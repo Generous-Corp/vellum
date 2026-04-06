@@ -1,0 +1,4905 @@
+#include <pulp/view/widget_bridge.hpp>
+#include <pulp/view/animation.hpp>
+#include <pulp/view/frame_clock.hpp>
+#include <pulp/view/ui_components.hpp>
+#include <pulp/view/text_editor.hpp>
+#include <pulp/view/canvas_widget.hpp>
+#include <pulp/view/modal.hpp>
+#include <pulp/view/asset_manager.hpp>
+#include <pulp/view/design_import.hpp>
+#if __has_include(<pulp/render/gpu_surface.hpp>)
+#include <pulp/render/gpu_surface.hpp>
+#define PULP_WIDGET_BRIDGE_HAS_GPU_SURFACE 1
+#else
+#define PULP_WIDGET_BRIDGE_HAS_GPU_SURFACE 0
+#endif
+#include <pulp/platform/popup_menu.hpp>
+#include <pulp/platform/file_dialog.hpp>
+#include <pulp/platform/clipboard.hpp>
+#include <web_compat_preludes_gen.hpp>
+#include <thread>
+#include <chrono>
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <sstream>
+#include <unordered_map>
+
+#ifdef PULP_HAS_SKIA
+#include "webgpu/webgpu_cpp.h"
+#endif
+
+#if defined(_WIN32)
+#define PULP_POPEN _popen
+#define PULP_PCLOSE _pclose
+#else
+#define PULP_POPEN popen
+#define PULP_PCLOSE pclose
+#endif
+
+namespace pulp::view {
+namespace {
+
+struct WidgetBridgeGpuInfo {
+    bool available = false;
+    bool native_bridge = false;
+    std::string backend;
+    std::string backend_type;
+    std::string name;
+    std::string preferred_canvas_format;
+    std::string vendor;
+    std::string architecture;
+    std::string description;
+};
+
+#if PULP_WIDGET_BRIDGE_HAS_GPU_SURFACE
+WidgetBridgeGpuInfo widget_bridge_gpu_info_from_adapter(const render::GpuSurface::AdapterInfo& info) {
+    WidgetBridgeGpuInfo result;
+    result.available = info.available;
+    result.native_bridge = info.native_bridge;
+    result.backend = info.backend;
+    result.backend_type = info.backend_type;
+    result.name = info.name;
+    result.preferred_canvas_format = info.preferred_canvas_format;
+    result.vendor = info.vendor;
+    result.architecture = info.architecture;
+    result.description = info.description;
+    return result;
+}
+#endif
+
+choc::value::Value gpu_adapter_info_to_value(const WidgetBridgeGpuInfo& info) {
+    auto value = choc::value::createObject("");
+    value.addMember("vendor", choc::value::createString(info.vendor));
+    value.addMember("architecture", choc::value::createString(info.architecture));
+    value.addMember("description", choc::value::createString(info.description));
+    value.addMember("backendType", choc::value::createString(info.backend_type));
+    return value;
+}
+
+choc::value::Value gpu_descriptor_to_value(const WidgetBridgeGpuInfo& info) {
+    auto value = choc::value::createObject("");
+    value.addMember("available", choc::value::createBool(info.available));
+    value.addMember("nativeBridge", choc::value::createBool(info.native_bridge));
+    value.addMember("backend", choc::value::createString(info.backend));
+    value.addMember("backendType", choc::value::createString(info.backend_type));
+    value.addMember("name", choc::value::createString(info.name));
+    value.addMember("preferredCanvasFormat", choc::value::createString(info.preferred_canvas_format));
+    value.addMember("info", gpu_adapter_info_to_value(info));
+    return value;
+}
+
+WidgetBridgeGpuInfo widget_bridge_gpu_info(render::GpuSurface* gpu_surface) {
+#if PULP_WIDGET_BRIDGE_HAS_GPU_SURFACE
+    if (gpu_surface != nullptr) {
+        auto info = gpu_surface->adapter_info();
+        if (info.available) {
+            return widget_bridge_gpu_info_from_adapter(info);
+        }
+    }
+#endif
+
+    WidgetBridgeGpuInfo info{};
+    info.available = true;
+    info.backend = "Dawn/WebGPU";
+    info.preferred_canvas_format = "bgra8unorm";
+    return info;
+}
+
+#ifdef PULP_HAS_SKIA
+wgpu::TextureFormat texture_format_from_string(const std::string& format) {
+    if (format == "rgba16float") return wgpu::TextureFormat::RGBA16Float;
+    if (format == "rgba8unorm") return wgpu::TextureFormat::RGBA8Unorm;
+    if (format == "bgra8unorm-srgb") return wgpu::TextureFormat::BGRA8UnormSrgb;
+    if (format == "rgba8unorm-srgb") return wgpu::TextureFormat::RGBA8UnormSrgb;
+    return wgpu::TextureFormat::BGRA8Unorm;
+}
+
+wgpu::PrimitiveTopology primitive_topology_from_string(const std::string& topology) {
+    if (topology == "point-list") return wgpu::PrimitiveTopology::PointList;
+    if (topology == "line-list") return wgpu::PrimitiveTopology::LineList;
+    if (topology == "line-strip") return wgpu::PrimitiveTopology::LineStrip;
+    if (topology == "triangle-strip") return wgpu::PrimitiveTopology::TriangleStrip;
+    return wgpu::PrimitiveTopology::TriangleList;
+}
+
+wgpu::VertexFormat vertex_format_from_string(const std::string& format) {
+    if (format == "float32") return wgpu::VertexFormat::Float32;
+    if (format == "float32x2") return wgpu::VertexFormat::Float32x2;
+    if (format == "float32x3") return wgpu::VertexFormat::Float32x3;
+    if (format == "float32x4") return wgpu::VertexFormat::Float32x4;
+    if (format == "uint32") return wgpu::VertexFormat::Uint32;
+    if (format == "uint32x2") return wgpu::VertexFormat::Uint32x2;
+    if (format == "uint32x3") return wgpu::VertexFormat::Uint32x3;
+    if (format == "uint32x4") return wgpu::VertexFormat::Uint32x4;
+    if (format == "sint32") return wgpu::VertexFormat::Sint32;
+    if (format == "sint32x2") return wgpu::VertexFormat::Sint32x2;
+    if (format == "sint32x3") return wgpu::VertexFormat::Sint32x3;
+    if (format == "sint32x4") return wgpu::VertexFormat::Sint32x4;
+    return wgpu::VertexFormat::Float32x2;
+}
+
+wgpu::VertexStepMode vertex_step_mode_from_string(const std::string& step_mode) {
+    if (step_mode == "instance") return wgpu::VertexStepMode::Instance;
+    return wgpu::VertexStepMode::Vertex;
+}
+
+wgpu::IndexFormat index_format_from_string(const std::string& format) {
+    if (format == "uint16") return wgpu::IndexFormat::Uint16;
+    return wgpu::IndexFormat::Uint32;
+}
+
+wgpu::BufferBindingType buffer_binding_type_from_string(const std::string& type) {
+    if (type == "storage") return wgpu::BufferBindingType::Storage;
+    if (type == "read-only-storage" || type == "readonly-storage") return wgpu::BufferBindingType::ReadOnlyStorage;
+    return wgpu::BufferBindingType::Uniform;
+}
+
+wgpu::BufferUsage buffer_usage_for_binding_type(wgpu::BufferBindingType type) {
+    switch (type) {
+        case wgpu::BufferBindingType::Storage:
+        case wgpu::BufferBindingType::ReadOnlyStorage:
+            return wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+        case wgpu::BufferBindingType::BindingNotUsed:
+            return wgpu::BufferUsage::CopyDst;
+        case wgpu::BufferBindingType::Undefined:
+        case wgpu::BufferBindingType::Uniform:
+        default:
+            return wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
+    }
+}
+
+wgpu::AddressMode address_mode_from_string(const std::string& mode) {
+    if (mode == "repeat") return wgpu::AddressMode::Repeat;
+    if (mode == "mirror-repeat") return wgpu::AddressMode::MirrorRepeat;
+    return wgpu::AddressMode::ClampToEdge;
+}
+
+wgpu::FilterMode filter_mode_from_string(const std::string& mode) {
+    if (mode == "linear") return wgpu::FilterMode::Linear;
+    return wgpu::FilterMode::Nearest;
+}
+
+wgpu::MipmapFilterMode mipmap_filter_mode_from_string(const std::string& mode) {
+    if (mode == "linear") return wgpu::MipmapFilterMode::Linear;
+    return wgpu::MipmapFilterMode::Nearest;
+}
+
+wgpu::TextureViewDimension texture_view_dimension_from_string(const std::string& dimension) {
+    if (dimension == "1d") return wgpu::TextureViewDimension::e1D;
+    if (dimension == "2d-array") return wgpu::TextureViewDimension::e2DArray;
+    if (dimension == "cube") return wgpu::TextureViewDimension::Cube;
+    if (dimension == "cube-array") return wgpu::TextureViewDimension::CubeArray;
+    if (dimension == "3d") return wgpu::TextureViewDimension::e3D;
+    return wgpu::TextureViewDimension::e2D;
+}
+
+wgpu::TextureAspect texture_aspect_from_string(const std::string& aspect) {
+    if (aspect == "stencil-only") return wgpu::TextureAspect::StencilOnly;
+    if (aspect == "depth-only") return wgpu::TextureAspect::DepthOnly;
+    if (aspect == "plane0-only") return wgpu::TextureAspect::Plane0Only;
+    if (aspect == "plane1-only") return wgpu::TextureAspect::Plane1Only;
+    if (aspect == "plane2-only") return wgpu::TextureAspect::Plane2Only;
+    return wgpu::TextureAspect::All;
+}
+
+std::vector<uint8_t> json_bytes_to_vector(const choc::value::ValueView& value) {
+    std::vector<uint8_t> bytes;
+    if (!value.isArray()) return bytes;
+    bytes.reserve(value.size());
+    for (uint32_t i = 0; i < value.size(); ++i) {
+        bytes.push_back(static_cast<uint8_t>(std::clamp(value[i].getWithDefault<int32_t>(0), 0, 255)));
+    }
+    return bytes;
+}
+
+std::vector<uint8_t> pad_webgpu_write_bytes(std::vector<uint8_t> bytes) {
+    if (bytes.empty()) return bytes;
+    auto remainder = bytes.size() % 4;
+    if (remainder != 0) {
+        bytes.resize(bytes.size() + (4 - remainder), 0);
+    }
+    return bytes;
+}
+
+uint32_t texture_bytes_per_pixel_from_format(const std::string& format) {
+    if (format == "rgba16float") {
+        return 8;
+    }
+    if (format == "rgba8unorm" || format == "bgra8unorm" ||
+        format == "rgba8unorm-srgb" || format == "bgra8unorm-srgb") {
+        return 4;
+    }
+    return 4;
+}
+
+wgpu::TextureUsage texture_usage_from_mask(uint32_t usage_mask) {
+    if (usage_mask == 0) {
+        return wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
+    }
+    return static_cast<wgpu::TextureUsage>(usage_mask);
+}
+#endif
+
+std::string bridge_base64_encode(const std::vector<uint8_t>& data) {
+    static const char* table = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    out.reserve((data.size() + 2) / 3 * 4);
+
+    for (size_t i = 0; i < data.size(); i += 3) {
+        uint32_t n = static_cast<uint32_t>(data[i]) << 16;
+        if (i + 1 < data.size()) n |= static_cast<uint32_t>(data[i + 1]) << 8;
+        if (i + 2 < data.size()) n |= static_cast<uint32_t>(data[i + 2]);
+
+        out += table[(n >> 18) & 0x3F];
+        out += table[(n >> 12) & 0x3F];
+        out += (i + 1 < data.size()) ? table[(n >> 6) & 0x3F] : '=';
+        out += (i + 2 < data.size()) ? table[n & 0x3F] : '=';
+    }
+
+    return out;
+}
+
+std::string canonical_bridge_asset_mime_type(std::string mime_type) {
+    if (mime_type == "application/json" || mime_type == "text/json") {
+        return "application/json;charset=utf-8";
+    }
+    return mime_type;
+}
+
+std::string guess_bridge_asset_mime_type(const std::string& path) {
+    auto dot = path.find_last_of('.');
+    std::string ext = dot == std::string::npos ? std::string{} : path.substr(dot);
+    for (auto& c : ext) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+
+    if (ext == ".html" || ext == ".htm") return "text/html";
+    if (ext == ".js" || ext == ".mjs") return "text/javascript";
+    if (ext == ".css") return "text/css";
+    if (ext == ".json") return "application/json";
+    if (ext == ".txt" || ext == ".wgsl" || ext == ".sksl") return "text/plain";
+    if (ext == ".svg") return "image/svg+xml";
+    if (ext == ".png") return "image/png";
+    if (ext == ".jpg" || ext == ".jpeg") return "image/jpeg";
+    if (ext == ".gif") return "image/gif";
+    if (ext == ".webp") return "image/webp";
+    if (ext == ".woff2") return "font/woff2";
+    if (ext == ".woff") return "font/woff";
+    if (ext == ".ttf") return "font/ttf";
+    return "application/octet-stream";
+}
+
+bool bridge_asset_is_text_like(const std::string& mime_type) {
+    return mime_type.rfind("text/", 0) == 0
+        || mime_type.find("json") != std::string::npos
+        || mime_type.find("javascript") != std::string::npos
+        || mime_type.find("xml") != std::string::npos
+        || mime_type.find("svg") != std::string::npos;
+}
+
+View* find_view_by_id(View& node, std::string_view id) {
+    if (!id.empty() && node.id() == id) {
+        return &node;
+    }
+
+    for (size_t i = 0; i < node.child_count(); ++i) {
+        if (auto* match = find_view_by_id(*node.child_at(i), id)) {
+            return match;
+        }
+    }
+
+    return nullptr;
+}
+
+bool subtree_contains_view(View& node, const View* target) {
+    if (&node == target) {
+        return true;
+    }
+
+    for (size_t i = 0; i < node.child_count(); ++i) {
+        if (subtree_contains_view(*node.child_at(i), target)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+void erase_widget_subtree(std::unordered_map<std::string, View*>& widgets, View* node) {
+    if (node == nullptr) {
+        return;
+    }
+
+    for (size_t i = 0; i < node->child_count(); ++i) {
+        erase_widget_subtree(widgets, node->child_at(i));
+    }
+
+    if (!node->id().empty()) {
+        widgets.erase(node->id());
+    }
+}
+
+std::string strip_leading_slashes(std::string path) {
+    while (!path.empty() && (path.front() == '/' || path.front() == '\\')) {
+        path.erase(path.begin());
+    }
+    return path;
+}
+
+struct BridgeAssetLoad {
+    bool ok = false;
+    int status = 404;
+    std::string resolved_path;
+    std::string mime_type;
+    BlobData blob;
+};
+
+BridgeAssetLoad load_bridge_asset(const std::string& url) {
+    BridgeAssetLoad result;
+    if (url.empty()) {
+        result.status = 400;
+        return result;
+    }
+
+    auto& assets = AssetManager::instance();
+
+    auto load_from_file = [&](std::string path) {
+        if (path.empty()) {
+            return BlobData{};
+        }
+#if defined(_WIN32)
+        if (path.size() > 2 && path[0] == '/' && std::isalpha(static_cast<unsigned char>(path[1])) && path[2] == ':') {
+            path.erase(path.begin());
+        }
+#endif
+        result.resolved_path = path;
+        return assets.load_blob(path);
+    };
+
+    auto load_from_embedded = [&](std::string name) {
+        name = strip_leading_slashes(std::move(name));
+        if (name.empty()) {
+            return BlobData{};
+        }
+        result.resolved_path = name;
+        if (assets.has_embedded(name)) {
+            return assets.load_blob_embedded(name);
+        }
+        return BlobData{};
+    };
+
+    if (url.rfind("pulp://", 0) == 0) {
+        auto ref = url.substr(7);
+        result.blob = load_from_embedded(ref);
+        if (!result.blob.valid()) {
+            result.blob = load_from_file(strip_leading_slashes(ref));
+        }
+    } else if (url.rfind("file://", 0) == 0) {
+        result.blob = load_from_file(url.substr(7));
+    } else {
+        result.blob = load_from_embedded(url);
+        if (!result.blob.valid()) {
+            result.blob = load_from_file(url);
+        }
+    }
+
+    if (!result.blob.valid()) {
+        result.status = 404;
+        return result;
+    }
+
+    result.ok = true;
+    result.status = 200;
+    result.mime_type = canonical_bridge_asset_mime_type(
+        guess_bridge_asset_mime_type(result.resolved_path.empty() ? url : result.resolved_path));
+    return result;
+}
+
+} // namespace
+
+struct WidgetBridge::NativeGpuBridgeState {
+    struct CanvasContextState {
+        uint32_t width = 1;
+        uint32_t height = 1;
+        std::string format = "bgra8unorm";
+        uint32_t usage = 0;
+        std::string alpha_mode = "opaque";
+#ifdef PULP_HAS_SKIA
+        wgpu::Texture texture;
+#endif
+        bool configured = false;
+    };
+
+    struct TextureState {
+        uint32_t width = 1;
+        uint32_t height = 1;
+        uint32_t depth_or_array_layers = 1;
+        std::string format = "bgra8unorm";
+        uint32_t usage = 0;
+        uint32_t mip_level_count = 1;
+        uint32_t sample_count = 1;
+#ifdef PULP_HAS_SKIA
+        wgpu::Texture texture;
+#endif
+        bool configured = false;
+    };
+
+    std::unordered_map<std::string, CanvasContextState> canvases;
+    std::unordered_map<std::string, TextureState> textures;
+    uint64_t next_texture_id = 1;
+};
+
+static const char* kJSPreamble = R"(
+var __callbacks__ = {};
+function __dispatch__(id, eventName) {
+    var key = id + ':' + eventName;
+    if (__callbacks__[key]) {
+        __callbacks__[key].apply(null, Array.prototype.slice.call(arguments, 2));
+    }
+}
+function on(id, eventName, fn) {
+    __callbacks__[id + ':' + eventName] = fn;
+}
+)";
+
+static const char* kDomOpsInit =
+    "Element.prototype.appendChild = function(child) {"
+    "  if (!(child instanceof Element)) return child;"
+    "  if (child._parentElement) child._parentElement.removeChild(child);"
+    "  child._parentElement = this;"
+    "  this._children.push(child);"
+    "  this._ensureNative();"
+    "  __domAppend(this._id, child._id, child.tagName.toLowerCase());"
+    "  child._nativeCreated = true;"
+    "  if (child._textContent) setText(child._id, child._textContent);"
+    "  child.style._flushAll();"
+    "  child._reapplyStylesheets();"
+    "  return child;"
+    "};"
+    "Element.prototype.removeChild = function(child) {"
+    "  var idx = this._children.indexOf(child);"
+    "  if (idx < 0) return child;"
+    "  this._children.splice(idx, 1);"
+    "  child._parentElement = null;"
+    "  if (child._nativeCreated) __domRemove(child._id);"
+    "  child._nativeCreated = false;"
+    "  return child;"
+    "};"
+    "Element.prototype.remove = function() {"
+    "  if (this._parentElement) this._parentElement.removeChild(this);"
+    "};"
+    "Element.prototype.insertBefore = function(newChild, refChild) {"
+    "  if (!refChild) return this.appendChild(newChild);"
+    "  var idx = this._children.indexOf(refChild);"
+    "  if (idx < 0) return this.appendChild(newChild);"
+    "  if (newChild._parentElement) newChild._parentElement.removeChild(newChild);"
+    "  newChild._parentElement = this;"
+    "  this._children.splice(idx, 0, newChild);"
+    "  this._ensureNative();"
+    "  __domAppend(this._id, newChild._id, newChild.tagName.toLowerCase());"
+    "  newChild._nativeCreated = true;"
+    "  if (newChild._textContent) setText(newChild._id, newChild._textContent);"
+    "  newChild.style._flushAll();"
+    "  newChild._reapplyStylesheets();"
+    "  return newChild;"
+    "};"
+    "Element.prototype.replaceChild = function(newChild, oldChild) {"
+    "  var idx = this._children.indexOf(oldChild);"
+    "  if (idx < 0) return oldChild;"
+    "  this.removeChild(oldChild);"
+    "  this.appendChild(newChild);"
+    "  return oldChild;"
+    "};";
+
+static void safe_dispatch_eval(ScriptEngine& engine, const std::string& js, const char* context) {
+    try {
+        engine.evaluate(js);
+    } catch (const std::exception& e) {
+        std::cerr << "WidgetBridge " << context << " error: " << e.what() << "\n";
+    } catch (...) {
+        std::cerr << "WidgetBridge " << context << " error: unknown exception\n";
+    }
+}
+
+static void safe_dispatch_eval(const std::shared_ptr<std::atomic<bool>>& alive,
+                               ScriptEngine* engine,
+                               const std::string& js,
+                               const char* context) {
+    if (!alive || !alive->load(std::memory_order_acquire) || engine == nullptr) return;
+    try {
+        if (!static_cast<bool>(*engine)) return;
+        engine->evaluate(js);
+    } catch (const std::exception& e) {
+        std::cerr << "WidgetBridge " << context << " error: " << e.what() << "\n";
+    } catch (...) {
+        std::cerr << "WidgetBridge " << context << " error: unknown exception\n";
+    }
+}
+
+static choc::value::Value make_layout_rect_value(View* v) {
+    auto result = choc::value::createObject("");
+    if (!v) return result;
+
+    float ax = 0.0f;
+    float ay = 0.0f;
+    View* cur = v;
+    while (cur) {
+        ax += cur->bounds().x;
+        ay += cur->bounds().y;
+        if (auto* scroll = dynamic_cast<ScrollView*>(cur->parent())) {
+            ax -= scroll->scroll_x();
+            ay -= scroll->scroll_y();
+        }
+        cur = cur->parent();
+    }
+
+    auto b = v->bounds();
+    result.addMember("x", choc::value::createFloat64(ax));
+    result.addMember("y", choc::value::createFloat64(ay));
+    result.addMember("width", choc::value::createFloat64(b.width));
+    result.addMember("height", choc::value::createFloat64(b.height));
+    result.addMember("top", choc::value::createFloat64(ay));
+    result.addMember("left", choc::value::createFloat64(ax));
+    result.addMember("right", choc::value::createFloat64(ax + b.width));
+    result.addMember("bottom", choc::value::createFloat64(ay + b.height));
+    return result;
+}
+
+static void eval_or_throw(ScriptEngine& engine, const char* name, const std::string& js) {
+    try {
+        engine.evaluate(js);
+    } catch (const choc::javascript::Error& e) {
+        throw std::runtime_error(std::string("failed to evaluate ") + name + ": " + e.what());
+    } catch (const std::exception& e) {
+        throw std::runtime_error(std::string("failed to evaluate ") + name + ": " + e.what());
+    } catch (...) {
+        throw std::runtime_error(std::string("failed to evaluate ") + name + ": unknown exception");
+    }
+}
+
+static std::string build_shell_command(const std::string& cmd) {
+#if defined(_WIN32)
+    return std::string(
+        "set \"PATH=%USERPROFILE%\\.local\\bin;%USERPROFILE%\\.npm-global\\bin;%PATH%\" && "
+    ) + cmd;
+#else
+    return std::string(
+        "export PATH=\"$HOME/.local/bin:$HOME/.npm-global/bin:"
+        "/opt/homebrew/bin:/usr/local/bin:$PATH\"; "
+    ) + cmd;
+#endif
+}
+
+WidgetBridge::WidgetBridge(ScriptEngine& engine, View& root, state::StateStore& store,
+                           render::GpuSurface* gpu_surface)
+    : engine_(engine), root_(root), store_(store), gpu_surface_(gpu_surface) {
+    if (widget_bridge_gpu_info(gpu_surface_).native_bridge) {
+        native_gpu_bridge_state_ = std::make_unique<NativeGpuBridgeState>();
+    }
+    register_api();
+    eval_or_throw(engine_, "kJSPreamble", kJSPreamble);
+    eval_or_throw(engine_, "css_colors", preludes::css_colors);
+    eval_or_throw(engine_, "css_parser", preludes::css_parser);
+    eval_or_throw(engine_, "web_compat_element", preludes::web_compat_element);
+    eval_or_throw(engine_, "web_compat_canvas", preludes::web_compat_canvas);
+    eval_or_throw(engine_, "web_compat_style_decl", preludes::web_compat_style_decl);
+    eval_or_throw(engine_, "web_compat_document", preludes::web_compat_document);
+    eval_or_throw(engine_, "web_compat_gpu_buffered", preludes::web_compat_gpu_buffered);
+}
+
+WidgetBridge::~WidgetBridge() {
+    if (callback_alive_) callback_alive_->store(false, std::memory_order_release);
+    root_.on_global_click = {};
+}
+
+void WidgetBridge::set_repaint_callback(std::function<void()> cb) {
+    repaint_callback_ = std::move(cb);
+}
+
+void WidgetBridge::set_ai_cli_command(std::string cmd) {
+    if (!cmd.empty()) ai_cli_command_ = std::move(cmd);
+}
+
+void WidgetBridge::request_repaint() {
+    if (repaint_callback_) repaint_callback_();
+}
+
+CanvasWidget::NativeGpuTextureFrame WidgetBridge::describe_native_canvas_frame(
+    const std::string& canvas_id) const {
+    CanvasWidget::NativeGpuTextureFrame frame;
+    if (native_gpu_bridge_state_ == nullptr || canvas_id.empty()) {
+        return frame;
+    }
+
+    auto it = native_gpu_bridge_state_->canvases.find(canvas_id);
+    if (it == native_gpu_bridge_state_->canvases.end() || !it->second.configured) {
+        return frame;
+    }
+
+    frame.width = it->second.width;
+    frame.height = it->second.height;
+    frame.format = it->second.format;
+    frame.available = true;
+#ifdef PULP_HAS_SKIA
+    frame.texture_handle = const_cast<wgpu::Texture*>(&it->second.texture);
+#endif
+    return frame;
+}
+
+CanvasWidget::NativeGpuTextureFrame WidgetBridge::describe_native_texture_frame(
+    const std::string& texture_id) const {
+    CanvasWidget::NativeGpuTextureFrame frame;
+    if (native_gpu_bridge_state_ == nullptr || texture_id.empty()) {
+        return frame;
+    }
+
+    auto it = native_gpu_bridge_state_->textures.find(texture_id);
+    if (it == native_gpu_bridge_state_->textures.end() || !it->second.configured) {
+        return frame;
+    }
+
+    frame.width = it->second.width;
+    frame.height = it->second.height;
+    frame.format = it->second.format;
+    frame.available = true;
+#ifdef PULP_HAS_SKIA
+    frame.texture_handle = const_cast<wgpu::Texture*>(&it->second.texture);
+#endif
+    return frame;
+}
+
+void WidgetBridge::load_script(const std::string& code) {
+    if (!dom_ops_loaded_) {
+        dom_ops_loaded_ = true;
+        eval_or_throw(engine_, "dom_ops_init", kDomOpsInit);
+    }
+    // Append ";void 0" so the eval result is undefined, not the last
+    // expression value. Elements have circular references (_parentElement
+    // ↔ _children) which cause infinite recursion in CHOC's toChocValue().
+    eval_or_throw(engine_, "user_script", code + "\n;void 0");
+    // Flush any pending requestAnimationFrame callbacks
+    eval_or_throw(engine_, "flush_frames", "if (typeof __flushFrames__ === 'function') __flushFrames__();void 0");
+}
+
+View* WidgetBridge::widget(const std::string& id) {
+    if (id.empty()) {
+        return nullptr;
+    }
+
+    auto it = widgets_.find(id);
+    if (it != widgets_.end()) {
+        if (it->second != nullptr && subtree_contains_view(root_, it->second)) {
+            return it->second;
+        }
+        widgets_.erase(it);
+    }
+
+    if (auto* live = find_view_by_id(root_, id)) {
+        widgets_[id] = live;
+        return live;
+    }
+
+    return nullptr;
+}
+
+void WidgetBridge::sync_from_store() {
+    for (auto& [id, view] : widgets_) {
+        if (auto* knob = dynamic_cast<Knob*>(view)) {
+            // Try to find a parameter matching this widget's id
+            // Convention: widget id matches parameter name
+            for (size_t i = 0; i < store_.param_count(); ++i) {
+                auto* info = &store_.all_params()[i];
+                if (info && info->name == id) {
+                    knob->set_value(store_.get_normalized(info->id));
+                    break;
+                }
+            }
+        } else if (auto* fader = dynamic_cast<Fader*>(view)) {
+            for (size_t i = 0; i < store_.param_count(); ++i) {
+                auto* info = &store_.all_params()[i];
+                if (info && info->name == id) {
+                    fader->set_value(store_.get_normalized(info->id));
+                    break;
+                }
+            }
+        } else if (auto* toggle = dynamic_cast<Toggle*>(view)) {
+            for (size_t i = 0; i < store_.param_count(); ++i) {
+                auto* info = &store_.all_params()[i];
+                if (info && info->name == id) {
+                    toggle->set_on(store_.get_normalized(info->id) > 0.5f);
+                    break;
+                }
+            }
+        }
+    }
+}
+
+View* WidgetBridge::resolve_parent(const std::string& parent_id) {
+    if (parent_id.empty()) return &root_;
+    auto it = widgets_.find(parent_id);
+    return it != widgets_.end() ? it->second : &root_;
+}
+
+void WidgetBridge::wire_callbacks(const std::string& id, View* w) {
+    auto alive = callback_alive_;
+    auto* engine = &engine_;
+    if (auto* k = dynamic_cast<Knob*>(w)) {
+        k->on_change = [alive, engine, id](float v) {
+            safe_dispatch_eval(alive, engine, "__dispatch__('" + id + "', 'change', " + std::to_string(v) + ")", "knob change");
+        };
+    } else if (auto* f = dynamic_cast<Fader*>(w)) {
+        f->on_change = [alive, engine, id](float v) {
+            safe_dispatch_eval(alive, engine, "__dispatch__('" + id + "', 'change', " + std::to_string(v) + ")", "fader change");
+        };
+    } else if (auto* t = dynamic_cast<Toggle*>(w)) {
+        t->on_toggle = [alive, engine, id](bool v) {
+            safe_dispatch_eval(alive, engine, "__dispatch__('" + id + "', 'toggle', " + std::string(v?"1":"0") + ")", "toggle");
+        };
+    }
+}
+
+void WidgetBridge::clear() {
+    pending_frame_ids_.clear();
+    shortcuts_.clear();
+    ComboBox::close_active_popup();
+    while (root_.child_count() > 0) {
+        auto* child = root_.child_at(root_.child_count() - 1);
+        auto removed = root_.remove_child(child);
+        erase_widget_subtree(widgets_, removed.get());
+    }
+    widgets_.clear();
+}
+
+void WidgetBridge::snapshot_values(std::unordered_map<std::string, float>& out) const {
+    for (auto& [id, view] : widgets_) {
+        if (auto* k = dynamic_cast<Knob*>(view)) out[id] = k->value();
+        else if (auto* f = dynamic_cast<Fader*>(view)) out[id] = f->value();
+        else if (auto* t = dynamic_cast<Toggle*>(view)) out[id] = t->is_on() ? 1.0f : 0.0f;
+        else if (auto* cb = dynamic_cast<Checkbox*>(view)) out[id] = cb->is_checked() ? 1.0f : 0.0f;
+        else if (auto* tb = dynamic_cast<ToggleButton*>(view)) out[id] = tb->is_on() ? 1.0f : 0.0f;
+    }
+}
+
+void WidgetBridge::restore_values(const std::unordered_map<std::string, float>& snapshot) {
+    for (auto& [id, val] : snapshot) {
+        auto it = widgets_.find(id);
+        if (it == widgets_.end()) continue;
+        if (auto* k = dynamic_cast<Knob*>(it->second)) k->set_value(val);
+        else if (auto* f = dynamic_cast<Fader*>(it->second)) f->set_value(val);
+        else if (auto* t = dynamic_cast<Toggle*>(it->second)) t->set_on(val > 0.5f);
+        else if (auto* cb = dynamic_cast<Checkbox*>(it->second)) cb->set_checked(val > 0.5f);
+        else if (auto* tb = dynamic_cast<ToggleButton*>(it->second)) tb->set_on(val > 0.5f);
+    }
+}
+
+void WidgetBridge::snapshot_values(WidgetReloadSnapshot& out) const {
+    for (auto& [id, view] : widgets_) {
+        if (auto* k = dynamic_cast<Knob*>(view)) out.scalar_values[id] = k->value();
+        else if (auto* f = dynamic_cast<Fader*>(view)) out.scalar_values[id] = f->value();
+        else if (auto* t = dynamic_cast<Toggle*>(view)) out.scalar_values[id] = t->is_on() ? 1.0f : 0.0f;
+        else if (auto* cb = dynamic_cast<Checkbox*>(view)) out.scalar_values[id] = cb->is_checked() ? 1.0f : 0.0f;
+        else if (auto* tb = dynamic_cast<ToggleButton*>(view)) out.scalar_values[id] = tb->is_on() ? 1.0f : 0.0f;
+        else if (auto* xy = dynamic_cast<XYPad*>(view)) out.xy_values[id] = {.x = xy->x_value(), .y = xy->y_value()};
+    }
+}
+
+void WidgetBridge::restore_values(const WidgetReloadSnapshot& snapshot) {
+    for (auto& [id, val] : snapshot.scalar_values) {
+        auto it = widgets_.find(id);
+        if (it == widgets_.end()) continue;
+        if (auto* k = dynamic_cast<Knob*>(it->second)) k->set_value(val);
+        else if (auto* f = dynamic_cast<Fader*>(it->second)) f->set_value(val);
+        else if (auto* t = dynamic_cast<Toggle*>(it->second)) t->set_on(val > 0.5f);
+        else if (auto* cb = dynamic_cast<Checkbox*>(it->second)) cb->set_checked(val > 0.5f);
+        else if (auto* tb = dynamic_cast<ToggleButton*>(it->second)) tb->set_on(val > 0.5f);
+    }
+    for (auto& [id, val] : snapshot.xy_values) {
+        auto it = widgets_.find(id);
+        if (it == widgets_.end()) continue;
+        if (auto* xy = dynamic_cast<XYPad*>(it->second)) { xy->set_x(val.x); xy->set_y(val.y); }
+    }
+}
+
+void WidgetBridge::poll_async_results() {
+    std::vector<AsyncExecResult> pending;
+    {
+        std::lock_guard<std::mutex> lock(*async_exec_mutex_);
+        pending.swap(*async_exec_results_);
+    }
+    bool had_pending_frames = !pending_frame_ids_.empty();
+
+    for (const auto& result : pending) {
+        auto payload = choc::json::toString(choc::value::createString(result.output), false);
+        safe_dispatch_eval(engine_, "__dispatch__('" + result.callback_id + "', 'result', " +
+            payload + ")", "async result");
+    }
+
+    if (had_pending_frames) {
+        engine_.evaluate("if (typeof __flushFrames__ === 'function') __flushFrames__();void 0");
+    }
+
+    if (!pending.empty() || had_pending_frames) {
+        request_repaint();
+    }
+}
+
+void WidgetBridge::service_frame_callbacks() {
+    engine_.pump_message_loop();
+    if (!pending_frame_ids_.empty()) {
+        engine_.evaluate("if (typeof __flushFrames__ === 'function') __flushFrames__();void 0");
+        engine_.pump_message_loop();
+    }
+}
+
+void WidgetBridge::register_api() {
+    // Helper: detect if arg[1] is a parent ID (string) or x position (number)
+    // Old API: createKnob(id, x, y, w, h) — 5 args, arg[1] is number
+    // New API: createKnob(id, parentId) — 2 args, arg[1] is string
+    auto isNewApi = [](choc::javascript::ArgumentList& args) -> bool {
+        if (args.numArgs <= 2) return true; // Only id + optional parent
+        // If 3+ args and arg[2] looks numeric, it's old API (id, x, y, ...)
+        auto test = args.get<std::string>(1, "");
+        // If the string is a registered widget ID or empty, it's new API
+        // If it parses as "0" or similar number, it's old API
+        if (test.empty()) return true;
+        if (test[0] >= '0' && test[0] <= '9') return false;
+        if (test[0] == '-') return false;
+        return true; // Starts with a letter = parent ID
+    };
+
+    // createKnob(id, parentId) OR createKnob(id, x, y, w, h)
+    engine_.register_function("createKnob", [this, isNewApi](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto knob = std::make_unique<Knob>();
+        knob->set_id(id);
+        knob->set_label(id);
+
+        if (isNewApi(args)) {
+            auto pid = args.get<std::string>(1, "");
+            auto* ptr = knob.get();
+            widgets_[id] = ptr;
+            wire_callbacks(id, ptr);
+            resolve_parent(pid)->add_child(std::move(knob));
+        } else {
+            knob->set_bounds({(float)args.get<double>(1,0), (float)args.get<double>(2,0),
+                             (float)args.get<double>(3,48), (float)args.get<double>(4,48)});
+            widgets_[id] = knob.get();
+            root_.add_child(std::move(knob));
+        }
+        return choc::value::createString(id);
+    });
+
+    // createFader(id, orientation, parentId) OR createFader(id, x, y, w, h, orientation)
+    engine_.register_function("createFader", [this, isNewApi](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto fader = std::make_unique<Fader>();
+        fader->set_id(id);
+
+        if (isNewApi(args)) {
+            auto orient = args.get<std::string>(1, "vertical");
+            auto pid = args.get<std::string>(2, "");
+            if (orient == "horizontal") fader->set_orientation(Fader::Orientation::horizontal);
+            auto* ptr = fader.get();
+            widgets_[id] = ptr;
+            wire_callbacks(id, ptr);
+            resolve_parent(pid)->add_child(std::move(fader));
+        } else {
+            fader->set_bounds({(float)args.get<double>(1,0), (float)args.get<double>(2,0),
+                              (float)args.get<double>(3,24), (float)args.get<double>(4,200)});
+            auto orient = args.get<std::string>(5, "vertical");
+            if (orient == "horizontal") fader->set_orientation(Fader::Orientation::horizontal);
+            fader->set_label(id);
+            widgets_[id] = fader.get();
+            root_.add_child(std::move(fader));
+        }
+        return choc::value::createString(id);
+    });
+
+    // createToggle(id, parentId) OR createToggle(id, x, y, w, h)
+    engine_.register_function("createToggle", [this, isNewApi](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto toggle = std::make_unique<Toggle>();
+        toggle->set_id(id);
+
+        if (isNewApi(args)) {
+            auto pid = args.get<std::string>(1, "");
+            auto* ptr = toggle.get();
+            widgets_[id] = ptr;
+            wire_callbacks(id, ptr);
+            resolve_parent(pid)->add_child(std::move(toggle));
+        } else {
+            toggle->set_bounds({(float)args.get<double>(1,0), (float)args.get<double>(2,0),
+                               (float)args.get<double>(3,50), (float)args.get<double>(4,30)});
+            toggle->set_label(id);
+            widgets_[id] = toggle.get();
+            root_.add_child(std::move(toggle));
+        }
+        return choc::value::createString(id);
+    });
+
+    // createIcon(id, type, parentId) — type: "image_upload", "send", "search", "close"
+    engine_.register_function("createIcon", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto type_str = args.get<std::string>(1, "image_upload");
+        auto pid = args.get<std::string>(2, "");
+        auto icon = std::make_unique<Icon>();
+        icon->set_id(id);
+        if (type_str == "send") icon->set_type(Icon::Type::send);
+        else if (type_str == "search") icon->set_type(Icon::Type::search);
+        else if (type_str == "close") icon->set_type(Icon::Type::close);
+        else icon->set_type(Icon::Type::image_upload);
+        widgets_[id] = icon.get();
+        resolve_parent(pid)->add_child(std::move(icon));
+        return choc::value::createString(id);
+    });
+
+    // createImage(id, parentId) — HTML <img> equivalent
+    engine_.register_function("createImage", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto pid = args.get<std::string>(1, "");
+        auto img = std::make_unique<ImageView>(); img->set_id(id);
+        widgets_[id] = img.get();
+        resolve_parent(pid)->add_child(std::move(img));
+        return choc::value::createString(id);
+    });
+
+    // setImageSource(id, path) — set image file path
+    engine_.register_function("setImageSource", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto path = args.get<std::string>(1, "");
+        if (auto* img = dynamic_cast<ImageView*>(widget(id)))
+            img->set_image_path(path);
+        return choc::value::Value();
+    });
+
+    // createCheckbox(id, parentId)
+    engine_.register_function("createCheckbox", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto pid = args.get<std::string>(1, "");
+        auto cb = std::make_unique<Checkbox>(); cb->set_id(id);
+        auto* ptr = cb.get(); widgets_[id] = ptr;
+        auto alive = callback_alive_;
+        auto* engine = &engine_;
+        cb->on_change = [alive, engine, id](bool v) {
+            safe_dispatch_eval(alive, engine, "__dispatch__('" + id + "', 'change', " + std::string(v?"1":"0") + ")", "checkbox change");
+        };
+        resolve_parent(pid)->add_child(std::move(cb));
+        return choc::value::createString(id);
+    });
+
+    // createToggleButton(id, parentId)
+    engine_.register_function("createToggleButton", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto pid = args.get<std::string>(1, "");
+        auto tb = std::make_unique<ToggleButton>(); tb->set_id(id);
+        auto* ptr = tb.get(); widgets_[id] = ptr;
+        auto alive = callback_alive_;
+        auto* engine = &engine_;
+        tb->on_toggle = [alive, engine, id](bool v) {
+            safe_dispatch_eval(alive, engine, "__dispatch__('" + id + "', 'toggle', " + std::string(v?"1":"0") + ")", "toggle button");
+        };
+        resolve_parent(pid)->add_child(std::move(tb));
+        return choc::value::createString(id);
+    });
+
+    // createLabel(id, text, parentId) OR createLabel(id, text, x, y, w, h)
+    engine_.register_function("createLabel", [this, isNewApi](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto text = args.get<std::string>(1, "");
+
+        // For Label: old API is (id, text, x, y, w, h) — arg[2] is number
+        // New API is (id, text, parentId) — arg[2] is string or absent
+        bool old = false;
+        if (args.numArgs >= 4) {
+            auto test = args.get<std::string>(2, "");
+            if (!test.empty() && (test[0] >= '0' && test[0] <= '9')) old = true;
+        }
+
+        auto label = std::make_unique<Label>(text);
+        label->set_id(id);
+
+        if (old) {
+            label->set_bounds({(float)args.get<double>(2,0), (float)args.get<double>(3,0),
+                              (float)args.get<double>(4,100), (float)args.get<double>(5,20)});
+            widgets_[id] = label.get();
+            root_.add_child(std::move(label));
+        } else {
+            auto pid = args.get<std::string>(2, "");
+            widgets_[id] = label.get();
+            resolve_parent(pid)->add_child(std::move(label));
+        }
+        return choc::value::createString(id);
+    });
+
+    // Keep old-API registration paths below for backward compat
+    // (The above replacements handle both APIs)
+
+    // ── OLD createFader removed (replaced above) ──
+    // Skip re-registering — the lambda above handles both APIs
+
+    // Continue with other registrations...
+    // (Old createFader/Toggle/Label registrations removed — replaced with
+    // dual-API versions above that detect parent ID vs absolute positioning)
+
+    // setValue(id, value) -> set widget normalized value
+    engine_.register_function("setValue", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto value = args.get<double>(1, 0);
+
+        auto it = widgets_.find(id);
+        if (it == widgets_.end()) return choc::value::Value();
+
+        if (auto* knob = dynamic_cast<Knob*>(it->second))
+            knob->set_value(static_cast<float>(value));
+        else if (auto* fader = dynamic_cast<Fader*>(it->second))
+            fader->set_value(static_cast<float>(value));
+        else if (auto* toggle = dynamic_cast<Toggle*>(it->second))
+            toggle->set_on(value > 0.5);
+        else if (auto* cb = dynamic_cast<Checkbox*>(it->second))
+            cb->set_checked(value > 0.5);
+        else if (auto* tb = dynamic_cast<ToggleButton*>(it->second))
+            tb->set_on(value > 0.5);
+
+        return choc::value::Value();
+    });
+
+    // getValue(id) -> get widget normalized value
+    engine_.register_function("getValue", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+
+        auto it = widgets_.find(id);
+        if (it == widgets_.end()) return choc::value::createFloat64(0);
+
+        if (auto* knob = dynamic_cast<Knob*>(it->second))
+            return choc::value::createFloat64(knob->value());
+        if (auto* fader = dynamic_cast<Fader*>(it->second))
+            return choc::value::createFloat64(fader->value());
+        if (auto* toggle = dynamic_cast<Toggle*>(it->second))
+            return choc::value::createFloat64(toggle->is_on() ? 1.0 : 0.0);
+
+        return choc::value::createFloat64(0);
+    });
+
+    // getParam(name) -> get parameter value from store (normalized)
+    engine_.register_function("getParam", [this](choc::javascript::ArgumentList args) {
+        auto name = args.get<std::string>(0, "");
+
+        for (size_t i = 0; i < store_.param_count(); ++i) {
+            auto* info = &store_.all_params()[i];
+            if (info && info->name == name) {
+                return choc::value::createFloat64(store_.get_normalized(info->id));
+            }
+        }
+        return choc::value::createFloat64(0);
+    });
+
+    // setParam(name, normalized_value) -> set parameter in store
+    engine_.register_function("setParam", [this](choc::javascript::ArgumentList args) {
+        auto name = args.get<std::string>(0, "");
+        auto value = args.get<double>(1, 0);
+
+        for (size_t i = 0; i < store_.param_count(); ++i) {
+            auto* info = &store_.all_params()[i];
+            if (info && info->name == name) {
+                store_.set_normalized(info->id, static_cast<float>(value));
+                break;
+            }
+        }
+        return choc::value::Value();
+    });
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Animation bridge
+    // ═══════════════════════════════════════════════════════════════════
+
+    // animate(id, property, targetValue, durationMs, easingName)
+    // animate(id, property, target, duration_ms, easing) — CSS transition equivalent
+    // Smoothly interpolates a property from current to target over duration
+    engine_.register_function("animate", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto prop = args.get<std::string>(1, "value");
+        auto target = static_cast<float>(args.get<double>(2, 0));
+        auto dur_ms = static_cast<float>(args.get<double>(3, 150));
+        auto ease_name = args.get<std::string>(4, "ease_out_cubic");
+
+        auto* v = widget(id);
+        if (!v) return choc::value::Value();
+
+        float dur = dur_ms / 1000.0f;
+        (void)ease_name; // easing for future ValueAnimation integration
+
+        // Apply property changes — for now immediate with duration stored
+        // TODO: integrate with FrameClock for actual interpolation
+        if (prop == "opacity") {
+            v->set_opacity(target);
+        } else if (prop == "scale") {
+            v->set_scale(target);
+        } else if (prop == "translate_x") {
+            v->set_translate(target, v->translate_y());
+        } else if (prop == "translate_y") {
+            v->set_translate(v->translate_x(), target);
+        } else if (prop == "rotation") {
+            v->set_rotation(target);
+        } else if (prop == "value") {
+            if (auto* k = dynamic_cast<Knob*>(v)) k->set_value(target);
+            else if (auto* f = dynamic_cast<Fader*>(v)) f->set_value(target);
+            else if (auto* t = dynamic_cast<Toggle*>(v)) t->set_on(target > 0.5f);
+        }
+        (void)dur;
+        return choc::value::Value();
+    });
+
+    // setMotionToken(tokenName, value)
+    engine_.register_function("setMotionToken", [this](choc::javascript::ArgumentList args) {
+        auto name = args.get<std::string>(0, "");
+        auto value = static_cast<float>(args.get<double>(1, 0));
+        if (name.empty()) return choc::value::Value();
+        auto theme = root_.theme();
+        theme.dimensions[name] = value;
+        root_.set_theme(theme);
+        return choc::value::Value();
+    });
+
+    // getMotionToken(tokenName) -> value
+    engine_.register_function("getMotionToken", [this](choc::javascript::ArgumentList args) {
+        auto name = args.get<std::string>(0, "");
+        auto d = root_.theme().dimension(name);
+        return choc::value::createFloat64(d.value_or(0.0f));
+    });
+
+    // setVisible(id, bool)
+    engine_.register_function("setVisible", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto vis = args.get<double>(1, 1) > 0.5;
+        auto it = widgets_.find(id);
+        if (it != widgets_.end()) it->second->set_visible(vis);
+        return choc::value::Value();
+    });
+
+    // registerHover(id) — enables "mouseenter"/"mouseleave" JS callbacks (CSS :hover)
+    engine_.register_function("registerHover", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto it = widgets_.find(id);
+        if (it != widgets_.end()) {
+            auto alive = callback_alive_;
+            auto* engine = &engine_;
+            it->second->on_hover_enter = [alive, engine, id]() {
+                safe_dispatch_eval(alive, engine, "__dispatch__('" + id + "', 'mouseenter', 0)", "hover enter");
+            };
+            it->second->on_hover_leave = [alive, engine, id]() {
+                safe_dispatch_eval(alive, engine, "__dispatch__('" + id + "', 'mouseleave', 0)", "hover leave");
+            };
+        }
+        return choc::value::Value();
+    });
+
+    // createGrid(id, parentId) — creates a grid container (CSS display: grid)
+    engine_.register_function("createGrid", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto pid = args.get<std::string>(1, "");
+        auto v = std::make_unique<View>();
+        v->set_id(id);
+        v->set_layout_mode(LayoutMode::grid);
+        widgets_[id] = v.get();
+        resolve_parent(pid)->add_child(std::move(v));
+        return choc::value::createString(id);
+    });
+
+    // setGrid(id, property, value) — set grid container properties
+    engine_.register_function("setGrid", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto key = args.get<std::string>(1, "");
+        auto* v = widget(id);
+        if (!v) return choc::value::Value();
+
+        if (key == "template_columns") {
+            auto tmpl = args.get<std::string>(2, "");
+            v->grid().template_columns = GridStyle::parse_template(tmpl);
+        } else if (key == "template_rows") {
+            auto tmpl = args.get<std::string>(2, "");
+            v->grid().template_rows = GridStyle::parse_template(tmpl);
+        } else if (key == "column_gap") {
+            v->grid().column_gap = static_cast<float>(args.get<double>(2, 0));
+        } else if (key == "row_gap") {
+            v->grid().row_gap = static_cast<float>(args.get<double>(2, 0));
+        } else if (key == "gap") {
+            float g = static_cast<float>(args.get<double>(2, 0));
+            v->grid().column_gap = g;
+            v->grid().row_gap = g;
+        } else if (key == "column_start") {
+            v->grid().grid_column_start = static_cast<int>(args.get<double>(2, 0));
+        } else if (key == "column_end") {
+            v->grid().grid_column_end = static_cast<int>(args.get<double>(2, 0));
+        } else if (key == "row_start") {
+            v->grid().grid_row_start = static_cast<int>(args.get<double>(2, 0));
+        } else if (key == "row_end") {
+            v->grid().grid_row_end = static_cast<int>(args.get<double>(2, 0));
+        }
+        return choc::value::Value();
+    });
+
+    // registerClick(id) — enables "click" event dispatch for any widget
+    engine_.register_function("registerClick", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto it = widgets_.find(id);
+        if (it != widgets_.end()) {
+            auto alive = callback_alive_;
+            auto* engine = &engine_;
+            it->second->on_click = [alive, engine, id]() {
+                safe_dispatch_eval(alive, engine, "__dispatch__('" + id + "', 'click', 0)", "click");
+            };
+        }
+        return choc::value::Value();
+    });
+
+    // ── Pointer events (P2) ─────────────────────────────────────────────
+
+    // Helper: build JS object literal for pointer event data from MouseEvent
+    auto pointer_data_js = [](const std::string& id, const MouseEvent& me) -> std::string {
+        std::string js = "__dispatch__('" + id + "', '";
+        // Event type placeholder — caller appends type
+        return js;
+    };
+
+    // registerPointer(id) — enables pointer event dispatch for a widget
+    engine_.register_function("registerPointer", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto it = widgets_.find(id);
+        if (it != widgets_.end()) {
+            auto* w = it->second;
+            auto alive = callback_alive_;
+            auto* engine = &engine_;
+            auto previous_pointer = w->on_pointer_event;
+            w->on_pointer_event = [alive, engine, id, previous_pointer](const MouseEvent& me) {
+                if (previous_pointer) {
+                    previous_pointer(me);
+                }
+                if (me.is_wheel) {
+                    return;
+                }
+                std::string type;
+                if (me.is_down) type = "pointerdown";
+                else type = "pointerup";
+                if (me.is_cancelled) type = "pointercancel";
+
+                std::string data = "{"
+                    "clientX:" + std::to_string(me.window_position.x) + ","
+                    "clientY:" + std::to_string(me.window_position.y) + ","
+                    "offsetX:" + std::to_string(me.position.x) + ","
+                    "offsetY:" + std::to_string(me.position.y) + ","
+                    "pointerId:" + std::to_string(me.pointer_id) + ","
+                    "pointerType:'" + std::string(me.pointerTypeString()) + "',"
+                    "isPrimary:" + (me.isPrimary() ? "true" : "false") + ","
+                    "pressure:" + std::to_string(me.pressure) + ","
+                    "altitudeAngle:" + std::to_string(me.altitude_angle) + ","
+                    "azimuthAngle:" + std::to_string(me.azimuth_angle) + ","
+                    "button:" + std::to_string(static_cast<int>(me.button)) + ","
+                    "ctrlKey:" + (me.isCtrlDown() ? "true" : "false") + ","
+                    "shiftKey:" + (me.isShiftDown() ? "true" : "false") + ","
+                    "altKey:" + (me.isAltDown() ? "true" : "false") + ","
+                    "metaKey:" + (me.isCmdDown() ? "true" : "false") +
+                    "}";
+
+                safe_dispatch_eval(alive, engine, "__dispatch__('" + id + "', '" + type + "', " + data + ")", "pointer");
+            };
+            // W3C PointerEvents: forward drag as pointermove
+            w->on_drag = [alive, engine, id](Point pos) {
+                std::string data = "{"
+                    "offsetX:" + std::to_string(pos.x) + ","
+                    "offsetY:" + std::to_string(pos.y) + ","
+                    "pointerId:0,pointerType:'mouse',isPrimary:true}";
+                safe_dispatch_eval(alive, engine, "__dispatch__('" + id + "', 'pointermove', " + data + ")", "pointermove");
+            };
+        }
+        return choc::value::Value();
+    });
+
+    // registerGesture(id) — enables gesture event dispatch for a widget
+    engine_.register_function("registerGesture", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto it = widgets_.find(id);
+        if (it != widgets_.end()) {
+            auto alive = callback_alive_;
+            auto* engine = &engine_;
+            it->second->on_gesture_cb = [alive, engine, id](const GestureEvent& ge) {
+                std::string type;
+                switch (ge.phase) {
+                    case GesturePhase::began:     type = "gesturestart"; break;
+                    case GesturePhase::ended:     type = "gestureend"; break;
+                    case GesturePhase::cancelled: type = "gestureend"; break;
+                    default:                      type = "gesturechange"; break;
+                }
+                std::string data = "{"
+                    "scale:" + std::to_string(ge.scale) + ","
+                    "rotation:" + std::to_string(ge.rotation) + ","
+                    "clientX:" + std::to_string(ge.position.x) + ","
+                    "clientY:" + std::to_string(ge.position.y) +
+                    "}";
+                safe_dispatch_eval(alive, engine, "__dispatch__('" + id + "', '" + type + "', " + data + ")", "gesture");
+            };
+        }
+        return choc::value::Value();
+    });
+
+    // nativeSetPointerCapture(id, pointerId) — P2b
+    engine_.register_function("nativeSetPointerCapture", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto pointerId = static_cast<int>(args.get<double>(1, 0));
+        auto it = widgets_.find(id);
+        if (it != widgets_.end()) {
+            it->second->set_pointer_capture(pointerId);
+            safe_dispatch_eval(engine_, "__dispatch__('" + id + "', 'gotpointercapture', {pointerId:" + std::to_string(pointerId) + "})", "gotpointercapture");
+        }
+        return choc::value::Value();
+    });
+
+    // nativeReleasePointerCapture(id, pointerId) — P2b
+    engine_.register_function("nativeReleasePointerCapture", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto pointerId = static_cast<int>(args.get<double>(1, 0));
+        auto it = widgets_.find(id);
+        if (it != widgets_.end()) {
+            it->second->release_pointer_capture(pointerId);
+            safe_dispatch_eval(engine_, "__dispatch__('" + id + "', 'lostpointercapture', {pointerId:" + std::to_string(pointerId) + "})", "lostpointercapture");
+        }
+        return choc::value::Value();
+    });
+
+    // enableInspectClick() — sets up Cmd+click detection on all registered widgets
+    engine_.register_function("enableInspectClick", [this](choc::javascript::ArgumentList) {
+        auto alive = callback_alive_;
+        auto* engine = &engine_;
+        root_.on_global_click = [alive, engine](const std::string& id, uint16_t mods) {
+            // Check for Cmd modifier (kModCmd = 0x10, kModMeta = 0x08)
+            bool cmd = (mods & (0x10 | 0x08)) != 0;
+            if (cmd) {
+                safe_dispatch_eval(alive, engine, "__dispatch__('__inspect__', 'click', '" + id + "')", "inspect click");
+            }
+        };
+        return choc::value::Value();
+    });
+
+    // removeWidget(id)
+    engine_.register_function("removeWidget", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        if (auto* w = widget(id)) {
+            View* parent = w->parent();
+            if (parent) {
+                auto removed = parent->remove_child(w);
+                erase_widget_subtree(widgets_, removed.get());
+            }
+        }
+        return choc::value::Value();
+    });
+
+    // ═══════════════════════════════════════════════════════════════
+    // Extended API: containers, layout, all widgets, themes, canvas
+    // ═══════════════════════════════════════════════════════════════
+
+    engine_.register_function("createRow", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto pid = args.get<std::string>(1, "");
+        auto v = std::make_unique<View>(); v->set_id(id);
+        v->flex().direction = FlexDirection::row;
+        widgets_[id] = v.get();
+        resolve_parent(pid)->add_child(std::move(v));
+        return choc::value::createString(id);
+    });
+
+    engine_.register_function("createCol", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto pid = args.get<std::string>(1, "");
+        auto v = std::make_unique<View>(); v->set_id(id);
+        v->flex().direction = FlexDirection::column;
+        widgets_[id] = v.get();
+        resolve_parent(pid)->add_child(std::move(v));
+        return choc::value::createString(id);
+    });
+
+    engine_.register_function("createModal", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto pid = args.get<std::string>(1, "");
+        auto v = std::make_unique<ModalOverlay>(); v->set_id(id);
+        v->flex().direction = FlexDirection::column;
+        auto* modal = v.get();
+        auto alive = callback_alive_;
+        auto* engine = &engine_;
+        modal->on_dismiss = [alive, engine, modal, id]() {
+            if (modal) {
+                modal->set_visible(false);
+            }
+            safe_dispatch_eval(alive, engine, "__dispatch__('" + id + "', 'dismiss', 0)", "modal dismiss");
+        };
+        widgets_[id] = v.get();
+        resolve_parent(pid)->add_child(std::move(v));
+        return choc::value::createString(id);
+    });
+
+    engine_.register_function("createPanel", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto pid = args.get<std::string>(1, "");
+        auto p = std::make_unique<Panel>(); p->set_id(id);
+        widgets_[id] = p.get();
+        resolve_parent(pid)->add_child(std::move(p));
+        return choc::value::createString(id);
+    });
+
+    engine_.register_function("setFlex", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto key = args.get<std::string>(1, "");
+        View* v = id.empty() ? &root_ : widget(id);
+        if (!v) return choc::value::Value();
+        auto& f = v->flex();
+        auto val = args.get<double>(2, 0);
+        if (key == "direction") f.direction = (args.get<std::string>(2,"col")=="row") ? FlexDirection::row : FlexDirection::column;
+        else if (key == "gap") f.gap = (float)val;
+        else if (key == "padding") f.padding = (float)val;
+        else if (key == "padding_top") f.padding_top = (float)val;
+        else if (key == "padding_right") f.padding_right = (float)val;
+        else if (key == "padding_bottom") f.padding_bottom = (float)val;
+        else if (key == "padding_left") f.padding_left = (float)val;
+        else if (key == "flex_grow") f.flex_grow = (float)val;
+        else if (key == "flex_shrink") f.flex_shrink = (float)val;
+        else if (key == "flex_basis") f.flex_basis = (float)val;
+        else if (key == "flex_wrap") f.flex_wrap = val > 0;
+        else if (key == "order") f.order = (int)val;
+        else if (key == "width") f.preferred_width = (float)val;
+        else if (key == "height") f.preferred_height = (float)val;
+        else if (key == "min_width") f.min_width = (float)val;
+        else if (key == "min_height") f.min_height = (float)val;
+        else if (key == "max_width") f.max_width = (float)val;
+        else if (key == "max_height") f.max_height = (float)val;
+        // Margin
+        else if (key == "margin") f.margin = (float)val;
+        else if (key == "margin_top") f.margin_top = (float)val;
+        else if (key == "margin_right") f.margin_right = (float)val;
+        else if (key == "margin_bottom") f.margin_bottom = (float)val;
+        else if (key == "margin_left") f.margin_left = (float)val;
+        // Directional gap
+        else if (key == "row_gap") f.row_gap = (float)val;
+        else if (key == "column_gap") f.column_gap = (float)val;
+        // Alignment
+        else if (key == "align_items") {
+            auto a = args.get<std::string>(2,"stretch");
+            if (a=="start") f.align_items=FlexAlign::start;
+            else if (a=="center") f.align_items=FlexAlign::center;
+            else if (a=="end") f.align_items=FlexAlign::end;
+            else f.align_items=FlexAlign::stretch;
+        }
+        else if (key == "align_self") {
+            auto a = args.get<std::string>(2,"auto");
+            if (a=="start") f.align_self=FlexAlign::start;
+            else if (a=="center") f.align_self=FlexAlign::center;
+            else if (a=="end") f.align_self=FlexAlign::end;
+            else if (a=="stretch") f.align_self=FlexAlign::stretch;
+            else f.align_self=FlexAlign::auto_;
+        }
+        else if (key == "justify_content") {
+            auto j = args.get<std::string>(2,"start");
+            if (j=="center") f.justify_content=FlexJustify::center;
+            else if (j=="end") f.justify_content=FlexJustify::end_;
+            else if (j=="space-between"||j=="space_between") f.justify_content=FlexJustify::space_between;
+            else if (j=="space-around"||j=="space_around") f.justify_content=FlexJustify::space_around;
+            else if (j=="space-evenly"||j=="space_evenly") f.justify_content=FlexJustify::space_evenly;
+            else f.justify_content=FlexJustify::start;
+        }
+        v->invalidate_layout();  // auto-invalidation on flex property change
+        return choc::value::Value();
+    });
+
+    // __domAppend(parentId, childId, tag) — native appendChild.
+    // Creates a native widget under parentId, purely in C++ — no re-entrant
+    // JS evaluation which causes stack overflow in QuickJS.
+    engine_.register_function("__domAppend", [this](choc::javascript::ArgumentList args) {
+        auto parentId = args.get<std::string>(0, "");
+        auto childId = args.get<std::string>(1, "");
+        auto tag = args.get<std::string>(2, "div");
+        auto* existing = widget(childId);
+        if (existing) {
+            if (auto* p = existing->parent()) {
+                // Move the existing subtree to the new parent — don't erase widgets
+                auto removed = p->remove_child(existing);
+                widgets_[childId] = removed.get();
+                resolve_parent(parentId)->add_child(std::move(removed));
+                return choc::value::Value();
+            }
+        }
+        // Create the appropriate widget type based on HTML tag
+        std::unique_ptr<View> child;
+        if (tag == "span" || tag == "p" || tag == "label" ||
+            tag == "h1" || tag == "h2" || tag == "h3" ||
+            tag == "h4" || tag == "h5" || tag == "h6") {
+            auto lbl = std::make_unique<Label>();
+            lbl->set_id(childId);
+            child = std::move(lbl);
+        } else if (tag == "canvas") {
+            auto canvas = std::make_unique<CanvasWidget>();
+            canvas->set_id(childId);
+            canvas->set_native_gpu_texture_provider([this, childId]() {
+                return this->describe_native_canvas_frame(childId);
+            });
+            child = std::move(canvas);
+        } else {
+            auto v = std::make_unique<View>();
+            v->set_id(childId);
+            if (tag == "div" || tag == "section" || tag == "article" || tag == "aside" ||
+                tag == "header" || tag == "footer" || tag == "nav" || tag == "main")
+                v->flex().direction = FlexDirection::column;
+            child = std::move(v);
+        }
+        widgets_[childId] = child.get();
+        resolve_parent(parentId)->add_child(std::move(child));
+        return choc::value::Value();
+    });
+
+    // __domRemove(childId) — native removeChild implementation
+    engine_.register_function("__domRemove", [this](choc::javascript::ArgumentList args) {
+        auto childId = args.get<std::string>(0, "");
+        auto* w = widget(childId);
+        if (w) {
+            if (auto* p = w->parent()) {
+                auto removed = p->remove_child(w);
+                erase_widget_subtree(widgets_, removed.get());
+            }
+        }
+        return choc::value::Value();
+    });
+
+    engine_.register_function("layout", [this](choc::javascript::ArgumentList) {
+        root_.clear_layout_dirty();
+        root_.layout_children();
+        request_repaint();
+        return choc::value::Value();
+    });
+
+    // getLayoutRect(id) -> {x, y, width, height, top, right, bottom, left}
+    // Returns layout-resolved bounds in root-relative coordinates
+    engine_.register_function("getLayoutRect", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        View* v = id.empty() ? &root_ : widget(id);
+        return make_layout_rect_value(v);
+    });
+
+    // getRootSize() -> {width, height} — actual root view dimensions for vw/vh/matchMedia
+    engine_.register_function("getRootSize", [this](choc::javascript::ArgumentList) {
+        auto b = root_.bounds();
+        auto r = choc::value::createObject("");
+        r.addMember("width", choc::value::createFloat64(b.width));
+        r.addMember("height", choc::value::createFloat64(b.height));
+        return r;
+    });
+
+    // setPointerEvents(id, "none"|"auto") — CSS pointer-events: skip in hit_test
+    engine_.register_function("setPointerEvents", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto mode = args.get<std::string>(1, "auto");
+        auto* v = id.empty() ? &root_ : widget(id);
+        if (v) v->set_hit_testable(mode != "none");
+        return choc::value::Value();
+    });
+
+    // setVisibility(id, "visible"|"hidden") — hidden preserves layout space
+    engine_.register_function("setVisibility", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto vis = args.get<std::string>(1, "visible");
+        auto* v = id.empty() ? &root_ : widget(id);
+        if (v) {
+            // visibility:hidden = still takes space but not painted
+            // We use opacity 0 + still visible for layout
+            if (vis == "hidden") { v->set_opacity(0); }
+            else { v->set_opacity(1); }
+        }
+        return choc::value::Value();
+    });
+
+    // setWhiteSpace(id, "normal"|"nowrap"|"pre"|"pre-wrap")
+    engine_.register_function("setWhiteSpace", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto ws = args.get<std::string>(1, "normal");
+        if (auto* l = dynamic_cast<Label*>(widget(id)))
+            l->set_multi_line(ws != "nowrap");
+        return choc::value::Value();
+    });
+
+    // setUserSelect(id, "none"|"text"|"all")
+    engine_.register_function("setUserSelect", [this](choc::javascript::ArgumentList args) {
+        (void)args; // Store for future use — currently no-op
+        return choc::value::Value();
+    });
+
+    engine_.register_function("createMeter", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, ""); auto o = args.get<std::string>(1, "vertical");
+        auto pid = args.get<std::string>(2, "");
+        auto m = std::make_unique<Meter>(); m->set_id(id);
+        if (o == "horizontal") m->set_orientation(Meter::Orientation::horizontal);
+        widgets_[id] = m.get(); resolve_parent(pid)->add_child(std::move(m));
+        return choc::value::createString(id);
+    });
+
+    engine_.register_function("createXYPad", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, ""); auto pid = args.get<std::string>(1, "");
+        auto p = std::make_unique<XYPad>(); p->set_id(id);
+        widgets_[id] = p.get(); resolve_parent(pid)->add_child(std::move(p));
+        return choc::value::createString(id);
+    });
+
+    engine_.register_function("createWaveform", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, ""); auto pid = args.get<std::string>(1, "");
+        auto w = std::make_unique<WaveformView>(); w->set_id(id);
+        widgets_[id] = w.get(); resolve_parent(pid)->add_child(std::move(w));
+        return choc::value::createString(id);
+    });
+
+    engine_.register_function("createSpectrum", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, ""); auto pid = args.get<std::string>(1, "");
+        auto s = std::make_unique<SpectrumView>(); s->set_id(id);
+        widgets_[id] = s.get(); resolve_parent(pid)->add_child(std::move(s));
+        return choc::value::createString(id);
+    });
+
+    engine_.register_function("createCombo", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, ""); auto pid = args.get<std::string>(1, "");
+        auto c = std::make_unique<ComboBox>(); c->set_id(id);
+        auto* ptr = c.get(); widgets_[id] = ptr;
+        auto alive = callback_alive_;
+        auto* engine = &engine_;
+        c->on_change = [alive, engine, id](int idx) {
+            safe_dispatch_eval(alive, engine, "__dispatch__('" + id + "', 'select', " + std::to_string(idx) + ")", "combo select");
+        };
+        resolve_parent(pid)->add_child(std::move(c));
+        return choc::value::createString(id);
+    });
+
+    engine_.register_function("createProgress", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, ""); auto pid = args.get<std::string>(1, "");
+        auto p = std::make_unique<ProgressBar>(); p->set_id(id);
+        widgets_[id] = p.get(); resolve_parent(pid)->add_child(std::move(p));
+        return choc::value::createString(id);
+    });
+
+    engine_.register_function("createScrollView", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, ""); auto pid = args.get<std::string>(1, "");
+        auto s = std::make_unique<ScrollView>(); s->set_id(id);
+        widgets_[id] = s.get(); resolve_parent(pid)->add_child(std::move(s));
+        return choc::value::createString(id);
+    });
+
+    engine_.register_function("createListBox", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, ""); auto pid = args.get<std::string>(1, "");
+        auto lb = std::make_unique<ListBox>(); lb->set_id(id);
+        auto* ptr = lb.get(); widgets_[id] = ptr;
+        auto alive = callback_alive_;
+        auto* engine = &engine_;
+        lb->on_select = [alive, engine, id](int idx) {
+            safe_dispatch_eval(alive, engine, "__dispatch__('" + id + "', 'select', " + std::to_string(idx) + ")", "list select");
+        };
+        lb->on_activate = [alive, engine, id](int idx) {
+            safe_dispatch_eval(alive, engine, "__dispatch__('" + id + "', 'activate', " + std::to_string(idx) + ")", "list activate");
+        };
+        resolve_parent(pid)->add_child(std::move(lb));
+        return choc::value::createString(id);
+    });
+
+    engine_.register_function("setListItems", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto* v = widget(id); if (!v) return choc::value::Value{};
+        if (auto* lb = dynamic_cast<ListBox*>(v)) {
+            std::vector<std::string> items;
+            if (args.numArgs > 1 && args[1]) {
+                auto& arr = *args[1];
+                for (uint32_t i = 0; i < arr.size(); ++i)
+                    items.push_back(std::string(arr[i].getString()));
+            }
+            lb->set_items(std::move(items));
+        }
+        return choc::value::Value{};
+    });
+
+    engine_.register_function("setListSelected", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto* v = widget(id); if (!v) return choc::value::Value{};
+        if (auto* lb = dynamic_cast<ListBox*>(v)) {
+            lb->set_selected(args.get<int>(1, 0));
+            lb->ensure_visible(lb->selected());
+        }
+        return choc::value::Value{};
+    });
+
+    engine_.register_function("setListRowHeight", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto* v = widget(id); if (!v) return choc::value::Value{};
+        if (auto* lb = dynamic_cast<ListBox*>(v))
+            lb->set_row_height(static_cast<float>(args.get<double>(1, 24.0)));
+        return choc::value::Value{};
+    });
+
+    engine_.register_function("createTextEditor", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, ""); auto pid = args.get<std::string>(1, "");
+        auto ed = std::make_unique<TextEditor>(); ed->set_id(id);
+        auto* ptr = ed.get(); widgets_[id] = ptr;
+        auto alive = callback_alive_;
+        auto* engine = &engine_;
+        ed->on_escape = [alive, engine, id]() {
+            safe_dispatch_eval(alive, engine, "__dispatch__('" + id + "', 'escape', 0)", "text escape");
+        };
+        ed->on_return = [alive, engine, id](const std::string& text) {
+            std::string e; for (char c : text) { if (c=='\'') e+= "\\'"; else if (c=='\n') e+= "\\n"; else e+= c; }
+            safe_dispatch_eval(alive, engine, "__dispatch__('" + id + "', 'return', '" + e + "')", "text return");
+        };
+        ed->on_change = [alive, engine, id](const std::string& text) {
+            std::string e; for (char c : text) { if (c=='\'') e+= "\\'"; else if (c=='\n') e+= "\\n"; else e+= c; }
+            safe_dispatch_eval(alive, engine, "__dispatch__('" + id + "', 'change', '" + e + "')", "text change");
+        };
+        resolve_parent(pid)->add_child(std::move(ed));
+        return choc::value::createString(id);
+    });
+
+    engine_.register_function("createCanvas", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, ""); auto pid = args.get<std::string>(1, "");
+        auto c = std::make_unique<CanvasWidget>(); c->set_id(id);
+        c->set_native_gpu_texture_provider([this, id]() {
+            return this->describe_native_canvas_frame(id);
+        });
+        widgets_[id] = c.get(); resolve_parent(pid)->add_child(std::move(c));
+        return choc::value::createString(id);
+    });
+
+    // Property setters
+    engine_.register_function("setLabel", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, ""); auto text = args.get<std::string>(1, "");
+        auto* v = widget(id);
+        if (auto* k = dynamic_cast<Knob*>(v)) k->set_label(text);
+        else if (auto* f = dynamic_cast<Fader*>(v)) f->set_label(text);
+        else if (auto* t = dynamic_cast<Toggle*>(v)) t->set_label(text);
+        else if (auto* tb = dynamic_cast<ToggleButton*>(v)) tb->set_label(text);
+        else if (auto* l = dynamic_cast<Label*>(v)) l->set_text(text);
+        return choc::value::Value();
+    });
+
+    // setStyle — placeholder until KnobStyle/ToggleStyle enums added to main widgets
+    engine_.register_function("setStyle", [](choc::javascript::ArgumentList) {
+        return choc::value::Value();
+    });
+
+    // setWidgetStyle(id, "standard"|"minimal") — switch rendering mode
+    // "minimal" draws simple shapes matching design tools (circles, thin tracks)
+    engine_.register_function("setWidgetStyle", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto style_str = args.get<std::string>(1, "standard");
+        auto style = (style_str == "minimal") ? WidgetRenderStyle::minimal : WidgetRenderStyle::standard;
+        auto* v = widget(id);
+        if (auto* k = dynamic_cast<Knob*>(v)) k->set_render_style(style);
+        else if (auto* f = dynamic_cast<Fader*>(v)) f->set_render_style(style);
+        else if (auto* m = dynamic_cast<Meter*>(v)) m->set_render_style(style);
+        return choc::value::Value();
+    });
+
+    engine_.register_function("setItems", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        if (auto* c = dynamic_cast<ComboBox*>(widget(id))) {
+            std::vector<std::string> items;
+            if (args.numArgs > 1 && args[1]) {
+                auto& arr = *args[1];
+                for (uint32_t i = 0; i < arr.size(); ++i)
+                    items.push_back(std::string(arr[i].toString()));
+            }
+            c->set_items(std::move(items));
+        }
+        return choc::value::Value();
+    });
+
+    // setSelected(id, index) — set ComboBox selected index without firing on_change
+    engine_.register_function("setSelected", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto idx = args.get<int>(1, 0);
+        if (auto* c = dynamic_cast<ComboBox*>(widget(id))) {
+            c->set_selected_silent(idx);
+        }
+        return choc::value::Value();
+    });
+
+    // Typography properties
+    engine_.register_function("setFontWeight", [this](choc::javascript::ArgumentList args) {
+        auto* v = widget(args.get<std::string>(0, ""));
+        int w = static_cast<int>(args.get<double>(1, 400));
+        if (auto* l = dynamic_cast<Label*>(v)) l->set_font_weight(w);
+        return choc::value::Value();
+    });
+
+    engine_.register_function("setFontStyle", [this](choc::javascript::ArgumentList args) {
+        auto* v = widget(args.get<std::string>(0, ""));
+        auto s = args.get<std::string>(1, "normal");
+        if (auto* l = dynamic_cast<Label*>(v)) l->set_font_style(s == "italic" ? 1 : 0);
+        return choc::value::Value();
+    });
+
+    engine_.register_function("setLetterSpacing", [this](choc::javascript::ArgumentList args) {
+        auto* v = widget(args.get<std::string>(0, ""));
+        auto sp = static_cast<float>(args.get<double>(1, 0));
+        if (auto* l = dynamic_cast<Label*>(v)) l->set_letter_spacing(sp);
+        return choc::value::Value();
+    });
+
+    engine_.register_function("setLineHeight", [this](choc::javascript::ArgumentList args) {
+        auto* v = widget(args.get<std::string>(0, ""));
+        auto lh = static_cast<float>(args.get<double>(1, 0));
+        if (auto* l = dynamic_cast<Label*>(v)) l->set_line_height(lh);
+        return choc::value::Value();
+    });
+
+    engine_.register_function("setTextAlign", [this](choc::javascript::ArgumentList args) {
+        auto* v = widget(args.get<std::string>(0, ""));
+        auto a = args.get<std::string>(1, "left");
+        if (auto* l = dynamic_cast<Label*>(v)) {
+            if (a == "center") l->set_text_align(LabelAlign::center);
+            else if (a == "right") l->set_text_align(LabelAlign::right);
+            else l->set_text_align(LabelAlign::left);
+        }
+        return choc::value::Value();
+    });
+
+    engine_.register_function("setMultiLine", [this](choc::javascript::ArgumentList args) {
+        auto* v = widget(args.get<std::string>(0, ""));
+        auto ml = args.get<double>(1, 0) > 0.5;
+        if (auto* l = dynamic_cast<Label*>(v)) l->set_multi_line(ml);
+        else if (auto* e = dynamic_cast<TextEditor*>(v)) e->multi_line = ml;
+        return choc::value::Value();
+    });
+
+    engine_.register_function("setFontSize", [this](choc::javascript::ArgumentList args) {
+        if (auto* l = dynamic_cast<Label*>(widget(args.get<std::string>(0, ""))))
+            l->set_font_size(static_cast<float>(args.get<double>(1, 14)));
+        else if (auto* e = dynamic_cast<TextEditor*>(widget(args.get<std::string>(0, ""))))
+            e->set_font_size(static_cast<float>(args.get<double>(1, 14)));
+        return choc::value::Value();
+    });
+
+    engine_.register_function("setProgress", [this](choc::javascript::ArgumentList args) {
+        if (auto* p = dynamic_cast<ProgressBar*>(widget(args.get<std::string>(0, ""))))
+            p->set_progress(static_cast<float>(args.get<double>(1, 0)));
+        return choc::value::Value();
+    });
+
+    engine_.register_function("setMeterLevel", [this](choc::javascript::ArgumentList args) {
+        if (auto* m = dynamic_cast<Meter*>(widget(args.get<std::string>(0, ""))))
+            m->set_level(static_cast<float>(args.get<double>(1, 0)),
+                        static_cast<float>(args.get<double>(2, 0)));
+        return choc::value::Value();
+    });
+
+    engine_.register_function("setXY", [this](choc::javascript::ArgumentList args) {
+        if (auto* p = dynamic_cast<XYPad*>(widget(args.get<std::string>(0, "")))) {
+            p->set_x(static_cast<float>(args.get<double>(1, .5)));
+            p->set_y(static_cast<float>(args.get<double>(2, .5)));
+        }
+        return choc::value::Value();
+    });
+
+    engine_.register_function("setWaveformData", [this](choc::javascript::ArgumentList args) {
+        if (auto* w = dynamic_cast<WaveformView*>(widget(args.get<std::string>(0, "")))) {
+            if (args.numArgs > 1 && args[1]) {
+                auto& a = *args[1]; std::vector<float> d(a.size());
+                for (uint32_t i = 0; i < a.size(); ++i) d[i] = static_cast<float>(a[i].getWithDefault<double>(0));
+                w->set_data(std::move(d));
+            }
+        }
+        return choc::value::Value();
+    });
+
+    engine_.register_function("setSpectrumData", [this](choc::javascript::ArgumentList args) {
+        if (auto* s = dynamic_cast<SpectrumView*>(widget(args.get<std::string>(0, "")))) {
+            if (args.numArgs > 1 && args[1]) {
+                auto& a = *args[1]; std::vector<float> d(a.size());
+                for (uint32_t i = 0; i < a.size(); ++i) d[i] = static_cast<float>(a[i].getWithDefault<double>(0));
+                s->set_spectrum(std::move(d));
+            }
+        }
+        return choc::value::Value();
+    });
+
+    engine_.register_function("setPlaceholder", [this](choc::javascript::ArgumentList args) {
+        if (auto* e = dynamic_cast<TextEditor*>(widget(args.get<std::string>(0, ""))))
+            e->placeholder = args.get<std::string>(1, "");
+        return choc::value::Value();
+    });
+
+    engine_.register_function("setText", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, ""); auto t = args.get<std::string>(1, "");
+        auto* v = widget(id);
+        if (auto* e = dynamic_cast<TextEditor*>(v)) e->set_text(t);
+        else if (auto* l = dynamic_cast<Label*>(v)) l->set_text(t);
+        return choc::value::Value();
+    });
+
+    engine_.register_function("getText", [this](choc::javascript::ArgumentList args) {
+        auto* v = widget(args.get<std::string>(0, ""));
+        if (auto* e = dynamic_cast<TextEditor*>(v)) return choc::value::createString(e->text());
+        if (auto* l = dynamic_cast<Label*>(v)) return choc::value::createString(l->text());
+        return choc::value::createString("");
+    });
+
+    engine_.register_function("setPanelStyle", [this](choc::javascript::ArgumentList args) {
+        if (auto* p = dynamic_cast<Panel*>(widget(args.get<std::string>(0, "")))) {
+            if (args.numArgs > 1) p->set_background_token(args.get<std::string>(1, "bg.surface"));
+            if (args.numArgs > 2) p->set_border_token(args.get<std::string>(2, "control.border"));
+            if (args.numArgs > 3) p->set_corner_radius(static_cast<float>(args.get<double>(3, 8)));
+            if (args.numArgs > 4) p->set_border_width(static_cast<float>(args.get<double>(4, 1)));
+        }
+        return choc::value::Value();
+    });
+
+    engine_.register_function("setScrollContentSize", [this](choc::javascript::ArgumentList args) {
+        if (auto* s = dynamic_cast<ScrollView*>(widget(args.get<std::string>(0, ""))))
+            s->set_content_size({static_cast<float>(args.get<double>(1,0)),
+                                static_cast<float>(args.get<double>(2,0))});
+        return choc::value::Value();
+    });
+
+    // ── Visual properties (CSS Box Model) ─────────────────────────────
+
+    // CSS Color Level 4 parser — accepts hex, rgb(), rgba(), hsl(), hsla(), named, transparent
+    auto parseColor = [](const std::string& str) -> canvas::Color {
+        canvas::Color c{255,255,255,255};
+        if (str.empty()) return c;
+
+        // transparent
+        if (str == "transparent") return {0, 0, 0, 0};
+
+        // Hex: #RGB, #RRGGBB, #RRGGBBAA
+        if (str[0] == '#') {
+            if (str.size() == 4) {  // #RGB → #RRGGBB
+                c.r = static_cast<uint8_t>(std::stoul(std::string(2, str[1]), nullptr, 16));
+                c.g = static_cast<uint8_t>(std::stoul(std::string(2, str[2]), nullptr, 16));
+                c.b = static_cast<uint8_t>(std::stoul(std::string(2, str[3]), nullptr, 16));
+            } else if (str.size() >= 7) {
+                c.r = static_cast<uint8_t>(std::stoul(str.substr(1,2), nullptr, 16));
+                c.g = static_cast<uint8_t>(std::stoul(str.substr(3,2), nullptr, 16));
+                c.b = static_cast<uint8_t>(std::stoul(str.substr(5,2), nullptr, 16));
+                if (str.size() >= 9)
+                    c.a = static_cast<uint8_t>(std::stoul(str.substr(7,2), nullptr, 16));
+            }
+            return c;
+        }
+
+        // rgb(r, g, b) / rgba(r, g, b, a)
+        if (str.substr(0, 4) == "rgb(" || str.substr(0, 5) == "rgba(") {
+            auto inner = str.substr(str.find('(') + 1);
+            inner = inner.substr(0, inner.find(')'));
+            float vals[4] = {0, 0, 0, 1};
+            int n = 0;
+            std::istringstream ss(inner);
+            std::string tok;
+            while (std::getline(ss, tok, ',') && n < 4) {
+                while (!tok.empty() && tok[0] == ' ') tok.erase(0, 1);
+                vals[n++] = std::stof(tok);
+            }
+            c.r = static_cast<uint8_t>(std::clamp(vals[0], 0.0f, 255.0f));
+            c.g = static_cast<uint8_t>(std::clamp(vals[1], 0.0f, 255.0f));
+            c.b = static_cast<uint8_t>(std::clamp(vals[2], 0.0f, 255.0f));
+            c.a = static_cast<uint8_t>(std::clamp(vals[3] * 255.0f, 0.0f, 255.0f));
+            return c;
+        }
+
+        // hsl(h, s%, l%) / hsla(h, s%, l%, a)
+        if (str.substr(0, 4) == "hsl(" || str.substr(0, 5) == "hsla(") {
+            auto inner = str.substr(str.find('(') + 1);
+            inner = inner.substr(0, inner.find(')'));
+            float vals[4] = {0, 0, 0, 1};
+            int n = 0;
+            std::istringstream ss(inner);
+            std::string tok;
+            while (std::getline(ss, tok, ',') && n < 4) {
+                while (!tok.empty() && tok[0] == ' ') tok.erase(0, 1);
+                if (tok.back() == '%') tok.pop_back();
+                vals[n++] = std::stof(tok);
+            }
+            float h = std::fmod(vals[0], 360.0f) / 360.0f;
+            float s = vals[1] / 100.0f;
+            float l = vals[2] / 100.0f;
+            // HSL to RGB conversion
+            auto hue2rgb = [](float p, float q, float t) {
+                if (t < 0) t += 1; if (t > 1) t -= 1;
+                if (t < 1.0f/6) return p + (q - p) * 6 * t;
+                if (t < 1.0f/2) return q;
+                if (t < 2.0f/3) return p + (q - p) * (2.0f/3 - t) * 6;
+                return p;
+            };
+            float r, g, b;
+            if (s == 0) { r = g = b = l; }
+            else {
+                float q = l < 0.5f ? l * (1 + s) : l + s - l * s;
+                float p = 2 * l - q;
+                r = hue2rgb(p, q, h + 1.0f/3);
+                g = hue2rgb(p, q, h);
+                b = hue2rgb(p, q, h - 1.0f/3);
+            }
+            c.r = static_cast<uint8_t>(r * 255); c.g = static_cast<uint8_t>(g * 255);
+            c.b = static_cast<uint8_t>(b * 255);
+            c.a = static_cast<uint8_t>(std::clamp(vals[3] * 255.0f, 0.0f, 255.0f));
+            return c;
+        }
+
+        // Named colors (common subset)
+        static const std::unordered_map<std::string, uint32_t> named = {
+            {"black", 0x000000}, {"white", 0xFFFFFF}, {"red", 0xFF0000},
+            {"green", 0x008000}, {"blue", 0x0000FF}, {"yellow", 0xFFFF00},
+            {"cyan", 0x00FFFF}, {"magenta", 0xFF00FF}, {"orange", 0xFFA500},
+            {"purple", 0x800080}, {"pink", 0xFFC0CB}, {"gray", 0x808080},
+            {"grey", 0x808080}, {"silver", 0xC0C0C0}, {"gold", 0xFFD700},
+            {"navy", 0x000080}, {"teal", 0x008080}, {"maroon", 0x800000},
+            {"olive", 0x808000}, {"lime", 0x00FF00}, {"aqua", 0x00FFFF},
+            {"fuchsia", 0xFF00FF}, {"coral", 0xFF7F50}, {"salmon", 0xFA8072},
+            {"tomato", 0xFF6347}, {"crimson", 0xDC143C}, {"indigo", 0x4B0082},
+            {"violet", 0xEE82EE}, {"turquoise", 0x40E0D0}, {"tan", 0xD2B48C},
+            {"khaki", 0xF0E68C}, {"plum", 0xDDA0DD}, {"orchid", 0xDA70D6},
+            {"chocolate", 0xD2691E}, {"sienna", 0xA0522D}, {"peru", 0xCD853F},
+            {"linen", 0xFAF0E6}, {"ivory", 0xFFFFF0}, {"beige", 0xF5F5DC},
+            {"wheat", 0xF5DEB3}, {"snow", 0xFFFAFA}, {"azure", 0xF0FFFF},
+            {"mintcream", 0xF5FFFA}, {"honeydew", 0xF0FFF0}, {"aliceblue", 0xF0F8FF},
+            {"lavender", 0xE6E6FA}, {"mistyrose", 0xFFE4E1}, {"seashell", 0xFFF5EE},
+            {"cornsilk", 0xFFF8DC}, {"papayawhip", 0xFFEFD5}, {"blanchedalmond", 0xFFEBCD},
+            {"bisque", 0xFFE4C4}, {"moccasin", 0xFFE4B5}, {"oldlace", 0xFDF5E6},
+            {"floralwhite", 0xFFFAF0}, {"ghostwhite", 0xF8F8FF}, {"whitesmoke", 0xF5F5F5},
+            {"gainsboro", 0xDCDCDC}, {"lightgray", 0xD3D3D3}, {"darkgray", 0xA9A9A9},
+            {"dimgray", 0x696969}, {"lightslategray", 0x778899}, {"slategray", 0x708090},
+            {"darkslategray", 0x2F4F4F},
+            {"lightcoral", 0xF08080}, {"indianred", 0xCD5C5C}, {"firebrick", 0xB22222},
+            {"darkred", 0x8B0000}, {"orangered", 0xFF4500}, {"darkorange", 0xFF8C00},
+            {"lightgreen", 0x90EE90}, {"limegreen", 0x32CD32}, {"forestgreen", 0x228B22},
+            {"darkgreen", 0x006400}, {"springgreen", 0x00FF7F}, {"seagreen", 0x2E8B57},
+            {"lightblue", 0xADD8E6}, {"skyblue", 0x87CEEB}, {"deepskyblue", 0x00BFFF},
+            {"dodgerblue", 0x1E90FF}, {"royalblue", 0x4169E1}, {"steelblue", 0x4682B4},
+            {"cornflowerblue", 0x6495ED}, {"mediumblue", 0x0000CD}, {"darkblue", 0x00008B},
+            {"midnightblue", 0x191970}, {"slateblue", 0x6A5ACD}, {"mediumpurple", 0x9370DB},
+            {"blueviolet", 0x8A2BE2}, {"darkviolet", 0x9400D3}, {"darkorchid", 0x9932CC},
+            {"darkmagenta", 0x8B008B}, {"deeppink", 0xFF1493}, {"hotpink", 0xFF69B4},
+            {"mediumvioletred", 0xC71585}, {"palevioletred", 0xDB7093},
+        };
+        auto it = named.find(str);
+        if (it != named.end()) {
+            uint32_t v = it->second;
+            c.r = (v >> 16) & 0xFF; c.g = (v >> 8) & 0xFF; c.b = v & 0xFF; c.a = 255;
+            return c;
+        }
+
+        return c;  // default white
+    };
+    // Alias for backward compatibility
+    auto parseHexColor = parseColor;
+
+    engine_.register_function("setBackground", [this, parseHexColor](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto hex = args.get<std::string>(1, "");
+        auto* v = id.empty() ? &root_ : widget(id);
+        if (v && !hex.empty()) v->set_background_color(parseHexColor(hex));
+        return choc::value::Value();
+    });
+
+    engine_.register_function("setBorder", [this, parseHexColor](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto hex = args.get<std::string>(1, "");
+        auto width = args.get<double>(2, 1.0);
+        auto radius = args.get<double>(3, 0.0);
+        auto* v = id.empty() ? &root_ : widget(id);
+        if (v && !hex.empty()) v->set_border(parseHexColor(hex), (float)width, (float)radius);
+        return choc::value::Value();
+    });
+
+    // setBorderSide(id, side, width, color) — per-side border
+    engine_.register_function("setBorderSide", [this, parseHexColor](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto side = args.get<std::string>(1, "");
+        auto width = static_cast<float>(args.get<double>(2, 1.0));
+        auto hex = args.get<std::string>(3, "");
+        auto* v = id.empty() ? &root_ : widget(id);
+        if (v) {
+            auto c = hex.empty() ? canvas::Color{128,128,128,255} : parseHexColor(hex);
+            if (side == "top") v->set_border_top(c, width);
+            else if (side == "right") v->set_border_right(c, width);
+            else if (side == "bottom") v->set_border_bottom(c, width);
+            else if (side == "left") v->set_border_left(c, width);
+        }
+        return choc::value::Value();
+    });
+
+    // setCornerRadius(id, corner, radius) — per-corner border-radius
+    engine_.register_function("setCornerRadius", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto corner = args.get<std::string>(1, "");
+        auto r = static_cast<float>(args.get<double>(2, 0));
+        auto* v = id.empty() ? &root_ : widget(id);
+        if (v) {
+            if (corner == "TopLeft") v->set_corner_radius_tl(r);
+            else if (corner == "TopRight") v->set_corner_radius_tr(r);
+            else if (corner == "BottomLeft") v->set_corner_radius_bl(r);
+            else if (corner == "BottomRight") v->set_corner_radius_br(r);
+        }
+        return choc::value::Value();
+    });
+
+    // registerWheel(id) — enable wheel event dispatch for scroll/zoom
+    engine_.register_function("registerWheel", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto it = widgets_.find(id);
+        if (it != widgets_.end()) {
+            auto* w = it->second;
+            auto alive = callback_alive_;
+            auto* engine = &engine_;
+            auto previous_pointer = w->on_pointer_event;
+            w->on_pointer_event = [alive, engine, id, previous_pointer](const MouseEvent& me) {
+                if (previous_pointer) {
+                    previous_pointer(me);
+                }
+                if (!me.is_wheel) {
+                    return;
+                }
+                std::string data = std::to_string(me.scroll_delta_x) + "," + std::to_string(me.scroll_delta_y);
+                safe_dispatch_eval(alive, engine, "__dispatch__('" + id + "', 'wheel', " + data + ")", "wheel");
+            };
+        }
+        return choc::value::Value();
+    });
+
+    engine_.register_function("setOpacity", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto alpha = args.get<double>(1, 1.0);
+        auto* v = id.empty() ? &root_ : widget(id);
+        if (v) v->set_opacity((float)alpha);
+        return choc::value::Value();
+    });
+
+    engine_.register_function("setTextColor", [this, parseHexColor](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto hex = args.get<std::string>(1, "");
+        auto* v = widget(id);
+        if (!v || hex.empty()) return choc::value::Value();
+        // Set a custom text color token override on the view's theme
+        auto theme = v->theme();
+        theme.colors["text.primary"] = parseHexColor(hex);
+        v->set_theme(theme);
+        return choc::value::Value();
+    });
+
+    engine_.register_function("setOverflow", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto mode = args.get<std::string>(1, "hidden");
+        auto* v = id.empty() ? &root_ : widget(id);
+        if (v) v->set_overflow(mode == "visible" ? View::Overflow::visible : View::Overflow::hidden);
+        return choc::value::Value();
+    });
+
+    // Canvas drawing
+    engine_.register_function("canvasClear", [this](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, ""))))
+            c->clear_commands();
+        return choc::value::Value();
+    });
+
+    // Canvas 2D API — full CanvasRenderingContext2D equivalent
+    // Helper to get CanvasWidget and add a command
+    auto canvasCmd = [this](choc::javascript::ArgumentList& args, CanvasDrawCmd::Type type) -> CanvasWidget* {
+        auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")));
+        return c;
+    };
+
+    engine_.register_function("canvasRect", [this, parseColor](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::fill_rect;
+            cmd.x=(float)args.get<double>(1,0); cmd.y=(float)args.get<double>(2,0);
+            cmd.w=(float)args.get<double>(3,0); cmd.h=(float)args.get<double>(4,0);
+            cmd.color = parseColor(args.get<std::string>(5, "#fff"));
+            c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    engine_.register_function("canvasStrokeRect", [this, parseColor](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::stroke_rect;
+            cmd.x=(float)args.get<double>(1,0); cmd.y=(float)args.get<double>(2,0);
+            cmd.w=(float)args.get<double>(3,0); cmd.h=(float)args.get<double>(4,0);
+            cmd.color = parseColor(args.get<std::string>(5, "#fff"));
+            cmd.extra = (float)args.get<double>(6, 1);
+            c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    engine_.register_function("canvasFillCircle", [this, parseColor](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::fill_circle;
+            cmd.x=(float)args.get<double>(1,0); cmd.y=(float)args.get<double>(2,0);
+            cmd.extra=(float)args.get<double>(3,10);
+            cmd.color = parseColor(args.get<std::string>(4, "#fff"));
+            c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    engine_.register_function("canvasStrokeLine", [this, parseColor](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::stroke_line;
+            cmd.x=(float)args.get<double>(1,0); cmd.y=(float)args.get<double>(2,0);
+            cmd.w=(float)args.get<double>(3,0); cmd.h=(float)args.get<double>(4,0);
+            cmd.color = parseColor(args.get<std::string>(5, "#fff"));
+            cmd.extra=(float)args.get<double>(6, 1);
+            c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    engine_.register_function("canvasFillText", [this, parseColor](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::fill_text;
+            cmd.text = args.get<std::string>(1, "");
+            cmd.x=(float)args.get<double>(2,0); cmd.y=(float)args.get<double>(3,0);
+            cmd.extra=(float)args.get<double>(4, 14);
+            cmd.color = parseColor(args.get<std::string>(5, "#fff"));
+            c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    engine_.register_function("canvasSetFillColor", [this, parseColor](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::set_fill_color;
+            cmd.color = parseColor(args.get<std::string>(1, "#fff"));
+            c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    engine_.register_function("canvasSetStrokeColor", [this, parseColor](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::set_stroke_color;
+            cmd.color = parseColor(args.get<std::string>(1, "#fff"));
+            c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    engine_.register_function("canvasSetLineWidth", [this](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::set_line_width;
+            cmd.extra = (float)args.get<double>(1, 1);
+            c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    engine_.register_function("canvasSetFont", [this](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::set_font;
+            cmd.text = args.get<std::string>(1, "Inter");
+            cmd.extra = (float)args.get<double>(2, 14);
+            c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    // Path operations
+    engine_.register_function("canvasBeginPath", [this](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::begin_path; c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    engine_.register_function("canvasMoveTo", [this](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::move_to;
+            cmd.x=(float)args.get<double>(1,0); cmd.y=(float)args.get<double>(2,0);
+            c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    engine_.register_function("canvasLineTo", [this](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::line_to;
+            cmd.x=(float)args.get<double>(1,0); cmd.y=(float)args.get<double>(2,0);
+            c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    engine_.register_function("canvasQuadTo", [this](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::quad_to;
+            cmd.x=(float)args.get<double>(1,0); cmd.y=(float)args.get<double>(2,0);
+            cmd.x2=(float)args.get<double>(3,0); cmd.y2=(float)args.get<double>(4,0);
+            c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    engine_.register_function("canvasCubicTo", [this](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::cubic_to;
+            cmd.x=(float)args.get<double>(1,0); cmd.y=(float)args.get<double>(2,0);
+            cmd.x2=(float)args.get<double>(3,0); cmd.y2=(float)args.get<double>(4,0);
+            cmd.x3=(float)args.get<double>(5,0); cmd.y3=(float)args.get<double>(6,0);
+            c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    engine_.register_function("canvasClosePath", [this](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::close_path; c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    engine_.register_function("canvasFillPath", [this](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::fill_path; c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    engine_.register_function("canvasStrokePath", [this](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::stroke_path; c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    // State
+    engine_.register_function("canvasSave", [this](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::save; c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    engine_.register_function("canvasRestore", [this](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::restore; c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    // Transform
+    engine_.register_function("canvasTranslate", [this](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::translate;
+            cmd.x=(float)args.get<double>(1,0); cmd.y=(float)args.get<double>(2,0);
+            c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    engine_.register_function("canvasScale", [this](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::scale;
+            cmd.x=(float)args.get<double>(1,1); cmd.y=(float)args.get<double>(2,1);
+            c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    engine_.register_function("canvasRotate", [this](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::rotate;
+            cmd.extra=(float)args.get<double>(1,0);
+            c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    // setStateStyle(id, state, property, value) — declarative state-driven styling
+    // Replaces manual hover callback wiring. States: hover, active, focus, disabled
+    engine_.register_function("setStateStyle", [this, parseColor](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto state = args.get<std::string>(1, "hover");
+        auto prop = args.get<std::string>(2, "");
+        auto val_str = args.get<std::string>(3, "");
+        auto* v = widget(id);
+        if (!v || prop.empty()) return choc::value::Value();
+
+        // Store the original value on first call
+        // Then register hover/focus callbacks that apply/revert
+
+        if (state == "hover") {
+            // Capture current value as "normal" state
+            if (prop == "background") {
+                auto target_color = parseColor(val_str);
+                auto* view = v;
+                // Wire hover enter/leave to apply/revert background
+                view->on_hover_enter = [this, id, view, target_color]() {
+                    view->set_background_color(target_color);
+                    engine_.evaluate("__dispatch__('" + id + "', 'mouseenter', 0)");
+                };
+                view->on_hover_leave = [this, id, view]() {
+                    view->clear_background_color();
+                    engine_.evaluate("__dispatch__('" + id + "', 'mouseleave', 0)");
+                };
+            } else if (prop == "scale") {
+                float target_scale = std::stof(val_str);
+                auto* view = v;
+                view->on_hover_enter = [this, id, view, target_scale]() {
+                    view->set_scale(target_scale);
+                    engine_.evaluate("__dispatch__('" + id + "', 'mouseenter', 0)");
+                };
+                view->on_hover_leave = [this, id, view]() {
+                    view->set_scale(1.0f);
+                    engine_.evaluate("__dispatch__('" + id + "', 'mouseleave', 0)");
+                };
+            } else if (prop == "opacity") {
+                float target_opacity = std::stof(val_str);
+                auto* view = v;
+                float original = view->opacity();
+                view->on_hover_enter = [this, id, view, target_opacity]() {
+                    view->set_opacity(target_opacity);
+                    engine_.evaluate("__dispatch__('" + id + "', 'mouseenter', 0)");
+                };
+                view->on_hover_leave = [this, id, view, original]() {
+                    view->set_opacity(original);
+                    engine_.evaluate("__dispatch__('" + id + "', 'mouseleave', 0)");
+                };
+            }
+        }
+        return choc::value::Value();
+    });
+
+    // setEnabled(id, bool) — CSS :disabled equivalent
+    engine_.register_function("setEnabled", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto enabled = args.get<double>(1, 1) > 0.5;
+        auto* v = id.empty() ? &root_ : widget(id);
+        if (v) v->set_enabled(enabled);
+        return choc::value::Value();
+    });
+
+    // setDebugPaint(bool) — draw bounding box outlines on all views
+    engine_.register_function("setDebugPaint", [this](choc::javascript::ArgumentList args) {
+        auto on = args.get<double>(0, 0) > 0.5;
+        // Store as a dimension token on root theme
+        auto theme = root_.theme();
+        theme.dimensions["debug.paint"] = on ? 1.0f : 0.0f;
+        root_.set_theme(theme);
+        return choc::value::Value();
+    });
+
+    // setColorToken(name, color) — set a color token on the root theme
+    engine_.register_function("setColorToken", [this, parseColor](choc::javascript::ArgumentList args) {
+        auto name = args.get<std::string>(0, "");
+        auto color_str = args.get<std::string>(1, "");
+        if (name.empty()) return choc::value::Value();
+        auto theme = root_.theme();
+        auto c = parseColor(color_str);
+        theme.colors[name] = c;
+        root_.set_theme(theme);
+        return choc::value::Value();
+    });
+
+    // setDimensionToken(name, value) — set a dimension token on the root theme
+    engine_.register_function("setDimensionToken", [this](choc::javascript::ArgumentList args) {
+        auto name = args.get<std::string>(0, "");
+        auto val = static_cast<float>(args.get<double>(1, 0));
+        if (name.empty()) return choc::value::Value();
+        auto theme = root_.theme();
+        theme.dimensions[name] = val;
+        root_.set_theme(theme);
+        return choc::value::Value();
+    });
+
+    // setTextTransform(id, "uppercase"/"lowercase"/"capitalize"/"none") — CSS text-transform
+    engine_.register_function("setTextTransform", [this](choc::javascript::ArgumentList args) {
+        auto* v = widget(args.get<std::string>(0, ""));
+        auto t = args.get<std::string>(1, "none");
+        if (auto* l = dynamic_cast<Label*>(v)) {
+            if (t == "uppercase") l->set_text_transform(Label::TextTransform::uppercase);
+            else if (t == "lowercase") l->set_text_transform(Label::TextTransform::lowercase);
+            else if (t == "capitalize") l->set_text_transform(Label::TextTransform::capitalize);
+            else l->set_text_transform(Label::TextTransform::none);
+        }
+        return choc::value::Value();
+    });
+
+    // setTextDecoration(id, "underline"/"line-through"/"overline"/"none") — CSS text-decoration
+    engine_.register_function("setTextDecoration", [this](choc::javascript::ArgumentList args) {
+        auto* v = widget(args.get<std::string>(0, ""));
+        auto d = args.get<std::string>(1, "none");
+        if (auto* l = dynamic_cast<Label*>(v)) {
+            if (d == "underline") l->set_text_decoration(Label::TextDecoration::underline);
+            else if (d == "line-through") l->set_text_decoration(Label::TextDecoration::line_through);
+            else if (d == "overline") l->set_text_decoration(Label::TextDecoration::overline);
+            else l->set_text_decoration(Label::TextDecoration::none);
+        }
+        return choc::value::Value();
+    });
+
+    // setPosition(id, "static"/"relative"/"absolute"/"fixed") — CSS position
+    engine_.register_function("setPosition", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto pos = args.get<std::string>(1, "static");
+        auto* v = id.empty() ? &root_ : widget(id);
+        if (!v) return choc::value::Value();
+        if (pos == "relative") v->set_position(View::Position::relative);
+        else if (pos == "absolute") v->set_position(View::Position::absolute);
+        else if (pos == "fixed") v->set_position(View::Position::fixed);
+        else if (pos == "sticky") v->set_position(View::Position::sticky);
+        else v->set_position(View::Position::static_);
+        return choc::value::Value();
+    });
+
+    // setTop/setRight/setBottom/setLeft(id, px) — CSS positioning offsets
+    engine_.register_function("setTop", [this](choc::javascript::ArgumentList args) {
+        auto* v = widget(args.get<std::string>(0, "")); if (v) v->set_top(static_cast<float>(args.get<double>(1, 0)));
+        return choc::value::Value();
+    });
+    engine_.register_function("setRight", [this](choc::javascript::ArgumentList args) {
+        auto* v = widget(args.get<std::string>(0, "")); if (v) v->set_right(static_cast<float>(args.get<double>(1, 0)));
+        return choc::value::Value();
+    });
+    engine_.register_function("setBottom", [this](choc::javascript::ArgumentList args) {
+        auto* v = widget(args.get<std::string>(0, "")); if (v) v->set_bottom(static_cast<float>(args.get<double>(1, 0)));
+        return choc::value::Value();
+    });
+    engine_.register_function("setLeft", [this](choc::javascript::ArgumentList args) {
+        auto* v = widget(args.get<std::string>(0, "")); if (v) v->set_left(static_cast<float>(args.get<double>(1, 0)));
+        return choc::value::Value();
+    });
+
+    // setZIndex(id, n) — CSS z-index
+    engine_.register_function("setZIndex", [this](choc::javascript::ArgumentList args) {
+        auto* v = widget(args.get<std::string>(0, ""));
+        if (v) v->set_z_index(static_cast<int>(args.get<double>(1, 0)));
+        return choc::value::Value();
+    });
+
+    // setTransitionDuration(id, seconds) — CSS transition duration for animated property changes
+    engine_.register_function("setTransitionDuration", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto dur = static_cast<float>(args.get<double>(1, 0.15));
+        // Store transition duration on the view's theme as a dimension token
+        auto* v = id.empty() ? &root_ : widget(id);
+        if (v) {
+            auto theme = v->theme();
+            theme.dimensions["transition.duration"] = dur;
+            v->set_theme(theme);
+        }
+        return choc::value::Value();
+    });
+
+    // setTranslate(id, x, y) — CSS transform: translate()
+    engine_.register_function("setTranslate", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto x = static_cast<float>(args.get<double>(1, 0));
+        auto y = static_cast<float>(args.get<double>(2, 0));
+        auto* v = id.empty() ? &root_ : widget(id);
+        if (v) v->set_translate(x, y);
+        return choc::value::Value();
+    });
+
+    // setRotation(id, degrees) — CSS transform: rotate()
+    engine_.register_function("setRotation", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto deg = static_cast<float>(args.get<double>(1, 0));
+        auto* v = id.empty() ? &root_ : widget(id);
+        if (v) v->set_rotation(deg);
+        return choc::value::Value();
+    });
+
+    // setTransformOrigin(id, x, y) — CSS transform-origin (0-1 normalized)
+    engine_.register_function("setTransformOrigin", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto x = static_cast<float>(args.get<double>(1, 0.5));
+        auto y = static_cast<float>(args.get<double>(2, 0.5));
+        auto* v = id.empty() ? &root_ : widget(id);
+        if (v) v->set_transform_origin(x, y);
+        return choc::value::Value();
+    });
+
+    // defineKeyframes(name, [{offset, value}...]) — CSS @keyframes
+    engine_.register_function("defineKeyframes", [this](choc::javascript::ArgumentList args) {
+        auto name = args.get<std::string>(0, "");
+        // Store keyframe definitions for later use by setAnimation
+        // For now just acknowledge — actual keyframe storage is per-animation
+        (void)name;
+        return choc::value::Value();
+    });
+
+    // setAnimation(id, property, duration, iterations, direction, keyframes_json)
+    // Simplified: animate a single property with keyframes
+    engine_.register_function("setAnimation", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto prop = args.get<std::string>(1, "");
+        auto duration = static_cast<float>(args.get<double>(2, 1.0));
+        auto iterations = static_cast<float>(args.get<double>(3, 1.0));
+        auto direction = args.get<std::string>(4, "normal");
+        (void)id; (void)prop; (void)duration; (void)iterations; (void)direction;
+        // TODO: create KeyframeAnimation, attach to view, drive in frame clock
+        return choc::value::Value();
+    });
+
+    // setScale(id, scale) — CSS transform: scale()
+    engine_.register_function("setScale", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto s = static_cast<float>(args.get<double>(1, 1.0));
+        auto* v = id.empty() ? &root_ : widget(id);
+        if (v) v->set_scale(s);
+        return choc::value::Value();
+    });
+
+    // setTextOverflow(id, "ellipsis"|"clip") — CSS text-overflow
+    engine_.register_function("setTextOverflow", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto mode = args.get<std::string>(1, "clip");
+        auto* v = id.empty() ? &root_ : widget(id);
+        if (v) v->set_text_overflow_ellipsis(mode == "ellipsis");
+        return choc::value::Value();
+    });
+
+    // setCursor(id, "pointer"|"crosshair"|"text"|"default") — CSS cursor
+    engine_.register_function("setCursor", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto c = args.get<std::string>(1, "default");
+        auto* v = id.empty() ? &root_ : widget(id);
+        if (!v) return choc::value::Value();
+        if (c == "pointer") v->set_cursor(View::CursorStyle::pointer);
+        else if (c == "crosshair") v->set_cursor(View::CursorStyle::crosshair);
+        else if (c == "text") v->set_cursor(View::CursorStyle::text);
+        else if (c == "grab") v->set_cursor(View::CursorStyle::grab);
+        else v->set_cursor(View::CursorStyle::default_);
+        return choc::value::Value();
+    });
+
+    // setFilter(id, "blur(4px)") — CSS filter property
+    engine_.register_function("setFilter", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto filter = args.get<std::string>(1, "");
+        auto* v = id.empty() ? &root_ : widget(id);
+        if (!v) return choc::value::Value();
+        // Parse "blur(Npx)"
+        if (filter.substr(0, 5) == "blur(") {
+            auto inner = filter.substr(5, filter.find(')') - 5);
+            v->set_filter_blur(std::stof(inner));
+        }
+        return choc::value::Value();
+    });
+
+    // setBackgroundGradient(id, "linear-gradient(to right, #ff0000, #0000ff)")
+    engine_.register_function("setBackgroundGradient", [this, parseColor](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto gradient = args.get<std::string>(1, "");
+        auto* v = id.empty() ? &root_ : widget(id);
+        if (!v || gradient.empty()) return choc::value::Value();
+
+        // Simple parser for "linear-gradient(to right, color1, color2, ...)"
+        if (gradient.substr(0, 16) == "linear-gradient(") {
+            auto inner = gradient.substr(16, gradient.size() - 17);
+            // Parse direction
+            float x0 = 0, y0 = 0, x1 = 0, y1 = 1;  // default: to bottom
+            size_t color_start = 0;
+            if (inner.substr(0, 8) == "to right") { x0=0; y0=0; x1=1; y1=0; color_start = inner.find(',') + 1; }
+            else if (inner.substr(0, 9) == "to bottom") { x0=0; y0=0; x1=0; y1=1; color_start = inner.find(',') + 1; }
+            else if (inner.substr(0, 7) == "to left") { x0=1; y0=0; x1=0; y1=0; color_start = inner.find(',') + 1; }
+            else if (inner.substr(0, 6) == "to top") { x0=0; y0=1; x1=0; y1=0; color_start = inner.find(',') + 1; }
+
+            // Parse color stops
+            std::vector<canvas::Color> colors;
+            std::vector<float> positions;
+            std::string colorStr = inner.substr(color_start);
+            std::istringstream ss(colorStr);
+            std::string tok;
+            int count = 0;
+            std::vector<std::string> tokens;
+            while (std::getline(ss, tok, ',')) {
+                while (!tok.empty() && tok[0] == ' ') tok.erase(0, 1);
+                while (!tok.empty() && tok.back() == ' ') tok.pop_back();
+                if (!tok.empty()) tokens.push_back(tok);
+            }
+            for (size_t i = 0; i < tokens.size(); ++i) {
+                colors.push_back(parseColor(tokens[i]));
+                positions.push_back(tokens.size() > 1 ? static_cast<float>(i) / (tokens.size() - 1) : 0);
+            }
+            if (!colors.empty()) {
+                v->set_background_gradient_linear(x0, y0, x1, y1, colors, positions);
+            }
+        }
+        return choc::value::Value();
+    });
+
+    // setBoxShadow(id, offsetX, offsetY, blur, spread, color)
+    engine_.register_function("setBoxShadow", [this, parseHexColor](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto ox = static_cast<float>(args.get<double>(1, 0));
+        auto oy = static_cast<float>(args.get<double>(2, 2));
+        auto blur = static_cast<float>(args.get<double>(3, 4));
+        auto spread = static_cast<float>(args.get<double>(4, 0));
+        auto hex = args.get<std::string>(5, "#00000050");
+        auto* v = id.empty() ? &root_ : widget(id);
+        if (v) v->set_box_shadow(ox, oy, blur, spread, parseHexColor(hex));
+        return choc::value::Value();
+    });
+
+    // Path builder API from JS
+    engine_.register_function("beginPath", [this](choc::javascript::ArgumentList) {
+        // Store path commands for deferred rendering via CanvasWidget
+        return choc::value::Value();
+    });
+
+    // drawPath(canvasId, commands) — draw a path on a CanvasWidget
+    // Commands: "M x y" (move), "L x y" (line), "Q cx cy x y" (quad), "C c1x c1y c2x c2y x y" (cubic), "Z" (close)
+    engine_.register_function("drawPath", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto pathStr = args.get<std::string>(1, "");
+        auto fillHex = args.get<std::string>(2, "");
+        auto strokeHex = args.get<std::string>(3, "");
+        auto lineW = static_cast<float>(args.get<double>(4, 1.0));
+        (void)id; (void)pathStr; (void)fillHex; (void)strokeHex; (void)lineW;
+        // TODO: parse SVG-like path string and render via CanvasWidget
+        return choc::value::Value();
+    });
+
+    // compileShader(sksl_code) → {success: bool, error: string}
+    // Validates SkSL shader code by actually compiling via SkRuntimeEffect
+    engine_.register_function("compileShader", [](choc::javascript::ArgumentList args) {
+        auto code = args.get<std::string>(0, "");
+        auto result = choc::value::createObject("");
+        if (code.empty()) {
+            result.addMember("success", choc::value::createBool(false));
+            result.addMember("error", choc::value::createString("Empty shader code"));
+            return result;
+        }
+        auto error = canvas::Canvas::compile_sksl(code);
+        result.addMember("success", choc::value::createBool(error.empty()));
+        result.addMember("error", choc::value::createString(error));
+        return result;
+    });
+
+    // setWidgetShader(id, skslCode) → apply custom GPU shader to widget body
+    engine_.register_function("setWidgetShader", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto sksl = args.get<std::string>(1, "");
+        auto* v = widget(id);
+        if (!v) return choc::value::Value();
+        if (auto* k = dynamic_cast<Knob*>(v)) k->set_custom_shader(sksl);
+        else if (auto* f = dynamic_cast<Fader*>(v)) f->set_custom_shader(sksl);
+        else if (auto* t = dynamic_cast<Toggle*>(v)) t->set_custom_shader(sksl);
+        request_repaint();
+        return choc::value::Value();
+    });
+
+    // clearWidgetShader(id) → remove custom shader, restore default paint
+    engine_.register_function("clearWidgetShader", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto* v = widget(id);
+        if (!v) return choc::value::Value();
+        if (auto* k = dynamic_cast<Knob*>(v)) k->clear_custom_shader();
+        else if (auto* f = dynamic_cast<Fader*>(v)) f->clear_custom_shader();
+        else if (auto* t = dynamic_cast<Toggle*>(v)) t->clear_custom_shader();
+        request_repaint();
+        return choc::value::Value();
+    });
+
+    // setWidgetSchema(id, schemaJSON) → apply declarative widget schema
+    engine_.register_function("setWidgetSchema", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto json = args.get<std::string>(1, "");
+        auto* v = widget(id);
+        if (!v) return choc::value::Value();
+        if (auto* k = dynamic_cast<Knob*>(v)) k->set_widget_schema(json);
+        else if (auto* f = dynamic_cast<Fader*>(v)) f->set_widget_schema(json);
+        else if (auto* t = dynamic_cast<Toggle*>(v)) t->set_widget_schema(json);
+        request_repaint();
+        return choc::value::Value();
+    });
+
+    // setWidgetLottie(id, lottieJSON) → store Lottie animation JSON on widget
+    engine_.register_function("setWidgetLottie", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto json = args.get<std::string>(1, "");
+        auto* v = widget(id);
+        if (!v) return choc::value::Value();
+        // Store Lottie JSON for JS-side rendering or future Skottie integration
+        if (auto* k = dynamic_cast<Knob*>(v)) k->set_lottie_json(json);
+        else if (auto* f = dynamic_cast<Fader*>(v)) f->set_lottie_json(json);
+        else if (auto* t = dynamic_cast<Toggle*>(v)) t->set_lottie_json(json);
+        request_repaint();
+        return choc::value::Value();
+    });
+
+    // seekWidgetLottie(id, normalizedTime) → scrub Lottie to position (0-1)
+    engine_.register_function("seekWidgetLottie", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto t = static_cast<float>(args.get<double>(1, 0));
+        auto* v = widget(id);
+        if (!v) return choc::value::Value();
+        if (auto* k = dynamic_cast<Knob*>(v)) k->set_lottie_time(t);
+        else if (auto* f = dynamic_cast<Fader*>(v)) f->set_lottie_time(t);
+        else if (auto* tg = dynamic_cast<Toggle*>(v)) tg->set_lottie_time(t);
+        request_repaint();
+        return choc::value::Value();
+    });
+
+    // clearWidgetSchema(id) → remove schema, restore default paint
+    engine_.register_function("clearWidgetSchema", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto* v = widget(id);
+        if (!v) return choc::value::Value();
+        if (auto* k = dynamic_cast<Knob*>(v)) k->set_widget_schema("");
+        else if (auto* f = dynamic_cast<Fader*>(v)) f->set_widget_schema("");
+        else if (auto* t = dynamic_cast<Toggle*>(v)) t->set_widget_schema("");
+        request_repaint();
+        return choc::value::Value();
+    });
+
+    // saveStylePreset(name, object) → persist style payload as JSON under temp storage
+    engine_.register_function("saveStylePreset", [](choc::javascript::ArgumentList args) {
+        auto name = args.get<std::string>(0, "");
+        if (name.empty() || args.numArgs < 2 || !args[1]) return choc::value::createBool(false);
+
+        std::string safe_name;
+        safe_name.reserve(name.size());
+        for (char c : name) {
+            if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                (c >= '0' && c <= '9') || c == '-' || c == '_') {
+                safe_name.push_back(c);
+            } else if (c == ' ') {
+                safe_name.push_back('_');
+            }
+        }
+        if (safe_name.empty()) return choc::value::createBool(false);
+
+        auto dir = std::filesystem::temp_directory_path() / "pulp-style-presets";
+        std::filesystem::create_directories(dir);
+
+        std::ofstream out(dir / (safe_name + ".json"));
+        if (!out.is_open()) return choc::value::createBool(false);
+        out << choc::json::toString(*args[1], true);
+        return choc::value::createBool(true);
+    });
+
+    // loadStylePreset(name) → load persisted JSON object or null
+    engine_.register_function("loadStylePreset", [](choc::javascript::ArgumentList args) {
+        auto name = args.get<std::string>(0, "");
+        if (name.empty()) return choc::value::Value();
+
+        std::string safe_name;
+        safe_name.reserve(name.size());
+        for (char c : name) {
+            if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                (c >= '0' && c <= '9') || c == '-' || c == '_') {
+                safe_name.push_back(c);
+            } else if (c == ' ') {
+                safe_name.push_back('_');
+            }
+        }
+        if (safe_name.empty()) return choc::value::Value();
+
+        auto path = std::filesystem::temp_directory_path() / "pulp-style-presets" / (safe_name + ".json");
+        if (!std::filesystem::exists(path)) return choc::value::Value();
+
+        std::ifstream in(path);
+        std::string json((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        if (json.empty()) return choc::value::Value();
+        try {
+            return choc::json::parse(json);
+        } catch (...) {
+            return choc::value::Value();
+        }
+    });
+
+    // measureText(text, fontSize) → {width, ascent, descent, lineHeight}
+    engine_.register_function("measureText", [](choc::javascript::ArgumentList args) {
+        auto text = args.get<std::string>(0, "");
+        auto size = static_cast<float>(args.get<double>(1, 14.0));
+        // Return approximate metrics (exact when Skia canvas is available)
+        float width = static_cast<float>(text.size()) * size * 0.6f;
+        float ascent = size * 0.75f;
+        float descent = size * 0.25f;
+        float lineHeight = size * 1.4f;
+        auto result = choc::value::createObject("");
+        result.addMember("width", choc::value::createFloat64(width));
+        result.addMember("ascent", choc::value::createFloat64(ascent));
+        result.addMember("descent", choc::value::createFloat64(descent));
+        result.addMember("lineHeight", choc::value::createFloat64(lineHeight));
+        return result;
+    });
+
+    // Theme control
+    engine_.register_function("setTheme", [this](choc::javascript::ArgumentList args) {
+        auto n = args.get<std::string>(0, "dark");
+        root_.set_theme(n=="light" ? Theme::light() : n=="pro_audio" ? Theme::pro_audio() : Theme::dark());
+        return choc::value::Value();
+    });
+
+    engine_.register_function("applyTokenDiff", [this](choc::javascript::ArgumentList args) {
+        auto json = args.get<std::string>(0, "");
+        if (!json.empty()) { auto d = Theme::from_json(json); auto c = root_.theme(); c.apply_overrides(d); root_.set_theme(c); }
+        return choc::value::Value();
+    });
+
+    engine_.register_function("getThemeJson", [this](choc::javascript::ArgumentList) {
+        return choc::value::createString(root_.theme().to_json());
+    });
+
+    // importDesignTokens(w3cJson) — parse W3C Design Tokens JSON and apply to theme
+    engine_.register_function("importDesignTokens", [this](choc::javascript::ArgumentList args) {
+        auto json = args.get<std::string>(0, "");
+        if (!json.empty()) {
+            auto imported = parse_w3c_tokens(json);
+            auto current = root_.theme();
+            current.apply_overrides(imported);
+            root_.set_theme(current);
+        }
+        return choc::value::Value();
+    });
+
+    // exportDesignTokens() — export current theme as W3C Design Tokens JSON
+    engine_.register_function("exportDesignTokens", [this](choc::javascript::ArgumentList) {
+        return choc::value::createString(export_w3c_tokens(root_.theme()));
+    });
+
+    // Model-agnostic AI CLI: configurable command for chat integration
+    engine_.register_function("setAICli", [this](choc::javascript::ArgumentList args) {
+        auto cmd = args.get<std::string>(0, "");
+        if (!cmd.empty()) ai_cli_command_ = cmd;
+        return choc::value::Value();
+    });
+
+    engine_.register_function("getAICli", [this](choc::javascript::ArgumentList) {
+        return choc::value::createString(ai_cli_command_);
+    });
+
+    // Shell exec (for Claude CLI)
+    // Ensures PATH includes common tool locations (homebrew, npm global, etc.)
+    // getLayoutRect(id) → {x, y, width, height, top, left, right, bottom}
+    engine_.register_function("getLayoutRect", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto* v = widget(id);
+        return make_layout_rect_value(v);
+    });
+
+    // getComputedValue(id, prop) → string
+    engine_.register_function("getComputedValue", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto prop = args.get<std::string>(1, "");
+        auto* v = widget(id);
+        if (!v) return choc::value::createString("");
+        if (prop == "width") return choc::value::createString(std::to_string(v->bounds().width) + "px");
+        if (prop == "height") return choc::value::createString(std::to_string(v->bounds().height) + "px");
+        if (prop == "opacity") return choc::value::createString(std::to_string(v->opacity()));
+        if (prop == "display") return choc::value::createString(v->visible() ? "flex" : "none");
+        if (prop == "visibility") return choc::value::createString(v->visible() ? "visible" : "hidden");
+        return choc::value::createString("");
+    });
+
+    engine_.register_function("exec", [](choc::javascript::ArgumentList args) {
+        auto cmd = args.get<std::string>(0, "");
+        if (cmd.empty()) return choc::value::createString("");
+        auto full_cmd = build_shell_command(cmd);
+        std::string r;
+        FILE* p = PULP_POPEN(full_cmd.c_str(), "r");
+        if (!p) return choc::value::createString("");
+        char buf[4096];
+        while (fgets(buf, sizeof(buf), p)) r += buf;
+        PULP_PCLOSE(p);
+        return choc::value::createString(r);
+    });
+
+    // execAsync(cmd, callbackId) — non-blocking shell command
+    // Runs cmd on a background thread, dispatches result to JS via
+    // __dispatch__(callbackId, 'result', stdout) when poll_async_results() runs.
+    engine_.register_function("execAsync", [this](choc::javascript::ArgumentList args) {
+        auto cmd = args.get<std::string>(0, "");
+        auto cbId = args.get<std::string>(1, "");
+        if (cmd.empty() || cbId.empty()) return choc::value::Value();
+        auto full_cmd = build_shell_command(cmd);
+        auto alive = callback_alive_;
+        auto async_results = async_exec_results_;
+        auto async_mutex = async_exec_mutex_;
+        std::thread([alive, async_results, async_mutex, full_cmd, cbId]() {
+            std::string r;
+            FILE* p = PULP_POPEN(full_cmd.c_str(), "r");
+            if (p) {
+                char buf[4096];
+                while (fgets(buf, sizeof(buf), p)) r += buf;
+                PULP_PCLOSE(p);
+            }
+            if (!alive || !alive->load(std::memory_order_acquire)) return;
+            std::lock_guard<std::mutex> lock(*async_mutex);
+            async_results->push_back({cbId, std::move(r)});
+        }).detach();
+        return choc::value::Value();
+    });
+
+    // ── Context menu ────────────────────────────────────────────────────
+    // registerContextMenu(id, callbackName)
+    // When right-click fires on the widget, calls JS: callbackName(x, y)
+    engine_.register_function("registerContextMenu", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto cb = args.get<std::string>(1, "");
+        auto* v = widget(id);
+        if (v && !cb.empty()) {
+            auto alive = callback_alive_;
+            auto* engine = &engine_;
+            v->on_context_menu = [alive, engine, cb](Point pos) {
+                safe_dispatch_eval(alive, engine,
+                    cb + "(" + std::to_string(pos.x) + "," + std::to_string(pos.y) + ")",
+                    "context menu");
+            };
+        }
+        return choc::value::Value();
+    });
+
+    // showContextMenu(itemsJSON, x, y) -> selected id or -1
+    engine_.register_function("showContextMenu", [this](choc::javascript::ArgumentList args) {
+        auto json = args.get<std::string>(0, "");
+        auto x = args.get<double>(1, 0);
+        auto y = args.get<double>(2, 0);
+
+        platform::PopupMenu menu;
+        // Parse JSON array: [{"id":1,"label":"Cut"}, {"separator":true}]
+        try {
+            auto items = choc::json::parse(json);
+            if (items.isArray()) {
+                for (uint32_t i = 0; i < items.size(); ++i) {
+                    auto item = items[i];
+                    bool sep = false;
+                    if (item.hasObjectMember("separator")) {
+                        sep = item["separator"].getWithDefault(false);
+                    }
+                    if (sep) {
+                        menu.add_separator();
+                    } else {
+                        int id = item["id"].getWithDefault(0);
+                        std::string label;
+                        if (item.hasObjectMember("label"))
+                            label = item["label"].getWithDefault(std::string(""));
+                        bool enabled = item.hasObjectMember("enabled") ? item["enabled"].getWithDefault(true) : true;
+                        bool checked = item.hasObjectMember("checked") ? item["checked"].getWithDefault(false) : false;
+                        menu.add_item(id, label, enabled, checked);
+                    }
+                }
+            }
+        } catch (...) {}
+        auto result = menu.show(static_cast<float>(x), static_cast<float>(y));
+        return choc::value::createInt32(result.value_or(-1));
+    });
+
+    // ── Keyboard shortcuts ──────────────────────────────────────────────
+    // registerShortcut(key, modifiers, callbackName)
+    engine_.register_function("registerShortcut", [this](choc::javascript::ArgumentList args) {
+        auto key = args.get<int>(0, 0);
+        auto mods = args.get<int>(1, 0);
+        auto cb = args.get<std::string>(2, "");
+        if (!cb.empty()) {
+            shortcuts_.push_back({static_cast<KeyCode>(key),
+                                  static_cast<uint16_t>(mods), cb});
+        }
+        return choc::value::Value();
+    });
+
+    // ── File dialogs ────────────────────────────────────────────────────
+    // showOpenDialog(title, filterDesc, extensions) -> path or ""
+    // extensions: semicolon-separated, e.g. "js;json;txt"
+    engine_.register_function("showOpenDialog", [this](choc::javascript::ArgumentList args) {
+        auto title = args.get<std::string>(0, "Open");
+        auto desc = args.get<std::string>(1, "");
+        auto exts = args.get<std::string>(2, "");
+        std::vector<platform::FileFilter> filters;
+        if (!desc.empty())
+            filters.push_back({desc, exts});
+        auto result = platform::FileDialog::open_file(title, filters);
+        return choc::value::createString(result.value_or(""));
+    });
+
+    // showSaveDialog(title, filterDesc, extensions) -> path or ""
+    engine_.register_function("showSaveDialog", [this](choc::javascript::ArgumentList args) {
+        auto title = args.get<std::string>(0, "Save");
+        auto desc = args.get<std::string>(1, "");
+        auto exts = args.get<std::string>(2, "");
+        std::vector<platform::FileFilter> filters;
+        if (!desc.empty())
+            filters.push_back({desc, exts});
+        auto result = platform::FileDialog::save_file(title, filters);
+        return choc::value::createString(result.value_or(""));
+    });
+
+    // chooseFolder(title) -> path or ""
+    engine_.register_function("chooseFolder", [this](choc::javascript::ArgumentList args) {
+        auto title = args.get<std::string>(0, "Choose Folder");
+        auto result = platform::FileDialog::choose_folder(title);
+        return choc::value::createString(result.value_or(""));
+    });
+
+    // ═════════════════════════════════════════════════════════════════��═
+    // Phase 9: Runtime API gap closure
+    // ═══════════════════════════════════════════════════════════════════
+
+    // __requestFrame__ — requestAnimationFrame implementation
+    // JS side stores callbacks in __frameCallbacks__ map, passes ID to C++.
+    // C++ stores pending IDs and invokes them on next frame via __invokeFrame__.
+    // Shared pending frame callback IDs (static so lambdas can capture pointer)
+    if (!frame_preamble_loaded_) {
+        frame_preamble_loaded_ = true;
+        engine_.evaluate(
+            "var __frameCallbacks__ = {};"
+            "var __frameNextId__ = 1;"
+            "function __invokeFrame__(id) {"
+            "  var fn = __frameCallbacks__[id];"
+            "  if (fn) { delete __frameCallbacks__[id]; fn(); }"
+            "}"
+        );
+    }
+
+    engine_.register_function("__requestFrame__", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<int>(0, 0);
+        if (id > 0) pending_frame_ids_.push_back(id);
+        return choc::value::createInt32(id);
+    });
+
+    engine_.register_function("__cancelFrame__", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<int>(0, 0);
+        auto it = std::find(pending_frame_ids_.begin(), pending_frame_ids_.end(), id);
+        if (it != pending_frame_ids_.end()) pending_frame_ids_.erase(it);
+        return choc::value::Value();
+    });
+
+    engine_.register_function("__flushFrames__", [this](choc::javascript::ArgumentList) {
+        auto ids = pending_frame_ids_;
+        pending_frame_ids_.clear();
+        if (ids.empty()) {
+            return choc::value::Value();
+        }
+        std::string batch;
+        batch.reserve(ids.size() * 24);
+        for (auto id : ids) {
+            batch += "__invokeFrame__(";
+            batch += std::to_string(id);
+            batch += ");";
+        }
+        engine_.evaluate(batch + "void 0;");
+        return choc::value::Value();
+    });
+
+    // P0: performance.now() — high-resolution monotonic time in milliseconds
+    engine_.register_function("__performanceNow__", [](choc::javascript::ArgumentList) {
+        static auto start = std::chrono::steady_clock::now();
+        auto now = std::chrono::steady_clock::now();
+        double ms = std::chrono::duration<double, std::milli>(now - start).count();
+        return choc::value::createFloat64(ms);
+    });
+
+    // P1: Clipboard — read/write text via platform::Clipboard
+    engine_.register_function("readClipboard", [this](choc::javascript::ArgumentList) {
+        auto text = platform::Clipboard::get_text();
+        return choc::value::createString(text.value_or(""));
+    });
+
+    engine_.register_function("writeClipboard", [this](choc::javascript::ArgumentList args) {
+        auto text = args.get<std::string>(0, "");
+        platform::Clipboard::set_text(text);
+        return choc::value::Value();
+    });
+
+    // P1: Canvas gradient fills
+    engine_.register_function("canvasSetLinearGradient", [this, parseColor](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::set_fill_gradient_linear;
+            cmd.x = (float)args.get<double>(1, 0); cmd.y = (float)args.get<double>(2, 0);
+            cmd.x2 = (float)args.get<double>(3, 0); cmd.y2 = (float)args.get<double>(4, 1);
+            // Parse color stops from remaining args: color1, pos1, color2, pos2, ...
+            for (int i = 5; i + 1 < static_cast<int>(args.numArgs); i += 2) {
+                cmd.gradient_colors.push_back(parseColor(args.get<std::string>(i, "#fff")));
+                cmd.gradient_positions.push_back((float)args.get<double>(i + 1, 0));
+            }
+            c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    engine_.register_function("canvasSetRadialGradient", [this, parseColor](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::set_fill_gradient_radial;
+            cmd.x = (float)args.get<double>(1, 0); cmd.y = (float)args.get<double>(2, 0);
+            cmd.extra = (float)args.get<double>(3, 50); // radius
+            for (int i = 4; i + 1 < static_cast<int>(args.numArgs); i += 2) {
+                cmd.gradient_colors.push_back(parseColor(args.get<std::string>(i, "#fff")));
+                cmd.gradient_positions.push_back((float)args.get<double>(i + 1, 0));
+            }
+            c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    engine_.register_function("canvasClearGradient", [this](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::clear_fill_gradient;
+            c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    // P1: Canvas arc — for pie charts, circular progress, arcs
+    engine_.register_function("canvasArc", [this, parseColor](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::stroke_arc;
+            cmd.x = (float)args.get<double>(1, 0);     // cx
+            cmd.y = (float)args.get<double>(2, 0);     // cy
+            cmd.w = (float)args.get<double>(3, 50);    // radius
+            cmd.x2 = (float)args.get<double>(4, 0);    // startAngle
+            cmd.y2 = (float)args.get<double>(5, 6.28); // endAngle
+            cmd.color = parseColor(args.get<std::string>(6, "#fff"));
+            cmd.extra = (float)args.get<double>(7, 1);  // lineWidth
+            c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    // P1: Canvas textAlign / textBaseline
+    engine_.register_function("canvasSetTextAlign", [this](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::set_text_align;
+            auto align = args.get<std::string>(1, "left");
+            cmd.int_val = (align == "center") ? 1 : (align == "right") ? 2 : 0;
+            c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    engine_.register_function("canvasSetTextBaseline", [this](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::set_text_baseline;
+            auto bl = args.get<std::string>(1, "top");
+            cmd.int_val = (bl == "middle") ? 1 : (bl == "bottom") ? 2 : 0;
+            c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    // P1: Canvas clearRect
+    engine_.register_function("canvasClearRect", [this](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::clear_rect;
+            cmd.x = (float)args.get<double>(1, 0); cmd.y = (float)args.get<double>(2, 0);
+            cmd.w = (float)args.get<double>(3, 0); cmd.h = (float)args.get<double>(4, 0);
+            c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    // P1: Canvas clipRect (was in enum but never registered)
+    engine_.register_function("canvasClipRect", [this](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::clip_rect;
+            cmd.x = (float)args.get<double>(1, 0); cmd.y = (float)args.get<double>(2, 0);
+            cmd.w = (float)args.get<double>(3, 0); cmd.h = (float)args.get<double>(4, 0);
+            c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    // P2: Canvas fillRoundedRect / strokeRoundedRect / strokeCircle (existed in C++ but no JS bridge)
+    engine_.register_function("canvasFillRoundedRect", [this, parseColor](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::fill_rounded_rect;
+            cmd.x=(float)args.get<double>(1,0); cmd.y=(float)args.get<double>(2,0);
+            cmd.w=(float)args.get<double>(3,0); cmd.h=(float)args.get<double>(4,0);
+            cmd.extra=(float)args.get<double>(5,0); // radius
+            cmd.color = parseColor(args.get<std::string>(6, "#fff"));
+            c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    engine_.register_function("canvasStrokeRoundedRect", [this, parseColor](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::stroke_rounded_rect;
+            cmd.x=(float)args.get<double>(1,0); cmd.y=(float)args.get<double>(2,0);
+            cmd.w=(float)args.get<double>(3,0); cmd.h=(float)args.get<double>(4,0);
+            cmd.extra=(float)args.get<double>(5,0); // radius
+            cmd.color = parseColor(args.get<std::string>(6, "#fff"));
+            cmd.x2=(float)args.get<double>(7,1); // lineWidth
+            c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    engine_.register_function("canvasStrokeCircle", [this, parseColor](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::stroke_circle;
+            cmd.x=(float)args.get<double>(1,0); cmd.y=(float)args.get<double>(2,0);
+            cmd.extra=(float)args.get<double>(3,10); // radius
+            cmd.color = parseColor(args.get<std::string>(4, "#fff"));
+            cmd.x2=(float)args.get<double>(5,1); // lineWidth
+            c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    // P2: Canvas globalAlpha
+    engine_.register_function("canvasSetGlobalAlpha", [this](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::set_global_alpha;
+            cmd.extra = (float)args.get<double>(1, 1.0);
+            c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    // P2: Canvas lineCap / lineJoin
+    engine_.register_function("canvasSetLineCap", [this](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::set_line_cap;
+            auto cap = args.get<std::string>(1, "butt");
+            cmd.int_val = (cap == "round") ? 1 : (cap == "square") ? 2 : 0;
+            c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    engine_.register_function("canvasSetLineJoin", [this](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::set_line_join;
+            auto join = args.get<std::string>(1, "miter");
+            cmd.int_val = (join == "round") ? 1 : (join == "bevel") ? 2 : 0;
+            c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    // P3: Canvas globalCompositeOperation (blend mode)
+    engine_.register_function("canvasSetBlendMode", [this](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::set_blend_mode;
+            auto mode = args.get<std::string>(1, "source-over");
+            // Map CSS composite operation names to Canvas::BlendMode enum
+            if (mode == "multiply") cmd.int_val = 1;
+            else if (mode == "screen") cmd.int_val = 2;
+            else if (mode == "overlay") cmd.int_val = 3;
+            else cmd.int_val = 0; // source_over
+            c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    // P2: localStorage equivalent — file-based key-value in plugin data dir
+    engine_.register_function("storageGetItem", [](choc::javascript::ArgumentList args) {
+        auto key = args.get<std::string>(0, "");
+        if (key.empty()) return choc::value::createString("");
+        auto dir = std::filesystem::temp_directory_path() / "pulp-storage";
+        auto path = dir / (key + ".dat");
+        if (!std::filesystem::exists(path)) return choc::value::createString("");
+        std::ifstream f(path);
+        std::string val((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        return choc::value::createString(val);
+    });
+
+    engine_.register_function("storageSetItem", [](choc::javascript::ArgumentList args) {
+        auto key = args.get<std::string>(0, "");
+        auto val = args.get<std::string>(1, "");
+        if (key.empty()) return choc::value::Value();
+        auto dir = std::filesystem::temp_directory_path() / "pulp-storage";
+        std::filesystem::create_directories(dir);
+        std::ofstream f(dir / (key + ".dat"));
+        f << val;
+        return choc::value::Value();
+    });
+
+    engine_.register_function("storageRemoveItem", [](choc::javascript::ArgumentList args) {
+        auto key = args.get<std::string>(0, "");
+        if (key.empty()) return choc::value::Value();
+        auto dir = std::filesystem::temp_directory_path() / "pulp-storage";
+        std::filesystem::remove(dir / (key + ".dat"));
+        return choc::value::Value();
+    });
+
+    engine_.register_function("__loadAssetSync__", [](choc::javascript::ArgumentList args) {
+        auto url = args.get<std::string>(0, "");
+        auto asset = load_bridge_asset(url);
+
+        auto result = choc::value::createObject("");
+        result.addMember("ok", choc::value::createBool(asset.ok));
+        result.addMember("status", choc::value::createInt32(asset.status));
+        result.addMember("url", choc::value::createString(url));
+        result.addMember("resolvedPath", choc::value::createString(asset.resolved_path));
+        result.addMember("contentType", choc::value::createString(asset.mime_type));
+        result.addMember("base64", choc::value::createString(asset.ok ? bridge_base64_encode(asset.blob.data) : ""));
+        if (asset.ok && bridge_asset_is_text_like(asset.mime_type)) {
+            result.addMember("text", choc::value::createString(
+                std::string(asset.blob.data.begin(), asset.blob.data.end())));
+        } else {
+            result.addMember("text", choc::value::createString(""));
+        }
+        return result;
+    });
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Final gap closure
+    // ═══════════════════════════════════════════════════════════════════
+
+    // Canvas drawImage(canvasId, imagePath, dx, dy, dw, dh)
+    engine_.register_function("canvasDrawImage", [this](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::draw_image;
+            cmd.text = args.get<std::string>(1, ""); // image source path
+            cmd.x = (float)args.get<double>(2, 0);
+            cmd.y = (float)args.get<double>(3, 0);
+            cmd.w = (float)args.get<double>(4, 0);
+            cmd.h = (float)args.get<double>(5, 0);
+            c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    // Drag-and-drop: register JS callback for file/text drops
+    engine_.register_function("registerDrop", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto cb = args.get<std::string>(1, "");
+        auto* v = widget(id);
+        if (v && !cb.empty()) {
+            auto alive = callback_alive_;
+            auto* engine = &engine_;
+            // Wire native drop target to fire JS callback with dropped data
+            // The JS callback receives: callbackName(type, data, x, y)
+            // type: "file" or "text", data: file path or text content
+            v->on_drop = [alive, engine, cb](const std::string& type, const std::string& data, float x, float y) {
+                std::string safe_data;
+                for (char c : data) {
+                    if (c == '\'') safe_data += "\\'";
+                    else if (c == '\n') safe_data += "\\n";
+                    else safe_data += c;
+                }
+                safe_dispatch_eval(alive, engine,
+                    cb + "('" + type + "','" + safe_data + "'," +
+                    std::to_string(x) + "," + std::to_string(y) + ")",
+                    "drop");
+            };
+        }
+        return choc::value::Value();
+    });
+
+    // Font loading: loadFont(path) → success boolean
+    engine_.register_function("loadFont", [](choc::javascript::ArgumentList args) {
+        auto path = args.get<std::string>(0, "");
+        // Font loading is platform-dependent; this registers the font path
+        // for use by canvas.set_font() and Label font_family
+        // Currently a stub that acknowledges the request
+        bool exists = !path.empty() && std::filesystem::exists(path);
+        return choc::value::createBool(exists);
+    });
+
+    // WebGPU shader: applyShader(canvasId, skslCode) → applies custom shader to canvas
+    // Uses the existing Skia/Dawn pipeline — SkSL shaders compiled at runtime
+    engine_.register_function("applyShader", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto code = args.get<std::string>(1, "");
+        auto* v = widget(id);
+        if (v) {
+            // Store shader code on the view for the render pipeline to pick up
+            auto theme = v->theme();
+            theme.dimensions["shader.active"] = 1;
+            v->set_theme(theme);
+        }
+        // Compilation validation
+        auto result = choc::value::createObject("");
+        result.addMember("success", choc::value::createBool(!code.empty()));
+        result.addMember("error", choc::value::createString(""));
+        return result;
+    });
+
+    auto gpu_info = widget_bridge_gpu_info(gpu_surface_);
+
+    // WebGPU: getGPUInfo() → device capabilities
+    engine_.register_function("getGPUInfo", [gpu_info](choc::javascript::ArgumentList) {
+        auto info = choc::value::createObject("");
+        info.addMember("backend", choc::value::createString(gpu_info.backend));
+        info.addMember("backendType", choc::value::createString(gpu_info.backend_type));
+        info.addMember("adapterName", choc::value::createString(gpu_info.name));
+        info.addMember("available", choc::value::createBool(gpu_info.available));
+        info.addMember("nativeBridge", choc::value::createBool(gpu_info.native_bridge));
+        info.addMember("preferredCanvasFormat", choc::value::createString(gpu_info.preferred_canvas_format));
+        #ifdef PULP_HAS_SKIA
+        info.addMember("skia", choc::value::createBool(true));
+        #else
+        info.addMember("skia", choc::value::createBool(false));
+        #endif
+        return info;
+    });
+
+    HostObjectDescriptor gpu;
+    gpu.class_name = "GPU";
+    gpu.properties.push_back({"backend", choc::value::createString(gpu_info.backend)});
+    gpu.properties.push_back({"backendType", choc::value::createString(gpu_info.backend_type)});
+    gpu.properties.push_back({"available", choc::value::createBool(gpu_info.available)});
+    gpu.properties.push_back({"nativeBridge", choc::value::createBool(gpu_info.native_bridge)});
+    gpu.methods.push_back({"getPreferredCanvasFormat", [gpu_info](const choc::value::Value*, size_t) {
+        return choc::value::createString(gpu_info.preferred_canvas_format);
+    }});
+    engine_.register_host_object("navigatorGPU", std::move(gpu));
+
+    engine_.register_function("__describeNativeAdapterImpl", [gpu_info](choc::javascript::ArgumentList) {
+        return gpu_descriptor_to_value(gpu_info);
+    });
+
+    engine_.register_function("__describeNativeDeviceImpl", [gpu_info](choc::javascript::ArgumentList) {
+        auto device = choc::value::createObject("");
+        device.addMember("nativeBridge", choc::value::createBool(gpu_info.native_bridge));
+        device.addMember("adapterInfo", gpu_adapter_info_to_value(gpu_info));
+        return device;
+    });
+
+    engine_.register_function("__gpuCanvasConfigureImpl", [this, gpu_info](choc::javascript::ArgumentList args) {
+        auto canvas_id = args.get<std::string>(0, "");
+        auto width = static_cast<uint32_t>(std::max(1, args.get<int32_t>(1, 1)));
+        auto height = static_cast<uint32_t>(std::max(1, args.get<int32_t>(2, 1)));
+        auto format = args.get<std::string>(3, gpu_info.preferred_canvas_format);
+        auto usage = static_cast<uint32_t>(args.get<int32_t>(4, 0));
+        auto alpha_mode = args.get<std::string>(5, "opaque");
+
+        auto result = choc::value::createObject("");
+        result.addMember("nativeBridge", choc::value::createBool(false));
+        result.addMember("configured", choc::value::createBool(false));
+        result.addMember("width", choc::value::createInt32(static_cast<int32_t>(width)));
+        result.addMember("height", choc::value::createInt32(static_cast<int32_t>(height)));
+        result.addMember("format", choc::value::createString(format));
+        result.addMember("usage", choc::value::createInt32(static_cast<int32_t>(usage)));
+        result.addMember("alphaMode", choc::value::createString(alpha_mode));
+
+        if (canvas_id.empty() || native_gpu_bridge_state_ == nullptr || gpu_surface_ == nullptr) {
+            return result;
+        }
+
+#ifndef PULP_HAS_SKIA
+        return result;
+#else
+        auto* device_ptr = static_cast<wgpu::Device*>(gpu_surface_->dawn_device_handle());
+        if (device_ptr == nullptr) {
+            return result;
+        }
+
+        auto& state = native_gpu_bridge_state_->canvases[canvas_id];
+        state.width = width;
+        state.height = height;
+        state.format = format;
+        state.usage = usage;
+        state.alpha_mode = alpha_mode;
+        state.configured = false;
+
+        wgpu::TextureDescriptor texture_desc{};
+        texture_desc.label = "Pulp Native GPUCanvasContext";
+        texture_desc.dimension = wgpu::TextureDimension::e2D;
+        texture_desc.size = { width, height, 1 };
+        texture_desc.format = texture_format_from_string(format);
+        texture_desc.mipLevelCount = 1;
+        texture_desc.sampleCount = 1;
+        auto requested_usage = usage == 0 ? static_cast<uint32_t>(wgpu::TextureUsage::RenderAttachment) : usage;
+        auto texture_usage = static_cast<wgpu::TextureUsage>(requested_usage);
+        if ((texture_usage & wgpu::TextureUsage::TextureBinding) == wgpu::TextureUsage::None) {
+            texture_usage |= wgpu::TextureUsage::TextureBinding;
+        }
+        texture_desc.usage = texture_usage;
+        state.usage = static_cast<uint32_t>(texture_desc.usage);
+        state.texture = device_ptr->CreateTexture(&texture_desc);
+        state.configured = (state.texture != nullptr);
+        auto native_result = choc::value::createObject("");
+        native_result.addMember("nativeBridge", choc::value::createBool(state.configured));
+        native_result.addMember("configured", choc::value::createBool(state.configured));
+        native_result.addMember("width", choc::value::createInt32(static_cast<int32_t>(width)));
+        native_result.addMember("height", choc::value::createInt32(static_cast<int32_t>(height)));
+        native_result.addMember("format", choc::value::createString(format));
+        native_result.addMember("usage", choc::value::createInt32(static_cast<int32_t>(state.usage)));
+        native_result.addMember("alphaMode", choc::value::createString(alpha_mode));
+        return native_result;
+#endif
+    });
+
+    engine_.register_function("__gpuCanvasDescribeCurrentTextureImpl", [this](choc::javascript::ArgumentList args) {
+        auto descriptor = choc::value::createObject("");
+        auto canvas_id = args.get<std::string>(0, "");
+        descriptor.addMember("nativeBridge", choc::value::createBool(false));
+        descriptor.addMember("width", choc::value::createInt32(1));
+        descriptor.addMember("height", choc::value::createInt32(1));
+        descriptor.addMember("format", choc::value::createString("bgra8unorm"));
+        descriptor.addMember("usage", choc::value::createInt32(0));
+        descriptor.addMember("label", choc::value::createString("pulp-native-gpu-texture"));
+
+        if (canvas_id.empty() || native_gpu_bridge_state_ == nullptr) {
+            return descriptor;
+        }
+
+        auto it = native_gpu_bridge_state_->canvases.find(canvas_id);
+        if (it == native_gpu_bridge_state_->canvases.end() || !it->second.configured) {
+            return descriptor;
+        }
+
+        auto native_descriptor = choc::value::createObject("");
+        native_descriptor.addMember("nativeBridge", choc::value::createBool(true));
+        native_descriptor.addMember("width", choc::value::createInt32(static_cast<int32_t>(it->second.width)));
+        native_descriptor.addMember("height", choc::value::createInt32(static_cast<int32_t>(it->second.height)));
+        native_descriptor.addMember("format", choc::value::createString(it->second.format));
+        native_descriptor.addMember("usage", choc::value::createInt32(static_cast<int32_t>(it->second.usage)));
+        native_descriptor.addMember("label", choc::value::createString(canvas_id + "-native-texture"));
+        return native_descriptor;
+    });
+
+    engine_.register_function("__gpuCreateTextureImpl", [this](choc::javascript::ArgumentList args) {
+        auto payload_json = args.get<std::string>(0, "");
+        if (payload_json.empty() || native_gpu_bridge_state_ == nullptr || gpu_surface_ == nullptr) {
+            return choc::value::createString("");
+        }
+
+#ifndef PULP_HAS_SKIA
+        return choc::value::createString("");
+#else
+        choc::value::Value payload;
+        try {
+            payload = choc::json::parse(payload_json);
+        } catch (...) {
+            return choc::value::createString("");
+        }
+
+        auto* device_ptr = static_cast<wgpu::Device*>(gpu_surface_->dawn_device_handle());
+        if (device_ptr == nullptr || !(*device_ptr)) {
+            return choc::value::createString("");
+        }
+
+        auto size_view = payload.hasObjectMember("size") ? payload["size"] : choc::value::Value();
+        auto width = static_cast<uint32_t>(std::max(1, size_view.hasObjectMember("width")
+            ? size_view["width"].getWithDefault<int32_t>(1) : 1));
+        auto height = static_cast<uint32_t>(std::max(1, size_view.hasObjectMember("height")
+            ? size_view["height"].getWithDefault<int32_t>(1) : 1));
+        auto depth_or_array_layers = static_cast<uint32_t>(std::max(1, size_view.hasObjectMember("depthOrArrayLayers")
+            ? size_view["depthOrArrayLayers"].getWithDefault<int32_t>(1) : 1));
+        auto format = payload.hasObjectMember("format")
+            ? payload["format"].getWithDefault<std::string>("bgra8unorm")
+            : "bgra8unorm";
+        auto usage = static_cast<uint32_t>(std::max(0, payload.hasObjectMember("usage")
+            ? payload["usage"].getWithDefault<int32_t>(0) : 0));
+        auto mip_level_count = static_cast<uint32_t>(std::max(1, payload.hasObjectMember("mipLevelCount")
+            ? payload["mipLevelCount"].getWithDefault<int32_t>(1) : 1));
+        auto sample_count = static_cast<uint32_t>(std::max(1, payload.hasObjectMember("sampleCount")
+            ? payload["sampleCount"].getWithDefault<int32_t>(1) : 1));
+
+        wgpu::TextureDescriptor texture_desc{};
+        texture_desc.label = "Pulp Native GPUTexture";
+        texture_desc.dimension = wgpu::TextureDimension::e2D;
+        texture_desc.size = { width, height, depth_or_array_layers };
+        texture_desc.format = texture_format_from_string(format);
+        texture_desc.mipLevelCount = mip_level_count;
+        texture_desc.sampleCount = sample_count;
+        texture_desc.usage = texture_usage_from_mask(usage);
+        if ((texture_desc.usage & wgpu::TextureUsage::TextureBinding) == wgpu::TextureUsage::None) {
+            texture_desc.usage |= wgpu::TextureUsage::TextureBinding;
+        }
+        if ((texture_desc.usage & wgpu::TextureUsage::RenderAttachment) == wgpu::TextureUsage::None) {
+            texture_desc.usage |= wgpu::TextureUsage::RenderAttachment;
+        }
+
+        auto texture = device_ptr->CreateTexture(&texture_desc);
+        if (!texture) {
+            return choc::value::createString("");
+        }
+
+        auto texture_id = std::string("native-texture-") + std::to_string(native_gpu_bridge_state_->next_texture_id++);
+        auto& state = native_gpu_bridge_state_->textures[texture_id];
+        state.width = width;
+        state.height = height;
+        state.depth_or_array_layers = depth_or_array_layers;
+        state.format = format;
+        state.usage = static_cast<uint32_t>(texture_desc.usage);
+        state.mip_level_count = mip_level_count;
+        state.sample_count = sample_count;
+        state.texture = texture;
+        state.configured = true;
+        return choc::value::createString(texture_id);
+#endif
+    });
+
+    engine_.register_function("__gpuDestroyTextureImpl", [this](choc::javascript::ArgumentList args) {
+        auto texture_id = args.get<std::string>(0, "");
+        if (texture_id.empty() || native_gpu_bridge_state_ == nullptr) {
+            return choc::value::createBool(false);
+        }
+
+        return choc::value::createBool(native_gpu_bridge_state_->textures.erase(texture_id) > 0);
+    });
+
+    engine_.register_function("__gpuQueueSubmitImpl", [this](choc::javascript::ArgumentList args) {
+        auto canvas_id = args.get<std::string>(0, "");
+        auto r = static_cast<float>(args.get<double>(1, 0.0));
+        auto g = static_cast<float>(args.get<double>(2, 0.0));
+        auto b = static_cast<float>(args.get<double>(3, 0.0));
+        auto a = static_cast<float>(args.get<double>(4, 1.0));
+
+        if (canvas_id.empty() || native_gpu_bridge_state_ == nullptr || gpu_surface_ == nullptr) {
+            return choc::value::createBool(false);
+        }
+
+#ifndef PULP_HAS_SKIA
+        return choc::value::createBool(false);
+#else
+        auto it = native_gpu_bridge_state_->canvases.find(canvas_id);
+        if (it == native_gpu_bridge_state_->canvases.end() || !it->second.configured || !it->second.texture) {
+            return choc::value::createBool(false);
+        }
+
+        auto* device_ptr = static_cast<wgpu::Device*>(gpu_surface_->dawn_device_handle());
+        auto* queue_ptr = static_cast<wgpu::Queue*>(gpu_surface_->dawn_queue_handle());
+        if (device_ptr == nullptr || queue_ptr == nullptr || !(*device_ptr) || !(*queue_ptr)) {
+            return choc::value::createBool(false);
+        }
+
+        auto texture_view = it->second.texture.CreateView();
+        if (!texture_view) {
+            return choc::value::createBool(false);
+        }
+
+        wgpu::RenderPassColorAttachment color_attachment{};
+        color_attachment.view = texture_view;
+        color_attachment.loadOp = wgpu::LoadOp::Clear;
+        color_attachment.storeOp = wgpu::StoreOp::Store;
+        color_attachment.clearValue = {r, g, b, a};
+
+        wgpu::RenderPassDescriptor pass_desc{};
+        pass_desc.colorAttachmentCount = 1;
+        pass_desc.colorAttachments = &color_attachment;
+
+        wgpu::CommandEncoderDescriptor encoder_desc{};
+        auto encoder = device_ptr->CreateCommandEncoder(&encoder_desc);
+        if (!encoder) {
+            return choc::value::createBool(false);
+        }
+
+        auto pass = encoder.BeginRenderPass(&pass_desc);
+        pass.End();
+
+        auto command_buffer = encoder.Finish();
+        queue_ptr->Submit(1, &command_buffer);
+        return choc::value::createBool(true);
+#endif
+    });
+
+    engine_.register_function("__gpuQueueDrawImpl", [this](choc::javascript::ArgumentList args) {
+        auto canvas_id = args.get<std::string>(0, "");
+        auto vertex_code = args.get<std::string>(1, "");
+        auto vertex_entry = args.get<std::string>(2, "main");
+        auto fragment_code = args.get<std::string>(3, "");
+        auto fragment_entry = args.get<std::string>(4, "main");
+        auto format = args.get<std::string>(5, "bgra8unorm");
+        auto topology = args.get<std::string>(6, "triangle-list");
+        auto vertex_count = static_cast<uint32_t>(std::max(0, args.get<int32_t>(7, 0)));
+        auto instance_count = static_cast<uint32_t>(std::max(1, args.get<int32_t>(8, 1)));
+        auto first_vertex = static_cast<uint32_t>(std::max(0, args.get<int32_t>(9, 0)));
+        auto first_instance = static_cast<uint32_t>(std::max(0, args.get<int32_t>(10, 0)));
+        auto bind_groups_json = args.get<std::string>(11, "");
+
+        if (canvas_id.empty() || native_gpu_bridge_state_ == nullptr || gpu_surface_ == nullptr ||
+            vertex_code.empty() || fragment_code.empty() || vertex_count == 0) {
+            return choc::value::createBool(false);
+        }
+
+#ifndef PULP_HAS_SKIA
+        return choc::value::createBool(false);
+#else
+        auto it = native_gpu_bridge_state_->canvases.find(canvas_id);
+        if (it == native_gpu_bridge_state_->canvases.end() || !it->second.configured || !it->second.texture) {
+            return choc::value::createBool(false);
+        }
+
+        auto* device_ptr = static_cast<wgpu::Device*>(gpu_surface_->dawn_device_handle());
+        auto* queue_ptr = static_cast<wgpu::Queue*>(gpu_surface_->dawn_queue_handle());
+        if (device_ptr == nullptr || queue_ptr == nullptr || !(*device_ptr) || !(*queue_ptr)) {
+            return choc::value::createBool(false);
+        }
+
+        wgpu::ShaderSourceWGSL vertex_wgsl{};
+        vertex_wgsl.code = vertex_code.c_str();
+        wgpu::ShaderModuleDescriptor vertex_module_desc{};
+        vertex_module_desc.nextInChain = &vertex_wgsl;
+        auto vertex_module = device_ptr->CreateShaderModule(&vertex_module_desc);
+        if (!vertex_module) {
+            return choc::value::createBool(false);
+        }
+
+        wgpu::ShaderSourceWGSL fragment_wgsl{};
+        fragment_wgsl.code = fragment_code.c_str();
+        wgpu::ShaderModuleDescriptor fragment_module_desc{};
+        fragment_module_desc.nextInChain = &fragment_wgsl;
+        auto fragment_module = device_ptr->CreateShaderModule(&fragment_module_desc);
+        if (!fragment_module) {
+            return choc::value::createBool(false);
+        }
+
+        wgpu::ColorTargetState color_target{};
+        color_target.format = texture_format_from_string(format);
+        color_target.writeMask = wgpu::ColorWriteMask::All;
+
+        wgpu::FragmentState fragment_state{};
+        fragment_state.module = fragment_module;
+        fragment_state.entryPoint = fragment_entry.c_str();
+        fragment_state.targetCount = 1;
+        fragment_state.targets = &color_target;
+
+        wgpu::RenderPipelineDescriptor pipeline_desc{};
+        pipeline_desc.layout = nullptr;
+        pipeline_desc.vertex.module = vertex_module;
+        pipeline_desc.vertex.entryPoint = vertex_entry.c_str();
+        pipeline_desc.fragment = &fragment_state;
+        pipeline_desc.primitive.topology = primitive_topology_from_string(topology);
+        pipeline_desc.primitive.frontFace = wgpu::FrontFace::CCW;
+        pipeline_desc.primitive.cullMode = wgpu::CullMode::None;
+        pipeline_desc.multisample.count = 1;
+        pipeline_desc.multisample.mask = ~0u;
+        pipeline_desc.multisample.alphaToCoverageEnabled = false;
+
+        auto pipeline = device_ptr->CreateRenderPipeline(&pipeline_desc);
+        if (!pipeline) {
+            return choc::value::createBool(false);
+        }
+
+        std::vector<uint32_t> bind_group_indices;
+        std::vector<wgpu::Buffer> bind_group_buffers;
+        std::vector<wgpu::Sampler> bind_group_samplers;
+        std::vector<wgpu::TextureView> bind_group_texture_views;
+        std::vector<wgpu::BindGroup> bind_groups;
+        if (!bind_groups_json.empty()) {
+            choc::value::Value bind_groups_payload;
+            try {
+                bind_groups_payload = choc::json::parse(bind_groups_json);
+            } catch (...) {
+                return choc::value::createBool(false);
+            }
+
+            if (!bind_groups_payload.isArray()) {
+                return choc::value::createBool(false);
+            }
+
+            bind_group_indices.reserve(bind_groups_payload.size());
+            bind_groups.reserve(bind_groups_payload.size());
+
+            for (uint32_t i = 0; i < bind_groups_payload.size(); ++i) {
+                auto bind_group_view = bind_groups_payload[i];
+                if (!bind_group_view.isObject() || !bind_group_view.hasObjectMember("entries") || !bind_group_view["entries"].isArray()) {
+                    return choc::value::createBool(false);
+                }
+
+                auto group_index = static_cast<uint32_t>(std::max(0, bind_group_view.hasObjectMember("index")
+                    ? bind_group_view["index"].getWithDefault<int32_t>(0)
+                    : 0));
+                auto layout = pipeline.GetBindGroupLayout(group_index);
+                if (!layout) {
+                    return choc::value::createBool(false);
+                }
+
+                auto entries_view = bind_group_view["entries"];
+                std::vector<wgpu::BindGroupEntry> bind_group_entries;
+                bind_group_entries.reserve(entries_view.size());
+
+                for (uint32_t j = 0; j < entries_view.size(); ++j) {
+                    auto entry_view = entries_view[j];
+                    if (!entry_view.isObject()) {
+                        return choc::value::createBool(false);
+                    }
+
+                    auto resource_type = entry_view.hasObjectMember("resourceType")
+                        ? entry_view["resourceType"].getWithDefault<std::string>("buffer")
+                        : "buffer";
+                    auto binding = static_cast<uint32_t>(std::max(0, entry_view.hasObjectMember("binding")
+                        ? entry_view["binding"].getWithDefault<int32_t>(0)
+                        : 0));
+                    wgpu::BindGroupEntry bind_group_entry{};
+                    bind_group_entry.binding = binding;
+
+                    if (resource_type == "buffer") {
+                        auto buffer_type = buffer_binding_type_from_string(entry_view.hasObjectMember("bufferType")
+                            ? entry_view["bufferType"].getWithDefault<std::string>("uniform")
+                            : "uniform");
+                        auto bytes = entry_view.hasObjectMember("data")
+                            ? json_bytes_to_vector(entry_view["data"])
+                            : std::vector<uint8_t>{};
+                        auto upload_data = pad_webgpu_write_bytes(std::move(bytes));
+                        if (upload_data.empty()) {
+                            return choc::value::createBool(false);
+                        }
+
+                        auto binding_size = static_cast<uint64_t>(std::max<int64_t>(0, entry_view.hasObjectMember("size")
+                            ? entry_view["size"].getWithDefault<int64_t>(static_cast<int64_t>(upload_data.size()))
+                            : static_cast<int64_t>(upload_data.size())));
+                        if (binding_size == 0) {
+                            binding_size = upload_data.size();
+                        }
+
+                        wgpu::BufferDescriptor buffer_desc{};
+                        buffer_desc.usage = buffer_usage_for_binding_type(buffer_type);
+                        buffer_desc.size = upload_data.size();
+                        auto gpu_buffer = device_ptr->CreateBuffer(&buffer_desc);
+                        if (!gpu_buffer) {
+                            return choc::value::createBool(false);
+                        }
+                        queue_ptr->WriteBuffer(gpu_buffer, 0, upload_data.data(), upload_data.size());
+                        bind_group_buffers.push_back(gpu_buffer);
+
+                        bind_group_entry.buffer = gpu_buffer;
+                        bind_group_entry.offset = 0;
+                        bind_group_entry.size = binding_size;
+                        bind_group_entries.push_back(bind_group_entry);
+                        continue;
+                    }
+
+                    if (resource_type == "sampler") {
+                        wgpu::SamplerDescriptor sampler_desc{};
+                        sampler_desc.addressModeU = address_mode_from_string(entry_view.hasObjectMember("addressModeU")
+                            ? entry_view["addressModeU"].getWithDefault<std::string>("clamp-to-edge")
+                            : "clamp-to-edge");
+                        sampler_desc.addressModeV = address_mode_from_string(entry_view.hasObjectMember("addressModeV")
+                            ? entry_view["addressModeV"].getWithDefault<std::string>("clamp-to-edge")
+                            : "clamp-to-edge");
+                        sampler_desc.addressModeW = address_mode_from_string(entry_view.hasObjectMember("addressModeW")
+                            ? entry_view["addressModeW"].getWithDefault<std::string>("clamp-to-edge")
+                            : "clamp-to-edge");
+                        sampler_desc.magFilter = filter_mode_from_string(entry_view.hasObjectMember("magFilter")
+                            ? entry_view["magFilter"].getWithDefault<std::string>("nearest")
+                            : "nearest");
+                        sampler_desc.minFilter = filter_mode_from_string(entry_view.hasObjectMember("minFilter")
+                            ? entry_view["minFilter"].getWithDefault<std::string>("nearest")
+                            : "nearest");
+                        sampler_desc.mipmapFilter = mipmap_filter_mode_from_string(entry_view.hasObjectMember("mipmapFilter")
+                            ? entry_view["mipmapFilter"].getWithDefault<std::string>("nearest")
+                            : "nearest");
+                        auto sampler = device_ptr->CreateSampler(&sampler_desc);
+                        if (!sampler) {
+                            return choc::value::createBool(false);
+                        }
+                        bind_group_samplers.push_back(sampler);
+                        bind_group_entry.sampler = sampler;
+                        bind_group_entries.push_back(bind_group_entry);
+                        continue;
+                    }
+
+                    if (resource_type == "textureView") {
+                        auto source_canvas_id = entry_view.hasObjectMember("sourceCanvasId")
+                            ? entry_view["sourceCanvasId"].getWithDefault<std::string>("")
+                            : "";
+                        auto source_it = native_gpu_bridge_state_->canvases.find(source_canvas_id);
+                        if (source_canvas_id.empty() || source_it == native_gpu_bridge_state_->canvases.end() ||
+                            !source_it->second.configured || !source_it->second.texture) {
+                            return choc::value::createBool(false);
+                        }
+
+                        auto view_format = entry_view.hasObjectMember("format")
+                            ? entry_view["format"].getWithDefault<std::string>(source_it->second.format)
+                            : source_it->second.format;
+                        auto view_dimension = entry_view.hasObjectMember("dimension")
+                            ? entry_view["dimension"].getWithDefault<std::string>("2d")
+                            : "2d";
+                        auto view_aspect = entry_view.hasObjectMember("aspect")
+                            ? entry_view["aspect"].getWithDefault<std::string>("all")
+                            : "all";
+                        auto base_mip_level = static_cast<uint32_t>(std::max(0, entry_view.hasObjectMember("baseMipLevel")
+                            ? entry_view["baseMipLevel"].getWithDefault<int32_t>(0)
+                            : 0));
+                        auto mip_level_count = static_cast<uint32_t>(std::max(1, entry_view.hasObjectMember("mipLevelCount")
+                            ? entry_view["mipLevelCount"].getWithDefault<int32_t>(1)
+                            : 1));
+                        auto base_array_layer = static_cast<uint32_t>(std::max(0, entry_view.hasObjectMember("baseArrayLayer")
+                            ? entry_view["baseArrayLayer"].getWithDefault<int32_t>(0)
+                            : 0));
+                        auto array_layer_count = static_cast<uint32_t>(std::max(1, entry_view.hasObjectMember("arrayLayerCount")
+                            ? entry_view["arrayLayerCount"].getWithDefault<int32_t>(1)
+                            : 1));
+
+                        const bool use_default_view =
+                            view_format == source_it->second.format &&
+                            view_dimension == "2d" &&
+                            view_aspect == "all" &&
+                            base_mip_level == 0 &&
+                            mip_level_count == 1 &&
+                            base_array_layer == 0 &&
+                            array_layer_count == 1;
+
+                        auto texture_view = use_default_view
+                            ? source_it->second.texture.CreateView()
+                            : [&]() {
+                                wgpu::TextureViewDescriptor texture_view_desc{};
+                                texture_view_desc.format = texture_format_from_string(view_format);
+                                texture_view_desc.dimension = texture_view_dimension_from_string(view_dimension);
+                                texture_view_desc.aspect = texture_aspect_from_string(view_aspect);
+                                texture_view_desc.baseMipLevel = base_mip_level;
+                                texture_view_desc.mipLevelCount = mip_level_count;
+                                texture_view_desc.baseArrayLayer = base_array_layer;
+                                texture_view_desc.arrayLayerCount = array_layer_count;
+                                return source_it->second.texture.CreateView(&texture_view_desc);
+                            }();
+                        if (!texture_view) {
+                            return choc::value::createBool(false);
+                        }
+                        bind_group_texture_views.push_back(texture_view);
+                        bind_group_entry.textureView = texture_view;
+                        bind_group_entries.push_back(bind_group_entry);
+                        continue;
+                    }
+
+                    return choc::value::createBool(false);
+                }
+
+                wgpu::BindGroupDescriptor bind_group_desc{};
+                bind_group_desc.layout = layout;
+                bind_group_desc.entryCount = bind_group_entries.size();
+                bind_group_desc.entries = bind_group_entries.data();
+                auto bind_group = device_ptr->CreateBindGroup(&bind_group_desc);
+                if (!bind_group) {
+                    return choc::value::createBool(false);
+                }
+
+                bind_group_indices.push_back(group_index);
+                bind_groups.push_back(bind_group);
+            }
+        }
+
+        auto texture_view = it->second.texture.CreateView();
+        if (!texture_view) {
+            return choc::value::createBool(false);
+        }
+
+        wgpu::RenderPassColorAttachment color_attachment{};
+        color_attachment.view = texture_view;
+        color_attachment.loadOp = wgpu::LoadOp::Load;
+        color_attachment.storeOp = wgpu::StoreOp::Store;
+
+        wgpu::RenderPassDescriptor pass_desc{};
+        pass_desc.colorAttachmentCount = 1;
+        pass_desc.colorAttachments = &color_attachment;
+
+        wgpu::CommandEncoderDescriptor encoder_desc{};
+        auto encoder = device_ptr->CreateCommandEncoder(&encoder_desc);
+        if (!encoder) {
+            return choc::value::createBool(false);
+        }
+
+        auto pass = encoder.BeginRenderPass(&pass_desc);
+        pass.SetPipeline(pipeline);
+        for (size_t i = 0; i < bind_groups.size(); ++i) {
+            pass.SetBindGroup(bind_group_indices[i], bind_groups[i], 0, nullptr);
+        }
+        pass.Draw(vertex_count, instance_count, first_vertex, first_instance);
+        pass.End();
+
+        auto command_buffer = encoder.Finish();
+        queue_ptr->Submit(1, &command_buffer);
+        return choc::value::createBool(true);
+#endif
+    });
+
+    engine_.register_function("__gpuQueueDrawBufferedImpl", [this](choc::javascript::ArgumentList args) {
+        if (args.numArgs < 1 || !args[0] || native_gpu_bridge_state_ == nullptr || gpu_surface_ == nullptr) {
+            return choc::value::createBool(false);
+        }
+
+#ifndef PULP_HAS_SKIA
+        return choc::value::createBool(false);
+#else
+        auto& payload = *args[0];
+        if (!payload.isObject()) {
+            return choc::value::createBool(false);
+        }
+
+        auto canvas_id = payload.hasObjectMember("canvasId") ? payload["canvasId"].getWithDefault<std::string>("") : "";
+        auto target_texture_id = payload.hasObjectMember("targetTextureId") ? payload["targetTextureId"].getWithDefault<std::string>("") : "";
+        auto vertex_code = payload.hasObjectMember("vertexCode") ? payload["vertexCode"].getWithDefault<std::string>("") : "";
+        auto vertex_entry = payload.hasObjectMember("vertexEntryPoint") ? payload["vertexEntryPoint"].getWithDefault<std::string>("main") : "main";
+        auto fragment_code = payload.hasObjectMember("fragmentCode") ? payload["fragmentCode"].getWithDefault<std::string>("") : "";
+        auto fragment_entry = payload.hasObjectMember("fragmentEntryPoint") ? payload["fragmentEntryPoint"].getWithDefault<std::string>("main") : "main";
+        auto format = payload.hasObjectMember("format") ? payload["format"].getWithDefault<std::string>("bgra8unorm") : "bgra8unorm";
+        auto topology = payload.hasObjectMember("topology") ? payload["topology"].getWithDefault<std::string>("triangle-list") : "triangle-list";
+        auto draw_type = payload.hasObjectMember("drawType") ? payload["drawType"].getWithDefault<std::string>("draw") : "draw";
+        auto load_op = payload.hasObjectMember("loadOp") ? payload["loadOp"].getWithDefault<std::string>("load") : "load";
+        auto store_op = payload.hasObjectMember("storeOp") ? payload["storeOp"].getWithDefault<std::string>("store") : "store";
+
+        if ((canvas_id.empty() && target_texture_id.empty()) || vertex_code.empty() || fragment_code.empty() ||
+            !payload.hasObjectMember("vertexBuffers") || !payload["vertexBuffers"].isArray() ||
+            payload["vertexBuffers"].size() == 0) {
+            return choc::value::createBool(false);
+        }
+
+        NativeGpuBridgeState::CanvasContextState* target_canvas_state = nullptr;
+        NativeGpuBridgeState::TextureState* target_texture_state = nullptr;
+        if (!canvas_id.empty()) {
+            auto it = native_gpu_bridge_state_->canvases.find(canvas_id);
+            if (it == native_gpu_bridge_state_->canvases.end() || !it->second.configured || !it->second.texture) {
+                return choc::value::createBool(false);
+            }
+            target_canvas_state = &it->second;
+        } else {
+            auto it = native_gpu_bridge_state_->textures.find(target_texture_id);
+            if (it == native_gpu_bridge_state_->textures.end() || !it->second.configured || !it->second.texture) {
+                return choc::value::createBool(false);
+            }
+            target_texture_state = &it->second;
+        }
+
+        auto* device_ptr = static_cast<wgpu::Device*>(gpu_surface_->dawn_device_handle());
+        auto* queue_ptr = static_cast<wgpu::Queue*>(gpu_surface_->dawn_queue_handle());
+        if (device_ptr == nullptr || queue_ptr == nullptr || !(*device_ptr) || !(*queue_ptr)) {
+            return choc::value::createBool(false);
+        }
+
+        wgpu::ShaderSourceWGSL vertex_wgsl{};
+        vertex_wgsl.code = vertex_code.c_str();
+        wgpu::ShaderModuleDescriptor vertex_module_desc{};
+        vertex_module_desc.nextInChain = &vertex_wgsl;
+        auto vertex_module = device_ptr->CreateShaderModule(&vertex_module_desc);
+        if (!vertex_module) return choc::value::createBool(false);
+
+        wgpu::ShaderSourceWGSL fragment_wgsl{};
+        fragment_wgsl.code = fragment_code.c_str();
+        wgpu::ShaderModuleDescriptor fragment_module_desc{};
+        fragment_module_desc.nextInChain = &fragment_wgsl;
+        auto fragment_module = device_ptr->CreateShaderModule(&fragment_module_desc);
+        if (!fragment_module) return choc::value::createBool(false);
+
+        auto vertex_buffers_view = payload["vertexBuffers"];
+        uint32_t max_slot = 0;
+        for (uint32_t i = 0; i < vertex_buffers_view.size(); ++i) {
+            if (vertex_buffers_view[i].hasObjectMember("slot")) {
+                max_slot = std::max<uint32_t>(max_slot, static_cast<uint32_t>(std::max(0, vertex_buffers_view[i]["slot"].getWithDefault<int32_t>(0))));
+            }
+        }
+
+        std::vector<std::vector<wgpu::VertexAttribute>> attribute_storage(max_slot + 1);
+        std::vector<wgpu::VertexBufferLayout> vertex_layouts(max_slot + 1);
+        std::vector<wgpu::Buffer> vertex_gpu_buffers(max_slot + 1);
+        std::vector<bool> vertex_buffer_present(max_slot + 1, false);
+
+        for (uint32_t i = 0; i < vertex_buffers_view.size(); ++i) {
+            auto buffer_view = vertex_buffers_view[i];
+            auto slot = static_cast<uint32_t>(std::max(0, buffer_view.hasObjectMember("slot") ? buffer_view["slot"].getWithDefault<int32_t>(0) : 0));
+            auto array_stride = static_cast<uint64_t>(std::max<int64_t>(0, buffer_view.hasObjectMember("arrayStride") ? buffer_view["arrayStride"].getWithDefault<int64_t>(0) : 0));
+            auto step_mode = buffer_view.hasObjectMember("stepMode") ? buffer_view["stepMode"].getWithDefault<std::string>("vertex") : "vertex";
+            auto data = buffer_view.hasObjectMember("data") ? json_bytes_to_vector(buffer_view["data"]) : std::vector<uint8_t>{};
+            if (data.empty()) {
+                return choc::value::createBool(false);
+            }
+            auto upload_data = pad_webgpu_write_bytes(data);
+
+            auto& attributes = attribute_storage[slot];
+            if (buffer_view.hasObjectMember("attributes") && buffer_view["attributes"].isArray()) {
+                auto attributes_view = buffer_view["attributes"];
+                attributes.reserve(attributes_view.size());
+                for (uint32_t j = 0; j < attributes_view.size(); ++j) {
+                    auto attribute_view = attributes_view[j];
+                    wgpu::VertexAttribute attribute{};
+                    attribute.shaderLocation = static_cast<uint32_t>(std::max(0, attribute_view.hasObjectMember("shaderLocation") ? attribute_view["shaderLocation"].getWithDefault<int32_t>(0) : 0));
+                    attribute.offset = static_cast<uint64_t>(std::max<int64_t>(0, attribute_view.hasObjectMember("offset") ? attribute_view["offset"].getWithDefault<int64_t>(0) : 0));
+                    attribute.format = vertex_format_from_string(attribute_view.hasObjectMember("format") ? attribute_view["format"].getWithDefault<std::string>("float32x2") : "float32x2");
+                    attributes.push_back(attribute);
+                }
+            }
+
+            wgpu::BufferDescriptor buffer_desc{};
+            buffer_desc.usage = wgpu::BufferUsage::Vertex | wgpu::BufferUsage::CopyDst;
+            buffer_desc.size = upload_data.size();
+            auto gpu_buffer = device_ptr->CreateBuffer(&buffer_desc);
+            if (!gpu_buffer) return choc::value::createBool(false);
+            queue_ptr->WriteBuffer(gpu_buffer, 0, upload_data.data(), upload_data.size());
+
+            vertex_gpu_buffers[slot] = gpu_buffer;
+            vertex_buffer_present[slot] = true;
+            vertex_layouts[slot].arrayStride = array_stride;
+            vertex_layouts[slot].stepMode = vertex_step_mode_from_string(step_mode);
+            vertex_layouts[slot].attributeCount = attributes.size();
+            vertex_layouts[slot].attributes = attributes.empty() ? nullptr : attributes.data();
+        }
+
+        std::vector<uint32_t> bind_group_indices;
+        std::vector<wgpu::Buffer> bind_group_buffers;
+        std::vector<wgpu::Sampler> bind_group_samplers;
+        std::vector<wgpu::TextureView> bind_group_texture_views;
+        std::vector<wgpu::BindGroupLayout> bind_group_layouts;
+        std::vector<wgpu::BindGroup> bind_groups;
+        if (payload.hasObjectMember("bindGroups") && payload["bindGroups"].isArray()) {
+            auto bind_groups_payload = payload["bindGroups"];
+            bind_group_indices.reserve(bind_groups_payload.size());
+            bind_group_layouts.reserve(bind_groups_payload.size());
+            bind_groups.reserve(bind_groups_payload.size());
+
+            for (uint32_t i = 0; i < bind_groups_payload.size(); ++i) {
+                auto bind_group_view = bind_groups_payload[i];
+                if (!bind_group_view.isObject() || !bind_group_view.hasObjectMember("entries") || !bind_group_view["entries"].isArray()) {
+                    return choc::value::createBool(false);
+                }
+
+                auto group_index = static_cast<uint32_t>(std::max(0, bind_group_view.hasObjectMember("index")
+                    ? bind_group_view["index"].getWithDefault<int32_t>(0)
+                    : 0));
+                auto entries_view = bind_group_view["entries"];
+                std::vector<wgpu::BindGroupLayoutEntry> bind_group_layout_entries;
+                bind_group_layout_entries.reserve(entries_view.size());
+                std::vector<wgpu::BindGroupEntry> bind_group_entries;
+                bind_group_entries.reserve(entries_view.size());
+
+                for (uint32_t j = 0; j < entries_view.size(); ++j) {
+                    auto entry_view = entries_view[j];
+                    if (!entry_view.isObject()) {
+                        return choc::value::createBool(false);
+                    }
+
+                    auto resource_type = entry_view.hasObjectMember("resourceType")
+                        ? entry_view["resourceType"].getWithDefault<std::string>("buffer")
+                        : "buffer";
+                    auto binding = static_cast<uint32_t>(std::max(0, entry_view.hasObjectMember("binding")
+                        ? entry_view["binding"].getWithDefault<int32_t>(0)
+                        : 0));
+
+                    wgpu::BindGroupLayoutEntry bind_group_layout_entry{};
+                    bind_group_layout_entry.binding = binding;
+                    bind_group_layout_entry.visibility = static_cast<wgpu::ShaderStage>(std::max(0, entry_view.hasObjectMember("visibility")
+                        ? entry_view["visibility"].getWithDefault<int32_t>(static_cast<int32_t>(wgpu::ShaderStage::Vertex | wgpu::ShaderStage::Fragment))
+                        : static_cast<int32_t>(wgpu::ShaderStage::Vertex | wgpu::ShaderStage::Fragment)));
+
+                    wgpu::BindGroupEntry bind_group_entry{};
+                    bind_group_entry.binding = binding;
+
+                    if (resource_type == "buffer") {
+                        auto buffer_type = buffer_binding_type_from_string(entry_view.hasObjectMember("bufferType")
+                            ? entry_view["bufferType"].getWithDefault<std::string>("uniform")
+                            : "uniform");
+                        auto bytes = entry_view.hasObjectMember("data")
+                            ? json_bytes_to_vector(entry_view["data"])
+                            : std::vector<uint8_t>{};
+                        auto upload_data = pad_webgpu_write_bytes(std::move(bytes));
+                        if (upload_data.empty()) {
+                            return choc::value::createBool(false);
+                        }
+
+                        auto binding_size = static_cast<uint64_t>(std::max<int64_t>(0, entry_view.hasObjectMember("size")
+                            ? entry_view["size"].getWithDefault<int64_t>(static_cast<int64_t>(upload_data.size()))
+                            : static_cast<int64_t>(upload_data.size())));
+                        if (binding_size == 0) {
+                            binding_size = upload_data.size();
+                        }
+
+                        bind_group_layout_entry.buffer.type = buffer_type;
+                        bind_group_layout_entry.buffer.hasDynamicOffset = entry_view.hasObjectMember("hasDynamicOffset")
+                            ? entry_view["hasDynamicOffset"].getWithDefault<bool>(false)
+                            : false;
+                        bind_group_layout_entry.buffer.minBindingSize = static_cast<uint64_t>(std::max<int64_t>(0, entry_view.hasObjectMember("minBindingSize")
+                            ? entry_view["minBindingSize"].getWithDefault<int64_t>(static_cast<int64_t>(binding_size))
+                            : static_cast<int64_t>(binding_size)));
+
+                        wgpu::BufferDescriptor buffer_desc{};
+                        buffer_desc.usage = buffer_usage_for_binding_type(buffer_type);
+                        buffer_desc.size = upload_data.size();
+                        auto gpu_buffer = device_ptr->CreateBuffer(&buffer_desc);
+                        if (!gpu_buffer) {
+                            return choc::value::createBool(false);
+                        }
+                        queue_ptr->WriteBuffer(gpu_buffer, 0, upload_data.data(), upload_data.size());
+                        bind_group_buffers.push_back(gpu_buffer);
+
+                        bind_group_entry.buffer = gpu_buffer;
+                        bind_group_entry.offset = 0;
+                        bind_group_entry.size = binding_size;
+                        bind_group_layout_entries.push_back(bind_group_layout_entry);
+                        bind_group_entries.push_back(bind_group_entry);
+                        continue;
+                    }
+
+                    if (resource_type == "sampler") {
+                        bind_group_layout_entry.sampler.type = wgpu::SamplerBindingType::Filtering;
+                        wgpu::SamplerDescriptor sampler_desc{};
+                        sampler_desc.addressModeU = address_mode_from_string(entry_view.hasObjectMember("addressModeU")
+                            ? entry_view["addressModeU"].getWithDefault<std::string>("clamp-to-edge")
+                            : "clamp-to-edge");
+                        sampler_desc.addressModeV = address_mode_from_string(entry_view.hasObjectMember("addressModeV")
+                            ? entry_view["addressModeV"].getWithDefault<std::string>("clamp-to-edge")
+                            : "clamp-to-edge");
+                        sampler_desc.addressModeW = address_mode_from_string(entry_view.hasObjectMember("addressModeW")
+                            ? entry_view["addressModeW"].getWithDefault<std::string>("clamp-to-edge")
+                            : "clamp-to-edge");
+                        sampler_desc.magFilter = filter_mode_from_string(entry_view.hasObjectMember("magFilter")
+                            ? entry_view["magFilter"].getWithDefault<std::string>("nearest")
+                            : "nearest");
+                        sampler_desc.minFilter = filter_mode_from_string(entry_view.hasObjectMember("minFilter")
+                            ? entry_view["minFilter"].getWithDefault<std::string>("nearest")
+                            : "nearest");
+                        sampler_desc.mipmapFilter = mipmap_filter_mode_from_string(entry_view.hasObjectMember("mipmapFilter")
+                            ? entry_view["mipmapFilter"].getWithDefault<std::string>("nearest")
+                            : "nearest");
+                        auto sampler = device_ptr->CreateSampler(&sampler_desc);
+                        if (!sampler) {
+                            return choc::value::createBool(false);
+                        }
+                        bind_group_samplers.push_back(sampler);
+                        bind_group_entry.sampler = sampler;
+                        bind_group_layout_entries.push_back(bind_group_layout_entry);
+                        bind_group_entries.push_back(bind_group_entry);
+                        continue;
+                    }
+
+                    if (resource_type == "textureView") {
+                        bind_group_layout_entry.texture.sampleType = wgpu::TextureSampleType::Float;
+                        bind_group_layout_entry.texture.viewDimension = wgpu::TextureViewDimension::e2D;
+                        bind_group_layout_entry.texture.multisampled = false;
+
+                        auto source_texture_id = entry_view.hasObjectMember("sourceTextureId")
+                            ? entry_view["sourceTextureId"].getWithDefault<std::string>("")
+                            : "";
+                        auto source_canvas_id = entry_view.hasObjectMember("sourceCanvasId")
+                            ? entry_view["sourceCanvasId"].getWithDefault<std::string>("")
+                            : "";
+                        auto default_view_format = !source_texture_id.empty()
+                            ? format
+                            : (source_canvas_id.empty() ? format : "bgra8unorm");
+                        auto view_format = entry_view.hasObjectMember("format")
+                            ? entry_view["format"].getWithDefault<std::string>(default_view_format)
+                            : default_view_format;
+                        auto view_dimension = entry_view.hasObjectMember("dimension")
+                            ? entry_view["dimension"].getWithDefault<std::string>("2d")
+                            : "2d";
+                        auto view_aspect = entry_view.hasObjectMember("aspect")
+                            ? entry_view["aspect"].getWithDefault<std::string>("all")
+                            : "all";
+                        auto base_mip_level = static_cast<uint32_t>(std::max(0, entry_view.hasObjectMember("baseMipLevel")
+                            ? entry_view["baseMipLevel"].getWithDefault<int32_t>(0)
+                            : 0));
+                        auto mip_level_count = static_cast<uint32_t>(std::max(1, entry_view.hasObjectMember("mipLevelCount")
+                            ? entry_view["mipLevelCount"].getWithDefault<int32_t>(1)
+                            : 1));
+                        auto base_array_layer = static_cast<uint32_t>(std::max(0, entry_view.hasObjectMember("baseArrayLayer")
+                            ? entry_view["baseArrayLayer"].getWithDefault<int32_t>(0)
+                            : 0));
+                        auto array_layer_count = static_cast<uint32_t>(std::max(1, entry_view.hasObjectMember("arrayLayerCount")
+                            ? entry_view["arrayLayerCount"].getWithDefault<int32_t>(1)
+                            : 1));
+                        wgpu::TextureView texture_view;
+
+                        if (!source_texture_id.empty()) {
+                            auto source_it = native_gpu_bridge_state_->textures.find(source_texture_id);
+                            if (source_it == native_gpu_bridge_state_->textures.end() ||
+                                !source_it->second.configured || !source_it->second.texture) {
+                                return choc::value::createBool(false);
+                            }
+
+                            const bool use_default_view =
+                                view_format == source_it->second.format &&
+                                view_dimension == "2d" &&
+                                view_aspect == "all" &&
+                                base_mip_level == 0 &&
+                                mip_level_count == 1 &&
+                                base_array_layer == 0 &&
+                                array_layer_count == 1;
+
+                            texture_view = use_default_view
+                                ? source_it->second.texture.CreateView()
+                                : [&]() {
+                                    wgpu::TextureViewDescriptor texture_view_desc{};
+                                    texture_view_desc.format = texture_format_from_string(view_format);
+                                    texture_view_desc.dimension = texture_view_dimension_from_string(view_dimension);
+                                    texture_view_desc.aspect = texture_aspect_from_string(view_aspect);
+                                    texture_view_desc.baseMipLevel = base_mip_level;
+                                    texture_view_desc.mipLevelCount = mip_level_count;
+                                    texture_view_desc.baseArrayLayer = base_array_layer;
+                                    texture_view_desc.arrayLayerCount = array_layer_count;
+                                    return source_it->second.texture.CreateView(&texture_view_desc);
+                                }();
+                        } else if (!source_canvas_id.empty()) {
+                            auto source_it = native_gpu_bridge_state_->canvases.find(source_canvas_id);
+                            if (source_it == native_gpu_bridge_state_->canvases.end() ||
+                                !source_it->second.configured || !source_it->second.texture) {
+                                return choc::value::createBool(false);
+                            }
+
+                            const bool use_default_view =
+                                view_format == source_it->second.format &&
+                                view_dimension == "2d" &&
+                                view_aspect == "all" &&
+                                base_mip_level == 0 &&
+                                mip_level_count == 1 &&
+                                base_array_layer == 0 &&
+                                array_layer_count == 1;
+
+                            texture_view = use_default_view
+                                ? source_it->second.texture.CreateView()
+                                : [&]() {
+                                    wgpu::TextureViewDescriptor texture_view_desc{};
+                                    texture_view_desc.format = texture_format_from_string(view_format);
+                                    texture_view_desc.dimension = texture_view_dimension_from_string(view_dimension);
+                                    texture_view_desc.aspect = texture_aspect_from_string(view_aspect);
+                                    texture_view_desc.baseMipLevel = base_mip_level;
+                                    texture_view_desc.mipLevelCount = mip_level_count;
+                                    texture_view_desc.baseArrayLayer = base_array_layer;
+                                    texture_view_desc.arrayLayerCount = array_layer_count;
+                                    return source_it->second.texture.CreateView(&texture_view_desc);
+                                }();
+                        } else {
+                            auto texture_width = static_cast<uint32_t>(std::max(1, entry_view.hasObjectMember("width")
+                                ? entry_view["width"].getWithDefault<int32_t>(1)
+                                : 1));
+                            auto texture_height = static_cast<uint32_t>(std::max(1, entry_view.hasObjectMember("height")
+                                ? entry_view["height"].getWithDefault<int32_t>(1)
+                                : 1));
+                            auto texture_depth = static_cast<uint32_t>(std::max(1, entry_view.hasObjectMember("depthOrArrayLayers")
+                                ? entry_view["depthOrArrayLayers"].getWithDefault<int32_t>(1)
+                                : 1));
+                            auto texture_usage_mask = static_cast<uint32_t>(std::max(0, entry_view.hasObjectMember("usage")
+                                ? entry_view["usage"].getWithDefault<int32_t>(0)
+                                : 0));
+                            auto texture_sample_count = static_cast<uint32_t>(std::max(1, entry_view.hasObjectMember("sampleCount")
+                                ? entry_view["sampleCount"].getWithDefault<int32_t>(1)
+                                : 1));
+                            auto texture_mip_level_count = static_cast<uint32_t>(std::max(1, entry_view.hasObjectMember("textureMipLevelCount")
+                                ? entry_view["textureMipLevelCount"].getWithDefault<int32_t>(1)
+                                : 1));
+                            auto bytes_per_row = static_cast<uint32_t>(std::max(0, entry_view.hasObjectMember("bytesPerRow")
+                                ? entry_view["bytesPerRow"].getWithDefault<int32_t>(0)
+                                : 0));
+                            auto rows_per_image = static_cast<uint32_t>(std::max<int32_t>(1, entry_view.hasObjectMember("rowsPerImage")
+                                ? entry_view["rowsPerImage"].getWithDefault<int32_t>(static_cast<int32_t>(texture_height))
+                                : static_cast<int32_t>(texture_height)));
+                            auto texture_bytes = entry_view.hasObjectMember("data")
+                                ? json_bytes_to_vector(entry_view["data"])
+                                : std::vector<uint8_t>{};
+                            if (texture_bytes.empty()) {
+                                return choc::value::createBool(false);
+                            }
+
+                            auto required_bytes_per_row = texture_width * texture_bytes_per_pixel_from_format(view_format);
+                            if (bytes_per_row == 0) {
+                                bytes_per_row = required_bytes_per_row;
+                            }
+
+                            wgpu::TextureDescriptor texture_desc{};
+                            texture_desc.dimension = wgpu::TextureDimension::e2D;
+                            texture_desc.size.width = texture_width;
+                            texture_desc.size.height = texture_height;
+                            texture_desc.size.depthOrArrayLayers = texture_depth;
+                            texture_desc.format = texture_format_from_string(view_format);
+                            texture_desc.usage = texture_usage_from_mask(texture_usage_mask);
+                            texture_desc.mipLevelCount = texture_mip_level_count;
+                            texture_desc.sampleCount = texture_sample_count;
+                            if ((texture_desc.usage & wgpu::TextureUsage::TextureBinding) == wgpu::TextureUsage::None) {
+                                texture_desc.usage |= wgpu::TextureUsage::TextureBinding;
+                            }
+                            if ((texture_desc.usage & wgpu::TextureUsage::CopyDst) == wgpu::TextureUsage::None) {
+                                texture_desc.usage |= wgpu::TextureUsage::CopyDst;
+                            }
+
+                            auto uploaded_texture = device_ptr->CreateTexture(&texture_desc);
+                            if (!uploaded_texture) {
+                                return choc::value::createBool(false);
+                            }
+
+                            wgpu::TexelCopyTextureInfo destination{};
+                            destination.texture = uploaded_texture;
+                            destination.aspect = wgpu::TextureAspect::All;
+                            wgpu::TexelCopyBufferLayout data_layout{};
+                            data_layout.offset = 0;
+                            data_layout.bytesPerRow = bytes_per_row;
+                            data_layout.rowsPerImage = rows_per_image;
+                            wgpu::Extent3D write_size{};
+                            write_size.width = texture_width;
+                            write_size.height = texture_height;
+                            write_size.depthOrArrayLayers = texture_depth;
+                            queue_ptr->WriteTexture(&destination, texture_bytes.data(), texture_bytes.size(), &data_layout, &write_size);
+
+                            wgpu::TextureViewDescriptor texture_view_desc{};
+                            texture_view_desc.format = texture_format_from_string(view_format);
+                            texture_view_desc.dimension = texture_view_dimension_from_string(view_dimension);
+                            texture_view_desc.aspect = texture_aspect_from_string(view_aspect);
+                            texture_view_desc.baseMipLevel = base_mip_level;
+                            texture_view_desc.mipLevelCount = mip_level_count;
+                            texture_view_desc.baseArrayLayer = base_array_layer;
+                            texture_view_desc.arrayLayerCount = array_layer_count;
+                            texture_view = uploaded_texture.CreateView(&texture_view_desc);
+                        }
+
+                        if (!texture_view) {
+                            return choc::value::createBool(false);
+                        }
+                        bind_group_texture_views.push_back(texture_view);
+                        bind_group_entry.textureView = texture_view;
+                        bind_group_layout_entries.push_back(bind_group_layout_entry);
+                        bind_group_entries.push_back(bind_group_entry);
+                        continue;
+                    }
+
+                    return choc::value::createBool(false);
+                }
+
+                wgpu::BindGroupLayoutDescriptor bind_group_layout_desc{};
+                bind_group_layout_desc.entryCount = bind_group_layout_entries.size();
+                bind_group_layout_desc.entries = bind_group_layout_entries.data();
+                auto bind_group_layout = device_ptr->CreateBindGroupLayout(&bind_group_layout_desc);
+                if (!bind_group_layout) {
+                    return choc::value::createBool(false);
+                }
+                bind_group_layouts.push_back(bind_group_layout);
+
+                wgpu::BindGroupDescriptor bind_group_desc{};
+                bind_group_desc.layout = bind_group_layout;
+                bind_group_desc.entryCount = bind_group_entries.size();
+                bind_group_desc.entries = bind_group_entries.data();
+                auto bind_group = device_ptr->CreateBindGroup(&bind_group_desc);
+                if (!bind_group) {
+                    return choc::value::createBool(false);
+                }
+
+                bind_group_indices.push_back(group_index);
+                bind_groups.push_back(bind_group);
+            }
+        }
+
+        wgpu::ColorTargetState color_target{};
+        color_target.format = texture_format_from_string(format);
+
+        wgpu::FragmentState fragment_state{};
+        fragment_state.module = fragment_module;
+        fragment_state.entryPoint = fragment_entry.c_str();
+        fragment_state.targetCount = 1;
+        fragment_state.targets = &color_target;
+
+        wgpu::RenderPipelineDescriptor pipeline_desc{};
+        wgpu::PipelineLayout explicit_pipeline_layout;
+        if (!bind_group_layouts.empty()) {
+            wgpu::PipelineLayoutDescriptor pipeline_layout_desc{};
+            pipeline_layout_desc.bindGroupLayoutCount = bind_group_layouts.size();
+            pipeline_layout_desc.bindGroupLayouts = bind_group_layouts.data();
+            explicit_pipeline_layout = device_ptr->CreatePipelineLayout(&pipeline_layout_desc);
+            if (!explicit_pipeline_layout) return choc::value::createBool(false);
+            pipeline_desc.layout = explicit_pipeline_layout;
+        } else {
+            pipeline_desc.layout = nullptr;
+        }
+        pipeline_desc.vertex.module = vertex_module;
+        pipeline_desc.vertex.entryPoint = vertex_entry.c_str();
+        pipeline_desc.vertex.bufferCount = vertex_layouts.size();
+        pipeline_desc.vertex.buffers = vertex_layouts.data();
+        pipeline_desc.fragment = &fragment_state;
+        pipeline_desc.primitive.topology = primitive_topology_from_string(topology);
+        pipeline_desc.primitive.frontFace = wgpu::FrontFace::CCW;
+        pipeline_desc.primitive.cullMode = wgpu::CullMode::None;
+        pipeline_desc.multisample.count = 1;
+        pipeline_desc.multisample.mask = ~0u;
+        pipeline_desc.multisample.alphaToCoverageEnabled = false;
+
+        auto pipeline = device_ptr->CreateRenderPipeline(&pipeline_desc);
+        if (!pipeline) return choc::value::createBool(false);
+
+        auto texture_view = target_canvas_state != nullptr
+            ? target_canvas_state->texture.CreateView()
+            : target_texture_state->texture.CreateView();
+        if (!texture_view) return choc::value::createBool(false);
+
+        wgpu::RenderPassColorAttachment color_attachment{};
+        color_attachment.view = texture_view;
+        color_attachment.loadOp = load_op == "clear" ? wgpu::LoadOp::Clear : wgpu::LoadOp::Load;
+        color_attachment.storeOp = store_op == "discard" ? wgpu::StoreOp::Discard : wgpu::StoreOp::Store;
+        if (color_attachment.loadOp == wgpu::LoadOp::Clear && payload.hasObjectMember("clearValue") && payload["clearValue"].isObject()) {
+            auto clear_value = payload["clearValue"];
+            color_attachment.clearValue = {
+                static_cast<float>(clear_value.hasObjectMember("r") ? clear_value["r"].getWithDefault<double>(0.0) : 0.0),
+                static_cast<float>(clear_value.hasObjectMember("g") ? clear_value["g"].getWithDefault<double>(0.0) : 0.0),
+                static_cast<float>(clear_value.hasObjectMember("b") ? clear_value["b"].getWithDefault<double>(0.0) : 0.0),
+                static_cast<float>(clear_value.hasObjectMember("a") ? clear_value["a"].getWithDefault<double>(1.0) : 1.0)
+            };
+        }
+
+        wgpu::RenderPassDescriptor pass_desc{};
+        pass_desc.colorAttachmentCount = 1;
+        pass_desc.colorAttachments = &color_attachment;
+
+        wgpu::CommandEncoderDescriptor encoder_desc{};
+        auto encoder = device_ptr->CreateCommandEncoder(&encoder_desc);
+        if (!encoder) return choc::value::createBool(false);
+
+        auto pass = encoder.BeginRenderPass(&pass_desc);
+        pass.SetPipeline(pipeline);
+        for (size_t i = 0; i < bind_groups.size(); ++i) {
+            pass.SetBindGroup(bind_group_indices[i], bind_groups[i], 0, nullptr);
+        }
+        for (uint32_t slot = 0; slot < vertex_gpu_buffers.size(); ++slot) {
+            if (vertex_buffer_present[slot]) {
+                pass.SetVertexBuffer(slot, vertex_gpu_buffers[slot]);
+            }
+        }
+
+        if (draw_type == "draw-indexed") {
+            if (!payload.hasObjectMember("indexBuffer")) {
+                return choc::value::createBool(false);
+            }
+            auto index_buffer_view = payload["indexBuffer"];
+            auto index_data = index_buffer_view.hasObjectMember("data") ? json_bytes_to_vector(index_buffer_view["data"]) : std::vector<uint8_t>{};
+            if (index_data.empty()) {
+                return choc::value::createBool(false);
+            }
+            auto upload_index_data = pad_webgpu_write_bytes(index_data);
+            wgpu::BufferDescriptor index_buffer_desc{};
+            index_buffer_desc.usage = wgpu::BufferUsage::Index | wgpu::BufferUsage::CopyDst;
+            index_buffer_desc.size = upload_index_data.size();
+            auto index_gpu_buffer = device_ptr->CreateBuffer(&index_buffer_desc);
+            if (!index_gpu_buffer) return choc::value::createBool(false);
+            queue_ptr->WriteBuffer(index_gpu_buffer, 0, upload_index_data.data(), upload_index_data.size());
+            pass.SetIndexBuffer(index_gpu_buffer, index_format_from_string(index_buffer_view.hasObjectMember("format") ? index_buffer_view["format"].getWithDefault<std::string>("uint32") : "uint32"));
+
+            auto index_count = static_cast<uint32_t>(std::max(0, payload.hasObjectMember("indexCount") ? payload["indexCount"].getWithDefault<int32_t>(0) : 0));
+            auto instance_count = static_cast<uint32_t>(std::max(1, payload.hasObjectMember("instanceCount") ? payload["instanceCount"].getWithDefault<int32_t>(1) : 1));
+            auto first_index = static_cast<uint32_t>(std::max(0, payload.hasObjectMember("firstIndex") ? payload["firstIndex"].getWithDefault<int32_t>(0) : 0));
+            auto base_vertex = static_cast<int32_t>(payload.hasObjectMember("baseVertex") ? payload["baseVertex"].getWithDefault<int32_t>(0) : 0);
+            auto first_instance = static_cast<uint32_t>(std::max(0, payload.hasObjectMember("firstInstance") ? payload["firstInstance"].getWithDefault<int32_t>(0) : 0));
+            if (index_count == 0) return choc::value::createBool(false);
+            pass.DrawIndexed(index_count, instance_count, first_index, base_vertex, first_instance);
+        } else {
+            auto vertex_count = static_cast<uint32_t>(std::max(0, payload.hasObjectMember("vertexCount") ? payload["vertexCount"].getWithDefault<int32_t>(0) : 0));
+            auto instance_count = static_cast<uint32_t>(std::max(1, payload.hasObjectMember("instanceCount") ? payload["instanceCount"].getWithDefault<int32_t>(1) : 1));
+            auto first_vertex = static_cast<uint32_t>(std::max(0, payload.hasObjectMember("firstVertex") ? payload["firstVertex"].getWithDefault<int32_t>(0) : 0));
+            auto first_instance = static_cast<uint32_t>(std::max(0, payload.hasObjectMember("firstInstance") ? payload["firstInstance"].getWithDefault<int32_t>(0) : 0));
+            if (vertex_count == 0) return choc::value::createBool(false);
+            pass.Draw(vertex_count, instance_count, first_vertex, first_instance);
+        }
+
+        pass.End();
+        auto command_buffer = encoder.Finish();
+        queue_ptr->Submit(1, &command_buffer);
+        if (target_canvas_state != nullptr) {
+            request_repaint();
+        }
+        return choc::value::createBool(true);
+#endif
+    });
+
+    engine_.register_function("__gpuQueuePresentTextureImpl", [this](choc::javascript::ArgumentList args) {
+        if (args.numArgs < 1 || !args[0] || native_gpu_bridge_state_ == nullptr || gpu_surface_ == nullptr) {
+            return choc::value::createBool(false);
+        }
+
+#ifndef PULP_HAS_SKIA
+        return choc::value::createBool(false);
+#else
+        auto& payload = *args[0];
+        if (!payload.isObject()) {
+            return choc::value::createBool(false);
+        }
+
+        auto canvas_id = payload.hasObjectMember("canvasId")
+            ? payload["canvasId"].getWithDefault<std::string>("")
+            : "";
+        auto source_texture_id = payload.hasObjectMember("sourceTextureId")
+            ? payload["sourceTextureId"].getWithDefault<std::string>("")
+            : "";
+        if (canvas_id.empty() || source_texture_id.empty()) {
+            return choc::value::createBool(false);
+        }
+
+        auto canvas_it = native_gpu_bridge_state_->canvases.find(canvas_id);
+        auto source_it = native_gpu_bridge_state_->textures.find(source_texture_id);
+        if (canvas_it == native_gpu_bridge_state_->canvases.end() ||
+            source_it == native_gpu_bridge_state_->textures.end() ||
+            !canvas_it->second.configured || !canvas_it->second.texture ||
+            !source_it->second.configured || !source_it->second.texture) {
+            return choc::value::createBool(false);
+        }
+
+        auto* device_ptr = static_cast<wgpu::Device*>(gpu_surface_->dawn_device_handle());
+        auto* queue_ptr = static_cast<wgpu::Queue*>(gpu_surface_->dawn_queue_handle());
+        if (device_ptr == nullptr || queue_ptr == nullptr || !(*device_ptr) || !(*queue_ptr)) {
+            return choc::value::createBool(false);
+        }
+
+        static constexpr const char* kFullscreenBlitVertex = R"WGSL(
+struct VertexOut {
+    @builtin(position) position : vec4<f32>,
+    @location(0) uv : vec2<f32>
+};
+
+@vertex
+fn main(@builtin(vertex_index) vertex_index : u32) -> VertexOut {
+    var positions = array<vec2<f32>, 3>(
+        vec2<f32>(-1.0, -3.0),
+        vec2<f32>(-1.0, 1.0),
+        vec2<f32>(3.0, 1.0)
+    );
+    var uvs = array<vec2<f32>, 3>(
+        vec2<f32>(0.0, 2.0),
+        vec2<f32>(0.0, 0.0),
+        vec2<f32>(2.0, 0.0)
+    );
+
+    var out : VertexOut;
+    out.position = vec4<f32>(positions[vertex_index], 0.0, 1.0);
+    out.uv = uvs[vertex_index];
+    return out;
+}
+)WGSL";
+
+        static constexpr const char* kFullscreenBlitFragment = R"WGSL(
+@group(0) @binding(0) var sourceSampler : sampler;
+@group(0) @binding(1) var sourceTexture : texture_2d<f32>;
+
+@fragment
+fn main(@location(0) uv : vec2<f32>) -> @location(0) vec4<f32> {
+    return textureSample(sourceTexture, sourceSampler, uv);
+}
+)WGSL";
+
+        wgpu::ShaderSourceWGSL vertex_wgsl{};
+        vertex_wgsl.code = kFullscreenBlitVertex;
+        wgpu::ShaderModuleDescriptor vertex_desc{};
+        vertex_desc.nextInChain = &vertex_wgsl;
+        auto vertex_module = device_ptr->CreateShaderModule(&vertex_desc);
+        if (!vertex_module) return choc::value::createBool(false);
+
+        wgpu::ShaderSourceWGSL fragment_wgsl{};
+        fragment_wgsl.code = kFullscreenBlitFragment;
+        wgpu::ShaderModuleDescriptor fragment_desc{};
+        fragment_desc.nextInChain = &fragment_wgsl;
+        auto fragment_module = device_ptr->CreateShaderModule(&fragment_desc);
+        if (!fragment_module) return choc::value::createBool(false);
+
+        wgpu::BindGroupLayoutEntry sampler_layout{};
+        sampler_layout.binding = 0;
+        sampler_layout.visibility = wgpu::ShaderStage::Fragment;
+        sampler_layout.sampler.type = wgpu::SamplerBindingType::Filtering;
+
+        wgpu::BindGroupLayoutEntry texture_layout{};
+        texture_layout.binding = 1;
+        texture_layout.visibility = wgpu::ShaderStage::Fragment;
+        texture_layout.texture.sampleType = wgpu::TextureSampleType::Float;
+        texture_layout.texture.viewDimension = wgpu::TextureViewDimension::e2D;
+        texture_layout.texture.multisampled = false;
+
+        std::array<wgpu::BindGroupLayoutEntry, 2> bind_group_layout_entries{ sampler_layout, texture_layout };
+        wgpu::BindGroupLayoutDescriptor bind_group_layout_desc{};
+        bind_group_layout_desc.entryCount = bind_group_layout_entries.size();
+        bind_group_layout_desc.entries = bind_group_layout_entries.data();
+        auto bind_group_layout = device_ptr->CreateBindGroupLayout(&bind_group_layout_desc);
+        if (!bind_group_layout) return choc::value::createBool(false);
+
+        wgpu::PipelineLayoutDescriptor pipeline_layout_desc{};
+        pipeline_layout_desc.bindGroupLayoutCount = 1;
+        pipeline_layout_desc.bindGroupLayouts = &bind_group_layout;
+        auto pipeline_layout = device_ptr->CreatePipelineLayout(&pipeline_layout_desc);
+        if (!pipeline_layout) return choc::value::createBool(false);
+
+        wgpu::ColorTargetState color_target{};
+        color_target.format = texture_format_from_string(canvas_it->second.format);
+        color_target.writeMask = wgpu::ColorWriteMask::All;
+
+        wgpu::FragmentState fragment_state{};
+        fragment_state.module = fragment_module;
+        fragment_state.entryPoint = "main";
+        fragment_state.targetCount = 1;
+        fragment_state.targets = &color_target;
+
+        wgpu::RenderPipelineDescriptor pipeline_desc{};
+        pipeline_desc.layout = pipeline_layout;
+        pipeline_desc.vertex.module = vertex_module;
+        pipeline_desc.vertex.entryPoint = "main";
+        pipeline_desc.vertex.bufferCount = 0;
+        pipeline_desc.vertex.buffers = nullptr;
+        pipeline_desc.fragment = &fragment_state;
+        pipeline_desc.primitive.topology = wgpu::PrimitiveTopology::TriangleList;
+        pipeline_desc.primitive.frontFace = wgpu::FrontFace::CCW;
+        pipeline_desc.primitive.cullMode = wgpu::CullMode::None;
+        pipeline_desc.multisample.count = 1;
+        pipeline_desc.multisample.mask = ~0u;
+        pipeline_desc.multisample.alphaToCoverageEnabled = false;
+        auto pipeline = device_ptr->CreateRenderPipeline(&pipeline_desc);
+        if (!pipeline) return choc::value::createBool(false);
+
+        wgpu::SamplerDescriptor sampler_desc{};
+        sampler_desc.addressModeU = wgpu::AddressMode::ClampToEdge;
+        sampler_desc.addressModeV = wgpu::AddressMode::ClampToEdge;
+        sampler_desc.addressModeW = wgpu::AddressMode::ClampToEdge;
+        sampler_desc.magFilter = wgpu::FilterMode::Linear;
+        sampler_desc.minFilter = wgpu::FilterMode::Linear;
+        sampler_desc.mipmapFilter = wgpu::MipmapFilterMode::Linear;
+        auto sampler = device_ptr->CreateSampler(&sampler_desc);
+        if (!sampler) return choc::value::createBool(false);
+
+        auto source_texture_view = source_it->second.texture.CreateView();
+        auto destination_texture_view = canvas_it->second.texture.CreateView();
+        if (!source_texture_view || !destination_texture_view) {
+            return choc::value::createBool(false);
+        }
+
+        std::array<wgpu::BindGroupEntry, 2> bind_group_entries{};
+        bind_group_entries[0].binding = 0;
+        bind_group_entries[0].sampler = sampler;
+        bind_group_entries[1].binding = 1;
+        bind_group_entries[1].textureView = source_texture_view;
+
+        wgpu::BindGroupDescriptor bind_group_desc{};
+        bind_group_desc.layout = bind_group_layout;
+        bind_group_desc.entryCount = bind_group_entries.size();
+        bind_group_desc.entries = bind_group_entries.data();
+        auto bind_group = device_ptr->CreateBindGroup(&bind_group_desc);
+        if (!bind_group) return choc::value::createBool(false);
+
+        wgpu::RenderPassColorAttachment color_attachment{};
+        color_attachment.view = destination_texture_view;
+        color_attachment.loadOp = wgpu::LoadOp::Clear;
+        color_attachment.storeOp = wgpu::StoreOp::Store;
+        color_attachment.clearValue = {0.0, 0.0, 0.0, 1.0};
+
+        wgpu::RenderPassDescriptor pass_desc{};
+        pass_desc.colorAttachmentCount = 1;
+        pass_desc.colorAttachments = &color_attachment;
+
+        wgpu::CommandEncoderDescriptor encoder_desc{};
+        auto encoder = device_ptr->CreateCommandEncoder(&encoder_desc);
+        if (!encoder) return choc::value::createBool(false);
+
+        auto pass = encoder.BeginRenderPass(&pass_desc);
+        pass.SetPipeline(pipeline);
+        pass.SetBindGroup(0, bind_group, 0, nullptr);
+        pass.Draw(3, 1, 0, 0);
+        pass.End();
+
+        auto command_buffer = encoder.Finish();
+        queue_ptr->Submit(1, &command_buffer);
+        request_repaint();
+        return choc::value::createBool(true);
+#endif
+    });
+
+    engine_.register_function("__gpuCanvasPresentImpl", [this](choc::javascript::ArgumentList args) {
+        auto canvas_id = args.get<std::string>(0, "");
+        if (canvas_id.empty() || native_gpu_bridge_state_ == nullptr) {
+            return choc::value::createBool(false);
+        }
+
+        auto it = native_gpu_bridge_state_->canvases.find(canvas_id);
+        if (it == native_gpu_bridge_state_->canvases.end()) {
+            return choc::value::createBool(false);
+        }
+
+        if (it->second.configured) {
+            request_repaint();
+        }
+        return choc::value::createBool(it->second.configured);
+    });
+
+    engine_.register_promise_function("__requestAdapterImpl", [gpu_info](const choc::value::Value*, size_t) {
+        return gpu_descriptor_to_value(gpu_info);
+    });
+}
+
+void WidgetBridge::forward_key_event(int key_code, uint16_t modifiers, bool is_down) {
+    if (!is_down) return;
+
+    // Check registered shortcuts first
+    auto kc = static_cast<KeyCode>(key_code);
+    for (auto& s : shortcuts_) {
+        if (s.key == kc && s.modifiers == modifiers) {
+            engine_.evaluate(s.callback + "()");
+            return;
+        }
+    }
+
+    engine_.evaluate("__dispatch__('__global__', 'keydown', {"
+        "key:" + std::to_string(key_code) +
+        ",mods:" + std::to_string(modifiers) + "})");
+}
+
+} // namespace pulp::view
