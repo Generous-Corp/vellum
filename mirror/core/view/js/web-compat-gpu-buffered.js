@@ -264,6 +264,26 @@ function __installNativeGpuBufferedDrawAugmentation() {
                 };
             }
         }
+        // Serialize depth/stencil attachment if present
+        if (depthStencil) {
+            payload.depthStencil = {
+                depthLoadOp: depthStencil.depthLoadOp || "clear",
+                depthStoreOp: depthStencil.depthStoreOp || "store",
+                depthClearValue: depthStencil.depthClearValue == null ? 1.0 : depthStencil.depthClearValue,
+                format: depthStencil.view && depthStencil.view.texture
+                    ? depthStencil.view.texture.format || "depth24plus"
+                    : "depth24plus"
+            };
+        }
+        // Serialize depth/stencil state from pipeline
+        if (currentPipeline && currentPipeline.depthStencil) {
+            payload.pipelineDepthStencil = {
+                format: currentPipeline.depthStencil.format || "depth24plus",
+                depthWriteEnabled: currentPipeline.depthStencil.depthWriteEnabled !== false,
+                depthCompare: currentPipeline.depthStencil.depthCompare || "less"
+            };
+        }
+
         if (attachmentView._nativeCanvasId) {
             payload.canvasId = attachmentView._nativeCanvasId;
         } else if (attachmentView._nativeTextureId) {
@@ -346,6 +366,7 @@ function __installNativeGpuBufferedDrawAugmentation() {
         var attachments = descriptor.colorAttachments || [];
         var attachment = attachments.length > 0 ? attachments[0] : null;
         var attachmentView = attachment && attachment.view ? attachment.view : null;
+        var depthStencil = descriptor.depthStencilAttachment || null;
         var originalSetPipeline = encoder.setPipeline;
         var originalSetBindGroup = encoder.setBindGroup;
         var originalSetVertexBuffer = encoder.setVertexBuffer;

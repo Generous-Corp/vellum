@@ -3,6 +3,7 @@
 #include <pulp/view/frame_clock.hpp>
 #include <choc/text/choc_JSON.h>
 #include <cmath>
+#include <fstream>
 #include <string>
 
 namespace pulp::view {
@@ -725,8 +726,30 @@ void ImageView::paint(canvas::Canvas& canvas) {
         return;
     }
 
-    // TODO: Load image via Skia SkData::MakeFromFileName + SkImages::DeferredFromEncodedData
-    // For now render path as text placeholder
+    // Use cached image data if available, otherwise load from file once
+    if (!loaded_ && cached_data_.empty()) {
+        // First paint with this path — read file into cache
+        std::ifstream file(path_, std::ios::binary | std::ios::ate);
+        if (file.is_open()) {
+            auto size = file.tellg();
+            if (size > 0) {
+                cached_data_.resize(static_cast<size_t>(size));
+                file.seekg(0);
+                file.read(reinterpret_cast<char*>(cached_data_.data()),
+                          static_cast<std::streamsize>(size));
+            }
+        }
+    }
+
+    // Draw from cached bytes (avoids re-reading file every frame)
+    if (!cached_data_.empty() &&
+        canvas.draw_image_from_data(cached_data_.data(), cached_data_.size(),
+                                    0, 0, b.width, b.height)) {
+        loaded_ = true;
+        return;
+    }
+
+    // Fallback: show filename as text placeholder
     canvas.set_fill_color(resolve_color("bg.surface", canvas::Color::rgba(50, 50, 60)));
     canvas.fill_rounded_rect(0, 0, b.width, b.height, 4);
     canvas.set_fill_color(resolve_color("text.secondary", canvas::Color::rgba(120, 120, 140)));
