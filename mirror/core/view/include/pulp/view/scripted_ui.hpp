@@ -1,0 +1,70 @@
+#pragma once
+
+#include <pulp/state/store.hpp>
+#include <pulp/view/hot_reload.hpp>
+#include <pulp/view/script_engine.hpp>
+#include <pulp/view/theme.hpp>
+#include <pulp/view/view.hpp>
+#include <pulp/view/widget_bridge.hpp>
+#include <filesystem>
+#include <functional>
+#include <memory>
+#include <optional>
+#include <string>
+#include <unordered_map>
+
+namespace pulp::view {
+
+struct ScriptedUiOptions {
+    std::filesystem::path script_path;
+    bool enable_hot_reload = false;
+    bool enable_theme_reload = true;
+};
+
+// Manages a JS-driven widget tree, optional theme.json overrides, and
+// standalone hot reload semantics with widget value preservation.
+class ScriptedUiSession {
+public:
+    ScriptedUiSession(View& root, state::StateStore& store, ScriptedUiOptions options);
+    ~ScriptedUiSession();
+
+    ScriptedUiSession(const ScriptedUiSession&) = delete;
+    ScriptedUiSession& operator=(const ScriptedUiSession&) = delete;
+
+    bool load(std::string* error = nullptr);
+    bool poll(std::string* error = nullptr);
+
+    void set_repaint_callback(std::function<void()> cb);
+    WidgetBridge* bridge() const { return bridge_.get(); }
+
+    const std::filesystem::path& script_path() const { return script_path_; }
+    const std::filesystem::path& theme_path() const { return theme_path_; }
+    bool hot_reload_enabled() const { return hot_reload_enabled_; }
+    bool theme_reload_enabled() const { return theme_reload_enabled_; }
+
+private:
+    View& root_;
+    state::StateStore& store_;
+    std::filesystem::path script_path_;
+    std::filesystem::path theme_path_;
+    bool hot_reload_enabled_ = false;
+    bool theme_reload_enabled_ = false;
+
+    std::unique_ptr<ScriptEngine> engine_;
+    std::unique_ptr<WidgetBridge> bridge_;
+    std::unique_ptr<HotReloader> reloader_;
+    std::function<void()> repaint_callback_;
+
+    Theme base_theme_;
+    bool last_theme_exists_ = false;
+    std::optional<std::filesystem::file_time_type> last_theme_write_time_;
+
+    bool rebuild_from_code(const std::string& code, bool preserve_state, std::string* error);
+    bool apply_theme_override(std::string* error);
+    bool poll_theme_reload(std::string* error);
+
+    static std::string read_text_file(const std::filesystem::path& path);
+    static std::string describe_exception();
+};
+
+} // namespace pulp::view

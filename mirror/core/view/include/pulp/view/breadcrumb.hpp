@@ -1,0 +1,54 @@
+#pragma once
+
+#include <pulp/view/view.hpp>
+#include <functional>
+#include <string>
+#include <vector>
+
+namespace pulp::view {
+
+// ── Breadcrumb ──────────────────────────────────────────────────────────────
+// Navigation breadcrumb trail.
+
+class Breadcrumb : public View {
+public:
+    struct Item {
+        std::string label;
+        std::string id;       // Optional identifier for callback
+    };
+
+    Breadcrumb();
+
+    /// Set the full breadcrumb path.
+    void set_items(std::vector<Item> items);
+    const std::vector<Item>& items() const { return items_; }
+
+    /// Push a new item onto the trail.
+    void push(Item item);
+
+    /// Pop the last item. Returns it, or empty if trail is empty.
+    Item pop();
+
+    /// Pop back to a specific index (inclusive).
+    void pop_to(size_t index);
+
+    /// Callback when a breadcrumb item is clicked.
+    std::function<void(size_t index, const Item& item)> on_navigate;
+
+    /// Separator string between items.
+    void set_separator(std::string sep) { separator_ = std::move(sep); }
+    const std::string& separator() const { return separator_; }
+
+    void paint(canvas::Canvas& canvas) override;
+    void on_mouse_down(Point pos) override;
+
+    float intrinsic_height() const override { return 32.0f; }
+
+private:
+    std::vector<Item> items_;
+    std::string separator_ = "/";
+
+    int item_at_position(Point pos) const;
+};
+
+} // namespace pulp::view
