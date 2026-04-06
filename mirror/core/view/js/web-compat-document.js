@@ -579,7 +579,10 @@ function __createMockGPUCommandEncoder(init) {
         _objectName: "GPUCommandEncoder",
         label: init.label || "",
         beginRenderPass: function(descriptor) {
-            return __createMockGPURenderPassEncoder({ label: descriptor && descriptor.label ? descriptor.label : "" });
+            return __createMockGPURenderPassEncoder({
+                label: descriptor && descriptor.label ? descriptor.label : "",
+                descriptor: descriptor || {}
+            });
         },
         beginComputePass: function(descriptor) {
             return __createMockGPUComputePassEncoder({ label: descriptor && descriptor.label ? descriptor.label : "" });
