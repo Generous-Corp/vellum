@@ -3,6 +3,7 @@
 #include <pulp/view/view.hpp>
 #include <pulp/view/audio_bridge.hpp>
 #include <pulp/view/animation.hpp>
+#include <pulp/view/sprite_strip.hpp>
 #include <pulp/signal/spectrogram.hpp>
 #include <pulp/signal/multi_channel_meter.hpp>
 #include <string>
@@ -81,6 +82,17 @@ private:
     TextDecoration text_decoration_ = TextDecoration::none;
     canvas::Color decoration_color_{};
     bool has_decoration_color_ = false;
+    canvas::TextDirection text_direction_ = canvas::TextDirection::left_to_right;
+    canvas::TextVerticalAlign vertical_align_ = canvas::TextVerticalAlign::top;
+
+public:
+    /// Set text direction (LTR, RTL, vertical top-to-bottom, vertical bottom-to-top).
+    void set_text_direction(canvas::TextDirection d) { text_direction_ = d; }
+    canvas::TextDirection text_direction() const { return text_direction_; }
+
+    /// Set vertical text alignment within the label's bounds.
+    void set_vertical_align(canvas::TextVerticalAlign a) { vertical_align_ = a; }
+    canvas::TextVerticalAlign vertical_align() const { return vertical_align_; }
 };
 
 // ── Knob ─────────────────────────────────────────────────────────────────────
@@ -117,6 +129,7 @@ public:
     void on_mouse_enter() override;
     void on_mouse_leave() override;
     void on_mouse_down(Point pos) override;
+    void on_mouse_up(Point pos) override;
     void on_mouse_drag(Point pos) override;
 
     // Animation accessors for testing
@@ -158,6 +171,14 @@ public:
     const std::string& lottie_json() const { return lottie_json_; }
     void set_lottie_time(float t) { lottie_time_ = std::clamp(t, 0.0f, 1.0f); }
     float lottie_time() const { return lottie_time_; }
+
+    /// Sprite strip: designer-created filmstrip for knob appearance.
+    /// The current value selects which frame to display.
+    void set_sprite_strip(std::shared_ptr<SpriteStrip> strip) { sprite_strip_ = std::move(strip); }
+    const std::shared_ptr<SpriteStrip>& sprite_strip() const { return sprite_strip_; }
+
+private:
+    std::shared_ptr<SpriteStrip> sprite_strip_;
 };
 
 // ── Fader ────────────────────────────────────────────────────────────────────
@@ -217,6 +238,14 @@ private:
     std::string lottie_json_;
     float lottie_time_ = 0.0f;
     WidgetRenderStyle render_style_ = WidgetRenderStyle::standard;
+
+public:
+    /// Sprite strip: designer-created filmstrip for fader appearance.
+    void set_sprite_strip(std::shared_ptr<SpriteStrip> strip) { sprite_strip_ = std::move(strip); }
+    const std::shared_ptr<SpriteStrip>& sprite_strip() const { return sprite_strip_; }
+
+private:
+    std::shared_ptr<SpriteStrip> sprite_strip_;
 };
 
 // ── Toggle ───────────────────────────────────────────────────────────────────
