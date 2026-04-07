@@ -13,7 +13,13 @@ target_sources(pulp-canvas PRIVATE
     src/effects.cpp
     src/text_layout.cpp
     src/attributed_string.cpp
+    src/text_shaper.cpp
 )
+
+# Text shaping via SkParagraph (default ON when Skia available, can be disabled)
+if(PULP_HAS_TEXT_SHAPING)
+    target_compile_definitions(pulp-canvas PRIVATE PULP_HAS_TEXT_SHAPING=1)
+endif()
 
 # nanosvg (zlib license) for SVG loading
 target_include_directories(pulp-canvas PRIVATE
