@@ -10,12 +10,14 @@ FileAnalyticsDestination::FileAnalyticsDestination(std::string_view path)
     : path_(path) {}
 
 void FileAnalyticsDestination::log_event(const AnalyticsEvent& event) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    buffer_.push_back(event);
-
-    // Auto-flush every 100 events
-    if (buffer_.size() >= 100)
-        flush();
+    bool should_flush = false;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        buffer_.push_back(event);
+        should_flush = buffer_.size() >= 100;
+    }
+    // Flush outside the lock to avoid deadlock
+    if (should_flush) flush();
 }
 
 void FileAnalyticsDestination::flush() {

@@ -141,10 +141,23 @@ bool InterprocessConnection::send_message(const void* data, size_t size) {
         static_cast<uint8_t>((len >> 24) & 0xFF)
     };
 
-    if (impl_->raw_write(header, 4) != 4) return false;
+    // Write header with retry for short writes
+    size_t header_sent = 0;
+    while (header_sent < 4) {
+        int n = impl_->raw_write(header + header_sent, 4 - header_sent);
+        if (n <= 0) return false;
+        header_sent += static_cast<size_t>(n);
+    }
+
+    // Write payload with retry for short writes
     if (size > 0) {
-        int written = impl_->raw_write(static_cast<const uint8_t*>(data), size);
-        return written == static_cast<int>(size);
+        size_t payload_sent = 0;
+        auto* payload = static_cast<const uint8_t*>(data);
+        while (payload_sent < size) {
+            int n = impl_->raw_write(payload + payload_sent, size - payload_sent);
+            if (n <= 0) return false;
+            payload_sent += static_cast<size_t>(n);
+        }
     }
     return true;
 }
