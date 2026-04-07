@@ -27,6 +27,10 @@ target_sources(pulp-runtime PRIVATE
     src/named_pipe.cpp
     src/ip_address.cpp
     src/i18n.cpp
+    src/crypto.cpp
+    src/analytics.cpp
+    src/big_integer.cpp
+    src/license.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../../external/pugixml/pugixml.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../../external/miniz/miniz.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../external/miniz/miniz_tdef.c
@@ -47,6 +51,14 @@ target_include_directories(pulp-runtime PRIVATE
 
 target_link_libraries(pulp-runtime PUBLIC pulp::platform)
 target_link_libraries(pulp-runtime PRIVATE hwy)
+
+# Mbed TLS for cryptographic operations
+if(TARGET mbedcrypto)
+    target_link_libraries(pulp-runtime PRIVATE mbedcrypto mbedx509 mbedtls)
+    target_include_directories(pulp-runtime PRIVATE
+        ${mbedtls_SOURCE_DIR}/include
+    )
+endif()
 
 # CHOC headers (used by SpscQueue wrapper)
 target_include_directories(pulp-runtime PUBLIC
