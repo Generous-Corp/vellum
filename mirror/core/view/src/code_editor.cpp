@@ -12,13 +12,87 @@ void CodeEditor::set_read_only(bool ro) { config_.read_only = ro; }
 void CodeEditor::insert_text(std::string_view text) { text_ += text; }
 void CodeEditor::go_to_line(int line) { cursor_line_ = line; }
 void CodeEditor::set_markers(const std::vector<std::pair<int, std::string>>&) {}
+// CodeEditor rendering: native fallback with line numbers and basic highlighting.
+// For full Monaco editor with syntax highlighting, minimap, IntelliSense, and
+// language modes, use the WebView integration pattern from examples/webview-monaco/.
+// That example embeds a bundled Monaco editor via WebViewPanel with the Pulp
+// native bridge for bidirectional communication (editor.ready, editor.changed).
+
 void CodeEditor::paint(canvas::Canvas& canvas) {
     float w = bounds().width, h = bounds().height;
-    canvas.set_fill_color(canvas::Color::rgba(30, 30, 35));
+
+    // Background
+    auto bg = (config_.theme == "vs-light")
+        ? canvas::Color::rgba(255, 255, 255)
+        : canvas::Color::rgba(30, 30, 35);
+    canvas.set_fill_color(bg);
     canvas.fill_rect(0, 0, w, h);
-    canvas.set_fill_color(canvas::Color::rgba(200, 200, 210));
-    canvas.set_font("monospace", config_.font_size);
-    canvas.fill_text(text_.empty() ? "// Code editor" : text_.substr(0, 200), 8, 20);
+
+    float line_h = config_.font_size * 1.5f;
+    float gutter_w = config_.line_numbers ? 50.0f : 0.0f;
+
+    // Gutter background
+    if (config_.line_numbers) {
+        canvas.set_fill_color(canvas::Color::rgba(25, 25, 30));
+        canvas.fill_rect(0, 0, gutter_w, h);
+    }
+
+    // Split text into lines and render
+    canvas.set_font(config_.font_family, config_.font_size);
+    canvas.set_text_align(canvas::TextAlign::left);
+
+    auto text_color = (config_.theme == "vs-light")
+        ? canvas::Color::rgba(30, 30, 30)
+        : canvas::Color::rgba(204, 204, 214);
+    auto line_num_color = canvas::Color::rgba(100, 100, 110);
+    auto keyword_color = (config_.theme == "vs-light")
+        ? canvas::Color::rgba(0, 0, 200)
+        : canvas::Color::rgba(86, 156, 214);
+    auto comment_color = canvas::Color::rgba(106, 153, 85);
+    auto string_color = canvas::Color::rgba(206, 145, 120);
+
+    float y = line_h;
+    int line_num = 1;
+    size_t pos = 0;
+
+    while (pos <= text_.size() && y < h) {
+        size_t end = text_.find('\n', pos);
+        if (end == std::string::npos) end = text_.size();
+        std::string line = text_.substr(pos, end - pos);
+
+        // Line number
+        if (config_.line_numbers) {
+            canvas.set_fill_color(line_num_color);
+            canvas.set_text_align(canvas::TextAlign::right);
+            canvas.fill_text(std::to_string(line_num), gutter_w - 8.0f, y);
+            canvas.set_text_align(canvas::TextAlign::left);
+        }
+
+        // Highlight current line
+        if (line_num == cursor_line_) {
+            canvas.set_fill_color(canvas::Color::rgba(40, 40, 50));
+            canvas.fill_rect(gutter_w, y - config_.font_size, w - gutter_w, line_h);
+        }
+
+        // Basic syntax coloring: detect comments and strings
+        bool is_comment = false;
+        if (line.size() >= 2 && line[0] == '/' && line[1] == '/') is_comment = true;
+        if (line.size() >= 1 && line[0] == '#') is_comment = true;
+
+        if (is_comment) {
+            canvas.set_fill_color(comment_color);
+        } else if (line.find('"') != std::string::npos || line.find('\'') != std::string::npos) {
+            canvas.set_fill_color(string_color);
+        } else {
+            canvas.set_fill_color(text_color);
+        }
+
+        canvas.fill_text(line, gutter_w + 8.0f, y);
+
+        y += line_h;
+        line_num++;
+        pos = end + 1;
+    }
 }
 
 SystemTrayIcon::~SystemTrayIcon() { hide(); }
@@ -56,7 +130,8 @@ void RecentlyOpenedFilesList::remove(std::string_view path) {
     files_.erase(std::remove(files_.begin(), files_.end(), p), files_.end());
 }
 bool RecentlyOpenedFilesList::load(std::string_view path) {
-    std::ifstream f(std::string(path));
+    std::string file_path(path);
+    std::ifstream f(file_path);
     if (!f) return false;
     files_.clear();
     std::string line;
@@ -65,7 +140,8 @@ bool RecentlyOpenedFilesList::load(std::string_view path) {
     return true;
 }
 bool RecentlyOpenedFilesList::save(std::string_view path) const {
-    std::ofstream f(std::string(path));
+    std::string file_path(path);
+    std::ofstream f(file_path);
     if (!f) return false;
     for (auto& file : files_) f << file << '\n';
     return true;

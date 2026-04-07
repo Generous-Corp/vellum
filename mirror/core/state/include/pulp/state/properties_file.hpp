@@ -20,10 +20,10 @@ public:
     /// Load properties from a JSON file. Returns false if file doesn't exist or is invalid.
     bool load(std::string_view path);
 
-    /// Save properties to a JSON file.
-    bool save(std::string_view path) const;
+    /// Save properties to a JSON file. Stores the path for subsequent save() calls.
+    bool save(std::string_view path);
 
-    /// Save to the path it was loaded from.
+    /// Save to the path it was loaded from (or last saved to).
     bool save() const;
 
     /// Get/set string properties
@@ -62,6 +62,7 @@ public:
     void set_path(std::string_view p) { path_ = std::string(p); }
 
 private:
+    bool save_to(const std::string& dest) const;
     std::map<std::string, std::string, std::less<>> values_;
     std::string path_;
 };

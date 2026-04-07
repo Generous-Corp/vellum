@@ -8,7 +8,8 @@ namespace pulp::runtime {
 // ── LocalisedStrings ────────────────────────────────────────────────────────
 
 bool LocalisedStrings::load_strings_file(std::string_view path) {
-    std::ifstream file(std::string(path));
+    std::string file_path(path);
+    std::ifstream file(file_path);
     if (!file.is_open()) return false;
 
     std::string line;
@@ -31,7 +32,8 @@ bool LocalisedStrings::load_strings_file(std::string_view path) {
 }
 
 bool LocalisedStrings::load_po_file(std::string_view path) {
-    std::ifstream file(std::string(path));
+    std::string file_path(path);
+    std::ifstream file(file_path);
     if (!file.is_open()) return false;
 
     std::string line, msgid, msgstr;
@@ -63,7 +65,8 @@ bool LocalisedStrings::load_po_file(std::string_view path) {
 }
 
 bool LocalisedStrings::load_json_file(std::string_view path) {
-    std::ifstream file(std::string(path));
+    std::string file_path(path);
+    std::ifstream file(file_path);
     if (!file.is_open()) return false;
 
     // Minimal JSON object parser for flat {"key":"value"} objects
