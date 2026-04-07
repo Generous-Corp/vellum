@@ -18,7 +18,13 @@ CoreGraphicsCanvas::CoreGraphicsCanvas(CGContextRef ctx, float width, float heig
 CoreGraphicsCanvas::~CoreGraphicsCanvas() = default;
 
 void CoreGraphicsCanvas::save() { CGContextSaveGState(ctx_); }
-void CoreGraphicsCanvas::restore() { CGContextRestoreGState(ctx_); }
+void CoreGraphicsCanvas::restore() {
+    if (in_transparency_layer_ > 0) {
+        CGContextEndTransparencyLayer(ctx_);
+        --in_transparency_layer_;
+    }
+    CGContextRestoreGState(ctx_);
+}
 
 void CoreGraphicsCanvas::translate(float x, float y) {
     CGContextTranslateCTM(ctx_, x, y);
@@ -38,14 +44,14 @@ void CoreGraphicsCanvas::clip_rect(float x, float y, float w, float h) {
 
 void CoreGraphicsCanvas::apply_fill_color() {
     CGContextSetRGBFillColor(ctx_,
-        fill_color_.r / 255.0, fill_color_.g / 255.0,
-        fill_color_.b / 255.0, fill_color_.a / 255.0);
+        fill_color_.r, fill_color_.g,
+        fill_color_.b, fill_color_.a);
 }
 
 void CoreGraphicsCanvas::apply_stroke_color() {
     CGContextSetRGBStrokeColor(ctx_,
-        stroke_color_.r / 255.0, stroke_color_.g / 255.0,
-        stroke_color_.b / 255.0, stroke_color_.a / 255.0);
+        stroke_color_.r, stroke_color_.g,
+        stroke_color_.b, stroke_color_.a);
 }
 
 void CoreGraphicsCanvas::set_fill_color(Color c) { fill_color_ = c; }
@@ -165,6 +171,20 @@ void CoreGraphicsCanvas::fill_path(const Point2D* points, size_t count) {
 
 void CoreGraphicsCanvas::set_opacity(float alpha) {
     CGContextSetAlpha(ctx_, alpha);
+}
+
+void CoreGraphicsCanvas::save_layer(float x, float y, float w, float h,
+                                     float opacity, float blur_radius) {
+    // CoreGraphics transparency layers composite the subtree as a single unit.
+    // CGContextBeginTransparencyLayer must be paired with CGContextEndTransparencyLayer.
+    // We use save/restore to scope the alpha, and the transparency layer handles
+    // proper group compositing.
+    (void)x; (void)y; (void)w; (void)h;  // CG transparency layer uses clip, not explicit rect
+    (void)blur_radius;  // CG blur would need CIFilter, not implemented here
+    CGContextSaveGState(ctx_);
+    CGContextSetAlpha(ctx_, opacity);
+    CGContextBeginTransparencyLayer(ctx_, nullptr);
+    ++in_transparency_layer_;
 }
 
 void CoreGraphicsCanvas::set_font(const std::string& family, float size) {

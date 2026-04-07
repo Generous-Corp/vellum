@@ -795,7 +795,7 @@ static pulp::view::KeyCode keyCodeFromNS(unsigned short code) {
         static_cast<float>(bounds.size.width),
         static_cast<float>(bounds.size.height));
 
-    canvas.set_fill_color(pulp::canvas::Color::rgba(30, 30, 46));
+    canvas.set_fill_color(pulp::canvas::Color::rgba8(30, 30, 46));
     canvas.fill_rect(0, 0,
         static_cast<float>(bounds.size.width),
         static_cast<float>(bounds.size.height));
@@ -1284,6 +1284,68 @@ public:
         }
     }
 
+    // ── Platform feature overrides ──────────────────────────────────────
+
+    void set_mouse_relative_mode(bool enabled) override {
+        if (enabled) {
+            CGAssociateMouseAndMouseCursorPosition(false);
+            [NSCursor hide];
+        } else {
+            CGAssociateMouseAndMouseCursorPosition(true);
+            [NSCursor unhide];
+        }
+    }
+
+    float dpi_scale() const override {
+        if (window_) return static_cast<float>([window_ backingScaleFactor]);
+        return 1.0f;
+    }
+
+    Size max_dimensions() const override {
+        NSScreen* screen = [NSScreen mainScreen];
+        NSRect frame = [screen visibleFrame];
+        return {static_cast<float>(frame.size.width), static_cast<float>(frame.size.height)};
+    }
+
+    void set_always_on_top(bool on_top) override {
+        if (window_)
+            [window_ setLevel:on_top ? NSFloatingWindowLevel : NSNormalWindowLevel];
+    }
+
+    void set_fixed_aspect_ratio(float ratio) override {
+        if (window_ && ratio > 0)
+            [window_ setContentAspectRatio:NSMakeSize(ratio, 1.0)];
+    }
+
+    void set_client_decoration(bool enabled) override {
+        if (!window_) return;
+        if (enabled) {
+            [window_ setTitlebarAppearsTransparent:YES];
+            [window_ setTitleVisibility:NSWindowTitleHidden];
+            [window_ setStyleMask:[window_ styleMask] | NSWindowStyleMaskFullSizeContentView];
+        } else {
+            [window_ setTitlebarAppearsTransparent:NO];
+            [window_ setTitleVisibility:NSWindowTitleVisible];
+            [window_ setStyleMask:[window_ styleMask] & ~NSWindowStyleMaskFullSizeContentView];
+        }
+    }
+
+    std::vector<MonitorInfo> get_monitors() const override {
+        std::vector<MonitorInfo> monitors;
+        for (NSScreen* screen in [NSScreen screens]) {
+            NSRect frame = [screen frame];
+            MonitorInfo info;
+            info.bounds = {static_cast<float>(frame.origin.x),
+                           static_cast<float>(frame.origin.y),
+                           static_cast<float>(frame.size.width),
+                           static_cast<float>(frame.size.height)};
+            info.dpi_scale = static_cast<float>([screen backingScaleFactor]);
+            info.name = std::string([[screen localizedName] UTF8String]);
+            monitors.push_back(info);
+        }
+        return monitors;
+    }
+
 private:
     View& root_;
     FrameClock frame_clock_;
@@ -1396,7 +1458,7 @@ private:
         root_.set_bounds({0, 0, width_, height_});
         root_.layout_children();
 
-        canvas.set_fill_color(canvas::Color::rgba(30, 30, 46));
+        canvas.set_fill_color(canvas::Color::rgba8(30, 30, 46));
         canvas.fill_rect(0, 0, width_, height_);
 
         root_.paint_all(canvas);

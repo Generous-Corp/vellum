@@ -45,9 +45,15 @@ void View::paint_all(canvas::Canvas& canvas) {
     if (overflow_ == Overflow::hidden)
         canvas.clip_rect(0, 0, bounds_.width, bounds_.height);
 
-    // Apply opacity as layer alpha
-    if (opacity_ < 1.0f)
-        canvas.set_opacity(opacity_);
+    // Compositing layer for opacity, blur, or post-effects
+    bool needs_layer = (opacity_ < 1.0f) || (filter_blur_ > 0.0f) || needs_layer_
+                       || (effect_ && effect_->needs_layer());
+    if (needs_layer) {
+        if (effect_)
+            effect_->configure_layer(canvas, 0, 0, bounds_.width, bounds_.height);
+        else
+            canvas.save_layer(0, 0, bounds_.width, bounds_.height, opacity_, filter_blur_);
+    }
 
     // Paint box shadow (before background, extends outside bounds)
     if (has_shadow_) {
@@ -57,12 +63,12 @@ void View::paint_all(canvas::Canvas& canvas) {
         float spread = shadow_.spread;
         // Approximate blur with multiple translucent rects at increasing offsets
         int steps = std::max(1, static_cast<int>(blur / 2));
-        uint8_t base_alpha = shadow_.color.a;
+        float base_alpha = shadow_.color.a;
         for (int i = steps; i >= 0; --i) {
             float t = static_cast<float>(i) / static_cast<float>(steps);
             float expand = spread + blur * t;
-            auto alpha = static_cast<uint8_t>(base_alpha * (1.0f - t) * (1.0f - t));
-            canvas.set_fill_color({shadow_.color.r, shadow_.color.g, shadow_.color.b, alpha});
+            float alpha = base_alpha * (1.0f - t) * (1.0f - t);
+            canvas.set_fill_color(Color::rgba(shadow_.color.r, shadow_.color.g, shadow_.color.b, alpha));
             canvas.fill_rounded_rect(-expand + sx, -expand + sy,
                                      bounds_.width + expand * 2,
                                      bounds_.height + expand * 2,
@@ -121,9 +127,9 @@ void View::paint_all(canvas::Canvas& canvas) {
         // for views that paint their own focus state
     }
 
-    // Reset opacity
-    if (opacity_ < 1.0f)
-        canvas.set_opacity(1.0f);
+    // End compositing layer (restore pops the saveLayer, compositing the subtree)
+    if (needs_layer)
+        canvas.restore();
 
     canvas.restore();
 }
@@ -218,6 +224,7 @@ void View::set_bounds(Rect r) {
 
 void View::add_child(std::unique_ptr<View> child) {
     child->parent_ = this;
+    child->window_host_ = window_host_;  // Propagate host reference
     children_.push_back(std::move(child));
     children_.back()->on_attached();
 }

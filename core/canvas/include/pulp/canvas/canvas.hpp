@@ -1,6 +1,9 @@
 #pragma once
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <vector>
 #include <variant>
@@ -11,20 +14,94 @@ namespace pulp::canvas {
 // ── Color ────────────────────────────────────────────────────────────────────
 
 struct Color {
-    uint8_t r = 0, g = 0, b = 0, a = 255;
+    float r = 0.0f, g = 0.0f, b = 0.0f, a = 1.0f;
 
-    static Color rgba(uint8_t r, uint8_t g, uint8_t b, uint8_t a = 255) {
+    /// Construct from float channels [0,1] (>1.0 allowed for HDR)
+    static constexpr Color rgba(float r, float g, float b, float a = 1.0f) {
         return {r, g, b, a};
     }
+
+    /// Construct from 8-bit channels [0,255] — convenience for legacy/hex code
+    static constexpr Color rgba8(uint8_t r, uint8_t g, uint8_t b, uint8_t a = 255) {
+        return {r / 255.0f, g / 255.0f, b / 255.0f, a / 255.0f};
+    }
+
+    /// Construct from hex 0xRRGGBB (alpha = 1.0)
     static Color hex(uint32_t rgb) {
-        return {static_cast<uint8_t>((rgb >> 16) & 0xFF),
-                static_cast<uint8_t>((rgb >> 8) & 0xFF),
-                static_cast<uint8_t>(rgb & 0xFF), 255};
+        return rgba8(static_cast<uint8_t>((rgb >> 16) & 0xFF),
+                     static_cast<uint8_t>((rgb >> 8) & 0xFF),
+                     static_cast<uint8_t>(rgb & 0xFF));
+    }
+
+    // ── Color space conversions ─────────────────────────────────────
+
+    struct HSV { float h = 0, s = 0, v = 0; };
+    struct HSL { float h = 0, s = 0, l = 0; };
+    struct OKLCH { float L = 0, C = 0, h = 0; };
+
+    /// Convert to HSV (h in [0,360), s and v in [0,1])
+    HSV to_hsv() const;
+    static Color from_hsv(HSV hsv, float alpha = 1.0f);
+
+    /// Convert to HSL (h in [0,360), s and l in [0,1])
+    HSL to_hsl() const;
+    static Color from_hsl(HSL hsl, float alpha = 1.0f);
+
+    /// Convert to OKLCH (perceptually uniform, CSS Color Level 4)
+    /// L in [0,1], C in [0,~0.4], h in [0,360)
+    OKLCH to_oklch() const;
+    static Color from_oklch(OKLCH oklch, float alpha = 1.0f);
+
+    /// Serialize to compact binary (4x float LE, 16 bytes)
+    void encode(uint8_t* out) const;
+    static Color decode(const uint8_t* data);
+
+    // ── Color math ──────────────────────────────────────────────────
+
+    /// Interpolate between this color and other by factor t [0,1]
+    Color interpolate(const Color& other, float t) const {
+        return {r + (other.r - r) * t,
+                g + (other.g - g) * t,
+                b + (other.b - b) * t,
+                a + (other.a - a) * t};
+    }
+
+    /// Scale color intensity for HDR (channels can exceed 1.0)
+    Color with_hdr_intensity(float multiplier) const {
+        return {r * multiplier, g * multiplier, b * multiplier, a};
+    }
+
+    /// Return copy with different alpha
+    Color with_alpha(float alpha) const {
+        return {r, g, b, alpha};
+    }
+
+    /// Convert to 8-bit values for serialization/interop
+    uint8_t r8() const { return static_cast<uint8_t>(std::clamp(r, 0.0f, 1.0f) * 255.0f + 0.5f); }
+    uint8_t g8() const { return static_cast<uint8_t>(std::clamp(g, 0.0f, 1.0f) * 255.0f + 0.5f); }
+    uint8_t b8() const { return static_cast<uint8_t>(std::clamp(b, 0.0f, 1.0f) * 255.0f + 0.5f); }
+    uint8_t a8() const { return static_cast<uint8_t>(std::clamp(a, 0.0f, 1.0f) * 255.0f + 0.5f); }
+
+    /// Pack to uint32_t ARGB (clamped to [0,255]) for Skia/platform interop
+    uint32_t to_argb32() const {
+        return (static_cast<uint32_t>(a8()) << 24) |
+               (static_cast<uint32_t>(r8()) << 16) |
+               (static_cast<uint32_t>(g8()) << 8) |
+               static_cast<uint32_t>(b8());
+    }
+
+    /// Unpack from uint32_t ARGB
+    static Color from_argb32(uint32_t argb) {
+        return rgba8(static_cast<uint8_t>((argb >> 16) & 0xFF),
+                     static_cast<uint8_t>((argb >> 8) & 0xFF),
+                     static_cast<uint8_t>(argb & 0xFF),
+                     static_cast<uint8_t>((argb >> 24) & 0xFF));
     }
 
     bool operator==(const Color& other) const {
         return r == other.r && g == other.g && b == other.b && a == other.a;
     }
+    bool operator!=(const Color& other) const { return !(*this == other); }
 };
 
 // ── Paint ────────────────────────────────────────────────────────────────────
@@ -41,17 +118,62 @@ struct LinearGradient {
 
 struct RadialGradient {
     float cx, cy, radius;
+    float focal_x = 0, focal_y = 0;  ///< Focal point offset for spotlight effects
     std::vector<GradientStop> stops;
 };
 
-using Paint = std::variant<Color, LinearGradient, RadialGradient>;
+/// Conic (sweep) gradient — colors sweep around a center point.
+struct ConicGradient {
+    float cx, cy;         ///< Center point
+    float start_angle;    ///< Starting angle in radians
+    std::vector<GradientStop> stops;
+};
+
+/// Gradient repeat mode.
+enum class GradientTileMode { clamp, repeat, mirror };
+
+/// Unified fill style — solid color, linear, radial, or conic gradient.
+/// Usable as fill or stroke paint.
+class FillStyle {
+public:
+    FillStyle() = default;
+    FillStyle(Color c) : color_(c) {} // NOLINT: implicit for convenience
+    FillStyle(LinearGradient g) : linear_(std::move(g)), type_(1) {}
+    FillStyle(RadialGradient g) : radial_(std::move(g)), type_(2) {}
+    FillStyle(ConicGradient g) : conic_(std::move(g)), type_(3) {}
+
+    bool is_solid() const { return type_ == 0; }
+    bool is_linear() const { return type_ == 1; }
+    bool is_radial() const { return type_ == 2; }
+    bool is_conic() const { return type_ == 3; }
+
+    const Color& color() const { return color_; }
+    const LinearGradient& linear() const { return linear_; }
+    const RadialGradient& radial() const { return radial_; }
+    const ConicGradient& conic() const { return conic_; }
+
+    GradientTileMode tile_mode() const { return tile_mode_; }
+    void set_tile_mode(GradientTileMode m) { tile_mode_ = m; }
+
+private:
+    Color color_;
+    LinearGradient linear_;
+    RadialGradient radial_;
+    ConicGradient conic_;
+    int type_ = 0;  // 0=solid, 1=linear, 2=radial, 3=conic
+    GradientTileMode tile_mode_ = GradientTileMode::clamp;
+};
+
+using Paint = std::variant<Color, LinearGradient, RadialGradient, ConicGradient>;
 
 // ── Drawing commands ─────────────────────────────────────────────────────────
 
 enum class LineCap { butt, round, square };
 enum class LineJoin { miter, round, bevel };
 enum class TextAlign { left, center, right };
+enum class TextVerticalAlign { top, center, bottom, baseline };
 enum class TextBaseline { top, middle, bottom };
+enum class TextDirection { left_to_right, right_to_left, top_to_bottom, bottom_to_top };
 
 // Abstract canvas for 2D drawing
 // Widgets paint against this interface. Concrete backends (Skia, CoreGraphics,
@@ -92,6 +214,13 @@ public:
                                           const Color* colors, const float* positions,
                                           int count) {
         if (count > 0) set_fill_color(colors[0]);
+    }
+
+    /// Set a conic (sweep) gradient as the fill paint.
+    virtual void set_fill_gradient_conic(float cx, float cy, float start_angle,
+                                          const Color* colors, const float* positions,
+                                          int count) {
+        if (count > 0) set_fill_color(colors[0]); // fallback
     }
 
     /// Clear gradient, return to solid fill color.
@@ -169,9 +298,20 @@ public:
         (void)points; (void)count; // Default: no-op, subclass should override
     }
 
-    // ── Opacity ───────────────────────────────────────────────────────────
+    // ── Opacity & Layers ──────────────────────────────────────────────────
     /// Set global alpha for subsequent drawing operations (0.0-1.0).
     virtual void set_opacity(float alpha) { (void)alpha; }
+
+    /// Save a compositing layer. All drawing until restore() is composited
+    /// with the given opacity and optional blur. This is the correct way to
+    /// implement CSS opacity and filter:blur() — the subtree paints into an
+    /// offscreen buffer and is composited back as a single unit.
+    virtual void save_layer(float x, float y, float w, float h,
+                            float opacity = 1.0f, float blur_radius = 0.0f) {
+        save(); // fallback: just save state
+        (void)x; (void)y; (void)w; (void)h;
+        (void)opacity; (void)blur_radius;
+    }
 
     // ── Text ─────────────────────────────────────────────────────────────
     virtual void set_font(const std::string& family, float size) = 0;
@@ -215,15 +355,35 @@ public:
 
     // ── SDF Shape Primitives (GPU-accelerated) ─────────────────────────
     /// Draw an SDF shape with anti-aliased edges via GPU shader.
-    enum class SDFShape { rect, circle, rounded_rect, arc, diamond };
+    enum class SDFShape {
+        rect,           // 0 — axis-aligned rectangle
+        circle,         // 1 — circle (min dimension as radius)
+        rounded_rect,   // 2 — rectangle with corner_radius
+        arc,            // 3 — ring arc (arc_start + arc_sweep)
+        diamond,        // 4 — rotated square
+        squircle,       // 5 — continuous-curvature rounded rect (power param)
+        triangle,       // 6 — equilateral triangle
+        ring,           // 7 — circle with inner radius (donut)
+        stadium,        // 8 — pill/capsule shape
+        cross,          // 9 — plus sign with configurable arm width
+        flat_segment,   // 10 — line segment with flat caps
+        rounded_segment,// 11 — line segment with rounded caps
+        flat_arc,       // 12 — arc with thickness and flat caps
+        quadratic_bezier,// 13 — quadratic bezier curve with thickness
+    };
 
     struct SDFStyle {
-        Color fill_color{100, 255, 100, 255};
-        Color stroke_color{100, 255, 100, 255};
+        Color fill_color = Color::rgba(0.392f, 1.0f, 0.392f);
+        Color stroke_color = Color::rgba(0.392f, 1.0f, 0.392f);
         float stroke_width = 0;       ///< 0 = filled, >0 = stroked
         float corner_radius = 0;      ///< For rounded_rect
         float arc_start = 0;          ///< For arc (radians)
         float arc_sweep = 4.712f;     ///< For arc (radians, default 270°)
+        float squircle_power = 4.0f;  ///< For squircle (higher = more rectangular)
+        float inner_radius = 0.5f;    ///< For ring (fraction of outer radius)
+        float arm_width = 0.3f;       ///< For cross (fraction of half-size)
+        float bezier_cx = 0.0f;       ///< For quadratic_bezier: control point X (normalized -1..1)
+        float bezier_cy = -1.0f;      ///< For quadratic_bezier: control point Y (normalized -1..1)
     };
 
     virtual void draw_sdf_shape(SDFShape shape, float x, float y, float w, float h,
@@ -254,7 +414,7 @@ public:
     /// Call before painting the overlay content.
     virtual void draw_blurred_backdrop(float x, float y, float w, float h,
                                        float blur_radius, float corner_radius = 0,
-                                       Color tint = {0, 0, 0, 80}) {
+                                       Color tint = Color::rgba(0.0f, 0.0f, 0.0f, 0.314f)) {
         // CPU fallback: just draw a semi-transparent rect (no blur)
         set_fill_color(tint);
         fill_rounded_rect(x, y, w, h, corner_radius);
@@ -264,8 +424,8 @@ public:
     /// Draw a waveform using GPU shader (SDF anti-aliased line + fill).
     /// Samples are normalized -1 to 1. Default implementation falls back to polyline.
     struct WaveformStyle {
-        Color line_color{100, 180, 250, 255};
-        Color fill_color{100, 180, 250, 40};
+        Color line_color = Color::rgba(0.392f, 0.706f, 0.980f);
+        Color fill_color = Color::rgba(0.392f, 0.706f, 0.980f, 0.157f);
         float line_thickness = 1.5f;
         bool show_fill = true;
         float fill_center = 0.5f;  ///< 0=top, 0.5=center, 1=bottom
@@ -315,7 +475,7 @@ public:
                                 float x, float y, float w, float h,
                                 const ShaderUniforms& uniforms) {
         // CPU fallback: draw a colored placeholder rect
-        set_fill_color(uniforms.fill_color.a > 0 ? uniforms.fill_color : Color{80, 80, 100, 200});
+        set_fill_color(uniforms.fill_color.a > 0.0f ? uniforms.fill_color : Color::rgba(0.314f, 0.314f, 0.392f, 0.784f));
         fill_rect(x, y, w, h);
         return false; // shader not rendered
     }
