@@ -84,6 +84,8 @@ public:
                                    const Color* colors, const float* positions, int count) override;
     void set_fill_gradient_radial(float cx, float cy, float radius,
                                    const Color* colors, const float* positions, int count) override;
+    void set_fill_gradient_conic(float cx, float cy, float start_angle,
+                                  const Color* colors, const float* positions, int count) override;
     void clear_fill_gradient() override;
 
     // Blend modes
@@ -121,11 +123,16 @@ public:
                                   float w,
                                   float h);
 
+    // Opacity & compositing layers
+    void set_opacity(float alpha) override;
+    void save_layer(float x, float y, float w, float h,
+                    float opacity, float blur_radius) override;
+
 private:
     SkCanvas* canvas_;        // Non-owning — owned by surface or caller
     skgpu::graphite::Recorder* recorder_ = nullptr; // Non-owning — owned by SkiaSurface
-    Color fill_color_{255, 255, 255, 255};
-    Color stroke_color_{255, 255, 255, 255};
+    Color fill_color_ = Color::rgba(1.0f, 1.0f, 1.0f);
+    Color stroke_color_ = Color::rgba(1.0f, 1.0f, 1.0f);
     float line_width_ = 1.0f;
     LineCap line_cap_ = LineCap::butt;
     LineJoin line_join_ = LineJoin::miter;

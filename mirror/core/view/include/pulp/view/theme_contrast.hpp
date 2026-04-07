@@ -44,16 +44,13 @@ std::optional<Color> adjust_for_contrast(Color foreground, Color background,
                                           ContrastLevel level = ContrastLevel::aa_normal);
 
 // ── HSL Conversion Utilities ────────────────────────────────────────────────
-// Used internally for color adjustment and theme derivation.
+// Delegates to Color::to_hsl() / Color::from_hsl() — these wrappers exist
+// for backward compatibility with code that uses the free-function API.
 
-struct HSL {
-    float h = 0;   // Hue in degrees [0, 360)
-    float s = 0;   // Saturation [0, 1]
-    float l = 0;   // Lightness [0, 1]
-};
+using HSL = canvas::Color::HSL;
 
-HSL rgb_to_hsl(Color c);
-Color hsl_to_rgb(HSL hsl, uint8_t alpha = 255);
+inline HSL rgb_to_hsl(Color c) { return c.to_hsl(); }
+inline Color hsl_to_rgb(HSL hsl, float alpha = 1.0f) { return Color::from_hsl(hsl, alpha); }
 
 /// Shift hue by degrees (wraps around 360).
 Color shift_hue(Color c, float degrees);
@@ -64,8 +61,8 @@ Color adjust_lightness(Color c, float delta);
 /// Blend two colors by factor t in [0,1]. t=0 returns a, t=1 returns b.
 Color blend_colors(Color a, Color b, float t);
 
-/// Apply alpha to a color (0-255).
-Color with_alpha(Color c, uint8_t alpha);
+/// Apply alpha to a color [0.0-1.0].
+Color with_alpha(Color c, float alpha);
 
 // ── Theme Contrast Validation ───────────────────────────────────────────────
 

@@ -59,12 +59,16 @@ static sk_sp<SkFontMgr> get_font_manager() {
 }
 
 static SkColor to_sk_color(Color c) {
-    return SkColorSetARGB(c.a, c.r, c.g, c.b);
+    return c.to_argb32();
+}
+
+static SkColor4f to_sk_color4f(Color c) {
+    return {c.r, c.g, c.b, c.a};
 }
 
 static SkPaint make_fill_paint(Color c) {
     SkPaint paint;
-    paint.setColor(to_sk_color(c));
+    paint.setColor4f(to_sk_color4f(c));
     paint.setStyle(SkPaint::kFill_Style);
     paint.setAntiAlias(true);
     return paint;
@@ -72,7 +76,7 @@ static SkPaint make_fill_paint(Color c) {
 
 static SkPaint make_stroke_paint(Color c, float width) {
     SkPaint paint;
-    paint.setColor(to_sk_color(c));
+    paint.setColor4f(to_sk_color4f(c));
     paint.setStyle(SkPaint::kStroke_Style);
     paint.setStrokeWidth(width);
     paint.setAntiAlias(true);
@@ -263,7 +267,7 @@ static void colors_to_skia(const Color* colors, const float* positions, int coun
     sk_colors.resize(static_cast<size_t>(count));
     sk_pos.resize(static_cast<size_t>(count));
     for (int i = 0; i < count; ++i) {
-        sk_colors[static_cast<size_t>(i)] = SkColorSetARGB(colors[i].a, colors[i].r, colors[i].g, colors[i].b);
+        sk_colors[static_cast<size_t>(i)] = colors[i].to_argb32();
         sk_pos[static_cast<size_t>(i)] = positions[i];
     }
 }
@@ -286,6 +290,18 @@ void SkiaCanvas::set_fill_gradient_radial(float cx, float cy, float radius,
     colors_to_skia(colors, positions, count, sk_colors, sk_pos);
     gradient_shader_ = SkGradientShader::MakeRadial({cx, cy}, radius, sk_colors.data(),
                                                      sk_pos.data(), count, SkTileMode::kClamp);
+    has_gradient_ = gradient_shader_ != nullptr;
+}
+
+void SkiaCanvas::set_fill_gradient_conic(float cx, float cy, float start_angle,
+                                          const Color* colors, const float* positions, int count) {
+    std::vector<SkColor> sk_colors;
+    std::vector<SkScalar> sk_pos;
+    colors_to_skia(colors, positions, count, sk_colors, sk_pos);
+    float start_deg = start_angle * 180.0f / 3.14159265f;
+    gradient_shader_ = SkGradientShader::MakeSweep(cx, cy, sk_colors.data(), sk_pos.data(),
+                                                     count, SkTileMode::kClamp,
+                                                     start_deg, start_deg + 360.0f, 0, nullptr);
     has_gradient_ = gradient_shader_ != nullptr;
 }
 
@@ -341,7 +357,7 @@ void SkiaCanvas::fill_current_path() {
     if (has_gradient_ && gradient_shader_) {
         paint.setShader(gradient_shader_);
     } else {
-        paint.setColor(SkColorSetARGB(fill_color_.a, fill_color_.r, fill_color_.g, fill_color_.b));
+        paint.setColor4f(to_sk_color4f(fill_color_));
     }
     paint.setBlendMode(blend_mode_);
     canvas_->drawPath(path_builder_->detach(), paint);
@@ -352,9 +368,7 @@ void SkiaCanvas::stroke_current_path() {
     SkPaint paint;
     paint.setAntiAlias(true);
     paint.setStyle(SkPaint::kStroke_Style);
-    paint.setColor(SkColorSetARGB(stroke_color_.r, stroke_color_.g, stroke_color_.b, stroke_color_.a));
-    // Fix: ARGB order
-    paint.setColor(SkColorSetARGB(stroke_color_.a, stroke_color_.r, stroke_color_.g, stroke_color_.b));
+    paint.setColor4f(to_sk_color4f(stroke_color_));
     paint.setStrokeWidth(line_width_);
     paint.setBlendMode(blend_mode_);
     canvas_->drawPath(path_builder_->detach(), paint);
@@ -378,6 +392,11 @@ static const char* kSDFShapeSkSL = R"(
     uniform float strokeWidth;
     uniform float arcStart;
     uniform float arcSweep;
+    uniform float squirclePower;
+    uniform float innerRadius;
+    uniform float armWidth;
+    uniform float bezierCX;
+    uniform float bezierCY;
     uniform half4 fillColor;
     uniform half4 strokeColor;
 
@@ -404,6 +423,78 @@ static const char* kSDFShapeSkSL = R"(
         return (q.x + q.y - s) * 0.7071;
     }
 
+    // SDF for squircle (superellipse): |x/a|^n + |y/b|^n = 1
+    float sdSquircle(float2 p, float2 b, float n) {
+        float2 q = abs(p) / b;
+        return (pow(pow(q.x, n) + pow(q.y, n), 1.0/n) - 1.0) * min(b.x, b.y);
+    }
+
+    // SDF for equilateral triangle
+    float sdTriangle(float2 p, float r) {
+        float k = 1.7321; // sqrt(3)
+        p.x = abs(p.x) - r;
+        p.y = p.y + r / k;
+        if (p.x + k * p.y > 0.0) p = float2(p.x - k * p.y, -k * p.x - p.y) / 2.0;
+        p.x -= clamp(p.x, -2.0 * r, 0.0);
+        return -length(p) * sign(p.y);
+    }
+
+    // SDF for ring (annulus)
+    float sdRing(float2 p, float outer, float inner) {
+        return abs(length(p) - (outer + inner) * 0.5) - (outer - inner) * 0.5;
+    }
+
+    // SDF for stadium (pill/capsule)
+    float sdStadium(float2 p, float2 b) {
+        float r = min(b.x, b.y);
+        float2 q = abs(p) - float2(b.x - r, 0.0);
+        return length(max(q, float2(0.0))) + min(max(q.x, q.y), 0.0) - r;
+    }
+
+    // SDF for cross (plus sign)
+    float sdCross(float2 p, float2 b, float armW) {
+        float2 q = abs(p);
+        float d1 = sdBox(q, float2(b.x, b.y * armW));
+        float d2 = sdBox(q, float2(b.x * armW, b.y));
+        return min(d1, d2);
+    }
+
+    // SDF for line segment with flat ends
+    float sdFlatSegment(float2 p, float2 halfSize) {
+        return sdBox(p, float2(halfSize.x, strokeWidth * 0.5));
+    }
+
+    // SDF for line segment with rounded ends
+    float sdRoundedSegment(float2 p, float halfLen, float thickness) {
+        p.x -= clamp(p.x, -halfLen, halfLen);
+        return length(p) - thickness * 0.5;
+    }
+
+    // SDF for arc with thickness (flat caps)
+    float sdFlatArc(float2 p, float outerR, float innerR, float startAngle, float sweepAngle) {
+        float angle = atan2(p.y, p.x);
+        float halfSweep = sweepAngle * 0.5;
+        float midAngle = startAngle + halfSweep;
+        float angleDiff = angle - midAngle;
+        angleDiff = angleDiff - 6.2832 * floor((angleDiff + 3.1416) / 6.2832);
+        float arcMask = abs(angleDiff) - halfSweep;
+        float ringDist = abs(length(p) - (outerR + innerR) * 0.5) - (outerR - innerR) * 0.5;
+        return max(ringDist, arcMask * outerR * 0.3);
+    }
+
+    // SDF for quadratic bezier curve with thickness (approximation)
+    // Uses distance to the closest point on the curve segment
+    float sdQuadBezier(float2 p, float2 a, float2 b, float2 c, float thickness) {
+        // Approximate by sampling the curve at several points
+        float minDist = 1e10;
+        for (float t = 0.0; t <= 1.0; t += 0.05) {
+            float2 q = (1.0-t)*(1.0-t)*a + 2.0*(1.0-t)*t*b + t*t*c;
+            float d = length(p - q);
+            minDist = min(minDist, d);
+        }
+        return minDist - thickness * 0.5;
+    }
+
     half4 main(float2 coord) {
         float2 center = resolution * 0.5;
         float2 p = coord - center;
@@ -412,35 +503,58 @@ static const char* kSDFShapeSkSL = R"(
         float d;
 
         if (shapeType < 0.5) {
-            d = sdBox(p, halfSize);  // rect
+            d = sdBox(p, halfSize);              // 0: rect
         } else if (shapeType < 1.5) {
-            d = sdCircle(p, r);  // circle
+            d = sdCircle(p, r);                  // 1: circle
         } else if (shapeType < 2.5) {
-            d = sdRoundBox(p, halfSize, cornerRadius);  // rounded rect
+            d = sdRoundBox(p, halfSize, cornerRadius); // 2: rounded rect
         } else if (shapeType < 3.5) {
-            // Arc: use circle SDF with angle masking
+            // 3: arc
             float angle = atan2(p.y, p.x);
             float halfSweep = arcSweep * 0.5;
             float midAngle = arcStart + halfSweep;
             float angleDiff = angle - midAngle;
-            // Normalize to [-PI, PI]
             angleDiff = angleDiff - 6.2832 * floor((angleDiff + 3.1416) / 6.2832);
             float arcDist = abs(angleDiff) - halfSweep;
             float ringDist = abs(length(p) - r * 0.8) - strokeWidth * 0.5;
             d = max(ringDist, arcDist * r * 0.5);
+        } else if (shapeType < 4.5) {
+            d = sdDiamond(p, r);                 // 4: diamond
+        } else if (shapeType < 5.5) {
+            d = sdSquircle(p, halfSize, squirclePower); // 5: squircle
+        } else if (shapeType < 6.5) {
+            d = sdTriangle(p, r);                // 6: triangle
+        } else if (shapeType < 7.5) {
+            float outer = r;
+            float inner = r * innerRadius;
+            d = sdRing(p, outer, inner);         // 7: ring
+        } else if (shapeType < 8.5) {
+            d = sdStadium(p, halfSize);          // 8: stadium
+        } else if (shapeType < 9.5) {
+            d = sdCross(p, halfSize, armWidth);  // 9: cross
+        } else if (shapeType < 10.5) {
+            d = sdFlatSegment(p, halfSize);      // 10: flat segment
+        } else if (shapeType < 11.5) {
+            d = sdRoundedSegment(p, halfSize.x, max(strokeWidth, 2.0)); // 11: rounded segment
+        } else if (shapeType < 12.5) {
+            float outerR = r;
+            float innerR = r * innerRadius;
+            d = sdFlatArc(p, outerR, innerR, arcStart, arcSweep);       // 12: flat arc
         } else {
-            d = sdDiamond(p, r);  // diamond
+            // 13: quadratic bezier — control point from uniform parameters
+            float2 a = float2(-halfSize.x, halfSize.y);
+            float2 b = float2(bezierCX * halfSize.x, bezierCY * halfSize.y);
+            float2 c = float2(halfSize.x, halfSize.y);
+            d = sdQuadBezier(p, a, b, c, max(strokeWidth, 2.0));        // 13: quadratic bezier
         }
 
         // Render: filled or stroked with AA
-        float aa = 1.0;  // AA width in pixels
+        float aa = 1.0;
         if (strokeWidth > 0.0 && shapeType < 2.5) {
-            // Stroked
             float sd = abs(d) - strokeWidth * 0.5;
             float alpha = 1.0 - smoothstep(-aa, aa, sd);
             return strokeColor * half(alpha);
         } else {
-            // Filled
             float alpha = 1.0 - smoothstep(-aa, aa, d);
             return fillColor * half(alpha);
         }
@@ -465,12 +579,17 @@ void SkiaCanvas::draw_sdf_shape(SDFShape shape, float x, float y, float w, float
     builder.uniform("strokeWidth") = style.stroke_width;
     builder.uniform("arcStart") = style.arc_start;
     builder.uniform("arcSweep") = style.arc_sweep;
+    builder.uniform("squirclePower") = style.squircle_power;
+    builder.uniform("innerRadius") = style.inner_radius;
+    builder.uniform("armWidth") = style.arm_width;
+    builder.uniform("bezierCX") = style.bezier_cx;
+    builder.uniform("bezierCY") = style.bezier_cy;
     builder.uniform("fillColor") = SkV4{
-        style.fill_color.r / 255.0f, style.fill_color.g / 255.0f,
-        style.fill_color.b / 255.0f, style.fill_color.a / 255.0f};
+        style.fill_color.r, style.fill_color.g,
+        style.fill_color.b, style.fill_color.a};
     builder.uniform("strokeColor") = SkV4{
-        style.stroke_color.r / 255.0f, style.stroke_color.g / 255.0f,
-        style.stroke_color.b / 255.0f, style.stroke_color.a / 255.0f};
+        style.stroke_color.r, style.stroke_color.g,
+        style.stroke_color.b, style.stroke_color.a};
 
     auto shader = builder.makeShader();
     if (!shader) { Canvas::draw_sdf_shape(shape, x, y, w, h, style); return; }
@@ -504,7 +623,7 @@ bool SkiaCanvas::draw_with_sksl(const std::string& sksl,
         builder.uniform("time") = uniforms.time;
 
     auto toSkV4 = [](Color c) -> SkV4 {
-        return {c.r / 255.0f, c.g / 255.0f, c.b / 255.0f, c.a / 255.0f};
+        return {c.r, c.g, c.b, c.a};
     };
 
     if (effect->findUniform("accentColor"))
@@ -592,7 +711,7 @@ void SkiaCanvas::draw_blurred_backdrop(float x, float y, float w, float h,
 
     // Tint overlay
     SkPaint tintPaint;
-    tintPaint.setColor(SkColorSetARGB(tint.a, tint.r, tint.g, tint.b));
+    tintPaint.setColor4f(to_sk_color4f(tint));
     if (corner_radius > 0) {
         canvas_->drawRRect(SkRRect::MakeRectXY(rect, corner_radius, corner_radius), tintPaint);
     } else {
@@ -600,6 +719,37 @@ void SkiaCanvas::draw_blurred_backdrop(float x, float y, float w, float h,
     }
 
     canvas_->restore();
+}
+
+// ── Opacity & Compositing Layers ────────────────────────────────────────────
+
+void SkiaCanvas::set_opacity(float alpha) {
+    // Note: set_opacity alone doesn't composite correctly for subtrees.
+    // For proper CSS opacity, use save_layer() which creates an offscreen
+    // buffer. This method exists for simple single-draw opacity.
+    // The SkPaint alpha is applied per-draw, not per-subtree.
+    (void)alpha; // Handled via save_layer in paint_all
+}
+
+void SkiaCanvas::save_layer(float x, float y, float w, float h,
+                             float opacity, float blur_radius) {
+    if (!canvas_) { save(); return; }
+
+    SkRect bounds = SkRect::MakeXYWH(x, y, w, h);
+    SkPaint layer_paint;
+
+    // Set layer opacity (composited when the layer is restored)
+    if (opacity < 1.0f) {
+        layer_paint.setAlphaf(opacity);
+    }
+
+    // Optionally apply blur as an image filter on the layer
+    if (blur_radius > 0.0f) {
+        layer_paint.setImageFilter(
+            SkImageFilters::Blur(blur_radius, blur_radius, SkTileMode::kClamp, nullptr));
+    }
+
+    canvas_->saveLayer(&bounds, &layer_paint);
 }
 
 // ── GPU Waveform (SkRuntimeEffect shader-driven) ────────────────────────────
@@ -722,11 +872,11 @@ void SkiaCanvas::draw_waveform(const float* samples, size_t count,
     builder.uniform("thickness") = style.line_thickness;
     builder.uniform("fillCenter") = style.fill_center;
     builder.uniform("lineColor") = SkV4{
-        style.line_color.r / 255.0f, style.line_color.g / 255.0f,
-        style.line_color.b / 255.0f, style.line_color.a / 255.0f};
+        style.line_color.r, style.line_color.g,
+        style.line_color.b, style.line_color.a};
     builder.uniform("fillColor") = SkV4{
-        style.fill_color.r / 255.0f, style.fill_color.g / 255.0f,
-        style.fill_color.b / 255.0f, style.fill_color.a / 255.0f};
+        style.fill_color.r, style.fill_color.g,
+        style.fill_color.b, style.fill_color.a};
 
     auto shader = builder.makeShader();
     if (!shader) {

@@ -6,8 +6,8 @@ namespace pulp::view {
 
 // ── Relative Luminance (WCAG 2.1) ──────────────────────────────────────────
 
-static float linearize(uint8_t channel) {
-    float s = static_cast<float>(channel) / 255.0f;
+static float linearize(float s) {
+    s = std::clamp(s, 0.0f, 1.0f);
     return (s <= 0.04045f) ? (s / 12.92f) : std::pow((s + 0.055f) / 1.055f, 2.4f);
 }
 
@@ -39,99 +39,34 @@ bool meets_contrast(Color foreground, Color background, ContrastLevel level) {
     return contrast_ratio(foreground, background) >= min_contrast_for_level(level);
 }
 
-// ── HSL Conversion ──────────────────────────────────────────────────────────
-
-HSL rgb_to_hsl(Color c) {
-    float r = c.r / 255.0f;
-    float g = c.g / 255.0f;
-    float b = c.b / 255.0f;
-
-    float mx = std::max({r, g, b});
-    float mn = std::min({r, g, b});
-    float d = mx - mn;
-
-    HSL hsl;
-    hsl.l = (mx + mn) / 2.0f;
-
-    if (d < 1e-6f) {
-        hsl.h = 0;
-        hsl.s = 0;
-        return hsl;
-    }
-
-    hsl.s = (hsl.l > 0.5f) ? d / (2.0f - mx - mn) : d / (mx + mn);
-
-    if (mx == r)
-        hsl.h = std::fmod((g - b) / d + 6.0f, 6.0f) * 60.0f;
-    else if (mx == g)
-        hsl.h = ((b - r) / d + 2.0f) * 60.0f;
-    else
-        hsl.h = ((r - g) / d + 4.0f) * 60.0f;
-
-    return hsl;
-}
-
-static float hue_to_rgb(float p, float q, float t) {
-    if (t < 0) t += 1.0f;
-    if (t > 1) t -= 1.0f;
-    if (t < 1.0f / 6.0f) return p + (q - p) * 6.0f * t;
-    if (t < 1.0f / 2.0f) return q;
-    if (t < 2.0f / 3.0f) return p + (q - p) * (2.0f / 3.0f - t) * 6.0f;
-    return p;
-}
-
-Color hsl_to_rgb(HSL hsl, uint8_t alpha) {
-    if (hsl.s < 1e-6f) {
-        auto v = static_cast<uint8_t>(std::clamp(hsl.l * 255.0f, 0.0f, 255.0f));
-        return Color::rgba(v, v, v, alpha);
-    }
-
-    float q = (hsl.l < 0.5f) ? hsl.l * (1.0f + hsl.s) : hsl.l + hsl.s - hsl.l * hsl.s;
-    float p = 2.0f * hsl.l - q;
-    float h = hsl.h / 360.0f;
-
-    float r = hue_to_rgb(p, q, h + 1.0f / 3.0f);
-    float g = hue_to_rgb(p, q, h);
-    float b = hue_to_rgb(p, q, h - 1.0f / 3.0f);
-
-    return Color::rgba(
-        static_cast<uint8_t>(std::clamp(r * 255.0f, 0.0f, 255.0f)),
-        static_cast<uint8_t>(std::clamp(g * 255.0f, 0.0f, 255.0f)),
-        static_cast<uint8_t>(std::clamp(b * 255.0f, 0.0f, 255.0f)),
-        alpha);
-}
+// ── Color utilities (delegate to Color methods) ────────────────────────────
 
 Color shift_hue(Color c, float degrees) {
-    auto hsl = rgb_to_hsl(c);
+    auto hsl = c.to_hsl();
     hsl.h = std::fmod(hsl.h + degrees + 360.0f, 360.0f);
-    return hsl_to_rgb(hsl, c.a);
+    return Color::from_hsl(hsl, c.a);
 }
 
 Color adjust_lightness(Color c, float delta) {
-    auto hsl = rgb_to_hsl(c);
+    auto hsl = c.to_hsl();
     hsl.l = std::clamp(hsl.l + delta, 0.0f, 1.0f);
-    return hsl_to_rgb(hsl, c.a);
+    return Color::from_hsl(hsl, c.a);
 }
 
 Color blend_colors(Color a, Color b, float t) {
-    t = std::clamp(t, 0.0f, 1.0f);
-    return Color::rgba(
-        static_cast<uint8_t>(a.r + (b.r - a.r) * t),
-        static_cast<uint8_t>(a.g + (b.g - a.g) * t),
-        static_cast<uint8_t>(a.b + (b.b - a.b) * t),
-        static_cast<uint8_t>(a.a + (b.a - a.a) * t));
+    return a.interpolate(b, std::clamp(t, 0.0f, 1.0f));
 }
 
-Color with_alpha(Color c, uint8_t alpha) {
-    return Color::rgba(c.r, c.g, c.b, alpha);
+Color with_alpha(Color c, float alpha) {
+    return c.with_alpha(alpha);
 }
 
 // ── Auto-Contrast ───────────────────────────────────────────────────────────
 
 Color auto_contrast_foreground(Color background, ContrastLevel level) {
     float threshold = min_contrast_for_level(level);
-    Color white = Color::rgba(255, 255, 255);
-    Color black = Color::rgba(0, 0, 0);
+    Color white = Color::rgba(1.0f, 1.0f, 1.0f);
+    Color black = Color::rgba(0.0f, 0.0f, 0.0f);
 
     if (contrast_ratio(white, background) >= threshold)
         return white;
