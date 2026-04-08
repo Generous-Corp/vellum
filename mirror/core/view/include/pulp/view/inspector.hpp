@@ -2,7 +2,10 @@
 
 #include <pulp/view/view.hpp>
 #include <pulp/view/widgets.hpp>
+#include <pulp/view/tree_view.hpp>
+#include <pulp/view/property_list.hpp>
 #include <string>
+#include <vector>
 
 namespace pulp::view {
 
@@ -21,6 +24,19 @@ public:
 
     // Get the type name of a view (e.g., "Knob", "Fader", "View")
     static std::string type_name(const View& view);
+
+    // ── Inspector window helpers ────────────────────────────────────────
+
+    /// Recursively populate a TreeNode hierarchy from a View tree.
+    /// Sets label = type_name + id, user_data = View*.
+    static void populate_tree(TreeNode& parent, const View& root);
+
+    /// Build a list of properties for display in a PropertyList.
+    /// Categories: Identity, Layout, Visual, Widget.
+    static std::vector<PropertyList::Property> view_properties(const View& view);
+
+    /// Compute absolute bounds by walking the parent chain.
+    static Rect absolute_bounds(const View& view);
 };
 
 } // namespace pulp::view

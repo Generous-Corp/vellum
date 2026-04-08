@@ -93,4 +93,75 @@ std::string ViewInspector::type_name(const View& view) {
     return "View";
 }
 
+// ── Inspector window helpers ────────────────────────────────────────────────
+
+void ViewInspector::populate_tree(TreeNode& parent, const View& root) {
+    std::string label = type_name(root);
+    if (!root.id().empty())
+        label += " #" + root.id();
+
+    auto& node = parent.add_child(label);
+    node.user_data = const_cast<View*>(&root);
+    node.expanded = true;
+
+    for (size_t i = 0; i < root.child_count(); ++i)
+        populate_tree(node, *root.child_at(i));
+}
+
+std::vector<PropertyList::Property> ViewInspector::view_properties(const View& view) {
+    std::vector<PropertyList::Property> props;
+    using PV = PropertyList::PropertyValue;
+
+    // Identity
+    props.push_back({"type", "Type", PV{type_name(view)}, true, "Identity"});
+    props.push_back({"id", "ID", PV{view.id().empty() ? std::string("(none)") : view.id()}, true, "Identity"});
+
+    // Layout
+    auto b = view.bounds();
+    props.push_back({"x", "X", PV{b.x}, true, "Layout"});
+    props.push_back({"y", "Y", PV{b.y}, true, "Layout"});
+    props.push_back({"width", "Width", PV{b.width}, true, "Layout"});
+    props.push_back({"height", "Height", PV{b.height}, true, "Layout"});
+    props.push_back({"visible", "Visible", PV{view.visible()}, true, "Layout"});
+
+    // Visual
+    props.push_back({"opacity", "Opacity", PV{view.opacity()}, true, "Visual"});
+    props.push_back({"has_bg", "Background", PV{view.has_background_color()}, true, "Visual"});
+    if (view.has_border())
+        props.push_back({"border_w", "Border Width", PV{view.border_width()}, true, "Visual"});
+    props.push_back({"corner_r", "Corner Radius", PV{view.corner_radius()}, true, "Visual"});
+    props.push_back({"hit_testable", "Hit-Testable", PV{view.hit_testable()}, true, "Visual"});
+
+    // Widget-specific
+    if (auto* knob = dynamic_cast<const Knob*>(&view)) {
+        props.push_back({"value", "Value", PV{static_cast<float>(knob->value())}, true, "Widget"});
+        props.push_back({"label", "Label", PV{knob->label()}, true, "Widget"});
+    } else if (auto* fader = dynamic_cast<const Fader*>(&view)) {
+        props.push_back({"value", "Value", PV{static_cast<float>(fader->value())}, true, "Widget"});
+        props.push_back({"label", "Label", PV{fader->label()}, true, "Widget"});
+    } else if (auto* toggle = dynamic_cast<const Toggle*>(&view)) {
+        props.push_back({"on", "On", PV{toggle->is_on()}, true, "Widget"});
+        props.push_back({"label", "Label", PV{toggle->label()}, true, "Widget"});
+    } else if (auto* lbl = dynamic_cast<const Label*>(&view)) {
+        props.push_back({"text", "Text", PV{lbl->text()}, true, "Widget"});
+        props.push_back({"font_size", "Font Size", PV{lbl->font_size()}, true, "Widget"});
+    } else if (auto* meter = dynamic_cast<const Meter*>(&view)) {
+        props.push_back({"rms", "RMS", PV{static_cast<float>(meter->display_rms())}, true, "Widget"});
+        props.push_back({"peak", "Peak", PV{static_cast<float>(meter->display_peak())}, true, "Widget"});
+    }
+
+    return props;
+}
+
+Rect ViewInspector::absolute_bounds(const View& view) {
+    Rect abs = view.bounds();
+    const View* current = view.parent();
+    while (current) {
+        abs.x += current->bounds().x;
+        abs.y += current->bounds().y;
+        current = current->parent();
+    }
+    return abs;
+}
+
 } // namespace pulp::view
