@@ -278,6 +278,14 @@ public:
     static std::vector<OverlayRequest>& overlay_queue();
     static void paint_overlays(canvas::Canvas& canvas);
 
+    /// Inspector hooks — set by the inspector module to intercept input and paint
+    /// without a circular dependency (view doesn't link inspect).
+    static void set_inspector_paint_hook(std::function<void(canvas::Canvas&)> hook);
+    static void set_inspector_key_hook(std::function<bool(const KeyEvent&)> hook);
+    static void set_inspector_mouse_hook(std::function<bool(const MouseEvent&)> hook);
+    static bool call_inspector_key_hook(const KeyEvent& e);
+    static bool call_inspector_mouse_hook(const MouseEvent& e);
+
     /// Global click callback (fires on any view click with widget id). Set on root.
     std::function<void(const std::string& id, uint16_t modifiers)> on_global_click;
 

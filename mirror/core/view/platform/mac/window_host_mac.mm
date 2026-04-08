@@ -309,6 +309,19 @@ static pulp::view::KeyCode keyCodeFromNS(unsigned short code) {
             }
             auto pt = [self localPoint:event];
 
+        // Inspector intercept — consume clicks when inspector is active
+        {
+            auto mods = modifiersFromNSFlags(event.modifierFlags);
+            pulp::view::MouseEvent me;
+            me.position = {pt.x, pt.y};
+            me.modifiers = mods;
+            me.is_down = true;
+            if (pulp::view::View::call_inspector_mouse_hook(me)) {
+                [self setNeedsDisplay:YES];
+                return;
+            }
+        }
+
         // Check if click is inside an active ComboBox dropdown overlay.
         // The dropdown renders as a paint overlay with no view backing, so
         // normal hit_test finds the view behind the dropdown. Route the click
@@ -475,6 +488,19 @@ static pulp::view::KeyCode keyCodeFromNS(unsigned short code) {
             auto key = keyCodeFromNS(event.keyCode);
             auto mods = modifiersFromNSFlags(event.modifierFlags);
 
+        // Inspector intercept — check before all other key handling
+        {
+            pulp::view::KeyEvent ike;
+            ike.key = key;
+            ike.modifiers = mods;
+            ike.is_down = true;
+            ike.is_repeat = event.isARepeat;
+            if (pulp::view::View::call_inspector_key_hook(ike)) {
+                [self setNeedsDisplay:YES];
+                return;
+            }
+        }
+
         if (key == pulp::view::KeyCode::tab && self.rootView) {
             auto* old = _focusedView;
             pulp::view::View* next = nullptr;
@@ -629,6 +655,15 @@ static pulp::view::KeyCode keyCodeFromNS(unsigned short code) {
         try {
             if (!self.rootView) return;
             auto pt = [self localPoint:event];
+
+            // Inspector hover intercept
+            {
+                pulp::view::MouseEvent me;
+                me.position = {pt.x, pt.y};
+                me.is_down = false;
+                pulp::view::View::call_inspector_mouse_hook(me);
+                // Don't consume — let normal hover handling continue for cursor changes
+            }
 
             if (pulp::view::ComboBox::active_popup_) {
                 auto* combo = pulp::view::ComboBox::active_popup_;
@@ -807,6 +842,8 @@ static pulp::view::KeyCode keyCodeFromNS(unsigned short code) {
         self.rootView->layout_children();
         self.rootView->paint_all(canvas);
         pulp::view::View::paint_overlays(canvas);
+
+        // Inspector overlay is painted automatically via View::paint_overlays()
     }
 }
 
@@ -1463,6 +1500,8 @@ private:
 
         root_.paint_all(canvas);
         pulp::view::View::paint_overlays(canvas);
+
+        // Inspector overlay is painted automatically via View::paint_overlays()
     }
 
     bool render_frame(std::vector<uint8_t>* capture_pixels = nullptr,
