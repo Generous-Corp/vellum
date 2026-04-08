@@ -34,37 +34,36 @@ struct Pipe {
     int write_end() const { return fd[1]; }
 };
 
-// Read available bytes from a non-blocking fd. Appends to buffer,
-// fires callback for each complete line, returns bytes read.
-size_t drain_pipe(int fd, std::string& buffer, size_t max_bytes,
+// Read available bytes from a non-blocking fd.
+// Appends to full_output (for ProcessResult), and to line_buf (for
+// line-by-line callback splitting). The two buffers are independent.
+size_t drain_pipe(int fd, std::string& full_output, std::string& line_buf,
+                  size_t max_bytes,
                   const std::function<void(std::string_view)>& line_cb) {
     char chunk[4096];
     size_t total = 0;
     while (true) {
         auto n = read(fd, chunk, sizeof(chunk));
         if (n <= 0) break;
-        total += static_cast<size_t>(n);
-        if (buffer.size() < max_bytes)
-            buffer.append(chunk, std::min(static_cast<size_t>(n),
-                                          max_bytes - buffer.size()));
-        if (line_cb) {
-            // Find complete lines in the appended data
-            // We need to track the line start position
-            size_t search_from = buffer.size() >= static_cast<size_t>(n)
-                                     ? buffer.size() - static_cast<size_t>(n) : 0;
-            // Simplified: scan the whole buffer for lines
-        }
+        auto bytes = static_cast<size_t>(n);
+        total += bytes;
+        // Always accumulate into full_output (capped)
+        if (full_output.size() < max_bytes)
+            full_output.append(chunk, std::min(bytes, max_bytes - full_output.size()));
+        // If line callback, also accumulate into line_buf for splitting
+        if (line_cb)
+            line_buf.append(chunk, bytes);
     }
     // Fire callbacks for complete lines
-    if (line_cb) {
+    if (line_cb && !line_buf.empty()) {
         size_t pos = 0;
-        while (pos < buffer.size()) {
-            auto nl = buffer.find('\n', pos);
+        while (pos < line_buf.size()) {
+            auto nl = line_buf.find('\n', pos);
             if (nl == std::string::npos) break;
-            line_cb(std::string_view(buffer).substr(pos, nl - pos));
+            line_cb(std::string_view(line_buf).substr(pos, nl - pos));
             pos = nl + 1;
         }
-        if (pos > 0) buffer.erase(0, pos);
+        if (pos > 0) line_buf.erase(0, pos);
     }
     return total;
 }
@@ -76,9 +75,9 @@ struct ChildProcess::Impl {
     Pipe stdout_pipe;
     Pipe stderr_pipe;
     ProcessOptions options;
-    std::string stdout_buf;
-    std::string stderr_buf;
-    std::string stdout_lines_buf;  // partial line accumulator
+    std::string stdout_full;       // complete captured output for ProcessResult
+    std::string stderr_full;
+    std::string stdout_lines_buf;  // partial line accumulator for callbacks
     std::string stderr_lines_buf;
     bool started = false;
     bool finished = false;
@@ -99,8 +98,8 @@ bool ChildProcess::start(const std::string& command,
                          const std::vector<std::string>& args,
                          const ProcessOptions& options) {
     impl_->options = options;
-    impl_->stdout_buf.clear();
-    impl_->stderr_buf.clear();
+    impl_->stdout_full.clear();
+    impl_->stderr_full.clear();
     impl_->stdout_lines_buf.clear();
     impl_->stderr_lines_buf.clear();
     impl_->finished = false;
@@ -126,13 +125,8 @@ bool ChildProcess::start(const std::string& command,
 
     // Working directory
     if (!options.working_directory.empty()) {
-#ifdef __APPLE__
+        // posix_spawn_file_actions_addchdir_np is available on macOS 10.15+ and glibc 2.29+
         posix_spawn_file_actions_addchdir_np(&actions, options.working_directory.c_str());
-#else
-        // Linux: chdir_np may not be available on older glibc
-        // Fall back to changing before spawn (not ideal for thread safety)
-        // TODO: use posix_spawn_file_actions_addchdir_np when available
-#endif
     }
 
     int rc = posix_spawnp(&impl_->pid,
@@ -161,9 +155,9 @@ bool ChildProcess::start(const std::string& command,
 
 bool ChildProcess::is_running() const {
     if (!impl_->started || impl_->finished) return false;
-    int status = 0;
-    auto rc = waitpid(impl_->pid, &status, WNOHANG);
-    return rc == 0;  // 0 means still running
+    // Use kill(pid, 0) to check existence without reaping.
+    // waitpid with WNOHANG would reap the child, causing wait() to hang.
+    return kill(impl_->pid, 0) == 0;
 }
 
 void ChildProcess::cancel() {
@@ -173,9 +167,13 @@ void ChildProcess::cancel() {
     for (int i = 0; i < 100; ++i) {
         int status = 0;
         if (waitpid(impl_->pid, &status, WNOHANG) != 0) {
+            impl_->stdout_pipe.close_read();
+            impl_->stderr_pipe.close_read();
             impl_->finished = true;
             impl_->result.was_cancelled = true;
             impl_->result.exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+            impl_->result.stdout_output = std::move(impl_->stdout_full);
+            impl_->result.stderr_output = std::move(impl_->stderr_full);
             return;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -183,9 +181,13 @@ void ChildProcess::cancel() {
     kill(impl_->pid, SIGKILL);
     int status = 0;
     waitpid(impl_->pid, &status, 0);
+    impl_->stdout_pipe.close_read();
+    impl_->stderr_pipe.close_read();
     impl_->finished = true;
     impl_->result.was_cancelled = true;
     impl_->result.exit_code = -1;
+    impl_->result.stdout_output = std::move(impl_->stdout_full);
+    impl_->result.stderr_output = std::move(impl_->stderr_full);
 }
 
 ProcessResult ChildProcess::wait() {
@@ -196,29 +198,22 @@ ProcessResult ChildProcess::wait() {
     auto max_bytes = impl_->options.max_output_bytes;
 
     while (true) {
-        // Drain pipes
-        drain_pipe(impl_->stdout_pipe.read_end(), impl_->stdout_lines_buf,
-                   max_bytes, impl_->options.on_stdout_line);
-        drain_pipe(impl_->stderr_pipe.read_end(), impl_->stderr_lines_buf,
-                   max_bytes, impl_->options.on_stderr_line);
-
-        // Accumulate for result (without line splitting)
-        // The drain_pipe modifies lines_buf in-place for line callbacks,
-        // so we maintain separate full-output buffers
-        {
-            char chunk[4096];
-            // stdout already drained by drain_pipe, data is in lines_buf
-        }
+        // Drain pipes — full output goes to stdout_full/stderr_full,
+        // line splitting goes to lines_buf (independent buffers)
+        drain_pipe(impl_->stdout_pipe.read_end(), impl_->stdout_full,
+                   impl_->stdout_lines_buf, max_bytes, impl_->options.on_stdout_line);
+        drain_pipe(impl_->stderr_pipe.read_end(), impl_->stderr_full,
+                   impl_->stderr_lines_buf, max_bytes, impl_->options.on_stderr_line);
 
         // Check if process exited
         int status = 0;
         auto rc = waitpid(impl_->pid, &status, WNOHANG);
         if (rc > 0) {
             // Process exited — drain remaining output
-            drain_pipe(impl_->stdout_pipe.read_end(), impl_->stdout_lines_buf,
-                       max_bytes, impl_->options.on_stdout_line);
-            drain_pipe(impl_->stderr_pipe.read_end(), impl_->stderr_lines_buf,
-                       max_bytes, impl_->options.on_stderr_line);
+            drain_pipe(impl_->stdout_pipe.read_end(), impl_->stdout_full,
+                       impl_->stdout_lines_buf, max_bytes, impl_->options.on_stdout_line);
+            drain_pipe(impl_->stderr_pipe.read_end(), impl_->stderr_full,
+                       impl_->stderr_lines_buf, max_bytes, impl_->options.on_stderr_line);
 
             impl_->finished = true;
             impl_->result.exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
@@ -249,19 +244,19 @@ ProcessResult ChildProcess::wait() {
     impl_->stdout_pipe.close_read();
     impl_->stderr_pipe.close_read();
 
-    // Remaining partial lines become output
-    impl_->result.stdout_output = std::move(impl_->stdout_lines_buf);
-    impl_->result.stderr_output = std::move(impl_->stderr_lines_buf);
+    // Full captured output goes to result
+    impl_->result.stdout_output = std::move(impl_->stdout_full);
+    impl_->result.stderr_output = std::move(impl_->stderr_full);
 
     return impl_->result;
 }
 
 std::string ChildProcess::read_available_output() {
     if (!impl_->started) return {};
-    std::string buf;
-    drain_pipe(impl_->stdout_pipe.read_end(), buf,
+    std::string full, lines;
+    drain_pipe(impl_->stdout_pipe.read_end(), full, lines,
                impl_->options.max_output_bytes, nullptr);
-    return buf;
+    return full;
 }
 
 ProcessResult ChildProcess::run(const std::string& command,
