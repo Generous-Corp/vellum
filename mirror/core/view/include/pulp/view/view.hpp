@@ -194,6 +194,10 @@ public:
     void set_access_value(std::string value) { access_value_ = std::move(value); }
     const std::string& access_value() const { return access_value_; }
 
+    /// Called by platform accessibility when VoiceOver increment/decrement is triggered.
+    /// Delta is typically ±0.05 (5% step). Override in widgets to adjust the value.
+    virtual void on_accessibility_adjust(float delta) { (void)delta; }
+
     // ── Identity ─────────────────────────────────────────────────────────
 
     void set_id(std::string id) { id_ = std::move(id); }
