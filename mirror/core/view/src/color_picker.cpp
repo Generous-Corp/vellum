@@ -1,4 +1,6 @@
+#include <algorithm>
 #include <pulp/view/color_picker.hpp>
+#include <algorithm>
 #include <cstdio>
 #include <cmath>
 

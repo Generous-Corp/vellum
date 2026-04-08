@@ -1,4 +1,6 @@
+#include <algorithm>
 #include <pulp/view/widgets.hpp>
+#include <algorithm>
 #include <pulp/view/animation.hpp>
 #include <pulp/view/frame_clock.hpp>
 #include <pulp/view/window_host.hpp>

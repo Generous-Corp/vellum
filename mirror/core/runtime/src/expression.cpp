@@ -1,4 +1,5 @@
 #include <pulp/runtime/expression.hpp>
+#include <algorithm>
 #include <cmath>
 #include <cctype>
 #include <stdexcept>
