@@ -88,8 +88,7 @@ public:
     InterprocessConnection(const InterprocessConnection&) = delete;
     InterprocessConnection& operator=(const InterprocessConnection&) = delete;
 
-    /// Adopt an already-connected socket (used by InterprocessConnectionServer).
-    void adopt_socket(runtime::Socket&& socket);
+    friend class InterprocessConnectionServer;  // Needs to inject accepted sockets
 
 private:
     struct Impl;
