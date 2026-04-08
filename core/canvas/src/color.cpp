@@ -1,4 +1,6 @@
+#include <algorithm>
 #include <pulp/canvas/canvas.hpp>
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
