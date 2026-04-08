@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <pulp/view/view.hpp>
 #include <pulp/view/audio_bridge.hpp>
 #include <pulp/view/animation.hpp>

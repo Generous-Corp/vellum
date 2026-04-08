@@ -1,4 +1,6 @@
+#include <algorithm>
 #include <pulp/state/store.hpp>
+#include <algorithm>
 #include <pulp/runtime/assert.hpp>
 #include <choc/memory/choc_Endianness.h>
 

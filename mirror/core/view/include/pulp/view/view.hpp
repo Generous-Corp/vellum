@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <pulp/view/geometry.hpp>
 #include <pulp/view/input_events.hpp>
 #include <pulp/view/theme.hpp>
