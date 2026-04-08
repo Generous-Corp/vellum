@@ -290,6 +290,10 @@ public:
     /// Global click callback (fires on any view click with widget id). Set on root.
     std::function<void(const std::string& id, uint16_t modifiers)> on_global_click;
 
+    /// Global key callback. If set on root, called before normal key dispatch.
+    /// Return true to consume the event.
+    std::function<bool(const KeyEvent&)> on_global_key;
+
     /// CSS position property
     enum class Position { static_, relative, absolute, fixed, sticky };
     void set_position(Position p) { position_ = p; }

@@ -517,6 +517,19 @@ static pulp::view::KeyCode keyCodeFromNS(unsigned short code) {
             return;
         }
 
+        // Global key callback — checked after inspector but before tab/escape
+        if (self.rootView && self.rootView->on_global_key) {
+            pulp::view::KeyEvent gke;
+            gke.key = key;
+            gke.modifiers = mods;
+            gke.is_down = true;
+            gke.is_repeat = event.isARepeat;
+            if (self.rootView->on_global_key(gke)) {
+                [self setNeedsDisplay:YES];
+                return;
+            }
+        }
+
         if (key == pulp::view::KeyCode::escape && self.rootView) {
             if (auto* modal = find_topmost_modal(self.rootView)) {
                 pulp::view::KeyEvent ke;
