@@ -338,22 +338,36 @@ void SkiaCanvas::fill_text_sdf(const std::string& text, float x, float y,
     struct GlyphDraw { const SdfGlyph* g; float x_offset; };
     std::vector<GlyphDraw> draws;
 
-    // Simple codepoint-by-codepoint iteration (handles ASCII + BMP).
-    // Full Unicode support would use ICU segmentation.
+    // UTF-8 → codepoint iteration with bounds checking.
+    // Falls back to fill_text() if any glyph is missing from the atlas
+    // (partial atlas should not produce invisible characters).
+    bool has_missing_glyph = false;
     size_t i = 0;
     while (i < text.size()) {
         char32_t cp;
         uint8_t c = static_cast<uint8_t>(text[i]);
-        if (c < 0x80) { cp = c; i += 1; }
-        else if (c < 0xE0) { cp = (c & 0x1F) << 6 | (text[i+1] & 0x3F); i += 2; }
-        else if (c < 0xF0) { cp = (c & 0x0F) << 12 | (text[i+1] & 0x3F) << 6 | (text[i+2] & 0x3F); i += 3; }
-        else { cp = (c & 0x07) << 18 | (text[i+1] & 0x3F) << 12 | (text[i+2] & 0x3F) << 6 | (text[i+3] & 0x3F); i += 4; }
+        if (c < 0x80) {
+            cp = c; i += 1;
+        } else if (c < 0xE0) {
+            if (i + 1 >= text.size()) break;  // truncated
+            cp = (c & 0x1F) << 6 | (text[i+1] & 0x3F); i += 2;
+        } else if (c < 0xF0) {
+            if (i + 2 >= text.size()) break;
+            cp = (c & 0x0F) << 12 | (text[i+1] & 0x3F) << 6 | (text[i+2] & 0x3F); i += 3;
+        } else {
+            if (i + 3 >= text.size()) break;
+            cp = (c & 0x07) << 18 | (text[i+1] & 0x3F) << 12 | (text[i+2] & 0x3F) << 6 | (text[i+3] & 0x3F); i += 4;
+        }
 
         const SdfGlyph* g = atlas.glyph(cp);
-        if (!g) continue;
+        if (!g) { has_missing_glyph = true; break; }
         draws.push_back({g, total_advance});
         total_advance += g->advance * scale;
     }
+
+    // If any glyph is missing, fall back to standard text rendering
+    // rather than producing incomplete/misaligned output.
+    if (has_missing_glyph || draws.empty()) { fill_text(text, x, y); return; }
 
     // Apply text alignment.
     float draw_x = x;
@@ -383,7 +397,21 @@ float SkiaCanvas::measure_text(const std::string& text) {
     SkFont font = make_font(font_family_, font_size_);
     if (!font.getTypeface()) return font_size_ * text.size() * 0.5f;
 
-    // Measure using per-glyph advances (same method as fill_text) for consistency
+#ifdef PULP_HAS_TEXT_SHAPING
+    // Use SkShaper for accurate post-kerning width when shaping is
+    // enabled — matches what fill_text() actually renders. Without
+    // this, measure_text returns unshaped widths that mismatch drawn
+    // text for kerning/ligature strings (e.g., "AV", "ffi").
+    auto shaper = SkShaper::Make();
+    if (shaper) {
+        SkTextBlobBuilderRunHandler handler(text.c_str(), {0, 0});
+        shaper->shape(text.c_str(), text.size(), font,
+                      /*leftToRight=*/true, SK_ScalarInfinity, &handler);
+        return handler.endPoint().x();
+    }
+#endif
+
+    // Fallback: per-glyph advances (no kerning/ligatures)
     int glyph_count = static_cast<int>(font.countText(text.c_str(), text.size(), SkTextEncoding::kUTF8));
     if (glyph_count <= 0) return 0;
 
