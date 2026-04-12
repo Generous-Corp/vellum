@@ -28,6 +28,17 @@
     #include "include/core/SkColor.h"
     #include "include/core/SkFont.h"
     #include "include/core/SkFontMgr.h"
+    #ifdef __APPLE__
+        #include "include/ports/SkFontMgr_mac_ct.h"
+    #elif defined(_WIN32)
+        #include "include/ports/SkFontMgr_directory.h"
+    #elif defined(__ANDROID__)
+        #include "include/ports/SkFontMgr_android.h"
+        #include "include/ports/SkFontScanner_FreeType.h"
+    #elif defined(__linux__)
+        #include "include/ports/SkFontMgr_fontconfig.h"
+        #include "include/ports/SkFontScanner_FreeType.h"
+    #endif
     #include "include/core/SkPaint.h"
     #include "include/core/SkTypeface.h"
     #include "include/core/SkImageInfo.h"
@@ -154,7 +165,18 @@ std::vector<std::uint8_t> rasterize_skia(const std::string& font_family,
                                           char32_t codepoint,
                                           int base_size,
                                           int w, int h, int padding) {
-    auto mgr = SkFontMgr::RefDefault();
+    // Use the platform-specific font manager — matches skia_canvas.cpp
+#ifdef __APPLE__
+    auto mgr = SkFontMgr_New_CoreText(nullptr);
+#elif defined(_WIN32)
+    auto mgr = SkFontMgr_New_DirectWrite();
+#elif defined(__ANDROID__)
+    auto mgr = SkFontMgr_New_Android(nullptr, SkFontScanner_Make_FreeType());
+#elif defined(__linux__)
+    auto mgr = SkFontMgr_New_FontConfig(nullptr, SkFontScanner_Make_FreeType());
+#else
+    sk_sp<SkFontMgr> mgr;
+#endif
     if (!mgr) return {};
 
     sk_sp<SkTypeface> face;
