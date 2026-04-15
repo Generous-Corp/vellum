@@ -175,7 +175,10 @@ std::optional<ProcessResult> run_process(
     // Working directory change for spawned process
     // posix_spawn_file_actions_addchdir_np is a non-standard extension
     // available on macOS and glibc 2.29+. Skip if unavailable.
-#if defined(__APPLE__) || (defined(__GLIBC__) && __GLIBC__ >= 2 && __GLIBC_MINOR__ >= 29)
+#if defined(__APPLE__)
+#  include <TargetConditionals.h>
+#endif
+#if (defined(__APPLE__) && !(TARGET_OS_IPHONE || TARGET_OS_TV || TARGET_OS_WATCH)) || (defined(__GLIBC__) && __GLIBC__ >= 2 && __GLIBC_MINOR__ >= 29)
     if (!working_dir.empty()) {
         std::string wd(working_dir);
         posix_spawn_file_actions_addchdir_np(&actions, wd.c_str());
