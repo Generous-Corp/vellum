@@ -9,6 +9,7 @@
 #include <vector>
 #include <functional>
 #include <atomic>
+#include <memory>
 #include <thread>
 #include <chrono>
 #include <mutex>
@@ -45,7 +46,19 @@ private:
 };
 
 /// mDNS-based network service discovery (Bonjour/DNS-SD).
-/// Discovers services on the local network.
+///
+/// **Status — experimental (#302).** The core/events module ships
+/// the API surface but no concrete backend. `browse()` with no
+/// backend installed is a no-op (does not claim running); nothing
+/// will ever be discovered until a host application installs a
+/// backend via `install_backend()`. `register_service()` without
+/// a backend returns false.
+///
+/// A future follow-up will ship per-platform backends
+/// (Bonjour/dns-sd on mac, Avahi on Linux, WinRT on Windows,
+/// NsdManager on Android). Until then consumers that need real
+/// mDNS must supply their own backend (e.g., linking an
+/// application-owned Bonjour wrapper and plumbing the callbacks).
 class NetworkServiceDiscovery {
 public:
     struct Service {
@@ -56,20 +69,58 @@ public:
         uint16_t port = 0;
     };
 
+    /// Backend interface the host installs to get real mDNS.
+    /// Every method can no-op on unsupported backends. The core
+    /// layer dispatches browse/register/unregister to the backend
+    /// and forwards discovered/lost events back through
+    /// on_service_found / on_service_lost.
+    class Backend {
+    public:
+        virtual ~Backend() = default;
+        virtual void browse(std::string_view service_type,
+                            NetworkServiceDiscovery& owner) = 0;
+        virtual void stop() = 0;
+        virtual bool register_service(std::string_view name,
+                                      std::string_view type,
+                                      uint16_t port) = 0;
+        virtual void unregister_service() = 0;
+    };
+
     NetworkServiceDiscovery() = default;
     ~NetworkServiceDiscovery();
 
+    /// Install a concrete backend. Takes ownership.
+    /// Pass nullptr to remove.
+    void install_backend(std::unique_ptr<Backend> backend);
+
+    /// Whether a concrete backend is installed. Callers can use this
+    /// to detect "no mDNS available" instead of silently discovering
+    /// nothing.
+    bool has_backend() const noexcept { return backend_ != nullptr; }
+
     /// Start browsing for services of the given type.
+    /// Without an installed backend this is a no-op.
     void browse(std::string_view service_type);
 
     /// Stop browsing.
     void stop();
 
-    /// Register a service on this machine.
+    /// Register a service on this machine. Returns false when no
+    /// backend is installed or the backend can't register.
     bool register_service(std::string_view name, std::string_view type, uint16_t port);
 
     /// Unregister a previously registered service.
     void unregister_service();
+
+    /// Push a discovered service into the core layer. Backends call
+    /// this when they learn about a new service; triggers
+    /// on_service_found.
+    void notify_service_found(const Service& svc);
+
+    /// Push a lost service into the core layer. Backends call this
+    /// when a service disappears; triggers on_service_lost and
+    /// removes it from the discovered() list.
+    void notify_service_lost(const Service& svc);
 
     /// Called when a service is discovered.
     std::function<void(const Service&)> on_service_found;
@@ -84,6 +135,7 @@ private:
     std::vector<Service> services_;
     std::atomic<bool> running_{false};
     std::thread browse_thread_;
+    std::unique_ptr<Backend> backend_;
 };
 
 /// Locking variant of AsyncUpdater — blocks the trigger thread until
