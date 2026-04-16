@@ -71,29 +71,65 @@ std::vector<std::string> MountedVolumeListChangeDetector::get_mounted_volumes() 
 }
 
 // ── NetworkServiceDiscovery ─────────────────────────────────────────────
+//
+// #302: the core is a dispatcher that delegates to an installed
+// Backend. Without a backend, every op is an honest no-op — browse()
+// does NOT set running_=true (that was the pre-#302 stub's silent-
+// success bug), register_service() returns false. A future follow-up
+// ships concrete backends (dns-sd on mac, Avahi on linux, etc.).
 
 NetworkServiceDiscovery::~NetworkServiceDiscovery() { stop(); }
 
-void NetworkServiceDiscovery::browse(std::string_view /*service_type*/) {
-    // Real implementation would use mdns.h or platform APIs
-    // (dns_sd.h on macOS, Avahi on Linux)
-    // Stub: just start the browse thread
+void NetworkServiceDiscovery::install_backend(std::unique_ptr<Backend> backend) {
+    stop();
+    backend_ = std::move(backend);
+}
+
+void NetworkServiceDiscovery::browse(std::string_view service_type) {
+    if (!backend_) {
+        // Explicit no-op: do NOT set running_=true. Callers that rely
+        // on running_ as a proxy for "browsing will yield results"
+        // must now pair it with has_backend().
+        return;
+    }
     running_.store(true);
+    backend_->browse(service_type, *this);
 }
 
 void NetworkServiceDiscovery::stop() {
     running_.store(false);
+    if (backend_) backend_->stop();
     if (browse_thread_.joinable()) browse_thread_.join();
 }
 
-bool NetworkServiceDiscovery::register_service(std::string_view /*name*/,
-                                                std::string_view /*type*/,
-                                                uint16_t /*port*/) {
-    // Platform-specific: dns_sd.h on macOS, Avahi on Linux
-    return false;  // Not yet implemented per-platform
+bool NetworkServiceDiscovery::register_service(std::string_view name,
+                                                std::string_view type,
+                                                uint16_t port) {
+    if (!backend_) return false;
+    return backend_->register_service(name, type, port);
 }
 
-void NetworkServiceDiscovery::unregister_service() {}
+void NetworkServiceDiscovery::unregister_service() {
+    if (backend_) backend_->unregister_service();
+}
+
+void NetworkServiceDiscovery::notify_service_found(const Service& svc) {
+    // Deduplicate by (name, type) — common case is a backend re-
+    // reporting the same service on a cache refresh.
+    for (const auto& s : services_) {
+        if (s.name == svc.name && s.type == svc.type) return;
+    }
+    services_.push_back(svc);
+    if (on_service_found) on_service_found(svc);
+}
+
+void NetworkServiceDiscovery::notify_service_lost(const Service& svc) {
+    auto it = std::find_if(services_.begin(), services_.end(),
+        [&](const Service& s) { return s.name == svc.name && s.type == svc.type; });
+    if (it == services_.end()) return;
+    services_.erase(it);
+    if (on_service_lost) on_service_lost(svc);
+}
 
 // ── LockingAsyncUpdater ─────────────────────────────────────────────────
 
