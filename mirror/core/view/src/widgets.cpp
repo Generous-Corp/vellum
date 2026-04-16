@@ -829,13 +829,12 @@ void ImageView::paint(canvas::Canvas& canvas) {
     if (cache_) {
         const auto* decoded = cache_->get(path_);
         if (decoded && decoded->native_handle) {
-            // Canvas backends that know how to draw an opaque native
-            // handle will pick it up here. Canvas without that capability
-            // is a no-op — we still render the filename below so the
-            // user sees something meaningful.
-            // TODO: canvas.draw_image(decoded->native_handle, 0, 0,
-            //                         b.width, b.height);
-            (void)decoded;
+            // Hand the opaque native handle to the canvas. Backends that
+            // know how to interpret it (CoreGraphics → CGImageRef,
+            // Skia → SkImage*) blit it; others no-op and we fall through
+            // to the filename placeholder. Workstream 07 slice B4/#255.
+            canvas.draw_image(decoded->native_handle, 0, 0, b.width, b.height);
+            return;
         }
     }
 
