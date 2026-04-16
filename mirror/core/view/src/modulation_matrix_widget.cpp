@@ -91,10 +91,76 @@ void ModulationMatrixWidget::on_mouse_down(Point pos) {
             route.source      = sources_[pending_source_].id;
             route.destination = destinations_[idx].id;
             route.depth       = 1.0f;
-            matrix_->add(route);
+            const auto added = matrix_->add(route);
+            selected_route_ = static_cast<int>(added);
             pending_source_ = -1;
         }
+    } else {
+        // Middle area — click an existing route line to select it.
+        const int idx = route_at_(pos);
+        if (idx >= 0) selected_route_ = idx;
     }
+}
+
+int ModulationMatrixWidget::route_at_(Point pos) const {
+    if (!matrix_) return -1;
+    const float row = row_height_();
+    const float col_source = source_column_x_();
+    const float col_dest   = dest_column_x_();
+    constexpr float kHitTolerance = 4.0f;  // px, perpendicular distance
+
+    int best = -1;
+    float best_d = kHitTolerance;
+    for (std::size_t i = 0; i < matrix_->routes().size(); ++i) {
+        const auto& route = matrix_->routes()[i];
+        int src_idx = -1, dst_idx = -1;
+        for (std::size_t s = 0; s < sources_.size(); ++s)
+            if (sources_[s].id == route.source) { src_idx = static_cast<int>(s); break; }
+        for (std::size_t d = 0; d < destinations_.size(); ++d)
+            if (destinations_[d].id == route.destination) { dst_idx = static_cast<int>(d); break; }
+        if (src_idx < 0 || dst_idx < 0) continue;
+        const float x0 = col_source + 60, y0 = row * (src_idx + 0.5f);
+        const float x1 = col_dest   - 60, y1 = row * (dst_idx + 0.5f);
+        // Distance from pos to segment (x0,y0)-(x1,y1).
+        const float dx = x1 - x0, dy = y1 - y0;
+        const float len2 = dx * dx + dy * dy;
+        if (len2 < 1e-6f) continue;
+        float t = ((pos.x - x0) * dx + (pos.y - y0) * dy) / len2;
+        t = std::clamp(t, 0.0f, 1.0f);
+        const float px = x0 + t * dx, py = y0 + t * dy;
+        const float d = std::hypot(pos.x - px, pos.y - py);
+        if (d < best_d) { best_d = d; best = static_cast<int>(i); }
+    }
+    return best;
+}
+
+float ModulationMatrixWidget::set_selected_route_depth(float depth) {
+    if (!matrix_ || selected_route_ < 0 ||
+        selected_route_ >= static_cast<int>(matrix_->routes().size())) return 0.0f;
+    depth = std::clamp(depth, -1.0f, 1.0f);
+    // matrix_->routes() is const; we need a mutable handle. The data
+    // model exposes routes via a vector that can be rebuilt by add().
+    // Re-add with the same source/destination overwrites in-place.
+    auto route = matrix_->routes()[selected_route_];
+    route.depth = depth;
+    route.bipolar = (depth < 0);
+    matrix_->add(route);
+    return depth;
+}
+
+void ModulationMatrixWidget::set_selected_route_curve(ModCurve curve) {
+    if (!matrix_ || selected_route_ < 0 ||
+        selected_route_ >= static_cast<int>(matrix_->routes().size())) return;
+    auto route = matrix_->routes()[selected_route_];
+    route.curve = curve;
+    matrix_->add(route);
+}
+
+void ModulationMatrixWidget::remove_selected_route() {
+    if (!matrix_ || selected_route_ < 0 ||
+        selected_route_ >= static_cast<int>(matrix_->routes().size())) return;
+    matrix_->remove(static_cast<std::size_t>(selected_route_));
+    selected_route_ = -1;
 }
 
 }  // namespace pulp::view
