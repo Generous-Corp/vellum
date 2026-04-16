@@ -298,6 +298,22 @@ public:
         (void)points; (void)count; // Default: no-op, subclass should override
     }
 
+    /// Draw an image identified by an opaque, platform-specific handle
+    /// into the rectangle (x, y, w, h). The handle is the \c native_handle
+    /// published by \c pulp::view::ImageCache (see core/view/include/pulp/view/image_cache.hpp).
+    /// Backends know how to interpret their own handles:
+    ///   * CoreGraphicsCanvas: CGImageRef
+    ///   * SkiaCanvas: SkImage*
+    /// Canvases without an image pipeline are a no-op by default so
+    /// widgets can call this unconditionally — the placeholder layer
+    /// behind them keeps the UI non-blank.
+    ///
+    /// Workstream 07 slice B4 follow-up (#255).
+    virtual void draw_image(void* native_handle,
+                            float x, float y, float w, float h) {
+        (void)native_handle; (void)x; (void)y; (void)w; (void)h;
+    }
+
     // ── Opacity & Layers ──────────────────────────────────────────────────
     /// Set global alpha for subsequent drawing operations (0.0-1.0).
     virtual void set_opacity(float alpha) { (void)alpha; }
