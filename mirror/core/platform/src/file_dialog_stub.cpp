@@ -35,8 +35,17 @@ void FileDialog::clear_backend() {
 }
 
 bool FileDialog::has_backend() {
+    // #312 Codex P2: on Apple platforms the native file_dialog_mac.mm /
+    // UIDocumentPicker impl is always available, so "has a working
+    // dialog backend" is unconditionally true. Non-Apple platforms
+    // report the host-registered state. This keeps callers' "probe
+    // before calling" checks meaningful across platforms.
+#if defined(__APPLE__)
+    return true;
+#else
     std::lock_guard lock(g_backend_mu);
     return g_backend_installed;
+#endif
 }
 
 #if !defined(__APPLE__)
