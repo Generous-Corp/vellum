@@ -139,14 +139,20 @@ private:
     std::vector<Menu> menus_;
 };
 
-// ── Toolbar ──────────────────────────────────────────────────────────────
+// ── NativeToolbar ────────────────────────────────────────────────────────
 
-/// Cross-platform toolbar abstraction.
+/// Native-toolbar descriptor — a lightweight config struct for host-level
+/// toolbars (macOS NSToolbar, Windows/Linux custom native). Separate from
+/// pulp::view::Toolbar (core/view/include/pulp/view/toolbar.hpp), which is
+/// a full View subclass with custom paint/hit-testing. Previously both
+/// types were named `Toolbar` in the same namespace — an ODR violation
+/// that UBSan caught on macos-arm64 (test #460 BUS, issue #411).
 ///
-/// On macOS, creates a native NSToolbar. On Windows/Linux, renders custom.
-class Toolbar {
+/// On macOS, `install_native()` builds an NSToolbar from these items.
+/// On Windows/Linux the view-layer pulp::view::Toolbar is used instead.
+class NativeToolbar {
 public:
-    struct ToolbarItem {
+    struct Item {
         std::string id;
         std::string label;
         std::string icon_name;     ///< SF Symbol name (macOS) or icon path
@@ -154,16 +160,16 @@ public:
         bool is_separator = false;
     };
 
-    void add_item(ToolbarItem item);
+    void add_item(Item item);
     void add_separator();
 
     /// Install as native toolbar (macOS: NSToolbar on the window).
     void install_native(void* native_window);
 
-    const std::vector<ToolbarItem>& items() const { return items_; }
+    const std::vector<Item>& items() const { return items_; }
 
 private:
-    std::vector<ToolbarItem> items_;
+    std::vector<Item> items_;
 };
 
 // ── AppSettings ──────────────────────────────────────────────────────────
