@@ -22,7 +22,11 @@ void Toolbar::add_toggle(std::string id, std::string label, std::function<void(b
     items_.push_back(std::move(item));
 }
 
-// add_separator() is defined in app_framework.cpp
+void Toolbar::add_separator() {
+    ToolbarItem item;
+    item.type = ToolbarItemType::Separator;
+    items_.push_back(std::move(item));
+}
 
 void Toolbar::add_spacer() {
     ToolbarItem item;

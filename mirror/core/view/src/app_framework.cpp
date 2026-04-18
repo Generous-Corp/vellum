@@ -171,17 +171,17 @@ void MenuBar::install_native() {
     // Platform-specific: implemented in platform/mac/menu_bar_mac.mm etc.
 }
 
-// ── Toolbar ──────────────────────────────────────────────────────────────
+// ── NativeToolbar ────────────────────────────────────────────────────────
 
-void Toolbar::add_item(ToolbarItem item) {
+void NativeToolbar::add_item(Item item) {
     items_.push_back(std::move(item));
 }
 
-void Toolbar::add_separator() {
+void NativeToolbar::add_separator() {
     items_.push_back({"", "", "", {}, true});
 }
 
-void Toolbar::install_native(void*) {
+void NativeToolbar::install_native(void*) {
     // Platform-specific: implemented in platform/mac/toolbar_mac.mm etc.
 }
 
