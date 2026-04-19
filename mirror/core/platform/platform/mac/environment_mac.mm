@@ -145,12 +145,23 @@ void publish_full_snapshot(LifecycleState lifecycle, MemoryPressure pressure) {
     // Memory pressure dispatch source. Includes NORMAL so apps receive a
     // memory_pressure = normal recovery event after WARN/CRITICAL clears
     // (otherwise listeners that released caches on pressure never know
-    // it's safe to repopulate them).
+    // it's safe to repopulate them). The mask is named + static_asserted
+    // so a future refactor that drops NORMAL fails at compile time on
+    // macOS, not silently at runtime the way #404 did.
+    constexpr unsigned long kMemoryPressureMask =
+        DISPATCH_MEMORYPRESSURE_NORMAL
+        | DISPATCH_MEMORYPRESSURE_WARN
+        | DISPATCH_MEMORYPRESSURE_CRITICAL;
+    static_assert((kMemoryPressureMask & DISPATCH_MEMORYPRESSURE_NORMAL) != 0,
+                  "NORMAL required so apps get a recovery event after "
+                  "pressure clears (#404 / #466)");
+    static_assert((kMemoryPressureMask & DISPATCH_MEMORYPRESSURE_WARN) != 0,
+                  "WARN required for moderate-pressure signal");
+    static_assert((kMemoryPressureMask & DISPATCH_MEMORYPRESSURE_CRITICAL) != 0,
+                  "CRITICAL required for critical-pressure signal");
     _pressureSource = dispatch_source_create(
         DISPATCH_SOURCE_TYPE_MEMORYPRESSURE, 0,
-        DISPATCH_MEMORYPRESSURE_NORMAL
-            | DISPATCH_MEMORYPRESSURE_WARN
-            | DISPATCH_MEMORYPRESSURE_CRITICAL,
+        kMemoryPressureMask,
         dispatch_get_main_queue());
     if (_pressureSource) {
         // Observer is process-lived (created via dispatch_once and never
