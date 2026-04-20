@@ -14,6 +14,10 @@
 #include <sstream>
 #include <thread>
 
+#ifdef PULP_BENCHMARK
+#include <pulp/render/bench/perf_counters.hpp>
+#endif
+
 namespace pulp::render {
 
 // ── WGSL Compute Shaders ────────────────────────────────────────────────────
@@ -162,13 +166,39 @@ public:
             wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopySrc);
         auto readback_buf = create_readback_buffer(output_bytes);
 
+#ifdef PULP_BENCHMARK
+        {
+            const double t0 = bench::now_us();
+            queue_.WriteBuffer(input_buf, 0, complex_pairs, input_bytes);
+            if (bench_counters_) {
+                bench_counters_->gpu_upload_total_us.fetch_add(
+                    bench::now_us() - t0, std::memory_order_relaxed);
+                bench_counters_->cpu_to_gpu_bytes_total.fetch_add(
+                    static_cast<double>(input_bytes),
+                    std::memory_order_relaxed);
+            }
+        }
+#else
         queue_.WriteBuffer(input_buf, 0, complex_pairs, input_bytes);
+#endif
 
         auto bind_group = create_bind_group(magnitude_pipeline_, {input_buf, output_buf});
 
         uint32_t workgroups = (num_bins + 255) / 256;
+#ifdef PULP_BENCHMARK
+        {
+            const double t0 = bench::now_us();
+            dispatch(magnitude_pipeline_, bind_group, workgroups);
+            copy_buffer(output_buf, readback_buf, output_bytes);
+            if (bench_counters_) {
+                bench_counters_->gpu_dispatch_total_us.fetch_add(
+                    bench::now_us() - t0, std::memory_order_relaxed);
+            }
+        }
+#else
         dispatch(magnitude_pipeline_, bind_group, workgroups);
         copy_buffer(output_buf, readback_buf, output_bytes);
+#endif
 
         return read_back(readback_buf, magnitudes, output_bytes);
     }
@@ -187,15 +217,42 @@ public:
             wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopySrc);
         auto readback_buf = create_readback_buffer(bytes);
 
+#ifdef PULP_BENCHMARK
+        {
+            const double t0 = bench::now_us();
+            queue_.WriteBuffer(buf_a, 0, a, bytes);
+            queue_.WriteBuffer(buf_b, 0, b, bytes);
+            if (bench_counters_) {
+                bench_counters_->gpu_upload_total_us.fetch_add(
+                    bench::now_us() - t0, std::memory_order_relaxed);
+                bench_counters_->cpu_to_gpu_bytes_total.fetch_add(
+                    static_cast<double>(bytes) * 2.0,
+                    std::memory_order_relaxed);
+            }
+        }
+#else
         queue_.WriteBuffer(buf_a, 0, a, bytes);
         queue_.WriteBuffer(buf_b, 0, b, bytes);
+#endif
 
         auto bind_group = create_bind_group(complex_mul_pipeline_,
             {buf_a, buf_b, buf_result});
 
         uint32_t workgroups = (count + 255) / 256;
+#ifdef PULP_BENCHMARK
+        {
+            const double t0 = bench::now_us();
+            dispatch(complex_mul_pipeline_, bind_group, workgroups);
+            copy_buffer(buf_result, readback_buf, bytes);
+            if (bench_counters_) {
+                bench_counters_->gpu_dispatch_total_us.fetch_add(
+                    bench::now_us() - t0, std::memory_order_relaxed);
+            }
+        }
+#else
         dispatch(complex_mul_pipeline_, bind_group, workgroups);
         copy_buffer(buf_result, readback_buf, bytes);
+#endif
 
         return read_back(readback_buf, result, bytes);
     }
@@ -487,6 +544,12 @@ public:
         return results;
     }
 
+#ifdef PULP_BENCHMARK
+    void set_bench_counters(bench::PerfCounters* counters) override {
+        bench_counters_ = counters;
+    }
+#endif
+
 private:
     wgpu::Device device_;
     wgpu::Queue queue_;
@@ -494,6 +557,10 @@ private:
     wgpu::Adapter adapter_;
     std::unique_ptr<dawn::native::Instance> native_instance_;
     bool owns_device_ = false;
+
+#ifdef PULP_BENCHMARK
+    bench::PerfCounters* bench_counters_ = nullptr;
+#endif
 
     wgpu::ComputePipeline magnitude_pipeline_;
     wgpu::ComputePipeline complex_mul_pipeline_;
@@ -623,7 +690,21 @@ private:
         const void* data = buffer.GetConstMappedRange(0, size);
         if (!data) return false;
 
+#ifdef PULP_BENCHMARK
+        {
+            const double t0 = bench::now_us();
+            std::memcpy(dest, data, size);
+            if (bench_counters_) {
+                bench_counters_->gpu_readback_total_us.fetch_add(
+                    bench::now_us() - t0, std::memory_order_relaxed);
+                bench_counters_->gpu_to_cpu_bytes_total.fetch_add(
+                    static_cast<double>(size),
+                    std::memory_order_relaxed);
+            }
+        }
+#else
         std::memcpy(dest, data, size);
+#endif
         buffer.Unmap();
         return true;
     }
