@@ -20,6 +20,10 @@
 #include <algorithm>
 #include <vector>
 
+#ifdef PULP_BENCHMARK
+#include <pulp/render/bench/perf_counters.hpp>
+#endif
+
 namespace pulp::view {
 
 /// Published spectrum data (lock-free via TripleBuffer).
@@ -100,7 +104,18 @@ public:
     void process(const float* const* channels, int num_channels, int num_samples) {
         // Multi-channel metering
         meter_.process(channels, num_channels, num_samples);
+#ifdef PULP_BENCHMARK
+        {
+            const double t0 = render::bench::now_us();
+            meter_buf_.write(meter_.snapshot());
+            if (bench_counters_) {
+                bench_counters_->triplebuffer_publish_total_us.fetch_add(
+                    render::bench::now_us() - t0, std::memory_order_relaxed);
+            }
+        }
+#else
         meter_buf_.write(meter_.snapshot());
+#endif
 
         // STFT on first channel (or mono mix for multi-channel)
         if (num_channels > 0 && num_samples > 0) {
@@ -112,8 +127,29 @@ public:
                 auto db = stft_.latest_magnitude_db(-120.0f);
                 spec.num_bins = std::min(static_cast<int>(db.size()),
                                          static_cast<int>(SpectrumData::kMaxBins));
+#ifdef PULP_BENCHMARK
+                {
+                    const double t_copy = render::bench::now_us();
+                    std::copy_n(db.data(), spec.num_bins, spec.magnitude_db.data());
+                    if (bench_counters_) {
+                        bench_counters_->audio_copy_total_us.fetch_add(
+                            render::bench::now_us() - t_copy,
+                            std::memory_order_relaxed);
+                    }
+                }
+                {
+                    const double t_pub = render::bench::now_us();
+                    spectrum_buf_.write(spec);
+                    if (bench_counters_) {
+                        bench_counters_->triplebuffer_publish_total_us.fetch_add(
+                            render::bench::now_us() - t_pub,
+                            std::memory_order_relaxed);
+                    }
+                }
+#else
                 std::copy_n(db.data(), spec.num_bins, spec.magnitude_db.data());
                 spectrum_buf_.write(spec);
+#endif
             }
         }
 
@@ -127,13 +163,47 @@ public:
             WaveformData wd;
             wd.num_samples = waveform_length_;
             wd.num_channels = num_channels;
+#ifdef PULP_BENCHMARK
+            {
+                const double t_copy = render::bench::now_us();
+                // Copy in order from oldest to newest
+                for (int i = 0; i < waveform_length_; ++i) {
+                    wd.samples[i] = waveform_ring_[(waveform_pos_ + i) % waveform_length_];
+                }
+                if (bench_counters_) {
+                    bench_counters_->audio_copy_total_us.fetch_add(
+                        render::bench::now_us() - t_copy,
+                        std::memory_order_relaxed);
+                }
+            }
+            {
+                const double t_pub = render::bench::now_us();
+                waveform_buf_.write(wd);
+                if (bench_counters_) {
+                    bench_counters_->triplebuffer_publish_total_us.fetch_add(
+                        render::bench::now_us() - t_pub,
+                        std::memory_order_relaxed);
+                }
+            }
+#else
             // Copy in order from oldest to newest
             for (int i = 0; i < waveform_length_; ++i) {
                 wd.samples[i] = waveform_ring_[(waveform_pos_ + i) % waveform_length_];
             }
             waveform_buf_.write(wd);
+#endif
         }
     }
+
+#ifdef PULP_BENCHMARK
+    /// Install (or clear) the benchmark perf-counter sink. Call from the
+    /// UI/main thread before the audio callback starts accumulating.
+    /// The pointer is stored by raw reference — caller owns the counters
+    /// and must outlive this bridge.
+    void set_bench_counters(render::bench::PerfCounters* counters) {
+        bench_counters_ = counters;
+    }
+#endif
 
     // ── UI thread reads ─────────────────────────────────────────────────────
 
@@ -179,6 +249,10 @@ private:
     std::array<float, WaveformData::kMaxSamples> waveform_ring_{};
     int waveform_length_ = 1024;
     int waveform_pos_ = 0;
+
+#ifdef PULP_BENCHMARK
+    render::bench::PerfCounters* bench_counters_ = nullptr;
+#endif
 };
 
 } // namespace pulp::view
