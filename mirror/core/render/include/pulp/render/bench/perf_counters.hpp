@@ -60,6 +60,23 @@ struct PerfCounters {
     // Number of samples (frames) rolled into the above totals.
     std::atomic<double> sample_count{0.0};
 
+    // Slice 0.5 additions — real JS→GPU upload instrumentation (#516).
+    // Captures the JS-driven WebGPU resource setup path in
+    // `core/view/src/widget_bridge.cpp`: base64 decode cost (for the
+    // __gpuComputeDispatchImpl bufferDataBase64 path added in #535),
+    // the number of WriteBuffer calls (so per-upload cost is derivable
+    // from `gpu_upload_total_us / gpu_buffer_upload_count`), and the
+    // peak resident GPU-buffer memory so we can tell whether a workload
+    // actually stresses the bridge (vs. the oscilloscope/spectrogram
+    // paths that allocate effectively nothing).
+    //
+    // The peak is tracked via a `compare_exchange` loop in
+    // `observe_resident_peak` so concurrent writers stay monotonic
+    // without a lock.
+    std::atomic<double> base64_decode_total_us{0.0};
+    std::atomic<double> gpu_buffer_upload_count{0.0};
+    std::atomic<double> gpu_buffer_bytes_resident_peak{0.0};
+
     /// Zero every counter. Primarily for tests.
     void reset() {
         audio_copy_total_us.store(0.0, std::memory_order_relaxed);
@@ -71,6 +88,23 @@ struct PerfCounters {
         cpu_to_gpu_bytes_total.store(0.0, std::memory_order_relaxed);
         gpu_to_cpu_bytes_total.store(0.0, std::memory_order_relaxed);
         sample_count.store(0.0, std::memory_order_relaxed);
+        base64_decode_total_us.store(0.0, std::memory_order_relaxed);
+        gpu_buffer_upload_count.store(0.0, std::memory_order_relaxed);
+        gpu_buffer_bytes_resident_peak.store(0.0, std::memory_order_relaxed);
+    }
+
+    /// Monotonic peak update for `gpu_buffer_bytes_resident_peak`. Safe
+    /// to call concurrently from multiple threads. No-op if `candidate`
+    /// is not larger than the current peak.
+    void observe_resident_peak(double candidate) {
+        double prev = gpu_buffer_bytes_resident_peak.load(std::memory_order_relaxed);
+        while (candidate > prev &&
+               !gpu_buffer_bytes_resident_peak.compare_exchange_weak(
+                   prev, candidate, std::memory_order_relaxed)) {
+            // `prev` is refreshed by `compare_exchange_weak` on failure;
+            // loop until we either succeed or the candidate is no
+            // longer larger.
+        }
     }
 
     /// Plain-old-data snapshot of the counters. Returned by
@@ -86,10 +120,15 @@ struct PerfCounters {
         double cpu_to_gpu_bytes_total = 0.0;
         double gpu_to_cpu_bytes_total = 0.0;
         double sample_count = 0.0;
+        double base64_decode_total_us = 0.0;
+        double gpu_buffer_upload_count = 0.0;
+        double gpu_buffer_bytes_resident_peak = 0.0;
     };
 
     /// Grab the current totals and zero the underlying atomics. Uses
     /// `exchange` so no samples are lost between the read and reset.
+    /// `gpu_buffer_bytes_resident_peak` is exchanged as well, so a
+    /// fresh window starts from zero and tracks its own peak.
     Snapshot snapshot_and_reset() {
         Snapshot s;
         s.audio_copy_total_us =
@@ -110,6 +149,12 @@ struct PerfCounters {
             gpu_to_cpu_bytes_total.exchange(0.0, std::memory_order_relaxed);
         s.sample_count =
             sample_count.exchange(0.0, std::memory_order_relaxed);
+        s.base64_decode_total_us =
+            base64_decode_total_us.exchange(0.0, std::memory_order_relaxed);
+        s.gpu_buffer_upload_count =
+            gpu_buffer_upload_count.exchange(0.0, std::memory_order_relaxed);
+        s.gpu_buffer_bytes_resident_peak =
+            gpu_buffer_bytes_resident_peak.exchange(0.0, std::memory_order_relaxed);
         return s;
     }
 };
