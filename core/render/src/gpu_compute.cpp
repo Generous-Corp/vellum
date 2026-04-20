@@ -216,9 +216,17 @@ public:
 
         const bool ok = read_back(readback_buf, magnitudes, output_bytes);
 
-        // read_back completed (success or timeout) — GPU is done with the
-        // readback buffer either way. Safe to return it to the pool.
-        pool_->release(readback_buf);
+        // Codex 2026-04-21 review on #536 P1: only recycle on SUCCESS.
+        // On MapAsync timeout the GPU may still be mapping the buffer
+        // when this function returns; handing it back to the pool lets
+        // a subsequent call re-acquire and reuse it while the prior map
+        // is still in flight — a validation error / silent corruption
+        // risk under slow GPU workloads. On failure we drop the handle
+        // and let the wgpu::Buffer dtor reclaim it when no other ref
+        // is pending.
+        if (ok) {
+            pool_->release(readback_buf);
+        }
         return ok;
     }
 
@@ -279,7 +287,12 @@ public:
         schedule_pool_release({buf_a, buf_b, buf_result});
 
         const bool ok = read_back(readback_buf, result, bytes);
-        pool_->release(readback_buf);
+        // Codex 2026-04-21 review on #536 P1 — matched to the magnitude
+        // path: only recycle on success. On read_back failure the GPU
+        // may still hold a mapping on this buffer.
+        if (ok) {
+            pool_->release(readback_buf);
+        }
         return ok;
     }
 
@@ -594,7 +607,15 @@ private:
     // Pool of persistent staging buffers, keyed by usage bitmask. Replaces
     // per-call device_.CreateBuffer() in compute_magnitude / complex_multiply
     // to eliminate allocator churn. Created lazily in create_pipelines().
-    std::unique_ptr<detail::StagingBufferPool> pool_;
+    // Codex 2026-04-21 review on #536: the OnSubmittedWorkDone callback
+    // captures the pool pointer to return buffers post-submission. The
+    // callback can fire after `~DawnGpuCompute()` resets the pool in
+    // shared-device mode (where event processing continues outside this
+    // object). Owning the pool via `shared_ptr` and handing the callback
+    // a `weak_ptr` means a stale callback just drops its buffers (RAII
+    // dtor handles the wgpu::Buffer side) instead of dereferencing a
+    // dangling `pool_raw` pointer.
+    std::shared_ptr<detail::StagingBufferPool> pool_;
 
     bool create_pipelines() {
         magnitude_pipeline_ = create_pipeline("magnitude", kMagnitudeShader);
@@ -609,7 +630,7 @@ private:
         // planning/zero-copy-slice-1-design-2026-04-20.md. Default cap of 8
         // covers typical GPU dispatch depth (3–4 in flight) × per-call buffer
         // count (2–3 inputs + output) with headroom.
-        pool_ = std::make_unique<detail::StagingBufferPool>(device_, 8);
+        pool_ = std::make_shared<detail::StagingBufferPool>(device_, 8);
 
         initialized_ = true;
         runtime::log_info("GpuCompute: pipelines created (device shared: {})",
@@ -677,19 +698,25 @@ private:
     // each of the given buffers back to the pool once the GPU confirms the
     // most-recent submission is complete. The lambda captures the buffers
     // (which are wgpu::Buffer ref-counted handles) to keep them alive until
-    // the callback fires. The pool itself also holds a reference via
-    // in_flight_, so this keeps the ref count coherent.
+    // the callback fires, and a weak_ptr to the pool so a callback that
+    // outlives ~DawnGpuCompute() cleanly no-ops instead of dereferencing
+    // a dangling raw pointer. Codex 2026-04-21 review on #536 P1.
     void schedule_pool_release(std::vector<wgpu::Buffer> bufs) {
         if (!pool_ || bufs.empty()) return;
 
-        auto* pool_raw = pool_.get();
+        std::weak_ptr<detail::StagingBufferPool> pool_weak = pool_;
         queue_.OnSubmittedWorkDone(
             wgpu::CallbackMode::AllowProcessEvents,
-            [pool_raw, bufs = std::move(bufs)](wgpu::QueueWorkDoneStatus,
-                                                wgpu::StringView) mutable {
-                for (auto& b : bufs) {
-                    pool_raw->release(b);
+            [pool_weak, bufs = std::move(bufs)](wgpu::QueueWorkDoneStatus,
+                                                 wgpu::StringView) mutable {
+                if (auto pool = pool_weak.lock()) {
+                    for (auto& b : bufs) {
+                        pool->release(b);
+                    }
                 }
+                // When lock() returns null the owning DawnGpuCompute has
+                // been destroyed; `bufs` goes out of scope here and the
+                // wgpu::Buffer dtor drops the underlying GPU handles.
             });
     }
 
