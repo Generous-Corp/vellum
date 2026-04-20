@@ -8,6 +8,10 @@
 #include <string>
 #include <vector>
 
+#ifdef PULP_BENCHMARK
+#include <pulp/render/bench/perf_counters.hpp>
+#endif
+
 namespace pulp::render {
 
 /// GPU compute pipeline for non-rendering workloads (e.g. spectral processing).
@@ -95,6 +99,14 @@ public:
         const std::vector<uint32_t>& sizes, int iterations = 10) = 0;
 
     static std::unique_ptr<GpuCompute> create();
+
+#ifdef PULP_BENCHMARK
+    /// Install (or clear) the zero-copy benchmark perf-counter sink.
+    /// The implementation accumulates upload/readback/dispatch times
+    /// around Dawn `WriteBuffer`, `Submit`, and `MapAsync`+memcpy calls.
+    /// Tooling-only; compiled out unless PULP_BENCHMARK is defined.
+    virtual void set_bench_counters(bench::PerfCounters* counters) = 0;
+#endif
 
 protected:
     bool initialized_ = false;
