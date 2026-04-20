@@ -26,6 +26,12 @@ namespace pulp::render {
 class GpuSurface;
 }
 
+#ifdef PULP_BENCHMARK
+namespace pulp::render::bench {
+struct PerfCounters;
+}
+#endif
+
 namespace pulp::view {
 
 // Widget value snapshot for hot reload preservation
@@ -91,6 +97,14 @@ public:
     // canvas-backed presentation texture.
     CanvasWidget::NativeGpuTextureFrame describe_native_texture_frame(const std::string& texture_id) const;
 
+#ifdef PULP_BENCHMARK
+    // Install (or clear) the zero-copy benchmark perf-counter sink. The
+    // counters are accumulated inline around WriteBuffer calls on the
+    // JS-driven GPU resource setup path (widget_bridge.cpp ~line 3984).
+    // Tooling-only; compiled out unless PULP_BENCHMARK is defined.
+    void set_bench_counters(render::bench::PerfCounters* counters);
+#endif
+
 private:
     struct NativeGpuBridgeState;
 
@@ -126,6 +140,10 @@ private:
     bool dom_ops_loaded_ = false;
     bool frame_preamble_loaded_ = false;
     std::function<void()> repaint_callback_;
+
+#ifdef PULP_BENCHMARK
+    render::bench::PerfCounters* bench_counters_ = nullptr;
+#endif
 
     // Resolve parent: returns view for parentId, or &root_ if empty
     View* resolve_parent(const std::string& parent_id);
