@@ -4003,6 +4003,10 @@ void WidgetBridge::register_api() {
                                 bench_counters_->cpu_to_gpu_bytes_total.fetch_add(
                                     static_cast<double>(upload_data.size()),
                                     std::memory_order_relaxed);
+                                bench_counters_->gpu_buffer_upload_count.fetch_add(
+                                    1.0, std::memory_order_relaxed);
+                                bench_counters_->observe_resident_peak(
+                                    static_cast<double>(upload_data.size()));
                             }
                         }
 #else
@@ -4271,7 +4275,26 @@ void WidgetBridge::register_api() {
             buffer_desc.size = upload_data.size();
             auto gpu_buffer = device_ptr->CreateBuffer(&buffer_desc);
             if (!gpu_buffer) return choc::value::createBool(false);
+#ifdef PULP_BENCHMARK
+            {
+                const double t0 = render::bench::now_us();
+                queue_ptr->WriteBuffer(gpu_buffer, 0, upload_data.data(), upload_data.size());
+                if (bench_counters_) {
+                    bench_counters_->gpu_upload_total_us.fetch_add(
+                        render::bench::now_us() - t0,
+                        std::memory_order_relaxed);
+                    bench_counters_->cpu_to_gpu_bytes_total.fetch_add(
+                        static_cast<double>(upload_data.size()),
+                        std::memory_order_relaxed);
+                    bench_counters_->gpu_buffer_upload_count.fetch_add(
+                        1.0, std::memory_order_relaxed);
+                    bench_counters_->observe_resident_peak(
+                        static_cast<double>(upload_data.size()));
+                }
+            }
+#else
             queue_ptr->WriteBuffer(gpu_buffer, 0, upload_data.data(), upload_data.size());
+#endif
 
             vertex_gpu_buffers[slot] = gpu_buffer;
             vertex_buffer_present[slot] = true;
@@ -4364,7 +4387,26 @@ void WidgetBridge::register_api() {
                         if (!gpu_buffer) {
                             return choc::value::createBool(false);
                         }
+#ifdef PULP_BENCHMARK
+                        {
+                            const double t0 = render::bench::now_us();
+                            queue_ptr->WriteBuffer(gpu_buffer, 0, upload_data.data(), upload_data.size());
+                            if (bench_counters_) {
+                                bench_counters_->gpu_upload_total_us.fetch_add(
+                                    render::bench::now_us() - t0,
+                                    std::memory_order_relaxed);
+                                bench_counters_->cpu_to_gpu_bytes_total.fetch_add(
+                                    static_cast<double>(upload_data.size()),
+                                    std::memory_order_relaxed);
+                                bench_counters_->gpu_buffer_upload_count.fetch_add(
+                                    1.0, std::memory_order_relaxed);
+                                bench_counters_->observe_resident_peak(
+                                    static_cast<double>(upload_data.size()));
+                            }
+                        }
+#else
                         queue_ptr->WriteBuffer(gpu_buffer, 0, upload_data.data(), upload_data.size());
+#endif
                         bind_group_buffers.push_back(gpu_buffer);
 
                         bind_group_entry.buffer = gpu_buffer;
@@ -4755,7 +4797,26 @@ void WidgetBridge::register_api() {
             index_buffer_desc.size = upload_index_data.size();
             auto index_gpu_buffer = device_ptr->CreateBuffer(&index_buffer_desc);
             if (!index_gpu_buffer) return choc::value::createBool(false);
+#ifdef PULP_BENCHMARK
+            {
+                const double t0 = render::bench::now_us();
+                queue_ptr->WriteBuffer(index_gpu_buffer, 0, upload_index_data.data(), upload_index_data.size());
+                if (bench_counters_) {
+                    bench_counters_->gpu_upload_total_us.fetch_add(
+                        render::bench::now_us() - t0,
+                        std::memory_order_relaxed);
+                    bench_counters_->cpu_to_gpu_bytes_total.fetch_add(
+                        static_cast<double>(upload_index_data.size()),
+                        std::memory_order_relaxed);
+                    bench_counters_->gpu_buffer_upload_count.fetch_add(
+                        1.0, std::memory_order_relaxed);
+                    bench_counters_->observe_resident_peak(
+                        static_cast<double>(upload_index_data.size()));
+                }
+            }
+#else
             queue_ptr->WriteBuffer(index_gpu_buffer, 0, upload_index_data.data(), upload_index_data.size());
+#endif
             pass.SetIndexBuffer(index_gpu_buffer, index_format_from_string(index_buffer_view.hasObjectMember("format") ? index_buffer_view["format"].getWithDefault<std::string>("uint32") : "uint32"));
 
             auto index_count = static_cast<uint32_t>(std::max(0, payload.hasObjectMember("indexCount") ? payload["indexCount"].getWithDefault<int32_t>(0) : 0));
@@ -5085,14 +5146,44 @@ fn main(@location(0) uv : vec2<f32>) -> @location(0) vec4<f32> {
                             if (entry.hasObjectMember("bufferDataBase64") && buf_size > 0) {
                                 auto b64 = entry["bufferDataBase64"].getWithDefault<std::string>("");
                                 if (!b64.empty()) {
-                                    if (auto decoded = runtime::base64_decode(b64)) {
+#ifdef PULP_BENCHMARK
+                                    const double decode_t0 = render::bench::now_us();
+                                    auto decoded = runtime::base64_decode(b64);
+                                    if (bench_counters_) {
+                                        bench_counters_->base64_decode_total_us.fetch_add(
+                                            render::bench::now_us() - decode_t0,
+                                            std::memory_order_relaxed);
+                                    }
+#else
+                                    auto decoded = runtime::base64_decode(b64);
+#endif
+                                    if (decoded) {
                                         const auto& bytes = *decoded;
                                         const uint64_t to_copy = std::min<uint64_t>(
                                             bytes.size(), buf_size);
                                         if (to_copy > 0) {
+#ifdef PULP_BENCHMARK
+                                            const double t0 = render::bench::now_us();
                                             queue_ptr->WriteBuffer(gpu_buf, 0,
                                                                    bytes.data(),
                                                                    static_cast<size_t>(to_copy));
+                                            if (bench_counters_) {
+                                                bench_counters_->gpu_upload_total_us.fetch_add(
+                                                    render::bench::now_us() - t0,
+                                                    std::memory_order_relaxed);
+                                                bench_counters_->cpu_to_gpu_bytes_total.fetch_add(
+                                                    static_cast<double>(to_copy),
+                                                    std::memory_order_relaxed);
+                                                bench_counters_->gpu_buffer_upload_count.fetch_add(
+                                                    1.0, std::memory_order_relaxed);
+                                                bench_counters_->observe_resident_peak(
+                                                    static_cast<double>(buf_size));
+                                            }
+#else
+                                            queue_ptr->WriteBuffer(gpu_buf, 0,
+                                                                   bytes.data(),
+                                                                   static_cast<size_t>(to_copy));
+#endif
                                         }
                                     }
                                 }
