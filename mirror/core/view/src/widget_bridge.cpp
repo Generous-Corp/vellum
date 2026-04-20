@@ -37,6 +37,10 @@
 #include "include/gpu/graphite/Image.h"
 #endif
 
+#ifdef PULP_BENCHMARK
+#include <pulp/render/bench/perf_counters.hpp>
+#endif
+
 #include <pulp/platform/child_process.hpp>
 
 namespace pulp::view {
@@ -623,6 +627,12 @@ void WidgetBridge::set_repaint_callback(std::function<void()> cb) {
 void WidgetBridge::set_ai_cli_command(std::string cmd) {
     if (!cmd.empty()) ai_cli_command_ = std::move(cmd);
 }
+
+#ifdef PULP_BENCHMARK
+void WidgetBridge::set_bench_counters(render::bench::PerfCounters* counters) {
+    bench_counters_ = counters;
+}
+#endif
 
 void WidgetBridge::request_repaint() {
     if (repaint_callback_) repaint_callback_();
@@ -3981,7 +3991,22 @@ void WidgetBridge::register_api() {
                         if (!gpu_buffer) {
                             return choc::value::createBool(false);
                         }
+#ifdef PULP_BENCHMARK
+                        {
+                            const double t0 = render::bench::now_us();
+                            queue_ptr->WriteBuffer(gpu_buffer, 0, upload_data.data(), upload_data.size());
+                            if (bench_counters_) {
+                                bench_counters_->gpu_upload_total_us.fetch_add(
+                                    render::bench::now_us() - t0,
+                                    std::memory_order_relaxed);
+                                bench_counters_->cpu_to_gpu_bytes_total.fetch_add(
+                                    static_cast<double>(upload_data.size()),
+                                    std::memory_order_relaxed);
+                            }
+                        }
+#else
                         queue_ptr->WriteBuffer(gpu_buffer, 0, upload_data.data(), upload_data.size());
+#endif
                         bind_group_buffers.push_back(gpu_buffer);
 
                         bind_group_entry.buffer = gpu_buffer;
