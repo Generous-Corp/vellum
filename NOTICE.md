@@ -1,7 +1,7 @@
 # Third-Party Notices
 
 Pulp includes or depends on the following third-party software.
-Entries are listed in alphabetical order.
+Entries are listed in alphabetical order (case-insensitive).
 
 ---
 
@@ -123,6 +123,31 @@ modification, are permitted provided that the following conditions are met:
 
 ---
 
+## dr_libs
+
+Copyright 2023 David Reid
+
+dr_libs (dr_flac, dr_mp3, dr_wav) is dual-licensed under the Unlicense
+(public domain) and MIT No Attribution. Pulp redistributes the headers
+under the Unlicense terms.
+
+This is free and unencumbered software released into the public domain.
+
+Anyone is free to copy, modify, publish, use, compile, sell, or distribute
+this software, either in source code form or as a compiled binary, for any
+purpose, commercial or non-commercial, and by any means.
+
+In jurisdictions that recognize copyright laws, the author or authors of
+this software dedicate any and all copyright interest in the software to
+the public domain. We make this dedication for the benefit of the public
+at large and to the detriment of our heirs and successors. We intend this
+dedication to be an overt act of relinquishment in perpetuity of all
+present and future rights to this software under copyright law.
+
+For more information, please refer to <http://unlicense.org/>.
+
+---
+
 ## Highway
 
 Copyright 2019 Google LLC
@@ -143,6 +168,53 @@ limitations under the License.
 
 ---
 
+## Inter
+
+Copyright (c) 2016 The Inter Project Authors (https://github.com/rsms/inter)
+
+SIL Open Font License, Version 1.1
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1.
+This license is copied below, and is also available with a FAQ at:
+https://openfontlicense.org
+
+PERMISSION & CONDITIONS
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of the Font Software, to use, study, copy, merge, embed, modify, redistribute,
+and sell modified and unmodified copies of the Font Software, subject to the
+following conditions:
+
+1) Neither the Font Software nor any of its individual components, in
+Original or Modified Versions, may be sold by itself.
+2) Original or Modified Versions of the Font Software may be bundled,
+redistributed and/or sold with any software, provided that each copy
+contains the above copyright notice and this license. These can be
+included either as stand-alone text files, human-readable headers or in
+the appropriate machine-readable metadata fields within text or binary
+files as long as those fields can be easily viewed by the user.
+3) No Modified Version of the Font Software may use the Reserved Font
+Name(s) unless explicit written permission is granted by the corresponding
+Copyright Holder. This restriction only applies to the primary font name
+as presented to the users.
+
+---
+
+## JetBrains Mono
+
+Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono)
+
+SIL Open Font License, Version 1.1
+
+Licensed under the SIL Open Font License, Version 1.1 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at: https://openfontlicense.org
+
+The Font Software may be bundled and redistributed with software under the
+terms of the SIL OFL 1.1; see the Inter entry above for the full license
+text shared by both fonts.
+
+---
+
 ## LV2
 
 Copyright (c) 2006-2019 David Robillard and contributors
@@ -160,6 +232,29 @@ ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
 WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
 ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+---
+
+## Mbed TLS
+
+Copyright The Mbed TLS Contributors
+
+Mbed TLS is distributed under a dual Apache-2.0 OR GPL-2.0-or-later
+license. Pulp uses Mbed TLS exclusively under the Apache-2.0 terms.
+
+Apache License, Version 2.0
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 
 ---
 
@@ -205,22 +300,6 @@ all copies or substantial portions of the Software.
 
 Copyright (c) 2013-2021 Mikko Mononen
 
----
-
-## Oboe
-
-Copyright 2017 Google LLC
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-https://github.com/google/oboe
-
----
-
 zlib License
 
 This software is provided 'as-is', without any express or implied
@@ -255,6 +334,44 @@ copies or substantial portions of the Software.
 
 ---
 
+## Oboe
+
+Copyright 2017 Google LLC
+
+Apache License, Version 2.0
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+
+https://github.com/google/oboe
+
+---
+
+## pugixml
+
+Copyright (c) 2006-2024 Arseny Kapoulkine
+
+MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+---
+
 ## pybind11
 
 Copyright (c) 2016 Wenzel Jakob
@@ -274,24 +391,6 @@ modification, are permitted provided that the following conditions are met:
 3. Neither the name of the copyright holder nor the names of its contributors
    may be used to endorse or promote products derived from this software
    without specific prior written permission.
-
----
-
-## pugixml
-
-Copyright (c) 2006-2024 Arseny Kapoulkine
-
-MIT License
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
 
 ---
 
@@ -332,6 +431,25 @@ modification, are permitted provided that the following conditions are met:
 3. Neither the name of the copyright holder nor the names of its contributors
    may be used to endorse or promote products derived from this software
    without specific prior written permission.
+
+---
+
+## three.js
+
+Copyright (c) 2010-2026 three.js authors
+
+MIT License — used optionally for native WebGPU bridge demos and tests.
+Fetched only when `PULP_BUILD_TESTS` and `PULP_ENABLE_GPU` are ON.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
 
 ---
 

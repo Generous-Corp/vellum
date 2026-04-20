@@ -4,12 +4,14 @@ All code that Pulp bundles, fetches automatically, exports via `cmake --install`
 
 ## Policy
 
-- **Allowed for bundled or redistributed code:** MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0, ISC, zlib, BSL-1.0, Unlicense, public domain
+- **Allowed for bundled or redistributed code:** MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0, ISC, zlib, BSL-1.0, Unlicense, public domain, SIL OFL 1.1 (fonts)
 - **Not allowed in the repo or shipped artifacts:** GPL, LGPL, AGPL, SSPL, proprietary, any copyleft
 - **Review required:** MPL-2.0 (weak copyleft, case-by-case evaluation)
 - **Optional vendor SDK carve-out:** AAX, ASIO, and similar SDKs may be supported only when they are off by default, separately obtained by the developer, kept outside the source tree, never committed, never exported by `cmake --install`, omitted from `NOTICE.md`, and not required by public CI.
 
 ## Current Dependencies
+
+Entries are sorted alphabetically (case-insensitive) by name.
 
 | Name | Version | License | How Used | Subsystem | Added |
 |------|---------|---------|----------|-----------|-------|
@@ -17,20 +19,24 @@ All code that Pulp bundles, fetches automatically, exports via `cmake --install`
 | Catch2 | 3.7.1 | BSL-1.0 | Unit testing framework | test | 2026-03-24 |
 | CHOC | f0f5cdf5a938 | ISC | JS engine abstraction, MIDI utilities, audio helpers | multiple | 2026-03-24 |
 | CLAP | 1.2.2 | MIT | CLAP plugin format headers | pulp-format | 2026-03-24 |
-| cpp-httplib | master | MIT | HTTP client (GET/POST/download) | pulp-runtime | 2026-04-07 |
-| dr_libs | master | Public domain | FLAC, MP3, WAV decode (dr_flac, dr_mp3, dr_wav) | pulp-audio | 2026-04-07 |
+| cpp-httplib | vendored-snapshot | MIT | HTTP client (GET/POST/download) | pulp-runtime | 2026-04-07 |
 | Dawn | chrome/m144 | BSD-3-Clause | WebGPU implementation used by the GPU render path (via pre-built Skia toolchain) | pulp-render | 2026-03-30 |
+| dr_libs | vendored-snapshot | Public domain (Unlicense) / MIT-0 | FLAC, MP3, WAV decode (dr_flac, dr_mp3, dr_wav) | pulp-audio | 2026-04-07 |
 | Highway | 1.2.0 | Apache-2.0 | Portable SIMD abstraction (SSE/NEON/AVX) | pulp-runtime | 2026-04-06 |
+| Inter | vendored-snapshot | SIL OFL 1.1 | Embedded UI font (Inter-Regular.ttf) | pulp-view | 2026-04-21 |
+| JetBrains Mono | vendored-snapshot | SIL OFL 1.1 | Embedded monospace font (JetBrainsMono-Regular.ttf) | pulp-view | 2026-04-21 |
 | LV2 | 1.18.10 | ISC | LV2 plugin format headers | pulp-format | 2026-03-30 |
+| Mbed TLS | 3.6.2 | Apache-2.0 | Cryptographic primitives (SHA-256, RSA, AES) | pulp-runtime | 2026-04-21 |
 | miniz | 3.0.2 | MIT | ZIP/GZIP compression | pulp-runtime | 2026-04-07 |
 | msdfgen | 1.12 | MIT | Multi-channel SDF glyph generation (planned, FetchContent) | pulp-canvas | 2026-04-12 |
-| nanosvg | master | zlib | SVG parsing and rasterization | pulp-canvas | 2026-03-25 |
+| nanosvg | vendored-snapshot | zlib | SVG parsing and rasterization | pulp-canvas | 2026-03-25 |
+| node-addon-api | 8.x | MIT | Node.js bindings via Node-API (optional, npm install) | bindings/nodejs | 2026-03-25 |
 | Oboe | 1.9.0 | Apache-2.0 | Android audio backend (AAudio/OpenSL ES abstraction) | pulp-audio | 2026-04-07 |
 | pugixml | 1.14 | MIT | XML parsing and generation | pulp-runtime | 2026-04-07 |
-| node-addon-api | 8.x | MIT | Node.js bindings via Node-API (optional, npm install) | bindings/nodejs | 2026-03-25 |
 | pybind11 | 2.13.6 | BSD-3-Clause | Python bindings for HeadlessHost (optional, FetchContent) | bindings/python | 2026-03-25 |
 | SDL3 | 3.2.12 | zlib | Cross-platform windowing, input, GPU context | pulp-view | 2026-03-25 |
 | Skia | chrome/m144 | BSD-3-Clause | GPU 2D rendering engine (pre-built via skia-builder). Call sites use the `SkSpan`-based `SkFont` API so Pulp compiles whether the Skia build defines `SK_SUPPORT_UNSPANNED_APIS` or not (#543). | pulp-canvas, pulp-render | 2026-03-25 |
+| three.js | 077dd13c0e86 | MIT | Native WebGPU bridge demos and tests (optional, fetched only when `PULP_BUILD_TESTS` and `PULP_ENABLE_GPU` are ON) | pulp-render | 2026-04-21 |
 | VST3 SDK | v3.7.12_build_20 | MIT | VST3 plugin format (pluginterfaces + base) | pulp-format | 2026-03-24 |
 | WebGPU-distribution | 17dcd42a7683 | MIT | WebGPU C API wrapper for Dawn (FetchContent) | pulp-render | 2026-03-25 |
 | Yoga | 3.2.1 | MIT | CSS Flexbox/Grid layout engine (Meta, FetchContent) | pulp-view | 2026-03-29 |
@@ -55,3 +61,4 @@ These SDKs are not part of Pulp's redistributed dependency chain. Pulp may integ
 | AAX SDK | Separately licensed by Avid | Optional AAX format integration | Developer obtains independently, keeps it out-of-tree, and points `PULP_AAX_SDK_DIR` at it |
 | ARA SDK | MIT-compatible (Celemony) | Optional ARA 2.x integration (pitch correction, spectral editing, clip-aware workflows) | Developer obtains independently (https://github.com/Celemony/ARA_SDK), keeps it out-of-tree, points `PULP_ARA_SDK_DIR` at it, and sets `PULP_ENABLE_ARA=ON`. Never bundled. |
 | ASIO SDK | Proprietary (Steinberg) | ASIO audio I/O (planned) | Developer obtains independently; never bundled or exported by Pulp |
+| DRACO | Apache-2.0 | Optional glTF mesh decompression | Fetched via FetchContent only when `PULP_ENABLE_DRACO=ON`; off by default |
