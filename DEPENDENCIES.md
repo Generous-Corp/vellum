@@ -27,14 +27,21 @@ Entries are sorted alphabetically (case-insensitive) by name.
 | Inter | vendored-snapshot | SIL OFL 1.1 | Embedded UI font (Inter-Regular.ttf) | pulp-view | 2026-04-21 |
 | JetBrains Mono | vendored-snapshot | SIL OFL 1.1 | Embedded monospace font (JetBrainsMono-Regular.ttf) | pulp-view | 2026-04-21 |
 | LV2 | 1.18.10 | ISC | LV2 plugin format headers | pulp-format | 2026-03-30 |
+| Material Design Icons | bundled-with-mkdocs-material | Apache-2.0 | Icon set bundled inside mkdocs-material and redistributed as SVG assets in the generated docs site | docs | 2026-04-22 |
 | Mbed TLS | 3.6.2 | Apache-2.0 | Cryptographic primitives (SHA-256, RSA, AES) | pulp-runtime | 2026-04-21 |
 | miniz | 3.0.2 | MIT | ZIP/GZIP compression | pulp-runtime | 2026-04-07 |
+| mkdocs | transitive | BSD-2-Clause | Static site generator (transitive via mkdocs-material); theme assets (search JS, sitemap) redistributed in the generated docs site | docs | 2026-04-22 |
+| mkdocs-awesome-pages-plugin | >=2.9,<3 | MIT | MkDocs plugin for nav ordering; build-time only | docs | 2026-04-22 |
+| mkdocs-git-revision-date-localized-plugin | >=1.2,<2 | MIT | MkDocs plugin for git-revision dates; build-time only | docs | 2026-04-22 |
+| mkdocs-material | >=9.5,<10 | MIT | MkDocs Material theme. CSS, JS, SVG icons, and search worker from this theme are redistributed in the generated docs site (generouscorp.com/pulp/) | docs | 2026-04-22 |
 | msdfgen | 1.12 | MIT | Multi-channel SDF glyph generation (planned, FetchContent) | pulp-canvas | 2026-04-12 |
 | nanosvg | vendored-snapshot | zlib | SVG parsing and rasterization | pulp-canvas | 2026-03-25 |
 | node-addon-api | 8.x | MIT | Node.js bindings via Node-API (optional, npm install) | bindings/nodejs | 2026-03-25 |
 | Oboe | 1.9.0 | Apache-2.0 | Android audio backend (AAudio/OpenSL ES abstraction) | pulp-audio | 2026-04-07 |
 | pugixml | 1.14 | MIT | XML parsing and generation | pulp-runtime | 2026-04-07 |
 | pybind11 | 2.13.6 | BSD-3-Clause | Python bindings for HeadlessHost (optional, FetchContent) | bindings/python | 2026-03-25 |
+| Pygments | transitive | BSD-2-Clause | Syntax highlighter used by mkdocs + pymdownx.highlight; redistributed as inline HTML/CSS in the generated docs site | docs | 2026-04-22 |
+| pymdown-extensions | >=10.7,<11 | MIT | Markdown extension bundle used by mkdocs-material (admonitions, tabs, superfences, highlight, emoji) | docs | 2026-04-22 |
 | SDL3 | 3.2.12 | zlib | Cross-platform windowing, input, GPU context | pulp-view | 2026-03-25 |
 | Skia | chrome/m144 | BSD-3-Clause | GPU 2D rendering engine (pre-built via skia-builder). Call sites use the `SkSpan`-based `SkFont` API so Pulp compiles whether the Skia build defines `SK_SUPPORT_UNSPANNED_APIS` or not (#543). | pulp-canvas, pulp-render | 2026-03-25 |
 | three.js | 077dd13c0e86 | MIT | Native WebGPU bridge demos and tests (optional, fetched only when `PULP_BUILD_TESTS` and `PULP_ENABLE_GPU` are ON) | pulp-render | 2026-04-21 |
