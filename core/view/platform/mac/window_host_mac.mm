@@ -1155,6 +1155,7 @@ public:
     }
 
     ~MacWindowHost() override {
+        root_.set_window_host(nullptr);
         root_.set_frame_clock(nullptr);
     }
 
@@ -1308,6 +1309,7 @@ public:
         skia_surface_.reset();
         gpu_surface_.reset();
         metal_view_.rootView = nullptr;
+        root_.set_window_host(nullptr);
         root_.set_frame_clock(nullptr);
     }
 
@@ -1723,10 +1725,14 @@ private:
 std::unique_ptr<WindowHost> WindowHost::create(View& root, const WindowOptions& options) {
 #ifdef PULP_HAS_SKIA
     if (options.use_gpu) {
-        return std::make_unique<MacGpuWindowHost>(root, options);
+        auto host = std::make_unique<MacGpuWindowHost>(root, options);
+        root.set_window_host(host.get());
+        return host;
     }
 #endif
-    return std::make_unique<MacWindowHost>(root, options);
+    auto host = std::make_unique<MacWindowHost>(root, options);
+    root.set_window_host(host.get());
+    return host;
 }
 
 } // namespace pulp::view
