@@ -66,6 +66,36 @@ public:
     // Resize
     virtual void set_size(uint32_t width, uint32_t height) = 0;
     virtual Size get_size() const = 0;
+
+    // Attach/detach a native child view inside the plugin editor host.
+    // Coordinates use Pulp's top-left origin convention, matching WindowHost.
+    virtual bool attach_native_child_view(NativeViewHandle child_view,
+                                          float x,
+                                          float y,
+                                          float width,
+                                          float height) {
+        (void) child_view;
+        (void) x;
+        (void) y;
+        (void) width;
+        (void) height;
+        return false;
+    }
+    virtual bool set_native_child_view_bounds(NativeViewHandle child_view,
+                                              float x,
+                                              float y,
+                                              float width,
+                                              float height) {
+        (void) child_view;
+        (void) x;
+        (void) y;
+        (void) width;
+        (void) height;
+        return false;
+    }
+    virtual void detach_native_child_view(NativeViewHandle child_view) {
+        (void) child_view;
+    }
 };
 
 } // namespace pulp::view

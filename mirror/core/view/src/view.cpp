@@ -222,9 +222,24 @@ void View::set_bounds(Rect r) {
     on_resized();
 }
 
+void View::set_window_host(WindowHost* host) {
+    window_host_ = host;
+    for (auto& child : children_) {
+        child->set_window_host(host);
+    }
+}
+
+void View::set_plugin_view_host(PluginViewHost* host) {
+    plugin_view_host_ = host;
+    for (auto& child : children_) {
+        child->set_plugin_view_host(host);
+    }
+}
+
 void View::add_child(std::unique_ptr<View> child) {
     child->parent_ = this;
-    child->window_host_ = window_host_;  // Propagate host reference
+    child->set_window_host(window_host_);
+    child->set_plugin_view_host(plugin_view_host_);
     children_.push_back(std::move(child));
     children_.back()->on_attached();
 }
@@ -235,6 +250,8 @@ std::unique_ptr<View> View::remove_child(View* child) {
     if (it == children_.end()) return nullptr;
 
     child->on_detached();
+    child->set_window_host(nullptr);
+    child->set_plugin_view_host(nullptr);
     child->parent_ = nullptr;
     auto owned = std::move(*it);
     children_.erase(it);
