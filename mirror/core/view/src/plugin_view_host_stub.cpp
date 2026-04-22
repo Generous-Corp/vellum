@@ -53,7 +53,11 @@ std::unique_ptr<PluginViewHost> PluginViewHost::create(View& root,
         if (!g_factory_installed || !g_factory) return nullptr;
         local = g_factory;
     }
-    return local(root, options);
+    auto host = local(root, options);
+    if (host) {
+        root.set_plugin_view_host(host.get());
+    }
+    return host;
 }
 
 #endif // !defined(__APPLE__)
