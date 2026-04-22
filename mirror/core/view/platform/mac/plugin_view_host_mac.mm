@@ -5,6 +5,7 @@
 
 #include <pulp/canvas/cg_canvas.hpp>
 #import <Cocoa/Cocoa.h>
+#include <algorithm>
 #include <atomic>
 
 #ifdef PULP_HAS_SKIA
@@ -120,6 +121,83 @@
 
 @end
 
+static NSRect child_view_frame_in_host(NSView* container,
+                                       float x,
+                                       float y,
+                                       float width,
+                                       float height) {
+    if (!container) {
+        return NSZeroRect;
+    }
+
+    const auto bounds = container.bounds;
+    const CGFloat clipped_width = std::max<CGFloat>(0.0, width);
+    const CGFloat clipped_height = std::max<CGFloat>(0.0, height);
+    const CGFloat cocoa_y = container.isFlipped
+        ? y
+        : NSHeight(bounds) - y - clipped_height;
+    return NSMakeRect(x, cocoa_y, clipped_width, clipped_height);
+}
+
+static bool attach_child_view_to_host(NSView* container,
+                                      void* child_view_handle,
+                                      float x,
+                                      float y,
+                                      float width,
+                                      float height) {
+    if (!container || !child_view_handle) {
+        return false;
+    }
+
+    NSView* child = (__bridge NSView*)child_view_handle;
+    if (!child) {
+        return false;
+    }
+
+    if (child.superview && child.superview != container) {
+        [child removeFromSuperview];
+    }
+
+    [child setFrame:child_view_frame_in_host(container, x, y, width, height)];
+
+    if (child.superview != container) {
+        [container addSubview:child];
+    }
+
+    [child setHidden:NO];
+    return true;
+}
+
+static bool set_child_view_bounds_in_host(NSView* container,
+                                          void* child_view_handle,
+                                          float x,
+                                          float y,
+                                          float width,
+                                          float height) {
+    if (!container || !child_view_handle) {
+        return false;
+    }
+
+    NSView* child = (__bridge NSView*)child_view_handle;
+    if (!child || child.superview != container) {
+        return false;
+    }
+
+    [child setFrame:child_view_frame_in_host(container, x, y, width, height)];
+    return true;
+}
+
+static void detach_child_view_from_host(NSView* container, void* child_view_handle) {
+    if (!container || !child_view_handle) {
+        return;
+    }
+
+    NSView* child = (__bridge NSView*)child_view_handle;
+    if (child && child.superview == container) {
+        [child removeFromSuperview];
+    }
+}
+
 // ── MacPluginViewHost ────────────────────────────────────────────────────────
 
 namespace pulp::view {
@@ -136,6 +214,7 @@ public:
     }
 
     ~MacPluginViewHost() override {
+        root_.set_plugin_view_host(nullptr);
         detach();
     }
 
@@ -177,6 +256,26 @@ public:
 
     Size get_size() const override {
         return size_;
+    }
+
+    bool attach_native_child_view(NativeViewHandle child_view,
+                                  float x,
+                                  float y,
+                                  float width,
+                                  float height) override {
+        return attach_child_view_to_host(view_, child_view, x, y, width, height);
+    }
+
+    bool set_native_child_view_bounds(NativeViewHandle child_view,
+                                      float x,
+                                      float y,
+                                      float width,
+                                      float height) override {
+        return set_child_view_bounds_in_host(view_, child_view, x, y, width, height);
+    }
+
+    void detach_native_child_view(NativeViewHandle child_view) override {
+        detach_child_view_from_host(view_, child_view);
     }
 
 private:
@@ -258,6 +357,7 @@ public:
     }
 
     ~MacGpuPluginViewHost() override {
+        root_.set_plugin_view_host(nullptr);
         stop_display_link();
         skia_surface_.reset();
         gpu_surface_.reset();
@@ -306,6 +406,26 @@ public:
     }
 
     Size get_size() const override { return size_; }
+
+    bool attach_native_child_view(NativeViewHandle child_view,
+                                  float x,
+                                  float y,
+                                  float width,
+                                  float height) override {
+        return attach_child_view_to_host(metal_view_, child_view, x, y, width, height);
+    }
+
+    bool set_native_child_view_bounds(NativeViewHandle child_view,
+                                      float x,
+                                      float y,
+                                      float width,
+                                      float height) override {
+        return set_child_view_bounds_in_host(metal_view_, child_view, x, y, width, height);
+    }
+
+    void detach_native_child_view(NativeViewHandle child_view) override {
+        detach_child_view_from_host(metal_view_, child_view);
+    }
 
 private:
     View& root_;
@@ -400,16 +520,22 @@ namespace pulp::view { // reopen for factory functions
 // ── Factory ──────────────────────────────────────────────────────────────────
 
 std::unique_ptr<PluginViewHost> PluginViewHost::create(View& root, Size size) {
-    return std::make_unique<MacPluginViewHost>(root, size);
+    auto host = std::make_unique<MacPluginViewHost>(root, size);
+    root.set_plugin_view_host(host.get());
+    return host;
 }
 
 std::unique_ptr<PluginViewHost> PluginViewHost::create(View& root, const Options& options) {
 #ifdef PULP_HAS_SKIA
     if (options.use_gpu) {
-        return std::make_unique<MacGpuPluginViewHost>(root, options.size);
+        auto host = std::make_unique<MacGpuPluginViewHost>(root, options.size);
+        root.set_plugin_view_host(host.get());
+        return host;
     }
 #endif
-    return std::make_unique<MacPluginViewHost>(root, options.size);
+    auto host = std::make_unique<MacPluginViewHost>(root, options.size);
+    root.set_plugin_view_host(host.get());
+    return host;
 }
 
 } // namespace pulp::view

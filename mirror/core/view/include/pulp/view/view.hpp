@@ -13,6 +13,7 @@
 namespace pulp::view {
 
 class WindowHost;  // Forward declaration for View→Host back-reference
+class PluginViewHost;
 
 class FrameClock;
 
@@ -357,8 +358,13 @@ public:
 
     /// Back-reference to the WindowHost that owns this view tree.
     /// Set by WindowHost when the root view is attached. Propagated to children.
-    void set_window_host(WindowHost* host) { window_host_ = host; }
+    void set_window_host(WindowHost* host);
     WindowHost* window_host() const { return window_host_; }
+
+    /// Back-reference to the PluginViewHost that owns this editor tree.
+    /// Set by PluginViewHost when the root view is attached. Propagated to children.
+    void set_plugin_view_host(PluginViewHost* host);
+    PluginViewHost* plugin_view_host() const { return plugin_view_host_; }
 
     /// Background gradient (CSS background: linear-gradient / radial-gradient)
     void set_background_gradient_linear(float x0, float y0, float x1, float y1,
@@ -443,6 +449,7 @@ private:
     float filter_blur_ = 0;
     bool needs_layer_ = false;
     WindowHost* window_host_ = nullptr;
+    PluginViewHost* plugin_view_host_ = nullptr;
     std::shared_ptr<canvas::ViewEffect> effect_;
     int bg_gradient_type_ = 0;  // 0=none, 1=linear, 2=radial
     float bg_grad_x0_ = 0, bg_grad_y0_ = 0, bg_grad_x1_ = 0, bg_grad_y1_ = 1;
