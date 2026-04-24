@@ -639,6 +639,11 @@ WidgetBridge::WidgetBridge(ScriptEngine& engine, View& root, state::StateStore& 
     // / queueMicrotask) finds the constructors it expects on the global.
     eval_or_throw(engine_, "web_compat_observers", preludes::web_compat_observers);
     eval_or_throw(engine_, "web_compat_scheduler", preludes::web_compat_scheduler);
+    // pulp #468 — DOM construction + walker for the Claude Design
+    // `--execute-bundle` import lane. Hides itself behind
+    // `globalThis.__pulpImportRuntime__` so non-import scripts don't
+    // see new globals.
+    eval_or_throw(engine_, "import_runtime", preludes::import_runtime);
 }
 
 WidgetBridge::~WidgetBridge() {
