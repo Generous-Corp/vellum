@@ -471,74 +471,12 @@ function on(id, eventName, fn) {
 }
 )";
 
-static const char* kDomOpsInit =
-    // DocumentFragment handling (pulp #468 Codex P1):
-    // A DocumentFragment must flatten on insert — the fragment's
-    // children move into the parent, the fragment node itself is not
-    // inserted. Without this, React 18's reconciler (which stages
-    // commits in fragments) produces phantom wrapper divs in the
-    // materialized tree. appendChild / insertBefore / replaceChild
-    // all check the flag at the top and recurse over the fragment's
-    // children when they see it.
-    "Element.prototype.appendChild = function(child) {"
-    "  if (!(child instanceof Element)) return child;"
-    "  if (child._isDocumentFragment) {"
-    "    var kids = child._children.slice(0);"
-    "    child._children.length = 0;"
-    "    for (var i = 0; i < kids.length; i++) this.appendChild(kids[i]);"
-    "    return child;"
-    "  }"
-    "  if (child._parentElement) child._parentElement.removeChild(child);"
-    "  child._parentElement = this;"
-    "  this._children.push(child);"
-    "  this._ensureNative();"
-    "  __domAppend(this._id, child._id, child.tagName.toLowerCase());"
-    "  child._nativeCreated = true;"
-    "  if (child._textContent) setText(child._id, child._textContent);"
-    "  child.style._flushAll();"
-    "  child._reapplyStylesheets();"
-    "  return child;"
-    "};"
-    "Element.prototype.removeChild = function(child) {"
-    "  var idx = this._children.indexOf(child);"
-    "  if (idx < 0) return child;"
-    "  this._children.splice(idx, 1);"
-    "  child._parentElement = null;"
-    "  if (child._nativeCreated) __domRemove(child._id);"
-    "  child._nativeCreated = false;"
-    "  return child;"
-    "};"
-    "Element.prototype.remove = function() {"
-    "  if (this._parentElement) this._parentElement.removeChild(this);"
-    "};"
-    "Element.prototype.insertBefore = function(newChild, refChild) {"
-    "  if (!refChild) return this.appendChild(newChild);"
-    "  if (newChild._isDocumentFragment) {"
-    "    var kids = newChild._children.slice(0);"
-    "    newChild._children.length = 0;"
-    "    for (var i = 0; i < kids.length; i++) this.insertBefore(kids[i], refChild);"
-    "    return newChild;"
-    "  }"
-    "  var idx = this._children.indexOf(refChild);"
-    "  if (idx < 0) return this.appendChild(newChild);"
-    "  if (newChild._parentElement) newChild._parentElement.removeChild(newChild);"
-    "  newChild._parentElement = this;"
-    "  this._children.splice(idx, 0, newChild);"
-    "  this._ensureNative();"
-    "  __domAppend(this._id, newChild._id, newChild.tagName.toLowerCase());"
-    "  newChild._nativeCreated = true;"
-    "  if (newChild._textContent) setText(newChild._id, newChild._textContent);"
-    "  newChild.style._flushAll();"
-    "  newChild._reapplyStylesheets();"
-    "  return newChild;"
-    "};"
-    "Element.prototype.replaceChild = function(newChild, oldChild) {"
-    "  var idx = this._children.indexOf(oldChild);"
-    "  if (idx < 0) return oldChild;"
-    "  this.removeChild(oldChild);"
-    "  this.appendChild(newChild);"  // fragment-aware via appendChild above
-    "  return oldChild;"
-    "};";
+// pulp #745: kDomOpsInit lived here as an inline C-string copy of
+// core/view/js/web-compat-dom-ops.js. Both sources had drifted (the
+// inline copy carried DocumentFragment flatten paths the standalone
+// file lacked); only the inline copy was actually evaluated. The JS
+// file is now the single source of truth and gets evaluated by the
+// constructor along with the rest of the prelude chain.
 
 static void safe_dispatch_eval(ScriptEngine& engine, const std::string& js, const char* context) {
     try {
@@ -634,6 +572,13 @@ WidgetBridge::WidgetBridge(ScriptEngine& engine, View& root, state::StateStore& 
     eval_or_throw(engine_, "web_compat_style_decl", preludes::web_compat_style_decl);
     eval_or_throw(engine_, "web_compat_document", preludes::web_compat_document);
     eval_or_throw(engine_, "web_compat_gpu_buffered", preludes::web_compat_gpu_buffered);
+    // pulp #745 — DOM mutation methods (appendChild / removeChild / etc.).
+    // Single source of truth lives in core/view/js/web-compat-dom-ops.js.
+    // The JS file's idempotency guard (`__pulp_dom_ops__` marker on the
+    // prototype methods) makes a re-eval a no-op, which matters because
+    // load_script callers used to re-trigger this initialization manually
+    // before the consolidation. See pulp #745.
+    eval_or_throw(engine_, "web_compat_dom_ops", preludes::web_compat_dom_ops);
     // pulp #468 — observer no-ops + scheduler shims so React 18 (and any
     // other framework that feature-detects MutationObserver / MessageChannel
     // / queueMicrotask) finds the constructors it expects on the global.
@@ -714,10 +659,12 @@ CanvasWidget::NativeGpuTextureFrame WidgetBridge::describe_native_texture_frame(
 }
 
 void WidgetBridge::load_script(const std::string& code) {
-    if (!dom_ops_loaded_) {
-        dom_ops_loaded_ = true;
-        eval_or_throw(engine_, "dom_ops_init", kDomOpsInit);
-    }
+    // pulp #745: the DOM mutation methods are now installed by the
+    // constructor's prelude chain (`web_compat_dom_ops` slot). The
+    // JS-side idempotency guard makes a re-eval a no-op, so callers
+    // that load multiple scripts no longer need the bridge to track
+    // a "first time" flag.
+    //
     // Append ";void 0" so the eval result is undefined, not the last
     // expression value. Elements have circular references (_parentElement
     // ↔ _children) which cause infinite recursion in CHOC's toChocValue().
