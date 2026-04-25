@@ -137,7 +137,6 @@ private:
     std::shared_ptr<std::vector<AsyncExecResult>> async_exec_results_ =
         std::make_shared<std::vector<AsyncExecResult>>();
     std::vector<int> pending_frame_ids_;
-    bool dom_ops_loaded_ = false;
     bool frame_preamble_loaded_ = false;
     std::function<void()> repaint_callback_;
 
