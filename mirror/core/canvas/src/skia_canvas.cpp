@@ -277,6 +277,21 @@ void SkiaCanvas::fill_rect(float x, float y, float w, float h) {
     GUARD_CANVAS; canvas_->drawRect(SkRect::MakeXYWH(x, y, w, h), make_fill_paint(fill_color_));
 }
 
+// pulp #929 — clearRect must actually clear pixels rather than compose a
+// transparent SrcOver fill (which is a visual no-op). Use SkBlendMode::kClear
+// so the destination texels become transparent black, mirroring the HTML
+// CanvasRenderingContext2D.clearRect semantics. Without this, the canvas
+// widget sat over whatever the parent had previously painted (or the
+// undefined swapchain-texture pixels), which on FilterBank looked like a
+// stuck white inner area.
+void SkiaCanvas::clear_rect(float x, float y, float w, float h) {
+    GUARD_CANVAS;
+    SkPaint paint;
+    paint.setBlendMode(SkBlendMode::kClear);
+    paint.setAntiAlias(false);
+    canvas_->drawRect(SkRect::MakeXYWH(x, y, w, h), paint);
+}
+
 // Apply the active line-dash pattern to a stroke paint (issue-916).
 // Skia's SkDashPathEffect requires an even-length pattern with
 // nonnegative entries; the JS bridge ensures both, so we treat any

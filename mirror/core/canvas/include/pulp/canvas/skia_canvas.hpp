@@ -61,6 +61,7 @@ public:
 
     // ── Shapes ───────────────────────────────────────────────────────────
     void fill_rect(float x, float y, float w, float h) override;
+    void clear_rect(float x, float y, float w, float h) override;
     void stroke_rect(float x, float y, float w, float h) override;
     void fill_rounded_rect(float x, float y, float w, float h, float radius) override;
     void stroke_rounded_rect(float x, float y, float w, float h, float radius) override;
