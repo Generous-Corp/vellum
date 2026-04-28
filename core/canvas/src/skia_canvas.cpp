@@ -196,6 +196,23 @@ void SkiaCanvas::capture_paint_baseline_transform() {
     paint_baseline_ = canvas_->getTotalMatrix();
 }
 
+void SkiaCanvas::concat_transform(float a, float b, float c,
+                                  float d, float e, float f) {
+    GUARD_CANVAS;
+    // CanvasRenderingContext2D affine matrix layout:
+    //   [a c e]
+    //   [b d f]
+    //   [0 0 1]
+    // SkMatrix::MakeAll takes row-major (sx, kx, tx, ky, sy, ty, p0, p1, p2),
+    // so the columns map: sx=a, kx=c, tx=e, ky=b, sy=d, ty=f.
+    // SkCanvas::concat multiplies the supplied matrix into the current matrix
+    // (right-side concat), exactly the View-level composition we want.
+    SkMatrix m = SkMatrix::MakeAll(a, c, e,
+                                    b, d, f,
+                                    0.0f, 0.0f, 1.0f);
+    canvas_->concat(m);
+}
+
 void SkiaCanvas::clip_rect(float x, float y, float w, float h) {
     GUARD_CANVAS;
     canvas_->clipRect(SkRect::MakeXYWH(x, y, w, h));
