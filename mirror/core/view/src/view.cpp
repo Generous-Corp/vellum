@@ -1,4 +1,6 @@
 #include <pulp/view/view.hpp>
+#include <pulp/view/window_host.hpp>
+#include <pulp/view/plugin_view_host.hpp>
 #include <algorithm>
 #include <numeric>
 #include <sstream>
@@ -384,6 +386,19 @@ FrameClock* View::frame_clock() const {
     if (frame_clock_) return frame_clock_;
     if (parent_) return parent_->frame_clock();
     return nullptr;
+}
+
+void View::request_repaint() {
+    // set_window_host / set_plugin_view_host propagate to children on
+    // add_child, so any attached view sees its own host pointer and we
+    // never need to walk the parent chain. No host attached: silent
+    // no-op — paint is already on the way for the initial mount, or
+    // there's no surface to paint to yet.
+    if (window_host_) {
+        window_host_->repaint();
+    } else if (plugin_view_host_) {
+        plugin_view_host_->repaint();
+    }
 }
 
 void View::simulate_hover(Point root_pos) {
