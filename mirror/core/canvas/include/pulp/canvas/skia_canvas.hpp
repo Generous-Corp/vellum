@@ -45,6 +45,8 @@ public:
     void set_transform(float a, float b, float c,
                        float d, float e, float f) override;
     void capture_paint_baseline_transform() override;
+    void concat_transform(float a, float b, float c,
+                          float d, float e, float f) override;
 
     // ── Clipping ─────────────────────────────────────────────────────────
     void clip_rect(float x, float y, float w, float h) override;

@@ -47,6 +47,14 @@ void RecordingCanvas::capture_paint_baseline_transform() {
     ++baseline_capture_count_;
 }
 
+void RecordingCanvas::concat_transform(float a, float b, float c,
+                                       float d, float e, float f) {
+    DrawCommand cmd{DrawCommand::Type::concat_transform};
+    cmd.f[0] = a; cmd.f[1] = b; cmd.f[2] = c;
+    cmd.f[3] = d; cmd.f[4] = e; cmd.f[5] = f;
+    commands_.push_back(cmd);
+}
+
 void RecordingCanvas::clip_rect(float x, float y, float w, float h) {
     DrawCommand cmd{DrawCommand::Type::clip_rect};
     cmd.f[0] = x; cmd.f[1] = y; cmd.f[2] = w; cmd.f[3] = h;
