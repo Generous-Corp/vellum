@@ -210,6 +210,22 @@ public:
     /// rather than wiping it. Default no-op for non-Skia backends.
     virtual void capture_paint_baseline_transform() {}
 
+    /// Concat (multiply) the supplied affine matrix onto the current
+    /// transform — does NOT replace it. Used by View::paint_all() when a
+    /// JS-supplied setTransform(id,a,b,c,d,e,f) is active on a View, so the
+    /// View's transform composes with parent transforms (translate to bounds,
+    /// outer transforms, etc.) rather than wiping them. Mirrors SkCanvas::concat.
+    /// Matrix layout matches CanvasRenderingContext2D.setTransform:
+    ///   [ a c e ]
+    ///   [ b d f ]
+    ///   [ 0 0 1 ]
+    /// Default no-op so non-Skia backends compile; Skia overrides to call
+    /// SkCanvas::concat, RecordingCanvas overrides to capture the command.
+    virtual void concat_transform(float a, float b, float c,
+                                  float d, float e, float f) {
+        (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;
+    }
+
     // ── Clipping ─────────────────────────────────────────────────────────
     virtual void clip_rect(float x, float y, float w, float h) = 0;
 
@@ -619,6 +635,7 @@ struct DrawCommand {
         save, restore,
         translate, scale, rotate, clip_rect,
         set_transform, clip, set_blend_mode,    // issue-896
+        concat_transform,                       // issue-930
         set_fill_color, set_stroke_color, set_line_width,
         set_line_cap, set_line_join,
         fill_rect, stroke_rect, fill_rounded_rect, stroke_rounded_rect,
@@ -664,6 +681,8 @@ public:
     void set_transform(float a, float b, float c,
                        float d, float e, float f) override;
     void capture_paint_baseline_transform() override;
+    void concat_transform(float a, float b, float c,
+                          float d, float e, float f) override;
     void clip_rect(float x, float y, float w, float h) override;
     void clip() override;
     void set_blend_mode(BlendMode mode) override;
