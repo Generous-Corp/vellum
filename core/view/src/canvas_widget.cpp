@@ -12,6 +12,19 @@ void CanvasWidget::paint(canvas::Canvas& canvas) {
     // P1 follow-up to issue-896).
     canvas.capture_paint_baseline_transform();
     last_native_gpu_texture_draw_succeeded_ = false;
+
+    // pulp #929 — Canvas widget paint contract:
+    //   * The widget MUST NOT pre-fill its bounds with an opaque background
+    //     before processing JS draw commands. The default state is fully
+    //     transparent so the parent's paint surface (View::paint_self_and_children
+    //     paints background + border before invoking this paint()) shows
+    //     through wherever the JS code does not explicitly draw.
+    //   * If the JS code wants an opaque background it must issue an explicit
+    //     fill_rect / clear command.
+    //   * If the host caller wants a regression check, the test below records
+    //     against a RecordingCanvas and asserts no full-bounds fill_rect was
+    //     emitted (test_canvas_widget.cpp [issue-929]).
+    // Do NOT add any unconditional fill / clear here.
 #ifdef PULP_HAS_SKIA
     if (native_gpu_texture_provider_) {
         auto frame = native_gpu_texture_provider_();
@@ -208,13 +221,13 @@ void CanvasWidget::paint(canvas::Canvas& canvas) {
             canvas.clear_fill_gradient();
             break;
 
-        // Clear rect
+        // Clear rect (pulp #929) — replace pixels with transparent black, do
+        // not SrcOver-blend a transparent fill (which is a no-op). The
+        // canvas::Canvas API exposes clear_rect with a kClear-equivalent
+        // implementation per backend; this is what CanvasRenderingContext2D
+        // .clearRect must do per the HTML spec.
         case CanvasDrawCmd::Type::clear_rect:
-            canvas.save();
-            canvas.clip_rect(cmd.x, cmd.y, cmd.w, cmd.h);
-            canvas.set_fill_color({0, 0, 0, 0});
-            canvas.fill_rect(cmd.x, cmd.y, cmd.w, cmd.h);
-            canvas.restore();
+            canvas.clear_rect(cmd.x, cmd.y, cmd.w, cmd.h);
             break;
 
         // Draw image — issue-916.

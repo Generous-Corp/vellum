@@ -107,6 +107,14 @@ void RecordingCanvas::fill_rect(float x, float y, float w, float h) {
     commands_.push_back(cmd);
 }
 
+// pulp #929 — record clearRect distinctly from fill_rect so tests can assert
+// CanvasWidget::paint() does not pre-fill its bounds with a solid background.
+void RecordingCanvas::clear_rect(float x, float y, float w, float h) {
+    DrawCommand cmd{DrawCommand::Type::clear_rect};
+    cmd.f[0] = x; cmd.f[1] = y; cmd.f[2] = w; cmd.f[3] = h;
+    commands_.push_back(cmd);
+}
+
 void RecordingCanvas::stroke_rect(float x, float y, float w, float h) {
     DrawCommand cmd{DrawCommand::Type::stroke_rect};
     cmd.f[0] = x; cmd.f[1] = y; cmd.f[2] = w; cmd.f[3] = h;
