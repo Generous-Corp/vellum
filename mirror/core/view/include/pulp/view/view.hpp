@@ -181,6 +181,19 @@ public:
     void invalidate_layout() { layout_dirty_ = true; }
     bool layout_dirty() const { return layout_dirty_; }
     void clear_layout_dirty() { layout_dirty_ = false; }
+
+    /// Request that this view's host invalidate and schedule a repaint.
+    /// Calls `repaint()` on the attached `WindowHost` or `PluginViewHost`.
+    /// Hosts are propagated to children on `add_child`, so any attached
+    /// descendant sees its own host pointer; if the view tree has not
+    /// been attached to a host yet, this is a no-op.
+    ///
+    /// This is the idiomatic wiring point for sub-bridges (e.g. a `View`
+    /// that owns its own `WidgetBridge` for an `@pulp/react` editor) — the
+    /// bridge's repaint callback is auto-wired to call this so JS-driven
+    /// `requestAnimationFrame` callbacks reach the host's invalidator.
+    /// See `WidgetBridge::set_repaint_callback` for the override path.
+    void request_repaint();
     bool has_focus() const { return has_focus_; }
     void set_focus(bool f) { has_focus_ = f; }
 
