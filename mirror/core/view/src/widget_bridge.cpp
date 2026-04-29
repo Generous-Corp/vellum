@@ -4,6 +4,7 @@
 #include <pulp/view/ui_components.hpp>
 #include <pulp/view/text_editor.hpp>
 #include <pulp/view/canvas_widget.hpp>
+#include <pulp/view/svg_path_widget.hpp>
 #include <pulp/view/modal.hpp>
 #include <pulp/view/asset_manager.hpp>
 #include <pulp/view/design_import.hpp>
@@ -2114,6 +2115,75 @@ void WidgetBridge::register_api() {
         auto hex = args.get<std::string>(1, "");
         auto* v = id.empty() ? &root_ : widget(id);
         if (v && !hex.empty()) v->set_background_color(parseHexColor(hex));
+        return choc::value::Value();
+    });
+
+    // ── pulp #965 — SvgPathWidget bridge ─────────────────────────────────────
+    // Mirrors the API surface of CanvasWidget but for inline <svg><path>
+    // icons. JS registers the widget and pushes its path-data + paint
+    // attributes; the native widget parses path-data once on set_path()
+    // and replays as Canvas2D path commands inside paint().
+    engine_.register_function("createSvgPath", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto pid = args.get<std::string>(1, "");
+        auto w = std::make_unique<SvgPathWidget>();
+        w->set_id(id);
+        widgets_[id] = w.get();
+        resolve_parent(pid)->add_child(std::move(w));
+        return choc::value::createString(id);
+    });
+
+    engine_.register_function("setSvgPath", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto data = args.get<std::string>(1, "");
+        if (auto* w = dynamic_cast<SvgPathWidget*>(widget(id))) {
+            w->set_path(data);
+        }
+        return choc::value::Value();
+    });
+
+    engine_.register_function("setSvgViewBox", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto vw = args.get<double>(1, 0.0);
+        auto vh = args.get<double>(2, 0.0);
+        if (auto* w = dynamic_cast<SvgPathWidget*>(widget(id))) {
+            w->set_viewbox(static_cast<float>(vw), static_cast<float>(vh));
+        }
+        return choc::value::Value();
+    });
+
+    engine_.register_function("setSvgFill", [this, parseHexColor](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto hex = args.get<std::string>(1, "");
+        if (auto* w = dynamic_cast<SvgPathWidget*>(widget(id))) {
+            if (hex.empty() || hex == "none") {
+                w->clear_fill();
+            } else {
+                w->set_fill_color(parseHexColor(hex));
+            }
+        }
+        return choc::value::Value();
+    });
+
+    engine_.register_function("setSvgStroke", [this, parseHexColor](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto hex = args.get<std::string>(1, "");
+        if (auto* w = dynamic_cast<SvgPathWidget*>(widget(id))) {
+            if (hex.empty() || hex == "none") {
+                w->clear_stroke();
+            } else {
+                w->set_stroke_color(parseHexColor(hex));
+            }
+        }
+        return choc::value::Value();
+    });
+
+    engine_.register_function("setSvgStrokeWidth", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto width = args.get<double>(1, 1.0);
+        if (auto* w = dynamic_cast<SvgPathWidget*>(widget(id))) {
+            w->set_stroke_width(static_cast<float>(width));
+        }
         return choc::value::Value();
     });
 
