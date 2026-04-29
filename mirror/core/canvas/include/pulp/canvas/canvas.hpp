@@ -715,7 +715,19 @@ struct DrawCommand {
         // ── issue-926: save_backdrop_filter for frosted-glass overlays ─
         save_backdrop_filter, ///< x/y/w/h in f[0..3], blur_radius in f[4]
         // ── issue-929: real clearRect that replaces pixels ────────────
-        clear_rect          ///< clear rect, x/y/w/h in f[0..3]
+        clear_rect,          ///< clear rect, x/y/w/h in f[0..3]
+        // ── issue-965: Canvas2D path API recording ────────────────────
+        // Captured so widgets that emit path commands (SvgPathWidget,
+        // CanvasWidget JS path-replays) can be asserted at the
+        // command-stream level without a Skia raster surface.
+        begin_path,           ///< no payload
+        move_to,              ///< (x, y) in f[0..1]
+        line_to,              ///< (x, y) in f[0..1]
+        quad_to,              ///< (cpx, cpy, x, y) in f[0..3]
+        cubic_to,             ///< (cp1x, cp1y, cp2x, cp2y, x, y) in f[0..5]
+        close_path,           ///< no payload
+        fill_current_path,    ///< no payload — uses last set_fill_color
+        stroke_current_path   ///< no payload — uses last set_stroke_color + set_line_width
     };
 
     Type type;
@@ -798,6 +810,20 @@ public:
     void draw_box_shadow(float x, float y, float w, float h,
                          float dx, float dy, float blur, float spread,
                          Color color, bool inset, float corner_radius) override;
+
+    // issue-965 — Canvas2D path API recording. Each call appends one
+    // DrawCommand so widget tests can assert on emit order and shape
+    // without needing a real raster surface. Pure capture; no geometry
+    // is computed.
+    void begin_path() override;
+    void move_to(float x, float y) override;
+    void line_to(float x, float y) override;
+    void quad_to(float cpx, float cpy, float x, float y) override;
+    void cubic_to(float cp1x, float cp1y, float cp2x, float cp2y,
+                  float x, float y) override;
+    void close_path() override;
+    void fill_current_path() override;
+    void stroke_current_path() override;
 
 private:
     std::vector<DrawCommand> commands_;

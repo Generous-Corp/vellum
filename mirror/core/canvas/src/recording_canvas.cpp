@@ -318,6 +318,51 @@ void RecordingCanvas::draw_box_shadow(float x, float y, float w, float h,
     commands_.push_back(std::move(cmd));
 }
 
+// ── issue-965: Canvas2D path API recording ──────────────────────────────────
+void RecordingCanvas::begin_path() {
+    commands_.push_back({DrawCommand::Type::begin_path});
+}
+
+void RecordingCanvas::move_to(float x, float y) {
+    DrawCommand cmd{DrawCommand::Type::move_to};
+    cmd.f[0] = x; cmd.f[1] = y;
+    commands_.push_back(cmd);
+}
+
+void RecordingCanvas::line_to(float x, float y) {
+    DrawCommand cmd{DrawCommand::Type::line_to};
+    cmd.f[0] = x; cmd.f[1] = y;
+    commands_.push_back(cmd);
+}
+
+void RecordingCanvas::quad_to(float cpx, float cpy, float x, float y) {
+    DrawCommand cmd{DrawCommand::Type::quad_to};
+    cmd.f[0] = cpx; cmd.f[1] = cpy;
+    cmd.f[2] = x;   cmd.f[3] = y;
+    commands_.push_back(cmd);
+}
+
+void RecordingCanvas::cubic_to(float cp1x, float cp1y, float cp2x, float cp2y,
+                               float x, float y) {
+    DrawCommand cmd{DrawCommand::Type::cubic_to};
+    cmd.f[0] = cp1x; cmd.f[1] = cp1y;
+    cmd.f[2] = cp2x; cmd.f[3] = cp2y;
+    cmd.f[4] = x;    cmd.f[5] = y;
+    commands_.push_back(cmd);
+}
+
+void RecordingCanvas::close_path() {
+    commands_.push_back({DrawCommand::Type::close_path});
+}
+
+void RecordingCanvas::fill_current_path() {
+    commands_.push_back({DrawCommand::Type::fill_current_path});
+}
+
+void RecordingCanvas::stroke_current_path() {
+    commands_.push_back({DrawCommand::Type::stroke_current_path});
+}
+
 // ── compile_sksl fallback for non-Skia builds ────────────────────────────────
 #ifndef PULP_HAS_SKIA
 std::string Canvas::compile_sksl(const std::string& sksl) {
