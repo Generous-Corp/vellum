@@ -32,28 +32,41 @@ public:
     void set_text(std::string text) { text_ = std::move(text); }
     const std::string& text() const { return text_; }
 
-    void set_font_size(float size) { font_size_ = size; }
+    // issue-969: each setter marks the corresponding has_own_* flag so
+    // paint() can distinguish "default value" from "explicitly set" and
+    // fall through to inheritable_*() for unset properties.
+    void set_font_size(float size) { font_size_ = size; has_own_font_size_ = true; }
     float font_size() const { return font_size_; }
+    bool has_own_font_size() const { return has_own_font_size_; }
 
     /// CSS font-family string (e.g. "Inter", "JetBrains Mono"). Empty means
     /// the widget falls back to the default theme family ("Inter").
     void set_font_family(std::string family) { font_family_ = std::move(family); }
     const std::string& font_family() const { return font_family_; }
 
-    void set_font_weight(int weight) { font_weight_ = weight; }  // 100-900, 400=normal, 700=bold
+    void set_font_weight(int weight) { font_weight_ = weight; has_own_font_weight_ = true; }  // 100-900, 400=normal, 700=bold
     int font_weight() const { return font_weight_; }
+    bool has_own_font_weight() const { return has_own_font_weight_; }
 
     void set_font_style(int style) { font_style_ = style; }  // 0=normal, 1=italic
     int font_style() const { return font_style_; }
 
-    void set_letter_spacing(float sp) { letter_spacing_ = sp; }
+    void set_letter_spacing(float sp) { letter_spacing_ = sp; has_own_letter_spacing_ = true; }
     float letter_spacing() const { return letter_spacing_; }
+    bool has_own_letter_spacing() const { return has_own_letter_spacing_; }
 
     void set_line_height(float lh) { line_height_ = lh; }
     float line_height() const { return line_height_; }
 
-    void set_text_align(LabelAlign align) { text_align_ = align; }
+    void set_text_align(LabelAlign align) { text_align_ = align; has_own_text_align_ = true; }
     LabelAlign text_align() const { return text_align_; }
+    bool has_own_text_align() const { return has_own_text_align_; }
+
+    // issue-969: explicit text color override on the Label itself. When
+    // set, overrides any inherited typography color and the theme token.
+    void set_text_color(canvas::Color c) { text_color_ = c; has_own_text_color_ = true; }
+    bool has_own_text_color() const { return has_own_text_color_; }
+    canvas::Color text_color() const { return text_color_; }
 
     void set_multi_line(bool ml) { multi_line_ = ml; }
     bool multi_line() const { return multi_line_; }
@@ -80,9 +93,9 @@ public:
     float intrinsic_width() const override;
 
     /// Intrinsic height based on font size and line height.
-    float intrinsic_height() const override {
-        return line_height_ > 0 ? line_height_ : font_size_ * 1.4f;
-    }
+    /// issue-969: walks the inheritance cascade so an unset font_size
+    /// picks up an ancestor View's setInheritableFontSize value.
+    float intrinsic_height() const override;
 
 private:
     std::string text_;
@@ -100,6 +113,15 @@ private:
     bool has_decoration_color_ = false;
     canvas::TextDirection text_direction_ = canvas::TextDirection::left_to_right;
     canvas::TextVerticalAlign vertical_align_ = canvas::TextVerticalAlign::top;
+    // issue-969: explicit-vs-inherited tracking. Fields keep their default
+    // values until a setter is called; the has_own_* flag tells paint()
+    // whether to honor the field or fall through to View::inheritable_*().
+    canvas::Color text_color_{};
+    bool has_own_text_color_ = false;
+    bool has_own_font_size_ = false;
+    bool has_own_font_weight_ = false;
+    bool has_own_letter_spacing_ = false;
+    bool has_own_text_align_ = false;
 
 public:
     /// Set text direction (LTR, RTL, vertical top-to-bottom, vertical bottom-to-top).
