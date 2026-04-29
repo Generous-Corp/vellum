@@ -6,6 +6,7 @@
 #include <pulp/view/theme.hpp>
 #include <pulp/canvas/canvas.hpp>
 #include <pulp/canvas/view_effect.hpp>
+#include <optional>
 #include <vector>
 #include <memory>
 #include <string>
@@ -67,6 +68,46 @@ public:
 
     // Resolve a color: check own theme first, then walk up to parent
     Color resolve_color(const std::string& name, Color fallback = {}) const;
+
+    // ── CSS-style typography inheritance (issue-969) ─────────────────────
+    //
+    // Mirrors CSS: setting `color: white` on a parent View cascades down
+    // to every text descendant unless overridden. These fields are stored
+    // on the View but DO NOT affect the View's own paint — they're picked
+    // up by Label::paint() (and other text widgets) when the widget has
+    // no explicit value of its own.
+    //
+    // The cascade order at paint time is:
+    //   1. Widget's own explicit value (e.g. Label::set_font_size on this Label)
+    //   2. inheritable_*() — walks up the parent chain returning the first
+    //      ancestor that set the matching field
+    //   3. Theme token / widget default fallback (existing behavior)
+    //
+    // text_align uses int rather than LabelAlign to keep View free of a
+    // back-include of widgets.hpp; the int matches LabelAlign's enum
+    // order: 0 = left, 1 = center, 2 = right.
+
+    void set_inheritable_text_color(Color c) { inh_text_color_ = c; }
+    void clear_inheritable_text_color() { inh_text_color_.reset(); }
+    /// Walks own value, then parent chain. nullopt if no ancestor set it.
+    std::optional<Color> inheritable_text_color() const;
+
+    void set_inheritable_font_size(float size) { inh_font_size_ = size; }
+    void clear_inheritable_font_size() { inh_font_size_.reset(); }
+    std::optional<float> inheritable_font_size() const;
+
+    void set_inheritable_letter_spacing(float sp) { inh_letter_spacing_ = sp; }
+    void clear_inheritable_letter_spacing() { inh_letter_spacing_.reset(); }
+    std::optional<float> inheritable_letter_spacing() const;
+
+    void set_inheritable_font_weight(int w) { inh_font_weight_ = w; }
+    void clear_inheritable_font_weight() { inh_font_weight_.reset(); }
+    std::optional<int> inheritable_font_weight() const;
+
+    /// 0 = left, 1 = center, 2 = right (matches LabelAlign).
+    void set_inheritable_text_align(int a) { inh_text_align_ = a; }
+    void clear_inheritable_text_align() { inh_text_align_.reset(); }
+    std::optional<int> inheritable_text_align() const;
 
     // ── Visibility ───────────────────────────────────────────────────────
 
@@ -535,6 +576,16 @@ private:
 
     // Pointer capture: pointer_id → this view receives all events for that pointer
     std::vector<int> captured_pointers_;
+
+    // CSS-style typography inheritance (issue-969). Unset by default; only
+    // populated when the bridge / app calls a set_inheritable_* setter.
+    // These do not affect the View's own paint — only descendant Labels
+    // (and other text widgets) consult them.
+    std::optional<Color> inh_text_color_;
+    std::optional<float> inh_font_size_;
+    std::optional<float> inh_letter_spacing_;
+    std::optional<int>   inh_font_weight_;
+    std::optional<int>   inh_text_align_;
 };
 
 } // namespace pulp::view
