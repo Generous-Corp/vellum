@@ -416,6 +416,42 @@ float View::resolve_dimension(const std::string& name, float fallback) const {
     return fallback;
 }
 
+// ── CSS-style typography inheritance (issue-969) ────────────────────────
+//
+// Each inheritable_*() walks the chain own → parent → … → root, returning
+// the first ancestor that has a value. nullopt means no one in the chain
+// set the field, so the caller falls back to the theme/widget default.
+
+std::optional<Color> View::inheritable_text_color() const {
+    if (inh_text_color_.has_value()) return inh_text_color_;
+    if (parent_) return parent_->inheritable_text_color();
+    return std::nullopt;
+}
+
+std::optional<float> View::inheritable_font_size() const {
+    if (inh_font_size_.has_value()) return inh_font_size_;
+    if (parent_) return parent_->inheritable_font_size();
+    return std::nullopt;
+}
+
+std::optional<float> View::inheritable_letter_spacing() const {
+    if (inh_letter_spacing_.has_value()) return inh_letter_spacing_;
+    if (parent_) return parent_->inheritable_letter_spacing();
+    return std::nullopt;
+}
+
+std::optional<int> View::inheritable_font_weight() const {
+    if (inh_font_weight_.has_value()) return inh_font_weight_;
+    if (parent_) return parent_->inheritable_font_weight();
+    return std::nullopt;
+}
+
+std::optional<int> View::inheritable_text_align() const {
+    if (inh_text_align_.has_value()) return inh_text_align_;
+    if (parent_) return parent_->inheritable_text_align();
+    return std::nullopt;
+}
+
 // ── Pointer capture ─────────────────────────────────────────────────────
 
 void View::set_pointer_capture(int pointer_id) {

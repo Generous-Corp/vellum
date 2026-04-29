@@ -242,6 +242,18 @@ void Toggle::advance_animations(float dt) {
 
 // ── Label ────────────────────────────────────────────────────────────────────
 
+float Label::intrinsic_height() const {
+    // issue-969: cascade font_size before computing height so descendants
+    // of a parent that called setInheritableFontSize report a height that
+    // actually matches what paint() will draw.
+    float effective_font_size = font_size_;
+    if (!has_own_font_size_) {
+        if (auto inh = inheritable_font_size(); inh.has_value())
+            effective_font_size = inh.value();
+    }
+    return line_height_ > 0 ? line_height_ : effective_font_size * 1.4f;
+}
+
 float Label::intrinsic_width() const {
     // issue-928: report the natural shaped-text width so Yoga reserves
     // enough horizontal space for the full label content. Without this,
@@ -253,6 +265,20 @@ float Label::intrinsic_width() const {
     // single-line text width.
     if (text_.empty() || multi_line_) return 0;
 
+    // issue-969: intrinsic measurement must match what paint() will
+    // actually draw, so honor the same own→inherited cascade for
+    // font_size and letter_spacing.
+    float effective_font_size = font_size_;
+    if (!has_own_font_size_) {
+        if (auto inh = inheritable_font_size(); inh.has_value())
+            effective_font_size = inh.value();
+    }
+    float effective_letter_spacing = letter_spacing_;
+    if (!has_own_letter_spacing_) {
+        if (auto inh = inheritable_letter_spacing(); inh.has_value())
+            effective_letter_spacing = inh.value();
+    }
+
     // pulp #943 P2 / #945: when paint() rotates the text 90° the
     // horizontal footprint is just the line height, not the shaped
     // string advance. Reporting the advance here makes Yoga reserve
@@ -260,7 +286,7 @@ float Label::intrinsic_width() const {
     bool vertical = (text_direction_ == canvas::TextDirection::top_to_bottom ||
                      text_direction_ == canvas::TextDirection::bottom_to_top);
     if (vertical) {
-        return std::ceil(line_height_ > 0 ? line_height_ : font_size_ * 1.4f);
+        return std::ceil(line_height_ > 0 ? line_height_ : effective_font_size * 1.4f);
     }
 
     // Mirror paint()'s text-transform — measurement must match what's
@@ -288,7 +314,7 @@ float Label::intrinsic_width() const {
     // to a character-width estimator otherwise — same fallback that
     // Canvas::measure_text() uses on the recording / non-Skia backends.
     auto& shaper = canvas::global_text_shaper();
-    auto prepared = shaper.prepare(display_text, "Inter", font_size_);
+    auto prepared = shaper.prepare(display_text, "Inter", effective_font_size);
     float width = prepared.total_width();
 
     // Letter-spacing adds extra advance per glyph break that isn't
@@ -296,7 +322,7 @@ float Label::intrinsic_width() const {
     // bytes — using `size()` over-applies spacing on multibyte input
     // (CJK, accented Latin, emoji) and inflates intrinsic width
     // (pulp #943 P2 #935 finding 2).
-    if (letter_spacing_ != 0 && !display_text.empty()) {
+    if (effective_letter_spacing != 0 && !display_text.empty()) {
         std::size_t glyph_count = 0;
         for (unsigned char c : display_text) {
             // Count any byte that is not a UTF-8 continuation byte
@@ -304,7 +330,7 @@ float Label::intrinsic_width() const {
             if ((c & 0xC0) != 0x80) ++glyph_count;
         }
         if (glyph_count > 1) {
-            width += letter_spacing_ * static_cast<float>(glyph_count - 1);
+            width += effective_letter_spacing * static_cast<float>(glyph_count - 1);
         }
     }
 
@@ -315,13 +341,42 @@ float Label::intrinsic_width() const {
 void Label::paint(canvas::Canvas& canvas) {
     if (text_.empty()) return;
 
-    auto text_color = resolve_color("text.primary", canvas::Color::rgba8(200, 200, 200));
+    // issue-969: CSS-style typography cascade. For each property:
+    //   1. Use the Label's own value if explicitly set.
+    //   2. Otherwise walk up the parent chain via View::inheritable_*().
+    //   3. Otherwise fall back to the existing theme/default behavior.
+    canvas::Color text_color;
+    if (has_own_text_color_) {
+        text_color = text_color_;
+    } else if (auto inherited = inheritable_text_color(); inherited.has_value()) {
+        text_color = inherited.value();
+    } else {
+        text_color = resolve_color("text.primary", canvas::Color::rgba8(200, 200, 200));
+    }
     canvas.set_fill_color({text_color.r, text_color.g, text_color.b, text_color.a});
+
+    float effective_font_size = font_size_;
+    if (!has_own_font_size_) {
+        if (auto inh = inheritable_font_size(); inh.has_value())
+            effective_font_size = inh.value();
+    }
+    int effective_font_weight = font_weight_;
+    if (!has_own_font_weight_) {
+        if (auto inh = inheritable_font_weight(); inh.has_value())
+            effective_font_weight = inh.value();
+    }
+    float effective_letter_spacing = letter_spacing_;
+    if (!has_own_letter_spacing_) {
+        if (auto inh = inheritable_letter_spacing(); inh.has_value())
+            effective_letter_spacing = inh.value();
+    }
+
     // pulp #927 — propagate setFontFamily / setFontWeight / setLetterSpacing
     // through to the canvas backend so JS calls actually change rasterised
     // glyphs. Empty font_family_ falls back to the default theme face.
     const std::string& family = font_family_.empty() ? std::string("Inter") : font_family_;
-    canvas.set_font_full(family, font_size_, font_weight_, font_style_, letter_spacing_);
+    canvas.set_font_full(family, effective_font_size, effective_font_weight,
+                          font_style_, effective_letter_spacing);
 
     // Apply text-transform
     std::string display_text = text_;
@@ -346,36 +401,47 @@ void Label::paint(canvas::Canvas& canvas) {
     if (vertical) {
         canvas.save();
         if (text_direction_ == canvas::TextDirection::top_to_bottom) {
-            canvas.translate(bounds().width * 0.5f + font_size_ * 0.35f, 0);
+            canvas.translate(bounds().width * 0.5f + effective_font_size * 0.35f, 0);
             canvas.rotate(3.14159265f / 2.0f);
         } else {
-            canvas.translate(bounds().width * 0.5f - font_size_ * 0.35f, bounds().height);
+            canvas.translate(bounds().width * 0.5f - effective_font_size * 0.35f, bounds().height);
             canvas.rotate(-3.14159265f / 2.0f);
         }
     }
 
     // Vertical alignment
-    float lh = line_height_ > 0 ? line_height_ : font_size_ * 1.4f;
-    float text_h = multi_line_ ? lh * static_cast<float>(std::count(display_text.begin(), display_text.end(), '\n') + 1) : font_size_;
+    float lh = line_height_ > 0 ? line_height_ : effective_font_size * 1.4f;
+    float text_h = multi_line_ ? lh * static_cast<float>(std::count(display_text.begin(), display_text.end(), '\n') + 1) : effective_font_size;
     float baseline_y;
     switch (vertical_align_) {
         case canvas::TextVerticalAlign::top:
-            baseline_y = font_size_ * 0.85f;
+            baseline_y = effective_font_size * 0.85f;
             break;
         case canvas::TextVerticalAlign::bottom:
-            baseline_y = bounds().height - text_h + font_size_ * 0.85f;
+            baseline_y = bounds().height - text_h + effective_font_size * 0.85f;
             break;
         case canvas::TextVerticalAlign::baseline:
             baseline_y = bounds().height * 0.75f;
             break;
         case canvas::TextVerticalAlign::center:
         default:
-            baseline_y = bounds().height * 0.5f + font_size_ * 0.35f;
+            baseline_y = bounds().height * 0.5f + effective_font_size * 0.35f;
             break;
     }
 
+    // issue-969: text-align cascade. Own value wins, otherwise inherited.
+    LabelAlign effective_text_align = text_align_;
+    if (!has_own_text_align_) {
+        if (auto inh = inheritable_text_align(); inh.has_value()) {
+            int v = inh.value();
+            if (v == 1) effective_text_align = LabelAlign::center;
+            else if (v == 2) effective_text_align = LabelAlign::right;
+            else effective_text_align = LabelAlign::left;
+        }
+    }
+
     float x = 0;
-    switch (text_align_) {
+    switch (effective_text_align) {
         case LabelAlign::left:
             canvas.set_text_align(canvas::TextAlign::left);
             break;
@@ -391,7 +457,7 @@ void Label::paint(canvas::Canvas& canvas) {
 
     if (!multi_line_) {
         // Text overflow ellipsis
-        if (text_overflow_ellipsis() && text_align_ == LabelAlign::left) {
+        if (text_overflow_ellipsis() && effective_text_align == LabelAlign::left) {
             float avail = bounds().width;
             float text_w = canvas.measure_text(display_text);
             if (text_w > avail && display_text.size() > 3) {
@@ -408,7 +474,7 @@ void Label::paint(canvas::Canvas& canvas) {
         }
         canvas.fill_text(display_text, x, baseline_y);
     } else {
-        float y = font_size_ * 0.85f;
+        float y = effective_font_size * 0.85f;
         size_t pos = 0;
         while (pos < display_text.size()) {
             size_t nl = display_text.find('\n', pos);
@@ -427,15 +493,15 @@ void Label::paint(canvas::Canvas& canvas) {
         canvas.set_line_width(1.0f);
         float text_w = canvas.measure_text(display_text);
         float draw_x = x;
-        if (text_align_ == LabelAlign::center) draw_x = x - text_w * 0.5f;
-        else if (text_align_ == LabelAlign::right) draw_x = x - text_w;
+        if (effective_text_align == LabelAlign::center) draw_x = x - text_w * 0.5f;
+        else if (effective_text_align == LabelAlign::right) draw_x = x - text_w;
 
         if (text_decoration_ == TextDecoration::underline)
             canvas.stroke_line(draw_x, baseline_y + 2, draw_x + text_w, baseline_y + 2);
         else if (text_decoration_ == TextDecoration::line_through)
-            canvas.stroke_line(draw_x, baseline_y - font_size_ * 0.2f, draw_x + text_w, baseline_y - font_size_ * 0.2f);
+            canvas.stroke_line(draw_x, baseline_y - effective_font_size * 0.2f, draw_x + text_w, baseline_y - effective_font_size * 0.2f);
         else if (text_decoration_ == TextDecoration::overline)
-            canvas.stroke_line(draw_x, baseline_y - font_size_ * 0.7f, draw_x + text_w, baseline_y - font_size_ * 0.7f);
+            canvas.stroke_line(draw_x, baseline_y - effective_font_size * 0.7f, draw_x + text_w, baseline_y - effective_font_size * 0.7f);
     }
 
     if (vertical) canvas.restore();

@@ -1841,10 +1841,17 @@ void WidgetBridge::register_api() {
         return choc::value::Value();
     });
 
+    // issue-969: typography setters cascade. Label gets its own value;
+    // any other View (Panel, Box, container) stores the value on the
+    // View's inheritable_* slot so descendant Labels pick it up. Don't
+    // silently no-op on container Views — that was the dom-adapter
+    // workaround we're replacing.
     engine_.register_function("setFontWeight", [this](choc::javascript::ArgumentList args) {
         auto* v = widget(args.get<std::string>(0, ""));
         int w = static_cast<int>(args.get<double>(1, 400));
+        if (!v) return choc::value::Value();
         if (auto* l = dynamic_cast<Label*>(v)) l->set_font_weight(w);
+        else v->set_inheritable_font_weight(w);
         return choc::value::Value();
     });
 
@@ -1858,7 +1865,9 @@ void WidgetBridge::register_api() {
     engine_.register_function("setLetterSpacing", [this](choc::javascript::ArgumentList args) {
         auto* v = widget(args.get<std::string>(0, ""));
         auto sp = static_cast<float>(args.get<double>(1, 0));
+        if (!v) return choc::value::Value();
         if (auto* l = dynamic_cast<Label*>(v)) l->set_letter_spacing(sp);
+        else v->set_inheritable_letter_spacing(sp);
         return choc::value::Value();
     });
 
@@ -1872,10 +1881,17 @@ void WidgetBridge::register_api() {
     engine_.register_function("setTextAlign", [this](choc::javascript::ArgumentList args) {
         auto* v = widget(args.get<std::string>(0, ""));
         auto a = args.get<std::string>(1, "left");
+        if (!v) return choc::value::Value();
+        // Map "left"/"center"/"right" → 0/1/2 (matches LabelAlign enum order).
+        int aligned = (a == "center") ? 1 : (a == "right") ? 2 : 0;
         if (auto* l = dynamic_cast<Label*>(v)) {
-            if (a == "center") l->set_text_align(LabelAlign::center);
-            else if (a == "right") l->set_text_align(LabelAlign::right);
+            if (aligned == 1) l->set_text_align(LabelAlign::center);
+            else if (aligned == 2) l->set_text_align(LabelAlign::right);
             else l->set_text_align(LabelAlign::left);
+        } else {
+            // issue-969: container Views store the alignment in the
+            // inheritable slot for descendant Labels.
+            v->set_inheritable_text_align(aligned);
         }
         return choc::value::Value();
     });
@@ -1889,10 +1905,19 @@ void WidgetBridge::register_api() {
     });
 
     engine_.register_function("setFontSize", [this](choc::javascript::ArgumentList args) {
-        if (auto* l = dynamic_cast<Label*>(widget(args.get<std::string>(0, ""))))
-            l->set_font_size(static_cast<float>(args.get<double>(1, 14)));
-        else if (auto* e = dynamic_cast<TextEditor*>(widget(args.get<std::string>(0, ""))))
-            e->set_font_size(static_cast<float>(args.get<double>(1, 14)));
+        auto id = args.get<std::string>(0, "");
+        auto size = static_cast<float>(args.get<double>(1, 14));
+        auto* v = widget(id);
+        if (!v) return choc::value::Value();
+        if (auto* l = dynamic_cast<Label*>(v)) {
+            l->set_font_size(size);
+        } else if (auto* e = dynamic_cast<TextEditor*>(v)) {
+            e->set_font_size(size);
+        } else {
+            // issue-969: container Views store the size for descendant
+            // Labels via the inheritable slot.
+            v->set_inheritable_font_size(size);
+        }
         return choc::value::Value();
     });
 
@@ -2265,9 +2290,24 @@ void WidgetBridge::register_api() {
         auto hex = args.get<std::string>(1, "");
         auto* v = widget(id);
         if (!v || hex.empty()) return choc::value::Value();
-        // Set a custom text color token override on the view's theme
+        auto color = parseHexColor(hex);
+        // issue-969: CSS-style cascade.
+        //   - On a Label: set the Label's own explicit text_color, which
+        //     wins over inheritance and theme tokens.
+        //   - On a container View: store the color on the inheritable
+        //     slot so descendant Labels pick it up. This replaces the
+        //     dom-adapter's manual "walk children and pushdown" hack.
+        if (auto* l = dynamic_cast<Label*>(v)) {
+            l->set_text_color(color);
+        } else {
+            v->set_inheritable_text_color(color);
+        }
+        // Keep the theme-token fallback in sync so widgets that resolve
+        // through `resolve_color("text.primary")` (e.g. Knob/ToggleButton)
+        // also pick up the override on their own subtree — preserves the
+        // pre-#969 behavior for those widgets.
         auto theme = v->theme();
-        theme.colors["text.primary"] = parseHexColor(hex);
+        theme.colors["text.primary"] = color;
         v->set_theme(theme);
         return choc::value::Value();
     });
