@@ -750,6 +750,145 @@ void Fader::paint(canvas::Canvas& canvas) {
     }
 }
 
+// ── RangeSlider ──────────────────────────────────────────────────────────────
+// HTML <input type="range"> equivalent. Track + handle, no decorative
+// fader chrome. Min/max/step quantisation lives here so the painted
+// position and the value seen by JS callers always agree.
+//
+// pulp issue-966.
+
+void RangeSlider::clamp_and_quantize_() {
+    // Defensive: if max < min, treat the range as collapsed at min.
+    float lo = min_;
+    float hi = std::max(min_, max_);
+
+    float v = std::clamp(value_, lo, hi);
+
+    // Snap to step relative to min_, but only when step is positive.
+    // Step <= 0 means "continuous" — matches HTML <input step="any">.
+    if (step_ > 0.0f) {
+        float steps = std::round((v - lo) / step_);
+        v = lo + steps * step_;
+        // Re-clamp because rounding can push us past hi (e.g. min=0 max=1
+        // step=0.3 — last reachable step is 0.9, not 1.2).
+        v = std::clamp(v, lo, hi);
+    }
+
+    if (v != value_) {
+        value_ = v;
+        if (on_change) on_change(value_);
+    }
+}
+
+float RangeSlider::position_to_value_(float t) const {
+    float lo = min_;
+    float hi = std::max(min_, max_);
+    float clamped_t = std::clamp(t, 0.0f, 1.0f);
+    float v = lo + clamped_t * (hi - lo);
+
+    if (step_ > 0.0f) {
+        float steps = std::round((v - lo) / step_);
+        v = lo + steps * step_;
+        v = std::clamp(v, lo, hi);
+    }
+    return v;
+}
+
+void RangeSlider::update_from_position_(Point pos) {
+    auto b = local_bounds();
+    float t;
+    if (orientation_ == Orientation::horizontal) {
+        t = b.width > 0 ? pos.x / b.width : 0;
+    } else {
+        // Vertical: y=0 at top → t=1 (max); y=height → t=0 (min).
+        t = b.height > 0 ? 1.0f - pos.y / b.height : 0;
+    }
+    float new_val = position_to_value_(t);
+    if (new_val != value_) {
+        value_ = new_val;
+        if (on_change) on_change(value_);
+    }
+}
+
+void RangeSlider::on_mouse_event(const MouseEvent& event) {
+    if (!event.is_down) {
+        dragging_ = false;
+        return;
+    }
+    dragging_ = true;
+    update_from_position_(event.position);
+}
+
+void RangeSlider::on_mouse_drag(Point pos) {
+    if (!dragging_) return;
+    update_from_position_(pos);
+}
+
+void RangeSlider::paint(canvas::Canvas& canvas) {
+    auto b = local_bounds();
+    bool horiz = orientation_ == Orientation::horizontal;
+
+    // Resolve theme colors. Caller-supplied accent overrides theme for
+    // both the active fill and the handle.
+    auto track_color = resolve_color("control.track", canvas::Color::rgba8(60, 60, 60));
+    auto theme_fill  = resolve_color("control.fill",  canvas::Color::rgba8(100, 150, 255));
+    auto theme_thumb = resolve_color("control.thumb", canvas::Color::rgba8(220, 220, 220));
+    auto fill_color  = has_accent_color_ ? accent_color_ : theme_fill;
+    auto thumb_color = has_accent_color_ ? accent_color_ : theme_thumb;
+
+    // Track thickness — typical HTML range visuals sit in 4..6px.
+    float track_thick = std::min(track_thickness_,
+                                 horiz ? std::max(b.height, 1.0f)
+                                       : std::max(b.width,  1.0f));
+
+    // Normalised position along the track, taking the (possibly-collapsed)
+    // [min,max] range into account.
+    float lo = min_;
+    float hi = std::max(min_, max_);
+    float span = hi - lo;
+    float t = span > 0 ? std::clamp((value_ - lo) / span, 0.0f, 1.0f) : 0.0f;
+
+    // Background track.
+    canvas.set_fill_color(track_color);
+    if (horiz) {
+        float ty = (b.height - track_thick) * 0.5f;
+        canvas.fill_rounded_rect(0, ty, b.width, track_thick, track_thick * 0.5f);
+    } else {
+        float tx = (b.width - track_thick) * 0.5f;
+        canvas.fill_rounded_rect(tx, 0, track_thick, b.height, track_thick * 0.5f);
+    }
+
+    // Active fill — only the portion between min and current value.
+    canvas.set_fill_color(fill_color);
+    if (horiz) {
+        float fill_w = t * b.width;
+        float ty = (b.height - track_thick) * 0.5f;
+        if (fill_w > 0)
+            canvas.fill_rounded_rect(0, ty, fill_w, track_thick, track_thick * 0.5f);
+    } else {
+        float fill_h = t * b.height;
+        float tx = (b.width - track_thick) * 0.5f;
+        // Vertical: fill the lower portion (closer to min at the bottom).
+        if (fill_h > 0)
+            canvas.fill_rounded_rect(tx, b.height - fill_h, track_thick, fill_h, track_thick * 0.5f);
+    }
+
+    // Handle. Inset by handle radius so it never overshoots the bounds.
+    canvas.set_fill_color(thumb_color);
+    float handle_radius = horiz ? std::min(b.height, 16.0f) * 0.5f
+                                : std::min(b.width,  16.0f) * 0.5f;
+    if (horiz) {
+        float usable = std::max(0.0f, b.width - 2.0f * handle_radius);
+        float hx = handle_radius + t * usable;
+        canvas.fill_circle(hx, b.height * 0.5f, handle_radius);
+    } else {
+        float usable = std::max(0.0f, b.height - 2.0f * handle_radius);
+        // Vertical: t=0 → bottom (handle near max-y), t=1 → top.
+        float hy = handle_radius + (1.0f - t) * usable;
+        canvas.fill_circle(b.width * 0.5f, hy, handle_radius);
+    }
+}
+
 // ── Toggle ───────────────────────────────────────────────────────────────────
 
 void Toggle::paint(canvas::Canvas& canvas) {

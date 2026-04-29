@@ -286,6 +286,102 @@ private:
     std::shared_ptr<SpriteStrip> sprite_strip_;
 };
 
+// ── RangeSlider ──────────────────────────────────────────────────────────────
+// Generic min/max/step slider mapped to HTML <input type="range">.
+//
+// Distinct from Knob (rotary, normalised 0..1) and Fader (DSP linear with
+// decorative track + large thumb). RangeSlider is the plain rectangular
+// track + circular handle the web uses for volume / morph / scrubber UIs.
+// Caller-supplied min/max/step are honoured natively — the bridge does
+// not preprocess them. Quantisation happens inside the widget so JS-side
+// callers see the same value the renderer paints.
+//
+// pulp issue-966.
+
+class RangeSlider : public View {
+public:
+    enum class Orientation { horizontal, vertical };
+
+    RangeSlider() {
+        set_access_role(AccessRole::slider);
+        set_focusable(true);
+    }
+
+    /// Inclusive lower bound (default 0).
+    void set_min(float v) { min_ = v; clamp_and_quantize_(); }
+    float min_value() const { return min_; }
+
+    /// Inclusive upper bound (default 1). If max < min, value falls
+    /// back to min — matches HTMLInputElement behaviour for invalid ranges.
+    void set_max(float v) { max_ = v; clamp_and_quantize_(); }
+    float max_value() const { return max_; }
+
+    /// Step size for quantisation. Zero or negative = no quantisation
+    /// (any value in [min,max] is allowed). HTML default is 1, but the
+    /// pulp default is 0 because most plugin UIs want continuous values
+    /// and explicitly opt in via `step` when they want stepping.
+    void set_step(float v) { step_ = v; clamp_and_quantize_(); }
+    float step() const { return step_; }
+
+    /// Set the current value. The value is clamped to [min,max] and
+    /// quantised to the nearest step if step > 0.
+    void set_value(float v) {
+        value_ = v;
+        clamp_and_quantize_();
+    }
+    float value() const { return value_; }
+
+    void set_orientation(Orientation o) { orientation_ = o; }
+    Orientation orientation() const { return orientation_; }
+
+    /// Override the accent color for the active fill and handle. Empty
+    /// (the default) means the widget pulls `control.fill` / `control.thumb`
+    /// from the active theme.
+    void set_accent_color(canvas::Color c) {
+        accent_color_ = c;
+        has_accent_color_ = true;
+    }
+    void clear_accent_color() { has_accent_color_ = false; }
+    bool has_accent_color() const { return has_accent_color_; }
+    canvas::Color accent_color() const { return accent_color_; }
+
+    /// Track thickness in pixels (default 4). Anything in 4–6 matches
+    /// the visual weight of common HTML range styling.
+    void set_track_thickness(float t) { track_thickness_ = std::max(1.0f, t); }
+    float track_thickness() const { return track_thickness_; }
+
+    /// Fired when the value changes — from drag, click, or set_value(). The
+    /// callback receives the post-quantisation value, exactly the same
+    /// number value() will return.
+    std::function<void(float)> on_change;
+
+    void paint(canvas::Canvas& canvas) override;
+    void on_mouse_event(const MouseEvent& event) override;
+    void on_mouse_drag(Point pos) override;
+
+private:
+    /// Convert a position along the track (0=start, 1=end) to a value
+    /// after applying clamp + step quantisation.
+    float position_to_value_(float t) const;
+
+    /// Clamp value_ to [min_,max_] and snap it to the nearest step, then
+    /// fire on_change if the post-quantisation value actually changed.
+    void clamp_and_quantize_();
+
+    /// Common drag/click handler — `pos` is in local coordinates.
+    void update_from_position_(Point pos);
+
+    float min_ = 0.0f;
+    float max_ = 1.0f;
+    float step_ = 0.0f;
+    float value_ = 0.0f;
+    Orientation orientation_ = Orientation::horizontal;
+    bool dragging_ = false;
+    float track_thickness_ = 4.0f;
+    canvas::Color accent_color_{};
+    bool has_accent_color_ = false;
+};
+
 // ── Toggle ───────────────────────────────────────────────────────────────────
 // Boolean on/off switch
 
