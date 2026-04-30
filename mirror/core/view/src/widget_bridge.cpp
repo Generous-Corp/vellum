@@ -460,16 +460,60 @@ struct WidgetBridge::NativeGpuBridgeState {
     uint64_t next_texture_id = 1;
 };
 
+// pulp #1006 — `on(id, eventName, fn)` is the JS-side hook that callers
+// (notably @pulp/react's prop-applier turning JSX `onClick={fn}` into a
+// bridge subscription) use to register event callbacks. Storing the fn
+// in __callbacks__ is necessary but not sufficient: events that the
+// native side fires through View::on_click / on_hover_enter /
+// on_pointer_event require an explicit `registerClick(id)` /
+// `registerHover(id)` / `registerPointer(id)` to wire the View
+// callback. Without that wiring real NSEvent / Win32 / X11 clicks
+// reach View::on_mouse_down/up but never trigger __dispatch__('click'),
+// so the JS handler never runs.
+//
+// The fix: when JS subscribes to a known event name, transparently
+// invoke the matching native registrar (idempotent per (id, group)
+// via __nativeRegistered__). This mirrors what
+// Element.prototype._registerNativeEvent does for addEventListener
+// callers, but on the lower-level `on()` channel that @pulp/react and
+// other native bridges use directly.
 static const char* kJSPreamble = R"(
 var __callbacks__ = {};
+var __nativeRegistered__ = {};
 function __dispatch__(id, eventName) {
     var key = id + ':' + eventName;
     if (__callbacks__[key]) {
         __callbacks__[key].apply(null, Array.prototype.slice.call(arguments, 2));
     }
 }
+function __ensureNativeRegistered__(id, group) {
+    var key = id + ':' + group;
+    if (__nativeRegistered__[key]) return;
+    __nativeRegistered__[key] = true;
+    if (group === 'click' && typeof registerClick === 'function') {
+        registerClick(id);
+    } else if (group === 'hover' && typeof registerHover === 'function') {
+        registerHover(id);
+    } else if (group === 'pointer' && typeof registerPointer === 'function') {
+        registerPointer(id);
+    } else if (group === 'gesture' && typeof registerGesture === 'function') {
+        registerGesture(id);
+    }
+}
 function on(id, eventName, fn) {
     __callbacks__[id + ':' + eventName] = fn;
+    if (eventName === 'click' || eventName === 'mousedown' || eventName === 'mouseup') {
+        __ensureNativeRegistered__(id, 'click');
+    } else if (eventName === 'mouseenter' || eventName === 'mouseleave' ||
+               eventName === 'pointerenter' || eventName === 'pointerleave') {
+        __ensureNativeRegistered__(id, 'hover');
+    } else if (eventName === 'pointerdown' || eventName === 'pointermove' ||
+               eventName === 'pointerup' || eventName === 'pointercancel') {
+        __ensureNativeRegistered__(id, 'pointer');
+    } else if (eventName === 'gesturestart' || eventName === 'gesturechange' ||
+               eventName === 'gestureend') {
+        __ensureNativeRegistered__(id, 'gesture');
+    }
 }
 )";
 
