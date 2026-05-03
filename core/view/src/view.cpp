@@ -310,8 +310,15 @@ void View::simulate_click(Point root_pos) {
     // the inner Label child. Walk up the parent chain to find the nearest
     // ancestor with a registered handler. Mirrors the same bubble pass the
     // mac mouseUp path performs (see core/view/platform/mac/window_host_mac.mm).
+    //
+    // pulp #1171 (Codex P2 on #1073) — bound the bubble walk to `this`
+    // (inclusive). Walking past the receiver into ancestors outside its
+    // subtree leaks synthetic clicks across component boundaries — a
+    // false-positive hazard for tests / tooling that simulate
+    // interaction on isolated subtrees.
     View* click_target = target;
     while (click_target && !click_target->on_click) {
+        if (click_target == this) break;  // stop at receiver, even if no handler
         click_target = click_target->parent();
     }
     if (click_target && click_target->on_click) click_target->on_click();

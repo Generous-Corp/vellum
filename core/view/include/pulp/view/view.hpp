@@ -335,10 +335,16 @@ public:
     bool has_border_sides() const { return has_border_sides_; }
 
     /// Per-corner border-radius (CSS border-top-left-radius, etc.)
-    void set_corner_radius_tl(float r) { corner_radii_[0] = r; has_corner_radii_ = true; }
-    void set_corner_radius_tr(float r) { corner_radii_[1] = r; has_corner_radii_ = true; }
-    void set_corner_radius_bl(float r) { corner_radii_[2] = r; has_corner_radii_ = true; }
-    void set_corner_radius_br(float r) { corner_radii_[3] = r; has_corner_radii_ = true; }
+    /// pulp #1171 (Codex P2 on #1044) — when transitioning from uniform
+    /// `corner_radius_` to per-corner mode, seed the un-overridden
+    /// corners from the uniform value so a sequence like
+    /// `set_border_radius(10); set_corner_radius_tl(2);` renders as
+    /// {2, 10, 10, 10} instead of {2, 0, 0, 0} (which silently
+    /// discarded the uniform radius).
+    void set_corner_radius_tl(float r) { promote_uniform_to_per_corner(); corner_radii_[0] = r; has_corner_radii_ = true; }
+    void set_corner_radius_tr(float r) { promote_uniform_to_per_corner(); corner_radii_[1] = r; has_corner_radii_ = true; }
+    void set_corner_radius_bl(float r) { promote_uniform_to_per_corner(); corner_radii_[2] = r; has_corner_radii_ = true; }
+    void set_corner_radius_br(float r) { promote_uniform_to_per_corner(); corner_radii_[3] = r; has_corner_radii_ = true; }
     /// Per-corner radius accessors. corner_radii_[0..3] = TL, TR, BL, BR.
     bool has_corner_radii() const { return has_corner_radii_; }
     float corner_radius_tl() const { return corner_radii_[0]; }
@@ -556,6 +562,19 @@ public:
     CursorStyle cursor() const { return cursor_; }
 
 private:
+    /// Seed corner_radii_ from the uniform corner_radius_ on the first
+    /// transition into per-corner mode (pulp #1171 Codex P2 on #1044).
+    /// Idempotent: subsequent calls (when has_corner_radii_ is already
+    /// true) are no-ops.
+    void promote_uniform_to_per_corner() {
+        if (!has_corner_radii_ && corner_radius_ > 0.0f) {
+            corner_radii_[0] = corner_radius_;
+            corner_radii_[1] = corner_radius_;
+            corner_radii_[2] = corner_radius_;
+            corner_radii_[3] = corner_radius_;
+        }
+    }
+
     Rect bounds_{};
     FlexStyle flex_{};
     GridStyle grid_{};
