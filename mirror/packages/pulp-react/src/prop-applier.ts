@@ -218,6 +218,21 @@ function applyOne(id: string, type: string, key: string, value: unknown): void {
             if (type === 'Meter')      return call('setMeterLevel', id, value as number);
             return call('setValue', id, value as number);
 
+        // SvgPath (pulp #994) — wires the SvgPathWidget bridge surface
+        // (createSvgPath / setSvgPath / setSvgViewBox / setSvgFill /
+        // setSvgStroke / setSvgStrokeWidth) through a typed JSX intrinsic.
+        case 'd':            return call('setSvgPath', id, value as string);
+        case 'viewBox': {
+            const vb = value as [number, number];
+            if (Array.isArray(vb) && vb.length >= 2) {
+                return call('setSvgViewBox', id, vb[0], vb[1]);
+            }
+            return;
+        }
+        case 'fill':         return call('setSvgFill', id, value as string);
+        case 'stroke':       return call('setSvgStroke', id, value as string);
+        case 'strokeWidth':  return call('setSvgStrokeWidth', id, value as number);
+
         default:
             // Unknown prop — silently ignore. We could warn here in DEV
             // builds, but staying chatty in prod is annoying. The

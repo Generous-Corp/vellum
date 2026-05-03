@@ -186,6 +186,29 @@ export interface IconProps extends BaseProps {
     name?: string;
 }
 
+/// Inline SVG path widget (pulp #994 / #991). Renders an `<svg><path/></svg>`
+/// from a path-data string + paint attributes. Use this for icon glyphs
+/// inside React-rendered UIs that previously sent raw `<svg>` markup
+/// (which the bridge has no DOM equivalent for).
+export interface SvgPathProps extends BaseProps {
+    /// SVG path-data string (the `d=` attribute on `<path>`).
+    /// Supports M/m, L/l, H/h, V/v, C/c, S/s, Q/q, T/t, A/a, Z/z.
+    d?: string;
+    /// Two-number viewbox (width, height). The path is parsed in the
+    /// viewbox's coordinate space and scaled into the widget's bounds
+    /// at paint time. Defaults to (0, 0) — i.e. the bridge will not
+    /// scale and the path's native units determine size.
+    viewBox?: [number, number];
+    /// Fill color as hex (`#rrggbb` / `#rrggbbaa`) or `"none"`. Defaults
+    /// to the SvgPathWidget's internal default (transparent + no stroke
+    /// = invisible). Pass `"none"` to clear an inherited fill.
+    fill?: string;
+    /// Stroke color as hex or `"none"`.
+    stroke?: string;
+    /// Stroke width in widget-local units. Defaults to 1.
+    strokeWidth?: number;
+}
+
 // ── Element-name → intrinsic-props map ──────────────────────────────
 // The host config consults this implicitly; tests assert names against it.
 export interface IntrinsicElementMap {
@@ -212,6 +235,7 @@ export interface IntrinsicElementMap {
     Canvas: CanvasProps;
     Image: ImageProps;
     Icon: IconProps;
+    SvgPath: SvgPathProps;
 }
 
 export type IntrinsicElementName = keyof IntrinsicElementMap;

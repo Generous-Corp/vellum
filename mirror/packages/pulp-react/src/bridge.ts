@@ -173,6 +173,9 @@ export function createMockBridge(): MockBridge {
         'setText', 'setTextColor', 'setTextAlign',
         'setSpectrumData', 'setWaveformData', 'setMeterLevel', 'setProgress',
         'setValue', 'setTheme', 'layout', 'on', 'registerHover',
+        // pulp #994 — SvgPath intrinsic surface
+        'createSvgPath', 'setSvgPath', 'setSvgViewBox',
+        'setSvgFill', 'setSvgStroke', 'setSvgStrokeWidth',
     ];
     const saved: Record<string, unknown> = {};
     return {
