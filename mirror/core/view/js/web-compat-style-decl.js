@@ -500,9 +500,40 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
             if (typeof setPointerEvents === "function") setPointerEvents(id, resolved);
             break;
 
-        // font-family
+        // font-family — pulp #1151
+        // CSS font-family is a comma-separated fallback list, e.g.
+        //   font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+        // Splitting must respect quoted multi-word names ('JetBrains Mono'
+        // contains a space but is one family). Real CSS doesn't put commas
+        // inside font names, so a plain split is sufficient. We trim each
+        // token, strip matching outer single/double quotes, and hand the
+        // first non-empty parsed family to setFontFamily — Pulp's bundled
+        // fonts (#932) plus the public registration API (#1150) decide if
+        // it resolves; generic fallbacks like "monospace" / "ui-monospace"
+        // never resolved before either, so picking the first author-named
+        // family is the right behavior.
+        //
+        // Before this fix, the entire raw list (commas + spaces) was passed
+        // verbatim to SkFontMgr::matchFamilyStyle which never matched
+        // anything → silent fallback to platform default.
         case "fontFamily":
-            if (typeof setFontFamily === "function") setFontFamily(id, resolved.replace(/['"]/g, ""));
+            if (typeof setFontFamily === "function") {
+                var ffParts = String(resolved).split(",");
+                for (var ffi = 0; ffi < ffParts.length; ffi++) {
+                    var ffName = ffParts[ffi].replace(/^\s+|\s+$/g, "");
+                    if (ffName.length >= 2) {
+                        var first = ffName.charAt(0);
+                        var last = ffName.charAt(ffName.length - 1);
+                        if ((first === "'" && last === "'") || (first === '"' && last === '"')) {
+                            ffName = ffName.substring(1, ffName.length - 1);
+                        }
+                    }
+                    if (ffName.length > 0) {
+                        setFontFamily(id, ffName);
+                        break;
+                    }
+                }
+            }
             break;
 
         // background-size: "cover", "contain", "100px 200px"
