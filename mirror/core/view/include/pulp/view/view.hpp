@@ -437,9 +437,23 @@ public:
     void claim_overlay() { active_overlay_ = this; }
     /// Clear the global overlay if (and only if) `this` currently holds it.
     /// Idempotent — safe to call on unmount even if claim never happened.
+    /// Does NOT fire `on_overlay_dismissed` — used by JSX unmount and the
+    /// View destructor where React already knows the popover is closing.
     void release_overlay() {
         if (active_overlay_ == this) active_overlay_ = nullptr;
     }
+    /// pulp #1361 — dismiss-path release. Releases the active overlay
+    /// (if any) AND fires its `on_overlay_dismissed` callback so React
+    /// state can flip `setOpen(false)` to keep the JSX tree in sync.
+    /// Called by the platform window host from the ESC keypath and the
+    /// outside-click path. No-op if nothing claimed the slot.
+    static void dismiss_active_overlay();
+    /// pulp #1361 — fired when the active overlay is dismissed via a
+    /// framework auto-dismissal path (ESC / outside-click). NOT fired
+    /// for `release_overlay()` (JSX unmount / destructor). The bridge
+    /// uses this to dispatch `__dispatch__(id, 'dismiss', 0)` so React
+    /// `<View overlay onDismissed>` consumers can sync state.
+    std::function<void()> on_overlay_dismissed;
     /// Bounds-test in window (root) coordinates. Walks the parent chain
     /// to compute absolute origin and adds local_bounds(). Mirrors the
     /// arithmetic the mac mouseDown path uses for the ComboBox dropdown.
