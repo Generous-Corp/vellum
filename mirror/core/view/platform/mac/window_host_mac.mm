@@ -454,7 +454,14 @@ static pulp::view::KeyCode keyCodeFromNS(unsigned short code) {
                 // overlay's "dismiss on outside click" semantics work without
                 // every JSX caller needing a global click listener. The next
                 // mount cycle will re-claim if the popover is still open.
-                overlay->release_overlay();
+                //
+                // pulp #1361 — go through dismiss_active_overlay() (not the
+                // bare release_overlay()) so React state can flip
+                // setOpen(false) via on_overlay_dismissed. Falls through to
+                // the standard hit_test below so the click also activates
+                // whatever view is underneath, matching existing WebView
+                // behavior where outside-click closes-and-clicks-through.
+                pulp::view::View::dismiss_active_overlay();
             }
         }
 
@@ -693,6 +700,19 @@ static pulp::view::KeyCode keyCodeFromNS(unsigned short code) {
                     [self setNeedsDisplay:YES];
                     return;
                 }
+            }
+            // pulp #1361 — generic active_overlay_ ESC dismissal. ModalOverlay,
+            // ComboBox, and CallOutBox already have their own ESC handlers
+            // (ComboBox/CallOutBox sit on the focused view and consume their
+            // own KeyCode::escape; modals are handled above). The generic
+            // `<View overlay>` path has no widget-specific ESC owner — wire
+            // it here so React popovers built from active_overlay_ close on
+            // ESC like every other popover surface.
+            if (pulp::view::View::active_overlay_) {
+                pulp::view::View::dismiss_active_overlay();
+                [self startAnimationTimerIfNeeded];
+                [self setNeedsDisplay:YES];
+                return;
             }
         }
 

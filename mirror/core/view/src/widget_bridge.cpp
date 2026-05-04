@@ -1439,6 +1439,17 @@ void WidgetBridge::register_api() {
         auto id = args.get<std::string>(0, "");
         auto it = widgets_.find(id);
         if (it != widgets_.end() && it->second) {
+            // pulp #1361 — install a JS-visible dismiss callback so React
+            // `<View overlay onDismissed>` consumers can flip setOpen(false)
+            // when the framework dismisses the overlay via ESC or
+            // outside-click. The legacy ModalOverlay / ComboBox / CallOutBox
+            // paths don't go through claim_overlay(), so they're unaffected.
+            auto alive = callback_alive_;
+            auto* engine = &engine_;
+            it->second->on_overlay_dismissed = [alive, engine, id]() {
+                safe_dispatch_eval(alive, engine,
+                    "__dispatch__('" + id + "', 'dismiss', 0)", "overlay dismiss");
+            };
             it->second->claim_overlay();
         }
         return choc::value::Value();
@@ -1447,6 +1458,10 @@ void WidgetBridge::register_api() {
         auto id = args.get<std::string>(0, "");
         auto it = widgets_.find(id);
         if (it != widgets_.end() && it->second) {
+            // pulp #1361 — JS-driven release (typically React unmount). Clear
+            // the dismiss callback first so a subsequent ESC / outside-click
+            // can't re-fire on the now-detached widget.
+            it->second->on_overlay_dismissed = nullptr;
             it->second->release_overlay();
         }
         return choc::value::Value();
