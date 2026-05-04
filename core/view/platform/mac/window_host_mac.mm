@@ -1104,10 +1104,47 @@ static pulp::view::KeyCode keyCodeFromNS(unsigned short code) {
         CGSize backing = NSMakeSize(frame.size.width * scale, frame.size.height * scale);
         layer.drawableSize = backing;
 
+        // pulp #1382 — declare the layer opaque and seed its background to
+        // the standalone-app's base dark fill (matches paint_scene RGB
+        // 30,30,46 = 0x1E1E2E). Without this, AppKit auto-clears the
+        // layer to its default `backgroundColor` (clear/white-equivalent
+        // through the window) every time `setNeedsDisplay:YES` fires —
+        // which any hover / mouse event triggers — and the user sees an
+        // opaque-white flash in the canvas region between when AppKit
+        // invalidates and when the next display-link tick produces a
+        // Metal frame. The "live paints white but headless paints dark"
+        // symptom comes from this gap, not from the canvas command list.
+        //
+        // BGRA8Unorm at full opacity, sRGB encoded as the pixel format
+        // expects (0x1E/255 ≈ 0.118, etc).
+        layer.opaque = YES;
+        const CGFloat dark[4] = { 30.0/255.0, 30.0/255.0, 46.0/255.0, 1.0 };
+        CGColorSpaceRef cs = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+        layer.backgroundColor = CGColorCreate(cs, dark);
+        CGColorSpaceRelease(cs);
+
         self.layer = layer;
         _metalLayer = layer;
     }
     return self;
+}
+
+// pulp #1382 — `wantsUpdateLayer = YES` tells AppKit to use the
+// layer-based drawing path (calls `-updateLayer` instead of
+// `-drawRect:`) and, critically, NOT to auto-clear the backing layer
+// to opaque background between updates. Combined with `layer.opaque
+// = YES` above, this makes setNeedsDisplay-triggered invalidations a
+// no-op for the layer's own contents — the most-recent Metal frame
+// stays presented until the next display-link tick produces a new one.
+- (BOOL)wantsUpdateLayer {
+    return YES;
+}
+
+- (void)updateLayer {
+    // No-op: Metal frames are produced by MacGpuWindowHost::render_frame
+    // off the display link callback, NOT inside AppKit's update cycle.
+    // We just need this method to exist so AppKit honors
+    // wantsUpdateLayer and skips its own paint pipeline.
 }
 
 - (void)drawRect:(NSRect)dirtyRect {
