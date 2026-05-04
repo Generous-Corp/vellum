@@ -167,6 +167,11 @@ public:
                     float opacity, float blur_radius) override;
 
 private:
+    // Build the active fill paint, honoring `gradient_shader_` when set
+    // so shape fills (rect / rrect / circle / arc / oval / polygon) render
+    // gradients consistently with `fill_current_path()` (#1350).
+    SkPaint current_fill_paint() const;
+
     SkCanvas* canvas_;        // Non-owning — owned by surface or caller
     skgpu::graphite::Recorder* recorder_ = nullptr; // Non-owning — owned by SkiaSurface
     Color fill_color_ = Color::rgba(1.0f, 1.0f, 1.0f);

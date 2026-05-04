@@ -88,7 +88,9 @@ static SkColor4f to_sk_color4f(Color c) {
     return {c.r, c.g, c.b, c.a};
 }
 
-static SkPaint make_fill_paint(Color c) {
+// Solid-color fill paint. For shape fills that should honor an active
+// gradient, prefer SkiaCanvas::current_fill_paint() — see #1350.
+static SkPaint make_solid_fill_paint(Color c) {
     SkPaint paint;
     paint.setColor4f(to_sk_color4f(c));
     paint.setStyle(SkPaint::kFill_Style);
@@ -289,6 +291,25 @@ void SkiaCanvas::clip() {
     canvas_->clipPath(path_builder_->snapshot(), /*doAntiAlias=*/true);
 }
 
+// pulp #1350 — single source of truth for shape-fill paints. Mirrors
+// `fill_current_path()` so a gradient set via `set_fill_gradient_*`
+// is honored by every shape helper (rect / rrect / circle / arc /
+// oval / polygon), not just path fills. The free `make_solid_fill_paint`
+// remains for paths that intentionally want a solid color regardless
+// of the active gradient (text glyphs today).
+SkPaint SkiaCanvas::current_fill_paint() const {
+    SkPaint paint;
+    paint.setStyle(SkPaint::kFill_Style);
+    paint.setAntiAlias(true);
+    paint.setBlendMode(blend_mode_);
+    if (has_gradient_ && gradient_shader_) {
+        paint.setShader(gradient_shader_);
+    } else {
+        paint.setColor4f(to_sk_color4f(fill_color_));
+    }
+    return paint;
+}
+
 void SkiaCanvas::set_fill_color(Color c) { fill_color_ = c; }
 void SkiaCanvas::set_stroke_color(Color c) { stroke_color_ = c; }
 void SkiaCanvas::set_line_width(float w) { line_width_ = w; }
@@ -302,7 +323,7 @@ void SkiaCanvas::set_line_join(LineJoin join) {
 }
 
 void SkiaCanvas::fill_rect(float x, float y, float w, float h) {
-    GUARD_CANVAS; canvas_->drawRect(SkRect::MakeXYWH(x, y, w, h), make_fill_paint(fill_color_));
+    GUARD_CANVAS; canvas_->drawRect(SkRect::MakeXYWH(x, y, w, h), current_fill_paint());
 }
 
 // pulp #929 — clearRect must actually clear pixels rather than compose a
@@ -342,7 +363,7 @@ void SkiaCanvas::stroke_rect(float x, float y, float w, float h) {
 void SkiaCanvas::fill_rounded_rect(float x, float y, float w, float h, float radius) {
     GUARD_CANVAS; SkRRect rrect;
     rrect.setRectXY(SkRect::MakeXYWH(x, y, w, h), radius, radius);
-    canvas_->drawRRect(rrect, make_fill_paint(fill_color_));
+    canvas_->drawRRect(rrect, current_fill_paint());
 }
 
 void SkiaCanvas::stroke_rounded_rect(float x, float y, float w, float h, float radius) {
@@ -354,7 +375,7 @@ void SkiaCanvas::stroke_rounded_rect(float x, float y, float w, float h, float r
 }
 
 void SkiaCanvas::fill_circle(float cx, float cy, float radius) {
-    GUARD_CANVAS; canvas_->drawCircle(cx, cy, radius, make_fill_paint(fill_color_));
+    GUARD_CANVAS; canvas_->drawCircle(cx, cy, radius, current_fill_paint());
 }
 
 void SkiaCanvas::stroke_circle(float cx, float cy, float radius) {
@@ -419,7 +440,9 @@ void SkiaCanvas::fill_text(const std::string& text, float x, float y) {
     SkFont font = make_font(font_family_, font_size_, font_weight_, font_slant_);
     if (!font.getTypeface()) return;
 
-    auto paint = make_fill_paint(fill_color_);
+    // Text glyphs use solid color today; gradient text-fill is a separate
+    // Canvas2D `fillText` path (#1350 scoped to shape fills only).
+    auto paint = make_solid_fill_paint(fill_color_);
 
 #ifdef PULP_HAS_TEXT_SHAPING
     // SkShaper path: full OpenType kerning + ligatures via HarfBuzz.
@@ -560,7 +583,9 @@ void SkiaCanvas::fill_text_sdf(const std::string& text, float x, float y,
     // Draw each glyph as a textured quad with the SDF alpha channel.
     // The smoothstep is applied per-pixel by Skia's shader pipeline
     // when we use kAlpha_8 — we just draw with the fill color's paint.
-    auto paint = make_fill_paint(fill_color_);
+    // Text glyphs use solid color today; gradient text-fill is a separate
+    // Canvas2D `fillText` path (#1350 scoped to shape fills only).
+    auto paint = make_solid_fill_paint(fill_color_);
     for (auto& [g, x_off] : draws) {
         float gx = draw_x + x_off + g->bearing_x * scale;
         float gy = y - g->bearing_y * scale;
