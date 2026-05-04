@@ -534,6 +534,20 @@ bool View::call_inspector_mouse_hook(const MouseEvent& e) {
 // pulp #1148 — generalized overlay-click routing.
 View* View::active_overlay_ = nullptr;
 
+// pulp #1361 — dismiss-path release. Pulls the slot, then fires the
+// dismissed View's `on_overlay_dismissed` callback so React state can
+// sync. Order matters: clear the slot FIRST so a callback that calls
+// claim_overlay() on a replacement popover doesn't immediately get
+// nulled out by our subsequent clear.
+void View::dismiss_active_overlay() {
+    View* victim = active_overlay_;
+    if (!victim) return;
+    active_overlay_ = nullptr;
+    if (victim->on_overlay_dismissed) {
+        victim->on_overlay_dismissed();
+    }
+}
+
 namespace {
 
 // pulp #1320 — recursively expand a child's painted-bounds contribution
