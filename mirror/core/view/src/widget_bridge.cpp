@@ -1686,6 +1686,16 @@ void WidgetBridge::register_api() {
         else if (key == "min_height") f.min_height = (float)val;
         else if (key == "max_width") f.max_width = (float)val;
         else if (key == "max_height") f.max_height = (float)val;
+        // Aspect ratio (pulp #1434) — width/height ratio. A value <= 0 or
+        // NaN clears the slot (matches CSS `aspect-ratio: auto`); a finite
+        // positive value pins the slot. The CSS shim in
+        // web-compat-style-decl.js parses both `1.5` and `16/9` forms
+        // before reaching here, and the @pulp/react prop-applier accepts
+        // `aspectRatio` directly as a number.
+        else if (key == "aspect_ratio" || key == "aspectRatio") {
+            if (val > 0.0 && std::isfinite(val)) f.aspect_ratio = (float)val;
+            else f.aspect_ratio.reset();
+        }
         // Margin
         else if (key == "margin") f.margin = (float)val;
         else if (key == "margin_top") f.margin_top = (float)val;
