@@ -820,6 +820,19 @@ void android_surface_resized(int width, int height) {
 void android_render_frame(float dt) {
     if (!g_gpu_surface || !g_gpu_surface->is_initialized()) return;
 
+    // pulp #1402 / #1387 gap #3 (Android parity with macOS #1400) — pump
+    // the bridge each vsync so JS rAF / setTimeout / async-result queues
+    // get drained without depending on a touch event to trigger
+    // request_repaint. Without this, requestAnimationFrame(cb) callbacks
+    // queue forever and only fire when an unrelated touch happens to
+    // call poll_async_results elsewhere. poll_async_results internally
+    // evaluates __flushFrames__ when pending_frame_ids_ is non-empty,
+    // and request_repaint chains the next vsync. Identical pattern to
+    // the macOS CVDisplayLink wiring in PR #1400.
+    if (g_widget_bridge) {
+        g_widget_bridge->poll_async_results();
+    }
+
     if (g_gpu_surface->begin_frame()) {
         if (g_skia_surface && g_skia_surface->is_available()) {
             auto* canvas = g_skia_surface->begin_frame();
