@@ -109,6 +109,16 @@ static void apply_flex_style(YGNodeRef node, const FlexStyle& f, bool is_absolut
     if (f.max_width > 0) YGNodeStyleSetMaxWidth(node, f.max_width);
     if (f.max_height > 0) YGNodeStyleSetMaxHeight(node, f.max_height);
 
+    // Aspect ratio (pulp #1434) — Yoga sizes the cross axis from the main
+    // axis using `width / height`. Only forward when explicitly set so the
+    // default (no aspect constraint) doesn't fight other size constraints.
+    // Negative / zero values are nonsensical for ratio semantics; treat
+    // those as "clear" so an "auto" or invalid value flowing through the
+    // CSS path doesn't pin the cross axis to 0.
+    if (f.aspect_ratio.has_value() && *f.aspect_ratio > 0.0f) {
+        YGNodeStyleSetAspectRatio(node, *f.aspect_ratio);
+    }
+
     // Order (Yoga doesn't support order directly — we handle it via child insertion order)
 }
 
