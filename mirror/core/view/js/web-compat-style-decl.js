@@ -85,7 +85,12 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
         // Display / flex direction
         case "display":
             if (resolved === "none") { setVisible(id, false); }
-            else if (resolved === "flex" || resolved === "block") {
+            else if (resolved === "flex" || resolved === "block" ||
+                     resolved === "inline-block" || resolved === "inline-flex") {
+                // pulp #1420 — `inline-block` ≡ `block` and `inline-flex`
+                // ≡ `flex` in pulp's non-text-flowing layout system. This
+                // matches react-native semantics and CSS spec for
+                // formatting contexts that don't have inline flow.
                 setVisible(id, true);
                 // CSS web-compat: `display: flex` defaults to flex-direction: row.
                 // Pulp's underlying widgets default to FlexDirection::column (RN
@@ -94,7 +99,7 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
                 // in which case the explicit declaration overrides this default
                 // either later in this flush (individual setters apply in order)
                 // or via _flushAll's iteration. See pulp #1147.
-                if (resolved === "flex") {
+                if (resolved === "flex" || resolved === "inline-flex") {
                     var hasExplicitDirection =
                         Object.prototype.hasOwnProperty.call(this._props, "flexDirection") ||
                         Object.prototype.hasOwnProperty.call(this._props, "flex-direction");
