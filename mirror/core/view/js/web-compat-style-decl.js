@@ -505,11 +505,35 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
 
         // ── P1: New CSS properties ──────────────────────────────────────
 
-        // aspect-ratio: "16/9" or "1"
+        // aspect-ratio: "16/9", "1.5", or "auto" (pulp #1434).
+        // Three value forms accepted — RN exports use the plain number form,
+        // CSS exports use the `width / height` form, "auto" clears the slot.
+        // Both `aspectRatio` (camelCase, set via `style.aspectRatio = ...`)
+        // and `aspect-ratio` (kebab-case via `style.setProperty(...)`) reach
+        // this branch — `setProperty` converts kebab to camel before
+        // dispatching through the descriptor setter.
         case "aspectRatio": {
-            var arParts = resolved.split("/");
-            var ratio = parseFloat(arParts[0]) || 1;
-            if (arParts[1]) ratio /= parseFloat(arParts[1]) || 1;
+            var trimmed = String(resolved).trim();
+            if (trimmed === "" || trimmed === "auto") {
+                // Clear: bridge interprets non-positive as "unset".
+                setFlex(id, "aspect_ratio", 0);
+                break;
+            }
+            var arParts = trimmed.split("/");
+            var num = parseFloat(arParts[0]);
+            if (!isFinite(num) || num <= 0) {
+                setFlex(id, "aspect_ratio", 0);
+                break;
+            }
+            var ratio = num;
+            if (arParts[1] !== undefined) {
+                var den = parseFloat(arParts[1]);
+                if (!isFinite(den) || den <= 0) {
+                    setFlex(id, "aspect_ratio", 0);
+                    break;
+                }
+                ratio = num / den;
+            }
             setFlex(id, "aspect_ratio", ratio);
             break;
         }
