@@ -164,10 +164,20 @@ struct FlexStyle {
 
     /// Viewport-relative dimension overrides. When set (unit != px with value 0),
     /// these are resolved before layout and override the corresponding float fields.
+    /// Yoga's native percent / auto APIs are dispatched on these in
+    /// `yoga_layout.cpp::apply_flex_style` when `unit != px`.
+    /// pulp #1434 (rn batch C) — added `dim_max_width` / `dim_max_height` /
+    /// `dim_flex_basis` so percent and `auto` strings on max-* and flex-basis
+    /// reach Yoga's `YGNodeStyleSet{MaxWidth,MaxHeight,FlexBasis}Percent` and
+    /// `YGNodeStyleSetFlexBasisAuto` instead of being truncated to plain
+    /// floats. min_* already had Dimension fields from earlier work.
     Dimension dim_width;
     Dimension dim_height;
     Dimension dim_min_width;
     Dimension dim_min_height;
+    Dimension dim_max_width;
+    Dimension dim_max_height;
+    Dimension dim_flex_basis;
 
     /// Resolve viewport-relative dimensions and apply to float fields.
     /// Call before layout pass with the viewport size.
