@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -184,6 +185,18 @@ struct FlexStyle {
 
     bool flex_wrap = false;     ///< Wrap to next line when main axis overflows
     int order = 0;              ///< Layout order (lower values first, default 0)
+
+    /// Aspect ratio (width / height). When set, Yoga sizes the cross axis
+    /// to match `main_axis / aspect_ratio` (or the inverse, depending on
+    /// which dimension is constrained). pulp #1434 — RN exports use
+    /// `aspectRatio` for image cards / video tiles; Figma exports for
+    /// fixed-ratio frames; v0/Claude Design generate it for hero images.
+    /// std::optional distinguishes "unset" from a literal 0 value (which
+    /// would be invalid anyway, but the optional makes the intent explicit
+    /// at the dispatcher boundary). Accepts plain numbers (1.5),
+    /// `width/height` parsed by web-compat-style-decl.js (16/9 -> 1.778),
+    /// and `auto` which clears the slot.
+    std::optional<float> aspect_ratio;
 
     // Helper: resolve per-side margin
     float margin_t() const { return margin_top >= 0 ? margin_top : margin; }
