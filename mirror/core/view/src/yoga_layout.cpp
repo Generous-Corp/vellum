@@ -63,7 +63,16 @@ static void apply_flex_style(YGNodeRef node, const FlexStyle& f, bool is_absolut
         // containing block sizing path, not the flex line.
         YGNodeStyleSetFlexGrow(node, f.flex_grow);
         YGNodeStyleSetFlexShrink(node, f.flex_shrink);
-        if (f.flex_basis >= 0) YGNodeStyleSetFlexBasis(node, f.flex_basis);
+        // pulp #1434 (rn batch C) — dispatch flex_basis on dim_*.unit:
+        // `'auto'` → YGNodeStyleSetFlexBasisAuto; `'50%'` →
+        // YGNodeStyleSetFlexBasisPercent; numeric → existing px API.
+        if (f.dim_flex_basis.unit == DimensionUnit::auto_) {
+            YGNodeStyleSetFlexBasisAuto(node);
+        } else if (f.dim_flex_basis.unit == DimensionUnit::percent && f.dim_flex_basis.value > 0) {
+            YGNodeStyleSetFlexBasisPercent(node, f.dim_flex_basis.value);
+        } else if (f.flex_basis >= 0) {
+            YGNodeStyleSetFlexBasis(node, f.flex_basis);
+        }
     } else {
         // Be explicit: zero them so a previously-set Yoga node (we don't
         // recycle here today, but defensively) doesn't carry residue, and
@@ -116,10 +125,20 @@ static void apply_flex_style(YGNodeRef node, const FlexStyle& f, bool is_absolut
     } else if (f.preferred_height > 0) {
         YGNodeStyleSetHeight(node, f.preferred_height);
     }
-    if (f.min_width > 0) YGNodeStyleSetMinWidth(node, f.min_width);
-    if (f.min_height > 0) YGNodeStyleSetMinHeight(node, f.min_height);
-    if (f.max_width > 0) YGNodeStyleSetMaxWidth(node, f.max_width);
-    if (f.max_height > 0) YGNodeStyleSetMaxHeight(node, f.max_height);
+    // pulp #1434 (rn batch C) — min/max width/height dispatch on dim_*.unit
+    // for the percent path; existing px path stays for numeric values.
+    if (f.dim_min_width.unit == DimensionUnit::percent && f.dim_min_width.value > 0) {
+        YGNodeStyleSetMinWidthPercent(node, f.dim_min_width.value);
+    } else if (f.min_width > 0) YGNodeStyleSetMinWidth(node, f.min_width);
+    if (f.dim_min_height.unit == DimensionUnit::percent && f.dim_min_height.value > 0) {
+        YGNodeStyleSetMinHeightPercent(node, f.dim_min_height.value);
+    } else if (f.min_height > 0) YGNodeStyleSetMinHeight(node, f.min_height);
+    if (f.dim_max_width.unit == DimensionUnit::percent && f.dim_max_width.value > 0) {
+        YGNodeStyleSetMaxWidthPercent(node, f.dim_max_width.value);
+    } else if (f.max_width > 0) YGNodeStyleSetMaxWidth(node, f.max_width);
+    if (f.dim_max_height.unit == DimensionUnit::percent && f.dim_max_height.value > 0) {
+        YGNodeStyleSetMaxHeightPercent(node, f.dim_max_height.value);
+    } else if (f.max_height > 0) YGNodeStyleSetMaxHeight(node, f.max_height);
 
     // Aspect ratio (pulp #1434) — Yoga sizes the cross axis from the main
     // axis using `width / height`. Only forward when explicitly set so the

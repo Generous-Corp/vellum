@@ -1677,7 +1677,29 @@ void WidgetBridge::register_api() {
         else if (key == "padding_left") f.padding_left = (float)val;
         else if (key == "flex_grow") f.flex_grow = (float)val;
         else if (key == "flex_shrink") f.flex_shrink = (float)val;
-        else if (key == "flex_basis") f.flex_basis = (float)val;
+        // pulp #1434 (rn batch C) — flex_basis accepts a number ("100"
+        // → px), a percentage string ("50%" → percent of parent), or
+        // the keyword "auto" (Yoga's YGAuto: "use the preferred size").
+        // The unit lives on FlexStyle::dim_flex_basis; yoga_layout.cpp
+        // dispatches to YGNodeStyleSetFlexBasis{Percent,Auto} for the
+        // non-px paths.
+        else if (key == "flex_basis") {
+            auto sval = args.get<std::string>(2, "");
+            if (sval == "auto") {
+                f.dim_flex_basis.unit = pulp::view::DimensionUnit::auto_;
+                f.flex_basis = -1; // sentinel: use preferred
+            } else if (!sval.empty() && sval.back() == '%') {
+                try {
+                    f.dim_flex_basis.value = std::stof(sval.substr(0, sval.size() - 1));
+                    f.dim_flex_basis.unit = pulp::view::DimensionUnit::percent;
+                    f.flex_basis = -1;
+                } catch (...) { /* keep current */ }
+            } else {
+                f.flex_basis = (float)val;
+                f.dim_flex_basis.value = (float)val;
+                f.dim_flex_basis.unit = pulp::view::DimensionUnit::px;
+            }
+        }
         else if (key == "flex_wrap") f.flex_wrap = val > 0;
         else if (key == "order") f.order = (int)val;
         // pulp #1423 — width/height accept either a number ("100" → px)
@@ -1714,10 +1736,68 @@ void WidgetBridge::register_api() {
                 f.dim_height.unit = pulp::view::DimensionUnit::px;
             }
         }
-        else if (key == "min_width") f.min_width = (float)val;
-        else if (key == "min_height") f.min_height = (float)val;
-        else if (key == "max_width") f.max_width = (float)val;
-        else if (key == "max_height") f.max_height = (float)val;
+        // pulp #1434 (rn batch C) — min/max width/height accept either a
+        // number ("100" → px) or a percentage string ("50%" → percent of
+        // parent). Same shape as #1426's width/height: store unit on
+        // FlexStyle::dim_*; yoga_layout.cpp dispatches to
+        // YGNodeStyleSet{Min,Max}{Width,Height}Percent for the percent
+        // path and the existing px API otherwise.
+        else if (key == "min_width") {
+            auto sval = args.get<std::string>(2, "");
+            if (!sval.empty() && sval.back() == '%') {
+                try {
+                    f.dim_min_width.value = std::stof(sval.substr(0, sval.size() - 1));
+                    f.dim_min_width.unit = pulp::view::DimensionUnit::percent;
+                    f.min_width = 0;
+                } catch (...) { /* keep current */ }
+            } else {
+                f.min_width = (float)val;
+                f.dim_min_width.value = (float)val;
+                f.dim_min_width.unit = pulp::view::DimensionUnit::px;
+            }
+        }
+        else if (key == "min_height") {
+            auto sval = args.get<std::string>(2, "");
+            if (!sval.empty() && sval.back() == '%') {
+                try {
+                    f.dim_min_height.value = std::stof(sval.substr(0, sval.size() - 1));
+                    f.dim_min_height.unit = pulp::view::DimensionUnit::percent;
+                    f.min_height = 0;
+                } catch (...) { /* keep current */ }
+            } else {
+                f.min_height = (float)val;
+                f.dim_min_height.value = (float)val;
+                f.dim_min_height.unit = pulp::view::DimensionUnit::px;
+            }
+        }
+        else if (key == "max_width") {
+            auto sval = args.get<std::string>(2, "");
+            if (!sval.empty() && sval.back() == '%') {
+                try {
+                    f.dim_max_width.value = std::stof(sval.substr(0, sval.size() - 1));
+                    f.dim_max_width.unit = pulp::view::DimensionUnit::percent;
+                    f.max_width = 0;
+                } catch (...) { /* keep current */ }
+            } else {
+                f.max_width = (float)val;
+                f.dim_max_width.value = (float)val;
+                f.dim_max_width.unit = pulp::view::DimensionUnit::px;
+            }
+        }
+        else if (key == "max_height") {
+            auto sval = args.get<std::string>(2, "");
+            if (!sval.empty() && sval.back() == '%') {
+                try {
+                    f.dim_max_height.value = std::stof(sval.substr(0, sval.size() - 1));
+                    f.dim_max_height.unit = pulp::view::DimensionUnit::percent;
+                    f.max_height = 0;
+                } catch (...) { /* keep current */ }
+            } else {
+                f.max_height = (float)val;
+                f.dim_max_height.value = (float)val;
+                f.dim_max_height.unit = pulp::view::DimensionUnit::px;
+            }
+        }
         // Aspect ratio (pulp #1434) — width/height ratio. A value <= 0 or
         // NaN clears the slot (matches CSS `aspect-ratio: auto`); a finite
         // positive value pins the slot. The CSS shim in
