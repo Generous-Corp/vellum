@@ -75,7 +75,10 @@ declare global {
             | 'max_height'
             | 'align_items'
             | 'align_self'
-            | 'justify_content',
+            | 'justify_content'
+            // pulp #1434 — width/height ratio. Value is a finite positive
+            // number; 0 / non-finite clears the slot on the bridge side.
+            | 'aspect_ratio',
         value: number | string,
     ): void;
 

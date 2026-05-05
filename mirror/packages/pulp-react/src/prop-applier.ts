@@ -232,6 +232,12 @@ function applyOne(id: string, type: string, key: string, value: unknown, props?:
         case 'alignItems':      return call('setFlex', id, 'align_items', value as string);
         case 'alignSelf':       return call('setFlex', id, 'align_self', value as string);
         case 'justifyContent':  return call('setFlex', id, 'justify_content', value as string);
+        // pulp #1434 — aspectRatio routes through setFlex like the other
+        // flex props. Accepts a finite positive number (RN-style); strings
+        // ("16/9", "auto") are NOT accepted at the JSX surface — those
+        // belong to the CSS shim path (web-compat-style-decl.js). A value
+        // of 0 / NaN / undefined clears the slot on the bridge side.
+        case 'aspectRatio':     return call('setFlex', id, 'aspect_ratio', value as number);
 
         // Visual style
         case 'background':         return call('setBackground', id, value as string);

@@ -45,6 +45,11 @@ export interface FlexProps {
     alignItems?: FlexAlign;
     alignSelf?: FlexAlignSelf;
     justifyContent?: FlexJustify;
+    /// pulp #1434 — width/height ratio for the cross axis. RN-compatible.
+    /// When set on a View with `width: 100, aspectRatio: 1.5`, the layout
+    /// produces `height = 100 / 1.5 ≈ 66.67`. When `height` is set instead,
+    /// the width is derived. Pass `0` or omit to clear.
+    aspectRatio?: number;
 }
 
 // ── Visual style ────────────────────────────────────────────────────
