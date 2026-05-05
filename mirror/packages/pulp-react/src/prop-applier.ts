@@ -266,15 +266,21 @@ function applyOne(id: string, type: string, key: string, value: unknown, props?:
             return;
         case 'flexGrow':        return call('setFlex', id, 'flex_grow', value as number);
         case 'flexShrink':      return call('setFlex', id, 'flex_shrink', value as number);
-        case 'flexBasis':       return call('setFlex', id, 'flex_basis', value as number);
+        // pulp #1434 (rn batch C) — dimension keys forward
+        // `number | string` so the bridge sees `'50%'` / `'auto'`
+        // verbatim. Numeric values still flow through unchanged.
+        // The bridge's setFlex case for each key inspects the third
+        // arg as a string and detects '%' / 'auto' suffix; otherwise
+        // it falls back to the numeric path.
+        case 'flexBasis':       return call('setFlex', id, 'flex_basis', value as number | string);
         case 'flexWrap':        return call('setFlex', id, 'flex_wrap', value ? 1 : 0);
         case 'order':           return call('setFlex', id, 'order', value as number);
-        case 'width':           return call('setFlex', id, 'width', value as number);
-        case 'height':          return call('setFlex', id, 'height', value as number);
-        case 'minWidth':        return call('setFlex', id, 'min_width', value as number);
-        case 'minHeight':       return call('setFlex', id, 'min_height', value as number);
-        case 'maxWidth':        return call('setFlex', id, 'max_width', value as number);
-        case 'maxHeight':       return call('setFlex', id, 'max_height', value as number);
+        case 'width':           return call('setFlex', id, 'width', value as number | string);
+        case 'height':          return call('setFlex', id, 'height', value as number | string);
+        case 'minWidth':        return call('setFlex', id, 'min_width', value as number | string);
+        case 'minHeight':       return call('setFlex', id, 'min_height', value as number | string);
+        case 'maxWidth':        return call('setFlex', id, 'max_width', value as number | string);
+        case 'maxHeight':       return call('setFlex', id, 'max_height', value as number | string);
         case 'alignItems':      return call('setFlex', id, 'align_items', value as string);
         case 'alignSelf':       return call('setFlex', id, 'align_self', value as string);
         case 'justifyContent':  return call('setFlex', id, 'justify_content', value as string);

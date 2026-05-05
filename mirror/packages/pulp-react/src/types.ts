@@ -46,15 +46,22 @@ export interface FlexProps {
     marginVertical?: number;
     flexGrow?: number;
     flexShrink?: number;
-    flexBasis?: number;
+    /// pulp #1434 (rn batch C) — accepts number (px), percentage string
+    /// (`'50%'`), or the keyword `'auto'`. The keyword maps to Yoga's
+    /// `YGNodeStyleSetFlexBasisAuto`; percent maps to
+    /// `YGNodeStyleSetFlexBasisPercent`.
+    flexBasis?: number | string;
     flexWrap?: boolean;
     order?: number;
-    width?: number;
-    height?: number;
-    minWidth?: number;
-    minHeight?: number;
-    maxWidth?: number;
-    maxHeight?: number;
+    /// pulp #1434 (rn batch C) — number (px) or percent string
+    /// (`'100%'`). Yoga's percent API is dispatched on
+    /// `FlexStyle::dim_*.unit` in `yoga_layout.cpp`.
+    width?: number | string;
+    height?: number | string;
+    minWidth?: number | string;
+    minHeight?: number | string;
+    maxWidth?: number | string;
+    maxHeight?: number | string;
     alignItems?: FlexAlign;
     alignSelf?: FlexAlignSelf;
     justifyContent?: FlexJustify;
