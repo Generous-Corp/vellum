@@ -395,6 +395,77 @@ void SkiaCanvas::set_line_join(LineJoin join) {
     line_join_ = join;
 }
 
+// pulp #1434 bridge-thin gap-fill — wire ctx.miterLimit through to
+// SkPaint::setStrokeMiter. The current stroke helpers build a fresh
+// SkPaint per draw via make_stroke_paint(); we apply the miter limit
+// at draw-time in stroke_current_path / stroke_rect / etc., so this
+// setter just stores the value and lets the apply_* helper read it.
+// Spec: non-positive / non-finite values are silently ignored.
+void SkiaCanvas::set_miter_limit(float limit) {
+    if (std::isfinite(limit) && limit > 0.0f) {
+        miter_limit_ = limit;
+    }
+}
+
+// pulp #1434 bridge-thin gap-fill — wire ctx.imageSmoothingEnabled and
+// ctx.imageSmoothingQuality through. The flag is read at drawImage
+// time by sampling_options_for_image_smoothing() below; we just store
+// the chosen state here so it sticks across draws.
+void SkiaCanvas::set_image_smoothing(bool enabled,
+                                     ImageSmoothingQuality quality) {
+    image_smoothing_enabled_ = enabled;
+    image_smoothing_quality_ = quality;
+}
+
+// pulp #1434 bridge-thin gap-fill — apply sticky stroke-paint state. The
+// existing stroke paths constructed an SkPaint via make_stroke_paint()
+// but never propagated the JS-side line_join / miter_limit state. The
+// canvas2d harness flagged miterLimit as silently dropped; setStrokeJoin
+// and setStrokeMiter close that gap without touching every call site.
+// line_cap_ is plumbed here too so the existing line_cap_ field finally
+// reaches the GPU paint — matches Canvas2D ctx.lineCap semantics.
+void SkiaCanvas::apply_stroke_state(SkPaint& paint) const {
+    SkPaint::Cap sk_cap = SkPaint::kButt_Cap;
+    switch (line_cap_) {
+        case LineCap::butt:   sk_cap = SkPaint::kButt_Cap;   break;
+        case LineCap::round:  sk_cap = SkPaint::kRound_Cap;  break;
+        case LineCap::square: sk_cap = SkPaint::kSquare_Cap; break;
+    }
+    paint.setStrokeCap(sk_cap);
+
+    SkPaint::Join sk_join = SkPaint::kMiter_Join;
+    switch (line_join_) {
+        case LineJoin::miter: sk_join = SkPaint::kMiter_Join; break;
+        case LineJoin::round: sk_join = SkPaint::kRound_Join; break;
+        case LineJoin::bevel: sk_join = SkPaint::kBevel_Join; break;
+    }
+    paint.setStrokeJoin(sk_join);
+    paint.setStrokeMiter(miter_limit_);
+}
+
+// pulp #1434 bridge-thin gap-fill — translate Canvas2D
+// imageSmoothingEnabled / imageSmoothingQuality into Skia sampling.
+// `enabled = false` => nearest (pixel-art preservation). `enabled = true`
+// honours the quality enum: low = bilinear (matches the existing default),
+// medium = mipmap-aware bilinear, high = cubic Mitchell. Falls through
+// to kLinear so callers that haven't touched the flag get unchanged
+// behavior.
+SkSamplingOptions SkiaCanvas::sampling_options_for_image_smoothing() const {
+    if (!image_smoothing_enabled_) {
+        return SkSamplingOptions(SkFilterMode::kNearest);
+    }
+    switch (image_smoothing_quality_) {
+        case ImageSmoothingQuality::low:
+            return SkSamplingOptions(SkFilterMode::kLinear);
+        case ImageSmoothingQuality::medium:
+            return SkSamplingOptions(SkFilterMode::kLinear,
+                                     SkMipmapMode::kLinear);
+        case ImageSmoothingQuality::high:
+            return SkSamplingOptions(SkCubicResampler::Mitchell());
+    }
+    return SkSamplingOptions(SkFilterMode::kLinear);
+}
+
 void SkiaCanvas::fill_rect(float x, float y, float w, float h) {
     GUARD_CANVAS; canvas_->drawRect(SkRect::MakeXYWH(x, y, w, h), current_fill_paint());
 }
@@ -429,6 +500,7 @@ static void apply_line_dash(SkPaint& paint,
 
 void SkiaCanvas::stroke_rect(float x, float y, float w, float h) {
     GUARD_CANVAS; auto paint = make_stroke_paint(stroke_color_, line_width_);
+    apply_stroke_state(paint);
     apply_line_dash(paint, line_dash_, line_dash_phase_);
     apply_shadow_filter(paint);
     canvas_->drawRect(SkRect::MakeXYWH(x, y, w, h), paint);
@@ -444,6 +516,7 @@ void SkiaCanvas::stroke_rounded_rect(float x, float y, float w, float h, float r
     GUARD_CANVAS; SkRRect rrect;
     rrect.setRectXY(SkRect::MakeXYWH(x, y, w, h), radius, radius);
     auto paint = make_stroke_paint(stroke_color_, line_width_);
+    apply_stroke_state(paint);
     apply_line_dash(paint, line_dash_, line_dash_phase_);
     apply_shadow_filter(paint);
     canvas_->drawRRect(rrect, paint);
@@ -456,6 +529,7 @@ void SkiaCanvas::fill_circle(float cx, float cy, float radius) {
 void SkiaCanvas::stroke_circle(float cx, float cy, float radius) {
     GUARD_CANVAS;
     auto paint = make_stroke_paint(stroke_color_, line_width_);
+    apply_stroke_state(paint);
     apply_line_dash(paint, line_dash_, line_dash_phase_);
     apply_shadow_filter(paint);
     canvas_->drawCircle(cx, cy, radius, paint);
@@ -469,6 +543,7 @@ void SkiaCanvas::stroke_arc(float cx, float cy, float radius,
     SkPath path = SkPathBuilder().addArc(oval, start_deg, sweep_deg).detach();
     if (canvas_) {
         auto paint = make_stroke_paint(stroke_color_, line_width_);
+        apply_stroke_state(paint);
         apply_line_dash(paint, line_dash_, line_dash_phase_);
         apply_shadow_filter(paint);
         canvas_->drawPath(path, paint);
@@ -478,6 +553,7 @@ void SkiaCanvas::stroke_arc(float cx, float cy, float radius,
 void SkiaCanvas::stroke_line(float x0, float y0, float x1, float y1) {
     GUARD_CANVAS;
     auto paint = make_stroke_paint(stroke_color_, line_width_);
+    apply_stroke_state(paint);
     apply_line_dash(paint, line_dash_, line_dash_phase_);
     apply_shadow_filter(paint);
     canvas_->drawLine(x0, y0, x1, y1, paint);
@@ -855,8 +931,9 @@ bool SkiaCanvas::draw_image_from_data(const uint8_t* data, size_t size,
     auto image = SkImages::DeferredFromEncodedData(sk_data);
     if (!image) return false;
 
+    // pulp #1434 — honour the sticky imageSmoothingEnabled / Quality state.
     canvas_->drawImageRect(image, SkRect::MakeXYWH(x, y, w, h),
-                           SkSamplingOptions(SkFilterMode::kLinear));
+                           sampling_options_for_image_smoothing());
     return true;
 }
 
@@ -870,8 +947,9 @@ bool SkiaCanvas::draw_image_from_file(const std::string& path,
     auto image = SkImages::DeferredFromEncodedData(sk_data);
     if (!image) return false;
 
+    // pulp #1434 — honour the sticky imageSmoothingEnabled / Quality state.
     canvas_->drawImageRect(image, SkRect::MakeXYWH(x, y, w, h),
-                           SkSamplingOptions(SkFilterMode::kLinear));
+                           sampling_options_for_image_smoothing());
     return true;
 }
 
@@ -1008,6 +1086,7 @@ void SkiaCanvas::stroke_current_path() {
     paint.setColor4f(to_sk_color4f(stroke_color_));
     paint.setStrokeWidth(line_width_);
     paint.setBlendMode(blend_mode_);
+    apply_stroke_state(paint);
     apply_line_dash(paint, line_dash_, line_dash_phase_);
     apply_shadow_filter(paint);
     canvas_->drawPath(path_builder_->detach(), paint);

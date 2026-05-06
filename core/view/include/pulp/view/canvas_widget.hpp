@@ -29,6 +29,11 @@ struct CanvasDrawCmd {
         set_global_alpha, set_blend_mode,
         // Gradient
         set_fill_gradient_linear, set_fill_gradient_radial, clear_fill_gradient,
+        // pulp #1434 bridge-thin gap-fill — Canvas2D ctx.createConicGradient.
+        // cx/cy in (x, y), start_angle in `extra`, stops in
+        // gradient_colors / gradient_positions (same shape as the
+        // linear / radial entries above).
+        set_fill_gradient_conic,
         // Path
         begin_path, move_to, line_to, quad_to, cubic_to, close_path,
         fill_path, stroke_path, clip_path,
@@ -48,6 +53,11 @@ struct CanvasDrawCmd {
         set_shadow_blur,           ///< blur (px) in `extra`
         set_shadow_offset_x,       ///< dx (px) in `extra`
         set_shadow_offset_y,       ///< dy (px) in `extra`
+        // pulp #1434 bridge-thin gap-fill: ctx.miterLimit and
+        // ctx.imageSmoothingEnabled / Quality. Sticky state pushed by
+        // the JS shim before the next stroke / drawImage.
+        set_miter_limit,           ///< limit in `extra`
+        set_image_smoothing,       ///< enabled in `int_val` (0/1), quality in `extra` (0=low,1=med,2=high)
         // Clear
         clear, clear_rect
     };
