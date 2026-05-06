@@ -63,6 +63,11 @@ function CanvasRenderingContext2D(canvasEl) {
     this._sentTextBaseline = null;
     this._sentLineCap = null;
     this._sentLineJoin = null;
+    // pulp #1434 — track miterLimit and imageSmoothing* sticky state so
+    // _syncLineState / _syncImageSmoothingState only push when changed.
+    this._sentMiterLimit = null;
+    this._sentImageSmoothingEnabled = null;
+    this._sentImageSmoothingQuality = null;
     this._sentGlobalAlpha = null;
     this._sentGlobalCompositeOperation = null;
     this._sentShadowColor = null;
@@ -86,6 +91,17 @@ CanvasRenderingContext2D.prototype._applyFillStyle = function() {
         var ar = [this._id, pr.x1, pr.y1, pr.r1];
         for (var j = 0; j < sr.length; ++j) { ar.push(sr[j].color); ar.push(sr[j].offset); }
         canvasSetRadialGradient.apply(null, ar);
+        this._activeFillKind = "gradient";
+        return;
+    }
+    // pulp #1434 bridge-thin gap-fill — ctx.createConicGradient. Skia
+    // routes through SkGradientShader::MakeSweep; CG degrades to the
+    // first-stop colour. Same flush shape as linear/radial.
+    if (fs && fs._kind === "conic" && typeof canvasSetConicGradient === "function") {
+        var pc = fs._params, sc = fs._stops;
+        var ac = [this._id, pc.cx, pc.cy, pc.startAngle];
+        for (var k = 0; k < sc.length; ++k) { ac.push(sc[k].color); ac.push(sc[k].offset); }
+        canvasSetConicGradient.apply(null, ac);
         this._activeFillKind = "gradient";
         return;
     }
@@ -146,6 +162,31 @@ CanvasRenderingContext2D.prototype._syncLineState = function() {
     if (this._sentLineJoin !== this.lineJoin) {
         if (typeof canvasSetLineJoin === "function") canvasSetLineJoin(this._id, this.lineJoin);
         this._sentLineJoin = this.lineJoin;
+    }
+    // pulp #1434 bridge-thin gap-fill — push ctx.miterLimit to the
+    // bridge so SkPaint::setStrokeMiter / CGContextSetMiterLimit
+    // honour the JS value. Spec: ignore non-finite / non-positive.
+    var ml = +this.miterLimit;
+    if (isFinite(ml) && ml > 0 && this._sentMiterLimit !== ml) {
+        if (typeof canvasSetMiterLimit === "function") canvasSetMiterLimit(this._id, ml);
+        this._sentMiterLimit = ml;
+    }
+};
+
+// pulp #1434 bridge-thin gap-fill — flush ctx.imageSmoothingEnabled and
+// ctx.imageSmoothingQuality before the next drawImage. Sticky on the C++
+// side; we only push when either field changes.
+CanvasRenderingContext2D.prototype._syncImageSmoothingState = function() {
+    var en = !!this.imageSmoothingEnabled;
+    var q = String(this.imageSmoothingQuality || "low");
+    if (q !== "low" && q !== "medium" && q !== "high") q = "low";
+    if (this._sentImageSmoothingEnabled !== en
+        || this._sentImageSmoothingQuality !== q) {
+        if (typeof canvasSetImageSmoothing === "function") {
+            canvasSetImageSmoothing(this._id, en, q);
+        }
+        this._sentImageSmoothingEnabled = en;
+        this._sentImageSmoothingQuality = q;
     }
 };
 CanvasRenderingContext2D.prototype._syncGlobalState = function() {
@@ -477,11 +518,18 @@ CanvasRenderingContext2D.prototype.createRadialGradient = function(x0, y0, r0, x
     return new CanvasGradient("radial", { x1: x1, y1: y1, r1: r1 });
 };
 
-CanvasRenderingContext2D.prototype.createConicGradient = function() {
-    // Conic gradients need a Skia conic shader — not yet plumbed
-    // through Pulp's canvas. Return an empty linear so consumer code
-    // (assignment to fillStyle, addColorStop) doesn't throw.
-    return new CanvasGradient("linear", { x0: 0, y0: 0, x1: 1, y1: 0 });
+CanvasRenderingContext2D.prototype.createConicGradient = function(startAngle, cx, cy) {
+    // pulp #1434 bridge-thin gap-fill — build a real conic CanvasGradient.
+    // Spec signature: createConicGradient(startAngle, x, y) where startAngle
+    // is in radians. The Skia backend renders the sweep via
+    // SkGradientShader::MakeSweep; the CG backend degrades to the first
+    // stop's flat colour (no native conic shader). The gradient is flushed
+    // via canvasSetConicGradient when assigned to ctx.fillStyle.
+    return new CanvasGradient("conic", {
+        cx: +cx || 0,
+        cy: +cy || 0,
+        startAngle: +startAngle || 0
+    });
 };
 
 CanvasRenderingContext2D.prototype.createPattern = function() {
@@ -531,6 +579,9 @@ CanvasRenderingContext2D.prototype.measureText = function(text) {
 // needs sprite-sheet slicing.
 CanvasRenderingContext2D.prototype.drawImage = function(img, a, b, c, d, e, f, g, h) {
     if (typeof canvasDrawImage !== "function") return;
+    // pulp #1434 — flush imageSmoothing state so Skia / CG honour the
+    // current ctx.imageSmoothingEnabled + Quality on this draw.
+    this._syncImageSmoothingState();
     var src = "";
     if (typeof img === "string") src = img;
     else if (img && typeof img.src === "string") src = img.src;
