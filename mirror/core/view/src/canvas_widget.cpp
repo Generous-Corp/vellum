@@ -56,6 +56,7 @@ inline const char* canvas_cmd_type_name(CanvasDrawCmd::Type t) {
         case CanvasDrawCmd::Type::set_blend_mode: return "set_blend_mode";
         case CanvasDrawCmd::Type::set_fill_gradient_linear: return "set_fill_gradient_linear";
         case CanvasDrawCmd::Type::set_fill_gradient_radial: return "set_fill_gradient_radial";
+        case CanvasDrawCmd::Type::set_fill_gradient_conic: return "set_fill_gradient_conic";
         case CanvasDrawCmd::Type::clear_fill_gradient: return "clear_fill_gradient";
         case CanvasDrawCmd::Type::begin_path: return "begin_path";
         case CanvasDrawCmd::Type::move_to: return "move_to";
@@ -81,6 +82,8 @@ inline const char* canvas_cmd_type_name(CanvasDrawCmd::Type t) {
         case CanvasDrawCmd::Type::set_shadow_blur: return "set_shadow_blur";
         case CanvasDrawCmd::Type::set_shadow_offset_x: return "set_shadow_offset_x";
         case CanvasDrawCmd::Type::set_shadow_offset_y: return "set_shadow_offset_y";
+        case CanvasDrawCmd::Type::set_miter_limit: return "set_miter_limit";
+        case CanvasDrawCmd::Type::set_image_smoothing: return "set_image_smoothing";
         case CanvasDrawCmd::Type::clear: return "clear";
         case CanvasDrawCmd::Type::clear_rect: return "clear_rect";
     }
@@ -392,6 +395,16 @@ void CanvasWidget::paint(canvas::Canvas& canvas) {
                     cmd.gradient_colors.data(), cmd.gradient_positions.data(),
                     static_cast<int>(cmd.gradient_colors.size()));
             break;
+        // pulp #1434 bridge-thin gap-fill — ctx.createConicGradient. Skia
+        // routes through SkGradientShader::MakeSweep; CG degrades to the
+        // first-stop colour (no native conic shader). Stops in the same
+        // gradient_colors / gradient_positions vectors as linear/radial.
+        case CanvasDrawCmd::Type::set_fill_gradient_conic:
+            if (!cmd.gradient_colors.empty())
+                canvas.set_fill_gradient_conic(cmd.x, cmd.y, cmd.extra,
+                    cmd.gradient_colors.data(), cmd.gradient_positions.data(),
+                    static_cast<int>(cmd.gradient_colors.size()));
+            break;
         case CanvasDrawCmd::Type::clear_fill_gradient:
             canvas.clear_fill_gradient();
             break;
@@ -471,6 +484,23 @@ void CanvasWidget::paint(canvas::Canvas& canvas) {
         case CanvasDrawCmd::Type::set_shadow_offset_y:
             canvas.set_shadow_offset_y(cmd.extra);
             break;
+        // pulp #1434 bridge-thin gap-fill — Canvas2D ctx.miterLimit and
+        // ctx.imageSmoothingEnabled / Quality. Sticky stroke / image state
+        // pushed by the JS shim. SkiaCanvas / CoreGraphicsCanvas honour
+        // them on the next stroke / drawImage; RecordingCanvas captures
+        // a single setter cmd per change so tests can assert flush order.
+        case CanvasDrawCmd::Type::set_miter_limit:
+            canvas.set_miter_limit(cmd.extra);
+            break;
+        case CanvasDrawCmd::Type::set_image_smoothing: {
+            using Q = canvas::Canvas::ImageSmoothingQuality;
+            Q q = Q::low;
+            int qi = static_cast<int>(cmd.extra);
+            if (qi == 1) q = Q::medium;
+            else if (qi == 2) q = Q::high;
+            canvas.set_image_smoothing(cmd.int_val != 0, q);
+            break;
+        }
 
         // putImageData (issue-916). Pixels packed in cmd.text as
         // raw RGBA bytes; int_val = width; x2 = height (as float, will round).
