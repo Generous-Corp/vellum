@@ -119,6 +119,13 @@ declare global {
     const setBorderTopRightRadius: ((id: string, radius: number) => void) | undefined;
     const setBorderBottomLeftRadius: ((id: string, radius: number) => void) | undefined;
     const setBorderBottomRightRadius: ((id: string, radius: number) => void) | undefined;
+    // pulp #1519 — outline cluster. Paint-time ring drawn OUTSIDE the
+    // border-box; does NOT take Yoga layout space. Style keyword set
+    // mirrors setBorderStyle.
+    const setOutlineColor: ((id: string, hexColor: string) => void) | undefined;
+    const setOutlineOffset: ((id: string, offsetPx: number) => void) | undefined;
+    const setOutlineStyle: ((id: string, style: string) => void) | undefined;
+    const setOutlineWidth: ((id: string, widthPx: number) => void) | undefined;
     function setOpacity(id: string, alpha: number): void;
     function setVisible(id: string, visible: boolean): void;
     function setPosition(id: string, top: number, left: number, right?: number, bottom?: number): void;
@@ -223,6 +230,9 @@ export function createMockBridge(): MockBridge {
         'setBorderBottomWidth', 'setBorderLeftWidth',
         'setBorderTopLeftRadius', 'setBorderTopRightRadius',
         'setBorderBottomLeftRadius', 'setBorderBottomRightRadius',
+        // pulp #1519 — RN outline cluster (paint-time ring outside the
+        // border-box; does not affect Yoga layout).
+        'setOutlineColor', 'setOutlineOffset', 'setOutlineStyle', 'setOutlineWidth',
         'setBorderSide', 'setOpacity', 'setVisible', 'setPosition',
         // pulp #1434 Triage #15 — boxShadow surfaced at the @pulp/react
         // layer; mock-bridge captures both setBoxShadow (with the full

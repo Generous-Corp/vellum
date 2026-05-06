@@ -160,6 +160,18 @@ export interface StyleProps {
     borderTopRightRadius?: number;
     borderBottomLeftRadius?: number;
     borderBottomRightRadius?: number;
+    /// pulp #1519 — CSS / RN outline cluster. Outline is paint-only:
+    /// it draws OUTSIDE the border-box and does NOT take up Yoga
+    /// layout space. Style keyword set mirrors borderStyle (CSS spec
+    /// identical). dashed/dotted install SkDashPathEffect at stroke
+    /// time; double/groove/ridge/inset/outset currently degrade to
+    /// solid (paint-side gap, same as borderStyle); none/hidden /
+    /// zero-width skip the stroke.
+    outlineColor?: string;
+    outlineOffset?: number;
+    outlineStyle?: 'solid' | 'dashed' | 'dotted' | 'double' | 'groove'
+                | 'ridge' | 'inset' | 'outset' | 'none' | 'hidden';
+    outlineWidth?: number;
     opacity?: number;
     visible?: boolean;
     /// pulp #1434 rn bridge-wires bundle — 7 props that already had C++

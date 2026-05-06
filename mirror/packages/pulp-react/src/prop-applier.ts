@@ -556,6 +556,15 @@ function applyOne(id: string, type: string, key: string, value: unknown, props?:
         case 'borderTopRightRadius':    return call('setBorderTopRightRadius', id, value as number);
         case 'borderBottomLeftRadius':  return call('setBorderBottomLeftRadius', id, value as number);
         case 'borderBottomRightRadius': return call('setBorderBottomRightRadius', id, value as number);
+        // pulp #1519 — RN outline cluster. Paint-time ring drawn OUTSIDE
+        // the border-box (no Yoga layout impact). Each prop routes to its
+        // own per-attribute bridge fn so a JSX prop diff that touches one
+        // outline-* preserves the others. Style keyword set mirrors
+        // borderStyle (CSS spec is identical).
+        case 'outlineColor':  return call('setOutlineColor',  id, value as string);
+        case 'outlineOffset': return call('setOutlineOffset', id, value as number);
+        case 'outlineStyle':  return call('setOutlineStyle',  id, value as string);
+        case 'outlineWidth':  return call('setOutlineWidth',  id, value as number);
         case 'opacity':      return call('setOpacity', id, value as number);
         case 'visible':      return call('setVisible', id, value as boolean);
         // pulp #1434 (rn batch — Triage #12) — `display: 'flex' | 'none'`.
