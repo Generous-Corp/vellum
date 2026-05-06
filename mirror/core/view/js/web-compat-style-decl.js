@@ -851,23 +851,50 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
             else setOpacity(id, 1);
             break;
 
-        // outline: "2px solid blue"
+        // outline: "2px solid blue" — fan-out to the per-attribute
+        // bridge fns introduced in pulp #1519 (setOutlineColor /
+        // setOutlineStyle / setOutlineWidth). Falls back to legacy
+        // setOutline if the new ones aren't registered (older bridge).
         case "outline": {
-            var op = resolved.match(/([\d.]+)px\s+\w+\s+(.+)/);
+            var op = resolved.match(/([\d.]+)px\s+(\w+)\s+(.+)/);
             if (op) {
-                var oc = parseCSSColor(op[2].trim());
-                if (typeof setOutline === "function") setOutline(id, parseFloat(op[1]), oc || op[2].trim());
+                var oc = parseCSSColor(op[3].trim());
+                if (typeof setOutlineWidth === "function") {
+                    setOutlineWidth(id, parseFloat(op[1]));
+                    if (typeof setOutlineStyle === "function") setOutlineStyle(id, op[2]);
+                    if (typeof setOutlineColor === "function") setOutlineColor(id, oc || op[3].trim());
+                } else if (typeof setOutline === "function") {
+                    setOutline(id, parseFloat(op[1]), oc || op[3].trim());
+                }
             }
             break;
         }
         case "outlineWidth": {
             var ow = parseCSSLength(resolved);
-            if (ow && typeof setOutline === "function") setOutline(id, ow.value, "");
+            if (ow) {
+                if (typeof setOutlineWidth === "function") setOutlineWidth(id, ow.value);
+                else if (typeof setOutline === "function") setOutline(id, ow.value, "");
+            }
             break;
         }
         case "outlineColor": {
             var occ = parseCSSColor(resolved);
-            if (occ && typeof setOutline === "function") setOutline(id, 0, occ);
+            if (occ) {
+                if (typeof setOutlineColor === "function") setOutlineColor(id, occ);
+                else if (typeof setOutline === "function") setOutline(id, 0, occ);
+            }
+            break;
+        }
+        // pulp #1519 — outline-offset / outline-style now have dedicated
+        // bridge setters. Outline doesn't take Yoga layout space, so the
+        // CSS path mirrors borderStyle keyword set verbatim.
+        case "outlineOffset": {
+            var oo = parseCSSLength(resolved);
+            if (oo && typeof setOutlineOffset === "function") setOutlineOffset(id, oo.value);
+            break;
+        }
+        case "outlineStyle": {
+            if (typeof setOutlineStyle === "function") setOutlineStyle(id, resolved);
             break;
         }
 
@@ -1199,7 +1226,7 @@ var __cssProperties__ = [
     "borderTopWidth", "borderRightWidth", "borderBottomWidth", "borderLeftWidth",
     "borderTopColor", "borderRightColor", "borderBottomColor", "borderLeftColor",
     "borderTopLeftRadius", "borderTopRightRadius", "borderBottomLeftRadius", "borderBottomRightRadius",
-    "outline", "outlineWidth", "outlineColor",
+    "outline", "outlineWidth", "outlineColor", "outlineOffset", "outlineStyle",
     "opacity", "overflow", "cursor", "visibility",
     "userSelect", "pointerEvents",
     "transform", "transformOrigin",
