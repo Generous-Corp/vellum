@@ -344,6 +344,25 @@ public:
     void set_border_style(BorderStyle s) { border_style_ = s; }
     BorderStyle border_style() const { return border_style_; }
 
+    /// CSS / RN outline cluster (pulp #1519). Outline is a paint-time
+    /// ring drawn OUTSIDE the border-box; it does NOT affect Yoga layout
+    /// (no parent space reserved). Slotting mirrors border-* but lives
+    /// in its own quartet of fields so a JSX prop diff that touches one
+    /// outline-* prop preserves the others. Reuses View::BorderStyle for
+    /// the line-style enum since CSS keyword sets are identical (solid /
+    /// dashed / dotted / double / groove / ridge / inset / outset / none /
+    /// hidden). The Skia paint inflates the box by `outline_offset_ +
+    /// outline_width_ / 2` and strokes; CG falls through (set_line_dash
+    /// canvas-base no-op) for dashed/dotted same as border-style.
+    void set_outline_color(Color c) { outline_color_ = c; }
+    void set_outline_offset(float px) { outline_offset_ = px; }
+    void set_outline_style(BorderStyle s) { outline_style_ = s; }
+    void set_outline_width(float px) { outline_width_ = px; }
+    Color outline_color() const { return outline_color_; }
+    float outline_offset() const { return outline_offset_; }
+    BorderStyle outline_style() const { return outline_style_; }
+    float outline_width() const { return outline_width_; }
+
     /// Per-side borders (CSS border-top, border-right, etc.)
     void set_border_top(Color c, float w) { border_top_ = {c, w}; has_border_sides_ = true; }
     void set_border_right(Color c, float w) { border_right_ = {c, w}; has_border_sides_ = true; }
@@ -704,6 +723,15 @@ private:
     float corner_radius_ = 0;
     bool has_border_ = false;
     BorderStyle border_style_ = BorderStyle::solid;
+    // CSS / RN outline cluster (pulp #1519). Defaults: outline_style_
+    // is `none` so paint short-circuits unless JS opts in via
+    // setOutlineStyle. width=0 also short-circuits as a belt-and-braces
+    // guard. Color defaults to fully-transparent black; bridge writes
+    // the parsed setter value before paint.
+    Color outline_color_{};
+    float outline_offset_ = 0.0f;
+    float outline_width_ = 0.0f;
+    BorderStyle outline_style_ = BorderStyle::none;
     // Per-side borders
     struct BorderSide { Color color{}; float width = 0; };
     BorderSide border_top_{}, border_right_{}, border_bottom_{}, border_left_{};
