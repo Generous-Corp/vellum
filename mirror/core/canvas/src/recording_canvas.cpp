@@ -416,6 +416,23 @@ void RecordingCanvas::set_shadow_offset_y(float dy) {
     commands_.push_back(std::move(cmd));
 }
 
+// ── issue-1434 bridge-thin gap-fill: Canvas2D state setters ─────────────────
+// Mirror the shadow-state recording shape — one cmd per setter so the
+// canvas2d bridge harness can assert flush order without rasterizing.
+void RecordingCanvas::set_miter_limit(float limit) {
+    DrawCommand cmd{DrawCommand::Type::set_miter_limit};
+    cmd.f[0] = limit;
+    commands_.push_back(cmd);
+}
+
+void RecordingCanvas::set_image_smoothing(bool enabled,
+                                          ImageSmoothingQuality quality) {
+    DrawCommand cmd{DrawCommand::Type::set_image_smoothing};
+    cmd.f[0] = enabled ? 1.0f : 0.0f;
+    cmd.f[1] = static_cast<float>(quality);
+    commands_.push_back(cmd);
+}
+
 // ── issue-965: Canvas2D path API recording ──────────────────────────────────
 void RecordingCanvas::begin_path() {
     commands_.push_back({DrawCommand::Type::begin_path});

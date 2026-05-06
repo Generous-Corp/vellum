@@ -62,6 +62,13 @@ public:
     void set_line_cap(LineCap cap) override;
     void set_line_join(LineJoin join) override;
 
+    // pulp #1434 bridge-thin gap-fill — Canvas2D ctx.miterLimit and
+    // ctx.imageSmoothingEnabled / ctx.imageSmoothingQuality. Sticky paint
+    // state honored by subsequent stroke / drawImage calls.
+    void set_miter_limit(float limit) override;
+    void set_image_smoothing(bool enabled,
+                             ImageSmoothingQuality quality) override;
+
     // ── Shapes ───────────────────────────────────────────────────────────
     void fill_rect(float x, float y, float w, float h) override;
     void clear_rect(float x, float y, float w, float h) override;
@@ -197,6 +204,19 @@ private:
     // so the gating logic stays in one place.
     bool shadow_is_active() const;
 
+    // pulp #1434 bridge-thin gap-fill — apply sticky stroke join + miter
+    // limit to a freshly-constructed stroke paint. Called from the
+    // stroke_* paths after make_stroke_paint() but before any paint
+    // submit. Centralises the policy so future stroke-state setters
+    // (lineCap and friends) can join here without touching every site.
+    void apply_stroke_state(SkPaint& paint) const;
+
+    // pulp #1434 bridge-thin gap-fill — translate the sticky
+    // imageSmoothingEnabled / imageSmoothingQuality state into an
+    // SkSamplingOptions for drawImageRect. Spec defaults match Skia
+    // defaults so non-set callers keep getting kLinear.
+    SkSamplingOptions sampling_options_for_image_smoothing() const;
+
     SkCanvas* canvas_;        // Non-owning — owned by surface or caller
     skgpu::graphite::Recorder* recorder_ = nullptr; // Non-owning — owned by SkiaSurface
     Color fill_color_ = Color::rgba(1.0f, 1.0f, 1.0f);
@@ -204,6 +224,14 @@ private:
     float line_width_ = 1.0f;
     LineCap line_cap_ = LineCap::butt;
     LineJoin line_join_ = LineJoin::miter;
+    // pulp #1434 bridge-thin gap-fill — Canvas2D ctx.miterLimit. Spec
+    // default is 10 (matches Skia's SkPaint default).
+    float miter_limit_ = 10.0f;
+    // pulp #1434 bridge-thin gap-fill — Canvas2D ctx.imageSmoothingEnabled
+    // / ctx.imageSmoothingQuality. Defaults match the spec (`true`,
+    // `"low"`). Honored by draw_image_from_data / draw_image_from_file.
+    bool image_smoothing_enabled_ = true;
+    ImageSmoothingQuality image_smoothing_quality_ = ImageSmoothingQuality::low;
     std::string font_family_ = "sans-serif";
     int font_weight_ = 400;             ///< CSS weight 100..900 (pulp #927)
     int font_slant_ = 0;                ///< 0=upright, 1=italic (pulp #927)

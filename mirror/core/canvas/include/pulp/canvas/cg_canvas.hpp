@@ -41,12 +41,24 @@ public:
     void set_line_cap(LineCap cap) override;
     void set_line_join(LineJoin join) override;
 
+    // pulp #1434 bridge-thin gap-fill — Canvas2D ctx.miterLimit and
+    // imageSmoothingEnabled / Quality. Stored on the canvas; CGContext's
+    // CGContextSetMiterLimit / CGContextSetInterpolationQuality apply
+    // immediately (no per-draw re-push needed since they hang off the
+    // current GState).
+    void set_miter_limit(float limit) override;
+    void set_image_smoothing(bool enabled,
+                             ImageSmoothingQuality quality) override;
+
     void set_fill_gradient_linear(float x0, float y0, float x1, float y1,
                                    const Color* colors, const float* positions,
                                    int count) override;
     void set_fill_gradient_radial(float cx, float cy, float radius,
                                    const Color* colors, const float* positions,
                                    int count) override;
+    void set_fill_gradient_conic(float cx, float cy, float start_angle,
+                                  const Color* colors, const float* positions,
+                                  int count) override;
     void clear_fill_gradient() override;
 
     void fill_rect(float x, float y, float w, float h) override;

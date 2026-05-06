@@ -290,6 +290,35 @@ public:
     virtual void set_line_cap(LineCap cap) = 0;
     virtual void set_line_join(LineJoin join) = 0;
 
+    /// Canvas2D `ctx.miterLimit`. Sticky stroke state — controls when a
+    /// `miter` join collapses to a `bevel` (Skia / CG default = 10). Spec
+    /// requires non-finite or non-positive values to be silently ignored;
+    /// callers that want spec semantics should clamp at the JS bridge.
+    /// Default no-op so backends without miter-limit support compile;
+    /// SkiaCanvas (`SkPaint::setStrokeMiter`) and CoreGraphicsCanvas
+    /// (`CGContextSetMiterLimit`) override. RecordingCanvas captures a
+    /// `set_miter_limit` command for tests. pulp #1434.
+    virtual void set_miter_limit(float limit) { (void)limit; }
+
+    /// Canvas2D image-smoothing quality enum. Mirrors the spec's
+    /// `imageSmoothingQuality` attribute. The bridge maps the JS string
+    /// values (`"low" | "medium" | "high"`) onto these.
+    enum class ImageSmoothingQuality { low, medium, high };
+
+    /// Canvas2D `ctx.imageSmoothingEnabled` + `imageSmoothingQuality`.
+    /// Sticky paint flag honored by subsequent `drawImage` calls. When
+    /// `enabled` is false the backend uses nearest-neighbour sampling;
+    /// when true the quality enum picks the resampler. Default no-op so
+    /// backends without smoothing support compile; SkiaCanvas
+    /// (`SkSamplingOptions`) and CoreGraphicsCanvas
+    /// (`CGContextSetInterpolationQuality`) override. RecordingCanvas
+    /// captures a `set_image_smoothing` command for tests. pulp #1434.
+    virtual void set_image_smoothing(bool enabled,
+                                     ImageSmoothingQuality quality
+                                         = ImageSmoothingQuality::low) {
+        (void)enabled; (void)quality;
+    }
+
     // ── Gradients ────────────────────────────────────────────────────────
     /// Set a linear gradient as the fill paint.
     virtual void set_fill_gradient_linear(float x0, float y0, float x1, float y1,
@@ -789,6 +818,11 @@ struct DrawCommand {
         set_shadow_blur,     ///< blur (px) in f[0]
         set_shadow_offset_x, ///< dx (px) in f[0]
         set_shadow_offset_y, ///< dy (px) in f[0]
+        // ── issue-1434 bridge-thin gap-fill: Canvas2D state setters ───
+        // Sticky stroke / image state. Captured one cmd per setter so
+        // the canvas2d bridge harness can assert flush order.
+        set_miter_limit,     ///< limit in f[0]
+        set_image_smoothing, ///< enabled in f[0] (0/1), quality in f[1] (0=low,1=med,2=high)
         // ── issue-926: save_backdrop_filter for frosted-glass overlays ─
         save_backdrop_filter, ///< x/y/w/h in f[0..3], blur_radius in f[4]
         // ── issue-929: real clearRect that replaces pixels ────────────
@@ -899,6 +933,14 @@ public:
     void set_shadow_blur(float blur) override;
     void set_shadow_offset_x(float dx) override;
     void set_shadow_offset_y(float dy) override;
+
+    // issue-1434 bridge-thin gap-fill — capture sticky stroke / image
+    // state so tests can assert that JS `ctx.miterLimit = ...` and
+    // `ctx.imageSmoothingEnabled = ...` flush through to the canvas
+    // before the next geometry is recorded.
+    void set_miter_limit(float limit) override;
+    void set_image_smoothing(bool enabled,
+                             ImageSmoothingQuality quality) override;
 
     // issue-965 — Canvas2D path API recording. Each call appends one
     // DrawCommand so widget tests can assert on emit order and shape

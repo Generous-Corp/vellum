@@ -2,6 +2,8 @@
 
 #ifdef __APPLE__
 
+#include <cmath>
+
 #import <CoreGraphics/CoreGraphics.h>
 #import <CoreText/CoreText.h>
 #import <Foundation/Foundation.h>
@@ -657,10 +659,72 @@ void CoreGraphicsCanvas::set_fill_gradient_radial(float cx, float cy,
     grad_positions_.assign(positions, positions + count);
 }
 
+// pulp #1434 bridge-thin gap-fill — Canvas2D ctx.createConicGradient.
+// CoreGraphics has no native conic shader (no equivalent of
+// CGContextDrawConicGradient), so degrade to a flat first-stop fill —
+// the same fallback pattern set_fill_gradient_radial took before its
+// real two-circle implementation landed. The Skia backend renders the
+// real conic via SkGradientShader::MakeSweep.
+void CoreGraphicsCanvas::set_fill_gradient_conic(float cx, float cy,
+                                                  float start_angle,
+                                                  const Color* colors,
+                                                  const float* positions,
+                                                  int count) {
+    (void)cx; (void)cy; (void)start_angle; (void)positions;
+    if (count <= 0) {
+        clear_fill_gradient();
+        return;
+    }
+    // CG can't render the sweep — pick the first stop as the active
+    // solid colour. Drop the gradient flag so subsequent fill_rect /
+    // fill_current_path paints with the new flat colour rather than
+    // re-running the linear/radial Draw call we wouldn't want to invoke.
+    clear_fill_gradient();
+    set_fill_color(colors[0]);
+}
+
 void CoreGraphicsCanvas::clear_fill_gradient() {
     has_gradient_ = false;
     grad_colors_.clear();
     grad_positions_.clear();
+}
+
+// pulp #1434 bridge-thin gap-fill — Canvas2D ctx.miterLimit.
+// CGContextSetMiterLimit attaches the value to the current GState, so
+// save()/restore() snapshots and pops it naturally. Spec: non-positive
+// or non-finite values are silently ignored (matches CG behaviour for
+// the "set" itself — CG would clamp to its internal minimum, but we
+// short-circuit to keep the recording-canvas test surface deterministic).
+void CoreGraphicsCanvas::set_miter_limit(float limit) {
+    if (!std::isfinite(limit) || limit <= 0.0f) return;
+    if (ctx_) {
+        CGContextSetMiterLimit(ctx_, limit);
+    }
+}
+
+// pulp #1434 bridge-thin gap-fill — Canvas2D
+// imageSmoothingEnabled / imageSmoothingQuality. CG exposes the same
+// concept via CGContextSetInterpolationQuality on the current GState.
+// We translate the spec's three quality levels onto CG's enum:
+//   low    = kCGInterpolationLow     (cheap bilinear)
+//   medium = kCGInterpolationMedium
+//   high   = kCGInterpolationHigh    (Lanczos / cubic)
+// `enabled = false` collapses to kCGInterpolationNone (nearest), which
+// is what HTML5 canvas spec requires (pixel-art preservation).
+void CoreGraphicsCanvas::set_image_smoothing(bool enabled,
+                                              ImageSmoothingQuality quality) {
+    if (!ctx_) return;
+    CGInterpolationQuality cg_q = kCGInterpolationDefault;
+    if (!enabled) {
+        cg_q = kCGInterpolationNone;
+    } else {
+        switch (quality) {
+            case ImageSmoothingQuality::low:    cg_q = kCGInterpolationLow;    break;
+            case ImageSmoothingQuality::medium: cg_q = kCGInterpolationMedium; break;
+            case ImageSmoothingQuality::high:   cg_q = kCGInterpolationHigh;   break;
+        }
+    }
+    CGContextSetInterpolationQuality(ctx_, cg_q);
 }
 
 void CoreGraphicsCanvas::fill_with_active_paint() {

@@ -4330,6 +4330,58 @@ void WidgetBridge::register_api() {
         return choc::value::Value();
     });
 
+    // pulp #1434 bridge-thin gap-fill — ctx.createConicGradient. Skia
+    // already exposes set_fill_gradient_conic via SkGradientShader::MakeSweep
+    // (skia_canvas.cpp line ~917); CG degrades to the first-stop colour.
+    // Args: (id, cx, cy, startAngle, color1, pos1, color2, pos2, ...)
+    engine_.register_function("canvasSetConicGradient", [this, parseColor](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::set_fill_gradient_conic;
+            cmd.x = (float)args.get<double>(1, 0);   // cx
+            cmd.y = (float)args.get<double>(2, 0);   // cy
+            cmd.extra = (float)args.get<double>(3, 0); // start_angle (radians)
+            for (int i = 4; i + 1 < static_cast<int>(args.numArgs); i += 2) {
+                cmd.gradient_colors.push_back(parseColor(args.get<std::string>(i, "#fff")));
+                cmd.gradient_positions.push_back((float)args.get<double>(i + 1, 0));
+            }
+            c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    // pulp #1434 bridge-thin gap-fill — ctx.miterLimit. Sticky stroke
+    // state honoured by SkPaint::setStrokeMiter (Skia) and
+    // CGContextSetMiterLimit (CG). Spec: non-positive / non-finite
+    // values are silently ignored — backends do the clamp.
+    // Args: (id, limit)
+    engine_.register_function("canvasSetMiterLimit", [this](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::set_miter_limit;
+            cmd.extra = (float)args.get<double>(1, 10.0); // spec default = 10
+            c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    // pulp #1434 bridge-thin gap-fill — ctx.imageSmoothingEnabled +
+    // ctx.imageSmoothingQuality. Sticky paint flag honoured on the next
+    // drawImage. Skia translates to SkSamplingOptions, CG to
+    // CGContextSetInterpolationQuality.
+    // Args: (id, enabled[, quality]) where quality ∈ "low" | "medium" | "high".
+    engine_.register_function("canvasSetImageSmoothing", [this](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::set_image_smoothing;
+            cmd.int_val = args.get<bool>(1, true) ? 1 : 0;
+            auto q = args.get<std::string>(2, "low");
+            int qi = 0;
+            if (q == "medium") qi = 1;
+            else if (q == "high") qi = 2;
+            cmd.extra = static_cast<float>(qi);
+            c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
     // P1: Canvas arc — for pie charts, circular progress, arcs
     engine_.register_function("canvasArc", [this, parseColor](choc::javascript::ArgumentList args) {
         if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
