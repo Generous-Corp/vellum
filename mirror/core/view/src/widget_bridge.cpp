@@ -4567,6 +4567,50 @@ void WidgetBridge::register_api() {
         return choc::value::Value();
     });
 
+    // pulp #1434 bridge-thin gap-fill — ctx.createPattern. Skia path
+    // routes through SkShader::MakeImage with SkTileMode per axis (real
+    // tiled fill); CG path degrades to the active fill colour because
+    // CG has no first-class pattern shader without CGPattern dance —
+    // same shape as the conic-gradient fallback.
+    //
+    // Args: (id, src, tile_x, tile_y)
+    //   src      — image source (file path, "data:" URL, or "" for clear)
+    //   tile_x   — "repeat" | "no-repeat"
+    //   tile_y   — "repeat" | "no-repeat"
+    engine_.register_function("canvasSetFillPattern", [this](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::set_fill_pattern;
+            cmd.text = args.get<std::string>(1, "");          // image source
+            auto tx = args.get<std::string>(2, "repeat");
+            auto ty = args.get<std::string>(3, "repeat");
+            // Pack tile modes into int_val (bit 0 = x, bit 1 = y);
+            // 0 = repeat, 1 = no-repeat. Mirrors set_image_smoothing's
+            // pattern of folding multiple enum values into one int slot.
+            int tx_i = (tx == "no-repeat") ? 1 : 0;
+            int ty_i = (ty == "no-repeat") ? 1 : 0;
+            cmd.int_val = tx_i | (ty_i << 1);
+            c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
+    // Stroke counterpart — same shape, different command type. Routes
+    // through set_stroke_pattern on the live canvas; CG falls back to
+    // solid stroke colour.
+    engine_.register_function("canvasSetStrokePattern", [this](choc::javascript::ArgumentList args) {
+        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::set_stroke_pattern;
+            cmd.text = args.get<std::string>(1, "");
+            auto tx = args.get<std::string>(2, "repeat");
+            auto ty = args.get<std::string>(3, "repeat");
+            int tx_i = (tx == "no-repeat") ? 1 : 0;
+            int ty_i = (ty == "no-repeat") ? 1 : 0;
+            cmd.int_val = tx_i | (ty_i << 1);
+            c->add_command(cmd);
+        }
+        return choc::value::Value();
+    });
+
     // pulp #1434 bridge-thin gap-fill — ctx.miterLimit. Sticky stroke
     // state honoured by SkPaint::setStrokeMiter (Skia) and
     // CGContextSetMiterLimit (CG). Spec: non-positive / non-finite
