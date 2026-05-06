@@ -219,6 +219,36 @@ function _parseAngleDegrees(v: unknown): number {
     return n;
 }
 
+// pulp #1434 rn bridge-wires bundle — parse a CSS transform-origin
+// string into two fractional coordinates (0..1) the bridge expects.
+// Accepts `'center'`, `'left top'`, `'NN%'` percentages, and `'NNpx'`
+// pixel offsets (the latter assumed to be on a unit-bound View — so
+// values just clamp). Falls back to {0.5, 0.5} on unrecognized input.
+function _parseTransformOrigin(s: string): { x: number; y: number } {
+    const work = s.trim().toLowerCase();
+    if (work === 'center' || work === '') return { x: 0.5, y: 0.5 };
+    const tokens = work.split(/\s+/);
+    const tok2coord = (tok: string, axis: 'x' | 'y'): number => {
+        if (tok === 'center') return 0.5;
+        if (tok === 'left' || tok === 'top')   return 0.0;
+        if (tok === 'right' || tok === 'bottom') return 1.0;
+        if (tok.endsWith('%')) {
+            const n = parseFloat(tok.slice(0, -1));
+            return Number.isFinite(n) ? n / 100 : 0.5;
+        }
+        // Bare number / px — interpret as fractional 0..1 if <=1, else
+        // clamp to 1.0 (better than negative/over-1 garbage on the
+        // bridge side; full pixel resolution would need parent bounds).
+        const n = parseFloat(tok);
+        if (!Number.isFinite(n)) return 0.5;
+        return Math.max(0, Math.min(1, n));
+        void axis;
+    };
+    const x = tok2coord(tokens[0] ?? 'center', 'x');
+    const y = tok2coord(tokens[1] ?? tokens[0] ?? 'center', 'y');
+    return { x, y };
+}
+
 // Walk the RN-style transform array. Returns a snapshot with `have*`
 // flags so the caller can dispatch only the operations the user
 // actually specified (translate dispatch is gated on haveTranslate, etc.).
@@ -553,6 +583,25 @@ function applyOne(id: string, type: string, key: string, value: unknown, props?:
         // Accepts the CSS keyword strings ('hidden' / 'visible' /
         // 'scroll' / 'auto'); bridge maps to View::Overflow enum.
         case 'overflow':     return call('setOverflow', id, value as string);
+
+        // pulp #1434 rn bridge-wires bundle (sub-agent #27 finding) —
+        // 7 RN-style props that already had C++ bridge fns registered
+        // but no `@pulp/react` prop-applier dispatch. Each forwards
+        // the keyword / string straight through to the matching setter.
+        case 'backfaceVisibility': return call('setBackfaceVisibility', id, value as string);
+        case 'cursor':             return call('setCursor', id, value as string);
+        case 'filter':             return call('setFilter', id, value as string);
+        case 'pointerEvents':      return call('setPointerEvents', id, value as string);
+        case 'textTransform':      return call('setTextTransform', id, value as string);
+        case 'userSelect':         return call('setUserSelect', id, value as string);
+        // transformOrigin accepts CSS strings of the form `'NN% NN%'`,
+        // `'NNpx NNpx'`, `'center'`, or two keyword tokens. The bridge
+        // wants two numeric fractions (0..1). Defaults to 0.5/0.5
+        // (center) when a token is unrecognized — matches CSS default.
+        case 'transformOrigin': {
+            const parsed = _parseTransformOrigin(String(value ?? 'center'));
+            return call('setTransformOrigin', id, parsed.x, parsed.y);
+        }
 
         // pulp #1434 Triage #9 — RN array transform.
         // RN's transform is an array of single-property objects:

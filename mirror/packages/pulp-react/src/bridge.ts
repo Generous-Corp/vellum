@@ -241,6 +241,12 @@ export function createMockBridge(): MockBridge {
         'setTextDecorationColor', 'setTextDecorationStyle',
         // pulp #1366 / #1434 — backdrop-filter (numeric blur arg).
         'setBackdropFilter',
+        // pulp #1434 rn bridge-wires bundle (sub-agent #27 finding) —
+        // 7 setX bridge fns now reachable from @pulp/react JSX. The
+        // C++ side has had these registered for a while; the gap was
+        // purely on the prop-applier dispatch.
+        'setBackfaceVisibility', 'setCursor', 'setFilter',
+        'setPointerEvents', 'setTransformOrigin', 'setUserSelect',
         'setSpectrumData', 'setWaveformData', 'setMeterLevel', 'setProgress',
         'setValue', 'setTheme', 'layout', 'on', 'registerHover',
         // pulp #1381 — registerPointer arms the bridge's on_pointer_event

@@ -119,6 +119,20 @@ export interface StyleProps {
     borderBottomRightRadius?: number;
     opacity?: number;
     visible?: boolean;
+    /// pulp #1434 rn bridge-wires bundle — 7 props that already had C++
+    /// bridge fns but no @pulp/react JSX dispatch. Each forwards the
+    /// keyword / string straight through to the matching setter.
+    backfaceVisibility?: 'hidden' | 'visible';
+    cursor?: string;
+    filter?: string;
+    pointerEvents?: 'auto' | 'none' | 'box-only' | 'box-none';
+    textTransform?: 'none' | 'uppercase' | 'lowercase' | 'capitalize';
+    /// CSS transform-origin: `'NN% NN%'`, `'NNpx NNpx'`, `'center'`,
+    /// or two-keyword combos (`'left top'`). Bridge expects fractional
+    /// 0..1 coordinates; the prop-applier parses the string before
+    /// dispatching.
+    transformOrigin?: string;
+    userSelect?: 'none' | 'text' | 'all';
     /// CSS / RN `display` keyword (pulp #1434 Triage #12). `'none'`
     /// hides the View (sets visible=false). `'flex'` is pulp's
     /// implicit default and is accepted as a no-op confirmation. Other
