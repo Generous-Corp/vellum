@@ -4177,6 +4177,36 @@ void WidgetBridge::register_api() {
             return choc::value::Value();
         });
 
+    // pulp #1517 — background sub-property setters. Storage-only today;
+    // see View::set_background_{attachment,clip,origin}() doc for the
+    // partial-vs-noop semantics. Wiring them here unblocks the JS shim
+    // path and lets the catalog honestly report `noop` / `partial`
+    // instead of `missing`.
+    engine_.register_function("setBackgroundAttachment",
+        [this](choc::javascript::ArgumentList args) {
+            auto id = args.get<std::string>(0, "");
+            auto kw = args.get<std::string>(1, "");
+            auto* v = id.empty() ? &root_ : widget(id);
+            if (v) v->set_background_attachment(kw);
+            return choc::value::Value();
+        });
+    engine_.register_function("setBackgroundClip",
+        [this](choc::javascript::ArgumentList args) {
+            auto id = args.get<std::string>(0, "");
+            auto kw = args.get<std::string>(1, "");
+            auto* v = id.empty() ? &root_ : widget(id);
+            if (v) v->set_background_clip(kw);
+            return choc::value::Value();
+        });
+    engine_.register_function("setBackgroundOrigin",
+        [this](choc::javascript::ArgumentList args) {
+            auto id = args.get<std::string>(0, "");
+            auto kw = args.get<std::string>(1, "");
+            auto* v = id.empty() ? &root_ : widget(id);
+            if (v) v->set_background_origin(kw);
+            return choc::value::Value();
+        });
+
     // setBackgroundGradient(id, "linear-gradient(to right, #ff0000, #0000ff)")
     engine_.register_function("setBackgroundGradient", [this, parseColor](choc::javascript::ArgumentList args) {
         auto id = args.get<std::string>(0, "");
