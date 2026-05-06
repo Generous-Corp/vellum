@@ -136,6 +136,12 @@ export interface FlexProps {
 export interface StyleProps {
     background?: string;            // hex; maps to setBackground
     backgroundGradient?: string;    // CSS-string; maps to setBackgroundGradient
+    /// pulp #1517 — CSS background sub-properties. Stored on the View
+    /// for round-tripping; paint impact partial today (see compat.json
+    /// css/backgroundAttachment / Clip / Origin).
+    backgroundAttachment?: 'scroll' | 'fixed' | 'local';
+    backgroundClip?: 'border-box' | 'padding-box' | 'content-box' | 'text';
+    backgroundOrigin?: 'border-box' | 'padding-box' | 'content-box';
     border?: { color: string; width?: number; radius?: number };  // setBorder
     borderTop?: { color: string; width: number };                  // setBorderSide
     borderRight?: { color: string; width: number };
