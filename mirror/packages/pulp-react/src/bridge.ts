@@ -318,6 +318,18 @@ export function createMockBridge(): MockBridge {
         'setTextTransform', 'setTextDecoration',
         // pulp #1434 batch 3 — text-decoration longhands.
         'setTextDecorationColor', 'setTextDecorationStyle',
+        // pulp #1434 (rn NOT-IMPL bundle 1) — RN textShadow cluster.
+        // Each per-attribute setter writes one slot in isolation so
+        // a JSX prop diff that touches one preserves the others.
+        // Bridge-side registration is staged on the #1548 feature
+        // branch; mock-bridge captures the calls so the JSX surface
+        // can be tested ahead of the bridge merge.
+        'setTextShadowColor', 'setTextShadowOffset', 'setTextShadowRadius',
+        // pulp #1434 (rn NOT-IMPL bundle 1) — RN fontVariant. The
+        // OpenType feature CSV is forwarded to a planned setFontVariant
+        // bridge fn (HarfBuzz hb_feature_t shape-pass wiring deferred).
+        // Mock-bridge captures the dispatch shape today.
+        'setFontVariant',
         // pulp #1366 / #1434 — backdrop-filter (numeric blur arg).
         'setBackdropFilter',
         // pulp #1434 rn bridge-wires bundle (sub-agent #27 finding) —

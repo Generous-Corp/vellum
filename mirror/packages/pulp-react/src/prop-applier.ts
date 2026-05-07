@@ -425,7 +425,24 @@ function applyOne(id: string, type: string, key: string, value: unknown, props?:
 
     switch (key) {
         // Flex / layout — all forwarded through setFlex
-        case 'direction':       return call('setFlex', id, 'direction', value as string);
+        // pulp #1434 (rn NOT-IMPL bundle 1) — `direction` is overloaded:
+        //   • RN (and CSS spec) sense — writing direction: 'ltr' / 'rtl' /
+        //     'inherit' (RN spec also accepts 'auto' on iOS-classic). The
+        //     New Architecture surfaces this cross-platform.
+        //   • pulp historical sense — flexDirection alias: 'row' / 'col' /
+        //     'row-reverse' / 'column' / 'column-reverse'. Existing test
+        //     at prop-applier-direction.test.ts:60 pins this behavior.
+        // Disambiguate on value: writing-direction keywords route to
+        // setDirection; everything else falls through to setFlex(direction)
+        // for backward compat. `writingDirection` is preferred for new code
+        // (case below) but RN code commonly emits `direction: 'rtl'`.
+        case 'direction': {
+            const sval = String(value).trim().toLowerCase();
+            if (sval === 'ltr' || sval === 'rtl' || sval === 'inherit' || sval === 'auto') {
+                return call('setDirection', id, sval);
+            }
+            return call('setFlex', id, 'direction', value as string);
+        }
         case 'gap':             return call('setFlex', id, 'gap', value as number);
         case 'rowGap':          return call('setFlex', id, 'row_gap', value as number);
         case 'columnGap':       return call('setFlex', id, 'column_gap', value as number);
@@ -1017,6 +1034,58 @@ function applyOne(id: string, type: string, key: string, value: unknown, props?:
             return call('setLineClamp', id, Number.isFinite(n) ? n : 0);
         }
         case 'backgroundRepeat': return call('setBackgroundRepeat', id, value as string);
+
+        // pulp #1434 (rn NOT-IMPL bundle 1) — RN's `textDecorationLine`
+        // is the spec-aligned name; pulp's bridge uses `setTextDecoration`
+        // (single-keyword form). RN allows `'underline line-through'` as
+        // a compound — pass through verbatim; the bridge's keyword table
+        // currently honors single-keyword `'none' / 'underline' /
+        // 'line-through' / 'overline'`. Compound rendering is the same
+        // partial gap as css/textDecoration's "single-keyword only" note.
+        case 'textDecorationLine': return call('setTextDecoration', id, value as string);
+        // pulp #1434 (rn NOT-IMPL bundle 1) — RN textShadow cluster.
+        // The CSS shim (`web-compat-style-decl.js`) calls `setTextShadow`
+        // defensively (`if (typeof setTextShadow === 'function')`); the
+        // bridge does NOT yet register that fn, so paint is a no-op
+        // today. Wire the @pulp/react surface here so when the bridge
+        // gains the registration (planned slot, see #1548 feature
+        // branch) every consumer flips on without a JSX-side change.
+        // Each per-attribute setter writes ONE slot in isolation so a
+        // diff that touches one prop doesn't clobber the others.
+        case 'textShadowColor':  return call('setTextShadowColor',  id, value as string);
+        case 'textShadowOffset': {
+            // RN spec: `{ width, height }` (number / number).
+            const o = value as { width?: number; height?: number };
+            const dx = typeof o?.width  === 'number' ? o.width  : 0;
+            const dy = typeof o?.height === 'number' ? o.height : 0;
+            return call('setTextShadowOffset', id, dx, dy);
+        }
+        case 'textShadowRadius': return call('setTextShadowRadius', id, value as number);
+
+        // pulp #1434 (rn NOT-IMPL bundle 1) — RN's `experimental_backgroundImage`
+        // (New Architecture only) accepts a CSS gradient string. Route
+        // through the existing setBackgroundGradient bridge fn — same
+        // shape, same parser. RN also allows an array-of-objects gradient
+        // form on Fabric; that shape is NOT supported here (gradient
+        // strings only). Catalog flips missing → partial.
+        case 'experimental_backgroundImage':
+            return call('setBackgroundGradient', id, value as string);
+
+        // pulp #1434 (rn NOT-IMPL bundle 1) — RN's `fontVariant` is a
+        // string-array of OpenType feature tokens (`['small-caps',
+        // 'tabular-nums', ...]`). True implementation requires HarfBuzz
+        // hb_feature_t setting on the shape pass — outside the scope of
+        // this prop-applier wiring. Forward as a comma-joined string to
+        // a bridge fn name reserved for the future paint-time impl;
+        // until the bridge registers `setFontVariant`, the dispatch is
+        // a no-op (the `call` helper silently skips unregistered names).
+        // Catalog flips missing → partial with the gotcha documented.
+        case 'fontVariant': {
+            const joined = Array.isArray(value)
+                ? (value as string[]).join(',')
+                : String(value);
+            return call('setFontVariant', id, joined);
+        }
 
         // Widget-specific data
         case 'data':
