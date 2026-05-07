@@ -3777,7 +3777,16 @@ void WidgetBridge::register_api() {
 
     engine_.register_function("canvasFillPath", [this](choc::javascript::ArgumentList args) {
         if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
-            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::fill_path; c->add_command(cmd);
+            // pulp DIVERGE→PASS sweep — read the optional fillRule int
+            // (0 = nonzero, 1 = evenodd) so the spec arg actually
+            // threads into the recorded command. The skia / cg paint
+            // sides already key on int_val for fill_path / clip;
+            // before this read the value was always 0 even when JS
+            // passed `1`. (Pairs with [issue-1522] test which had been
+            // failing since landing because the wiring got missed.)
+            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::fill_path;
+            cmd.int_val = (int)args.get<double>(1, 0);
+            c->add_command(cmd);
         }
         return choc::value::Value();
     });
@@ -5953,10 +5962,13 @@ void WidgetBridge::register_api() {
         return choc::value::Value();
     });
 
-    // canvasClip(id) — intersect clip region with current path (issue-896).
+    // canvasClip(id, fillRule?) — intersect clip region with current path (issue-896).
+    // pulp DIVERGE→PASS sweep — also threads optional fillRule int (0 =
+    // nonzero, 1 = evenodd). Same as canvasFillPath above.
     engine_.register_function("canvasClip", [this](choc::javascript::ArgumentList args) {
         if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
             CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::clip;
+            cmd.int_val = (int)args.get<double>(1, 0);
             c->add_command(cmd);
         }
         return choc::value::Value();
