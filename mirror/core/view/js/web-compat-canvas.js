@@ -618,12 +618,15 @@ CanvasRenderingContext2D.prototype.closePath = function() {
     }
 };
 
-CanvasRenderingContext2D.prototype.fill = function() {
+CanvasRenderingContext2D.prototype.fill = function(fillRule) {
+    // pulp DIVERGE→PASS sweep — fillRule arg ('evenodd' | 'nonzero')
+    // threads through to the bridge. Default 'nonzero' = 0; 'evenodd' = 1.
     this._syncGlobalState();
     this._syncShadowState();
     this._syncFilterState();
     this._applyFillStyle();
-    if (typeof canvasFillPath === "function") canvasFillPath(this._id);
+    var rule = (fillRule === "evenodd") ? 1 : 0;
+    if (typeof canvasFillPath === "function") canvasFillPath(this._id, rule);
 };
 
 CanvasRenderingContext2D.prototype.stroke = function() {
@@ -937,9 +940,12 @@ CanvasRenderingContext2D.prototype.clip = function(fillRule) {
     // pulp #964 — match Canvas2D's clip() spec: intersect the current
     // clip region with the current path. The bridge's canvasClip
     // (issue-896) calls SkCanvas::clipPath; canvasClipRect is the older
-    // rect-only path. Prefer canvasClip when available.
-    void fillRule;
-    if (typeof canvasClip === "function") canvasClip(this._id);
+    // rect-only path.
+    // pulp DIVERGE→PASS sweep — thread the fillRule arg ('evenodd' |
+    // 'nonzero') through to canvasClip, matching what the bridge now
+    // accepts as int_val (0 = nonzero, 1 = evenodd).
+    var rule = (fillRule === "evenodd") ? 1 : 0;
+    if (typeof canvasClip === "function") canvasClip(this._id, rule);
 };
 
 // ── pulp #1527 — isPointInPath / isPointInStroke ─────────────────────────
