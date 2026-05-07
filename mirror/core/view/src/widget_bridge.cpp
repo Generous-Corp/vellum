@@ -2128,9 +2128,33 @@ void WidgetBridge::register_api() {
             else if (a == "rtl") f.writing_direction = pulp::view::FlexStyle::WritingDirection::rtl;
             else                 f.writing_direction = pulp::view::FlexStyle::WritingDirection::inherit;
         }
-        // Directional gap
-        else if (key == "row_gap") f.row_gap = (float)val;
-        else if (key == "column_gap") f.column_gap = (float)val;
+        // Directional gap.
+        // pulp Wave 2 css.2 — accept a `'NN%'` string for parity with
+        // padding/margin edges. Yoga itself does not have a
+        // YGNodeStyleSetGapPercent API today, so the percent value is
+        // stored on the scalar `row_gap` / `column_gap` slot verbatim
+        // (treated as px until the Yoga update lands). This is the same
+        // best-effort treatment we apply to other percent-but-Yoga-
+        // doesn't-honor cases — the catalog entry stays `partial` and
+        // documents the gap.
+        else if (key == "row_gap") {
+            auto sval = args.get<std::string>(2, "");
+            if (!sval.empty() && sval.back() == '%') {
+                try { f.row_gap = std::stof(sval.substr(0, sval.size() - 1)); }
+                catch (...) { /* keep current */ }
+            } else {
+                f.row_gap = (float)val;
+            }
+        }
+        else if (key == "column_gap") {
+            auto sval = args.get<std::string>(2, "");
+            if (!sval.empty() && sval.back() == '%') {
+                try { f.column_gap = std::stof(sval.substr(0, sval.size() - 1)); }
+                catch (...) { /* keep current */ }
+            } else {
+                f.column_gap = (float)val;
+            }
+        }
         // Alignment.
         // pulp #1434 (rn batch B) — accept both bare `start`/`end`
         // (Yoga / pulp short forms) and the `flex-start`/`flex-end`
@@ -4826,7 +4850,18 @@ void WidgetBridge::register_api() {
             else if (kw == "saturation")  mode = BM::saturation;
             else if (kw == "color")       mode = BM::color;
             else if (kw == "luminosity")  mode = BM::luminosity;
-            // Unknown / "plus-lighter" / "plus-darker" → normal (no-op).
+            // pulp Wave 2 css.9 — `plus-lighter` and `plus-darker` are CSS
+            // Compositing & Blending Level 2 keywords. Both map to
+            // `SkBlendMode::kPlus` (additive) at the Skia layer (see
+            // canvas.hpp::BlendMode::lighter, index 26). `plus-darker` is
+            // technically a multiplicative variant in the W3C draft but
+            // Skia / Chromium ship the additive `kPlus` for both;
+            // mirroring that is the closest we can do without a custom
+            // SkBlender. Keeps consumers (Figma export, compositing demos)
+            // from silently falling back to `normal`.
+            else if (kw == "plus-lighter" || kw == "plus-darker")
+                                          mode = BM::lighter;
+            // Unknown keyword → normal (paint-time no-op fallback).
             v->set_mix_blend_mode(mode);
             return choc::value::Value();
         });
