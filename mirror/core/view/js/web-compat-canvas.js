@@ -940,7 +940,7 @@ CanvasRenderingContext2D.prototype.clip = function(fillRule) {
     // pulp #964 — match Canvas2D's clip() spec: intersect the current
     // clip region with the current path. The bridge's canvasClip
     // (issue-896) calls SkCanvas::clipPath; canvasClipRect is the older
-    // rect-only path.
+    // rect-only path. Prefer canvasClip when available.
     // pulp DIVERGE→PASS sweep — thread the fillRule arg ('evenodd' |
     // 'nonzero') through to canvasClip, matching what the bridge now
     // accepts as int_val (0 = nonzero, 1 = evenodd).
