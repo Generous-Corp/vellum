@@ -3785,7 +3785,7 @@ void WidgetBridge::register_api() {
             // passed `1`. (Pairs with [issue-1522] test which had been
             // failing since landing because the wiring got missed.)
             CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::fill_path;
-            cmd.int_val = (int)args.get<double>(1, 0);
+            cmd.int_val = static_cast<int>(args.get<double>(1, 0));
             c->add_command(cmd);
         }
         return choc::value::Value();
@@ -5968,7 +5968,7 @@ void WidgetBridge::register_api() {
     engine_.register_function("canvasClip", [this](choc::javascript::ArgumentList args) {
         if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
             CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::clip;
-            cmd.int_val = (int)args.get<double>(1, 0);
+            cmd.int_val = static_cast<int>(args.get<double>(1, 0));
             c->add_command(cmd);
         }
         return choc::value::Value();
