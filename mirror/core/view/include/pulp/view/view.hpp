@@ -365,6 +365,29 @@ public:
     void set_border_style(BorderStyle s) { border_style_ = s; }
     BorderStyle border_style() const { return border_style_; }
 
+    /// CSS / RN list-style cluster (pulp #1514). Pulp doesn't model
+    /// HTML <li>/<ul>/<ol> semantics — these slots store the values
+    /// the consumer set so an external paint pass (or future <li>
+    /// semantic surface) can honor them. The bridge round-trips the
+    /// keyword/url; paint-time marker rendering is the follow-up.
+    enum class ListStyleType {
+        none,     ///< No marker.
+        disc,     ///< Filled circle (default for <ul>).
+        circle,   ///< Hollow circle.
+        square,   ///< Filled square.
+        decimal,  ///< Numeric (default for <ol>) — needs sibling-index, not painted yet.
+    };
+    enum class ListStylePosition {
+        outside,  ///< Marker hangs in the margin (CSS default).
+        inside,   ///< Marker is part of the content box.
+    };
+    void set_list_style_type(ListStyleType t) { list_style_type_ = t; }
+    ListStyleType list_style_type() const { return list_style_type_; }
+    void set_list_style_image(std::string url) { list_style_image_ = std::move(url); }
+    const std::string& list_style_image() const { return list_style_image_; }
+    void set_list_style_position(ListStylePosition p) { list_style_position_ = p; }
+    ListStylePosition list_style_position() const { return list_style_position_; }
+
     /// CSS / RN outline cluster (pulp #1519). Outline is a paint-time
     /// ring drawn OUTSIDE the border-box; it does NOT affect Yoga layout
     /// (no parent space reserved). Slotting mirrors border-* but lives
@@ -383,6 +406,7 @@ public:
     float outline_offset() const { return outline_offset_; }
     BorderStyle outline_style() const { return outline_style_; }
     float outline_width() const { return outline_width_; }
+
 
     /// Per-side borders (CSS border-top, border-right, etc.)
     /// pulp #1566 (Codex P2 follow-up to #1543) — track an explicit
@@ -830,6 +854,12 @@ private:
     float corner_radius_ = 0;
     bool has_border_ = false;
     BorderStyle border_style_ = BorderStyle::solid;
+    // pulp #1514 — list-style cluster slots. Stored verbatim; paint-
+    // time marker rendering is deferred. Defaults match CSS spec
+    // (`disc` for the type, `outside` for the position, empty image).
+    ListStyleType list_style_type_ = ListStyleType::disc;
+    std::string list_style_image_{};
+    ListStylePosition list_style_position_ = ListStylePosition::outside;
     // CSS / RN outline cluster (pulp #1519). Defaults: outline_style_
     // is `none` so paint short-circuits unless JS opts in via
     // setOutlineStyle. width=0 also short-circuits as a belt-and-braces
