@@ -764,6 +764,28 @@ public:
     std::vector<CssAnimation>& active_animations() { return active_animations_; }
     const std::vector<CssAnimation>& active_animations() const { return active_animations_; }
 
+    /// Advance every active CSS animation by `dt` seconds (pulp #1434
+    /// Wave 3 css.3 — animation-play-state playback driver pause /
+    /// resume). When `animation_play_state_ == "paused"`, the call is
+    /// a no-op so the animations' `elapsed_seconds` does not advance —
+    /// the spec semantic of `animation-play-state: paused`. The default
+    /// keyword is `running`; any value other than `paused` advances.
+    /// Returns the number of animations that finished this tick (i.e.
+    /// flipped `active` to false). The caller is responsible for
+    /// committing finished animations; this method only ticks the
+    /// timeline.
+    int tick_animations(float dt) {
+        if (animation_play_state_ == "paused") return 0;
+        int finished = 0;
+        for (auto& a : active_animations_) {
+            if (!a.active) continue;
+            const bool was_active = a.active;
+            a.tick(dt);
+            if (was_active && !a.active) ++finished;
+        }
+        return finished;
+    }
+
     /// Staged CSS animation control tokens (pulp #1434 — Codex audit on
     /// PR #1508). The web-compat-style-decl shim invokes
     /// `setAnimation(id, "name"|"duration"|"easing"|..., value)` one
