@@ -981,6 +981,13 @@ function applyOne(id: string, type: string, key: string, value: unknown, props?:
             return call('setAnimation', id, 'direction', value as string);
         case 'animationFillMode':
             return call('setAnimation', id, 'fill', value as string);
+        // pulp #1434 Wave 3 css.3 — animation-play-state. Routes
+        // through the legacy 2-arg setAnimation control-token form so
+        // the bridge stores the keyword on View::animation_play_state_;
+        // View::tick_animations honors `paused` by skipping the
+        // timeline advance (web spec semantic).
+        case 'animationPlayState':
+            return call('setAnimation', id, 'play_state', value as string);
 
         // pulp #1434 rn logical-edge bundle (sub-agent #27 finding) —
         // RN's CSS-spec-equivalent logical-flow props. LTR-only fast
