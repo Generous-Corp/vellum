@@ -48,7 +48,13 @@ function CanvasRenderingContext2D(canvasEl) {
     this.lineCap = "butt";
     this.lineJoin = "miter";
     this.miterLimit = 10;
-    this.lineDashOffset = 0;
+    // pulp Wave 4 c2d cleanup — lineDashOffset re-flushes the active dash
+    // pattern on assignment so mutating between draws actually shifts the
+    // phase. Pre-Wave-4 the field was tracked locally but only sent on the
+    // next setLineDash call; that meant `ctx.setLineDash([8,4]); ctx.stroke();
+    // ctx.lineDashOffset = 4; ctx.stroke();` painted both strokes with phase 0.
+    // Backed by `_lineDashOffset`; exposed via a defineProperty pair below.
+    this._lineDashOffset = 0;
     this.globalAlpha = 1;
     this.globalCompositeOperation = "source-over";
     this.imageSmoothingEnabled = true;
@@ -1302,6 +1308,29 @@ CanvasRenderingContext2D.prototype.getLineDash = function() {
     // returning the same array).
     return this._lineDash ? this._lineDash.slice() : [];
 };
+
+// pulp Wave 4 c2d cleanup — lineDashOffset getter/setter pair. Mutating
+// between draws now re-pushes the dash pattern with the new phase so the
+// next stroke picks up the shift. Spec: HTML5 Canvas2D
+// `lineDashOffset` is the only sticky line-dash phase property; assigning
+// to it must be observable on subsequent stroke() calls without
+// re-issuing setLineDash.
+Object.defineProperty(CanvasRenderingContext2D.prototype, "lineDashOffset", {
+    configurable: true,
+    enumerable: true,
+    get: function() { return this._lineDashOffset || 0; },
+    set: function(v) {
+        var nv = +v;
+        if (!isFinite(nv)) return; // HTML5: non-finite values ignored.
+        this._lineDashOffset = nv;
+        // Re-flush the active dash pattern so the phase change lands on
+        // the next draw. Bridge tolerates an empty pattern (no-op stroke).
+        if (typeof canvasSetLineDash === "function") {
+            var pat = this._lineDash || [];
+            canvasSetLineDash(this._id, pat, nv);
+        }
+    }
+});
 
 // getImageData(x, y, w, h) → { data: Uint8ClampedArray, width, height }
 // The bridge returns a base64-encoded RGBA blob; we decode it to a
