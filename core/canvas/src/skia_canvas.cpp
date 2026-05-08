@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <optional>
 #include <sstream>
 #include <unordered_map>
 #include <pulp/canvas/skia_canvas.hpp>
@@ -557,20 +558,29 @@ SkColor parse_css_color_to_skcolor(const std::string& str) {
     if (str == "transparent") return SK_ColorTRANSPARENT;
 
     if (!str.empty() && str[0] == '#') {
-        if (str.size() == 4) { // #RGB
-            uint8_t r = static_cast<uint8_t>(std::stoul(std::string(2, str[1]), nullptr, 16));
-            uint8_t g = static_cast<uint8_t>(std::stoul(std::string(2, str[2]), nullptr, 16));
-            uint8_t b = static_cast<uint8_t>(std::stoul(std::string(2, str[3]), nullptr, 16));
-            return SkColorSetRGB(r * 17, g * 17, b * 17);
+        auto parse_hex = [](const std::string& s) -> std::optional<uint8_t> {
+            try { return static_cast<uint8_t>(std::stoul(s, nullptr, 16)); }
+            catch (...) { return std::nullopt; }
+        };
+        if (str.size() == 4) { // #RGB — each nibble doubled
+            auto r = parse_hex(std::string(2, str[1]));
+            auto g = parse_hex(std::string(2, str[2]));
+            auto b = parse_hex(std::string(2, str[3]));
+            if (r && g && b) return SkColorSetRGB(*r, *g, *b);
+            return SK_ColorBLACK;
         }
         if (str.size() >= 7) { // #RRGGBB[AA]
-            uint8_t r = static_cast<uint8_t>(std::stoul(str.substr(1, 2), nullptr, 16));
-            uint8_t g = static_cast<uint8_t>(std::stoul(str.substr(3, 2), nullptr, 16));
-            uint8_t b = static_cast<uint8_t>(std::stoul(str.substr(5, 2), nullptr, 16));
+            auto r = parse_hex(str.substr(1, 2));
+            auto g = parse_hex(str.substr(3, 2));
+            auto b = parse_hex(str.substr(5, 2));
+            if (!r || !g || !b) return SK_ColorBLACK;
             uint8_t a = 255;
-            if (str.size() >= 9)
-                a = static_cast<uint8_t>(std::stoul(str.substr(7, 2), nullptr, 16));
-            return SkColorSetARGB(a, r, g, b);
+            if (str.size() >= 9) {
+                auto parsed = parse_hex(str.substr(7, 2));
+                if (!parsed) return SK_ColorBLACK;
+                a = *parsed;
+            }
+            return SkColorSetARGB(a, *r, *g, *b);
         }
         return SK_ColorBLACK;
     }
