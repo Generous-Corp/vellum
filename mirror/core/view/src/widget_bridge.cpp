@@ -2493,11 +2493,23 @@ void WidgetBridge::register_api() {
         else if (ws == "break-spaces")  mode = M::break_spaces;
         // Unknown keyword falls back to normal (per CSS forward-compat).
         v->set_white_space_mode(mode);
-        // Label.multi_line: true when the mode wraps (normal/pre-wrap/
-        // pre-line/break-spaces), false when it doesn't (nowrap/pre).
+        // pulp #1737 (Codex P1 followup on #1786): Label.multi_line
+        // is TRUE for all modes except `nowrap`. Originally `pre`
+        // mapped to multi_line=false to match the CSS spec's
+        // "no-soft-wrap" semantic, but Pulp's Label only emits hard
+        // line breaks via the multi_line splitting path — single-line
+        // mode draws the whole string in one fill_text call, dropping
+        // `\n`. So <pre> content with newlines silently lost its
+        // breaks. Per CSS spec, pre MUST preserve newlines as hard
+        // breaks; the only thing it disables is SOFT wrapping at word
+        // boundaries (long lines overflow). Pulp's Label doesn't have
+        // a separate soft-wrap-vs-hard-break knob today, so we honour
+        // the spec-critical "preserve newlines" by keeping
+        // multi_line=true for `pre`. Long lines overflow horizontally
+        // — a degraded but spec-correct behaviour. Soft-wrap
+        // suppression for `pre` is a Label-side follow-up.
         if (auto* l = dynamic_cast<Label*>(widget(id))) {
-            const bool wraps = (mode == M::normal || mode == M::pre_wrap ||
-                                mode == M::pre_line || mode == M::break_spaces);
+            const bool wraps = (mode != M::nowrap);
             l->set_multi_line(wraps);
         }
         return choc::value::Value();
