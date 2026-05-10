@@ -218,14 +218,21 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
                 if (grCol) setFlex(id, "column_gap",
                     grCol.unit === "%" ? (grCol.value + "%") : grCol.value);
             } else {
-                // Reset per-axis (-1 = "consult shared gap") so the new
-                // single-token value isn't shadowed by a prior 2-token
-                // write.
-                setFlex(id, "row_gap", -1);
-                setFlex(id, "column_gap", -1);
+                // Codex P2 followup on #1700 (#1707): parse FIRST,
+                // then reset per-axis only if the new value is valid.
+                // The earlier ordering cleared row_gap/column_gap
+                // unconditionally, which silently nuked prior 2-token
+                // state when the new value was malformed.
                 var g = parseCSSLength(resolved);
-                if (g) setFlex(id, "gap",
-                    g.unit === "%" ? (g.value + "%") : g.value);
+                if (g) {
+                    // Reset per-axis (-1 = "consult shared gap") so
+                    // the new single-token value isn't shadowed by a
+                    // prior 2-token write.
+                    setFlex(id, "row_gap", -1);
+                    setFlex(id, "column_gap", -1);
+                    setFlex(id, "gap",
+                        g.unit === "%" ? (g.value + "%") : g.value);
+                }
             }
             break;
         }
