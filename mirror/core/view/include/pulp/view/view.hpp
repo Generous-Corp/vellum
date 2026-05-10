@@ -1046,31 +1046,30 @@ public:
     /// to a specific widget type. Label keeps its `multi_line_` flag in
     /// lock-step via WidgetBridge::setWhiteSpace, so existing callers keep
     /// working.
-    void set_white_space_nowrap(bool n) { white_space_nowrap_ = n; }
-    bool white_space_nowrap() const { return white_space_nowrap_; }
-
     // pulp #1737 — full CSS `white-space` enum. Replaces the
-    // nowrap-only bool with the spec's 6 keywords. Each value
-    // controls a different combination of:
-    //   * collapse_spaces — runs of whitespace collapse to single space.
-    //   * preserve_newlines — `\n` is preserved as a hard line break.
-    //   * wrap — long lines wrap at word boundaries.
-    //
-    // Per CSS Text Module Level 3 §3:
+    // nowrap-only bool with the spec's 6 keywords. Per CSS Text
+    // Module Level 3 §3:
     //   normal       collapse  drop_nl   wrap
     //   nowrap       collapse  drop_nl   nowrap
     //   pre          preserve  preserve  nowrap
     //   pre_wrap     preserve  preserve  wrap
     //   pre_line     collapse  preserve  wrap
     //   break_spaces preserve  preserve  wrap (extra break opps)
-    //
-    // The legacy `set_white_space_nowrap()` setter still works — it's
-    // mapped to nowrap when true and normal when false. New callers
-    // should prefer the enum API. Label::paint reads the enum to
-    // preprocess display text + toggle multi_line.
     enum class WhiteSpaceMode {
         normal, nowrap, pre, pre_wrap, pre_line, break_spaces
     };
+    // pulp #1737 (Codex P2 followup on #1786): set_white_space_nowrap()
+    // also keeps the WhiteSpaceMode enum in sync so callers using the
+    // legacy setter don't leave white_space_mode() stale. The enum is
+    // pinned to nowrap (true) or normal (false) — we can't infer
+    // pre/pre-wrap/etc. from a bool, so the legacy setter only ever
+    // produces these two modes.
+    void set_white_space_nowrap(bool n) {
+        white_space_nowrap_ = n;
+        white_space_mode_ = n ? WhiteSpaceMode::nowrap : WhiteSpaceMode::normal;
+    }
+    bool white_space_nowrap() const { return white_space_nowrap_; }
+
     void set_white_space_mode(WhiteSpaceMode m) {
         white_space_mode_ = m;
         white_space_nowrap_ = (m == WhiteSpaceMode::nowrap || m == WhiteSpaceMode::pre);
