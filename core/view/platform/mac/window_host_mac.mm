@@ -1846,6 +1846,12 @@ private:
         else if (auto* sv = dynamic_cast<ScrollView*>(view)) sv->advance_animations(dt);
         else if (auto* tip = dynamic_cast<Tooltip*>(view)) tip->advance_animations(dt);
 
+        // pulp #1668 — also drive CSS animations on every View in the
+        // tree. tick_animations honors animation_play_state_ ("paused"
+        // → no advance) and is a no-op for Views with no active CSS
+        // animations, so the recursive walk is cheap.
+        view->tick_animations(dt);
+
         for (size_t i = 0; i < view->child_count(); ++i)
             advance_widget_animations(view->child_at(i), dt);
     }

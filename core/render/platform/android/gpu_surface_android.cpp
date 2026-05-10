@@ -145,6 +145,10 @@ static void advance_view_animations(view::View* v, float dt) {
     if (auto* k = dynamic_cast<view::Knob*>(v))   { k->advance_animations(dt); }
     if (auto* f = dynamic_cast<view::Fader*>(v))   { f->advance_animations(dt); }
     if (auto* t = dynamic_cast<view::Toggle*>(v))  { t->advance_animations(dt); }
+    // pulp #1668 — also drive CSS animations on every View in the tree.
+    // tick_animations honors animation_play_state_ (paused → no advance)
+    // and is a no-op for Views with no active CSS animations.
+    v->tick_animations(dt);
     for (size_t i = 0; i < v->child_count(); ++i)
         advance_view_animations(v->child_at(i), dt);
 }
