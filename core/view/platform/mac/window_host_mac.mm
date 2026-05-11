@@ -1908,6 +1908,19 @@ private:
             if (sv->scroll_animating()) return true;
         }
 
+        // pulp #1734 (Codex P1): CSS animations on a generic View were
+        // not keeping the CVDisplayLink loop alive. tick_animations()
+        // is called every frame in advance_widget_animations, but
+        // without a continuous-frame request the loop stalls after
+        // needs_repaint_ clears once. Check for any unpaused active
+        // CSS animation; matches the gate inside tick_animations()
+        // (early-out when animation_play_state_ == "paused").
+        if (view->animation_play_state() != "paused") {
+            for (const auto& a : view->active_animations()) {
+                if (a.active) return true;
+            }
+        }
+
         for (size_t i = 0; i < view->child_count(); ++i) {
             if (view_needs_continuous_frames(view->child_at(i))) return true;
         }
