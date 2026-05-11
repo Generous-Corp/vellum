@@ -183,8 +183,13 @@ _PulpCanvasMatrix.prototype.toFloat64Array = function() {
     return this.toFloat32Array();
 };
 _PulpCanvasMatrix.prototype.toJSON = function() {
+    // Codex P2 follow-up on #1754: honor the actual is2D state. A
+    // singular-inverse result has is2D=false; if toJSON hardcodes
+    // true, JSON consumers can't distinguish inversion failure from
+    // a successful 2D inverse.
     return { a: this.a, b: this.b, c: this.c, d: this.d,
-             e: this.e, f: this.f, is2D: true, isIdentity: this.isIdentity };
+             e: this.e, f: this.f, is2D: this.is2D !== false,
+             isIdentity: this.isIdentity };
 };
 
 // pulp #1527 — DOMMatrix mutator methods. Snapshot semantics
@@ -216,6 +221,10 @@ _PulpCanvasMatrix.prototype.multiplySelf = function(other) {
     return this;
 };
 _PulpCanvasMatrix.prototype.scaleSelf = function(sx, sy) {
+    // Codex P2 on #1730: spec says scaleX defaults to 1 when omitted,
+    // and scaleY defaults to scaleX when omitted. Without this, the
+    // bare scaleSelf() call multiplies by undefined and produces NaN.
+    if (sx === undefined) sx = 1;
     if (sy === undefined) sy = sx;
     this.a *= sx;
     this.b *= sx;
@@ -225,7 +234,14 @@ _PulpCanvasMatrix.prototype.scaleSelf = function(sx, sy) {
     return this;
 };
 _PulpCanvasMatrix.prototype.rotateSelf = function(angle) {
-    var cos = Math.cos(angle), sin = Math.sin(angle);
+    // Codex P1 on #1730: DOMMatrix.rotateSelf() takes degrees per spec
+    // (https://drafts.fxtf.org/geometry/#dom-dommatrix-rotateself). The
+    // previous implementation fed `angle` directly into Math.cos/sin
+    // (radians), so callers ported from browsers (e.g. rotateSelf(90)
+    // expecting a quarter turn) got the wrong rotation.
+    if (angle === undefined) angle = 0;
+    var rad = angle * Math.PI / 180;
+    var cos = Math.cos(rad), sin = Math.sin(rad);
     var a = this.a, b = this.b, c = this.c, d = this.d;
     this.a =  a * cos + c * sin;
     this.b =  b * cos + d * sin;
@@ -235,6 +251,7 @@ _PulpCanvasMatrix.prototype.rotateSelf = function(angle) {
     return this;
 };
 _PulpCanvasMatrix.prototype.translateSelf = function(tx, ty) {
+    if (tx === undefined) tx = 0;
     if (ty === undefined) ty = 0;
     this.e += this.a * tx + this.c * ty;
     this.f += this.b * tx + this.d * ty;
@@ -242,10 +259,27 @@ _PulpCanvasMatrix.prototype.translateSelf = function(tx, ty) {
     return this;
 };
 _PulpCanvasMatrix.prototype.inverse = function() {
+    // Codex P1 on #1730: spec says non-invertible matrices yield a
+    // matrix with NaN components and `is2D = false` — they do NOT
+    // throw. Throwing here breaks compat for callers that rely on
+    // the standard non-throwing inverse contract.
+    // https://drafts.fxtf.org/geometry/#dom-dommatrixreadonly-inverse
     var a = this.a, b = this.b, c = this.c, d = this.d, e = this.e, f = this.f;
     var det = a * d - b * c;
-    if (det === 0) {
-        throw new TypeError("DOMMatrix.inverse() called on a singular matrix");
+    if (det === 0 || !isFinite(det)) {
+        // Codex P2 follow-up: spec says ALL 16 components become NaN
+        // for a non-invertible matrix. The constructor only NaNs the
+        // 2D aliases (m11..m22, m41..m42); m13, m14, m23, m24,
+        // m31..m34, m43, m44 stay at constructor-default identity.
+        // toFloat32Array() / toFloat64Array() would then return
+        // mixed finite/NaN data, violating the contract.
+        var nan = new _PulpCanvasMatrix(NaN, NaN, NaN, NaN, NaN, NaN);
+        nan.m13 = NaN; nan.m14 = NaN;
+        nan.m23 = NaN; nan.m24 = NaN;
+        nan.m31 = NaN; nan.m32 = NaN; nan.m33 = NaN; nan.m34 = NaN;
+        nan.m43 = NaN; nan.m44 = NaN;
+        nan.is2D = false;
+        return nan;
     }
     var ia =  d / det, ib = -b / det;
     var ic = -c / det, id =  a / det;
