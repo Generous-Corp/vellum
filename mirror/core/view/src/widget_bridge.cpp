@@ -49,6 +49,14 @@
 #include <pulp/platform/child_process.hpp>
 
 namespace pulp::view {
+
+// Forward declaration of the design_import.cpp wrapper that exposes its
+// (anonymous-namespace) json_string_literal helper across translation
+// units. Used by the runtime-import handlers below.
+namespace detail {
+std::string json_string_literal_for_widget_bridge(const std::string& s);
+} // namespace detail
+
 namespace {
 
 struct WidgetBridgeGpuInfo {
@@ -1005,6 +1013,147 @@ void WidgetBridge::service_frame_callbacks() {
         engine_.evaluate("if (typeof __flushFrames__ === 'function') __flushFrames__();void 0");
         engine_.pump_message_loop();
     }
+}
+
+// ── Runtime design import (pulp #468 follow-up) ───────────────────
+//
+// Registers __pulpRuntimeImport__(html, source) and
+// __pulpRuntimeSettle__(rounds) on the live bridge engine. The JS-side
+// `@pulp/react/runtime-import` calls these to evaluate a design bundle
+// in THIS engine (not a fresh one) — the key insight from the
+// pulp-runtime-import-FINAL-design.md alignment with codex: one engine,
+// one React, one reconciler.
+//
+// Architecturally distinct from the offline parse_claude_html_with_runtime
+// path which allocates a fresh sandbox for IR extraction. That path stays
+// available via `pulp import-design --execute-bundle` for inspection.
+//
+// Side effects (set on globalThis for the JS shim to inspect):
+//   - __pulpRuntimeImportErr__ : string set on soft-fail (empty = ok)
+//
+// JS side reads/clears the err global; this function only writes to it.
+
+void WidgetBridge::install_runtime_import_handlers() {
+    // Idempotency guard: register once per bridge. The earlier
+    // implementation used a static thread_local set keyed by `this`,
+    // which broke under heap reuse (test bridges destroyed and
+    // reconstructed at the same address skipped registration silently).
+    if (runtime_import_installed_) return;
+    runtime_import_installed_ = true;
+
+    // The bundled-React asset evaluation can throw arbitrary JS errors
+    // when the sandbox is missing a host primitive (DecompressionStream,
+    // some HTMLElement, etc.). We surface those via the runtime-error
+    // sink rather than throwing into the JS engine — the JS shim is
+    // responsible for routing them to opts.onError.
+    auto set_err = [this](const std::string& msg) {
+        std::string js = "globalThis.__pulpRuntimeImportErr__ = ";
+        js += detail::json_string_literal_for_widget_bridge(msg);
+        js += ";void 0";
+        try { engine_.evaluate(js); } catch (...) { /* best-effort */ }
+    };
+
+    auto clear_err = [this]() {
+        try { engine_.evaluate("globalThis.__pulpRuntimeImportErr__ = '';void 0"); }
+        catch (...) { /* best-effort */ }
+    };
+
+    // __pulpRuntimeImport__(html, source_label) → void
+    //
+    // Parses the bundle envelope (Claude format only for now — figma /
+    // stitch / v0 / pencil can layer on later), evaluates inline
+    // text/javascript + text/babel scripts on THIS engine, dispatches
+    // DOMContentLoaded.
+    //
+    // Crucially does NOT call buildDom or walkDomJson: the runtime path
+    // is reconciler-owned (the JS-side ReactDOM capture shim catches
+    // the React element directly).
+    engine_.register_function("__pulpRuntimeImport__",
+        [this, set_err, clear_err](choc::javascript::ArgumentList args) -> choc::value::Value {
+            clear_err();
+            auto html = args.get<std::string>(0, "");
+            auto src_label = args.get<std::string>(1, "auto");
+            if (html.empty()) {
+                set_err("__pulpRuntimeImport__: empty html");
+                return choc::value::Value();
+            }
+
+            try {
+                // For now: claude is the only source with a runtime-eval
+                // path (others are static IR). Future: dispatch on
+                // src_label to parse_figma / parse_stitch / etc.
+                auto bundle = parse_claude_bundle(html);
+                if (!bundle) {
+                    set_err("__pulpRuntimeImport__: no claude bundle envelope (got '"
+                            + src_label + "')");
+                    return choc::value::Value();
+                }
+
+                // The shared shim setup + payload eval logic lives in
+                // a helper that both this path and the offline path
+                // (parse_claude_html_with_runtime) can call. Phase 6 step 7
+                // factors that helper out. For now, inline the minimal
+                // sequence needed for a working runtime path: shims,
+                // asset eval, inline script eval. Skips buildDom +
+                // walkDomJson per the FINAL design.
+                evaluate_claude_bundle_in_live_engine(*bundle);
+                // Codex P1 (Phase 6.1 review): the shared pipeline
+                // writes per-payload eval failures to
+                // `__pulpPayloadErr_<idx>__` and Babel-transform
+                // failures to `__pulpEvalErr__`, but JS callers (and
+                // Phase 6.3's runtime-import.ts) only read
+                // `__pulpRuntimeImportErr__`. Aggregate any soft errors
+                // into the runtime-error sink so they're visible to
+                // onError / lastError callers. Best-effort — if the
+                // engine is in a bad state, leave the existing err
+                // value (set by set_err / clear_err above) intact.
+                try {
+                    auto v = engine_.evaluate(
+                        "(function(){"
+                        "  var errs = [];"
+                        "  var k = globalThis.__pulpRuntimeImportErr__;"
+                        "  if (typeof k === 'string' && k.length) errs.push(k);"
+                        "  if (typeof globalThis.__pulpEvalErr__ === 'string' && globalThis.__pulpEvalErr__.length)"
+                        "    errs.push('babel-transform: ' + globalThis.__pulpEvalErr__);"
+                        "  if (typeof globalThis.__pulpFlushSyncErr__ === 'string' && globalThis.__pulpFlushSyncErr__.length)"
+                        "    errs.push('flushSync: ' + globalThis.__pulpFlushSyncErr__);"
+                        "  for (var key in globalThis) {"
+                        "    if (key.indexOf('__pulpPayloadErr_') === 0) {"
+                        "      var pe = globalThis[key];"
+                        "      if (typeof pe === 'string' && pe.length) errs.push('payload ' + key.slice(17, -2) + ': ' + pe);"
+                        "    }"
+                        "  }"
+                        "  return errs.join(' | ');"
+                        "})()");
+                    auto aggregated = v.getWithDefault<std::string>("");
+                    if (!aggregated.empty()) set_err(aggregated);
+                } catch (...) { /* leave existing err */ }
+            } catch (const std::exception& e) {
+                set_err(std::string("__pulpRuntimeImport__ threw: ") + e.what());
+            } catch (...) {
+                set_err("__pulpRuntimeImport__ threw: unknown exception");
+            }
+            return choc::value::Value();
+        });
+
+    // __pulpRuntimeSettle__(rounds) → void
+    //
+    // Pump the bridge's message loop + service_frame_callbacks the
+    // requested number of times. Used by the JS shim to drain
+    // useEffect callbacks, rAF queues, and timers after React commits.
+    engine_.register_function("__pulpRuntimeSettle__",
+        [this](choc::javascript::ArgumentList args) -> choc::value::Value {
+            int rounds = static_cast<int>(args.get<double>(0, 8.0));
+            if (rounds < 1) rounds = 1;
+            if (rounds > 64) rounds = 64;  // sanity cap
+            for (int i = 0; i < rounds; ++i) {
+                try {
+                    engine_.pump_message_loop();
+                    service_frame_callbacks();
+                } catch (...) { /* swallow — best-effort settle */ }
+            }
+            return choc::value::Value();
+        });
 }
 
 void WidgetBridge::register_api() {
