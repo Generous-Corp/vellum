@@ -1571,6 +1571,86 @@ function applyOne(id: string, type: string, key: string, value: unknown, props?:
     }
 }
 
+// ── normalizeHostProps (Phase 6 codex amendment #1) ─────────────────
+//
+// Imported React apps (Claude/Stitch/Figma/v0 bundles loaded via
+// @pulp/react/runtime-import) use HTML-style JSX:
+//   <div style={{ width: 100, color: 'red' }} className="card">
+// This flattens that to the shape applyAllProps/applyChangedProps
+// expect (flat `width: 100, color: 'red'` props).
+//
+// Merge precedence: className rules < inline style < explicit flat
+// props. Later overrides earlier.
+
+type ClassRulesProvider = (className: string) => Record<string, unknown> | null;
+
+let _classRulesProvider: ClassRulesProvider | null = null;
+
+/// Install a class-rules resolver. runtime-import wires this from the
+/// classnames.json that the source bundle ships. Pass null to clear.
+export function setClassRulesProvider(fn: ClassRulesProvider | null): void {
+    _classRulesProvider = fn;
+}
+
+/// Returns the active provider (test helper).
+export function getClassRulesProvider(): ClassRulesProvider | null {
+    return _classRulesProvider;
+}
+
+/// Flatten raw HTML/JSX props with `style` object + `className` string
+/// into the flat-prop shape prop-applier consumes. Idempotent on
+/// already-flat input.
+export function normalizeHostProps(
+    _type: string,
+    rawProps: Record<string, unknown>,
+): Record<string, unknown> {
+    const hasStyle = rawProps.style !== undefined && rawProps.style !== null
+        && typeof rawProps.style === 'object';
+    const hasClassName = typeof rawProps.className === 'string'
+        && (rawProps.className as string).length > 0;
+    if (!hasStyle && !hasClassName) return rawProps;
+
+    // Codex P2 (Phase 6.1 review) — `Object.create(null)` so the prop
+    // map is prototype-free. With a plain `{}`, a malformed CSS rule
+    // (or hostile class-rules JSON) carrying `__proto__` / `constructor`
+    // / `prototype` keys would poison Object.prototype on Object.assign.
+    // The applier later iterates `Object.keys(out)` which is safe on
+    // a null-proto object.
+    const out: Record<string, unknown> = Object.create(null);
+
+    // Filter dangerous keys when merging untrusted provider output. The
+    // inline `style` and flat-prop paths trust the JSX author (React
+    // already strips these at element-construction time), but the
+    // class-rules provider returns JSON parsed from a bundle asset —
+    // that's untrusted input.
+    const isSafeKey = (k: string): boolean =>
+        k !== '__proto__' && k !== 'constructor' && k !== 'prototype';
+
+    if (hasClassName && _classRulesProvider) {
+        const tokens = (rawProps.className as string)
+            .split(/\s+/).filter(t => t.length > 0);
+        for (const tok of tokens) {
+            const rules = _classRulesProvider(tok);
+            if (!rules) continue;
+            for (const k of Object.keys(rules)) {
+                if (isSafeKey(k)) out[k] = (rules as Record<string, unknown>)[k];
+            }
+        }
+    }
+
+    if (hasStyle) {
+        const style = rawProps.style as Record<string, unknown>;
+        for (const k of Object.keys(style)) out[k] = style[k];
+    }
+
+    for (const k of Object.keys(rawProps)) {
+        if (k === 'style' || k === 'className') continue;
+        out[k] = rawProps[k];
+    }
+
+    return out;
+}
+
 /// Apply ALL props for first-attach. Called from appendInitialChild /
 /// appendChild after the instance lands on the bridge.
 export function applyAllProps(instance: PulpInstance): void {

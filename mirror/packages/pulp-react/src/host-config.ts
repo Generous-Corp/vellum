@@ -18,7 +18,7 @@ import type {
     PulpContainer,
     IntrinsicElementName,
 } from './types.js';
-import { applyAllProps, applyChangedProps } from './prop-applier.js';
+import { applyAllProps, applyChangedProps, normalizeHostProps } from './prop-applier.js';
 
 type Type = IntrinsicElementName;
 type Props = Record<string, unknown>;
@@ -190,12 +190,18 @@ export const PulpHostConfig: HostConfig<
         // to appendInitialChild / appendChild, which DO receive the parent.
         // (Codex + RepoPrompt review both flagged the original plan that
         // tried createX(id, parent) here as the wrong lifecycle point.)
-        const id = (props.id as string) ?? autoId(rootContainer);
+        // Flatten HTML/JSX-style `style` object + `className` string into
+        // the flat-prop shape applyAllProps/applyChangedProps expect.
+        // Native intrinsics already use flat props — normalizeHostProps
+        // is a no-op fast path for them. Runtime-import bundles
+        // (Claude/Stitch/Figma/v0/Pencil) reach prop-applier through here.
+        const normalizedProps = normalizeHostProps(type, props as Record<string, unknown>);
+        const id = (normalizedProps.id as string) ?? autoId(rootContainer);
         return {
             id,
             type,
             // parentId stays undefined until attached
-            props: { ...props },
+            props: { ...normalizedProps },
             childIds: [],
             onBridge: false,
             pendingChildren: [],
@@ -317,20 +323,24 @@ export const PulpHostConfig: HostConfig<
     },
 
     // ── Updates ────────────────────────────────────────────────────
-    prepareUpdate(_instance, _type, oldProps, newProps): UpdatePayload {
-        // Cheap shallow inequality check. Returning truthy schedules
-        // commitUpdate; falsy skips it. We do the actual diff inside
-        // commitUpdate via applyChangedProps for symmetry with mount.
-        return shallowDiff(oldProps, newProps);
+    prepareUpdate(_instance, type, oldProps, newProps): UpdatePayload {
+        // Flatten both sides before diffing so style/className changes
+        // surface as real prop deltas (and vice versa: a flat width:100
+        // → style:{width:100} swap collapses to a no-op).
+        const oldN = normalizeHostProps(type, oldProps as Record<string, unknown>);
+        const newN = normalizeHostProps(type, newProps as Record<string, unknown>);
+        return shallowDiff(oldN, newN);
     },
 
-    commitUpdate(instance, _updatePayload, _type, oldProps, newProps, _internalHandle) {
-        applyChangedProps(instance, oldProps, newProps);
-        instance.props = { ...newProps };
+    commitUpdate(instance, _updatePayload, type, oldProps, newProps, _internalHandle) {
+        const oldN = normalizeHostProps(type, oldProps as Record<string, unknown>);
+        const newN = normalizeHostProps(type, newProps as Record<string, unknown>);
+        applyChangedProps(instance, oldN, newN);
+        instance.props = { ...newN };
         // Re-apply text children if changed (Label/Button special-case).
         if (TEXT_BEARING.has(instance.type)) {
-            const oldText = asText(oldProps.children) ?? (oldProps.text as string | undefined);
-            const newText = asText(newProps.children) ?? (newProps.text as string | undefined);
+            const oldText = asText(oldN.children) ?? (oldN.text as string | undefined);
+            const newText = asText(newN.children) ?? (newN.text as string | undefined);
             if (oldText !== newText && newText !== undefined) {
                 if (typeof g.setText === 'function') call('setText', instance.id, newText);
             }
