@@ -15,6 +15,8 @@
 #include <pulp/view/input_events.hpp>
 #include <pulp/view/theme.hpp>
 #include <pulp/state/store.hpp>
+
+namespace pulp::view { struct ClaudeBundle; }
 #include <chrono>
 #include <string>
 #include <vector>
@@ -83,6 +85,33 @@ public:
     // Flush requestAnimationFrame-style callbacks and pending microtasks from
     // the host frame loop.
     void service_frame_callbacks();
+
+    // ── Runtime design import (pulp #468 follow-up) ──────────────
+    //
+    // Registers the `__pulpRuntimeImport__(html, source)` and
+    // `__pulpRuntimeSettle__(rounds)` native functions on the bridge's
+    // JS engine. These are the C++ side of `@pulp/react/runtime-import`'s
+    // `renderFromDesign()`: they evaluate a design bundle's HTML in
+    // the LIVE bridge engine (not a fresh sandbox) and pump the
+    // settle loop using this bridge's own service_frame_callbacks.
+    //
+    // Call ONCE after constructing the bridge, before consumer code
+    // calls renderFromDesign(). Subsequent calls are no-ops.
+    //
+    // See planning/pulp-runtime-import-FINAL-design.md.
+    void install_runtime_import_handlers();
+
+private:
+    // Internal helper used by __pulpRuntimeImport__. Forward-declared in
+    // the design_import unit so the implementation lives next to the
+    // related offline boot code. Installs navigator/HTML*Element/etc.
+    // sandbox shims on engine_ (idempotent), evaluates the bundle's
+    // asset payloads (React/ReactDOM/Babel) preserving any host React
+    // already installed on globalThis, evaluates inline text/javascript
+    // and text/babel scripts, dispatches DOMContentLoaded. Skips
+    // buildDom + walkDomJson — the runtime path is reconciler-owned.
+    void evaluate_claude_bundle_in_live_engine(const ClaudeBundle& bundle);
+public:
 
     // Override the repaint invalidator used after JS-driven UI / style
     // changes and to drain `requestAnimationFrame` callbacks.
@@ -171,6 +200,10 @@ private:
         std::make_shared<std::vector<AsyncExecResult>>();
     std::vector<int> pending_frame_ids_;
     bool frame_preamble_loaded_ = false;
+    // pulp #468 — install_runtime_import_handlers() is idempotent. Tracked
+    // per-bridge (not as a static thread_local on `this`, because heap reuse
+    // across tests gave duplicate addresses → spurious skip).
+    bool runtime_import_installed_ = false;
 
     // pulp #915 — native-side timer queue for setTimeout / setInterval.
     // Callbacks themselves live in JS (`__timerCallbacks__`); native
