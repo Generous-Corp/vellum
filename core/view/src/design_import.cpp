@@ -11,6 +11,7 @@
 #include <sstream>
 #include <algorithm>
 #include <cctype>
+#include <functional>
 #include <regex>
 #include <cmath>
 #include <map>
@@ -803,7 +804,474 @@ void set_runtime_error(ClaudeRuntimeOptions& opts, const std::string& msg) {
     if (opts.error_out) *opts.error_out = msg;
 }
 
+// ── Shared Claude-bundle runtime-import shim + payload pipeline ─────────
+//
+// Both the offline harness (`parse_claude_html_with_runtime`) and the
+// live-engine path (`WidgetBridge::evaluate_claude_bundle_in_live_engine`)
+// need to run an identical sequence of pre-payload shims, asset payload
+// evals, autoflushSync patch, inline-script evals (JSON/JS/Babel), and
+// finally a synthetic readystatechange/DOMContentLoaded/load dispatch.
+//
+// The shape diverges only on two axes:
+//   • the User-Agent string we plant on `navigator` (offline harness
+//     identifies itself differently from the live runtime),
+//   • whether host-installed `globalThis.React` / `globalThis.ReactDOM`
+//     must be snapshotted around the asset-eval loop so the bundle's
+//     react.development.js can't clobber the live reconciler's copy.
+//   • how soft errors are surfaced — offline forwards them to a caller
+//     sink (eventually `opts.error_out`), runtime silently swallows.
+//
+// The helper below encapsulates all of that. Tag-named via the ImportShimConfig
+// struct so callers stay readable.
+struct ImportShimConfig {
+    // Value planted on navigator.userAgent. Offline harness uses
+    // "PulpImportHarness/1.0"; live runtime uses "PulpImportRuntime/1.0".
+    const char* user_agent = "PulpImportHarness/1.0";
+
+    // When true, snapshot globalThis.React/ReactDOM into hidden globals
+    // before the asset payload loop and restore them after. Required for
+    // the live-engine path so the bundle's bundled React can't displace
+    // the host reconciler's React. Offline harness has no host React
+    // installed so this is a no-op there.
+    bool preserve_host_react = false;
+
+    // When true, gate the autoflushSync ReactDOM.createRoot patch on an
+    // idempotency marker (__pulpAutoflushPatched__). The live engine may
+    // re-enter the runtime path on the same ReactDOM instance; the
+    // offline harness creates a fresh engine each call so the marker
+    // isn't needed.
+    bool guard_autoflush_idempotent = false;
+
+    // Optional sink for soft errors. nullptr swallows everything (matches
+    // the live-runtime behavior; the JS side reads error slots out of
+    // globalThis instead).
+    std::function<void(const std::string&)> report_error;
+};
+
+// Run the shared boot sequence against an already-configured engine.
+//
+// Steps:
+//   1. Pre-payload shims (createElementNS/createTextNode, HTML*Element
+//      stub constructors, addEventListener on document/window/globalThis,
+//      navigator.userAgent).
+//   2. Optionally snapshot host React/ReactDOM, then evaluate each
+//      `javascript_indices` asset (each wrapped in a JS try/catch that
+//      stashes errors in `globalThis.__pulpPayloadErr_<idx>__`), then
+//      optionally restore host React/ReactDOM.
+//   3. Patch ReactDOM.createRoot so root.render runs inside flushSync.
+//   4. Re-inject JSON inline scripts (tweak-defaults pattern), then
+//      text/javascript inline scripts, then text/babel inline scripts
+//      (Babel.transform → eval per block).
+//   5. Dispatch synthetic readystatechange → DOMContentLoaded → load.
+//
+// Soft errors are forwarded to `cfg.report_error` when set; otherwise
+// silently swallowed. C++ exceptions never escape this helper for the
+// asset/inline/DOM-event steps — they are caught and (optionally)
+// reported. The shim-installation try/catches are best-effort by design.
+void run_claude_bundle_payload_pipeline(ScriptEngine& engine,
+                                        const ClaudeBundle& bundle,
+                                        const ImportShimConfig& cfg) {
+    auto report = [&](const std::string& msg) {
+        if (cfg.report_error) cfg.report_error(msg);
+    };
+
+    // ── Pre-payload sandbox shims ──
+    // document.createElementNS / createTextNode — React-DOM expects them.
+    try {
+        engine.evaluate(
+            "(function(){"
+            "  if (typeof document === 'undefined' || !document) return;"
+            "  if (typeof document.createElementNS !== 'function') {"
+            "    document.createElementNS = function(ns, type) {"
+            "      var el = document.createElement(type);"
+            "      try { el.namespaceURI = ns; } catch (e) {}"
+            "      return el;"
+            "    };"
+            "  }"
+            "  if (typeof document.createTextNode !== 'function') {"
+            "    document.createTextNode = function(text) {"
+            "      var el = document.createElement('#text');"
+            "      try { el.nodeValue = text; el.textContent = text; } catch (e) {}"
+            "      return el;"
+            "    };"
+            "  }"
+            "})();void 0");
+    } catch (...) {}
+
+    // Stub HTML*Element constructors so React-DOM `instanceof` checks return
+    // false instead of throwing "invalid 'instanceof' right operand".
+    try {
+        engine.evaluate(
+            "(function(){"
+            "  var names = ['Element','HTMLElement','Node','EventTarget',"
+            "    'HTMLIFrameElement','HTMLInputElement','HTMLTextAreaElement',"
+            "    'HTMLSelectElement','HTMLOptionElement','HTMLOptGroupElement',"
+            "    'HTMLFormElement','HTMLAnchorElement','HTMLImageElement',"
+            "    'HTMLDivElement','HTMLSpanElement','HTMLButtonElement',"
+            "    'HTMLLabelElement','HTMLCanvasElement','HTMLBodyElement',"
+            "    'HTMLDocument','SVGElement','DocumentFragment','Text','Comment'];"
+            "  for (var i = 0; i < names.length; i++) {"
+            "    var n = names[i];"
+            "    if (typeof globalThis[n] === 'undefined') {"
+            "      try { globalThis[n] = function(){}; } catch (e) {}"
+            "    }"
+            "    if (typeof window !== 'undefined' && typeof window[n] === 'undefined') {"
+            "      try { window[n] = globalThis[n]; } catch (e) {}"
+            "    }"
+            "  }"
+            "})();void 0");
+    } catch (...) {}
+
+    // Ensure addEventListener / removeEventListener exist on document/window/globalThis.
+    try {
+        engine.evaluate(
+            "(function(){"
+            "  function _ensureEL(t){"
+            "    if (!t) return;"
+            "    if (typeof t.addEventListener !== 'function') {"
+            "      t.addEventListener = function(){};"
+            "    }"
+            "    if (typeof t.removeEventListener !== 'function') {"
+            "      t.removeEventListener = function(){};"
+            "    }"
+            "  }"
+            "  if (typeof document !== 'undefined') _ensureEL(document);"
+            "  if (typeof window !== 'undefined')   _ensureEL(window);"
+            "  if (typeof globalThis !== 'undefined') _ensureEL(globalThis);"
+            "})();void 0");
+    } catch (...) {}
+
+    // navigator.userAgent — UMD factory bundles probe it during init.
+    // Generic enough that browser-feature detection chains fall through
+    // to safe defaults.
+    {
+        std::string ua_js =
+            "if (typeof navigator === 'undefined' || !navigator || !navigator.userAgent) {"
+            "  try {"
+            "    globalThis.navigator = globalThis.navigator || {};"
+            "    if (!globalThis.navigator.userAgent) {"
+            "      Object.defineProperty(globalThis.navigator, 'userAgent', {"
+            "        value: '";
+        ua_js += cfg.user_agent;
+        ua_js +=
+            "', writable: false, configurable: true"
+            "      });"
+            "    }"
+            "  } catch (e) {"
+            "    globalThis.navigator = { userAgent: '";
+        ua_js += cfg.user_agent;
+        ua_js +=
+            "' };"
+            "  }"
+            "}"
+            ";void 0";
+        try { engine.evaluate(ua_js); } catch (...) {}
+    }
+
+    // ── Asset payload eval ──
+    //
+    // When preserve_host_react is set, snapshot any host-installed
+    // globalThis.React / globalThis.ReactDOM before the loop so a bundle
+    // that ships its own react.development.js can't displace the live
+    // reconciler's copy. Restore after.
+    if (cfg.preserve_host_react) {
+        try {
+            engine.evaluate(
+                "globalThis.__pulpHostReact__ = "
+                "  (typeof globalThis.React !== 'undefined') ? globalThis.React : null;"
+                "globalThis.__pulpHostReactDOM__ = "
+                "  (typeof globalThis.ReactDOM !== 'undefined') ? globalThis.ReactDOM : null;"
+                ";void 0");
+        } catch (...) {}
+    }
+
+    for (auto idx : bundle.javascript_indices) {
+        if (idx >= bundle.assets.size()) continue;
+        const auto& asset = bundle.assets[idx];
+        std::string source(asset.data.begin(), asset.data.end());
+        std::string wrap_pre = "try {\n";
+        std::string wrap_post = "\n} catch(e) { globalThis.__pulpPayloadErr_" + std::to_string(idx) +
+            "__ = String(e && e.message ? e.message : e) + ' :: stack=' + (e && e.stack ? e.stack : '<no stack>'); }";
+        source = wrap_pre + source + wrap_post;
+        // Trailing `;void 0` so the payload's last expression doesn't
+        // produce a value the engine has to convert back to choc. (The
+        // CHOC QuickJS path can recurse on cyclical objects.)
+        source += "\n;void 0";
+        try {
+            engine.evaluate(source);
+        } catch (const std::exception& e) {
+            report(std::string("payload ") + std::to_string(idx)
+                   + " threw: " + e.what());
+            // continue intentionally — soft-fail per asset.
+        } catch (...) {
+            report(std::string("payload ") + std::to_string(idx)
+                   + " threw: unknown exception");
+            // continue intentionally
+        }
+    }
+
+    if (cfg.preserve_host_react) {
+        try {
+            engine.evaluate(
+                "if (globalThis.__pulpHostReact__) {"
+                "  globalThis.React = globalThis.__pulpHostReact__;"
+                "}"
+                "if (globalThis.__pulpHostReactDOM__) {"
+                "  globalThis.ReactDOM = globalThis.__pulpHostReactDOM__;"
+                "}"
+                "delete globalThis.__pulpHostReact__;"
+                "delete globalThis.__pulpHostReactDOM__;"
+                ";void 0");
+        } catch (...) {}
+    }
+
+    // Patch ReactDOM.createRoot so root.render wraps work in
+    // ReactDOM.flushSync — forces React 18's concurrent renderer to
+    // commit synchronously. Without this, render() schedules work via
+    // the scheduler (MessageChannel) but the commit never fires before
+    // walkDomJson (offline) or settle (runtime) runs.
+    {
+        std::string patch_js = "(function(){";
+        patch_js += "  if (typeof ReactDOM !== 'object' || typeof ReactDOM.createRoot !== 'function') return;";
+        if (cfg.guard_autoflush_idempotent) {
+            patch_js += "  if (ReactDOM.__pulpAutoflushPatched__) return;";
+            patch_js += "  ReactDOM.__pulpAutoflushPatched__ = true;";
+        }
+        patch_js +=
+            "  var _origCreateRoot = ReactDOM.createRoot;"
+            "  ReactDOM.createRoot = function(container, opts) {"
+            "    var root = _origCreateRoot.call(this, container, opts);"
+            "    if (root && typeof root.render === 'function') {"
+            "      var _origRender = root.render.bind(root);"
+            "      root.render = function(element) {"
+            "        try {"
+            "          if (typeof ReactDOM.flushSync === 'function') {"
+            "            ReactDOM.flushSync(function(){ _origRender(element); });"
+            "          } else {"
+            "            _origRender(element);"
+            "          }"
+            "        } catch (e) {"
+            "          globalThis.__pulpCreateRootRenderErr__ ="
+            "            String(e && e.message ? e.message : e) + ' :: stack=' + (e && e.stack ? e.stack : '');"
+            "        }"
+            "      };"
+            "    }"
+            "    return root;"
+            "  };"
+            "})();void 0";
+        try { engine.evaluate(patch_js); } catch (...) {}
+    }
+
+    // ── Inline scripts from the template ──
+    auto inline_scripts = extract_inline_template_scripts(bundle.template_html);
+
+    // Re-inject JSON-kind inline scripts (e.g. `<script id="tweak-defaults">`)
+    // back into document.head — bundles read them via getElementById.
+    for (size_t i = 0; i < inline_scripts.size(); ++i) {
+        const auto& s = inline_scripts[i];
+        if (s.kind != "json") continue;
+        std::string js =
+            "globalThis.__pulpJsonScript_" + std::to_string(i) + "__ = "
+            + json_string_literal(s.source) + ";"
+            "(function(){"
+            "  var el = document.createElement('script');"
+            "  el.type = 'application/json';"
+            "  el.id = 'tweak-defaults';"
+            "  el.textContent = globalThis.__pulpJsonScript_" + std::to_string(i) + "__;"
+            "  document.head.appendChild(el);"
+            "})();void 0";
+        try { engine.evaluate(js); } catch (...) {}
+    }
+
+    // text/javascript inline blocks in document order. Soft-fail per
+    // script — match the existing payload-eval pattern.
+    for (size_t i = 0; i < inline_scripts.size(); ++i) {
+        const auto& s = inline_scripts[i];
+        if (s.kind != "javascript") continue;
+        try {
+            engine.evaluate(s.source + "\n;void 0");
+        } catch (const std::exception& e) {
+            report("inline JS script " + std::to_string(i)
+                   + " threw: " + e.what());
+        } catch (...) {
+            report("inline JS script " + std::to_string(i)
+                   + " threw: unknown exception");
+        }
+    }
+
+    // text/babel inline blocks — verify Babel-standalone is in scope, then
+    // transform each block via `Babel.transform(src, {presets: ['react']}).code`
+    // before evaluating. Soft-fail per script.
+    bool has_any_babel = false;
+    for (const auto& s : inline_scripts) {
+        if (s.kind == "babel") { has_any_babel = true; break; }
+    }
+    if (has_any_babel) {
+        bool babel_loaded = false;
+        try {
+            // QuickJS / JSC may report the boolean expression as bool,
+            // int32, or float64 depending on which path the engine took
+            // to coerce — accept any numeric-or-bool truthy value.
+            auto v = engine.evaluate(
+                "!!(typeof globalThis.Babel !== 'undefined' && "
+                "   typeof globalThis.Babel.transform === 'function')");
+            if (v.isBool())          babel_loaded = v.getBool();
+            else if (v.isInt32())    babel_loaded = (v.getInt32() != 0);
+            else if (v.isInt64())    babel_loaded = (v.getInt64() != 0);
+            else if (v.isFloat32() || v.isFloat64())
+                babel_loaded = (v.getFloat64() != 0.0);
+        } catch (...) {
+            babel_loaded = false;
+        }
+
+        if (!babel_loaded) {
+            report("babel-standalone not loaded; skipping inline text/babel scripts");
+        } else {
+            // Stash each Babel source as a JS string, transform via the
+            // engine, then evaluate the transformed code. Using a global
+            // staging slot keeps us from escaping JSX source for embedding
+            // in a JS string literal — JSX happily contains characters
+            // that would break a hand-rolled escape.
+            auto soft_step = [&](size_t i, const char* phase,
+                                 const std::string& src) -> bool {
+                try {
+                    engine.evaluate(src);
+                    return true;
+                } catch (const std::exception& e) {
+                    report("inline babel script " + std::to_string(i)
+                           + " " + phase + " failed: " + e.what());
+                    return false;
+                } catch (...) {
+                    report("inline babel script " + std::to_string(i)
+                           + " " + phase + " failed: unknown exception");
+                    return false;
+                }
+            };
+
+            for (size_t i = 0; i < inline_scripts.size(); ++i) {
+                const auto& s = inline_scripts[i];
+                if (s.kind != "babel") continue;
+
+                std::string set_src = "globalThis.__pulpBabelSrc__ = ";
+                set_src += json_string_literal(s.source);
+                set_src += ";void 0";
+                if (!soft_step(i, "stash", set_src)) continue;
+
+                if (!soft_step(i, "transform",
+                        "(function(){"
+                        "  try {"
+                        "    var out = globalThis.Babel.transform("
+                        "      globalThis.__pulpBabelSrc__,"
+                        "      { presets: ['react'] });"
+                        "    globalThis.__pulpBabelOut__ = (out && out.code) ? out.code : '';"
+                        "    globalThis.__pulpBabelErr__ = '';"
+                        "  } catch (e) {"
+                        "    globalThis.__pulpBabelOut__ = '';"
+                        "    globalThis.__pulpBabelErr__ = String(e && e.message ? e.message : e);"
+                        "  }"
+                        "})();void 0")) continue;
+
+                // Probe the babel-side error string and surface if non-empty.
+                try {
+                    auto err_v = engine.evaluate(
+                        "globalThis.__pulpBabelErr__ || ''");
+                    if (err_v.isString()) {
+                        std::string err_msg(err_v.getString());
+                        if (!err_msg.empty()) {
+                            report("inline babel script " + std::to_string(i)
+                                   + " babel error: " + err_msg);
+                            continue;
+                        }
+                    }
+                } catch (...) { /* ignore probe failure */ }
+
+                // JS-side try/catch around eval so non-std::exception JS
+                // errors get surfaced via __pulpEvalErr__ instead of being
+                // silently swallowed by the C++ catch(...).
+                soft_step(i, "eval",
+                    "try {"
+                    "  (0, eval)(globalThis.__pulpBabelOut__);"
+                    "  globalThis.__pulpEvalErr__ = '';"
+                    "} catch (e) {"
+                    "  globalThis.__pulpEvalErr__ = String(e && e.message ? e.message : e)"
+                    "    + ' :: stack=' + (e && e.stack ? e.stack : '<no stack>');"
+                    "}"
+                    ";void 0");
+                try {
+                    auto v = engine.evaluate("globalThis.__pulpEvalErr__ || ''");
+                    if (v.isString()) {
+                        std::string em(v.getString());
+                        if (!em.empty()) {
+                            report("inline babel script " + std::to_string(i)
+                                   + " JS-eval error: " + em);
+                        }
+                    }
+                } catch (...) { /* ignore best-effort surfacing */ }
+            }
+
+            // Tidy up the staging slots so they don't leak into the
+            // walker's view of globals.
+            try {
+                engine.evaluate(
+                    "delete globalThis.__pulpBabelSrc__;"
+                    "delete globalThis.__pulpBabelOut__;"
+                    "delete globalThis.__pulpBabelErr__;void 0");
+            } catch (...) { /* nothing to do — best-effort */ }
+        }
+    }
+
+    // ── Dispatch readystatechange → DOMContentLoaded → load ──
+    // Mirrors the browser lifecycle for bundles that defer boot to
+    // document-ready. The trailing `;void 0` avoids the QuickJS
+    // toChocValue circular-ref recursion. We construct the event objects
+    // defensively: use `new Event(t)` if available, otherwise a plain
+    // literal so dispatch still runs against listeners keyed on `type`.
+    try {
+        engine.evaluate(
+            "(function(){"
+            "  if (typeof document === 'undefined') return;"
+            "  function _mkEvent(t, target){"
+            "    if (typeof Event === 'function') {"
+            "      try { return new Event(t); } catch (e) {}"
+            "    }"
+            "    return { type: t, target: target, currentTarget: target,"
+            "             bubbles: false, cancelable: false,"
+            "             defaultPrevented: false,"
+            "             preventDefault: function(){ this.defaultPrevented = true; },"
+            "             stopPropagation: function(){},"
+            "             stopImmediatePropagation: function(){} };"
+            "  }"
+            "  function _dispatch(target, type){"
+            "    if (!target) return;"
+            "    if (typeof target.dispatchEvent === 'function') {"
+            "      try { target.dispatchEvent(_mkEvent(type, target)); } catch (e) {}"
+            "    }"
+            "  }"
+            "  try { document.readyState = 'interactive'; } catch (e) {}"
+            "  _dispatch(document, 'readystatechange');"
+            "  _dispatch(document, 'DOMContentLoaded');"
+            "  try { document.readyState = 'complete'; } catch (e) {}"
+            "  _dispatch(document, 'readystatechange');"
+            "  if (typeof window !== 'undefined') _dispatch(window, 'load');"
+            "})();void 0");
+    } catch (const std::exception& e) {
+        report(std::string("DOMContentLoaded dispatch threw: ") + e.what());
+    } catch (...) {
+        report("DOMContentLoaded dispatch threw: unknown exception");
+    }
+}
+
 } // namespace
+
+// External-linkage thin wrapper around the anonymous-namespace
+// json_string_literal so widget_bridge.cpp (a separate TU) can use it
+// without re-implementing JSON escaping. Forward-declared in
+// widget_bridge.cpp at file scope.
+namespace detail {
+std::string json_string_literal_for_widget_bridge(const std::string& s) {
+    return ::pulp::view::json_string_literal(s);
+}
+} // namespace detail
 
 DesignIR parse_claude_html_with_runtime(const std::string& html, ClaudeRuntimeOptions opts) {
     auto static_fallback = [&](const std::string& reason) -> DesignIR {
@@ -902,227 +1370,20 @@ DesignIR parse_claude_html_with_runtime(const std::string& html, ClaudeRuntimeOp
             }
         }
 
-        // Evaluate each JS payload in template-script order. Wrap each in
-        // a try/catch so a single payload's runtime error doesn't abort
-        // the whole harness — React's dev build especially likes to throw
-        // on missing browser features that we can't easily polyfill.
-        for (auto idx : bundle->javascript_indices) {
-            if (idx >= bundle->assets.size()) continue;
-            const auto& asset = bundle->assets[idx];
-            std::string source(asset.data.begin(), asset.data.end());
-            // Trailing `;void 0` so the payload's last expression doesn't
-            // produce a value the engine has to convert back to choc.
-            // (The CHOC QuickJS path can recurse on cyclical objects;
-            // documented in the codebase memory.)
-            source += "\n;void 0";
-            try {
-                engine.evaluate(source);
-            } catch (const std::exception& e) {
-                // Soft-fail and keep going. The walker may still see a
-                // partial commit if React got past the first render.
-                std::string msg = std::string("payload ") + std::to_string(idx)
-                    + " threw: " + e.what();
+        // Shim install + payload eval + inline-script eval + DOMContentLoaded
+        // dispatch. Shared with WidgetBridge::evaluate_claude_bundle_in_live_engine
+        // — see run_claude_bundle_payload_pipeline for the full sequence.
+        // The offline harness uses a fresh ScriptEngine, so neither host-React
+        // preservation nor the autoflushSync-idempotency marker is required.
+        {
+            ImportShimConfig cfg;
+            cfg.user_agent = "PulpImportHarness/1.0";
+            cfg.preserve_host_react = false;
+            cfg.guard_autoflush_idempotent = false;
+            cfg.report_error = [&](const std::string& msg) {
                 set_runtime_error(opts, msg);
-                // continue intentionally
-            } catch (...) {
-                std::string msg = std::string("payload ") + std::to_string(idx)
-                    + " threw: unknown exception";
-                set_runtime_error(opts, msg);
-                // continue intentionally
-            }
-        }
-
-        // ── pulp #758: evaluate inline `<script>` blocks from the template ──
-        //
-        // The src-loaded payloads above bring in libraries (React,
-        // ReactDOM, Babel-standalone). The actual app code in a Claude
-        // bundled-React export usually lives in inline `<script
-        // type="text/babel">` blocks — and a few inline `text/javascript`
-        // blocks for plain-JS data declarations. Without this loop the
-        // walker only sees the empty `<div id="root"></div>` shell.
-        auto inline_scripts = extract_inline_template_scripts(bundle->template_html);
-
-        // Step 1: inline `text/javascript` (and untyped `<script>`) blocks
-        // in document order. Soft-fail per script — match the existing
-        // payload-eval pattern at lines ~580-595.
-        auto soft_eval = [&](const std::string& kind_label, size_t i,
-                             const std::string& source_with_void) {
-            try {
-                engine.evaluate(source_with_void);
-            } catch (const std::exception& e) {
-                std::string msg = "inline " + kind_label + " script "
-                    + std::to_string(i) + " threw: " + e.what();
-                set_runtime_error(opts, msg);
-            } catch (...) {
-                std::string msg = "inline " + kind_label + " script "
-                    + std::to_string(i) + " threw: unknown exception";
-                set_runtime_error(opts, msg);
-            }
-        };
-        for (size_t i = 0; i < inline_scripts.size(); ++i) {
-            const auto& s = inline_scripts[i];
-            if (s.kind != "javascript") continue;
-            soft_eval("JS", i, s.source + "\n;void 0");
-        }
-
-        // Step 2: inline `text/babel` (and `text/jsx`) blocks. Verify
-        // Babel-standalone is in scope (the src-loaded library payloads
-        // above should have installed `globalThis.Babel`), then transform
-        // each block via `Babel.transform(src, {presets: ['react']}).code`
-        // before evaluating. Soft-fail per script.
-        bool has_any_babel = false;
-        for (const auto& s : inline_scripts) {
-            if (s.kind == "babel") { has_any_babel = true; break; }
-        }
-        if (has_any_babel) {
-            bool babel_loaded = false;
-            try {
-                // QuickJS / JSC may report the boolean expression as
-                // bool, int32, or float64 depending on which path the
-                // engine took to coerce — accept any numeric-or-bool
-                // truthy value.
-                auto v = engine.evaluate(
-                    "!!(typeof globalThis.Babel !== 'undefined' && "
-                    "   typeof globalThis.Babel.transform === 'function')");
-                if (v.isBool())          babel_loaded = v.getBool();
-                else if (v.isInt32())    babel_loaded = (v.getInt32() != 0);
-                else if (v.isInt64())    babel_loaded = (v.getInt64() != 0);
-                else if (v.isFloat32() || v.isFloat64())
-                    babel_loaded = (v.getFloat64() != 0.0);
-            } catch (...) {
-                babel_loaded = false;
-            }
-            if (!babel_loaded) {
-                set_runtime_error(opts,
-                    "babel-standalone not loaded; skipping inline text/babel scripts");
-            } else {
-                // Stash each Babel source as a JS string, transform it via
-                // the engine, then evaluate the transformed code. Using a
-                // global staging slot keeps us from having to escape JSX
-                // source for embedding in a JS string literal — JSX
-                // happily contains characters that would break a
-                // hand-rolled escape (template literals, comments, etc.).
-                auto soft_step = [&](size_t i, const char* phase,
-                                     const std::string& src) -> bool {
-                    try {
-                        engine.evaluate(src);
-                        return true;
-                    } catch (const std::exception& e) {
-                        std::string msg = "inline babel script "
-                            + std::to_string(i) + " " + phase
-                            + " failed: " + e.what();
-                        set_runtime_error(opts, msg);
-                        return false;
-                    } catch (...) {
-                        std::string msg = "inline babel script "
-                            + std::to_string(i) + " " + phase
-                            + " failed: unknown exception";
-                        set_runtime_error(opts, msg);
-                        return false;
-                    }
-                };
-
-                for (size_t i = 0; i < inline_scripts.size(); ++i) {
-                    const auto& s = inline_scripts[i];
-                    if (s.kind != "babel") continue;
-
-                    // Stash → transform → check babel-side error → eval.
-                    std::string set_src = "globalThis.__pulpBabelSrc__ = ";
-                    set_src += json_string_literal(s.source);
-                    set_src += ";void 0";
-                    if (!soft_step(i, "stash", set_src)) continue;
-
-                    if (!soft_step(i, "transform",
-                            "(function(){"
-                            "  try {"
-                            "    var out = globalThis.Babel.transform("
-                            "      globalThis.__pulpBabelSrc__,"
-                            "      { presets: ['react'] });"
-                            "    globalThis.__pulpBabelOut__ = (out && out.code) ? out.code : '';"
-                            "    globalThis.__pulpBabelErr__ = '';"
-                            "  } catch (e) {"
-                            "    globalThis.__pulpBabelOut__ = '';"
-                            "    globalThis.__pulpBabelErr__ = String(e && e.message ? e.message : e);"
-                            "  }"
-                            "})();void 0")) continue;
-
-                    // Probe the babel-side error string and surface if non-empty.
-                    try {
-                        auto err_v = engine.evaluate(
-                            "globalThis.__pulpBabelErr__ || ''");
-                        if (err_v.isString()) {
-                            std::string err_msg(err_v.getString());
-                            if (!err_msg.empty()) {
-                                std::string msg = std::string("inline babel script ")
-                                    + std::to_string(i) + " babel error: " + err_msg;
-                                set_runtime_error(opts, msg);
-                                continue;
-                            }
-                        }
-                    } catch (...) { /* ignore probe failure */ }
-
-                    soft_step(i, "eval",
-                        "(0, eval)(globalThis.__pulpBabelOut__);void 0");
-                }
-
-                // Tidy up the staging slots so they don't leak into the
-                // walker's view of globals.
-                try {
-                    engine.evaluate(
-                        "delete globalThis.__pulpBabelSrc__;"
-                        "delete globalThis.__pulpBabelOut__;"
-                        "delete globalThis.__pulpBabelErr__;void 0");
-                } catch (...) { /* nothing to do — best-effort */ }
-            }
-        }
-
-        // Step 3: dispatch DOMContentLoaded so bundles that defer their
-        // boot to the document-ready signal actually fire. Mirrors the
-        // browser sequence: readystatechange → DOMContentLoaded → load.
-        //
-        // We construct the event objects defensively: if `Event` is a
-        // valid constructor in scope we use it, otherwise we fall back
-        // to a plain `{type:..., target:..., bubbles:false}` literal so
-        // dispatch still runs against listeners that just key on `type`.
-        // The trailing `;void 0` avoids the QuickJS toChocValue
-        // circular-ref recursion documented in the project memory.
-        try {
-            engine.evaluate(
-                "(function(){"
-                "  if (typeof document === 'undefined') return;"
-                "  function _mkEvent(t, target){"
-                "    if (typeof Event === 'function') {"
-                "      try { return new Event(t); } catch (e) {}"
-                "    }"
-                "    return { type: t, target: target, currentTarget: target,"
-                "             bubbles: false, cancelable: false,"
-                "             defaultPrevented: false,"
-                "             preventDefault: function(){ this.defaultPrevented = true; },"
-                "             stopPropagation: function(){},"
-                "             stopImmediatePropagation: function(){} };"
-                "  }"
-                "  function _dispatch(target, type){"
-                "    if (!target) return;"
-                "    if (typeof target.dispatchEvent === 'function') {"
-                "      try { target.dispatchEvent(_mkEvent(type, target)); } catch (e) {}"
-                "    }"
-                "  }"
-                "  try { document.readyState = 'interactive'; } catch (e) {}"
-                "  _dispatch(document, 'readystatechange');"
-                "  _dispatch(document, 'DOMContentLoaded');"
-                "  try { document.readyState = 'complete'; } catch (e) {}"
-                "  _dispatch(document, 'readystatechange');"
-                "  if (typeof window !== 'undefined') _dispatch(window, 'load');"
-                "})();void 0");
-        } catch (const std::exception& e) {
-            // Soft-fail: if the engine's event surface is missing some of
-            // these globals, the bundle just won't get its lifecycle
-            // events. Don't block the walker.
-            set_runtime_error(opts,
-                std::string("DOMContentLoaded dispatch threw: ") + e.what());
-        } catch (...) {
-            set_runtime_error(opts,
-                "DOMContentLoaded dispatch threw: unknown exception");
+            };
+            run_claude_bundle_payload_pipeline(engine, *bundle, cfg);
         }
 
         // Step 4: layered async drain. The original two-pump cycle stays;
@@ -1206,6 +1467,70 @@ DesignIR parse_claude_html_with_runtime(const std::string& html, ClaudeRuntimeOp
     } catch (...) {
         return static_fallback("harness boot failed: unknown exception");
     }
+}
+
+// ── Runtime-import: evaluate a Claude bundle in the LIVE bridge engine ──
+//
+// Phase 6 of pulp-runtime-import-FINAL-design.md. The offline path
+// (parse_claude_html_with_runtime, above) allocates its own
+// ScriptEngine/View/StateStore/WidgetBridge harness, then walks the
+// materialized DOM into a DesignIR. The runtime path is different:
+// the caller's `@pulp/react` reconciler is already mounted on `engine_`,
+// and we want the bundle's React components to render through it
+// instead of into a throwaway sandbox. So we:
+//
+//   1. Install the same set of pre-payload shims (navigator.userAgent,
+//      HTML*Element constructors, document.createElementNS, addEventListener
+//      on document/window/globalThis, ReactDOM.createRoot autoflushSync).
+//   2. Evaluate the bundle's `text/javascript` asset payloads, BUT
+//      preserve any host-installed `globalThis.React` / `globalThis.ReactDOM`
+//      that the JS-side `installHostReact` + `installReactDOMCapture`
+//      shims placed before this call (codex amendment #2 — the bundle's
+//      React payload must not clobber the reconciler's React).
+//   3. Re-inject JSON-kind inline scripts (tweak-defaults pattern) and
+//      evaluate text/javascript + text/babel inline scripts in document
+//      order (Babel.transform → eval for JSX).
+//   4. Dispatch readystatechange → DOMContentLoaded → load so bundles
+//      that defer boot to document-ready actually fire.
+//
+// Explicitly NOT done here:
+//   - buildDom / walkDomJson (offline-only; we have a live React tree).
+//   - Pumping the message loop (the JS side calls __pulpRuntimeSettle__
+//     separately so it can control how many drain rounds run).
+//   - Allocating any new engine / view / bridge (use this->engine_).
+//   - Static-fallback path (this returns void; soft-errors propagate via
+//     globalThis.__pulpPayloadErr_<idx>__ / __pulpEvalErr__ slots and the
+//     WidgetBridge's normal error surface, not a DesignIR replacement).
+//
+// Token budget: this duplicates roughly the shim + asset-eval + inline-eval
+// + DOMContentLoaded blocks of parse_claude_html_with_runtime. The
+// codex-anticipated factoring (a shared helper called from both paths) is
+// the natural next step once both functions live side-by-side and a
+// concrete duplication count is visible.
+void WidgetBridge::evaluate_claude_bundle_in_live_engine(const ClaudeBundle& bundle) {
+    // The live-engine path differs from the offline harness in three
+    // small ways: it uses a different navigator.userAgent, it must
+    // preserve any host-installed globalThis.React / ReactDOM around the
+    // bundle's asset eval loop (so the bundle's bundled react.development.js
+    // can't displace the live reconciler's copy — codex amendment #2),
+    // and the autoflushSync ReactDOM.createRoot patch is guarded by an
+    // idempotency marker since the same ReactDOM instance may be
+    // re-entered on subsequent calls. Everything else (shims, inline-script
+    // eval, DOMContentLoaded dispatch) is identical, so the shared helper
+    // does the heavy lifting.
+    //
+    // We deliberately do NOT pump the message loop or run walkDomJson
+    // here — the JS side calls __pulpRuntimeSettle__ separately so it
+    // can control how many drain rounds run, and the live React tree
+    // replaces the offline DOM walker. Soft errors propagate via
+    // globalThis.__pulpPayloadErr_<idx>__ / __pulpEvalErr__ slots, not
+    // via a caller-side sink.
+    ImportShimConfig cfg;
+    cfg.user_agent = "PulpImportRuntime/1.0";
+    cfg.preserve_host_react = true;
+    cfg.guard_autoflush_idempotent = true;
+    cfg.report_error = nullptr;  // runtime path swallows; JS reads slots.
+    run_claude_bundle_payload_pipeline(engine_, bundle, cfg);
 }
 
 std::string render_claude_bridge_scaffold(const std::string& generated_js_path) {
