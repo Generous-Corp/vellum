@@ -102,7 +102,16 @@ if(PULP_HAS_SKIA)
             pkg_check_modules(FONTCONFIG fontconfig)
             if(FONTCONFIG_FOUND)
                 target_include_directories(pulp-canvas PRIVATE ${FONTCONFIG_INCLUDE_DIRS})
-                target_link_libraries(pulp-canvas PRIVATE ${FONTCONFIG_LIBRARIES})
+                # Use PUBLIC so the fontconfig dependency propagates to
+                # downstream executables (e.g. `pulp-cpp` in
+                # release-cli.yml). pulp-canvas is a STATIC library, so
+                # CMake does NOT automatically inherit PRIVATE link deps
+                # — the executable's link line wouldn't include
+                # `-lfontconfig` and the chrome/m144 Skia archive's
+                # `SkFontMgr_New_FontConfig` symbol fails to resolve.
+                # Closes the linux-x64 Build leg of release-cli's
+                # backfill matrix (#1962, #1970 follow-up).
+                target_link_libraries(pulp-canvas PUBLIC ${FONTCONFIG_LIBRARIES})
             endif()
         endif()
     # Android: Skia bundles FreeType + HarfBuzz, no system fontconfig needed
