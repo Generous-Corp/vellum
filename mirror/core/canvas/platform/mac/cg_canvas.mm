@@ -242,6 +242,55 @@ void CoreGraphicsCanvas::set_line_join(LineJoin join) {
     CGContextSetLineJoin(ctx_, cg_join);
 }
 
+// pulp #1898 — Canvas2D ctx.setLineDash() / lineDashOffset on the CG backend.
+//
+// Background. The base Canvas virtual is a no-op `(void)`, so before this
+// override every dashed stroke on the macOS CPU paint path drew solid.
+// SkiaCanvas applies the pattern via SkDashPathEffect on the per-call
+// SkPaint (skia_canvas.cpp:1132-1209); CG has no per-paint dash state,
+// only the GState-resident pair set by CGContextSetLineDash. We therefore
+// store the intervals + phase on the canvas (mirroring Skia's fields) and
+// push/clear the CG dash phase around each stroke draw via
+// apply_line_dash_to_ctx() / reset_line_dash_on_ctx().
+//
+// The reset-to-solid after every stroke prevents the dash from leaking
+// into callers that bypass our overrides (e.g. raw CG callers nested
+// inside a save_layer transparency layer, or future overrides we haven't
+// wrapped yet). It also keeps semantics aligned with Skia where the
+// dash is a paint-local property, not a GState property.
+//
+// Spec: an empty/odd-length pattern clears the dash and reverts to solid
+// strokes (the HTML5 spec says odd-length must be duplicated; the JS
+// bridge handles that before the call reaches us, so any odd count here
+// is treated as "clear" rather than risking a half-period dash).
+void CoreGraphicsCanvas::set_line_dash(const float* intervals, int count,
+                                        float phase) {
+    if (count <= 0 || (count % 2) != 0 || !intervals) {
+        line_dash_.clear();
+    } else {
+        line_dash_.assign(intervals, intervals + count);
+    }
+    line_dash_phase_ = phase;
+}
+
+void CoreGraphicsCanvas::apply_line_dash_to_ctx() {
+    if (line_dash_.empty()) {
+        CGContextSetLineDash(ctx_, 0.0, nullptr, 0);
+        return;
+    }
+    // CGContextSetLineDash expects CGFloat (= double on Apple platforms);
+    // convert from our float storage. The conversion is cheap (typically
+    // 2-8 entries) and avoids an ABI mismatch on macOS arm64 / x86_64.
+    std::vector<CGFloat> dash(line_dash_.begin(), line_dash_.end());
+    CGContextSetLineDash(ctx_, static_cast<CGFloat>(line_dash_phase_),
+                         dash.data(), dash.size());
+}
+
+void CoreGraphicsCanvas::reset_line_dash_on_ctx() {
+    if (line_dash_.empty()) return;  // already solid — skip the CG call
+    CGContextSetLineDash(ctx_, 0.0, nullptr, 0);
+}
+
 // pulp #1371 — map every BlendMode value to its CGBlendMode counterpart and
 // push it into the current GState. The base Canvas default for set_blend_mode
 // is a no-op `(void)mode;`, so without this override every CG-backed CPU paint
@@ -326,7 +375,9 @@ void CoreGraphicsCanvas::stroke_rect(float x, float y, float w, float h) {
         return;
     }
     apply_stroke_color();
+    apply_line_dash_to_ctx();
     CGContextStrokeRect(ctx_, CGRectMake(x, y, w, h));
+    reset_line_dash_on_ctx();
 }
 
 void CoreGraphicsCanvas::add_rounded_rect_path(float x, float y, float w, float h, float r) {
@@ -368,7 +419,9 @@ void CoreGraphicsCanvas::stroke_rounded_rect(float x, float y, float w, float h,
         return;
     }
     apply_stroke_color();
+    apply_line_dash_to_ctx();
     CGContextStrokePath(ctx_);
+    reset_line_dash_on_ctx();
 }
 
 void CoreGraphicsCanvas::fill_circle(float cx, float cy, float radius) {
@@ -397,7 +450,9 @@ void CoreGraphicsCanvas::stroke_circle(float cx, float cy, float radius) {
         return;
     }
     apply_stroke_color();
+    apply_line_dash_to_ctx();
     CGContextStrokeEllipseInRect(ctx_, CGRectMake(cx - radius, cy - radius, radius * 2, radius * 2));
+    reset_line_dash_on_ctx();
 }
 
 void CoreGraphicsCanvas::stroke_arc(float cx, float cy, float radius,
@@ -410,7 +465,9 @@ void CoreGraphicsCanvas::stroke_arc(float cx, float cy, float radius,
         return;
     }
     apply_stroke_color();
+    apply_line_dash_to_ctx();
     CGContextStrokePath(ctx_);
+    reset_line_dash_on_ctx();
 }
 
 void CoreGraphicsCanvas::stroke_line(float x0, float y0, float x1, float y1) {
@@ -422,7 +479,9 @@ void CoreGraphicsCanvas::stroke_line(float x0, float y0, float x1, float y1) {
         return;
     }
     apply_stroke_color();
+    apply_line_dash_to_ctx();
     CGContextStrokePath(ctx_);
+    reset_line_dash_on_ctx();
 }
 
 void CoreGraphicsCanvas::stroke_path(const Point2D* points, size_t count) {
@@ -438,7 +497,9 @@ void CoreGraphicsCanvas::stroke_path(const Point2D* points, size_t count) {
         return;
     }
     apply_stroke_color();
+    apply_line_dash_to_ctx();
     CGContextStrokePath(ctx_);
+    reset_line_dash_on_ctx();
 }
 
 void CoreGraphicsCanvas::fill_path(const Point2D* points, size_t count) {
@@ -693,10 +754,19 @@ void CoreGraphicsCanvas::stroke_text(const std::string& text, float x, float y,
                                        stroke_color_.b, stroke_color_.a);
             CGContextSetTextDrawingMode(ctx_, kCGTextStroke);
 
+            // pulp #1898 — apply the active dash pattern around the glyph
+            // outline stroke. CTLineDraw in kCGTextStroke mode strokes each
+            // glyph's silhouette using the current GState dash, so this is
+            // the correct injection point. The enclosing CGContextSaveGState
+            // (above) snapshots the dash for us, but we still call the
+            // reset explicitly to keep the GState's dash field clean in
+            // case a future override skips the save/restore wrapper.
+            apply_line_dash_to_ctx();
             CGContextTranslateCTM(ctx_, draw_x, y);
             CGContextScaleCTM(ctx_, 1.0, -1.0);
             CGContextSetTextPosition(ctx_, 0, 0);
             CTLineDraw(line, ctx_);
+            reset_line_dash_on_ctx();
 
             // Reset to fill mode for subsequent draws — fill_text doesn't
             // re-set the mode and would otherwise leak our stroke setting
@@ -864,7 +934,9 @@ void CoreGraphicsCanvas::stroke_current_path() {
         return;
     }
     apply_stroke_color();
+    apply_line_dash_to_ctx();
     CGContextStrokePath(ctx_);
+    reset_line_dash_on_ctx();
     // pulp #1806 — preserve path; see fill_current_path comment.
 }
 
@@ -1162,11 +1234,19 @@ void CoreGraphicsCanvas::clear_stroke_gradient() {
 void CoreGraphicsCanvas::stroke_with_active_paint() {
     if (!has_stroke_gradient_ || stroke_grad_colors_.empty()) {
         apply_stroke_color();
+        apply_line_dash_to_ctx();
         CGContextStrokePath(ctx_);
+        reset_line_dash_on_ctx();
         return;
     }
     // Convert path to its stroked outline + clip to it. Then draw gradient.
     CGContextSaveGState(ctx_);
+    // pulp #1898 — push the dash pattern before CGContextReplacePathWithStrokedPath
+    // so the stroked outline reflects the dash gaps. The Save/Restore frame
+    // we just opened snapshots the dash and pops it on Restore, so this only
+    // affects the stroked-path build itself (and the gradient draw inside the
+    // clip is rect-fill semantics that ignore dash anyway).
+    apply_line_dash_to_ctx();
     CGContextReplacePathWithStrokedPath(ctx_);
     CGContextClip(ctx_);
 
