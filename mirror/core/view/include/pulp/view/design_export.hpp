@@ -6,6 +6,7 @@
 
 #include <pulp/view/theme.hpp>
 #include <string>
+#include <unordered_map>
 
 namespace pulp::view {
 
@@ -60,5 +61,38 @@ public:
     /// @endcode
     static std::string to_wgsl_uniforms(const Theme& theme, const std::string& struct_name = "ThemeUniforms");
 };
+
+// ── Phase 3 (gated on pulp #1307): DESIGN.md emitter ─────────────────────
+//
+// `export_designmd` is the shared write path behind two upcoming
+// surfaces:
+//
+//   1. `pulp import-design --from <source> --update-design-md` — merges
+//      an external re-import (Figma / Stitch / v0 / Pencil / Claude)
+//      into the project's DESIGN.md instead of overwriting tokens.json.
+//      Round-trip semantic — preserves prose sections and comment
+//      placement from the prose_hints argument.
+//   2. `pulp design` on save — captures the live editor's Theme state
+//      back into DESIGN.md.
+//
+// This phase is GATED on #1307 (reimport-safe loop). Until anchor-stable
+// IDs and 3-way merge semantics land there, the function below throws
+// `std::logic_error("export_designmd is gated on pulp #1307")`. The
+// signature is fixed so callers can already wire against it; the body
+// fills in when the gate clears.
+
+struct DesignMdProseHints {
+    // Optional verbatim prose for each canonical section (Overview,
+    // Colors, Typography, Layout, Elevation & Depth, Shapes, Components,
+    // Do's and Don'ts). Unset keys produce auto-generated stub prose.
+    std::unordered_map<std::string, std::string> section_bodies;
+    // Optional name override; defaults to the theme's existing "name"
+    // string token if present.
+    std::string name_override;
+};
+
+/// Phase 3 placeholder. Implementation lands when pulp #1307 closes.
+std::string export_designmd(const Theme& theme,
+                             const DesignMdProseHints& hints = {});
 
 } // namespace pulp::view
