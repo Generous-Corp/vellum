@@ -308,6 +308,13 @@ static SkFont make_font(const std::string& family, float size,
                         int slant = 0,
                         bool non_opaque_dst = false) {
     SkFont font;
+    // pulp #1899 — Spectr's drawSpectrum() can fire ctx.fillText calls
+    // before the ctx.font setter has propagated through the JS shim
+    // (race between React useEffect commit and canvas command replay).
+    // If size is 0 here, fill_text would record commands but produce
+    // zero-height glyphs — clamp to a minimal visible default so labels
+    // render even when the JS-side font sync raced the paint.
+    if (!(size > 0.0f)) size = 14.0f;
     font.setSize(size);
     font.setSubpixel(true);                               // Subpixel glyph positioning
     // pulp #1899 (gap #3) — LCD subpixel AA visibly degrades when the
@@ -326,6 +333,24 @@ static SkFont make_font(const std::string& family, float size,
     font.setLinearMetrics(true);                           // Linear scaling for consistent metrics
 
     auto typeface = get_cached_typeface(family, weight, slant);
+    if (!typeface) {
+        // pulp #1899 — when no typeface resolves (empty family, missing
+        // font, or pulp-screenshot's headless context missing the JS-side
+        // ctx.font sync), fall back to the SkFontMgr default rather than
+        // letting fill_text silently no-op. The previous behavior caused
+        // all canvas text (dB axis labels, frequency labels, IIR·analog
+        // sub-label) to render as nothing in Spectr's native runtime-
+        // import path — bars + grid rendered fine because they don't
+        // need typeface, but every fillText call silently dropped.
+        auto mgr = get_font_manager();
+        if (mgr) {
+            SkFontStyle sk_style{
+                weight, SkFontStyle::kNormal_Width,
+                slant ? SkFontStyle::kItalic_Slant : SkFontStyle::kUpright_Slant
+            };
+            typeface = mgr->matchFamilyStyle(nullptr, sk_style);
+        }
+    }
     if (typeface) font.setTypeface(std::move(typeface));
 
     return font;
