@@ -1105,6 +1105,43 @@ std::string v0_html_attr_escape(const std::string& s) {
     return out;
 }
 
+/// Escape a string for emission inside a JavaScript single-quoted literal
+/// (pulp #81). The design_import generator emits calls like
+/// `createLabel('<id>', '<text>', '<parent>')` where the middle arg is
+/// arbitrary user text. Before this helper, a multi-line `<style>` block
+/// imported from a Claude Design HTML file emitted raw newlines into the
+/// JS source, producing `'\n    * { ... }'` — JavaScript treats that as
+/// an unterminated string and `pulp-screenshot --script ui.js` aborts
+/// with "unexpected end of string". Same problem for any text containing
+/// `'`, `\`, `\r`, `\t`, or NUL. Mirror the standard JS string-escape
+/// rules so any user text round-trips through the emitted JS safely.
+std::string js_single_quote_escape(const std::string& s) {
+    std::string out;
+    out.reserve(s.size() + 4);
+    for (unsigned char c : s) {
+        switch (c) {
+            case '\\': out += "\\\\"; break;
+            case '\'': out += "\\'";  break;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            case '\t': out += "\\t";  break;
+            case '\b': out += "\\b";  break;
+            case '\f': out += "\\f";  break;
+            case '\0': out += "\\x00"; break;
+            default:
+                if (c < 0x20) {
+                    char buf[8];
+                    std::snprintf(buf, sizeof(buf), "\\x%02x", c);
+                    out += buf;
+                } else {
+                    out += static_cast<char>(c);
+                }
+                break;
+        }
+    }
+    return out;
+}
+
 std::string replace_all_copy(std::string s,
                              const std::string& needle,
                              const std::string& replacement) {
@@ -3314,7 +3351,7 @@ static void generate_node(std::ostringstream& ss, const IRNode& node,
 
     // Text content
     if (!node.text_content.empty())
-        ss << ind << var << ".textContent = '" << node.text_content << "';\n";
+        ss << ind << var << ".textContent = '" << js_single_quote_escape(node.text_content) << "';\n";  // pulp #81
 
     // Append to parent
     if (!parent_var.empty())
@@ -3481,7 +3518,7 @@ static void generate_native_node(std::ostringstream& ss, const IRNode& node,
             // Labels below knob — center-aligned, Yoga-positioned
             if (!label_text.empty()) {
                 std::string lbl_id = id + "_lbl";
-                ss << ind << "createLabel('" << lbl_id << "', '" << label_text << "', '" << col_id << "');\n";
+                ss << ind << "createLabel('" << lbl_id << "', '" << js_single_quote_escape(label_text) << "', '" << col_id << "');\n";
                 ss << ind << "setFlex('" << lbl_id << "', 'height', " << kMinLabelHeight << ");\n";
                 ss << ind << "setFontSize('" << lbl_id << "', 11);\n";
                 ss << ind << "setTextColor('" << lbl_id << "', '#a6adc8');\n";
@@ -3489,7 +3526,7 @@ static void generate_native_node(std::ostringstream& ss, const IRNode& node,
             }
             if (!value_text.empty()) {
                 std::string val_id = id + "_val";
-                ss << ind << "createLabel('" << val_id << "', '" << value_text << "', '" << col_id << "');\n";
+                ss << ind << "createLabel('" << val_id << "', '" << js_single_quote_escape(value_text) << "', '" << col_id << "');\n";
                 ss << ind << "setFlex('" << val_id << "', 'height', " << kMinSmallLabelHeight << ");\n";
                 ss << ind << "setFontSize('" << val_id << "', 10);\n";
                 ss << ind << "setTextColor('" << val_id << "', '#6c7086');\n";
@@ -3519,7 +3556,7 @@ static void generate_native_node(std::ostringstream& ss, const IRNode& node,
             emit_style(id);
             if (!label_text.empty()) {
                 std::string lbl_id = id + "_lbl";
-                ss << ind << "createLabel('" << lbl_id << "', '" << label_text << "', '" << col_id << "');\n";
+                ss << ind << "createLabel('" << lbl_id << "', '" << js_single_quote_escape(label_text) << "', '" << col_id << "');\n";
                 ss << ind << "setFlex('" << lbl_id << "', 'height', " << kMinLabelHeight << ");\n";
                 ss << ind << "setFontSize('" << lbl_id << "', 11);\n";
                 ss << ind << "setTextColor('" << lbl_id << "', '#a6adc8');\n";
@@ -3546,7 +3583,7 @@ static void generate_native_node(std::ostringstream& ss, const IRNode& node,
             // Meter has no setLabel — always add a separate label
             if (!label_text.empty()) {
                 std::string lbl_id = id + "_lbl";
-                ss << ind << "createLabel('" << lbl_id << "', '" << label_text << "', '" << col_id << "');\n";
+                ss << ind << "createLabel('" << lbl_id << "', '" << js_single_quote_escape(label_text) << "', '" << col_id << "');\n";
                 ss << ind << "setFlex('" << lbl_id << "', 'height', " << kMinLabelHeight << ");\n";
                 ss << ind << "setFontSize('" << lbl_id << "', 11);\n";
                 ss << ind << "setTextColor('" << lbl_id << "', '#a6adc8');\n";
@@ -3581,7 +3618,7 @@ static void generate_native_node(std::ostringstream& ss, const IRNode& node,
 
     if (is_text) {
         // Text node → createLabel with explicit height (Yoga requirement)
-        ss << ind << "createLabel('" << id << "', '" << node.text_content << "', " << pid << ");\n";
+        ss << ind << "createLabel('" << id << "', '" << js_single_quote_escape(node.text_content) << "', " << pid << ");\n";  // pulp #81
 
         float font_h = node.style.font_size.value_or(14.0f);
         float label_h = std::max(font_h * 1.4f, kMinLabelHeight);
