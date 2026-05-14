@@ -4294,21 +4294,109 @@ void WidgetBridge::register_api() {
     });
 
     engine_.register_function("canvasFillText", [this, parseColor](choc::javascript::ArgumentList args) {
-        if (auto* c = dynamic_cast<CanvasWidget*>(widget(args.get<std::string>(0, "")))) {
-            CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::fill_text;
-            cmd.text = args.get<std::string>(1, "");
-            cmd.x=(float)args.get<double>(2,0); cmd.y=(float)args.get<double>(3,0);
-            cmd.extra=(float)args.get<double>(4, 14);
+        auto cid = args.get<std::string>(0, "");
+        auto* c = dynamic_cast<CanvasWidget*>(widget(cid));
+        if (!c) return choc::value::Value();
+
+        CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::fill_text;
+
+        // pulp #1899 — accept BOTH calling conventions.
+        //
+        // Pulp's web-compat-canvas.js shim emits the 7-arg form:
+        //   canvasFillText(id, text, x, y, size, color, maxWidth)
+        //
+        // Third-party shims bundled with imported designs (e.g. Spectr's
+        // native-react/canvas2d-shim.ts:269) emit a 4-arg form with text
+        // LAST:
+        //   canvasFillText(id, x, y, text)
+        //
+        // Both are valid JS-side surface contracts. Detect by checking
+        // whether slot 1 is a string (web-compat form) or a number
+        // (legacy / third-party form). Without this branch, the 4-arg
+        // form silently drops all text — every fillText() that flowed
+        // through the third-party shim recorded an empty fill_text cmd,
+        // which fill_text() in skia_canvas then skipped via the
+        // `if (text.empty()) return;` early-out. Net effect: bars + grid
+        // rendered (other commands), but every axis label / overlay
+        // text was invisible.
+        std::string slot1_str = args.get<std::string>(1, "");
+        const bool is_4arg_form = (args.numArgs == 4) && slot1_str.empty();
+
+        if (is_4arg_form) {
+            // canvasFillText(id, x, y, text). Third-party shims that emit
+            // this form (e.g. Spectr's canvas2d-shim.ts:269) often do NOT
+            // call canvasSetFont first, so the CanvasWidget's command
+            // buffer has no `set_font` command ahead of this `fill_text`.
+            // At paint time, CGCanvas / SkiaCanvas would create a font
+            // with font_size_ = 0 (the canvas's default) → glyphs are
+            // 0-pt → text draws invisibly. Inject a default set_font
+            // command so the replay establishes a sane font state before
+            // this fill_text command renders.
+            //
+            // pulp #1901 review (Codex P1): only inject the default
+            // set_font when no prior font state has been recorded on
+            // this canvas. Scanning the recorded command stream is the
+            // canvas's only source of "prior state" — there is no
+            // separate accessor. If a caller already issued
+            // canvasSetFont / canvasSetFontFull, preserve their state
+            // (no override). Same rationale for cmd.color below: a
+            // prior canvasSetFillColor (or fill-gradient/pattern) must
+            // not be stomped by the hard-coded #fff default — scan
+            // back for the most recent fill-style cmd and reuse its
+            // color, otherwise fall back to #fff.
+            const auto& prior = c->commands();
+            bool has_prior_font = false;
+            bool has_prior_fill = false;
+            canvas::Color prior_fill_color = canvas::Color::rgba(1.0f, 1.0f, 1.0f, 1.0f);
+            for (auto it = prior.rbegin(); it != prior.rend(); ++it) {
+                if (!has_prior_font &&
+                    (it->type == CanvasDrawCmd::Type::set_font ||
+                     it->type == CanvasDrawCmd::Type::set_font_full)) {
+                    has_prior_font = true;
+                }
+                if (!has_prior_fill &&
+                    (it->type == CanvasDrawCmd::Type::set_fill_color ||
+                     it->type == CanvasDrawCmd::Type::set_fill_gradient_linear ||
+                     it->type == CanvasDrawCmd::Type::set_fill_gradient_radial ||
+                     it->type == CanvasDrawCmd::Type::set_fill_gradient_radial_two_circles ||
+                     it->type == CanvasDrawCmd::Type::set_fill_gradient_conic ||
+                     it->type == CanvasDrawCmd::Type::set_fill_pattern)) {
+                    has_prior_fill = true;
+                    prior_fill_color = it->color;
+                }
+                if (has_prior_font && has_prior_fill) break;
+            }
+
+            if (!has_prior_font) {
+                CanvasDrawCmd font_cmd;
+                font_cmd.type  = CanvasDrawCmd::Type::set_font;
+                font_cmd.text  = "system-ui";
+                font_cmd.extra = 14.0f;
+                c->add_command(font_cmd);
+            }
+
+            cmd.x    = (float)args.get<double>(1, 0);
+            cmd.y    = (float)args.get<double>(2, 0);
+            cmd.text = args.get<std::string>(3, "");
+            cmd.extra = 14.0f;                  // default font size px
+            // Preserve any prior fill style; only default to white when
+            // the caller never set a fill color / gradient / pattern.
+            cmd.color = has_prior_fill ? prior_fill_color
+                                       : parseColor("#fff");
+            cmd.w     = 0.0f;                   // no maxWidth
+        } else {
+            // canvasFillText(id, text, x, y, size, color, maxWidth)
+            cmd.text  = slot1_str;
+            cmd.x     = (float)args.get<double>(2, 0);
+            cmd.y     = (float)args.get<double>(3, 0);
+            cmd.extra = (float)args.get<double>(4, 14);
             cmd.color = parseColor(args.get<std::string>(5, "#fff"));
-            // pulp #1525 — Canvas2D `fillText(text, x, y, maxWidth)`. The
-            // JS shim threads the optional maxWidth through as the 7th
-            // arg (px). `<= 0` (or absent) is the spec sentinel for "no
-            // constraint" and routes through the legacy fill_text path
-            // unchanged. Stored on `cmd.w` (which fill_text otherwise
-            // does not consume) so we don't have to grow CanvasDrawCmd.
-            cmd.w = (float)args.get<double>(6, 0.0);
-            c->add_command(cmd);
+            // pulp #1525 — maxWidth threaded as 7th arg in CSS px;
+            // `<= 0` or absent means "no constraint".
+            cmd.w     = (float)args.get<double>(6, 0.0);
         }
+
+        c->add_command(cmd);
         return choc::value::Value();
     });
 
