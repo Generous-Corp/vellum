@@ -1992,6 +1992,16 @@ CSSStyleDeclaration.prototype.setProperty = function(name, value) {
     // --custom-property -> set as theme token
     if (name.indexOf("--") === 0) {
         var tokenName = name.slice(2);
+        // pulp #1918 (Codex review) — custom-property storage spans
+        // three theme slots: dimensions (motion), colors, strings.
+        // When a var() is reassigned from one value-type to another
+        // (e.g. `--my-var: "red"` → `--my-var: 12px`) the OLD slot
+        // would otherwise retain a stale token, and the React-side
+        // resolver checks strings BEFORE motion — so the stale string
+        // would shadow the new length. Conservatively clear every
+        // non-active slot up front, then write the new value.
+        if (typeof setStringToken === 'function') setStringToken(tokenName, "");
+        if (typeof setMotionToken === 'function') setMotionToken(tokenName, 0);
         var parsed = parseCSSLength(value);
         if (parsed) {
             setMotionToken(tokenName, parsed.value);
@@ -2001,6 +2011,14 @@ CSSStyleDeclaration.prototype.setProperty = function(name, value) {
             if (color) {
                 // Use applyTokenDiff for color tokens
                 applyTokenDiff('{"colors":{"' + tokenName + '":"' + color + '"}}');
+            } else if (typeof setStringToken === 'function') {
+                // pulp #1899 (gap #3) — string-valued custom property
+                // (e.g. `--mono: "JetBrains Mono"`). Store on
+                // theme.strings so resolveVar() on the React side and
+                // getPropertyValue() below can read it back. Without
+                // this, fontFamily-shaped custom properties were
+                // silently dropped at setProperty time.
+                setStringToken(tokenName, String(value));
             }
         }
     } else {
@@ -2013,6 +2031,14 @@ CSSStyleDeclaration.prototype.setProperty = function(name, value) {
 CSSStyleDeclaration.prototype.getPropertyValue = function(name) {
     if (name.indexOf("--") === 0) {
         var tokenName = name.slice(2);
+        // pulp #1899 (gap #3) — prefer the string-token map for
+        // values that weren't parseable as length / color at set time
+        // (e.g. font families). Fall back to the motion-token value
+        // otherwise to preserve legacy numeric token reads.
+        if (typeof getStringToken === 'function') {
+            var s = getStringToken(tokenName);
+            if (s) return s;
+        }
         return String(getMotionToken(tokenName));
     }
     var camel = name.replace(/-([a-z])/g, function(_, c) { return c.toUpperCase(); });
