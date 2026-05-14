@@ -761,6 +761,71 @@ copies or substantial portions of the Software.
 
 ---
 
+## DESIGN.md format (google-labs-code/design.md)
+
+Copyright 2025 Google LLC
+
+Apache License, Version 2.0
+
+https://github.com/google-labs-code/design.md
+
+Upstream pin: tag `0.1.1` (commit `6589f05166473ddc54ca01a615254a673add492c`,
+published 2026-04-21). Update this pin together with `compat.json`'s
+`imports.designmd.detected-formats[].format-version` and the upstream
+attribution in `docs/reference/licensing.md` whenever the format spec
+moves to a new tag.
+
+Pulp adopts Google's DESIGN.md format as a first-class import source
+(`pulp import-design --from designmd`). The format specification at
+`docs/spec.md` (upstream) is referenced by Pulp's documentation and
+reimplemented in C++; no upstream source code is vendored. One
+example file from the upstream `examples/paws-and-paths/` directory
+is redistributed verbatim under this license as the test fixture
+`test/fixtures/imports/designmd/alpha/DESIGN.md` (byte-identical to
+the upstream copy at tag `0.1.1`).
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+---
+
+## yaml-cpp
+
+Copyright (c) 2008-2015 Jesse Beder.
+
+MIT License
+
+https://github.com/jbeder/yaml-cpp
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
 ## Yoga
 
 Copyright (c) Meta Platforms, Inc. and affiliates.

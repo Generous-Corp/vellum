@@ -51,6 +51,7 @@ Entries are sorted alphabetically (case-insensitive) by name.
 | three.js | 077dd13c0e86 | MIT | Native WebGPU bridge demos and tests (optional, fetched only when `PULP_BUILD_TESTS` and `PULP_ENABLE_GPU` are ON) | pulp-render | 2026-04-21 |
 | VST3 SDK | v3.7.12_build_20 | MIT | VST3 plugin format (pluginterfaces + base) | pulp-format | 2026-03-24 |
 | WebGPU-distribution | 17dcd42a7683 | MIT | WebGPU C API wrapper for Dawn (FetchContent) | pulp-render | 2026-03-25 |
+| yaml-cpp | 0.8.0 | MIT | YAML frontmatter parser for the DESIGN.md import source (FetchContent) | pulp-view | 2026-05-13 |
 | Yoga | 3.2.1 | MIT | CSS Flexbox/Grid layout engine (Meta, FetchContent) | pulp-view | 2026-03-29 |
 
 ## Open-Source Format SDKs Pulp Can Bootstrap

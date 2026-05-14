@@ -22,7 +22,8 @@ enum class DesignSource {
     stitch,
     v0,
     pencil,
-    claude   // Anthropic Claude Design — manual HTML/zip export, no Anthropic API
+    claude,   // Anthropic Claude Design — manual HTML/zip export, no Anthropic API
+    designmd  // Google DESIGN.md (Apache-2.0) — YAML frontmatter + Markdown body
 };
 
 /// Convert string to DesignSource, returns nullopt for unknown sources.
@@ -150,6 +151,105 @@ DesignIR parse_pencil_json(const std::string& json);
 /// as DesignSource::claude so downstream code (CLI bridge scaffold,
 /// SKILL guidance) can route on it.
 DesignIR parse_claude_html(const std::string& html);
+
+// ── DESIGN.md adapter (Google design.md, Apache-2.0) ─────────────────────
+//
+// DESIGN.md is a YAML-frontmatter + Markdown-body description of a design
+// system. Unlike the other import sources, it does NOT describe a screen
+// or a renderable artifact — it carries tokens and prose rationale. The
+// parser populates IR token maps; the IR root node is left empty (no
+// children, type "frame"). Phase 1 deliberately does NOT scaffold a
+// placeholder UI tree; that would imply scaffold quality Pulp cannot yet
+// deliver. Spec: https://github.com/google-labs-code/design.md
+//
+// Diagnostics use a structured shape so the CLI can emit them as JSON
+// with line/column info supplied by yaml-cpp.
+
+enum class DesignMdSeverity {
+    info,
+    warning,
+    error
+};
+
+struct DesignMdDiagnostic {
+    DesignMdSeverity severity = DesignMdSeverity::info;
+    std::string code;        // e.g. "broken-ref", "duplicate-section"
+    std::string path;        // dotted token path or section name
+    int line = 0;            // 1-based; 0 = unknown
+    int column = 0;          // 1-based; 0 = unknown
+    std::string message;
+};
+
+struct DesignMdParseResult {
+    DesignIR ir;
+    std::vector<DesignMdDiagnostic> diagnostics;
+    // Sections seen in the body, in the order they appeared. Used by the
+    // Phase 2 section-order lint rule.
+    std::vector<std::string> sections;
+    bool had_frontmatter = false;
+    // Names of color tokens (the part after "colors.") that were
+    // dereferenced during parse. `resolve_references` rewrites
+    // `{colors.X}` to the resolved hex value in-place, which would
+    // otherwise hide the reference from `lint_designmd`'s
+    // orphaned-tokens rule. The rule consumes this set directly
+    // instead of re-scanning post-resolution strings.
+    std::vector<std::string> referenced_color_tokens;
+};
+
+/// Parse a DESIGN.md file (YAML frontmatter + Markdown body) into a DesignIR.
+/// Errors are reported via diagnostics, not exceptions; the IR is partially
+/// populated on parse error so callers can still surface what was readable.
+DesignMdParseResult parse_designmd(const std::string& markdown);
+
+/// Thin wrapper that returns just the IR. The CLI uses parse_designmd()
+/// directly so it can emit structured diagnostics; this overload exists
+/// for parity with the other source adapters' signatures.
+DesignIR parse_designmd_yaml(const std::string& markdown);
+
+// ── Phase 2: lint, diff, and Tailwind export ────────────────────────────
+//
+// These surfaces let DESIGN.md slot into CI gates the same way
+// @google/design.md's TypeScript CLI does, without taking on its JS
+// dependency surface. The lint rule set mirrors the upstream CLI's
+// seven rules plus section-order (which upstream uses as a warning).
+
+/// Run the seven Google design.md lint rules + section-order against a
+/// parsed DESIGN.md. Findings carry severity (info/warning/error).
+std::vector<DesignMdDiagnostic> lint_designmd(const DesignMdParseResult& parsed);
+
+struct DesignMdTokenDiff {
+    std::vector<std::string> added;       // tokens present in `after` only
+    std::vector<std::string> removed;     // tokens present in `before` only
+    std::vector<std::string> modified;    // tokens whose value changed
+};
+
+struct DesignMdDiffResult {
+    DesignMdTokenDiff colors;
+    DesignMdTokenDiff dimensions;
+    DesignMdTokenDiff strings;
+    // True if the `after` file has more error- or warning-severity
+    // diagnostics than `before` (matches @google/design.md's diff
+    // regression semantic).
+    bool regression = false;
+};
+
+/// Compute the token diff between two parsed DESIGN.md files plus a
+/// regression flag derived from their respective lint outputs.
+DesignMdDiffResult diff_designmd(const DesignMdParseResult& before,
+                                  const DesignMdParseResult& after);
+
+/// Emit a Tailwind v3 `theme.extend`-shaped JSON object from the parsed
+/// token tree. Byte-compatible with @google/design.md's
+/// `--format json-tailwind` output for the common-case keys (colors,
+/// fontFamily, fontSize, lineHeight, letterSpacing, fontWeight,
+/// borderRadius, spacing).
+std::string export_tailwind_v3_json(const DesignMdParseResult& parsed);
+
+/// Emit a Tailwind v4 `@theme { ... }` CSS block from the parsed
+/// token tree. Uses Tailwind v4's CSS-variable token namespaces
+/// (`--color-*`, `--font-*`, `--text-*`, `--leading-*`,
+/// `--tracking-*`, `--font-weight-*`, `--radius-*`, `--spacing-*`).
+std::string export_tailwind_v4_css(const DesignMdParseResult& parsed);
 
 // ── Claude Design bundle envelope (pulp #468) ───────────────────────────
 //

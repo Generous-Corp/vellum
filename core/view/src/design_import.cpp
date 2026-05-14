@@ -22,21 +22,23 @@ namespace pulp::view {
 // ── Design source helpers ───────────────────────────────────────────────
 
 std::optional<DesignSource> parse_design_source(const std::string& name) {
-    if (name == "figma")  return DesignSource::figma;
-    if (name == "stitch") return DesignSource::stitch;
-    if (name == "v0")     return DesignSource::v0;
-    if (name == "pencil") return DesignSource::pencil;
-    if (name == "claude") return DesignSource::claude;
+    if (name == "figma")    return DesignSource::figma;
+    if (name == "stitch")   return DesignSource::stitch;
+    if (name == "v0")       return DesignSource::v0;
+    if (name == "pencil")   return DesignSource::pencil;
+    if (name == "claude")   return DesignSource::claude;
+    if (name == "designmd") return DesignSource::designmd;
     return std::nullopt;
 }
 
 const char* design_source_name(DesignSource source) {
     switch (source) {
-        case DesignSource::figma:  return "Figma";
-        case DesignSource::stitch: return "Stitch";
-        case DesignSource::v0:     return "v0";
-        case DesignSource::pencil: return "Pencil";
-        case DesignSource::claude: return "Claude Design";
+        case DesignSource::figma:    return "Figma";
+        case DesignSource::stitch:   return "Stitch";
+        case DesignSource::v0:       return "v0";
+        case DesignSource::pencil:   return "Pencil";
+        case DesignSource::claude:   return "Claude Design";
+        case DesignSource::designmd: return "DESIGN.md";
     }
     return "unknown";
 }
