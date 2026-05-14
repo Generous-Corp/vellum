@@ -2,6 +2,7 @@
 #include <sstream>
 #include <iomanip>
 #include <cmath>
+#include <stdexcept>
 
 namespace pulp::view {
 
@@ -194,6 +195,21 @@ std::string DesignExport::to_wgsl_uniforms(const Theme& theme, const std::string
 
     ss << "};\n";
     return ss.str();
+}
+
+// ── Phase 3 (gated on pulp #1307) ───────────────────────────────────────
+//
+// DESIGN.md emitter — fills in once anchor-stable IDs + 3-way merge
+// semantics from #1307 land. Until then the signature is fixed so
+// callers can wire against it; the body throws so misuse surfaces
+// at the call site rather than silently writing an empty file.
+
+std::string export_designmd(const Theme& /*theme*/,
+                             const DesignMdProseHints& /*hints*/) {
+    throw std::logic_error(
+        "export_designmd is gated on pulp #1307 (reimport-safe loop). "
+        "See planning/2026-05-13-designmd-integration-plan.md Phase 3 "
+        "for the round-trip design.");
 }
 
 } // namespace pulp::view
