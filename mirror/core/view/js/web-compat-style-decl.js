@@ -147,7 +147,7 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
             setFlex(id, "flex_shrink", parseFloat(resolved) || 0);
             break;
         case "flexBasis":
-            var fb = parseCSSLength(resolved);
+            var fb = resolveCSSLength(resolved);
             if (fb) setFlex(id, "flex_basis", fb.value);
             break;
         case "flex": {
@@ -180,7 +180,7 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
                 if (basisTok === "auto") {
                     setFlex(id, "flex_basis", "auto");
                 } else {
-                    var b = parseCSSLength(parts[2]);
+                    var b = resolveCSSLength(parts[2]);
                     if (b) setFlex(id, "flex_basis", b.unit === "%" ? (b.value + "%") : b.value);
                 }
             }
@@ -211,8 +211,8 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
             // shared slot so the new shorthand value actually wins.
             var gapToks = String(resolved).trim().split(/\s+/);
             if (gapToks.length >= 2) {
-                var grRow = parseCSSLength(gapToks[0]);
-                var grCol = parseCSSLength(gapToks[1]);
+                var grRow = resolveCSSLength(gapToks[0]);
+                var grCol = resolveCSSLength(gapToks[1]);
                 if (grRow) setFlex(id, "row_gap",
                     grRow.unit === "%" ? (grRow.value + "%") : grRow.value);
                 if (grCol) setFlex(id, "column_gap",
@@ -223,7 +223,7 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
                 // The earlier ordering cleared row_gap/column_gap
                 // unconditionally, which silently nuked prior 2-token
                 // state when the new value was malformed.
-                var g = parseCSSLength(resolved);
+                var g = resolveCSSLength(resolved);
                 if (g) {
                     // Reset per-axis (-1 = "consult shared gap") so
                     // the new single-token value isn't shadowed by a
@@ -241,7 +241,7 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
             // stores the percent value on the FlexStyle.row_gap slot
             // (best-effort: Yoga has no row-gap percent API yet, so the
             // value is treated as px until the Yoga update lands).
-            var rg = parseCSSLength(resolved);
+            var rg = resolveCSSLength(resolved);
             if (rg) setFlex(id, "row_gap",
                 rg.unit === "%" ? (rg.value + "%") : rg.value);
             break;
@@ -249,7 +249,7 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
         case "columnGap": {
             // pulp Wave 2 css.2 — forward `'NN%'` verbatim (same caveat
             // as rowGap above).
-            var cg = parseCSSLength(resolved);
+            var cg = resolveCSSLength(resolved);
             if (cg) setFlex(id, "column_gap",
                 cg.unit === "%" ? (cg.value + "%") : cg.value);
             break;
@@ -267,7 +267,7 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
             // verbatim so the bridge can route to YGNodeStyleSetWidthAuto
             // ("hug contents"). Mirrors the percent path.
             if (resolved === "auto") { setFlex(id, "width", "auto"); break; }
-            var w = parseCSSLength(resolved);
+            var w = resolveCSSLength(resolved);
             if (!w) break;
             if (w.unit === "auto") setFlex(id, "width", "auto");
             else if (w.unit === "%") setFlex(id, "width", w.value + "%");
@@ -276,53 +276,40 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
         }
         case "height": {
             if (resolved === "auto") { setFlex(id, "height", "auto"); break; }
-            var h = parseCSSLength(resolved);
+            var h = resolveCSSLength(resolved);
             if (!h) break;
             if (h.unit === "auto") setFlex(id, "height", "auto");
             else if (h.unit === "%") setFlex(id, "height", h.value + "%");
             else setFlex(id, "height", h.value);
             break;
         }
+        // pulp #1576 — these four min/max length properties previously
+        // had a dual-path: a `/^(calc|min|max|clamp)\(/` guard that
+        // routed calc-family values into resolveCSSLength's number-
+        // return shape, and a parseCSSLength branch for the px/%/auto
+        // case. After #1576 restored resolveCSSLength to the unified
+        // {value, unit} shape (drop-in replacement for parseCSSLength),
+        // both paths collapse into a single resolveCSSLength call.
         case "minWidth": {
-            // pulp Wave 2 css.2 — accept `calc()` / `min()` / `max()` /
-            // `clamp()` via the existing resolveCSSLength helper. Numeric
-            // px and % paths route through the legacy parseCSSLength
-            // dispatch (which the bridge then forwards to Yoga).
-            if (/^(calc|min|max|clamp)\(/.test(String(resolved).trim())) {
-                setFlex(id, "min_width", resolveCSSLength(resolved, null));
-                break;
-            }
-            var mw = parseCSSLength(resolved);
+            var mw = resolveCSSLength(resolved);
             if (mw) setFlex(id, "min_width",
                 mw.unit === "%" ? (mw.value + "%") : mw.value);
             break;
         }
         case "minHeight": {
-            if (/^(calc|min|max|clamp)\(/.test(String(resolved).trim())) {
-                setFlex(id, "min_height", resolveCSSLength(resolved, null));
-                break;
-            }
-            var mh = parseCSSLength(resolved);
+            var mh = resolveCSSLength(resolved);
             if (mh) setFlex(id, "min_height",
                 mh.unit === "%" ? (mh.value + "%") : mh.value);
             break;
         }
         case "maxWidth": {
-            if (/^(calc|min|max|clamp)\(/.test(String(resolved).trim())) {
-                setFlex(id, "max_width", resolveCSSLength(resolved, null));
-                break;
-            }
-            var xw = parseCSSLength(resolved);
+            var xw = resolveCSSLength(resolved);
             if (xw) setFlex(id, "max_width",
                 xw.unit === "%" ? (xw.value + "%") : xw.value);
             break;
         }
         case "maxHeight": {
-            if (/^(calc|min|max|clamp)\(/.test(String(resolved).trim())) {
-                setFlex(id, "max_height", resolveCSSLength(resolved, null));
-                break;
-            }
-            var xh = parseCSSLength(resolved);
+            var xh = resolveCSSLength(resolved);
             if (xh) setFlex(id, "max_height",
                 xh.unit === "%" ? (xh.value + "%") : xh.value);
             break;
@@ -336,7 +323,7 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
         // marginRight: auto`) — Yoga supports it on margin only.
         case "marginTop": {
             if (resolved === "auto") { setFlex(id, "margin_top", "auto"); break; }
-            var mt = parseCSSLength(resolved);
+            var mt = resolveCSSLength(resolved);
             if (!mt) break;
             if (mt.unit === "%") setFlex(id, "margin_top", mt.value + "%");
             else setFlex(id, "margin_top", mt.value);
@@ -344,7 +331,7 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
         }
         case "marginRight": {
             if (resolved === "auto") { setFlex(id, "margin_right", "auto"); break; }
-            var mr = parseCSSLength(resolved);
+            var mr = resolveCSSLength(resolved);
             if (!mr) break;
             if (mr.unit === "%") setFlex(id, "margin_right", mr.value + "%");
             else setFlex(id, "margin_right", mr.value);
@@ -352,7 +339,7 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
         }
         case "marginBottom": {
             if (resolved === "auto") { setFlex(id, "margin_bottom", "auto"); break; }
-            var mb = parseCSSLength(resolved);
+            var mb = resolveCSSLength(resolved);
             if (!mb) break;
             if (mb.unit === "%") setFlex(id, "margin_bottom", mb.value + "%");
             else setFlex(id, "margin_bottom", mb.value);
@@ -360,7 +347,7 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
         }
         case "marginLeft": {
             if (resolved === "auto") { setFlex(id, "margin_left", "auto"); break; }
-            var ml = parseCSSLength(resolved);
+            var ml = resolveCSSLength(resolved);
             if (!ml) break;
             if (ml.unit === "%") setFlex(id, "margin_left", ml.value + "%");
             else setFlex(id, "margin_left", ml.value);
@@ -387,7 +374,7 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
                 if (tok === "auto") {
                     setFlex(id, mNames[mi], "auto");
                 } else {
-                    var mp = parseCSSLength(tok);
+                    var mp = resolveCSSLength(tok);
                     if (!mp) continue;
                     setFlex(id, mNames[mi],
                         mp.unit === "%" ? (mp.value + "%") : mp.value);
@@ -414,7 +401,7 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
                 setFlex(id, "margin_right", "auto");
                 break;
             }
-            var mhv = parseCSSLength(resolved);
+            var mhv = resolveCSSLength(resolved);
             if (!mhv) break;
             var mhArg = mhv.unit === "%" ? mhv.value + "%" : mhv.value;
             setFlex(id, "margin_left",  mhArg);
@@ -427,7 +414,7 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
                 setFlex(id, "margin_bottom", "auto");
                 break;
             }
-            var mvv = parseCSSLength(resolved);
+            var mvv = resolveCSSLength(resolved);
             if (!mvv) break;
             var mvArg = mvv.unit === "%" ? mvv.value + "%" : mvv.value;
             setFlex(id, "margin_top",    mvArg);
@@ -441,28 +428,28 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
         // `auto` (only margin does), so the keyword is silently dropped
         // here.
         case "paddingTop": {
-            var pt = parseCSSLength(resolved);
+            var pt = resolveCSSLength(resolved);
             if (!pt) break;
             if (pt.unit === "%") setFlex(id, "padding_top", pt.value + "%");
             else setFlex(id, "padding_top", pt.value);
             break;
         }
         case "paddingRight": {
-            var pr = parseCSSLength(resolved);
+            var pr = resolveCSSLength(resolved);
             if (!pr) break;
             if (pr.unit === "%") setFlex(id, "padding_right", pr.value + "%");
             else setFlex(id, "padding_right", pr.value);
             break;
         }
         case "paddingBottom": {
-            var pb = parseCSSLength(resolved);
+            var pb = resolveCSSLength(resolved);
             if (!pb) break;
             if (pb.unit === "%") setFlex(id, "padding_bottom", pb.value + "%");
             else setFlex(id, "padding_bottom", pb.value);
             break;
         }
         case "paddingLeft": {
-            var pl = parseCSSLength(resolved);
+            var pl = resolveCSSLength(resolved);
             if (!pl) break;
             if (pl.unit === "%") setFlex(id, "padding_left", pl.value + "%");
             else setFlex(id, "padding_left", pl.value);
@@ -481,7 +468,7 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
             for (var pi = 0; pi < 4; pi++) {
                 var ptok = String(pEdges[pi]).trim().toLowerCase();
                 if (ptok === "auto") continue; // Yoga padding has no auto
-                var pp = parseCSSLength(ptok);
+                var pp = resolveCSSLength(ptok);
                 if (!pp) continue;
                 setFlex(id, pNames[pi],
                     pp.unit === "%" ? (pp.value + "%") : pp.value);
@@ -498,7 +485,7 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
             // `style={{ paddingHorizontal: '5%' }}` route correctly.
             // Yoga's padding does NOT support 'auto', so the keyword is
             // a no-op (unlike the marginHorizontal alias).
-            var phv = parseCSSLength(resolved);
+            var phv = resolveCSSLength(resolved);
             if (!phv) break;
             var phArg = phv.unit === "%" ? phv.value + "%" : phv.value;
             setFlex(id, "padding_left",  phArg);
@@ -506,7 +493,7 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
             break;
         }
         case "paddingVertical": {
-            var pvv = parseCSSLength(resolved);
+            var pvv = resolveCSSLength(resolved);
             if (!pvv) break;
             var pvArg = pvv.unit === "%" ? pvv.value + "%" : pvv.value;
             setFlex(id, "padding_top",    pvArg);
@@ -552,7 +539,7 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
                 setFontSize(id, inherited * 1.2);
                 break;
             }
-            var fs = parseCSSLength(resolved);
+            var fs = resolveCSSLength(resolved);
             if (!fs) break;
             if (fs.unit === "em" || fs.unit === "rem") {
                 setFontSize(id, fs.value * inherited);
@@ -611,7 +598,7 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
                 setLetterSpacing(id, 0);
                 break;
             }
-            var ls = parseCSSLength(resolved);
+            var ls = resolveCSSLength(resolved);
             if (!ls) break;
             if (ls.unit === "em" || ls.unit === "rem") {
                 setLetterSpacing(id, ls.value * 14);
@@ -643,7 +630,7 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
                 setLineHeight(id, parseFloat(lhResolved) * 14);
                 break;
             }
-            var lh = parseCSSLength(resolved);
+            var lh = resolveCSSLength(resolved);
             if (!lh) break;
             if (lh.unit === "em" || lh.unit === "rem") {
                 setLineHeight(id, lh.value * 14);
@@ -706,7 +693,7 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
             // have the box size here. The catalog flips %/elliptical to
             // `partial` honest. Users wanting a circle should use a
             // numeric radius >= half their min(width, height).
-            var br = parseCSSLength(resolved);
+            var br = resolveCSSLength(resolved);
             if (br) setBorderRadius(id, br.value);
             break;
         }
@@ -741,7 +728,7 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
             if (bwResolved === "thin")   { setBorderWidth(id, 1); break; }
             if (bwResolved === "medium") { setBorderWidth(id, 2); break; }
             if (bwResolved === "thick")  { setBorderWidth(id, 4); break; }
-            var bw = parseCSSLength(resolved);
+            var bw = resolveCSSLength(resolved);
             if (bw) setBorderWidth(id, bw.value);
             break;
         }
@@ -947,7 +934,7 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
                 if (v === "center") return 0.5;
                 if (v === "left" || v === "top") return 0;
                 if (v === "right" || v === "bottom") return 1;
-                var l = parseCSSLength(v);
+                var l = resolveCSSLength(v);
                 if (l && l.unit === "%") return l.value / 100;
                 return 0.5;
             }
@@ -1021,7 +1008,7 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
         // resolveLength in css-parser.js). Numeric px and `%` paths
         // are unchanged.
         case "top": {
-            var tv = parseCSSLength(resolved); if (!tv) break;
+            var tv = resolveCSSLength(resolved); if (!tv) break;
             if (tv.unit === "%") setTop(id, tv.value + "%");
             else if (tv.unit === "em" || tv.unit === "rem") setTop(id, tv.value * 14);
             else if (tv.unit === "vh") setTop(id, tv.value / 100 * 600);
@@ -1030,7 +1017,7 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
             break;
         }
         case "right": {
-            var rv = parseCSSLength(resolved); if (!rv) break;
+            var rv = resolveCSSLength(resolved); if (!rv) break;
             if (rv.unit === "%") setRight(id, rv.value + "%");
             else if (rv.unit === "em" || rv.unit === "rem") setRight(id, rv.value * 14);
             else if (rv.unit === "vh") setRight(id, rv.value / 100 * 600);
@@ -1039,7 +1026,7 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
             break;
         }
         case "bottom": {
-            var bv = parseCSSLength(resolved); if (!bv) break;
+            var bv = resolveCSSLength(resolved); if (!bv) break;
             if (bv.unit === "%") setBottom(id, bv.value + "%");
             else if (bv.unit === "em" || bv.unit === "rem") setBottom(id, bv.value * 14);
             else if (bv.unit === "vh") setBottom(id, bv.value / 100 * 600);
@@ -1048,7 +1035,7 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
             break;
         }
         case "left": {
-            var lv = parseCSSLength(resolved); if (!lv) break;
+            var lv = resolveCSSLength(resolved); if (!lv) break;
             if (lv.unit === "%") setLeft(id, lv.value + "%");
             else if (lv.unit === "em" || lv.unit === "rem") setLeft(id, lv.value * 14);
             else if (lv.unit === "vh") setLeft(id, lv.value / 100 * 600);
@@ -1405,7 +1392,7 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
             break;
         }
         case "outlineWidth": {
-            var ow = parseCSSLength(resolved);
+            var ow = resolveCSSLength(resolved);
             if (ow) {
                 if (typeof setOutlineWidth === "function") setOutlineWidth(id, ow.value);
                 else if (typeof setOutline === "function") setOutline(id, ow.value, "");
@@ -1424,7 +1411,7 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
         // bridge setters. Outline doesn't take Yoga layout space, so the
         // CSS path mirrors borderStyle keyword set verbatim.
         case "outlineOffset": {
-            var oo = parseCSSLength(resolved);
+            var oo = resolveCSSLength(resolved);
             if (oo && typeof setOutlineOffset === "function") setOutlineOffset(id, oo.value);
             break;
         }
@@ -1534,22 +1521,22 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
         // applyBorderSide in widget_bridge.cpp). Calling setBorderSide
         // with a placeholder 0/"" for the unset slot would clobber it.
         case "borderTopWidth": {
-            var bwT = parseCSSLength(resolved);
+            var bwT = resolveCSSLength(resolved);
             if (bwT && typeof setBorderTopWidth === "function") setBorderTopWidth(id, bwT.value);
             break;
         }
         case "borderRightWidth": {
-            var bwR = parseCSSLength(resolved);
+            var bwR = resolveCSSLength(resolved);
             if (bwR && typeof setBorderRightWidth === "function") setBorderRightWidth(id, bwR.value);
             break;
         }
         case "borderBottomWidth": {
-            var bwB = parseCSSLength(resolved);
+            var bwB = resolveCSSLength(resolved);
             if (bwB && typeof setBorderBottomWidth === "function") setBorderBottomWidth(id, bwB.value);
             break;
         }
         case "borderLeftWidth": {
-            var bwL = parseCSSLength(resolved);
+            var bwL = resolveCSSLength(resolved);
             if (bwL && typeof setBorderLeftWidth === "function") setBorderLeftWidth(id, bwL.value);
             break;
         }
@@ -1578,7 +1565,7 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
         case "borderTopLeftRadius": case "borderTopRightRadius":
         case "borderBottomLeftRadius": case "borderBottomRightRadius": {
             var corner = key.replace("border", "").replace("Radius", "");
-            var cr = parseCSSLength(resolved);
+            var cr = resolveCSSLength(resolved);
             if (cr && typeof setCornerRadius === "function")
                 setCornerRadius(id, corner, cr.value);
             break;
@@ -1705,7 +1692,7 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
         case "marginInlineStart": {
             // LTR fast path — inline-start ≡ left.
             if (resolved === "auto") { setFlex(id, "margin_left", "auto"); break; }
-            var mis = parseCSSLength(resolved);
+            var mis = resolveCSSLength(resolved);
             if (!mis) break;
             setFlex(id, "margin_left", mis.unit === "%" ? mis.value + "%" : mis.value);
             break;
@@ -1713,7 +1700,7 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
         case "marginInlineEnd": {
             // LTR fast path — inline-end ≡ right.
             if (resolved === "auto") { setFlex(id, "margin_right", "auto"); break; }
-            var mie = parseCSSLength(resolved);
+            var mie = resolveCSSLength(resolved);
             if (!mie) break;
             setFlex(id, "margin_right", mie.unit === "%" ? mie.value + "%" : mie.value);
             break;
@@ -1726,7 +1713,7 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
         case "marginBlockStart": {
             // horizontal-tb fast path — block-start ≡ top.
             if (resolved === "auto") { setFlex(id, "margin_top", "auto"); break; }
-            var mbs = parseCSSLength(resolved);
+            var mbs = resolveCSSLength(resolved);
             if (!mbs) break;
             setFlex(id, "margin_top", mbs.unit === "%" ? mbs.value + "%" : mbs.value);
             break;
@@ -1734,7 +1721,7 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
         case "marginBlockEnd": {
             // horizontal-tb fast path — block-end ≡ bottom.
             if (resolved === "auto") { setFlex(id, "margin_bottom", "auto"); break; }
-            var mbe = parseCSSLength(resolved);
+            var mbe = resolveCSSLength(resolved);
             if (!mbe) break;
             setFlex(id, "margin_bottom", mbe.unit === "%" ? mbe.value + "%" : mbe.value);
             break;
@@ -1747,14 +1734,14 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
         case "paddingInlineStart": {
             // LTR fast path — inline-start ≡ left. Yoga's padding doesn't
             // support `auto` (only margin does); keyword silently dropped.
-            var pis = parseCSSLength(resolved);
+            var pis = resolveCSSLength(resolved);
             if (!pis) break;
             setFlex(id, "padding_left", pis.unit === "%" ? pis.value + "%" : pis.value);
             break;
         }
         case "paddingInlineEnd": {
             // LTR fast path — inline-end ≡ right.
-            var pie = parseCSSLength(resolved);
+            var pie = resolveCSSLength(resolved);
             if (!pie) break;
             setFlex(id, "padding_right", pie.unit === "%" ? pie.value + "%" : pie.value);
             break;
@@ -1766,24 +1753,24 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
         }
         case "paddingBlockStart": {
             // horizontal-tb fast path — block-start ≡ top.
-            var pbs = parseCSSLength(resolved);
+            var pbs = resolveCSSLength(resolved);
             if (!pbs) break;
             setFlex(id, "padding_top", pbs.unit === "%" ? pbs.value + "%" : pbs.value);
             break;
         }
         case "paddingBlockEnd": {
             // horizontal-tb fast path — block-end ≡ bottom.
-            var pbe = parseCSSLength(resolved);
+            var pbe = resolveCSSLength(resolved);
             if (!pbe) break;
             setFlex(id, "padding_bottom", pbe.unit === "%" ? pbe.value + "%" : pbe.value);
             break;
         }
         case "inset": {
             var ins = expandShorthand(resolved);
-            var tv2 = parseCSSLength(String(ins[0])); if (tv2) setTop(id, tv2.value);
-            var rv2 = parseCSSLength(String(ins[1])); if (rv2) setRight(id, rv2.value);
-            var bv2 = parseCSSLength(String(ins[2])); if (bv2) setBottom(id, bv2.value);
-            var lv2 = parseCSSLength(String(ins[3])); if (lv2) setLeft(id, lv2.value);
+            var tv2 = resolveCSSLength(String(ins[0])); if (tv2) setTop(id, tv2.value);
+            var rv2 = resolveCSSLength(String(ins[1])); if (rv2) setRight(id, rv2.value);
+            var bv2 = resolveCSSLength(String(ins[2])); if (bv2) setBottom(id, bv2.value);
+            var lv2 = resolveCSSLength(String(ins[3])); if (lv2) setLeft(id, lv2.value);
             break;
         }
 
@@ -1810,7 +1797,7 @@ CSSStyleDeclaration.prototype._applyProperty = function(key, value) {
         // text-indent — first-line indent. Storage-only; SkParagraph
         // setTextIndent integration is the follow-up.
         case "textIndent": {
-            var ti = parseCSSLength(resolved);
+            var ti = resolveCSSLength(resolved);
             if (ti && typeof setTextIndent === "function") setTextIndent(id, ti.value);
             break;
         }
@@ -2002,7 +1989,7 @@ CSSStyleDeclaration.prototype.setProperty = function(name, value) {
         // non-active slot up front, then write the new value.
         if (typeof setStringToken === 'function') setStringToken(tokenName, "");
         if (typeof setMotionToken === 'function') setMotionToken(tokenName, 0);
-        var parsed = parseCSSLength(value);
+        var parsed = resolveCSSLength(value);
         if (parsed) {
             setMotionToken(tokenName, parsed.value);
         } else {
