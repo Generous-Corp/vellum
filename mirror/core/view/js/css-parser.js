@@ -549,18 +549,167 @@ function resolveLength(parsed, ctx) {
     }
 }
 
-// Resolve a CSS length string to px in one call
+// Resolve a CSS length string into the same {value, unit} shape that
+// parseCSSLength returns, but with calc() / min() / max() / clamp()
+// support. pulp #1553 — drop-in replacement for parseCSSLength so call
+// sites in web-compat-style-decl.js gain calc-family expression support
+// without each per-property branch having to special-case the function
+// syntax.
+//
+// Return shape (matches parseCSSLength):
+//   { value: <number>, unit: "px" | "%" | "auto" | "em" | "rem" | ... }
+//   or null if the input is empty / unparseable / malformed.
+//
+// Per-input behaviour:
+//   - calc-family with all-percent operands  →  { value, unit: "%" }
+//     so the bridge routes through the percent path (Codex P2 on #1576).
+//   - calc-family otherwise                   →  { value: <px>, unit: "px" }
+//     (evaluateCalc resolves mixed-unit operands inline against ctx).
+//   - non-calc-family                         →  parseCSSLength passthrough.
+//   - malformed calc-family (empty parens,
+//     unbalanced parens, no operands)          →  null
+//     (Codex P1 on #1576 — was infinite-recursing through evaluateCalc).
 function resolveCSSLength(str, ctx) {
-    if (!str) return 0;
-    str = String(str).trim();
-    // Check for calc/min/max/clamp first
-    if (str.indexOf("calc(") === 0 || str.indexOf("min(") === 0 ||
-        str.indexOf("max(") === 0 || str.indexOf("clamp(") === 0) {
-        return evaluateCalc(str, ctx);
+    if (str === undefined || str === null || str === "") return null;
+    var s = String(str).trim();
+    var isCalcFamily =
+        s.indexOf("calc(")  === 0 ||
+        s.indexOf("min(")   === 0 ||
+        s.indexOf("max(")   === 0 ||
+        s.indexOf("clamp(") === 0;
+
+    if (isCalcFamily) {
+        // P1 guard: reject malformed calc-family inputs before delegating
+        // to evaluateCalc. `min()` / `max()` / `clamp()` with empty parens
+        // would otherwise infinite-recurse through evaluateCalc's nested-
+        // function regex (line ~598: /(calc|min|max|clamp)\([^)]*\)/g
+        // matches zero-char inner content).
+        var inner = _calcFamilyInner(s);
+        if (inner === null) return null;
+
+        // Unit-preservation fast path: if every operand of the calc-
+        // family expression is a bare `<num><unit>` token sharing a
+        // single unit, preserve that unit so the bridge can route
+        // through the right layout path (% layout, em font-size, vh
+        // viewport-relative, etc.). Mixed-unit or arithmetic expressions
+        // (e.g. `calc(50% + 10px)`) fall through to evaluateCalc, which
+        // resolves them to px against ctx — Pulp has no deferred-
+        // resolution layer, so cross-unit arithmetic resolves at the JS
+        // boundary. Closes Codex P2 on #1576 (% preservation) and the
+        // follow-up P1 on #1862 (vh/vw/em/rem preservation).
+        var single = _calcFamilySingleUnit(s);
+        if (single !== null) return single;
+
+        var px = evaluateCalc(s, ctx);
+        return { value: px, unit: "px" };
     }
-    var parsed = parseCSSLength(str);
-    if (!parsed) return 0;
-    return resolveLength(parsed, ctx);
+    return parseCSSLength(s);
+}
+
+// Resolve a CSS length string to a raw px number. Convenience wrapper
+// for callers that only want the numeric value. Returns 0 on null /
+// non-px (auto, %) inputs — callers that need the unit information
+// should use `resolveCSSLength` directly.
+function resolveCSSLengthPx(str, ctx) {
+    var r = resolveCSSLength(str, ctx);
+    if (!r) return 0;
+    return resolveLength(r, ctx);
+}
+
+// Internal: returns the trimmed contents inside a calc-family's outer
+// parens, or null if the input is malformed (no opening paren, no
+// matching closing paren, or empty operands). Codex P1 guard.
+function _calcFamilyInner(s) {
+    var open = s.indexOf("(");
+    if (open < 0 || s.charAt(s.length - 1) !== ")") return null;
+    var inner = s.slice(open + 1, -1).trim();
+    return inner.length > 0 ? inner : null;
+}
+
+// Internal: if every operand of a calc-family expression is a bare
+// `<num><unit>` token (no operators, all the same unit), return the
+// resolved `{value, unit}` so the caller can preserve that unit
+// through to the bridge instead of losing it in px-resolution.
+//
+// Closes BOTH Codex P-tier findings on PR #1576 and its follow-up
+// P1 on PR #1862:
+//   - PR #1576 P2: `calc(50%)` → {value: 50, unit: '%'} so the
+//     bridge routes through the percent layout path.
+//   - PR #1862 P1: `calc(10vh)` / `min(1em, 2em)` etc. — unit
+//     preservation extended to every unit parseCSSLength
+//     recognises (px, em, rem, %, vw, vh, vmin, vmax). Units
+//     outside that set (ch, pt, in, cm, etc.) fall through to
+//     px resolution rather than introducing helper-only support
+//     that would diverge from `parseCSSLength` (Codex P2 review).
+//
+// Expressions with operators (`calc(50% + 10px)`) or mixed units
+// (`min(10vh, 20px)`) return null so they fall through to
+// evaluateCalc's px resolution — Pulp has no deferred-resolution
+// layer, so a mixed-unit arithmetic gets resolved at the JS layer
+// using the supplied ctx. Documented in [issue-1576][fallback-behaviour].
+//
+// Examples:
+//   calc(50%)               → {value: 50, unit: '%'}
+//   calc(10vh)              → {value: 10, unit: 'vh'}
+//   min(10%, 20%)           → {value: 10, unit: '%'}
+//   min(1em, 2em)           → {value: 1, unit: 'em'}
+//   max(10vw, 20vw)         → {value: 20, unit: 'vw'}
+//   clamp(10%, 50%, 90%)    → {value: 50, unit: '%'}
+//   calc(50% + 10px)        → null  (operator → px fallthrough)
+//   min(10vh, 20px)         → null  (mixed unit → px fallthrough)
+//   calc(50)                → null  (no unit → px fallthrough)
+//   calc(3ch)               → null  (unit outside parseCSSLength
+//                                    set → px fallthrough)
+//   calc(.px) / calc(1.2.3em) → null  (malformed number)
+function _calcFamilySingleUnit(s) {
+    var prefix =
+        s.indexOf("calc(")  === 0 ? "calc"  :
+        s.indexOf("min(")   === 0 ? "min"   :
+        s.indexOf("max(")   === 0 ? "max"   :
+        s.indexOf("clamp(") === 0 ? "clamp" : null;
+    if (prefix === null) return null;
+
+    var inner = s.slice(prefix.length + 1, -1).trim();
+    // Match: optional sign + valid number + required unit. The unit
+    // set is intentionally kept aligned with `parseCSSLength` so a
+    // bare `3em` and `calc(3em)` resolve the same way (no
+    // helper-only units). Number pattern is strict — accepts
+    // `12`, `1.5`, `.5`, `-2`, `-.25` but rejects `.`, `1.2.3`, `..`
+    // (Codex P2 review on PR #1862).
+    var bareRe = /^(-?(?:\d+(?:\.\d+)?|\.\d+))(px|em|rem|%|vw|vh|vmin|vmax)$/;
+
+    function parseOperand(tok) {
+        var m = tok.match(bareRe);
+        if (!m) return null;
+        return { value: parseFloat(m[1]), unit: m[2] };
+    }
+
+    if (prefix === "calc") {
+        return parseOperand(inner);  // single bare unit or null
+    }
+
+    // min / max / clamp — every operand must parse, and they must all
+    // share the SAME unit.
+    var args = _splitCalcArgs(inner);
+    if (args.length === 0) return null;
+    var sharedUnit = null;
+    var vals = [];
+    for (var i = 0; i < args.length; i++) {
+        var op = parseOperand(args[i].trim());
+        if (!op) return null;
+        if (sharedUnit === null) sharedUnit = op.unit;
+        else if (sharedUnit !== op.unit) return null;
+        vals.push(op.value);
+    }
+    var result = null;
+    if (prefix === "min")   result = Math.min.apply(null, vals);
+    if (prefix === "max")   result = Math.max.apply(null, vals);
+    if (prefix === "clamp") {
+        if (vals.length < 3) return null;
+        result = Math.min(Math.max(vals[1], vals[0]), vals[2]);
+    }
+    if (result === null) return null;
+    return { value: result, unit: sharedUnit };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -604,8 +753,14 @@ function evaluateCalc(expr, ctx) {
     }
 
     // Evaluate arithmetic expression: supports +, -, *, /
-    // First resolve nested function calls
-    expr = expr.replace(/(calc|min|max|clamp)\([^)]*\)/g, function(match) {
+    // First resolve nested function calls. Codex P1 defense-in-depth on
+    // PR #1576: require AT LEAST ONE char inside the inner function
+    // parens. `[^)]*` (zero-or-more) would otherwise match `min()` and
+    // re-enter evaluateCalc with the same empty token, causing
+    // RangeError: maximum call stack size exceeded. `[^)]+` (one-or-
+    // more) means malformed calls fall through to the tokenizer below
+    // where they cleanly evaluate to 0 instead of crashing the engine.
+    expr = expr.replace(/(calc|min|max|clamp)\([^)]+\)/g, function(match) {
         return String(evaluateCalc(match, ctx));
     });
 
