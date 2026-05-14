@@ -43,6 +43,17 @@ public:
     void set_line_cap(LineCap cap) override;
     void set_line_join(LineJoin join) override;
 
+    // pulp #1898 — Canvas2D ctx.setLineDash() / lineDashOffset on the CG
+    // backend. The base Canvas default is a no-op `(void)`, which silently
+    // dropped every dashed-stroke draw on the macOS CPU paint path — most
+    // visibly Spectr's 0 dB rail rendered solid instead of dashed, plus
+    // ~5 other callsites (TextEditor caret guides, ResizeHandle dashed
+    // hint, etc.). Mirrors SkiaCanvas::set_line_dash; the actual CG state
+    // mutation happens via CGContextSetLineDash inside apply_line_dash_to_ctx()
+    // immediately before each stroke draw, then is reset to solid afterwards
+    // so the dash pattern doesn't leak into untracked CG callers.
+    void set_line_dash(const float* intervals, int count, float phase) override;
+
     // pulp #1434 bridge-thin gap-fill — Canvas2D ctx.miterLimit and
     // imageSmoothingEnabled / Quality. Stored on the canvas; CGContext's
     // CGContextSetMiterLimit / CGContextSetInterpolationQuality apply
@@ -274,6 +285,17 @@ private:
     float shadow_offset_x_ = 0.0f;
     float shadow_offset_y_ = 0.0f;
     void apply_shadow_to_context();
+
+    // pulp #1898 — line-dash state. CG's CGContextSetLineDash mutates the
+    // current GState so we cannot just push it once at setter time and
+    // forget; the JS bridge may toggle dash on/off between strokes within
+    // a single GState frame. We instead store the intervals + phase here
+    // and apply via apply_line_dash_to_ctx() immediately before every
+    // stroke call, then reset to solid afterwards.
+    std::vector<float> line_dash_;
+    float line_dash_phase_ = 0.0f;
+    void apply_line_dash_to_ctx();
+    void reset_line_dash_on_ctx();
 
     void apply_fill_color();
     void apply_stroke_color();
