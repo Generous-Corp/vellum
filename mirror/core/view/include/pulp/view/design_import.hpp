@@ -397,6 +397,16 @@ ClaudeClassNameRules extract_claude_classnames(const std::string& html);
 /// (e.g. `@pulp/css-adapt`) handle lowering to bridge calls.
 std::string serialize_claude_classnames(const ClaudeClassNameRules& rules);
 
+/// Heuristic: does this HTML look like a JS-bundler entry (React, Vue,
+/// Svelte, @pulp/react, generic webpack/vite/bun output) rather than a
+/// hand-authored Claude Design page? The static-HTML parser only sees
+/// the literal DOM, so for bundler entries it captures the empty mount
+/// placeholder. Used by `pulp import-design --from claude` to print a
+/// "use pulp-design-tool --script <bundle>.js" hint instead of letting
+/// the user wonder why their 1000-element editor became a 9-element
+/// ui.js. Never throws; returns false on any empty/unparseable input.
+bool looks_like_bundler_entry(const std::string& html);
+
 /// Detect audio widget type from a node name.
 AudioWidgetType detect_audio_widget(const std::string& name);
 
