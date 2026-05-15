@@ -276,6 +276,39 @@ ClaudeClassNameRules extract_claude_classnames(const std::string& html) {
     return rules;
 }
 
+bool looks_like_bundler_entry(const std::string& html) {
+    if (html.empty()) return false;
+
+    auto contains = [&](const char* needle) {
+        return html.find(needle) != std::string::npos;
+    };
+
+    // Standard mount points (React, Vue, Svelte, @pulp/react).
+    const bool has_mount_root =
+        contains("id=\"root\"")        || contains("id='root'") ||
+        contains("id=\"app\"")         || contains("id='app'")  ||
+        contains("id=\"__pulp_root\"") || contains("id='__pulp_root'");
+
+    // Script tags that pull in a bundled JS entry. We don't try to
+    // identify whether the script *is* a bundle — just that the page
+    // is structured to load one.
+    const bool has_script_src =
+        contains("<script src=")                  ||
+        contains("<script type=\"module\" src=")  ||
+        contains("import(\"./")                   || contains("import('./");
+
+    // Bundler-emitted markers (`__bundler_*`, "Unpacking..." status, the
+    // @pulp/react runtime, React dev-tools hooks). These rarely show up
+    // in hand-authored Claude Design HTML, so a single hit is enough.
+    const bool has_bundler_hint =
+        contains("__bundler")        || contains("Unpacking")     ||
+        contains("data-reactroot")   || contains("@pulp/react");
+
+    // Either (mount + script) — vanilla shell — or any unambiguous
+    // bundler-specific marker.
+    return (has_mount_root && has_script_src) || has_bundler_hint;
+}
+
 std::string serialize_claude_classnames(const ClaudeClassNameRules& rules) {
     // Use choc::value::createObject for stable, well-escaped JSON. The
     // outer map is a std::map so keys arrive in alphabetical order
