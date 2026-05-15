@@ -817,6 +817,21 @@ static pulp::view::KeyCode keyCodeFromNS(unsigned short code) {
                     return;
                 }
             }
+            // pulp #68 — host-level ESC fallback for an open ComboBox dropdown
+            // whose focus has been stolen by a sibling JS-driven element
+            // (common pattern: React mounts a popover next to the combo,
+            // grabs focus inside it, but the user hits ESC expecting the
+            // dropdown they can still see to close). The ComboBox's own
+            // on_key_event handler only fires when ComboBox owns focus,
+            // so a stolen-focus case wedges the dropdown open with no
+            // keyboard escape route. Close at host level the same way
+            // active_overlay_ does below.
+            if (pulp::view::ComboBox::active_popup_) {
+                pulp::view::ComboBox::close_active_popup();
+                [self startAnimationTimerIfNeeded];
+                [self setNeedsDisplay:YES];
+                return;
+            }
             // pulp #1361 — generic active_overlay_ ESC dismissal. ModalOverlay,
             // ComboBox, and CallOutBox already have their own ESC handlers
             // (ComboBox/CallOutBox sit on the focused view and consume their
