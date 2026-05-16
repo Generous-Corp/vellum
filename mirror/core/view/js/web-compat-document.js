@@ -816,7 +816,16 @@ var document = {
         Object.defineProperty(el, "nodeName", { value: "#document-fragment", configurable: true });
         __elements__[el._id] = el;
         return el;
-    }
+    },
+
+    // pulp #2101 — EventTarget no-ops at the document level. Three.js's
+    // OrbitControls (and any other helper that takes an Element + walks
+    // up to `ownerDocument`) calls `ownerDocument.removeEventListener`
+    // on cleanup; without these the call throws and Three.js's async-
+    // executor swallows it, surfacing as a broken-but-silent demo.
+    addEventListener: function() {},
+    removeEventListener: function() {},
+    dispatchEvent: function() { return true; }
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1227,6 +1236,12 @@ function __createMockGPUQueue(init) {
     var queue = {
         _objectName: "GPUQueue",
         label: init.label || "",
+        // pulp #2101 — bridge flag the buffered-draw augmentation
+        // (web-compat-gpu-buffered.js) reads to decide whether to forward
+        // command buffers to Dawn. That file wraps queue.submit with the
+        // actual __gpuQueueSubmitImpl / __gpuQueueDrawBufferedImpl
+        // dispatch; we just need to expose the flag here.
+        _nativeBridge: !!init.nativeBridge,
         _submitCount: 0
     };
     queue.submit = function(commandBuffers) {
@@ -1282,20 +1297,46 @@ function __pickDeviceFeatures(adapter, descriptor) {
     return picked;
 }
 
-function __createMockGPUDevice(adapter, descriptor) {
+function __createMockGPUDevice(adapter, descriptor, init) {
+    // pulp #2101 — third `init` arg carries the bridge descriptor returned by
+    // `__describeNativeDeviceImpl`. When `init.nativeBridge` is true, the
+    // device is wired so `createTexture` mints a native Dawn texture handle
+    // (via `__gpuCreateTextureImpl`) instead of a pure mock. Without this
+    // branch every Three.js draw call lands in a no-op mock device and the
+    // demo's WebGPU canvas stays solid black.
     descriptor = descriptor || {};
+    init = init || {};
     var device = {
         _objectName: "GPUDevice",
         label: descriptor.label || "",
+        _nativeBridge: !!init.nativeBridge,
         features: __createFeatureSet(__pickDeviceFeatures(adapter, descriptor)),
         limits: __mergeMockGpuLimits(descriptor.requiredLimits),
-        queue: __createMockGPUQueue({}),
+        queue: __createMockGPUQueue({ nativeBridge: !!init.nativeBridge }),
         adapterInfo: adapter && adapter.info ? adapter.info : null,
         lost: new Promise(function() {}),
+        _errorScopes: [],
         _destroyed: false
     };
     device.createBuffer = function(bufferDescriptor) { return __createMockGPUBuffer(bufferDescriptor || {}); };
-    device.createTexture = function(textureDescriptor) { return __createMockGPUTexture(textureDescriptor || {}); };
+    device.createTexture = function(textureDescriptor) {
+        textureDescriptor = textureDescriptor || {};
+        var nativeTextureId = "";
+        if (device._nativeBridge && typeof __gpuCreateTextureImpl === "function") {
+            nativeTextureId = String(__gpuCreateTextureImpl(JSON.stringify({
+                size: textureDescriptor.size || {},
+                format: textureDescriptor.format || null,
+                usage: textureDescriptor.usage || 0,
+                label: textureDescriptor.label || ""
+            })) || "");
+        }
+        var t = __createMockGPUTexture(textureDescriptor);
+        if (nativeTextureId) {
+            t._nativeBridge = true;
+            t._nativeTextureId = nativeTextureId;
+        }
+        return t;
+    };
     device.createSampler = function(samplerDescriptor) { return __createMockGPUSampler(samplerDescriptor || {}); };
     device.createShaderModule = function(shaderDescriptor) { return __createMockGPUShaderModule(shaderDescriptor || {}); };
     device.createBindGroupLayout = function(layoutDescriptor) { return __createMockGPUBindGroupLayout(layoutDescriptor || {}); };
@@ -1333,7 +1374,44 @@ function __createMockGPUDevice(adapter, descriptor) {
     };
     device.createCommandEncoder = function(commandDescriptor) { return __createMockGPUCommandEncoder(commandDescriptor || {}); };
     device.destroy = function() { device._destroyed = true; };
+    // pulp #2101 — Three.js WebGPUPipelineUtils calls pushErrorScope/popErrorScope
+    // around every pipeline create. The async-executor pattern swallows throws
+    // when these are missing, so a `TypeError: device.pushErrorScope is not a
+    // function` becomes a silently-empty mock canvas. Provide no-op error scopes
+    // (we don't surface bridge errors back to JS yet).
+    device.pushErrorScope = function(filter) { device._errorScopes.push({ filter: filter }); };
+    device.popErrorScope = function() { device._errorScopes.pop(); return Promise.resolve(null); };
+    device.addEventListener = function() {};
+    device.removeEventListener = function() {};
     return device;
+}
+
+// pulp #2101 — bridge-aware adapter factory. When `init.nativeBridge` is true,
+// `requestDevice` asks the host for a device descriptor (`__describeNativeDeviceImpl`)
+// and forwards `init.nativeBridge` into `__createMockGPUDevice` so the device's
+// `createTexture` mints real Dawn handles. The legacy `__createMockGPUAdapter`
+// factory below stays for non-native paths and aliases this one.
+function __createGPUAdapter(init) {
+    init = init || {};
+    var adapter = {
+        _objectName: "GPUAdapter",
+        name: init.name || "Pulp Native Adapter",
+        backend: init.backend || __mockGpuInfo().backend,
+        preferredCanvasFormat: init.preferredCanvasFormat || __mockPreferredCanvasFormat(),
+        features: __createFeatureSet(init.features || [ "core-features-and-limits", "timestamp-query" ]),
+        limits: __mergeMockGpuLimits(init.limits),
+        info: init.info || { vendor: "Pulp", architecture: init.backend || __mockGpuInfo().backend, description: init.name || "Pulp Native Adapter" },
+        _nativeBridge: !!init.nativeBridge
+    };
+    adapter.requestDevice = function(descriptor) {
+        var deviceInit = {};
+        if (adapter._nativeBridge && typeof __describeNativeDeviceImpl === "function") {
+            deviceInit = __describeNativeDeviceImpl(descriptor || {}) || {};
+            deviceInit.nativeBridge = true;
+        }
+        return Promise.resolve(__createMockGPUDevice(adapter, descriptor || {}, deviceInit));
+    };
+    return adapter;
 }
 
 function __createMockGPUAdapter(init) {
@@ -1390,6 +1468,16 @@ var navigator = globalThis.navigator || {};
 if (typeof navigatorGPU !== "undefined" && navigatorGPU) {
     navigator.gpu = navigatorGPU;
     navigator.gpu.requestAdapter = function() {
+        // pulp #2101 — prefer the native Dawn adapter when the host advertises one
+        // via __describeNativeAdapterImpl. Falls back to the pure-mock adapter so
+        // headless test paths (no host bridge) still resolve cleanly.
+        var descriptor = null;
+        if (typeof __describeNativeAdapterImpl === "function") {
+            descriptor = __describeNativeAdapterImpl();
+        }
+        if (descriptor && descriptor.nativeBridge) {
+            return Promise.resolve(__createGPUAdapter(descriptor));
+        }
         return Promise.resolve(window.pulp.gpu.createMockAdapter());
     };
 }
@@ -1816,5 +1904,17 @@ window.pulp.gpu = {
         adapter = adapter && adapter._objectName === "GPUAdapter" ? adapter : window.pulp.gpu.createMockAdapter();
         descriptor = descriptor || {};
         return __createMockGPUDevice(adapter, descriptor);
+    },
+    // pulp #2101 — explicit accessors for the native Dawn adapter so test
+    // harnesses and demos can opt into the bridge path without relying on
+    // requestAdapter's auto-detection.
+    describeNativeAdapter: function() {
+        if (typeof __describeNativeAdapterImpl === "function") return __describeNativeAdapterImpl();
+        return null;
+    },
+    createNativeAdapter: function() {
+        var descriptor = window.pulp.gpu.describeNativeAdapter();
+        if (!descriptor || !descriptor.nativeBridge) return null;
+        return __createGPUAdapter(descriptor);
     }
 };
