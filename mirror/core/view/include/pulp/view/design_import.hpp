@@ -397,6 +397,65 @@ ClaudeClassNameRules extract_claude_classnames(const std::string& html);
 /// (e.g. `@pulp/css-adapt`) handle lowering to bridge calls.
 std::string serialize_claude_classnames(const ClaudeClassNameRules& rules);
 
+// ── Keyboard shortcut import (UX best-practice default) ─────────────────
+//
+// React designs commonly declare keyboard shortcuts inline via
+// `onKeyDown={e => { if (e.key === 'Escape') ... }}`,
+// `window.addEventListener('keydown', e => { if (e.metaKey && e.key === 's') ... })`,
+// or `useHotkeys('cmd+s', ...)`. The design-import path scans the bundled
+// React source for these patterns and emits a manifest the runtime can
+// register via `registerShortcut(key, modifiers, callback)`. Default-on;
+// opt out with `--no-import-shortcuts` (CLI) for designs where the host
+// owns shortcut handling.
+
+struct DetectedShortcut {
+    /// Verbatim pattern as it appeared in source — `"e.key === 'Escape'"`,
+    /// `"e.metaKey && e.key === 's'"`. Preserved for the manifest so a
+    /// reviewer can audit the match without re-grepping source.
+    std::string pattern;
+
+    /// Human-readable key name in DOM-spec form: `"Escape"`, `"s"`, `"ArrowLeft"`.
+    /// Empty if the pattern's key reference couldn't be resolved (e.g. the
+    /// handler dispatches on a runtime variable instead of a literal).
+    std::string key;
+
+    /// Modifier names in the order they appeared in source: any of
+    /// `"shift"`, `"ctrl"`, `"alt"`, `"meta"`. `meta` covers both `metaKey`
+    /// (macOS Cmd) and `ctrlKey` when the source uses `e.metaKey || e.ctrlKey`
+    /// as the cross-platform shortcut idiom.
+    std::vector<std::string> modifiers;
+
+    /// Best-effort source location for the matched pattern, in `<file>:<line>`
+    /// form when the input source carries filename hints (Claude bundles do;
+    /// raw TSX/JS strings don't — caller can pass an empty filename).
+    std::string source_location;
+
+    /// Best-effort handler-body excerpt — the first ~80 chars after the
+    /// condition match. Surfaced in the manifest so a reviewer can decide
+    /// whether the shortcut is safe to auto-wire vs needs human triage.
+    std::string handler_excerpt;
+};
+
+/// Static-scan a TSX/JS source string for keyboard-shortcut patterns.
+/// Recognized forms:
+///   * `if (e.key === 'X') ...` / `if (e.code === 'X') ...`
+///   * `e.metaKey`, `e.ctrlKey`, `e.altKey`, `e.shiftKey` (singular or
+///     combined with `&&` or `||`)
+///   * Inline `onKeyDown={e => {...}}` JSX prop bodies
+///   * `window.addEventListener('keydown', handler)` /
+///     `document.addEventListener('keydown', handler)`
+/// Pure regex / lexical pass — does NOT attempt to evaluate handler bodies
+/// or resolve dynamic `e.key` references. Returns an empty vector when no
+/// patterns match. Never throws. The `filename` arg is woven into each
+/// shortcut's `source_location` for traceability; pass `""` if unknown.
+std::vector<DetectedShortcut> extract_keyboard_shortcuts(
+    const std::string& source, const std::string& filename = "");
+
+/// Serialize a list of `DetectedShortcut`s to JSON. Stable ordering: sorted
+/// by (key, modifiers, source_location) so the artifact is deterministic
+/// across runs.
+std::string serialize_detected_shortcuts(const std::vector<DetectedShortcut>& shortcuts);
+
 /// Heuristic: does this HTML look like a JS-bundler entry (React, Vue,
 /// Svelte, @pulp/react, generic webpack/vite/bun output) rather than a
 /// hand-authored Claude Design page? The static-HTML parser only sees
