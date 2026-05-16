@@ -329,6 +329,146 @@ std::string serialize_claude_classnames(const ClaudeClassNameRules& rules) {
     return choc::json::toString(root, /*useLineBreaks=*/true);
 }
 
+// ── Keyboard shortcut extraction (UX best-practice default) ─────────────
+
+namespace {
+
+// Compute 1-based line number for an offset into `source`. Used to surface
+// source locations in the detected-shortcut manifest.
+int line_for_offset(const std::string& source, size_t offset) {
+    int line = 1;
+    size_t scan_end = std::min(offset, source.size());
+    for (size_t i = 0; i < scan_end; ++i) {
+        if (source[i] == '\n') ++line;
+    }
+    return line;
+}
+
+// Walk a window around the matched key check and pull every modifier
+// reference the surrounding boolean expression touches. `e.metaKey` or
+// `event.metaKey` is "meta"; the `e.metaKey || e.ctrlKey` cross-platform
+// idiom maps to a single "meta" entry (de-duped) because both flags fire
+// the same Pulp shortcut on macOS vs other hosts. Window size chosen
+// empirically — long enough to cover multi-line `&&`/`||` chains in
+// React handler bodies, short enough to avoid bleeding into the next
+// statement.
+std::vector<std::string> collect_modifiers(const std::string& source, size_t key_offset) {
+    constexpr size_t kWindow = 200;
+    size_t start = key_offset > kWindow ? key_offset - kWindow : 0;
+    std::string ctx = source.substr(start, std::min(kWindow * 2, source.size() - start));
+    std::vector<std::string> mods;
+    auto add = [&](const std::string& m) {
+        for (const auto& existing : mods) {
+            if (existing == m) return;
+        }
+        mods.push_back(m);
+    };
+    if (ctx.find(".metaKey") != std::string::npos ||
+        ctx.find(".ctrlKey") != std::string::npos) {
+        add("meta");
+    }
+    if (ctx.find(".altKey") != std::string::npos) add("alt");
+    if (ctx.find(".shiftKey") != std::string::npos) add("shift");
+    return mods;
+}
+
+// Pull a short excerpt of the handler body following the key check, for
+// the manifest reviewer. Stops at the next `}` or `;` after the key
+// match, capped to ~80 chars. Newlines collapsed to spaces.
+std::string extract_handler_excerpt(const std::string& source, size_t key_offset) {
+    constexpr size_t kMax = 80;
+    size_t scan_end = std::min(source.size(), key_offset + 240);
+    std::string excerpt;
+    bool past_paren = false;
+    int depth = 0;
+    for (size_t i = key_offset; i < scan_end && excerpt.size() < kMax; ++i) {
+        char c = source[i];
+        if (!past_paren) {
+            if (c == ')') past_paren = true;
+            continue;
+        }
+        if (c == '{') { ++depth; continue; }
+        if (c == '}') { if (depth == 0) break; --depth; continue; }
+        if (c == ';' && depth == 0) break;
+        if (c == '\n' || c == '\r' || c == '\t') {
+            if (!excerpt.empty() && excerpt.back() != ' ') excerpt += ' ';
+        } else {
+            excerpt += c;
+        }
+    }
+    // Trim leading whitespace from excerpt.
+    size_t first = excerpt.find_first_not_of(' ');
+    if (first != std::string::npos) excerpt.erase(0, first);
+    return excerpt;
+}
+
+} // namespace
+
+std::vector<DetectedShortcut> extract_keyboard_shortcuts(
+    const std::string& source, const std::string& filename) {
+    std::vector<DetectedShortcut> out;
+    if (source.empty()) return out;
+
+    // Matches:
+    //   e.key === 'X'    e.key === "X"    event.key === 'X'
+    //   e.code === 'X'   event.code === "X"
+    // Quotes balanced; key/code is any non-empty sequence of [A-Za-z0-9_+-/]
+    // (covers `Escape`, `Enter`, `ArrowLeft`, `+`, `/`, `F1`, `s`, etc.).
+    std::regex re(R"((\w+)\.(key|code)\s*===\s*(['"])([A-Za-z0-9_+\-/]+)\3)");
+
+    auto begin = std::sregex_iterator(source.begin(), source.end(), re);
+    auto end = std::sregex_iterator{};
+    for (auto it = begin; it != end; ++it) {
+        const auto& m = *it;
+        DetectedShortcut s;
+        s.key = m[4].str();
+        s.modifiers = collect_modifiers(source, static_cast<size_t>(m.position()));
+        s.pattern = m[1].str() + "." + m[2].str() + " === " + m[3].str() +
+                    s.key + m[3].str();
+        int line = line_for_offset(source, static_cast<size_t>(m.position()));
+        s.source_location = filename.empty()
+            ? (":" + std::to_string(line))
+            : (filename + ":" + std::to_string(line));
+        s.handler_excerpt = extract_handler_excerpt(
+            source, static_cast<size_t>(m.position()));
+        out.push_back(std::move(s));
+    }
+
+    // De-dupe identical (key, modifiers) pairs — multiple checks in the
+    // same source for the same chord (e.g. nested branches) shouldn't
+    // produce duplicate manifest entries. Keep first occurrence (lowest
+    // source location), which is what stable sort preserves.
+    std::sort(out.begin(), out.end(), [](const auto& a, const auto& b) {
+        if (a.key != b.key) return a.key < b.key;
+        if (a.modifiers != b.modifiers) return a.modifiers < b.modifiers;
+        return a.source_location < b.source_location;
+    });
+    out.erase(std::unique(out.begin(), out.end(),
+                          [](const auto& a, const auto& b) {
+                              return a.key == b.key && a.modifiers == b.modifiers;
+                          }),
+              out.end());
+    return out;
+}
+
+std::string serialize_detected_shortcuts(const std::vector<DetectedShortcut>& shortcuts) {
+    auto root = choc::value::createObject("");
+    auto arr = choc::value::createEmptyArray();
+    for (const auto& s : shortcuts) {
+        auto obj = choc::value::createObject("");
+        obj.addMember("key", s.key);
+        auto mods = choc::value::createEmptyArray();
+        for (const auto& m : s.modifiers) mods.addArrayElement(m);
+        obj.addMember("modifiers", mods);
+        obj.addMember("pattern", s.pattern);
+        obj.addMember("source_location", s.source_location);
+        obj.addMember("handler_excerpt", s.handler_excerpt);
+        arr.addArrayElement(obj);
+    }
+    root.addMember("shortcuts", arr);
+    return choc::json::toString(root, /*useLineBreaks=*/true);
+}
+
 // ── Claude Design bundle envelope (pulp #468) ───────────────────────────
 
 namespace {
