@@ -231,6 +231,15 @@ public:
     bool focusable() const { return focusable_; }
     void set_focusable(bool f) { focusable_ = f; }
 
+    /// Does this widget consume printable character keys for text entry?
+    /// Default false. Override to true on TextEditor and any future
+    /// text-accepting widget. Used by `WidgetBridge::forward_key_event`
+    /// to suppress bare-key global shortcuts (e.g. bare `?` for cheatsheet)
+    /// while the user is typing — non-text focusables like Knob, Button,
+    /// ListBox return false so single-key shortcuts still fire after they
+    /// take focus.
+    virtual bool accepts_text_input() const { return false; }
+
     /// CSS :disabled equivalent — blocks input, reduces opacity
     bool enabled() const { return enabled_; }
     void set_enabled(bool e) { enabled_ = e; }
