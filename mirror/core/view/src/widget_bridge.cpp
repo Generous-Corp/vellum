@@ -9438,10 +9438,34 @@ static std::string keycode_to_w3c_key(int key_code, bool shift_held) {
 void WidgetBridge::forward_key_event(int key_code, uint16_t modifiers, bool is_down) {
     if (!is_down) return;
 
-    // Check registered shortcuts first
+    // Check registered shortcuts first. Bare-key shortcuts (no Ctrl/Alt/
+    // Meta/Cmd — Shift alone counts as bare since it just selects the
+    // upper-case glyph) are suppressed while a text-accepting widget has
+    // keyboard focus, so a user typing `?` into a search box doesn't
+    // trigger a global "open cheatsheet" handler. Modifier chords always
+    // fire — Cmd+S, Cmd+,, etc. are always-global by design.
+    //
+    // The focus slot `View::focused_input_` is claimed by ANY focusable
+    // widget (Knob, Button, ListBox, TextEditor, ...) via the macOS host
+    // focus path. We narrow that to text-accepting widgets via the virtual
+    // `View::accepts_text_input()` — defaults false; only TextEditor (and
+    // any future text-input widget) returns true. Otherwise focusing a
+    // knob would silently kill every single-key shortcut until focus
+    // moved off it.
+    constexpr uint16_t kGlobalModifierMask =
+        kModCtrl | kModAlt | kModMeta | kModCmd;
+    const bool has_global_modifier = (modifiers & kGlobalModifierMask) != 0;
+    const bool text_input_focused  =
+        (View::focused_input_ != nullptr &&
+         View::focused_input_->accepts_text_input());
+
     auto kc = static_cast<KeyCode>(key_code);
     for (auto& s : shortcuts_) {
         if (s.key == kc && s.modifiers == modifiers) {
+            if (!has_global_modifier && text_input_focused) {
+                // Let the key fall through to the focused text input.
+                break;
+            }
             engine_.evaluate(s.callback + "()");
             return;
         }
