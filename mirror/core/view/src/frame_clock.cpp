@@ -9,12 +9,21 @@ void FrameClock::tick(float dt) {
     time_ += dt;
     ++frame_;
 
-    // Tick all subscribers, removing those that return false
-    for (auto& sub : subscribers_) {
-        if (sub.active) {
-            if (!sub.callback(dt)) {
-                sub.active = false;
-            }
+    const auto count = subscribers_.size();
+
+    for (std::size_t i = 0; i < count && i < subscribers_.size(); ++i) {
+        if (!subscribers_[i].active) {
+            continue;
+        }
+
+        const int id = subscribers_[i].id;
+        auto callback = subscribers_[i].callback;
+        const bool keep = callback(dt);
+
+        auto it = std::find_if(subscribers_.begin(), subscribers_.end(),
+            [id](const Subscriber& s) { return s.id == id; });
+        if (it != subscribers_.end() && !keep) {
+            it->active = false;
         }
     }
 
