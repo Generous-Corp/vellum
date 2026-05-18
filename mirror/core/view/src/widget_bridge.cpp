@@ -844,6 +844,11 @@ WidgetBridge::WidgetBridge(ScriptEngine& engine, View& root, state::StateStore& 
     eval_or_throw(engine_, "css_parser", preludes::css_parser);
     eval_or_throw(engine_, "web_compat_element", preludes::web_compat_element);
     eval_or_throw(engine_, "web_compat_canvas", preludes::web_compat_canvas);
+    // P5-6 first cut — native GPU canvas helpers extracted from
+    // web-compat-canvas.js. Must eval AFTER the canvas core so
+    // CanvasRenderingContext2D + window.pulp.gpu are in scope when
+    // __ensurePulpGpuHelpers / getContext("webgpu") run.
+    eval_or_throw(engine_, "web_compat_canvas_gpu", preludes::web_compat_canvas_gpu);
     eval_or_throw(engine_, "web_compat_style_decl", preludes::web_compat_style_decl);
     // P5-5 first cut — _cssToFlex + __cssProperties__ IIFE +
     // setProperty/getPropertyValue/removeProperty extracted out of
