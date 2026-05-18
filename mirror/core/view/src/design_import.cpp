@@ -44,6 +44,22 @@ const char* design_source_name(DesignSource source) {
     return "unknown";
 }
 
+/// Phase 9: motion provenance vendor key. Matches the `source` token
+/// the import CLI accepts, lowercased + slash-friendly so the resulting
+/// `source_id` (e.g. "figma:LevelMeter/Panel") is easy to grep through
+/// fixtures. Stable across releases — fixtures depend on these strings.
+const char* design_source_vendor_key(DesignSource source) {
+    switch (source) {
+        case DesignSource::figma:    return "figma";
+        case DesignSource::stitch:   return "stitch";
+        case DesignSource::v0:       return "v0";
+        case DesignSource::pencil:   return "pencil";
+        case DesignSource::claude:   return "claude";
+        case DesignSource::designmd: return "designmd";
+    }
+    return "unknown";
+}
+
 DesignIR parse_claude_html(const std::string& html) {
     // Claude Design exports the same HTML+CSS shape as other web tools,
     // so parse with the existing Stitch HTML pipeline and re-tag the
@@ -3782,6 +3798,38 @@ std::string generate_pulp_js(const DesignIR& ir, const CodeGenOptions& opts) {
         if (!ir.source_file.empty())
             ss << "// Source: " << ir.source_file << "\n";
         ss << "\n";
+    }
+
+    // Phase 9: tag the bundle with a motion-observability provenance
+    // envelope so any animation it drives (view.animate, CSS transitions,
+    // rAF publishes) inherits source_kind="design-import",
+    // source_id="<vendor>:<root-node-or-file>". The native bridge falls
+    // through cleanly when `motion` isn't installed (e.g. when the
+    // bundle is rendered by an older Pulp build), so the line is safe
+    // to emit unconditionally.
+    {
+        std::string root_id;
+        if (!ir.root.name.empty()) root_id = ir.root.name;
+        else if (!ir.source_file.empty()) {
+            // Strip directory + extension for a compact id.
+            auto& p = ir.source_file;
+            auto slash = p.find_last_of("/\\");
+            auto base = (slash == std::string::npos) ? p : p.substr(slash + 1);
+            auto dot = base.find_last_of('.');
+            root_id = (dot == std::string::npos) ? base : base.substr(0, dot);
+        } else {
+            root_id = "bundle";
+        }
+        // Escape single quotes for embedding in the JS string literal.
+        std::string safe_id;
+        safe_id.reserve(root_id.size());
+        for (char c : root_id) {
+            if (c == '\'' || c == '\\') safe_id += '\\';
+            safe_id += c;
+        }
+        ss << "if (typeof motion !== 'undefined' && motion.setProvenance)\n"
+           << "    motion.setProvenance('design-import', '"
+           << design_source_vendor_key(ir.source) << ":" << safe_id << "');\n\n";
     }
 
     ss << "setTheme('dark');\n\n";

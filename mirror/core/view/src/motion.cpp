@@ -1,11 +1,14 @@
 #include <pulp/view/motion.hpp>
 
+#include <pulp/view/motion_cost.hpp>
 #include <pulp/runtime/log.hpp>
 #include <pulp/view/frame_clock.hpp>
+#include <pulp/view/motion_preferences.hpp>
 #include <pulp/view/ui_components.hpp>
 #include <pulp/view/view.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <fstream>
@@ -424,6 +427,15 @@ std::string format_line(const SampleEvent& e) {
                 ss << " " << k << "Delta=" << fmt_double(v, e.precision);
             }
             break;
+        case SampleEvent::Kind::Input:
+            ss << " -- Input kind=" << e.input_kind
+               << " view_id=" << e.view_id
+               << " frame=" << e.frame
+               << " t=" << fmt_double(e.t_seconds, 6) << " --";
+            for (const auto& [k, v] : e.components) {
+                ss << " " << k << "=" << fmt_double(v, e.precision);
+            }
+            break;
     }
     return ss.str();
 }
@@ -460,6 +472,25 @@ void publish_components(std::string view_name,
     Coordinator::instance().publish_internal(std::move(view_name),
                                              std::move(metric_name),
                                              std::move(components), opts);
+}
+
+// ── Ambient provenance (Phase 9) ─────────────────────────────────────
+//
+// The ambient slot lives on the Coordinator's State (under its mutex)
+// so concurrent publishes from any sink-fed thread see a coherent
+// snapshot. Read by `publish_internal` when a caller's PublishOptions
+// carries an empty provenance envelope.
+
+void set_ambient_provenance(Provenance p) {
+    Coordinator::instance().set_ambient_provenance_internal(std::move(p));
+}
+
+void clear_ambient_provenance() {
+    Coordinator::instance().set_ambient_provenance_internal(Provenance{});
+}
+
+Provenance current_ambient_provenance() {
+    return Coordinator::instance().current_ambient_provenance_internal();
 }
 
 // ── Coordinator internals ─────────────────────────────────────────────
@@ -519,6 +550,11 @@ struct Coordinator::State {
     // sampler-driven trace map above so publishes and sampled traces
     // don't interfere even on the same view/metric name.
     std::map<PublishKey, PublishState> publish_states;
+    // Phase 9: ambient publish provenance. Set via
+    // `set_ambient_provenance` and stamped onto publishes whose
+    // PublishOptions::provenance is empty. Single global slot — intended
+    // for single-threaded scripted contexts.
+    Provenance ambient_provenance;
 };
 
 // ── Coordinator ───────────────────────────────────────────────────────
@@ -635,6 +671,17 @@ void Coordinator::reset() {
     state_->emitted_count = 0;
     state_->next_sink_id = 1;
     state_->next_trace_id = 1;
+    state_->ambient_provenance = Provenance{};
+}
+
+void Coordinator::set_ambient_provenance_internal(Provenance p) {
+    std::lock_guard<std::mutex> lock(state_->mtx);
+    state_->ambient_provenance = std::move(p);
+}
+
+Provenance Coordinator::current_ambient_provenance_internal() const {
+    std::lock_guard<std::mutex> lock(state_->mtx);
+    return state_->ambient_provenance;
 }
 
 std::size_t Coordinator::active_trace_count() const noexcept {
@@ -689,16 +736,47 @@ void sort_components(std::vector<std::pair<std::string, double>>& v) {
 }  // namespace
 
 void Coordinator::on_tick(float dt) {
+    // Cost attribution observes every tick (when enabled) regardless
+    // of whether the event sinks are populated. note_tick_begin runs
+    // first so per-tick scratch is fresh; emit_frame runs at the very
+    // end so trace activity has had a chance to accumulate.
+    auto& cost = CostAttributor::instance();
+    const bool cost_enabled = cost.enabled();
+    if (cost_enabled) {
+        const double t_cost =
+            state_->clock ? static_cast<double>(state_->clock->time()) : 0.0;
+        const std::uint64_t f_cost =
+            state_->clock ? state_->clock->frame() : 0;
+        cost.note_tick_begin(f_cost, t_cost);
+    }
+
     // Collect events under lock, dispatch outside the lock.
     std::vector<std::pair<Sink, SampleEvent>> pending;
+    // Trace activity (trace_id + provenance envelope) recorded under
+    // the lock; forwarded to the CostAttributor after the lock is
+    // released so the attributor can sample its probe without
+    // contending on the coordinator mutex.
+    std::vector<std::pair<int, Provenance>> tick_activity;
     {
         std::lock_guard<std::mutex> lock(state_->mtx);
-        if (!state_->tracing_enabled || state_->sinks.empty()) return;
+        // Cost attribution must still emit a sample even when there
+        // are no active traces / sinks — render cost itself is the
+        // useful signal in that case. So bail only when BOTH tracing
+        // and cost attribution are off.
+        const bool have_traces =
+            state_->tracing_enabled && !state_->sinks.empty();
+        if (!have_traces && !cost_enabled) return;
 
         const double t_now =
             state_->clock ? static_cast<double>(state_->clock->time()) : 0.0;
         const std::uint64_t f_now =
             state_->clock ? state_->clock->frame() : 0;
+
+        if (!have_traces) {
+            // Skip sampler-driven trace work; cost emission still
+            // happens below.
+            goto cost_emit;
+        }
 
         for (auto& [trace_id, trace] : state_->traces) {
             // Phase 7: emit TraceStarted once per trace on its first tick.
@@ -717,6 +795,10 @@ void Coordinator::on_tick(float dt) {
                     pending.emplace_back(sink, ev);
                 }
                 state_->emitted_count++;
+                if (cost_enabled) {
+                    tick_activity.emplace_back(trace.id,
+                                               trace.spec->provenance);
+                }
                 trace.needs_trace_started = false;
             }
 
@@ -758,6 +840,15 @@ void Coordinator::on_tick(float dt) {
                         pending.emplace_back(sink, e);
                     }
                     state_->emitted_count++;
+                    // Cost attribution: track every emission (including
+                    // Baseline / Start / End markers) as "this trace was
+                    // active this tick". TraceStarted is one-shot and
+                    // emitted above; it's also legitimate cost-side
+                    // activity so it's recorded with the rest below.
+                    if (cost_enabled) {
+                        tick_activity.emplace_back(trace.id,
+                                                   trace.spec->provenance);
+                    }
                 };
 
                 if (!mstate.has_baseline) {
@@ -796,8 +887,22 @@ void Coordinator::on_tick(float dt) {
                 }
             }
         }
+    cost_emit:
+        (void)0;
     }
     for (auto& [sink, ev] : pending) sink(ev);
+
+    // Forward per-tick trace activity to the CostAttributor and emit
+    // a CostSample. Done outside the coordinator lock so the probe
+    // (which may call into render-layer code) doesn't contend with
+    // sink registration or trace attach.
+    if (cost_enabled) {
+        for (const auto& [tid, prov] : tick_activity) {
+            cost.note_trace_activity(tid);
+            cost.note_provenance(tid, prov);
+        }
+        cost.emit_frame();
+    }
 }
 
 // ── Coordinator::publish_internal (Phase 3) ───────────────────────────
@@ -838,6 +943,13 @@ void Coordinator::publish_internal(std::string view_name,
             pstate.epsilon = opts.epsilon;
         }
 
+        // Phase 9: resolve effective provenance. Explicit opts.provenance
+        // wins; otherwise fall back to the coordinator's ambient slot.
+        // Empty stays empty so pre-Phase-9 callers see no behavior change.
+        const Provenance effective_prov =
+            opts.provenance.is_set() ? opts.provenance
+                                     : state_->ambient_provenance;
+
         auto enqueue = [&](SampleEvent::Kind kind,
                            std::vector<std::pair<std::string, double>> comps,
                            std::vector<std::pair<std::string, double>> deltas = {}) {
@@ -854,6 +966,7 @@ void Coordinator::publish_internal(std::string view_name,
             e.trace_id = 0;
             e.metric_id = 0;
             e.burst_id = pstate.current_burst_id;
+            e.provenance = effective_prov;  // Phase 9
             e.components = std::move(comps);
             e.deltas = std::move(deltas);
             for (const auto& [sid, sink] : state_->sinks) {
@@ -900,6 +1013,32 @@ void Coordinator::publish_internal(std::string view_name,
     for (auto& [sink, ev] : pending) sink(ev);
 }
 
+// ── Coordinator::dispatch_input_event (Phase 10) ─────────────────────
+
+void Coordinator::dispatch_input_event(SampleEvent e) {
+    std::vector<std::pair<Sink, SampleEvent>> pending;
+    {
+        std::lock_guard<std::mutex> lock(state_->mtx);
+        if (state_->sinks.empty()) return;
+        // Stamp the bound clock's monotonic time/frame so replay can
+        // recover the original cadence. Input events bypass the
+        // tracing_enabled gate because recording is itself a separate
+        // opt-in (an `InputRecorder` was constructed); requiring both
+        // would be a footgun for "record an interaction without
+        // sampler-driven traces."
+        if (state_->clock) {
+            e.t_seconds = static_cast<double>(state_->clock->time());
+            e.frame = state_->clock->frame();
+        }
+        for (const auto& [sid, sink] : state_->sinks) {
+            (void)sid;
+            pending.emplace_back(sink, e);
+        }
+        state_->emitted_count++;
+    }
+    for (auto& [sink, ev] : pending) sink(ev);
+}
+
 // ── Fixture record / replay (Phase 5) ────────────────────────────────
 
 namespace {
@@ -911,6 +1050,7 @@ const char* sample_kind_string(SampleEvent::Kind k) {
         case SampleEvent::Kind::Sample:       return "sample";
         case SampleEvent::Kind::Start:        return "start";
         case SampleEvent::Kind::End:          return "end";
+        case SampleEvent::Kind::Input:        return "input";
     }
     return "?";
 }
@@ -921,6 +1061,7 @@ bool kind_from_string(std::string_view s, SampleEvent::Kind& out) {
     if (s == "sample")        { out = SampleEvent::Kind::Sample;       return true; }
     if (s == "start")         { out = SampleEvent::Kind::Start;        return true; }
     if (s == "end")           { out = SampleEvent::Kind::End;          return true; }
+    if (s == "input")         { out = SampleEvent::Kind::Input;        return true; }
     return false;
 }
 
@@ -1008,6 +1149,13 @@ std::string serialize_event(const SampleEvent& e) {
     if (e.provenance.is_set()) {
         ss << ",\"provenance\":" << serialize_provenance(e.provenance);
     }
+    // Phase 10: input fields only emitted on Input events so existing
+    // motion lines stay byte-for-byte identical with pre-Phase-10
+    // captures.
+    if (e.kind == SampleEvent::Kind::Input) {
+        ss << ",\"input_kind\":\"" << json_escape(e.input_kind) << "\""
+           << ",\"view_id\":\"" << json_escape(e.view_id) << "\"";
+    }
     ss << "}";
     return ss.str();
 }
@@ -1062,6 +1210,10 @@ public:
                 e.burst_id = static_cast<int>(v);
             } else if (key == "provenance") {
                 if (!parse_provenance(e.provenance)) return false;
+            } else if (key == "input_kind") {
+                if (!parse_string(e.input_kind)) return false;
+            } else if (key == "view_id") {
+                if (!parse_string(e.view_id)) return false;
             } else {
                 // Unknown key — skip its value tolerantly.
                 if (!skip_value()) return false;
@@ -1098,17 +1250,42 @@ public:
     }
 
     bool parse_header(int& version_out) {
+        FixtureHeader unused;
+        return parse_header_full(unused) && (version_out = unused.version, true);
+    }
+
+    /// Parses the full fixture header. Accepts any subset / order of
+    /// `motion_fixture_version`, `policy`, `duration_scale`. Returns
+    /// false only on malformed JSON or missing version. Unknown keys
+    /// are skipped tolerantly so future additive fields don't break v2
+    /// loaders.
+    bool parse_header_full(FixtureHeader& out) {
         if (!expect('{')) return false;
-        std::string key;
         skip_ws();
-        if (peek() == '}') { ++pos_; version_out = 0; return false; }
-        if (!parse_string(key) || !expect(':')) return false;
-        if (key != "motion_fixture_version") return false;
-        double v = 0;
-        if (!parse_number(v)) return false;
-        skip_ws();
-        if (peek() == '}') { ++pos_; version_out = static_cast<int>(v); return true; }
-        return false;
+        if (peek() == '}') { ++pos_; return false; }
+        bool saw_version = false;
+        while (true) {
+            std::string key;
+            if (!parse_string(key) || !expect(':')) return false;
+            if (key == "motion_fixture_version") {
+                double v = 0;
+                if (!parse_number(v)) return false;
+                out.version = static_cast<int>(v);
+                saw_version = true;
+            } else if (key == "policy") {
+                if (!parse_string(out.policy)) return false;
+            } else if (key == "duration_scale") {
+                double v = 0;
+                if (!parse_number(v)) return false;
+                out.duration_scale = v;
+            } else {
+                if (!skip_value()) return false;
+            }
+            skip_ws();
+            if (peek() == ',') { ++pos_; continue; }
+            if (peek() == '}') { ++pos_; return saw_version; }
+            return false;
+        }
     }
 
 private:
@@ -1277,8 +1454,17 @@ Sink make_fixture_sink(std::string path) {
         state->ensure_open();
         if (!state->stream || !state->stream->is_open()) return;
         if (!state->header_written) {
+            // Snapshot the MotionPolicy + duration_scale in effect at
+            // the recording's first event. Goldens recorded under
+            // Reduced will not silently compare against Full captures.
+            const auto policy_str = motion_policy_to_string(
+                MotionPreferences::current());
+            const double scale = MotionPreferences::current_duration_scale();
             *state->stream << "{\"motion_fixture_version\":"
-                           << kFixtureSchemaVersion << "}\n";
+                           << kFixtureSchemaVersion
+                           << ",\"policy\":\"" << policy_str << "\""
+                           << ",\"duration_scale\":" << scale
+                           << "}\n";
             state->header_written = true;
         }
         *state->stream << serialize_event(e) << "\n";
@@ -1293,9 +1479,9 @@ std::vector<SampleEvent> load_fixture(const std::string& path) {
     std::string line;
     if (!std::getline(in, line)) return out;
     FixtureLineParser header(line);
-    int version = 0;
-    if (!header.parse_header(version)) return out;
-    if (version != kFixtureSchemaVersion) return out;
+    FixtureHeader hdr;
+    if (!header.parse_header_full(hdr)) return out;
+    if (hdr.version != kFixtureSchemaVersion) return out;
     while (std::getline(in, line)) {
         if (line.empty()) continue;
         SampleEvent e;
@@ -1304,6 +1490,18 @@ std::vector<SampleEvent> load_fixture(const std::string& path) {
         out.push_back(std::move(e));
     }
     return out;
+}
+
+FixtureHeader load_fixture_header(const std::string& path) {
+    FixtureHeader hdr;
+    std::ifstream in(path, std::ios::in | std::ios::binary);
+    if (!in.is_open()) return hdr;
+    std::string line;
+    if (!std::getline(in, line)) return hdr;
+    FixtureLineParser p(line);
+    FixtureHeader parsed;
+    if (!p.parse_header_full(parsed)) return hdr;
+    return parsed;
 }
 
 int replay_fixture(const std::string& path, const Sink& sink) {
@@ -1468,6 +1666,34 @@ FixtureDiff assert_matches(const std::vector<SampleEvent>& golden,
     return diff;
 }
 
+FixtureDiff assert_matches(const FixtureHeader& golden_header,
+                           const std::vector<SampleEvent>& golden,
+                           const FixtureHeader& captured_header,
+                           const std::vector<SampleEvent>& captured,
+                           FixtureMatchOptions opts) {
+    FixtureDiff diff = assert_matches(golden, captured, opts);
+    if (opts.require_matching_policy) {
+        if (golden_header.policy != captured_header.policy) {
+            FixtureDiff::Item item;
+            item.kind = "policy-mismatch";
+            item.detail = "policy: golden=" + golden_header.policy +
+                          " captured=" + captured_header.policy;
+            diff.differences.push_back(item);
+        }
+        if (std::fabs(golden_header.duration_scale -
+                      captured_header.duration_scale) >
+            opts.duration_scale_epsilon) {
+            FixtureDiff::Item item;
+            item.kind = "policy-mismatch";
+            item.detail = "duration_scale mismatch";
+            item.expected = golden_header.duration_scale;
+            item.observed = captured_header.duration_scale;
+            diff.differences.push_back(item);
+        }
+    }
+    return diff;
+}
+
 // ── Assertion helpers ─────────────────────────────────────────────────
 
 std::vector<ScalarSample> extract_scalar(
@@ -1571,6 +1797,204 @@ double frame_jitter_seconds(const std::vector<ScalarSample>& samples) {
 double final_value(const std::vector<ScalarSample>& samples) {
     if (samples.empty()) return std::numeric_limits<double>::quiet_NaN();
     return samples.back().value;
+}
+
+// ── Input recording / replay (Phase 10) ──────────────────────────────
+//
+// Recording: View::simulate_* calls `record_simulated_input` which —
+// when at least one InputRecorder is alive — builds an `Input`
+// SampleEvent and dispatches it to every installed sink. The
+// FrameClock-relative timestamp comes from the Coordinator's bound
+// clock so a replay can recover the original cadence.
+//
+// Replay: `replay_inputs` walks the fixture, resolves each Input's
+// `view_id` against `root_view` via DFS, advances `frame_clock` to
+// match the recorded `t_seconds`, and calls the matching
+// `View::simulate_*`. Sinks installed on the Coordinator (typically the
+// same `make_fixture_sink` paired with the recorder) re-capture the
+// motion stream the replayed inputs produce.
+
+namespace {
+
+/// Process-wide recording-active counter. Bumped by `make_input_recorder`,
+/// dropped by `InputRecorder::stop()` / destructor. `View::simulate_*`
+/// gates on this so the non-recording cost is a single relaxed load.
+std::atomic<int> g_recorder_count{0};
+
+}  // namespace
+
+bool input_recording_enabled() noexcept {
+    return g_recorder_count.load(std::memory_order_relaxed) > 0;
+}
+
+void record_simulated_input(const std::string& input_kind,
+                            const std::string& view_id,
+                            std::vector<std::pair<std::string, double>> coords) {
+    // Snapshot a SampleEvent::Kind::Input under the recorder mutex
+    // and let Coordinator's sinks pick it up. The Coordinator itself
+    // already serializes sink iteration internally on its own mutex
+    // via the publish path; we bypass it here because Input events
+    // don't participate in the Baseline/Start/Sample/End burst state
+    // machine — they're a flat event stream tagged into the same
+    // fixture for chronological replay.
+    auto& coord = Coordinator::instance();
+    if (!input_recording_enabled()) return;
+
+    SampleEvent e;
+    e.kind = SampleEvent::Kind::Input;
+    e.view_name = "input";   // sentinel so format_line groups under [input]
+    e.metric_name = input_kind;
+    e.input_kind = input_kind;
+    e.view_id = view_id;
+    e.components = std::move(coords);
+    // Coordinator owns the FrameClock binding; reach in via its
+    // public sink set and let the dispatch loop stamp `t`/`frame`
+    // ourselves. We keep the lookup simple — if the coordinator
+    // isn't bound, the event still serializes with t=0 / frame=0
+    // and replay falls back to elapsed-clock advance.
+    e.t_seconds = 0.0;
+    e.frame = 0;
+    // The dispatcher below mirrors Coordinator's pending-then-fire
+    // pattern so a sink that calls back into motion (e.g. write-then-
+    // log) doesn't deadlock.
+    coord.dispatch_input_event(e);
+}
+
+// ── InputRecorder ────────────────────────────────────────────────────
+
+InputRecorder::InputRecorder(InputRecorder&& o) noexcept : sink_id_(o.sink_id_) {
+    o.sink_id_ = 0;
+}
+
+InputRecorder& InputRecorder::operator=(InputRecorder&& o) noexcept {
+    if (this != &o) {
+        stop();
+        sink_id_ = o.sink_id_;
+        o.sink_id_ = 0;
+    }
+    return *this;
+}
+
+InputRecorder::~InputRecorder() { stop(); }
+
+void InputRecorder::stop() {
+    if (sink_id_ == 0) return;
+    Coordinator::instance().remove_sink(sink_id_);
+    sink_id_ = 0;
+    // Drop the recorder count last so any in-flight record_simulated_input
+    // either fully publishes (if it loaded the count before our store) or
+    // becomes a clean no-op (if it loaded after). Either is correct — the
+    // sink was already removed.
+    g_recorder_count.fetch_sub(1, std::memory_order_relaxed);
+}
+
+InputRecorder make_input_recorder(std::string path) {
+    // Bump the recorder-count first so any simulate_* dispatch racing
+    // against our sink install becomes a fully published event rather
+    // than a silently-dropped one. The sink id is the recorder's
+    // ownership token; we hand it back wrapped in the RAII handle.
+    g_recorder_count.fetch_add(1, std::memory_order_relaxed);
+    const int sink_id =
+        Coordinator::instance().add_sink(make_fixture_sink(std::move(path)));
+    return InputRecorder(sink_id);
+}
+
+// ── replay_inputs (Phase 10b) ────────────────────────────────────────
+//
+// Walks a fixture, locates each Input's target by `view_id` (DFS from
+// `root_view`), advances `frame_clock` to the recorded timestamp, and
+// re-invokes the matching `View::simulate_*`. Sinks installed on the
+// Coordinator (typically the same `make_fixture_sink` paired with the
+// recorder) re-capture the motion stream the replayed inputs produce,
+// so a captured fixture replayed against a fresh view tree yields a
+// byte-equivalent motion fixture.
+
+namespace {
+
+const View* find_by_id(const View& root, const std::string& id) {
+    if (root.id() == id) return &root;
+    for (std::size_t i = 0; i < root.child_count(); ++i) {
+        if (const View* found = find_by_id(*root.child_at(i), id)) {
+            return found;
+        }
+    }
+    return nullptr;
+}
+
+double component_value(const std::vector<std::pair<std::string, double>>& comps,
+                       const std::string& name) {
+    for (const auto& [k, v] : comps) {
+        if (k == name) return v;
+    }
+    return 0.0;
+}
+
+}  // namespace
+
+int replay_inputs(const std::string& path, View& root_view, FrameClock& clock) {
+    auto events = load_fixture(path);
+    if (events.empty()) return -1;
+
+    int replayed = 0;
+    double last_t = 0.0;
+    bool have_last_t = false;
+    for (const auto& e : events) {
+        if (e.kind != SampleEvent::Kind::Input) continue;
+
+        // Advance the clock to the recorded timestamp. The first input
+        // anchors `last_t` so a delayed first interaction is preserved.
+        if (have_last_t) {
+            const double dt = e.t_seconds - last_t;
+            if (dt > 0.0) clock.tick(static_cast<float>(dt));
+        } else {
+            // Anchor on the recorded `t` so geometry traces that
+            // sample on the same FrameClock observe a consistent
+            // start offset.
+            if (e.t_seconds > 0.0) clock.tick(static_cast<float>(e.t_seconds));
+            have_last_t = true;
+        }
+        last_t = e.t_seconds;
+
+        // Coordinates in the fixture are root-space (matching the
+        // original `View::simulate_*` contract), so dispatch through
+        // `root_view`: its `hit_test` walks the tree and lands on the
+        // same descendant the recorder captured. `view_id` is a
+        // recorded provenance signal — useful for diffing across
+        // replay runs — not the actual dispatch receiver, because
+        // calling `simulate_click` on a leaf view with root-space
+        // coords would always miss its local hit_test.
+        //
+        // We still resolve `view_id` so the lookup itself is
+        // exercised, and (when the id has moved or been renamed) the
+        // diagnostic surface here can be extended without changing
+        // the public contract.
+        if (!e.view_id.empty()) {
+            (void)find_by_id(root_view, e.view_id);
+        }
+        View* target = &root_view;
+
+        if (e.input_kind == "click") {
+            const Point p{ static_cast<float>(component_value(e.components, "x")),
+                           static_cast<float>(component_value(e.components, "y")) };
+            target->simulate_click(p);
+            ++replayed;
+        } else if (e.input_kind == "hover") {
+            const Point p{ static_cast<float>(component_value(e.components, "x")),
+                           static_cast<float>(component_value(e.components, "y")) };
+            target->simulate_hover(p);
+            ++replayed;
+        } else if (e.input_kind == "drag") {
+            const Point s{ static_cast<float>(component_value(e.components, "start_x")),
+                           static_cast<float>(component_value(e.components, "start_y")) };
+            const Point en{ static_cast<float>(component_value(e.components, "end_x")),
+                            static_cast<float>(component_value(e.components, "end_y")) };
+            const int steps = std::max(
+                1, static_cast<int>(component_value(e.components, "steps")));
+            target->simulate_drag(s, en, steps);
+            ++replayed;
+        }
+    }
+    return replayed;
 }
 
 }  // namespace pulp::view::motion
