@@ -242,6 +242,63 @@ const char* property_name(GeometryProperty prop) {
     return "?";
 }
 
+// ── Scroll-geometry helpers ──────────────────────────────────────────
+
+double extract_scroll_property(const pulp::view::ScrollView& sv,
+                               ScrollProperty prop) {
+    const auto& b = sv.bounds();
+    const float sx = sv.scroll_x();
+    const float sy = sv.scroll_y();
+    const float vw = b.width;
+    const float vh = b.height;
+    const pulp::view::Size cs = sv.content_size();
+
+    switch (prop) {
+        case ScrollProperty::ContentOffsetX:    return sx;
+        case ScrollProperty::ContentOffsetY:    return sy;
+        case ScrollProperty::VisibleRectMinX:   return sx;
+        case ScrollProperty::VisibleRectMinY:   return sy;
+        case ScrollProperty::VisibleRectWidth:  return vw;
+        case ScrollProperty::VisibleRectHeight: return vh;
+        case ScrollProperty::ContentSizeWidth:  return cs.width;
+        case ScrollProperty::ContentSizeHeight: return cs.height;
+        // ScrollView does not currently expose per-edge content insets;
+        // the four Inset* properties always report 0.0 and remain on
+        // the enum so callers can wire them once insets land without
+        // breaking the public API surface.
+        case ScrollProperty::InsetTop:
+        case ScrollProperty::InsetBottom:
+        case ScrollProperty::InsetLeft:
+        case ScrollProperty::InsetRight:
+            return 0.0;
+        case ScrollProperty::ScrollableMaxX:
+            return std::max(0.0, static_cast<double>(cs.width) - vw);
+        case ScrollProperty::ScrollableMaxY:
+            return std::max(0.0, static_cast<double>(cs.height) - vh);
+    }
+    return 0.0;
+}
+
+const char* scroll_property_name(ScrollProperty prop) {
+    switch (prop) {
+        case ScrollProperty::ContentOffsetX:    return "contentOffsetX";
+        case ScrollProperty::ContentOffsetY:    return "contentOffsetY";
+        case ScrollProperty::VisibleRectMinX:   return "visibleRectMinX";
+        case ScrollProperty::VisibleRectMinY:   return "visibleRectMinY";
+        case ScrollProperty::VisibleRectWidth:  return "visibleRectWidth";
+        case ScrollProperty::VisibleRectHeight: return "visibleRectHeight";
+        case ScrollProperty::ContentSizeWidth:  return "contentSizeWidth";
+        case ScrollProperty::ContentSizeHeight: return "contentSizeHeight";
+        case ScrollProperty::InsetTop:          return "insetTop";
+        case ScrollProperty::InsetBottom:       return "insetBottom";
+        case ScrollProperty::InsetLeft:         return "insetLeft";
+        case ScrollProperty::InsetRight:        return "insetRight";
+        case ScrollProperty::ScrollableMaxX:    return "scrollableMaxX";
+        case ScrollProperty::ScrollableMaxY:    return "scrollableMaxY";
+    }
+    return "?";
+}
+
 std::string fmt_double(double v, int precision) {
     std::ostringstream ss;
     ss << std::fixed << std::setprecision(std::max(0, precision)) << v;
@@ -283,6 +340,21 @@ struct GeometryMetric : MetricBase {
         const Rect r = resolve_geometry(*target, space, source);
         for (auto p : props) {
             out.emplace_back(property_name(p), extract_property(r, p));
+        }
+        return out;
+    }
+};
+
+struct ScrollGeometryMetric : MetricBase {
+    pulp::view::ScrollView* target = nullptr;
+    std::vector<ScrollProperty> props;
+    std::vector<std::pair<std::string, double>> sample() const override {
+        std::vector<std::pair<std::string, double>> out;
+        if (!target) return out;
+        out.reserve(props.size());
+        for (auto p : props) {
+            out.emplace_back(scroll_property_name(p),
+                             extract_scroll_property(*target, p));
         }
         return out;
     }
@@ -341,6 +413,30 @@ TraceBuilder& TraceBuilder::geometry(std::string name,
     m->props = std::move(props);
     m->space = space;
     m->source = source;
+    spec_->metrics.push_back(std::move(m));
+    return *this;
+}
+
+TraceBuilder& TraceBuilder::scroll_geometry(std::string name,
+                                            pulp::view::ScrollView& target,
+                                            std::vector<ScrollProperty> props,
+                                            int precision, double epsilon) {
+    auto m = std::make_unique<ScrollGeometryMetric>();
+    m->name = std::move(name);
+    m->precision = precision;
+    m->epsilon = epsilon;
+    m->target = &target;
+    // Empty props → preserve the documented 4-property default. (The
+    // header default applies to direct C++ callers; an empty vector
+    // passed explicitly — including over the JSON inspector bridge —
+    // gets the same shape.)
+    if (props.empty()) {
+        props = {
+            ScrollProperty::ContentOffsetX, ScrollProperty::ContentOffsetY,
+            ScrollProperty::VisibleRectMinY, ScrollProperty::VisibleRectHeight,
+        };
+    }
+    m->props = std::move(props);
     spec_->metrics.push_back(std::move(m));
     return *this;
 }
@@ -1797,6 +1893,62 @@ double frame_jitter_seconds(const std::vector<ScalarSample>& samples) {
 double final_value(const std::vector<ScalarSample>& samples) {
     if (samples.empty()) return std::numeric_limits<double>::quiet_NaN();
     return samples.back().value;
+}
+
+double local_step_outlier_ratio(const std::vector<ScalarSample>& samples,
+                                std::size_t window_radius,
+                                double epsilon) {
+    // Spec: returns 0.0 when samples.size() < 2*window_radius + 1.
+    // With samples.size() == 2r + 1 we have 2r steps total and a single
+    // valid sample index (r); the local window has the other 2r - 1
+    // steps as neighbors. Larger sample counts grow the candidate range.
+    if (window_radius == 0) return 0.0;
+    if (samples.size() < 2 * window_radius + 1) return 0.0;
+
+    // Pre-compute step magnitudes between consecutive samples. Step
+    // ending at sample index `i` (i >= 1) sits at `steps[i-1]`.
+    const std::size_t n = samples.size();
+    std::vector<double> steps;
+    steps.reserve(n - 1);
+    for (std::size_t i = 1; i < n; ++i) {
+        steps.push_back(std::fabs(samples[i].value - samples[i - 1].value));
+    }
+
+    const std::size_t r = window_radius;
+    double max_ratio = 0.0;
+    // Candidate sample indices `i` in [r, n - r) — half-open per spec.
+    for (std::size_t i = r; i + r < n; ++i) {
+        // Window of `2r + 1` sample indices [i - r, i + r]; for each,
+        // pick its incoming step (steps[k - 1]) when k >= 1. Skip the
+        // candidate's own step so the median excludes it.
+        std::vector<double> window;
+        window.reserve(2 * r);
+        for (std::size_t k = i - r; k <= i + r; ++k) {
+            if (k == i) continue;          // exclude candidate
+            if (k == 0) continue;          // no incoming step for the first sample
+            window.push_back(steps[k - 1]);
+        }
+        if (window.empty()) continue;
+
+        // Median via nth_element copy. For even counts, average the
+        // middle two for the same reason `frame_jitter_seconds` uses
+        // an averaging formulation — keeps the metric stable when an
+        // outlier sits exactly at the median index.
+        std::vector<double> tmp = window;
+        const std::size_t sz = tmp.size();
+        const std::size_t mid = sz / 2;
+        std::nth_element(tmp.begin(), tmp.begin() + mid, tmp.end());
+        double median = tmp[mid];
+        if ((sz & 1u) == 0) {
+            const double upper = tmp[mid];
+            std::nth_element(tmp.begin(), tmp.begin() + (mid - 1), tmp.end());
+            median = 0.5 * (tmp[mid - 1] + upper);
+        }
+        const double denom = std::max(median, epsilon);
+        const double ratio = steps[i - 1] / denom;
+        if (ratio > max_ratio) max_ratio = ratio;
+    }
+    return max_ratio;
 }
 
 // ── Input recording / replay (Phase 10) ──────────────────────────────
