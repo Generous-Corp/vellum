@@ -88,26 +88,62 @@ bool register_font_file(const std::string& path,
 bool is_font_registered(const std::string& family);
 
 /// Monotonic counter that bumps every time a typeface registration mutates
-/// process-global font state (`register_font`, `register_font_file`,
-/// `register_emoji_fallback`). Downstream caches that key on typeface
-/// identity (the static `SkTypeface` cache in `skia_canvas.cpp`, the
-/// `(family,size)->text->width` cache in `text_shaper.cpp`) sample this
-/// before every lookup and flush themselves when it has advanced.
-///
-/// Without this, re-registering "MyBrand" with a different .ttf — or
-/// swapping the emoji fallback mid-process — would still resolve to the
-/// previously-cached `SkTypeface`, contradicting `register_font`'s
-/// documented "idempotent, invalidates the cache" contract.
+/// process-global font state. Downstream caches sample this and flush.
 std::uint64_t font_registration_generation() noexcept;
 
 /// Force-bump the registration generation. Called from
-/// `register_emoji_fallback(...)` (defined in `text_font_context.cpp`)
-/// and other entry points that mutate process-global font state outside
-/// `register_font(...)`. Avoid calling from regular code — the standard
-/// registration entry points handle it for you.
+/// `register_emoji_fallback(...)` and other entry points that mutate
+/// process-global font state outside `register_font(...)`.
 void bump_font_registration_generation() noexcept;
 
+// ── Phase 2 skeleton — async lifecycle + font security ──────────────────
+// pulp #2163 — font v2 Slices 2.1 / 2.8 surface declarations.
+
+/// Async font lifecycle state (Slice 2.1).
+enum class FontState : std::uint8_t {
+    Pending,
+    Loaded,
+    Failed,
+    Substituted,
+};
+
+/// Validate font bytes before handing them to Skia (Slice 2.8). Skeleton
+/// confirms Skia can parse the bytes; full sanitizer is the impl slice.
+bool validate_font_bytes(const std::uint8_t* data, std::size_t size);
+
+// ── Phase 3 skeletons — color fonts, WOFF2, TextEditor cluster APIs ────
+// pulp #2163 — font v2 Slices 3.1, 3.5, 3.6 surface declarations. The
+// bodies arrive in the Phase 3 implementation slices; declarations live
+// here so Phase 3 callers can target a stable API now.
+
+/// Slice 3.5 — register a WOFF2-compressed font at runtime. Gated on
+/// the Phase 2 sanitizer (validate_font_bytes); rejects malformed
+/// payloads cleanly. Skeleton returns false; the implementation slice
+/// wires Brotli decompression behind the budget + consent path.
+bool register_font_woff2(const std::uint8_t* woff2_data, std::size_t size,
+                         const std::string& family_override = "");
+
+/// Slice 3.6 — grapheme-aware cursor step for TextEditor. Returns the
+/// UTF-8 byte offset of the cluster boundary one step forward (or
+/// backward, when forward=false) from `byte_offset`. Skeleton uses a
+/// naive single-codepoint step; the implementation slice consults the
+/// Phase 1 UnicodeIndexMap for proper UAX #29 cluster boundaries (so
+/// 👨‍👩‍👧‍👦 moves in one step, not 7).
+std::size_t cluster_step(const std::string& text, std::size_t byte_offset,
+                         bool forward = true);
+
 #ifdef PULP_HAS_SKIA
+
+/// Process-wide platform font manager. Returns the CoreText / DirectWrite /
+/// Android / FontConfig manager appropriate for the current OS, or nullptr
+/// on platforms where no manager is available. Lazily constructed; the
+/// same instance is returned for every call.
+///
+/// pulp #2163 / font v2 Slice 1.1.a — consolidates the five identical
+/// `SkFontMgr_New_*` switch blocks that previously lived inside
+/// `skia_canvas.cpp`, `text_shaper.cpp`, `sdf_atlas.cpp`,
+/// `bundled_fonts.cpp` (×2), and the seed copy in `font_resolver.cpp`.
+sk_sp<SkFontMgr> platform_font_manager();
 
 /// Look up a bundled typeface by family name (e.g. "Inter",
 /// "JetBrains Mono"). The first call for a given process eagerly materialises
