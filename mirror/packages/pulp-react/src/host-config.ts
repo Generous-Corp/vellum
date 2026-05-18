@@ -103,9 +103,213 @@ function createWidget(type: Type, id: string, parentId: string, props: Props): v
         case 'SvgRect':     call('createSvgRect', id, parentId); return;
         case 'SvgLine':     call('createSvgLine', id, parentId); return;
         default: {
-            // Should be unreachable thanks to the typed intrinsics in types.ts.
-            const _exhaustive: never = type;
-            throw new Error('@pulp/react: unknown intrinsic type: ' + String(_exhaustive));
+            // pulp jsx-instrument-import 2026-05-17 — lowercase HTML/SVG
+            // intrinsic aliases. Lets the reconciler handle Chainer-style
+            // raw JSX (<div>, <svg>, <path>, …) directly through the
+            // existing bridge widgets, mirroring the web-compat shim's
+            // _ensureNative tag → createX map. Per ChatGPT/Codex consult:
+            // the right architecture is react-konva/r3f-style direct
+            // reconciler wiring, not ReactDOM event delegation.
+            const lower = String(type).toLowerCase();
+            switch (lower) {
+                case 'div': case 'section': case 'article': case 'aside':
+                case 'header': case 'footer': case 'nav': case 'main':
+                case 'figure': case 'figcaption': case 'form': case 'ul':
+                case 'ol': case 'li': case 'dl': case 'dt': case 'dd': {
+                    // pulp jsx-instrument-import 2026-05-17 — when a div
+                    // contains ONLY string/number children (no nested
+                    // ReactElements), treat it as a text-bearing leaf
+                    // (createLabel with concatenated text). Matches browser
+                    // inline-text behavior: `<div>+{val} ct</div>` renders
+                    // text on one line, not as three stacked column siblings.
+                    // Chainer's detune display `{detuneC > 0 ? "+" : ""}{detuneC} ct`
+                    // depends on this — three text expressions were creating
+                    // three Labels in a column that wrapped vertically.
+                    const txt = asText(props.children);
+                    if (txt !== undefined && txt.length > 0) {
+                        call('createLabel', id, txt, parentId);
+                    } else {
+                        call('createCol', id, parentId);
+                    }
+                    return;
+                }
+                case 'span': case 'p': case 'label':
+                case 'h1': case 'h2': case 'h3': case 'h4': case 'h5': case 'h6':
+                case 'b': case 'i': case 'em': case 'strong': case 'small': case 'code':
+                case 'pre': case 'a': case 'td': case 'th': case 'title':
+                case 'text': case 'tspan': case 'desc': {
+                    // pulp jsx-instrument-import 2026-05-17 — text-bearing
+                    // tags need to be containers when they have ReactElement
+                    // children (e.g. Chainer's `<span>CHAINER /
+                    // <span>polywave ms-split</span></span>`). Pure-text
+                    // children → createLabel (leaf). Mixed/element children
+                    // → createCol so the reconciler can appendChild the
+                    // inner spans as siblings. The string portions get
+                    // their own synthetic Label instances via
+                    // createTextInstance.
+                    const txt = asText(props.children);
+                    if (txt !== undefined) {
+                        call('createLabel', id, txt, parentId);
+                    } else {
+                        // Mixed or element children — use a row container
+                        // so child labels flow horizontally like inline
+                        // text. Span/p/label semantics expect inline; div
+                        // would default to column layout.
+                        call('createRow', id, parentId);
+                    }
+                    return;
+                }
+                case 'button': {
+                    const text = asText(props.children) ?? (props.text as string ?? '');
+                    if (typeof g.createButton === 'function') {
+                        call('createButton', id, text, parentId);
+                    } else {
+                        call('createPanel', id, parentId);
+                        call('createLabel', id + '_l', text, id);
+                    }
+                    return;
+                }
+                case 'input': {
+                    const inputType = String(props.type ?? 'text').toLowerCase();
+                    if (inputType === 'range') {
+                        const orient = (props['aria-orientation'] === 'vertical')
+                            ? 'vertical' : 'horizontal';
+                        call('createFader', id, orient, parentId);
+                    } else if (inputType === 'checkbox') {
+                        call('createCheckbox', id, parentId);
+                    } else {
+                        // text / search / email / url / tel / password / (default)
+                        call('createTextEditor', id, parentId);
+                    }
+                    return;
+                }
+                case 'textarea': call('createTextEditor', id, parentId); return;
+                case 'select':   call('createCombo', id, parentId); return;
+                case 'progress': call('createProgress', id, parentId); return;
+                case 'img':      call('createImage', id, parentId); return;
+                case 'canvas':   call('createCanvas', id, parentId); return;
+                case 'svg':      call('createCol', id, parentId); return;  // SVG = container; children paint
+                case 'path': {
+                    call('createSvgPath', id, parentId);
+                    // pulp jsx-instrument-import 2026-05-17 — lowercase
+                    // <path>/<circle>/<line> children of <svg> have no
+                    // intrinsic flex sizing (JSX puts width/height on the
+                    // parent <svg>, children inherit via viewBox in a
+                    // real browser). SvgPathWidget::paint early-returns
+                    // when local_bounds is 0×0. Pin children to fill
+                    // their parent svg via position:absolute + inset:0.
+                    call('setPosition', id, 'absolute');
+                    call('setTop', id, 0);
+                    call('setLeft', id, 0);
+                    call('setRight', id, 0);
+                    call('setBottom', id, 0);
+                    // pulp jsx-instrument-import 2026-05-17 — fill-parent
+                    // makes the SVG primitive the topmost hit-test target,
+                    // shadowing the parent <svg>'s onMouseDown handler.
+                    // Set pointer-events: none so clicks fall through to
+                    // the parent <svg> which holds the JSX handler.
+                    // Matches browser SVG behavior where presentational
+                    // children of <svg> don't intercept events by default
+                    // (they need explicit pointer-events="visible" or
+                    // similar).
+                    call('setPointerEvents', id, 'none');
+                    return;
+                }
+                case 'circle': {
+                    // SVG <circle cx="..." cy="..." r="..."> → SvgPath
+                    // with synthesized `d` from a 2-arc construction.
+                    // Mirrors web-compat-element.js __replaySvgCircleAttributes__.
+                    // Render at construction time using whatever cx/cy/r
+                    // the JSX commits in this pass; subsequent prop updates
+                    // re-synth via the cx/cy/r handlers in prop-applier.
+                    call('createSvgPath', id, parentId);
+                    const cx = typeof props.cx === 'number' ? props.cx as number : Number(props.cx) || 0;
+                    const cy = typeof props.cy === 'number' ? props.cy as number : Number(props.cy) || 0;
+                    const r  = typeof props.r  === 'number' ? props.r  as number : Number(props.r)  || 0;
+                    // Diagnostic counter — confirms circle reaches host-config
+                    // before chasing downstream prop-applier issues.
+                    const gg = g as Record<string, unknown>;
+                    if (typeof gg.__pulpCircleStats__ !== 'object' || gg.__pulpCircleStats__ === null) {
+                        gg.__pulpCircleStats__ = { total: 0, withR: 0, samples: [] };
+                    }
+                    const stats = gg.__pulpCircleStats__ as Record<string, unknown>;
+                    stats.total = (stats.total as number) + 1;
+                    if (r > 0) {
+                        stats.withR = (stats.withR as number) + 1;
+                        const d = `M ${cx - r} ${cy} a ${r} ${r} 0 1 0 ${2 * r} 0 a ${r} ${r} 0 1 0 ${-2 * r} 0 Z`;
+                        call('setSvgPath', id, d);
+                        const samples = stats.samples as unknown[];
+                        if (samples.length < 5) {
+                            samples.push({ id, cx, cy, r, d, fill: props.fill, stroke: props.stroke });
+                        }
+                    }
+                    // Same fill-parent sizing as <path> (see comment above).
+                    call('setPosition', id, 'absolute');
+                    call('setTop', id, 0);
+                    call('setLeft', id, 0);
+                    call('setRight', id, 0);
+                    call('setBottom', id, 0);
+                    // pulp jsx-instrument-import 2026-05-17 — fill-parent
+                    // makes the SVG primitive the topmost hit-test target,
+                    // shadowing the parent <svg>'s onMouseDown handler.
+                    // Set pointer-events: none so clicks fall through to
+                    // the parent <svg> which holds the JSX handler.
+                    // Matches browser SVG behavior where presentational
+                    // children of <svg> don't intercept events by default
+                    // (they need explicit pointer-events="visible" or
+                    // similar).
+                    call('setPointerEvents', id, 'none');
+                    return;
+                }
+                case 'rect': {
+                    call('createSvgRect', id, parentId);
+                    call('setPosition', id, 'absolute');
+                    call('setTop', id, 0);
+                    call('setLeft', id, 0);
+                    call('setRight', id, 0);
+                    call('setBottom', id, 0);
+                    // pulp jsx-instrument-import 2026-05-17 — fill-parent
+                    // makes the SVG primitive the topmost hit-test target,
+                    // shadowing the parent <svg>'s onMouseDown handler.
+                    // Set pointer-events: none so clicks fall through to
+                    // the parent <svg> which holds the JSX handler.
+                    // Matches browser SVG behavior where presentational
+                    // children of <svg> don't intercept events by default
+                    // (they need explicit pointer-events="visible" or
+                    // similar).
+                    call('setPointerEvents', id, 'none');
+                    return;
+                }
+                case 'line': {
+                    call('createSvgLine', id, parentId);
+                    call('setPosition', id, 'absolute');
+                    call('setTop', id, 0);
+                    call('setLeft', id, 0);
+                    call('setRight', id, 0);
+                    call('setBottom', id, 0);
+                    // pulp jsx-instrument-import 2026-05-17 — fill-parent
+                    // makes the SVG primitive the topmost hit-test target,
+                    // shadowing the parent <svg>'s onMouseDown handler.
+                    // Set pointer-events: none so clicks fall through to
+                    // the parent <svg> which holds the JSX handler.
+                    // Matches browser SVG behavior where presentational
+                    // children of <svg> don't intercept events by default
+                    // (they need explicit pointer-events="visible" or
+                    // similar).
+                    call('setPointerEvents', id, 'none');
+                    return;
+                }
+                case 'g':        call('createCol', id, parentId); return; // <svg><g> group
+                default: {
+                    // Last-resort fallback: treat any unknown intrinsic as a
+                    // container so child mounts can still attach. Surfaces a
+                    // diagnostic line in dev/test paths via __spectrLog.
+                    const lg = (g as Record<string, AnyFn | undefined>).__spectrLog;
+                    if (typeof lg === 'function') lg('[host-config] unknown intrinsic ' + lower + ' — falling back to createCol');
+                    call('createCol', id, parentId);
+                    return;
+                }
+            }
         }
     }
 }
@@ -132,6 +336,15 @@ function asText(children: unknown): string | undefined {
         }
         return parts.join('');
     }
+    // pulp jsx-instrument-import 2026-05-17 — ReactElement children
+    // (`<span>CHAINER / <span>polywave ms-split</span></span>` from
+    // Chainer's titlebar): return undefined HERE so shouldSetTextContent
+    // returns false and the reconciler instead walks the children as
+    // child node instances. The outer `<span>` then renders as a
+    // container (NOT a label that swallows the children), and the
+    // inner `<span>polywave ms-split</span>` gets its own createLabel.
+    // Pre-fix the outer span swallowed children as text → empty string,
+    // dropping the inner span's content entirely.
     return undefined;
 }
 
@@ -152,6 +365,17 @@ const TEXT_BEARING: Set<Type> = new Set([
     'b', 'button', 'code', 'desc', 'em', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
     'i', 'label', 'li', 'p', 'pre', 'span', 'strong', 'td', 'text', 'th',
     'title', 'tspan',
+    // pulp jsx-instrument-import 2026-05-17 — container tags that
+    // host-config conditionally treats as text-leaves when their
+    // children are pure string/number. Without this, shouldSetTextContent
+    // returns false → React mounts the text children as separate
+    // synthetic Label widgets → duplicate text rendered on top of the
+    // createLabel we already made. The shouldSetTextContent check below
+    // still gates on children-are-pure-text (so divs with element
+    // children correctly route to createCol via createWidget's else
+    // branch).
+    'div', 'section', 'article', 'aside', 'header', 'footer', 'nav', 'main',
+    'figure', 'figcaption', 'form', 'ul', 'ol', 'dl', 'dt', 'dd',
 ] as Type[]);
 
 // ── HostConfig ──────────────────────────────────────────────────────
