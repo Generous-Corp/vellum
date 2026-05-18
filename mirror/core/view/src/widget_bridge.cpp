@@ -840,6 +840,13 @@ WidgetBridge::WidgetBridge(ScriptEngine& engine, View& root, state::StateStore& 
     eval_or_throw(engine_, "web_compat_element", preludes::web_compat_element);
     eval_or_throw(engine_, "web_compat_canvas", preludes::web_compat_canvas);
     eval_or_throw(engine_, "web_compat_style_decl", preludes::web_compat_style_decl);
+    // P5-5 first cut — _cssToFlex + __cssProperties__ IIFE +
+    // setProperty/getPropertyValue/removeProperty extracted out of
+    // web-compat-style-decl.js. Must eval AFTER style_decl so the
+    // CSSStyleDeclaration constructor + _applyProperty prototype
+    // method are in scope when the IIFE walks __cssProperties__ and
+    // installs the per-property reflection.
+    eval_or_throw(engine_, "web_compat_style_decl_helpers", preludes::web_compat_style_decl_helpers);
     eval_or_throw(engine_, "web_compat_document", preludes::web_compat_document);
     eval_or_throw(engine_, "web_compat_gpu_buffered", preludes::web_compat_gpu_buffered);
     // pulp #745 — DOM mutation methods (appendChild / removeChild / etc.).
