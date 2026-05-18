@@ -45,6 +45,9 @@
 #endif  // PULP_HAS_SKIA
 
 #include <pulp/canvas/skia_canvas.hpp>
+#ifdef PULP_HAS_SKIA
+#include "skia_canvas_internal.hpp"  // skia_blend_mode_for, to_sk_color4f
+#endif
 
 #ifdef PULP_HAS_SKIA
 
