@@ -88,6 +88,11 @@ struct SampleEvent {
         Start,         ///< Burst opened (value drifted off baseline / last
                        ///< stable).
         End,           ///< Burst closed (value stabilized). Carries deltas.
+        Input,         ///< Recorded `View::simulate_*` interaction (Phase 10).
+                       ///< Carries `input_kind` ("click" / "drag" / "hover"),
+                       ///< the target view's id() if any, and root-space
+                       ///< coordinates in `components`. Replayed by
+                       ///< `replay_inputs` against a fresh tree.
     };
 
     Kind kind = Kind::Baseline;
@@ -110,6 +115,22 @@ struct SampleEvent {
 
     std::vector<std::pair<std::string, double>> components;  ///< Sorted by name.
     std::vector<std::pair<std::string, double>> deltas;      ///< End events only.
+
+    // ── Input fields (Phase 10, populated only when `kind == Input`) ─
+    //
+    // `input_kind` is one of `"click"`, `"drag"`, `"hover"`. `view_id`
+    // is the recorded target's `View::id()` (empty when the recorder
+    // captured an event that didn't land on an id-bearing view). The
+    // root-space coordinates ride on `components`:
+    //   - click/hover: `{ "x": ..., "y": ... }`
+    //   - drag       : `{ "start_x": ..., "start_y": ...,
+    //                     "end_x":   ..., "end_y":   ...,
+    //                     "steps":   ... }`
+    // (Sorted by name, same as every other event.) The optional name
+    // ride along with `view_name` set to "input" by convention so
+    // `format_line` and existing groupers don't trip on an empty view.
+    std::string input_kind;
+    std::string view_id;
 };
 
 /// Render the canonical `[PulpMotion][view][metric] ...` line for a sample event.
@@ -140,6 +161,13 @@ std::string format_line(const SampleEvent& e);
 struct PublishOptions {
     int precision = 3;
     double epsilon = 0.0001;
+    /// Phase 9: optional Provenance envelope. When set, the publish
+    /// channel stamps each emitted event (Baseline / Start / Sample / End)
+    /// with this provenance so an offline reader can answer "what
+    /// animation surface drove this value?" Empty by default — pre-Phase-9
+    /// callers that omit this field continue emitting events with the
+    /// envelope unset (backwards compatible).
+    Provenance provenance;
 };
 
 /// Single-component publish.
@@ -154,6 +182,23 @@ void publish_components(std::string view_name,
                         std::string metric_name,
                         std::vector<std::pair<std::string, double>> components,
                         PublishOptions opts = {});
+
+// ── Ambient provenance (Phase 9) ─────────────────────────────────────
+//
+// Some animation surfaces (JS rAF, design-import codegen) don't easily
+// thread a `PublishOptions{ .provenance = ... }` through every call site.
+// For those, the publish channel offers a process-wide "ambient"
+// provenance slot — `set_ambient_provenance(p)` is sticky until cleared
+// (or replaced). When a publish call carries an empty `opts.provenance`,
+// the coordinator stamps the ambient provenance instead. When both are
+// set, the explicit `opts.provenance` wins.
+//
+// Ambient state is intended for single-threaded scripted contexts (one
+// JS engine per bridge). Tests should call `clear_ambient_provenance()`
+// between scenarios so leftover state doesn't bleed across.
+void set_ambient_provenance(Provenance p);
+void clear_ambient_provenance();
+Provenance current_ambient_provenance();
 
 // ── Record / replay fixtures (Phase 5) ───────────────────────────────
 //
@@ -172,14 +217,35 @@ void publish_components(std::string view_name,
 //   - `assert_matches(golden, captured, opts)` compares two fixtures
 //     and returns a structured diff agents can act on.
 //
-// Fixture version 1 schema (one event per line, sorted-key JSON):
-//   {"kind":"baseline|sample|start|end",
-//    "view":"…","metric":"…","t":…,"frame":…,"precision":N,
-//    "components":{"k":v,…}, "deltas":{"k":v,…}}
-// Lines are separated by `\n`; the first line is the header:
-//   {"motion_fixture_version":1}
+// Fixture schema v2 header (Phase 8 — `policy` + `duration_scale`
+// additive fields):
+//   {"motion_fixture_version":2,
+//    "policy":"full|reduced|off",
+//    "duration_scale":1.0}
+//
+// `policy` / `duration_scale` are optional. When absent, the loader
+// defaults `policy` to `"full"` and `duration_scale` to `1.0` —
+// pre-Phase-8 v2 fixtures still load. When `make_fixture_sink` writes
+// a fresh fixture it snapshots `MotionPreferences::current()` /
+// `current_duration_scale()` at first event.
 
 constexpr int kFixtureSchemaVersion = 2;
+/// Sentinel for a default-constructed / unrecognised fixture header.
+/// `load_fixture_header()` returns a FixtureHeader with this version
+/// when the file is missing, empty, or its header fails to parse, so
+/// callers can distinguish "valid empty fixture" from "load failed".
+constexpr int kInvalidFixtureSchemaVersion = 0;
+
+/// Header metadata recorded once at the top of a fixture file.
+struct FixtureHeader {
+    int version = kInvalidFixtureSchemaVersion;
+    /// Policy in effect when the fixture was recorded. `"full"` /
+    /// `"reduced"` / `"off"`. Stored as a string so loaders without
+    /// `motion_preferences.hpp` can still compare.
+    std::string policy = "full";
+    /// Duration scale in effect when the fixture was recorded.
+    double duration_scale = 1.0;
+};
 
 // (`make_fixture_sink` and `replay_fixture` are declared below
 // alongside the other Sink helpers so the `using Sink = …` typedef is
@@ -188,6 +254,10 @@ constexpr int kFixtureSchemaVersion = 2;
 /// Load a fixture file into memory. Returns events in file order.
 /// Empty vector on missing / unreadable / unknown-version files.
 std::vector<SampleEvent> load_fixture(const std::string& path);
+
+/// Load a fixture's header (schema version + policy + duration_scale).
+/// Returns a default-constructed FixtureHeader on parse failure.
+FixtureHeader load_fixture_header(const std::string& path);
 
 /// Comparison result from `assert_matches`. Empty `differences` means
 /// the captured run matched the golden within tolerances.
@@ -210,9 +280,26 @@ struct FixtureMatchOptions {
     double component_epsilon = 0.05;
     double timing_epsilon_seconds = 0.05;
     bool require_same_event_count = true;
+    /// When true (default), `assert_matches_headers` will flag a
+    /// `"policy-mismatch"` diff item if the two fixtures recorded
+    /// different MotionPolicy values or differ in `duration_scale`
+    /// beyond `duration_scale_epsilon`. The event-only overload
+    /// (no headers passed) skips this check.
+    bool require_matching_policy = true;
+    double duration_scale_epsilon = 1e-6;
 };
 
 FixtureDiff assert_matches(const std::vector<SampleEvent>& golden,
+                           const std::vector<SampleEvent>& captured,
+                           FixtureMatchOptions opts = {});
+
+/// Overload that also compares fixture headers. Adds a
+/// `"policy-mismatch"` Item to the diff when policy / duration_scale
+/// differ and `opts.require_matching_policy` is true. Otherwise
+/// behaves identically to the event-only overload.
+FixtureDiff assert_matches(const FixtureHeader& golden_header,
+                           const std::vector<SampleEvent>& golden,
+                           const FixtureHeader& captured_header,
                            const std::vector<SampleEvent>& captured,
                            FixtureMatchOptions opts = {});
 
@@ -283,6 +370,81 @@ Sink make_fixture_sink(std::string path);
 /// Read a fixture file from disk and dispatch each event to `sink`.
 /// Returns the number of events replayed, or `-1` on parse error.
 int replay_fixture(const std::string& path, const Sink& sink);
+
+// ── Input recording / replay (Phase 10) ──────────────────────────────
+//
+// Phase 10 wires `View::simulate_click` / `simulate_drag` /
+// `simulate_hover` into the same fixture stream that carries motion
+// samples. Recording is opt-in: nothing changes about simulate_* until
+// a caller installs a recorder, after which every simulate_* dispatch
+// emits an `Input` `SampleEvent` to the Coordinator's sinks (so the
+// already-installed `make_fixture_sink(path)` captures inputs alongside
+// samples). Replay reads the fixture, walks the view tree by `id()` to
+// reattach each input to a live target, and re-invokes the matching
+// `View::simulate_*`. The motion fixture that emerges from the replay
+// — when paired with the same animation primitives — matches the
+// originally-recorded one.
+//
+// Layered intent:
+//   - `make_input_recorder(path)` is a one-call companion to
+//     `make_fixture_sink(path)`: it installs a fixture sink AND turns
+//     on simulate_* recording, returning a handle whose destructor
+//     turns recording back off. Off by default everywhere else.
+//   - `replay_inputs(path, root_view, frame_clock)` reads the fixture
+//     and re-dispatches each `Input` event by `view_id` against
+//     `root_view`. The `frame_clock` is advanced between inputs to
+//     reproduce the original timing (FrameClock-relative).
+
+/// Recording handle returned by `make_input_recorder`. RAII: destruction
+/// removes the installed sink and turns input recording back off.
+class InputRecorder {
+public:
+    InputRecorder() noexcept = default;
+    InputRecorder(InputRecorder&&) noexcept;
+    InputRecorder& operator=(InputRecorder&&) noexcept;
+    InputRecorder(const InputRecorder&) = delete;
+    InputRecorder& operator=(const InputRecorder&) = delete;
+    ~InputRecorder();
+
+    /// Stop recording inputs and close the fixture sink. Idempotent.
+    void stop();
+
+    bool is_recording() const noexcept { return sink_id_ != 0; }
+
+private:
+    friend InputRecorder make_input_recorder(std::string path);
+    explicit InputRecorder(int sink_id) noexcept : sink_id_(sink_id) {}
+    int sink_id_ = 0;
+};
+
+/// Install a fixture sink at `path` and enable simulate_* recording.
+/// Returns an `InputRecorder` whose destructor stops both the sink and
+/// the recording. Off by default. Repeated calls install independent
+/// recorders; each gets its own sink id.
+InputRecorder make_input_recorder(std::string path);
+
+/// Read a fixture file, find each `Input` event, locate a target by
+/// `view_id` walking from `root_view` (depth-first), and re-dispatch
+/// the matching `View::simulate_*` against it. Between inputs the
+/// frame_clock is advanced by the delta between recorded
+/// `t_seconds`. Returns the number of inputs replayed, or `-1` on
+/// parse error.
+int replay_inputs(const std::string& path,
+                  View& root_view,
+                  FrameClock& frame_clock);
+
+/// Process-wide entry point called by `View::simulate_*` when input
+/// recording is active. Public so the View free functions can reach
+/// it without a friend relationship; callers should prefer the
+/// `View::simulate_*` API.
+void record_simulated_input(const std::string& input_kind,
+                            const std::string& view_id,
+                            std::vector<std::pair<std::string, double>> coords);
+
+/// True while at least one `InputRecorder` is alive. Off by default;
+/// `View::simulate_*` gates on this so the non-recording cost stays a
+/// single load + branch.
+bool input_recording_enabled() noexcept;
 
 // ── Forward declarations ─────────────────────────────────────────────
 
@@ -423,6 +585,17 @@ public:
                           std::string metric_name,
                           std::vector<std::pair<std::string, double>> components,
                           PublishOptions opts);
+
+    // ── Phase 9: ambient provenance internals ─────────────────────────
+    /// Called by `set_ambient_provenance` / `clear_ambient_provenance`.
+    /// Callers should prefer the free functions for forward compatibility.
+    void set_ambient_provenance_internal(Provenance p);
+    Provenance current_ambient_provenance_internal() const;
+
+    // ── Phase 10: input recording dispatch ───────────────────────────
+    /// Stamp `e` with the bound FrameClock's `t`/`frame` and dispatch
+    /// it to every installed sink. Called by `record_simulated_input`.
+    void dispatch_input_event(SampleEvent e);
 
 private:
     Coordinator();
