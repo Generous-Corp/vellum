@@ -459,6 +459,161 @@ struct TextShaper::Impl {
     // keeps its tofu-width forever.
     std::uint64_t cached_generation = 0;
 
+    // pulp #2163 — metrics cache keyed by (font_family, font_size). Stores
+    // SkFontMetrics-derived ascent/descent/leading once per typeface so
+    // every measure_metrics call after the first is pure cache hit. Same
+    // PreText "measure once, reuse forever" model as the segment cache.
+    struct LineBox {
+        float ascent;   // positive distance above baseline (Skia stores it negative)
+        float descent;  // positive distance below baseline
+        float leading;  // extra inter-line gap
+        float line_height;  // ascent + descent + leading
+        bool real;      // true if derived from SkFontMetrics, false for the heuristic fallback
+    };
+    std::unordered_map<CacheKey, LineBox, CacheKeyHash> metrics_cache;
+    std::mutex metrics_mutex;
+
+#ifdef PULP_HAS_TEXT_SHAPING
+    // pulp #2163 — shared typeface resolution. Same comma-list walk used
+    // by measure_segment so the typeface used for width measurement is
+    // identical to the one used for line metrics. Returns null when no
+    // family matched and there's no platform fallback (non-Skia build,
+    // RefEmpty mgr, etc.).
+    sk_sp<SkTypeface> resolve_typeface(const std::string& font_family) {
+        auto try_family = [&](const std::string& fam) -> sk_sp<SkTypeface> {
+            std::string clean = fam;
+            size_t a = clean.find_first_not_of(" \t");
+            size_t b = clean.find_last_not_of(" \t");
+            if (a == std::string::npos) return nullptr;
+            clean = clean.substr(a, b - a + 1);
+            if (clean.size() >= 2
+                && (clean.front() == '"' || clean.front() == '\'')
+                && clean.back() == clean.front()) {
+                clean = clean.substr(1, clean.size() - 2);
+            }
+            if (clean.empty()) return nullptr;
+            auto tf = match_registered_typeface(clean, SkFontStyle::Normal());
+            if (tf) return tf;
+            if (font_mgr && font_mgr->countFamilies() > 0) {
+                tf = font_mgr->matchFamilyStyle(clean.c_str(), SkFontStyle::Normal());
+                if (tf) {
+                    SkString actual;
+                    tf->getFamilyName(&actual);
+                    std::string a_str(actual.c_str(), actual.size());
+                    auto lower = [](std::string s) {
+                        for (auto& c : s)
+                            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                        return s;
+                    };
+                    std::string al = lower(a_str), cl = lower(clean);
+                    if (al == cl
+                        || al.find(cl) != std::string::npos
+                        || cl.find(al) != std::string::npos) {
+                        return tf;
+                    }
+                }
+            }
+            return nullptr;
+        };
+        sk_sp<SkTypeface> tf;
+        if (font_family.find(',') == std::string::npos) {
+            tf = try_family(font_family);
+        } else {
+            size_t pos = 0;
+            while (pos < font_family.size()) {
+                size_t comma = font_family.find(',', pos);
+                std::string segment = font_family.substr(
+                    pos, (comma == std::string::npos ? font_family.size() : comma) - pos);
+                pos = (comma == std::string::npos) ? font_family.size() : comma + 1;
+                tf = try_family(segment);
+                if (tf) break;
+            }
+        }
+        if (!tf && font_mgr && font_mgr->countFamilies() > 0) {
+            tf = font_mgr->matchFamilyStyle(nullptr, SkFontStyle::Normal());
+        }
+        return tf;
+    }
+#endif
+
+    LineBox measure_metrics(const std::string& font_family, float font_size) {
+        CacheKey key{font_family, font_size};
+        {
+            std::lock_guard<std::mutex> lock(metrics_mutex);
+            auto it = metrics_cache.find(key);
+            if (it != metrics_cache.end()) return it->second;
+        }
+
+        LineBox box{};
+        box.line_height = font_size * 1.5f;  // fallback if no real metrics
+        box.real = false;
+
+#ifdef PULP_HAS_TEXT_SHAPING
+        SkFont font;
+        sk_sp<SkTypeface> tf = resolve_typeface(font_family);
+        if (tf) font.setTypeface(std::move(tf));
+        font.setSize(font_size);
+        if (font.getTypeface()) {
+            SkFontMetrics m;
+            font.getMetrics(&m);
+            // pulp #2163 — use fTop / fBottom (the WORST-CASE glyph
+            // bbox extents) rather than fAscent / fDescent (the
+            // RECOMMENDED ascent/descent for Latin-only layout).
+            //
+            // The difference matters at small font sizes: fAscent is
+            // the line above which TYPICAL glyphs fit, but caps and
+            // accents on some fonts (IBM Plex Mono among them) extend
+            // above fAscent. Boxes sized to fAscent + fDescent clip
+            // the cap-tops on those glyphs. fTop / fBottom guarantee
+            // every glyph fits — the cost is slightly taller line
+            // boxes for fonts where the worst-case glyph sits well
+            // above the typical ascent (display fonts with
+            // exaggerated accents), but that's still the right
+            // tradeoff for "imported design renders correctly".
+            //
+            // Skia convention: fAscent / fTop are NEGATIVE (above
+            // baseline), fDescent / fBottom POSITIVE (below baseline),
+            // fLeading the extra inter-line gap.
+            const float top    = m.fTop    < m.fAscent  ? m.fTop    : m.fAscent;
+            const float bottom = m.fBottom > m.fDescent ? m.fBottom : m.fDescent;
+            box.ascent  = -top;           // worst-case distance above baseline (positive)
+            box.descent =  bottom;        // worst-case distance below baseline (positive)
+            box.leading =  m.fLeading > 0 ? m.fLeading : 0;
+            // pulp #2163 — empirical safety margin. Sk{Font,Shaper}'s
+            // declared metrics (fTop / fBottom) under-report the
+            // y-extent the rasterizer actually paints at small font
+            // sizes, presumably because of subpixel positioning and
+            // anti-aliased pixel coverage that bleeds 1–2px past the
+            // declared bbox. Without this margin, intrinsic_height
+            // returns a box that just barely fits the declared
+            // metrics but visually clips the glyph caps and
+            // descenders of imported designs (CROSSOVER /
+            // MID / SIDE WIDTH section titles, XY pad axis labels at
+            // fontSize 7). The 0.5 * font_size safety is empirical:
+            // a multiplier of 0 reproduced the clipping; PULP_LH_DOUBLE
+            // (200%) over-corrected; 50% looks correct for IBM Plex
+            // Mono and Inter at sizes 7-14. Will be replaced with
+            // a structured anchor + parity-tested measurement in the
+            // FontResolver / ShapedText work (planning doc:
+            // 2026-05-17-font-subsystem-hardening-v2.md slice 1.3).
+            box.line_height = box.ascent + box.descent + box.leading
+                            + font_size * 0.5f;
+            box.real = true;
+        }
+#endif
+
+        if (std::getenv("PULP_METRICS_TRACE")) {
+            std::fprintf(stderr, "[metrics] family='%s' size=%.1f ascent=%.2f descent=%.2f leading=%.2f line_height=%.2f real=%d\n",
+                         font_family.c_str(), font_size, box.ascent, box.descent,
+                         box.leading, box.line_height, box.real ? 1 : 0);
+        }
+        {
+            std::lock_guard<std::mutex> lock(metrics_mutex);
+            metrics_cache[key] = box;
+        }
+        return box;
+    }
+
     float measure_segment(const std::string& text, const std::string& font_family, float font_size) {
         std::uint64_t current_gen = font_registration_generation();
 
@@ -487,24 +642,81 @@ struct TextShaper::Impl {
         // is what regressed Label measurement in pulp #945.
         SkFont font;
         sk_sp<SkTypeface> typeface;
-        // pulp #1150 — plugin-registered typefaces win over the platform
-        // font manager so measurement matches paint (skia_canvas.cpp's
-        // get_cached_typeface honours the same precedence). Without this,
-        // a label using "MyBrand Display" would shape under whatever the
-        // platform fell back to and paint with the registered face,
-        // producing inconsistent line-break decisions.
-        typeface = match_registered_typeface(font_family,
-                                             SkFontStyle::Normal());
-        if (!typeface && font_mgr && font_mgr->countFamilies() > 0) {
-            typeface = font_mgr->matchFamilyStyle(font_family.c_str(),
-                                                  SkFontStyle::Normal());
-            if (!typeface) {
-                // Family wasn't found (e.g. "Inter" not installed) —
-                // fall back to the platform default face so we still
-                // get a real measurement instead of a phantom typeface.
-                typeface = font_mgr->matchFamilyStyle(nullptr,
-                                                      SkFontStyle::Normal());
+
+        // pulp #2163 — CSS font-family can be a comma-separated list
+        // ("'IBM Plex Mono', monospace"). Walk the list and return the
+        // first family that resolves to a real typeface. Before this
+        // fix, the whole string was used as a single family lookup,
+        // which always failed and fell through to the platform default
+        // → label measurements no longer matched the painter's actual
+        // typeface and Yoga reserved the wrong width.
+        auto try_family = [&](const std::string& fam) -> sk_sp<SkTypeface> {
+            // Strip outer quotes (CSS allows 'Family Name' / "Family Name").
+            std::string clean = fam;
+            // Trim whitespace
+            size_t a = clean.find_first_not_of(" \t");
+            size_t b = clean.find_last_not_of(" \t");
+            if (a == std::string::npos) return nullptr;
+            clean = clean.substr(a, b - a + 1);
+            if (clean.size() >= 2
+                && (clean.front() == '"' || clean.front() == '\'')
+                && clean.back() == clean.front()) {
+                clean = clean.substr(1, clean.size() - 2);
             }
+            if (clean.empty()) return nullptr;
+
+            // pulp #1150 — plugin-registered typefaces win over the platform
+            // font manager so measurement matches paint (skia_canvas.cpp's
+            // get_cached_typeface honours the same precedence).
+            auto tf = match_registered_typeface(clean, SkFontStyle::Normal());
+            if (tf) return tf;
+            if (font_mgr && font_mgr->countFamilies() > 0) {
+                tf = font_mgr->matchFamilyStyle(clean.c_str(),
+                                                SkFontStyle::Normal());
+                // Verify the matcher didn't silently substitute the
+                // platform default. Compare names case-insensitively;
+                // accept if the actual name contains the requested
+                // family or vice versa.
+                if (tf) {
+                    SkString actual;
+                    tf->getFamilyName(&actual);
+                    std::string a_str(actual.c_str(), actual.size());
+                    auto lower = [](std::string s) {
+                        for (auto& c : s)
+                            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                        return s;
+                    };
+                    std::string al = lower(a_str), cl = lower(clean);
+                    if (al == cl
+                        || al.find(cl) != std::string::npos
+                        || cl.find(al) != std::string::npos) {
+                        return tf;
+                    }
+                    // The matcher returned a fallback that doesn't match
+                    // the requested name — keep walking the comma list.
+                }
+            }
+            return nullptr;
+        };
+
+        if (font_family.find(',') == std::string::npos) {
+            typeface = try_family(font_family);
+        } else {
+            size_t pos = 0;
+            while (pos < font_family.size()) {
+                size_t comma = font_family.find(',', pos);
+                std::string segment = font_family.substr(
+                    pos, (comma == std::string::npos ? font_family.size() : comma) - pos);
+                pos = (comma == std::string::npos) ? font_family.size() : comma + 1;
+                typeface = try_family(segment);
+                if (typeface) break;
+            }
+        }
+
+        // Final fallback — platform default. Used only when every
+        // family in the list missed (or no list was provided).
+        if (!typeface && font_mgr && font_mgr->countFamilies() > 0) {
+            typeface = font_mgr->matchFamilyStyle(nullptr, SkFontStyle::Normal());
         }
         if (typeface) font.setTypeface(std::move(typeface));
         font.setSize(font_size);
@@ -594,7 +806,18 @@ PreparedText TextShaper::prepare(std::string_view text, std::string_view font_fa
     PreparedText result;
     result.font_family_ = std::string(font_family);
     result.font_size_ = font_size;
-    result.line_height_ = font_size * 1.5f;
+    // pulp #2163 — ask the impl for real SkFontMetrics-derived line
+    // height. Falls back to font_size * 1.5 only when there's no
+    // resolvable typeface (non-Skia build, empty font manager, etc.).
+    // Cached per (family, size) so repeated layout calls hit pure
+    // arithmetic — same PreText "measure once" guarantee that already
+    // drives the segment width cache.
+    auto box = impl_->measure_metrics(result.font_family_, font_size);
+    result.line_height_ = box.line_height;
+    result.ascent_       = box.ascent;
+    result.descent_      = box.descent;
+    result.leading_      = box.leading;
+    result.metrics_real_ = box.real;
 
     // Segment the text: split on whitespace and newlines
     std::string current;
