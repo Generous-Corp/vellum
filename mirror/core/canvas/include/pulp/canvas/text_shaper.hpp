@@ -40,6 +40,21 @@ public:
     /// Line height for this text
     float line_height() const { return line_height_; }
 
+    /// pulp #2163 — SkFontMetrics-derived line box of the resolved
+    /// typeface. `ascent` is the distance ABOVE the baseline (positive
+    /// — Skia's fAscent is negative, we flip it here). `descent` is
+    /// distance below baseline. `leading` is the extra inter-line gap.
+    /// `line_height` equals ascent + descent + leading. `real` is true
+    /// when these came from a resolved typeface, false when the
+    /// fallback heuristic ran (no Skia, family unresolvable, etc.).
+    /// Callers that need to place a baseline (paint code, custom
+    /// canvases) should use `ascent` rather than the previous
+    /// `font_size * 0.85` rule-of-thumb.
+    float ascent()  const { return ascent_; }
+    float descent() const { return descent_; }
+    float leading() const { return leading_; }
+    bool metrics_are_real() const { return metrics_real_; }
+
     /// Total width if laid out on a single line
     float total_width() const;
 
@@ -50,6 +65,10 @@ private:
     friend class TextShaper;
     std::vector<ShapedSegment> segments_;
     float line_height_ = 0;
+    float ascent_ = 0;
+    float descent_ = 0;
+    float leading_ = 0;
+    bool metrics_real_ = false;
     std::string font_family_;
     float font_size_ = 0;
 };
