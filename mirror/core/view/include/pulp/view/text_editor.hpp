@@ -131,6 +131,15 @@ public:
     /// Caret position in the text, for IME cursor rect queries.
     int caret_pos() const { return caret_position_; }
 
+    /// Caret bounding rect in local view coordinates. Returns the position
+    /// the caret occupies after the most recent paint — both single-line
+    /// (uses measured text width and the editor's vertical centering) and
+    /// multi-line (uses the cached wrapped-line layout so the rect rides
+    /// the correct visual row even when wrap is engaged). When `paint()`
+    /// has not yet been called the rect collapses to the inner padding
+    /// origin so IME hosts still get a sane (if non-precise) anchor.
+    Rect caret_rect() const;
+
 private:
     std::string text_;
     int caret_position_ = 0;     ///< Cursor position (character index)
@@ -150,6 +159,55 @@ private:
     std::vector<std::pair<std::string, int>> undo_history_;
     std::vector<std::pair<std::string, int>> redo_history_;
 
+    /// Snapshot of the most recent paint's layout, populated for both
+    /// single-line and multi-line modes. The mouse handler and
+    /// `caret_rect()` consult this so click-to-caret in line 2+ of a
+    /// wrapped paragraph picks the right visual row and the IME caret
+    /// rect reflects what the user actually sees.
+    struct LayoutSnapshot {
+        struct Line {
+            int start = 0;
+            int end = 0;
+            float baseline_y = 0.f;
+            float top_y = 0.f;
+            float inner_x = 0.f;
+            float line_height = 0.f;
+            /// Cumulative x of each char start; size = (end-start)+1.
+            /// Built once per cache-key change rather than per paint.
+            std::vector<float> x_offsets;
+        };
+        std::vector<Line> lines;
+        bool multi_line = false;
+        float fallback_char_w = 0.f;
+    };
+    mutable LayoutSnapshot last_layout_;
+
+    /// Cache key for `last_layout_`. The expensive `x_offsets` arrays
+    /// only rebuild when one of these inputs changes (text edit, font
+    /// change, viewport resize, mode flip, scroll), NOT on every paint
+    /// — paint is a 60Hz hot path on the UI thread.
+    struct LayoutCacheKey {
+        std::size_t text_hash = 0;
+        float font_size = 0.f;
+        float bounds_width = 0.f;
+        float bounds_height = 0.f;
+        float scroll_offset = 0.f;
+        bool multi_line = false;
+        bool password_mode = false;
+        bool placeholder_visible = false;
+        bool operator==(const LayoutCacheKey& o) const noexcept {
+            return text_hash == o.text_hash
+                && font_size == o.font_size
+                && bounds_width == o.bounds_width
+                && bounds_height == o.bounds_height
+                && scroll_offset == o.scroll_offset
+                && multi_line == o.multi_line
+                && password_mode == o.password_mode
+                && placeholder_visible == o.placeholder_visible;
+        }
+    };
+    mutable LayoutCacheKey last_layout_key_;
+
     void push_undo();
     void insert_text(const std::string& t);
     void delete_selection();
@@ -164,6 +222,11 @@ private:
     void move_to_end(bool extend_selection);
 
     int char_index_at_x(float x) const;
+    /// Multi-line aware hit-test. When `paint()` has populated a layout
+    /// snapshot the y coordinate selects the visual row; the x coordinate
+    /// then picks the nearest character within that row's measured glyph
+    /// offsets. Falls back to `char_index_at_x` when no snapshot exists.
+    int char_index_at_point(float x, float y) const;
     bool is_word_char(char c) const;
 
     void notify_change();
