@@ -819,6 +819,11 @@ std::unordered_set<WidgetBridge*>& all_bridges_set() {
 WidgetBridge::WidgetBridge(ScriptEngine& engine, View& root, state::StateStore& store,
                            render::GpuSurface* gpu_surface)
     : engine_(engine), root_(root), store_(store), gpu_surface_(gpu_surface) {
+    {
+        std::lock_guard<std::recursive_mutex> lock(all_bridges_mutex());
+        all_bridges_set().insert(this);
+    }
+
     if (widget_bridge_gpu_info(gpu_surface_).native_bridge) {
         native_gpu_bridge_state_ = std::make_unique<NativeGpuBridgeState>();
     }
@@ -1316,6 +1321,11 @@ void WidgetBridge::install_runtime_import_handlers() {
                                 + src_label + "')");
                         return choc::value::Value();
                     }
+                } else if ((source_lc == "auto" || source_lc.empty())
+                           && html.find("react-native") != std::string::npos) {
+                    bundle = parse_react_native_export(html);
+                    if (!bundle) bundle = parse_claude_bundle(html);
+                    if (!bundle) bundle = parse_pencil_react(html);
                 } else {
                     bundle = parse_claude_bundle(html);
                     if (!bundle) bundle = parse_react_native_export(html);
