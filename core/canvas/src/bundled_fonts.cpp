@@ -11,6 +11,8 @@
 // are gated on the same macro.
 
 #include <pulp/canvas/bundled_fonts.hpp>
+#include <pulp/canvas/font_resolver.hpp>
+#include <pulp/canvas/font_options.hpp>
 
 #ifdef PULP_HAS_SKIA
 
@@ -192,11 +194,14 @@ void bump_generation() noexcept {
     registration_generation().fetch_add(1, std::memory_order_acq_rel);
 }
 
-// Lazy, process-wide platform font manager. Parallels skia_canvas.cpp's
-// `get_font_manager()`. Duplicated here because `bundled_fonts.cpp` is
-// linked privately from pulp-canvas and must not call back into
-// skia_canvas.cpp's TU-local helpers.
-sk_sp<SkFontMgr> registration_font_manager() {
+} // namespace
+
+// pulp #2163 / font v2 Slice 1.1.a — single canonical platform-font-manager
+// helper, exported from `bundled_fonts.hpp`. Replaces the five inline
+// SkFontMgr_New_* switch blocks that previously lived in skia_canvas.cpp,
+// text_shaper.cpp, sdf_atlas.cpp, bundled_fonts.cpp (×2), and the seed
+// copy in font_resolver.cpp.
+sk_sp<SkFontMgr> platform_font_manager() {
     static sk_sp<SkFontMgr> mgr;
     static bool tried = false;
     if (!tried) {
@@ -213,8 +218,6 @@ sk_sp<SkFontMgr> registration_font_manager() {
     }
     return mgr;
 }
-
-} // namespace
 
 sk_sp<SkTypeface> match_registered_typeface(const std::string& family,
                                             SkFontStyle style) {
@@ -261,7 +264,7 @@ bool register_font(const std::uint8_t* data, std::size_t size,
                    const std::string& family_override) {
     if (!data || size == 0) return false;
 
-    SkFontMgr* mgr = registration_font_manager().get();
+    SkFontMgr* mgr = platform_font_manager().get();
     if (!mgr) {
         // No platform font manager → no way to materialise an SkTypeface
         // from raw bytes (the prebuilt Skia we ship doesn't link FreeType
@@ -328,40 +331,24 @@ FontProbe probe_font_glyph(const std::string& family,
 
     if (family.empty()) return out;
 
-    SkFontStyle style{weight, SkFontStyle::kNormal_Width,
-                      slant ? SkFontStyle::kItalic_Slant : SkFontStyle::kUpright_Slant};
+    // pulp #2163 / font v2 Slice 1.1.a — was a hand-rolled cascade that
+    // mirrored get_cached_typeface_single. Now routes through
+    // FontResolver so the probe sees exactly what fill_text would
+    // resolve to. The resolver's cache is keyed on the full
+    // FontOptions blob so a probe call doesn't "pollute" — it
+    // pre-populates a key a subsequent real call would have hit
+    // anyway.
+    FontOptions opts;
+    opts.family_stack.push_back(family);
+    opts.weight = static_cast<float>(weight);
+    opts.slant  = slant ? FontSlant::Italic : FontSlant::Normal;
+    auto resolved = FontResolver::instance().resolve_family_list(opts);
+    if (!resolved.typeface) return out;
 
-    // Mirror the cascade order in get_cached_typeface_single
-    // (skia_canvas.cpp): registered → bundled → platform manager. Doing
-    // it here rather than reusing the static-cached path keeps this
-    // probe side-effect-free (no cache pollution from a probe call).
-    sk_sp<SkTypeface> face = match_registered_typeface(family, style);
-    if (!face) {
-        // Bundled fonts need an SkFontMgr handle. Use the same
-        // platform-appropriate factories as skia_canvas.cpp so the
-        // probe reflects the real resolution that fill_text would do.
-        sk_sp<SkFontMgr> mgr;
-#ifdef __APPLE__
-        mgr = SkFontMgr_New_CoreText(nullptr);
-#elif defined(_WIN32)
-        mgr = SkFontMgr_New_DirectWrite();
-#elif defined(__ANDROID__)
-        mgr = SkFontMgr_New_Android(nullptr, SkFontScanner_Make_FreeType());
-#elif defined(__linux__)
-        mgr = SkFontMgr_New_FontConfig(nullptr, SkFontScanner_Make_FreeType());
-#endif
-        if (mgr) {
-            face = match_bundled_typeface(mgr.get(), family, style);
-            if (!face) face = mgr->matchFamilyStyle(family.c_str(), style);
-        }
-    }
-
-    if (!face) return out;
     out.family_resolved = true;
-    SkString name;
-    face->getFamilyName(&name);
-    out.resolved_family.assign(name.c_str(), name.size());
-    out.glyph_present = (face->unicharToGlyph(static_cast<SkUnichar>(codepoint)) != 0);
+    out.resolved_family = resolved.actual_family;
+    out.glyph_present = (resolved.typeface->unicharToGlyph(
+        static_cast<SkUnichar>(codepoint)) != 0);
     return out;
 }
 
@@ -378,6 +365,22 @@ std::uint64_t font_registration_generation() noexcept {
 
 void bump_font_registration_generation() noexcept {
     bump_generation();
+}
+
+// pulp #2163 — font v2 Slice 2.8 skeleton. The Phase 2 implementation
+// slice replaces this with a Chromium-`ots`-style sanitizer that
+// verifies the TTF/OTF table directory + critical-table checksums and
+// rejects malformed inputs. For now we just confirm Skia can parse the
+// bytes into an SkTypeface — that gates the most catastrophic crashes
+// (truncated streams, garbage data) without the full per-table audit.
+bool validate_font_bytes(const std::uint8_t* data, std::size_t size) {
+    if (!data || size == 0) return false;
+    auto sk_data = SkData::MakeWithCopy(data, size);
+    if (!sk_data) return false;
+    auto mgr = platform_font_manager();
+    if (!mgr) return true; // can't validate without a mgr; accept conservatively
+    auto face = mgr->makeFromData(std::move(sk_data));
+    return static_cast<bool>(face);
 }
 
 } // namespace pulp::canvas

@@ -15,6 +15,9 @@
 //      packer.
 
 #include <pulp/canvas/sdf_atlas.hpp>
+#include <pulp/canvas/bundled_fonts.hpp>
+#include <pulp/canvas/font_resolver.hpp>
+#include <pulp/canvas/font_options.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -164,33 +167,29 @@ std::vector<std::uint8_t> rasterize_placeholder(char32_t codepoint, int w, int h
 }
 
 #if PULP_HAS_SKIA
-// Resolve a typeface the same way rasterize_skia() does so metrics and
-// rasterization agree on which font is in use.
+// pulp #2163 / font v2 Slice 1.1.a — platform font manager comes from
+// the single canonical helper in bundled_fonts.cpp; this TU-local shim
+// preserves the existing call sites until the broader caller-migration
+// pass routes them through the resolver.
 sk_sp<SkFontMgr> make_font_mgr() {
-#ifdef __APPLE__
-    return SkFontMgr_New_CoreText(nullptr);
-#elif defined(_WIN32)
-    return SkFontMgr_New_DirectWrite();
-#elif defined(__ANDROID__)
-    return SkFontMgr_New_Android(nullptr, SkFontScanner_Make_FreeType());
-#elif defined(__linux__)
-    return SkFontMgr_New_FontConfig(nullptr, SkFontScanner_Make_FreeType());
-#else
-    return nullptr;
-#endif
+    return platform_font_manager();
 }
 
 sk_sp<SkTypeface> resolve_typeface(const std::string& font_family) {
+    // pulp #2163 / font v2 Slice 1.1.a — was a platform-only
+    // matchFamilyStyle (ignored plugin-registered + bundled). Now
+    // routes through FontResolver so the SDF atlas path sees the
+    // same cascade as Skia text rendering. Closes v1 doc gap §1.6.
+    FontOptions opts;
+    if (!font_family.empty()) opts.family_stack.push_back(font_family);
+    auto resolved = FontResolver::instance().resolve_family_list(opts);
+    if (resolved.typeface) return resolved.typeface;
+    // Last-resort legacy default for environments where the resolver
+    // cascade misses entirely (kept as a safety net; trace records
+    // emitted by the resolver document the miss).
     auto mgr = make_font_mgr();
     if (!mgr) return nullptr;
-    sk_sp<SkTypeface> face;
-    if (!font_family.empty()) {
-        face = mgr->matchFamilyStyle(font_family.c_str(), SkFontStyle::Normal());
-    }
-    if (!face) {
-        face = mgr->legacyMakeTypeface(nullptr, SkFontStyle::Normal());
-    }
-    return face;
+    return mgr->legacyMakeTypeface(nullptr, SkFontStyle::Normal());
 }
 
 // Capture glyph metrics from SkFont at base_size. Returns valid=false
@@ -246,16 +245,18 @@ std::vector<std::uint8_t> rasterize_skia(const std::string& font_family,
                                           char32_t codepoint,
                                           int base_size,
                                           int w, int h, int padding) {
-    auto mgr = make_font_mgr();
-    if (!mgr) return {};
-
+    // pulp #2163 / font v2 Slice 1.1.a — same migration as
+    // resolve_typeface above: use FontResolver so plugin-registered
+    // and bundled fonts are honored by the SDF rasterizer path.
     sk_sp<SkTypeface> face;
-    if (!font_family.empty()) {
-        face = mgr->matchFamilyStyle(font_family.c_str(), SkFontStyle::Normal());
+    {
+        FontOptions opts;
+        if (!font_family.empty()) opts.family_stack.push_back(font_family);
+        face = FontResolver::instance().resolve_family_list(opts).typeface;
     }
     if (!face) {
-        // Fall back to the platform default by leaving the family null.
-        face = mgr->legacyMakeTypeface(nullptr, SkFontStyle::Normal());
+        auto mgr = make_font_mgr();
+        if (mgr) face = mgr->legacyMakeTypeface(nullptr, SkFontStyle::Normal());
     }
     if (!face) return {};
 

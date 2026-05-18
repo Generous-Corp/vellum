@@ -34,17 +34,46 @@ float Label::intrinsic_height() const {
         if (auto inh = inheritable_font_size(); inh.has_value())
             effective_font_size = inh.value();
     }
-    // pulp-internal #76 — small font sizes need a larger line-height
-    // multiplier than the standard 1.4. At fs=10 (Spectr's
-    // `<span fontSize=10>SNAPSHOT</span>` in the bottom toolbar), Inter's
-    // typographic ascent + descent is ~13px, leaving only ~1px of slack
-    // in a 14px box (10 * 1.4); the GPU clip-rect on the View bounds
-    // then shaved the descender-side slack off in practice and the label
-    // visibly clipped from the bottom. Bumping to 1.6 for sizes below
-    // ~12pt buys 16px of box room for fs=10, fully containing the glyph
-    // extent. Larger sizes keep 1.4 — they have plenty of absolute slack.
+
+    // pulp #2163 / font v2 Slice 1.2.b — prefer the shaper's real
+    // metrics (worst-case ascent + descent from SkFontMetrics fTop/
+    // fBottom + empirical safety margin gated by
+    // PULP_FONT_NO_SAFETY_MARGIN) over the legacy `font_size * 1.6` /
+    // `font_size * 1.4` multiplier from pulp-internal #76. Real
+    // metrics make `intrinsic_height` track what paint() actually
+    // draws (the same shaper cache feeds Label::paint baseline math
+    // and the Yoga measure callback), and let the env-var-gated
+    // empirical margin actually affect intrinsic box sizes — which is
+    // the prerequisite for the Slice 1.3 parity harness retiring it
+    // entirely. Falls back to the legacy multiplier only when the
+    // shaper hasn't resolved real metrics (no Skia / family
+    // unresolvable).
+    //
+    // pulp-internal #76 history: small fonts (< 12px) had
+    // `font_size * 1.6` instead of `font_size * 1.4` because Inter's
+    // typographic ascent+descent was ~13px at fs=10 and the painter's
+    // GPU clip-rect shaved descenders. Real fTop/fBottom metrics
+    // already cover that case (they include caps + descenders by
+    // construction) plus the empirical safety margin.
+    std::string effective_family = font_family_;
+    if (effective_family.empty()) {
+        if (auto inh = inheritable_font_family(); inh.has_value())
+            effective_family = inh.value();
+    }
+    if (effective_family.empty()) effective_family = "Inter";
+
+    auto& shaper = canvas::global_text_shaper();
+    auto prepared = shaper.prepare(text_.empty() ? std::string(" ") : text_,
+                                   effective_family, effective_font_size);
     const float lh_mult = effective_font_size < 12.0f ? 1.6f : 1.4f;
-    const float lh = line_height_ > 0 ? line_height_ : effective_font_size * lh_mult;
+    float lh;
+    if (line_height_ > 0) {
+        lh = line_height_;
+    } else if (prepared.line_height() > 0) {
+        lh = prepared.line_height();
+    } else {
+        lh = effective_font_size * lh_mult;
+    }
 
     // pulp-internal #74 — when the Label is multi_line, the reserved
     // height must reflect the number of lines paint() will emit, not a
@@ -157,6 +186,57 @@ float Label::measured_height(float available_width) const {
     if (line_clamp_ > 0 && line_clamp_ < line_count)
         line_count = line_clamp_;
     return std::ceil(lh * static_cast<float>(line_count));
+}
+
+float Label::baseline_y() const {
+    // pulp #2163 / font-v2 Slice 1.1.b — baseline offset from the top
+    // of the Label's box, used by Yoga's YGNodeSetBaselineFunc to
+    // honor `align-items: baseline` on flex containers. The CHAIN INFO
+    // panel in Chainer (#2163) is the canonical canary: bold labels
+    // (OSC / ENV / XOVER / ...) and description text (polywave generator
+    // / ADSR shaper / ...) share a flex row but render top-aligned
+    // because Yoga's measure callback today returns only width+height,
+    // never a baseline. Without that channel, `align-items: baseline`
+    // silently degrades to top-align of unequal-height boxes — exactly
+    // the visible misalignment we're fixing.
+    //
+    // The baseline of a single line of text sits at `ascent` distance
+    // below the top of the worst-case glyph box (SkFontMetrics::fTop
+    // semantics). For multi-line Labels we honor the first line's
+    // baseline — that's what RN, the CSS spec, and Yoga's other
+    // baseline-bearing children all do.
+    float effective_font_size = font_size_;
+    if (!has_own_font_size_) {
+        if (auto inh = inheritable_font_size(); inh.has_value())
+            effective_font_size = inh.value();
+    }
+
+    std::string effective_family = font_family_;
+    if (effective_family.empty()) {
+        if (auto inh = inheritable_font_family(); inh.has_value())
+            effective_family = inh.value();
+    }
+    if (effective_family.empty()) effective_family = "Inter";
+
+    // Skia's SkFontMetrics-derived ascent (PreparedText::ascent() flips
+    // SkFontMetrics::fAscent positive). The painter computes baseline_y
+    // from the same prepared metrics — see widgets/label.cpp paint() —
+    // so what Yoga sees here matches where the glyphs actually land.
+    // For a Label with no text we still need a sensible baseline so a
+    // baseline-aligned row of widgets (some text, some not) doesn't
+    // collapse — feed the shaper a single space to pin the metric.
+    auto& shaper = canvas::global_text_shaper();
+    auto prepared = shaper.prepare(text_.empty() ? std::string(" ") : text_,
+                                   effective_family, effective_font_size);
+    float ascent = prepared.ascent();
+    if (ascent <= 0.0f) {
+        // Fallback when shaper metrics aren't real (no Skia, family
+        // unresolvable): use the same 0.85 × font_size heuristic that
+        // pre-#2163 paint code used. Better than returning 0 and
+        // collapsing the baseline-aligned row.
+        ascent = effective_font_size * 0.85f;
+    }
+    return ascent;
 }
 
 float Label::intrinsic_width() const {
