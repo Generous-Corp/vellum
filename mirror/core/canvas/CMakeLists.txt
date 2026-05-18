@@ -31,6 +31,21 @@ target_sources(pulp-canvas PRIVATE
     # stub TU lets plugin startup code call register_font(...) on non-GPU
     # builds without guarding every call site.
     src/font_registry_stubs.cpp
+    # Pulp #2163 — Phase 1 / Slice 1.1.a of the font v2 roadmap. FontOptions
+    # is Skia-free; FontScope manages scope-level registrations + a
+    # monotonic generation counter; FontResolver is the canonical
+    # resolution path that will progressively absorb the legacy parsers in
+    # skia_canvas.cpp / text_shaper.cpp / bundled_fonts.cpp / sdf_atlas.cpp.
+    src/font_options.cpp
+    src/font_scope.cpp
+    src/font_resolver.cpp
+    # Pulp #2163 — Phase 1 / Slice 1.2.a. ShapedText is the canonical
+    # artifact produced by TextRunPlanner; both measurement
+    # (TextShaper) and paint (SkiaCanvas) consume the same instance
+    # so they cannot diverge. Skeleton wraps existing TextShaper
+    # internally; the real bidi/script iterator swap is the finish
+    # half of 1.2.a.
+    src/text_run_planner.cpp
 )
 
 # Text shaping via SkParagraph (default ON when Skia available, can be disabled)
