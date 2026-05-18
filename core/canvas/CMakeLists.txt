@@ -46,6 +46,11 @@ target_sources(pulp-canvas PRIVATE
     # internally; the real bidi/script iterator swap is the finish
     # half of 1.2.a.
     src/text_run_planner.cpp
+    # Pulp #2163 — Phase 2 / Slice 2.2. FontFlightRecorder is the
+    # bounded process-global trace buffer that callers (the --font-
+    # trace CLI flag, the import-missing-font-advisor, debug overlays)
+    # drain to see every typeface resolution the resolver performed.
+    src/font_flight_recorder.cpp
 )
 
 # Text shaping via SkParagraph (default ON when Skia available, can be disabled)

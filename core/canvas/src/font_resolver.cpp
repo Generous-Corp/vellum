@@ -12,6 +12,7 @@
 #include "pulp/canvas/font_resolver.hpp"
 #include "pulp/canvas/font_scope.hpp"
 #include "pulp/canvas/bundled_fonts.hpp"
+#include "pulp/canvas/font_flight_recorder.hpp"
 
 #include <mutex>
 #include <string>
@@ -239,6 +240,14 @@ ResolvedFont FontResolver::resolve_family_list(const FontOptions& options) {
             r.typeface = apply_variation_axes(std::move(r.typeface));
             r.trace = std::move(trace);
             resolved = std::move(r);
+            // pulp #2163 — Slice 2.2 — record one event per resolution.
+            FontFlightRecorder::instance().record_fallback({
+                /*requested_family*/ family,
+                /*selected_family*/ resolved.actual_family,
+                /*origin*/   static_cast<std::uint8_t>(resolved.origin),
+                /*generation*/ resolved.generation,
+                /*sequence*/ 0,
+            });
             std::lock_guard<std::mutex> lock(impl_->mtx);
             impl_->cache[key] = resolved;
             return resolved;
