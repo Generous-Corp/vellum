@@ -220,8 +220,25 @@ float Label::intrinsic_width() const {
     // uses the global Skia/HarfBuzz path when available and falls back
     // to a character-width estimator otherwise — same fallback that
     // Canvas::measure_text() uses on the recording / non-Skia backends.
+    //
+    // pulp #2163 — must use the Label's actual font_family, not a
+    // hardcoded "Inter". Different families have very different
+    // metrics: monospaced fonts (IBM Plex Mono ~0.6em per glyph) are
+    // ~20% wider than proportional Inter (~0.5em average) at the same
+    // size. Under-reserving width caused imported designs (Chainer JSX)
+    // to clip labels like "XOVER → lo_freq" to "XOVER → lo_fre" — Yoga
+    // reserved Inter's width while the painter drew the requested
+    // family's. Mirror paint()'s precedence: font_family_ if set, else
+    // inheritable_font_family() cascade, else default "Inter".
+    std::string effective_family = font_family_;
+    if (effective_family.empty()) {
+        if (auto inh = inheritable_font_family(); inh.has_value())
+            effective_family = inh.value();
+    }
+    if (effective_family.empty()) effective_family = "Inter";
+
     auto& shaper = canvas::global_text_shaper();
-    auto prepared = shaper.prepare(display_text, "Inter", effective_font_size);
+    auto prepared = shaper.prepare(display_text, effective_family, effective_font_size);
     float width = prepared.total_width();
 
     // Letter-spacing adds extra advance per glyph break that isn't
