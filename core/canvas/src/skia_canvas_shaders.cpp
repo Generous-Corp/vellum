@@ -41,10 +41,19 @@
 #include "include/core/SkTileMode.h"
 #include "include/effects/SkImageFilters.h"
 #include "include/effects/SkRuntimeEffect.h"
+// pulp #2183 hot-fix: WebGPU/Graphite native-texture wrap path was
+// missing these heavy includes after the split.
+#include "include/gpu/graphite/BackendTexture.h"
+#include "include/gpu/graphite/Image.h"
+#include "webgpu/webgpu_cpp.h"
 
 #endif  // PULP_HAS_SKIA
 
 #include <pulp/canvas/skia_canvas.hpp>
+#ifdef PULP_HAS_SKIA
+#include "skia_canvas_internal.hpp"  // to_sk_color4f, webgpu-format helpers
+#include "runtime_effect_cache.hpp"  // RuntimeEffectCache (sibling header)
+#endif
 
 #ifdef PULP_HAS_SKIA
 
@@ -324,31 +333,18 @@ bool SkiaCanvas::draw_native_dawn_texture(void* texture_handle,
                                           float y,
                                           float w,
                                           float h) {
-    if (!canvas_ || !recorder_ || texture_handle == nullptr || width == 0 || height == 0) {
-        return false;
-    }
-
-    auto* texture_ptr = static_cast<wgpu::Texture*>(texture_handle);
-    if (texture_ptr == nullptr || !(*texture_ptr)) {
-        return false;
-    }
-
-    auto backend_texture = skgpu::graphite::BackendTextures::MakeDawn(texture_ptr->Get());
-    if (!backend_texture.isValid()) {
-        return false;
-    }
-
-    auto image = SkImages::WrapTexture(recorder_,
-                                       backend_texture,
-                                       sk_color_type_from_webgpu_format(format),
-                                       kPremul_SkAlphaType,
-                                       sk_color_space_from_webgpu_format(format));
-    if (!image) {
-        return false;
-    }
-
-    canvas_->drawImageRect(image, SkRect::MakeXYWH(x, y, w, h), SkSamplingOptions());
-    return true;
+    // pulp #2183 hot-fix: the original body referenced
+    // `skgpu::graphite::BackendTextures::MakeDawn(wgpu::Texture::Handle)`,
+    // an API that does not exist in this Skia release. Stubbed to
+    // return false so the canvas widget (core/view/src/canvas_widget.cpp)
+    // falls back to its non-native rendering path until whoever owns
+    // the Dawn-native-texture wrap path lands the correct
+    // `BackendTexture` factory call for the bundled Skia.
+    (void) texture_handle;
+    (void) width; (void) height;
+    (void) format;
+    (void) x; (void) y; (void) w; (void) h;
+    return false;
 }
 
 // ── Blur backdrop ────────────────────────────────────────────────────────────

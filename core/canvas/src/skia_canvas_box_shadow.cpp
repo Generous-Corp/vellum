@@ -21,10 +21,16 @@
 #include "include/core/SkPath.h"
 #include "include/core/SkRRect.h"
 #include "include/core/SkRect.h"
+// pulp #2183 hot-fix: box-shadow uses SkImageFilters::DropShadowOnly +
+// SkImageFilters::Blur; missing from the original split.
+#include "include/effects/SkImageFilters.h"
 
 #endif  // PULP_HAS_SKIA
 
 #include <pulp/canvas/skia_canvas.hpp>
+#ifdef PULP_HAS_SKIA
+#include "skia_canvas_internal.hpp"
+#endif
 
 #ifdef PULP_HAS_SKIA
 
