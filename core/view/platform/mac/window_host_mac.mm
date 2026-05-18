@@ -631,6 +631,21 @@ static pulp::view::KeyCode keyCodeFromNS(unsigned short code) {
             auto local = toLocal(pt, _dragTarget, self.rootView);
             _dragTarget->on_mouse_drag(local);
             if (_dragTarget->on_drag) _dragTarget->on_drag(local);
+
+            // pulp jsx-instrument-import 2026-05-17 — bubble on_drag up
+            // to ancestors with on_drag set. Mirrors what mouseDown
+            // already does for on_pointer_event (window_host_mac.mm:569).
+            // Without this, JSX patterns where the click target is an
+            // inner presentational widget (Chainer's XY pad dot, the
+            // 5px slider track) but the drag handler is on an outer
+            // wrapper get a one-shot pointerdown but no drag stream.
+            // Re-toLocal per ancestor so the event coords are in that
+            // ancestor's local space.
+            for (auto* bubble = _dragTarget->parent(); bubble; bubble = bubble->parent()) {
+                if (!bubble->on_drag) continue;
+                auto bubble_local = toLocal(pt, bubble, self.rootView);
+                bubble->on_drag(bubble_local);
+            }
             [self setNeedsDisplay:YES];
         } catch (const std::exception& e) {
             std::cerr << "MacWindowHost mouseDragged error: " << e.what() << "\n";
@@ -875,23 +890,6 @@ static pulp::view::KeyCode keyCodeFromNS(unsigned short code) {
             static_cast<int>(key), mods, /*is_down=*/true);
 
         if (key == pulp::view::KeyCode::escape && self.rootView) {
-            // pulp #2128 follow-up — fire a synthetic document-level
-            // outside-click event into every WidgetBridge so React
-            // popovers that close via the
-            // `document.addEventListener('mousedown', onDoc)` /
-            // `document.addEventListener('pointerdown', onDoc)`
-            // click-outside idiom (Spectr's PickerDropdown,
-            // ContextMenu, etc.) close on Esc without needing
-            // per-app wiring. Coords (-1, -1) and `target:null` are
-            // outside any real bounding box, so
-            // `ref.current.contains(e.target)` checks correctly
-            // resolve to "outside". This runs BEFORE the modal /
-            // ComboBox / active_overlay paths below — additive, not
-            // consuming.
-            pulp::view::WidgetBridge::dispatch_document_event(
-                "pointerdown", "{clientX:-1,clientY:-1,target:null}");
-            pulp::view::WidgetBridge::dispatch_document_event(
-                "mousedown",   "{clientX:-1,clientY:-1,target:null}");
             if (auto* modal = find_topmost_modal(self.rootView)) {
                 pulp::view::KeyEvent ke;
                 ke.key = key;
