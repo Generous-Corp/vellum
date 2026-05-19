@@ -401,9 +401,23 @@ std::future<FontState> register_font_url(const std::string& url,
     auto promise = std::make_shared<std::promise<FontState>>();
     std::future<FontState> fut = promise->get_future();
     std::thread([promise, path = std::move(path), family_override]() mutable {
-        const FontState state = register_font_file(path, family_override)
-            ? FontState::Loaded
-            : FontState::Failed;
+        // Wrap the whole worker body in a catch-all. Codex review on
+        // PR #2308 flagged that `register_font_file()` can throw (e.g.
+        // a vector allocation backed by `tellg()` for a huge / sparse
+        // file), and an exception escaping this detached `std::thread`
+        // calls `std::terminate`. The pre-#2308 `std::async` path kept
+        // the exception in the future state; this path documents
+        // futures as safe-to-drop, so any escape would crash callers
+        // who took us at our word. Convert every escape to
+        // `FontState::Failed` and signal via the promise.
+        FontState state = FontState::Failed;
+        try {
+            state = register_font_file(path, family_override)
+                ? FontState::Loaded
+                : FontState::Failed;
+        } catch (...) {
+            state = FontState::Failed;
+        }
         try {
             promise->set_value(state);
         } catch (const std::future_error&) {
