@@ -142,7 +142,7 @@ private:
 
                 // Custom functions
                 auto it = fns_.find(name);
-                if (it != fns_.end()) return it->second(arg);
+                if (it != fns_.end() && !has_arg2) return it->second(arg);
 
                 throw std::runtime_error("Unknown function: " + name);
             }
