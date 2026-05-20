@@ -13,6 +13,16 @@ namespace pulp::state {
 /// Use a hash or manual assignment to keep IDs consistent between releases.
 using ParamID = uint32_t;
 
+/// Parameter update-rate classification.
+///
+/// ControlRate parameters are read as one coherent value per processing
+/// block. AudioRate parameters may accept dense per-sample modulation from
+/// host graph edges.
+enum class ParamRate {
+    ControlRate,
+    AudioRate,
+};
+
 /// Defines the numeric range of a parameter, including normalization.
 ///
 /// Normalization maps the [min, max] range to [0, 1] for host automation.
@@ -60,6 +70,8 @@ struct ParamInfo {
     std::function<std::string(float)> to_string;
     /// Parse a display string back to a raw value.
     std::function<float(const std::string&)> from_string;
+
+    ParamRate rate = ParamRate::ControlRate;
 };
 
 /// Thread-safe atomic parameter value for lock-free audio/UI communication.
