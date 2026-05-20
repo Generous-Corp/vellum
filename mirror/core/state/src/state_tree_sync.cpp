@@ -3,54 +3,169 @@
 
 namespace pulp::state {
 
-void StateTreeSynchroniser::attach(StateTree::Ptr tree) {
-    detach();
-    tree_ = tree;
-    if (!tree_) return;
+namespace {
 
-    listener_id_ = tree_->add_listener(
-        [this](StateTree& node, std::string_view prop, const PropertyValue&, const PropertyValue& new_val) {
+// Compute the dot-separated child-index path from `root` to `node`.
+// Returns "" when node == root. Walks parent pointers leaf→root, so the
+// path identifies the node's position within the tree rather than a
+// (non-unique) type name. Returns "" if `node` is not reachable from
+// `root` — apply() then targets the root, matching prior behavior.
+std::string compute_path(const StateTree* root, const StateTree* node) {
+    std::vector<int> indices;
+    const StateTree* cur = node;
+    while (cur && cur != root) {
+        StateTree* parent = cur->parent();
+        if (!parent) break;
+        int idx = -1;
+        for (int i = 0; i < parent->child_count(); ++i) {
+            if (parent->child(i).get() == cur) {
+                idx = i;
+                break;
+            }
+        }
+        if (idx < 0) break;
+        indices.push_back(idx);
+        cur = parent;
+    }
+    if (cur != root) return {};  // not reachable from root
+
+    std::string path;
+    for (auto it = indices.rbegin(); it != indices.rend(); ++it) {
+        if (!path.empty()) path += '.';
+        path += std::to_string(*it);
+    }
+    return path;
+}
+
+// Resolve a dot-separated child-index path to a node within `root`.
+// Returns &root for an empty path. Returns nullptr if any path segment
+// is malformed or out of bounds, so apply() can safely skip the delta.
+StateTree* resolve_path(StateTree& root, const std::string& path) {
+    if (path.empty()) return &root;
+    StateTree* cur = &root;
+    size_t pos = 0;
+    while (pos <= path.size()) {
+        size_t dot = path.find('.', pos);
+        size_t end = (dot == std::string::npos) ? path.size() : dot;
+        if (end == pos) return nullptr;  // empty segment
+        int idx = 0;
+        for (size_t i = pos; i < end; ++i) {
+            char c = path[i];
+            if (c < '0' || c > '9') return nullptr;
+            idx = idx * 10 + (c - '0');
+        }
+        if (idx < 0 || idx >= cur->child_count()) return nullptr;
+        cur = cur->child(idx).get();
+        if (dot == std::string::npos) break;
+        pos = dot + 1;
+    }
+    return cur;
+}
+
+}  // namespace
+
+void StateTreeSynchroniser::attach_node(StateTree& node) {
+    int prop_id = node.add_listener(
+        [this](StateTree& n, std::string_view prop, const PropertyValue&, const PropertyValue& new_val) {
             SyncDelta delta;
-            delta.type = std::holds_alternative<std::monostate>(new_val) && !node.has(prop)
+            delta.type = std::holds_alternative<std::monostate>(new_val) && !n.has(prop)
                 ? SyncDeltaType::PropertyRemove
                 : SyncDeltaType::PropertySet;
-            delta.path = tree_->type_name();
+            delta.path = compute_path(tree_.get(), &n);
             delta.key = std::string(prop);
             delta.value = new_val;
             pending_.push_back(std::move(delta));
         });
+    property_listener_ids_.push_back({&node, prop_id});
 
-    int added_id = tree_->add_child_added_listener(
+    int added_id = node.add_child_added_listener(
         [this](StateTree& parent, StateTree& child, int index) {
             SyncDelta delta;
             delta.type = SyncDeltaType::ChildAdd;
-            delta.path = parent.type_name();
+            delta.path = compute_path(tree_.get(), &parent);
             delta.key = child.type_name();
             delta.child_index = index;
             pending_.push_back(std::move(delta));
+            // Newly added subtrees must also be observed so their own
+            // nested mutations produce deltas.
+            attach_subtree(child);
         });
-    child_listener_ids_.push_back(added_id);
+    child_added_listener_ids_.push_back({&node, added_id});
 
-    int removed_id = tree_->add_child_removed_listener(
-        [this](StateTree& parent, StateTree&, int index) {
+    int removed_id = node.add_child_removed_listener(
+        [this](StateTree& parent, StateTree& child, int index) {
             SyncDelta delta;
             delta.type = SyncDeltaType::ChildRemove;
-            delta.path = parent.type_name();
+            delta.path = compute_path(tree_.get(), &parent);
             delta.child_index = index;
             pending_.push_back(std::move(delta));
+            // The removed subtree's nodes may be destroyed once this
+            // callback returns. Drop their listeners now so a later
+            // detach() never dereferences a freed StateTree*, and a
+            // re-add of a surviving child does not stack duplicates.
+            detach_subtree(child);
         });
-    child_listener_ids_.push_back(removed_id);
+    child_removed_listener_ids_.push_back({&node, removed_id});
+}
+
+void StateTreeSynchroniser::detach_subtree(StateTree& node) {
+    // Clear descendants first so the whole removed subtree is purged.
+    for (int i = 0; i < node.child_count(); ++i) {
+        if (auto child = node.child(i)) detach_subtree(*child);
+    }
+    // Remove this node's listeners and erase its id-table entries, so
+    // detach() does not later call remove_*listener() through a pointer
+    // to a freed StateTree.
+    for (auto it = property_listener_ids_.begin(); it != property_listener_ids_.end();) {
+        if (it->first == &node) {
+            node.remove_listener(it->second);
+            it = property_listener_ids_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (auto it = child_added_listener_ids_.begin(); it != child_added_listener_ids_.end();) {
+        if (it->first == &node) {
+            node.remove_child_added_listener(it->second);
+            it = child_added_listener_ids_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (auto it = child_removed_listener_ids_.begin(); it != child_removed_listener_ids_.end();) {
+        if (it->first == &node) {
+            node.remove_child_removed_listener(it->second);
+            it = child_removed_listener_ids_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void StateTreeSynchroniser::attach_subtree(StateTree& node) {
+    attach_node(node);
+    for (int i = 0; i < node.child_count(); ++i) {
+        if (auto child = node.child(i)) attach_subtree(*child);
+    }
+}
+
+void StateTreeSynchroniser::attach(StateTree::Ptr tree) {
+    detach();
+    tree_ = tree;
+    if (!tree_) return;
+    attach_subtree(*tree_);
 }
 
 void StateTreeSynchroniser::detach() {
-    if (tree_ && listener_id_ >= 0)
-        tree_->remove_listener(listener_id_);
-    if (tree_ && child_listener_ids_.size() >= 2) {
-        tree_->remove_child_added_listener(child_listener_ids_[0]);
-        tree_->remove_child_removed_listener(child_listener_ids_[1]);
-    }
-    listener_id_ = -1;
-    child_listener_ids_.clear();
+    for (auto& [node, id] : property_listener_ids_)
+        if (node) node->remove_listener(id);
+    for (auto& [node, id] : child_added_listener_ids_)
+        if (node) node->remove_child_added_listener(id);
+    for (auto& [node, id] : child_removed_listener_ids_)
+        if (node) node->remove_child_removed_listener(id);
+    property_listener_ids_.clear();
+    child_added_listener_ids_.clear();
+    child_removed_listener_ids_.clear();
     tree_ = nullptr;
     pending_.clear();
 }
@@ -175,24 +290,30 @@ std::vector<SyncDelta> StateTreeSynchroniser::decode(const uint8_t* data, size_t
 
 void StateTreeSynchroniser::apply(StateTree& tree, const std::vector<SyncDelta>& deltas) {
     for (auto& d : deltas) {
+        // Route the delta to the node identified by its path. A delta
+        // captured on a nested node must be applied to that node, not
+        // the root. Unresolvable paths are skipped rather than misapplied.
+        StateTree* target = resolve_path(tree, d.path);
+        if (!target) continue;
+
         switch (d.type) {
             case SyncDeltaType::PropertySet:
-                tree.set(d.key, d.value);
+                target->set(d.key, d.value);
                 break;
             case SyncDeltaType::PropertyRemove:
-                tree.remove(d.key);
+                target->remove(d.key);
                 break;
             case SyncDeltaType::ChildAdd: {
                 auto child = StateTree::create(d.key);
-                if (d.child_index >= 0 && d.child_index < tree.child_count())
-                    tree.insert_child(d.child_index, child);
+                if (d.child_index >= 0 && d.child_index < target->child_count())
+                    target->insert_child(d.child_index, child);
                 else
-                    tree.add_child(child);
+                    target->add_child(child);
                 break;
             }
             case SyncDeltaType::ChildRemove:
-                if (d.child_index >= 0 && d.child_index < tree.child_count())
-                    tree.remove_child(d.child_index);
+                if (d.child_index >= 0 && d.child_index < target->child_count())
+                    target->remove_child(d.child_index);
                 break;
         }
     }
