@@ -8,6 +8,7 @@
 #include <vector>
 #include <cstdint>
 #include <functional>
+#include <utility>
 
 namespace pulp::state {
 
@@ -52,10 +53,26 @@ public:
     static void apply(StateTree& tree, const std::vector<SyncDelta>& deltas);
 
 private:
+    /// Install change listeners on a single node.
+    void attach_node(StateTree& node);
+
+    /// Recursively install change listeners on a node and its descendants.
+    void attach_subtree(StateTree& node);
+
+    /// Recursively remove change listeners from a node and its
+    /// descendants, erasing their id-table entries. Called when a child
+    /// subtree is removed so a later detach() never dereferences a freed
+    /// StateTree* and a re-add cannot stack duplicate listeners.
+    void detach_subtree(StateTree& node);
+
     StateTree::Ptr tree_;
     std::vector<SyncDelta> pending_;
-    int listener_id_ = -1;
-    std::vector<int> child_listener_ids_;
+
+    // Per-node listener registrations — recorded so detach() can remove
+    // listeners from every observed node, not just the root.
+    std::vector<std::pair<StateTree*, int>> property_listener_ids_;
+    std::vector<std::pair<StateTree*, int>> child_added_listener_ids_;
+    std::vector<std::pair<StateTree*, int>> child_removed_listener_ids_;
 };
 
 }  // namespace pulp::state
