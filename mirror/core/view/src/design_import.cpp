@@ -26,6 +26,7 @@
 #include <map>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace pulp::view {
 namespace fs = std::filesystem;
@@ -73,6 +74,54 @@ const char* design_source_vendor_key(DesignSource source) {
     return "unknown";
 }
 
+WidgetPromotionSignal classify_interactive_signal(const IRNode& node) {
+    if (node.type != "frame") {
+        return WidgetPromotionSignal::none;
+    }
+
+    if (node.attributes.count("onclick") || node.attributes.count("onClick")) {
+        return WidgetPromotionSignal::onclick_attribute;
+    }
+
+    if (auto it = node.attributes.find("role");
+        it != node.attributes.end() && it->second == "button") {
+        return WidgetPromotionSignal::aria_role_button;
+    }
+
+    if (node.style.cursor && *node.style.cursor == "pointer") {
+        if (auto it = node.attributes.find("role");
+            it != node.attributes.end() && it->second == "presentation") {
+            return WidgetPromotionSignal::none;
+        }
+        return WidgetPromotionSignal::cursor_pointer;
+    }
+
+    return WidgetPromotionSignal::none;
+}
+
+std::size_t promote_interactive_frames(IRNode& root) {
+    std::size_t promoted = 0;
+    std::vector<IRNode*> worklist;
+    worklist.push_back(&root);
+
+    while (!worklist.empty()) {
+        IRNode* node = worklist.back();
+        worklist.pop_back();
+
+        if (classify_interactive_signal(*node) != WidgetPromotionSignal::none) {
+            node->type = "button";
+            ++promoted;
+            continue;
+        }
+
+        for (auto it = node->children.rbegin(); it != node->children.rend(); ++it) {
+            worklist.push_back(&*it);
+        }
+    }
+
+    return promoted;
+}
+
 DesignIR parse_claude_html(const std::string& html) {
     // Claude Design exports the same HTML+CSS shape as other web tools,
     // so parse with the existing Stitch HTML pipeline and re-tag the
@@ -80,6 +129,7 @@ DesignIR parse_claude_html(const std::string& html) {
     // exported HTML over directly — no Anthropic API integration.
     auto ir = parse_stitch_html(html);
     ir.source = DesignSource::claude;
+    ir.source_adapter = "claude-design-html";
     // Phase 0a: re-tag provenance after the Stitch parser stamped it.
     // Anchors were already assigned by parse_stitch_html with the
     // content-hash strategy — same strategy claude-design-html uses
@@ -942,6 +992,68 @@ static ImportDiagnosticSeverity parse_diagnostic_severity(const std::string& val
     return ImportDiagnosticSeverity::warning;
 }
 
+static const char* diagnostic_kind_id(ImportDiagnosticKind kind) {
+    switch (kind) {
+        case ImportDiagnosticKind::unknown:                    return "unknown";
+        case ImportDiagnosticKind::unsupported_property:       return "unsupported_property";
+        case ImportDiagnosticKind::unresolved_asset:           return "unresolved_asset";
+        case ImportDiagnosticKind::snapshot_semantics_warning: return "snapshot_semantics_warning";
+        case ImportDiagnosticKind::legacy_field_shortcut:      return "legacy_field_shortcut";
+        case ImportDiagnosticKind::capture_partial:            return "capture_partial";
+        case ImportDiagnosticKind::fallback_used:              return "fallback_used";
+    }
+    return "unknown";
+}
+
+static ImportDiagnosticKind parse_diagnostic_kind(const std::string& value) {
+    if (value == "unsupported_property") return ImportDiagnosticKind::unsupported_property;
+    if (value == "unresolved_asset") return ImportDiagnosticKind::unresolved_asset;
+    if (value == "snapshot_semantics_warning") return ImportDiagnosticKind::snapshot_semantics_warning;
+    if (value == "legacy_field_shortcut") return ImportDiagnosticKind::legacy_field_shortcut;
+    if (value == "capture_partial") return ImportDiagnosticKind::capture_partial;
+    if (value == "fallback_used") return ImportDiagnosticKind::fallback_used;
+    return ImportDiagnosticKind::unknown;
+}
+
+static ImportDiagnosticKind diagnostic_kind_from_code(const std::string& code) {
+    if (code == "asset-unresolved"
+        || code == "asset-network-fetch-disabled"
+        || code == "asset-fetcher-missing"
+        || code == "asset-fetch-failed"
+        || code == "asset-fetch-timeout"
+        || code == "asset-empty"
+        || code == "asset-data-uri-invalid"
+        || code == "asset-hash-mismatch") {
+        return ImportDiagnosticKind::unresolved_asset;
+    }
+    if (code == "snapshot-dynamic-api") {
+        return ImportDiagnosticKind::snapshot_semantics_warning;
+    }
+    if (code == "legacy-ir") {
+        return ImportDiagnosticKind::legacy_field_shortcut;
+    }
+    if (code == "fallback-used" || code == "runtime-fallback") {
+        return ImportDiagnosticKind::fallback_used;
+    }
+    return ImportDiagnosticKind::unknown;
+}
+
+static ImportDiagnostic make_import_diagnostic(ImportDiagnosticSeverity severity,
+                                               std::string code,
+                                               std::string path,
+                                               std::string message,
+                                               ImportDiagnosticKind kind = ImportDiagnosticKind::unknown) {
+    ImportDiagnostic diagnostic;
+    diagnostic.severity = severity;
+    diagnostic.code = std::move(code);
+    diagnostic.path = std::move(path);
+    diagnostic.message = std::move(message);
+    diagnostic.kind = kind == ImportDiagnosticKind::unknown
+        ? diagnostic_kind_from_code(diagnostic.code)
+        : kind;
+    return diagnostic;
+}
+
 static std::string json_escape(std::string_view text) {
     std::ostringstream out;
     for (unsigned char c : text) {
@@ -1259,10 +1371,26 @@ static void write_diagnostic_json(std::ostringstream& out, const ImportDiagnosti
     out << '{';
     bool first = true;
     write_string_member(out, first, "severity", diagnostic_severity_id(diagnostic.severity));
+    const auto kind = diagnostic.kind == ImportDiagnosticKind::unknown
+        ? diagnostic_kind_from_code(diagnostic.code)
+        : diagnostic.kind;
+    write_string_member(out, first, "kind", diagnostic_kind_id(kind));
     write_string_member(out, first, "code", diagnostic.code);
     write_string_member(out, first, "path", diagnostic.path);
     write_string_member(out, first, "message", diagnostic.message);
+    write_string_member(out, first, "anchor_id", diagnostic.anchor_id);
+    write_string_member(out, first, "property", diagnostic.property);
     out << '}';
+}
+
+static void write_diagnostics_array_json(std::ostringstream& out,
+                                         const std::vector<ImportDiagnostic>& diagnostics) {
+    out << '[';
+    for (size_t i = 0; i < diagnostics.size(); ++i) {
+        if (i) out << ',';
+        write_diagnostic_json(out, diagnostics[i]);
+    }
+    out << ']';
 }
 
 static void write_asset_manifest_json(std::ostringstream& out, const IRAssetManifest& manifest) {
@@ -1296,12 +1424,7 @@ static void write_asset_manifest_json(std::ostringstream& out, const IRAssetMani
         write_string_member(out, afirst, "license", asset.license);
         write_string_member(out, afirst, "source_url", asset.source_url);
         write_key(out, afirst, "diagnostics");
-        out << '[';
-        for (size_t j = 0; j < asset.diagnostics.size(); ++j) {
-            if (j) out << ',';
-            write_diagnostic_json(out, asset.diagnostics[j]);
-        }
-        out << ']';
+        write_diagnostics_array_json(out, asset.diagnostics);
         out << '}';
     }
     out << ']';
@@ -1315,7 +1438,24 @@ static ImportDiagnostic parse_import_diagnostic(const choc::value::ValueView& ob
     diagnostic.code = get_string(obj, "code");
     diagnostic.path = get_string(obj, "path");
     diagnostic.message = get_string(obj, "message");
+    diagnostic.kind = parse_diagnostic_kind(get_string(obj, "kind"));
+    if (diagnostic.kind == ImportDiagnosticKind::unknown)
+        diagnostic.kind = diagnostic_kind_from_code(diagnostic.code);
+    auto anchor = get_string(obj, "anchor_id");
+    if (anchor.empty()) anchor = get_string(obj, "anchorId");
+    if (!anchor.empty()) diagnostic.anchor_id = anchor;
+    auto property = get_string(obj, "property");
+    if (!property.empty()) diagnostic.property = property;
     return diagnostic;
+}
+
+static std::vector<ImportDiagnostic> parse_import_diagnostics(const choc::value::ValueView& obj) {
+    std::vector<ImportDiagnostic> diagnostics;
+    if (!obj.isArray()) return diagnostics;
+    for (uint32_t i = 0; i < obj.size(); ++i) {
+        diagnostics.push_back(parse_import_diagnostic(obj[static_cast<int>(i)]));
+    }
+    return diagnostics;
 }
 
 static IRAssetManifest parse_asset_manifest(const choc::value::ValueView& obj) {
@@ -1386,6 +1526,12 @@ std::string serialize_design_ir(const DesignIR& ir,
     write_int_member(out, first, "version", options.version > 0 ? options.version : ir.version);
     write_string_member(out, first, "source", design_source_id(ir.source));
     if (!ir.source_file.empty()) write_string_member(out, first, "sourceFile", ir.source_file);
+    write_string_member(out, first, "capture_method", ir.capture_method);
+    if (ir.settle_rounds > 0) write_int_member(out, first, "settle_rounds", ir.settle_rounds);
+    write_string_member(out, first, "fallback_reason", ir.fallback_reason);
+    write_string_member(out, first, "source_adapter", ir.source_adapter);
+    write_string_member(out, first, "source_version", ir.source_version);
+    write_string_member(out, first, "imported_at", ir.imported_at);
     write_key(out, first, "root");
     write_ir_node_json(out, ir.root, options.include_source_metadata);
     if (options.include_tokens) {
@@ -1395,6 +1541,10 @@ std::string serialize_design_ir(const DesignIR& ir,
     if (options.include_asset_manifest) {
         write_key(out, first, "assetManifest");
         write_asset_manifest_json(out, ir.asset_manifest);
+    }
+    if (!ir.diagnostics.empty()) {
+        write_key(out, first, "diagnostics");
+        write_diagnostics_array_json(out, ir.diagnostics);
     }
     out << '}';
     return out.str();
@@ -1412,18 +1562,200 @@ DesignIR parse_design_ir_json(const std::string& json) {
             }
         }
         ir.source_file = get_string(parsed, "sourceFile");
+        ir.capture_method = get_string(parsed, "capture_method");
+        if (ir.capture_method.empty()) ir.capture_method = get_string(parsed, "captureMethod");
+        if (parsed.hasObjectMember("settle_rounds"))
+            ir.settle_rounds = static_cast<int>(parsed["settle_rounds"].getWithDefault<int64_t>(0));
+        else if (parsed.hasObjectMember("settleRounds"))
+            ir.settle_rounds = static_cast<int>(parsed["settleRounds"].getWithDefault<int64_t>(0));
+        ir.fallback_reason = get_string(parsed, "fallback_reason");
+        if (ir.fallback_reason.empty()) ir.fallback_reason = get_string(parsed, "fallbackReason");
+        ir.source_adapter = get_string(parsed, "source_adapter");
+        if (ir.source_adapter.empty()) ir.source_adapter = get_string(parsed, "sourceAdapter");
+        ir.source_version = get_string(parsed, "source_version");
+        if (ir.source_version.empty()) ir.source_version = get_string(parsed, "sourceVersion");
+        ir.imported_at = get_string(parsed, "imported_at");
+        if (ir.imported_at.empty()) ir.imported_at = get_string(parsed, "importedAt");
         ir.root = parse_ir_node(parsed["root"]);
         if (parsed.hasObjectMember("tokens"))
             ir.tokens = parse_ir_tokens(parsed["tokens"]);
         if (parsed.hasObjectMember("assetManifest"))
             ir.asset_manifest = parse_asset_manifest(parsed["assetManifest"]);
+        if (parsed.hasObjectMember("diagnostics"))
+            ir.diagnostics = parse_import_diagnostics(parsed["diagnostics"]);
+        promote_interactive_frames(ir.root);
         return ir;
     }
 
     ir.root = parse_ir_node(parsed);
     if (parsed.isObject() && parsed.hasObjectMember("tokens"))
         ir.tokens = parse_ir_tokens(parsed["tokens"]);
+    ir.capture_method = "adapter_parse";
+    ir.diagnostics.push_back(make_import_diagnostic(
+        ImportDiagnosticSeverity::info,
+        "legacy-ir",
+        "<root>",
+        "parsed legacy bare-node DesignIR JSON",
+        ImportDiagnosticKind::legacy_field_shortcut));
+    promote_interactive_frames(ir.root);
     return ir;
+}
+
+static std::string strip_js_comments_and_literals(std::string_view source) {
+    enum class State {
+        normal,
+        line_comment,
+        block_comment,
+        single_quote,
+        double_quote,
+        template_literal
+    };
+
+    struct TemplateExpression {
+        int brace_depth = 0;
+    };
+
+    std::string out;
+    out.reserve(source.size());
+    State state = State::normal;
+    bool escaped = false;
+    std::vector<TemplateExpression> template_expressions;
+
+    for (size_t i = 0; i < source.size(); ++i) {
+        const char c = source[i];
+        const char next = (i + 1 < source.size()) ? source[i + 1] : '\0';
+
+        switch (state) {
+            case State::normal:
+                if (!template_expressions.empty() && c == '}') {
+                    out.push_back(' ');
+                    auto& expr = template_expressions.back();
+                    --expr.brace_depth;
+                    if (expr.brace_depth == 0) {
+                        template_expressions.pop_back();
+                        state = State::template_literal;
+                        escaped = false;
+                    }
+                } else if (!template_expressions.empty() && c == '{') {
+                    out.push_back(c);
+                    ++template_expressions.back().brace_depth;
+                } else if (c == '/' && next == '/') {
+                    out.push_back(' ');
+                    out.push_back(' ');
+                    ++i;
+                    state = State::line_comment;
+                } else if (c == '/' && next == '*') {
+                    out.push_back(' ');
+                    out.push_back(' ');
+                    ++i;
+                    state = State::block_comment;
+                } else if (c == '\'') {
+                    out.push_back(' ');
+                    state = State::single_quote;
+                    escaped = false;
+                } else if (c == '"') {
+                    out.push_back(' ');
+                    state = State::double_quote;
+                    escaped = false;
+                } else if (c == '`') {
+                    out.push_back(' ');
+                    state = State::template_literal;
+                    escaped = false;
+                } else {
+                    out.push_back(c);
+                }
+                break;
+
+            case State::line_comment:
+                if (c == '\n' || c == '\r') {
+                    out.push_back(c);
+                    state = State::normal;
+                } else {
+                    out.push_back(' ');
+                }
+                break;
+
+            case State::block_comment:
+                if (c == '*' && next == '/') {
+                    out.push_back(' ');
+                    out.push_back(' ');
+                    ++i;
+                    state = State::normal;
+                } else {
+                    out.push_back((c == '\n' || c == '\r') ? c : ' ');
+                }
+                break;
+
+            case State::single_quote:
+                out.push_back((c == '\n' || c == '\r') ? c : ' ');
+                if (escaped) {
+                    escaped = false;
+                } else if (c == '\\') {
+                    escaped = true;
+                } else if (c == '\'') {
+                    state = State::normal;
+                }
+                break;
+
+            case State::double_quote:
+                out.push_back((c == '\n' || c == '\r') ? c : ' ');
+                if (escaped) {
+                    escaped = false;
+                } else if (c == '\\') {
+                    escaped = true;
+                } else if (c == '"') {
+                    state = State::normal;
+                }
+                break;
+
+            case State::template_literal:
+                if (escaped) {
+                    out.push_back((c == '\n' || c == '\r') ? c : ' ');
+                    escaped = false;
+                } else if (c == '$' && next == '{') {
+                    out.push_back(' ');
+                    out.push_back(' ');
+                    ++i;
+                    template_expressions.push_back({1});
+                    state = State::normal;
+                } else if (c == '\\') {
+                    out.push_back(' ');
+                    escaped = true;
+                } else if (c == '`') {
+                    out.push_back(' ');
+                    state = State::normal;
+                } else {
+                    out.push_back((c == '\n' || c == '\r') ? c : ' ');
+                }
+                break;
+        }
+    }
+
+    return out;
+}
+
+static bool regex_present(const std::string& source, const char* pattern) {
+    return std::regex_search(source, std::regex(pattern));
+}
+
+SnapshotDynamicApiScan detect_jsx_snapshot_dynamic_apis(std::string_view source) {
+    const auto searchable = strip_js_comments_and_literals(source);
+    SnapshotDynamicApiScan scan;
+    auto add_if_present = [&](const char* pattern, std::string label) {
+        if (!regex_present(searchable, pattern)) return;
+        if (std::find(scan.tokens.begin(), scan.tokens.end(), label) == scan.tokens.end())
+            scan.tokens.push_back(std::move(label));
+    };
+
+    add_if_present(R"(\bsetInterval\s*\()", "setInterval");
+    add_if_present(R"(\bsetTimeout\s*\()", "setTimeout");
+    add_if_present(R"(\brequestAnimationFrame\s*\()", "requestAnimationFrame");
+    add_if_present(R"(\bDate\s*\.\s*now\s*\()", "Date.now");
+    add_if_present(R"(\bnew\s+Date\s*\()", "new Date");
+    add_if_present(R"(\bperformance\s*\.\s*now\s*\()", "performance.now");
+    add_if_present(R"(\bMath\s*\.\s*random\s*\()", "Math.random");
+    add_if_present(R"(\bfetch\s*\()", "fetch");
+    return scan;
 }
 
 static bool has_prefix(std::string_view value, std::string_view prefix) {
@@ -1704,23 +2036,23 @@ static std::optional<std::vector<uint8_t>> fetch_network_asset(
     }
 
     if (!allow_fetch) {
-        asset.diagnostics.push_back({
+        asset.diagnostics.push_back(make_import_diagnostic(
             ImportDiagnosticSeverity::warning,
             "asset-network-fetch-disabled",
             url,
-            "network asset requires --allow-network-fetch"
-        });
+            "network asset requires --allow-network-fetch",
+            ImportDiagnosticKind::unresolved_asset));
         return std::nullopt;
     }
 
     auto curl = pulp::platform::find_on_path("curl");
     if (!curl) {
-        asset.diagnostics.push_back({
+        asset.diagnostics.push_back(make_import_diagnostic(
             ImportDiagnosticSeverity::error,
             "asset-fetcher-missing",
             asset.original_uri,
-            "curl was not found on PATH"
-        });
+            "curl was not found on PATH",
+            ImportDiagnosticKind::unresolved_asset));
         return std::nullopt;
     }
 
@@ -1735,21 +2067,21 @@ static std::optional<std::vector<uint8_t>> fetch_network_asset(
          "--output", temp_path.string(), url},
         process_opts);
     if (result.timed_out) {
-        asset.diagnostics.push_back({
+        asset.diagnostics.push_back(make_import_diagnostic(
             ImportDiagnosticSeverity::error,
             "asset-fetch-timeout",
             asset.original_uri,
-            "timed out while fetching asset"
-        });
+            "timed out while fetching asset",
+            ImportDiagnosticKind::unresolved_asset));
         return std::nullopt;
     }
     if (result.exit_code != 0) {
-        asset.diagnostics.push_back({
+        asset.diagnostics.push_back(make_import_diagnostic(
             ImportDiagnosticSeverity::error,
             "asset-fetch-failed",
             asset.original_uri,
-            result.stderr_output.empty() ? "curl failed while fetching asset" : result.stderr_output
-        });
+            result.stderr_output.empty() ? "curl failed while fetching asset" : result.stderr_output,
+            ImportDiagnosticKind::unresolved_asset));
         std::error_code ec;
         fs::remove(temp_path, ec);
         return std::nullopt;
@@ -1757,12 +2089,12 @@ static std::optional<std::vector<uint8_t>> fetch_network_asset(
 
     auto bytes = read_binary_file(temp_path);
     if (bytes.empty()) {
-        asset.diagnostics.push_back({
+        asset.diagnostics.push_back(make_import_diagnostic(
             ImportDiagnosticSeverity::error,
             "asset-empty",
             asset.original_uri,
-            "fetched asset was empty"
-        });
+            "fetched asset was empty",
+            ImportDiagnosticKind::unresolved_asset));
         return std::nullopt;
     }
 
@@ -1800,22 +2132,22 @@ static std::optional<std::vector<uint8_t>> resolve_local_asset(
     }
     std::error_code ec;
     if (!fs::exists(path, ec) || fs::is_directory(path, ec)) {
-        asset.diagnostics.push_back({
+        asset.diagnostics.push_back(make_import_diagnostic(
             ImportDiagnosticSeverity::warning,
             "asset-unresolved",
             asset.original_uri,
-            "asset file was not found"
-        });
+            "asset file was not found",
+            ImportDiagnosticKind::unresolved_asset));
         return std::nullopt;
     }
     auto bytes = read_binary_file(path);
     if (bytes.empty()) {
-        asset.diagnostics.push_back({
+        asset.diagnostics.push_back(make_import_diagnostic(
             ImportDiagnosticSeverity::warning,
             "asset-empty",
             asset.original_uri,
-            "asset file was empty or unreadable"
-        });
+            "asset file was empty or unreadable",
+            ImportDiagnosticKind::unresolved_asset));
         return std::nullopt;
     }
     asset.local_path = path.string();
@@ -2031,12 +2363,12 @@ IRAssetManifest collect_design_ir_assets(const DesignIR& ir,
                 bytes = std::move(parsed.bytes);
                 asset.mime = parsed.mime;
             } else {
-                asset.diagnostics.push_back({
+                asset.diagnostics.push_back(make_import_diagnostic(
                     ImportDiagnosticSeverity::error,
                     "asset-data-uri-invalid",
                     uri,
-                    "data URI could not be decoded"
-                });
+                    "data URI could not be decoded",
+                    ImportDiagnosticKind::unresolved_asset));
             }
         } else if (is_network_url(resolved_uri)) {
             bytes = fetch_network_asset(resolved_uri, cache_dir, options.network_timeout_ms,
@@ -2056,12 +2388,12 @@ IRAssetManifest collect_design_ir_assets(const DesignIR& ir,
             if (expected != options.expected_hash_by_uri.end()
                 && expected->second != asset.content_hash) {
                 hash_mismatch = true;
-                asset.diagnostics.push_back({
+                asset.diagnostics.push_back(make_import_diagnostic(
                     ImportDiagnosticSeverity::error,
                     "asset-hash-mismatch",
                     uri,
-                    "resolved asset hash did not match the expected hash"
-                });
+                    "resolved asset hash did not match the expected hash",
+                    ImportDiagnosticKind::unresolved_asset));
             }
             if (is_network_url(resolved_uri) && !asset.local_path && !hash_mismatch)
                 cache_network_asset(resolved_uri, cache_dir, asset.content_hash, *bytes, asset);
@@ -2174,6 +2506,9 @@ void refresh_design_ir_asset_manifest(DesignIR& ir,
 DesignIR parse_figma_json(const std::string& json) {
     DesignIR ir;
     ir.source = DesignSource::figma;
+    ir.capture_method = "adapter_parse";
+    ir.source_adapter = "figma";
+    ir.source_version = "1";
 
     auto root = choc::json::parse(json);
 
@@ -2191,6 +2526,7 @@ DesignIR parse_figma_json(const std::string& json) {
     // through to the content-hash branch inside compute_anchor_id.
     ir.root.provenance = IRProvenance{"figma", "1", /*source_uri=*/{}};
     ir.root.confidence = IRConfidence::pass;
+    promote_interactive_frames(ir.root);
     assign_anchors(ir.root, AnchorStrategy::adapter, "figma");
 
     return ir;
@@ -2199,6 +2535,9 @@ DesignIR parse_figma_json(const std::string& json) {
 DesignIR parse_stitch_html(const std::string& html) {
     DesignIR ir;
     ir.source = DesignSource::stitch;
+    ir.capture_method = "adapter_parse";
+    ir.source_adapter = "stitch-html";
+    ir.source_version = "1";
 
     // Try parsing as JSON IR first (from Stitch MCP get_screen)
     try {
@@ -2208,6 +2547,7 @@ DesignIR parse_stitch_html(const std::string& html) {
             ir.tokens = parse_ir_tokens(root["tokens"]);
         ir.root.provenance = IRProvenance{"stitch-html", "1", {}};
         ir.root.confidence = IRConfidence::pass;
+        promote_interactive_frames(ir.root);
         assign_anchors(ir.root, AnchorStrategy::content_hash);
         return ir;
     } catch (...) {
@@ -2248,6 +2588,14 @@ DesignIR parse_stitch_html(const std::string& html) {
     // Phase 0a: assign anchors to the regex-extracted tree.
     ir.root.provenance = IRProvenance{"stitch-html", "1", {}};
     ir.root.confidence = IRConfidence::diverge;  // regex fallback is lossy
+    ir.fallback_reason = "input was not JSON; used regex HTML text extraction";
+    ir.diagnostics.push_back(make_import_diagnostic(
+        ImportDiagnosticSeverity::warning,
+        "fallback-used",
+        "<root>",
+        ir.fallback_reason,
+        ImportDiagnosticKind::fallback_used));
+    promote_interactive_frames(ir.root);
     assign_anchors(ir.root, AnchorStrategy::content_hash);
     return ir;
 }
@@ -2255,6 +2603,9 @@ DesignIR parse_stitch_html(const std::string& html) {
 DesignIR parse_v0_tsx(const std::string& tsx) {
     DesignIR ir;
     ir.source = DesignSource::v0;
+    ir.capture_method = "adapter_parse";
+    ir.source_adapter = "v0-tsx";
+    ir.source_version = "1";
 
     // Try parsing as JSON IR first (pre-processed by AI pipeline)
     try {
@@ -2264,6 +2615,7 @@ DesignIR parse_v0_tsx(const std::string& tsx) {
             ir.tokens = parse_ir_tokens(root["tokens"]);
         ir.root.provenance = IRProvenance{"v0-tsx", "1", {}};
         ir.root.confidence = IRConfidence::pass;
+        promote_interactive_frames(ir.root);
         assign_anchors(ir.root, AnchorStrategy::content_hash);
         return ir;
     } catch (...) {
@@ -2297,6 +2649,14 @@ DesignIR parse_v0_tsx(const std::string& tsx) {
     // Phase 0a: anchor the regex-extracted Tailwind tree.
     ir.root.provenance = IRProvenance{"v0-tsx", "1", {}};
     ir.root.confidence = IRConfidence::diverge;  // regex extraction is lossy
+    ir.fallback_reason = "input was not JSON; used regex TSX class extraction";
+    ir.diagnostics.push_back(make_import_diagnostic(
+        ImportDiagnosticSeverity::warning,
+        "fallback-used",
+        "<root>",
+        ir.fallback_reason,
+        ImportDiagnosticKind::fallback_used));
+    promote_interactive_frames(ir.root);
     assign_anchors(ir.root, AnchorStrategy::content_hash);
     return ir;
 }
@@ -2304,6 +2664,9 @@ DesignIR parse_v0_tsx(const std::string& tsx) {
 DesignIR parse_pencil_json(const std::string& json) {
     DesignIR ir;
     ir.source = DesignSource::pencil;
+    ir.capture_method = "adapter_parse";
+    ir.source_adapter = "pencil";
+    ir.source_version = "1";
 
     auto root = choc::json::parse(json);
 
@@ -2319,6 +2682,7 @@ DesignIR parse_pencil_json(const std::string& json) {
     // populates into source_node_id; the adapter strategy uses it directly.
     ir.root.provenance = IRProvenance{"pencil", "1", {}};
     ir.root.confidence = IRConfidence::pass;
+    promote_interactive_frames(ir.root);
     assign_anchors(ir.root, AnchorStrategy::adapter, "pencil");
 
     return ir;

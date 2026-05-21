@@ -6,6 +6,7 @@
 /// representation (IR) and W3C Design Tokens.
 
 #include <pulp/view/theme.hpp>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -140,6 +141,25 @@ enum class AudioWidgetType {
     spectrum
 };
 
+struct IRNode;
+
+/// Heuristic signals that a parsed frame is interactive enough to promote
+/// from a static frame to a button widget.
+enum class WidgetPromotionSignal {
+    none,
+    onclick_attribute,
+    aria_role_button,
+    cursor_pointer
+};
+
+/// Inspect one IR node for interactive-frame promotion signals.
+WidgetPromotionSignal classify_interactive_signal(const IRNode& node);
+
+/// Promote parsed `frame` nodes carrying click/ARIA/cursor signals to
+/// `button`. Runs automatically from the parse APIs; exposed for tests and
+/// callers that construct IR manually.
+std::size_t promote_interactive_frames(IRNode& root);
+
 // ── Phase 0a (planning/2026-05-18-inspector-direct-manipulation-roadmap.md):
 // additive identity fields on IRNode. The TS-side @pulp/import-ir package
 // already defines the canonical shape; the C++ IR lags. Phase 0a is
@@ -216,11 +236,24 @@ enum class ImportDiagnosticSeverity {
     error
 };
 
+enum class ImportDiagnosticKind {
+    unknown,
+    unsupported_property,
+    unresolved_asset,
+    snapshot_semantics_warning,
+    legacy_field_shortcut,
+    capture_partial,
+    fallback_used
+};
+
 struct ImportDiagnostic {
     ImportDiagnosticSeverity severity = ImportDiagnosticSeverity::warning;
     std::string code;
     std::string path;
     std::string message;
+    ImportDiagnosticKind kind = ImportDiagnosticKind::unknown;
+    std::optional<std::string> anchor_id;
+    std::optional<std::string> property;
 };
 
 struct IRAssetRef {
@@ -265,8 +298,15 @@ struct DesignIR {
     IRNode root;
     IRTokens tokens;
     IRAssetManifest asset_manifest;
+    std::vector<ImportDiagnostic> diagnostics;
     DesignSource source = DesignSource::figma;
     std::string source_file;
+    std::string capture_method;
+    int settle_rounds = 0;
+    std::string fallback_reason;
+    std::string source_adapter;
+    std::string source_version;
+    std::string imported_at;
 };
 
 struct DesignIrJsonOptions {
@@ -304,6 +344,16 @@ IRAssetManifest collect_design_ir_assets(const DesignIR& ir,
 /// Rebuild and store ir.asset_manifest from the current tree.
 void refresh_design_ir_asset_manifest(DesignIR& ir,
                                       const DesignIrAssetOptions& options = {});
+
+struct SnapshotDynamicApiScan {
+    std::vector<std::string> tokens;
+
+    bool has_dynamic_apis() const { return !tokens.empty(); }
+};
+
+/// Detect dynamic APIs that make a JSX baked snapshot non-deterministic unless
+/// the caller explicitly accepts or warns on snapshot semantics.
+SnapshotDynamicApiScan detect_jsx_snapshot_dynamic_apis(std::string_view source);
 
 // ── Source adapters ─────────────────────────────────────────────────────
 
