@@ -23,6 +23,15 @@ if(NOT ANDROID)
     target_sources(pulp-render PRIVATE src/sdl3_surface.cpp)
 endif()
 
+# Slice 16 — VBlank-locked RenderLoop platform backends.
+# iOS uses CADisplayLink; Android uses AChoreographer. macOS (CVDisplayLink),
+# Windows (DwmFlush) and the Linux/timer fallback all live in render_loop.cpp.
+if(PULP_IOS)
+    target_sources(pulp-render PRIVATE src/render_loop_apple.mm)
+elseif(ANDROID)
+    target_sources(pulp-render PRIVATE src/render_loop_android.cpp)
+endif()
+
 # DRACO mesh decompression (optional)
 if(PULP_HAS_DRACO)
     target_link_libraries(pulp-render PRIVATE draco)
@@ -61,9 +70,15 @@ if(PULP_HAS_SDL3)
     target_compile_definitions(pulp-render PRIVATE PULP_HAS_SDL3=1)
 endif()
 
-# CVDisplayLink for macOS render loop
+# RenderLoop vblank sources (Slice 16):
+#   macOS — CVDisplayLink (CoreVideo)
+#   iOS   — CADisplayLink (QuartzCore, already linked above for Metal)
+#   Win   — DwmFlush (dwmapi)
 if(APPLE AND NOT PULP_IOS)
     target_link_libraries(pulp-render PRIVATE "-framework CoreVideo")
+endif()
+if(WIN32)
+    target_link_libraries(pulp-render PRIVATE dwmapi)
 endif()
 
 # Link WebGPU if available
