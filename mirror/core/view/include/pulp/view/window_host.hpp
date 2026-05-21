@@ -9,6 +9,7 @@
 
 namespace pulp::render {
 class GpuSurface;
+class RenderLoop;
 }
 
 namespace pulp::view {
@@ -81,8 +82,36 @@ public:
     virtual void hide() = 0;
     virtual bool is_visible() const = 0;
 
-    // Request a repaint
+    // Request a repaint immediately. Platform impls translate this to the
+    // native invalidation call (setNeedsDisplay, InvalidateRect, …).
     virtual void repaint() = 0;
+
+    // ── Slice 16: VBlank-locked safe-repaint ────────────────────────────
+    //
+    // The canonical pattern for "something changed, the UI needs to redraw"
+    // is *"set a dirty flag, repaint on the next frame"* rather than the
+    // legacy periodic-polling pattern (Binding::poll() on a timer).
+    //
+    // mark_dirty() is the consumer entry point. When a RenderLoop has been
+    // attached via attach_render_loop(), it coalesces every call between
+    // two vblanks into exactly one request_frame() — so N state changes in
+    // one frame cost one repaint, locked to the display refresh. When no
+    // RenderLoop is attached it falls through to repaint() so existing
+    // callers keep working unchanged.
+    //
+    // Non-virtual on purpose: the coalescing policy is platform-agnostic
+    // and lives here so every platform host shares one implementation.
+    void mark_dirty();
+
+    // Attach (or detach, with nullptr) a vblank-paced RenderLoop that
+    // mark_dirty() should drive. Ownership stays with the caller; the loop
+    // must outlive the host or be detached first. Optional — hosts that
+    // already run their own native display-link loop can leave this unset
+    // and mark_dirty() degrades to a direct repaint().
+    void attach_render_loop(render::RenderLoop* loop) { render_loop_ = loop; }
+
+    // The attached RenderLoop, or nullptr.
+    render::RenderLoop* render_loop() const { return render_loop_; }
 
     // Native host/window handles for embedding child platform views such as
     // WebViews. Default implementations return nullptr on platforms that do
@@ -274,6 +303,10 @@ public:
     // ── D.4 Mouse relative mode ─────────────────────────────────────────
     /// Hide cursor and report relative deltas (infinite drag for knobs).
     virtual void set_mouse_relative_mode(bool enabled) { (void)enabled; }
+
+private:
+    // Slice 16 — optional vblank-paced RenderLoop driven by mark_dirty().
+    render::RenderLoop* render_loop_ = nullptr;
 };
 
 } // namespace pulp::view

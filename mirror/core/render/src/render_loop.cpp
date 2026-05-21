@@ -1,5 +1,17 @@
-// RenderLoop platform implementations
-// Each platform uses its native vsync mechanism for frame-paced rendering.
+// RenderLoop platform implementations.
+//
+// Each platform uses its native vsync mechanism for frame-paced rendering;
+// the shared RenderLoopState (render_loop_state.hpp) is the platform-
+// agnostic dirty-flag coalescer that turns N request_frame() calls between
+// two vblanks into exactly one callback invocation.
+//
+//   macOS   — MacRenderLoop      : CVDisplayLink           (this file)
+//   iOS     — IOSRenderLoop      : CADisplayLink           (render_loop_apple.mm)
+//   Android — AndroidRenderLoop  : AChoreographer          (render_loop_android.cpp)
+//   Windows — WindowsRenderLoop  : DwmFlush vblank wait    (this file)
+//   Linux   — TimerRenderLoop    : conscious timer fallback (this file)
+//
+// Slice 16, planning/2026-05-18-rt-safety-and-debug-dx.md.
 
 #include <pulp/render/render_loop.hpp>
 #include <pulp/runtime/log.hpp>
@@ -15,7 +27,23 @@
 #endif
 #endif
 
+#if defined(_WIN32) && !defined(PULP_RENDER_LOOP_FORCE_TIMER)
+#include <windows.h>
+#include <dwmapi.h>
+#endif
+
 namespace pulp::render {
+
+const char* render_loop_backend_name(RenderLoopBackend backend) {
+    switch (backend) {
+        case RenderLoopBackend::cv_display_link: return "CVDisplayLink";
+        case RenderLoopBackend::ca_display_link: return "CADisplayLink";
+        case RenderLoopBackend::choreographer:   return "AChoreographer";
+        case RenderLoopBackend::dwm_flush:       return "DwmFlush";
+        case RenderLoopBackend::timer:           return "timer";
+    }
+    return "unknown";
+}
 
 // ── macOS: CVDisplayLink ────────────────────────────────────────────────
 
@@ -51,6 +79,10 @@ public:
 
     bool is_running() const override { return state_.is_running(); }
 
+    RenderLoopBackend backend() const override {
+        return RenderLoopBackend::cv_display_link;
+    }
+
 private:
     CVDisplayLinkRef display_link_ = nullptr;
     FrameCallback callback_;
@@ -72,7 +104,82 @@ private:
 
 #endif // macOS
 
-// ── Generic: Timer-based fallback (Windows, Linux, or no-vsync) ─────────
+// ── Windows: DwmFlush (DWM-composed vblank wait) ────────────────────────
+//
+// DwmFlush() blocks until the DWM compositor's next composition pass,
+// which is paced to the display's vblank. Unlike a present-paced waitable
+// swapchain it needs no swapchain/window handle, so it works from the
+// RenderLoop factory seam without a native_handle. If DwmFlush() fails
+// (no DWM — Server Core, remote session, or a future headless config) the
+// loop transparently degrades to the ~60 Hz timer cadence for that frame.
+
+#if defined(_WIN32) && !defined(PULP_RENDER_LOOP_FORCE_TIMER)
+
+class WindowsRenderLoop : public RenderLoop {
+public:
+    ~WindowsRenderLoop() override { stop(); }
+
+    void start(FrameCallback on_frame) override {
+        if (!state_.start()) {
+            return;
+        }
+        callback_ = std::move(on_frame);
+
+        thread_ = std::thread([this]() {
+            using namespace std::chrono;
+            const auto fallback_interval = microseconds(16667); // ~60Hz
+            while (state_.is_running()) {
+                // Block until the next DWM composition (vblank-paced).
+                // S_OK means we waited on a real vblank; any failure
+                // (DWM disabled / unavailable) falls back to a timed
+                // sleep so the loop still makes forward progress.
+                const HRESULT hr = DwmFlush();
+                backend_tracker_.note_wait_result(hr == S_OK);
+                if (hr != S_OK && state_.is_running()) {
+                    std::this_thread::sleep_for(fallback_interval);
+                }
+                if (state_.consume_frame_request() && state_.is_running()) {
+                    if (callback_) callback_();
+                }
+            }
+        });
+    }
+
+    void stop() override {
+        state_.stop();
+        if (thread_.joinable()) thread_.join();
+    }
+
+    void request_frame() override {
+        state_.request_frame();
+    }
+
+    bool is_running() const override { return state_.is_running(); }
+
+    // Reports timer once DwmFlush() has failed, so callers using
+    // render_loop_backend_is_vsync() can detect the fallback (Codex P2 #2580).
+    RenderLoopBackend backend() const override {
+        return backend_tracker_.effective_backend();
+    }
+
+private:
+    std::thread thread_;
+    FrameCallback callback_;
+    RenderLoopState state_;
+    DwmBackendTracker backend_tracker_;
+};
+
+#endif // Windows
+
+// ── Generic: Timer-based fallback ───────────────────────────────────────
+//
+// Used on Linux and any other platform without a wired vblank source, and
+// by headless unit tests via PULP_RENDER_LOOP_FORCE_TIMER. This is a
+// CONSCIOUS fallback, not a real vblank lock: Linux real pacing needs an
+// X11 (GLX_OML_sync_control / DRM vblank) or Wayland (frame-callback)
+// presentation object that the RenderLoop factory does not own today. The
+// factory seam below is the single point where a real LinuxRenderLoop
+// drops in once that surface exists — no consumer code changes.
 
 class TimerRenderLoop : public RenderLoop {
 public:
@@ -112,6 +219,10 @@ public:
 
     bool is_running() const override { return state_.is_running(); }
 
+    RenderLoopBackend backend() const override {
+        return RenderLoopBackend::timer;
+    }
+
 private:
     std::thread thread_;
     FrameCallback callback_;
@@ -119,14 +230,43 @@ private:
 };
 
 // ── Factory ─────────────────────────────────────────────────────────────
+//
+// Single seam for backend selection. Platform subclasses defined in their
+// own translation units (iOS / Android) are constructed via the forward-
+// declared factory helpers below so this file stays C++-only.
+
+#if defined(__APPLE__) && !defined(PULP_RENDER_LOOP_FORCE_TIMER) && TARGET_OS_IPHONE
+// Defined in render_loop_apple.mm — owns a CADisplayLink.
+std::unique_ptr<RenderLoop> make_ios_render_loop();
+#endif
+
+#if defined(__ANDROID__) && !defined(PULP_RENDER_LOOP_FORCE_TIMER)
+// Defined in render_loop_android.cpp — owns an AChoreographer registration.
+std::unique_ptr<RenderLoop> make_android_render_loop();
+#endif
 
 std::unique_ptr<RenderLoop> RenderLoop::create(void* native_handle) {
     (void)native_handle;
-#if defined(__APPLE__) && !defined(PULP_RENDER_LOOP_FORCE_TIMER) && TARGET_OS_OSX
+#if defined(PULP_RENDER_LOOP_FORCE_TIMER)
+    return std::make_unique<TimerRenderLoop>();
+#elif defined(__APPLE__) && TARGET_OS_OSX
     return std::make_unique<MacRenderLoop>();
+#elif defined(__APPLE__) && TARGET_OS_IPHONE
+    return make_ios_render_loop();
+#elif defined(__ANDROID__)
+    return make_android_render_loop();
+#elif defined(_WIN32)
+    return std::make_unique<WindowsRenderLoop>();
 #else
+    // Linux and any other platform: conscious timer fallback.
     return std::make_unique<TimerRenderLoop>();
 #endif
+}
+
+std::unique_ptr<RenderLoop> RenderLoop::create_timer_loop() {
+    // TimerRenderLoop is compiled on every platform — no native run loop
+    // needed, so this is the deterministic choice for headless tests.
+    return std::make_unique<TimerRenderLoop>();
 }
 
 } // namespace pulp::render
