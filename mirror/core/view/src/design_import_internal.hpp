@@ -14,6 +14,8 @@
 
 #pragma once
 
+#include <string>
+
 #include <pulp/view/design_import.hpp>
 
 namespace pulp::view {
@@ -23,5 +25,17 @@ namespace pulp::view {
 // releases (fixtures depend on these strings). Defined in
 // design_import.cpp.
 const char* design_source_vendor_key(DesignSource source);
+
+// JSON-encode an arbitrary string for safe embedding inside a JS string
+// literal (escapes quotes, control chars, and `<` to dodge a premature
+// `</script>` close). Defined in claude_bundle.cpp; shared with the
+// extracted claude_bundle_sources.cpp source-detection cluster.
+std::string json_string_literal(const std::string& s);
+
+// HTML-attribute escaper (&, ", <, >) used by the design-tool runtime-
+// import entry points to embed `data-pulp-source` / `data-*-root`
+// attributes. Defined in claude_bundle_sources.cpp; shared with the
+// runtime harness (parse_jsx_react) in claude_bundle.cpp.
+std::string v0_html_attr_escape(const std::string& s);
 
 }  // namespace pulp::view
