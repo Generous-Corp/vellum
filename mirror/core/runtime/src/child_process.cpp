@@ -12,7 +12,9 @@
 #include <poll.h>
 #endif
 
+#include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstring>
 
 extern "C" {
@@ -203,6 +205,11 @@ std::optional<ProcessResult> run_process(
 
     ProcessResult result;
     char buf[4096];
+    bool timed_out = false;
+    auto deadline = std::chrono::steady_clock::now();
+    if (timeout_ms > 0) {
+        deadline += std::chrono::milliseconds(timeout_ms);
+    }
 
     // Read stdout and stderr using poll
     struct pollfd fds[2] = {
@@ -212,8 +219,24 @@ std::optional<ProcessResult> run_process(
     int open_fds = 2;
 
     while (open_fds > 0) {
-        int ret = poll(fds, 2, timeout_ms > 0 ? timeout_ms : -1);
-        if (ret <= 0) break;
+        int poll_timeout = -1;
+        if (timeout_ms > 0) {
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= deadline) {
+                timed_out = true;
+                break;
+            }
+            auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+                deadline - now).count();
+            poll_timeout = static_cast<int>(std::max<int64_t>(remaining, 1));
+        }
+
+        int ret = poll(fds, 2, poll_timeout);
+        if (ret == 0) {
+            timed_out = true;
+            break;
+        }
+        if (ret < 0) break;
 
         if (fds[0].revents & (POLLIN | POLLHUP)) {
             ssize_t n = read(stdout_pipe[0], buf, sizeof(buf));
@@ -227,12 +250,19 @@ std::optional<ProcessResult> run_process(
         }
     }
 
+    if (timed_out) {
+        kill(pid, SIGKILL);
+    }
+
     ::close(stdout_pipe[0]);
     ::close(stderr_pipe[0]);
 
     int wstatus;
-    waitpid(pid, &wstatus, 0);
-    result.exit_code = WIFEXITED(wstatus) ? WEXITSTATUS(wstatus) : -1;
+    if (waitpid(pid, &wstatus, 0) < 0 || timed_out) {
+        result.exit_code = -1;
+    } else {
+        result.exit_code = WIFEXITED(wstatus) ? WEXITSTATUS(wstatus) : -1;
+    }
 
     return result;
 }
