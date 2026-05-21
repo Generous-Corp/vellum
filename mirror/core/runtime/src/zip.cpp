@@ -62,6 +62,9 @@ std::optional<size_t> parse_gzip_header(const uint8_t* data, size_t size) {
 // Decompress a raw DEFLATE stream of unknown decompressed size into a vector.
 // Used for the gzip path (no zlib header) and as a building block.
 std::optional<std::vector<uint8_t>> inflate_raw(const uint8_t* data, size_t size) {
+    if (data == nullptr || size == 0)
+        return std::nullopt;
+
     std::vector<uint8_t> result;
     // Heuristic initial size; grows as needed.
     result.resize(size > 0 ? size * 4 : 64);
@@ -83,6 +86,10 @@ std::optional<std::vector<uint8_t>> inflate_raw(const uint8_t* data, size_t size
             return result;
         }
         if (status == MZ_BUF_ERROR) {
+            if (stream.avail_in == 0 && stream.avail_out > 0) {
+                mz_inflateEnd(&stream);
+                return std::nullopt;
+            }
             size_t old_size = result.size();
             result.resize(old_size * 2);
             stream.next_out = result.data() + stream.total_out;
@@ -105,6 +112,9 @@ std::optional<std::vector<uint8_t>> inflate_raw(const uint8_t* data, size_t size
 // concatenated RFC 1952 gzip members.
 std::optional<std::vector<uint8_t>> inflate_raw_consumed(
         const uint8_t* data, size_t size, size_t* consumed_in) {
+    if (data == nullptr || size == 0)
+        return std::nullopt;
+
     std::vector<uint8_t> result;
     result.resize(size > 0 ? size * 4 : 64);
 
@@ -129,6 +139,10 @@ std::optional<std::vector<uint8_t>> inflate_raw_consumed(
             return result;
         }
         if (status == MZ_BUF_ERROR || status == MZ_OK) {
+            if (stream.avail_in == 0 && stream.avail_out > 0) {
+                mz_inflateEnd(&stream);
+                return std::nullopt;
+            }
             // Need more output room (or we ran out of input prematurely).
             // Doubling output is the right move for MZ_BUF_ERROR; if
             // avail_in is already 0 we'll loop here briefly and the
