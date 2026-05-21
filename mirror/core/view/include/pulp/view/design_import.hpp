@@ -882,6 +882,30 @@ struct CodeGenOptions {
 /// Web-compat mode uses document.createElement + el.style.
 std::string generate_pulp_js(const DesignIR& ir, const CodeGenOptions& opts = {});
 
+struct CppExportOptions {
+    std::string function_name = "build_imported_ui";
+    std::string namespace_name;
+    std::string header_filename = "imported_ui.hpp";
+    bool include_comments = true;
+    bool emit_named_tokens = true;
+    bool emit_asset_constants = true;
+    bool extract_named_components = true;
+    int indent_spaces = 4;
+};
+
+struct CppExportResult {
+    std::string header;
+    std::string source;
+};
+
+/// Generate an ownable baked-C++ view artifact from a DesignIR. The result
+/// contains a header/source pair: the header declares `function_name()` plus
+/// `bake_asset_manifest()`, and the source constructs the view tree directly
+/// with Pulp View widgets.
+CppExportResult generate_pulp_cpp(const DesignIR& ir,
+                                  const IRAssetManifest& manifest,
+                                  const CppExportOptions& opts = {});
+
 // ── Shortcut helpers (V2 — used by both the generator and any test/
 //    runtime caller that needs to map DetectedShortcut → registerShortcut
 //    args). String forms come from `extract_keyboard_shortcuts`; integer
