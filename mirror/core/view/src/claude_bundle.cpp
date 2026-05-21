@@ -1104,7 +1104,16 @@ std::string json_string_literal_for_widget_bridge(const std::string& s) {
 DesignIR parse_claude_html_with_runtime(const std::string& html, ClaudeRuntimeOptions opts) {
     auto static_fallback = [&](const std::string& reason) -> DesignIR {
         set_runtime_error(opts, reason);
-        return parse_claude_html(html);
+        auto ir = parse_claude_html(html);
+        ir.fallback_reason = reason;
+        ImportDiagnostic diagnostic;
+        diagnostic.severity = ImportDiagnosticSeverity::warning;
+        diagnostic.kind = ImportDiagnosticKind::fallback_used;
+        diagnostic.code = "runtime-fallback";
+        diagnostic.path = "<root>";
+        diagnostic.message = reason;
+        ir.diagnostics.push_back(std::move(diagnostic));
+        return ir;
     };
 
     auto bundle = parse_claude_bundle(html);
@@ -1295,10 +1304,16 @@ DesignIR parse_claude_html_with_runtime(const std::string& html, ClaudeRuntimeOp
         // native IDs (DOM `id` attrs are author-supplied and not
         // guaranteed unique across re-imports), so content-hash is the
         // right strategy — matches DEFAULT_ANCHOR_STRATEGY for
-        // claude-design-html.
+        // claude-design-html. Promotion runs before anchors because
+        // content-hash anchors include node.type.
         ir.root.provenance = IRProvenance{"claude-design-html", "1", {}};
         ir.root.confidence = IRConfidence::pass;  // walker ran successfully
+        promote_interactive_frames(ir.root);
         assign_anchors(ir.root, AnchorStrategy::content_hash);
+        ir.capture_method = "runtime_snapshot";
+        ir.settle_rounds = 4;
+        ir.source_adapter = "claude-design-html";
+        ir.source_version = "1";
         return ir;
     } catch (const std::exception& e) {
         return static_fallback(std::string("harness boot failed: ") + e.what());

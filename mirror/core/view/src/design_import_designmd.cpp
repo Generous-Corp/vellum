@@ -31,6 +31,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_set>
+#include <utility>
 
 namespace pulp::view {
 
@@ -148,6 +149,35 @@ DesignMdDiagnostic make_diag(DesignMdSeverity sev,
     d.column = column;
     d.message = std::move(message);
     return d;
+}
+
+ImportDiagnosticSeverity to_import_severity(DesignMdSeverity severity) {
+    switch (severity) {
+        case DesignMdSeverity::info:    return ImportDiagnosticSeverity::info;
+        case DesignMdSeverity::warning: return ImportDiagnosticSeverity::warning;
+        case DesignMdSeverity::error:   return ImportDiagnosticSeverity::error;
+    }
+    return ImportDiagnosticSeverity::warning;
+}
+
+void mirror_import_diagnostics(DesignMdParseResult& result) {
+    result.ir.diagnostics.clear();
+    result.ir.diagnostics.reserve(result.diagnostics.size());
+    for (const auto& diagnostic : result.diagnostics) {
+        ImportDiagnostic imported;
+        imported.severity = to_import_severity(diagnostic.severity);
+        imported.kind = ImportDiagnosticKind::unsupported_property;
+        imported.code = diagnostic.code;
+        imported.path = diagnostic.path;
+        imported.message = diagnostic.message;
+        if (!diagnostic.path.empty()) imported.property = diagnostic.path;
+        result.ir.diagnostics.push_back(std::move(imported));
+    }
+}
+
+DesignMdParseResult finalize_result(DesignMdParseResult result) {
+    mirror_import_diagnostics(result);
+    return result;
 }
 
 int yaml_line(const YAML::Node& node, int fallback) {
@@ -326,6 +356,9 @@ void resolve_references(DesignMdParseResult& result) {
 DesignMdParseResult parse_designmd(const std::string& markdown) {
     DesignMdParseResult result;
     result.ir.source = DesignSource::designmd;
+    result.ir.capture_method = "adapter_parse";
+    result.ir.source_adapter = "designmd";
+    result.ir.source_version = "1";
     result.ir.root.type = "frame";  // empty container; DESIGN.md has no screen.
 
     auto slice = split_frontmatter(markdown);
@@ -350,7 +383,7 @@ DesignMdParseResult parse_designmd(const std::string& markdown) {
         result.diagnostics.push_back(make_diag(
             DesignMdSeverity::info, "no-frontmatter", "", 0, 0,
             "no YAML frontmatter found; emitting empty token set"));
-        return result;
+        return finalize_result(std::move(result));
     }
 
     YAML::Node root;
@@ -362,18 +395,18 @@ DesignMdParseResult parse_designmd(const std::string& markdown) {
             "<frontmatter>",
             e.mark.line + slice.yaml_start_line, e.mark.column + 1,
             e.what()));
-        return result;
+        return finalize_result(std::move(result));
     } catch (const YAML::Exception& e) {
         result.diagnostics.push_back(make_diag(
             DesignMdSeverity::error, "yaml-parse", "<frontmatter>", 0, 0, e.what()));
-        return result;
+        return finalize_result(std::move(result));
     }
 
     if (!root || !root.IsMap()) {
         result.diagnostics.push_back(make_diag(
             DesignMdSeverity::error, "yaml-shape", "<frontmatter>", 0, 0,
             "expected a YAML mapping at the top level of frontmatter"));
-        return result;
+        return finalize_result(std::move(result));
     }
 
     // Carry name/description/version through as string tokens.
@@ -389,7 +422,7 @@ DesignMdParseResult parse_designmd(const std::string& markdown) {
 
     resolve_references(result);
 
-    return result;
+    return finalize_result(std::move(result));
 }
 
 DesignIR parse_designmd_yaml(const std::string& markdown) {
