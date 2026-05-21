@@ -1113,8 +1113,14 @@ void View::request_repaint() {
     // never need to walk the parent chain. No host attached: silent
     // no-op — paint is already on the way for the initial mount, or
     // there's no surface to paint to yet.
+    //
+    // Slice 16 — route through WindowHost::mark_dirty(), the canonical
+    // "set a dirty flag, repaint on the next vblank" path. When a
+    // RenderLoop is attached this coalesces N change notifications in one
+    // frame into a single vsync-paced repaint; otherwise mark_dirty()
+    // degrades to a direct repaint() (unchanged behavior).
     if (window_host_) {
-        window_host_->repaint();
+        window_host_->mark_dirty();
     } else if (plugin_view_host_) {
         plugin_view_host_->repaint();
     }
