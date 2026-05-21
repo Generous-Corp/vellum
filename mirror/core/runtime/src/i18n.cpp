@@ -88,6 +88,9 @@ bool LocalisedStrings::load_json_file(std::string_view path) {
                 ++pos;
                 if (content[pos] == 'n') result += '\n';
                 else if (content[pos] == 't') result += '\t';
+                else if (content[pos] == 'r') result += '\r';
+                else if (content[pos] == 'b') result += '\b';
+                else if (content[pos] == 'f') result += '\f';
                 else result += content[pos];
             } else {
                 result += content[pos];
