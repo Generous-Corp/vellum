@@ -2,11 +2,21 @@
 
 #include <pulp/runtime/log.hpp>
 
+#include <atomic>
+#include <chrono>
+#include <cstddef>
+#include <memory>
+#include <thread>
+
 // Phase 6.5 — Dawn GPU timestamp queries.
 //
 // The header (`gpu_timestamps.hpp`) carries the pure tick→ms conversion
-// math, which is unit-tested without a device. This file carries the
-// Dawn-specific QuerySet / resolve-buffer plumbing.
+// math and the `decode_resolved_ticks` byte-decode seam, both unit-
+// tested without a device. This file carries the Dawn-specific QuerySet
+// / resolve-buffer plumbing: `begin_frame` sizes the QuerySet, `resolve`
+// encodes `ResolveQuerySet` + a copy into a host-mappable buffer, maps
+// it, and decodes the ticks into `last_resolved` so `read_back` actually
+// returns live GPU numbers.
 //
 // The C++ WebGPU API (`webgpu/webgpu_cpp.h`, the `wgpu::` types) ships
 // inside Skia's bundled Dawn, so the real implementation gates on
@@ -37,6 +47,11 @@ struct GpuTimestamps::Impl {
 
     /// Last successfully map-read frame of ticks.
     std::vector<std::uint64_t> last_resolved;
+};
+
+struct MapReadbackState {
+    std::atomic_bool mapped{false};
+    std::atomic_bool ok{false};
 };
 
 GpuTimestamps::GpuTimestamps() = default;
@@ -119,6 +134,93 @@ void GpuTimestamps::begin_frame(std::size_t pass_count) {
     impl_->slot_capacity = slots;
 }
 
+bool GpuTimestamps::resolve(void* dawn_instance_handle) {
+    if (support_ != GpuTimestampSupport::supported || impl_ == nullptr) {
+        return false;
+    }
+    // begin_frame() must have created the QuerySet + buffers first. A
+    // zero-pass frame leaves them null; nothing to resolve.
+    if (impl_->query_set == nullptr || impl_->resolve_buffer == nullptr ||
+        impl_->readback_buffer == nullptr || impl_->slot_capacity == 0) {
+        return false;
+    }
+
+    // The instance is required to pump `ProcessEvents` while the async
+    // buffer map completes — Dawn never advances callbacks on its own.
+    if (dawn_instance_handle == nullptr) {
+        return false;
+    }
+    auto* instance = static_cast<wgpu::Instance*>(dawn_instance_handle);
+    if (instance == nullptr || *instance == nullptr) {
+        return false;
+    }
+
+    const std::uint64_t bytes =
+        static_cast<std::uint64_t>(impl_->slot_capacity) * sizeof(std::uint64_t);
+
+    // Encode: ResolveQuerySet writes the QuerySet's ticks into the
+    // resolve buffer; CopyBufferToBuffer stages them into the host-
+    // mappable readback buffer. One encoder, one submit.
+    wgpu::CommandEncoderDescriptor enc_desc{};
+    enc_desc.label = "Pulp Timestamp Resolve";
+    wgpu::CommandEncoder encoder = impl_->device.CreateCommandEncoder(&enc_desc);
+    encoder.ResolveQuerySet(impl_->query_set, 0, impl_->slot_capacity,
+                            impl_->resolve_buffer, 0);
+    encoder.CopyBufferToBuffer(impl_->resolve_buffer, 0,
+                               impl_->readback_buffer, 0, bytes);
+    wgpu::CommandBuffer cmd = encoder.Finish();
+    impl_->device.GetQueue().Submit(1, &cmd);
+
+    // Map the readback buffer for host reads. The map is asynchronous;
+    // pump `ProcessEvents` until the callback fires or a deadline trips.
+    // The deadline mirrors `gpu_compute.cpp`'s readback path so a wedged
+    // GPU degrades to "no sample this frame" instead of hanging.
+    auto map_state = std::make_shared<MapReadbackState>();
+    impl_->readback_buffer.MapAsync(
+        wgpu::MapMode::Read, 0, static_cast<std::size_t>(bytes),
+        wgpu::CallbackMode::AllowProcessEvents,
+        [map_state](wgpu::MapAsyncStatus status, wgpu::StringView) {
+            map_state->ok.store(status == wgpu::MapAsyncStatus::Success);
+            map_state->mapped.store(true);
+        });
+
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!map_state->mapped.load() &&
+           std::chrono::steady_clock::now() < deadline) {
+        instance->ProcessEvents();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    if (!map_state->mapped.load()) {
+        // Cancel the pending map so the same readback buffer can be used
+        // by a later frame. The callback may still arrive after return,
+        // so it only touches the shared state above.
+        impl_->readback_buffer.Unmap();
+        runtime::log_info("GpuTimestamps: timestamp readback did not map");
+        return false;
+    }
+
+    if (!map_state->ok.load()) {
+        runtime::log_info("GpuTimestamps: timestamp readback did not map");
+        return false;
+    }
+
+    const void* data = impl_->readback_buffer.GetConstMappedRange(
+        0, static_cast<std::size_t>(bytes));
+    if (data == nullptr) {
+        impl_->readback_buffer.Unmap();
+        return false;
+    }
+
+    // Decode the mapped bytes through the pure, Dawn-free helper — the
+    // same path the unit tests exercise with synthetic bytes.
+    impl_->last_resolved = decode_resolved_ticks(
+        static_cast<const std::byte*>(data), static_cast<std::size_t>(bytes));
+    impl_->readback_buffer.Unmap();
+    return !impl_->last_resolved.empty();
+}
+
 std::vector<std::uint64_t> GpuTimestamps::read_back() const {
     if (impl_ == nullptr) {
         return {};
@@ -144,6 +246,8 @@ bool GpuTimestamps::initialize(void* /*dawn_device_handle*/) {
 }
 
 void GpuTimestamps::begin_frame(std::size_t /*pass_count*/) {}
+
+bool GpuTimestamps::resolve(void* /*dawn_instance_handle*/) { return false; }
 
 std::vector<std::uint64_t> GpuTimestamps::read_back() const { return {}; }
 

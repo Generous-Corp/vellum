@@ -51,8 +51,10 @@ public:
     /// Begin a new frame. Resets all pass statistics.
     void begin_frame() {
         passes_.clear();
+        current_pass_ = RenderPassType::background;
         frame_count_++;
         total_time_ms_ = 0;
+        over_budget_ = false;
     }
 
     /// Begin a render pass of the given type.
