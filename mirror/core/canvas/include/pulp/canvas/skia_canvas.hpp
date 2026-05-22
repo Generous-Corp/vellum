@@ -115,6 +115,11 @@ public:
                        const SdfAtlas& atlas) override;
     float measure_text(const std::string& text) override;
     TextMetrics measure_text_full(const std::string& text) override;
+    // WYSIWYG caret math — caret x for a byte boundary within the FULL
+    // shaped run (same make_paragraph(...) fill_text uses), so kerned/
+    // letter-spaced text reports the exact painted advance.
+    float text_x_for_byte(const std::string& text,
+                          std::size_t byte_index) override;
 
     // ── Images ──────────────────────────────────────────────────────────
     bool draw_image_from_data(const uint8_t* data, size_t size,

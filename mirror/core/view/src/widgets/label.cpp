@@ -342,6 +342,205 @@ float Label::intrinsic_width() const {
     return std::ceil(width);
 }
 
+// pulp WYSIWYG caret-x — shared style/origin resolver. paint() and
+// text_edit_metrics() both call this so the inspector edit overlay's
+// caret/selection geometry can never drift from the rendered glyphs.
+// Resolves the inherited size/weight/letter-spacing cascade, the family
+// fallback ("Inter"), slant, and the full text-align resolution (own →
+// inherited → match-parent walk → auto). `baseline_y` is the SINGLE-LINE
+// first-line baseline using the same vertical-align formula paint() uses
+// (text_h == font_size); the multi-line painter recomputes text_h locally.
+Label::ResolvedTextStyle Label::resolve_text_style() const {
+    ResolvedTextStyle rs;
+
+    rs.font_size = font_size_;
+    if (!has_own_font_size_) {
+        if (auto inh = inheritable_font_size(); inh.has_value())
+            rs.font_size = inh.value();
+    }
+    rs.font_weight = font_weight_;
+    if (!has_own_font_weight_) {
+        if (auto inh = inheritable_font_weight(); inh.has_value())
+            rs.font_weight = inh.value();
+    }
+    rs.letter_spacing = letter_spacing_;
+    if (!has_own_letter_spacing_) {
+        if (auto inh = inheritable_letter_spacing(); inh.has_value())
+            rs.letter_spacing = inh.value();
+    }
+    rs.family = font_family_.empty() ? std::string("Inter") : font_family_;
+    rs.font_slant = font_style_;
+
+    // text-align cascade — own value wins, else inherited (issue-969).
+    LabelAlign align = text_align_;
+    if (!has_own_text_align_) {
+        if (auto inh = inheritable_text_align(); inh.has_value()) {
+            int v = inh.value();
+            if (v == 1) align = LabelAlign::center;
+            else if (v == 2) align = LabelAlign::right;
+            else if (v == 3) align = LabelAlign::auto_;
+            else if (v == 4) align = LabelAlign::justify;
+            else if (v == 5) align = LabelAlign::match_parent;
+            else align = LabelAlign::left;
+        }
+    }
+    // match-parent resolution — walk ancestors for the first non-5 SET
+    // value (pulp #1434 / Codex P1 on #1879). Mirrors paint() exactly.
+    if (align == LabelAlign::match_parent) {
+        LabelAlign parent_resolved = LabelAlign::left;
+        for (auto* anc = parent(); anc != nullptr; anc = anc->parent()) {
+            auto inh = anc->inheritable_text_align();
+            if (!inh.has_value()) continue;
+            int v = inh.value();
+            if (v == 5) continue;
+            if      (v == 1) parent_resolved = LabelAlign::center;
+            else if (v == 2) parent_resolved = LabelAlign::right;
+            else if (v == 3) parent_resolved = LabelAlign::auto_;
+            else if (v == 4) parent_resolved = LabelAlign::justify;
+            else             parent_resolved = LabelAlign::left;
+            break;
+        }
+        align = parent_resolved;
+    }
+    if (align == LabelAlign::auto_) align = LabelAlign::left;  // LTR-only
+    rs.text_align = align;
+
+    // Single-line first-line baseline — same formula as paint() with
+    // text_h == font_size (multi-line paint recomputes text_h itself).
+    switch (vertical_align_) {
+        case canvas::TextVerticalAlign::top:
+            rs.baseline_y = rs.font_size * 0.85f;
+            break;
+        case canvas::TextVerticalAlign::bottom:
+            rs.baseline_y = bounds().height - rs.font_size + rs.font_size * 0.85f;
+            break;
+        case canvas::TextVerticalAlign::baseline:
+            rs.baseline_y = bounds().height * 0.75f;
+            break;
+        case canvas::TextVerticalAlign::center:
+        default:
+            rs.baseline_y = (bounds().height - rs.font_size) * 0.5f
+                            + rs.font_size * 0.85f;
+            break;
+    }
+    return rs;
+}
+
+std::string Label::apply_text_transform(const std::string& in) const {
+    std::string out = in;
+    if (text_transform_ == TextTransform::uppercase) {
+        for (auto& ch : out) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+    } else if (text_transform_ == TextTransform::lowercase) {
+        for (auto& ch : out) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    } else if (text_transform_ == TextTransform::capitalize) {
+        bool cap_next = true;
+        for (auto& ch : out) {
+            if (cap_next && std::isalpha(static_cast<unsigned char>(ch))) {
+                ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+                cap_next = false;
+            }
+            if (ch == ' ') cap_next = true;
+        }
+    }
+    return out;
+}
+
+// pulp #1737 — translate the CSS font-variant CSV → SkShaper Feature tags and
+// apply them to the canvas. Wires the storage-only View::font_variant_ slot
+// into the active paint. Empty CSV → clear features so the previous view's
+// settings don't bleed across paint calls. Each CSS keyword maps to its
+// OpenType feature tag (per CSS Fonts Module 4 §7.3):
+//   tabular-nums       → tnum
+//   small-caps         → smcp
+//   oldstyle-nums      → onum
+//   lining-nums        → lnum
+//   proportional-nums  → pnum
+// Unknown values are silently ignored (forward-compat).
+//
+// Shared by paint() and text_edit_metrics() — the WYSIWYG caret invariant: the
+// inline-edit caret/selection must shape with the SAME features the painter
+// renders, or the per-byte caret x drifts for font-variant labels.
+void Label::apply_font_features(canvas::Canvas& canvas) const {
+    const std::string& fv = font_variant();
+    if (fv.empty()) {
+        canvas.clear_font_features();
+        return;
+    }
+    std::vector<canvas::Canvas::FontFeature> features;
+    size_t i = 0;
+    while (i < fv.size()) {
+        while (i < fv.size() && (std::isspace(static_cast<unsigned char>(fv[i])) || fv[i] == ',')) ++i;
+        if (i >= fv.size()) break;
+        size_t end = i;
+        while (end < fv.size() && fv[end] != ',') ++end;
+        std::string token(fv, i, end - i);
+        while (!token.empty() && std::isspace(static_cast<unsigned char>(token.back()))) token.pop_back();
+        if      (token == "tabular-nums")      features.push_back({canvas::Canvas::make_font_feature_tag("tnum"), 1});
+        else if (token == "small-caps")        features.push_back({canvas::Canvas::make_font_feature_tag("smcp"), 1});
+        else if (token == "oldstyle-nums")     features.push_back({canvas::Canvas::make_font_feature_tag("onum"), 1});
+        else if (token == "lining-nums")       features.push_back({canvas::Canvas::make_font_feature_tag("lnum"), 1});
+        else if (token == "proportional-nums") features.push_back({canvas::Canvas::make_font_feature_tag("pnum"), 1});
+        // Unknown token → silently ignored.
+        i = end + 1;
+    }
+    if (!features.empty()) canvas.set_font_features(std::move(features));
+    else                   canvas.clear_font_features();
+}
+
+Label::TextEditMetrics Label::text_edit_metrics(canvas::Canvas& canvas,
+                                                std::string_view edit_text) const {
+    TextEditMetrics m;
+    const ResolvedTextStyle rs = resolve_text_style();
+
+    // Apply the SAME text-transform paint() applies, so the measured run
+    // matches the rendered run (e.g. an uppercase ENVELOPE label).
+    m.display_text = apply_text_transform(std::string(edit_text));
+
+    // Set the canvas font via the SAME full setter paint() uses, so
+    // text_x_for_byte shapes with identical state (family/size/weight/
+    // slant/letter-spacing).
+    canvas.set_font_full(rs.family, rs.font_size, rs.font_weight,
+                         rs.font_slant, rs.letter_spacing);
+
+    // Apply the SAME font-variant OpenType features paint() applies, so the
+    // caret/selection x shapes with identical glyph advances (tabular-nums,
+    // small-caps, …). Without this the caret drifts for font-variant labels.
+    apply_font_features(canvas);
+
+    // Per-byte caret offsets over the FULL shaped run.
+    m.caret_x_by_byte.resize(m.display_text.size() + 1, 0.0f);
+    for (std::size_t i = 0; i <= m.display_text.size(); ++i) {
+        m.caret_x_by_byte[i] = canvas.text_x_for_byte(m.display_text, i);
+    }
+
+    // Alignment-dependent left origin. paint() centers/right-aligns by
+    // anchoring the canvas text-align at width/2 or width; the resulting
+    // glyph left edge is what the overlay needs.
+    const float shaped_w = m.caret_x_by_byte.back();
+    switch (rs.text_align) {
+        case LabelAlign::center:
+            m.local_text_left = (bounds().width - shaped_w) * 0.5f;
+            break;
+        case LabelAlign::right:
+            m.local_text_left = bounds().width - shaped_w;
+            break;
+        case LabelAlign::left:
+        case LabelAlign::justify:
+        case LabelAlign::auto_:        // resolved to left in resolve_text_style()
+        case LabelAlign::match_parent: // resolved above
+        default:
+            m.local_text_left = 0.0f;
+            break;
+    }
+
+    // Band aligned to the TOP of the text (where top-aligned label text
+    // renders), matching the overlay's existing top-anchored band. The
+    // ascent top sits ~0.85*font_size above the baseline.
+    m.local_band_y = rs.baseline_y - rs.font_size * 0.85f;
+    m.band_height = rs.font_size * 1.3f;
+    return m;
+}
+
 void Label::paint(canvas::Canvas& canvas) {
     if (text_.empty()) return;
 
@@ -382,41 +581,10 @@ void Label::paint(canvas::Canvas& canvas) {
     canvas.set_font_full(family, effective_font_size, effective_font_weight,
                           font_style_, effective_letter_spacing);
 
-    // pulp #1737 — translate CSS font-variant CSV → SkShaper Feature
-    // tags. Wires the storage-only View::font_variant_ slot into the
-    // active paint. Empty CSV → clear features so previous view's
-    // settings don't bleed across paint calls. Each CSS keyword maps
-    // to its OpenType feature tag (per CSS Fonts Module 4 §7.3):
-    //   tabular-nums       → tnum
-    //   small-caps         → smcp
-    //   oldstyle-nums      → onum
-    //   lining-nums        → lnum
-    //   proportional-nums  → pnum
-    // Unknown values are silently ignored (forward-compat).
-    const std::string& fv = font_variant();
-    if (fv.empty()) {
-        canvas.clear_font_features();
-    } else {
-        std::vector<canvas::Canvas::FontFeature> features;
-        size_t i = 0;
-        while (i < fv.size()) {
-            while (i < fv.size() && (std::isspace(static_cast<unsigned char>(fv[i])) || fv[i] == ',')) ++i;
-            if (i >= fv.size()) break;
-            size_t end = i;
-            while (end < fv.size() && fv[end] != ',') ++end;
-            std::string token(fv, i, end - i);
-            while (!token.empty() && std::isspace(static_cast<unsigned char>(token.back()))) token.pop_back();
-            if      (token == "tabular-nums")      features.push_back({canvas::Canvas::make_font_feature_tag("tnum"), 1});
-            else if (token == "small-caps")        features.push_back({canvas::Canvas::make_font_feature_tag("smcp"), 1});
-            else if (token == "oldstyle-nums")     features.push_back({canvas::Canvas::make_font_feature_tag("onum"), 1});
-            else if (token == "lining-nums")       features.push_back({canvas::Canvas::make_font_feature_tag("lnum"), 1});
-            else if (token == "proportional-nums") features.push_back({canvas::Canvas::make_font_feature_tag("pnum"), 1});
-            // Unknown token → silently ignored.
-            i = end + 1;
-        }
-        if (!features.empty()) canvas.set_font_features(std::move(features));
-        else                    canvas.clear_font_features();
-    }
+    // pulp #1737 — apply the CSS font-variant CSV as SkShaper OpenType feature
+    // tags. Factored into apply_font_features() so text_edit_metrics() shapes
+    // the caret with the IDENTICAL features (WYSIWYG caret invariant).
+    apply_font_features(canvas);
 
     // Apply text-transform
     std::string display_text = text_;

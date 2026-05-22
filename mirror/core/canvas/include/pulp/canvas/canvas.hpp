@@ -730,6 +730,23 @@ public:
     virtual void fill_text(const std::string& text, float x, float y) = 0;
     virtual float measure_text(const std::string& text) = 0;
 
+    /// Caret x (in text-local space, measured from the text's leading edge)
+    /// for the glyph boundary at `byte_index` within `text`. This is the
+    /// drift-proof companion to `measure_text`: it shapes the FULL run with
+    /// the current font state (family / size / weight / slant / letter-spacing
+    /// / direction / features) and returns the caret offset for the cluster
+    /// boundary at `byte_index`, so a kerned pair like "AV" reports the same
+    /// advance the painter actually draws — not the sum of isolated glyph
+    /// widths.
+    ///
+    /// The default implementation measures the prefix substring, which is
+    /// correct for unkerned, unspaced text but drifts on kerned runs. The
+    /// Skia backend overrides this to query the shaped paragraph directly.
+    virtual float text_x_for_byte(const std::string& text,
+                                  std::size_t byte_index) {
+        return measure_text(text.substr(0, std::min(byte_index, text.size())));
+    }
+
     /// pulp #2163 / font v2 Slice 1.2.b — explicit, typed vertical-anchor
     /// API. The historical `fill_text(text, x, y)` follows the Canvas2D
     /// spec (web-compat baseline semantics) — `y` is the text baseline.
