@@ -4,12 +4,19 @@
 #if TARGET_OS_OSX
 
 #include <pulp/canvas/cg_canvas.hpp>
+#include <pulp/view/input_events.hpp>
+#include <pulp/view/widgets.hpp>
+#include <pulp/view/ui_components.hpp>
 #import <Cocoa/Cocoa.h>
 #include <algorithm>
 #include <atomic>
 
 #include <functional>
 #include <memory>
+
+// Reuse the standalone window host's coordinate/event helpers (to_local,
+// view_is_in_tree, modifiers_from_ns_flags) — same pulp-view-core lib.
+#include "window_host_mac_internal.hpp"
 
 #ifdef PULP_HAS_SKIA
 #include <pulp/render/gpu_surface.hpp>
@@ -79,9 +86,143 @@ NSArray* pulp_text_accessibility_all_elements_macos();
 - (BOOL)isAccessibilityElement { return YES; }
 @end
 
-@implementation PulpPluginView
+// ── Shared mouse-input dispatch for embedded plugin views ────────────────────
+//
+// Both PulpPluginView (CPU) and PulpGpuPluginView (GPU) embed a Pulp View tree
+// in a DAW editor window and must route native mouse events into it. This is
+// the same hit_test → on_mouse_event + on_mouse_down/drag/up + W3C pointer/drag
+// bubbling that the standalone MacGpuWindowHost's PulpView does — without it the
+// editor paints but swallows every click (the bug seen in Logic). Kept as free
+// functions so the two ObjC view classes share one implementation.
+namespace {
+
+pulp::view::Point pulp_plugin_local_point(NSView* self, NSEvent* event) {
+    NSPoint p = [self convertPoint:event.locationInWindow fromView:nil];
+    // NSView is not flipped (both plugin views return isFlipped NO): Y=0 is the
+    // bottom, so flip into the view tree's top-down space.
+    const float h = static_cast<float>(self.bounds.size.height);
+    return pulp::view::Point{static_cast<float>(p.x), h - static_cast<float>(p.y)};
+}
+
+void pulp_plugin_mouse_down(pulp::view::View* root, NSEvent* event,
+                            pulp::view::Point pt, pulp::view::View** drag_target) {
+    if (!root) return;
+    *drag_target = root->hit_test(pt);
+    pulp::view::ComboBox::notify_global_click(*drag_target);
+    if (!*drag_target) return;
+    using namespace pulp::view::mac_geometry;
+    auto local = to_local(pt, *drag_target, root);
+    if ((*drag_target)->focusable()) (*drag_target)->claim_input_focus();
+
+    pulp::view::MouseEvent me;
+    me.position = local;
+    me.window_position = pt;
+    me.button = pulp::view::MouseButton::left;
+    me.modifiers = modifiers_from_ns_flags(event.modifierFlags);
+    me.is_down = true;
+    me.click_count = static_cast<int>(event.clickCount);
+    (*drag_target)->on_mouse_event(me);
+    (*drag_target)->on_mouse_down(local);
+    // Bubble pointerdown to ancestors that registered on_pointer_event (React).
+    for (auto* b = (*drag_target)->parent(); b; b = b->parent()) {
+        if (!b->on_pointer_event) continue;
+        pulp::view::MouseEvent bme = me;
+        bme.position = to_local(pt, b, root);
+        b->on_pointer_event(bme);
+    }
+}
+
+void pulp_plugin_mouse_drag(pulp::view::View* root, pulp::view::Point pt,
+                            pulp::view::View** drag_target) {
+    using namespace pulp::view::mac_geometry;
+    if (!*drag_target || !root) return;
+    if (!view_is_in_tree(*drag_target, root)) { *drag_target = nullptr; return; }
+    auto local = to_local(pt, *drag_target, root);
+    (*drag_target)->on_mouse_drag(local);
+    if ((*drag_target)->on_drag) (*drag_target)->on_drag(local);
+    for (auto* b = (*drag_target)->parent(); b; b = b->parent()) {
+        if (!b->on_drag) continue;
+        (*b).on_drag(to_local(pt, b, root));
+    }
+}
+
+void pulp_plugin_mouse_up(pulp::view::View* root, NSEvent* event,
+                          pulp::view::Point pt, pulp::view::View** drag_target) {
+    using namespace pulp::view::mac_geometry;
+    if (!*drag_target || !root) return;
+    if (!view_is_in_tree(*drag_target, root)) { *drag_target = nullptr; return; }
+    auto local = to_local(pt, *drag_target, root);
+    auto* released = root->hit_test(pt);
+    pulp::view::View* click_target = *drag_target;
+    while (click_target && !click_target->on_click) click_target = click_target->parent();
+    auto click_handler = click_target ? click_target->on_click : std::function<void()>{};
+
+    (*drag_target)->on_mouse_up(local);
+    pulp::view::MouseEvent up;
+    up.position = local;
+    up.window_position = pt;
+    up.button = pulp::view::MouseButton::left;
+    up.modifiers = modifiers_from_ns_flags(event.modifierFlags);
+    up.is_down = false;
+    up.click_count = static_cast<int>(event.clickCount);
+    (*drag_target)->on_mouse_event(up);
+    for (auto* b = (*drag_target)->parent(); b; b = b->parent()) {
+        if (!b->on_pointer_event) continue;
+        pulp::view::MouseEvent bme = up;
+        bme.position = to_local(pt, b, root);
+        b->on_pointer_event(bme);
+    }
+    if (released == *drag_target && click_handler) click_handler();
+    *drag_target = nullptr;
+}
+
+void pulp_plugin_wheel(pulp::view::View* root, pulp::view::Point pt, NSEvent* event) {
+    if (!root) return;
+    auto* target = root->hit_test(pt);
+    if (!target) return;
+    pulp::view::MouseEvent me;
+    me.position = pt;
+    me.window_position = pt;
+    me.is_wheel = true;
+    me.scroll_delta_x = static_cast<float>(event.scrollingDeltaX);
+    me.scroll_delta_y = static_cast<float>(-event.scrollingDeltaY);
+    for (auto* v = target; v; v = v->parent()) {
+        if (auto* sv = dynamic_cast<pulp::view::ScrollView*>(v)) {
+            sv->on_mouse_event(me);
+            sv->layout_children();
+            return;
+        }
+        if (v->on_pointer_event) v->on_mouse_event(me);
+    }
+    target->on_mouse_event(me);
+}
+
+} // namespace
+
+@implementation PulpPluginView {
+    pulp::view::View* _dragTarget;  // captured at mouseDown, re-validated each event
+}
 
 - (BOOL)isFlipped { return NO; }
+- (BOOL)acceptsFirstResponder { return YES; }
+- (void)mouseDown:(NSEvent*)event {
+    if (!self.rootView) return;
+    pulp_plugin_mouse_down(self.rootView, event, pulp_plugin_local_point(self, event), &_dragTarget);
+    [self setNeedsDisplay:YES];
+}
+- (void)mouseDragged:(NSEvent*)event {
+    pulp_plugin_mouse_drag(self.rootView, pulp_plugin_local_point(self, event), &_dragTarget);
+    [self setNeedsDisplay:YES];
+}
+- (void)mouseUp:(NSEvent*)event {
+    pulp_plugin_mouse_up(self.rootView, event, pulp_plugin_local_point(self, event), &_dragTarget);
+    [self setNeedsDisplay:YES];
+}
+- (void)scrollWheel:(NSEvent*)event {
+    if (!self.rootView) return;
+    pulp_plugin_wheel(self.rootView, pulp_plugin_local_point(self, event), event);
+    [self setNeedsDisplay:YES];
+}
 - (BOOL)isAccessibilityElement { return YES; }
 - (NSAccessibilityRole)accessibilityRole { return NSAccessibilityGroupRole; }
 - (NSString*)accessibilityLabel { return @"Plugin UI"; }
@@ -247,6 +388,7 @@ public:
             NSRect frame = NSMakeRect(0, 0, size.width, size.height);
             view_ = [[PulpPluginView alloc] initWithFrame:frame];
             view_.rootView = &root_;
+            view_.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
             view_.onResize = ^(uint32_t w, uint32_t h) {
                 this->on_native_frame_changed(w, h);
             };
@@ -361,12 +503,38 @@ private:
 @property (nonatomic, copy) void (^onResize)(uint32_t, uint32_t);
 @end
 
-@implementation PulpGpuPluginView
+@implementation PulpGpuPluginView {
+    pulp::view::View* _dragTarget;  // captured at mouseDown, re-validated each event
+}
+
+- (BOOL)acceptsFirstResponder { return YES; }
+- (void)mouseDown:(NSEvent*)event {
+    if (!self.rootView) return;
+    pulp_plugin_mouse_down(self.rootView, event, pulp_plugin_local_point(self, event), &_dragTarget);
+    if (self.rootView) self.rootView->request_repaint();
+}
+- (void)mouseDragged:(NSEvent*)event {
+    pulp_plugin_mouse_drag(self.rootView, pulp_plugin_local_point(self, event), &_dragTarget);
+    if (self.rootView) self.rootView->request_repaint();
+}
+- (void)mouseUp:(NSEvent*)event {
+    pulp_plugin_mouse_up(self.rootView, event, pulp_plugin_local_point(self, event), &_dragTarget);
+    if (self.rootView) self.rootView->request_repaint();
+}
+- (void)scrollWheel:(NSEvent*)event {
+    if (!self.rootView) return;
+    pulp_plugin_wheel(self.rootView, pulp_plugin_local_point(self, event), event);
+    if (self.rootView) self.rootView->request_repaint();
+}
 
 - (instancetype)initWithFrame:(NSRect)frame {
     self = [super initWithFrame:frame];
     if (self) {
         self.wantsLayer = YES;
+        // Follow the host's editor-container resize. AU v2 hosts (and VST3/CLAP
+        // when they resize the parent) move our frame; flexible autoresizing
+        // makes -setFrameSize: fire, which resizes the surfaces + relays out.
+        self.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         CAMetalLayer* layer = [CAMetalLayer layer];
         layer.device = MTLCreateSystemDefaultDevice();
         layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
