@@ -21,17 +21,21 @@
 
 #include <pulp/view/design_import.hpp>
 #include <pulp/view/anchor_strategy.hpp>
+#include <pulp/view/buttons.hpp>
 #include <pulp/view/input_events.hpp>
 #include <pulp/runtime/base64.hpp>
 #include <pulp/runtime/zip.hpp>
 #include <pulp/view/script_engine.hpp>
+#include <pulp/view/text_editor.hpp>
 #include <pulp/view/widget_bridge.hpp>
 #include <pulp/view/view.hpp>
+#include <pulp/view/widgets.hpp>
 #include <pulp/state/store.hpp>
 #include <choc/text/choc_JSON.h>
 #include <cstdio>
 #include <cstdlib>
 #include <sstream>
+#include <iomanip>
 #include <algorithm>
 #include <cctype>
 #include <functional>
@@ -519,6 +523,102 @@ size_t count_ir_nodes(const IRNode& n) {
     size_t total = 1;
     for (const auto& c : n.children) total += count_ir_nodes(c);
     return total;
+}
+
+std::string color_to_hex(Color color) {
+    std::ostringstream out;
+    out << '#'
+        << std::hex << std::setfill('0') << std::nouppercase
+        << std::setw(2) << static_cast<int>(color.r8())
+        << std::setw(2) << static_cast<int>(color.g8())
+        << std::setw(2) << static_cast<int>(color.b8());
+    if (color.a8() != 255)
+        out << std::setw(2) << static_cast<int>(color.a8());
+    return out.str();
+}
+
+LayoutDirection ir_direction(FlexDirection direction) {
+    return (direction == FlexDirection::row || direction == FlexDirection::row_reverse)
+        ? LayoutDirection::row
+        : LayoutDirection::column;
+}
+
+IRNode view_to_ir_node(const View& view, std::string_view path) {
+    IRNode node;
+    node.name = !view.id().empty() ? view.id() : std::string(path);
+    if (!view.id().empty()) {
+        node.stable_anchor_id = view.id();
+        node.anchor_strategy = "adapter";
+    }
+
+    if (const auto* label = dynamic_cast<const Label*>(&view)) {
+        node.type = "text";
+        node.text_content = label->text();
+        if (label->has_own_font_size()) node.style.font_size = label->font_size();
+        if (label->has_own_text_color()) node.style.color = color_to_hex(label->text_color());
+        if (!label->font_family().empty()) node.style.font_family = label->font_family();
+        if (label->has_own_font_weight()) node.style.font_weight = label->font_weight();
+    } else if (const auto* button = dynamic_cast<const TextButton*>(&view)) {
+        node.type = "button";
+        node.text_content = button->label();
+    } else if (const auto* editor = dynamic_cast<const TextEditor*>(&view)) {
+        node.type = "input";
+        node.attributes["value"] = editor->text();
+    } else if (const auto* checkbox = dynamic_cast<const Checkbox*>(&view)) {
+        node.type = "checkbox";
+        node.attributes["checked"] = checkbox->is_checked() ? "true" : "false";
+    } else if (const auto* knob = dynamic_cast<const Knob*>(&view)) {
+        node.type = "knob";
+        node.audio_widget = AudioWidgetType::knob;
+        node.audio_label = knob->label();
+        node.audio_default = knob->default_value();
+        node.attributes["value"] = std::to_string(knob->value());
+    } else if (const auto* fader = dynamic_cast<const Fader*>(&view)) {
+        node.type = "fader";
+        node.audio_widget = AudioWidgetType::fader;
+        node.audio_label = fader->label();
+        node.attributes["value"] = std::to_string(fader->value());
+        if (fader->orientation() == Fader::Orientation::horizontal)
+            node.attributes["orientation"] = "horizontal";
+    } else if (const auto* meter = dynamic_cast<const Meter*>(&view)) {
+        node.type = "meter";
+        node.audio_widget = AudioWidgetType::meter;
+        node.attributes["value"] = std::to_string(meter->display_rms());
+    } else if (const auto* xy = dynamic_cast<const XYPad*>(&view)) {
+        node.type = "xy_pad";
+        node.audio_widget = AudioWidgetType::xy_pad;
+        node.attributes["x"] = std::to_string(xy->x_value());
+        node.attributes["y"] = std::to_string(xy->y_value());
+    } else {
+        node.type = "frame";
+    }
+
+    const auto& flex = view.flex();
+    node.layout.direction = ir_direction(flex.direction);
+    node.layout.gap = flex.gap;
+    node.layout.padding_top = flex.padding_top >= 0 ? flex.padding_top : flex.padding;
+    node.layout.padding_right = flex.padding_right >= 0 ? flex.padding_right : flex.padding;
+    node.layout.padding_bottom = flex.padding_bottom >= 0 ? flex.padding_bottom : flex.padding;
+    node.layout.padding_left = flex.padding_left >= 0 ? flex.padding_left : flex.padding;
+    if (flex.flex_grow != 0.0f) node.layout.flex_grow = flex.flex_grow;
+    if (flex.flex_shrink != 1.0f) node.layout.flex_shrink = flex.flex_shrink;
+
+    if (flex.preferred_width > 0) node.style.width = flex.preferred_width;
+    else if (view.bounds().width > 0) node.style.width = view.bounds().width;
+    if (flex.preferred_height > 0) node.style.height = flex.preferred_height;
+    else if (view.bounds().height > 0) node.style.height = view.bounds().height;
+    if (flex.min_width > 0) node.style.min_width = flex.min_width;
+    if (flex.min_height > 0) node.style.min_height = flex.min_height;
+    if (flex.max_width > 0) node.style.max_width = flex.max_width;
+    if (flex.max_height > 0) node.style.max_height = flex.max_height;
+    if (view.has_background_color()) node.style.background_color = color_to_hex(view.background_color());
+
+    for (size_t i = 0; i < view.child_count(); ++i) {
+        const auto* child = view.child_at(i);
+        if (child == nullptr) continue;
+        node.children.push_back(view_to_ir_node(*child, std::string(path) + "/" + std::to_string(i)));
+    }
+    return node;
 }
 
 }  // namespace
@@ -1290,6 +1390,30 @@ DesignIR parse_claude_html_with_runtime(const std::string& html, ClaudeRuntimeOp
         // so the caller never gets worse than the current behavior.
         size_t nodes = count_ir_nodes(ir.root);
         if (nodes <= 9) {
+            // Native JSX live bundles route ReactDOM through @pulp/react, so
+            // there may be no expanded DOM for walkDomJson() to harvest. In
+            // that case the WidgetBridge root is the materialized tree; freeze
+            // that native tree into DesignIR so the same bundle can still emit
+            // baked IR/C++.
+            if (root.child_count() > 0) {
+                DesignIR native_ir;
+                native_ir.source = DesignSource::claude;
+                native_ir.root = view_to_ir_node(root, "root");
+                native_ir.root.type = "frame";
+                if (native_ir.root.name.empty()) native_ir.root.name = "ClaudeImport";
+                const size_t native_nodes = count_ir_nodes(native_ir.root);
+                if (native_nodes > 9) {
+                    if (opts.error_out) opts.error_out->clear();
+                    native_ir.root.provenance = IRProvenance{"claude-native-view", "1", {}};
+                    native_ir.root.confidence = IRConfidence::pass;
+                    assign_anchors(native_ir.root, AnchorStrategy::content_hash);
+                    native_ir.capture_method = "runtime_native_snapshot";
+                    native_ir.settle_rounds = 4;
+                    native_ir.source_adapter = "claude-native-view";
+                    native_ir.source_version = "1";
+                    return native_ir;
+                }
+            }
             std::ostringstream ss;
             ss << "runtime walker produced only " << nodes
                << " nodes (<= loader-shell floor of 9); falling back to static parser";
