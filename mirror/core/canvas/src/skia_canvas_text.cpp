@@ -983,6 +983,53 @@ float SkiaCanvas::measure_text(const std::string& text) {
     return total;
 }
 
+float SkiaCanvas::text_x_for_byte(const std::string& text,
+                                  std::size_t byte_index) {
+    // Clamp into range; a boundary past the end is the end-of-text caret.
+    const std::size_t clamped =
+        std::min(byte_index, text.size());
+    if (clamped == 0 || text.empty()) return 0.0f;
+
+#ifdef PULP_HAS_TEXT_SHAPING
+    // Shape the FULL run with the SAME make_paragraph(...) config fill_text
+    // uses (family / size / weight / slant / letter-spacing / direction /
+    // features). Querying caret x against the full shaped run is what makes
+    // this drift-proof for kerned + letter-spaced text: the prefix substring
+    // measured in isolation can re-kern at its boundary and report a
+    // different advance than the painter actually draws.
+    auto prepared = make_paragraph(text, font_family_, font_size_,
+                                    font_weight_, font_slant_,
+                                    letter_spacing_, /*ltr=*/true,
+                                    std::nullopt, font_features_);
+    if (prepared.paragraph) {
+        // [0, clamped) — the glyph-cluster boxes preceding the caret.
+        // kMax height keeps all line boxes a uniform height; kTight width
+        // gives the exact run advance. The caret sits at the trailing edge
+        // of the last box (LTR). If the boundary falls mid-cluster (rare for
+        // a byte index landing inside a multi-byte UTF-8 sequence) the box
+        // still covers up to the cluster end, which is the visually correct
+        // caret snap.
+        auto boxes = prepared.paragraph->getRectsForRange(
+            0u, static_cast<unsigned>(clamped),
+            skia::textlayout::RectHeightStyle::kMax,
+            skia::textlayout::RectWidthStyle::kTight);
+        if (!boxes.empty()) {
+            float right = boxes.front().rect.fRight;
+            for (const auto& b : boxes) right = std::max(right, b.rect.fRight);
+            return right;
+        }
+        // Empty box list with a non-zero prefix (e.g. all-whitespace prefix
+        // that SkParagraph collapses) — fall back to the full advance when
+        // the caret is at end-of-text, else to the prefix measurement below.
+        if (clamped == text.size()) return prepared.advance;
+    }
+#endif
+
+    // Fallback: prefix substring measurement (matches the base-class default
+    // and the no-Skia path). Correct for unkerned, unspaced text.
+    return measure_text(text.substr(0, clamped));
+}
+
 Canvas::TextMetrics SkiaCanvas::measure_text_full(const std::string& text) {
     SkFont font = make_font(font_family_, font_size_, font_weight_, font_slant_);
     if (!font.getTypeface()) {
