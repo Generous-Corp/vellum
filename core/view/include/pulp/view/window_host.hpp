@@ -35,6 +35,17 @@ struct WindowOptions {
     /// flag fall back to normal behaviour.
     bool initially_hidden = false;
 
+    /// WYSIWYG P4 FIX 4 — explicit window role for the close policy. A PRIMARY
+    /// window (default) is the app's main window: closing it stops/tears down
+    /// the app. A SECONDARY window (e.g. the floating InspectorWindow) only
+    /// orders itself out on close and never stops the app, so closing the
+    /// inspector while the main canvas is open leaves the app running, and
+    /// closing the main canvas while the inspector is open still quits.
+    /// Replaces the previous "stop the app when no other visible window
+    /// remains" heuristic, which left the app alive with only the inspector
+    /// after the main window closed.
+    bool secondary_window = false;
+
     // ── Multi-window hints (Phase 6) ────────────────────────────────────
     // These are used by WindowManager to configure platform-specific
     // window behavior. Callers creating standalone windows can ignore them.
@@ -126,6 +137,25 @@ public:
     virtual void* dawn_queue_handle() const { return nullptr; }
     virtual void* dawn_instance_handle() const { return nullptr; }
     virtual render::GpuSurface* gpu_surface() const { return nullptr; }
+
+    /// Most recent whole-recording GPU *render* time in milliseconds for the
+    /// last presented frame, or 0 when GPU timing is unavailable (CPU host,
+    /// adapter without `timestamp-query`, or no sample landed yet).
+    ///
+    /// This is render-recording time (Skia Graphite's whole-recording
+    /// GpuStats elapsed time as exposed by `SkiaSurface::gpu_render_time_ms()`),
+    /// NOT total frame time and NOT a per-pass number. See
+    /// `planning/2026-05-21-gpu-timestamp-readback-proposal.md`. GPU-backed
+    /// platform hosts forward this from their `SkiaSurface`; the base and
+    /// CPU/non-GPU hosts return 0.
+    virtual double gpu_render_time_ms() const { return 0.0; }
+
+    /// Whether whole-recording GPU render timing is available this run — the
+    /// host owns a `SkiaSurface` whose
+    /// `SkiaSurface::gpu_render_timing_available()` is true. When false the
+    /// inspector should show the honest "GPU timing unavailable" rather than 0.
+    virtual bool gpu_render_timing_available() const { return false; }
+
     virtual ContentSize get_content_size() const;
 
     // Attach/detach a platform-native child view inside this host. Coordinates

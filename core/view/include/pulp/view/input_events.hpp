@@ -74,6 +74,26 @@ enum class PointerType : uint8_t {
     pen   = 2,   ///< Stylus / Apple Pencil
 };
 
+/// Explicit press/drag/release phase for a pointer gesture.
+///
+/// `MouseEvent::is_down` alone is ambiguous for a multi-event gesture: the
+/// historical headless convention is press=`is_down=true`, drag-tick=
+/// `is_down=false`, release=`is_down=true` (JUCE-style), while a real
+/// platform host naturally delivers press=down, drag=down, release=up. A
+/// consumer that infers press/drag/release from `is_down` alone therefore
+/// behaves OPPOSITELY between the two callers (pulp WYSIWYG P2h: a live mac
+/// drag ended its move/resize gesture on the FIRST drag tick and fell
+/// through to re-selection). `phase` lets a host state the gesture phase
+/// unambiguously. `automatic` (the default) preserves the legacy is_down
+/// inference for callers that don't set it.
+enum class MousePhase : uint8_t {
+    automatic = 0,  ///< Infer from is_down (legacy / headless default).
+    press,          ///< Initial button-down that begins a gesture.
+    drag,           ///< Pointer moved with the button held (a drag tick).
+    release,        ///< Button-up that ends a gesture.
+    hover,          ///< Pointer moved with no button held.
+};
+
 /// Rich mouse/pointer event with position, modifiers, button state, pointer ID,
 /// and stylus properties. Unified for mouse, touch, and pen input.
 struct MouseEvent {
@@ -84,6 +104,7 @@ struct MouseEvent {
     int pointer_id = 0;          ///< 0 = primary, >0 = additional touches (multi-touch)
     int click_count = 1;         ///< 1=single, 2=double, 3=triple click
     bool is_down = false;        ///< True for mouse-down / touch-began events
+    MousePhase phase = MousePhase::automatic;  ///< Explicit gesture phase (see MousePhase)
     bool is_cancelled = false;   ///< True for touchesCancelled (→ pointercancel)
     bool is_wheel = false;       ///< True for scroll wheel events
     float scroll_delta_x = 0;   ///< Horizontal scroll delta (positive = right)
@@ -105,6 +126,28 @@ struct MouseEvent {
     bool isPen() const        { return pointer_type == PointerType::pen; }
     bool isWheel() const      { return is_wheel; }
     bool isPrimary() const    { return pointer_id == 0; }
+
+    // ── Gesture-phase resolution (pulp WYSIWYG P2h) ─────────────────
+    // When `phase` is set explicitly (a real platform host), use it.
+    // When it is `automatic` (legacy / headless callers that only set
+    // `is_down`), keep the historical inference: `is_down` events that
+    // begin a gesture read as a press; a host that follows the JUCE
+    // drag-tick convention (drag=is_down=false, release=is_down=true)
+    // is unchanged because those callers leave `phase == automatic`.
+    /// True for the initial button-down that begins a gesture.
+    bool isPress() const {
+        return phase == MousePhase::automatic ? is_down
+                                              : phase == MousePhase::press;
+    }
+    /// True for a drag tick (pointer moved with the button held). With
+    /// `automatic` phase this is never authoritative — the legacy
+    /// inference cannot tell a drag tick from a release — so callers on
+    /// the legacy path keep using `is_down` directly.
+    bool isDrag() const { return phase == MousePhase::drag; }
+    /// True for the button-up that ends a gesture.
+    bool isRelease() const { return phase == MousePhase::release; }
+    /// True when an explicit (non-automatic) phase is present.
+    bool hasExplicitPhase() const { return phase != MousePhase::automatic; }
 
     /// W3C pointerType string
     const char* pointerTypeString() const {

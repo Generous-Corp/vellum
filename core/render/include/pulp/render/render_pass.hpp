@@ -55,6 +55,11 @@ public:
         frame_count_++;
         total_time_ms_ = 0;
         over_budget_ = false;
+        // Invalidate last frame's whole-recording GPU sample; a fresh sample
+        // (if any) is fed in via set_gpu_render_time_ms() for this frame. The
+        // value itself is left as-is so a stale read between begin_frame() and
+        // the next set is reported as invalid rather than as a bogus 0.
+        gpu_render_time_valid_ = false;
     }
 
     /// Begin a render pass of the given type.
@@ -103,6 +108,36 @@ public:
         return false;
     }
 
+    /// Feed the whole-recording GPU render time for this frame.
+    ///
+    /// This is FRAME-LEVEL — the entire render recording's GPU-side elapsed
+    /// time (Skia Graphite GpuStats(kElapsedTime), surfaced by
+    /// `SkiaSurface::gpu_render_time_ms()` / `WindowHost::gpu_render_time_ms()`).
+    /// It is distinct from the per-pass `set_pass_gpu_time()` numbers: the GPU
+    /// render clock is whole-recording, not per-pass, so this is the honest
+    /// place to record it. `valid` should reflect
+    /// `WindowHost::gpu_render_timing_available()`. Negative durations are
+    /// clamped to "invalid". See
+    /// `planning/2026-05-21-gpu-timestamp-readback-proposal.md`.
+    void set_gpu_render_time_ms(float ms, bool valid) {
+        if (valid && ms >= 0.0f) {
+            gpu_render_time_ms_ = ms;
+            gpu_render_time_valid_ = true;
+        } else {
+            gpu_render_time_valid_ = false;
+        }
+    }
+
+    /// Whole-recording GPU render time (ms) for the most recent frame that fed
+    /// a valid sample. Only meaningful when gpu_render_timing_available() is
+    /// true. Frame-level, NOT per-pass — see set_gpu_render_time_ms().
+    float gpu_render_time_ms() const { return gpu_render_time_ms_; }
+
+    /// Whether the frame-level whole-recording GPU render time holds a real,
+    /// current sample. The inspector uses this to decide between showing the
+    /// GPU render number and showing "GPU render timing unavailable".
+    bool gpu_render_timing_available() const { return gpu_render_time_valid_; }
+
     /// Set the per-frame time budget in milliseconds (0 = no budget).
     /// At 60fps, budget should be ~16ms. At 120fps, ~8ms.
     void set_budget(float ms) { budget_ms_ = ms; }
@@ -130,6 +165,10 @@ private:
     float total_time_ms_ = 0;
     bool over_budget_ = false;
     uint64_t frame_count_ = 0;
+    // Frame-level (whole-recording) GPU render time, distinct from the
+    // per-pass PassStats::gpu_time_ms. See set_gpu_render_time_ms().
+    float gpu_render_time_ms_ = 0.0f;
+    bool gpu_render_time_valid_ = false;
 };
 
 } // namespace pulp::render

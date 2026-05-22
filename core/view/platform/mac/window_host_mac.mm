@@ -34,6 +34,24 @@
 // our own hidden state and always unhide before setting a different cursor.
 static bool s_cursor_hidden = false;
 
+// ── Diagonal resize cursor (WYSIWYG P2h REGRESSION 5) ────────────────────────
+// AppKit exposes no PUBLIC diagonal corner-resize cursor, but NSCursor carries
+// the private `_windowResizeNorthWestSouthEastCursor` (↖↘) and
+// `_windowResizeNorthEastSouthWestCursor` (↗↙) selectors that NSWindow itself
+// uses for corner resizing. We reach them via respondsToSelector so a future
+// SDK that renames/removes them degrades to a crosshair instead of crashing.
+// `nwse == YES` → the ↖↘ (TL/BR) variant; NO → the ↗↙ (TR/BL) variant.
+static NSCursor* pulp_diagonal_resize_cursor(BOOL nwse) {
+    SEL sel = nwse
+        ? NSSelectorFromString(@"_windowResizeNorthWestSouthEastCursor")
+        : NSSelectorFromString(@"_windowResizeNorthEastSouthWestCursor");
+    if ([NSCursor respondsToSelector:sel]) {
+        id cur = [NSCursor performSelector:sel];
+        if ([cur isKindOfClass:[NSCursor class]]) return (NSCursor*)cur;
+    }
+    return [NSCursor crosshairCursor];
+}
+
 // ── App menu helper ──────────────────────────────────────────────────────────
 
 @interface PulpAppTerminationHandler : NSObject
@@ -53,13 +71,15 @@ static bool s_cursor_hidden = false;
 }
 
 - (void)quit:(id)sender {
-    NSWindow* target = [NSApp keyWindow];
-    if (target == nil) target = [NSApp mainWindow];
-    if (target != nil) {
-        [target performClose:sender];
-    } else {
-        [NSApp stop:nil];
-    }
+    (void)sender;
+    // cmd+Q / Quit terminates the WHOLE app in one press. Previously this did
+    // performClose on only the KEY window, so with the floating inspector
+    // focused cmd+Q closed just the inspector and a second cmd+Q was needed.
+    // [NSApp stop:nil] returns from the [NSApp run] in run_event_loop, main()
+    // unwinds, and every WindowHost destructor closes its window (canvas +
+    // inspector + any others) — a single, clean quit. (cmd+W still closes one
+    // window via the standard responder chain.)
+    [NSApp stop:nil];
 }
 
 @end
@@ -122,6 +142,11 @@ static void install_app_menu(NSString* appName) {
     // `dispatch_block_create` blocks do not, and cancelling a non-dispatch
     // block aborts.
     std::shared_ptr<std::atomic<bool>> _deferredClickAlive;
+    // WYSIWYG P2h REGRESSION 4 — set in -acceptsFirstMouse: (the click that
+    // brings an inactive window forward), consumed + cleared in the next
+    // -mouseDown: so the window-foregrounding click does not also select a
+    // view in the inspector overlay.
+    BOOL _pendingFirstMouse;
 }
 
 - (instancetype)initWithFrame:(NSRect)frame {
@@ -161,7 +186,21 @@ static void install_app_menu(NSString* appName) {
 // the dirty region with the window bg before invoking drawRect.
 - (BOOL)isOpaque { return YES; }
 - (BOOL)acceptsFirstResponder { return YES; }
-- (BOOL)acceptsFirstMouse:(NSEvent*)e { (void)e; return YES; }
+- (BOOL)acceptsFirstMouse:(NSEvent*)e {
+    (void)e;
+    // The click that activates an inactive window foregrounds it ONLY — it is
+    // NOT delivered as a mouseDown, so it cannot select a view in the inspector
+    // overlay ("the foregrounding click shouldn't select"). Returning NO (the
+    // AppKit default) also means that once the window IS key, hover (mouseMoved)
+    // and clicks behave normally. The prior YES + _pendingFirstMouse approach
+    // left a NON-key window (e.g. when the floating inspector held key focus)
+    // with dead hover AND every click eaten — the cause of "after Esc I can't
+    // hover/click until I cycle Cmd+I". One click now refocuses the canvas and
+    // hover+click resume. Trade-off: a first click on a widget while the window
+    // is inactive foregrounds rather than interacts — correct for an inspect
+    // surface.
+    return NO;
+}
 
 // pulp #2088 — the Obj-C `_focusedView` ivar is a parallel pointer to
 // `pulp::view::View::focused_input_`. The static is auto-cleared by ~View()
@@ -213,7 +252,25 @@ static void install_app_menu(NSString* appName) {
     if (!self.rootView) return;
     auto pt = [self localPoint:event];
     auto* target = self.rootView->hit_test(pt);
-    if (!target) return;
+    if (!target) {
+        // WYSIWYG P6 FIX 4 — hovering over EMPTY background inside a scroll
+        // pane returns no hit (no hit-testable child under the point), which
+        // previously dropped the wheel event. Route it to the ScrollView the
+        // cursor is over so scrolling works anywhere in the pane without a
+        // click first.
+        if (auto* sv = pulp::view::find_scroll_view_at(*self.rootView, pt)) {
+            pulp::view::MouseEvent me;
+            me.position = pt;
+            me.window_position = pt;
+            me.is_wheel = true;
+            me.scroll_delta_x = static_cast<float>(event.scrollingDeltaX);
+            me.scroll_delta_y = static_cast<float>(-event.scrollingDeltaY);
+            sv->on_mouse_event(me);
+            sv->layout_children();
+            [self setNeedsDisplay:YES];
+        }
+        return;
+    }
 
     pulp::view::MouseEvent me;
     me.position = pt;
@@ -284,14 +341,28 @@ static void install_app_menu(NSString* appName) {
                 _focusedView = pulp::view::View::focused_input_;
             }
 
-        // Inspector intercept — consume clicks when inspector is active
+        // Inspector intercept — consume clicks when inspector is active.
+        //
+        // WYSIWYG P2h REGRESSION 4: when Cmd+I foregrounds the floating
+        // inspector window, clicking the MAIN window to bring it forward
+        // should ONLY foreground it — not also select a view under that
+        // activating click. `acceptsFirstMouse:` returns YES so the
+        // window-activating click IS delivered to mouseDown; we flag it in
+        // -acceptsFirstMouse: and, when set, skip forwarding this one
+        // mouse-down to the inspector hook (and clear the flag). Hover
+        // (mouseMoved) still highlights regardless — only this single
+        // activating press is suppressed, and only for the inspector path.
         {
             auto mods = modifiers_from_ns_flags(event.modifierFlags);
             pulp::view::MouseEvent me;
             me.position = {pt.x, pt.y};
             me.modifiers = mods;
             me.is_down = true;
-            if (pulp::view::View::call_inspector_mouse_hook(me)) {
+            me.phase = pulp::view::MousePhase::press;
+            // WYSIWYG P4 FIX 1 — pass this window's root so the installed hook
+            // gates to the inspected canvas root; events in a secondary window
+            // (the floating InspectorWindow) must not touch the canvas overlay.
+            if (pulp::view::View::call_inspector_mouse_hook(me, self.rootView)) {
                 [self setNeedsDisplay:YES];
                 return;
             }
@@ -465,6 +536,30 @@ static void install_app_menu(NSString* appName) {
 - (void)mouseDragged:(NSEvent*)event {
     @try {
         try {
+            // Inspector intercept — route drag-ticks to the in-canvas overlay
+            // so its move/resize gesture state machine sees the drag stream.
+            // mouseDown alone is not enough: without this the overlay gets the
+            // press but never the drag or release, so a drag "sort of works"
+            // but never completes/commits. Consume when the overlay handles it.
+            {
+                auto pt_i = [self localPoint:event];
+                auto mods = modifiers_from_ns_flags(event.modifierFlags);
+                pulp::view::MouseEvent me;
+                me.position = {pt_i.x, pt_i.y};
+                me.modifiers = mods;
+                me.is_down = true;  // button still held during drag
+                // WYSIWYG P2h: state the gesture phase explicitly so the
+                // overlay's move/resize machine treats this as a DRAG TICK,
+                // not a release. Without this the overlay (which historically
+                // inferred drag-vs-release from is_down) ended the gesture on
+                // the first mac drag tick and fell through to re-selection.
+                me.phase = pulp::view::MousePhase::drag;
+                // WYSIWYG P4 FIX 1 — gate to this window's root (see press).
+                if (pulp::view::View::call_inspector_mouse_hook(me, self.rootView)) {
+                    [self setNeedsDisplay:YES];
+                    return;
+                }
+            }
             // pulp #992 — _dragTarget is captured in mouseDown but the View
             // it points to may be unmounted (and freed) before the next
             // drag event arrives, e.g. when a click triggers a React state
@@ -510,6 +605,23 @@ static void install_app_menu(NSString* appName) {
 - (void)mouseUp:(NSEvent*)event {
     @try {
         try {
+            // Inspector intercept — route the release to the overlay so its
+            // move/resize gesture commits (and records its undo entry).
+            // Mirrors mouseDown/mouseDragged. Consume when handled.
+            {
+                auto pt_i = [self localPoint:event];
+                auto mods = modifiers_from_ns_flags(event.modifierFlags);
+                pulp::view::MouseEvent me;
+                me.position = {pt_i.x, pt_i.y};
+                me.modifiers = mods;
+                me.is_down = false;  // release
+                me.phase = pulp::view::MousePhase::release;  // WYSIWYG P2h
+                // WYSIWYG P4 FIX 1 — gate to this window's root (see press).
+                if (pulp::view::View::call_inspector_mouse_hook(me, self.rootView)) {
+                    [self setNeedsDisplay:YES];
+                    return;
+                }
+            }
             if (_dragTarget) {
                 // pulp #992 — _dragTarget may point at a freed View if
                 // the mouseDown handler triggered a React unmount of the
@@ -846,6 +958,24 @@ static void install_app_menu(NSString* appName) {
 
 - (void)insertText:(id)string replacementRange:(NSRange)range {
     (void)range;
+    NSString* in_str = [string isKindOfClass:[NSAttributedString class]]
+        ? [(NSAttributedString*)string string] : (NSString*)string;
+
+    // WYSIWYG P3 — inspector inline Text-tool edit intercepts character
+    // input BEFORE the focused widget. When the inspector consumes it (an
+    // inline text edit is in progress), the keystroke must NOT also reach
+    // a focused widget. Checked before the focused-view delivery below.
+    {
+        pulp::view::TextInputEvent ite;
+        ite.text = [in_str UTF8String];
+        // WYSIWYG P4 FIX 1 — gate to this window's root so text typed into a
+        // secondary window doesn't drive the canvas overlay's inline edit.
+        if (pulp::view::View::call_inspector_text_hook(ite, self.rootView)) {
+            [self setNeedsDisplay:YES];
+            return;
+        }
+    }
+
     // pulp #1708 — read from View::focused_input_ rather than the raw
     // _focusedView ivar. The static is auto-cleared by ~View() when the
     // focused widget is destroyed (e.g., React unmount of an open modal),
@@ -963,7 +1093,10 @@ static void install_app_menu(NSString* appName) {
                 pulp::view::MouseEvent me;
                 me.position = {pt.x, pt.y};
                 me.is_down = false;
-                pulp::view::View::call_inspector_mouse_hook(me);
+                me.phase = pulp::view::MousePhase::hover;  // WYSIWYG P2h
+                // WYSIWYG P4 FIX 1 — gate to this window's root so hovering the
+                // floating InspectorWindow does not highlight the canvas.
+                pulp::view::View::call_inspector_mouse_hook(me, self.rootView);
                 // Don't consume — let normal hover handling continue for cursor changes
             }
 
@@ -981,8 +1114,25 @@ static void install_app_menu(NSString* appName) {
             self.rootView->simulate_hover(pt);
 
             auto* target = self.rootView->hit_test(pt);
-            if (target) {
-                auto style = target->cursor();
+            // WYSIWYG P2d — the inspector overlay may override the cursor for
+            // its move/resize affordances (it owns mouse-move before normal
+            // hit-testing). A returned style >= 0 wins over the hit view's
+            // own cursor(); -1 defers to the normal path below.
+            int inspector_cursor = -1;
+            {
+                pulp::view::MouseEvent cme;
+                cme.position = {pt.x, pt.y};
+                cme.is_down = false;
+                // WYSIWYG P4 FIX 1 — gate to this window's root so the canvas
+                // overlay's cursor affordance is not driven by moves inside a
+                // secondary window.
+                inspector_cursor =
+                    pulp::view::View::call_inspector_cursor_hook(cme, self.rootView);
+            }
+            if (target || inspector_cursor >= 0) {
+                auto style = inspector_cursor >= 0
+                    ? static_cast<pulp::view::View::CursorStyle>(inspector_cursor)
+                    : target->cursor();
                 // Unhide cursor before switching to any non-invisible style
                 if (style != pulp::view::View::CursorStyle::invisible && s_cursor_hidden) {
                     [NSCursor unhide];
@@ -1013,12 +1163,20 @@ static void install_app_menu(NSString* appName) {
                         [[NSCursor resizeUpDownCursor] set]; break;
                     case pulp::view::View::CursorStyle::top_left_resize:
                     case pulp::view::View::CursorStyle::bottom_right_resize:
-                        // macOS doesn't have a diagonal NW-SE cursor — use crosshair
-                        [[NSCursor crosshairCursor] set]; break;
+                        // WYSIWYG P2h REGRESSION 5 — proper diagonal ↖↘
+                        // resize cursor. AppKit ships no PUBLIC diagonal
+                        // resize cursor, but the private
+                        // `_windowResizeNorthWestSouthEastCursor` selector
+                        // is the standard NSWindow corner-resize arrow.
+                        // Guard with respondsToSelector and fall back to
+                        // crosshair if the (undocumented) symbol is gone.
+                        [pulp_diagonal_resize_cursor(YES) set]; break;
                     case pulp::view::View::CursorStyle::top_right_resize:
                     case pulp::view::View::CursorStyle::bottom_left_resize:
-                        // macOS doesn't have a diagonal NE-SW cursor — use crosshair
-                        [[NSCursor crosshairCursor] set]; break;
+                        // WYSIWYG P2h REGRESSION 5 — proper diagonal ↗↙
+                        // resize cursor (private
+                        // `_windowResizeNorthEastSouthWestCursor`).
+                        [pulp_diagonal_resize_cursor(NO) set]; break;
                     case pulp::view::View::CursorStyle::multi_directional_resize:
                         [[NSCursor openHandCursor] set]; break;
                     // pulp #1550 Tier-4 macOS partial 2026-05-12 — 5
@@ -1198,7 +1356,7 @@ static void install_app_menu(NSString* appName) {
             static_cast<float>(bounds.size.height)});
         self.rootView->layout_children();
         self.rootView->paint_all(canvas);
-        pulp::view::View::paint_overlays(canvas);
+        pulp::view::View::paint_overlays(canvas, self.rootView);
 
         // Inspector overlay is painted automatically via View::paint_overlays()
     }
@@ -1342,14 +1500,26 @@ static void install_app_menu(NSString* appName) {
 /// design aspect regardless of drag handle or zoom path. When 0, no
 /// constraint is applied.
 @property (nonatomic, assign) CGFloat aspectRatio;
+/// WYSIWYG P4 FIX 4 — explicit window role for the close policy. A SECONDARY
+/// window (the floating inspector) only orders itself out on close and never
+/// stops the app; a PRIMARY window (the main canvas, the default) stops the
+/// app on close regardless of whatever secondary windows remain visible. This
+/// replaces the previous visible-window-count heuristic, which left the app
+/// running with only the inspector after the main window closed.
+@property (nonatomic, assign) BOOL isSecondaryWindow;
 @end
 
 @implementation PulpWindowDelegate
 
 - (BOOL)windowShouldClose:(NSWindow*)sender {
     if (self.onClose) self.onClose();
-    [NSApp stop:nil];
     [sender orderOut:nil];
+    // WYSIWYG P4 FIX 4 — role-based close policy (replaces the visible-count
+    // heuristic). A secondary window (e.g. the floating inspector) closing only
+    // orders itself out and leaves the main window + app running. A primary
+    // window (the main canvas) closing stops the app regardless of any
+    // secondary windows still visible.
+    if (!self.isSecondaryWindow) [NSApp stop:nil];
     return YES;
 }
 
@@ -1476,7 +1646,24 @@ public:
             view_.frameClock = &frame_clock_;
             [window_ setContentView:view_];
 
+            // WYSIWYG QA BUG 5 — the CPU host backs the FLOATING inspector
+            // window. Its PulpView tracking area carries NSTrackingMouseMoved,
+            // but a tracking area only fans -mouseMoved: out to its owner when
+            // the window itself accepts mouse-moved events; NSWindow defaults
+            // that flag to NO. The main GPU canvas window happened to get moves
+            // anyway (primary key window, continuous run-loop pump), so the
+            // shared -mouseMoved: -> rootView->simulate_hover(pt) path that
+            // drives View::on_hover_move() (and thus the ToolStrip's per-button
+            // tooltip) never fired for the secondary inspector window. Opting
+            // the window into mouse-moved delivery makes hover reach the strip
+            // so the "Select (V)" / "Text (T)" tooltips paint live.
+            [window_ setAcceptsMouseMovedEvents:YES];
+
             delegate_ = [[PulpWindowDelegate alloc] init];
+            // WYSIWYG P4 FIX 4 — role drives the close policy (see
+            // windowShouldClose:). Default primary; secondary windows (the
+            // floating inspector) opt in via WindowOptions::secondary_window.
+            delegate_.isSecondaryWindow = options.secondary_window ? YES : NO;
             delegate_.onResize = ^(float w, float h) {
                 // pulp #1321: belt-and-suspenders relayout — PulpView's
                 // setFrameSize: already pushes new bounds + relayouts when
@@ -1504,6 +1691,19 @@ public:
         // between here and the caller's earlier-destroyed bridge/engine, so
         // cancelling now reliably catches every still-queued block.
         [view_ prepareForTeardown];
+        // Fully detach the NSWindow when the host is destroyed (e.g. the Cmd+I
+        // toggle's reset()). Without this the window LINGERED on screen with
+        // its C++ root torn out (so it looked "cleared"), the unique_ptr went
+        // null so the next Cmd+I stacked ANOTHER inspector, and the lingering
+        // window's delegate still pointed at the freed close_callback_ — so
+        // closing it invoked a dangling callback (UAF / pointer-auth crash).
+        // Clear the callback + delegate FIRST so close can't re-enter
+        // windowShouldClose:/onClose during teardown; releasedWhenClosed=NO so
+        // our ARC strong ref controls the final dealloc.
+        delegate_.onClose = nil;
+        [window_ setDelegate:nil];
+        [window_ setReleasedWhenClosed:NO];
+        [window_ close];
         root_.set_window_host(nullptr);
         root_.set_frame_clock(nullptr);
     }
@@ -1679,6 +1879,11 @@ public:
             [window_ setContentView:metal_view_];
 
             delegate_ = [[PulpWindowDelegate alloc] init];
+            // WYSIWYG P4 FIX 4 — role drives the close policy (see
+            // windowShouldClose:). The GPU host is normally the primary main
+            // canvas window; secondary windows opt in via
+            // WindowOptions::secondary_window.
+            delegate_.isSecondaryWindow = options.secondary_window ? YES : NO;
             delegate_.onResize = ^(float w, float h) {
                 handle_resize(w, h);
             };
@@ -1690,6 +1895,21 @@ public:
     }
 
     ~MacGpuWindowHost() override {
+        // WYSIWYG P4 FIX 2 — detach the NSWindow + delegate FIRST, mirroring
+        // ~MacWindowHost. The GPU host is the MAIN canvas window; if it is
+        // destroyed while still visible (e.g. app teardown, host swap) AppKit
+        // can otherwise keep the window alive holding a delegate whose onClose
+        // block closes over this now-freed host (`close_callback_`), so a later
+        // close: invokes a dangling callback (UAF / pointer-auth crash). Clear
+        // the callback + delegate before close so windowShouldClose:/onClose
+        // can't re-enter during teardown; releasedWhenClosed=NO so our ARC
+        // strong ref controls the final dealloc.
+        delegate_.onClose = nil;
+        delegate_.onResize = nil;
+        [window_ setDelegate:nil];
+        [window_ setReleasedWhenClosed:NO];
+        [window_ close];
+
         stop_display_link();
         skia_surface_.reset();
         gpu_surface_.reset();
@@ -1749,6 +1969,17 @@ public:
         return gpu_surface_ ? gpu_surface_->dawn_instance_handle() : nullptr;
     }
     render::GpuSurface* gpu_surface() const override { return gpu_surface_.get(); }
+
+    // Whole-recording GPU render time for the last presented frame, forwarded
+    // from the owning SkiaSurface (Graphite GpuStats elapsed time). Guards null
+    // so a host whose surface failed to create reports the honest no-op.
+    double gpu_render_time_ms() const override {
+        return skia_surface_ ? skia_surface_->gpu_render_time_ms() : 0.0;
+    }
+    bool gpu_render_timing_available() const override {
+        return skia_surface_ ? skia_surface_->gpu_render_timing_available() : false;
+    }
+
     bool attach_native_child_view(void* child_view,
                                   float x,
                                   float y,
@@ -2219,11 +2450,11 @@ private:
             canvas.translate(tx, ty);
             canvas.scale(sx, sy);
             root_.paint_all(canvas);
-            pulp::view::View::paint_overlays(canvas);
+            pulp::view::View::paint_overlays(canvas, &root_);
             canvas.restore_to_count(saved);
         } else {
             root_.paint_all(canvas);
-            pulp::view::View::paint_overlays(canvas);
+            pulp::view::View::paint_overlays(canvas, &root_);
         }
 
         // Inspector overlay is painted automatically via View::paint_overlays()

@@ -877,24 +877,48 @@ std::vector<View::OverlayRequest>& View::overlay_queue() {
 
 // Inspector hooks — set by the inspector module via function pointers
 // to avoid circular dependency (view → inspect).
-static std::function<void(canvas::Canvas&)> s_inspector_paint_hook;
+static std::function<void(canvas::Canvas&, View*)> s_inspector_paint_hook;
 static std::function<bool(const KeyEvent&)> s_inspector_key_hook;
-static std::function<bool(const MouseEvent&)> s_inspector_mouse_hook;
+// WYSIWYG P4 FIX 1 — mouse/text/cursor hooks now carry the event's root View
+// (mirroring the paint hook's painting_root) so the installed hook can gate to
+// the inspected canvas root and ignore a secondary window's events.
+static std::function<bool(const MouseEvent&, View*)> s_inspector_mouse_hook;
+static std::function<bool(const TextInputEvent&, View*)> s_inspector_text_hook;
 
-void View::set_inspector_paint_hook(std::function<void(canvas::Canvas&)> hook) {
+void View::set_inspector_paint_hook(
+    std::function<void(canvas::Canvas&, View*)> hook) {
     s_inspector_paint_hook = std::move(hook);
 }
 void View::set_inspector_key_hook(std::function<bool(const KeyEvent&)> hook) {
     s_inspector_key_hook = std::move(hook);
 }
-void View::set_inspector_mouse_hook(std::function<bool(const MouseEvent&)> hook) {
+void View::set_inspector_mouse_hook(
+    std::function<bool(const MouseEvent&, View*)> hook) {
     s_inspector_mouse_hook = std::move(hook);
 }
 bool View::call_inspector_key_hook(const KeyEvent& e) {
     return s_inspector_key_hook ? s_inspector_key_hook(e) : false;
 }
-bool View::call_inspector_mouse_hook(const MouseEvent& e) {
-    return s_inspector_mouse_hook ? s_inspector_mouse_hook(e) : false;
+bool View::call_inspector_mouse_hook(const MouseEvent& e, View* event_root) {
+    return s_inspector_mouse_hook ? s_inspector_mouse_hook(e, event_root)
+                                  : false;
+}
+void View::set_inspector_text_hook(
+    std::function<bool(const TextInputEvent&, View*)> hook) {
+    s_inspector_text_hook = std::move(hook);
+}
+bool View::call_inspector_text_hook(const TextInputEvent& e, View* event_root) {
+    return s_inspector_text_hook ? s_inspector_text_hook(e, event_root) : false;
+}
+
+static std::function<int(const MouseEvent&, View*)> s_inspector_cursor_hook;
+void View::set_inspector_cursor_hook(
+    std::function<int(const MouseEvent&, View*)> hook) {
+    s_inspector_cursor_hook = std::move(hook);
+}
+int View::call_inspector_cursor_hook(const MouseEvent& e, View* event_root) {
+    return s_inspector_cursor_hook ? s_inspector_cursor_hook(e, event_root)
+                                   : -1;
 }
 
 // pulp #1148 — generalized overlay-click routing.
@@ -1000,16 +1024,20 @@ bool View::overlay_contains(Point window_pt) const {
            window_pt.y >= min_y && window_pt.y <= max_y;
 }
 
-void View::paint_overlays(canvas::Canvas& canvas) {
+void View::paint_overlays(canvas::Canvas& canvas, View* painting_root) {
     auto& queue = overlay_queue();
     for (auto& req : queue) {
         if (req.paint_fn) req.paint_fn(canvas);
     }
     queue.clear();
 
-    // Inspector paint hook — called after all overlays, topmost layer
+    // Inspector paint hook — called after all overlays, topmost layer.
+    // `painting_root` is forwarded so the hook can gate (WYSIWYG P2e): the
+    // in-canvas overlay must paint its selection box / handles / drop
+    // indicators ONLY on the inspected root, never into the floating
+    // InspectorWindow's own root at the overlay's root coordinates.
     if (s_inspector_paint_hook) {
-        s_inspector_paint_hook(canvas);
+        s_inspector_paint_hook(canvas, painting_root);
     }
 }
 
@@ -1144,7 +1172,21 @@ void View::simulate_hover(Point root_pos) {
         coords.emplace_back("y", static_cast<double>(root_pos.y));
         pulp::view::motion::record_simulated_input("hover", id, std::move(coords));
     }
-    if (target) target->set_hovered(true);
+    if (target) {
+        target->set_hovered(true);
+        // WYSIWYG T1 — also deliver a positioned hover sample so a widget can
+        // track WHICH sub-region of itself the pointer is over (e.g. the
+        // inspector ToolStrip's per-button tooltip, which set_hovered() alone
+        // can't drive because on_mouse_enter carries no coordinate). Convert
+        // the root-space point into the target's local space by subtracting
+        // its accumulated bounds origin up the parent chain.
+        float ox = 0.0f, oy = 0.0f;
+        for (View* v = target; v; v = v->parent()) {
+            ox += v->bounds().x;
+            oy += v->bounds().y;
+        }
+        target->on_hover_move(Point{root_pos.x - ox, root_pos.y - oy});
+    }
 }
 
 // ── Grid template parsing ────────────────────────────────────────────────────
