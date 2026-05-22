@@ -8,6 +8,8 @@
 #include <pulp/signal/spectrogram.hpp>
 #include <pulp/signal/multi_channel_meter.hpp>
 #include <string>
+#include <string_view>
+#include <cstddef>
 #include <cmath>
 #include <functional>
 #include <array>
@@ -43,7 +45,20 @@ public:
         set_access_label(text_);
     }
 
-    void set_text(std::string text) { text_ = std::move(text); }
+    void set_text(std::string text) {
+        if (text == text_) return;
+        text_ = std::move(text);
+        // WYSIWYG P5 FIX 4 — the Yoga measure callback (yoga_measure ->
+        // Label::intrinsic_width / measured_height) re-runs TextShaper::prepare
+        // keyed on the CURRENT text_, so a text change re-shapes correctly —
+        // but only if a re-layout is actually triggered. Mark this Label's
+        // layout dirty here so the new copy re-measures + reflows; without it
+        // the laid-out width stays stale at the old text's advance. The
+        // PreText-style shaper cache is keyed by (text, family, size), so the
+        // new text simply hits a different cache entry — no algorithm change,
+        // just cache-correct re-measurement.
+        invalidate_layout();
+    }
     const std::string& text() const { return text_; }
 
     // issue-969: each setter marks the corresponding has_own_* flag so
@@ -161,7 +176,57 @@ public:
     /// typographic baselines rather than top-of-box.
     float baseline_y() const;
 
+    /// WYSIWYG text-edit metrics — the geometry an inspector edit overlay
+    /// needs to draw a caret + selection band that EXACTLY matches the
+    /// glyphs `paint()` renders. The label's painter resolves inherited
+    /// size/weight/letter-spacing, family fallback, slant, text-transform,
+    /// and an alignment-dependent draw origin; an overlay that re-measures
+    /// with the Label's OWN fields drifts whenever any of those differ
+    /// (e.g. a PARENT sets `letter-spacing`, or the label is center/right
+    /// aligned). This factors the same style/origin resolution `paint()`
+    /// uses so the two can never disagree.
+    ///
+    /// `caret_x_by_byte[i]` is the caret x (local, measured from
+    /// `local_text_left`) for the byte boundary at index `i` over the
+    /// supplied `edit_text` — the buffer the overlay is currently editing,
+    /// NOT `text()` (which is mid-edit). It has `edit_text.size() + 1`
+    /// entries (one per boundary, including end-of-text).
+    struct TextEditMetrics {
+        std::string display_text;
+        float local_text_left = 0.0f;   ///< local x where text starts (handles center/right align)
+        float local_band_y = 0.0f;      ///< local y of the caret/selection band (top of text)
+        float band_height = 0.0f;
+        std::vector<float> caret_x_by_byte;  ///< size == display_text.size()+1
+    };
+    TextEditMetrics text_edit_metrics(canvas::Canvas& canvas,
+                                      std::string_view edit_text) const;
+
 private:
+    /// Resolved typography + origin shared by paint() and
+    /// text_edit_metrics(). Factoring this out is the WYSIWYG invariant:
+    /// the caret overlay and the painter resolve the SAME inherited
+    /// size/weight/letter-spacing, family fallback, slant, alignment, and
+    /// vertical band so a letter-spaced or center/right-aligned label can't
+    /// drift between the two. `apply_text_transform()` mirrors paint()'s
+    /// transform so the measured run matches the rendered run.
+    struct ResolvedTextStyle {
+        std::string family;
+        float font_size = 14.0f;
+        int font_weight = 400;
+        int font_slant = 0;
+        float letter_spacing = 0.0f;
+        LabelAlign text_align = LabelAlign::left;
+        float baseline_y = 0.0f;   ///< first-line baseline in local space
+    };
+    ResolvedTextStyle resolve_text_style() const;
+    std::string apply_text_transform(const std::string& in) const;
+    /// Translate the CSS `font-variant` CSV (View::font_variant_) into SkShaper
+    /// OpenType feature tags and apply them to `canvas` (empty CSV → clear).
+    /// paint() AND text_edit_metrics() both call this so the caret/selection
+    /// geometry shapes with the SAME features the painter renders — without it
+    /// a tabular-nums / small-caps label's caret x drifts (pulp WYSIWYG sweep).
+    void apply_font_features(canvas::Canvas& canvas) const;
+
     std::string text_;
     std::string font_family_;     ///< Empty == widget default ("Inter")
     float font_size_ = 14.0f;
