@@ -418,14 +418,18 @@ LabelAlign parse_label_align(std::string_view value) {
     return LabelAlign::left;
 }
 
-float normalized_audio_value(const IRNode& node) {
-    if (auto value = attr_float(node, "value")) return std::clamp(*value, 0.0f, 1.0f);
+float normalized_audio_default(const IRNode& node) {
     if (node.audio_max > node.audio_min)
         return std::clamp((node.audio_default - node.audio_min) /
                               (node.audio_max - node.audio_min),
                           0.0f,
                           1.0f);
     return std::clamp(node.audio_default, 0.0f, 1.0f);
+}
+
+float normalized_audio_value(const IRNode& node) {
+    if (auto value = attr_float(node, "value")) return std::clamp(*value, 0.0f, 1.0f);
+    return normalized_audio_default(node);
 }
 
 void append_resolved_diagnostics(const ResolvedNativeNode& node,
@@ -757,7 +761,7 @@ std::unique_ptr<View> make_widget(const IRNode& node,
             auto knob = std::make_unique<Knob>();
             if (!text.empty()) knob->set_label(text);
             knob->set_value(normalized_audio_value(node));
-            knob->set_default_value(normalized_audio_value(node));
+            knob->set_default_value(normalized_audio_default(node));
             if (options.preview_mode) knob->set_render_style(WidgetRenderStyle::minimal);
             return knob;
         }

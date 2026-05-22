@@ -211,15 +211,19 @@ bool attr_bool(const IRNode& node, std::string_view key) {
     return lower == "true" || lower == "1" || lower == "yes" || lower == "on";
 }
 
-float normalized_audio_value(const IRNode& node) {
-    if (auto value = attr_float(node, "value"))
-        return std::clamp(*value, 0.0f, 1.0f);
+float normalized_audio_default(const IRNode& node) {
     if (node.audio_max > node.audio_min)
         return std::clamp((node.audio_default - node.audio_min) /
                               (node.audio_max - node.audio_min),
                           0.0f,
                           1.0f);
     return std::clamp(node.audio_default, 0.0f, 1.0f);
+}
+
+float normalized_audio_value(const IRNode& node) {
+    if (auto value = attr_float(node, "value"))
+        return std::clamp(*value, 0.0f, 1.0f);
+    return normalized_audio_default(node);
 }
 
 std::optional<std::string> first_asset_id(const IRNode& node) {
@@ -841,8 +845,9 @@ void emit_widget_specific(std::ostringstream& out,
             if (!text.empty())
                 emit_line(out, depth, opts.indent_spaces, std::string(var) + "->set_label(" + cpp_string_literal(text) + ");");
             const auto value = float_expr(ctx, normalized_audio_value(node));
+            const auto default_value = float_expr(ctx, normalized_audio_default(node));
             emit_line(out, depth, opts.indent_spaces, std::string(var) + "->set_value(/* TODO: bind to param */ " + value + ");");
-            emit_line(out, depth, opts.indent_spaces, std::string(var) + "->set_default_value(" + value + ");");
+            emit_line(out, depth, opts.indent_spaces, std::string(var) + "->set_default_value(" + default_value + ");");
             break;
         }
         case NativeWidgetKind::fader: {

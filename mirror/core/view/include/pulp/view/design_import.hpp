@@ -566,8 +566,9 @@ std::optional<ClaudeBundle> parse_react_native_export(const std::string& tsx);
 /// outside Pulp's supported runtime-import DOM/CSS/API subset.
 std::optional<ClaudeBundle> parse_pencil_react(const std::string& tsx);
 
-/// Wrap a pre-compiled JSX runtime bundle (esbuild IIFE of React + ReactDOM +
-/// the user's JSX component, produced by `tools/import-design/jsx-runtime/
+/// Wrap a pre-compiled JSX runtime bundle (esbuild IIFE of React plus either
+/// ReactDOM or the @pulp/react native bridge and the user's JSX component,
+/// produced by `tools/import-design/jsx-runtime/
 /// jsx-transform.mjs`) as a synthetic `ClaudeBundle` so the existing
 /// runtime-import harness (`parse_claude_html_with_runtime`) can materialize
 /// it. The C++ side does not compile JSX itself — the Node-side esbuild
