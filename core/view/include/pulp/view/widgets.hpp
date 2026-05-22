@@ -238,6 +238,7 @@ public:
     float value() const { return value_; }
 
     void set_default_value(float v) { default_value_ = std::clamp(v, 0.0f, 1.0f); }
+    float default_value() const { return default_value_; }
 
     void set_label(std::string text) {
         if (label_ == text) return;
