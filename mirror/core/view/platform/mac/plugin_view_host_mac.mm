@@ -7,6 +7,7 @@
 #include <pulp/view/input_events.hpp>
 #include <pulp/view/widgets.hpp>
 #include <pulp/view/ui_components.hpp>
+#include <pulp/view/window_host.hpp>  // compute_design_viewport_transform
 #import <Cocoa/Cocoa.h>
 #include <algorithm>
 #include <atomic>
@@ -45,6 +46,16 @@ NSArray* pulp_text_accessibility_all_elements_macos();
 @interface PulpPluginView : NSView
 @property (nonatomic, assign) pulp::view::View* rootView;
 @property (nonatomic, copy) void (^onResize)(uint32_t, uint32_t);
+// Inverse-design-viewport transform applied to every host-space input point
+// before hit_test, mirroring the standalone PulpView. nil = identity. Set
+// by MacPluginViewHost::set_design_viewport.
+@property (nonatomic, copy) pulp::view::Point (^pointTransform)(pulp::view::Point);
+// Design viewport size. (0, 0) = identity (paint at host bounds, no
+// scale/letterbox). When set, drawRect pins root to (designW, designH),
+// fills letterbox bars at host bounds, then translate+scale before
+// paint_all so the rendered surface matches the standalone host.
+@property (nonatomic, assign) float designW;
+@property (nonatomic, assign) float designH;
 @end
 
 // ── Accessibility element wrapping a Pulp View ──────────────────────────────
@@ -239,22 +250,30 @@ void pulp_plugin_wheel(pulp::view::View* root, pulp::view::Point pt, NSEvent* ev
 
 - (BOOL)isFlipped { return NO; }
 - (BOOL)acceptsFirstResponder { return YES; }
+// Resolve a window-space event into root-view coords, applying the inverse
+// design-viewport transform when set so hit_test runs against design-space
+// coords. Identity when pointTransform is nil.
+- (pulp::view::Point)localPoint:(NSEvent*)event {
+    auto pt = pulp_plugin_local_point(self, event);
+    if (self.pointTransform) pt = self.pointTransform(pt);
+    return pt;
+}
 - (void)mouseDown:(NSEvent*)event {
     if (!self.rootView) return;
-    pulp_plugin_mouse_down(self.rootView, event, pulp_plugin_local_point(self, event), &_dragTarget);
+    pulp_plugin_mouse_down(self.rootView, event, [self localPoint:event], &_dragTarget);
     [self setNeedsDisplay:YES];
 }
 - (void)mouseDragged:(NSEvent*)event {
-    pulp_plugin_mouse_drag(self.rootView, pulp_plugin_local_point(self, event), &_dragTarget);
+    pulp_plugin_mouse_drag(self.rootView, [self localPoint:event], &_dragTarget);
     [self setNeedsDisplay:YES];
 }
 - (void)mouseUp:(NSEvent*)event {
-    pulp_plugin_mouse_up(self.rootView, event, pulp_plugin_local_point(self, event), &_dragTarget);
+    pulp_plugin_mouse_up(self.rootView, event, [self localPoint:event], &_dragTarget);
     [self setNeedsDisplay:YES];
 }
 - (void)scrollWheel:(NSEvent*)event {
     if (!self.rootView) return;
-    pulp_plugin_wheel(self.rootView, pulp_plugin_local_point(self, event), event);
+    pulp_plugin_wheel(self.rootView, [self localPoint:event], event);
     [self setNeedsDisplay:YES];
 }
 - (BOOL)isAccessibilityElement { return YES; }
@@ -298,21 +317,38 @@ void pulp_plugin_wheel(pulp::view::View* root, pulp::view::Point pt, NSEvent* ev
 - (void)drawRect:(NSRect)dirtyRect {
     CGContextRef ctx = [[NSGraphicsContext currentContext] CGContext];
     NSRect bounds = self.bounds;
+    const float bw = static_cast<float>(bounds.size.width);
+    const float bh = static_cast<float>(bounds.size.height);
 
-    pulp::canvas::CoreGraphicsCanvas canvas(ctx,
-        static_cast<float>(bounds.size.width),
-        static_cast<float>(bounds.size.height));
+    pulp::canvas::CoreGraphicsCanvas canvas(ctx, bw, bh);
 
-    // Clear with theme background
+    // Clear at host bounds so the letterbox bars (visible only when the
+    // OS aspect-lock briefly diverges during user drag) share the design
+    // background color — same approach as the standalone host.
     canvas.set_fill_color(pulp::canvas::Color::rgba8(30, 30, 46));
-    canvas.fill_rect(0, 0,
-        static_cast<float>(bounds.size.width),
-        static_cast<float>(bounds.size.height));
+    canvas.fill_rect(0, 0, bw, bh);
 
-    if (self.rootView) {
-        self.rootView->set_bounds({0, 0,
-            static_cast<float>(bounds.size.width),
-            static_cast<float>(bounds.size.height)});
+    if (!self.rootView) return;
+
+    // Design viewport: pin root at design size, apply translate+scale
+    // before paint_all so content renders proportionally. Otherwise lay
+    // out at host bounds. Mirrors WindowHost paint_scene.
+    float sx, sy, tx, ty;
+    const bool has_viewport = self.designW > 0.0f && self.designH > 0.0f &&
+        pulp::view::WindowHost::compute_design_viewport_transform(
+            bw, bh, self.designW, self.designH, sx, sy, tx, ty);
+
+    if (has_viewport) {
+        self.rootView->set_bounds({0, 0, self.designW, self.designH});
+        self.rootView->layout_children();
+        const int saved = canvas.save_count();
+        canvas.save();
+        canvas.translate(tx, ty);
+        canvas.scale(sx, sy);
+        self.rootView->paint_all(canvas);
+        canvas.restore_to_count(saved);
+    } else {
+        self.rootView->set_bounds({0, 0, bw, bh});
         self.rootView->layout_children();
         self.rootView->paint_all(canvas);
     }
@@ -499,6 +535,43 @@ public:
         detach_child_view_from_host(view_, child_view);
     }
 
+    void set_fixed_aspect_ratio(float ratio) override {
+        // Plugin hosts don't own the OS window — DAW enforces the aspect
+        // via the per-format resize-hint path. Stored for API parity.
+        fixed_aspect_ratio_ = ratio;
+    }
+
+    void set_design_viewport(float design_w, float design_h) override {
+        design_viewport_w_ = design_w;
+        design_viewport_h_ = design_h;
+        @autoreleasepool {
+            view_.designW = design_w;
+            view_.designH = design_h;
+            if (design_w > 0.0f && design_h > 0.0f) {
+                __block MacPluginViewHost* host = this;
+                view_.pointTransform = ^pulp::view::Point(pulp::view::Point pt) {
+                    return host->window_to_root_point(pt);
+                };
+            } else {
+                view_.pointTransform = nil;
+            }
+            [view_ setNeedsDisplay:YES];
+        }
+    }
+
+    Point window_to_root_point(Point pt) const override {
+        float sx, sy, tx, ty;
+        if (!WindowHost::compute_design_viewport_transform(
+                static_cast<float>(size_.width),
+                static_cast<float>(size_.height),
+                design_viewport_w_, design_viewport_h_,
+                sx, sy, tx, ty)) {
+            return pt;
+        }
+        if (sx <= 0.0f || sy <= 0.0f) return pt;
+        return { (pt.x - tx) / sx, (pt.y - ty) / sy };
+    }
+
     void on_native_frame_changed(uint32_t w, uint32_t h) {
         if (w == size_.width && h == size_.height) return;
         if (w == 0 || h == 0) return;
@@ -511,6 +584,12 @@ private:
     Size size_;
     PulpPluginView* view_ = nil;
     std::function<void(uint32_t, uint32_t)> resize_cb_;
+    // Design viewport: when (>0, >0) root paints at design size and the
+    // canvas applies translate+scale to fit the host bounds. Mouse coords
+    // are inverse-mapped via window_to_root_point().
+    float design_viewport_w_ = 0.0f;
+    float design_viewport_h_ = 0.0f;
+    float fixed_aspect_ratio_ = 0.0f;
 };
 
 } // namespace pulp::view (close for ObjC declarations)
@@ -535,6 +614,10 @@ private:
 @property (nonatomic, copy) void (^onWindowChange)(void);
 @property (nonatomic, copy) void (^onBackingChange)(void);
 @property (nonatomic, copy) void (^onResize)(uint32_t, uint32_t);
+// Inverse-design-viewport transform applied to every host-space input point
+// before hit_test. Mirrors PulpPluginView + the standalone host. nil =
+// identity. Set by MacGpuPluginViewHost::set_design_viewport.
+@property (nonatomic, copy) pulp::view::Point (^pointTransform)(pulp::view::Point);
 @end
 
 @implementation PulpGpuPluginView {
@@ -542,22 +625,29 @@ private:
 }
 
 - (BOOL)acceptsFirstResponder { return YES; }
+// Resolve a window-space event into root-view coords, applying the inverse
+// design-viewport transform when set.
+- (pulp::view::Point)localPoint:(NSEvent*)event {
+    auto pt = pulp_plugin_local_point(self, event);
+    if (self.pointTransform) pt = self.pointTransform(pt);
+    return pt;
+}
 - (void)mouseDown:(NSEvent*)event {
     if (!self.rootView) return;
-    pulp_plugin_mouse_down(self.rootView, event, pulp_plugin_local_point(self, event), &_dragTarget);
+    pulp_plugin_mouse_down(self.rootView, event, [self localPoint:event], &_dragTarget);
     if (self.rootView) self.rootView->request_repaint();
 }
 - (void)mouseDragged:(NSEvent*)event {
-    pulp_plugin_mouse_drag(self.rootView, pulp_plugin_local_point(self, event), &_dragTarget);
+    pulp_plugin_mouse_drag(self.rootView, [self localPoint:event], &_dragTarget);
     if (self.rootView) self.rootView->request_repaint();
 }
 - (void)mouseUp:(NSEvent*)event {
-    pulp_plugin_mouse_up(self.rootView, event, pulp_plugin_local_point(self, event), &_dragTarget);
+    pulp_plugin_mouse_up(self.rootView, event, [self localPoint:event], &_dragTarget);
     if (self.rootView) self.rootView->request_repaint();
 }
 - (void)scrollWheel:(NSEvent*)event {
     if (!self.rootView) return;
-    pulp_plugin_wheel(self.rootView, pulp_plugin_local_point(self, event), event);
+    pulp_plugin_wheel(self.rootView, [self localPoint:event], event);
     if (self.rootView) self.rootView->request_repaint();
 }
 
@@ -774,6 +864,41 @@ public:
         detach_child_view_from_host(metal_view_, child_view);
     }
 
+    void set_fixed_aspect_ratio(float ratio) override {
+        // Plugin hosts don't own the OS window — DAW enforces via the
+        // per-format resize-hint path. Stored for API parity.
+        fixed_aspect_ratio_ = ratio;
+    }
+
+    void set_design_viewport(float design_w, float design_h) override {
+        design_viewport_w_ = design_w;
+        design_viewport_h_ = design_h;
+        @autoreleasepool {
+            if (design_w > 0.0f && design_h > 0.0f) {
+                __block MacGpuPluginViewHost* host = this;
+                metal_view_.pointTransform = ^pulp::view::Point(pulp::view::Point pt) {
+                    return host->window_to_root_point(pt);
+                };
+            } else {
+                metal_view_.pointTransform = nil;
+            }
+        }
+        needs_repaint_.store(true, std::memory_order_relaxed);
+    }
+
+    Point window_to_root_point(Point pt) const override {
+        float sx, sy, tx, ty;
+        if (!WindowHost::compute_design_viewport_transform(
+                static_cast<float>(size_.width),
+                static_cast<float>(size_.height),
+                design_viewport_w_, design_viewport_h_,
+                sx, sy, tx, ty)) {
+            return pt;
+        }
+        if (sx <= 0.0f || sy <= 0.0f) return pt;
+        return { (pt.x - tx) / sx, (pt.y - ty) / sy };
+    }
+
 private:
     View& root_;
     Size size_;
@@ -794,6 +919,12 @@ private:
     // teardown is a no-op (DAW teardown order is not under our control).
     std::shared_ptr<std::atomic<bool>> alive_;
     int frame_ok_count_ = 0;
+    // Design viewport: when (>0, >0) root paints at design size and the
+    // Skia canvas applies translate+scale to fit the host bounds. Mouse
+    // coords are inverse-mapped via window_to_root_point().
+    float design_viewport_w_ = 0.0f;
+    float design_viewport_h_ = 0.0f;
+    float fixed_aspect_ratio_ = 0.0f;
 
     void init_gpu(float width, float height) {
         gpu_surface_ = render::GpuSurface::create_dawn();
@@ -838,13 +969,34 @@ private:
     }
 
     void paint_scene(canvas::Canvas& canvas) {
-        float w = static_cast<float>(size_.width);
-        float h = static_cast<float>(size_.height);
-        root_.set_bounds({0, 0, w, h});
-        root_.layout_children();
+        const float w = static_cast<float>(size_.width);
+        const float h = static_cast<float>(size_.height);
+
+        // Letterbox bg first at host bounds so the bars (visible only when
+        // the OS aspect-lock briefly diverges during user drag) share the
+        // design background color. Matches the standalone host.
         canvas.set_fill_color(pulp::canvas::Color::rgba8(30, 30, 46));
         canvas.fill_rect(0, 0, w, h);
-        root_.paint_all(canvas);
+
+        float sx, sy, tx, ty;
+        const bool has_viewport = design_viewport_w_ > 0.0f && design_viewport_h_ > 0.0f &&
+            WindowHost::compute_design_viewport_transform(
+                w, h, design_viewport_w_, design_viewport_h_, sx, sy, tx, ty);
+
+        if (has_viewport) {
+            root_.set_bounds({0, 0, design_viewport_w_, design_viewport_h_});
+            root_.layout_children();
+            const int saved = canvas.save_count();
+            canvas.save();
+            canvas.translate(tx, ty);
+            canvas.scale(sx, sy);
+            root_.paint_all(canvas);
+            canvas.restore_to_count(saved);
+        } else {
+            root_.set_bounds({0, 0, w, h});
+            root_.layout_children();
+            root_.paint_all(canvas);
+        }
     }
 
     // Render one frame. When capture buffers are supplied, the rendered
