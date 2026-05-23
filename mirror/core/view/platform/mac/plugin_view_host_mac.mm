@@ -346,11 +346,20 @@ void pulp_plugin_wheel(pulp::view::View* root, pulp::view::Point pt, NSEvent* ev
         canvas.translate(tx, ty);
         canvas.scale(sx, sy);
         self.rootView->paint_all(canvas);
+        // paint_overlays MUST run inside the design transform — overlays
+        // (ComboBox dropdowns, inspector layer) draw in ROOT coordinates,
+        // and mouse input inverse-maps window→root via pointTransform
+        // before hit_test. Painting them outside the transform would put
+        // them at root coords in window space → visually misaligned and
+        // non-clickable at any host size that isn't exactly design size.
+        // Matches the standalone host (pulp PR #1984 Codex P1).
+        pulp::view::View::paint_overlays(canvas, self.rootView);
         canvas.restore_to_count(saved);
     } else {
         self.rootView->set_bounds({0, 0, bw, bh});
         self.rootView->layout_children();
         self.rootView->paint_all(canvas);
+        pulp::view::View::paint_overlays(canvas, self.rootView);
     }
 }
 
@@ -467,7 +476,16 @@ public:
 
     ~MacPluginViewHost() override {
         root_.set_plugin_view_host(nullptr);
-        @autoreleasepool { view_.onResize = nil; }
+        // CRITICAL: clear pointTransform BEFORE the host C++ object is freed.
+        // The block captures `this` by raw pointer. If the DAW retains the
+        // NSView after host disposal (it routinely does — `attach_to_parent`
+        // hands the view to the DAW's view hierarchy), a later mouseDown:
+        // would invoke the block on freed memory → host crash. Mirrors the
+        // #2502 deferred-click teardown pattern.
+        @autoreleasepool {
+            view_.pointTransform = nil;
+            view_.onResize = nil;
+        }
         detach();
     }
 
@@ -756,7 +774,12 @@ public:
         alive_->store(false, std::memory_order_release);
         root_.set_plugin_view_host(nullptr);
         stop_display_link();
+        // CRITICAL: clear pointTransform BEFORE the host C++ object is freed.
+        // The block captures `this` by raw pointer; if the DAW retains the
+        // NSView after host disposal, a later mouseDown: would call the
+        // block on freed memory → host crash.
         @autoreleasepool {
+            metal_view_.pointTransform = nil;
             metal_view_.onWindowChange = nil;
             metal_view_.onBackingChange = nil;
             metal_view_.onResize = nil;
@@ -991,11 +1014,19 @@ private:
             canvas.translate(tx, ty);
             canvas.scale(sx, sy);
             root_.paint_all(canvas);
+            // paint_overlays MUST run inside the design transform —
+            // overlays (ComboBox dropdowns, inspector layer) draw in ROOT
+            // coords, mouse input inverse-maps window→root before hit_test.
+            // Painting outside the transform would visually misalign + make
+            // overlays non-clickable at any non-design-size host. Matches
+            // the standalone GPU host (pulp PR #1984 Codex P1).
+            View::paint_overlays(canvas, &root_);
             canvas.restore_to_count(saved);
         } else {
             root_.set_bounds({0, 0, w, h});
             root_.layout_children();
             root_.paint_all(canvas);
+            View::paint_overlays(canvas, &root_);
         }
     }
 
