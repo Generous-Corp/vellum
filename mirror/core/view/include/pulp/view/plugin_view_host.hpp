@@ -130,6 +130,40 @@ public:
     virtual void detach_native_child_view(NativeViewHandle child_view) {
         (void) child_view;
     }
+
+    // ── Design viewport (mirrors WindowHost::set_design_viewport) ────────
+    //
+    // Constrain editor resize to a fixed aspect ratio. Plugin hosts do not
+    // own the OS window — the DAW does — so the host does not enforce the
+    // aspect itself. Per-format resize-hint paths drive enforcement (CLAP
+    // `gui_get_resize_hints.preserve_aspect_ratio`, VST3
+    // `checkSizeConstraint`). Stored here purely for API parity with
+    // `WindowHost` and so adapters can query it. Default no-op.
+    virtual void set_fixed_aspect_ratio(float ratio) { (void)ratio; }
+
+    // Set a fixed "design viewport". When set, the root view's bounds are
+    // pinned to (design_w x design_h) and paint applies an aspect-correct
+    // scale + letterbox translate to fit the current host size. Mouse
+    // coordinates receive the inverse transform before hit-test. Pass
+    // (0, 0) to disable.
+    //
+    // This mirrors `WindowHost::set_design_viewport` (see that method's
+    // docs for the design rationale, pulp #59/#63/#64/#65) so that an
+    // editor that already paints correctly in the standalone window host
+    // paints identically when embedded by a DAW. Default no-op for hosts
+    // that do not implement design-viewport scaling.
+    virtual void set_design_viewport(float design_w, float design_h) {
+        (void)design_w;
+        (void)design_h;
+    }
+
+    // Inverse-map a host-space point (e.g. mouse coords in host logical
+    // pixels) into root-view space using the active design-viewport
+    // transform. Identity when no design viewport is set. Exposed so
+    // native event handlers AND unit tests can exercise the same
+    // inverse-transform path without needing AppKit / UIKit event
+    // delivery.
+    virtual Point window_to_root_point(Point pt) const { return pt; }
 };
 
 } // namespace pulp::view
