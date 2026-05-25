@@ -54,6 +54,101 @@ struct ParamRange {
     }
 };
 
+/// Skew-aware normalized range with optional symmetric centre.
+///
+/// `NormalisableRange<T>` extends `ParamRange` with a non-linear mapping
+/// between the [0, 1] host-automation domain and the [min, max] parameter
+/// domain. Two shape controls:
+///
+/// - `skew`: <1 weights toward `min`, >1 weights toward `max`, 1 = linear.
+///   Conventionally, a skew of `log(0.5) / log((mid - min) / (max - min))`
+///   places `mid` at the centre (0.5) of the normalized range.
+/// - `symmetric_skew`: when true, the curve is mirrored around the centre,
+///   so values near 0.5 in normalized space land near the midpoint and
+///   values near the edges fan out symmetrically. Useful for bipolar
+///   parameters like pan, balance, detune.
+///
+/// Step quantization is honored on denormalize (matches `ParamRange::step`).
+///
+/// @code
+/// // Frequency knob: 20 Hz at min, 20 kHz at max, 1 kHz at centre.
+/// pulp::state::NormalisableRange<float> freq{20.0f, 20000.0f, 1000.0f};
+/// float normalized = freq.normalize(1000.0f); // ~= 0.5
+/// float hz         = freq.denormalize(0.5f);  // ~= 1000.0f
+/// @endcode
+template<typename T = float>
+struct NormalisableRange {
+    T min = T(0);
+    T max = T(1);
+    T interval = T(0);          ///< Step size. 0 = continuous.
+    T skew = T(1);              ///< 1 = linear, <1 weights min, >1 weights max.
+    bool symmetric_skew = false;
+
+    constexpr NormalisableRange() = default;
+    constexpr NormalisableRange(T lo, T hi, T step = T(0), T skew_value = T(1),
+                                bool symmetric = false)
+        : min(lo), max(hi), interval(step),
+          skew(skew_value), symmetric_skew(symmetric) {}
+
+    /// Build a NormalisableRange whose normalised midpoint maps to the
+    /// supplied real-valued centre. Equivalent to choosing the skew that
+    /// satisfies denormalize(0.5) == centre.
+    static NormalisableRange with_centre(T lo, T hi, T centre, T step = T(0)) {
+        NormalisableRange r{lo, hi, step};
+        if (hi > lo && centre > lo && centre < hi) {
+            const T proportion = (centre - lo) / (hi - lo);
+            // log(0.5) / log(proportion) gives the skew that lands `centre` at 0.5.
+            r.skew = std::log(T(0.5)) / std::log(proportion);
+        }
+        return r;
+    }
+
+    /// Map a real value in [min, max] to a normalized value in [0, 1].
+    ///
+    /// Skew convention: with `skew < 1` the curve weights toward `min`
+    /// (small real values cover more of the [0, 1] domain); with
+    /// `skew > 1` the curve weights toward `max`. `skew == 1` is linear.
+    T normalize(T value) const {
+        if (max == min) return T(0);
+        T proportion = (value - min) / (max - min);
+        proportion = std::clamp(proportion, T(0), T(1));
+        if (symmetric_skew) {
+            const T centred = (proportion * T(2)) - T(1); // [-1, 1]
+            const T magnitude = std::pow(std::abs(centred), skew);
+            const T signed_mag = centred < T(0) ? -magnitude : magnitude;
+            return (signed_mag + T(1)) * T(0.5);
+        }
+        return std::pow(proportion, skew);
+    }
+
+    /// Map a normalized [0, 1] value back to the real range. Applies
+    /// `interval` quantization when non-zero.
+    T denormalize(T normalized) const {
+        normalized = std::clamp(normalized, T(0), T(1));
+        T proportion;
+        if (symmetric_skew) {
+            const T centred = (normalized * T(2)) - T(1); // [-1, 1]
+            const T magnitude = std::pow(std::abs(centred), T(1) / skew);
+            const T signed_mag = centred < T(0) ? -magnitude : magnitude;
+            proportion = (signed_mag + T(1)) * T(0.5);
+        } else {
+            proportion = std::pow(normalized, T(1) / skew);
+        }
+        T value = min + proportion * (max - min);
+        if (interval > T(0)) {
+            value = min + std::round((value - min) / interval) * interval;
+        }
+        return std::clamp(value, min, max);
+    }
+
+    /// Round a real value down to the nearest legal step.
+    T snap(T value) const {
+        if (interval <= T(0)) return std::clamp(value, min, max);
+        T snapped = min + std::round((value - min) / interval) * interval;
+        return std::clamp(snapped, min, max);
+    }
+};
+
 /// Immutable parameter metadata, registered once at plugin initialization.
 ///
 /// Each parameter has a unique @c id, a human-readable @c name, an optional
