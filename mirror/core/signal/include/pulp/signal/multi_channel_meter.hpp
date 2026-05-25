@@ -275,6 +275,8 @@ private:
             snapshot_.correlation = denom > 1e-10
                 ? static_cast<float>(correlation_sum_xy_ / denom)
                 : 0.0f;
+        } else {
+            snapshot_.correlation = 0.0f;
         }
 
         // LUFS integrated (running average of momentary measurements)
