@@ -1,13 +1,31 @@
 #include <pulp/events/event_loop.hpp>
 #include <algorithm>
+#include <utility>
 
 namespace pulp::events {
 
-EventLoop::EventLoop() {
-    thread_ = std::thread([this] {
-        thread_id_ = std::this_thread::get_id();
-        run();
-    });
+struct EventLoop::State {
+    struct TimedTask {
+        TimePoint when;
+        Task task;
+    };
+
+    std::mutex mutex;
+    std::condition_variable cv;
+    std::vector<Task> pending;
+    std::vector<TimedTask> timed;
+    std::atomic<bool> running{true};
+    std::thread::id thread_id;
+};
+
+EventLoop::EventLoop()
+    : state_(std::make_shared<State>()) {
+    auto state = state_;
+    thread_ = std::thread([state] { run(std::move(state)); });
+    {
+        std::lock_guard lock(state_->mutex);
+        state_->thread_id = thread_.get_id();
+    }
 }
 
 EventLoop::~EventLoop() {
@@ -15,78 +33,107 @@ EventLoop::~EventLoop() {
 }
 
 void EventLoop::dispatch(Task task) {
+    auto state = state_;
     {
-        std::lock_guard lock(mutex_);
-        pending_.push_back(std::move(task));
+        std::lock_guard lock(state->mutex);
+        if (!state->running.load(std::memory_order_acquire))
+            return;
+        state->pending.push_back(std::move(task));
     }
-    cv_.notify_one();
+    state->cv.notify_one();
 }
 
 void EventLoop::dispatch_after(Duration delay, Task task) {
     auto when = Clock::now() + delay;
+    auto state = state_;
     {
-        std::lock_guard lock(mutex_);
-        timed_.push_back({when, std::move(task)});
+        std::lock_guard lock(state->mutex);
+        if (!state->running.load(std::memory_order_acquire))
+            return;
+        state->timed.push_back({when, std::move(task)});
     }
-    cv_.notify_one();
+    state->cv.notify_one();
 }
 
 bool EventLoop::is_current_thread() const {
-    return std::this_thread::get_id() == thread_id_;
+    return std::this_thread::get_id() == thread_id();
+}
+
+std::thread::id EventLoop::thread_id() const {
+    std::lock_guard lock(state_->mutex);
+    return state_->thread_id;
+}
+
+bool EventLoop::running() const {
+    return state_->running.load(std::memory_order_acquire);
 }
 
 void EventLoop::stop() {
-    if (running_.exchange(false, std::memory_order_acq_rel))
-        cv_.notify_one();
-    if (!thread_.joinable() || thread_.get_id() == std::this_thread::get_id())
+    auto state = state_;
+    auto should_notify = false;
+    {
+        std::lock_guard lock(state->mutex);
+        should_notify = state->running.exchange(false, std::memory_order_acq_rel);
+    }
+    if (should_notify)
+        state->cv.notify_one();
+
+    if (!thread_.joinable())
         return;
+
+    if (thread_.get_id() == std::this_thread::get_id()) {
+        thread_.detach();
+        return;
+    }
+
     thread_.join();
 }
 
-void EventLoop::run() {
-    while (running_.load(std::memory_order_acquire)) {
+void EventLoop::run(std::shared_ptr<State> state) {
+    while (state->running.load(std::memory_order_acquire)) {
         std::vector<Task> tasks;
         {
-            std::unique_lock lock(mutex_);
+            std::unique_lock lock(state->mutex);
 
             // Find the earliest timed task deadline
             auto deadline = TimePoint::max();
-            for (const auto& t : timed_) {
+            for (const auto& t : state->timed) {
                 if (t.when < deadline) deadline = t.when;
             }
 
             // Wait for work or deadline
-            if (pending_.empty() && (timed_.empty() || Clock::now() < deadline)) {
-                if (timed_.empty()) {
-                    cv_.wait(lock, [this] {
-                        return !pending_.empty() || !timed_.empty() ||
-                               !running_.load(std::memory_order_acquire);
+            if (state->pending.empty() && (state->timed.empty() || Clock::now() < deadline)) {
+                if (state->timed.empty()) {
+                    state->cv.wait(lock, [&] {
+                        return !state->pending.empty() || !state->timed.empty() ||
+                               !state->running.load(std::memory_order_acquire);
                     });
                 } else {
-                    cv_.wait_until(lock, deadline);
+                    state->cv.wait_until(lock, deadline);
                 }
             }
 
-            if (!running_.load(std::memory_order_acquire))
+            if (!state->running.load(std::memory_order_acquire))
                 break;
 
             // Collect ready immediate tasks
-            tasks = std::move(pending_);
-            pending_.clear();
+            tasks = std::move(state->pending);
+            state->pending.clear();
 
             // Collect ready timed tasks
             auto now = Clock::now();
-            auto it = std::partition(timed_.begin(), timed_.end(),
-                [now](const TimedTask& t) { return t.when > now; });
-            for (auto ready = it; ready != timed_.end(); ++ready) {
+            auto it = std::partition(state->timed.begin(), state->timed.end(),
+                [now](const State::TimedTask& t) { return t.when > now; });
+            for (auto ready = it; ready != state->timed.end(); ++ready) {
                 tasks.push_back(std::move(ready->task));
             }
-            timed_.erase(it, timed_.end());
+            state->timed.erase(it, state->timed.end());
         }
 
         // Execute outside the lock
         for (auto& task : tasks) {
-            if (task) task();
+            if (state->running.load(std::memory_order_acquire) && task)
+                task();
         }
     }
 }
