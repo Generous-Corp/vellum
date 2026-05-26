@@ -34,6 +34,7 @@
 #include "pulp/canvas/font_resolver.hpp"
 #include "pulp/canvas/font_scope.hpp"
 #include "pulp/canvas/bundled_fonts.hpp"   // cluster_step()
+#include "pulp/canvas/bidi.hpp"            // BidiAnalyzer (item 6.8)
 
 #include <algorithm>
 #include <future>
@@ -465,15 +466,37 @@ ShapedText TextRunPlanner::shape(std::string_view text,
     segments = segment_with_icu(text, base_level);
 #endif
     if (segments.empty()) {
-        // Degraded path (non-Skia or ICU iterator construction failed):
-        // single segment, level / script inferred from FontOptions.
-        BidiScriptSegment seg;
-        seg.start      = 0;
-        seg.end        = text.size();
-        seg.bidi_level = base_level;
-        seg.script_tag = 0;
-        segments.push_back(seg);
-    } else {
+        // Non-Skia / ICU-iterator-construction-failed path. Item 6.8
+        // wires SheenBidi in here so Arabic / Hebrew / mixed-direction
+        // text still gets a paragraph-level bidi pass without ICU. The
+        // script tag stays 0 (script-iterator integration tracks
+        // separately — Pulp #2163 finish); what we gain is correct
+        // per-run embedding levels feeding the rest of the pipeline.
+        const auto bidi_dir =
+            (opts.direction == BaseDirection::RTL)
+                ? BidiBaseDirection::RTL
+                : BidiBaseDirection::LTR;
+        auto bp = BidiAnalyzer::analyze(text, bidi_dir);
+        if (!bp.runs.empty()) {
+            segments.reserve(bp.runs.size());
+            for (const auto& r : bp.runs) {
+                BidiScriptSegment seg;
+                seg.start      = r.start;
+                seg.end        = r.start + r.length;
+                seg.bidi_level = r.level;
+                seg.script_tag = 0;
+                segments.push_back(seg);
+            }
+        } else {
+            BidiScriptSegment seg;
+            seg.start      = 0;
+            seg.end        = text.size();
+            seg.bidi_level = base_level;
+            seg.script_tag = 0;
+            segments.push_back(seg);
+        }
+    }
+    if (!segments.empty()) {
         // Ensure full coverage. ICU iterators sometimes stop short on
         // malformed UTF-8; we cap the last segment at text.size() and
         // synthesize a trailing run if any bytes weren't covered.
