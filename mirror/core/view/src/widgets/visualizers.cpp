@@ -14,6 +14,7 @@
 #include <pulp/view/text_overflow.hpp>
 #include <pulp/view/window_host.hpp>
 #include <pulp/canvas/text_shaper.hpp>
+#include <pulp/audio/audio_thumbnail.hpp>
 #include <choc/text/choc_JSON.h>
 
 #include <algorithm>
@@ -458,11 +459,26 @@ void WaveformView::apply_trigger() {
 void WaveformView::set_data(const float* samples, size_t count) {
     samples_.assign(samples, samples + count);
     apply_trigger();
+    thumbnail_ = nullptr;  // raw samples win over any cached thumbnail
 }
 
 void WaveformView::set_data(std::vector<float> samples) {
     samples_ = std::move(samples);
     apply_trigger();
+    thumbnail_ = nullptr;
+}
+
+void WaveformView::set_thumbnail(const pulp::audio::AudioThumbnail* thumb,
+                                  uint32_t channel) {
+    thumbnail_ = thumb;
+    thumbnail_channel_ = channel;
+    // A live thumbnail shadows any prior raw sample buffer at paint time;
+    // we drop the samples cache so memory doesn't double up.
+    samples_.clear();
+}
+
+void WaveformView::clear_thumbnail() {
+    thumbnail_ = nullptr;
 }
 
 void WaveformView::paint(canvas::Canvas& canvas) {
@@ -473,6 +489,55 @@ void WaveformView::paint(canvas::Canvas& canvas) {
     canvas.set_fill_color(bg);
     canvas.fill_rounded_rect(0, 0, b.width, b.height, 2.0f);
 
+    auto wave_color = resolve_color("waveform.line", canvas::Color::rgba8(100, 180, 250));
+    auto fill_color = resolve_color("waveform.fill", canvas::Color::rgba(wave_color.r, wave_color.g, wave_color.b, 56.0f/255.0f));
+
+    // Thumbnail path (Pulp #2843 / item 6.12): render decimated min/max
+    // peaks straight from the cached thumbnail without re-decoding audio.
+    if (thumbnail_ != nullptr && !thumbnail_->empty()) {
+        // Center line
+        auto center_color = resolve_color("waveform.grid", canvas::Color::rgba8(50, 50, 60));
+        canvas.set_stroke_color(center_color);
+        canvas.set_line_width(0.5f);
+        float cy = b.height * 0.5f;
+        canvas.stroke_line(0, cy, b.width, cy);
+
+        // Render one (min, max) pair per pixel column. ~2 KB on the stack
+        // for a 1024-wide widget; cap at 4096 px to stay bounded.
+        const std::size_t target_peaks =
+            std::min<std::size_t>(static_cast<std::size_t>(std::max(1.0f, b.width)), 4096u);
+        std::vector<float> min_max(target_peaks * 2, 0.0f);
+        const std::size_t produced = thumbnail_->render_min_max(
+            thumbnail_channel_, static_cast<uint32_t>(target_peaks), min_max.data());
+        if (produced == 0) return;
+
+        // Drive the GPU waveform shader with the per-column max so the
+        // line/fill remain consistent with the live-sample path. We render
+        // the absolute envelope (max(|min|, |max|)) — perceptually closest
+        // to traditional audio-editor waveform displays.
+        std::vector<float> envelope(produced);
+        for (std::size_t i = 0; i < produced; ++i) {
+            const float lo = min_max[i * 2 + 0];
+            const float hi = min_max[i * 2 + 1];
+            const float amp = std::max(std::abs(lo), std::abs(hi));
+            // Signed envelope: top half positive, bottom half negative would
+            // require two passes through the shader. The shader already
+            // handles symmetric ±amp, so we feed it max amplitude per column.
+            envelope[i] = hi >= -lo ? amp : -amp;
+        }
+
+        canvas::Canvas::WaveformStyle style;
+        style.line_color = wave_color;
+        style.fill_color = fill_color;
+        style.line_thickness = 2.0f;
+        style.show_fill = true;
+        style.fill_center = 0.5f;
+
+        canvas.draw_waveform(envelope.data(), envelope.size(),
+                              0, 0, b.width, b.height, style);
+        return;
+    }
+
     if (samples_.empty()) return;
 
     // Center line
@@ -481,9 +546,6 @@ void WaveformView::paint(canvas::Canvas& canvas) {
     canvas.set_line_width(0.5f);
     float cy = b.height * 0.5f;
     canvas.stroke_line(0, cy, b.width, cy);
-
-    auto wave_color = resolve_color("waveform.line", canvas::Color::rgba8(100, 180, 250));
-    auto fill_color = resolve_color("waveform.fill", canvas::Color::rgba(wave_color.r, wave_color.g, wave_color.b, 56.0f/255.0f));
 
     // GPU-accelerated waveform rendering via SkSL shader
     canvas::Canvas::WaveformStyle style;

@@ -801,6 +801,22 @@ private:
 
 // ── WaveformView ─────────────────────────────────────────────────────────────
 // Displays audio waveform data
+//
+// Two backing sources are supported:
+//
+//   set_data(...)       — raw normalised samples, redrawn directly. The
+//                         existing behaviour, used by oscilloscope-style
+//                         displays of live audio.
+//   set_thumbnail(...)  — points the widget at a pre-decoded
+//                         `pulp::audio::AudioThumbnail`. Paint reads peak
+//                         pairs from the cached level instead of decoding
+//                         per redraw. Pulp item 6.12 — wire AudioThumbnail
+//                         into existing WaveformView without inventing a
+//                         new widget.
+
+}  // namespace pulp::view
+namespace pulp::audio { class AudioThumbnail; }
+namespace pulp::view {
 
 class WaveformView : public View {
 public:
@@ -816,8 +832,24 @@ public:
     // mode is active, the buffer is rotated so the first matching
     // crossing becomes index 0, producing a stable display for periodic
     // signals. If no crossing is found, the buffer is stored as-is.
+    //
+    // Calling set_data clears any active thumbnail source.
     void set_data(const float* samples, size_t count);
     void set_data(std::vector<float> samples);
+
+    // Wire the widget to read peak (min, max) pairs from a pre-decoded
+    // `AudioThumbnail` (Pulp item 6.12). The thumbnail is borrowed —
+    // callers (typically an `AudioThumbnailCache` owner) must outlive the
+    // widget or call `clear_thumbnail()`. Setting a thumbnail clears any
+    // raw sample buffer.
+    //
+    // `channel == UINT32_MAX` folds all channels into one display row.
+    void set_thumbnail(const pulp::audio::AudioThumbnail* thumb,
+                       uint32_t channel = static_cast<uint32_t>(-1));
+    void clear_thumbnail();
+
+    bool has_thumbnail() const noexcept { return thumbnail_ != nullptr; }
+    const pulp::audio::AudioThumbnail* thumbnail() const noexcept { return thumbnail_; }
 
     size_t sample_count() const { return samples_.size(); }
 
@@ -837,6 +869,9 @@ private:
 
     std::vector<float> samples_;
     TriggerMode trigger_mode_ = TriggerMode::free_run;
+
+    const pulp::audio::AudioThumbnail* thumbnail_ = nullptr;
+    uint32_t thumbnail_channel_ = static_cast<uint32_t>(-1);
 };
 
 // ── SpectrumView ─────────────────────────────────────────────────────────────
