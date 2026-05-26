@@ -17,6 +17,28 @@
 
 namespace pulp::runtime {
 
+namespace {
+
+// v2 layout: "v2." + base64( IV(12) || ciphertext(N) || tag(16) )
+constexpr std::string_view kV2Prefix = "v2.";
+constexpr size_t kV2IvSize  = 12;  // AES-GCM IV per NIST SP 800-38D §8.2.1
+constexpr size_t kV2TagSize = 16;
+constexpr size_t kV2SecretSize = 32;
+
+std::string license_info_to_json(const LicenseInfo& info) {
+    std::ostringstream json;
+    json << "{\"product_id\":\"" << info.product_id << "\"";
+    if (!info.user_email.empty()) json << ",\"email\":\"" << info.user_email << "\"";
+    if (!info.machine_id.empty()) json << ",\"machine_id\":\"" << info.machine_id << "\"";
+    if (!info.edition.empty()) json << ",\"edition\":\"" << info.edition << "\"";
+    json << ",\"issued\":" << info.issued_timestamp;
+    if (info.expiry_timestamp > 0) json << ",\"expiry\":" << info.expiry_timestamp;
+    json << "}";
+    return json.str();
+}
+
+}  // namespace
+
 // ── JSON helpers (minimal, no dependency on pugixml for this) ───────────
 
 static std::string json_string_value(std::string_view json, std::string_view key) {
@@ -59,6 +81,28 @@ static bool json_int_value(std::string_view json, std::string_view key, int64_t&
 
 void LicenseValidator::set_public_key(std::string_view pem) {
     public_key_pem_ = std::string(pem);
+}
+
+void LicenseValidator::set_shared_secret(const uint8_t* secret, size_t secret_size) {
+    if (secret == nullptr || secret_size != kV2SecretSize) {
+        shared_secret_.clear();
+        return;
+    }
+    shared_secret_.assign(secret, secret + secret_size);
+}
+
+// ── Format detection ────────────────────────────────────────────────────
+
+std::optional<LicenseFormatVersion> detect_license_format(std::string_view key) {
+    if (key.substr(0, kV2Prefix.size()) == kV2Prefix)
+        return LicenseFormatVersion::V2;
+    // v1 layout is `<base64-payload>.<base64-signature>` — any string with
+    // at least one '.' separator counts as v1. Empty payload / empty
+    // signature halves are detected and rejected later by validate_v1 as
+    // InvalidSignature, matching the pre-v2 behaviour.
+    if (key.find('.') != std::string_view::npos)
+        return LicenseFormatVersion::V1;
+    return std::nullopt;
 }
 
 std::optional<LicenseInfo> LicenseValidator::parse_payload(std::string_view json) const {
@@ -108,6 +152,14 @@ bool LicenseValidator::verify_signature(std::string_view payload,
 }
 
 LicenseStatus LicenseValidator::validate(std::string_view license_key) const {
+    auto fmt = detect_license_format(license_key);
+    if (!fmt) return LicenseStatus::InvalidFormat;
+    return (*fmt == LicenseFormatVersion::V2)
+        ? validate_v2(license_key)
+        : validate_v1(license_key);
+}
+
+LicenseStatus LicenseValidator::validate_v1(std::string_view license_key) const {
     // Format: base64(payload).base64(signature)
     auto dot = license_key.find('.');
     if (dot == std::string_view::npos) return LicenseStatus::InvalidFormat;
@@ -144,15 +196,75 @@ LicenseStatus LicenseValidator::validate(std::string_view license_key) const {
     return LicenseStatus::Valid;
 }
 
+LicenseStatus LicenseValidator::validate_v2(std::string_view license_key) const {
+    if (shared_secret_.size() != kV2SecretSize) return LicenseStatus::InvalidSignature;
+    if (license_key.substr(0, kV2Prefix.size()) != kV2Prefix)
+        return LicenseStatus::InvalidFormat;
+
+    auto blob = base64_decode(license_key.substr(kV2Prefix.size()));
+    if (!blob) return LicenseStatus::InvalidFormat;
+    if (blob->size() < kV2IvSize + kV2TagSize) return LicenseStatus::InvalidFormat;
+
+    const uint8_t* iv  = blob->data();
+    size_t ct_size     = blob->size() - kV2IvSize - kV2TagSize;
+    const uint8_t* ct  = blob->data() + kV2IvSize;
+    const uint8_t* tag = blob->data() + kV2IvSize + ct_size;
+
+    // AAD = "v2." so a tampered prefix can't strip the format marker.
+    auto plaintext = aes_gcm_decrypt(
+        ct, ct_size,
+        shared_secret_.data(),
+        iv, kV2IvSize,
+        reinterpret_cast<const uint8_t*>(kV2Prefix.data()), kV2Prefix.size(),
+        tag);
+    if (!plaintext) return LicenseStatus::InvalidSignature;
+
+    std::string payload(plaintext->begin(), plaintext->end());
+    auto info = parse_payload(payload);
+    if (!info) return LicenseStatus::InvalidFormat;
+
+    if (info->expiry_timestamp > 0) {
+        auto now = std::time(nullptr);
+        if (now > info->expiry_timestamp)
+            return LicenseStatus::Expired;
+    }
+    if (!info->machine_id.empty()) {
+        if (info->machine_id != machine_id())
+            return LicenseStatus::MachineIdMismatch;
+    }
+    return LicenseStatus::Valid;
+}
+
 std::optional<LicenseInfo> LicenseValidator::validate_and_parse(std::string_view license_key) const {
-    auto dot = license_key.find('.');
-    if (dot == std::string_view::npos) return std::nullopt;
+    auto fmt = detect_license_format(license_key);
+    if (!fmt) return std::nullopt;
 
-    auto payload_b64 = license_key.substr(0, dot);
-    auto payload_bytes = base64_decode(payload_b64);
-    if (!payload_bytes) return std::nullopt;
+    if (*fmt == LicenseFormatVersion::V1) {
+        auto dot = license_key.find('.');
+        if (dot == std::string_view::npos) return std::nullopt;
+        auto payload_b64 = license_key.substr(0, dot);
+        auto payload_bytes = base64_decode(payload_b64);
+        if (!payload_bytes) return std::nullopt;
+        std::string payload(payload_bytes->begin(), payload_bytes->end());
+        return parse_payload(payload);
+    }
 
-    std::string payload(payload_bytes->begin(), payload_bytes->end());
+    // v2 requires the shared secret to decrypt
+    if (shared_secret_.size() != kV2SecretSize) return std::nullopt;
+    auto blob = base64_decode(license_key.substr(kV2Prefix.size()));
+    if (!blob || blob->size() < kV2IvSize + kV2TagSize) return std::nullopt;
+    const uint8_t* iv  = blob->data();
+    size_t ct_size     = blob->size() - kV2IvSize - kV2TagSize;
+    const uint8_t* ct  = blob->data() + kV2IvSize;
+    const uint8_t* tag = blob->data() + kV2IvSize + ct_size;
+    auto plaintext = aes_gcm_decrypt(
+        ct, ct_size,
+        shared_secret_.data(),
+        iv, kV2IvSize,
+        reinterpret_cast<const uint8_t*>(kV2Prefix.data()), kV2Prefix.size(),
+        tag);
+    if (!plaintext) return std::nullopt;
+    std::string payload(plaintext->begin(), plaintext->end());
     return parse_payload(payload);
 }
 
@@ -181,20 +293,27 @@ void LicenseGenerator::set_private_key(std::string_view pem) {
     private_key_pem_ = std::string(pem);
 }
 
+void LicenseGenerator::set_shared_secret(const uint8_t* secret, size_t secret_size) {
+    if (secret == nullptr || secret_size != kV2SecretSize) {
+        shared_secret_.clear();
+        return;
+    }
+    shared_secret_.assign(secret, secret + secret_size);
+}
+
 std::optional<std::string> LicenseGenerator::generate(const LicenseInfo& info) const {
+    // Prefer v2 if a shared secret is set; otherwise fall back to v1 so
+    // existing callers that only ever wired an RSA key keep working.
+    if (kCurrentLicenseFormat == LicenseFormatVersion::V2
+        && shared_secret_.size() == kV2SecretSize)
+        return generate_v2(info);
+    return generate_v1(info);
+}
+
+std::optional<std::string> LicenseGenerator::generate_v1(const LicenseInfo& info) const {
     if (private_key_pem_.empty()) return std::nullopt;
 
-    // Build JSON payload
-    std::ostringstream json;
-    json << "{\"product_id\":\"" << info.product_id << "\"";
-    if (!info.user_email.empty()) json << ",\"email\":\"" << info.user_email << "\"";
-    if (!info.machine_id.empty()) json << ",\"machine_id\":\"" << info.machine_id << "\"";
-    if (!info.edition.empty()) json << ",\"edition\":\"" << info.edition << "\"";
-    json << ",\"issued\":" << info.issued_timestamp;
-    if (info.expiry_timestamp > 0) json << ",\"expiry\":" << info.expiry_timestamp;
-    json << "}";
-
-    std::string payload = json.str();
+    std::string payload = license_info_to_json(info);
 
     // Hash the payload
     uint8_t hash[32];
@@ -241,6 +360,80 @@ std::optional<std::string> LicenseGenerator::generate(const LicenseInfo& info) c
     result += base64_encode(sig, sig_len);
 
     return result;
+}
+
+std::optional<std::string> LicenseGenerator::generate_v2(const LicenseInfo& info) const {
+    if (shared_secret_.size() != kV2SecretSize) return std::nullopt;
+
+    std::string payload = license_info_to_json(info);
+
+    // Draw a fresh 12-byte IV from CTR-DRBG.
+    uint8_t iv[kV2IvSize];
+    {
+        mbedtls_entropy_context entropy;
+        mbedtls_ctr_drbg_context drbg;
+        mbedtls_entropy_init(&entropy);
+        mbedtls_ctr_drbg_init(&drbg);
+        int rc = mbedtls_ctr_drbg_seed(&drbg, mbedtls_entropy_func, &entropy,
+                                       reinterpret_cast<const uint8_t*>("pulp::license::v2"),
+                                       17);
+        if (rc == 0) rc = mbedtls_ctr_drbg_random(&drbg, iv, kV2IvSize);
+        mbedtls_ctr_drbg_free(&drbg);
+        mbedtls_entropy_free(&entropy);
+        if (rc != 0) return std::nullopt;
+    }
+
+    auto gcm = aes_gcm_encrypt(
+        reinterpret_cast<const uint8_t*>(payload.data()), payload.size(),
+        shared_secret_.data(),
+        iv, kV2IvSize,
+        reinterpret_cast<const uint8_t*>(kV2Prefix.data()), kV2Prefix.size());
+    if (!gcm) return std::nullopt;
+
+    // Concatenate IV || ciphertext || tag and base64-encode.
+    std::vector<uint8_t> blob;
+    blob.reserve(kV2IvSize + gcm->ciphertext.size() + gcm->tag.size());
+    blob.insert(blob.end(), iv, iv + kV2IvSize);
+    blob.insert(blob.end(), gcm->ciphertext.begin(), gcm->ciphertext.end());
+    blob.insert(blob.end(), gcm->tag.begin(), gcm->tag.end());
+
+    std::string out(kV2Prefix);
+    out += base64_encode(blob.data(), blob.size());
+    return out;
+}
+
+// ── Migration: v1 -> v2 ─────────────────────────────────────────────────
+
+std::optional<std::string> migrate_v1_to_v2(
+    std::string_view v1_license_key,
+    std::string_view v1_public_key_pem,
+    const uint8_t* v2_secret,
+    size_t v2_secret_size) {
+    if (v2_secret == nullptr || v2_secret_size != kV2SecretSize)
+        return std::nullopt;
+    if (detect_license_format(v1_license_key) != LicenseFormatVersion::V1)
+        return std::nullopt;
+
+    // 1. Verify the v1 signature so a tampered v1 key cannot upgrade
+    //    itself into a valid v2 key.
+    LicenseValidator v1;
+    v1.set_public_key(v1_public_key_pem);
+    if (v1.validate(v1_license_key) != LicenseStatus::Valid) {
+        // Allow Expired/MachineId — migration of an expired/cross-machine
+        // key is still a useful operation (e.g. server-side re-issue with
+        // a fresh expiry). Reject only on InvalidSignature/Format.
+        auto status = v1.validate(v1_license_key);
+        if (status == LicenseStatus::InvalidSignature
+            || status == LicenseStatus::InvalidFormat)
+            return std::nullopt;
+    }
+
+    auto info = v1.validate_and_parse(v1_license_key);
+    if (!info) return std::nullopt;
+
+    LicenseGenerator gen;
+    gen.set_shared_secret(v2_secret, v2_secret_size);
+    return gen.generate_v2(*info);
 }
 
 // ── OnlineActivation ────────────────────────────────────────────────────
