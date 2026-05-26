@@ -21,6 +21,12 @@ target_sources(pulp-canvas PRIVATE
     src/text_layout.cpp
     src/attributed_string.cpp
     src/text_shaper.cpp
+    # Item 6.8 / 2026-05-24 macOS plugin-authoring plan.
+    # BidiAnalyzer wraps SheenBidi (Apache-2.0) to give
+    # core/canvas::TextShaper a paragraph-level UBA pass that doesn't
+    # depend on system ICU — the canonical fallback for iOS / Android /
+    # headless builds. See core/canvas/include/pulp/canvas/bidi.hpp.
+    src/bidi.cpp
     src/sdf_atlas.cpp
     src/msdf_atlas.cpp
     src/sdf_atlas_cache.cpp
@@ -62,6 +68,15 @@ target_sources(pulp-canvas PRIVATE
 # Text shaping via SkParagraph (default ON when Skia available, can be disabled)
 if(PULP_HAS_TEXT_SHAPING)
     target_compile_definitions(pulp-canvas PRIVATE PULP_HAS_TEXT_SHAPING=1)
+endif()
+
+# Item 6.8: SheenBidi-backed BidiAnalyzer. PULP_HAS_SHEENBIDI is set by
+# tools/cmake/PulpDependencies.cmake when the FetchContent step
+# succeeds. When undefined, bidi.cpp compiles to a single-run pass-
+# through that infers level from BidiBaseDirection only (LTR-correct).
+if(PULP_HAS_SHEENBIDI AND TARGET SheenBidi::SheenBidi)
+    target_link_libraries(pulp-canvas PRIVATE SheenBidi::SheenBidi)
+    target_compile_definitions(pulp-canvas PRIVATE PULP_HAS_SHEENBIDI=1)
 endif()
 
 # nanosvg (zlib license) for SVG loading
