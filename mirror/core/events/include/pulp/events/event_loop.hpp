@@ -8,6 +8,7 @@
 #include <atomic>
 #include <thread>
 #include <condition_variable>
+#include <memory>
 
 namespace pulp::events {
 
@@ -26,37 +27,31 @@ public:
     EventLoop(const EventLoop&) = delete;
     EventLoop& operator=(const EventLoop&) = delete;
 
-    // Dispatch a task to be executed on this event loop's thread
+    // Dispatch a task to be executed on this event loop's thread.
+    // Tasks submitted after stop() are ignored.
     void dispatch(Task task);
 
-    // Schedule a one-shot task after a delay
+    // Schedule a one-shot task after a delay. Tasks submitted after stop()
+    // are ignored.
     void dispatch_after(Duration delay, Task task);
 
     // Check if the calling thread is this event loop's thread
     bool is_current_thread() const;
+    std::thread::id thread_id() const;
 
     // Stop the event loop (called automatically by destructor)
     void stop();
 
     // Is the loop running?
-    bool running() const { return running_.load(std::memory_order_acquire); }
+    bool running() const;
 
 private:
-    struct TimedTask {
-        TimePoint when;
-        Task task;
-        bool operator>(const TimedTask& other) const { return when > other.when; }
-    };
+    struct State;
 
-    void run();
+    static void run(std::shared_ptr<State> state);
 
+    std::shared_ptr<State> state_;
     std::thread thread_;
-    std::mutex mutex_;
-    std::condition_variable cv_;
-    std::vector<Task> pending_;
-    std::vector<TimedTask> timed_;
-    std::atomic<bool> running_{true};
-    std::thread::id thread_id_;
 };
 
 } // namespace pulp::events

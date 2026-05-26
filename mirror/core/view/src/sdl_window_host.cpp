@@ -3,8 +3,14 @@
 #ifdef PULP_HAS_SDL3
 
 #include <pulp/canvas/canvas.hpp>
+#include <pulp/events/main_thread_dispatcher.hpp>
 #include <SDL3/SDL.h>
+#include <deque>
 #include <iostream>
+#include <memory>
+#include <mutex>
+#include <thread>
+#include <utility>
 
 // On macOS, use CoreGraphics canvas for rendering into SDL surface
 #ifdef __APPLE__
@@ -42,6 +48,7 @@ public:
     }
 
     ~SdlWindowHostImpl() {
+        shutdown_dispatcher();
         if (renderer_) SDL_DestroyRenderer(renderer_);
         if (window_) SDL_DestroyWindow(window_);
         SDL_Quit();
@@ -67,6 +74,7 @@ public:
         if (!window_ || !renderer_) return;
 
         show();
+        register_dispatcher();
         bool running = true;
         needs_repaint_ = true;
 
@@ -89,6 +97,8 @@ public:
                 }
             }
 
+            drain_dispatcher_tasks();
+
             if (needs_repaint_) {
                 render_frame();
                 needs_repaint_ = false;
@@ -97,6 +107,7 @@ public:
             SDL_Delay(16); // ~60fps
         }
 
+        shutdown_dispatcher();
         if (close_callback_) close_callback_();
     }
 
@@ -138,6 +149,72 @@ private:
     SDL_Renderer* renderer_ = nullptr;
     std::function<void()> close_callback_;
     bool needs_repaint_ = false;
+
+    struct DispatcherQueueState {
+        mutable std::mutex mutex;
+        std::deque<events::Task> tasks;
+        bool accepting = true;
+    };
+
+    std::shared_ptr<DispatcherQueueState> dispatcher_queue_;
+    events::MainThreadDispatcher::Token dispatcher_token_ = 0;
+
+    void register_dispatcher() {
+        shutdown_dispatcher();
+
+        auto queue = std::make_shared<DispatcherQueueState>();
+        auto loop_thread_id = std::this_thread::get_id();
+        auto token = events::MainThreadDispatcher::register_backend({
+            [queue](events::Task task) {
+                if (!task)
+                    return false;
+                std::lock_guard lock(queue->mutex);
+                if (!queue->accepting)
+                    return false;
+                queue->tasks.push_back(std::move(task));
+                return true;
+            },
+            [loop_thread_id] {
+                return std::this_thread::get_id() == loop_thread_id;
+            },
+        });
+
+        dispatcher_queue_ = std::move(queue);
+        dispatcher_token_ = token;
+    }
+
+    void drain_dispatcher_tasks() {
+        if (!dispatcher_queue_)
+            return;
+
+        std::deque<events::Task> tasks;
+        {
+            std::lock_guard lock(dispatcher_queue_->mutex);
+            tasks.swap(dispatcher_queue_->tasks);
+        }
+
+        while (!tasks.empty()) {
+            auto task = std::move(tasks.front());
+            tasks.pop_front();
+            if (task)
+                task();
+        }
+    }
+
+    void shutdown_dispatcher() {
+        events::MainThreadDispatcher::unregister_backend(dispatcher_token_);
+        dispatcher_token_ = 0;
+
+        if (!dispatcher_queue_)
+            return;
+
+        {
+            std::lock_guard lock(dispatcher_queue_->mutex);
+            dispatcher_queue_->accepting = false;
+        }
+        drain_dispatcher_tasks();
+        dispatcher_queue_.reset();
+    }
 
     void render_frame() {
         if (!renderer_) return;

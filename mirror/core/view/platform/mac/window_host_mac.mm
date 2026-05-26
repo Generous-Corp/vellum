@@ -6,6 +6,7 @@
 #include <pulp/view/text_editor.hpp>
 #include <pulp/view/modal.hpp>
 #include <pulp/view/script_event_dispatch.hpp>
+#include <pulp/events/main_thread_dispatcher.hpp>
 
 #include "window_host_mac_capture.h"
 #include "window_host_mac_internal.hpp"
@@ -19,6 +20,9 @@
 #include <atomic>
 #include <iostream>
 #include <memory>   // pulp #2502 — shared_ptr liveness token for deferred clicks
+#include <mutex>
+#include <utility>
+#include <vector>
 
 #ifdef PULP_HAS_SKIA
 #include <pulp/render/dirty_tracker.hpp>
@@ -54,6 +58,49 @@ static NSCursor* pulp_diagonal_resize_cursor(BOOL nwse) {
 
 // ── App menu helper ──────────────────────────────────────────────────────────
 
+static std::mutex& cocoa_dispatcher_liveness_mutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
+static std::vector<std::weak_ptr<std::atomic<bool>>>& cocoa_dispatcher_liveness_tokens() {
+    static std::vector<std::weak_ptr<std::atomic<bool>>> tokens;
+    return tokens;
+}
+
+static void register_cocoa_dispatcher_liveness(
+    const std::shared_ptr<std::atomic<bool>>& alive) {
+    auto& mutex = cocoa_dispatcher_liveness_mutex();
+    auto& tokens = cocoa_dispatcher_liveness_tokens();
+    std::lock_guard lock(mutex);
+    tokens.erase(std::remove_if(tokens.begin(), tokens.end(),
+                     [](const auto& token) { return token.expired(); }),
+                 tokens.end());
+    tokens.push_back(alive);
+}
+
+static void mark_cocoa_dispatchers_stopping() {
+    auto& mutex = cocoa_dispatcher_liveness_mutex();
+    auto& tokens = cocoa_dispatcher_liveness_tokens();
+    std::lock_guard lock(mutex);
+    tokens.erase(std::remove_if(tokens.begin(), tokens.end(),
+                     [](const auto& token) {
+                         auto alive = token.lock();
+                         if (!alive)
+                             return true;
+                         alive->store(false, std::memory_order_release);
+                         return false;
+                     }),
+                 tokens.end());
+}
+
+static void request_cocoa_app_stop() {
+    mark_cocoa_dispatchers_stopping();
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [NSApp stop:nil];
+    });
+}
+
 @interface PulpAppTerminationHandler : NSObject
 + (instancetype)sharedHandler;
 - (void)quit:(id)sender;
@@ -79,7 +126,7 @@ static NSCursor* pulp_diagonal_resize_cursor(BOOL nwse) {
     // unwinds, and every WindowHost destructor closes its window (canvas +
     // inspector + any others) — a single, clean quit. (cmd+W still closes one
     // window via the standard responder chain.)
-    [NSApp stop:nil];
+    request_cocoa_app_stop();
 }
 
 @end
@@ -91,6 +138,26 @@ static NSCursor* pulp_diagonal_resize_cursor(BOOL nwse) {
 // the R2-5 refactor — see window_host_mac_internal.hpp. Used here via
 // the `pulp::view::mac_geometry` namespace.
 using namespace pulp::view::mac_geometry;
+
+static pulp::events::MainThreadDispatcher::Backend make_cocoa_main_thread_backend(
+    std::shared_ptr<std::atomic<bool>> alive) {
+    return {
+        [alive](pulp::events::Task task) -> bool {
+            if (!task) return false;
+            if (!alive || !alive->load(std::memory_order_acquire)) return false;
+            auto* heap_task = new pulp::events::Task(std::move(task));
+            dispatch_async(dispatch_get_main_queue(), ^{
+                std::unique_ptr<pulp::events::Task> owned(heap_task);
+                if (*owned) (*owned)();
+            });
+            return true;
+        },
+        [alive] {
+            if (!alive || !alive->load(std::memory_order_acquire)) return false;
+            return [NSThread isMainThread];
+        },
+    };
+}
 
 static void install_app_menu(NSString* appName) {
     NSMenu* menuBar = [[NSMenu alloc] init];
@@ -1519,7 +1586,7 @@ static void install_app_menu(NSString* appName) {
     // orders itself out and leaves the main window + app running. A primary
     // window (the main canvas) closing stops the app regardless of any
     // secondary windows still visible.
-    if (!self.isSecondaryWindow) [NSApp stop:nil];
+    if (!self.isSecondaryWindow) request_cocoa_app_stop();
     return YES;
 }
 
@@ -1685,6 +1752,12 @@ public:
     }
 
     ~MacWindowHost() override {
+        if (idle_timer_) {
+            [idle_timer_ invalidate];
+            idle_timer_ = nil;
+        }
+        idle_callback_ = nullptr;
+
         // pulp #2502 — cancel any queued deferred-click blocks before the
         // root View tree / WidgetBridge / ScriptEngine they captured can be
         // freed. This destructor runs synchronously, with no run-loop pump
@@ -1804,6 +1877,11 @@ public:
     void run_event_loop() override {
         @autoreleasepool {
             [NSApplication sharedApplication];
+            auto dispatcher_alive = std::make_shared<std::atomic<bool>>(true);
+            register_cocoa_dispatcher_liveness(dispatcher_alive);
+            auto dispatcher_token =
+                pulp::events::MainThreadDispatcher::register_backend(
+                    make_cocoa_main_thread_backend(dispatcher_alive));
             // pulp-internal #71 follow-up — see header for initially_hidden.
             if (options_initially_hidden_) {
                 [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
@@ -1814,6 +1892,8 @@ public:
                 [NSApp activateIgnoringOtherApps:YES];
             }
             [NSApp run];
+            dispatcher_alive->store(false, std::memory_order_release);
+            pulp::events::MainThreadDispatcher::unregister_backend(dispatcher_token);
         }
     }
 
@@ -1895,6 +1975,11 @@ public:
     }
 
     ~MacGpuWindowHost() override {
+        if (render_dispatch_alive_)
+            render_dispatch_alive_->store(false, std::memory_order_release);
+        stop_display_link();
+        render_dispatch_queued_.store(false, std::memory_order_release);
+
         // WYSIWYG P4 FIX 2 — detach the NSWindow + delegate FIRST, mirroring
         // ~MacWindowHost. The GPU host is the MAIN canvas window; if it is
         // destroyed while still visible (e.g. app teardown, host swap) AppKit
@@ -1910,13 +1995,14 @@ public:
         [window_ setReleasedWhenClosed:NO];
         [window_ close];
 
-        stop_display_link();
         skia_surface_.reset();
         gpu_surface_.reset();
         // pulp #2502 — cancel any queued deferred-click blocks before the
         // captured View tree / WidgetBridge / ScriptEngine can be freed.
         // PulpMetalView inherits -prepareForTeardown from PulpView.
         [metal_view_ prepareForTeardown];
+        metal_view_.repaintBlock = nil;
+        metal_view_.pointTransform = nil;
         metal_view_.rootView = nullptr;
         root_.set_window_host(nullptr);
         root_.set_frame_clock(nullptr);
@@ -2096,6 +2182,11 @@ public:
     void run_event_loop() override {
         @autoreleasepool {
             [NSApplication sharedApplication];
+            auto dispatcher_alive = std::make_shared<std::atomic<bool>>(true);
+            register_cocoa_dispatcher_liveness(dispatcher_alive);
+            auto dispatcher_token =
+                pulp::events::MainThreadDispatcher::register_backend(
+                    make_cocoa_main_thread_backend(dispatcher_alive));
             // pulp-internal #71 follow-up — when initially_hidden is set,
             // skip Dock icon, focus stealing, and the show() call. Window
             // is created and the run loop drives the bridge per-vsync as
@@ -2118,6 +2209,8 @@ public:
                 [NSApp activateIgnoringOtherApps:YES];
             }
             [NSApp run];
+            dispatcher_alive->store(false, std::memory_order_release);
+            pulp::events::MainThreadDispatcher::unregister_backend(dispatcher_token);
         }
     }
 
@@ -2256,6 +2349,8 @@ private:
     std::atomic<bool> needs_repaint_{true};
     std::atomic<bool> continuous_frames_{false};
     std::atomic<bool> render_dispatch_queued_{false};
+    std::shared_ptr<std::atomic<bool>> render_dispatch_alive_ =
+        std::make_shared<std::atomic<bool>>(true);
     // partial-rendering POC. Tracks per-frame invalidations
     // pushed by repaint() and the animation / FrameClock pump. The
     // render gate still uses the existing needs_repaint_/animation
@@ -2402,9 +2497,12 @@ private:
         root_.set_bounds({0, 0, width, height});
         root_.layout_children();
         if (resize_callback_) {
+            auto alive_token = render_dispatch_alive_;
             resize_callback_(
                 static_cast<uint32_t>(std::max(0.0f, width)),
                 static_cast<uint32_t>(std::max(0.0f, height)));
+            if (!alive_token || !alive_token->load(std::memory_order_acquire))
+                return;
         }
         needs_repaint_ = true;
         tracker_.set_viewport(width, height);
@@ -2548,14 +2646,20 @@ private:
                                                                        std::memory_order_relaxed)) {
                 return kCVReturnSuccess;
             }
+            auto alive_token = self->render_dispatch_alive_;
             // Dispatch rendering to the main thread (required for Cocoa + Metal)
             dispatch_async(dispatch_get_main_queue(), ^{
                 @autoreleasepool {
+                    if (!alive_token || !alive_token->load(std::memory_order_acquire))
+                        return;
+
                     // Pump idle FIRST so JS rAF callbacks fire (and any
                     // request_repaint they trigger arms needs_repaint_)
                     // before we evaluate whether to render this frame.
                     if (self->idle_callback_) {
                         self->idle_callback_();
+                        if (!alive_token || !alive_token->load(std::memory_order_acquire))
+                            return;
                     }
 
                     bool animate = view_needs_continuous_frames(&self->root_);
