@@ -181,6 +181,33 @@ public:
     /// of *this. The returned copy is itself a fresh tree.
     Ptr deep_copy() const;
 
+    // ── Synchronized clone (single-process) ─────────────────────────────
+
+    /// Returns a deep clone of this subtree, with one-way listener
+    /// wiring so that subsequent mutations on **this** mirror onto the
+    /// clone within the same process. The returned `SyncedClone`
+    /// (declared below) owns the listener subscriptions; destroying it
+    /// detaches them, but the cloned tree itself stays usable as a
+    /// snapshot.
+    ///
+    /// Closes the gap-doc Phase 3 row "Single-process StateTree deep
+    /// clone w/ listener wiring (currently IPC-only
+    /// StateTreeSynchroniser)". Mirrors:
+    ///   - `set(key, v)` and `remove(key)` (typed property mutations)
+    ///   - `add_child(c)` (appended children are themselves deep-copied
+    ///     AND wired recursively, so deep mutations propagate)
+    ///   - `remove_child(idx)` and `remove_child(StateTree*)`
+    ///
+    /// Mutations on the clone are NOT mirrored back to the original
+    /// (one-way observer). Children added after the clone is created
+    /// auto-get their own wiring. Caller still owns thread-serialisation
+    /// of the original — see the class header's thread-safety contract.
+    ///
+    /// NOT thread-safe — caller must serialise with any concurrent
+    /// mutator of *this during the clone call itself.
+    class SyncedClone;
+    SyncedClone clone_synced();
+
 private:
     explicit StateTree(std::string type_name) : type_name_(std::move(type_name)) {}
 
@@ -201,6 +228,54 @@ private:
     void notify_property_changed(std::string_view name,
                                  const PropertyValue& old_val,
                                  const PropertyValue& new_val);
+};
+
+/// Owns the listener wiring created by `StateTree::clone_synced()`.
+/// One instance per clone; destroy to detach.
+///
+/// Move-only: copying would silently double up listener registrations.
+class StateTree::SyncedClone {
+public:
+    SyncedClone(SyncedClone&&) noexcept;
+    SyncedClone& operator=(SyncedClone&&) noexcept;
+    SyncedClone(const SyncedClone&) = delete;
+    SyncedClone& operator=(const SyncedClone&) = delete;
+    ~SyncedClone();
+
+    /// The cloned tree. Mutate the ORIGINAL (the tree passed to
+    /// `clone_synced`) to drive changes; this handle observes them.
+    const StateTree::Ptr& clone() const { return clone_; }
+
+    /// Drop the listener subscriptions early. After this returns the
+    /// clone stops mirroring further mutations. Safe to call twice.
+    void detach();
+
+    /// Whether the subscription is still active.
+    bool is_attached() const { return attached_; }
+
+private:
+    friend class StateTree;
+
+    SyncedClone(StateTree::Ptr source, StateTree::Ptr cloned);
+
+    void attach_recursive(StateTree& src, StateTree& dst);
+
+    // Weak handle to the source node. When the source subtree is
+    // removed via `remove_child` and no other shared_ptr keeps it
+    // alive, `lock()` returns null so `detach()` skips deregistration
+    // safely instead of dereferencing a dangling raw pointer.
+    // Pinned by the SyncedClone destructor-safety regression test.
+    struct WiringEntry {
+        std::weak_ptr<StateTree> source;
+        int prop_listener_id;
+        int child_added_listener_id;
+        int child_removed_listener_id;
+    };
+
+    StateTree::Ptr source_;
+    StateTree::Ptr clone_;
+    std::vector<WiringEntry> wiring_;
+    bool attached_ = true;
 };
 
 /// Observable value — wraps a single value with change notification.

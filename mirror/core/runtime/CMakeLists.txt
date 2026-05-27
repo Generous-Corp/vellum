@@ -108,6 +108,8 @@ target_sources(pulp-runtime PRIVATE
     src/websocket_channel.cpp
     src/json_rpc.cpp
     src/ip_address.cpp
+    src/mac_address.cpp
+    src/url.cpp
     src/i18n.cpp
     src/crypto.cpp
     src/analytics.cpp
