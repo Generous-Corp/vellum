@@ -257,4 +257,120 @@ StateTree::Ptr StateTree::deep_copy() const {
     return copy;
 }
 
+StateTree::SyncedClone StateTree::clone_synced() {
+    return SyncedClone(shared_from_this(), deep_copy());
+}
+
+// ── SyncedClone ─────────────────────────────────────────────────────────
+//
+// Single-process equivalent of StateTreeSynchroniser. Walks the source +
+// clone in parallel, installs property + child listeners at every level
+// of the source, and applies the equivalent mutation on the matching
+// clone node. Newly added children on the source side are deep-copied
+// onto the clone AND recursively wired so the observer keeps mirroring
+// after structural changes.
+
+StateTree::SyncedClone::SyncedClone(StateTree::Ptr source,
+                                    StateTree::Ptr cloned)
+    : source_(std::move(source)),
+      clone_(std::move(cloned)) {
+    attach_recursive(*source_, *clone_);
+}
+
+StateTree::SyncedClone::SyncedClone(SyncedClone&& other) noexcept
+    : source_(std::move(other.source_)),
+      clone_(std::move(other.clone_)),
+      wiring_(std::move(other.wiring_)),
+      attached_(other.attached_) {
+    other.attached_ = false;
+}
+
+StateTree::SyncedClone&
+StateTree::SyncedClone::operator=(SyncedClone&& other) noexcept {
+    if (this != &other) {
+        detach();
+        source_ = std::move(other.source_);
+        clone_ = std::move(other.clone_);
+        wiring_ = std::move(other.wiring_);
+        attached_ = other.attached_;
+        other.attached_ = false;
+    }
+    return *this;
+}
+
+StateTree::SyncedClone::~SyncedClone() {
+    detach();
+}
+
+void StateTree::SyncedClone::detach() {
+    if (!attached_) return;
+    for (auto& w : wiring_) {
+        // The source subtree may have been removed via `remove_child`
+        // and dropped to refcount 0 between attach time and detach. In
+        // that case `lock()` returns null and the listener vector is
+        // already gone with the StateTree, so there is nothing to
+        // remove. Pinned by the dangling-pointer regression test.
+        if (auto src = w.source.lock()) {
+            src->remove_listener(w.prop_listener_id);
+            src->remove_child_added_listener(w.child_added_listener_id);
+            src->remove_child_removed_listener(w.child_removed_listener_id);
+        }
+    }
+    wiring_.clear();
+    attached_ = false;
+}
+
+void StateTree::SyncedClone::attach_recursive(StateTree& src, StateTree& dst) {
+    // Property changes: set / remove on src → set / remove on dst.
+    int prop_id = src.add_listener(
+        [dst_ptr = &dst](StateTree& /*node*/, std::string_view prop,
+                         const PropertyValue& /*old*/, const PropertyValue& new_v) {
+            if (std::holds_alternative<std::monostate>(new_v)) {
+                dst_ptr->remove(prop);
+            } else {
+                dst_ptr->set(prop, new_v);
+            }
+        });
+
+    // Child-added on src → deep-copy onto dst at the same index AND wire
+    // the new subtree recursively so deeper mutations keep mirroring.
+    int added_id = src.add_child_added_listener(
+        [this, dst_ptr = &dst](StateTree& /*parent*/,
+                               StateTree& added_child, int idx) {
+            auto cloned_child = added_child.deep_copy();
+            dst_ptr->insert_child(idx, cloned_child);
+            this->attach_recursive(added_child, *cloned_child);
+        });
+
+    // Child-removed on src → remove same index on dst. We don't bother
+    // de-registering the listeners we installed on the removed subtree's
+    // source nodes — the wiring vector keeps non-owning pointers that
+    // will simply no-op when the source subtree is destroyed (its
+    // listener vectors die with it). If the caller re-parents the
+    // removed subtree later that's a separate `clone_synced` call.
+    int removed_id = src.add_child_removed_listener(
+        [dst_ptr = &dst](StateTree& /*parent*/, StateTree& /*removed_child*/,
+                         int idx) {
+            dst_ptr->remove_child(idx);
+        });
+
+    // weak_ptr so dropped subtrees don't dangle here — see WiringEntry
+    // comment in the header.
+    wiring_.push_back({src.weak_from_this(),
+                       prop_id, added_id, removed_id});
+
+    // Recurse on existing children. dst was deep-copied from src in the
+    // same shape, so positional zip is safe.
+    int n = src.child_count();
+    int dst_n = dst.child_count();
+    int common = std::min(n, dst_n);
+    for (int i = 0; i < common; ++i) {
+        auto src_child = src.child(i);
+        auto dst_child = dst.child(i);
+        if (src_child && dst_child) {
+            attach_recursive(*src_child, *dst_child);
+        }
+    }
+}
+
 }  // namespace pulp::state
