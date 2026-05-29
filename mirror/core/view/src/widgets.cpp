@@ -11,6 +11,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
+#include <optional>
 #include <string>
 
 namespace pulp::view {
@@ -28,6 +29,32 @@ static bool parse_schema_float_token(const std::string& token, float& out) {
     }
     out = value;
     return true;
+}
+
+static int parse_schema_hex_digit(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static std::optional<canvas::Color> parse_schema_hex_color(std::string_view value) {
+    if (value.empty() || value.front() != '#') return std::nullopt;
+    auto pair = [](char high, char low) -> std::optional<uint8_t> {
+        const int h = parse_schema_hex_digit(high);
+        const int l = parse_schema_hex_digit(low);
+        if (h < 0 || l < 0) return std::nullopt;
+        return static_cast<uint8_t>((h << 4) | l);
+    };
+    if (value.size() == 7 || value.size() == 9) {
+        auto r = pair(value[1], value[2]);
+        auto g = pair(value[3], value[4]);
+        auto b = pair(value[5], value[6]);
+        auto a = value.size() == 9 ? pair(value[7], value[8]) : std::optional<uint8_t>(255);
+        if (!r || !g || !b || !a) return std::nullopt;
+        return canvas::Color::rgba8(*r, *g, *b, *a);
+    }
+    return std::nullopt;
 }
 
 static void render_schema(canvas::Canvas& canvas, const std::string& json,
@@ -48,6 +75,8 @@ static void render_schema(canvas::Canvas& canvas, const std::string& json,
             auto resolveColor = [&](const std::string& key, canvas::Color fallback) -> canvas::Color {
                 if (!el.hasObjectMember(key)) return fallback;
                 auto tok = el[key].getWithDefault(std::string(""));
+                if (auto color = parse_schema_hex_color(tok))
+                    return *color;
                 return view.resolve_color(tok, fallback);
             };
 
@@ -108,6 +137,14 @@ static void render_schema(canvas::Canvas& canvas, const std::string& json,
                 auto radius = resolveDim("radius", r * 0.3f);
                 canvas.set_fill_color(color);
                 canvas.fill_circle(cx, cy, radius);
+                if (el.hasObjectMember("strokeColor")) {
+                    auto stroke = resolveColor("strokeColor", {60, 60, 80, 255});
+                    auto stroke_width = static_cast<float>(el.hasObjectMember("strokeWidth")
+                        ? el["strokeWidth"].getWithDefault(1.0) : 1.0);
+                    canvas.set_stroke_color(stroke);
+                    canvas.set_line_width(stroke_width);
+                    canvas.stroke_circle(cx, cy, radius);
+                }
             } else if (type == "line") {
                 auto color = resolveColor("color", {220, 220, 220, 255});
                 // Line from inner to outer at value angle
@@ -117,6 +154,7 @@ static void render_schema(canvas::Canvas& canvas, const std::string& json,
                 float outerR = resolveDim("outerRadius", r);
                 canvas.set_stroke_color(color);
                 canvas.set_line_width(lineW);
+                canvas.set_line_cap(canvas::LineCap::round);
                 canvas.stroke_line(cx + innerR * std::cos(angleRad), cy + innerR * std::sin(angleRad),
                                    cx + outerR * std::cos(angleRad), cy + outerR * std::sin(angleRad));
             } else if (type == "rect") {
@@ -167,6 +205,10 @@ void Knob::on_mouse_event(const MouseEvent& event) {
 void Knob::on_mouse_down(Point pos) {
     drag_start_y_ = pos.y;
     drag_start_value_ = value_;
+    if (!gesture_active_) {
+        gesture_active_ = true;
+        if (on_gesture_begin) on_gesture_begin();
+    }
     if (window_host())
         window_host()->set_mouse_relative_mode(true);
 }
@@ -174,6 +216,10 @@ void Knob::on_mouse_down(Point pos) {
 void Knob::on_mouse_up(Point) {
     if (window_host())
         window_host()->set_mouse_relative_mode(false);
+    if (gesture_active_) {
+        gesture_active_ = false;
+        if (on_gesture_end) on_gesture_end();
+    }
 }
 
 void Knob::on_mouse_drag(Point pos) {
@@ -203,19 +249,33 @@ void Fader::on_mouse_leave() {
 }
 
 void Fader::on_mouse_event(const MouseEvent& event) {
-    if (!event.is_down) { dragging_ = false; return; }
+    if (!event.is_down) {
+        on_mouse_up(event.position);
+        return;
+    }
+    on_mouse_down(event.position);
+}
+
+void Fader::on_mouse_down(Point pos) {
+    if (!dragging_ && on_gesture_begin) on_gesture_begin();
     dragging_ = true;
     auto b = local_bounds();
     float new_val;
     if (orientation_ == Orientation::horizontal) {
-        new_val = std::clamp(event.position.x / b.width, 0.0f, 1.0f);
+        new_val = std::clamp(pos.x / b.width, 0.0f, 1.0f);
     } else {
-        new_val = std::clamp(1.0f - event.position.y / b.height, 0.0f, 1.0f);
+        new_val = std::clamp(1.0f - pos.y / b.height, 0.0f, 1.0f);
     }
     if (new_val != value_) {
         value_ = new_val;
         if (on_change) on_change(value_);
     }
+}
+
+void Fader::on_mouse_up(Point) {
+    if (!dragging_) return;
+    dragging_ = false;
+    if (on_gesture_end) on_gesture_end();
 }
 
 void Fader::on_mouse_drag(Point pos) {
@@ -382,7 +442,7 @@ void Knob::paint(canvas::Canvas& canvas) {
     }
 
     // Label below (always drawn, even with shader)
-    if (!label_.empty()) {
+    if (show_label_ && !label_.empty()) {
         auto text_color = resolve_color("text.secondary", canvas::Color::rgba8(150, 150, 150));
         canvas.set_fill_color({text_color.r, text_color.g, text_color.b, text_color.a});
         canvas.set_font("Inter", 10.0f);
@@ -488,18 +548,37 @@ void Fader::paint(canvas::Canvas& canvas) {
         auto thumb_color = resolve_color("control.thumb", canvas::Color::rgba8(220, 220, 220));
         canvas.set_fill_color({thumb_color.r, thumb_color.g, thumb_color.b, thumb_color.a});
 
-        float thumb_radius = std::min(track_width * 0.35f, 8.0f) * hover_thumb_scale_.value();
-        // Convention: when mapping a 0..1 value to a position with a circular/rect
-        // indicator, inset by the indicator's radius so it stays fully within bounds:
-        //   usable = length - 2 * radius;  pos = radius + value * usable;
-        if (vert) {
-            float usable = track_length - 2.0f * thumb_radius;
-            float thumb_y = thumb_radius + usable - value_ * usable;
-            canvas.fill_circle(b.width * 0.5f, thumb_y, thumb_radius);
+        if (thumb_shape_ == ThumbShape::rectangle) {
+            const float scale = hover_thumb_scale_.value();
+            const float default_w = vert ? std::min(b.width, track_width) : 8.0f;
+            const float default_h = vert ? 5.0f : std::min(b.height, track_width);
+            const float thumb_w = std::max(1.0f, (thumb_width_ > 0.0f ? thumb_width_ : default_w) * scale);
+            const float thumb_h = std::max(1.0f, (thumb_height_ > 0.0f ? thumb_height_ : default_h) * scale);
+            const float axis_half = (vert ? thumb_h : thumb_w) * 0.5f;
+            const float usable = std::max(0.0f, track_length - 2.0f * axis_half);
+            const float axis_center = axis_half + (vert ? (1.0f - value_) : value_) * usable;
+            const float radius = std::min(thumb_corner_radius_, std::min(thumb_w, thumb_h) * 0.5f);
+            if (vert) {
+                const float x = (b.width - thumb_w) * 0.5f;
+                canvas.fill_rounded_rect(x, axis_center - thumb_h * 0.5f, thumb_w, thumb_h, radius);
+            } else {
+                const float y = (b.height - thumb_h) * 0.5f;
+                canvas.fill_rounded_rect(axis_center - thumb_w * 0.5f, y, thumb_w, thumb_h, radius);
+            }
         } else {
-            float usable = track_length - 2.0f * thumb_radius;
-            float thumb_x = thumb_radius + value_ * usable;
-            canvas.fill_circle(thumb_x, b.height * 0.5f, thumb_radius);
+            float thumb_radius = std::min(track_width * 0.35f, 8.0f) * hover_thumb_scale_.value();
+            // Convention: when mapping a 0..1 value to a position with a circular/rect
+            // indicator, inset by the indicator's radius so it stays fully within bounds:
+            //   usable = length - 2 * radius;  pos = radius + value * usable;
+            if (vert) {
+                float usable = track_length - 2.0f * thumb_radius;
+                float thumb_y = thumb_radius + usable - value_ * usable;
+                canvas.fill_circle(b.width * 0.5f, thumb_y, thumb_radius);
+            } else {
+                float usable = track_length - 2.0f * thumb_radius;
+                float thumb_x = thumb_radius + value_ * usable;
+                canvas.fill_circle(thumb_x, b.height * 0.5f, thumb_radius);
+            }
         }
     }
 
@@ -754,30 +833,36 @@ void Checkbox::on_mouse_down(Point) {
 void ToggleButton::paint(canvas::Canvas& canvas) {
     auto b = local_bounds();
 
-    auto bg = on_ ? resolve_color("accent.primary", canvas::Color::rgba8(100, 150, 255))
-                  : resolve_color("bg.surface", canvas::Color::rgba8(50, 50, 60));
-    auto border = resolve_color("control.border", canvas::Color::rgba8(80, 80, 100));
+    auto bg = on_
+        ? on_background_color_.value_or(resolve_color("accent.primary", canvas::Color::rgba8(100, 150, 255)))
+        : off_background_color_.value_or(resolve_color("bg.surface", canvas::Color::rgba8(50, 50, 60)));
+    auto border = on_
+        ? on_border_color_.value_or(resolve_color("control.border", canvas::Color::rgba8(80, 80, 100)))
+        : off_border_color_.value_or(resolve_color("control.border", canvas::Color::rgba8(80, 80, 100)));
+    const bool has_custom_border = on_ ? on_border_color_.has_value() : off_border_color_.has_value();
+    const float radius = corner_radius_.value_or(6.0f);
 
     canvas.set_fill_color(bg);
-    canvas.fill_rounded_rect(0, 0, b.width, b.height, 6);
-    if (!on_) {
+    canvas.fill_rounded_rect(0, 0, b.width, b.height, radius);
+    if (!on_ || has_custom_border) {
         canvas.set_stroke_color(border);
         canvas.set_line_width(1);
-        canvas.stroke_rounded_rect(0, 0, b.width, b.height, 6);
+        canvas.stroke_rounded_rect(0, 0, b.width, b.height, radius);
     }
 
     if (!label_.empty()) {
-        auto text_color = on_ ? canvas::Color::rgba8(255, 255, 255)
-                              : resolve_color("text.primary", canvas::Color::rgba8(200, 200, 210));
+        auto text_color = on_
+            ? on_text_color_.value_or(canvas::Color::rgba8(255, 255, 255))
+            : off_text_color_.value_or(resolve_color("text.primary", canvas::Color::rgba8(200, 200, 210)));
         canvas.set_fill_color(text_color);
-        canvas.set_font("Inter", 13);
+        canvas.set_font("Inter", font_size_.value_or(13.0f));
         canvas.set_text_align(canvas::TextAlign::center);
         canvas.fill_text_anchored(label_, b.width * 0.5f, b.height * 0.5f, canvas::Canvas::TextAnchor::GlyphCenter);
     }
 }
 
 void ToggleButton::on_mouse_down(Point) {
-    on_ = !on_;
+    set_on(!on_);
     if (on_toggle) on_toggle(on_);
 }
 

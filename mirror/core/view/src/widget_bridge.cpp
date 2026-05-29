@@ -767,6 +767,32 @@ static choc::value::Value make_layout_rect_value(View* v) {
     return result;
 }
 
+static std::string layout_trace_id(const View& v) {
+    if (!v.anchor_id().empty()) return v.anchor_id();
+    if (!v.id().empty()) return v.id();
+    return {};
+}
+
+static choc::value::Value make_layout_ancestor_chain_value(View* v) {
+    auto result = choc::value::createEmptyArray();
+    if (!v) return result;
+
+    std::vector<View*> chain;
+    for (auto* cur = v; cur != nullptr; cur = cur->parent())
+        chain.push_back(cur);
+    std::reverse(chain.begin(), chain.end());
+
+    for (auto* cur : chain) {
+        auto id = layout_trace_id(*cur);
+        if (id.empty()) continue;
+        auto entry = choc::value::createObject("");
+        entry.addMember("id", id);
+        entry.addMember("bounds", make_layout_rect_value(cur));
+        result.addArrayElement(entry);
+    }
+    return result;
+}
+
 static void eval_or_throw(ScriptEngine& engine, const char* name, const std::string& js) {
     try {
         engine.evaluate(js);
@@ -3158,6 +3184,16 @@ void WidgetBridge::register_api() {
         root_.layout_children();
         View* v = id.empty() ? &root_ : widget(id);
         return make_layout_rect_value(v);
+    });
+
+    // getLayoutAncestorRects(id) -> [{id, bounds}, ...]
+    // Same coordinate space as getLayoutRect(), but with the native View
+    // parent chain included so validation can localize coordinate drift.
+    engine_.register_function("getLayoutAncestorRects", [this](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        root_.layout_children();
+        View* v = id.empty() ? &root_ : widget(id);
+        return make_layout_ancestor_chain_value(v);
     });
 
     // getRootSize() -> {width, height} — actual root view dimensions for vw/vh/matchMedia
@@ -6768,21 +6804,6 @@ void WidgetBridge::register_api() {
         return choc::value::createString(ai_cli_command_);
     });
 
-    // Shell exec (for Claude CLI)
-    // Ensures PATH includes common tool locations (homebrew, npm global, etc.)
-    // getLayoutRect(id) → {x, y, width, height, top, left, right, bottom}
-    // pulp #1899 — see the matching note on the earlier getLayoutRect
-    // registration. Both bindings must force a layout pass; whichever
-    // wins the engine_.register_function override needs the same
-    // semantics so React-imported trees get correct bounds in mount-
-    // time effects.
-    engine_.register_function("getLayoutRect", [this](choc::javascript::ArgumentList args) {
-        auto id = args.get<std::string>(0, "");
-        root_.layout_children();
-        auto* v = widget(id);
-        return make_layout_rect_value(v);
-    });
-
     // getComputedValue(id, prop) → string
     engine_.register_function("getComputedValue", [this](choc::javascript::ArgumentList args) {
         auto id = args.get<std::string>(0, "");
@@ -6797,6 +6818,8 @@ void WidgetBridge::register_api() {
         return choc::value::createString("");
     });
 
+    // Shell exec
+    // Ensures PATH includes common tool locations (homebrew, npm global, etc.)
     engine_.register_function("exec", [](choc::javascript::ArgumentList args) {
         auto cmd = args.get<std::string>(0, "");
         if (cmd.empty()) return choc::value::createString("");

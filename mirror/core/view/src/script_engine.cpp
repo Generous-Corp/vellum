@@ -3,7 +3,6 @@
 // the original API that WidgetBridge and all existing callers depend on.
 
 #include <pulp/view/script_engine.hpp>
-#include <stdexcept>
 
 namespace pulp::view {
 
