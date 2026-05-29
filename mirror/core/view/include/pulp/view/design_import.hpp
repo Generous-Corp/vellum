@@ -21,6 +21,14 @@
 namespace pulp::view {
 
 class View;
+class Knob;
+class Fader;
+class Meter;
+class ToggleButton;
+class TextButton;
+class TextEditor;
+class XYPad;
+class WaveformView;
 
 // ── Design source types ─────────────────────────────────────────────────
 
@@ -357,6 +365,111 @@ struct NativeMaterializeOptions {
     std::vector<ImportDiagnostic>* diagnostics_out = nullptr;
 };
 
+struct NativeImportBindingDescriptor {
+    std::string_view route_id;
+    std::string_view param_key;
+    std::string_view binding_module;
+    std::string_view binding_param;
+    std::string_view event_contract;
+    std::string_view gesture_contract;
+};
+
+struct NativeImportXYPadBindingDescriptor {
+    std::string_view route_id;
+    std::string_view x_param_key;
+    std::string_view y_param_key;
+    std::string_view x_binding_module;
+    std::string_view x_binding_param;
+    std::string_view y_binding_module;
+    std::string_view y_binding_param;
+    std::string_view event_contract;
+    std::string_view gesture_contract;
+};
+
+struct NativeImportMeterBindingDescriptor {
+    std::string_view route_id;
+    std::string_view meter_source;
+    std::string_view channel;
+    std::string_view value_key;
+    std::string_view event_contract;
+};
+
+struct NativeImportChoiceBindingDescriptor {
+    std::string_view route_id;
+    std::string_view param_key;
+    std::string_view choice_value;
+    std::string_view choice_label;
+    std::string_view event_contract;
+    std::string_view gesture_contract;
+};
+
+struct NativeImportWaveformBindingDescriptor {
+    std::string_view route_id;
+    std::string_view param_key;
+    std::string_view shape;
+    std::string_view event_contract;
+};
+
+struct NativeImportTextBindingDescriptor {
+    std::string_view route_id;
+    std::string_view value_key;
+    std::string_view initial_value;
+    std::string_view placeholder;
+    std::string_view event_contract;
+    std::string_view focus_contract;
+};
+
+struct NativeImportHostActionDescriptor {
+    std::string_view route_id;
+    std::string_view action;
+    std::string_view label;
+    std::string_view payload_contract;
+    std::string_view event_contract;
+    std::string_view gesture_contract;
+};
+
+class NativeImportBindingContext {
+public:
+    virtual ~NativeImportBindingContext() = default;
+    virtual void bind_knob(Knob& knob, const NativeImportBindingDescriptor& descriptor) {
+        (void)knob;
+        (void)descriptor;
+    }
+    virtual void bind_fader(Fader& fader, const NativeImportBindingDescriptor& descriptor) {
+        (void)fader;
+        (void)descriptor;
+    }
+    virtual void bind_meter(Meter& meter, const NativeImportMeterBindingDescriptor& descriptor) {
+        (void)meter;
+        (void)descriptor;
+    }
+    virtual void bind_toggle_button(ToggleButton& button, const NativeImportBindingDescriptor& descriptor) {
+        (void)button;
+        (void)descriptor;
+    }
+    virtual void bind_choice_button(ToggleButton& button, const NativeImportChoiceBindingDescriptor& descriptor) {
+        (void)button;
+        (void)descriptor;
+    }
+    virtual void bind_xy_pad(XYPad& pad, const NativeImportXYPadBindingDescriptor& descriptor) {
+        (void)pad;
+        (void)descriptor;
+    }
+    virtual void bind_waveform_display(WaveformView& waveform,
+                                       const NativeImportWaveformBindingDescriptor& descriptor) {
+        (void)waveform;
+        (void)descriptor;
+    }
+    virtual void bind_text_editor(TextEditor& editor, const NativeImportTextBindingDescriptor& descriptor) {
+        (void)editor;
+        (void)descriptor;
+    }
+    virtual void bind_host_action(TextButton& button, const NativeImportHostActionDescriptor& descriptor) {
+        (void)button;
+        (void)descriptor;
+    }
+};
+
 std::unique_ptr<View> build_native_view_tree(
     const DesignIR& ir,
     const IRAssetManifest& manifest,
@@ -617,6 +730,12 @@ struct ClaudeRuntimeOptions {
     /// static parser. Empty when `parse_claude_html_with_runtime` returns
     /// a non-empty IR.
     std::string* error_out = nullptr;
+
+    /// Optional viewport used when a runtime-native tree is frozen into
+    /// DesignIR. When both values are positive, the bridge root is laid out
+    /// at this size before computed view bounds are captured.
+    int runtime_snapshot_viewport_width = 0;
+    int runtime_snapshot_viewport_height = 0;
 };
 
 /// Run the Claude Design bundle in a headless JS engine and harvest the
@@ -887,16 +1006,19 @@ struct CppExportOptions {
     std::string function_name = "build_imported_ui";
     std::string namespace_name;
     std::string header_filename = "imported_ui.hpp";
+    std::string binding_function_name = "bind_imported_ui";
     bool include_comments = true;
     bool emit_named_tokens = true;
     bool emit_asset_constants = true;
     bool extract_named_components = true;
+    bool emit_binding_context_helpers = true;
     int indent_spaces = 4;
 };
 
 struct CppExportResult {
     std::string header;
     std::string source;
+    std::string binding_manifest;
 };
 
 /// Generate an ownable baked-C++ view artifact from a DesignIR. The result
