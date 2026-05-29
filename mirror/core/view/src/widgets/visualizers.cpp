@@ -279,10 +279,12 @@ void Meter::set_level(float rms, float peak) {
     current_peak_ = std::clamp(peak, 0.0f, 1.0f);
     ballistics_.display_rms = current_rms_;
     ballistics_.display_peak = current_peak_;
+    request_repaint();
 }
 
 void Meter::update(float raw_peak, float raw_rms, float dt) {
     ballistics_.update(raw_peak, raw_rms, dt);
+    request_repaint();
 }
 
 void Meter::paint(canvas::Canvas& canvas) {
@@ -309,6 +311,11 @@ void Meter::paint(canvas::Canvas& canvas) {
     canvas.fill_rounded_rect(0, 0, b.width, b.height, 2.0f);
 
     float meter_length = vert ? b.height : b.width;
+    auto level_to_pixels = [meter_length](float level) {
+        return std::clamp(std::round(std::clamp(level, 0.0f, 1.0f) * meter_length),
+                          0.0f,
+                          meter_length);
+    };
 
     // RMS fill (main body)
     auto rms_color = resolve_color("accent.success", canvas::Color::rgba8(80, 200, 80));
@@ -321,27 +328,31 @@ void Meter::paint(canvas::Canvas& canvas) {
         rms_color = resolve_color("accent.warning", canvas::Color::rgba8(240, 180, 60));
 
     canvas.set_fill_color(rms_color);
-    float fill = rms_level * meter_length;
+    float fill = level_to_pixels(rms_level);
 
     if (vert) {
-        canvas.fill_rect(1, b.height - fill, b.width - 2, fill);
+        if (fill > 0.0f)
+            canvas.fill_rect(1, b.height - fill, b.width - 2, fill);
     } else {
-        canvas.fill_rect(0, 1, fill, b.height - 2);
+        if (fill > 0.0f)
+            canvas.fill_rect(0, 1, fill, b.height - 2);
     }
 
     // Peak indicator line
     float peak_level = ballistics_.display_peak;
     if (peak_level > 0.01f) {
-        auto peak_color = resolve_color("control.thumb", canvas::Color::rgba8(255, 255, 255));
-        canvas.set_stroke_color(peak_color);
-        canvas.set_line_width(1.0f);
+        float peak_pos = level_to_pixels(peak_level);
+        if (peak_pos != fill) {
+            auto peak_color = resolve_color("control.thumb", canvas::Color::rgba8(255, 255, 255));
+            canvas.set_stroke_color(peak_color);
+            canvas.set_line_width(1.0f);
 
-        float peak_pos = peak_level * meter_length;
-        if (vert) {
-            float y = b.height - peak_pos;
-            canvas.stroke_line(1, y, b.width - 1, y);
-        } else {
-            canvas.stroke_line(peak_pos, 1, peak_pos, b.height - 1);
+            if (vert) {
+                float y = b.height - peak_pos;
+                canvas.stroke_line(1, y, b.width - 1, y);
+            } else {
+                canvas.stroke_line(peak_pos, 1, peak_pos, b.height - 1);
+            }
         }
     }
 
@@ -355,7 +366,7 @@ void Meter::paint(canvas::Canvas& canvas) {
         canvas.set_stroke_color(held_color);
         canvas.set_line_width(2.0f);
 
-        float held_pos = held * meter_length;
+        float held_pos = level_to_pixels(held);
         if (vert) {
             float y = b.height - held_pos;
             canvas.stroke_line(0, y, b.width, y);
@@ -379,8 +390,22 @@ void XYPad::update_from_pos(Point pos) {
     }
 }
 
-void XYPad::on_mouse_down(Point pos) { update_from_pos(pos); }
-void XYPad::on_mouse_drag(Point pos) { update_from_pos(pos); }
+void XYPad::on_mouse_down(Point pos) {
+    if (!dragging_ && on_gesture_begin) on_gesture_begin();
+    dragging_ = true;
+    update_from_pos(pos);
+}
+
+void XYPad::on_mouse_drag(Point pos) {
+    if (!dragging_) return;
+    update_from_pos(pos);
+}
+
+void XYPad::on_mouse_up(Point) {
+    if (!dragging_) return;
+    dragging_ = false;
+    if (on_gesture_end) on_gesture_end();
+}
 
 void XYPad::paint(canvas::Canvas& canvas) {
     auto b = local_bounds();
@@ -445,6 +470,23 @@ size_t WaveformView::find_trigger_index(const float* samples, size_t count,
         }
     }
     return 0;
+}
+
+void WaveformView::set_preview_shape(std::string_view shape) {
+    std::string normalized(shape);
+    std::transform(normalized.begin(), normalized.end(), normalized.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (normalized == "saw" || normalized == "sawtooth")
+        preview_shape_ = PreviewShape::saw;
+    else if (normalized == "sine" || normalized == "sin")
+        preview_shape_ = PreviewShape::sine;
+    else if (normalized == "square" || normalized == "squ")
+        preview_shape_ = PreviewShape::square;
+    else if (normalized == "tri" || normalized == "triangle")
+        preview_shape_ = PreviewShape::triangle;
+    else
+        preview_shape_ = PreviewShape::none;
+    request_repaint();
 }
 
 void WaveformView::apply_trigger() {
@@ -535,6 +577,59 @@ void WaveformView::paint(canvas::Canvas& canvas) {
 
         canvas.draw_waveform(envelope.data(), envelope.size(),
                               0, 0, b.width, b.height, style);
+        return;
+    }
+
+    if (samples_.empty() && preview_shape_ != PreviewShape::none) {
+        auto center_color = resolve_color("waveform.grid", canvas::Color::rgba8(50, 50, 60));
+        canvas.set_stroke_color(center_color);
+        canvas.set_line_width(0.5f);
+        const float cy = b.height * 0.5f;
+        canvas.stroke_line(0, cy, b.width, cy);
+
+        canvas.set_stroke_color(wave_color.with_alpha(wave_color.a * 0.85f));
+        canvas.set_line_width(1.2f);
+        canvas.begin_path();
+        switch (preview_shape_) {
+            case PreviewShape::saw:
+                canvas.move_to(0.0f, b.height * 0.8f);
+                canvas.line_to(b.width * 0.25f, b.height * 0.2f);
+                canvas.line_to(b.width * 0.25f, b.height * 0.8f);
+                canvas.line_to(b.width * 0.5f, b.height * 0.2f);
+                canvas.line_to(b.width * 0.5f, b.height * 0.8f);
+                canvas.line_to(b.width * 0.75f, b.height * 0.2f);
+                canvas.line_to(b.width * 0.75f, b.height * 0.8f);
+                canvas.line_to(b.width, b.height * 0.2f);
+                break;
+            case PreviewShape::sine:
+                canvas.move_to(0.0f, b.height * 0.5f);
+                canvas.quad_to(b.width * 0.12f, b.height * 0.1f, b.width * 0.25f, b.height * 0.5f);
+                canvas.quad_to(b.width * 0.38f, b.height * 0.9f, b.width * 0.5f, b.height * 0.5f);
+                canvas.quad_to(b.width * 0.62f, b.height * 0.1f, b.width * 0.75f, b.height * 0.5f);
+                canvas.quad_to(b.width * 0.88f, b.height * 0.9f, b.width, b.height * 0.5f);
+                break;
+            case PreviewShape::square:
+                canvas.move_to(0.0f, b.height * 0.2f);
+                canvas.line_to(b.width * 0.25f, b.height * 0.2f);
+                canvas.line_to(b.width * 0.25f, b.height * 0.8f);
+                canvas.line_to(b.width * 0.5f, b.height * 0.8f);
+                canvas.line_to(b.width * 0.5f, b.height * 0.2f);
+                canvas.line_to(b.width * 0.75f, b.height * 0.2f);
+                canvas.line_to(b.width * 0.75f, b.height * 0.8f);
+                canvas.line_to(b.width, b.height * 0.8f);
+                break;
+            case PreviewShape::triangle:
+                canvas.move_to(0.0f, b.height * 0.5f);
+                canvas.line_to(b.width * 0.125f, b.height * 0.15f);
+                canvas.line_to(b.width * 0.375f, b.height * 0.85f);
+                canvas.line_to(b.width * 0.625f, b.height * 0.15f);
+                canvas.line_to(b.width * 0.875f, b.height * 0.85f);
+                canvas.line_to(b.width, b.height * 0.5f);
+                break;
+            case PreviewShape::none:
+                break;
+        }
+        canvas.stroke_current_path();
         return;
     }
 

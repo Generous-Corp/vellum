@@ -7,6 +7,8 @@
 #include <memory>
 #include <vector>
 #include <cstdint>
+#include <stdexcept>
+#include <unordered_set>
 #include <choc/containers/choc_Value.h>
 #include <choc/text/choc_JSON.h>
 
@@ -41,6 +43,13 @@ struct HostObjectDescriptor {
     std::string class_name;
     std::vector<HostObjectProperty> properties;
     std::vector<HostObjectMethod> methods;
+};
+
+struct JsEngineCreationStats {
+    uint64_t total = 0;
+    uint64_t quickjs = 0;
+    uint64_t jsc = 0;
+    uint64_t v8 = 0;
 };
 
 // Which JS engine backend is active
@@ -83,8 +92,11 @@ public:
                             ModuleResolver resolver,
                             ModuleCompletionHandler completion = {}) = 0;
 
-    // Register a C++ function callable from JS as a global
-    virtual void register_function(const std::string& name, NativeFunction fn) = 0;
+    // Register a C++ function callable from JS as a global.
+    void register_function(const std::string& name, NativeFunction fn) {
+        claim_native_symbol(name);
+        register_function_impl(name, std::move(fn));
+    }
 
     // Invoke a global JS function by name with no arguments
     virtual choc::value::Value invoke(std::string_view name) = 0;
@@ -99,7 +111,49 @@ public:
 
     // Register a native-backed global object with snapshot properties and
     // native method callbacks.
-    virtual void register_host_object(const std::string& name, HostObjectDescriptor descriptor) {
+    void register_host_object(const std::string& name, HostObjectDescriptor descriptor) {
+        claim_native_symbol(name);
+        register_host_object_impl(name, std::move(descriptor));
+    }
+
+    // First promise slice: expose a native callback as a JS function that
+    // returns a real Promise and resolves on the JS microtask queue.
+    // This does not yet provide a held native resolver for later completion.
+    void register_promise_function(const std::string& name, NativePromiseFunction fn) {
+        claim_native_symbol(name);
+        register_promise_function_impl(name, std::move(fn));
+    }
+
+    // Hint that now is a good time to collect garbage (advisory)
+    virtual void gc_hint() {}
+
+    // Pump any engine-specific message loop / microtask queue. This is a no-op
+    // for engines that do not expose an explicit pump hook.
+    virtual void pump_message_loop() {}
+
+    // ── Phase 13 forward-compatibility (HostObject / TypedArray / Promise) ──
+    // These are defined now so all backends can be designed with them in mind.
+    // Default implementations return false / no-op. Backends enable as ready.
+
+    virtual bool supports_host_objects() const { return false; }
+    // This means the engine can surface JS TypedArray / ArrayBuffer values
+    // through the current Pulp API seam without collapsing them into an
+    // opaque generic object. It does not imply zero-copy bridging yet.
+    virtual bool supports_typed_arrays() const { return false; }
+    virtual bool supports_promises() const { return false; }
+
+    // Non-copyable, non-movable (owned via unique_ptr)
+    JsEngine(const JsEngine&) = delete;
+    JsEngine& operator=(const JsEngine&) = delete;
+    JsEngine(JsEngine&&) = delete;
+    JsEngine& operator=(JsEngine&&) = delete;
+
+protected:
+    JsEngine() = default;
+
+    virtual void register_function_impl(const std::string& name, NativeFunction fn) = 0;
+
+    virtual void register_host_object_impl(const std::string& name, HostObjectDescriptor descriptor) {
         const auto quote_string = [] (std::string_view text) {
             return choc::json::toString(choc::value::createString(std::string(text)));
         };
@@ -133,10 +187,7 @@ public:
         evaluate(script + target + ";");
     }
 
-    // First promise slice: expose a native callback as a JS function that
-    // returns a real Promise and resolves on the JS microtask queue.
-    // This does not yet provide a held native resolver for later completion.
-    virtual void register_promise_function(const std::string& name, NativePromiseFunction fn) {
+    virtual void register_promise_function_impl(const std::string& name, NativePromiseFunction fn) {
         const auto quote_string = [] (std::string_view text) {
             return choc::json::toString(choc::value::createString(std::string(text)));
         };
@@ -148,38 +199,19 @@ public:
         std::string quoted_hidden = quote_string(hidden_name);
         std::string quoted_name = quote_string(name);
         std::string script =
-            "globalThis[" + quoted_name + "] = (...args) => Promise.resolve().then(() => globalThis[" + quoted_hidden + "](...args));\n"
+            "globalThis[" + quoted_name + "] = ((fn) => (...args) => Promise.resolve().then(() => fn(...args)))(globalThis[" + quoted_hidden + "]);\n"
             "delete globalThis[" + quoted_hidden + "];\n"
             "globalThis[" + quoted_name + "];";
         evaluate(script);
     }
 
-    // Hint that now is a good time to collect garbage (advisory)
-    virtual void gc_hint() {}
+private:
+    std::unordered_set<std::string> registered_native_symbols_;
 
-    // Pump any engine-specific message loop / microtask queue. This is a no-op
-    // for engines that do not expose an explicit pump hook.
-    virtual void pump_message_loop() {}
-
-    // ── Phase 13 forward-compatibility (HostObject / TypedArray / Promise) ──
-    // These are defined now so all backends can be designed with them in mind.
-    // Default implementations return false / no-op. Backends enable as ready.
-
-    virtual bool supports_host_objects() const { return false; }
-    // This means the engine can surface JS TypedArray / ArrayBuffer values
-    // through the current Pulp API seam without collapsing them into an
-    // opaque generic object. It does not imply zero-copy bridging yet.
-    virtual bool supports_typed_arrays() const { return false; }
-    virtual bool supports_promises() const { return false; }
-
-    // Non-copyable, non-movable (owned via unique_ptr)
-    JsEngine(const JsEngine&) = delete;
-    JsEngine& operator=(const JsEngine&) = delete;
-    JsEngine(JsEngine&&) = delete;
-    JsEngine& operator=(JsEngine&&) = delete;
-
-protected:
-    JsEngine() = default;
+    void claim_native_symbol(const std::string& name) {
+        if (!registered_native_symbols_.insert(name).second)
+            throw std::runtime_error("JsEngine native symbol already registered: " + name);
+    }
 };
 
 // ── Engine factory ─────────────────────────────────────────────────────────
@@ -195,5 +227,10 @@ std::unique_ptr<JsEngine> create_default_js_engine();
 
 // Query which engines are available in this build
 bool is_engine_available(JsEngineType type);
+
+// Diagnostic hook used by native-import validation to prove that a generated
+// C++ view path did not initialize a scripting backend while building/rendering.
+JsEngineCreationStats js_engine_creation_stats();
+void reset_js_engine_creation_stats_for_tests();
 
 } // namespace pulp::view

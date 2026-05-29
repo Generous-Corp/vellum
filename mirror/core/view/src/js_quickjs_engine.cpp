@@ -127,7 +127,7 @@ public:
             });
     }
 
-    void register_function(const std::string& name, NativeFunction fn) override {
+    void register_function_impl(const std::string& name, NativeFunction fn) override {
         // Adapt Pulp's NativeFunction to CHOC's NativeFunction signature
         context_.registerFunction(name,
             [fn = std::move(fn)](choc::javascript::ArgumentList args) -> choc::value::Value {
