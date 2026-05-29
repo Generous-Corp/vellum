@@ -1219,7 +1219,10 @@ void append_json_field_if_present(std::ostringstream& out,
         append_json_field(out, first, key, *value);
 }
 
-bool has_binding_manifest_metadata(const IRNode& node) {
+// Returns true when `node` carries any of the `pulp*` binding-contract
+// attributes that gate a binding-manifest entry. This is the manifest
+// eligibility gate (distinct from the helper eligibility gate below).
+bool node_has_binding_manifest_metadata(const IRNode& node) {
     for (std::string_view key : {
              "pulpRouteId",
              "pulpRouteType",
@@ -1261,97 +1264,9 @@ bool has_binding_manifest_metadata(const IRNode& node) {
     return false;
 }
 
-void collect_binding_manifest_entries(std::ostringstream& out,
-                                      const IRNode& node,
-                                      const ResolvedNativeNode& resolved,
-                                      std::string_view ir_path,
-                                      bool& first_entry) {
-    const auto md = NativeBindingMetadata::parse(node);
-    if (has_binding_manifest_metadata(node)) {
-        if (!first_entry)
-            out << ",";
-        out << "\n    {";
-        bool first_field = true;
-        if (md.route_id && !md.route_id->empty()) {
-            append_json_field(out, first_field, "id", *md.route_id);
-        } else if (node.stable_anchor_id && !node.stable_anchor_id->empty()) {
-            append_json_field(out, first_field, "id", *node.stable_anchor_id);
-        } else if (!node.name.empty()) {
-            append_json_field(out, first_field, "id", node.name);
-        }
-        append_json_field(out, first_field, "ir_path", ir_path);
-        if (node.stable_anchor_id && !node.stable_anchor_id->empty())
-            append_json_field(out, first_field, "anchor_id", *node.stable_anchor_id);
-        append_json_field(out, first_field, "native_primitive", native_widget_kind_name(resolved.kind));
-        append_json_field_if_present(out, first_field, "route_type", md.route_type);
-        append_json_field_if_present(out, first_field, "source_family", md.source_family);
-        append_json_field_if_present(out, first_field, "source_path", md.source_path);
-        append_json_field_if_present(out, first_field, "param_key", md.param_key);
-        append_json_field_if_present(out, first_field, "binding_module", md.binding_module);
-        append_json_field_if_present(out, first_field, "binding_param", md.binding_param);
-        append_json_field_if_present(out, first_field, "choice_value", md.choice_value);
-        append_json_field_if_present(out, first_field, "choice_label", md.choice_label);
-        append_json_field_if_present(out, first_field, "x_param_key", md.x_param_key);
-        append_json_field_if_present(out, first_field, "y_param_key", md.y_param_key);
-        append_json_field_if_present(out, first_field, "x_binding_module", md.x_binding_module);
-        append_json_field_if_present(out, first_field, "x_binding_param", md.x_binding_param);
-        append_json_field_if_present(out, first_field, "y_binding_module", md.y_binding_module);
-        append_json_field_if_present(out, first_field, "y_binding_param", md.y_binding_param);
-        append_json_field_if_present(out, first_field, "meter_source", md.meter_source);
-        append_json_field_if_present(out, first_field, "meter_channel", md.meter_channel);
-        append_json_field_if_present(out, first_field, "meter_value_key", md.meter_value_key);
-        append_json_field_if_present(out, first_field, "waveform_shape", md.waveform_shape);
-        append_json_field_if_present(out, first_field, "value_key", md.value_key);
-        append_json_field_if_present(out, first_field, "initial_value", md.initial_value);
-        append_json_field_if_present(out, first_field, "placeholder", md.placeholder);
-        append_json_field_if_present(out, first_field, "focus_contract", md.focus_contract);
-        append_json_field_if_present(out, first_field, "payload_contract", md.payload_contract);
-        append_json_field_if_present(out, first_field, "host_action_label", md.host_action_label);
-        append_json_field_if_present(out, first_field, "component_type_label", md.type_label);
-        append_json_field_if_present(out, first_field, "description", md.description);
-        append_json_field_if_present(out, first_field, "thumb_shape", md.thumb_shape);
-        append_json_field_if_present(out, first_field, "thumb_width", md.thumb_width);
-        append_json_field_if_present(out, first_field, "thumb_height", md.thumb_height);
-        append_json_field_if_present(out, first_field, "thumb_corner_radius", md.thumb_corner_radius);
-        append_json_field_if_present(out, first_field, "on_background_color", md.on_background_color);
-        append_json_field_if_present(out, first_field, "off_background_color", md.off_background_color);
-        append_json_field_if_present(out, first_field, "on_text_color", md.on_text_color);
-        append_json_field_if_present(out, first_field, "off_text_color", md.off_text_color);
-        append_json_field_if_present(out, first_field, "on_border_color", md.on_border_color);
-        append_json_field_if_present(out, first_field, "off_border_color", md.off_border_color);
-        append_json_field_if_present(out, first_field, "corner_radius", md.corner_radius);
-        append_json_field_if_present(out, first_field, "font_size", md.font_size);
-        append_json_field_if_present(out, first_field, "event_contract", md.event_contract);
-        append_json_field_if_present(out, first_field, "gesture_contract", md.gesture_contract);
-        append_json_field_if_present(out, first_field, "host_action", md.host_action);
-        append_json_field_if_present(out, first_field, "style_tokens", md.style_tokens);
-        append_json_field_if_present(out, first_field, "default_value_source", md.default_value_source);
-        append_json_field_if_present(out, first_field, "fallback_reason", md.fallback_reason);
-        out << "\n    }";
-        first_entry = false;
-    }
-
-    const auto count = std::min(node.children.size(), resolved.children.size());
-    for (std::size_t i = 0; i < count; ++i) {
-        const auto child_path = std::string(ir_path) + "/" + std::to_string(i);
-        collect_binding_manifest_entries(out, node.children[i], resolved.children[i], child_path, first_entry);
-    }
-}
-
-std::string build_binding_manifest_json(const DesignIR& ir, const ResolvedNativeNode& resolved) {
-    std::ostringstream out;
-    out << "{\n"
-        << "  \"schema\": \"pulp-native-cpp-binding-manifest-v1\",\n"
-        << "  \"entries\": [";
-    bool first_entry = true;
-    collect_binding_manifest_entries(out, ir.root, resolved, "root", first_entry);
-    if (!first_entry)
-        out << "\n  ";
-    out << "]\n"
-        << "}\n";
-    return out.str();
-}
-
+// One emitted binding-context helper route. The helper-emission pass consumes
+// these; they are the value-or-empty-string projection of a metadata node that
+// passed the (helper-specific) eligibility gate.
 struct BindingHelperRoute {
     NativeWidgetKind kind = NativeWidgetKind::view;
     std::string anchor_id;
@@ -1382,78 +1297,212 @@ struct BindingHelperRoute {
     std::string gesture_contract;
 };
 
-void collect_binding_helper_routes(std::vector<BindingHelperRoute>& routes,
+// One node's resolved binding state, parsed exactly once during the single
+// tree traversal. Both the binding-manifest JSON and the binding-context
+// helper C++ are rendered from the plan's routes.
+//
+// The two eligibility flags are DELIBERATELY DISTINCT — the manifest gate
+// (`eligible_for_manifest`) and the helper gate (`eligible_for_helper`) are
+// different predicates, and not every manifest entry produces a helper route.
+struct ResolvedBindingRoute {
+    std::string ir_path;
+    const IRNode* ir_node = nullptr;
+    const ResolvedNativeNode* resolved = nullptr;
+    NativeBindingMetadata metadata;
+    bool eligible_for_manifest = false;
+    bool eligible_for_helper = false;
+};
+
+struct ResolvedBindingPlan {
+    std::vector<ResolvedBindingRoute> routes;
+};
+
+// Single DFS over the (IRNode, ResolvedNativeNode) tree. Parses
+// NativeBindingMetadata once per node and records both eligibility verdicts.
+// Visits children in the SAME order as the old two separate traversals
+// (both walked min(node.children, resolved.children) in index order), so the
+// resulting manifest-entry and helper-emission orders are unchanged.
+void collect_resolved_binding_plan(ResolvedBindingPlan& plan,
                                    const IRNode& node,
-                                   const ResolvedNativeNode& resolved) {
-    const auto md = NativeBindingMetadata::parse(node);
-    const auto& route_id = md.route_id;
-    const auto& param_key = md.param_key;
-    const auto& x_param_key = md.x_param_key;
-    const auto& y_param_key = md.y_param_key;
-    const auto& meter_source = md.meter_source;
-    const auto& meter_channel = md.meter_channel;
-    const auto& choice_value = md.choice_value;
-    const auto& waveform_shape = md.waveform_shape;
-    const auto& value_key = md.value_key;
-    const auto& host_action = md.host_action;
-    const bool has_single_param = param_key && !param_key->empty();
+                                   const ResolvedNativeNode& resolved,
+                                   std::string_view ir_path) {
+    ResolvedBindingRoute route;
+    route.ir_path = std::string(ir_path);
+    route.ir_node = &node;
+    route.resolved = &resolved;
+    route.metadata = NativeBindingMetadata::parse(node);
+
+    // Manifest gate: identical to the old has_binding_manifest_metadata().
+    route.eligible_for_manifest = node_has_binding_manifest_metadata(node);
+
+    // Helper gate: identical to the old collect_binding_helper_routes() gate.
+    const auto& md = route.metadata;
+    const bool has_single_param = md.param_key && !md.param_key->empty();
     const bool has_scalar_param_control =
         (resolved.kind == NativeWidgetKind::knob ||
          resolved.kind == NativeWidgetKind::fader ||
          resolved.kind == NativeWidgetKind::toggle_button) &&
         has_single_param;
     const bool has_choice_param = resolved.kind == NativeWidgetKind::toggle_button &&
-        has_single_param && choice_value && !choice_value->empty();
+        has_single_param && md.choice_value && !md.choice_value->empty();
     const bool has_xy_params = resolved.kind == NativeWidgetKind::xy_pad &&
-        x_param_key && !x_param_key->empty() &&
-        y_param_key && !y_param_key->empty();
+        md.x_param_key && !md.x_param_key->empty() &&
+        md.y_param_key && !md.y_param_key->empty();
     const bool has_meter_input = resolved.kind == NativeWidgetKind::meter &&
-        meter_source && !meter_source->empty() &&
-        meter_channel && !meter_channel->empty();
+        md.meter_source && !md.meter_source->empty() &&
+        md.meter_channel && !md.meter_channel->empty();
     const bool has_waveform_input = resolved.kind == NativeWidgetKind::waveform &&
-        has_single_param && waveform_shape && !waveform_shape->empty();
+        has_single_param && md.waveform_shape && !md.waveform_shape->empty();
     const bool has_text_input = resolved.kind == NativeWidgetKind::text_editor &&
-        value_key && !value_key->empty();
+        md.value_key && !md.value_key->empty();
     const bool has_host_action = resolved.kind == NativeWidgetKind::text_button &&
-        host_action && !host_action->empty();
-    if (route_id && !route_id->empty() &&
+        md.host_action && !md.host_action->empty();
+    route.eligible_for_helper =
+        md.route_id && !md.route_id->empty() &&
         (has_scalar_param_control || has_choice_param || has_xy_params || has_meter_input ||
          has_waveform_input || has_text_input || has_host_action) &&
-        node.stable_anchor_id && !node.stable_anchor_id->empty()) {
+        node.stable_anchor_id && !node.stable_anchor_id->empty();
+
+    plan.routes.push_back(std::move(route));
+
+    const auto count = std::min(node.children.size(), resolved.children.size());
+    for (std::size_t i = 0; i < count; ++i) {
+        const auto child_path = std::string(ir_path) + "/" + std::to_string(i);
+        collect_resolved_binding_plan(plan, node.children[i], resolved.children[i], child_path);
+    }
+}
+
+// Render one binding-manifest JSON entry. Field order / names / presence are
+// identical to the old collect_binding_manifest_entries() body.
+void render_binding_manifest_entry(std::ostringstream& out,
+                                   const ResolvedBindingRoute& route,
+                                   bool& first_entry) {
+    const IRNode& node = *route.ir_node;
+    const ResolvedNativeNode& resolved = *route.resolved;
+    const NativeBindingMetadata& md = route.metadata;
+    if (!first_entry)
+        out << ",";
+    out << "\n    {";
+    bool first_field = true;
+    if (md.route_id && !md.route_id->empty()) {
+        append_json_field(out, first_field, "id", *md.route_id);
+    } else if (node.stable_anchor_id && !node.stable_anchor_id->empty()) {
+        append_json_field(out, first_field, "id", *node.stable_anchor_id);
+    } else if (!node.name.empty()) {
+        append_json_field(out, first_field, "id", node.name);
+    }
+    append_json_field(out, first_field, "ir_path", route.ir_path);
+    if (node.stable_anchor_id && !node.stable_anchor_id->empty())
+        append_json_field(out, first_field, "anchor_id", *node.stable_anchor_id);
+    append_json_field(out, first_field, "native_primitive", native_widget_kind_name(resolved.kind));
+    append_json_field_if_present(out, first_field, "route_type", md.route_type);
+    append_json_field_if_present(out, first_field, "source_family", md.source_family);
+    append_json_field_if_present(out, first_field, "source_path", md.source_path);
+    append_json_field_if_present(out, first_field, "param_key", md.param_key);
+    append_json_field_if_present(out, first_field, "binding_module", md.binding_module);
+    append_json_field_if_present(out, first_field, "binding_param", md.binding_param);
+    append_json_field_if_present(out, first_field, "choice_value", md.choice_value);
+    append_json_field_if_present(out, first_field, "choice_label", md.choice_label);
+    append_json_field_if_present(out, first_field, "x_param_key", md.x_param_key);
+    append_json_field_if_present(out, first_field, "y_param_key", md.y_param_key);
+    append_json_field_if_present(out, first_field, "x_binding_module", md.x_binding_module);
+    append_json_field_if_present(out, first_field, "x_binding_param", md.x_binding_param);
+    append_json_field_if_present(out, first_field, "y_binding_module", md.y_binding_module);
+    append_json_field_if_present(out, first_field, "y_binding_param", md.y_binding_param);
+    append_json_field_if_present(out, first_field, "meter_source", md.meter_source);
+    append_json_field_if_present(out, first_field, "meter_channel", md.meter_channel);
+    append_json_field_if_present(out, first_field, "meter_value_key", md.meter_value_key);
+    append_json_field_if_present(out, first_field, "waveform_shape", md.waveform_shape);
+    append_json_field_if_present(out, first_field, "value_key", md.value_key);
+    append_json_field_if_present(out, first_field, "initial_value", md.initial_value);
+    append_json_field_if_present(out, first_field, "placeholder", md.placeholder);
+    append_json_field_if_present(out, first_field, "focus_contract", md.focus_contract);
+    append_json_field_if_present(out, first_field, "payload_contract", md.payload_contract);
+    append_json_field_if_present(out, first_field, "host_action_label", md.host_action_label);
+    append_json_field_if_present(out, first_field, "component_type_label", md.type_label);
+    append_json_field_if_present(out, first_field, "description", md.description);
+    append_json_field_if_present(out, first_field, "thumb_shape", md.thumb_shape);
+    append_json_field_if_present(out, first_field, "thumb_width", md.thumb_width);
+    append_json_field_if_present(out, first_field, "thumb_height", md.thumb_height);
+    append_json_field_if_present(out, first_field, "thumb_corner_radius", md.thumb_corner_radius);
+    append_json_field_if_present(out, first_field, "on_background_color", md.on_background_color);
+    append_json_field_if_present(out, first_field, "off_background_color", md.off_background_color);
+    append_json_field_if_present(out, first_field, "on_text_color", md.on_text_color);
+    append_json_field_if_present(out, first_field, "off_text_color", md.off_text_color);
+    append_json_field_if_present(out, first_field, "on_border_color", md.on_border_color);
+    append_json_field_if_present(out, first_field, "off_border_color", md.off_border_color);
+    append_json_field_if_present(out, first_field, "corner_radius", md.corner_radius);
+    append_json_field_if_present(out, first_field, "font_size", md.font_size);
+    append_json_field_if_present(out, first_field, "event_contract", md.event_contract);
+    append_json_field_if_present(out, first_field, "gesture_contract", md.gesture_contract);
+    append_json_field_if_present(out, first_field, "host_action", md.host_action);
+    append_json_field_if_present(out, first_field, "style_tokens", md.style_tokens);
+    append_json_field_if_present(out, first_field, "default_value_source", md.default_value_source);
+    append_json_field_if_present(out, first_field, "fallback_reason", md.fallback_reason);
+    out << "\n    }";
+    first_entry = false;
+}
+
+// Render the binding-manifest JSON from the plan, in DFS order, filtered by
+// the manifest eligibility flag. Byte-identical to the old
+// build_binding_manifest_json().
+std::string build_binding_manifest_json(const ResolvedBindingPlan& plan) {
+    std::ostringstream out;
+    out << "{\n"
+        << "  \"schema\": \"pulp-native-cpp-binding-manifest-v1\",\n"
+        << "  \"entries\": [";
+    bool first_entry = true;
+    for (const auto& route : plan.routes) {
+        if (route.eligible_for_manifest)
+            render_binding_manifest_entry(out, route, first_entry);
+    }
+    if (!first_entry)
+        out << "\n  ";
+    out << "]\n"
+        << "}\n";
+    return out.str();
+}
+
+// Project the plan's helper-eligible routes into BindingHelperRoute, in DFS
+// order. value_or(empty) defaulting is identical to the old
+// collect_binding_helper_routes().
+std::vector<BindingHelperRoute> build_binding_helper_routes(const ResolvedBindingPlan& plan) {
+    std::vector<BindingHelperRoute> routes;
+    for (const auto& route : plan.routes) {
+        if (!route.eligible_for_helper)
+            continue;
+        const NativeBindingMetadata& md = route.metadata;
         routes.push_back(BindingHelperRoute{
-            .kind = resolved.kind,
-            .anchor_id = *node.stable_anchor_id,
-            .route_id = *route_id,
-            .param_key = param_key.value_or(std::string{}),
+            .kind = route.resolved->kind,
+            .anchor_id = *route.ir_node->stable_anchor_id,
+            .route_id = *md.route_id,
+            .param_key = md.param_key.value_or(std::string{}),
             .binding_module = md.binding_module.value_or(std::string{}),
             .binding_param = md.binding_param.value_or(std::string{}),
-            .choice_value = choice_value.value_or(std::string{}),
+            .choice_value = md.choice_value.value_or(std::string{}),
             .choice_label = md.choice_label.value_or(std::string{}),
-            .x_param_key = x_param_key.value_or(std::string{}),
-            .y_param_key = y_param_key.value_or(std::string{}),
+            .x_param_key = md.x_param_key.value_or(std::string{}),
+            .y_param_key = md.y_param_key.value_or(std::string{}),
             .x_binding_module = md.x_binding_module.value_or(std::string{}),
             .x_binding_param = md.x_binding_param.value_or(std::string{}),
             .y_binding_module = md.y_binding_module.value_or(std::string{}),
             .y_binding_param = md.y_binding_param.value_or(std::string{}),
-            .meter_source = meter_source.value_or(std::string{}),
-            .meter_channel = meter_channel.value_or(std::string{}),
+            .meter_source = md.meter_source.value_or(std::string{}),
+            .meter_channel = md.meter_channel.value_or(std::string{}),
             .meter_value_key = md.meter_value_key.value_or(std::string{}),
-            .waveform_shape = waveform_shape.value_or(std::string{}),
-            .value_key = value_key.value_or(std::string{}),
+            .waveform_shape = md.waveform_shape.value_or(std::string{}),
+            .value_key = md.value_key.value_or(std::string{}),
             .initial_value = md.initial_value.value_or(std::string{}),
             .placeholder = md.placeholder.value_or(std::string{}),
             .focus_contract = md.focus_contract.value_or(std::string{}),
-            .host_action = host_action.value_or(std::string{}),
+            .host_action = md.host_action.value_or(std::string{}),
             .host_action_label = md.host_action_label.value_or(std::string{}),
             .payload_contract = md.payload_contract.value_or(std::string{}),
             .event_contract = md.event_contract.value_or(std::string{}),
             .gesture_contract = md.gesture_contract.value_or(std::string{}),
         });
     }
-
-    const auto count = std::min(node.children.size(), resolved.children.size());
-    for (std::size_t i = 0; i < count; ++i)
-        collect_binding_helper_routes(routes, node.children[i], resolved.children[i]);
+    return routes;
 }
 
 void emit_binding_context_helpers(std::ostringstream& out,
@@ -1661,9 +1710,16 @@ CppExportResult generate_pulp_cpp(const DesignIR& ir,
         ? ir.asset_manifest
         : manifest;
     auto resolved = resolve_design_ir_native(ir, effective_manifest);
+
+    // Single tree traversal: parse NativeBindingMetadata once per node and
+    // record both eligibility verdicts. The binding-manifest JSON and the
+    // binding-context helper C++ are both rendered from this one plan.
+    ResolvedBindingPlan binding_plan;
+    collect_resolved_binding_plan(binding_plan, ir.root, resolved, "root");
+
     std::vector<BindingHelperRoute> binding_helper_routes;
     if (opts.emit_binding_context_helpers)
-        collect_binding_helper_routes(binding_helper_routes, ir.root, resolved);
+        binding_helper_routes = build_binding_helper_routes(binding_plan);
     const bool emit_binding_helpers = !binding_helper_routes.empty();
 
     EmitContext ctx{
@@ -1733,7 +1789,7 @@ CppExportResult generate_pulp_cpp(const DesignIR& ir,
         emit_binding_context_helpers(source, opts, binding_helper_routes);
     emit_namespace_close(source, opts.namespace_name);
     result.source = trim_trailing_blank_lines(source.str());
-    result.binding_manifest = build_binding_manifest_json(ir, resolved);
+    result.binding_manifest = build_binding_manifest_json(binding_plan);
     return result;
 }
 
