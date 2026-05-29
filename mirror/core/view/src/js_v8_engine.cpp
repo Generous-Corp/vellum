@@ -64,7 +64,7 @@ public:
             });
     }
 
-    void register_function(const std::string& name, NativeFunction fn) override {
+    void register_function_impl(const std::string& name, NativeFunction fn) override {
         context_.registerFunction(name,
             [fn = std::move(fn)](choc::javascript::ArgumentList args) -> choc::value::Value {
                 return fn(args.args, args.numArgs);
