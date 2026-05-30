@@ -187,6 +187,17 @@ public:
         (void)design_h;
     }
 
+    // Anchor the design viewport to the TOP of the host pane instead of
+    // centering it vertically (horizontal centering unchanged). The AU v3
+    // editor opts in so a fixed-aspect design in a taller host pane (REAPER's
+    // FX-chain pane, where AU can't negotiate the pane aspect like CLAP/VST3)
+    // reads like CLAP/VST3 — content at the top with the slack as a single
+    // bottom strip — instead of floating centered between two bands. Default
+    // no-op / centered for every other host + format.
+    virtual void set_design_viewport_top_align(bool top_align) {
+        (void)top_align;
+    }
+
     // Inverse-map a host-space point (e.g. mouse coords in host logical
     // pixels) into root-view space using the active design-viewport
     // transform. Identity when no design viewport is set. Exposed so
