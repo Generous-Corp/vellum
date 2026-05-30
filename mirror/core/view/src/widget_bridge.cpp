@@ -12,6 +12,7 @@
 #include <pulp/view/asset_manager.hpp>
 #include <pulp/view/sprite_strip.hpp>
 #include <pulp/view/design_import.hpp>
+#include "import_validation_bridge.hpp"
 #if __has_include(<pulp/render/gpu_surface.hpp>)
 #include <pulp/render/gpu_surface.hpp>
 #define PULP_WIDGET_BRIDGE_HAS_GPU_SURFACE 1
@@ -759,60 +760,9 @@ static void safe_dispatch_eval(const std::shared_ptr<std::atomic<bool>>& alive,
     }
 }
 
-static choc::value::Value make_layout_rect_value(View* v) {
-    auto result = choc::value::createObject("");
-    if (!v) return result;
-
-    float ax = 0.0f;
-    float ay = 0.0f;
-    View* cur = v;
-    while (cur) {
-        ax += cur->bounds().x;
-        ay += cur->bounds().y;
-        if (auto* scroll = dynamic_cast<ScrollView*>(cur->parent())) {
-            ax -= scroll->scroll_x();
-            ay -= scroll->scroll_y();
-        }
-        cur = cur->parent();
-    }
-
-    auto b = v->bounds();
-    result.addMember("x", choc::value::createFloat64(ax));
-    result.addMember("y", choc::value::createFloat64(ay));
-    result.addMember("width", choc::value::createFloat64(b.width));
-    result.addMember("height", choc::value::createFloat64(b.height));
-    result.addMember("top", choc::value::createFloat64(ay));
-    result.addMember("left", choc::value::createFloat64(ax));
-    result.addMember("right", choc::value::createFloat64(ax + b.width));
-    result.addMember("bottom", choc::value::createFloat64(ay + b.height));
-    return result;
-}
-
-static std::string layout_trace_id(const View& v) {
-    if (!v.anchor_id().empty()) return v.anchor_id();
-    if (!v.id().empty()) return v.id();
-    return {};
-}
-
-static choc::value::Value make_layout_ancestor_chain_value(View* v) {
-    auto result = choc::value::createEmptyArray();
-    if (!v) return result;
-
-    std::vector<View*> chain;
-    for (auto* cur = v; cur != nullptr; cur = cur->parent())
-        chain.push_back(cur);
-    std::reverse(chain.begin(), chain.end());
-
-    for (auto* cur : chain) {
-        auto id = layout_trace_id(*cur);
-        if (id.empty()) continue;
-        auto entry = choc::value::createObject("");
-        entry.addMember("id", id);
-        entry.addMember("bounds", make_layout_rect_value(cur));
-        result.addArrayElement(entry);
-    }
-    return result;
-}
+// make_layout_rect_value / make_layout_ancestor_chain_value were extracted
+// verbatim to import_validation_bridge.{hpp,cpp} (#3151). The getLayoutRect /
+// getLayoutAncestorRects registrations below call the shared definitions.
 
 static void eval_or_throw(ScriptEngine& engine, const char* name, const std::string& js) {
     try {

@@ -43,6 +43,7 @@
 #include <cmath>
 
 #include "design_import_internal.hpp"
+#include "import_validation_bridge.hpp"
 
 namespace pulp::view {
 
@@ -525,16 +526,9 @@ size_t count_ir_nodes(const IRNode& n) {
     return total;
 }
 
-void layout_runtime_snapshot_root_if_requested(View& root, const ClaudeRuntimeOptions& opts) {
-    if (opts.runtime_snapshot_viewport_width <= 0 || opts.runtime_snapshot_viewport_height <= 0)
-        return;
-
-    root.set_bounds({0.0f,
-                     0.0f,
-                     static_cast<float>(opts.runtime_snapshot_viewport_width),
-                     static_cast<float>(opts.runtime_snapshot_viewport_height)});
-    root.layout_children();
-}
+// layout_runtime_snapshot_root_if_requested was extracted verbatim to
+// import_validation_bridge.{hpp,cpp} (#3151). The call site below uses the
+// shared definition.
 
 std::string color_to_hex(Color color) {
     std::ostringstream out;
