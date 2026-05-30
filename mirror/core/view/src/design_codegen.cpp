@@ -455,6 +455,81 @@ static void generate_native_node(std::ostringstream& ss, const IRNode& node,
                 ss << ind << "setWidgetStyle('" << wid << "', 'minimal');\n";
         };
 
+        // Format an audio value the way the Pulp Library components do: a whole
+        // number prints with no decimals (880, 0, -60), a fractional value with
+        // one decimal (-6.0). Generalizable — no per-instance hardcoding.
+        auto fmt_audio_value = [](float v) -> std::string {
+            std::ostringstream os;
+            if (std::fabs(v - std::round(v)) < 0.05f)
+                os << static_cast<long long>(std::llround(v));
+            else {
+                os.setf(std::ios::fixed);
+                os.precision(1);
+                os << v;
+            }
+            return os.str();
+        };
+
+        // The figma-plugin export carries each widget's value / range / unit /
+        // binding as NODE METADATA (audio_min/max/default + attributes
+        // units/binding), NOT as child text nodes — the captured PNG bakes them
+        // in. Reconstruct the Pulp Library display stack from that metadata so
+        // the imported widget reads like the reference: the widget label, then
+        // the formatted value, then a small grey sub-stack of min / max / units /
+        // binding (decreasing emphasis, grey #6c7086). Emitted below the widget
+        // inside its column. Fully generalizable from metadata. pulp #3192
+        // follow-up (value-stack reconstruction).
+        auto units_attr = node.attributes.find("units");
+        std::string units_text = (units_attr != node.attributes.end()) ? units_attr->second : std::string();
+        auto binding_attr = node.attributes.find("binding");
+        std::string binding_text = (binding_attr != node.attributes.end()) ? binding_attr->second : std::string();
+        bool has_value_stack = node.has_audio_range || !units_text.empty() || !binding_text.empty();
+        auto emit_value_stack = [&](const std::string& container_id) {
+            if (!has_value_stack) return;
+            // Primary value (slightly dimmer than the label, larger than the
+            // grey sub-stack). Skip when a child-text value label was already
+            // emitted by the widget branch (non-figma-plugin import paths), so
+            // we never double-print the value.
+            if (value_text.empty()) {
+                std::string vid = id + "_val";
+                ss << ind << "createLabel('" << vid << "', '"
+                   << js_single_quote_escape(fmt_audio_value(node.audio_default))
+                   << "', '" << container_id << "');\n";
+                ss << ind << "setFlex('" << vid << "', 'height', " << kMinLabelHeight << ");\n";
+                ss << ind << "setFontSize('" << vid << "', 10);\n";
+                ss << ind << "setTextColor('" << vid << "', '#9399b2');\n";
+                ss << ind << "setTextAlign('" << vid << "', 'center');\n";
+            }
+            // Grey sub-stack: min, max, units, binding (each its own small line).
+            int sub_i = 0;
+            auto emit_sub = [&](const std::string& text) {
+                if (text.empty()) return;
+                std::string sid = id + "_sub" + std::to_string(sub_i++);
+                ss << ind << "createLabel('" << sid << "', '"
+                   << js_single_quote_escape(text) << "', '" << container_id << "');\n";
+                ss << ind << "setFlex('" << sid << "', 'height', " << kMinSmallLabelHeight << ");\n";
+                ss << ind << "setFontSize('" << sid << "', 9);\n";
+                ss << ind << "setTextColor('" << sid << "', '#6c7086');\n";
+                ss << ind << "setTextAlign('" << sid << "', 'center');\n";
+            };
+            if (node.has_audio_range) {
+                emit_sub(fmt_audio_value(node.audio_min));
+                emit_sub(fmt_audio_value(node.audio_max));
+            }
+            emit_sub(units_text);
+            emit_sub(binding_text);
+        };
+        // Extra column height to reserve for the value stack (value + up to 4
+        // sub-lines), so the wrapper column hugs its content instead of clipping.
+        int value_stack_lines = 0;
+        if (has_value_stack) {
+            value_stack_lines = 1;  // value
+            if (node.has_audio_range) value_stack_lines += 2;  // min, max
+            if (!units_text.empty()) value_stack_lines += 1;
+            if (!binding_text.empty()) value_stack_lines += 1;
+        }
+        float value_stack_h = static_cast<float>(value_stack_lines) * (kMinSmallLabelHeight + 4.0f);
+
         // When the IR has NO inlined label or value text children, the widget
         // doesn't need its own wrapper column — the parent (typically a Figma
         // auto-layout row that already arranges siblings) does the layout.
@@ -462,7 +537,7 @@ static void generate_native_node(std::ostringstream& ss, const IRNode& node,
         // taller than the parent's hugged row height, breaking Yoga's flex
         // layout (Track A regression on the ELYSIUM knob row: the wrapper
         // was 28x61 / 62x111 / 28x61 inside a 158x91 parent).
-        bool needs_label_wrapper = !label_text.empty() || !value_text.empty();
+        bool needs_label_wrapper = !label_text.empty() || !value_text.empty() || has_value_stack;
 
         // Create a wrapper column for the widget + value label (only when
         // there's actual label/value text to stack below the widget).
@@ -496,7 +571,7 @@ static void generate_native_node(std::ostringstream& ss, const IRNode& node,
             if (node.attributes.count("shape_height"))
                 shape_h = std::stof(node.attributes.at("shape_height"));
             float frame_w = shape_w;
-            float col_h = shape_h + 20 + (value_text.empty() ? 0 : 16);
+            float col_h = shape_h + 20 + (value_text.empty() ? 0 : 16) + value_stack_h;
             if (needs_label_wrapper) {
                 ss << ind << "setFlex('" << col_id << "', 'height', " << col_h << ");\n";
                 ss << ind << "setFlex('" << col_id << "', 'min_width', " << frame_w << ");\n";
@@ -507,7 +582,38 @@ static void generate_native_node(std::ostringstream& ss, const IRNode& node,
             ss << ind << "setFlex('" << id << "', 'height', " << shape_h << ");\n";
             // Clear built-in label — use separate Yoga-positioned labels for exact placement
             ss << ind << "setLabel('" << id << "', ' ');\n";
-            ss << ind << "setValue('" << id << "', " << node.audio_default << ");\n";
+            // Normalise the captured value to 0..1 — Knob::set_value clamps to
+            // [0,1], so a raw audio value (e.g. 880 Hz) would clamp to 1 and
+            // park the indicator at the far end. The native silver knob maps
+            // 0..1 linearly to its [-135°,+135°] sweep, so the NORMALISED value
+            // must already encode the parameter taper. For a frequency-unit
+            // knob (Hz / kHz) use a LOG taper — that's how audio cutoff/freq
+            // controls are laid out (and how Figma's library knob is drawn), so
+            // 880 Hz in [20, 20000] lands near the centre (≈0.55), indicator
+            // ~straight up, matching the design. Linear units fall back to the
+            // plain (value-min)/(max-min) map. Generalizable rule keyed on the
+            // IR's own units attribute — no per-instance angle hardcoding.
+            float knob_norm = node.audio_default;
+            {
+                float lo = node.audio_min, hi = node.audio_max;
+                auto uit = node.attributes.find("units");
+                std::string units;
+                if (uit != node.attributes.end()) {
+                    units = uit->second;
+                    for (auto& c : units)
+                        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                }
+                const bool freq_unit = (units == "hz" || units == "khz");
+                if (freq_unit && lo > 0.0f && hi > lo && node.audio_default > 0.0f) {
+                    float ln_lo = std::log(lo), ln_hi = std::log(hi);
+                    knob_norm = std::clamp(
+                        (std::log(node.audio_default) - ln_lo) / (ln_hi - ln_lo),
+                        0.0f, 1.0f);
+                } else if (hi > lo) {
+                    knob_norm = std::clamp((node.audio_default - lo) / (hi - lo), 0.0f, 1.0f);
+                }
+            }
+            ss << ind << "setValue('" << id << "', " << knob_norm << ");\n";
             // Track A3 — attach a designer-supplied sprite-strip skin when the
             // figma-plugin CLI lane (or anyone else) pre-resolved an asset_path
             // onto this knob node. Frame count defaults to 1 (static body);
@@ -611,19 +717,23 @@ static void generate_native_node(std::ostringstream& ss, const IRNode& node,
                 ss << ind << "setTextColor('" << val_id << "', '#6c7086');\n";
                 ss << ind << "setTextAlign('" << val_id << "', 'center');\n";
             }
+            emit_value_stack(col_id);
         }
         else if (wtype == AudioWidgetType::fader) {
-            // shape_width/height from child rectangle, frame width for column
+            // shape_width/height from child rectangle, frame width for column.
+            // Default height to the node's own design height (not the bare
+            // kMin floor) so a tall fader stays tall — the kMin is only a
+            // floor for nodes that genuinely carry no height.
             float frame_w = node.style.width.value_or(kMinFaderWidth);
             float shape_w = frame_w;
-            float shape_h = kMinFaderHeight;
+            float shape_h = node.style.height.value_or(kMinFaderHeight);
             if (node.attributes.count("shape_width"))
                 shape_w = std::stof(node.attributes.at("shape_width"));
             if (node.attributes.count("shape_height"))
                 shape_h = std::stof(node.attributes.at("shape_height"));
             // Use frame width for column, but ensure widget is at least usable
             float widget_w = std::max(shape_w, 6.0f);
-            float col_h = shape_h + 20;
+            float col_h = shape_h + 20 + value_stack_h;
             ss << ind << "setFlex('" << col_id << "', 'height', " << col_h << ");\n";
             ss << ind << "setFlex('" << col_id << "', 'min_width', " << frame_w << ");\n";
             ss << ind << "createFader('" << id << "', 'vertical', '" << col_id << "');\n";
@@ -631,7 +741,56 @@ static void generate_native_node(std::ostringstream& ss, const IRNode& node,
             ss << ind << "setFlex('" << id << "', 'height', " << shape_h << ");\n";
             // Fader label overlaps track when rendered inside bounds — use separate label
             ss << ind << "setLabel('" << id << "', ' ');\n";  // Clear built-in label
-            ss << ind << "setValue('" << id << "', " << node.audio_default << ");\n";
+            // Normalise the captured value (audio_default, in [audio_min,
+            // audio_max]) to 0..1 so the imported fader's thumb sits where the
+            // capture shows it. setValue clamps to [0,1]; a raw value like a dB
+            // figure would clamp and mis-position the thumb.
+            float fader_norm = node.audio_default;
+            {
+                float lo = node.audio_min, hi = node.audio_max;
+                if (hi > lo) fader_norm = std::clamp((node.audio_default - lo) / (hi - lo), 0.0f, 1.0f);
+            }
+            // Prefer the captured thumb position when the sampler recovered it
+            // (#3191): an audio fader's value→position map is non-linear, so the
+            // linear seed above lands the thumb wrong; the captured position
+            // reproduces where the design drew it.
+            if (auto pit = node.attributes.find("skin_thumb_position");
+                pit != node.attributes.end() && !pit->second.empty())
+                fader_norm = std::clamp(std::stof(pit->second), 0.0f, 1.0f);
+            ss << ind << "setValue('" << id << "', " << fader_norm << ");\n";
+            // pulp #3191 — value-driven skin derived from the captured asset.
+            // The importer sampled the PNG's track/fill/thumb colours; emit
+            // setFaderSkin so the native fader renders the captured look while
+            // the thumb still moves with setValue(). No per-instance hardcoding
+            // — every value comes from node.attributes stamped by the sampler.
+            if (opts.skin_faders) {
+                auto attr = [&](const char* k) -> std::string {
+                    auto it = node.attributes.find(k);
+                    return it != node.attributes.end() ? it->second : std::string();
+                };
+                std::string tc = attr("skin_track_color");
+                std::string fc = attr("skin_fill_color");
+                std::string thc = attr("skin_thumb_color");
+                std::string tbc = attr("skin_thumb_border_color");
+                if (!tc.empty() || !fc.empty() || !thc.empty() || !tbc.empty()) {
+                    ss << ind << "setFaderSkin('" << id << "', '"
+                       << tc << "', '" << fc << "', '" << thc << "', '" << tbc << "');\n";
+                }
+                // pulp #3191 — derived thin track width (logical px). Drives the
+                // fader's track/fill thickness so it draws the narrow captured
+                // line instead of a fraction of the (wide) widget box.
+                if (node.attributes.count("skin_track_width")) {
+                    ss << ind << "setFaderTrackWidth('" << id << "', "
+                       << node.attributes.at("skin_track_width") << ");\n";
+                }
+                // pulp #3192 — derived empty-track outline colour. Strokes the
+                // track rect so the empty channel above the thumb shows the
+                // captured edge instead of a flat dark slab.
+                std::string tbo = attr("skin_track_border_color");
+                if (!tbo.empty()) {
+                    ss << ind << "setFaderTrackBorder('" << id << "', '" << tbo << "');\n";
+                }
+            }
             emit_style(id);
             if (!label_text.empty()) {
                 std::string lbl_id = id + "_lbl";
@@ -641,23 +800,61 @@ static void generate_native_node(std::ostringstream& ss, const IRNode& node,
                 ss << ind << "setTextColor('" << lbl_id << "', '#a6adc8');\n";
                 ss << ind << "setTextAlign('" << lbl_id << "', 'center');\n";
             }
+            emit_value_stack(col_id);
         }
         else if (wtype == AudioWidgetType::meter) {
             float frame_w = node.style.width.value_or(kMinMeterWidth);
             float shape_w = frame_w;
-            float shape_h = kMinMeterHeight;
+            // Honor the node's design height so a tall meter stays tall.
+            float shape_h = node.style.height.value_or(kMinMeterHeight);
             if (node.attributes.count("shape_width"))
                 shape_w = std::stof(node.attributes.at("shape_width"));
             if (node.attributes.count("shape_height"))
                 shape_h = std::stof(node.attributes.at("shape_height"));
             float widget_w = std::max(shape_w, 8.0f);
-            float col_h = shape_h + 20;
+            float col_h = shape_h + 20 + value_stack_h;
             ss << ind << "setFlex('" << col_id << "', 'height', " << col_h << ");\n";
             ss << ind << "setFlex('" << col_id << "', 'min_width', " << frame_w << ");\n";
             ss << ind << "createMeter('" << id << "', 'vertical', '" << col_id << "');\n";
             ss << ind << "setFlex('" << id << "', 'width', " << widget_w << ");\n";
             ss << ind << "setFlex('" << id << "', 'height', " << shape_h << ");\n";
-            ss << ind << "setMeterLevel('" << id << "', -6);\n";
+            // Initial level: normalise the captured value (audio_default, in
+            // [audio_min, audio_max]) to 0..1 so the imported meter shows the
+            // captured fill. setMeterLevel clamps to [0,1]; a raw dB value
+            // (e.g. -6) would clamp to 0 and read empty.
+            float meter_norm = 0.0f;
+            {
+                float lo = node.audio_min, hi = node.audio_max;
+                if (hi > lo) meter_norm = std::clamp((node.audio_default - lo) / (hi - lo), 0.0f, 1.0f);
+            }
+            // Prefer the captured fill level when recovered (#3191) — matches
+            // where the design filled the meter rather than a linear dB map.
+            if (auto lit = node.attributes.find("skin_fill_level");
+                lit != node.attributes.end() && !lit->second.empty())
+                meter_norm = std::clamp(std::stof(lit->second), 0.0f, 1.0f);
+            ss << ind << "setMeterLevel('" << id << "', " << meter_norm << ", " << meter_norm << ");\n";
+            // pulp #3191 — value-driven gradient skin sampled from the captured
+            // meter PNG. setMeterColors hands the meter the recovered gradient
+            // stops (low→high); the meter redraws them CLIPPED to the level so
+            // the fill still animates with setMeterLevel(). No hardcoding.
+            if (opts.skin_meters) {
+                auto grad_it = node.attributes.find("skin_meter_gradient");
+                if (grad_it != node.attributes.end() && !grad_it->second.empty()) {
+                    std::string bg;
+                    if (auto bg_it = node.attributes.find("skin_meter_background");
+                        bg_it != node.attributes.end())
+                        bg = bg_it->second;
+                    ss << ind << "setMeterColors('" << id << "', '" << bg << "', '"
+                       << grad_it->second << "');\n";
+                }
+                // pulp #3191 follow-up — colored-bar/housing width ratio. Insets
+                // the gradient bar so it reads as a recessed fill in the wider
+                // dark housing, matching the captured meter's structure.
+                if (node.attributes.count("skin_meter_bar_ratio")) {
+                    ss << ind << "setMeterBarRatio('" << id << "', "
+                       << node.attributes.at("skin_meter_bar_ratio") << ");\n";
+                }
+            }
             emit_style(id);
             // Meter has no setLabel — always add a separate label
             if (!label_text.empty()) {
@@ -668,6 +865,7 @@ static void generate_native_node(std::ostringstream& ss, const IRNode& node,
                 ss << ind << "setTextColor('" << lbl_id << "', '#a6adc8');\n";
                 ss << ind << "setTextAlign('" << lbl_id << "', 'center');\n";
             }
+            emit_value_stack(col_id);
         }
         else if (wtype == AudioWidgetType::xy_pad) {
             float sz = std::max(node.style.width.value_or(100.0f), 80.0f);
@@ -788,6 +986,25 @@ static void generate_native_node(std::ostringstream& ss, const IRNode& node,
             float w = *node.style.width;
             if (uppercase) w *= 1.20f;  // empirical: caps run ~15-20% wider
             ss << ind << "setFlex('" << id << "', 'min_width', " << w << ");\n";
+
+            // Multi-line text box: when the design's own box is taller than a
+            // single line of this font, the designer intended the string to
+            // WRAP within its declared width (a paragraph / subtitle), so emit
+            // the box WIDTH (a hard bound, not just a min) and put the label in
+            // multi-line mode. Without this a long string runs off the parent
+            // (visible bug: the smoke-test subtitle at width 720 overflowed the
+            // panel). The decision keys on the IR's own height vs. font size —
+            // generalizable, no per-node hardcoding. A single-line label
+            // (height ≈ one line, e.g. a title) is intentionally NOT bounded
+            // here: forcing its narrow hug-width as a hard wrap box would make
+            // it wrap when Pulp's font metrics run a hair wider than Figma's,
+            // breaking a title that the design drew on one line.
+            bool multiline_box =
+                node.style.height && *node.style.height > font_h * 1.6f;
+            if (multiline_box) {
+                ss << ind << "setFlex('" << id << "', 'width', " << *node.style.width << ");\n";
+                ss << ind << "setMultiLine('" << id << "', true);\n";
+            }
         }
 
         ss << "\n";
