@@ -295,10 +295,21 @@ public:
     /// Pure math behind set_design_viewport — used both by the platform
     /// host's paint_scene and by tests. Returns false (and leaves outputs
     /// untouched) when the inputs don't define a valid transform.
+    ///
+    /// `top_align`: when true, anchor the scaled design to the TOP of the window
+    /// (vertical slack falls below it) instead of centering it vertically.
+    /// Horizontal centering is unchanged. Used by the AU v3 editor so a
+    /// fixed-aspect design embedded in a taller host pane (e.g. REAPER's FX-chain
+    /// pane — AU can't negotiate the pane aspect the way CLAP's gui_adjust_size /
+    /// VST3's checkSizeConstraint do) reads like CLAP/VST3 (content at the top)
+    /// instead of floating centered between two bands. Default false = centered
+    /// (every other caller). Must be passed identically at the paint AND
+    /// input-mapping call sites, or clicks misalign.
     static bool compute_design_viewport_transform(
         float window_w, float window_h,
         float design_w, float design_h,
-        float& sx, float& sy, float& tx, float& ty) {
+        float& sx, float& sy, float& tx, float& ty,
+        bool top_align = false) {
         if (design_w <= 0.0f || design_h <= 0.0f ||
             window_w <= 0.0f || window_h <= 0.0f) {
             return false;
@@ -307,7 +318,7 @@ public:
         sx = s;
         sy = s;
         tx = (window_w - design_w * s) * 0.5f;
-        ty = (window_h - design_h * s) * 0.5f;
+        ty = top_align ? 0.0f : (window_h - design_h * s) * 0.5f;
         return true;
     }
 

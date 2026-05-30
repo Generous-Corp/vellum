@@ -583,7 +583,7 @@ public:
                 static_cast<float>(size_.width),
                 static_cast<float>(size_.height),
                 design_viewport_w_, design_viewport_h_,
-                sx, sy, tx, ty)) {
+                sx, sy, tx, ty, design_top_align_)) {
             return pt;
         }
         if (sx <= 0.0f || sy <= 0.0f) return pt;
@@ -608,6 +608,10 @@ private:
     float design_viewport_w_ = 0.0f;
     float design_viewport_h_ = 0.0f;
     float fixed_aspect_ratio_ = 0.0f;
+    // CPU-host fallback stays vertically CENTERED (no setter override). The
+    // member exists only so window_to_root_point's shared call compiles; the
+    // CPU NSView paint also centers, so paint + input stay consistent.
+    bool design_top_align_ = false;
 };
 
 } // namespace pulp::view (close for ObjC declarations)
@@ -918,13 +922,18 @@ public:
         needs_repaint_.store(true, std::memory_order_relaxed);
     }
 
+    void set_design_viewport_top_align(bool top_align) override {
+        design_top_align_ = top_align;
+        needs_repaint_.store(true, std::memory_order_relaxed);
+    }
+
     Point window_to_root_point(Point pt) const override {
         float sx, sy, tx, ty;
         if (!WindowHost::compute_design_viewport_transform(
                 static_cast<float>(size_.width),
                 static_cast<float>(size_.height),
                 design_viewport_w_, design_viewport_h_,
-                sx, sy, tx, ty)) {
+                sx, sy, tx, ty, design_top_align_)) {
             return pt;
         }
         if (sx <= 0.0f || sy <= 0.0f) return pt;
@@ -935,6 +944,7 @@ private:
     View& root_;
     Size size_;
     PulpGpuPluginView* metal_view_ = nil;
+    bool design_top_align_ = false;
 
     std::unique_ptr<render::GpuSurface> gpu_surface_;
     std::unique_ptr<render::SkiaSurface> skia_surface_;
@@ -1023,7 +1033,8 @@ private:
         float sx, sy, tx, ty;
         const bool has_viewport = design_viewport_w_ > 0.0f && design_viewport_h_ > 0.0f &&
             WindowHost::compute_design_viewport_transform(
-                w, h, design_viewport_w_, design_viewport_h_, sx, sy, tx, ty);
+                w, h, design_viewport_w_, design_viewport_h_, sx, sy, tx, ty,
+                design_top_align_);
 
         if (has_viewport) {
             root_.set_bounds({0, 0, design_viewport_w_, design_viewport_h_});
