@@ -1672,6 +1672,150 @@ void WidgetBridge::register_api() {
         return choc::value::Value();
     });
 
+    // Inline hex-color parser shared by the fader/meter skin setters. Mirrors
+    // setAccentColor's inline parser (parseColor is registered later in
+    // register_api, so we don't depend on registration order). Accepts
+    // "#rgb", "#rrggbb", "#rrggbbaa"; anything else → opaque white. Returns a
+    // (Color, ok) pair so callers can distinguish "no colour given" (empty
+    // string → skip the override) from a real parse.
+    auto parse_skin_hex = [](const std::string& hex) -> std::pair<canvas::Color, bool> {
+        canvas::Color c = canvas::Color::rgba(1.0f, 1.0f, 1.0f, 1.0f);
+        if (hex.empty() || hex[0] != '#') return {c, false};
+        try {
+            if (hex.size() == 4) {
+                c.r = static_cast<float>(std::stoul(std::string(2, hex[1]), nullptr, 16)) / 255.0f;
+                c.g = static_cast<float>(std::stoul(std::string(2, hex[2]), nullptr, 16)) / 255.0f;
+                c.b = static_cast<float>(std::stoul(std::string(2, hex[3]), nullptr, 16)) / 255.0f;
+            } else if (hex.size() >= 7) {
+                c.r = static_cast<float>(std::stoul(hex.substr(1, 2), nullptr, 16)) / 255.0f;
+                c.g = static_cast<float>(std::stoul(hex.substr(3, 2), nullptr, 16)) / 255.0f;
+                c.b = static_cast<float>(std::stoul(hex.substr(5, 2), nullptr, 16)) / 255.0f;
+                if (hex.size() >= 9)
+                    c.a = static_cast<float>(std::stoul(hex.substr(7, 2), nullptr, 16)) / 255.0f;
+            } else {
+                return {c, false};
+            }
+        } catch (...) {
+            return {c, false};
+        }
+        return {c, true};
+    };
+
+    // setFaderSkin(id, trackColor, fillColor, thumbColor, thumbBorderColor?,
+    //              thumbW?, thumbH?, cornerRadius?)
+    //
+    // Generalises the knob sprite-strip skin to the fader: instead of baking
+    // the captured Figma art (which would freeze the thumb at its captured
+    // value), the importer derives track / fill / thumb colours from the
+    // design and the fader redraws them procedurally so the thumb still MOVES
+    // with setValue(). Any colour arg that's empty is skipped (keeps the
+    // theme token). Thumb size / radius default to a captured-style slab when
+    // omitted (<= 0). Mirrors setAccentColor / setKnobSpriteStrip.
+    engine_.register_function("setFaderSkin",
+        [this, parse_skin_hex](choc::javascript::ArgumentList args) {
+            auto* f = dynamic_cast<Fader*>(widget(args.get<std::string>(0, "")));
+            if (!f) return choc::value::Value();
+            if (auto [c, ok] = parse_skin_hex(args.get<std::string>(1, "")); ok) f->set_skin_track_color(c);
+            if (auto [c, ok] = parse_skin_hex(args.get<std::string>(2, "")); ok) f->set_skin_fill_color(c);
+            if (auto [c, ok] = parse_skin_hex(args.get<std::string>(3, "")); ok) f->set_skin_thumb_color(c);
+            if (auto [c, ok] = parse_skin_hex(args.get<std::string>(4, "")); ok) f->set_skin_thumb_border_color(c);
+            float tw = static_cast<float>(args.get<double>(5, 0));
+            float th = static_cast<float>(args.get<double>(6, 0));
+            if (tw > 0.0f && th > 0.0f) f->set_thumb_size(tw, th);
+            float cr = static_cast<float>(args.get<double>(7, 0));
+            if (cr > 0.0f) f->set_thumb_corner_radius(cr);
+            f->set_thumb_shape(Fader::ThumbShape::rectangle);
+            f->request_repaint();
+            return choc::value::Value();
+        });
+
+    // setFaderTrackWidth(id, widthPx)
+    //
+    // pulp #3191 — the importer derived the captured track's thin width (the
+    // narrow central column, distinct from the wide thumb slab). The skinned
+    // fader draws its track / fill at exactly this logical width (centred)
+    // instead of a fraction of the widget box, so an over-wide widget box no
+    // longer balloons the track. No-op for non-positive widths.
+    engine_.register_function("setFaderTrackWidth",
+        [this](choc::javascript::ArgumentList args) {
+            auto* f = dynamic_cast<Fader*>(widget(args.get<std::string>(0, "")));
+            if (!f) return choc::value::Value();
+            float w = static_cast<float>(args.get<double>(1, 0));
+            if (w > 0.0f) { f->set_skin_track_width(w); f->request_repaint(); }
+            return choc::value::Value();
+        });
+
+    // setFaderTrackBorder(id, "#rrggbb")
+    //
+    // pulp #3192 — the importer derived the lighter edge the captured art draws
+    // around the empty track channel. The skinned fader strokes the track rect
+    // with this colour so the empty portion above the thumb doesn't read as a
+    // flat dark slab. No-op for an empty / unparseable colour.
+    engine_.register_function("setFaderTrackBorder",
+        [this, parse_skin_hex](choc::javascript::ArgumentList args) {
+            auto* f = dynamic_cast<Fader*>(widget(args.get<std::string>(0, "")));
+            if (!f) return choc::value::Value();
+            if (auto [c, ok] = parse_skin_hex(args.get<std::string>(1, "")); ok) {
+                f->set_skin_track_border_color(c);
+                f->request_repaint();
+            }
+            return choc::value::Value();
+        });
+
+    // setMeterColors(id, backgroundColor, "#stop0,#stop1,#stop2,...")
+    //
+    // Generalises the knob sprite-strip skin to the meter: the importer
+    // samples the captured PNG's vertical gradient (green→orange→red) and
+    // hands the stops here (ordered low→high). The meter redraws that
+    // gradient procedurally, CLIPPED to the current level, so the fill still
+    // animates with setMeterLevel() instead of freezing the captured image.
+    // An empty stop list clears the skin (back to threshold colours).
+    engine_.register_function("setMeterColors",
+        [this, parse_skin_hex](choc::javascript::ArgumentList args) {
+            auto* m = dynamic_cast<Meter*>(widget(args.get<std::string>(0, "")));
+            if (!m) return choc::value::Value();
+            if (auto [bg, ok] = parse_skin_hex(args.get<std::string>(1, "")); ok)
+                m->set_skin_background_color(bg);
+            auto stops_str = args.get<std::string>(2, "");
+            std::vector<canvas::Color> stops;
+            size_t start = 0;
+            while (start <= stops_str.size()) {
+                size_t comma = stops_str.find(',', start);
+                std::string tok = stops_str.substr(start, comma == std::string::npos
+                                                              ? std::string::npos
+                                                              : comma - start);
+                // trim whitespace
+                while (!tok.empty() && std::isspace(static_cast<unsigned char>(tok.front()))) tok.erase(tok.begin());
+                while (!tok.empty() && std::isspace(static_cast<unsigned char>(tok.back()))) tok.pop_back();
+                if (!tok.empty()) {
+                    if (auto [c, ok] = parse_skin_hex(tok); ok) stops.push_back(c);
+                }
+                if (comma == std::string::npos) break;
+                start = comma + 1;
+            }
+            if (stops.size() >= 2) m->set_skin_gradient(std::move(stops));
+            else m->clear_skin();
+            m->request_repaint();
+            return choc::value::Value();
+        });
+
+    // setMeterBarRatio(id, ratio)
+    //
+    // pulp #3191 follow-up — the captured meter draws a narrow coloured fill
+    // recessed inside a wider dark housing slot. The importer derives the
+    // colored-bar-width / housing-width ratio from the asset and hands it here
+    // so the skinned meter insets its gradient bar by (1-ratio)/2 on each side
+    // instead of painting edge-to-edge. No-op (full width) for a non-positive
+    // or unset ratio.
+    engine_.register_function("setMeterBarRatio",
+        [this](choc::javascript::ArgumentList args) {
+            auto* m = dynamic_cast<Meter*>(widget(args.get<std::string>(0, "")));
+            if (!m) return choc::value::Value();
+            float r = static_cast<float>(args.get<double>(1, 0));
+            if (r > 0.0f) { m->set_bar_fill_ratio(r); m->request_repaint(); }
+            return choc::value::Value();
+        });
+
     // createCheckbox(id, parentId)
     engine_.register_function("createCheckbox", [this](choc::javascript::ArgumentList args) {
         auto id = args.get<std::string>(0, "");
