@@ -287,9 +287,95 @@ void Meter::update(float raw_peak, float raw_rms, float dt) {
     request_repaint();
 }
 
+canvas::Color Meter::gradient_color_at(float t) const {
+    if (gradient_stops_.empty()) return canvas::Color::rgba8(80, 200, 80);
+    if (gradient_stops_.size() == 1) return gradient_stops_.front();
+    t = std::clamp(t, 0.0f, 1.0f);
+    float scaled = t * static_cast<float>(gradient_stops_.size() - 1);
+    int i = static_cast<int>(scaled);
+    if (i >= static_cast<int>(gradient_stops_.size()) - 1)
+        return gradient_stops_.back();
+    float frac = scaled - static_cast<float>(i);
+    return gradient_stops_[i].interpolate(gradient_stops_[i + 1], frac);
+}
+
 void Meter::paint(canvas::Canvas& canvas) {
     auto b = local_bounds();
     bool vert = orientation_ == Orientation::vertical;
+
+    // ── Skinned gradient path (figma-plugin import) ────────────────────────
+    // When the importer sampled the captured meter PNG's gradient, redraw it
+    // procedurally CLIPPED to the current level so the fill animates with
+    // set_level()/update() instead of freezing the captured image. The
+    // gradient maps low(bottom)→high(top); the fill reveals it from the
+    // bottom up to display_rms. This is value-driven, not a static image.
+    if (has_skin_gradient()) {
+        auto bg = has_skin_background_
+            ? background_color_
+            : resolve_color("control.track", canvas::Color::rgba8(15, 18, 23));
+        canvas.set_fill_color(bg);
+        canvas.fill_rounded_rect(0, 0, b.width, b.height, std::min(b.width, b.height) * 0.18f);
+
+        float meter_length = vert ? b.height : b.width;
+        float level = std::clamp(ballistics_.display_rms, 0.0f, 1.0f);
+        float fill = std::clamp(std::round(level * meter_length), 0.0f, meter_length);
+
+        // Draw the gradient row-by-row, but only up to the fill height. The
+        // captured gradient stops span the bar's FULL colored range (low/green
+        // at stop 0 → warm/red at the top stop). The captured asset draws that
+        // entire ramp inside the FILLED region — the empty channel above the
+        // fill is the dark housing, and the warm/red top stop sits at the TOP
+        // of the fill (just under the peak line), not at the absolute meter top.
+        // So sample the gradient across the FILL region (0 at the fill bottom,
+        // 1 at the fill top) rather than against absolute meter height. That
+        // makes the fill top read warm/red — matching the capture — while the
+        // fill still reveals more of the SAME ramp as the level moves. pulp
+        // #3191 follow-up: previously `pos` was keyed off absolute meter height,
+        // so a partial fill only ever exposed the lower (green→yellow) stops and
+        // the warm top was clipped away above the fill.
+        //
+        // Horizontal inset is derived from the captured bar-vs-housing ratio so
+        // the colored bar reads as a narrower fill recessed inside the darker
+        // housing slot (the capture's structure), not edge-to-edge paint.
+        float h_inset = vert ? std::max(1.0f, b.width * (1.0f - bar_fill_ratio_) * 0.5f) : 1.0f;
+        float v_inset = vert ? 1.0f : std::max(1.0f, b.height * (1.0f - bar_fill_ratio_) * 0.5f);
+        if (fill > 0.0f) {
+            if (vert) {
+                int start = static_cast<int>(b.height - fill);
+                float fill_top = static_cast<float>(start);
+                float fill_span = std::max(1.0f, static_cast<float>(b.height) - fill_top);
+                for (int y = start; y < static_cast<int>(b.height) - 1; ++y) {
+                    // position within the FILL: 1.0 at the fill top, 0.0 at the
+                    // fill bottom (the meter base).
+                    float pos = 1.0f - (static_cast<float>(y) + 0.5f - fill_top) / fill_span;
+                    canvas.set_fill_color(gradient_color_at(pos));
+                    canvas.fill_rect(h_inset, static_cast<float>(y), b.width - 2 * h_inset, 1);
+                }
+            } else {
+                float fill_span = std::max(1.0f, fill);
+                for (int x = 0; x < static_cast<int>(fill); ++x) {
+                    float pos = (static_cast<float>(x) + 0.5f) / fill_span;
+                    canvas.set_fill_color(gradient_color_at(pos));
+                    canvas.fill_rect(static_cast<float>(x), v_inset, 1, b.height - 2 * v_inset);
+                }
+            }
+        }
+
+        // Peak line at display_peak (white tick), matching the captured look.
+        float peak_level = std::clamp(ballistics_.display_peak, 0.0f, 1.0f);
+        if (peak_level > 0.01f) {
+            float peak_pos = std::clamp(std::round(peak_level * meter_length), 0.0f, meter_length);
+            canvas.set_stroke_color(canvas::Color::rgba8(255, 255, 255));
+            canvas.set_line_width(2.0f);
+            if (vert) {
+                float y = b.height - peak_pos;
+                canvas.stroke_line(h_inset, y, b.width - h_inset, y);
+            } else {
+                canvas.stroke_line(peak_pos, v_inset, peak_pos, b.height - v_inset);
+            }
+        }
+        return;
+    }
 
     if (render_style_ == WidgetRenderStyle::minimal) {
         // ── Minimal: gradient bar (green→red) matching design tool appearance ──
