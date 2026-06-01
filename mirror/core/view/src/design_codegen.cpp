@@ -416,6 +416,7 @@ static void generate_native_node(std::ostringstream& ss, const IRNode& node,
     // Audio widgets use native widget API
     if (node.audio_widget != AudioWidgetType::none) {
         auto wtype = node.audio_widget;
+        float fid_w = 0.0f, fid_h = 0.0f;  // emitted widget dims, set per sub-branch (fidelity)
 
         // Extract label text, value text, and stroke color from child nodes
         std::string label_text = node.audio_label;
@@ -577,6 +578,7 @@ static void generate_native_node(std::ostringstream& ss, const IRNode& node,
                 ss << ind << "setFlex('" << col_id << "', 'height', " << col_h << ");\n";
                 ss << ind << "setFlex('" << col_id << "', 'min_width', " << frame_w << ");\n";
             }
+            fid_w = shape_w; fid_h = shape_h;  // emitted widget dims (fidelity)
             ss << ind << "createKnob('" << id << "', '" << col_id << "');\n";
             if (!needs_label_wrapper) emit_position_if_absolute(id);
             ss << ind << "setFlex('" << id << "', 'width', " << shape_w << ");\n";
@@ -737,6 +739,7 @@ static void generate_native_node(std::ostringstream& ss, const IRNode& node,
             float col_h = shape_h + 20 + value_stack_h;
             ss << ind << "setFlex('" << col_id << "', 'height', " << col_h << ");\n";
             ss << ind << "setFlex('" << col_id << "', 'min_width', " << frame_w << ");\n";
+            fid_w = widget_w; fid_h = shape_h;  // emitted widget dims (fidelity)
             ss << ind << "createFader('" << id << "', 'vertical', '" << col_id << "');\n";
             ss << ind << "setFlex('" << id << "', 'width', " << widget_w << ");\n";
             ss << ind << "setFlex('" << id << "', 'height', " << shape_h << ");\n";
@@ -816,6 +819,7 @@ static void generate_native_node(std::ostringstream& ss, const IRNode& node,
             float col_h = shape_h + 20 + value_stack_h;
             ss << ind << "setFlex('" << col_id << "', 'height', " << col_h << ");\n";
             ss << ind << "setFlex('" << col_id << "', 'min_width', " << frame_w << ");\n";
+            fid_w = widget_w; fid_h = shape_h;  // emitted widget dims (fidelity)
             ss << ind << "createMeter('" << id << "', 'vertical', '" << col_id << "');\n";
             ss << ind << "setFlex('" << id << "', 'width', " << widget_w << ");\n";
             ss << ind << "setFlex('" << id << "', 'height', " << shape_h << ");\n";
@@ -871,6 +875,7 @@ static void generate_native_node(std::ostringstream& ss, const IRNode& node,
         else if (wtype == AudioWidgetType::xy_pad) {
             float sz = std::max(node.style.width.value_or(100.0f), 80.0f);
             ss << ind << "setFlex('" << col_id << "', 'height', " << (sz + 20) << ");\n";
+            fid_w = sz; fid_h = sz;  // emitted widget dims (fidelity)
             ss << ind << "createXYPad('" << id << "', '" << col_id << "');\n";
             ss << ind << "setFlex('" << id << "', 'width', " << sz << ");\n";
             ss << ind << "setFlex('" << id << "', 'height', " << sz << ");\n";
@@ -880,11 +885,16 @@ static void generate_native_node(std::ostringstream& ss, const IRNode& node,
             float h = node.style.height.value_or(80.0f);
             ss << ind << "setFlex('" << col_id << "', 'height', " << (h + 20) << ");\n";
             auto fn = (wtype == AudioWidgetType::waveform) ? "createWaveform" : "createSpectrum";
+            fid_w = w; fid_h = h;  // emitted widget dims (fidelity)
             ss << ind << fn << "('" << id << "', '" << col_id << "');\n";
             ss << ind << "setFlex('" << id << "', 'width', " << w << ");\n";
             ss << ind << "setFlex('" << id << "', 'height', " << h << ");\n";
         }
 
+        // Reference-free fidelity self-checks for this widget (see design_fidelity).
+        if (opts.fidelity_report)
+            run_fidelity_checks({node, id, fid_w, fid_h, FidelityElement::widget},
+                                *opts.fidelity_report);
         ss << "\n";
         return;
     }
@@ -1049,8 +1059,10 @@ static void generate_native_node(std::ostringstream& ss, const IRNode& node,
         // middle. Without this Label defaults to top-aligned, and the
         // SEARCH input's "Search" text rides above the magnifying-glass
         // icon instead of baseline-aligning with it.
+        bool emitted_vcenter = false;
         if (ir_height_is_explicit && label_h > font_h * 1.15f) {
             ss << ind << "setVerticalAlign('" << id << "', 'center');\n";
+            emitted_vcenter = true;
         }
 
         if (node.style.font_size)
@@ -1117,6 +1129,15 @@ static void generate_native_node(std::ostringstream& ss, const IRNode& node,
             }
         }
 
+        // Reference-free fidelity self-check for this text (see design_fidelity):
+        // a single-line label given a tall slot must be vertically centered.
+        // node is const here, so stamp the emitted vertical-align onto a copy.
+        if (opts.fidelity_report) {
+            IRNode fnode = node;
+            fnode.attributes["_emitted_vertical_align"] = emitted_vcenter ? "center" : "top";
+            run_fidelity_checks({fnode, id, 0.0f, label_h, FidelityElement::text},
+                                *opts.fidelity_report);
+        }
         ss << "\n";
         return;
     }
