@@ -266,6 +266,10 @@ static IRStyle parse_ir_style(const choc::value::ValueView& obj) {
         s.box_shadow = parse_css_box_shadow(std::string(obj[k->c_str()].toString()));
     set_opt_str("filter", s.filter);
     set_opt_str("backdropFilter", s.backdrop_filter);
+    set_opt_str("clipPath", s.clip_path);
+    set_opt_str("mask", s.mask);
+    set_opt_str("maskImage", s.mask_image);
+    set_opt_str("maskSize", s.mask_size);
     set_opt_str("fontFamily", s.font_family);
     set_opt_float("fontSize", s.font_size);
     set_opt_int("fontWeight", s.font_weight);
@@ -1407,6 +1411,10 @@ static void write_ir_style_json(std::ostringstream& out, const IRStyle& s) {
         write_string_member(out, first, "boxShadow", box_shadow_to_css(s.box_shadow));
     write_string_member(out, first, "filter", s.filter);
     write_string_member(out, first, "backdropFilter", s.backdrop_filter);
+    write_string_member(out, first, "clipPath", s.clip_path);
+    write_string_member(out, first, "mask", s.mask);
+    write_string_member(out, first, "maskImage", s.mask_image);
+    write_string_member(out, first, "maskSize", s.mask_size);
     write_string_member(out, first, "fontFamily", s.font_family);
     write_float_member(out, first, "fontSize", s.font_size);
     write_int_member(out, first, "fontWeight", s.font_weight);
