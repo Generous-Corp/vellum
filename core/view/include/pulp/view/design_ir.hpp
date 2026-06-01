@@ -99,6 +99,14 @@ struct IRStyle {
     std::vector<IRBoxShadow> box_shadow;               // ordered CSS shadow layers
     std::optional<std::string> filter;                 // e.g. "blur(4px)"
     std::optional<std::string> backdrop_filter;
+    // CSS clip-path / mask. The engine (View::set_clip_path / set_mask /
+    // set_mask_image / set_mask_size) + the setClipPath/setMask* bridge
+    // (pulp #1515) consume these; sources that carry them — and Figma mask
+    // layers once the extractor emits a clip-path — survive the IR.
+    std::optional<std::string> clip_path;
+    std::optional<std::string> mask;                   // `mask` shorthand
+    std::optional<std::string> mask_image;
+    std::optional<std::string> mask_size;
     std::optional<std::string> font_family;
     std::optional<float> font_size;
     std::optional<int> font_weight;
