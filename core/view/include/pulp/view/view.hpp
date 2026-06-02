@@ -1270,8 +1270,32 @@ public:
         bg_grad_x0_ = x0; bg_grad_y0_ = y0;
         bg_grad_x1_ = x1; bg_grad_y1_ = y1;
     }
+    /// Radial gradient. cx/cy are fractions of the box; radius_frac is a
+    /// fraction of the larger box dimension (resolved at paint).
+    void set_background_gradient_radial(float cx, float cy, float radius_frac,
+                                         const std::vector<Color>& colors,
+                                         const std::vector<float>& positions) {
+        bg_gradient_colors_ = colors;
+        bg_gradient_positions_ = positions;
+        bg_gradient_type_ = 2;  // radial
+        bg_grad_x0_ = cx; bg_grad_y0_ = cy;
+        bg_grad_radius_ = radius_frac;
+    }
+    /// Conic (CSS conic-gradient / Figma angular). cx/cy are fractions of the
+    /// box; start_angle is in radians (0 = +x axis, matching the canvas API).
+    void set_background_gradient_conic(float cx, float cy, float start_angle,
+                                        const std::vector<Color>& colors,
+                                        const std::vector<float>& positions) {
+        bg_gradient_colors_ = colors;
+        bg_gradient_positions_ = positions;
+        bg_gradient_type_ = 3;  // conic / sweep
+        bg_grad_x0_ = cx; bg_grad_y0_ = cy;
+        bg_grad_angle_ = start_angle;
+    }
     void clear_background_gradient() { bg_gradient_type_ = 0; }
     bool has_background_gradient() const { return bg_gradient_type_ > 0; }
+    /// 0=none, 1=linear, 2=radial, 3=conic. Exposed for tests/inspection.
+    int background_gradient_type() const { return bg_gradient_type_; }
 
     /// Text overflow: ellipsis (CSS text-overflow: ellipsis)
     void set_text_overflow_ellipsis(bool e) { text_ellipsis_ = e; }
@@ -1562,8 +1586,10 @@ private:
     WindowHost* window_host_ = nullptr;
     PluginViewHost* plugin_view_host_ = nullptr;
     std::shared_ptr<canvas::ViewEffect> effect_;
-    int bg_gradient_type_ = 0;  // 0=none, 1=linear, 2=radial
+    int bg_gradient_type_ = 0;  // 0=none, 1=linear, 2=radial, 3=conic
     float bg_grad_x0_ = 0, bg_grad_y0_ = 0, bg_grad_x1_ = 0, bg_grad_y1_ = 1;
+    float bg_grad_radius_ = 0.7071f;  // radial: fraction of max(w,h)
+    float bg_grad_angle_ = 0.0f;      // conic: start angle in radians
     std::vector<Color> bg_gradient_colors_;
     std::vector<float> bg_gradient_positions_;
     std::string background_repeat_;  ///< pulp #1552: CSS background-repeat keyword (storage-only)
