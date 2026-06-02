@@ -6784,6 +6784,96 @@ void WidgetBridge::register_api() {
         auto* v = id.empty() ? &root_ : widget(id);
         if (!v || gradient.empty()) return choc::value::Value();
 
+        // Shared color-stop parser: paren-aware comma split (so rgba(...) stays
+        // intact) + trailing position peel (Npx / N%). Used by linear, radial,
+        // and conic. Fills colors/positions in parallel.
+        auto parse_stops = [&parseColor](const std::string& colorStr,
+                                         std::vector<canvas::Color>& colors,
+                                         std::vector<float>& positions) {
+            std::vector<std::string> tokens;
+            std::string cur; int paren = 0;
+            for (char c : colorStr) {
+                if (c == '(') paren++;
+                else if (c == ')') paren--;
+                if (c == ',' && paren <= 0) {
+                    while (!cur.empty() && cur.front() == ' ') cur.erase(0, 1);
+                    while (!cur.empty() && cur.back() == ' ') cur.pop_back();
+                    if (!cur.empty()) tokens.push_back(cur);
+                    cur.clear();
+                } else cur.push_back(c);
+            }
+            while (!cur.empty() && cur.front() == ' ') cur.erase(0, 1);
+            while (!cur.empty() && cur.back() == ' ') cur.pop_back();
+            if (!cur.empty()) tokens.push_back(cur);
+            for (size_t i = 0; i < tokens.size(); ++i) {
+                std::string tok = tokens[i];
+                std::optional<float> explicitPos;
+                auto sp = tok.find_last_of(' ');
+                if (sp != std::string::npos) {
+                    std::string tail = tok.substr(sp + 1);
+                    bool isPct = false;
+                    if (!tail.empty() && tail.back() == '%') { isPct = true; tail.pop_back(); }
+                    else if (tail.size() >= 2 && tail.substr(tail.size() - 2) == "px")
+                        tail = tail.substr(0, tail.size() - 2);
+                    if (!tail.empty() && (std::isdigit(static_cast<unsigned char>(tail[0])) ||
+                                          tail[0] == '.' || tail[0] == '-')) {
+                        try {
+                            float vv = std::stof(tail);
+                            explicitPos = isPct ? vv / 100.0f : vv;
+                            tok = tok.substr(0, sp);
+                            while (!tok.empty() && tok.back() == ' ') tok.pop_back();
+                        } catch (...) {}
+                    }
+                }
+                colors.push_back(parseColor(tok));
+                positions.push_back(explicitPos.value_or(
+                    tokens.size() > 1 ? static_cast<float>(i) / (tokens.size() - 1) : 0));
+            }
+        };
+        // First top-level (paren-depth 0) comma — splits an optional shape/
+        // position/angle prefix from the color stops.
+        auto top_level_comma = [](const std::string& s) -> size_t {
+            int paren = 0;
+            for (size_t i = 0; i < s.size(); ++i) {
+                if (s[i] == '(') paren++;
+                else if (s[i] == ')') paren--;
+                else if (s[i] == ',' && paren <= 0) return i;
+            }
+            return std::string::npos;
+        };
+        // Parse "<n>%" / "left|right|top|bottom|center" into a [0,1] fraction.
+        auto axis_frac = [](const std::string& t, float dflt) -> float {
+            if (t == "center") return 0.5f;
+            if (t == "left" || t == "top") return 0.0f;
+            if (t == "right" || t == "bottom") return 1.0f;
+            if (!t.empty() && t.back() == '%') {
+                try { return std::stof(t.substr(0, t.size() - 1)) / 100.0f; } catch (...) {}
+            }
+            return dflt;
+        };
+        // Pull "at X Y" out of a radial/conic prefix into cx/cy fractions.
+        auto parse_at_center = [&axis_frac](const std::string& seg, float& cx, float& cy) {
+            auto at = seg.find("at ");
+            if (at == std::string::npos) return;
+            std::istringstream is(seg.substr(at + 3));
+            std::string a, b;
+            if (is >> a) cx = axis_frac(a, cx);
+            if (is >> b) cy = axis_frac(b, cy);
+        };
+        // CSS <angle> → radians (deg default; rad/turn/grad honored).
+        auto parse_angle = [](const std::string& t) -> float {
+            size_t i = 0;
+            while (i < t.size() && (std::isdigit(static_cast<unsigned char>(t[i])) ||
+                                    t[i] == '.' || t[i] == '-' || t[i] == '+')) i++;
+            float val = 0.0f;
+            try { val = std::stof(t.substr(0, i)); } catch (...) { return 0.0f; }
+            std::string unit = t.substr(i);
+            if (unit == "rad")  return val;
+            if (unit == "turn") return val * 6.28318531f;
+            if (unit == "grad") return val * 3.14159265f / 200.0f;
+            return val * 3.14159265f / 180.0f;  // deg
+        };
+
         // Simple parser for "linear-gradient(to right, color1, color2, ...)"
         if (gradient.substr(0, 16) == "linear-gradient(") {
             auto inner = gradient.substr(16, gradient.size() - 17);
@@ -6795,73 +6885,66 @@ void WidgetBridge::register_api() {
             else if (inner.substr(0, 7) == "to left") { x0=1; y0=0; x1=0; y1=0; color_start = inner.find(',') + 1; }
             else if (inner.substr(0, 6) == "to top") { x0=0; y0=1; x1=0; y1=0; color_start = inner.find(',') + 1; }
 
-            // Parse color stops. Paren-aware comma split so we don't shred
-            // tokens like `rgba(228, 237, 246, 1.000) 0.0%`. Per-token, also
-            // peel off any trailing position annotation (Npx, N%) and use it
-            // as the explicit stop position when present.
             std::vector<canvas::Color> colors;
             std::vector<float> positions;
-            std::vector<std::string> tokens;
-            {
-                std::string colorStr = inner.substr(color_start);
-                std::string cur;
-                int paren = 0;
-                for (char c : colorStr) {
-                    if (c == '(') paren++;
-                    else if (c == ')') paren--;
-                    if (c == ',' && paren <= 0) {
-                        // Trim
-                        while (!cur.empty() && cur.front() == ' ') cur.erase(0, 1);
-                        while (!cur.empty() && cur.back() == ' ') cur.pop_back();
-                        if (!cur.empty()) tokens.push_back(cur);
-                        cur.clear();
-                    } else {
-                        cur.push_back(c);
-                    }
-                }
-                while (!cur.empty() && cur.front() == ' ') cur.erase(0, 1);
-                while (!cur.empty() && cur.back() == ' ') cur.pop_back();
-                if (!cur.empty()) tokens.push_back(cur);
-            }
-
-            for (size_t i = 0; i < tokens.size(); ++i) {
-                std::string tok = tokens[i];
-                // Look for explicit position at the END of the token:
-                //   "#aabbcc 30%"     or "rgba(...) 30%"     or "#aabbcc 12px"
-                // The position is whatever comes after the LAST space when the
-                // tail looks like a number followed by % or px (or just a number).
-                std::optional<float> explicitPos;
-                {
-                    auto sp = tok.find_last_of(' ');
-                    if (sp != std::string::npos) {
-                        std::string tail = tok.substr(sp + 1);
-                        // Strip trailing unit
-                        bool isPct = false;
-                        if (!tail.empty() && tail.back() == '%') {
-                            isPct = true;
-                            tail.pop_back();
-                        } else if (tail.size() >= 2 && tail.substr(tail.size() - 2) == "px") {
-                            tail = tail.substr(0, tail.size() - 2);
-                        }
-                        if (!tail.empty() && (std::isdigit(static_cast<unsigned char>(tail[0])) || tail[0] == '.' || tail[0] == '-')) {
-                            try {
-                                float v = std::stof(tail);
-                                explicitPos = isPct ? v / 100.0f : v;
-                                tok = tok.substr(0, sp);
-                                while (!tok.empty() && tok.back() == ' ') tok.pop_back();
-                            } catch (...) {
-                                // not a number; leave tok untouched
-                            }
-                        }
-                    }
-                }
-                colors.push_back(parseColor(tok));
-                positions.push_back(explicitPos.value_or(
-                    tokens.size() > 1 ? static_cast<float>(i) / (tokens.size() - 1) : 0));
-            }
-            if (!colors.empty()) {
+            parse_stops(inner.substr(color_start), colors, positions);
+            if (!colors.empty())
                 v->set_background_gradient_linear(x0, y0, x1, y1, colors, positions);
+        }
+        // radial-gradient([<shape>] [at <pos>],] stop, stop, ...). The canvas +
+        // Skia/CoreGraphics backends paint a real radial; we just parse the CSS
+        // center (default 50% 50%) and the stops. Sizing keywords
+        // (closest-side / farthest-corner / explicit radii) are not yet sized
+        // precisely — radius defaults to ~farthest-corner of a square box.
+        else if (gradient.substr(0, 16) == "radial-gradient(") {
+            std::string inner = gradient.substr(16, gradient.size() - 17);
+            float cx = 0.5f, cy = 0.5f;
+            size_t color_start = 0;
+            size_t fc = top_level_comma(inner);
+            if (fc != std::string::npos) {
+                std::string seg = inner.substr(0, fc);
+                // A leading segment is a shape/position spec (not a color) when
+                // it names a shape, an "at" anchor, or a sizing keyword.
+                if (seg.find("at ") != std::string::npos ||
+                    seg.rfind("circle", 0) == 0 || seg.rfind("ellipse", 0) == 0 ||
+                    seg.rfind("closest", 0) == 0 || seg.rfind("farthest", 0) == 0) {
+                    parse_at_center(seg, cx, cy);
+                    color_start = fc + 1;
+                }
             }
+            std::vector<canvas::Color> colors;
+            std::vector<float> positions;
+            parse_stops(inner.substr(color_start), colors, positions);
+            if (!colors.empty())
+                v->set_background_gradient_radial(cx, cy, 0.7071f, colors, positions);
+        }
+        // conic-gradient([from <angle>] [at <pos>],] stop, stop, ...). Painted
+        // via the canvas sweep gradient. CSS measures `from` clockwise from the
+        // top (12 o'clock); the canvas sweep starts at +x (3 o'clock), so we
+        // offset by -90deg to keep `from 0deg` pointing up.
+        else if (gradient.substr(0, 15) == "conic-gradient(") {
+            std::string inner = gradient.substr(15, gradient.size() - 16);
+            float cx = 0.5f, cy = 0.5f, from_rad = 0.0f;
+            size_t color_start = 0;
+            size_t fc = top_level_comma(inner);
+            if (fc != std::string::npos) {
+                std::string seg = inner.substr(0, fc);
+                if (seg.rfind("from ", 0) == 0 || seg.find(" at ", 0) != std::string::npos ||
+                    seg.rfind("at ", 0) == 0) {
+                    auto fromPos = seg.find("from ");
+                    if (fromPos != std::string::npos) {
+                        std::istringstream is(seg.substr(fromPos + 5));
+                        std::string ang; if (is >> ang) from_rad = parse_angle(ang);
+                    }
+                    parse_at_center(seg, cx, cy);
+                    color_start = fc + 1;
+                }
+            }
+            std::vector<canvas::Color> colors;
+            std::vector<float> positions;
+            parse_stops(inner.substr(color_start), colors, positions);
+            if (!colors.empty())
+                v->set_background_gradient_conic(cx, cy, from_rad - 1.57079633f, colors, positions);
         }
         return choc::value::Value();
     });

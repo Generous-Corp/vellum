@@ -447,13 +447,29 @@ void View::paint_all(canvas::Canvas& canvas) {
     const float eff_bl = effective_corner_radius_bl(bounds_.width, bounds_.height);
     const float eff_br = effective_corner_radius_br(bounds_.width, bounds_.height);
 
-    // Paint background gradient if set (CSS background: linear-gradient)
+    // Paint background gradient if set (CSS background: linear/radial/conic).
+    // The canvas + Skia/CoreGraphics backends implement all three; the View
+    // just dispatches on the stored type. cx/cy are box fractions; radial
+    // radius is a fraction of the larger box dimension; conic angle is radians.
     if (bg_gradient_type_ > 0 && !bg_gradient_colors_.empty()) {
-        canvas.set_fill_gradient_linear(
-            bg_grad_x0_ * bounds_.width, bg_grad_y0_ * bounds_.height,
-            bg_grad_x1_ * bounds_.width, bg_grad_y1_ * bounds_.height,
-            bg_gradient_colors_.data(), bg_gradient_positions_.data(),
-            static_cast<int>(bg_gradient_colors_.size()));
+        const int grad_n = static_cast<int>(bg_gradient_colors_.size());
+        const Color* grad_c = bg_gradient_colors_.data();
+        const float* grad_p = bg_gradient_positions_.data();
+        if (bg_gradient_type_ == 2) {  // radial
+            canvas.set_fill_gradient_radial(
+                bg_grad_x0_ * bounds_.width, bg_grad_y0_ * bounds_.height,
+                bg_grad_radius_ * std::max(bounds_.width, bounds_.height),
+                grad_c, grad_p, grad_n);
+        } else if (bg_gradient_type_ == 3) {  // conic / sweep
+            canvas.set_fill_gradient_conic(
+                bg_grad_x0_ * bounds_.width, bg_grad_y0_ * bounds_.height,
+                bg_grad_angle_, grad_c, grad_p, grad_n);
+        } else {  // linear
+            canvas.set_fill_gradient_linear(
+                bg_grad_x0_ * bounds_.width, bg_grad_y0_ * bounds_.height,
+                bg_grad_x1_ * bounds_.width, bg_grad_y1_ * bounds_.height,
+                grad_c, grad_p, grad_n);
+        }
         if (use_per_corner) {
             build_corner_path(bounds_.width, bounds_.height,
                                                eff_tl, eff_tr, eff_bl, eff_br);
