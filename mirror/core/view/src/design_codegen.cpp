@@ -146,6 +146,21 @@ static void emit_web_text_runs(std::ostringstream& ss, const std::string& ind,
         append_plain(cursor, rs);            // base-styled gap before the run
         const std::string child = var + "_r" + std::to_string(idx++);
         ss << ind << "const " << child << " = document.createElement('span');\n";
+        // Carry the node's dominant style onto the run child first — Pulp's
+        // web-compat Labels do not inherit from the parent span, so without this
+        // a run that overrides only one field would render the rest with Label
+        // defaults. The run overrides below win over these base values.
+        const auto& base = node.style;
+        if (base.font_family)
+            ss << ind << child << ".style.fontFamily = '" << js_single_quote_escape(*base.font_family) << "';\n";
+        if (base.font_size)
+            ss << ind << child << ".style.fontSize = '" << *base.font_size << "px';\n";
+        if (base.font_weight)
+            ss << ind << child << ".style.fontWeight = '" << *base.font_weight << "';\n";
+        if (base.color)
+            ss << ind << child << ".style.color = '" << js_single_quote_escape(*base.color) << "';\n";
+        if (base.letter_spacing)
+            ss << ind << child << ".style.letterSpacing = '" << *base.letter_spacing << "px';\n";
         if (r->font_weight)
             ss << ind << child << ".style.fontWeight = '" << *r->font_weight << "';\n";
         if (r->font_size)
@@ -1430,9 +1445,15 @@ static void generate_native_node(std::ostringstream& ss, const IRNode& node,
         emit_position_if_absolute(id);
         emit_node_visual_overrides(id);
         if (is_grid) {
+            // The native grid layout drops all children when its column track
+            // list is empty, so a `display:grid` node with no explicit columns
+            // (only rows, or none) gets a single implicit column rather than
+            // vanishing — matches CSS auto-column behavior closely enough.
             if (node.layout.grid_template_columns)
                 ss << ind << "setGrid('" << id << "', 'template_columns', '"
                    << js_single_quote_escape(*node.layout.grid_template_columns) << "');\n";
+            else
+                ss << ind << "setGrid('" << id << "', 'template_columns', '1fr');\n";
             if (node.layout.grid_template_rows)
                 ss << ind << "setGrid('" << id << "', 'template_rows', '"
                    << js_single_quote_escape(*node.layout.grid_template_rows) << "');\n";
