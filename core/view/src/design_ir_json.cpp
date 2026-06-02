@@ -1565,6 +1565,22 @@ static void write_ir_layout_json(std::ostringstream& out, const IRLayout& l) {
     write_string_member(out, first, "overflowY", l.overflow_y);
     write_string_member(out, first, "widthMode", sizing_mode_id(l.width_mode));
     write_string_member(out, first, "heightMode", sizing_mode_id(l.height_mode));
+    // CSS grid + Figma resize constraints — round-trip the fields parse_ir_layout
+    // / parse_ir_node read back, so a frozen/serialized DesignIR does not lose
+    // them on the second parse+codegen pass.
+    write_string_member(out, first, "gridTemplateColumns", l.grid_template_columns);
+    write_string_member(out, first, "gridTemplateRows", l.grid_template_rows);
+    write_string_member(out, first, "gridAutoFlow", l.grid_auto_flow);
+    write_string_member(out, first, "gridColumn", l.grid_column);
+    write_string_member(out, first, "gridRow", l.grid_row);
+    if (l.h_constraint || l.v_constraint) {
+        write_key(out, first, "constraints");
+        out << '{';
+        bool cf = true;
+        write_string_member(out, cf, "horizontal", l.h_constraint);
+        write_string_member(out, cf, "vertical", l.v_constraint);
+        out << '}';
+    }
     out << '}';
 }
 
@@ -1576,6 +1592,29 @@ static void write_ir_node_json(std::ostringstream& out, const IRNode& node,
     write_string_member(out, first, "name", node.name);
     if (!node.text_content.empty())
         write_string_member(out, first, "content", node.text_content);
+
+    // Per-range text style runs — round-trip so mixed-style text survives a
+    // serialize -> re-parse pass (e.g. `--emit ir-json` then re-import).
+    if (!node.text_runs.empty()) {
+        write_key(out, first, "runs");
+        out << '[';
+        for (size_t i = 0; i < node.text_runs.size(); ++i) {
+            if (i) out << ',';
+            const auto& r = node.text_runs[i];
+            out << '{';
+            bool rf = true;
+            write_int_member(out, rf, "start", r.start);
+            write_int_member(out, rf, "end", r.end);
+            write_float_member(out, rf, "fontSize", r.font_size);
+            write_int_member(out, rf, "fontWeight", r.font_weight);
+            write_string_member(out, rf, "fontStyle", r.font_style);
+            write_string_member(out, rf, "color", r.color);
+            write_float_member(out, rf, "letterSpacing", r.letter_spacing);
+            write_string_member(out, rf, "textDecoration", r.text_decoration);
+            out << '}';
+        }
+        out << ']';
+    }
 
     write_key(out, first, "style");
     write_ir_style_json(out, node.style);

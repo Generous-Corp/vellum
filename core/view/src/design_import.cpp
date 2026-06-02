@@ -1824,6 +1824,16 @@ void synthesize_node(IRNode& n) {
     if (n.style.border_color && !n.style.border_color->empty()) {
         n.attributes["svg_stroke"] = *n.style.border_color;
         n.attributes["svg_stroke_width"] = svg_num(n.style.border_width.value_or(1.0f));
+    } else if (auto sc = n.attributes.find("stroke_color");
+               sc != n.attributes.end() && !sc->second.empty()) {
+        // Pencil-style shapes record their stroke as a `stroke_color` attribute
+        // rather than style.border_color. Consume it (and its width) so a
+        // stroked rect/ellipse is not synthesized as an invisible fill-none path.
+        n.attributes["svg_stroke"] = sc->second;
+        auto sw = n.attributes.find("stroke_width");
+        if (sw == n.attributes.end()) sw = n.attributes.find("stroke-width");
+        n.attributes["svg_stroke_width"] =
+            (sw != n.attributes.end() && !sw->second.empty()) ? sw->second : "1";
     }
 }
 
