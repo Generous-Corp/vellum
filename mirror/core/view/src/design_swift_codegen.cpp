@@ -130,6 +130,13 @@ std::string json_string_escape(std::string_view input) {
 }
 
 std::string format_float(float value) {
+    // A non-finite value (inf/nan) has no valid Swift Float literal — `ss <<`
+    // would emit "inf"/"nan" and the generated `.frame(width: inf)` /
+    // `.scaleEffect(nan)` would not compile. This is reachable: the CSS
+    // transform parser casts std::stod to float (`scale(1e40)` → +inf), and a
+    // degenerate source dimension can be non-finite too. Clamp to 0 — a safe,
+    // visible-no-op default — rather than emit broken Swift.
+    if (!std::isfinite(value)) value = 0.0f;
     // Trim trailing zeros so emitted Swift reads naturally (4 not 4.000000).
     std::ostringstream ss;
     ss << value;
@@ -1152,7 +1159,13 @@ std::string stack_alignment_token(bool row, LayoutAlign align, bool* stretch) {
 // count (`auto-fill`/`auto-fit`, viewport-dependent and unknowable at codegen)
 // falls back to the pattern's own count. Clamped to ≥1. Exact track SIZING is
 // not modelled — B5 maps only the column COUNT onto equal flexible GridItems.
-int grid_column_count(const std::string& tracks) {
+int grid_column_count(const std::string& tracks, int recursion_depth = 0) {
+    // CSS forbids nested repeat(), but the IR can carry arbitrary text from a
+    // non-CSS source; cap recursion so a pathological repeat(repeat(repeat(…)))
+    // can't overflow the stack. Past the cap a repeat's pattern counts as one.
+    constexpr int kMaxDepth = 8;
+    if (recursion_depth >= kMaxDepth) return 1;
+
     std::vector<std::string> toks;
     std::string cur;
     int depth = 0;
@@ -1180,12 +1193,15 @@ int grid_column_count(const std::string& tracks) {
                 if (close != std::string::npos && close > comma)
                     pattern = t.substr(comma + 1, close - comma - 1);
             }
-            total += n * grid_column_count(pattern);  // recurse on the pattern
+            total += n * grid_column_count(pattern, recursion_depth + 1);
         } else {
             total += 1;
         }
+        if (total > 4096) break;  // bound a pathological repeat(100000, …)
     }
-    return std::max(1, total);
+    // Clamp to a sane column count: no real grid exceeds this, and it bounds the
+    // emitted GridItem array regardless of a hostile track list.
+    return std::clamp(total, 1, 1024);
 }
 
 // The asset id an image node references. Mirrors design_cpp_codegen's
