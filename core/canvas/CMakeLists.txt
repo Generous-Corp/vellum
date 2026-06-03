@@ -190,6 +190,19 @@ if(PULP_HAS_SKIA)
     target_compile_definitions(pulp-canvas PUBLIC PULP_HAS_SKIA=1)
     target_include_directories(pulp-canvas PRIVATE ${SKIA_INCLUDE_DIRS})
 
+    # font_registry_stubs.cpp compiles direct icu::Locale / BreakIterator calls
+    # when PULP_HAS_SKIA and ICU public headers are on the include path (true on
+    # Linux with libicu-dev). The bundled Skia statically links SkUnicode but does
+    # NOT export ICU's own symbols, so link system ICU here or the Linux link
+    # fails with undefined `icu_NN::Locale::...`. macOS links libicucore
+    # implicitly; Linux must be explicit. (Surfaced by the local Linux VM CI lane.)
+    if(UNIX AND NOT APPLE AND NOT ANDROID)
+        find_package(ICU COMPONENTS uc i18n data QUIET)
+        if(ICU_FOUND)
+            target_link_libraries(pulp-canvas PRIVATE ICU::uc ICU::i18n ICU::data)
+        endif()
+    endif()
+
     # Platform font managers for Skia text rendering
     if(WIN32)
         target_link_libraries(pulp-canvas PRIVATE dwrite)
