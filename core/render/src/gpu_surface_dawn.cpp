@@ -42,6 +42,17 @@ std::string dawn_texture_format_name(wgpu::TextureFormat format) {
     }
 }
 
+wgpu::BackendType dawn_backend_preference(
+    GpuSurface::AdapterBackendPreference preference) {
+    switch (preference) {
+        case GpuSurface::AdapterBackendPreference::null_backend:
+            return wgpu::BackendType::Null;
+        case GpuSurface::AdapterBackendPreference::default_backend:
+            return wgpu::BackendType::Undefined;
+    }
+    return wgpu::BackendType::Undefined;
+}
+
 } // namespace
 
 class DawnGpuSurface : public GpuSurface {
@@ -93,6 +104,9 @@ public:
         // Request adapter (compatible with surface if we have one)
         wgpu::RequestAdapterOptions adapter_opts{};
         adapter_opts.powerPreference = wgpu::PowerPreference::HighPerformance;
+        adapter_opts.forceFallbackAdapter = config.force_fallback_adapter;
+        adapter_opts.backendType = dawn_backend_preference(
+            config.backend_preference);
         if (surface_) {
             adapter_opts.compatibleSurface = surface_;
         }
@@ -467,6 +481,30 @@ std::unique_ptr<GpuSurface> GpuSurface::create_dawn() {
 
 namespace pulp::render {
 
+namespace {
+
+std::string wgpu_backend_type_name(WGPUBackendType type) {
+    switch (type) {
+        case WGPUBackendType_Metal: return "Metal";
+        case WGPUBackendType_D3D12: return "D3D12";
+        case WGPUBackendType_Vulkan: return "Vulkan";
+        case WGPUBackendType_OpenGL: return "OpenGL";
+        case WGPUBackendType_OpenGLES: return "OpenGLES";
+        case WGPUBackendType_Null: return "Null";
+        case WGPUBackendType_WebGPU: return "WebGPU";
+        default: return "Unknown";
+    }
+}
+
+std::string wgpu_string_view_to_string(WGPUStringView view) {
+    if (view.data == nullptr || view.length == 0) {
+        return {};
+    }
+    return std::string(view.data, view.length);
+}
+
+} // namespace
+
 class WgpuGpuSurface : public GpuSurface {
 public:
     ~WgpuGpuSurface() override {
@@ -485,6 +523,11 @@ public:
 
         WGPURequestAdapterOptions adapter_opts{};
         adapter_opts.powerPreference = WGPUPowerPreference_HighPerformance;
+        adapter_opts.forceFallbackAdapter = config.force_fallback_adapter;
+        adapter_opts.backendType = config.backend_preference ==
+                GpuSurface::AdapterBackendPreference::null_backend
+            ? WGPUBackendType_Null
+            : WGPUBackendType_Undefined;
 
         WGPURequestAdapterCallbackInfo adapter_cb{};
         adapter_cb.mode = WGPUCallbackMode_AllowSpontaneous;
@@ -536,6 +579,25 @@ public:
         info.vendor = info.available ? "wgpu-native" : "Pulp";
         info.architecture = info.backend_type;
         info.description = info.name;
+        if (adapter_) {
+            WGPUAdapterInfo adapter_info{};
+            if (wgpuAdapterGetInfo(adapter_, &adapter_info) == WGPUStatus_Success) {
+                info.backend_type = wgpu_backend_type_name(adapter_info.backendType);
+                info.architecture = info.backend_type;
+                const auto device = wgpu_string_view_to_string(adapter_info.device);
+                const auto description =
+                    wgpu_string_view_to_string(adapter_info.description);
+                const auto vendor = wgpu_string_view_to_string(adapter_info.vendor);
+                info.name = device.empty()
+                    ? "Native WebGPU Adapter (" + info.backend_type + ")"
+                    : device;
+                info.description = description.empty()
+                    ? info.name
+                    : description;
+                info.vendor = vendor.empty() ? "wgpu-native" : vendor;
+                wgpuAdapterInfoFreeMembers(adapter_info);
+            }
+        }
         return info;
     }
 

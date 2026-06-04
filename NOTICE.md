@@ -215,6 +215,27 @@ For more information, please refer to <http://unlicense.org/>.
 
 ---
 
+## fastgltf
+
+Copyright (C) 2022 - 2025 Sean Apeler
+
+MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+Optional native no-JS glTF/GLB parser, fetched only when
+`PULP_ENABLE_SCENE3D=ON`.
+
+---
+
 ## Highway
 
 Copyright 2019 Google LLC
@@ -771,6 +792,28 @@ limitations under the License.
 
 ---
 
+## simdjson
+
+Copyright 2018 The simdjson authors
+
+Apache License, Version 2.0
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+JSON parser used by fastgltf, fetched only when `PULP_ENABLE_SCENE3D=ON`.
+
+---
+
 ## Skia
 
 Copyright 2011 Google LLC
@@ -896,6 +939,32 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
+
+---
+
+## Khronos Box Textured fixture
+
+`test/fixtures/scene3d/BoxTextured/BoxTextured.glb` is redistributed from the
+Khronos glTF Sample Assets repository:
+
+https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/BoxTextured
+
+Source file:
+
+https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/BoxTextured/glTF-Binary/BoxTextured.glb
+
+SHA-256:
+`b510eca2e2ef33f62f9ed57d6e7ce2d10ebb2bdebc4a8e59d347719ba81abdf4`
+
+Model assets: Copyright 2017, Cesium. Licensed as CC-BY 4.0 International
+with Trademark Limitations (`LicenseRef-CC-BY-TM`) in the upstream model
+`LICENSE.md`.
+
+Cesium logo mark: Copyright 2015, Cesium. Licensed under Cesium Trademark or
+Logo (`LicenseRef-LegalMark-Cesium`) in the upstream metadata.
+
+This fixture is used by Scene3D tests only to validate native glTF loading and
+no-JS rendering of the official Box Textured sample asset.
 
 ---
 

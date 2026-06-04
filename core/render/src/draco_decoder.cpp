@@ -8,7 +8,48 @@
 
 namespace pulp::render {
 
-DecodedMesh decode_draco(const uint8_t* data, size_t size) {
+namespace {
+
+void copy_float_attribute(const draco::PointAttribute* attribute,
+                          int component_count,
+                          int vertex_count,
+                          std::vector<float>& out) {
+    if (attribute == nullptr || component_count <= 0) {
+        return;
+    }
+    const int available_components = attribute->num_components();
+    if (available_components <= 0) {
+        return;
+    }
+    out.resize(static_cast<size_t>(vertex_count) *
+               static_cast<size_t>(component_count));
+    for (draco::PointIndex i(0); i < vertex_count; ++i) {
+        float values[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+        attribute->GetMappedValue(i, values);
+        const auto idx = static_cast<size_t>(i.value()) *
+                         static_cast<size_t>(component_count);
+        for (int component = 0; component < component_count; ++component) {
+            if (component < available_components) {
+                out[idx + static_cast<size_t>(component)] = values[component];
+            } else if (component == 3) {
+                out[idx + static_cast<size_t>(component)] = 1.0f;
+            }
+        }
+    }
+}
+
+const draco::PointAttribute* attribute_by_unique_id(
+    const draco::Mesh& mesh,
+    int unique_id) {
+    if (unique_id < 0) {
+        return nullptr;
+    }
+    return mesh.GetAttributeByUniqueId(static_cast<uint32_t>(unique_id));
+}
+
+DecodedMesh decode_draco_impl(const uint8_t* data,
+                              size_t size,
+                              const DracoAttributeIds* attribute_ids) {
     DecodedMesh result;
     if (!data || size == 0) return result;
 
@@ -28,45 +69,48 @@ DecodedMesh decode_draco(const uint8_t* data, size_t size) {
     result.vertex_count = static_cast<int>(mesh->num_points());
     result.face_count = static_cast<int>(mesh->num_faces());
 
-    // Extract positions
-    auto* pos_attr = mesh->GetNamedAttribute(draco::GeometryAttribute::POSITION);
-    if (pos_attr) {
-        result.positions.resize(static_cast<size_t>(result.vertex_count) * 3);
-        for (draco::PointIndex i(0); i < mesh->num_points(); ++i) {
-            float values[3];
-            pos_attr->GetMappedValue(i, values);
-            auto idx = static_cast<size_t>(i.value()) * 3;
-            result.positions[idx] = values[0];
-            result.positions[idx + 1] = values[1];
-            result.positions[idx + 2] = values[2];
-        }
-    }
-
-    // Extract normals
-    auto* norm_attr = mesh->GetNamedAttribute(draco::GeometryAttribute::NORMAL);
-    if (norm_attr) {
-        result.normals.resize(static_cast<size_t>(result.vertex_count) * 3);
-        for (draco::PointIndex i(0); i < mesh->num_points(); ++i) {
-            float values[3];
-            norm_attr->GetMappedValue(i, values);
-            auto idx = static_cast<size_t>(i.value()) * 3;
-            result.normals[idx] = values[0];
-            result.normals[idx + 1] = values[1];
-            result.normals[idx + 2] = values[2];
-        }
-    }
-
-    // Extract texture coordinates
-    auto* tc_attr = mesh->GetNamedAttribute(draco::GeometryAttribute::TEX_COORD);
-    if (tc_attr) {
-        result.tex_coords.resize(static_cast<size_t>(result.vertex_count) * 2);
-        for (draco::PointIndex i(0); i < mesh->num_points(); ++i) {
-            float values[2];
-            tc_attr->GetMappedValue(i, values);
-            auto idx = static_cast<size_t>(i.value()) * 2;
-            result.tex_coords[idx] = values[0];
-            result.tex_coords[idx + 1] = values[1];
-        }
+    if (attribute_ids != nullptr) {
+        result.unique_id_attributes_applied = true;
+        copy_float_attribute(attribute_by_unique_id(*mesh, attribute_ids->position),
+                             3,
+                             result.vertex_count,
+                             result.positions);
+        copy_float_attribute(attribute_by_unique_id(*mesh, attribute_ids->normal),
+                             3,
+                             result.vertex_count,
+                             result.normals);
+        copy_float_attribute(attribute_by_unique_id(*mesh, attribute_ids->texcoord0),
+                             2,
+                             result.vertex_count,
+                             result.tex_coords);
+        copy_float_attribute(attribute_by_unique_id(*mesh, attribute_ids->texcoord1),
+                             2,
+                             result.vertex_count,
+                             result.tex_coords1);
+        copy_float_attribute(attribute_by_unique_id(*mesh, attribute_ids->tangent),
+                             4,
+                             result.vertex_count,
+                             result.tangents);
+        copy_float_attribute(attribute_by_unique_id(*mesh, attribute_ids->color0),
+                             4,
+                             result.vertex_count,
+                             result.colors);
+    } else {
+        copy_float_attribute(
+            mesh->GetNamedAttribute(draco::GeometryAttribute::POSITION),
+            3,
+            result.vertex_count,
+            result.positions);
+        copy_float_attribute(
+            mesh->GetNamedAttribute(draco::GeometryAttribute::NORMAL),
+            3,
+            result.vertex_count,
+            result.normals);
+        copy_float_attribute(
+            mesh->GetNamedAttribute(draco::GeometryAttribute::TEX_COORD),
+            2,
+            result.vertex_count,
+            result.tex_coords);
     }
 
     // Extract indices
@@ -83,6 +127,22 @@ DecodedMesh decode_draco(const uint8_t* data, size_t size) {
     return result;
 }
 
+} // namespace
+
+DecodedMesh decode_draco(const uint8_t* data, size_t size) {
+    return decode_draco_impl(data, size, nullptr);
+}
+
+DecodedMesh decode_draco(const uint8_t* data,
+                         size_t size,
+                         const DracoAttributeIds& attribute_ids) {
+    return decode_draco_impl(data, size, &attribute_ids);
+}
+
+bool draco_decoder_available() {
+    return true;
+}
+
 } // namespace pulp::render
 
 #else // !PULP_HAS_DRACO
@@ -91,6 +151,14 @@ namespace pulp::render {
 
 DecodedMesh decode_draco(const uint8_t*, size_t) {
     return {};  // DRACO not available
+}
+
+DecodedMesh decode_draco(const uint8_t*, size_t, const DracoAttributeIds&) {
+    return {};  // DRACO not available
+}
+
+bool draco_decoder_available() {
+    return false;
 }
 
 } // namespace pulp::render

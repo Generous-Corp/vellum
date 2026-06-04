@@ -25,9 +25,11 @@ Entries are sorted alphabetically (case-insensitive) by name.
 | Dawn | chrome/m149 deps (bundled in Skia toolchain) | BSD-3-Clause | WebGPU implementation used by the GPU render path (via pre-built Skia toolchain) | pulp-render | 2026-05-23 |
 | DRACO | 1.5.7 | Apache-2.0 | Optional glTF mesh decompression; fetched via FetchContent only when `PULP_ENABLE_DRACO=ON` (default OFF) | pulp-render | 2026-04-21 |
 | dr_libs | vendored-snapshot | Public domain (Unlicense) / MIT-0 | FLAC, MP3, WAV decode (dr_flac, dr_mp3, dr_wav) | pulp-audio | 2026-04-07 |
+| fastgltf | v0.9.0 | MIT | Optional native no-JS glTF/GLB parser; fetched only when `PULP_ENABLE_SCENE3D=ON` | pulp-scene | 2026-06-03 |
 | Highway | 1.2.0 | Apache-2.0 | Portable SIMD abstraction (SSE/NEON/AVX) | pulp-runtime | 2026-04-06 |
 | Inter | 4.001;git-9221beed3 | SIL OFL 1.1 | Embedded UI font (Inter-Regular.ttf, SHA-256 `40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82`) | pulp-view | 2026-04-21 |
 | JetBrains Mono | 2.304 | SIL OFL 1.1 | Embedded monospace font (JetBrainsMono-Regular.ttf, SHA-256 `a0bf60ef0f83c5ed4d7a75d45838548b1f6873372dfac88f71804491898d138f`) | pulp-view | 2026-04-21 |
+| Khronos Box Textured fixture | b510eca2e2ef33f62f9ed57d6e7ce2d10ebb2bdebc4a8e59d347719ba81abdf4 | LicenseRef-CC-BY-TM + LicenseRef-LegalMark-Cesium | Official glTF Sample Assets `BoxTextured.glb` redistributed as a Scene3D native loader/render test fixture | test fixture | 2026-06-03 |
 | lcov_cobertura | 2.1.2 | Apache-2.0 | LCOV→Cobertura converter; vendored as `tools/scripts/lcov_cobertura.py` for the coverage pipeline (single-file Python script, no pip dependency in CI) | tooling | 2026-04-21 |
 | LV2 | 1.18.10 | ISC | LV2 plugin format headers | pulp-format | 2026-03-30 |
 | Material Design Icons | bundled-with-mkdocs-material | Apache-2.0 | Icon set bundled inside mkdocs-material and redistributed as SVG assets in the generated docs site | docs | 2026-04-22 |
@@ -51,6 +53,7 @@ Entries are sorted alphabetically (case-insensitive) by name.
 | scheduler | ^0.23.2 | MIT | Cooperative-scheduling runtime pulled in transitively by react-reconciler for `@pulp/react`; npm-installed, not bundled into the C++ tree | packages/pulp-react | 2026-04-29 |
 | SDL3 | 3.2.12 | zlib | Cross-platform windowing, input, GPU context | pulp-view | 2026-03-25 |
 | SheenBidi | v3.0.0 | Apache-2.0 | Unicode Bidirectional Algorithm engine. Backs `core/canvas::BidiAnalyzer` for Arabic / Hebrew / mixed-direction text — provides a Pulp-owned bidi pass that does not depend on system ICU, consumed by `TextRunPlanner` as the canonical fallback for iOS / Android / headless / minimal-toolchain hosts. Item 6.8 of the 2026-05-24 macOS plugin-authoring plan. | pulp-canvas | 2026-05-26 |
+| simdjson | v3.12.3 | Apache-2.0 | JSON parser used by fastgltf; fetched only when `PULP_ENABLE_SCENE3D=ON` | pulp-scene | 2026-06-03 |
 | Skia | chrome/m149 | BSD-3-Clause | GPU 2D rendering engine. Pre-built via [danielraffel/skia-builder](https://github.com/danielraffel/skia-builder) fork (adds iOS device/simulator, visionOS, mac-x86_64, and `Skia.xcframework` slices that upstream `olilarkin/skia-builder` doesn't ship). The fork tracks Skia's `chrome/m149` tag and is the active dependency until upstream publishes those slices. Call sites use the m149-era `SkShaders::*` gradient namespace + the new 3-arg `ParagraphBuilder::make(..., SkUnicode)` signature. | pulp-canvas, pulp-render | 2026-05-23 |
 | three.js | 077dd13c0e86 | MIT | Native WebGPU bridge demos and tests (optional, fetched only when `PULP_BUILD_TESTS` and `PULP_ENABLE_GPU` are ON) | pulp-render | 2026-04-21 |
 | TweetNaCl | 20140427 | Public domain | Ed25519 sign/verify per RFC 8032 — Sparkle appcast signatures, future v2 license-key payloads | pulp-runtime | 2026-05-25 |

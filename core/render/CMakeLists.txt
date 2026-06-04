@@ -19,6 +19,33 @@ target_sources(pulp-render PRIVATE
     src/ktx2_decoder.cpp
     src/texture_atlas.cpp
 )
+if(PULP_ENABLE_SCENE3D)
+    target_sources(pulp-render PRIVATE
+        src/renderer3d.cpp
+    )
+    target_compile_definitions(pulp-render PUBLIC PULP_ENABLE_SCENE3D=1)
+    target_include_directories(pulp-render PRIVATE
+        ${CMAKE_SOURCE_DIR}/core/scene/include
+    )
+
+    add_executable(pulp-renderer3d-probe
+        src/renderer3d_probe.cpp
+    )
+    target_link_libraries(pulp-renderer3d-probe PRIVATE
+        pulp::render
+        pulp::scene
+    )
+
+    add_executable(pulp-scene3d-inspect-native
+        ${CMAKE_SOURCE_DIR}/core/scene/src/scene3d_inspect.cpp
+    )
+    target_compile_definitions(pulp-scene3d-inspect-native PRIVATE
+        PULP_SCENE3D_INSPECT_NATIVE_DRACO=1)
+    target_link_libraries(pulp-scene3d-inspect-native PRIVATE
+        pulp::render
+        pulp::scene
+    )
+endif()
 # SDL3 surface is desktop-only (Android uses PulpSurfaceView via JNI)
 if(NOT ANDROID)
     target_sources(pulp-render PRIVATE src/sdl3_surface.cpp)
@@ -35,8 +62,12 @@ endif()
 
 # DRACO mesh decompression (optional)
 if(PULP_HAS_DRACO)
-    target_link_libraries(pulp-render PRIVATE draco)
+    target_link_libraries(pulp-render PRIVATE draco::draco)
     target_compile_definitions(pulp-render PRIVATE PULP_HAS_DRACO)
+    target_include_directories(pulp-render PRIVATE
+        "${draco_SOURCE_DIR}/src"
+        "${draco_BINARY_DIR}"
+        "${CMAKE_BINARY_DIR}")
 endif()
 
 # Apple Metal surface helpers for Dawn rendering
