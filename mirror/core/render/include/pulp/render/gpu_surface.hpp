@@ -22,6 +22,11 @@ namespace pulp::render {
 ///   gpu.end_frame()     → presents to native surface
 class GpuSurface {
 public:
+    enum class AdapterBackendPreference {
+        default_backend,
+        null_backend,
+    };
+
     struct AdapterInfo {
         bool available = false;
         bool native_bridge = false;
@@ -38,6 +43,9 @@ public:
         uint32_t width = 800;
         uint32_t height = 600;
         bool vsync = true;
+        bool force_fallback_adapter = false;
+        AdapterBackendPreference backend_preference =
+            AdapterBackendPreference::default_backend;
 
         /// Opaque platform-specific handle for on-screen rendering.
         /// On macOS/iOS: CAMetalLayer*
