@@ -11,21 +11,24 @@ void TextButton::paint(canvas::Canvas& canvas) {
     float w = bounds().width, h = bounds().height;
     float r = 6.0f;
 
-    // Background
-    auto bg = hovered_ ? canvas::Color::rgba(80, 80, 90) : canvas::Color::rgba(60, 60, 70);
-    if (!enabled_) bg = canvas::Color::rgba(50, 50, 55);
+    // Background. NOTE: Color::rgba() takes 0–1 floats; these are 0–255 channel values and
+    // must use rgba8() — rgba() clamps every channel to 1.0 and paints the button solid
+    // white (the standalone Settings/Done buttons regressed to white because of this).
+    auto bg = hovered_ ? canvas::Color::rgba8(80, 80, 90) : canvas::Color::rgba8(60, 60, 70);
+    if (pressed_) bg = canvas::Color::rgba8(96, 96, 110);
+    if (!enabled_) bg = canvas::Color::rgba8(50, 50, 55);
     canvas.set_fill_color(bg);
     canvas.fill_rounded_rect(0, 0, w, h, r);
 
     // Border
-    canvas.set_stroke_color(canvas::Color::rgba(100, 100, 110));
+    canvas.set_stroke_color(canvas::Color::rgba8(100, 100, 110));
     canvas.set_line_width(1.0f);
     canvas.stroke_rect(0, 0, w, h);
 
     // Label — pulp #1407 honors CSS text-overflow: ellipsis when set on
     // the button via setTextOverflow(id, "ellipsis"). Reserves a small
     // horizontal padding so the ellipsis doesn't touch the rounded edge.
-    auto text_color = enabled_ ? canvas::Color::rgba(220, 220, 230) : canvas::Color::rgba(120, 120, 130);
+    auto text_color = enabled_ ? canvas::Color::rgba8(220, 220, 230) : canvas::Color::rgba8(120, 120, 130);
     canvas.set_fill_color(text_color);
     canvas.set_font("system", 14.0f);
     constexpr float kButtonHPad = 8.0f;
