@@ -37,6 +37,7 @@ namespace pulp::view {
 class TextEditor : public View {
 public:
     TextEditor() { set_focusable(true); set_cursor(CursorStyle::text); }
+    ~TextEditor() override;
 
     bool accepts_text_input() const override { return true; }
 
@@ -159,6 +160,7 @@ private:
     float content_inset_left_ = 0.0f; ///< Extra left inset to clear a leading icon
     float scroll_offset_ = 0.0f; ///< Horizontal scroll for single-line
     float caret_blink_time_ = 0.0f; ///< Accumulated time for caret blinking
+    int caret_blink_sub_ = -1;      ///< Frame-clock subscription that drives blink repaints while focused
 
     // IME composition state
     std::string marked_text_;        ///< Active composition string
