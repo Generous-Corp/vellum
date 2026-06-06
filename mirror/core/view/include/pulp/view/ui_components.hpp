@@ -57,6 +57,7 @@ public:
     void paint(canvas::Canvas& canvas) override;
     void on_mouse_event(const MouseEvent& event) override;
     bool on_key_event(const KeyEvent& event) override;
+    View* hit_test(Point local_point) override;  // extend hit area over the open dropdown
 
     void on_text_input(const TextInputEvent& event) override;
 
@@ -75,6 +76,11 @@ private:
     void set_selected_impl(int index, bool notify);
     void open_dropdown();
     void close_dropdown();
+    // Top of the dropdown menu in this combo's LOCAL coords. Below the field normally;
+    // negative (above the field) when flipped up because it would spill past the window.
+    // Shared by paint, hit_test, and mouse hover so they always agree.
+    float dropdown_local_top() const;
+    void move_hover(int delta);  // keyboard: move the highlighted row, skipping separators
 
     std::vector<std::string> items_;
     int selected_ = 0;
@@ -196,10 +202,23 @@ public:
         std::unique_ptr<View> content;
     };
 
+    // Reserve the tab-bar height as top padding so tab content flows BELOW the tab bar
+    // (instead of painting over it). Uses flex padding so child hit-testing stays correct.
+    TabPanel() { flex().padding_top = tab_height_; }
+
     void add_tab(std::string title, std::unique_ptr<View> content);
     void set_active_tab(int index);
     int active_tab() const { return active_; }
     int tab_count() const { return static_cast<int>(tabs_.size()); }
+
+    /// Hide the tab bar and use the panel purely as a navigable card stack (the active
+    /// tab is shown; switch with set_active_tab()). Useful when an outer container should
+    /// not show its own tabs — e.g. a standalone editor whose Settings is reached via a
+    /// button rather than a tab.
+    void set_show_tab_bar(bool show) {
+        show_tab_bar_ = show;
+        flex().padding_top = show ? tab_height_ : 0.0f;
+    }
 
     /// Called when the active tab changes.
     std::function<void(int index)> on_tab_change;
@@ -211,6 +230,7 @@ private:
     std::vector<Tab> tabs_;
     int active_ = 0;
     float tab_height_ = 32.0f;
+    bool show_tab_bar_ = true;
 };
 
 // ── ScrollView ───────────────────────────────────────────────────────────
