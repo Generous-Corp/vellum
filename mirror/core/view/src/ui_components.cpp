@@ -84,7 +84,7 @@ void ComboBox::paint(canvas::Canvas& canvas) {
 
     // Dropdown menu: deferred to overlay queue so it paints on top of everything
     if (open_ && !items_.empty()) {
-        // Compute absolute position by walking up the parent chain
+        // Compute absolute position by walking up the parent chain.
         float abs_x = 0, abs_y = 0;
         View* v = this;
         while (v) {
@@ -94,9 +94,10 @@ void ComboBox::paint(canvas::Canvas& canvas) {
         }
 
         float item_h = 24.0f;
-        float dd_top = abs_y + base_h + 2;
         float dd_w = b.width;
         float dd_h = static_cast<float>(items_.size()) * item_h;
+        // dropdown_local_top() decides below/flip-up; paint, hit_test and hover all share it.
+        float dd_top = abs_y + dropdown_local_top();
         int sel = selected_;
         int* hover_ptr = &hover_index_;  // live pointer for dynamic hover tracking
         auto items_copy = items_;
@@ -192,70 +193,127 @@ void ComboBox::close_dropdown() {
     if (active_popup_ == this) active_popup_ = nullptr;
 }
 
-void ComboBox::on_mouse_event(const MouseEvent& event) {
-    auto b = local_bounds();
-    float header_h = std::min(b.height, 28.0f);
+float ComboBox::dropdown_local_top() const {
+    const float base_h = std::min(local_bounds().height, 28.0f);
+    const float dd_h = static_cast<float>(items_.size()) * 24.0f;
+    float abs_y = 0.0f, root_h = 0.0f;
+    const View* v = this;
+    while (v) {
+        abs_y += v->bounds().y;
+        root_h = v->bounds().height;  // last assignment is the root (window content height)
+        v = v->parent();
+    }
+    if (root_h > 0.0f && abs_y + base_h + 2.0f + dd_h > root_h && abs_y - dd_h - 2.0f >= 0.0f)
+        return -(dd_h + 2.0f);  // flip above the field
+    return base_h + 2.0f;       // below the field
+}
 
-    // Track hover on mouse move (even without button down)
+View* ComboBox::hit_test(Point local_point) {
+    // When open, the menu overlay lives outside this view's own bounds (below, or above when
+    // flipped). Claim hits over it so hover/click reach us regardless of flip direction.
+    if (open_ && !items_.empty()) {
+        const float top = dropdown_local_top();
+        const float dd_h = static_cast<float>(items_.size()) * 24.0f;
+        if (local_point.x >= 0.0f && local_point.x <= local_bounds().width &&
+            local_point.y >= std::min(top, 0.0f) &&
+            local_point.y <= std::max(top + dd_h, local_bounds().height))
+            return this;
+    }
+    return View::hit_test(local_point);
+}
+
+void ComboBox::move_hover(int delta) {
+    if (items_.empty()) return;
+    const int n = static_cast<int>(items_.size());
+    int idx = (hover_index_ < 0) ? selected_ : hover_index_;
+    for (int step = 0; step < n; ++step) {
+        int next = std::clamp(idx + delta, 0, n - 1);
+        if (next == idx) break;  // hit an end
+        idx = next;
+        const auto& it = items_[static_cast<size_t>(idx)];
+        if (it.size() < 3 || it.substr(0, 3) != "---") break;  // landed on a real item
+    }
+    hover_index_ = idx;
+    request_repaint();
+}
+
+void ComboBox::on_mouse_event(const MouseEvent& event) {
+    // Menu geometry in local coords — shared with paint/hit_test so hover/click line up with
+    // what's drawn, including the flipped-up case.
+    const float dropdown_top = dropdown_local_top();
+    const float dd_bottom = dropdown_top + static_cast<float>(items_.size()) * 24.0f;
+    const bool in_menu = event.position.y >= dropdown_top && event.position.y < dd_bottom;
+
+    // Track hover on mouse move (even without button down). Repaint so the highlight follows
+    // the pointer even when nothing else is driving frames (e.g. on the Settings tab).
     if (open_ && !event.is_down && !event.is_wheel) {
-        float dropdown_top = header_h + 2;
-        if (event.position.y >= dropdown_top) {
-            hover_index_ = static_cast<int>((event.position.y - dropdown_top) / 24.0f);
-            if (hover_index_ >= static_cast<int>(items_.size())) hover_index_ = -1;
+        if (in_menu) {
+            int idx = static_cast<int>((event.position.y - dropdown_top) / 24.0f);
+            hover_index_ = (idx >= 0 && idx < static_cast<int>(items_.size())) ? idx : -1;
         } else {
             hover_index_ = -1;
         }
+        request_repaint();
         return;
     }
 
     if (!event.is_down) return;
 
     if (open_) {
-        float dropdown_top = header_h + 2;
-        if (event.position.y >= dropdown_top) {
+        if (in_menu) {
             int index = static_cast<int>((event.position.y - dropdown_top) / 24.0f);
             if (index >= 0 && index < static_cast<int>(items_.size())) {
                 const auto& item = items_[static_cast<size_t>(index)];
-                if (item.size() < 3 || item.substr(0, 3) != "---") {
-                    set_selected(index);
-                }
+                if (item.size() < 3 || item.substr(0, 3) != "---") set_selected(index);
             }
         }
-        close_dropdown();
+        close_dropdown();  // a click on a row commits; a click on the header/outside cancels
     } else {
         open_dropdown();
     }
+    request_repaint();
 }
 
 
 bool ComboBox::on_key_event(const KeyEvent& event) {
     if (!event.is_down) return false;
-    if (event.key == KeyCode::up && selected_ > 0) {
-        set_selected(selected_ - 1);
-        // Keyboard navigation should move the row HIGHLIGHT too (not just the
-        // check glyph), matching mouse hover — otherwise arrowing through an
-        // open dropdown shows no highlighted row until the mouse moves over it.
-        if (open_) hover_index_ = selected_;
-        return true;
+
+    if (!open_) {
+        // Closed: Up/Down step the value like a stepper; Enter/Space opens the menu.
+        if (event.key == KeyCode::up && selected_ > 0) {
+            set_selected(selected_ - 1);
+            return true;
+        }
+        if (event.key == KeyCode::down && selected_ < static_cast<int>(items_.size()) - 1) {
+            set_selected(selected_ + 1);
+            return true;
+        }
+        if (event.key == KeyCode::enter || event.key == KeyCode::space) {
+            open_dropdown();
+            request_repaint();
+            return true;
+        }
+        return false;
     }
-    if (event.key == KeyCode::down && selected_ < static_cast<int>(items_.size()) - 1) {
-        set_selected(selected_ + 1);
-        if (open_) hover_index_ = selected_;
-        return true;
+
+    // Open: arrows move the highlight (like hover), Enter/Space commits, Esc cancels.
+    switch (event.key) {
+        case KeyCode::up:   move_hover(-1); return true;
+        case KeyCode::down: move_hover(+1); return true;
+        case KeyCode::escape:
+            close_dropdown();  // cancel — selection unchanged
+            request_repaint();
+            return true;
+        case KeyCode::enter:
+        case KeyCode::space:
+            if (hover_index_ >= 0 && hover_index_ < static_cast<int>(items_.size()))
+                set_selected(hover_index_);
+            close_dropdown();
+            request_repaint();
+            return true;
+        default:
+            return false;
     }
-    if (event.key == KeyCode::escape && open_) {
-        close_dropdown();
-        return true;
-    }
-    if ((event.key == KeyCode::enter || event.key == KeyCode::space) && !open_) {
-        open_dropdown();
-        return true;
-    }
-    if ((event.key == KeyCode::enter || event.key == KeyCode::space) && open_) {
-        close_dropdown();
-        return true;
-    }
-    return false;
 }
 
 void ComboBox::on_text_input(const TextInputEvent& event) {
@@ -403,6 +461,7 @@ void TabPanel::set_active_tab(int index) {
 }
 
 void TabPanel::paint(canvas::Canvas& canvas) {
+    if (!show_tab_bar_) return;  // card-stack mode: no tab bar, content fills the panel
     auto b = local_bounds();
 
     // Tab bar background
@@ -431,6 +490,7 @@ void TabPanel::paint(canvas::Canvas& canvas) {
 }
 
 void TabPanel::on_mouse_event(const MouseEvent& event) {
+    if (!show_tab_bar_) return;  // card-stack mode: nothing to click in the (absent) tab bar
     if (!event.is_down) return;
     if (tabs_.empty()) return;
     if (event.position.y > tab_height_) return; // click below tab bar

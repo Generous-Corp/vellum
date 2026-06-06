@@ -304,9 +304,8 @@ void Toggle::set_on(bool v) {
     on_ = v;
     float dur = resolve_dimension("motion.duration.normal", 0.15f);
     thumb_position_.animate_to(v ? 1.0f : 0.0f, dur, easing::ease_out_cubic);
-    // pulp #73 — programmatic toggle (preset apply, JS bridge setValue)
-    // must reach the screen on its own. User-input toggles already
-    // repaint via the host's per-event setNeedsDisplay path.
+    // pulp #73 — programmatic toggle (preset apply, JS bridge setValue) must reach the
+    // screen on its own; user-input toggles also repaint via the host per-event path.
     request_repaint();
 }
 
