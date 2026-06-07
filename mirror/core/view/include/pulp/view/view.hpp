@@ -311,6 +311,27 @@ public:
     bool requires_gpu_host() const { return requires_gpu_host_; }
     void set_requires_gpu_host(bool v) { requires_gpu_host_ = v; }
 
+    /// True when this view (or its subtree) attaches a NATIVE child overlay — a
+    /// WebView / NSView / HWND that is composited by the OS window server, NOT
+    /// painted into the Pulp Skia canvas by `paint_all()`. Such overlays are
+    /// invisible to headless capture (`render_to_png` / `HeadlessSurface`); the
+    /// smart capture path (`capture_view`) reads this to refuse with a clear
+    /// reason instead of silently returning a blank frame. Generic on purpose —
+    /// the owning wrapper view sets it (e.g. a WebView pane), so capture does not
+    /// need to know about WebView specifically.
+    bool contains_native_overlay() const { return contains_native_overlay_; }
+    void set_contains_native_overlay(bool v) { contains_native_overlay_ = v; }
+
+    /// When this view owns a native overlay (a WebView pane), it overrides this to
+    /// return an in-process PNG snapshot of that overlay (e.g. WKWebView
+    /// takeSnapshot). `capture_view` calls it for `contains_native_overlay()`
+    /// subtrees so even native overlays are headlessly capturable instead of
+    /// refused. Default empty = "no in-process snapshot available". Main-thread.
+    virtual std::vector<uint8_t> capture_native_overlay_png(uint32_t /*width*/,
+                                                            uint32_t /*height*/) {
+        return {};
+    }
+
     /// Mark layout as needing recalculation (auto-invalidation)
     void invalidate_layout() { layout_dirty_ = true; }
     bool layout_dirty() const { return layout_dirty_; }
@@ -1466,6 +1487,7 @@ private:
     PointerEvents pointer_events_ = PointerEvents::auto_;
     bool backface_visible_ = true;
     bool requires_gpu_host_ = false;
+    bool contains_native_overlay_ = false;
     FrameClock* frame_clock_ = nullptr;
 
     // Visual properties
