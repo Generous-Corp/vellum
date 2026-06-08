@@ -361,6 +361,7 @@ private:
     void register_widget_border_box_api(std::function<canvas::Color(const std::string&)> parse_color);
     void register_widget_outline_api(std::function<canvas::Color(const std::string&)> parse_color);
     void register_widget_border_radius_api();
+    void register_widget_border_side_api(std::function<canvas::Color(const std::string&)> parse_color);
 };
 
 } // namespace pulp::view
