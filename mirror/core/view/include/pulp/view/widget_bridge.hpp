@@ -315,6 +315,7 @@ private:
     void register_shader_canvas_api();
     void register_theme_api();
     void register_tokens_api(std::function<canvas::Color(const std::string&)> parse_color);
+    void register_widget_assets_api();
     void register_widget_schema_api();
     void register_widget_factory_controls_api();
     void register_widget_factory_form_api();
