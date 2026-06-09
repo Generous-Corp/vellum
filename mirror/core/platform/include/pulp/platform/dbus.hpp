@@ -150,6 +150,7 @@ public:
     public:
         bool append_string(const std::string& s);
         bool append_object_path(const std::string& p);
+        bool append_bool(bool v);
         bool append_int32(int v);
         bool append_uint32(unsigned v);
         bool append_double(double v);

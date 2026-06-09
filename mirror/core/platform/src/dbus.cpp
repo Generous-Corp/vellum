@@ -217,7 +217,7 @@ struct DBus::Impl {
         msg_get_interface = sym<fn_msg_get_iface>("dbus_message_get_interface");
         msg_get_member = sym<fn_msg_get_member>("dbus_message_get_member");
         msg_get_sender = sym<fn_msg_get_sender>("dbus_message_get_sender");
-        get_unique_name = sym<fn_get_unique>("dbus_connection_get_unique_name");
+        get_unique_name = sym<fn_get_unique>("dbus_bus_get_unique_name");
 
         // a11y-bus symbols (needed to open the separate accessibility daemon).
         open_private = sym<fn_open_private>("dbus_connection_open_private");
@@ -377,6 +377,11 @@ bool DBus::Writer::append_object_path(const std::string& p) {
     if (!owner_ || !owner_->impl_ || !iter_) return false;
     const char* c = p.c_str();
     return owner_->impl_->iter_append_basic(iter_, kTypeObjPath, &c) != 0;
+}
+bool DBus::Writer::append_bool(bool v) {
+    if (!owner_ || !owner_->impl_ || !iter_) return false;
+    const int b = v ? 1 : 0;
+    return owner_->impl_->iter_append_basic(iter_, kTypeBool, &b) != 0;
 }
 bool DBus::Writer::append_int32(int v) {
     if (!owner_ || !owner_->impl_ || !iter_) return false;
@@ -720,7 +725,7 @@ std::optional<DBus::PortalResult> DBus::file_chooser(
         d.append_dict_entry(&opts, k.c_str(), kTypeString, &vc);
     }
     for (const auto& [k, v] : bool_options) {
-        unsigned b = v ? 1u : 0u;
+        int b = v ? 1 : 0;
         d.append_dict_entry(&opts, k.c_str(), kTypeBool, &b);
     }
     d.iter_close_container(&args, &opts);
@@ -824,6 +829,7 @@ bool DBus::Reader::recurse(Reader&) { return false; }
 
 bool DBus::Writer::append_string(const std::string&) { return false; }
 bool DBus::Writer::append_object_path(const std::string&) { return false; }
+bool DBus::Writer::append_bool(bool) { return false; }
 bool DBus::Writer::append_int32(int) { return false; }
 bool DBus::Writer::append_uint32(unsigned) { return false; }
 bool DBus::Writer::append_double(double) { return false; }

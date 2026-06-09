@@ -418,17 +418,18 @@ InstallModelResult install_model(const ModelEntry& model, std::string_view subsy
             if (!on_progress) return true;
             DownloadProgress agg = p;
             // Map this asset's progress into one monotonic 0→1'000'000 bar across all n
-            // assets. When the server omits Content-Length (p.total == 0) we can't know the
-            // within-asset fraction, so pin to this asset's start boundary — otherwise agg
-            // would carry the raw byte count and the bar would visibly snap back to ~0 at
-            // each asset transition.
+            // assets. When the server omits Content-Length (p.total == 0), report byte
+            // progress as indeterminate instead of freezing at this asset's start boundary.
             const double base = static_cast<double>(idx) / static_cast<double>(n);
-            const double frac = p.total > 0
-                                    ? base + (static_cast<double>(p.downloaded) /
-                                              static_cast<double>(p.total)) / static_cast<double>(n)
-                                    : base;
-            agg.downloaded = static_cast<std::uint64_t>(frac * 1'000'000.0);
-            agg.total = 1'000'000;
+            if (p.total > 0) {
+                const double frac = base + (static_cast<double>(p.downloaded) /
+                                            static_cast<double>(p.total)) / static_cast<double>(n);
+                agg.downloaded = static_cast<std::uint64_t>(frac * 1'000'000.0);
+                agg.total = 1'000'000;
+            } else {
+                agg.downloaded = p.downloaded;
+                agg.total = 0;
+            }
             return on_progress(agg);
         };
 
@@ -441,6 +442,17 @@ InstallModelResult install_model(const ModelEntry& model, std::string_view subsy
         if (!dl.ok) {
             r.error = dl.error;
             return r;
+        }
+        if (on_progress) {
+            DownloadProgress done{};
+            done.downloaded = static_cast<std::uint64_t>(
+                (static_cast<double>(idx + 1) / static_cast<double>(n)) * 1'000'000.0);
+            done.total = 1'000'000;
+            if (!on_progress(done)) {
+                r.cancelled = true;
+                r.error = "cancelled";
+                return r;
+            }
         }
 
         if (i == 0) {
