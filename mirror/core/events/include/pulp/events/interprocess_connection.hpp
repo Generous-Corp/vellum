@@ -106,6 +106,7 @@ private:
     std::atomic<IpcState> state_{IpcState::Disconnected};
     std::thread read_thread_;
     std::atomic<bool> running_{false};
+    std::atomic<bool> defer_first_dispatch_until_callback_{false};
     mutable std::mutex callback_mutex_;
 
     void start_read_thread();
