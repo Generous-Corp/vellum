@@ -5,8 +5,28 @@
 /// metering, and waveform capture. Manages all audio→UI publication paths
 /// for visualization through a single configuration point.
 ///
+/// NOT A REALTIME-SAFE GENERIC AUDIO PROBE.
+/// =========================================
+/// Despite running from the audio callback, `VisualizationBridge::process()`
+/// is **not** an RT-safe probe and must not be copied as the model for one.
+/// Its body runs a full STFT and calls `Stft::latest_magnitude_db()`, which
+/// returns a `std::vector` — i.e. it performs FFT work and (potentially)
+/// heap allocation on the audio thread. That is acceptable here only because
+/// this bridge is an opt-in visualization path for examples/demos, not a
+/// general-purpose boundary probe, and because callers accept the cost.
+///
+/// The realtime-safe, allocation-free, scalar-only probe path is
+/// `pulp::audio::AudioProbe` (header `pulp/audio/audio_probe.hpp`). Use that
+/// — never this class — when you need an output-boundary probe that satisfies
+/// the strict RT ABI (no allocation, no FFT/STFT, no locks, no vector growth).
+/// Reuse this bridge's UI-side rendering if you like, but never its
+/// callback-side analysis. See the harness plan
+/// (`planning/2026-06-09-audio-observability-and-validation-harness-plan.md`,
+/// Section 4 "Runtime Probe Infrastructure").
+///
 /// Audio thread calls process(). UI thread reads latest data.
-/// All transport uses TripleBuffer (latest-value, no blocking, no allocation).
+/// Spectrum/meter/waveform publication uses TripleBuffer (latest-value), but
+/// the *analysis* feeding it (STFT) is not allocation-free — see above.
 ///
 /// Forward-compatible with Phase 13 Three.js bridge: the same data published
 /// here is accessible from JS via AudioBridge → widget_bridge.cpp bindings.
@@ -72,6 +92,10 @@ struct VisualizationConfig {
 /// visualization data. Wraps STFT, multi-channel metering, and waveform
 /// capture with lock-free TripleBuffer publication.
 ///
+/// NOT an RT-safe probe — see the file-level comment. `process()` runs STFT
+/// and a vector-returning spectrum path on the audio thread. For an
+/// allocation-free output-boundary probe, use `pulp::audio::AudioProbe`.
+///
 /// Thread model:
 ///   - Audio thread: calls process() from the audio callback
 ///   - UI thread: calls read_spectrum(), read_meter(), read_waveform()
@@ -105,6 +129,11 @@ public:
 
     /// Process audio from the audio callback. Computes STFT, metering,
     /// and waveform capture, then publishes results lock-free.
+    ///
+    /// WARNING: this is NOT allocation-free. The STFT path calls
+    /// `Stft::latest_magnitude_db()` (vector-returning) on the audio thread.
+    /// Do not treat this as the RT-safe probe contract — use
+    /// `pulp::audio::AudioProbe::analyze_output()` for that.
     ///
     /// @param channels  Array of channel buffer pointers.
     /// @param num_channels  Number of channels.
