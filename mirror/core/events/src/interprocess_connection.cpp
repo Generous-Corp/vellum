@@ -2,9 +2,11 @@
 #include <pulp/runtime/named_pipe.hpp>
 #include <pulp/runtime/socket.hpp>
 #include <charconv>
+#include <chrono>
 #include <cstring>
 #include <mutex>
 #include <optional>
+#include <thread>
 
 namespace pulp::events {
 
@@ -340,15 +342,24 @@ void InterprocessConnection::read_loop() {
             return;
         }
 
-        // Dispatch message
-        message_received(buffer.data(), msg_len);
         std::function<void(const void*, size_t)> message_callback;
         std::function<void(std::string_view)> text_callback;
-        {
-            std::lock_guard lock(callback_mutex_);
-            message_callback = on_message;
-            text_callback = on_text_message;
+        const bool wait_for_first_callback =
+            defer_first_dispatch_until_callback_.exchange(false);
+        const int attempts = wait_for_first_callback ? 100 : 1;
+        for (int attempt = 0; attempt < attempts; ++attempt) {
+            {
+                std::lock_guard lock(callback_mutex_);
+                message_callback = on_message;
+                text_callback = on_text_message;
+            }
+            if (message_callback || text_callback || attempt + 1 == attempts)
+                break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
+
+        // Dispatch message
+        message_received(buffer.data(), msg_len);
         if (message_callback) message_callback(buffer.data(), msg_len);
 
         std::string_view text_view(reinterpret_cast<const char*>(buffer.data()), msg_len);
@@ -404,6 +415,7 @@ bool InterprocessConnectionServer::start(std::string_view name, IpcTransport tra
                 conn->impl_->transport = IpcTransport::Socket;
                 conn->impl_->socket = std::move(*client_sock);
                 conn->state_.store(IpcState::Connected);
+                conn->defer_first_dispatch_until_callback_.store(true);
                 conn->connection_made();
                 std::function<void()> connected_callback;
                 {
@@ -415,9 +427,11 @@ bool InterprocessConnectionServer::start(std::string_view name, IpcTransport tra
                 // Start read thread while we still own the connection,
                 // then hand off. This avoids use-after-free if the
                 // callback destroys the connection immediately.
-                // The read thread uses atomics so it's safe to start
-                // before handlers are set — worst case it reads a
-                // message and calls the default no-op virtual methods.
+                // The read thread uses atomics so it can start before
+                // handlers are set. Its first dispatch waits briefly for
+                // the accepted callback to install handlers, preserving
+                // an eager client's first frame without handing out a
+                // connection whose lifetime we no longer control.
                 conn->start_read_thread();
 
                 if (on_client_connected)
