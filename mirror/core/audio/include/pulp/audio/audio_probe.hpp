@@ -111,6 +111,8 @@ public:
     void set_clip_ceiling(float linear) noexcept { clip_ceiling_ = linear; }
 
 private:
+    void publish_empty_snapshot() noexcept;
+
     int max_channels_ = 0;
     int max_frames_ = 0;
     int capture_frames_ = 0;
