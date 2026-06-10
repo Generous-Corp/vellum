@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <atomic>
 #include <mutex>
+#include <vector>
 #include <pulp/events/event_loop.hpp>
 #include <pulp/runtime/spsc_queue.hpp>
 #include <pulp/state/store.hpp>
@@ -269,7 +270,7 @@ void StateStore::set_value(ParamID id, float value) {
     float clamped = std::clamp(value, param.range.min, param.range.max);
     values_[it->second].set(clamped);
 
-    // Wait-free fan-out: notify() does a single atomic-shared_ptr load and
+    // Wait-free fan-out: notify() does a single atomic pointer load and
     // iterates the const snapshot. Audio listeners run inline; Main
     // listeners route through the installed EventLoop (which allocates;
     // audio-thread callers must use set_value_rt() instead).
