@@ -4,8 +4,10 @@
 
 namespace pulp::signal {
 
-// Biquad IIR filter — standard second-order section
-// Real-time safe. Supports common filter types via static factory methods.
+// Biquad IIR filter — standard second-order section.
+// RT contract: coefficient calculation and process/reset paths allocate no
+// memory. Retune coefficients at a block boundary if parameter continuity
+// matters.
 class Biquad {
 public:
     enum class Type { lowpass, highpass, bandpass, notch, allpass, peaking, low_shelf, high_shelf };
