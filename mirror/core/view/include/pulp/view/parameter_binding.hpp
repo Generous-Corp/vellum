@@ -1,0 +1,113 @@
+#pragma once
+
+/// @file parameter_binding.hpp
+/// Two-way binding between a standard widget and a store parameter, with
+/// host automation gestures — the equivalent of a JUCE
+/// `AudioProcessorValueTreeState` attachment.
+///
+/// `bind_parameter(widget, store, id)` wires:
+///   - widget interaction → host gesture (begin on press, end on release)
+///     so DAWs record and play back the control's automation;
+///   - widget value changes → `store.set_normalized(id, …)`;
+///   - store changes (e.g. automation playback, preset load) → the widget's
+///     displayed value.
+///
+/// It returns a `ParameterBinding` that owns the store listener; keep it
+/// alive for as long as the widget is bound (typically a member of the
+/// editor), exactly like a JUCE attachment. Dropping it unbinds.
+///
+/// Without this, a widget changes the parameter audibly but the host does
+/// not record the move, because the raw value write is not bracketed in a
+/// gesture. See pulp::state::ParameterEdit for the lower-level primitive
+/// used by bespoke (non-widget) controls.
+///
+/// UI-thread only.
+
+#include <pulp/state/parameter.hpp>
+#include <pulp/state/store.hpp>
+#include <pulp/view/widgets.hpp>
+#include <utility>
+
+namespace pulp::view {
+
+/// RAII owner of a widget↔parameter binding's store listener. Move-only;
+/// keep it alive for the binding's lifetime.
+class ParameterBinding {
+public:
+    ParameterBinding() = default;
+    explicit ParameterBinding(state::ListenerToken token) : token_(std::move(token)) {}
+    ParameterBinding(ParameterBinding&&) noexcept = default;
+    ParameterBinding& operator=(ParameterBinding&&) noexcept = default;
+    ParameterBinding(const ParameterBinding&) = delete;
+    ParameterBinding& operator=(const ParameterBinding&) = delete;
+
+private:
+    state::ListenerToken token_;
+};
+
+/// Knob ↔ parameter (normalized).
+[[nodiscard]] inline ParameterBinding
+bind_parameter(Knob& knob, state::StateStore& store, state::ParamID id) {
+    knob.set_value(store.get_normalized(id));
+    knob.on_gesture_begin = [&store, id] { store.begin_gesture(id); };
+    knob.on_change = [&store, id](float v) { store.set_normalized(id, v); };
+    knob.on_gesture_end = [&store, id] { store.end_gesture(id); };
+    return ParameterBinding(store.add_listener(
+        [&knob, &store, id](state::ParamID changed, float) {
+            if (changed == id) knob.set_value(store.get_normalized(id));
+        },
+        state::ListenerThread::Main));
+}
+
+/// Fader ↔ parameter (normalized).
+[[nodiscard]] inline ParameterBinding
+bind_parameter(Fader& fader, state::StateStore& store, state::ParamID id) {
+    fader.set_value(store.get_normalized(id));
+    fader.on_gesture_begin = [&store, id] { store.begin_gesture(id); };
+    fader.on_change = [&store, id](float v) { store.set_normalized(id, v); };
+    fader.on_gesture_end = [&store, id] { store.end_gesture(id); };
+    return ParameterBinding(store.add_listener(
+        [&fader, &store, id](state::ParamID changed, float) {
+            if (changed == id) fader.set_value(store.get_normalized(id));
+        },
+        state::ListenerThread::Main));
+}
+
+/// XY pad ↔ two parameters (normalized). A single drag drives both.
+[[nodiscard]] inline ParameterBinding
+bind_parameter(XYPad& pad, state::StateStore& store, state::ParamID x_id, state::ParamID y_id) {
+    pad.on_gesture_begin = [&store, x_id, y_id] {
+        store.begin_gesture(x_id);
+        store.begin_gesture(y_id);
+    };
+    pad.on_change = [&store, x_id, y_id](float x, float y) {
+        store.set_normalized(x_id, x);
+        store.set_normalized(y_id, y);
+    };
+    pad.on_gesture_end = [&store, x_id, y_id] {
+        store.end_gesture(x_id);
+        store.end_gesture(y_id);
+    };
+    return ParameterBinding(store.add_listener(
+        [x_id, y_id](state::ParamID, float) { (void)x_id; (void)y_id; },
+        state::ListenerThread::Main));
+}
+
+/// Toggle button ↔ parameter. A press is a complete one-shot gesture so
+/// the host records the discrete change.
+[[nodiscard]] inline ParameterBinding
+bind_parameter(ToggleButton& button, state::StateStore& store, state::ParamID id) {
+    button.set_on(store.get_value(id) >= 0.5f);
+    button.on_toggle = [&store, id](bool on) {
+        store.begin_gesture(id);
+        store.set_value(id, on ? 1.0f : 0.0f);
+        store.end_gesture(id);
+    };
+    return ParameterBinding(store.add_listener(
+        [&button, &store, id](state::ParamID changed, float) {
+            if (changed == id) button.set_on(store.get_value(id) >= 0.5f);
+        },
+        state::ListenerThread::Main));
+}
+
+} // namespace pulp::view
