@@ -551,8 +551,23 @@ void CoreGraphicsCanvas::set_text_align(TextAlign align) {
     text_align_ = align;
 }
 
+// std::string → NSString that can never return nil. stringWithUTF8String:
+// returns nil on invalid UTF-8 (e.g. a string sliced mid-codepoint), and a nil
+// string passed to NSAttributedString initWithString: THROWS — inside
+// drawRect: that uncaught exception kills the host's entire AU process (every
+// plugin in it, observed live in Logic's AUHostingService). Fall back to a
+// lossy Latin-1 reinterpretation (always succeeds byte-wise), then to @"".
+static NSString* ns_string_never_nil(const std::string& s) {
+    NSString* ns = [NSString stringWithUTF8String:s.c_str()];
+    if (ns) return ns;
+    ns = [[NSString alloc] initWithBytes:s.data()
+                                  length:s.size()
+                                encoding:NSISOLatin1StringEncoding];
+    return ns ? ns : @"";
+}
+
 static CTFontRef create_font_with_fallback(const std::string& family, float size) {
-    NSString* ns_font = [NSString stringWithUTF8String:family.c_str()];
+    NSString* ns_font = ns_string_never_nil(family);
     CTFontRef font = CTFontCreateWithName((__bridge CFStringRef)ns_font, size, NULL);
     if (!font) {
         // Requested family not available — fall back to system font
@@ -563,7 +578,7 @@ static CTFontRef create_font_with_fallback(const std::string& family, float size
 
 void CoreGraphicsCanvas::fill_text(const std::string& text, float x, float y) {
     @autoreleasepool {
-        NSString* ns_text = [NSString stringWithUTF8String:text.c_str()];
+        NSString* ns_text = ns_string_never_nil(text);
 
         CTFontRef font = create_font_with_fallback(font_family_, font_size_);
         if (!font) return;
@@ -657,7 +672,7 @@ void CoreGraphicsCanvas::stroke_text(const std::string& text, float x, float y,
     // strokeStyle as the fill colour.
     @autoreleasepool {
         if (text.empty()) return;
-        NSString* ns_text = [NSString stringWithUTF8String:text.c_str()];
+        NSString* ns_text = ns_string_never_nil(text);
 
         CTFontRef font = create_font_with_fallback(font_family_, font_size_);
         if (!font) return;
@@ -782,7 +797,7 @@ void CoreGraphicsCanvas::stroke_text(const std::string& text, float x, float y,
 
 float CoreGraphicsCanvas::measure_text(const std::string& text) {
     @autoreleasepool {
-        NSString* ns_text = [NSString stringWithUTF8String:text.c_str()];
+        NSString* ns_text = ns_string_never_nil(text);
 
         CTFontRef font = create_font_with_fallback(font_family_, font_size_);
         if (!font) return 0;
@@ -805,7 +820,7 @@ float CoreGraphicsCanvas::measure_text(const std::string& text) {
 
 Canvas::TextMetrics CoreGraphicsCanvas::measure_text_full(const std::string& text) {
     @autoreleasepool {
-        NSString* ns_text = [NSString stringWithUTF8String:text.c_str()];
+        NSString* ns_text = ns_string_never_nil(text);
 
         CTFontRef font = create_font_with_fallback(font_family_, font_size_);
         if (!font) return {};
@@ -1132,7 +1147,7 @@ CGImageRef cg_decode_image_from_path_or_data(const std::string& src) {
         // file off disk first, for `data:` URLs we let ImageIO handle
         // the base64 decode transparently via CGImageSourceCreateWithURL.
         if (src.rfind("data:", 0) == 0) {
-            NSString* ns = [NSString stringWithUTF8String:src.c_str()];
+            NSString* ns = ns_string_never_nil(src);
             NSURL* url = [NSURL URLWithString:ns];
             if (!url) return nullptr;
             CGImageSourceRef source = CGImageSourceCreateWithURL(
@@ -1142,7 +1157,7 @@ CGImageRef cg_decode_image_from_path_or_data(const std::string& src) {
             CFRelease(source);
             return img;
         }
-        NSString* ns_path = [NSString stringWithUTF8String:src.c_str()];
+        NSString* ns_path = ns_string_never_nil(src);
         NSData* data = [NSData dataWithContentsOfFile:ns_path];
         if (!data) return nullptr;
         CGImageSourceRef source = CGImageSourceCreateWithData(
