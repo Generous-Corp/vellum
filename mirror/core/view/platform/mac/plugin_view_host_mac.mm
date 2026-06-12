@@ -4,6 +4,7 @@
 #if TARGET_OS_OSX
 
 #include <pulp/canvas/cg_canvas.hpp>
+#include <pulp/runtime/log.hpp>
 #include <pulp/view/input_events.hpp>
 #include <pulp/view/widgets.hpp>
 #include <pulp/view/ui_components.hpp>
@@ -300,9 +301,29 @@ bool pulp_plugin_key_down(pulp::view::View* root, NSEvent* event) {
 }
 
 - (BOOL)isFlipped { return NO; }
-- (BOOL)acceptsFirstResponder { return YES; }
+// Keyboard-focus contract (host-etiquette): a plugin editor must NOT hold the
+// host window's first responder except while one of its widgets is actively
+// receiving text input. An editor that grabs first responder on every click
+// swallows the host's keyboard routing — in Logic that silences Musical
+// Typing on software-instrument tracks the moment the user touches a plugin
+// control, until they refocus a host view (perceived as "adjusting the plugin
+// kills the instrument"). So: accept first responder only while a pulp widget
+// holds the input-focus slot, and hand focus back the moment it clears.
+- (BOOL)acceptsFirstResponder {
+    return pulp::view::View::focused_input_ != nullptr;
+}
+- (void)syncKeyFocus {
+    NSWindow* win = self.window;
+    if (!win) return;
+    const bool wants = pulp::view::View::focused_input_ != nullptr;
+    if (wants && win.firstResponder != self)
+        [win makeFirstResponder:self];
+    else if (!wants && win.firstResponder == self)
+        [win makeFirstResponder:nil];  // return keys to the host (Musical Typing)
+}
 - (void)keyDown:(NSEvent*)event {
     if (!pulp_plugin_key_down(self.rootView, event)) [super keyDown:event];
+    [self syncKeyFocus];  // commit/escape may have ended text input — release
 }
 // Resolve a window-space event into root-view coords, applying the inverse
 // design-viewport transform when set so hit_test runs against design-space
@@ -316,6 +337,7 @@ bool pulp_plugin_key_down(pulp::view::View* root, NSEvent* event) {
     if (!self.rootView) return;
     pulp_plugin_mouse_down(self.rootView, event, [self localPoint:event], &_dragTarget);
     [self setNeedsDisplay:YES];
+    [self syncKeyFocus];
 }
 - (void)mouseDragged:(NSEvent*)event {
     pulp_plugin_mouse_drag(self.rootView, [self localPoint:event], &_dragTarget);
@@ -324,6 +346,7 @@ bool pulp_plugin_key_down(pulp::view::View* root, NSEvent* event) {
 - (void)mouseUp:(NSEvent*)event {
     pulp_plugin_mouse_up(self.rootView, event, [self localPoint:event], &_dragTarget);
     [self setNeedsDisplay:YES];
+    [self syncKeyFocus];  // a tap may have entered (or left) type-in
 }
 - (void)scrollWheel:(NSEvent*)event {
     if (!self.rootView) return;
@@ -384,36 +407,54 @@ bool pulp_plugin_key_down(pulp::view::View* root, NSEvent* event) {
 
     if (!self.rootView) return;
 
-    // Design viewport: pin root at design size, apply translate+scale
-    // before paint_all so content renders proportionally. Otherwise lay
-    // out at host bounds. Mirrors WindowHost paint_scene.
-    float sx, sy, tx, ty;
-    const bool has_viewport = self.designW > 0.0f && self.designH > 0.0f &&
-        pulp::view::WindowHost::compute_design_viewport_transform(
-            bw, bh, self.designW, self.designH, sx, sy, tx, ty);
+    // An exception escaping drawRect: is FATAL to the entire hosting process:
+    // AppKit's _crashOnException kills it, and in a DAW's shared AU sandbox
+    // (Logic's AUHostingService) that takes down EVERY plugin in the process —
+    // observed live as "adjusting one plugin kills the instrument's audio until
+    // it is reopened". Painting one bad frame is always preferable; catch, log
+    // once, and keep the process alive.
+    @try {
+        // Design viewport: pin root at design size, apply translate+scale
+        // before paint_all so content renders proportionally. Otherwise lay
+        // out at host bounds. Mirrors WindowHost paint_scene.
+        float sx, sy, tx, ty;
+        const bool has_viewport = self.designW > 0.0f && self.designH > 0.0f &&
+            pulp::view::WindowHost::compute_design_viewport_transform(
+                bw, bh, self.designW, self.designH, sx, sy, tx, ty);
 
-    if (has_viewport) {
-        self.rootView->set_bounds({0, 0, self.designW, self.designH});
-        self.rootView->layout_children();
-        const int saved = canvas.save_count();
-        canvas.save();
-        canvas.translate(tx, ty);
-        canvas.scale(sx, sy);
-        self.rootView->paint_all(canvas);
-        // paint_overlays MUST run inside the design transform — overlays
-        // (ComboBox dropdowns, inspector layer) draw in ROOT coordinates,
-        // and mouse input inverse-maps window→root via pointTransform
-        // before hit_test. Painting them outside the transform would put
-        // them at root coords in window space → visually misaligned and
-        // non-clickable at any host size that isn't exactly design size.
-        // Matches the standalone host (pulp PR #1984 Codex P1).
-        pulp::view::View::paint_overlays(canvas, self.rootView);
-        canvas.restore_to_count(saved);
-    } else {
-        self.rootView->set_bounds({0, 0, bw, bh});
-        self.rootView->layout_children();
-        self.rootView->paint_all(canvas);
-        pulp::view::View::paint_overlays(canvas, self.rootView);
+        if (has_viewport) {
+            self.rootView->set_bounds({0, 0, self.designW, self.designH});
+            self.rootView->layout_children();
+            const int saved = canvas.save_count();
+            canvas.save();
+            canvas.translate(tx, ty);
+            canvas.scale(sx, sy);
+            self.rootView->paint_all(canvas);
+            // paint_overlays MUST run inside the design transform — overlays
+            // (ComboBox dropdowns, inspector layer) draw in ROOT coordinates,
+            // and mouse input inverse-maps window→root via pointTransform
+            // before hit_test. Painting them outside the transform would put
+            // them at root coords in window space → visually misaligned and
+            // non-clickable at any host size that isn't exactly design size.
+            // Matches the standalone host (pulp PR #1984 Codex P1).
+            pulp::view::View::paint_overlays(canvas, self.rootView);
+            canvas.restore_to_count(saved);
+        } else {
+            self.rootView->set_bounds({0, 0, bw, bh});
+            self.rootView->layout_children();
+            self.rootView->paint_all(canvas);
+            pulp::view::View::paint_overlays(canvas, self.rootView);
+        }
+    } @catch (NSException* e) {
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            pulp::runtime::log_error(
+                "[plugin-view] exception during editor paint (suppressed to keep "
+                "the host process alive): {} — {}",
+                e.name.UTF8String ? e.name.UTF8String : "?",
+                e.reason.UTF8String ? e.reason.UTF8String : "?");
+        }
     }
 }
 
@@ -853,9 +894,25 @@ private:
     pulp::view::View* _dragTarget;  // captured at mouseDown, re-validated each event
 }
 
-- (BOOL)acceptsFirstResponder { return YES; }
+// Keyboard-focus contract — see PulpPluginView::acceptsFirstResponder above:
+// only hold the host window's first responder while a pulp widget is in
+// active text input, and hand it back the moment that ends, so the host's
+// own keyboard routing (e.g. Logic's Musical Typing) keeps working.
+- (BOOL)acceptsFirstResponder {
+    return pulp::view::View::focused_input_ != nullptr;
+}
+- (void)syncKeyFocus {
+    NSWindow* win = self.window;
+    if (!win) return;
+    const bool wants = pulp::view::View::focused_input_ != nullptr;
+    if (wants && win.firstResponder != self)
+        [win makeFirstResponder:self];
+    else if (!wants && win.firstResponder == self)
+        [win makeFirstResponder:nil];
+}
 - (void)keyDown:(NSEvent*)event {
     if (!pulp_plugin_key_down(self.rootView, event)) [super keyDown:event];
+    [self syncKeyFocus];
 }
 // Resolve a window-space event into root-view coords, applying the inverse
 // design-viewport transform when set.
@@ -868,6 +925,7 @@ private:
     if (!self.rootView) return;
     pulp_plugin_mouse_down(self.rootView, event, [self localPoint:event], &_dragTarget);
     if (self.rootView) self.rootView->request_repaint();
+    [self syncKeyFocus];
 }
 - (void)mouseDragged:(NSEvent*)event {
     pulp_plugin_mouse_drag(self.rootView, [self localPoint:event], &_dragTarget);
@@ -876,6 +934,7 @@ private:
 - (void)mouseUp:(NSEvent*)event {
     pulp_plugin_mouse_up(self.rootView, event, [self localPoint:event], &_dragTarget);
     if (self.rootView) self.rootView->request_repaint();
+    [self syncKeyFocus];
 }
 - (void)scrollWheel:(NSEvent*)event {
     if (!self.rootView) return;
