@@ -259,12 +259,28 @@ void pulp_plugin_wheel(pulp::view::View* root, pulp::view::Point pt, NSEvent* ev
 // A click already sets focus (claim_input_focus in mouseDown). Returns true when
 // a focused input consumed the event, so the caller only falls through to
 // [super keyDown:] (host menu shortcuts etc.) when nothing was focused.
+// The input-focus slot (`View::focused_input_`) is a process-GLOBAL static, so
+// in a host with two Pulp plugin editors open at once it may point into a
+// DIFFERENT editor's view tree. Every focus decision here must be scoped to
+// THIS NSView's embedded root, or editor B steals/ misroutes the keyboard when
+// editor A holds focus. Returns the focused view only when it is `root` or a
+// descendant of it; nullptr otherwise. The static is auto-cleared by ~View
+// (#1708), so the pointer is never stale.
+static pulp::view::View* pulp_focus_under_root(pulp::view::View* root) {
+    auto* fv = pulp::view::View::focused_input_;
+    if (!fv || !root) return nullptr;
+    for (pulp::view::View* v = fv; v != nullptr; v = v->parent())
+        if (v == root) return fv;
+    return nullptr;
+}
+
 bool pulp_plugin_key_down(pulp::view::View* root, NSEvent* event) {
   try {
     if (!root) return false;
-    // Auto-clearing static: cleared by ~View when the focused widget is freed,
-    // so this never derefs freed memory (pulp #1708 rationale).
-    auto* fv = pulp::view::View::focused_input_;
+    // Only dispatch to a focused widget that belongs to THIS editor's tree —
+    // never another open plugin editor's focused field (focused_input_ is
+    // process-global).
+    auto* fv = pulp_focus_under_root(root);
     if (!fv) return false;
     pulp::view::KeyEvent ke;
     ke.key = pulp::view::mac_geometry::key_code_from_ns(event.keyCode);
@@ -319,8 +335,10 @@ static NSResponder* pulp_plugin_live_prior_responder(NSResponder* saved, NSWindo
 // the slot first makes the widget's own release_input_focus() a no-op, so
 // the on_focus_changed notification can commit/close its editing UI without
 // recursing. Returns true when a widget was actually ended (repaint needed).
-static bool pulp_plugin_end_text_input() {
-    auto* fv = pulp::view::View::focused_input_;
+// Scoped to `root`: a resignFirstResponder on THIS editor must never end a
+// type-in owned by another open plugin editor (focused_input_ is global).
+static bool pulp_plugin_end_text_input(pulp::view::View* root) {
+    auto* fv = pulp_focus_under_root(root);
     if (!fv) return false;
     fv->release_input_focus();
     try {
@@ -348,12 +366,12 @@ static bool pulp_plugin_end_text_input() {
 // kills the instrument"). So: accept first responder only while a pulp widget
 // holds the input-focus slot, and hand focus back the moment it clears.
 - (BOOL)acceptsFirstResponder {
-    return pulp::view::View::focused_input_ != nullptr;
+    return pulp_focus_under_root(self.rootView) != nullptr;
 }
 - (void)syncKeyFocus {
     NSWindow* win = self.window;
     if (!win) return;
-    const bool wants = pulp::view::View::focused_input_ != nullptr;
+    const bool wants = pulp_focus_under_root(self.rootView) != nullptr;
     if (wants && win.firstResponder != self) {
         _priorResponder = win.firstResponder;  // remember whose keyboard we take
         [win makeFirstResponder:self];
@@ -373,7 +391,7 @@ static bool pulp_plugin_end_text_input() {
 // Musical Typing again".
 - (BOOL)resignFirstResponder {
     _priorResponder = nil;  // the host chose a new responder; nothing to restore
-    if (pulp_plugin_end_text_input()) [self setNeedsDisplay:YES];
+    if (pulp_plugin_end_text_input(self.rootView)) [self setNeedsDisplay:YES];
     return [super resignFirstResponder];
 }
 - (void)keyDown:(NSEvent*)event {
@@ -955,12 +973,12 @@ private:
 // active text input, and hand it back the moment that ends, so the host's
 // own keyboard routing (e.g. Logic's Musical Typing) keeps working.
 - (BOOL)acceptsFirstResponder {
-    return pulp::view::View::focused_input_ != nullptr;
+    return pulp_focus_under_root(self.rootView) != nullptr;
 }
 - (void)syncKeyFocus {
     NSWindow* win = self.window;
     if (!win) return;
-    const bool wants = pulp::view::View::focused_input_ != nullptr;
+    const bool wants = pulp_focus_under_root(self.rootView) != nullptr;
     if (wants && win.firstResponder != self) {
         _priorResponder = win.firstResponder;  // remember whose keyboard we take
         [win makeFirstResponder:self];
@@ -975,7 +993,7 @@ private:
 // See PulpPluginView::resignFirstResponder.
 - (BOOL)resignFirstResponder {
     _priorResponder = nil;
-    if (pulp_plugin_end_text_input() && self.rootView)
+    if (pulp_plugin_end_text_input(self.rootView) && self.rootView)
         self.rootView->request_repaint();
     return [super resignFirstResponder];
 }
