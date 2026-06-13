@@ -744,7 +744,16 @@ public:
     /// Skia backend overrides this to query the shaped paragraph directly.
     virtual float text_x_for_byte(const std::string& text,
                                   std::size_t byte_index) {
-        return measure_text(text.substr(0, std::min(byte_index, text.size())));
+        std::size_t end = std::min(byte_index, text.size());
+        // Clamp back to a UTF-8 codepoint boundary: a caller-supplied byte
+        // index that lands inside a multi-byte sequence would otherwise slice
+        // an invalid prefix. On the CoreGraphics backend that invalid UTF-8
+        // made NSString conversion return nil and NSAttributedString THROW
+        // inside the editor's drawRect:, killing the host's whole AU process
+        // (and every plugin in it). Never measure an invalid prefix.
+        while (end > 0 && (static_cast<unsigned char>(text[end]) & 0xC0) == 0x80)
+            --end;
+        return measure_text(text.substr(0, end));
     }
 
     /// pulp #2163 / font v2 Slice 1.2.b — explicit, typed vertical-anchor
