@@ -279,7 +279,9 @@ export function applyPaintProp(
         case 'opacity':      call('setOpacity', id, value as number); return true;
         case 'visible':      call('setVisible', id, value as boolean); return true;
         // `boxShadow` accepts:
-        //  • `null` / `undefined` / `'none'` -> clearBoxShadow
+        //  • `'none'` / `''` -> clearBoxShadow
+        //  • `null` / `undefined` -> no-op in the generic dispatcher
+        //    before this handler runs
         //  • String form (`'2px 4px 8px rgba(0,0,0,0.3)'` with optional
         //    `inset`) — parsed inline below.
         //  • Object form `{ offsetX, offsetY, blur?, spread?, color,
