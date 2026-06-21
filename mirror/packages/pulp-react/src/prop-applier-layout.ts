@@ -50,7 +50,8 @@ export function applyLayoutProp(
         //     New Architecture surfaces this cross-platform.
         //   • Pulp historical sense — flexDirection alias: 'row' / 'col' /
         //     'row-reverse' / 'column' / 'column-reverse'. Existing test
-        //     at prop-applier-direction.test.ts:60 pins this behavior.
+        //     in prop-applier-direction.test.ts ("does NOT shadow FlexProps
+        //     `direction`") pins this behavior.
         // Disambiguate on value: writing-direction keywords route to
         // setDirection; everything else falls through to setFlex(direction)
         // for backward compat. `writingDirection` is preferred for new code
@@ -274,8 +275,7 @@ export function applyLayoutProp(
                 // (display:flex handler). Without this fallback the
                 // flat-prop path used by `style={{ display: 'flex' }}`
                 // JSX silently collapses every flex container to a
-                // vertical stack on import — first seen in Spectr's
-                // editor toolbar re-validation.
+                // vertical stack on import.
                 if (props) {
                     // `direction` is a third flex-direction alias in
                     // this prop-applier
