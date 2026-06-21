@@ -1127,16 +1127,17 @@ public:
     const std::string& appearance() const { return appearance_; }
 
     /// CSS `object-fit` — controls how an `<img>` content's intrinsic size is
-    /// fitted into its layout box. Storage-only today; ImageView currently
-    /// stretches to bounds and does not consult the decoded image's natural
-    /// size. Honored values once the image paint path consumes this slot:
-    /// `fill` (default), `contain`, `cover`, `none`, `scale-down`.
+    /// fitted into its layout box. ImageView consumes this slot at paint time
+    /// when the backend can measure the decoded image's natural size; otherwise
+    /// it falls back to `fill` and stretches to bounds. Honored values:
+    /// `fill` (default), `contain`, `cover`, `none`, and `scale-down`.
     void set_object_fit(const std::string& value) { object_fit_ = value; }
     const std::string& object_fit() const { return object_fit_; }
 
     /// CSS `object-position` — alignment of the object inside its
     /// content box when object-fit leaves blank space (e.g. `contain`
-    /// in a wider box). Storage-only today; pairs with object-fit.
+    /// in a wider box). ImageView consumes it alongside `object-fit` at paint
+    /// time when a measurable image is available.
     void set_object_position(const std::string& value) { object_position_ = value; }
     const std::string& object_position() const { return object_position_; }
 
@@ -1206,9 +1207,9 @@ public:
     const std::string& isolation() const           { return isolation_; }
     void set_resize(std::string kw)                { resize_ = std::move(kw); }
     const std::string& resize() const              { return resize_; }
-    /// Animation play-state. Stored on the staged_animation slot via the
-    /// existing setAnimation control-token ABI; this duplicate slot is
-    /// for direct round-trip queries.
+    /// Animation play-state. Stored separately from staged animation tokens and
+    /// consumed by `tick_animations()`; `paused` freezes active animation
+    /// timelines while other values advance normally.
     void set_animation_play_state(std::string kw)  { animation_play_state_ = std::move(kw); }
     const std::string& animation_play_state() const { return animation_play_state_; }
 
@@ -1340,6 +1341,8 @@ public:
 
     void set_white_space_mode(WhiteSpaceMode m) {
         white_space_mode_ = m;
+        // `pre` also pins nowrap: it preserves newlines and spaces while
+        // disabling soft wrapping.
         white_space_nowrap_ = (m == WhiteSpaceMode::nowrap || m == WhiteSpaceMode::pre);
     }
     WhiteSpaceMode white_space_mode() const { return white_space_mode_; }
@@ -1538,8 +1541,8 @@ private:
     std::string mask_;
     std::string mask_size_;     // CSS mask-size paired with mask_image_
     std::string appearance_;    // CSS appearance — storage-only no-op for Pulp custom widgets
-    std::string object_fit_;    // CSS object-fit — storage-only today
-    std::string object_position_; // CSS object-position — storage; pairs with object-fit
+    std::string object_fit_;      // CSS object-fit consumed by ImageView paint
+    std::string object_position_; // CSS object-position paired with object-fit
     /// Transition specs + active animations.
     std::vector<TransitionSpec> transitions_{};
     std::vector<CssAnimation> active_animations_{};
@@ -1560,7 +1563,7 @@ private:
     std::string writing_mode_;             // noop (Pulp horizontal-only)
     std::string isolation_;                // wontfix (no z-buffer)
     std::string resize_;                   // noop (no resize handles)
-    std::string animation_play_state_;     // partial (storage only)
+    std::string animation_play_state_;     // partial (tick_animations consumes)
     bool wants_continuous_repaint_ = false; // opt-in per-vsync repaint
     // RN textShadow* per-attribute storage slots. SkPaint shadow integration
     // deferred; storage path is round-trippable.
