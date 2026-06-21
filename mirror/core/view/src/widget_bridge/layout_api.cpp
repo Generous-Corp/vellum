@@ -118,7 +118,7 @@ void WidgetBridge::register_layout_flex_api() {
         auto val = args.get<double>(2, 0);
         // Slider/drag jitter diagnostic. When PULP_DEBUG_FLEX_THRASH=1, log
         // every setFlex call so per-frame style churn during a drag is visible.
-        // Reading getenv every call is cheap and only emits when enabled.
+        // The getenv result is cached on first call and only emits when enabled.
         static const bool flex_thrash_log = std::getenv("PULP_DEBUG_FLEX_THRASH") != nullptr;
         if (flex_thrash_log) {
             std::string sval;
@@ -553,9 +553,6 @@ void WidgetBridge::register_layout_flex_api() {
         // `flex-end` CSS/RN spellings. The CSS shim maps prefixed forms to the
         // bare ones, but @pulp/react's prop-applier passes RN values through
         // verbatim, so the bridge has to accept both.
-        // FlexAlign has no `baseline` variant yet (separate gap;
-        // would need YGAlignBaseline plumbing); falls through to
-        // stretch / auto_ as before.
         else if (key == "align_items") {
             auto a = args.get<std::string>(2,"stretch");
             if (a=="start" || a=="flex-start") f.align_items=FlexAlign::start;
