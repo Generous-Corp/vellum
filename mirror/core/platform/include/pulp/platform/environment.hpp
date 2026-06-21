@@ -269,7 +269,8 @@ inline void start_environment_observer() {
 #elif defined(_WIN32)
     start_environment_observer_win();
 #endif
-    // Platforms without an observer keep the EnvironmentState defaults.
+    // Other platforms wire their adapters in follow-up PRs; until then
+    // their hosts simply see the EnvironmentState defaults.
 }
 
 } // namespace pulp::platform
