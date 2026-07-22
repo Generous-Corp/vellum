@@ -48,5 +48,7 @@ reimplemented_slices:
     state: framework-reimplemented-no-transfer
   - id: vellum-design-ir
     state: framework-reimplemented-no-transfer
+  - id: vellum-platform-graphics
+    state: framework-reimplemented-no-transfer
   - id: vellum-cli
     state: framework-reimplemented-no-transfer

@@ -6,9 +6,10 @@ JavaScript behavior, and ship a GPU-rendered application without Chromium or an
 OS WebView as the primary UI runtime?
 
 This repository is at the independent-validation milestone. The project CLI
-and repository shape are usable; native rendering, import, and packaging remain
-capabilities supplied by an SDK backend and may report `capability_unavailable`
-until that backend artifact is installed.
+and repository shape are usable. An audio-free native C++ kernel, installable
+CMake SDK, and macOS CoreGraphics smoke application are executable in-tree.
+Import, CLI-driven native builds, Skia/Dawn GPU rendering, and packaging remain
+SDK-backend capabilities and report `capability_unavailable` until implemented.
 
 ## Five-minute local-development start
 
@@ -91,3 +92,6 @@ there is an immutable, checksummed release to install.
 - macOS and browser/Wasm are the first proof targets; other platforms should
   not be claimed before executable evidence exists.
 - Import compatibility is a documented subset, not arbitrary DOM/CSS support.
+- The current macOS smoke proves the native lifecycle and graphics package with
+  CoreGraphics. It is not evidence that the required Skia/Dawn GPU slice or
+  retained view tree is complete.
