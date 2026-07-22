@@ -1,0 +1,7 @@
+import { HomeScreen } from "../ui/generated/Home.generated";
+import { createAppState } from "./state";
+
+export function App() {
+  const state = createAppState();
+  return <HomeScreen title={"{{PROJECT_NAME_JSON}}"} count={state.count} />;
+}

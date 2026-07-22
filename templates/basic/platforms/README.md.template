@@ -1,0 +1,4 @@
+# Platform modules
+
+Keep deliberate platform-specific services or UI adapters in named platform
+subdirectories. Shared application behavior stays in `src/`.

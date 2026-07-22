@@ -1,0 +1,4 @@
+# Optional native components
+
+Custom C++ components are an explicit escape hatch. The basic app does not
+require native application code.

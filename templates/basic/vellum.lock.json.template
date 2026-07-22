@@ -1,0 +1,18 @@
+{
+  "schema": "vellum.project-lock.v1",
+  "project": {
+    "id": "{{PROJECT_ID}}",
+    "name": "{{PROJECT_NAME_JSON}}",
+    "slug": "{{PROJECT_SLUG}}"
+  },
+  "framework": {
+    "version": "{{CLI_VERSION}}"
+  },
+  "cli": {
+    "api": 1
+  },
+  "template": {
+    "name": "basic",
+    "version": 1
+  }
+}

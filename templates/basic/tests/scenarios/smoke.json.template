@@ -1,0 +1,9 @@
+{
+  "schema": "vellum.scenario.v1",
+  "name": "smoke",
+  "viewport": { "width": 1024, "height": 768 },
+  "steps": [
+    { "action": "wait-for-idle" },
+    { "action": "capture", "name": "home" }
+  ]
+}

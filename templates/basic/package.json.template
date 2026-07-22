@@ -1,0 +1,11 @@
+{
+  "name": "{{PROJECT_SLUG}}",
+  "private": true,
+  "version": "0.0.1",
+  "scripts": {
+    "build": "vellum build",
+    "capture": "vellum capture --scenario smoke",
+    "dev": "vellum run",
+    "test": "vellum test"
+  }
+}

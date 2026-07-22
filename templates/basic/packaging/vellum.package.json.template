@@ -1,0 +1,9 @@
+{
+  "schema": "vellum.package.v1",
+  "application_id": "dev.vellum.{{PROJECT_SLUG}}",
+  "display_name": "{{PROJECT_NAME_JSON}}",
+  "targets": {
+    "macos": { "format": "app" },
+    "web": { "format": "directory" }
+  }
+}

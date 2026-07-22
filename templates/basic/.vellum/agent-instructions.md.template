@@ -1,0 +1,15 @@
+# Vellum agent contract v1
+
+- Treat `sources/imported/` as immutable source snapshots.
+- Treat `design/ir/` and `ui/generated/` as tool-owned output.
+- Put application behavior, state, and safe extensions in `src/` and
+  `components/`.
+- Never silently discard unsupported import properties. Preserve diagnostics
+  and conversion losses with the imported snapshot.
+- Use stable imported component identities; do not replace generated identities
+  with names based on array position.
+- Keep platform-specific work in `platforms/` and optional native extensions in
+  `native/`.
+- Run scenarios and visual captures after imports, reimports, or layout changes.
+- This template contains no media or audio subsystem. Add optional capabilities
+  explicitly rather than assuming they exist.

@@ -1,0 +1,8 @@
+# Agent instructions
+
+Instruction contract: `vellum.agent-instructions.v1`.
+
+Read `.vellum/agent-instructions.md` before changing this application. Keep
+hand-written behavior outside `ui/generated/`; use `vellum reimport` for design
+updates; and run `vellum test` plus the relevant capture scenario before
+reporting UI work complete.

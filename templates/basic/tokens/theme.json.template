@@ -1,0 +1,8 @@
+{
+  "schema": "vellum.tokens.v1",
+  "color": {
+    "background": "#17191f",
+    "foreground": "#f5f6fa",
+    "accent": "#7c8cff"
+  }
+}

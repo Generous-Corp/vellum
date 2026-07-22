@@ -1,0 +1,18 @@
+# {{PROJECT_NAME}}
+
+This application was created from the deterministic Vellum `basic` template.
+Application behavior belongs in `src/`; generated design material belongs in
+`ui/generated/` and should not be hand-edited.
+
+```sh
+vellum doctor --fix
+vellum build
+vellum run
+vellum test
+vellum capture --scenario smoke --output artifacts/smoke.png
+vellum package --output dist
+```
+
+The extraction milestone may report `capability_unavailable` for build and
+runtime commands until an SDK backend is installed. That is an honest product
+boundary, not a successful no-op.

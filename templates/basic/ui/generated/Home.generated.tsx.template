@@ -1,0 +1,11 @@
+// Generated or materialized UI. Extend this screen from developer-owned code.
+export type HomeScreenProps = { title: string; count: number };
+
+export function HomeScreen({ title, count }: HomeScreenProps) {
+  return (
+    <view id="home" style={{ padding: 24, gap: 12 }}>
+      <text style={{ fontSize: 28 }}>{title}</text>
+      <text>Count: {count}</text>
+    </view>
+  );
+}

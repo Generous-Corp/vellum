@@ -1,0 +1,5 @@
+export type AppState = { count: number };
+
+export function createAppState(): AppState {
+  return { count: 0 };
+}

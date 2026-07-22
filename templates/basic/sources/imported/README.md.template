@@ -1,0 +1,5 @@
+# Imported source snapshots
+
+`vellum import` and `vellum reimport` place immutable, versioned design source
+snapshots and conversion diagnostics here. Do not put application behavior in
+this directory.
