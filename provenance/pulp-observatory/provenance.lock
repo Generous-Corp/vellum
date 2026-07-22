@@ -1,0 +1,11 @@
+schema_version: 1
+state: prepared
+pulp_repository: Generous-Corp/pulp
+pulp_extraction_base: 2ccff748f0d59da34b01ce1fbceabcf19f452731
+vellum_repository: Generous-Corp/vellum
+vellum_history_seed: e4f8c96fcfd19bac433252c36fdf5bfa681e6d25
+vellum_ownership_commit: null
+pulp_activation_commit: null
+ownership_schema_version: 1
+event_schema_version: 1
+source_projection: ../cut-manifest.json

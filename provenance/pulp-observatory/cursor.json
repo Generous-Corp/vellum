@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "state": "prepared",
+  "pulp": {
+    "last_scanned_commit": "2ccff748f0d59da34b01ce1fbceabcf19f452731",
+    "last_dispatch_event": null
+  },
+  "vellum": {
+    "last_scanned_commit": null,
+    "last_dispatch_event": null
+  },
+  "reconciled_at": null
+}

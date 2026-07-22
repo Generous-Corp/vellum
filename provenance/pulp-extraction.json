@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "status": "prepared",
+  "source": {
+    "repository": "https://github.com/Generous-Corp/pulp",
+    "commit": "2ccff748f0d59da34b01ce1fbceabcf19f452731",
+    "committed_at": "2026-07-22T13:19:20Z"
+  },
+  "history_extraction": {
+    "mechanism": "git-filter-repo",
+    "version": "2.47.0",
+    "tool_commit": "a40bce548d2c",
+    "filtered_seed_tip": "e4f8c96fcfd19bac433252c36fdf5bfa681e6d25",
+    "source_ref": "refs/heads/main",
+    "source_ref_tip": "2ccff748f0d59da34b01ce1fbceabcf19f452731",
+    "commit_map": "filter-repo-commit-map.txt",
+    "commit_map_sha256": "c2bfb2665fbecfdab2407c02143bea0f8bf9d18cc779abb12293ff29b7f909c7",
+    "ref_map": "filter-repo-ref-map.txt",
+    "ref_map_sha256": "ef7546204c7bcbdffbd7bee4d234a2956a201bf51a287de1385afe9a15b01582"
+  },
+  "cut": {
+    "manifest": "cut-manifest.json",
+    "manifest_sha256": "c2b392afa4c6a05d3079e31e24e21275b9a72e058adb4036539c7f5634e2d78d",
+    "path_specification": "cut-paths.txt",
+    "path_specification_sha256": "efe6dbb8d517bdee801dcc37ab4dd4a9a08868618e870acd9101a195d6caa753",
+    "entry_count": 235,
+    "unresolved_entry_count": 39
+  },
+  "authority": {
+    "repository": "https://github.com/Generous-Corp/vellum",
+    "state": "prepared",
+    "ownership_start_commit": null,
+    "pulp_activation_commit": null,
+    "accepted_by": null,
+    "accepted_at": null
+  },
+  "notes": [
+    "The exact Pulp source tip did not itself touch a selected path, so its commit-map row is zero; ref-map points refs/heads/main at its last retained selected-path ancestor.",
+    "This record preserves a prepared history seed. It does not claim that source authority has transferred."
+  ]
+}

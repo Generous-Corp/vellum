@@ -1,0 +1,35 @@
+name: Provenance and forbidden dependencies
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  provenance-verify:
+    name: provenance-verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out full preserved history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify extraction and active-source quarantine
+        run: |
+          python3 tools/provenance/test_verify_extraction.py
+          python3 tools/provenance/verify_extraction.py \
+            --output "$RUNNER_TEMP/provenance-report.json"
+
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: provenance-report
+          path: ${{ runner.temp }}/provenance-report.json
+          if-no-files-found: error
+          retention-days: 90

@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "state": "prepared",
+  "generated_at": null,
+  "pending": 0,
+  "overdue": 0,
+  "events": [],
+  "activation_blockers": [
+    "authority-not-transferred",
+    "dedicated-cross-repository-credentials-not-provisioned",
+    "private-repository-required-check-enforcement-unavailable",
+    "burl-disposition-not-ratified"
+  ]
+}

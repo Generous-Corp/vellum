@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "status": "prepared",
+  "dependencies": [
+    {
+      "name": "Inter Regular",
+      "path": "external/fonts/Inter-Regular.ttf",
+      "version": "4.001;git-9221beed3",
+      "license": "OFL-1.1",
+      "sha256": "40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82"
+    },
+    {
+      "name": "JetBrains Mono Regular",
+      "path": "external/fonts/JetBrainsMono-Regular.ttf",
+      "version": "2.304",
+      "license": "OFL-1.1",
+      "sha256": "a0bf60ef0f83c5ed4d7a75d45838548b1f6873372dfac88f71804491898d138f"
+    },
+    {
+      "name": "NanoSVG",
+      "paths": [
+        "external/nanosvg/nanosvg.h",
+        "external/nanosvg/nanosvgrast.h"
+      ],
+      "version": "vendored-snapshot",
+      "license": "Zlib",
+      "source_commit": "2ccff748f0d59da34b01ce1fbceabcf19f452731"
+    }
+  ],
+  "runtime_toolchain_dependencies": {
+    "state": "unresolved",
+    "required_before_sdk_release": [
+      "Skia artifact URL and checksum",
+      "Dawn/WebGPU distribution identity",
+      "Yoga version and checksum",
+      "JavaScript engine identity",
+      "CMake and Ninja bootstrap identities"
+    ]
+  }
+}
