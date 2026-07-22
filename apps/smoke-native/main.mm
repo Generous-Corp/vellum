@@ -1,7 +1,7 @@
 #import <Cocoa/Cocoa.h>
 #import <CoreGraphics/CoreGraphics.h>
 
-#include <pulp/canvas/cg_canvas.hpp>
+#include <vellum/graphics/core_graphics_canvas.hpp>
 #include <vellum/runtime/kernel.hpp>
 
 #include <cstdint>
@@ -13,8 +13,8 @@
 
 namespace {
 
-using pulp::canvas::Color;
-using pulp::canvas::CoreGraphicsCanvas;
+using vellum::graphics::Color;
+using vellum::graphics::CoreGraphicsCanvas;
 
 void paint_scene(CGContextRef context, float width, float height) {
     CoreGraphicsCanvas canvas(context, width, height);

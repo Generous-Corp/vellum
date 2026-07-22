@@ -15,9 +15,7 @@ include(CMakePackageConfigHelpers)
 
 option(VELLUM_BUILD_TESTS "Build Vellum unit and smoke tests" ${BUILD_TESTING})
 option(VELLUM_BUILD_SMOKE_NATIVE "Build the macOS native smoke application" ON)
-option(VELLUM_ENABLE_RETAINED_CANVAS
-       "Build the retained Pulp-origin canvas with the dependency-free platform backend"
-       ON)
+option(VELLUM_ENABLE_GRAPHICS "Build the initial platform graphics backend" ON)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -27,24 +25,12 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 add_subdirectory(foundation)
 add_subdirectory(runtime)
 
-if(VELLUM_ENABLE_RETAINED_CANVAS)
-    # The extracted canvas is the first reusable Pulp-origin graphics slice.
-    # This milestone intentionally selects its dependency-free platform backend:
-    # Skia/Dawn are not present in the filtered repository yet. Keep the old
-    # pulp::runtime alias private to this compatibility boundary; new code links
-    # Vellum::Runtime and Vellum::Graphics.
-    set(PULP_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
-    set(PULP_HAS_SKIA OFF)
-    set(PULP_HAS_TEXT_SHAPING OFF)
-    set(PULP_HAS_SHEENBIDI OFF)
-    set(PULP_LOTTIE OFF)
-    add_subdirectory(core/canvas)
-    set_target_properties(pulp-canvas PROPERTIES EXPORT_NAME Graphics)
-    add_library(Vellum::Graphics ALIAS pulp-canvas)
+if(VELLUM_ENABLE_GRAPHICS)
+    add_subdirectory(graphics)
 endif()
 
 if(VELLUM_BUILD_SMOKE_NATIVE)
-    if(APPLE AND VELLUM_ENABLE_RETAINED_CANVAS)
+    if(APPLE AND VELLUM_ENABLE_GRAPHICS)
         add_subdirectory(apps/smoke-native)
     else()
         message(STATUS
@@ -76,8 +62,8 @@ if(VELLUM_BUILD_TESTS)
 endif()
 
 set(_vellum_install_targets vellum-foundation vellum-runtime)
-if(VELLUM_ENABLE_RETAINED_CANVAS)
-    list(APPEND _vellum_install_targets pulp-canvas)
+if(VELLUM_ENABLE_GRAPHICS)
+    list(APPEND _vellum_install_targets vellum-graphics)
 endif()
 
 install(TARGETS ${_vellum_install_targets}
@@ -91,8 +77,8 @@ install(DIRECTORY foundation/include/ DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
 install(FILES "${VELLUM_GENERATED_VERSION_HEADER}"
     DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/vellum/foundation")
 install(DIRECTORY runtime/include/ DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
-if(VELLUM_ENABLE_RETAINED_CANVAS)
-    install(DIRECTORY core/canvas/include/ DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+if(VELLUM_ENABLE_GRAPHICS)
+    install(DIRECTORY graphics/include/ DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
 endif()
 
 configure_package_config_file(

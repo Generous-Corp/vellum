@@ -2,10 +2,6 @@ add_library(vellum-runtime
     src/kernel.cpp)
 add_library(Vellum::Runtime ALIAS vellum-runtime)
 
-# Compatibility alias for the retained canvas target. This is deliberately not
-# an installed public namespace: installed consumers use Vellum::Runtime.
-add_library(pulp::runtime ALIAS vellum-runtime)
-
 set_target_properties(vellum-runtime PROPERTIES
     EXPORT_NAME Runtime)
 
