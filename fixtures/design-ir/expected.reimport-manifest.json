@@ -1,0 +1,96 @@
+{
+  "added": [
+    "main/card-c",
+    "main/create-button-v2",
+    "main/generated-1b9akz8",
+    "main/generated-o6k134",
+    "main/toolbar"
+  ],
+  "aliases": [
+    {
+      "from": "main/create-button-v1",
+      "previousExists": true,
+      "status": "approved",
+      "to": "main/create-button-v2"
+    }
+  ],
+  "bindings": [
+    {
+      "action": "boards.create",
+      "originalNodeId": "main/create-button-v1",
+      "resolvedNodeId": "main/create-button-v2"
+    },
+    {
+      "action": "settings.open",
+      "originalNodeId": "main/settings-button",
+      "resolvedNodeId": "main/settings-button"
+    }
+  ],
+  "heuristicCandidates": [
+    {
+      "ambiguous": true,
+      "candidates": [
+        { "id": "main/generated-1b9akz8", "score": 0.7 },
+        { "id": "main/generated-o6k134", "score": 0.7 }
+      ],
+      "oldId": "main/generated-npmrd5",
+      "requiresReview": true
+    }
+  ],
+  "moved": [
+    {
+      "from": { "index": 1, "parentId": "main/app-root" },
+      "id": "main/cards",
+      "to": { "index": 2, "parentId": "main/app-root" }
+    },
+    {
+      "from": { "index": 1, "parentId": "main/header" },
+      "id": "main/settings-button",
+      "to": { "index": 0, "parentId": "main/toolbar" }
+    }
+  ],
+  "removed": [
+    "main/create-button-v1",
+    "main/generated-npmrd5",
+    "main/legacy-tip"
+  ],
+  "retained": [
+    "main/app-root",
+    "main/card-a",
+    "main/card-b",
+    "main/cards",
+    "main/header",
+    "main/settings-button",
+    "main/title"
+  ],
+  "summary": {
+    "added": 5,
+    "aliasesApplied": 1,
+    "changed": 4,
+    "conflicts": 0,
+    "heuristicCandidates": 1,
+    "moved": 2,
+    "removed": 3,
+    "renamed": 2,
+    "retained": 7,
+    "tokenChanges": 2
+  },
+  "tokenLayers": {
+    "diagnostics": [],
+    "primitive": {
+      "main.color.accent": "#14b8a6",
+      "main.color.accentText": "#0f172a",
+      "main.color.canvas": "#0f172a",
+      "main.color.surface": "#1e293b",
+      "main.radius.card": { "unit": "px", "value": 12 }
+    },
+    "semantic": {
+      "color.action": "#14b8a6",
+      "color.workspace": "#0f172a"
+    },
+    "theme": {
+      "button.primary.background": "#14b8a6",
+      "button.primary.foreground": "#ffffff"
+    }
+  }
+}

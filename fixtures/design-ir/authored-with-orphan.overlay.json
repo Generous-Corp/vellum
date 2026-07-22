@@ -1,0 +1,23 @@
+{
+  "$schema": "https://vellum.dev/schemas/design-ir/authored-overlay/v1",
+  "schemaVersion": 1,
+  "sourceKey": "main",
+  "aliases": {
+    "main/create-button-v1": "main/create-button-v2"
+  },
+  "bindings": [
+    {
+      "nodeId": "main/create-button-v1",
+      "event": "press",
+      "action": "boards.create"
+    },
+    {
+      "nodeId": "main/legacy-tip",
+      "event": "press",
+      "action": "tips.dismiss"
+    }
+  ],
+  "overrides": [],
+  "semanticTokens": {},
+  "themeOverrides": {}
+}

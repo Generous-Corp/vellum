@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vellum.dev/schemas/design-ir/authored-overlay/v1",
+  "title": "Vellum authored design overlay v1",
+  "description": "Developer-owned bindings, reviewed identity aliases, structured visual overrides, and theme mappings. Import and reimport never rewrite this file.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "schemaVersion",
+    "sourceKey",
+    "aliases",
+    "bindings",
+    "overrides",
+    "semanticTokens",
+    "themeOverrides"
+  ],
+  "properties": {
+    "$schema": { "const": "https://vellum.dev/schemas/design-ir/authored-overlay/v1" },
+    "schemaVersion": { "const": 1 },
+    "sourceKey": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$" },
+    "aliases": {
+      "type": "object",
+      "additionalProperties": { "type": "string", "minLength": 3 }
+    },
+    "bindings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["nodeId", "event", "action"],
+        "properties": {
+          "nodeId": { "type": "string", "minLength": 3 },
+          "event": { "type": "string", "minLength": 1 },
+          "action": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": true
+      }
+    },
+    "overrides": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["nodeId", "path", "value"],
+        "properties": {
+          "nodeId": { "type": "string", "minLength": 3 },
+          "path": {
+            "type": "string",
+            "pattern": "^properties\\.(?!(?:__proto__|constructor|prototype)(?:\\.|$))[A-Za-z_][A-Za-z0-9_-]*(?:\\.(?!(?:__proto__|constructor|prototype)(?:\\.|$))[A-Za-z_][A-Za-z0-9_-]*)*$"
+          },
+          "value": {}
+        }
+      }
+    },
+    "semanticTokens": { "type": "object", "additionalProperties": true },
+    "themeOverrides": { "type": "object", "additionalProperties": true }
+  }
+}

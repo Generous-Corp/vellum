@@ -1,0 +1,37 @@
+{
+  "$schema": "https://vellum.dev/schemas/design-ir/authored-overlay/v1",
+  "schemaVersion": 1,
+  "sourceKey": "main",
+  "aliases": {
+    "main/create-button-v1": "main/create-button-v2"
+  },
+  "bindings": [
+    {
+      "nodeId": "main/create-button-v1",
+      "event": "press",
+      "action": "boards.create",
+      "handlerModule": "src/commands/boards.ts"
+    },
+    {
+      "nodeId": "main/settings-button",
+      "event": "press",
+      "action": "settings.open",
+      "handlerModule": "src/commands/settings.ts"
+    }
+  ],
+  "overrides": [
+    {
+      "nodeId": "main/card-a",
+      "path": "properties.paint.borderRadius",
+      "value": 20
+    }
+  ],
+  "semanticTokens": {
+    "color.action": "{main.color.accent}",
+    "color.workspace": "{main.color.canvas}"
+  },
+  "themeOverrides": {
+    "button.primary.background": "{color.action}",
+    "button.primary.foreground": "#ffffff"
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "name": "@vellum/design-ir",
+  "version": "0.1.0-experimental.0",
+  "description": "Canonical, deterministic DesignIR and safe overlay-aware reimport primitives for Vellum",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "import": "./src/index.js"
+    },
+    "./schema/design-ir-v1": "./schema/design-ir-v1.schema.json",
+    "./schema/authored-overlay-v1": "./schema/authored-overlay-v1.schema.json",
+    "./schema/reimport-report-v1": "./schema/reimport-report-v1.schema.json"
+  },
+  "bin": {
+    "vellum-design-ir": "./bin/vellum-design-ir.js"
+  },
+  "files": [
+    "README.md",
+    "bin",
+    "schema",
+    "src"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "test:sterile": "node scripts/sterile-consumer.mjs",
+    "check": "npm test && npm run test:sterile"
+  },
+  "dependencies": {}
+}

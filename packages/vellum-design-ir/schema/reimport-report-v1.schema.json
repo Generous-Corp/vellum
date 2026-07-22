@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vellum.dev/schemas/design-ir/reimport-report/v1",
+  "title": "Vellum DesignIR reimport report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "schemaVersion",
+    "accepted",
+    "sourceKey",
+    "previousRevision",
+    "nextRevision",
+    "authoredOverlay",
+    "changes",
+    "aliasesApplied",
+    "conflicts",
+    "heuristicCandidates",
+    "summary"
+  ],
+  "properties": {
+    "$schema": { "const": "https://vellum.dev/schemas/design-ir/reimport-report/v1" },
+    "schemaVersion": { "const": 1 },
+    "accepted": { "type": "boolean" },
+    "sourceKey": { "type": "string" },
+    "previousRevision": { "type": "string" },
+    "nextRevision": { "type": "string" },
+    "authoredOverlay": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["canonicalFingerprint", "preservedByteForByte"],
+      "properties": {
+        "canonicalFingerprint": { "type": "string", "pattern": "^fnv1a32:" },
+        "preservedByteForByte": { "const": true }
+      }
+    },
+    "changes": { "type": "object" },
+    "aliasesApplied": { "type": "array" },
+    "conflicts": { "type": "array" },
+    "heuristicCandidates": { "type": "array" },
+    "summary": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } }
+  }
+}

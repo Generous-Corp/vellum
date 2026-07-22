@@ -1,0 +1,125 @@
+{
+  "source": {
+    "key": "main",
+    "namespace": "main",
+    "adapter": "figma-plugin",
+    "adapterVersion": "1.0.0",
+    "formatVersion": "figma-plugin-export-v1",
+    "revision": "palette-board-a",
+    "snapshotHash": "sha256:fixture-revision-a",
+    "sourceUri": "figma://fixture/palette-board"
+  },
+  "root": {
+    "kind": "view",
+    "sourceId": "app-root",
+    "name": "Palette Board",
+    "properties": {
+      "layout": { "display": "flex", "direction": "column", "gap": 16 },
+      "paint": { "backgroundColor": "{color.canvas}" }
+    },
+    "children": [
+      {
+        "kind": "view",
+        "sourceId": "header",
+        "name": "Header",
+        "properties": { "layout": { "display": "flex", "direction": "row" } },
+        "children": [
+          {
+            "kind": "text",
+            "sourceId": "title",
+            "name": "Title",
+            "text": "Palette Board",
+            "properties": { "text": { "fontSize": 28, "fontWeight": 700 } },
+            "children": []
+          },
+          {
+            "kind": "button",
+            "sourceId": "settings-button",
+            "name": "Settings",
+            "text": "Settings",
+            "role": "button",
+            "properties": { "paint": { "backgroundColor": "{color.surface}" } },
+            "children": []
+          }
+        ]
+      },
+      {
+        "kind": "view",
+        "sourceId": "cards",
+        "name": "Cards",
+        "properties": { "layout": { "display": "grid", "columns": 2, "gap": 12 } },
+        "children": [
+          {
+            "kind": "view",
+            "sourceId": "card-a",
+            "name": "Cyan",
+            "properties": { "paint": { "backgroundColor": "#38bdf8", "borderRadius": 8 } },
+            "children": []
+          },
+          {
+            "kind": "view",
+            "sourceId": "card-b",
+            "name": "Violet",
+            "properties": { "paint": { "backgroundColor": "#8b5cf6", "borderRadius": 8 } },
+            "children": []
+          },
+          {
+            "kind": "text",
+            "sourceId": "legacy-tip",
+            "name": "Tip",
+            "text": "Drag colors to reorder",
+            "properties": { "text": { "fontSize": 12 } },
+            "children": []
+          },
+          {
+            "kind": "view",
+            "name": "Layout",
+            "text": "Automatic",
+            "properties": { "semantics": { "purpose": "layout-choice" } },
+            "children": []
+          }
+        ]
+      },
+      {
+        "kind": "button",
+        "sourceId": "create-button-v1",
+        "name": "Create board",
+        "text": "Create board",
+        "role": "button",
+        "properties": { "paint": { "backgroundColor": "{color.accent}" } },
+        "children": []
+      }
+    ]
+  },
+  "tokens": {
+    "color": {
+      "canvas": { "$type": "color", "$value": "#0f172a" },
+      "surface": { "$type": "color", "$value": "#1e293b" },
+      "accent": { "$type": "color", "$value": "#22c55e" },
+      "accentText": { "$type": "color", "$value": "{color.canvas}" }
+    },
+    "radius": {
+      "card": { "$type": "dimension", "$value": { "value": 8, "unit": "px" } }
+    }
+  },
+  "assets": [
+    {
+      "id": "app-mark",
+      "contentHash": "sha256:fixture-mark",
+      "mimeType": "image/svg+xml",
+      "uri": "assets/app-mark.svg",
+      "width": 32,
+      "height": 32
+    }
+  ],
+  "diagnostics": [
+    {
+      "code": "blur-lowered",
+      "disposition": "lowered",
+      "message": "Background blur is represented by the portable blur effect",
+      "path": "$.root",
+      "property": "effects.backgroundBlur",
+      "severity": "info"
+    }
+  ]
+}

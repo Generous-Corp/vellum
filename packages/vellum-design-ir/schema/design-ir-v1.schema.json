@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vellum.dev/schemas/design-ir/v1",
+  "title": "Vellum DesignIR v1",
+  "description": "Audio-free canonical retained-scene interchange generated from one immutable design source snapshot.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "schemaVersion",
+    "compiler",
+    "source",
+    "root",
+    "tokens",
+    "assets",
+    "diagnostics",
+    "lossReport"
+  ],
+  "properties": {
+    "$schema": { "const": "https://vellum.dev/schemas/design-ir/v1" },
+    "schemaVersion": { "const": 1 },
+    "compiler": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "const": "@vellum/design-ir" },
+        "version": { "type": "string", "minLength": 1 }
+      }
+    },
+    "source": { "$ref": "#/$defs/source" },
+    "root": { "$ref": "#/$defs/node" },
+    "tokens": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/token" }
+    },
+    "assets": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/asset" }
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/diagnostic" }
+    },
+    "lossReport": { "$ref": "#/$defs/lossReport" }
+  },
+  "$defs": {
+    "jsonValue": {
+      "oneOf": [
+        { "type": ["null", "boolean", "number", "string"] },
+        { "type": "array", "items": { "$ref": "#/$defs/jsonValue" } },
+        { "type": "object", "additionalProperties": { "$ref": "#/$defs/jsonValue" } }
+      ]
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "namespace", "adapter", "adapterVersion", "formatVersion", "revision"],
+      "properties": {
+        "key": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$" },
+        "namespace": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$" },
+        "adapter": { "type": "string", "minLength": 1 },
+        "adapterVersion": { "type": "string", "minLength": 1 },
+        "formatVersion": { "type": "string", "minLength": 1 },
+        "revision": { "type": "string", "minLength": 1 },
+        "snapshotHash": { "type": "string" },
+        "sourceUri": { "type": "string" },
+        "providerFileKey": { "type": "string" },
+        "providerNodeId": { "type": "string" },
+        "provenance": { "$ref": "#/$defs/jsonValue" }
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["strategy"],
+      "properties": {
+        "strategy": { "enum": ["provider", "semantic", "structural"] },
+        "sourceId": { "type": "string" },
+        "semanticId": { "type": "string" },
+        "fingerprint": { "type": "string" },
+        "ordinal": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "identity", "kind", "properties", "children"],
+      "properties": {
+        "id": { "type": "string", "minLength": 3 },
+        "identity": { "$ref": "#/$defs/identity" },
+        "kind": { "type": "string", "minLength": 1 },
+        "name": { "type": "string" },
+        "role": { "type": "string" },
+        "text": { "type": "string" },
+        "properties": { "type": "object", "additionalProperties": { "$ref": "#/$defs/jsonValue" } },
+        "extensions": { "type": "object", "additionalProperties": { "$ref": "#/$defs/jsonValue" } },
+        "children": { "type": "array", "items": { "$ref": "#/$defs/node" } }
+      }
+    },
+    "token": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["$type", "$value", "sourcePath"],
+      "properties": {
+        "$type": { "type": "string", "minLength": 1 },
+        "$value": { "$ref": "#/$defs/jsonValue" },
+        "$description": { "type": "string" },
+        "sourcePath": { "type": "string", "minLength": 1 }
+      }
+    },
+    "asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "contentHash": { "type": "string" },
+        "mimeType": { "type": "string" },
+        "uri": { "type": "string" },
+        "width": { "type": "number", "minimum": 0 },
+        "height": { "type": "number", "minimum": 0 },
+        "provenance": { "$ref": "#/$defs/jsonValue" }
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "disposition", "message", "path", "severity"],
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "disposition": { "enum": ["portable", "lowered", "rasterized", "web-only", "extension", "unsupported"] },
+        "message": { "type": "string", "minLength": 1 },
+        "path": { "type": "string", "minLength": 1 },
+        "severity": { "enum": ["info", "warning", "error"] },
+        "property": { "type": "string" },
+        "remediation": { "$ref": "#/$defs/jsonValue" },
+        "sourceLocation": { "$ref": "#/$defs/jsonValue" },
+        "detail": { "$ref": "#/$defs/jsonValue" }
+      }
+    },
+    "lossReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["byDisposition", "bySeverity", "lossCount", "losses", "totalDiagnostics"],
+      "properties": {
+        "byDisposition": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
+        "bySeverity": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
+        "lossCount": { "type": "integer", "minimum": 0 },
+        "losses": { "type": "array", "items": { "$ref": "#/$defs/diagnostic" } },
+        "totalDiagnostics": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

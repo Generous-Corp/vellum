@@ -1,0 +1,139 @@
+{
+  "diagnostics": [
+    {
+      "severity": "info",
+      "path": "$.root",
+      "message": "Background blur is represented by the portable blur effect",
+      "disposition": "lowered",
+      "code": "blur-lowered",
+      "property": "effects.backgroundBlur"
+    }
+  ],
+  "assets": [
+    {
+      "width": 32,
+      "uri": "assets/app-mark.svg",
+      "mimeType": "image/svg+xml",
+      "id": "app-mark",
+      "height": 32,
+      "contentHash": "sha256:fixture-mark"
+    }
+  ],
+  "tokens": {
+    "radius": {
+      "card": { "$value": { "unit": "px", "value": 12 }, "$type": "dimension" }
+    },
+    "color": {
+      "surface": { "$value": "#1e293b", "$type": "color" },
+      "canvas": { "$value": "#0f172a", "$type": "color" },
+      "accentText": { "$value": "{color.canvas}", "$type": "color" },
+      "accent": { "$value": "#14b8a6", "$type": "color" }
+    }
+  },
+  "root": {
+    "sourceId": "app-root",
+    "properties": {
+      "paint": { "backgroundColor": "{color.canvas}" },
+      "layout": { "gap": 16, "direction": "column", "display": "flex" }
+    },
+    "name": "Palette Board",
+    "kind": "view",
+    "children": [
+      {
+        "sourceId": "header",
+        "properties": { "layout": { "display": "flex", "direction": "row" } },
+        "name": "Header",
+        "kind": "view",
+        "children": [
+          {
+            "sourceId": "title",
+            "properties": { "text": { "fontWeight": 700, "fontSize": 28 } },
+            "name": "Title",
+            "kind": "text",
+            "text": "Palette Workspace",
+            "children": []
+          }
+        ]
+      },
+      {
+        "sourceId": "toolbar",
+        "properties": { "layout": { "display": "flex", "direction": "row" } },
+        "name": "Toolbar",
+        "kind": "view",
+        "children": [
+          {
+            "sourceId": "settings-button",
+            "role": "button",
+            "properties": { "paint": { "backgroundColor": "{color.surface}" } },
+            "name": "Settings",
+            "kind": "button",
+            "text": "Settings",
+            "children": []
+          }
+        ]
+      },
+      {
+        "sourceId": "cards",
+        "properties": { "layout": { "gap": 12, "display": "grid", "columns": 3 } },
+        "name": "Swatches",
+        "kind": "view",
+        "children": [
+          {
+            "sourceId": "card-a",
+            "properties": { "paint": { "borderRadius": 12, "backgroundColor": "#38bdf8" } },
+            "name": "Cyan",
+            "kind": "view",
+            "children": []
+          },
+          {
+            "sourceId": "card-b",
+            "properties": { "paint": { "borderRadius": 12, "backgroundColor": "#8b5cf6" } },
+            "name": "Purple",
+            "kind": "view",
+            "children": []
+          },
+          {
+            "sourceId": "card-c",
+            "properties": { "paint": { "borderRadius": 12, "backgroundColor": "#f97316" } },
+            "name": "Orange",
+            "kind": "view",
+            "children": []
+          },
+          {
+            "properties": { "semantics": { "purpose": "layout-choice" } },
+            "name": "Layout",
+            "kind": "view",
+            "text": "Grid",
+            "children": []
+          },
+          {
+            "properties": { "semantics": { "purpose": "layout-choice" } },
+            "name": "Layout",
+            "kind": "view",
+            "text": "List",
+            "children": []
+          }
+        ]
+      },
+      {
+        "sourceId": "create-button-v2",
+        "role": "button",
+        "properties": { "paint": { "backgroundColor": "{color.accent}" } },
+        "name": "Create board",
+        "kind": "button",
+        "text": "Create board",
+        "children": []
+      }
+    ]
+  },
+  "source": {
+    "sourceUri": "figma://fixture/palette-board",
+    "snapshotHash": "sha256:fixture-revision-b",
+    "revision": "palette-board-b",
+    "namespace": "main",
+    "key": "main",
+    "formatVersion": "figma-plugin-export-v1",
+    "adapterVersion": "1.0.0",
+    "adapter": "figma-plugin"
+  }
+}
