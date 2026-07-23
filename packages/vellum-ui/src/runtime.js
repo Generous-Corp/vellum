@@ -335,6 +335,11 @@ class Runtime {
         if (typeof this.applicationId !== 'string' || this.applicationId.length === 0) {
             throw new TypeError('Vellum application id must be a non-empty string');
         }
+        this.applicationStateVersion = options.stateVersion ?? '1';
+        if (typeof this.applicationStateVersion !== 'string' ||
+            this.applicationStateVersion.length === 0) {
+            throw new TypeError('Vellum application stateVersion must be a non-empty string');
+        }
         this.frames = new Map();
         this.handlers = new Map();
         this.namedActions = new Map(Object.entries(options.actions ?? {}));
@@ -344,7 +349,6 @@ class Runtime {
             }
         }
         this.model = durableValue(options.initialState ?? null, 'initialState');
-        this.componentTypes = new Map();
         this.renderState = null;
         this.mutationFrames = null;
         this.dirty = true;
@@ -360,13 +364,13 @@ class Runtime {
         const identity = explicit === undefined
             ? `${name}@${fnv1a32(Function.prototype.toString.call(component))}`
             : `explicit:${name}`;
-        const prior = this.componentTypes.get(identity);
+        const prior = this.renderState?.componentTypes.get(identity);
         if (prior !== undefined && prior !== component) {
             throw new Error(
                 `ambiguous Vellum component identity: ${name}; assign distinct vellumId values`,
             );
         }
-        this.componentTypes.set(identity, component);
+        this.renderState?.componentTypes.set(identity, component);
         return identity;
     }
 
@@ -397,6 +401,7 @@ class Runtime {
             handlers: new Map(),
             nodeIds: new Set(),
             visitedFrames: new Set(),
+            componentTypes: new Map(),
             frameStack: [],
         };
         const priorRuntime = renderingRuntime;
@@ -431,10 +436,16 @@ class Runtime {
     }
 
     render() {
+        if (this.mutationFrames !== null || this.renderState !== null) {
+            throw new Error('reentrant Vellum host operations are not supported');
+        }
         return this.commitRender();
     }
 
     dispatch(action, payload) {
+        if (this.mutationFrames !== null || this.renderState !== null) {
+            throw new Error('reentrant Vellum host operations are not supported');
+        }
         const workingFrames = cloneFrames(this.frames);
         let workingModel = this.model;
         this.mutationFrames = workingFrames;
@@ -459,6 +470,9 @@ class Runtime {
     }
 
     snapshot() {
+        if (this.mutationFrames !== null || this.renderState !== null) {
+            throw new Error('reentrant Vellum host operations are not supported');
+        }
         if (this.lastTree === null) this.render();
         const stateFrames = [...this.frames.entries()]
             .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
@@ -473,6 +487,7 @@ class Runtime {
         return {
             schema_version: SNAPSHOT_SCHEMA,
             application_id: this.applicationId,
+            application_state_version: this.applicationStateVersion,
             layout_fingerprint: frameFingerprint(this.frames),
             model: this.model,
             frames: stateFrames,
@@ -480,12 +495,21 @@ class Runtime {
     }
 
     restore(snapshot) {
+        if (this.mutationFrames !== null || this.renderState !== null) {
+            throw new Error('reentrant Vellum host operations are not supported');
+        }
         assertPlainJson(snapshot, 'state');
         if (!snapshot || snapshot.schema_version !== SNAPSHOT_SCHEMA ||
             snapshot.application_id !== this.applicationId ||
             typeof snapshot.layout_fingerprint !== 'string' ||
             !Array.isArray(snapshot.frames)) {
             throw new Error('Vellum state snapshot is incompatible with this application layout');
+        }
+        if (snapshot.application_state_version !== this.applicationStateVersion) {
+            throw new Error(
+                `Vellum state snapshot version ${snapshot.application_state_version ?? 'missing'} ` +
+                `does not match application version ${this.applicationStateVersion}`,
+            );
         }
         const frames = new Map();
         const seen = new Set();

@@ -458,3 +458,108 @@ test('rejects style accessors without invocation and safely preserves __proto__'
     const tree = JSON.parse(bridge.renderJSON()).tree;
     assert.equal(tree.style.__proto__, 'literal');
 });
+
+test('stages component identity and permits intentional stable replacements', () => {
+    function First() {
+        const [value, setValue] = useState('FIRST');
+        return jsx(Button, {
+            id: 'replacement',
+            onPress: () => setValue((prior) => `${prior}!`),
+            children: value,
+        });
+    }
+    function Second() {
+        const [value] = useState('SECOND');
+        return jsx(Button, { id: 'replacement', onPress() {}, children: value });
+    }
+    First.vellumId = 'example.replacement';
+    Second.vellumId = 'example.replacement';
+
+    let component = First;
+    let failCandidate = false;
+    function Application() {
+        if (failCandidate) {
+            return jsx(Stack, {
+                id: 'failed-candidate',
+                children: [
+                    jsx(First, {}),
+                    jsx(Text, { id: 'duplicate-after-component', children: 'A' }),
+                    jsx(Text, { id: 'duplicate-after-component', children: 'B' }),
+                ],
+            });
+        }
+        return jsx(component, {});
+    }
+
+    const bridge = mount(Application);
+    let tree = JSON.parse(bridge.renderJSON()).tree;
+    tree = JSON.parse(bridge.dispatchJSON(JSON.stringify({
+        protocol, action: tree.events.press,
+    }))).tree;
+    assert.equal(tree.children[0].text, 'FIRST!');
+
+    failCandidate = true;
+    assert.throws(() => bridge.renderJSON(), /duplicate Vellum node id/);
+    failCandidate = false;
+    component = Second;
+    tree = JSON.parse(bridge.renderJSON()).tree;
+    assert.equal(tree.children[0].text, 'FIRST!');
+});
+
+test('rejects reentrant host operations without losing or partially committing state', () => {
+    let bridge;
+    let innerAction;
+    function Application() {
+        const [outer, setOuter] = useState(0);
+        const [inner, setInner] = useState(0);
+        return jsx(Stack, {
+            id: 'reentrant',
+            children: [
+                jsx(Button, {
+                    id: 'outer',
+                    onPress() {
+                        setOuter((value) => value + 1);
+                        bridge.dispatchJSON(JSON.stringify({ protocol, action: innerAction }));
+                        setOuter((value) => value + 1);
+                    },
+                    children: `Outer ${outer}`,
+                }),
+                jsx(Button, {
+                    id: 'inner',
+                    onPress: () => setInner((value) => value + 1),
+                    children: `Inner ${inner}`,
+                }),
+            ],
+        });
+    }
+    bridge = mount(Application);
+    let tree = JSON.parse(bridge.renderJSON()).tree;
+    innerAction = tree.children[1].events.press;
+    assert.throws(
+        () => bridge.dispatchJSON(JSON.stringify({
+            protocol, action: tree.children[0].events.press,
+        })),
+        /reentrant Vellum host operations/,
+    );
+    tree = JSON.parse(bridge.renderJSON()).tree;
+    assert.equal(tree.children[0].children[0].text, 'Outer 0');
+    assert.equal(tree.children[1].children[0].text, 'Inner 0');
+});
+
+test('fails closed when persisted application state versions do not match', () => {
+    function Application() {
+        return jsx(View, { id: 'versioned' });
+    }
+    const first = mount(createApp({
+        id: 'versioned-app', stateVersion: '1', render: Application,
+    }));
+    first.renderJSON();
+    const snapshot = first.snapshotStateJSON();
+    const second = mount(createApp({
+        id: 'versioned-app', stateVersion: '2', render: Application,
+    }));
+    assert.throws(
+        () => second.restoreStateJSON(snapshot),
+        /snapshot version 1 does not match application version 2/,
+    );
+});

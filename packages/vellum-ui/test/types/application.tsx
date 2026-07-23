@@ -26,6 +26,8 @@ Card.vellumId = 'example.card';
 
 type Model = { screens: number; metadata: JsonValue };
 const app = createApp<Model>({
+    id: 'example.types',
+    stateVersion: '1',
     initialState: { screens: 1, metadata: null },
     actions: {
         addScreen(model, payload) {

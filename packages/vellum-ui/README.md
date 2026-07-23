@@ -29,15 +29,18 @@ already carry them; hand-written components should choose IDs that survive
 refactors and reimports. Event handlers and hook state remain developer-owned
 and are never written into generated DesignIR files.
 
-Applications that persist snapshots should pass a stable `id` to `createApp`.
+Applications that persist snapshots should pass a stable `id` and
+`stateVersion` to `createApp`; incompatible versions fail closed so the
+application can run an explicit migration before restore.
 Components normally derive identity from their name and implementation; set a
 unique static `vellumId` when state must survive an intentional implementation
 replacement or reimport.
 
 Run `npm ci && npm test` to exercise runtime, strict TypeScript/JSX, and
 classic-script bundle checks. `npm run build:native-test -- <output.js>` builds
-the fixture consumed by the native JavaScriptCore integration test; it is not
-an application-facing bundler command.
+a fixture suitable for the repository's native JavaScriptCore integration lane;
+this package-level check itself executes under Node and is not an
+application-facing bundler command.
 
 The native bridge calls `globalThis.__vellum.renderJSON()`,
 `dispatchJSON(...)`, `snapshotStateJSON()`, and `restoreStateJSON(...)`. Those

@@ -54,6 +54,7 @@ export declare const Canvas: Component;
 
 export interface AppOptions<Model extends JsonValue = JsonValue> {
     id?: string;
+    stateVersion?: string;
     initialState?: Model;
     actions?: Record<string, (model: Model, payload: EventPayload) => Model | void>;
     render(model: Model): VellumElement;
