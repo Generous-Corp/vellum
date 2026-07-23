@@ -60,6 +60,12 @@ class CliTests(unittest.TestCase):
             lock = json.loads((first / "vellum.lock.json").read_text())
             self.assertEqual(lock["project"]["id"], hashlib.sha256(b"vellum-project-v1:example-app").hexdigest()[:24])
             self.assertEqual(lock["framework"]["version"], "0.1.0")
+            self.assertEqual(lock["framework"]["artifact"], {
+                "verified": False,
+                "sha256": None,
+                "target": "local-development",
+                "sourceCommit": None,
+            })
 
     def test_create_refuses_nonempty_destination(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -174,6 +180,8 @@ class CliTests(unittest.TestCase):
                 "framework_version": "0.2.0",
                 "cli_version": "0.2.0",
                 "cli_api": 1,
+                "source_commit": "a" * 40,
+                "target": "test-host",
                 "capabilities": {
                     "authoring_cli": True,
                     "cmake_sdk": True,
@@ -189,9 +197,67 @@ class CliTests(unittest.TestCase):
                     },
                 },
             }), encoding="utf-8")
+            (sdk / "install-manifest.json").write_text(json.dumps({
+                "schema": "vellum.sdk-install.v1",
+                "verified": True,
+                "artifact": "vellum-sdk-0.2.0-test-host.tar.gz",
+                "artifact_sha256": "b" * 64,
+                "framework_version": "0.2.0",
+                "target": "test-host",
+                "source_commit": "a" * 40,
+            }), encoding="utf-8")
             completed = invoke("build", "--json", cwd=project, env={"VELLUM_SDK_ROOT": str(sdk)})
             self.assertEqual(completed.returncode, 3)
             self.assertEqual(json.loads(completed.stdout)["status"], "sdk_version_mismatch")
+
+    def test_project_pins_and_enforces_exact_installed_artifact_sha(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sdk = root / "sdk"
+            sdk.mkdir()
+            capabilities = {
+                "authoring_cli": True,
+                "cmake_sdk": True,
+                "gpu_renderer": False,
+                "commands": {
+                    "import": True, "reimport": True, "build": False,
+                    "run": False, "test": False, "capture": False, "package": False,
+                },
+            }
+            metadata = {
+                "schema": "vellum.sdk-artifact.v1",
+                "framework_version": "0.1.0",
+                "cli_version": "0.1.0-dev",
+                "cli_api": 1,
+                "source_commit": "a" * 40,
+                "target": "test-host",
+                "capabilities": capabilities,
+            }
+            manifest = {
+                "schema": "vellum.sdk-install.v1",
+                "verified": True,
+                "artifact": "vellum-sdk-0.1.0-test-host.tar.gz",
+                "artifact_sha256": "b" * 64,
+                "framework_version": "0.1.0",
+                "target": "test-host",
+                "source_commit": "a" * 40,
+            }
+            (sdk / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+            manifest_path = sdk / "install-manifest.json"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            project = root / "app"
+            installed_env = {"VELLUM_SDK_ROOT": str(sdk)}
+            created = invoke("create", "Pinned artifact", "-d", str(project), "--json", env=installed_env)
+            self.assertEqual(created.returncode, 0, created.stderr)
+            lock = json.loads((project / "vellum.lock.json").read_text(encoding="utf-8"))
+            self.assertEqual(lock["framework"]["artifact"]["sha256"], "b" * 64)
+            self.assertTrue(lock["framework"]["artifact"]["verified"])
+
+            manifest["artifact_sha256"] = "c" * 64
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            mismatch = invoke("build", "--json", cwd=project, env=installed_env)
+            self.assertEqual(mismatch.returncode, 3)
+            self.assertEqual(json.loads(mismatch.stdout)["status"], "sdk_artifact_mismatch")
 
     def test_cli_api_mismatch_requires_migration_but_framework_patch_does_not(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

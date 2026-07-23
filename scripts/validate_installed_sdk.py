@@ -57,6 +57,23 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
             "--install-dir", str(prefix),
         ], cwd=root)
 
+        install_manifest_path = prefix / "lib/vellum/install-manifest.json"
+        try:
+            install_manifest = json.loads(install_manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise ValidationError(f"installed SDK has no valid install manifest: {error}") from error
+        expected_manifest = {
+            "schema": "vellum.sdk-install.v1",
+            "verified": True,
+            "artifact": verification["artifact"],
+            "artifact_sha256": verification["sha256"],
+            "framework_version": verification["framework_version"],
+            "target": verification["target"],
+            "source_commit": verification["source_commit"],
+        }
+        if install_manifest != expected_manifest:
+            raise ValidationError("installed SDK identity does not match the verified archive")
+
         contamination = installed_contamination_findings(prefix)
         if contamination:
             first = contamination[0]
@@ -85,6 +102,24 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
         package_text = "\n".join(path.read_text(encoding="utf-8") for path in package_files)
         if forbid_path and str(forbid_path.resolve()) in package_text:
             raise ValidationError("installed CMake package refers to the forbidden source checkout")
+        gpu_claimed = verification["claims"]["gpu_renderer"] is True
+        native_claimed = any(
+            verification["claims"]["commands"][command]
+            for command in ("build", "run", "test", "capture", "package")
+        )
+        ui_present = (prefix / "lib/vellum/ui/package.json").is_file()
+        native_present = (
+            (prefix / "lib/vellum/vellum_native_backend.py").is_file() and
+            (prefix / "lib/vellum/bin/vellum-native-backend").is_file()
+        )
+        if gpu_claimed and (
+            "Vellum::Gpu" not in package_text or
+            "Vellum::Authoring" not in package_text or
+            not ui_present
+        ):
+            raise ValidationError("GPU artifact is missing its installed GPU/authoring/UI payload")
+        if native_claimed and not native_present:
+            raise ValidationError("native command claims have no installed native backend")
 
         project = root / "application"
         created = json.loads(run([
@@ -110,6 +145,14 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
         lock = json.loads((project / "vellum.lock.json").read_text(encoding="utf-8"))
         if lock["framework"]["version"] != verification["framework_version"]:
             raise ValidationError("created project lock does not match the installed SDK artifact")
+        expected_lock_identity = {
+            "verified": True,
+            "sha256": verification["sha256"],
+            "target": verification["target"],
+            "sourceCommit": verification["source_commit"],
+        }
+        if lock["framework"].get("artifact") != expected_lock_identity:
+            raise ValidationError("created project lock does not pin the installed artifact SHA")
         if created.get("status") != "created" or doctor.get("status") != "ready":
             raise ValidationError("installed CLI create/doctor journey did not become ready")
         if imported.get("status") != "imported" or reimported.get("status") != "reimported":
@@ -131,13 +174,17 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
             "checksum_and_payload_manifest": True,
             "artifact_contamination_scan": verification["contamination_free"],
             "clean_prefix_install": True,
+            "installed_artifact_identity": install_manifest == expected_manifest,
             "installed_tree_contamination_scan": not contamination,
             "relocatable_cmake_package": True,
+            "gpu_authoring_ui_payload": not gpu_claimed or ui_present,
+            "native_backend_payload": not native_claimed or native_present,
             "sterile_consumer_configure": True,
             "sterile_consumer_build": True,
             "sterile_consumer_test": True,
             "project_created_by_installed_cli": created.get("status") == "created",
             "project_lock_matches_sdk": True,
+            "project_lock_pins_artifact_sha": lock["framework"].get("artifact") == expected_lock_identity,
             "installed_cli_doctor": doctor.get("status") == "ready",
             "installed_cli_import": imported.get("status") == "imported",
             "installed_cli_reimport": reimported.get("status") == "reimported",

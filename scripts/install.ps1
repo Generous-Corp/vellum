@@ -11,6 +11,10 @@ param(
 $ErrorActionPreference = "Stop"
 if (!$InstallDir -or $InstallDir -eq "/" -or $InstallDir -eq ".") { throw "Refusing unsafe install prefix: $InstallDir" }
 
+function Write-Utf8NoBom([string]$Path, [string]$Content) {
+    [IO.File]::WriteAllText($Path, $Content, [Text.UTF8Encoding]::new($false))
+}
+
 function Assert-Node20 {
     $node = Get-Command node -ErrorAction SilentlyContinue
     if (!$node) { throw "Node.js 20+ is required for import/reimport." }
@@ -26,16 +30,28 @@ function Install-Payload([string]$Payload) {
     New-Item -ItemType Directory -Force -Path $library, $bin | Out-Null
     Copy-Item (Join-Path $Payload "vellum_cli.py") (Join-Path $library "vellum_cli.py") -Force
     Copy-Item (Join-Path $Payload "vellum_backend.py") (Join-Path $library "vellum_backend.py") -Force
+    Copy-Item (Join-Path $Payload "metadata.json") (Join-Path $library "metadata.json") -Force
+    Copy-Item (Join-Path $Payload "install-manifest.json") (Join-Path $library "install-manifest.json") -Force
     $templateDestination = Join-Path $library "templates"
     Remove-Item $templateDestination -Recurse -Force -ErrorAction SilentlyContinue
     Copy-Item (Join-Path $Payload "templates") $templateDestination -Recurse
     $sdkDestination = Join-Path $library "sdk"
     if (Test-Path (Join-Path $Payload "sdk")) {
-        Copy-Item (Join-Path $Payload "metadata.json") (Join-Path $library "metadata.json") -Force
         Remove-Item $sdkDestination -Recurse -Force -ErrorAction SilentlyContinue
         Copy-Item (Join-Path $Payload "sdk") $sdkDestination -Recurse
-    } elseif (!(Test-Path (Join-Path $library "metadata.json"))) {
-        Copy-Item (Join-Path $Payload "metadata.json") (Join-Path $library "metadata.json") -Force
+    } else {
+        Remove-Item $sdkDestination -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    $uiDestination = Join-Path $library "ui"
+    Remove-Item $uiDestination -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path (Join-Path $Payload "ui")) {
+        Copy-Item (Join-Path $Payload "ui") $uiDestination -Recurse
+    }
+    $nativeBackendSource = Join-Path $Payload "vellum_native_backend.py"
+    $nativeBackendDestination = Join-Path $library "vellum_native_backend.py"
+    Remove-Item $nativeBackendDestination -Force -ErrorAction SilentlyContinue
+    if (Test-Path $nativeBackendSource) {
+        Copy-Item $nativeBackendSource $nativeBackendDestination -Force
     }
     Remove-Item (Join-Path $library "bin") -Recurse -Force -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path (Join-Path $library "bin") | Out-Null
@@ -52,9 +68,13 @@ node "%~dp0..\design-ir\bin\vellum-backend.js" %*
         $importLauncher = $importLauncher.Replace("`n", "`r`n")
         [IO.File]::WriteAllText((Join-Path $library "bin\vellum-import-backend.cmd"), $importLauncher)
     }
-    $nativeBackend = Join-Path $Payload "bin\vellum-native-backend.exe"
-    if (Test-Path $nativeBackend) {
-        Copy-Item $nativeBackend (Join-Path $library "bin\vellum-native-backend.exe") -Force
+    if (Test-Path $nativeBackendSource) {
+        $nativeLauncher = @'
+@echo off
+python "%~dp0..\vellum_native_backend.py" %*
+'@
+        $nativeLauncher = $nativeLauncher.Replace("`n", "`r`n")
+        [IO.File]::WriteAllText((Join-Path $library "bin\vellum-native-backend.cmd"), $nativeLauncher)
     }
     $backendLauncher = @'
 @echo off
@@ -89,7 +109,7 @@ if ($LocalRoot) {
         Copy-Item $cli (Join-Path $temporary "vellum_cli.py")
         Copy-Item (Join-Path $LocalRoot "cli\vellum_backend.py") (Join-Path $temporary "vellum_backend.py")
         Copy-Item (Join-Path $LocalRoot "templates") (Join-Path $temporary "templates") -Recurse
-        @'
+        $localMetadata = @'
 {
   "schema": "vellum.sdk-artifact.v1",
   "framework_version": "0.1.0",
@@ -113,7 +133,20 @@ if ($LocalRoot) {
   },
   "files": []
 }
-'@ | Set-Content (Join-Path $temporary "metadata.json") -Encoding UTF8
+'@
+        Write-Utf8NoBom (Join-Path $temporary "metadata.json") $localMetadata
+        $localInstallManifest = @'
+{
+  "schema": "vellum.sdk-install.v1",
+  "verified": false,
+  "artifact": null,
+  "artifact_sha256": null,
+  "framework_version": "0.1.0",
+  "target": "local-development",
+  "source_commit": null
+}
+'@
+        Write-Utf8NoBom (Join-Path $temporary "install-manifest.json") $localInstallManifest
         Copy-Item (Join-Path $LocalRoot "packages\vellum-design-ir") (Join-Path $temporary "design-ir") -Recurse
         Write-Warning "LOCAL DEVELOPMENT INSTALL: source bytes are not release-verified; import/reimport is included but no native backend is included by default."
         Install-Payload $temporary
@@ -179,13 +212,13 @@ import tarfile
 archive, destination = sys.argv[1:]
 with tarfile.open(archive, "r:gz") as handle:
     members = handle.getmembers()
-    if len(members) > 10_000 or sum(member.size for member in members) > 2 * 1024**3:
+    if len(members) > 20_000 or sum(member.size for member in members) > 4 * 1024**3:
         raise SystemExit("archive exceeds installer safety limits")
     if len({member.name for member in members}) != len(members):
         raise SystemExit("archive contains duplicate member names")
     for member in members:
         path = PurePosixPath(member.name)
-        if (not path.parts or path.parts[0] not in {"vellum_cli.py", "vellum_backend.py", "templates", "sdk", "bin", "design-ir", "metadata.json"} or
+        if (not path.parts or path.parts[0] not in {"vellum_cli.py", "vellum_backend.py", "vellum_native_backend.py", "templates", "sdk", "bin", "design-ir", "ui", "metadata.json"} or
                 path.is_absolute() or ".." in path.parts or "\\" in member.name or ":" in path.parts[0] or
                 member.issym() or member.islnk() or not (member.isfile() or member.isdir())):
             raise SystemExit(f"unsafe archive member: {member.name}")
@@ -196,7 +229,12 @@ with tarfile.open(archive, "r:gz") as handle:
     except (KeyError, json.JSONDecodeError) as error:
         raise SystemExit(f"invalid SDK artifact metadata: {error}")
     if (not isinstance(metadata, dict) or metadata.get("schema") != "vellum.sdk-artifact.v1" or
-            not isinstance(metadata.get("framework_version"), str) or metadata.get("cli_api") != 1):
+            not isinstance(metadata.get("framework_version"), str) or not metadata["framework_version"] or
+            metadata.get("cli_api") != 1 or
+            not isinstance(metadata.get("target"), str) or not metadata["target"] or
+            not isinstance(metadata.get("source_commit"), str) or
+            len(metadata["source_commit"]) != 40 or
+            any(character not in "0123456789abcdef" for character in metadata["source_commit"])):
         raise SystemExit("incompatible SDK artifact metadata")
     handle.extractall(destination)
 '@
@@ -210,6 +248,17 @@ with tarfile.open(archive, "r:gz") as handle:
         !(Test-Path (Join-Path $temporary "sdk"))) {
         throw "Verified archive does not contain the Vellum SDK artifact layout."
     }
+    $metadata = Get-Content (Join-Path $temporary "metadata.json") -Raw | ConvertFrom-Json
+    $installManifest = [ordered]@{
+        schema = "vellum.sdk-install.v1"
+        verified = $true
+        artifact = $archiveName
+        artifact_sha256 = $actual
+        framework_version = $metadata.framework_version
+        target = $metadata.target
+        source_commit = $metadata.source_commit
+    }
+    Write-Utf8NoBom (Join-Path $temporary "install-manifest.json") ($installManifest | ConvertTo-Json)
     Install-Payload $temporary
 } finally {
     Remove-Item $temporary -Recurse -Force -ErrorAction SilentlyContinue

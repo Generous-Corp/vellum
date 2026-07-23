@@ -126,9 +126,29 @@ python3 scripts/verify_sdk_artifact.py \
   --checksums dist/SHA256SUMS
 ```
 
+To compose the pinned GPU and authoring SDK into the artifact, pass the Skia
+archive verified in the preceding section:
+
+```sh
+python3 scripts/build_sdk_artifact.py \
+  --skia-archive /tmp/vellum-skia-m150.zip \
+  --output-dir dist --json
+```
+
+That artifact includes the installed `Vellum::Gpu` and `Vellum::Authoring`
+targets and an offline-ready `@vellum/ui` toolchain. Native CLI commands remain
+unavailable unless a real `cli/vellum_native_backend.py` exists; artifact
+metadata is derived from the payload and cannot claim a missing backend.
+
 The installed CMake tree is under the chosen prefix at `lib/vellum/sdk`;
 consumers can add that directory to `CMAKE_PREFIX_PATH` and use
 `find_package(Vellum CONFIG REQUIRED)`.
+
+Every install writes `lib/vellum/install-manifest.json`. Verified installs
+record the archive SHA-256, target, version, and source commit; local installs
+are explicitly unverified and carry no fabricated hash. New projects pin this
+identity in `vellum.lock.json`, so a same-version but different SDK artifact is
+rejected before backend execution.
 
 `scripts/validate_installed_sdk.py` verifies the archive, installs to a clean
 prefix, creates an app through the installed CLI, checks its project lock

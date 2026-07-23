@@ -6,7 +6,8 @@
     "slug": "{{PROJECT_SLUG}}"
   },
   "framework": {
-    "version": "{{FRAMEWORK_VERSION}}"
+    "version": "{{FRAMEWORK_VERSION}}",
+    "artifact": {{ARTIFACT_IDENTITY_JSON}}
   },
   "cli": {
     "api": 1

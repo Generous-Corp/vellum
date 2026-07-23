@@ -39,6 +39,25 @@ class InstallerTests(unittest.TestCase):
             )
             self.assertEqual(create.returncode, 0, create.stderr)
             self.assertTrue((project / "vellum.lock.json").is_file())
+            install_manifest = json.loads(
+                (prefix / "lib/vellum/install-manifest.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(install_manifest, {
+                "schema": "vellum.sdk-install.v1",
+                "verified": False,
+                "artifact": None,
+                "artifact_sha256": None,
+                "framework_version": "0.1.0",
+                "target": "local-development",
+                "source_commit": None,
+            })
+            lock = json.loads((project / "vellum.lock.json").read_text(encoding="utf-8"))
+            self.assertEqual(lock["framework"]["artifact"], {
+                "verified": False,
+                "sha256": None,
+                "target": "local-development",
+                "sourceCommit": None,
+            })
             source = root / "revision-a.source.json"
             updated_source = root / "revision-b.source.json"
             shutil.copy2(REPO / "fixtures/design-ir/revision-a.source.json", source)
@@ -164,6 +183,24 @@ class InstallerTests(unittest.TestCase):
             )
             self.assertEqual(valid.returncode, 0, valid.stderr)
             self.assertIn("Verified SHA-256", valid.stdout)
+            manifest = json.loads(
+                (prefix / "lib/vellum/install-manifest.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(manifest["artifact_sha256"], digest)
+            self.assertEqual(manifest["artifact"], archive.name)
+            self.assertEqual(manifest["target"], "test")
+            self.assertEqual(manifest["source_commit"], "a" * 40)
+            project = root / "verified-project"
+            created = subprocess.run(
+                [str(prefix / "bin/vellum"), "create", "Verified", "-d", str(project), "--json"],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(created.returncode, 0, created.stderr)
+            lock = json.loads((project / "vellum.lock.json").read_text(encoding="utf-8"))
+            self.assertEqual(lock["framework"]["artifact"]["sha256"], digest)
+            self.assertTrue(lock["framework"]["artifact"]["verified"])
 
             tampered = root / "tampered-prefix"
             archive.write_bytes(archive.read_bytes() + b"tampered")

@@ -79,14 +79,23 @@ copy_payload() {
   mkdir -p "$library" "$bindir"
   cp "$payload/vellum_cli.py" "$library/vellum_cli.py"
   cp "$payload/vellum_backend.py" "$library/vellum_backend.py"
+  cp "$payload/metadata.json" "$library/metadata.json"
+  cp "$payload/install-manifest.json" "$library/install-manifest.json"
   rm -rf "$library/templates"
   cp -R "$payload/templates" "$library/templates"
   if [ -d "$payload/sdk" ]; then
-    cp "$payload/metadata.json" "$library/metadata.json"
     rm -rf "$library/sdk"
     cp -R "$payload/sdk" "$library/sdk"
-  elif [ ! -f "$library/metadata.json" ]; then
-    cp "$payload/metadata.json" "$library/metadata.json"
+  else
+    rm -rf "$library/sdk"
+  fi
+  rm -rf "$library/ui"
+  if [ -d "$payload/ui" ]; then
+    cp -R "$payload/ui" "$library/ui"
+  fi
+  rm -f "$library/vellum_native_backend.py"
+  if [ -f "$payload/vellum_native_backend.py" ]; then
+    cp "$payload/vellum_native_backend.py" "$library/vellum_native_backend.py"
   fi
   rm -rf "${library:?}/bin"
   mkdir -p "$library/bin"
@@ -103,8 +112,14 @@ copy_payload() {
     } > "$library/bin/vellum-import-backend"
     chmod 755 "$library/bin/vellum-import-backend"
   fi
-  if [ -f "$payload/bin/vellum-native-backend" ]; then
-    cp "$payload/bin/vellum-native-backend" "$library/bin/vellum-native-backend"
+  if [ -f "$payload/vellum_native_backend.py" ]; then
+    {
+      printf '%s\n' '#!/bin/sh' 'set -eu'
+      # shellcheck disable=SC2016
+      printf '%s\n' 'bindir=$(CDPATH="" cd -- "$(dirname -- "$0")" && pwd)'
+      # shellcheck disable=SC2016
+      printf '%s\n' 'exec python3 "$bindir/../vellum_native_backend.py" "$@"'
+    } > "$library/bin/vellum-native-backend"
     chmod 755 "$library/bin/vellum-native-backend"
   fi
   {
@@ -167,6 +182,17 @@ if [ -n "$local_root" ]; then
     }
   },
   "files": []
+}
+JSON
+  cat > "$temporary/install-manifest.json" <<'JSON'
+{
+  "schema": "vellum.sdk-install.v1",
+  "verified": false,
+  "artifact": null,
+  "artifact_sha256": null,
+  "framework_version": "0.1.0",
+  "target": "local-development",
+  "source_commit": null
 }
 JSON
   cp -R "$local_root/packages/vellum-design-ir" "$temporary/design-ir"
@@ -249,13 +275,13 @@ import tarfile
 archive, destination = sys.argv[1:]
 with tarfile.open(archive, "r:gz") as handle:
     members = handle.getmembers()
-    if len(members) > 10_000 or sum(member.size for member in members) > 2 * 1024**3:
+    if len(members) > 20_000 or sum(member.size for member in members) > 4 * 1024**3:
         raise SystemExit("archive exceeds installer safety limits")
     if len({member.name for member in members}) != len(members):
         raise SystemExit("archive contains duplicate member names")
     for member in members:
         path = PurePosixPath(member.name)
-        if (not path.parts or path.parts[0] not in {"vellum_cli.py", "vellum_backend.py", "templates", "sdk", "bin", "design-ir", "metadata.json"} or
+        if (not path.parts or path.parts[0] not in {"vellum_cli.py", "vellum_backend.py", "vellum_native_backend.py", "templates", "sdk", "bin", "design-ir", "ui", "metadata.json"} or
                 path.is_absolute() or ".." in path.parts or "\\" in member.name or ":" in path.parts[0] or
                 member.issym() or member.islnk() or not (member.isfile() or member.isdir())):
             raise SystemExit(f"unsafe archive member: {member.name}")
@@ -266,7 +292,12 @@ with tarfile.open(archive, "r:gz") as handle:
     except (KeyError, json.JSONDecodeError) as error:
         raise SystemExit(f"invalid SDK artifact metadata: {error}")
     if (not isinstance(metadata, dict) or metadata.get("schema") != "vellum.sdk-artifact.v1" or
-            not isinstance(metadata.get("framework_version"), str) or metadata.get("cli_api") != 1):
+            not isinstance(metadata.get("framework_version"), str) or not metadata["framework_version"] or
+            metadata.get("cli_api") != 1 or
+            not isinstance(metadata.get("target"), str) or not metadata["target"] or
+            not isinstance(metadata.get("source_commit"), str) or
+            len(metadata["source_commit"]) != 40 or
+            any(character not in "0123456789abcdef" for character in metadata["source_commit"])):
         raise SystemExit("incompatible SDK artifact metadata")
     handle.extractall(destination)
 PY
@@ -276,4 +307,24 @@ PY
   printf '%s\n' 'Verified archive does not contain the Vellum SDK artifact layout.' >&2
   exit 1
 }
+python3 - "$temporary/metadata.json" "$temporary/install-manifest.json" "$archive_name" "$actual" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+metadata_path, output_path, artifact, digest = sys.argv[1:]
+metadata = json.loads(Path(metadata_path).read_text(encoding="utf-8"))
+manifest = {
+    "schema": "vellum.sdk-install.v1",
+    "verified": True,
+    "artifact": artifact,
+    "artifact_sha256": digest.lower(),
+    "framework_version": metadata["framework_version"],
+    "target": metadata["target"],
+    "source_commit": metadata["source_commit"],
+}
+Path(output_path).write_text(
+    json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+)
+PY
 copy_payload "$temporary"

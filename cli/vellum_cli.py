@@ -21,6 +21,7 @@ CLI_API_VERSION = 1
 RESULT_SCHEMA = "vellum.cli.result.v1"
 LOCK_SCHEMA = "vellum.project-lock.v1"
 SDK_METADATA_SCHEMA = "vellum.sdk-artifact.v1"
+INSTALL_MANIFEST_SCHEMA = "vellum.sdk-install.v1"
 LOCK_NAME = "vellum.lock.json"
 BACKEND_NAMES = ("vellum-backend.cmd", "vellum-backend.exe") if os.name == "nt" else ("vellum-backend",)
 BACKEND_COMMANDS = ("import", "reimport", "build", "run", "test", "capture", "package")
@@ -28,6 +29,8 @@ EXIT_USAGE = 2
 EXIT_PROJECT = 3
 EXIT_UNAVAILABLE = 4
 EXIT_BACKEND = 5
+SHA256_RE = re.compile(r"[0-9a-f]{64}")
+COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 
 
 class CliFailure(RuntimeError):
@@ -108,6 +111,24 @@ def render_template(source: Path, destination: Path, replacements: dict[str, str
     destination.chmod(source.stat().st_mode & 0o777)
 
 
+def unverified_artifact_identity() -> dict[str, Any]:
+    return {
+        "verified": False,
+        "sha256": None,
+        "target": "local-development",
+        "sourceCommit": None,
+    }
+
+
+def artifact_identity(install_manifest: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "verified": install_manifest["verified"],
+        "sha256": install_manifest["artifact_sha256"],
+        "target": install_manifest["target"],
+        "sourceCommit": install_manifest["source_commit"],
+    }
+
+
 def create_project(args: argparse.Namespace) -> dict[str, Any]:
     slug = slugify(args.name)
     destination = Path(args.directory or slug).expanduser().resolve()
@@ -121,6 +142,9 @@ def create_project(args: argparse.Namespace) -> dict[str, Any]:
     if not source.is_dir():
         raise CliFailure(f"Unknown template: {args.template}", status="unknown_template", exit_code=EXIT_USAGE)
 
+    sdk = load_sdk_metadata()
+    framework_version = sdk[1]["framework_version"] if sdk else FRAMEWORK_VERSION
+    installed_identity = artifact_identity(sdk[2]) if sdk else unverified_artifact_identity()
     project_id = hashlib.sha256(f"vellum-project-v1:{slug}".encode()).hexdigest()[:24]
     replacements = {
         "PROJECT_NAME": args.name.strip(),
@@ -128,7 +152,10 @@ def create_project(args: argparse.Namespace) -> dict[str, Any]:
         "PROJECT_SLUG": slug,
         "PROJECT_ID": project_id,
         "CLI_VERSION": CLI_VERSION,
-        "FRAMEWORK_VERSION": FRAMEWORK_VERSION,
+        "FRAMEWORK_VERSION": framework_version,
+        "ARTIFACT_IDENTITY_JSON": json.dumps(
+            installed_identity, sort_keys=True, separators=(",", ":")
+        ),
     }
     destination.mkdir(parents=True, exist_ok=True)
     created: list[str] = []
@@ -147,6 +174,7 @@ def create_project(args: argparse.Namespace) -> dict[str, Any]:
             "project_root": str(destination),
             "project_id": project_id,
             "template": args.template,
+            "artifact": installed_identity,
             "files": created,
             "next_steps": [f"cd {destination}", "vellum doctor", "vellum build"],
         },
@@ -183,6 +211,32 @@ def load_project(path: str | None) -> tuple[Path, dict[str, Any]]:
             status="invalid_project_lock",
             exit_code=EXIT_PROJECT,
         )
+    artifact = lock.get("framework", {}).get("artifact")
+    if not isinstance(artifact, dict) or set(artifact) != {
+        "verified", "sha256", "target", "sourceCommit",
+    }:
+        raise CliFailure(
+            f"Project lock has no valid artifact identity in {lock_path}.",
+            status="invalid_project_lock",
+            exit_code=EXIT_PROJECT,
+        )
+    verified = artifact.get("verified")
+    sha = artifact.get("sha256")
+    target = artifact.get("target")
+    source_commit = artifact.get("sourceCommit")
+    if (
+        not isinstance(verified, bool) or not isinstance(target, str) or not target or
+        (verified and (
+            not isinstance(sha, str) or not SHA256_RE.fullmatch(sha) or
+            not isinstance(source_commit, str) or not COMMIT_RE.fullmatch(source_commit)
+        )) or
+        (not verified and (sha is not None or source_commit is not None))
+    ):
+        raise CliFailure(
+            f"Project lock artifact identity is malformed in {lock_path}.",
+            status="invalid_project_lock",
+            exit_code=EXIT_PROJECT,
+        )
     if lock.get("cli", {}).get("api") != CLI_API_VERSION:
         raise CliFailure(
             f"Project requires CLI API {lock.get('cli', {}).get('api')}; this CLI supports API {CLI_API_VERSION}.",
@@ -213,7 +267,50 @@ def locate_backend() -> Path | None:
     return None
 
 
-def load_sdk_metadata() -> tuple[Path, dict[str, Any]] | None:
+def load_install_manifest(sdk_root: Path) -> dict[str, Any]:
+    path = sdk_root / "install-manifest.json"
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise CliFailure(
+            f"Cannot read SDK install manifest at {path}: {error}",
+            status="invalid_sdk_artifact",
+            exit_code=EXIT_PROJECT,
+        ) from error
+    if not isinstance(manifest, dict) or set(manifest) != {
+        "schema", "verified", "artifact", "artifact_sha256", "framework_version",
+        "target", "source_commit",
+    } or manifest.get("schema") != INSTALL_MANIFEST_SCHEMA:
+        raise CliFailure(
+            f"SDK install manifest is incompatible: {path}",
+            status="invalid_sdk_artifact",
+            exit_code=EXIT_PROJECT,
+        )
+    verified = manifest.get("verified")
+    if (
+        not isinstance(verified, bool) or
+        not isinstance(manifest.get("framework_version"), str) or
+        not isinstance(manifest.get("target"), str) or not manifest["target"] or
+        (verified and (
+            not isinstance(manifest.get("artifact"), str) or not manifest["artifact"] or
+            not isinstance(manifest.get("artifact_sha256"), str) or
+            not SHA256_RE.fullmatch(manifest["artifact_sha256"]) or
+            not isinstance(manifest.get("source_commit"), str) or
+            not COMMIT_RE.fullmatch(manifest["source_commit"])
+        )) or
+        (not verified and any(manifest.get(name) is not None for name in (
+            "artifact", "artifact_sha256", "source_commit",
+        )))
+    ):
+        raise CliFailure(
+            f"SDK install manifest identity is malformed: {path}",
+            status="invalid_sdk_artifact",
+            exit_code=EXIT_PROJECT,
+        )
+    return manifest
+
+
+def load_sdk_metadata() -> tuple[Path, dict[str, Any], dict[str, Any]] | None:
     sdk_root_value = os.environ.get("VELLUM_SDK_ROOT")
     if not sdk_root_value:
         return None
@@ -248,13 +345,26 @@ def load_sdk_metadata() -> tuple[Path, dict[str, Any]] | None:
             status="invalid_sdk_artifact",
             exit_code=EXIT_PROJECT,
         )
-    return sdk_root, metadata
+    install_manifest = load_install_manifest(sdk_root)
+    if (
+        install_manifest["framework_version"] != metadata["framework_version"] or
+        install_manifest["target"] != metadata.get("target") or
+        install_manifest["source_commit"] != metadata.get("source_commit")
+    ):
+        raise CliFailure(
+            f"SDK metadata and install identity disagree at {sdk_root}.",
+            status="invalid_sdk_artifact",
+            exit_code=EXIT_PROJECT,
+        )
+    return sdk_root, metadata, install_manifest
 
 
-def validate_project_sdk(lock: dict[str, Any], sdk: tuple[Path, dict[str, Any]] | None) -> None:
+def validate_project_sdk(
+    lock: dict[str, Any], sdk: tuple[Path, dict[str, Any], dict[str, Any]] | None,
+) -> None:
     if sdk is None:
         return
-    sdk_root, metadata = sdk
+    sdk_root, metadata, install_manifest = sdk
     locked_version = lock["framework"]["version"]
     installed_version = metadata["framework_version"]
     if locked_version != installed_version:
@@ -266,6 +376,19 @@ def validate_project_sdk(lock: dict[str, Any], sdk: tuple[Path, dict[str, Any]] 
                 "level": "error",
                 "code": "framework_pin_mismatch",
                 "message": "Install the exact framework version pinned by vellum.lock.json; do not edit the lock to bypass compatibility.",
+            }],
+        )
+    locked_artifact = lock["framework"]["artifact"]
+    installed_artifact = artifact_identity(install_manifest)
+    if locked_artifact != installed_artifact:
+        raise CliFailure(
+            "Project artifact pin does not match the installed Vellum SDK artifact.",
+            status="sdk_artifact_mismatch",
+            exit_code=EXIT_PROJECT,
+            diagnostics=[{
+                "level": "error",
+                "code": "artifact_pin_mismatch",
+                "message": "Install the exact artifact SHA pinned by vellum.lock.json; local-development locks remain explicitly unverified.",
             }],
         )
 
@@ -310,7 +433,7 @@ def doctor(args: argparse.Namespace) -> dict[str, Any]:
 
     backend = locate_backend()
     sdk_configured = bool(os.environ.get("VELLUM_SDK_ROOT"))
-    sdk: tuple[Path, dict[str, Any]] | None = None
+    sdk: tuple[Path, dict[str, Any], dict[str, Any]] | None = None
     sdk_error: CliFailure | None = None
     try:
         sdk = load_sdk_metadata()

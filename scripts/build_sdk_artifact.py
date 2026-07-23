@@ -3,7 +3,8 @@
 
 The archive is the installation boundary: it contains the authoring CLI,
 DesignIR import backend, SDK metadata, and a relocatable CMake install tree.
-Native application commands remain explicitly unavailable.
+An explicit pinned-Skia mode additionally composes the GPU/authoring runtime,
+the TypeScript UI package, and a native backend when that implementation exists.
 """
 
 from __future__ import annotations
@@ -30,16 +31,12 @@ CLI_VERSION = "0.1.0-dev"
 CLI_API = 1
 METADATA_SCHEMA = "vellum.sdk-artifact.v1"
 EVIDENCE_SCHEMA = "vellum.sdk-artifact-evidence.v1"
-COMMAND_CAPABILITIES = {
-    "import": True,
-    "reimport": True,
-    "build": False,
-    "run": False,
-    "test": False,
-    "capture": False,
-    "package": False,
-}
+COMMAND_NAMES = ("import", "reimport", "build", "run", "test", "capture", "package")
+NATIVE_COMMANDS = ("build", "run", "test", "capture", "package")
 DESIGN_IR_PAYLOAD_ENTRIES = ("LICENSE.md", "README.md", "bin", "package.json", "schema", "src")
+UI_PAYLOAD_ENTRIES = (
+    "LICENSE.md", "README.md", "package.json", "package-lock.json", "scripts", "src", "test",
+)
 
 
 class ArtifactError(RuntimeError):
@@ -60,6 +57,77 @@ def run(arguments: list[str], *, cwd: Path | None = None) -> None:
             f"command failed ({completed.returncode}): {' '.join(arguments)}\n"
             f"{completed.stdout}"
         )
+
+
+def installed_cmake_target(install_tree: Path, target: str) -> bool:
+    package = install_tree / "lib/cmake/Vellum"
+    marker = f"Vellum::{target}"
+    return any(marker in path.read_text(encoding="utf-8") for path in package.glob("*.cmake"))
+
+
+def prepare_ui_payload(repo: Path, payload: Path) -> None:
+    source = repo / "packages/vellum-ui"
+    destination = payload / "ui"
+    destination.mkdir()
+    for entry in UI_PAYLOAD_ENTRIES:
+        item = source / entry
+        if not item.exists():
+            raise ArtifactError(f"@vellum/ui payload entry is missing: {item}")
+        if item.is_dir():
+            shutil.copytree(item, destination / entry)
+        else:
+            shutil.copy2(item, destination / entry)
+
+    package = json.loads((destination / "package.json").read_text(encoding="utf-8"))
+    dependencies = package.get("devDependencies")
+    if not isinstance(dependencies, dict) or not dependencies:
+        raise ArtifactError("@vellum/ui has no pinned authoring dependencies")
+    if any(not isinstance(version, str) or version[:1] in {"^", "~", ">", "<", "*"}
+           for version in dependencies.values()):
+        raise ArtifactError("@vellum/ui authoring dependencies must use exact versions")
+    npm = shutil.which("npm")
+    if npm is None:
+        raise ArtifactError("--skia-archive requires npm to package @vellum/ui dependencies")
+    run([
+        npm, "ci", "--include=dev", "--ignore-scripts", "--no-audit", "--no-fund",
+    ], cwd=destination)
+    shutil.rmtree(destination / "node_modules/.bin", ignore_errors=True)
+    for name, version in dependencies.items():
+        installed = destination / "node_modules" / name / "package.json"
+        if not installed.is_file():
+            raise ArtifactError(f"@vellum/ui dependency was not installed: {name}@{version}")
+        actual = json.loads(installed.read_text(encoding="utf-8")).get("version")
+        if actual != version:
+            raise ArtifactError(
+                f"@vellum/ui dependency version mismatch: expected {name}@{version}, got {actual}"
+            )
+
+
+def derive_capabilities(payload: Path, install_tree: Path) -> dict[str, object]:
+    cmake_sdk = (install_tree / "lib/cmake/Vellum/VellumConfig.cmake").is_file()
+    gpu_renderer = installed_cmake_target(install_tree, "Gpu")
+    authoring_runtime = installed_cmake_target(install_tree, "Authoring")
+    import_backend = (payload / "design-ir/bin/vellum-backend.js").is_file()
+    ui_runtime = all((payload / path).exists() for path in (
+        "ui/package.json",
+        "ui/package-lock.json",
+        "ui/src/index.js",
+        "ui/node_modules/esbuild/package.json",
+        "ui/node_modules/typescript/package.json",
+    ))
+    native_backend = (payload / "vellum_native_backend.py").is_file()
+    native_ready = gpu_renderer and authoring_runtime and ui_runtime and native_backend
+    commands = {name: False for name in COMMAND_NAMES}
+    commands["import"] = import_backend
+    commands["reimport"] = import_backend
+    for name in NATIVE_COMMANDS:
+        commands[name] = native_ready
+    return {
+        "cmake_sdk": cmake_sdk,
+        "authoring_cli": (payload / "vellum_cli.py").is_file(),
+        "gpu_renderer": gpu_renderer,
+        "commands": commands,
+    }
 
 
 def sha256(path: Path) -> str:
@@ -202,6 +270,8 @@ def copy_payload(
     commit: str,
     source_tree_clean: bool,
     target: str,
+    *,
+    include_ui: bool,
 ) -> dict[str, object]:
     shutil.copy2(repo / "cli/vellum_cli.py", payload / "vellum_cli.py")
     shutil.copy2(repo / "cli/vellum_backend.py", payload / "vellum_backend.py")
@@ -217,6 +287,12 @@ def copy_payload(
             shutil.copytree(source, destination)
         else:
             shutil.copy2(source, destination)
+    if include_ui:
+        prepare_ui_payload(repo, payload)
+        native_backend = repo / "cli/vellum_native_backend.py"
+        if native_backend.is_file():
+            shutil.copy2(native_backend, payload / "vellum_native_backend.py")
+    capabilities = derive_capabilities(payload, install_tree)
     metadata: dict[str, object] = {
         "schema": METADATA_SCHEMA,
         "framework_version": FRAMEWORK_VERSION,
@@ -225,12 +301,7 @@ def copy_payload(
         "source_commit": commit,
         "source_tree_clean": source_tree_clean,
         "target": target,
-        "capabilities": {
-            "cmake_sdk": True,
-            "authoring_cli": True,
-            "gpu_renderer": False,
-            "commands": COMMAND_CAPABILITIES,
-        },
+        "capabilities": capabilities,
     }
     metadata["files"] = payload_files(payload)
     (payload / "metadata.json").write_text(
@@ -244,7 +315,14 @@ def build(args: argparse.Namespace) -> dict[str, object]:
     output_dir = args.output_dir.resolve()
     commit, source_tree_clean = source_identity(repo, args.source_commit, args.allow_dirty)
     target = args.target or target_name()
-    graphics = args.graphics == "on" or (args.graphics == "auto" and platform.system() == "Darwin")
+    skia_archive = args.skia_archive.resolve() if args.skia_archive else None
+    if skia_archive and not skia_archive.is_file():
+        raise ArtifactError(f"--skia-archive does not exist: {skia_archive}")
+    if skia_archive and args.graphics == "off":
+        raise ArtifactError("--skia-archive cannot be combined with --graphics off")
+    graphics = bool(skia_archive) or args.graphics == "on" or (
+        args.graphics == "auto" and platform.system() == "Darwin"
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory(prefix="vellum-sdk-artifact-") as temporary_text:
@@ -260,6 +338,13 @@ def build(args: argparse.Namespace) -> dict[str, object]:
             "-DVELLUM_BUILD_SMOKE_NATIVE=OFF",
             f"-DVELLUM_ENABLE_GRAPHICS={'ON' if graphics else 'OFF'}",
         ]
+        if skia_archive:
+            configure.extend([
+                "-DVELLUM_ENABLE_GPU=ON",
+                "-DVELLUM_REQUIRE_GPU=ON",
+                "-DVELLUM_ENABLE_AUTHORING=ON",
+                f"-DVELLUM_SKIA_ARCHIVE={skia_archive}",
+            ])
         if shutil.which("ninja"):
             configure.extend(["-G", "Ninja"])
         run(configure)
@@ -272,7 +357,17 @@ def build(args: argparse.Namespace) -> dict[str, object]:
         run(["cmake", "--install", str(build_dir), "--config", "Release", "--prefix", str(install_tree)])
         for archive in sorted(install_tree.rglob("*.a")):
             normalize_static_archive(archive)
-        metadata = copy_payload(repo, install_tree, payload, commit, source_tree_clean, target)
+        if skia_archive and not (
+            installed_cmake_target(install_tree, "Gpu") and
+            installed_cmake_target(install_tree, "Authoring")
+        ):
+            raise ArtifactError(
+                "--skia-archive build did not install both Vellum::Gpu and Vellum::Authoring"
+            )
+        metadata = copy_payload(
+            repo, install_tree, payload, commit, source_tree_clean, target,
+            include_ui=bool(skia_archive),
+        )
 
         asset_name = f"vellum-sdk-{FRAMEWORK_VERSION}-{target}.tar.gz"
         archive = output_dir / asset_name
@@ -309,6 +404,11 @@ def parser() -> argparse.ArgumentParser:
     )
     value.add_argument("--target", help="override the detected artifact target (tests/release coordinator)")
     value.add_argument("--graphics", choices=("auto", "on", "off"), default="auto")
+    value.add_argument(
+        "--skia-archive",
+        type=Path,
+        help="compose the exact pinned Skia/Dawn GPU, Authoring, and @vellum/ui payload",
+    )
     value.add_argument("--json", action="store_true")
     return value
 

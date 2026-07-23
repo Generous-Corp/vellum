@@ -12,7 +12,9 @@ the requested path or current directory toward the filesystem root for
 
 - schema `vellum.project-lock.v1`;
 - a deterministic 24-character project identity;
-- the exact framework version plus a separately versioned CLI protocol API;
+- the exact framework version and installed artifact identity (verification
+  state, SHA-256, target, and source commit), plus a separately versioned CLI
+  protocol API;
 - the source template and template version.
 
 An unsupported schema, malformed identity, CLI API mismatch, or installed SDK
@@ -20,7 +22,9 @@ artifact mismatch fails before a backend is invoked. The framework pin is
 passed to the backend, which must use
 the matching SDK. Separating CLI API compatibility from the framework pin lets
 the CLI gain backward-compatible fixes without making every existing project
-unopenable. The lock is application-owned and should be committed.
+unopenable. The lock is application-owned and should be committed. Projects
+made from a local source install are explicitly marked unverified with no SHA
+or commit; verified installs pin the archive SHA exactly.
 
 ## JSON result
 

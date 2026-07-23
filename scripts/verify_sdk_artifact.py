@@ -19,6 +19,11 @@ COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 MAX_MEMBERS = 20_000
 MAX_BYTES = 4 * 1024**3
 COMMANDS = {"import", "reimport", "build", "run", "test", "capture", "package"}
+NATIVE_COMMANDS = {"build", "run", "test", "capture", "package"}
+SAFE_ROOTS = {
+    "vellum_cli.py", "vellum_backend.py", "vellum_native_backend.py",
+    "templates", "sdk", "bin", "design-ir", "ui", "metadata.json",
+}
 FORBIDDEN_PAYLOAD_PATH_PATTERNS = {
     "retired-projection-path": re.compile(
         r"(?:^|/)(?:core|external/(?:fonts|nanosvg)|packages/pulp-import-ir|tools/figma-plugin)(?:/|$)",
@@ -81,6 +86,68 @@ def sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
+def payload_has_cmake_target(contents: dict[str, bytes], target: str) -> bool:
+    marker = f"Vellum::{target}".encode()
+    return any(
+        name.startswith("sdk/lib/cmake/Vellum/") and name.endswith(".cmake") and
+        marker in content
+        for name, content in contents.items()
+    )
+
+
+def validate_ui_payload(contents: dict[str, bytes]) -> bool:
+    if not any(name.startswith("ui/") for name in contents):
+        return False
+    required = {
+        "ui/package.json", "ui/package-lock.json", "ui/src/index.js",
+        "ui/node_modules/esbuild/package.json",
+        "ui/node_modules/typescript/package.json",
+    }
+    if not required.issubset(contents):
+        raise VerificationError("@vellum/ui payload is incomplete")
+    try:
+        package = json.loads(contents["ui/package.json"])
+        lock = json.loads(contents["ui/package-lock.json"])
+        installed = {
+            name: json.loads(contents[f"ui/node_modules/{name}/package.json"])["version"]
+            for name in ("esbuild", "typescript")
+        }
+    except (KeyError, TypeError, json.JSONDecodeError) as error:
+        raise VerificationError(f"@vellum/ui dependency metadata is malformed: {error}") from error
+    dependencies = package.get("devDependencies")
+    locked_dependencies = lock.get("packages", {}).get("", {}).get("devDependencies")
+    if (
+        not isinstance(dependencies, dict) or dependencies != locked_dependencies or
+        set(dependencies) != {"esbuild", "typescript"} or
+        any(not isinstance(version, str) or version[:1] in {"^", "~", ">", "<", "*"}
+            for version in dependencies.values()) or
+        installed != dependencies
+    ):
+        raise VerificationError("@vellum/ui dependencies do not match their exact lock")
+    return True
+
+
+def derived_capabilities(contents: dict[str, bytes]) -> dict[str, object]:
+    cmake_sdk = "sdk/lib/cmake/Vellum/VellumConfig.cmake" in contents
+    gpu_renderer = payload_has_cmake_target(contents, "Gpu")
+    authoring_runtime = payload_has_cmake_target(contents, "Authoring")
+    ui_runtime = validate_ui_payload(contents)
+    import_backend = "design-ir/bin/vellum-backend.js" in contents
+    native_backend = "vellum_native_backend.py" in contents
+    native_ready = gpu_renderer and authoring_runtime and ui_runtime and native_backend
+    commands = {name: False for name in COMMANDS}
+    commands["import"] = import_backend
+    commands["reimport"] = import_backend
+    for name in NATIVE_COMMANDS:
+        commands[name] = native_ready
+    return {
+        "cmake_sdk": cmake_sdk,
+        "authoring_cli": "vellum_cli.py" in contents,
+        "gpu_renderer": gpu_renderer,
+        "commands": commands,
+    }
+
+
 def verify(archive: Path, checksums: Path) -> dict[str, object]:
     expected = checksum_entry(archive, checksums)
     actual = sha256_bytes(archive.read_bytes())
@@ -98,7 +165,7 @@ def verify(archive: Path, checksums: Path) -> dict[str, object]:
             path = PurePosixPath(member.name)
             if (
                 not path.parts
-                or path.parts[0] not in {"vellum_cli.py", "vellum_backend.py", "templates", "sdk", "bin", "design-ir", "metadata.json"}
+                or path.parts[0] not in SAFE_ROOTS
                 or path.is_absolute()
                 or ".." in path.parts
                 or "\\" in member.name
@@ -145,10 +212,6 @@ def verify(archive: Path, checksums: Path) -> dict[str, object]:
             or not all(isinstance(value, bool) for value in capabilities["commands"].values())
         ):
             raise VerificationError("SDK artifact capability claims are malformed")
-        if capabilities["commands"]["import"] is not True or capabilities["commands"]["reimport"] is not True:
-            raise VerificationError("SDK artifact must expose its packaged import/reimport backend")
-        if any(capabilities["commands"][name] for name in COMMANDS - {"import", "reimport"}):
-            raise VerificationError("SDK artifact claims an unimplemented native application command")
         files = metadata.get("files")
         if not isinstance(files, list):
             raise VerificationError("artifact metadata has no file inventory")
@@ -156,6 +219,7 @@ def verify(archive: Path, checksums: Path) -> dict[str, object]:
             raise VerificationError("artifact file inventory is not in canonical path order")
         expected_files = {member.name for member in members if member.isfile() and member.name != "metadata.json"}
         declared: set[str] = set()
+        payload_contents: dict[str, bytes] = {}
         contamination_findings: list[dict[str, str]] = []
         for row in files:
             if not isinstance(row, dict) or set(row) != {"path", "sha256", "size", "executable"}:
@@ -173,6 +237,7 @@ def verify(archive: Path, checksums: Path) -> dict[str, object]:
             if row["executable"] is not bool(member.mode & 0o100):
                 raise VerificationError(f"artifact executable mode does not match metadata: {name}")
             contamination_findings.extend(payload_contamination_findings(name, content))
+            payload_contents[name] = content
             declared.add(name)
         if declared != expected_files:
             raise VerificationError("artifact metadata does not cover every payload file")
@@ -181,6 +246,11 @@ def verify(archive: Path, checksums: Path) -> dict[str, object]:
             raise VerificationError(
                 f"artifact contamination: {first['rule']} in {first['path']}"
             )
+        actual_capabilities = derived_capabilities(payload_contents)
+        if capabilities != actual_capabilities:
+            raise VerificationError("SDK artifact capability claims do not match installed payloads")
+        if capabilities["commands"]["import"] is not True or capabilities["commands"]["reimport"] is not True:
+            raise VerificationError("SDK artifact must expose its packaged import/reimport backend")
 
     return {
         "schema": "vellum.sdk-artifact-verification.v1",

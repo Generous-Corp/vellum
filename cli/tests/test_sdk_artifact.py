@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import copy
+import hashlib
+import io
 import json
 from pathlib import Path
+import runpy
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 
@@ -23,6 +28,43 @@ class SdkArtifactTests(unittest.TestCase):
         completed = subprocess.run(arguments, cwd=cwd, text=True, capture_output=True, check=False)
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
         return completed
+
+    def test_native_command_claims_require_every_composed_payload(self) -> None:
+        derive_capabilities = runpy.run_path(str(BUILDER))["derive_capabilities"]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            payload = root / "payload"
+            install_tree = root / "install"
+            required_files = (
+                "vellum_cli.py",
+                "design-ir/bin/vellum-backend.js",
+                "ui/package.json",
+                "ui/package-lock.json",
+                "ui/src/index.js",
+                "ui/node_modules/esbuild/package.json",
+                "ui/node_modules/typescript/package.json",
+            )
+            for relative in required_files:
+                path = payload / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("{}\n", encoding="utf-8")
+            package = install_tree / "lib/cmake/Vellum"
+            package.mkdir(parents=True)
+            (package / "VellumConfig.cmake").write_text(
+                "# Vellum::Gpu Vellum::Authoring\n", encoding="utf-8"
+            )
+            without_backend = derive_capabilities(payload, install_tree)
+            self.assertTrue(without_backend["gpu_renderer"])
+            self.assertFalse(any(
+                without_backend["commands"][command]
+                for command in ("build", "run", "test", "capture", "package")
+            ))
+            (payload / "vellum_native_backend.py").write_text("# fixture\n", encoding="utf-8")
+            with_backend = derive_capabilities(payload, install_tree)
+            self.assertTrue(all(
+                with_backend["commands"][command]
+                for command in ("build", "run", "test", "capture", "package")
+            ))
 
     def test_reproducible_archive_installs_into_sterile_consumer(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -71,6 +113,32 @@ class SdkArtifactTests(unittest.TestCase):
             for command in ("build", "run", "test", "capture", "package"):
                 self.assertEqual(verification["claims"]["commands"][command], False)
 
+            forged_archive = root / "vellum-sdk-forged-claims.tar.gz"
+            with tarfile.open(first_archive, "r:gz") as source, tarfile.open(forged_archive, "w:gz") as output:
+                for member in source.getmembers():
+                    file_object = source.extractfile(member) if member.isfile() else None
+                    if member.name == "metadata.json":
+                        forged_metadata = json.load(file_object)
+                        forged_metadata["capabilities"]["commands"]["build"] = True
+                        content = (json.dumps(forged_metadata, indent=2, sort_keys=True) + "\n").encode()
+                        replacement = copy.copy(member)
+                        replacement.size = len(content)
+                        output.addfile(replacement, io.BytesIO(content))
+                    else:
+                        output.addfile(member, file_object)
+            forged_sums = root / "FORGED-SHA256SUMS"
+            forged_sums.write_text(
+                f"{hashlib.sha256(forged_archive.read_bytes()).hexdigest()}  {forged_archive.name}\n",
+                encoding="utf-8",
+            )
+            forged = subprocess.run([
+                sys.executable, str(VERIFIER),
+                "--archive", str(forged_archive),
+                "--checksums", str(forged_sums), "--json",
+            ], text=True, capture_output=True, check=False)
+            self.assertNotEqual(forged.returncode, 0)
+            self.assertIn("capability claims do not match", forged.stderr)
+
             validated = self.run_checked([
                 sys.executable, str(VALIDATOR),
                 "--archive", str(first_archive),
@@ -87,6 +155,12 @@ class SdkArtifactTests(unittest.TestCase):
                 "--checksums", str(first_sums), "--install-dir", str(prefix),
             ])
             self.assertIn("Verified SHA-256", installed.stdout)
+            install_manifest = json.loads(
+                (prefix / "lib/vellum/install-manifest.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(install_manifest["artifact_sha256"], verification["sha256"])
+            self.assertEqual(install_manifest["source_commit"], current_head)
+            self.assertTrue(install_manifest["verified"])
             if shutil.which("curl"):
                 release_dir = root / "release/v0.1.0"
                 release_dir.mkdir(parents=True)
@@ -125,6 +199,12 @@ class SdkArtifactTests(unittest.TestCase):
             self.assertEqual(json.loads(created.stdout)["status"], "created")
             lock = json.loads((project / "vellum.lock.json").read_text(encoding="utf-8"))
             self.assertEqual(lock["framework"]["version"], "0.1.0")
+            self.assertEqual(lock["framework"]["artifact"], {
+                "verified": True,
+                "sha256": verification["sha256"],
+                "target": "test-host",
+                "sourceCommit": current_head,
+            })
             doctor = self.run_checked([str(prefix / "bin/vellum"), "doctor", "--json"], cwd=project)
             doctor_payload = json.loads(doctor.stdout)
             sdk_check = next(item for item in doctor_payload["data"]["checks"] if item["name"] == "sdk-artifact")
