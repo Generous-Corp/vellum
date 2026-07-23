@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
-#include <unordered_set>
+#include <unordered_map>
 
 namespace vellum::graphics {
 
@@ -18,13 +18,8 @@ CaptureStats analyze_capture_rgba(
 
     CaptureStats stats{};
     stats.pixel_count = pixel_count;
-    std::unordered_set<std::uint32_t> colors;
-    colors.reserve(std::min<std::size_t>(pixel_count, 4096U));
-    const auto background =
-        (static_cast<std::uint32_t>(rgba[0]) << 24U) |
-        (static_cast<std::uint32_t>(rgba[1]) << 16U) |
-        (static_cast<std::uint32_t>(rgba[2]) << 8U) |
-        rgba[3];
+    std::unordered_map<std::uint32_t, std::size_t> color_counts;
+    color_counts.reserve(std::min<std::size_t>(pixel_count, 4096U));
     double luminance_sum = 0.0;
     double luminance_square_sum = 0.0;
 
@@ -35,16 +30,19 @@ CaptureStats analyze_capture_rgba(
             (static_cast<std::uint32_t>(rgba[offset + 1]) << 16U) |
             (static_cast<std::uint32_t>(rgba[offset + 2]) << 8U) |
             rgba[offset + 3];
-        colors.insert(color);
+        ++color_counts[color];
         stats.opaque_pixels += rgba[offset + 3] >= 250U ? 1U : 0U;
-        stats.non_background_pixels += color != background ? 1U : 0U;
         const double luminance =
             0.2126 * rgba[offset] + 0.7152 * rgba[offset + 1] +
             0.0722 * rgba[offset + 2];
         luminance_sum += luminance;
         luminance_square_sum += luminance * luminance;
     }
-    stats.unique_colors = colors.size();
+    stats.unique_colors = color_counts.size();
+    const auto dominant = std::max_element(
+        color_counts.begin(), color_counts.end(),
+        [](const auto& left, const auto& right) { return left.second < right.second; });
+    stats.non_background_pixels = pixel_count - dominant->second;
     const double mean = luminance_sum / static_cast<double>(pixel_count);
     const double variance = std::max(
         0.0, luminance_square_sum / static_cast<double>(pixel_count) - mean * mean);

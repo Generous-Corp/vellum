@@ -19,6 +19,8 @@ option(VELLUM_ENABLE_GRAPHICS "Build the initial platform graphics backend" ON)
 option(VELLUM_ENABLE_GPU "Build the pinned Skia Graphite + Dawn GPU backend when its artifact is available" ON)
 option(VELLUM_REQUIRE_GPU "Fail configure unless the requested Skia/Dawn GPU backend is available" OFF)
 option(VELLUM_ENABLE_AUTHORING "Build the native JavaScript/TypeScript application host" ON)
+set(VELLUM_AUTHORING_TEST_BUNDLE "" CACHE FILEPATH
+    "Optional @vellum/ui classic-script bundle for the real JavaScriptCore integration test")
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -89,6 +91,15 @@ if(VELLUM_BUILD_TESTS)
             authoring/tests/js_application_test.cpp)
         target_link_libraries(vellum-authoring-test PRIVATE Vellum::Authoring)
         add_test(NAME vellum.authoring COMMAND vellum-authoring-test)
+        if(VELLUM_AUTHORING_TEST_BUNDLE)
+            if(NOT EXISTS "${VELLUM_AUTHORING_TEST_BUNDLE}")
+                message(FATAL_ERROR
+                    "VELLUM_AUTHORING_TEST_BUNDLE does not exist: "
+                    "${VELLUM_AUTHORING_TEST_BUNDLE}")
+            endif()
+            add_test(NAME vellum.authoring-ui-bundle
+                COMMAND vellum-authoring-test "${VELLUM_AUTHORING_TEST_BUNDLE}")
+        endif()
     endif()
 
     add_test(NAME vellum.install-consumer

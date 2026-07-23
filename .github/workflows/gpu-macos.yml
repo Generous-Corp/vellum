@@ -31,12 +31,27 @@ jobs:
             "$archive" | shasum -a 256 -c -
           printf 'VELLUM_SKIA_ARCHIVE=%s\n' "$archive" >> "$GITHUB_ENV"
 
+      - name: Set up the authoring toolchain
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: packages/vellum-ui/package-lock.json
+
+      - name: Build the real TypeScript and JSX host fixture
+        run: |
+          npm ci --prefix packages/vellum-ui
+          npm test --prefix packages/vellum-ui
+          npm run --prefix packages/vellum-ui build:native-test -- \
+            "$RUNNER_TEMP/vellum-ui-native.iife.js"
+
       - name: Build the release GPU slice
         run: |
           cmake -S . -B build-gpu \
             -DCMAKE_BUILD_TYPE=Release \
             -DVELLUM_BUILD_TESTS=ON \
             -DVELLUM_REQUIRE_GPU=ON \
+            -DVELLUM_AUTHORING_TEST_BUNDLE="$RUNNER_TEMP/vellum-ui-native.iife.js" \
             -DVELLUM_SKIA_ARCHIVE="$VELLUM_SKIA_ARCHIVE"
           cmake --build build-gpu --parallel
 

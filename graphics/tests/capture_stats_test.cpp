@@ -14,6 +14,18 @@ int main() {
         return 1;
     }
 
+    std::vector<std::uint8_t> corner_content(10U * 10U * 4U, 255U);
+    for (std::size_t pixel = 0; pixel < 10U; ++pixel) {
+        const auto offset = pixel * 4U;
+        corner_content[offset] = 10U;
+        corner_content[offset + 1U] = 20U;
+        corner_content[offset + 2U] = 30U;
+    }
+    const auto corner_stats = analyze_capture_rgba(corner_content, 10U, 10U);
+    if (corner_stats.non_background_pixels != 10U || corner_stats.unique_colors != 2U) {
+        return 1;
+    }
+
     std::vector<std::uint8_t> content(width * height * 4U, 255U);
     for (std::uint32_t y = 0; y < height; ++y) {
         for (std::uint32_t x = 0; x < width; ++x) {

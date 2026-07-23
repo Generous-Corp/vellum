@@ -1,7 +1,15 @@
 {
   "schema_version": 2,
   "status": "incubation-byte-locked-not-release-attested",
-  "dependencies": [],
+  "dependencies": [
+    {
+      "name": "Skia Graphite and Dawn renderer toolchain",
+      "version": "chrome/m150",
+      "license": "multiple; see NOTICE.md and runtime_toolchain_dependencies",
+      "sha256": "13b0e9818c3b05db661af85cb1e2bf2ef10e30d468b81351dd90295237d17734",
+      "surface": "byte-locked build input statically linked into the optional installed vellum-gpu shared library; source association and exhaustive legal inventory remain release-blocked"
+    }
+  ],
   "runtime_toolchain_dependencies": {
     "state": "renderer-artifact-byte-locked",
     "renderer": {
