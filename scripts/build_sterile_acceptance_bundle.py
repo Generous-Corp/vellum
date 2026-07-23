@@ -17,7 +17,9 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_FILES = (
     "install.sh",
     "install_core.py",
+    "select_release.py",
     "validate_installed_sdk.py",
+    "verify_release_assets.py",
     "verify_sdk_artifact.py",
 )
 SUPPORT_FILES = (
