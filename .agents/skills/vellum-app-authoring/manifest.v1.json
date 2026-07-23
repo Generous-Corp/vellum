@@ -21,7 +21,7 @@
       "step": "create",
       "kind": "cli",
       "command": "create",
-      "flags": ["--json", "--directory", "--template"]
+      "flags": ["--json", "--directory", "--template", "--from", "--as"]
     },
     {
       "step": "doctor",

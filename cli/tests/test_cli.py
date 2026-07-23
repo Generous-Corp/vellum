@@ -88,6 +88,63 @@ class CliTests(unittest.TestCase):
             self.assertEqual(json.loads(completed.stdout)["status"], "capability_unavailable")
             self.assertFalse(destination.exists())
 
+    def test_create_from_requires_import_capability_before_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "frame.json"
+            source.write_text("{}\n", encoding="utf-8")
+            destination = root / "app"
+            completed = invoke(
+                "create", "Imported", "-d", str(destination),
+                "--from", "figma", str(source), "--json",
+            )
+            self.assertEqual(completed.returncode, 4)
+            self.assertEqual(json.loads(completed.stdout)["status"], "capability_unavailable")
+            self.assertFalse(destination.exists())
+
+    def test_create_from_composes_initial_import_with_permanent_source_key(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sdk = root / "sdk"
+            sdk.mkdir()
+            commands = {
+                "import": True, "reimport": True, "build": False, "run": False,
+                "test": False, "capture": False, "package": False,
+            }
+            (sdk / "metadata.json").write_text(json.dumps({
+                "schema": "vellum.sdk-artifact.v1", "framework_version": "0.1.0",
+                "cli_version": "0.1.0-dev", "cli_api": 1, "source_commit": None,
+                "target": "local-development",
+                "capabilities": {"authoring_cli": True, "cmake_sdk": False, "gpu_renderer": False, "commands": commands},
+                "files": [],
+            }), encoding="utf-8")
+            (sdk / "install-manifest.json").write_text(json.dumps({
+                "schema": "vellum.sdk-install.v1", "verified": False,
+                "artifact": None, "artifact_sha256": None, "framework_version": "0.1.0",
+                "target": "local-development", "source_commit": None,
+            }), encoding="utf-8")
+            backend = root / "backend"
+            backend.write_text(
+                f"#!{sys.executable}\n"
+                "import json, sys\n"
+                "print(json.dumps({'schema':'vellum.backend.result.v1','ok':True,'status':'imported','message':'ok','data':{'argv':sys.argv[1:]},'diagnostics':[]}))\n",
+                encoding="utf-8",
+            )
+            backend.chmod(0o755)
+            source = root / "frame.json"
+            source.write_text("{}\n", encoding="utf-8")
+            destination = root / "app"
+            completed = invoke(
+                "create", "Imported", "-d", str(destination), "--no-verify",
+                "--from", "figma", str(source), "--as", "shell", "--json",
+                env={"VELLUM_SDK_ROOT": str(sdk), "VELLUM_BACKEND": str(backend)},
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["data"]["validation"]["commands"], [
+                {"command": "import", "status": "imported"}
+            ])
+
     def test_create_refuses_file_destination_without_traceback(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             destination = Path(temporary) / "a-file"

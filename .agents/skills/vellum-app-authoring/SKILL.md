@@ -31,6 +31,7 @@ to the project lock.
 
 ```sh
 vellum --json create "My App" --directory "$app" --template basic
+vellum --json create "Imported App" --directory "$app" --template basic --from figma "$figma_export" --as main
 vellum --json doctor --fix --project "$app"
 vellum --json import "$figma_export" --source-type figma --as main --project "$app"
 vellum --json reimport --source "$updated_export" --as main --project "$app"

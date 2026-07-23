@@ -106,6 +106,10 @@ vellum capture --scenario smoke --output artifacts/smoke.png
 vellum package --target macos --output dist
 ```
 
+The one-command imported path is
+`vellum create "Imported App" --from figma ./frame.pulp.zip --run`; it uses
+the permanent source key `main` unless `--as` supplies another key.
+
 `create` is deterministic and separates imported snapshots, normalized
 DesignIR, generated UI, tokens/assets, hand-written app logic, optional native
 components, platform modules, tests, and packaging configuration. The macOS GPU

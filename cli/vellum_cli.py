@@ -265,6 +265,26 @@ def create_project(args: argparse.Namespace) -> dict[str, Any]:
     if not source.is_dir():
         raise CliFailure(f"Unknown template: {args.template}", status="unknown_template", exit_code=EXIT_USAGE)
     sdk = load_sdk_metadata()
+    import_request: tuple[str, Path, str] | None = None
+    if args.import_source:
+        source_type, source_value = args.import_source
+        if source_type not in {"figma", "design-ir"}:
+            raise CliFailure(
+                f"Unsupported create source type: {source_type}",
+                status="unsupported_source_type", exit_code=EXIT_USAGE,
+            )
+        source_path = Path(source_value).expanduser().resolve()
+        if not source_path.is_file():
+            raise CliFailure(
+                f"Import source does not exist: {source_path}",
+                status="source_not_found", exit_code=EXIT_PROJECT,
+            )
+        if sdk is None or sdk[1]["capabilities"]["commands"].get("import") is not True:
+            raise CliFailure(
+                "create --from requires an installed SDK with the import capability.",
+                status="capability_unavailable", exit_code=EXIT_UNAVAILABLE,
+            )
+        import_request = (source_type, source_path, args.source_key)
     if args.run and (
         sdk is None
         or not all(sdk[1]["capabilities"]["commands"].get(name) for name in ("build", "run", "test"))
@@ -319,14 +339,34 @@ def create_project(args: argparse.Namespace) -> dict[str, Any]:
                 diagnostics=[{"level": "error", "code": "npm_ci_failed", "message": npm_detail}],
             )
 
+    lock = json.loads((destination / LOCK_NAME).read_text(encoding="utf-8"))
+    if sdk is not None:
+        validate_project_sdk(lock, sdk)
+    if import_request is not None:
+        source_type, source_path, source_key = import_request
+        backend_payload, return_code = invoke_backend(
+            "import", destination, lock,
+            [str(source_path), "--source-type", source_type, "--as", source_key],
+        )
+        setup_commands.append({"command": "import", "status": backend_payload.get("status")})
+        if return_code != 0 or not backend_payload.get("ok"):
+            return result(
+                "create", ok=False, status="create_import_failed",
+                message="Created the project, but initial design import failed.",
+                data={
+                    "project_root": str(destination), "project_id": project_id,
+                    "files": created, "validation": {"status": "failed", "commands": setup_commands},
+                    "backend": backend_payload,
+                },
+                diagnostics=backend_payload.get("diagnostics", []),
+            )
+
     validation: dict[str, Any] = {
         "status": "not_available",
         "commands": setup_commands,
         "detail": "No installed native SDK capability was available; scaffold only.",
     }
     if not args.no_verify and sdk is not None:
-        lock = json.loads((destination / LOCK_NAME).read_text(encoding="utf-8"))
-        validate_project_sdk(lock, sdk)
         capabilities = sdk[1]["capabilities"]["commands"]
         if capabilities.get("build") and capabilities.get("test"):
             completed_commands: list[dict[str, Any]] = list(setup_commands)
@@ -778,6 +818,12 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("name")
     create.add_argument("--directory", "-d")
     create.add_argument("--template", default="basic")
+    create.add_argument(
+        "--from", dest="import_source", nargs=2, metavar=("SOURCE_TYPE", "SOURCE"),
+        choices=None,
+        help="create from an initial source: --from figma FILE or --from design-ir FILE",
+    )
+    create.add_argument("--as", dest="source_key", default="main", help="permanent source key for --from")
     create.add_argument("--no-verify", action="store_true", help="scaffold without installed native build/test proof")
     create.add_argument("--run", action="store_true", help="launch after the default build/test proof")
 
