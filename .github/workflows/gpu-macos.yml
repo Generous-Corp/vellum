@@ -74,12 +74,38 @@ jobs:
             --output "$RUNNER_TEMP/provenance-report.json"
           npm run check --prefix packages/vellum-design-ir
 
-      - name: Build the real TypeScript and JSX host fixture
+      - name: Build the installed TypeScript and JSX Phase 3 fixture
+        shell: bash
         run: |
+          set -euo pipefail
           npm ci --prefix packages/vellum-ui
           npm test --prefix packages/vellum-ui
-          npm run --prefix packages/vellum-ui build:native-test -- \
-            "$RUNNER_TEMP/vellum-ui-native.iife.js"
+          fixture_root="$RUNNER_TEMP/phase3-installed"
+          cp -R fixtures/authoring-phase3 "$fixture_root"
+          mkdir -p "$RUNNER_TEMP/phase3-packages"
+          package_json="$(
+            npm pack ./packages/vellum-ui \
+              --pack-destination "$RUNNER_TEMP/phase3-packages" --json
+          )"
+          archive_name="$(
+            node -e '
+              const fs = require("fs");
+              const value = JSON.parse(fs.readFileSync(0, "utf8"));
+              process.stdout.write(value[0].filename);
+            ' <<<"$package_json"
+          )"
+          npm pkg set \
+            "dependencies.@vellum/ui=file:$RUNNER_TEMP/phase3-packages/$archive_name" \
+            --prefix "$fixture_root"
+          npm install --offline --ignore-scripts --no-audit --no-fund \
+            --package-lock=false --prefix "$fixture_root"
+          bundle="$RUNNER_TEMP/vellum-phase3-native.iife.js"
+          VELLUM_BUILD_FORMAT=iife \
+          VELLUM_PROJECT_ROOT="$fixture_root" \
+            node "$fixture_root/node_modules/@vellum/ui/scripts/build-project.mjs" \
+              "$fixture_root/src/App.tsx" "$bundle"
+          printf 'VELLUM_AUTHORING_TEST_BUNDLE=%s\n' "$bundle" \
+            >> "$GITHUB_ENV"
 
       - name: Build the release GPU slice
         run: |
@@ -87,7 +113,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DVELLUM_BUILD_TESTS=ON \
             -DVELLUM_REQUIRE_GPU=ON \
-            -DVELLUM_AUTHORING_TEST_BUNDLE="$RUNNER_TEMP/vellum-ui-native.iife.js" \
+            -DVELLUM_AUTHORING_TEST_BUNDLE="$VELLUM_AUTHORING_TEST_BUNDLE" \
             -DVELLUM_SKIA_ARCHIVE="$VELLUM_SKIA_ARCHIVE"
           cmake --build build-gpu --parallel
 
