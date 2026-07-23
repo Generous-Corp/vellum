@@ -42,6 +42,8 @@ class SdkArtifactTests(unittest.TestCase):
                 "ui/package-lock.json",
                 "ui/src/index.js",
                 "ui/node_modules/esbuild/package.json",
+                "ui/node_modules/@esbuild/darwin-arm64/package.json",
+                "ui/node_modules/@esbuild/darwin-arm64/bin/esbuild",
                 "ui/node_modules/typescript/package.json",
             )
             for relative in required_files:
@@ -53,6 +55,14 @@ class SdkArtifactTests(unittest.TestCase):
             (package / "VellumConfig.cmake").write_text(
                 "# Vellum::Gpu Vellum::Authoring\n", encoding="utf-8"
             )
+            for relative in (
+                "bin/vellum-app-host",
+                "lib/libvellum-authoring.dylib",
+                "lib/libvellum-gpu.dylib",
+            ):
+                path = install_tree / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"fixture\n")
             without_backend = derive_capabilities(payload, install_tree)
             self.assertTrue(without_backend["gpu_renderer"])
             self.assertFalse(any(
