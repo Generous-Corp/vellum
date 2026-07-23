@@ -54,10 +54,17 @@ The CLI discovers an executable in this order:
 It invokes:
 
 ```text
-vellum-backend COMMAND --project ABSOLUTE_ROOT --json [command options]
+vellum-backend COMMAND --project ABSOLUTE_ROOT --json \
+  --framework-version EXACT_VERSION --cli-api API [command options]
 ```
 
-The backend must write one JSON object with `ok`, `status`, `message`, optional
+The framework/API arguments are a required compatibility handshake. The
+installed dispatcher checks them against `metadata.json`, then routes
+`import`/`reimport` to `vellum-import-backend` and reserves
+`vellum-native-backend` for native application commands. Those executables never
+replace one another.
+
+The selected backend must write one JSON object with `ok`, `status`, `message`, optional
 `data`, and optional `diagnostics`; it must use a nonzero exit status on
 failure. The front end nests that response under `data.backend`, preserving the
 stable outer schema.
@@ -69,9 +76,14 @@ stable outer schema.
 | `create` | yes | none |
 | `doctor [--fix]` | yes | reports backend availability |
 | `import` / `reimport` | no | implemented by the installed `@vellum/design-ir` backend |
-| `build` / `run` | no | platform build and runtime host |
-| `test` / `capture` | no | scenario driver and capture provider |
-| `package` | no | target packager |
+| `build` / `run` | no | unavailable; future native backend |
+| `test` / `capture` | no | unavailable; future native backend |
+| `package` | no | unavailable; future native backend |
+
+Installed SDK metadata carries a boolean capability for every backend command.
+The CLI rejects a false capability before dispatch, so the existence of the
+import backend never implies that native build, run, capture, or packaging is
+available.
 
 `doctor --fix` only creates safe project-local cache and state directories. It
 does not silently install system packages or modify shell profiles.

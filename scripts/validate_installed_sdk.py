@@ -76,9 +76,28 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
         doctor = json.loads(run([
             str(prefix / "bin/vellum"), "doctor", "--json",
         ], cwd=project).stdout)
+        imported = json.loads(run([
+            str(prefix / "bin/vellum"), "import",
+            str(REPO / "fixtures/design-ir/revision-a.source.json"),
+            "--source-type", "figma", "--as", "main", "--json",
+        ], cwd=project).stdout)
+        reimported = json.loads(run([
+            str(prefix / "bin/vellum"), "reimport",
+            "--source", str(REPO / "fixtures/design-ir/revision-b.source.json"),
+            "--as", "main", "--json",
+        ], cwd=project).stdout)
+        active_revision = json.loads(
+            (project / "design/import.lock.json").read_text(encoding="utf-8")
+        )["sources"]["main"]["activeRevision"]
         lock = json.loads((project / "vellum.lock.json").read_text(encoding="utf-8"))
         if lock["framework"]["version"] != verification["framework_version"]:
             raise ValidationError("created project lock does not match the installed SDK artifact")
+        if created.get("status") != "created" or doctor.get("status") != "ready":
+            raise ValidationError("installed CLI create/doctor journey did not become ready")
+        if imported.get("status") != "imported" or reimported.get("status") != "reimported":
+            raise ValidationError("installed CLI import/reimport journey did not complete")
+        if active_revision != "palette-board-b":
+            raise ValidationError("installed CLI reimport did not advance the active revision")
 
     return {
         "schema": "vellum.installed-sdk-validation.v1",
@@ -100,6 +119,9 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
             "project_created_by_installed_cli": created.get("status") == "created",
             "project_lock_matches_sdk": True,
             "installed_cli_doctor": doctor.get("status") == "ready",
+            "installed_cli_import": imported.get("status") == "imported",
+            "installed_cli_reimport": reimported.get("status") == "reimported",
+            "active_reimport_revision": active_revision == "palette-board-b",
         },
     }
 

@@ -11,11 +11,21 @@ param(
 $ErrorActionPreference = "Stop"
 if (!$InstallDir -or $InstallDir -eq "/" -or $InstallDir -eq ".") { throw "Refusing unsafe install prefix: $InstallDir" }
 
+function Assert-Node20 {
+    $node = Get-Command node -ErrorAction SilentlyContinue
+    if (!$node) { throw "Node.js 20+ is required for import/reimport." }
+    $rendered = (& node --version).Trim()
+    if ($LASTEXITCODE -ne 0 -or $rendered -notmatch '^v?(\d+)(?:\.\d+){0,2}$' -or [int]$Matches[1] -lt 20) {
+        throw "Node.js 20+ is required for import/reimport; found $rendered."
+    }
+}
+
 function Install-Payload([string]$Payload) {
     $library = Join-Path $InstallDir "lib\vellum"
     $bin = Join-Path $InstallDir "bin"
     New-Item -ItemType Directory -Force -Path $library, $bin | Out-Null
     Copy-Item (Join-Path $Payload "vellum_cli.py") (Join-Path $library "vellum_cli.py") -Force
+    Copy-Item (Join-Path $Payload "vellum_backend.py") (Join-Path $library "vellum_backend.py") -Force
     $templateDestination = Join-Path $library "templates"
     Remove-Item $templateDestination -Recurse -Force -ErrorAction SilentlyContinue
     Copy-Item (Join-Path $Payload "templates") $templateDestination -Recurse
@@ -24,30 +34,34 @@ function Install-Payload([string]$Payload) {
         Copy-Item (Join-Path $Payload "metadata.json") (Join-Path $library "metadata.json") -Force
         Remove-Item $sdkDestination -Recurse -Force -ErrorAction SilentlyContinue
         Copy-Item (Join-Path $Payload "sdk") $sdkDestination -Recurse
-        Remove-Item (Join-Path $library "bin") -Recurse -Force -ErrorAction SilentlyContinue
     } elseif (!(Test-Path (Join-Path $library "metadata.json"))) {
         Copy-Item (Join-Path $Payload "metadata.json") (Join-Path $library "metadata.json") -Force
     }
+    Remove-Item (Join-Path $library "bin") -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force -Path (Join-Path $library "bin") | Out-Null
     $designIr = Join-Path $Payload "design-ir"
     if (Test-Path $designIr) {
-        if (!(Get-Command node -ErrorAction SilentlyContinue)) { throw "Node.js 20+ is required for import/reimport." }
+        Assert-Node20
         $designIrDestination = Join-Path $library "design-ir"
         Remove-Item $designIrDestination -Recurse -Force -ErrorAction SilentlyContinue
         Copy-Item $designIr $designIrDestination -Recurse
-        New-Item -ItemType Directory -Force -Path (Join-Path $library "bin") | Out-Null
-        $backendLauncher = @'
+        $importLauncher = @'
 @echo off
 node "%~dp0..\design-ir\bin\vellum-backend.js" %*
 '@
-        $backendLauncher = $backendLauncher.Replace("`n", "`r`n")
-        [IO.File]::WriteAllText((Join-Path $library "bin\vellum-backend.cmd"), $backendLauncher)
-    } else {
-        $backend = Join-Path $Payload "bin\vellum-backend.exe"
-        if (Test-Path $backend) {
-            New-Item -ItemType Directory -Force -Path (Join-Path $library "bin") | Out-Null
-            Copy-Item $backend (Join-Path $library "bin\vellum-backend.exe") -Force
-        }
+        $importLauncher = $importLauncher.Replace("`n", "`r`n")
+        [IO.File]::WriteAllText((Join-Path $library "bin\vellum-import-backend.cmd"), $importLauncher)
     }
+    $nativeBackend = Join-Path $Payload "bin\vellum-native-backend.exe"
+    if (Test-Path $nativeBackend) {
+        Copy-Item $nativeBackend (Join-Path $library "bin\vellum-native-backend.exe") -Force
+    }
+    $backendLauncher = @'
+@echo off
+python "%~dp0..\vellum_backend.py" %*
+'@
+    $backendLauncher = $backendLauncher.Replace("`n", "`r`n")
+    [IO.File]::WriteAllText((Join-Path $library "bin\vellum-backend.cmd"), $backendLauncher)
     $launcher = @'
 @echo off
 set VELLUM_SDK_ROOT=%~dp0..\lib\vellum
@@ -63,12 +77,17 @@ python "%VELLUM_SDK_ROOT%\vellum_cli.py" %*
 if ($LocalRoot) {
     if ($Archive -or $Checksums -or $Version) { throw "-LocalRoot cannot be combined with artifact or release options." }
     $cli = Join-Path $LocalRoot "cli\vellum_cli.py"
+    $dispatcher = Join-Path $LocalRoot "cli\vellum_backend.py"
     $templates = Join-Path $LocalRoot "templates\basic"
-    if (!(Test-Path $cli) -or !(Test-Path $templates)) { throw "Local root lacks cli/vellum_cli.py or templates/basic." }
+    $designIrPackage = Join-Path $LocalRoot "packages\vellum-design-ir"
+    if (!(Test-Path $cli) -or !(Test-Path $dispatcher) -or !(Test-Path $templates) -or !(Test-Path $designIrPackage)) {
+        throw "Local root lacks the CLI, dispatcher, templates, or DesignIR package."
+    }
     $temporary = Join-Path ([IO.Path]::GetTempPath()) ("vellum-local-" + [guid]::NewGuid())
     New-Item -ItemType Directory -Path $temporary | Out-Null
     try {
         Copy-Item $cli (Join-Path $temporary "vellum_cli.py")
+        Copy-Item (Join-Path $LocalRoot "cli\vellum_backend.py") (Join-Path $temporary "vellum_backend.py")
         Copy-Item (Join-Path $LocalRoot "templates") (Join-Path $temporary "templates") -Recurse
         @'
 {
@@ -81,8 +100,16 @@ if ($LocalRoot) {
   "capabilities": {
     "cmake_sdk": false,
     "authoring_cli": true,
-    "native_backend": false,
-    "gpu_renderer": false
+    "gpu_renderer": false,
+    "commands": {
+      "import": true,
+      "reimport": true,
+      "build": false,
+      "run": false,
+      "test": false,
+      "capture": false,
+      "package": false
+    }
   },
   "files": []
 }
@@ -158,7 +185,7 @@ with tarfile.open(archive, "r:gz") as handle:
         raise SystemExit("archive contains duplicate member names")
     for member in members:
         path = PurePosixPath(member.name)
-        if (not path.parts or path.parts[0] not in {"vellum_cli.py", "templates", "sdk", "bin", "design-ir", "metadata.json"} or
+        if (not path.parts or path.parts[0] not in {"vellum_cli.py", "vellum_backend.py", "templates", "sdk", "bin", "design-ir", "metadata.json"} or
                 path.is_absolute() or ".." in path.parts or "\\" in member.name or ":" in path.parts[0] or
                 member.issym() or member.islnk() or not (member.isfile() or member.isdir())):
             raise SystemExit(f"unsafe archive member: {member.name}")
@@ -176,7 +203,9 @@ with tarfile.open(archive, "r:gz") as handle:
     $extractor | python - $Archive $temporary
     if ($LASTEXITCODE -ne 0) { throw "Archive extraction validation failed." }
     if (!(Test-Path (Join-Path $temporary "vellum_cli.py")) -or
+        !(Test-Path (Join-Path $temporary "vellum_backend.py")) -or
         !(Test-Path (Join-Path $temporary "templates\basic")) -or
+        !(Test-Path (Join-Path $temporary "design-ir")) -or
         !(Test-Path (Join-Path $temporary "metadata.json")) -or
         !(Test-Path (Join-Path $temporary "sdk"))) {
         throw "Verified archive does not contain the Vellum SDK artifact layout."

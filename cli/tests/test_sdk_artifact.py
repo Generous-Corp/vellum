@@ -64,7 +64,10 @@ class SdkArtifactTests(unittest.TestCase):
             verification = json.loads(verified.stdout)
             self.assertTrue(verification["ok"])
             self.assertEqual(verification["claims"]["gpu_renderer"], False)
-            self.assertEqual(verification["claims"]["native_backend"], False)
+            self.assertEqual(verification["claims"]["commands"]["import"], True)
+            self.assertEqual(verification["claims"]["commands"]["reimport"], True)
+            for command in ("build", "run", "test", "capture", "package"):
+                self.assertEqual(verification["claims"]["commands"][command], False)
 
             validated = self.run_checked([
                 sys.executable, str(VALIDATOR),

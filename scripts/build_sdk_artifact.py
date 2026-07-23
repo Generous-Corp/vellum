@@ -2,8 +2,8 @@
 """Build a deterministic, checksummed Vellum SDK archive.
 
 The archive is the installation boundary: it contains the authoring CLI,
-templates, SDK metadata, and a relocatable CMake install tree.  It intentionally
-does not claim a native application backend unless one is supplied explicitly.
+DesignIR import backend, SDK metadata, and a relocatable CMake install tree.
+Native application commands remain explicitly unavailable.
 """
 
 from __future__ import annotations
@@ -30,6 +30,16 @@ CLI_VERSION = "0.1.0-dev"
 CLI_API = 1
 METADATA_SCHEMA = "vellum.sdk-artifact.v1"
 EVIDENCE_SCHEMA = "vellum.sdk-artifact-evidence.v1"
+COMMAND_CAPABILITIES = {
+    "import": True,
+    "reimport": True,
+    "build": False,
+    "run": False,
+    "test": False,
+    "capture": False,
+    "package": False,
+}
+DESIGN_IR_PAYLOAD_ENTRIES = ("LICENSE.md", "README.md", "bin", "package.json", "schema", "src")
 
 
 class ArtifactError(RuntimeError):
@@ -194,8 +204,19 @@ def copy_payload(
     target: str,
 ) -> dict[str, object]:
     shutil.copy2(repo / "cli/vellum_cli.py", payload / "vellum_cli.py")
+    shutil.copy2(repo / "cli/vellum_backend.py", payload / "vellum_backend.py")
     shutil.copytree(repo / "templates", payload / "templates")
     shutil.copytree(install_tree, payload / "sdk")
+    design_ir_source = repo / "packages/vellum-design-ir"
+    design_ir_payload = payload / "design-ir"
+    design_ir_payload.mkdir()
+    for entry in DESIGN_IR_PAYLOAD_ENTRIES:
+        source = design_ir_source / entry
+        destination = design_ir_payload / entry
+        if source.is_dir():
+            shutil.copytree(source, destination)
+        else:
+            shutil.copy2(source, destination)
     metadata: dict[str, object] = {
         "schema": METADATA_SCHEMA,
         "framework_version": FRAMEWORK_VERSION,
@@ -207,8 +228,8 @@ def copy_payload(
         "capabilities": {
             "cmake_sdk": True,
             "authoring_cli": True,
-            "native_backend": False,
             "gpu_renderer": False,
+            "commands": COMMAND_CAPABILITIES,
         },
     }
     metadata["files"] = payload_files(payload)

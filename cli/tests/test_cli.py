@@ -147,7 +147,11 @@ class CliTests(unittest.TestCase):
             self.assertEqual(payload["status"], "built")
             self.assertEqual(
                 payload["data"]["backend"]["data"]["argv"],
-                ["build", "--project", str(project.resolve()), "--json", "--target", "web"],
+                [
+                    "build", "--project", str(project.resolve()), "--json",
+                    "--framework-version", "0.1.0", "--cli-api", "1",
+                    "--target", "web",
+                ],
             )
 
     def test_invalid_lock_fails_before_backend_discovery(self) -> None:
@@ -170,7 +174,20 @@ class CliTests(unittest.TestCase):
                 "framework_version": "0.2.0",
                 "cli_version": "0.2.0",
                 "cli_api": 1,
-                "capabilities": {},
+                "capabilities": {
+                    "authoring_cli": True,
+                    "cmake_sdk": True,
+                    "gpu_renderer": False,
+                    "commands": {
+                        "import": True,
+                        "reimport": True,
+                        "build": False,
+                        "run": False,
+                        "test": False,
+                        "capture": False,
+                        "package": False,
+                    },
+                },
             }), encoding="utf-8")
             completed = invoke("build", "--json", cwd=project, env={"VELLUM_SDK_ROOT": str(sdk)})
             self.assertEqual(completed.returncode, 3)

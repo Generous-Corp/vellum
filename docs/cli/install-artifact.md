@@ -9,6 +9,7 @@ The gzip-compressed tar has this root layout:
 
 ```text
 vellum_cli.py
+vellum_backend.py
 templates/basic/...
 metadata.json
 sdk/include/...
@@ -17,8 +18,7 @@ sdk/lib/libvellum-*.a
 design-ir/bin/vellum-backend.js
 design-ir/src/...
 design-ir/schema/...
-bin/vellum-backend        # optional on Unix
-bin/vellum-backend.exe    # optional on Windows
+design-ir/LICENSE.md
 ```
 
 `metadata.json` uses `vellum.sdk-artifact.v1`, records framework and CLI
@@ -27,9 +27,12 @@ claims. The current artifact claims the authoring CLI, deterministic DesignIR
 import/reimport, and CMake SDK; it explicitly records native application and GPU
 rendering capabilities as unavailable.
 
-When `design-ir/` is present, the installers generate the platform launcher
-(`vellum-backend` or `vellum-backend.cmd`) that runs its packaged backend. A
-future native backend executable may occupy the optional `bin/` slot instead.
+The installer creates three distinct executable roles under
+`$VELLUM_SDK_ROOT/bin`: `vellum-backend` is the stable dispatcher,
+`vellum-import-backend` runs the packaged DesignIR backend, and the absent
+`vellum-native-backend` name is reserved for a future native application
+backend. Import and native command implementations therefore cannot shadow one
+another. Node.js 20 or newer is required when installing this artifact.
 
 `SHA256SUMS` must contain exactly one basename entry for the archive. Both
 installers calculate SHA-256 and abort before extraction when the entry is
@@ -56,7 +59,8 @@ and records `source_tree_clean=false` in metadata and evidence.
 The last command produces `vellum.installed-sdk-validation.v1` evidence for
 checksum verification, clean-prefix installation, CMake relocation, sterile
 consumer configure/build/test, installed-CLI project creation, and exact
-project-lock compatibility.
+project-lock compatibility. It also runs installed CLI import and reimport from
+two fixture revisions and verifies that the accepted active revision advances.
 
 A production release must additionally provide immutable versioned assets,
 GitHub asset digests, release provenance/attestation, and a separately

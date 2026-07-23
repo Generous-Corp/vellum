@@ -59,43 +59,62 @@ sha256_file() {
   fi
 }
 
+require_node_20() {
+  command -v node >/dev/null 2>&1 || {
+    printf '%s\n' 'Node.js 20+ is required for import/reimport.' >&2
+    exit 1
+  }
+  node_version=$(node --version 2>/dev/null || true)
+  node_major=$(printf '%s\n' "$node_version" | sed -n 's/^v\{0,1\}\([0-9][0-9]*\)\(\..*\)\{0,1\}$/\1/p')
+  [ -n "$node_major" ] && [ "$node_major" -ge 20 ] || {
+    printf 'Node.js 20+ is required for import/reimport; found %s.\n' "${node_version:-unknown}" >&2
+    exit 1
+  }
+}
+
 copy_payload() {
   payload=$1
   library="$install_prefix/lib/vellum"
   bindir="$install_prefix/bin"
   mkdir -p "$library" "$bindir"
   cp "$payload/vellum_cli.py" "$library/vellum_cli.py"
+  cp "$payload/vellum_backend.py" "$library/vellum_backend.py"
   rm -rf "$library/templates"
   cp -R "$payload/templates" "$library/templates"
   if [ -d "$payload/sdk" ]; then
     cp "$payload/metadata.json" "$library/metadata.json"
     rm -rf "$library/sdk"
     cp -R "$payload/sdk" "$library/sdk"
-    rm -rf "${library:?}/bin"
   elif [ ! -f "$library/metadata.json" ]; then
     cp "$payload/metadata.json" "$library/metadata.json"
   fi
+  rm -rf "${library:?}/bin"
+  mkdir -p "$library/bin"
   if [ -d "$payload/design-ir" ]; then
-    command -v node >/dev/null 2>&1 || {
-      printf '%s\n' 'Node.js 20+ is required for the import/reimport backend.' >&2
-      exit 1
-    }
+    require_node_20
     rm -rf "$library/design-ir"
     cp -R "$payload/design-ir" "$library/design-ir"
-    mkdir -p "$library/bin"
     {
       printf '%s\n' '#!/bin/sh' 'set -eu'
       # shellcheck disable=SC2016
       printf '%s\n' 'bindir=$(CDPATH="" cd -- "$(dirname -- "$0")" && pwd)'
       # shellcheck disable=SC2016
       printf '%s\n' 'exec node "$bindir/../design-ir/bin/vellum-backend.js" "$@"'
-    } > "$library/bin/vellum-backend"
-    chmod 755 "$library/bin/vellum-backend"
-  elif [ -f "$payload/bin/vellum-backend" ]; then
-    mkdir -p "$library/bin"
-    cp "$payload/bin/vellum-backend" "$library/bin/vellum-backend"
-    chmod 755 "$library/bin/vellum-backend"
+    } > "$library/bin/vellum-import-backend"
+    chmod 755 "$library/bin/vellum-import-backend"
   fi
+  if [ -f "$payload/bin/vellum-native-backend" ]; then
+    cp "$payload/bin/vellum-native-backend" "$library/bin/vellum-native-backend"
+    chmod 755 "$library/bin/vellum-native-backend"
+  fi
+  {
+    printf '%s\n' '#!/bin/sh' 'set -eu'
+    # shellcheck disable=SC2016
+    printf '%s\n' 'bindir=$(CDPATH="" cd -- "$(dirname -- "$0")" && pwd)'
+    # shellcheck disable=SC2016
+    printf '%s\n' 'exec python3 "$bindir/../vellum_backend.py" "$@"'
+  } > "$library/bin/vellum-backend"
+  chmod 755 "$library/bin/vellum-backend"
   {
     printf '%s\n' '#!/bin/sh' 'set -eu'
     # These expressions are intentionally written literally into the launcher.
@@ -115,13 +134,15 @@ copy_payload() {
 }
 
 if [ -n "$local_root" ]; then
-  [ -f "$local_root/cli/vellum_cli.py" ] && [ -d "$local_root/templates/basic" ] || {
-    printf '%s\n' 'Local root must contain cli/vellum_cli.py and templates/basic.' >&2
+  [ -f "$local_root/cli/vellum_cli.py" ] && [ -f "$local_root/cli/vellum_backend.py" ] && \
+    [ -d "$local_root/templates/basic" ] && [ -d "$local_root/packages/vellum-design-ir" ] || {
+    printf '%s\n' 'Local root lacks the CLI, dispatcher, templates, or DesignIR package.' >&2
     exit 1
   }
   temporary=$(mktemp -d "${TMPDIR:-/tmp}/vellum-local.XXXXXX")
   trap 'rm -rf "$temporary"' EXIT HUP INT TERM
   cp "$local_root/cli/vellum_cli.py" "$temporary/vellum_cli.py"
+  cp "$local_root/cli/vellum_backend.py" "$temporary/vellum_backend.py"
   cp -R "$local_root/templates" "$temporary/templates"
   cat > "$temporary/metadata.json" <<'JSON'
 {
@@ -134,8 +155,16 @@ if [ -n "$local_root" ]; then
   "capabilities": {
     "cmake_sdk": false,
     "authoring_cli": true,
-    "native_backend": false,
-    "gpu_renderer": false
+    "gpu_renderer": false,
+    "commands": {
+      "import": true,
+      "reimport": true,
+      "build": false,
+      "run": false,
+      "test": false,
+      "capture": false,
+      "package": false
+    }
   },
   "files": []
 }
@@ -226,7 +255,7 @@ with tarfile.open(archive, "r:gz") as handle:
         raise SystemExit("archive contains duplicate member names")
     for member in members:
         path = PurePosixPath(member.name)
-        if (not path.parts or path.parts[0] not in {"vellum_cli.py", "templates", "sdk", "bin", "design-ir", "metadata.json"} or
+        if (not path.parts or path.parts[0] not in {"vellum_cli.py", "vellum_backend.py", "templates", "sdk", "bin", "design-ir", "metadata.json"} or
                 path.is_absolute() or ".." in path.parts or "\\" in member.name or ":" in path.parts[0] or
                 member.issym() or member.islnk() or not (member.isfile() or member.isdir())):
             raise SystemExit(f"unsafe archive member: {member.name}")
@@ -241,7 +270,8 @@ with tarfile.open(archive, "r:gz") as handle:
         raise SystemExit("incompatible SDK artifact metadata")
     handle.extractall(destination)
 PY
-[ -f "$temporary/vellum_cli.py" ] && [ -d "$temporary/templates/basic" ] && \
+[ -f "$temporary/vellum_cli.py" ] && [ -f "$temporary/vellum_backend.py" ] && \
+  [ -d "$temporary/templates/basic" ] && [ -d "$temporary/design-ir" ] && \
   [ -f "$temporary/metadata.json" ] && [ -d "$temporary/sdk" ] || {
   printf '%s\n' 'Verified archive does not contain the Vellum SDK artifact layout.' >&2
   exit 1

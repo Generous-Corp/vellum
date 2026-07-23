@@ -17,10 +17,11 @@
     "./schema/reimport-report-v1": "./schema/reimport-report-v1.schema.json"
   },
   "bin": {
-    "vellum-backend": "./bin/vellum-backend.js",
+    "vellum-import-backend": "./bin/vellum-backend.js",
     "vellum-design-ir": "./bin/vellum-design-ir.js"
   },
   "files": [
+    "LICENSE.md",
     "README.md",
     "bin",
     "schema",

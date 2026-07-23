@@ -48,7 +48,7 @@ vellum-design-ir reimport \
 
 All machine output uses recursively sorted JSON object keys and a trailing newline. Reimport exits `0` when accepted, `2` when a valid report contains unresolved authored conflicts, and `1` for invalid input.
 
-The package also installs `vellum-backend`, the filesystem adapter used by the
+The package also installs `vellum-import-backend`, the filesystem adapter used by the
 public Python CLI. It snapshots source bytes and assets, writes normalized IR,
 tokens, generated component definitions, typed IDs, diagnostics, and the import
 lock, and performs overlay-preserving reimport transactions. See

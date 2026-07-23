@@ -29,6 +29,11 @@ try {
         cwd: consumer,
         encoding: 'utf8',
     });
+    const installedLicense = await readFile(
+        join(consumer, 'node_modules', '@vellum', 'design-ir', 'LICENSE.md'),
+        'utf8',
+    );
+    assert.match(installedLicense, /^MIT License/);
     await writeFile(
         join(consumer, 'source.json'),
         await readFile(join(fixtureRoot, 'revision-a.source.json')),

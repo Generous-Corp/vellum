@@ -94,8 +94,8 @@ consumers can add that directory to `CMAKE_PREFIX_PATH` and use
 
 `scripts/validate_installed_sdk.py` verifies the archive, installs to a clean
 prefix, creates an app through the installed CLI, checks its project lock
-against SDK metadata, and builds/tests a sterile CMake consumer without a
-Vellum or Pulp checkout.
+against SDK metadata, imports and reimports two design revisions, and
+builds/tests a sterile CMake consumer without a Vellum or Pulp checkout.
 
 No hosted Vellum release exists yet. Once an exact versioned release contains
 the same archive and `SHA256SUMS`, the installer can consume it without a

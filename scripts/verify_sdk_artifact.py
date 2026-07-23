@@ -18,6 +18,7 @@ SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 MAX_MEMBERS = 20_000
 MAX_BYTES = 4 * 1024**3
+COMMANDS = {"import", "reimport", "build", "run", "test", "capture", "package"}
 
 
 class VerificationError(RuntimeError):
@@ -59,7 +60,7 @@ def verify(archive: Path, checksums: Path) -> dict[str, object]:
             path = PurePosixPath(member.name)
             if (
                 not path.parts
-                or path.parts[0] not in {"vellum_cli.py", "templates", "sdk", "bin", "metadata.json"}
+                or path.parts[0] not in {"vellum_cli.py", "vellum_backend.py", "templates", "sdk", "bin", "design-ir", "metadata.json"}
                 or path.is_absolute()
                 or ".." in path.parts
                 or "\\" in member.name
@@ -97,10 +98,19 @@ def verify(archive: Path, checksums: Path) -> dict[str, object]:
         capabilities = metadata["capabilities"]
         if (
             not isinstance(capabilities, dict)
-            or set(capabilities) != {"cmake_sdk", "authoring_cli", "native_backend", "gpu_renderer"}
-            or not all(isinstance(value, bool) for value in capabilities.values())
+            or set(capabilities) != {"cmake_sdk", "authoring_cli", "gpu_renderer", "commands"}
+            or not isinstance(capabilities.get("cmake_sdk"), bool)
+            or not isinstance(capabilities.get("authoring_cli"), bool)
+            or not isinstance(capabilities.get("gpu_renderer"), bool)
+            or not isinstance(capabilities.get("commands"), dict)
+            or set(capabilities["commands"]) != COMMANDS
+            or not all(isinstance(value, bool) for value in capabilities["commands"].values())
         ):
             raise VerificationError("SDK artifact capability claims are malformed")
+        if capabilities["commands"]["import"] is not True or capabilities["commands"]["reimport"] is not True:
+            raise VerificationError("SDK artifact must expose its packaged import/reimport backend")
+        if any(capabilities["commands"][name] for name in COMMANDS - {"import", "reimport"}):
+            raise VerificationError("SDK artifact claims an unimplemented native application command")
         files = metadata.get("files")
         if not isinstance(files, list):
             raise VerificationError("artifact metadata has no file inventory")

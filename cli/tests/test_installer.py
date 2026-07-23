@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
 import tarfile
 import tempfile
 import unittest
-import json
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -53,6 +53,20 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(imported.returncode, 0, imported.stdout)
             self.assertTrue((project / "design/ir/sources/main.designir.json").is_file())
             self.assertTrue((prefix / "lib/vellum/bin/vellum-backend").is_file())
+            self.assertTrue((prefix / "lib/vellum/bin/vellum-import-backend").is_file())
+            self.assertFalse((prefix / "lib/vellum/bin/vellum-native-backend").exists())
+            handshake = subprocess.run(
+                [
+                    str(prefix / "lib/vellum/bin/vellum-backend"),
+                    "import", "--project", str(project), "--json",
+                    "--framework-version", "9.9.9", "--cli-api", "1",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(handshake.returncode, 3, handshake.stdout)
+            self.assertEqual(json.loads(handshake.stdout)["status"], "backend_handshake_mismatch")
             reimported = subprocess.run(
                 [str(prefix / "bin/vellum"), "reimport", "--source", str(updated_source), "--json"],
                 cwd=project,
@@ -63,6 +77,34 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(reimported.returncode, 0, reimported.stdout)
             active = json.loads((project / "design/import.lock.json").read_text())
             self.assertEqual(active["sources"]["main"]["activeRevision"], "palette-board-b")
+            unavailable = subprocess.run(
+                [str(prefix / "bin/vellum"), "build", "--json"],
+                cwd=project,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(unavailable.returncode, 4, unavailable.stdout)
+            self.assertEqual(json.loads(unavailable.stdout)["status"], "capability_unavailable")
+
+    def test_local_install_requires_node_20_or_newer(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            fake_node = fake_bin / "node"
+            fake_node.write_text("#!/bin/sh\nprintf '%s\\n' 'v18.20.0'\n", encoding="utf-8")
+            fake_node.chmod(0o755)
+            completed = subprocess.run(
+                ["sh", str(INSTALLER), "--local", str(REPO), "--install-dir", str(root / "prefix")],
+                text=True,
+                capture_output=True,
+                check=False,
+                env={**os.environ, "PATH": f"{fake_bin}:/usr/bin:/bin"},
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("Node.js 20+", completed.stderr)
+            self.assertIn("v18.20.0", completed.stderr)
 
     def test_archive_hash_is_verified_before_extraction(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -70,7 +112,9 @@ class InstallerTests(unittest.TestCase):
             payload = root / "payload"
             payload.mkdir()
             shutil.copy2(REPO / "cli/vellum_cli.py", payload / "vellum_cli.py")
+            shutil.copy2(REPO / "cli/vellum_backend.py", payload / "vellum_backend.py")
             shutil.copytree(REPO / "templates", payload / "templates")
+            shutil.copytree(REPO / "packages/vellum-design-ir", payload / "design-ir")
             (payload / "sdk/include").mkdir(parents=True)
             (payload / "sdk/include/placeholder.hpp").write_text("// fixture\n", encoding="utf-8")
             (payload / "metadata.json").write_text(
@@ -81,7 +125,20 @@ class InstallerTests(unittest.TestCase):
                     "cli_api": 1,
                     "source_commit": "a" * 40,
                     "target": "test",
-                    "capabilities": {"cmake_sdk": True, "authoring_cli": True, "native_backend": False, "gpu_renderer": False},
+                    "capabilities": {
+                        "cmake_sdk": True,
+                        "authoring_cli": True,
+                        "gpu_renderer": False,
+                        "commands": {
+                            "import": True,
+                            "reimport": True,
+                            "build": False,
+                            "run": False,
+                            "test": False,
+                            "capture": False,
+                            "package": False,
+                        },
+                    },
                     "files": [],
                 }),
                 encoding="utf-8",
@@ -89,7 +146,9 @@ class InstallerTests(unittest.TestCase):
             archive = root / "vellum-sdk-test.tar.gz"
             with tarfile.open(archive, "w:gz") as handle:
                 handle.add(payload / "vellum_cli.py", arcname="vellum_cli.py")
+                handle.add(payload / "vellum_backend.py", arcname="vellum_backend.py")
                 handle.add(payload / "templates", arcname="templates")
+                handle.add(payload / "design-ir", arcname="design-ir")
                 handle.add(payload / "sdk", arcname="sdk")
                 handle.add(payload / "metadata.json", arcname="metadata.json")
             digest = hashlib.sha256(archive.read_bytes()).hexdigest()
