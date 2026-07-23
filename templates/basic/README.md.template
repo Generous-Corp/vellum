@@ -7,19 +7,24 @@ Application behavior belongs in `src/`; generated design material belongs in
 ```sh
 vellum doctor --fix
 npm ci
-vellum build
-vellum run
-vellum test
+vellum build --target web
+vellum test --target web
+vellum run --target web
 vellum capture --scenario smoke --output artifacts/smoke.png
 vellum capture --matrix tests/capture-matrix.json --montage --output artifacts/montage.png
 vellum package --output dist
 ```
 
+`run --target web` returns the exact finite local-server command for the static
+build; it does not leave a hidden background process. The macOS commands remain
+available from an SDK artifact that advertises that target.
+
 `app.toml` is the sole editable application, target, capability, and packaging
 manifest. `framework.lock` pins the exact SDK artifact and JavaScript package
 identity. `doctor --fix` materializes immutable SDK-provided package bytes under
-the ignored `.vellum/` directory; `npm ci` verifies the checked-in exact lock.
+the ignored `.vellum/` directory. Project creation materializes the exact UI
+package without requiring external npm.
 
-When created by the native macOS SDK, the initial build and smoke scenario have
-already passed. SDKs without that capability and unsupported targets report
+When created by a web or native SDK, one advertised target's initial build and
+smoke scenario have already passed. SDKs without that capability report
 `capability_unavailable`; that is an error, not a successful no-op.

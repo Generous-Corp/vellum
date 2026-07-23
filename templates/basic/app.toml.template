@@ -12,7 +12,7 @@ native_js_engine = "default"
 [targets]
 desktop = ["macos"]
 mobile = []
-web = false
+web = true
 
 [capabilities]
 files = "none"
@@ -27,5 +27,6 @@ components_manifest = "native/components.toml"
 
 [packaging]
 macos_format = "app"
+web_format = "static"
 
 [packaging.overrides]

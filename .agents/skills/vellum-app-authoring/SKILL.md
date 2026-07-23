@@ -37,11 +37,16 @@ vellum --json import "$figma_export" --source-type figma --as main --project "$a
 vellum --json reimport --source "$updated_export" --as main --project "$app"
 vellum --json build --target macos --project "$app"
 vellum --json run --target macos --project "$app"
-vellum --json test --scenario smoke --project "$app"
+vellum --json test --scenario smoke --target macos --project "$app"
 vellum --json capture --scenario smoke --output "$app/artifacts/smoke.png" --target macos --project "$app"
 vellum --json capture --matrix tests/capture-matrix.json --montage --output artifacts/montage.png --target macos --project "$app"
 vellum --json package --target macos --output "$app/dist" --project "$app"
 ```
+
+For the installed browser lane, substitute `web` for `macos` on build, run,
+test, and package. Web `run` returns a finite local-server command; execute that
+command explicitly when an interactive browser session is wanted. Web capture
+is not yet a capability.
 
 The only supported import source types are `figma` and `design-ir`. The first
 means Vellum's bounded, credential-free plugin-export JSON or its actual

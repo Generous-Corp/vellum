@@ -1,0 +1,4 @@
+:root { color-scheme: dark; font-family: ui-sans-serif, system-ui, sans-serif; }
+body { margin: 0; min-height: 100vh; display: grid; place-content: center; gap: 12px; background: #090e1a; }
+canvas { width: min(640px, calc(100vw - 32px)); height: auto; border-radius: 16px; box-shadow: 0 24px 80px #0008; }
+p { width: 640px; max-width: calc(100vw - 32px); margin: 0; color: #a7f3d0; }

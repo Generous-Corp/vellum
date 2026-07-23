@@ -238,16 +238,18 @@ def ensure_project_ui_package(
 
 
 def install_project_js_dependencies(root: Path) -> tuple[bool, str]:
-    npm = shutil.which("npm")
-    if npm is None:
-        return False, "npm is required to install the exact project JavaScript lock"
-    completed = subprocess.run(
-        [npm, "ci", "--ignore-scripts", "--no-audit", "--no-fund"],
-        cwd=root, text=True, capture_output=True, check=False,
-    )
-    if completed.returncode:
-        return False, (completed.stderr or completed.stdout).strip() or "npm ci failed"
-    return True, (completed.stdout or "npm ci passed").strip()
+    source = project_ui_package(root)
+    if not source.is_dir():
+        return False, "the exact project-local @vellum/ui package is missing"
+    destination = root / "node_modules/@vellum/ui"
+    try:
+        if (root / "node_modules").exists():
+            shutil.rmtree(root / "node_modules")
+        destination.parent.mkdir(parents=True)
+        shutil.copytree(source, destination)
+    except OSError as error:
+        return False, f"could not materialize exact project JavaScript dependencies: {error}"
+    return True, "materialized exact project-locked @vellum/ui without external npm"
 
 
 def create_project(args: argparse.Namespace) -> dict[str, Any]:
@@ -285,12 +287,14 @@ def create_project(args: argparse.Namespace) -> dict[str, Any]:
                 status="capability_unavailable", exit_code=EXIT_UNAVAILABLE,
             )
         import_request = (source_type, source_path, args.source_key)
-    if args.run and (
-        sdk is None
-        or not all(sdk[1]["capabilities"]["commands"].get(name) for name in ("build", "run", "test"))
-    ):
+    target_capabilities = sdk[1]["capabilities"].get("targets", {}) if sdk else {}
+    runnable_target = next((target for target in ("macos", "web") if all(
+        target_capabilities.get(target, {}).get("commands", {}).get(name)
+        for name in ("build", "run", "test")
+    )), None)
+    if args.run and runnable_target is None:
         raise CliFailure(
-            "--run requires an installed SDK with native build, test, and run capabilities.",
+            "--run requires one installed target with build, test, and run capabilities.",
             status="capability_unavailable",
             exit_code=EXIT_UNAVAILABLE,
         )
@@ -327,7 +331,7 @@ def create_project(args: argparse.Namespace) -> dict[str, Any]:
         if not available:
             raise CliFailure(detail, status="invalid_sdk_artifact", exit_code=EXIT_PROJECT)
         npm_ok, npm_detail = install_project_js_dependencies(destination)
-        setup_commands.append({"command": "npm-ci", "status": "passed" if npm_ok else "failed"})
+        setup_commands.append({"command": "js-dependencies", "status": "passed" if npm_ok else "failed"})
         if not npm_ok:
             return result(
                 "create", ok=False, status="create_validation_failed",
@@ -364,13 +368,16 @@ def create_project(args: argparse.Namespace) -> dict[str, Any]:
     validation: dict[str, Any] = {
         "status": "not_available",
         "commands": setup_commands,
-        "detail": "No installed native SDK capability was available; scaffold only.",
+        "detail": "No installed application target capability was available; scaffold only.",
     }
     if not args.no_verify and sdk is not None:
-        capabilities = sdk[1]["capabilities"]["commands"]
-        if capabilities.get("build") and capabilities.get("test"):
+        validation_target = runnable_target
+        if validation_target is not None:
             completed_commands: list[dict[str, Any]] = list(setup_commands)
-            for command, forwarded in (("build", ["--target", "macos"]), ("test", ["--scenario", "smoke"])):
+            for command, forwarded in (
+                ("build", ["--target", validation_target]),
+                ("test", ["--scenario", "smoke", "--target", validation_target]),
+            ):
                 backend_payload, return_code = invoke_backend(
                     command, destination, lock, forwarded
                 )
@@ -380,7 +387,7 @@ def create_project(args: argparse.Namespace) -> dict[str, Any]:
                         "create",
                         ok=False,
                         status="create_validation_failed",
-                        message=f"Created the project, but native '{command}' validation failed.",
+                        message=f"Created the project, but {validation_target} '{command}' validation failed.",
                         data={
                             "project_root": str(destination),
                             "project_id": project_id,
@@ -393,7 +400,7 @@ def create_project(args: argparse.Namespace) -> dict[str, Any]:
             validation = {"status": "passed", "commands": completed_commands}
             if args.run:
                 backend_payload, return_code = invoke_backend(
-                    "run", destination, lock, ["--target", "macos", "--no-build"]
+                    "run", destination, lock, ["--target", validation_target, "--no-build", "--no-window"]
                 )
                 validation["commands"].append({"command": "run", "status": backend_payload.get("status")})
                 if return_code != 0 or not backend_payload.get("ok"):
@@ -405,7 +412,7 @@ def create_project(args: argparse.Namespace) -> dict[str, Any]:
                     )
         elif args.run:
             raise CliFailure(
-                "--run requires an installed SDK with native build and run capabilities.",
+                "--run requires an installed target with build and run capabilities.",
                 status="capability_unavailable",
                 exit_code=EXIT_UNAVAILABLE,
             )
@@ -421,7 +428,10 @@ def create_project(args: argparse.Namespace) -> dict[str, Any]:
             "artifact": installed_identity,
             "files": created,
             "validation": validation,
-            "next_steps": [f"cd {destination}", "vellum doctor", "vellum build"],
+            "next_steps": [
+                f"cd {destination}", "vellum doctor",
+                f"vellum build --target {runnable_target}" if runnable_target else "vellum build",
+            ],
         },
     )
 
@@ -647,8 +657,8 @@ def check_item(name: str, *, required: bool, available: bool, detail: str, fix: 
     return {"name": name, "required": required, "available": available, "detail": detail, "fix": fix}
 
 
-def node_version() -> tuple[bool, str]:
-    executable = shutil.which("node")
+def node_version(executable: str | None = None) -> tuple[bool, str]:
+    executable = executable or shutil.which("node")
     if not executable:
         return False, "not found"
     try:
@@ -710,15 +720,24 @@ def doctor(args: argparse.Namespace) -> dict[str, Any]:
         except CliFailure as error:
             ui_detail = str(error)
             diagnostics.append({"level": "error", "code": error.status, "message": str(error)})
-    node_available, node_detail = node_version()
+    embedded_node_path = next((path for path in (
+        sdk[0] / "node/bin/node", sdk[0] / "node/bin/node.exe",
+    ) if path.is_file()), None) if sdk else None
+    embedded_node = str(embedded_node_path) if embedded_node_path else None
+    node_available, node_detail = node_version(embedded_node)
+    if embedded_node:
+        node_detail = f"{node_detail} (SDK-local {embedded_node})"
     import_required = bool(command_capabilities.get("import") or command_capabilities.get("reimport"))
+    web_commands = sdk[1]["capabilities"].get("targets", {}).get("web", {}).get("commands", {}) if sdk else {}
+    web_required = any(web_commands.values())
     checks = [
         check_item("python", required=True, available=sys.version_info >= (3, 9), detail=sys.version.split()[0]),
         check_item("project-lock", required=bool(args.project), available=lock_valid, detail=str(project_root) if project_root else "not in a Vellum project"),
         check_item("git", required=False, available=bool(shutil.which("git")), detail=shutil.which("git") or "not found"),
         check_item("cmake", required=False, available=bool(shutil.which("cmake")), detail=shutil.which("cmake") or "not found", fix="Install CMake for native builds."),
         check_item("ninja", required=False, available=bool(shutil.which("ninja")), detail=shutil.which("ninja") or "not found", fix="Install Ninja for native builds."),
-        check_item("node", required=import_required, available=node_available, detail=node_detail, fix="Install Node.js 20 or newer for import/reimport and TypeScript authoring tools."),
+        check_item("node", required=import_required or web_required, available=node_available, detail=node_detail, fix="Install an SDK with its exact Node runtime or provide Node.js 20+."),
+        check_item("chrome", required=web_required, available=bool(shutil.which("google-chrome") or Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome").is_file()), detail=shutil.which("google-chrome") or ("/Applications/Google Chrome.app" if Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome").is_file() else "not found"), fix="Install Chrome to execute web scenarios."),
         check_item("sdk-artifact", required=sdk_configured, available=sdk is not None, detail=sdk_detail, fix="Install a checksummed SDK artifact for native CMake consumption."),
         check_item("project-sdk-compatibility", required=sdk_configured and project_lock is not None, available=sdk_error is None and (sdk is not None or not sdk_configured), detail="exact framework pin matched" if sdk and not sdk_error and project_lock else sdk_detail),
         check_item("project-ui-package", required=bool(project_root and sdk and (sdk[0] / "ui/package.json").is_file()), available=ui_available, detail=ui_detail, fix="Run vellum doctor --fix with the exact project-locked SDK installed."),
@@ -741,9 +760,15 @@ def backend_command(args: argparse.Namespace, forwarded: list[str]) -> dict[str,
     root, lock = load_project(args.project)
     sdk = load_sdk_metadata()
     validate_project_sdk(lock, sdk)
-    if sdk is not None and sdk[1]["capabilities"]["commands"].get(args.command) is not True:
+    target = getattr(args, "target", None)
+    available = sdk[1]["capabilities"]["commands"].get(args.command) if sdk is not None else None
+    if sdk is not None and target is not None:
+        available = sdk[1]["capabilities"].get("targets", {}).get(target, {}).get(
+            "commands", {}
+        ).get(args.command)
+    if sdk is not None and available is not True:
         raise CliFailure(
-            f"The installed SDK does not yet provide the '{args.command}' capability.",
+            f"The installed SDK does not provide '{args.command}' for target '{target or 'default'}'.",
             status="capability_unavailable",
             exit_code=EXIT_UNAVAILABLE,
         )
@@ -848,7 +873,7 @@ def parser() -> argparse.ArgumentParser:
             ("--self-test", {"action": "store_true"}),
             ("--no-window", {"action": "store_true"}),
         ],
-        "test": [("--scenario", {})],
+        "test": [("--scenario", {}), ("--target", {"default": "macos"})],
         "capture": [
             ("--scenario", {}), ("--matrix", {}), ("--montage", {"action": "store_true"}),
             ("--output", {}), ("--target", {"default": "macos"}),

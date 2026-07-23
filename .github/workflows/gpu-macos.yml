@@ -78,11 +78,47 @@ jobs:
           set -euo pipefail
           first="$RUNNER_TEMP/sdk-first"
           second="$RUNNER_TEMP/sdk-second"
+          node_binary="$(command -v node)"
+          node_version="$(node -p 'process.versions.node')"
+          node_platform="$(node -p 'process.platform')"
+          node_arch="$(node -p 'process.arch')"
+          node_dist="node-v${node_version}-${node_platform}-${node_arch}.tar.gz"
+          node_url="https://nodejs.org/dist/v${node_version}/${node_dist}"
+          node_dist_sha="$(curl -fsSL "https://nodejs.org/dist/v${node_version}/SHASUMS256.txt" | awk -v name="$node_dist" '$2 == name { print $1 }')"
+          test -n "$node_dist_sha"
+          node_license="$(node -p "require('path').join(require('path').dirname(require('path').dirname(process.execPath)), 'LICENSE')")"
+          test -s "$node_license"
+          NODE_BINARY="$node_binary" NODE_LICENSE="$node_license" NODE_VERSION="$node_version" \
+            NODE_URL="$node_url" NODE_DIST_SHA="$node_dist_sha" python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          digest = lambda path: hashlib.sha256(Path(path).read_bytes()).hexdigest()
+          record = {
+              "schema": "vellum.node-runtime-provenance.v1",
+              "name": "Node.js",
+              "version": os.environ["NODE_VERSION"],
+              "target": "darwin-arm64",
+              "source_url": os.environ["NODE_URL"],
+              "distribution_sha256": os.environ["NODE_DIST_SHA"],
+              "binary_sha256": digest(os.environ["NODE_BINARY"]),
+              "license_file": "LICENSE",
+              "license_sha256": digest(os.environ["NODE_LICENSE"]),
+          }
+          Path(os.environ["RUNNER_TEMP"], "node-provenance.json").write_text(
+              json.dumps(record, indent=2, sort_keys=True) + "\n"
+          )
+          PY
           python3 scripts/build_sdk_artifact.py \
             --skia-archive "$VELLUM_SKIA_ARCHIVE" \
+            --node-binary "$node_binary" \
+            --node-license "$node_license" \
+            --node-provenance "$RUNNER_TEMP/node-provenance.json" \
             --output-dir "$first" --json > "$RUNNER_TEMP/sdk-first.json"
           python3 scripts/build_sdk_artifact.py \
             --skia-archive "$VELLUM_SKIA_ARCHIVE" \
+            --node-binary "$node_binary" \
+            --node-license "$node_license" \
+            --node-provenance "$RUNNER_TEMP/node-provenance.json" \
             --output-dir "$second" --json > "$RUNNER_TEMP/sdk-second.json"
           archive="vellum-sdk-0.1.0-darwin-arm64.tar.gz"
           cmp "$first/$archive" "$second/$archive"

@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -31,8 +33,10 @@ def installed_contamination_findings(prefix: Path) -> list[dict[str, str]]:
     return findings
 
 
-def run(arguments: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-    completed = subprocess.run(arguments, cwd=cwd, text=True, capture_output=True, check=False)
+def run(arguments: list[str], *, cwd: Path | None = None,
+        env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    completed = subprocess.run(arguments, cwd=cwd, text=True, capture_output=True, check=False,
+                               env=env)
     if completed.returncode:
         raise ValidationError(
             f"command failed ({completed.returncode}): {' '.join(arguments)}\n"
@@ -51,6 +55,10 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
     with tempfile.TemporaryDirectory(prefix="vellum-sterile-consumer-") as temporary_text:
         root = Path(temporary_text)
         prefix = root / "prefix"
+        no_external_node = {**os.environ, "PATH": "/usr/bin:/bin"}
+        journey_env = (
+            no_external_node if verification["claims"].get("node_runtime") else os.environ
+        )
         run([
             "sh", str(REPO / "scripts/install.sh"),
             "--archive", str(archive), "--checksums", str(checksums),
@@ -104,7 +112,7 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
             raise ValidationError("installed CMake package refers to the forbidden source checkout")
         gpu_claimed = verification["claims"]["gpu_renderer"] is True
         native_claimed = any(
-            verification["claims"]["commands"][command]
+            verification["claims"]["targets"]["macos"]["commands"][command]
             for command in ("build", "run", "test", "capture", "package")
         )
         ui_present = (prefix / "lib/vellum/ui/package.json").is_file()
@@ -120,25 +128,38 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
             raise ValidationError("GPU artifact is missing its installed GPU/authoring/UI payload")
         if native_claimed and not native_present:
             raise ValidationError("native command claims have no installed native backend")
+        web_claimed = all(
+            verification["claims"]["targets"]["web"]["commands"][command]
+            for command in ("build", "run", "test", "package")
+        )
+        web_present = all((prefix / "lib/vellum" / path).is_file() for path in (
+            "vellum_web_backend.py", "bin/vellum-web-backend",
+            "web/manifest.json", "web/vellum_web_core.js", "web/vellum_web_core.wasm",
+            "web/vellum_host.js",
+        )) and any((prefix / "lib/vellum" / path).is_file() for path in (
+            "node/bin/node", "node/bin/node.exe",
+        ))
+        if web_claimed and not web_present:
+            raise ValidationError("web command claims have no complete installed runtime/backend")
 
         project = root / "application"
         created = json.loads(run([
             str(prefix / "bin/vellum"), "create", "Sterile Artifact App",
             "--directory", str(project), "--json",
-        ], cwd=root).stdout)
+        ], cwd=root, env=journey_env).stdout)
         doctor = json.loads(run([
             str(prefix / "bin/vellum"), "doctor", "--json",
-        ], cwd=project).stdout)
+        ], cwd=project, env=journey_env).stdout)
         imported = json.loads(run([
             str(prefix / "bin/vellum"), "import",
             str(REPO / "fixtures/design-ir/revision-a.source.json"),
             "--source-type", "figma", "--as", "main", "--json",
-        ], cwd=project).stdout)
+        ], cwd=project, env=journey_env).stdout)
         reimported = json.loads(run([
             str(prefix / "bin/vellum"), "reimport",
             "--source", str(REPO / "fixtures/design-ir/revision-b.source.json"),
             "--as", "main", "--json",
-        ], cwd=project).stdout)
+        ], cwd=project, env=journey_env).stdout)
         active_revision = json.loads(
             (project / "design/import.lock.json").read_text(encoding="utf-8")
         )["sources"]["main"]["activeRevision"]
@@ -167,7 +188,7 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
             "--from", "figma",
             str(REPO / "fixtures/design-ir/pulp-emitter-generic.pulp.zip"),
             "--no-verify", "--json",
-        ], cwd=root).stdout)
+        ], cwd=root, env=journey_env).stdout)
         zip_lock = json.loads(
             (zip_project / "design/import.lock.json").read_text(encoding="utf-8")
         )["sources"]["main"]
@@ -184,7 +205,10 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
         if not zip_snapshot_verified:
             raise ValidationError("installed CLI create --from figma ZIP journey did not complete")
 
-        native_enabled = verification["claims"]["gpu_renderer"] is True
+        native_enabled = all(
+            verification["claims"]["targets"]["macos"]["commands"][name]
+            for name in ("build", "run", "test", "capture", "package")
+        )
         native_results: dict[str, dict[str, object]] = {}
         native_capture = project / "artifacts/installed-proof.png"
         native_montage = project / "artifacts/installed-montage.png"
@@ -236,6 +260,48 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
             native_montage_produced = True
             native_package_produced = True
 
+        web_results: dict[str, dict[str, object]] = {}
+        web_reproducible = False
+        web_runtime_exact = False
+        web_node_self_contained = False
+        if web_claimed:
+            web_project = root / "web-application"
+            web_results["create"] = json.loads(run([
+                str(prefix / "bin/vellum"), "create", "Sterile Web App",
+                "--directory", str(web_project), "--no-verify", "--json",
+            ], cwd=root, env=no_external_node).stdout)
+            for name, arguments in {
+                "build": ["build", "--target", "web"],
+                "test": ["test", "--target", "web", "--scenario", "smoke"],
+                "run": ["run", "--target", "web", "--no-build"],
+                "package_a": ["package", "--target", "web", "--output", "dist-a"],
+                "package_b": ["package", "--target", "web", "--output", "dist-b"],
+            }.items():
+                web_results[name] = json.loads(run([
+                    str(prefix / "bin/vellum"), *arguments, "--json",
+                ], cwd=web_project, env=no_external_node).stdout)
+            if any(not value.get("ok") for value in web_results.values()):
+                raise ValidationError("installed web CLI journey did not complete")
+            archives = [
+                web_project / "dist-a/sterile-web-app-web.tar.gz",
+                web_project / "dist-b/sterile-web-app-web.tar.gz",
+            ]
+            web_reproducible = (
+                all(path.is_file() for path in archives) and
+                hashlib.sha256(archives[0].read_bytes()).digest()
+                == hashlib.sha256(archives[1].read_bytes()).digest()
+            )
+            built_wasm = web_project / ".vellum/build/web/vellum_web_core.wasm"
+            installed_wasm = prefix / "lib/vellum/web/vellum_web_core.wasm"
+            web_runtime_exact = built_wasm.read_bytes() == installed_wasm.read_bytes()
+            web_doctor = json.loads(run([
+                str(prefix / "bin/vellum"), "doctor", "--json",
+            ], cwd=web_project, env=no_external_node).stdout)
+            node_check = next(item for item in web_doctor["data"]["checks"] if item["name"] == "node")
+            web_node_self_contained = "SDK-local" in node_check["detail"]
+            if not web_reproducible or not web_runtime_exact or not web_node_self_contained:
+                raise ValidationError("installed web reproducibility/runtime/Node proof failed")
+
     checks = {
         "checksum_and_payload_manifest": True,
         "artifact_contamination_scan": verification["contamination_free"],
@@ -258,7 +324,7 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
         "installed_cli_pulp_zip_create_from": zip_created.get("status") == "created",
         "installed_pulp_zip_snapshot": zip_snapshot_verified,
         "native_capability_claim_consistent": all(
-            verification["claims"]["commands"][name] is native_enabled
+            verification["claims"]["targets"]["macos"]["commands"][name] is native_enabled
             for name in ("build", "run", "test", "capture", "package")
         ),
         "installed_native_build": not native_enabled or native_results["build"]["status"] == "built",
@@ -268,6 +334,13 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
         "installed_native_capture": not native_enabled or native_capture_produced,
         "installed_native_montage": not native_enabled or native_montage_produced,
         "installed_native_package": not native_enabled or native_package_produced,
+        "web_backend_payload": not web_claimed or web_present,
+        "installed_web_build": not web_claimed or web_results["build"]["status"] == "built",
+        "installed_web_real_chrome_scenario": not web_claimed or web_results["test"]["status"] == "tests_passed",
+        "installed_web_run_instructions": not web_claimed or web_results["run"]["status"] == "ready_to_serve",
+        "installed_web_reproducible_package": not web_claimed or web_reproducible,
+        "installed_web_exact_wasm": not web_claimed or web_runtime_exact,
+        "installed_sdk_local_node": not web_claimed or web_node_self_contained,
     }
     if not all(checks.values()):
         failed = sorted(name for name, passed in checks.items() if not passed)

@@ -5,8 +5,8 @@ can ordinary browser JavaScript use Vellum's retained authoring model while the
 same C++ runtime, scene, and paint-command traversal used by the native renderer
 run as WebAssembly?
 
-The answer for the current bounded primitive set is yes. This is an incubation
-target, not a supported application or packaging target yet.
+The answer for the current bounded primitive set is yes. Exact-pinned SDK
+artifacts can now expose this as an installed static application target.
 
 ## Build and run
 
@@ -39,6 +39,50 @@ a nontrivial PNG data result. `vellum.web.no-engine` scans the produced `.wasm`
 for known embedded-engine markers. Its negative control proves the detector can
 fail when a JavaScriptCore marker is present.
 
+## Installed application lane
+
+Release assembly is deliberately split into two toolchains. First build a
+source-commit-bound Wasm payload with an activated Emscripten SDK. Then compose
+that payload and an explicit pinned Node executable into the host SDK artifact:
+
+```sh
+python3 scripts/build_web_payload.py \
+  --output /tmp/vellum-web-payload --source-commit "$(git rev-parse HEAD)"
+python3 scripts/build_sdk_artifact.py \
+  --web-payload /tmp/vellum-web-payload \
+  --node-binary /path/to/exact/node \
+  --node-license /path/to/node-distribution/LICENSE \
+  --node-provenance /path/to/node-provenance.json \
+  --output-dir dist
+```
+
+The web payload manifest records the Vellum commit, Emscripten version, backend
+identity, file sizes, and SHA-256 hashes. Artifact construction and verification
+reject a partial, modified, or source-mismatched payload. Web-capable artifacts
+must include SDK-local Node plus its exact license and source/hash provenance;
+generated applications do not contain Node. Installed launchers prefer this
+SDK-local runtime. Only an explicit local-development install falls back to a
+compatible system Node.
+
+After verified installation, no framework checkout or Emscripten installation
+is needed:
+
+```sh
+vellum create "Web App" --directory web-app
+cd web-app
+vellum build --target web
+vellum test --target web --scenario smoke
+vellum run --target web
+vellum package --target web --output dist
+```
+
+Build bundles application TypeScript/JavaScript with installed exact tooling,
+copies the exact installed Wasm/runtime bytes, and scans the Wasm plus a detector
+negative control. Test serves the build temporarily and requires a real Chrome
+semantic scenario whose press changes the C++ command digest. Package emits a
+reproducible static `.tar.gz`. Run returns a local `python -m http.server`
+command rather than starting an unmanaged background process.
+
 ## Exact boundary
 
 What this proves:
@@ -62,35 +106,29 @@ What this does not prove:
   authoring host. Moving that layout/materialization boundary into portable C++
   is required before cross-target layout parity can be claimed.
 - There is no arbitrary DOM, CSS, React DOM, HTML import, accessibility tree,
-  browser navigation, persistence, packaging, deployment, or screenshot-driver
+  browser navigation, persistence, deployment automation, or screenshot-driver
   parity in this milestone.
-- `vellum build`, `run`, `test`, and `package --target web` remain unavailable.
-  The installed backend contract is still honestly macOS-only; this proof should
-  inform later CLI work rather than advertise capabilities that do not exist.
+- Static build/test/package is supported, but web capture is not advertised.
 - The 16 MiB fixed Wasm memory is adequate for this bounded proof, not a final
   application memory policy.
 
-## Reuse from a sterile browser application
+## Runtime output
 
-The reusable output boundary is `build-web/web-dist/`:
+The generated application boundary is `.vellum/build/web/`:
 
 ```text
-web-dist/
+.vellum/build/web/
+├── app.js                    # browser JavaScript application bundle
+├── index.html                # canvas shell
+├── vellum_host.js            # generic retained-tree bridge
 ├── vellum_web_core.js       # ESM module factory
 ├── vellum_web_core.wasm     # shared C++ runtime/graphics core
-└── vellum-ui/runtime.js     # browser JavaScript authoring runtime
+└── build-manifest.json      # exact artifact identity and file hashes
 ```
-
-`demo.js`, `index.html`, and `style.css` are a replaceable example shell. An
-external experiment can copy or serve the three runtime artifacts, author an
-application with the package runtime, and adapt the explicit C ABI used by
-`demo.js`. That interface is experimental and exact-pin only. It is intentionally
-not installed as a stable SDK or presented as the final application template.
 
 ## Next decision gates
 
-Before CLI integration, extract the retained-tree-to-scene materializer into a
+Extract the retained-tree-to-scene materializer into a
 portable C++ authoring-core target and prove identical semantic/layout snapshots
 for native and browser fixtures. Then select and prove the intended browser GPU
-backend. Only after those gates should a web backend advertise build/run/test or
-packaging capabilities through the installed CLI protocol.
+backend. Only after those gates should Vellum claim layout or GPU parity.

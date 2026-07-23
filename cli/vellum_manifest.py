@@ -12,7 +12,7 @@ from typing import Any
 APP_MANIFEST_NAME = "app.toml"
 LOCK_NAME = "framework.lock"
 LOCK_SCHEMA = "vellum.project-lock.v1"
-SUPPORTED_TARGET = "macos"
+SUPPORTED_DESKTOP_TARGET = "macos"
 
 
 class ManifestError(ValueError):
@@ -177,8 +177,11 @@ def load_app_manifest(project: Path) -> dict[str, Any]:
 
     targets = raw.get("targets", {})
     _exact_keys(targets, {"desktop", "mobile", "web"}, set(), "targets")
-    if targets != {"desktop": [SUPPORTED_TARGET], "mobile": [], "web": False}:
-        raise ManifestError("the initial SDK supports exactly desktop = [\"macos\"], mobile = [], web = false")
+    if targets.get("desktop") != [SUPPORTED_DESKTOP_TARGET] or targets.get("mobile") != [] or \
+            not isinstance(targets.get("web"), bool):
+        raise ManifestError(
+            "the initial SDK requires desktop = [\"macos\"], mobile = [], and boolean web"
+        )
 
     capabilities = raw.get("capabilities", {})
     _exact_keys(capabilities, {"files", "clipboard", "open_url", "network", "persistence"}, set(), "capabilities")
@@ -197,9 +200,13 @@ def load_app_manifest(project: Path) -> dict[str, Any]:
     _project_relative(native["components_manifest"], "[native].components_manifest")
 
     packaging = raw.get("packaging", {})
-    _exact_keys(packaging, {"macos_format"}, set(), "packaging")
+    _exact_keys(packaging, {"macos_format"}, {"web_format"}, "packaging")
     if packaging["macos_format"] != "app":
         raise ManifestError("the initial SDK packages only macOS app bundles")
+    if targets["web"] and packaging.get("web_format") != "static":
+        raise ManifestError("web targets require [packaging].web_format = \"static\"")
+    if "web_format" in packaging and packaging["web_format"] != "static":
+        raise ManifestError("the initial SDK packages web targets only as static bundles")
     overrides = raw.get("packaging.overrides", {})
     _exact_keys(overrides, set(), {"macos"}, "packaging.overrides")
     if "macos" in overrides:

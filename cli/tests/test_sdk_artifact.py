@@ -25,6 +25,48 @@ CONSUMER = REPO / "apps/smoke-native/install-consumer"
 
 @unittest.skipUnless(shutil.which("cmake") and (shutil.which("shasum") or shutil.which("sha256sum")), "CMake/checksum tools unavailable")
 class SdkArtifactTests(unittest.TestCase):
+    def test_web_payload_and_node_are_exact_fail_closed_inputs(self) -> None:
+        module = runpy.run_path(str(BUILDER))
+        copy_web_payload = module["copy_web_payload"]
+        artifact_error = module["ArtifactError"]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "web"
+            source.mkdir()
+            names = (
+                "vellum_web_core.js", "vellum_web_core.wasm", "index.html",
+                "style.css", "vellum_host.js", "check_wasm_no_engine.py",
+            )
+            records = {}
+            for name in names:
+                content = f"fixture:{name}\n".encode()
+                (source / name).write_bytes(content)
+                records[name] = {"sha256": hashlib.sha256(content).hexdigest(), "size": len(content)}
+            commit = "a" * 40
+            (source / "manifest.json").write_text(json.dumps({
+                "schema": "vellum.web-payload.v1", "source_commit": commit,
+                "compiler": "fixture", "backend": "fixture", "files": records,
+            }), encoding="utf-8")
+            destination = root / "copied"
+            copy_web_payload(source, destination, commit)
+            self.assertEqual((destination / "vellum_web_core.wasm").read_bytes(),
+                             (source / "vellum_web_core.wasm").read_bytes())
+            with self.assertRaisesRegex(artifact_error, "source commit"):
+                copy_web_payload(source, root / "wrong-commit", "b" * 40)
+            (source / "vellum_web_core.wasm").write_bytes(b"tampered")
+            with self.assertRaisesRegex(artifact_error, "hash or size mismatch"):
+                copy_web_payload(source, root / "tampered", commit)
+
+            missing_node = subprocess.run([
+                sys.executable, str(BUILDER), "--output-dir", str(root / "output"),
+                "--source-commit", subprocess.check_output(
+                    ["git", "rev-parse", "HEAD"], cwd=REPO, text=True
+                ).strip(),
+                "--allow-dirty", "--graphics", "off", "--web-payload", str(source),
+            ], text=True, capture_output=True, check=False)
+            self.assertNotEqual(missing_node.returncode, 0)
+            self.assertIn("require an exact --node-binary", missing_node.stderr)
+
     def test_macho_uuid_rewrite_is_deterministic_and_fail_closed(self) -> None:
         module = runpy.run_path(str(BUILDER))
         rewrite = module["rewrite_macho_uuid"]
@@ -42,6 +84,53 @@ class SdkArtifactTests(unittest.TestCase):
             self.assertEqual(path.read_bytes(), first)
             with self.assertRaises(artifact_error):
                 rewrite(path, b"short")
+
+    def test_node_license_and_provenance_match_exact_runtime(self) -> None:
+        module = runpy.run_path(str(BUILDER))
+        validate = module["validate_node_inputs"]
+        artifact_error = module["ArtifactError"]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            binary = root / "node"
+            binary.write_bytes(b"exact node executable fixture\n")
+            license_path = root / "LICENSE"
+            license_path.write_text("Node.js license fixture\n" * 20, encoding="utf-8")
+            provenance_path = root / "provenance.json"
+            provenance = {
+                "schema": "vellum.node-runtime-provenance.v1",
+                "name": "Node.js",
+                "version": "22.16.0",
+                "target": "darwin-arm64",
+                "source_url": "https://nodejs.org/dist/v22.16.0/node.tar.gz",
+                "distribution_sha256": "a" * 64,
+                "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
+                "license_file": "LICENSE",
+                "license_sha256": hashlib.sha256(license_path.read_bytes()).hexdigest(),
+            }
+            provenance_path.write_text(json.dumps(provenance), encoding="utf-8")
+            self.assertEqual(
+                validate(binary, license_path, provenance_path,
+                         version="v22.16.0", target="darwin-arm64"),
+                provenance,
+            )
+            binary.write_bytes(b"different node executable\n")
+            with self.assertRaisesRegex(artifact_error, "binary_sha256"):
+                validate(binary, license_path, provenance_path,
+                         version="v22.16.0", target="darwin-arm64")
+
+    def test_native_backend_resolves_only_sdk_local_node(self) -> None:
+        module = runpy.run_path(str(REPO / "cli/vellum_native_backend.py"))
+        sdk_node = module["sdk_node"]
+        backend_failure = module["BackendFailure"]
+        with tempfile.TemporaryDirectory() as temporary:
+            sdk = Path(temporary)
+            with self.assertRaisesRegex(backend_failure, "exact Node runtime"):
+                sdk_node(sdk)
+            local_node = sdk / "node/bin/node"
+            local_node.parent.mkdir(parents=True)
+            local_node.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            local_node.chmod(0o755)
+            self.assertEqual(sdk_node(sdk), local_node)
 
     def run_checked(self, arguments: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
         completed = subprocess.run(arguments, cwd=cwd, text=True, capture_output=True, check=False)
@@ -64,6 +153,9 @@ class SdkArtifactTests(unittest.TestCase):
                 "ui/node_modules/@esbuild/darwin-arm64/package.json",
                 "ui/node_modules/@esbuild/darwin-arm64/bin/esbuild",
                 "ui/node_modules/typescript/package.json",
+                "node/bin/node",
+                "node/LICENSE",
+                "node/provenance.json",
             )
             for relative in required_files:
                 path = payload / relative

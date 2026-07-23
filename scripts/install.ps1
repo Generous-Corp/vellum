@@ -52,22 +52,39 @@ function Install-Payload([string]$Payload) {
     if (Test-Path (Join-Path $Payload "ui")) {
         Copy-Item (Join-Path $Payload "ui") $uiDestination -Recurse
     }
+    foreach ($name in @("node", "web")) {
+        $destination = Join-Path $library $name
+        Remove-Item $destination -Recurse -Force -ErrorAction SilentlyContinue
+        if (Test-Path (Join-Path $Payload $name)) {
+            Copy-Item (Join-Path $Payload $name) $destination -Recurse
+        }
+    }
     $nativeBackendSource = Join-Path $Payload "vellum_native_backend.py"
     $nativeBackendDestination = Join-Path $library "vellum_native_backend.py"
     Remove-Item $nativeBackendDestination -Force -ErrorAction SilentlyContinue
     if (Test-Path $nativeBackendSource) {
         Copy-Item $nativeBackendSource $nativeBackendDestination -Force
     }
+    $webBackendSource = Join-Path $Payload "vellum_web_backend.py"
+    $webBackendDestination = Join-Path $library "vellum_web_backend.py"
+    Remove-Item $webBackendDestination -Force -ErrorAction SilentlyContinue
+    if (Test-Path $webBackendSource) {
+        Copy-Item $webBackendSource $webBackendDestination -Force
+    }
     Remove-Item (Join-Path $library "bin") -Recurse -Force -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path (Join-Path $library "bin") | Out-Null
     $designIr = Join-Path $Payload "design-ir"
     if (Test-Path $designIr) {
-        Assert-Node20
+        $localNode = Join-Path $library "node\bin\node.exe"
+        if (!(Test-Path $localNode)) { $localNode = Join-Path $library "node\bin\node" }
+        if (!(Test-Path $localNode)) { Assert-Node20 }
         $designIrDestination = Join-Path $library "design-ir"
         Remove-Item $designIrDestination -Recurse -Force -ErrorAction SilentlyContinue
         Copy-Item $designIr $designIrDestination -Recurse
         $importLauncher = @'
 @echo off
+if exist "%~dp0..\node\bin\node.exe" "%~dp0..\node\bin\node.exe" "%~dp0..\design-ir\bin\vellum-backend.js" %* & exit /b %errorlevel%
+if exist "%~dp0..\node\bin\node" "%~dp0..\node\bin\node" "%~dp0..\design-ir\bin\vellum-backend.js" %* & exit /b %errorlevel%
 node "%~dp0..\design-ir\bin\vellum-backend.js" %*
 '@
         $importLauncher = $importLauncher.Replace("`n", "`r`n")
@@ -80,6 +97,14 @@ python "%~dp0..\vellum_native_backend.py" %*
 '@
         $nativeLauncher = $nativeLauncher.Replace("`n", "`r`n")
         [IO.File]::WriteAllText((Join-Path $library "bin\vellum-native-backend.cmd"), $nativeLauncher)
+    }
+    if (Test-Path $webBackendSource) {
+        $webLauncher = @'
+@echo off
+python "%~dp0..\vellum_web_backend.py" %*
+'@
+        $webLauncher = $webLauncher.Replace("`n", "`r`n")
+        [IO.File]::WriteAllText((Join-Path $library "bin\vellum-web-backend.cmd"), $webLauncher)
     }
     $backendLauncher = @'
 @echo off
@@ -231,7 +256,7 @@ with tarfile.open(archive, "r:gz") as handle:
         raise SystemExit("archive contains duplicate member names")
     for member in members:
         path = PurePosixPath(member.name)
-        if (not path.parts or path.parts[0] not in {".agents", "vellum_cli.py", "vellum_backend.py", "vellum_manifest.py", "vellum_png.py", "vellum_native_backend.py", "templates", "sdk", "bin", "design-ir", "ui", "metadata.json"} or
+        if (not path.parts or path.parts[0] not in {".agents", "vellum_cli.py", "vellum_backend.py", "vellum_manifest.py", "vellum_png.py", "vellum_native_backend.py", "vellum_web_backend.py", "templates", "sdk", "bin", "design-ir", "ui", "web", "node", "metadata.json"} or
                 path.is_absolute() or ".." in path.parts or "\\" in member.name or ":" in path.parts[0] or
                 member.issym() or member.islnk() or not (member.isfile() or member.isdir())):
             raise SystemExit(f"unsafe archive member: {member.name}")

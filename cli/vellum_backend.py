@@ -87,12 +87,18 @@ def load_metadata(root: Path) -> dict[str, Any]:
     return metadata
 
 
-def backend_path(root: Path, command: str) -> Path:
+def backend_path(root: Path, command: str, arguments: list[str]) -> Path:
     bin_dir = root / "bin"
     if command in IMPORT_COMMANDS:
         names = ("vellum-import-backend.cmd",) if os.name == "nt" else ("vellum-import-backend",)
     else:
-        names = ("vellum-native-backend.exe", "vellum-native-backend.cmd") if os.name == "nt" else ("vellum-native-backend",)
+        target = option_value(arguments, "--target") or "macos"
+        if target == "web":
+            names = ("vellum-web-backend.exe", "vellum-web-backend.cmd") if os.name == "nt" else ("vellum-web-backend",)
+        elif target == "macos":
+            names = ("vellum-native-backend.exe", "vellum-native-backend.cmd") if os.name == "nt" else ("vellum-native-backend",)
+        else:
+            raise ValueError(f"unsupported application target: {target}")
     for name in names:
         candidate = bin_dir / name
         if candidate.is_file():
@@ -416,14 +422,19 @@ def main() -> int:
                 "project/CLI compatibility handshake does not match the installed SDK",
                 exit_code=3,
             )
+        target = option_value(forwarded, "--target") if command in NATIVE_COMMANDS else None
         available = metadata["capabilities"]["commands"].get(command)
+        if target is not None:
+            available = metadata["capabilities"].get("targets", {}).get(target, {}).get(
+                "commands", {}
+            ).get(command)
         if available is not True:
             return emit_failure(
                 "capability_unavailable",
                 f"The installed SDK does not yet provide the '{command}' capability",
                 exit_code=4,
             )
-        backend = backend_path(root, command)
+        backend = backend_path(root, command, forwarded)
         completed = invoke_backend_with_archive_staging(backend, command, forwarded)
         return completed.returncode
     except ArchiveFailure as error:

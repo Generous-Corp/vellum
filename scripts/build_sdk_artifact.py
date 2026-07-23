@@ -17,6 +17,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import stat
 import struct
@@ -35,6 +36,8 @@ METADATA_SCHEMA = "vellum.sdk-artifact.v1"
 EVIDENCE_SCHEMA = "vellum.sdk-artifact-evidence.v1"
 COMMAND_NAMES = ("import", "reimport", "build", "run", "test", "capture", "package")
 NATIVE_COMMANDS = ("build", "run", "test", "capture", "package")
+WEB_COMMANDS = ("build", "run", "test", "package")
+NODE_PROVENANCE_SCHEMA = "vellum.node-runtime-provenance.v1"
 DESIGN_IR_PAYLOAD_ENTRIES = ("LICENSE.md", "README.md", "bin", "package.json", "schema", "src")
 UI_PAYLOAD_ENTRIES = (
     "LICENSE.md", "README.md", "package.json", "package-lock.json", "scripts", "src", "test",
@@ -125,18 +128,33 @@ def derive_capabilities(payload: Path, install_tree: Path) -> dict[str, object]:
         "lib/libvellum-authoring.dylib",
         "lib/libvellum-gpu.dylib",
     ))
-    native_ready = (
-        gpu_renderer and authoring_runtime and ui_runtime and native_backend and native_host
+    node_runtime = (
+        any((payload / name).is_file() for name in ("node/bin/node", "node/bin/node.exe"))
+        and (payload / "node/LICENSE").is_file()
+        and (payload / "node/provenance.json").is_file()
     )
+    native_ready = (
+        gpu_renderer and authoring_runtime and ui_runtime and native_backend and
+        native_host and node_runtime
+    )
+    web_backend = (payload / "vellum_web_backend.py").is_file()
+    web_runtime = all((payload / "web" / name).is_file() for name in (
+        "manifest.json", "vellum_web_core.js", "vellum_web_core.wasm",
+        "index.html", "style.css", "vellum_host.js", "check_wasm_no_engine.py",
+    ))
+    web_ready = ui_runtime and node_runtime and web_backend and web_runtime
     commands = {name: False for name in COMMAND_NAMES}
     commands["import"] = import_backend
     commands["reimport"] = import_backend
     for name in NATIVE_COMMANDS:
         commands[name] = native_ready
+    for name in WEB_COMMANDS:
+        commands[name] = commands[name] or web_ready
     return {
         "cmake_sdk": cmake_sdk,
         "authoring_cli": (payload / "vellum_cli.py").is_file(),
         "gpu_renderer": gpu_renderer,
+        "node_runtime": node_runtime,
         "commands": commands,
         "authoring": {
             "text_input_v1": {
@@ -168,7 +186,39 @@ def derive_capabilities(payload: Path, install_tree: Path) -> dict[str, object]:
                 "sync": False,
             },
         },
+        "targets": {
+            "macos": {"commands": {name: native_ready for name in NATIVE_COMMANDS}},
+            "web": {"commands": {
+                name: (web_ready if name in WEB_COMMANDS else False)
+                for name in NATIVE_COMMANDS
+            }},
+        },
     }
+
+
+def copy_web_payload(source: Path, destination: Path, commit: str) -> None:
+    manifest_path = source / "manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ArtifactError(f"invalid web payload manifest: {error}") from error
+    if (
+        not isinstance(manifest, dict) or manifest.get("schema") != "vellum.web-payload.v1" or
+        manifest.get("source_commit") != commit or not isinstance(manifest.get("files"), dict)
+    ):
+        raise ArtifactError("web payload does not match the SDK source commit")
+    expected = manifest["files"]
+    actual_names = {path.name for path in source.iterdir() if path.is_file() and path.name != "manifest.json"}
+    if actual_names != set(expected):
+        raise ArtifactError("web payload files do not match its manifest")
+    for name, record in expected.items():
+        path = source / name
+        if (
+            not isinstance(record, dict) or record.get("sha256") != sha256(path) or
+            record.get("size") != path.stat().st_size
+        ):
+            raise ArtifactError(f"web payload hash or size mismatch: {name}")
+    shutil.copytree(source, destination)
 
 
 def sha256(path: Path) -> str:
@@ -177,6 +227,48 @@ def sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def validate_node_inputs(
+    binary: Path,
+    license_path: Path,
+    provenance_path: Path,
+    *,
+    version: str,
+    target: str,
+) -> dict[str, str]:
+    try:
+        provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ArtifactError(f"invalid --node-provenance JSON: {error}") from error
+    required = {
+        "schema", "name", "version", "target", "source_url", "distribution_sha256",
+        "binary_sha256", "license_file", "license_sha256",
+    }
+    if not isinstance(provenance, dict) or set(provenance) != required:
+        raise ArtifactError("--node-provenance has missing or unknown fields")
+    if (
+        provenance["schema"] != NODE_PROVENANCE_SCHEMA
+        or provenance["name"] != "Node.js"
+        or provenance["version"] != version.removeprefix("v")
+        or provenance["target"] != target
+        or not isinstance(provenance["source_url"], str)
+        or not provenance["source_url"].startswith("https://")
+        or provenance["license_file"] != "LICENSE"
+        or any(
+            not isinstance(provenance[field], str)
+            or re.fullmatch(r"[0-9a-f]{64}", provenance[field]) is None
+            for field in ("distribution_sha256", "binary_sha256", "license_sha256")
+        )
+    ):
+        raise ArtifactError("--node-provenance compatibility fields are malformed")
+    if not license_path.is_file() or license_path.stat().st_size < 100:
+        raise ArtifactError("--node-license must be the complete Node.js license file")
+    if provenance["binary_sha256"] != sha256(binary):
+        raise ArtifactError("--node-provenance binary_sha256 does not match --node-binary")
+    if provenance["license_sha256"] != sha256(license_path):
+        raise ArtifactError("--node-provenance license_sha256 does not match --node-license")
+    return provenance
 
 
 def normalize_static_archive(path: Path) -> None:
@@ -364,6 +456,10 @@ def copy_payload(
     target: str,
     *,
     include_ui: bool,
+    web_payload: Path | None = None,
+    node_binary: Path | None = None,
+    node_license: Path | None = None,
+    node_provenance: dict[str, str] | None = None,
 ) -> dict[str, object]:
     shutil.copy2(repo / "cli/vellum_cli.py", payload / "vellum_cli.py")
     shutil.copy2(repo / "cli/vellum_backend.py", payload / "vellum_backend.py")
@@ -387,6 +483,22 @@ def copy_payload(
         native_backend = repo / "cli/vellum_native_backend.py"
         if native_backend.is_file():
             shutil.copy2(native_backend, payload / "vellum_native_backend.py")
+    if web_payload is not None:
+        copy_web_payload(web_payload, payload / "web", commit)
+        shutil.copy2(repo / "cli/vellum_web_backend.py", payload / "vellum_web_backend.py")
+    if node_binary is not None:
+        if node_license is None or node_provenance is None:
+            raise ArtifactError("Node payload is missing validated license or provenance")
+        node_destination = payload / "node/bin" / (
+            "node.exe" if node_binary.suffix.lower() == ".exe" else "node"
+        )
+        node_destination.parent.mkdir(parents=True)
+        shutil.copy2(node_binary, node_destination)
+        node_destination.chmod(0o755)
+        shutil.copy2(node_license, payload / "node/LICENSE")
+        (payload / "node/provenance.json").write_text(
+            json.dumps(node_provenance, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
     capabilities = derive_capabilities(payload, install_tree)
     metadata: dict[str, object] = {
         "schema": METADATA_SCHEMA,
@@ -411,10 +523,38 @@ def build(args: argparse.Namespace) -> dict[str, object]:
     commit, source_tree_clean = source_identity(repo, args.source_commit, args.allow_dirty)
     target = args.target or target_name()
     skia_archive = args.skia_archive.resolve() if args.skia_archive else None
+    web_payload = args.web_payload.resolve() if args.web_payload else None
+    node_binary = args.node_binary.resolve() if args.node_binary else None
+    node_license = args.node_license.resolve() if args.node_license else None
+    node_provenance_path = args.node_provenance.resolve() if args.node_provenance else None
+    node_provenance = None
     if skia_archive and not skia_archive.is_file():
         raise ArtifactError(f"--skia-archive does not exist: {skia_archive}")
     if skia_archive and args.graphics == "off":
         raise ArtifactError("--skia-archive cannot be combined with --graphics off")
+    if web_payload is not None and not web_payload.is_dir():
+        raise ArtifactError(f"--web-payload does not exist: {web_payload}")
+    if node_binary is not None and (not node_binary.is_file() or not os.access(node_binary, os.X_OK)):
+        raise ArtifactError(f"--node-binary must be an executable file: {node_binary}")
+    if node_binary is not None:
+        node_probe = subprocess.run(
+            [str(node_binary), "--version"], text=True, capture_output=True, check=False
+        )
+        match = re.fullmatch(r"v?(\d+)(?:\.\d+){0,2}", node_probe.stdout.strip())
+        if node_probe.returncode or not match or int(match.group(1)) < 20:
+            raise ArtifactError("--node-binary must execute as Node.js 20 or newer")
+        if node_license is None or node_provenance_path is None:
+            raise ArtifactError(
+                "--node-binary requires exact --node-license and --node-provenance inputs"
+            )
+        node_provenance = validate_node_inputs(
+            node_binary, node_license, node_provenance_path,
+            version=node_probe.stdout.strip(), target=target,
+        )
+    elif node_license is not None or node_provenance_path is not None:
+        raise ArtifactError("--node-license/--node-provenance require --node-binary")
+    if (web_payload is not None or skia_archive is not None) and node_binary is None:
+        raise ArtifactError("application runtime payloads require an exact --node-binary")
     graphics = bool(skia_archive) or args.graphics == "on" or (
         args.graphics == "auto" and platform.system() == "Darwin"
     )
@@ -468,7 +608,11 @@ def build(args: argparse.Namespace) -> dict[str, object]:
             raise ArtifactError("native application artifacts currently require target darwin-arm64")
         metadata = copy_payload(
             repo, install_tree, payload, commit, source_tree_clean, target,
-            include_ui=bool(skia_archive),
+            include_ui=bool(skia_archive or web_payload),
+            web_payload=web_payload,
+            node_binary=node_binary,
+            node_license=node_license,
+            node_provenance=node_provenance,
         )
         if skia_archive and not all(
             metadata["capabilities"]["commands"][name] for name in NATIVE_COMMANDS
@@ -476,6 +620,11 @@ def build(args: argparse.Namespace) -> dict[str, object]:
             raise ArtifactError(
                 "--skia-archive payload did not derive every native application capability"
             )
+        if web_payload and not all(
+            metadata["capabilities"]["targets"]["web"]["commands"][name]
+            for name in WEB_COMMANDS
+        ):
+            raise ArtifactError("web payload did not derive every web consumer capability")
 
         asset_name = f"vellum-sdk-{FRAMEWORK_VERSION}-{target}.tar.gz"
         archive = output_dir / asset_name
@@ -516,6 +665,22 @@ def parser() -> argparse.ArgumentParser:
         "--skia-archive",
         type=Path,
         help="compose the exact pinned native GPU host, Authoring, @vellum/ui, and CLI payload",
+    )
+    value.add_argument(
+        "--web-payload", type=Path,
+        help="compose a source-matched payload from scripts/build_web_payload.py",
+    )
+    value.add_argument(
+        "--node-binary", type=Path,
+        help="compose one exact executable Node runtime for installed authoring tools",
+    )
+    value.add_argument(
+        "--node-license", type=Path,
+        help="complete license file for the exact Node distribution",
+    )
+    value.add_argument(
+        "--node-provenance", type=Path,
+        help="vellum.node-runtime-provenance.v1 JSON for the exact Node distribution",
     )
     value.add_argument("--json", action="store_true")
     return value

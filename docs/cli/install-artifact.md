@@ -28,6 +28,9 @@ ui/package.json                     # pinned-Skia mode
 ui/scripts/build-project.mjs        # pinned-Skia mode
 ui/node_modules/esbuild/...         # exact package-lock versions
 ui/node_modules/typescript/...
+node/bin/node                       # exact SDK-local Node executable
+node/LICENSE                        # complete Node distribution license
+node/provenance.json                # exact version/source/hash tuple
 vellum_native_backend.py            # pinned-Skia mode
 ```
 
@@ -45,7 +48,30 @@ esbuild/TypeScript dependencies:
 ```sh
 python3 scripts/build_sdk_artifact.py \
   --skia-archive /tmp/vellum-skia-m150.zip \
+  --node-binary "$(command -v node)" \
+  --node-license /path/to/node-distribution/LICENSE \
+  --node-provenance /path/to/node-provenance.json \
   --output-dir dist --json
+```
+
+`node-provenance.json` uses `vellum.node-runtime-provenance.v1` and contains
+exactly `schema`, `name` (`Node.js`), `version`, SDK `target`, HTTPS
+`source_url`, `distribution_sha256`, `binary_sha256`, `license_file`
+(`LICENSE`), and `license_sha256`. Construction rejects a runtime whose probed
+version or bytes do not match this record. Verification independently requires
+the executable, license, and record as one indivisible payload and recomputes
+the executable and license hashes.
+
+Create the record from a verified Node distribution before composing the SDK:
+
+```sh
+python3 scripts/create_node_provenance.py \
+  --node-binary /path/to/node/bin/node \
+  --node-license /path/to/node/LICENSE \
+  --target darwin-arm64 \
+  --source-url https://nodejs.org/dist/v22.16.0/node-v22.16.0-darwin-arm64.tar.gz \
+  --distribution-sha256 <sha256-from-the-signed-node-release-list> \
+  --output /tmp/node-provenance.json
 ```
 
 `build`, `run`, `test`, `capture`, and `package` become available only when the
@@ -58,7 +84,9 @@ The installer creates three distinct executable roles under
 `vellum-import-backend` runs the packaged DesignIR backend, and
 `vellum-native-backend` is installed only when its source implementation was
 packaged. Import and native command implementations therefore cannot shadow one
-another. Node.js 20 or newer is required when installing this artifact. The GPU
+another. Application-capable artifacts carry their exact Node.js 20+ runtime,
+license, and provenance; verified installation does not require system Node.
+Local development installs remain an explicit system-Node fallback. The GPU
 artifact contains its locked esbuild platform binary and TypeScript compiler;
 application builds do not resolve framework packages from the network. Project
 creation materializes the exact runtime package from the SDK and proves the

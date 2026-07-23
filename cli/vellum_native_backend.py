@@ -128,8 +128,8 @@ def project_context(project_argument: str) -> dict[str, Any]:
     if not entry.is_file() or entry.suffix not in {".js", ".jsx", ".ts", ".tsx"}:
         raise BackendFailure(f"Project entry is missing or unsupported: {entry}", status="invalid_project")
     targets = manifest["targets"]
-    if targets != {"desktop": [SUPPORTED_TARGET], "mobile": [], "web": False}:
-        raise BackendFailure("This SDK supports exactly the macos project target", status="unsupported_target", exit_code=4)
+    if SUPPORTED_TARGET not in targets.get("desktop", []):
+        raise BackendFailure("Project does not enable the macos target", status="unsupported_target", exit_code=4)
     application_id = manifest["app"].get("identifier")
     display_name = manifest["app"].get("name")
     if not isinstance(application_id, str) or not re.fullmatch(r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", application_id):
@@ -170,6 +170,13 @@ def require_target(value: str) -> None:
         )
 
 
+def sdk_node(sdk: Path) -> Path:
+    for node in (sdk / "node/bin/node", sdk / "node/bin/node.exe"):
+        if node.is_file() and os.access(node, os.X_OK):
+            return node
+    raise BackendFailure("Installed SDK has no exact Node runtime", status="invalid_sdk")
+
+
 def copy_frameworks(sdk: Path, destination: Path) -> list[str]:
     source = sdk / "sdk/lib"
     names = ["libvellum-authoring.dylib", "libvellum-gpu.dylib"]
@@ -203,7 +210,7 @@ def build_app(context: dict[str, Any], sdk: Path) -> dict[str, Any]:
     if not bundler.is_file():
         raise BackendFailure("Installed SDK has no @vellum/ui project bundler", status="invalid_sdk")
     bundle = resources / "app.js"
-    bundle_command = ["node", str(bundler), str(context["entry"]), str(bundle)]
+    bundle_command = [str(sdk_node(sdk)), str(bundler), str(context["entry"]), str(bundle)]
     imported_design = project / "ui/generated/main.materialized.json"
     if imported_design.is_file():
         bundle_command.append(str(imported_design))
@@ -506,7 +513,7 @@ def parser(command: str) -> argparse.ArgumentParser:
     value = BackendArgumentParser(add_help=False)
     value.add_argument("--project", required=True)
     value.add_argument("--json", action="store_true", required=True)
-    if command in {"build", "run", "capture", "package"}:
+    if command in {"build", "run", "test", "capture", "package"}:
         value.add_argument("--target", default=SUPPORTED_TARGET)
     if command == "run":
         value.add_argument("--no-build", action="store_true")

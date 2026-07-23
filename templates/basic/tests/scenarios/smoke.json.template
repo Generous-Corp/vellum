@@ -4,6 +4,9 @@
   "viewport": { "width": 640, "height": 400 },
   "steps": [
     { "action": "wait-for-idle" },
-    { "action": "capture", "name": "home" }
+    { "action": "capture", "name": "before" },
+    { "action": "press", "target": "increment" },
+    { "action": "wait-for-idle" },
+    { "action": "capture", "name": "after" }
   ]
 }

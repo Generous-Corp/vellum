@@ -97,14 +97,30 @@ copy_payload() {
   if [ -d "$payload/ui" ]; then
     cp -R "$payload/ui" "$library/ui"
   fi
+  rm -rf "$library/node"
+  if [ -x "$payload/node/bin/node" ]; then
+    cp -R "$payload/node" "$library/node"
+  fi
+  rm -rf "$library/web"
+  if [ -d "$payload/web" ]; then
+    cp -R "$payload/web" "$library/web"
+  fi
   rm -f "$library/vellum_native_backend.py"
   if [ -f "$payload/vellum_native_backend.py" ]; then
     cp "$payload/vellum_native_backend.py" "$library/vellum_native_backend.py"
   fi
+  rm -f "$library/vellum_web_backend.py"
+  if [ -f "$payload/vellum_web_backend.py" ]; then
+    cp "$payload/vellum_web_backend.py" "$library/vellum_web_backend.py"
+  fi
   rm -rf "${library:?}/bin"
   mkdir -p "$library/bin"
   if [ -d "$payload/design-ir" ]; then
-    require_node_20
+    if [ -x "$library/node/bin/node" ]; then
+      node_version=$("$library/node/bin/node" --version 2>/dev/null || true)
+    else
+      require_node_20
+    fi
     rm -rf "$library/design-ir"
     cp -R "$payload/design-ir" "$library/design-ir"
     {
@@ -112,6 +128,7 @@ copy_payload() {
       # shellcheck disable=SC2016
       printf '%s\n' 'bindir=$(CDPATH="" cd -- "$(dirname -- "$0")" && pwd)'
       # shellcheck disable=SC2016
+      printf '%s\n' 'if [ -x "$bindir/../node/bin/node" ]; then exec "$bindir/../node/bin/node" "$bindir/../design-ir/bin/vellum-backend.js" "$@"; fi'
       printf '%s\n' 'exec node "$bindir/../design-ir/bin/vellum-backend.js" "$@"'
     } > "$library/bin/vellum-import-backend"
     chmod 755 "$library/bin/vellum-import-backend"
@@ -125,6 +142,14 @@ copy_payload() {
       printf '%s\n' 'exec python3 "$bindir/../vellum_native_backend.py" "$@"'
     } > "$library/bin/vellum-native-backend"
     chmod 755 "$library/bin/vellum-native-backend"
+  fi
+  if [ -f "$payload/vellum_web_backend.py" ]; then
+    {
+      printf '%s\n' '#!/bin/sh' 'set -eu'
+      printf '%s\n' 'bindir=$(CDPATH="" cd -- "$(dirname -- "$0")" && pwd)'
+      printf '%s\n' 'exec python3 "$bindir/../vellum_web_backend.py" "$@"'
+    } > "$library/bin/vellum-web-backend"
+    chmod 755 "$library/bin/vellum-web-backend"
   fi
   {
     printf '%s\n' '#!/bin/sh' 'set -eu'
@@ -292,7 +317,7 @@ with tarfile.open(archive, "r:gz") as handle:
         raise SystemExit("archive contains duplicate member names")
     for member in members:
         path = PurePosixPath(member.name)
-        if (not path.parts or path.parts[0] not in {".agents", "vellum_cli.py", "vellum_backend.py", "vellum_manifest.py", "vellum_png.py", "vellum_native_backend.py", "templates", "sdk", "bin", "design-ir", "ui", "metadata.json"} or
+        if (not path.parts or path.parts[0] not in {".agents", "vellum_cli.py", "vellum_backend.py", "vellum_manifest.py", "vellum_png.py", "vellum_native_backend.py", "vellum_web_backend.py", "templates", "sdk", "bin", "design-ir", "ui", "web", "node", "metadata.json"} or
                 path.is_absolute() or ".." in path.parts or "\\" in member.name or ":" in path.parts[0] or
                 member.issym() or member.islnk() or not (member.isfile() or member.isdir())):
             raise SystemExit(f"unsafe archive member: {member.name}")

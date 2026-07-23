@@ -21,8 +21,9 @@ GPU PNG, and emits an ad-hoc-signed application package using installed bytes
 only. An experimental browser proof now runs browser JavaScript against the
 shared C++ runtime, retained scene, and paint-command traversal compiled to
 Wasm, with Canvas2D as an explicitly identified presentation shell. It is not
-yet a CLI, GPU-backend, packaging, or compatibility claim. Other supported
-targets remain unavailable and fail closed.
+yet a GPU-backend or arbitrary compatibility claim. Exact-pinned SDK artifacts
+may expose build/test/run-instructions/static-package for web while unsupported
+targets continue to fail closed.
 
 The history-preserving Pulp projection has been removed from the active tip.
 Its authorship and exact blobs remain auditable in Git history and immutable
@@ -70,7 +71,11 @@ cmake -S . -B build-gpu \
 cmake --build build-gpu --parallel
 ctest --test-dir build-gpu --output-on-failure
 python3 scripts/build_sdk_artifact.py \
-  --skia-archive /tmp/vellum-skia-m150.zip --output-dir dist --json
+  --skia-archive /tmp/vellum-skia-m150.zip \
+  --node-binary "$(command -v node)" \
+  --node-license /path/to/node-distribution/LICENSE \
+  --node-provenance /path/to/node-provenance.json \
+  --output-dir dist --json
 ./scripts/install.sh \
   --archive dist/vellum-sdk-0.1.0-darwin-arm64.tar.gz \
   --checksums dist/SHA256SUMS
@@ -166,7 +171,11 @@ by the integration test.
 
 ```sh
 python3 scripts/build_sdk_artifact.py \
-  --skia-archive /tmp/vellum-skia-m150.zip --output-dir dist --json
+  --skia-archive /tmp/vellum-skia-m150.zip \
+  --node-binary "$(command -v node)" \
+  --node-license /path/to/node-distribution/LICENSE \
+  --node-provenance /path/to/node-provenance.json \
+  --output-dir dist --json
 python3 scripts/verify_sdk_artifact.py \
   --archive dist/vellum-sdk-0.1.0-darwin-arm64.tar.gz \
   --checksums dist/SHA256SUMS --json
@@ -181,6 +190,9 @@ archive verified in the preceding section:
 ```sh
 python3 scripts/build_sdk_artifact.py \
   --skia-archive /tmp/vellum-skia-m150.zip \
+  --node-binary "$(command -v node)" \
+  --node-license /path/to/node-distribution/LICENSE \
+  --node-provenance /path/to/node-provenance.json \
   --output-dir dist --json
 ```
 
