@@ -488,6 +488,7 @@ def derived_capabilities(
         "web/index.html",
         "web/style.css",
         "web/vellum_host.js",
+        "web/browser_component_adapter.cpp",
         "web/check_wasm_no_engine.py",
         "vellum_web_backend.py",
     }

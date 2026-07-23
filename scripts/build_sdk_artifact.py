@@ -157,7 +157,8 @@ def derive_capabilities(payload: Path, install_tree: Path) -> dict[str, object]:
     web_backend = (payload / "vellum_web_backend.py").is_file()
     web_runtime = all((payload / "web" / name).is_file() for name in (
         "manifest.json", "vellum_web_core.js", "vellum_web_core.wasm",
-        "index.html", "style.css", "vellum_host.js", "check_wasm_no_engine.py",
+        "index.html", "style.css", "vellum_host.js",
+        "browser_component_adapter.cpp", "check_wasm_no_engine.py",
     ))
     web_ready = ui_runtime and node_runtime and web_backend and web_runtime
     custom_components = (

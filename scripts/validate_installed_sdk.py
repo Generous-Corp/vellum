@@ -170,7 +170,7 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
         web_present = all((prefix / "lib/vellum" / path).is_file() for path in (
             "vellum_web_backend.py", "bin/vellum-web-backend",
             "web/manifest.json", "web/vellum_web_core.js", "web/vellum_web_core.wasm",
-            "web/vellum_host.js",
+            "web/vellum_host.js", "web/browser_component_adapter.cpp",
         )) and any((prefix / "lib/vellum" / path).is_file() for path in (
             "node/bin/node", "node/bin/node.exe",
         ))

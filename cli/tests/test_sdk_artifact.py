@@ -59,7 +59,8 @@ class SdkArtifactTests(unittest.TestCase):
             source.mkdir()
             names = (
                 "vellum_web_core.js", "vellum_web_core.wasm", "index.html",
-                "style.css", "vellum_host.js", "check_wasm_no_engine.py",
+                "style.css", "vellum_host.js", "browser_component_adapter.cpp",
+                "check_wasm_no_engine.py",
             )
             records = {}
             for name in names:
