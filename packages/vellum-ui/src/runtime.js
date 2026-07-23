@@ -2,6 +2,9 @@ const ELEMENT = Symbol.for('vellum.element');
 const FRAGMENT = Symbol.for('vellum.fragment');
 const PROTOCOL = 'vellum.authoring-host.v1';
 const SNAPSHOT_SCHEMA = 'vellum.authoring-state.v1';
+const TEXT_INPUT_PRIMITIVE_VERSION = 1;
+const MAXIMUM_TEXT_INPUT_LENGTH = 65536;
+const MAXIMUM_TEXT_INPUT_PLACEHOLDER_LENGTH = 1024;
 
 let renderingRuntime = null;
 
@@ -137,6 +140,10 @@ export const Text = primitive('text');
 export const Button = primitive('button');
 export const Image = primitive('image');
 export const Canvas = primitive('canvas');
+export function TextInput(properties = {}) {
+    return jsx('text-input', { ...properties, primitiveVersion: TEXT_INPUT_PRIMITIVE_VERSION });
+}
+TextInput.displayName = 'Vellum.TextInput';
 
 function designToken(document, value) {
     if (typeof value !== 'string' || !value.startsWith('{') || !value.endsWith('}')) return value;
@@ -321,7 +328,37 @@ function materialize(value, runtime, path) {
         throw new TypeError(`${path}.type must be a component or intrinsic string`);
     }
 
-    const children = flattenChildren(value.props.children).flatMap((child, index) =>
+    const childValues = flattenChildren(value.props.children);
+    if (value.type === 'text-input') {
+        if (value.props.primitiveVersion !== TEXT_INPUT_PRIMITIVE_VERSION) {
+            throw new Error(`${path} uses an unsupported TextInput primitive version`);
+        }
+        if (typeof value.props.id !== 'string' || value.props.id.length === 0) {
+            throw new Error(`${path}.TextInput requires an explicit stable id`);
+        }
+        if (typeof value.props.value !== 'string' ||
+            value.props.value.length > MAXIMUM_TEXT_INPUT_LENGTH) {
+            throw new TypeError(
+                `${path}.TextInput value must be a string of at most ` +
+                `${MAXIMUM_TEXT_INPUT_LENGTH} code units`,
+            );
+        }
+        if (value.props.placeholder !== undefined &&
+            (typeof value.props.placeholder !== 'string' ||
+             value.props.placeholder.length > MAXIMUM_TEXT_INPUT_PLACEHOLDER_LENGTH)) {
+            throw new TypeError(
+                `${path}.TextInput placeholder must be a string of at most ` +
+                `${MAXIMUM_TEXT_INPUT_PLACEHOLDER_LENGTH} code units`,
+            );
+        }
+        if (value.props.onChange === undefined) {
+            throw new Error(`${path}.TextInput requires onChange for controlled state`);
+        }
+        if (childValues.length > 0) {
+            throw new Error(`${path}.TextInput does not accept children`);
+        }
+    }
+    const children = childValues.flatMap((child, index) =>
         materialize(child, runtime, elementPath(path, child, index)));
     const id = typeof value.props.id === 'string' && value.props.id.length > 0
         ? value.props.id : `${path}/${value.type}`;
@@ -362,6 +399,11 @@ function materialize(value, runtime, path) {
     if (typeof value.props.source === 'string') node.source = value.props.source;
     if (typeof value.props.accessibilityLabel === 'string') {
         node.accessibilityLabel = value.props.accessibilityLabel;
+    }
+    if (value.type === 'text-input') {
+        node.primitiveVersion = TEXT_INPUT_PRIMITIVE_VERSION;
+        node.value = value.props.value;
+        if (value.props.placeholder !== undefined) node.placeholder = value.props.placeholder;
     }
     if (Object.keys(events).length > 0) node.events = events;
     return [node];

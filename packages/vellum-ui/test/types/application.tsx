@@ -3,6 +3,7 @@ import {
     Fragment,
     Stack,
     Text,
+    TextInput,
     createApp,
     materializeDesign,
     mount,
@@ -50,6 +51,23 @@ const app = createApp<Model>({
 const bridge = mount(app);
 const rendered: string = bridge.renderJSON();
 void rendered;
+
+function EditableTitle(): VellumElement {
+    const [value, setValue] = useState('Draft');
+    return (
+        <TextInput
+            id="title-input"
+            value={value}
+            placeholder="Board title"
+            onChange={(payload) => {
+                if (payload && typeof payload === 'object' && !Array.isArray(payload) &&
+                    typeof payload.value === 'string') setValue(payload.value);
+            }}
+            onKeyDown="handleKey"
+        />
+    );
+}
+void EditableTitle;
 
 const imported = materializeDesign({
     root: {

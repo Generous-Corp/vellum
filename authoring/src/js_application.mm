@@ -18,6 +18,8 @@ constexpr std::size_t kMaximumBundleBytes = 16U * 1024U * 1024U;
 constexpr std::size_t kMaximumJsonBytes = 16U * 1024U * 1024U;
 constexpr std::size_t kMaximumNodes = 100000U;
 constexpr std::size_t kMaximumDepth = 256U;
+constexpr NSUInteger kMaximumTextInputBytes = 64U * 1024U;
+constexpr NSUInteger kMaximumPlaceholderBytes = 4U * 1024U;
 
 void set_error(std::string* destination, std::string value) {
     if (destination != nullptr) *destination = std::move(value);
@@ -86,13 +88,16 @@ struct MaterializeContext final {
     std::set<std::string> identities;
     std::size_t nodes = 0;
     std::vector<Interaction>* interactions = nullptr;
+    std::vector<TextInputControl>* text_inputs = nullptr;
 };
 
 float default_height(NSString* type, NSDictionary* style) {
     if ([type isEqualToString:@"text"] || [type isEqualToString:@"text-run"]) {
         return number_or(style, @"fontSize", 14.0F) * 1.4F;
     }
-    if ([type isEqualToString:@"button"]) return 44.0F;
+    if ([type isEqualToString:@"button"] || [type isEqualToString:@"text-input"]) {
+        return 44.0F;
+    }
     return 0.0F;
 }
 
@@ -137,6 +142,35 @@ bool materialize_node(
         return false;
     }
     NSDictionary* style = dictionary_or_empty(source[@"style"]);
+    NSDictionary* events = dictionary_or_empty(source[@"events"]);
+    const bool is_text_input = [type isEqualToString:@"text-input"];
+    NSString* input_value = nil;
+    NSString* input_placeholder = nil;
+    if (is_text_input) {
+        NSNumber* primitive_version = [source[@"primitiveVersion"]
+            isKindOfClass:NSNumber.class] ? source[@"primitiveVersion"] : nil;
+        input_value = [source[@"value"] isKindOfClass:NSString.class]
+            ? source[@"value"] : nil;
+        input_placeholder = [source[@"placeholder"] isKindOfClass:NSString.class]
+            ? source[@"placeholder"] : nil;
+        if (primitive_version == nil || primitive_version.integerValue != 1 ||
+            input_value == nil ||
+            [input_value lengthOfBytesUsingEncoding:NSUTF8StringEncoding] >
+                kMaximumTextInputBytes ||
+            (source[@"placeholder"] != nil && input_placeholder == nil) ||
+            [input_placeholder lengthOfBytesUsingEncoding:NSUTF8StringEncoding] >
+                kMaximumPlaceholderBytes ||
+            ![events[@"change"] isKindOfClass:NSString.class]) {
+            set_error(error,
+                "text-input requires primitiveVersion 1, bounded string value/placeholder, "
+                "and a change action");
+            return false;
+        }
+        if (array_or_empty(source[@"children"]).count != 0U) {
+            set_error(error, "text-input v1 does not accept retained-tree children");
+            return false;
+        }
+    }
     output.id = identity;
     output.bounds = proposed;
     output.corner_radius = std::max(0.0F, number_or(style, @"borderRadius", 0.0F));
@@ -149,6 +183,11 @@ bool materialize_node(
         output.font_size = std::max(1.0F, number_or(style, @"fontSize", 14.0F));
         output.fill = parse_color(style[@"color"])
             .value_or(vellum::graphics::Color::hex(0x111827));
+    } else if (is_text_input) {
+        output.kind = vellum::graphics::SceneNode::Kind::rectangle;
+        output.fill = parse_color(style[@"backgroundColor"])
+            .value_or(vellum::graphics::Color::hex(0xFFFFFF));
+        output.corner_radius = std::max(output.corner_radius, 6.0F);
     } else if ([type isEqualToString:@"button"] ||
                parse_color(style[@"backgroundColor"]).has_value()) {
         output.kind = vellum::graphics::SceneNode::Kind::rectangle;
@@ -161,7 +200,6 @@ bool materialize_node(
         output.kind = vellum::graphics::SceneNode::Kind::group;
     }
 
-    NSDictionary* events = dictionary_or_empty(source[@"events"]);
     for (NSString* event in events) {
         if (![event isKindOfClass:NSString.class] ||
             ![events[event] isKindOfClass:NSString.class]) {
@@ -172,6 +210,27 @@ bool materialize_node(
             .node_id = identity,
             .event = cpp_string(event),
             .action = cpp_string(events[event]),
+            .bounds = {
+                absolute_x + proposed.x,
+                absolute_y + proposed.y,
+                proposed.width,
+                proposed.height,
+            },
+        });
+    }
+
+    if (is_text_input) {
+        const auto action = [&](NSString* name) -> std::string {
+            return [events[name] isKindOfClass:NSString.class]
+                ? cpp_string(events[name]) : std::string{};
+        };
+        context.text_inputs->push_back({
+            .node_id = identity,
+            .value = cpp_string(input_value),
+            .placeholder = cpp_string(input_placeholder),
+            .change_action = action(@"change"),
+            .submit_action = action(@"submit"),
+            .key_down_action = action(@"keyDown"),
             .bounds = {
                 absolute_x + proposed.x,
                 absolute_y + proposed.y,
@@ -207,6 +266,31 @@ bool materialize_node(
                 .value_or(vellum::graphics::Color::hex(0x041412));
             label.font_size = font_size;
             label.text = label_text;
+            output.children.push_back(std::move(label));
+        }
+    }
+    if (is_text_input) {
+        const bool showing_placeholder = input_value.length == 0U;
+        NSString* display = showing_placeholder ? input_placeholder : input_value;
+        if (display.length > 0U) {
+            vellum::graphics::SceneNode label;
+            const float font_size = std::max(1.0F, number_or(style, @"fontSize", 14.0F));
+            label.id = identity + "/value";
+            if (!context.identities.insert(label.id).second) {
+                set_error(error, "generated text-input value id collides: " + label.id);
+                return false;
+            }
+            if (++context.nodes > kMaximumNodes) {
+                set_error(error, "authoring tree exceeds the node limit");
+                return false;
+            }
+            label.kind = vellum::graphics::SceneNode::Kind::text;
+            label.bounds = {12.0F, (proposed.height - font_size * 1.4F) * 0.5F,
+                            std::max(0.0F, proposed.width - 24.0F), font_size * 1.4F};
+            label.fill = parse_color(style[@"color"]).value_or(
+                vellum::graphics::Color::hex(showing_placeholder ? 0x94A3B8 : 0x111827));
+            label.font_size = font_size;
+            label.text = cpp_string(display);
             output.children.push_back(std::move(label));
         }
     }
@@ -282,7 +366,10 @@ bool parse_rendered_json(
     candidate.scene.height = height;
     candidate.scene.background = parse_color(style[@"backgroundColor"])
         .value_or(vellum::graphics::Color::hex(0xF8FAFC));
-    MaterializeContext context{.interactions = &candidate.interactions};
+    MaterializeContext context{
+        .interactions = &candidate.interactions,
+        .text_inputs = &candidate.text_inputs,
+    };
     if (!materialize_node(
             tree, {0.0F, 0.0F, width, height}, 0.0F, 0.0F, 0U,
             context, candidate.scene.root, error)) {

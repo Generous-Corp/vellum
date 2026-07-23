@@ -24,6 +24,29 @@ function App() {
 mount(App);
 ```
 
+The controlled `TextInput` v1 primitive keeps value ownership in application
+code and uses the same serializable event boundary on native and web hosts:
+
+```tsx
+import { TextInput, useState } from "@vellum/ui";
+
+const [title, setTitle] = useState("Draft");
+<TextInput
+  id="board-title"
+  value={title}
+  placeholder="Board title"
+  onChange={(event) => setTitle(event.value)}
+  onSubmit={() => save(title)}
+/>
+```
+
+`TextInput` requires a stable ID, a string `value`, and `onChange`; it rejects
+children and unsupported primitive versions. The macOS host currently provides
+pointer focus, direct keyboard text insertion, a final-grapheme Backspace, and
+bounded semantic key/submit dispatch. It does not yet provide a caret or
+selection model, IME composition, clipboard editing shortcuts, password input,
+accessibility text semantics, spellcheck, or mobile platform integration.
+
 Imported DesignIR stays inspectable JSON. Applications opt into it from
 developer-owned code and bind behavior separately:
 
@@ -62,6 +85,14 @@ application can run an explicit migration before restore.
 Components normally derive identity from their name and implementation; set a
 unique static `vellumId` when state must survive an intentional implementation
 replacement or reimport.
+
+Native persistence is separately capability-gated in `app.toml` with
+`persistence = "state-v1"` under `[capabilities]`. On macOS this restores the
+whole versioned Vellum snapshot from Application Support before the first
+interactive render and atomically rewrites it after a handled mutation. `none`
+remains the default. A corrupt, oversized, wrong-app, wrong-state-version, or
+incompatible-layout snapshot fails closed. This is not a general key/value
+database or migration, sync, secret-storage, or file API.
 
 Run `npm ci && npm test` to exercise runtime, strict TypeScript/JSX, and
 classic-script bundle checks. `npm run build:native-test -- <output.js>` builds

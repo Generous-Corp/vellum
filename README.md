@@ -132,6 +132,14 @@ exact npm lock; an installed SDK projects immutable `@vellum/ui` runtime bytes
 into ignored `.vellum/packages/`, and `create` proves the lock with offline
 `npm ci` before reporting success.
 
+The native authoring slice includes a controlled, versioned `TextInput`,
+pointer focus, direct key/text dispatch, bounded semantic `input`/`key`
+scenarios, and opt-in `persistence = "state-v1"` whole-app snapshots on macOS.
+Its deliberately narrow limitations—including no IME composition, selection,
+clipboard editing, accessibility text semantics, general storage API, or state
+migration—are documented in [`@vellum/ui`](packages/vellum-ui/README.md) and
+[Interaction capture and montages](docs/cli/capture.md).
+
 The accepted source contract, generated tree, ownership boundary, and conflict
 workflow are documented in [Import and reimport](docs/cli/import-reimport.md).
 The semantic interaction driver, offscreen capture path, and deterministic

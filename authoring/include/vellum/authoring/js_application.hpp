@@ -19,9 +19,22 @@ struct Interaction final {
     vellum::graphics::Rect bounds;
 };
 
+/// The exact controlled TextInput v1 surface exposed to a native host.
+/// Empty optional action strings mean that event was not authored.
+struct TextInputControl final {
+    std::string node_id;
+    std::string value;
+    std::string placeholder;
+    std::string change_action;
+    std::string submit_action;
+    std::string key_down_action;
+    vellum::graphics::Rect bounds;
+};
+
 struct RenderedApplication final {
     vellum::graphics::Scene scene;
     std::vector<Interaction> interactions;
+    std::vector<TextInputControl> text_inputs;
 };
 
 /// Executes a bundled Vellum JavaScript/TypeScript application through the

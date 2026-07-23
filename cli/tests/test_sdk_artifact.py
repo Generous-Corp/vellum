@@ -100,6 +100,13 @@ class SdkArtifactTests(unittest.TestCase):
                 with_backend["commands"][command]
                 for command in ("build", "run", "test", "capture", "package")
             ))
+            authoring = with_backend["authoring"]
+            self.assertTrue(authoring["text_input_v1"]["native_direct_text"])
+            self.assertTrue(authoring["scenario_v1"]["input"])
+            self.assertTrue(authoring["persistence"]["state_v1"])
+            self.assertFalse(authoring["text_input_v1"]["ime_composition"])
+            self.assertFalse(authoring["text_input_v1"]["accessibility_text"])
+            self.assertFalse(authoring["persistence"]["migration_api"])
 
     def test_reproducible_archive_installs_into_sterile_consumer(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

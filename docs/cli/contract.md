@@ -98,6 +98,11 @@ It reads only the installed host, libraries, UI bundler, and the application
 project. At this milestone it accepts exactly the `macos` target; unsupported
 targets and missing payloads are errors, never successful no-ops.
 
+`[capabilities].persistence` accepts only `"none"` or the explicit
+`"state-v1"` whole-runtime snapshot lane. The macOS package records that exact
+choice in its Info.plist; the host does not infer persistence from use of
+`useState` or `createApp`.
+
 `doctor --fix` creates safe project-local cache/state directories and projects
 the exact locked UI package from the installed SDK into ignored `.vellum/`
 state. It does not silently install system packages or modify shell profiles.

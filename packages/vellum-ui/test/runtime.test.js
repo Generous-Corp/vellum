@@ -6,6 +6,7 @@ import {
     Design,
     Stack,
     Text,
+    TextInput,
     View,
     createApp,
     jsx,
@@ -64,6 +65,68 @@ test('dispatches inline JSX behavior and persists hook state', () => {
     bridge.dispatchJSON(JSON.stringify({ protocol, action, payload: null }));
     tree = JSON.parse(bridge.restoreStateJSON(snapshot)).tree;
     assert.equal(tree.children[0].children[0].text, 'Count 1');
+});
+
+test('TextInput v1 is controlled, serializable, and dispatches semantic input events', () => {
+    function Editor() {
+        const [value, setValue] = useState('Draft');
+        const [submitted, setSubmitted] = useState(false);
+        return jsx(Stack, {
+            id: 'editor',
+            style: { width: 320, height: 160 },
+            children: [
+                jsx(TextInput, {
+                    id: 'title-input',
+                    value,
+                    placeholder: 'Board title',
+                    onChange: (payload) => setValue(payload.value),
+                    onSubmit: () => setSubmitted(true),
+                }),
+                jsx(Text, { id: 'result', children: `${value}:${submitted}` }),
+            ],
+        });
+    }
+    const bridge = mount(Editor);
+    let tree = JSON.parse(bridge.renderJSON()).tree;
+    const input = tree.children[0];
+    assert.deepEqual({
+        type: input.type,
+        primitiveVersion: input.primitiveVersion,
+        value: input.value,
+        placeholder: input.placeholder,
+    }, {
+        type: 'text-input', primitiveVersion: 1, value: 'Draft', placeholder: 'Board title',
+    });
+    tree = JSON.parse(bridge.dispatchJSON(JSON.stringify({
+        protocol,
+        action: input.events.change,
+        payload: { value: 'Roadmap', inputType: 'scenario' },
+    }))).tree;
+    assert.equal(tree.children[0].value, 'Roadmap');
+    assert.equal(tree.children[1].children[0].text, 'Roadmap:false');
+    tree = JSON.parse(bridge.dispatchJSON(JSON.stringify({
+        protocol,
+        action: tree.children[0].events.submit,
+        payload: { value: 'Roadmap' },
+    }))).tree;
+    assert.equal(tree.children[1].children[0].text, 'Roadmap:true');
+});
+
+test('TextInput v1 rejects unversioned, uncontrolled, and oversized payloads', () => {
+    assert.throws(
+        () => mount(() => jsx('text-input', { id: 'raw', value: '', onChange() {} })).renderJSON(),
+        /unsupported TextInput primitive version/,
+    );
+    assert.throws(
+        () => mount(() => jsx(TextInput, { id: 'missing-change', value: '' })).renderJSON(),
+        /requires onChange/,
+    );
+    assert.throws(
+        () => mount(() => jsx(TextInput, {
+            id: 'too-long', value: 'x'.repeat(65537), onChange() {},
+        })).renderJSON(),
+        /at most 65536 code units/,
+    );
 });
 
 test('supports named model actions for imported/generated components', () => {

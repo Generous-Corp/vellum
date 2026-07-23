@@ -19,6 +19,7 @@ files = "none"
 clipboard = false
 open_url = false
 network = false
+# Opt in with "state-v1" for bounded whole-app snapshots on the native host.
 persistence = "none"
 
 [native]

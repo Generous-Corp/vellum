@@ -77,7 +77,7 @@ int main(int argc, char** argv) {
     if (!application->render(rendered, &error) ||
         rendered.scene.width != 320.0F ||
         rendered.scene.height != (external_bundle ? 180.0F : 200.0F) ||
-        rendered.interactions.size() != 1U ||
+        rendered.interactions.size() != (external_bundle ? 3U : 1U) ||
         rendered.interactions[0].node_id !=
             (external_bundle ? "native-increment" : "add") ||
         vellum::graphics::find_node(
@@ -85,6 +85,15 @@ int main(int argc, char** argv) {
         vellum::graphics::find_node(
             rendered.scene, external_bundle ? "native-increment/label" : "add/label") == nullptr) {
         std::cerr << (error.empty() ? "initial JS materialization failed" : error) << '\n';
+        return 1;
+    }
+    if (external_bundle &&
+        (rendered.text_inputs.size() != 1U ||
+         rendered.text_inputs[0].node_id != "native-title-input" ||
+         rendered.text_inputs[0].value != "Draft" ||
+         rendered.text_inputs[0].change_action.empty() ||
+         rendered.text_inputs[0].submit_action.empty())) {
+        std::cerr << "TextInput v1 materialization failed\n";
         return 1;
     }
     const std::string action = rendered.interactions[0].action;

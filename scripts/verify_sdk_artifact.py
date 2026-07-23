@@ -160,6 +160,36 @@ def derived_capabilities(contents: dict[str, bytes]) -> dict[str, object]:
         "authoring_cli": "vellum_cli.py" in contents,
         "gpu_renderer": gpu_renderer,
         "commands": commands,
+        "authoring": {
+            "text_input_v1": {
+                "retained_tree": ui_runtime,
+                "native_pointer_focus": native_ready,
+                "native_direct_text": native_ready,
+                "ime_composition": False,
+                "caret_and_selection": False,
+                "clipboard_editing": False,
+                "accessibility_text": False,
+                "mobile": False,
+            },
+            "scenario_v1": {
+                "input": native_ready,
+                "key": native_ready,
+                "maximum_steps": 1000,
+                "maximum_input_utf8_bytes": 64 * 1024,
+                "keys": [
+                    "Enter", "Escape", "Backspace", "Tab", "ArrowUp", "ArrowDown",
+                    "ArrowLeft", "ArrowRight", "Home", "End", "Delete",
+                ] if native_ready else [],
+            },
+            "persistence": {
+                "state_v1": native_ready,
+                "macos_application_support": native_ready,
+                "atomic_snapshot_write": native_ready,
+                "migration_api": False,
+                "key_value_store": False,
+                "sync": False,
+            },
+        },
     }
 
 
@@ -218,11 +248,14 @@ def verify(archive: Path, checksums: Path) -> dict[str, object]:
         capabilities = metadata["capabilities"]
         if (
             not isinstance(capabilities, dict)
-            or set(capabilities) != {"cmake_sdk", "authoring_cli", "gpu_renderer", "commands"}
+            or set(capabilities) != {
+                "cmake_sdk", "authoring_cli", "gpu_renderer", "commands", "authoring"
+            }
             or not isinstance(capabilities.get("cmake_sdk"), bool)
             or not isinstance(capabilities.get("authoring_cli"), bool)
             or not isinstance(capabilities.get("gpu_renderer"), bool)
             or not isinstance(capabilities.get("commands"), dict)
+            or not isinstance(capabilities.get("authoring"), dict)
             or set(capabilities["commands"]) != COMMANDS
             or not all(isinstance(value, bool) for value in capabilities["commands"].values())
         ):

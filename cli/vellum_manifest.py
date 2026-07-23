@@ -186,8 +186,11 @@ def load_app_manifest(project: Path) -> dict[str, Any]:
         "files": "none", "clipboard": False, "open_url": False,
         "network": False, "persistence": "none",
     }
-    if capabilities != expected_capabilities:
-        raise ManifestError("the initial host exposes no application service capabilities yet")
+    if {**capabilities, "persistence": "none"} != expected_capabilities or \
+            capabilities["persistence"] not in {"none", "state-v1"}:
+        raise ManifestError(
+            "the initial host exposes only the optional persistence = \"state-v1\" capability"
+        )
 
     native = raw.get("native", {})
     _exact_keys(native, {"components_manifest"}, set(), "native")

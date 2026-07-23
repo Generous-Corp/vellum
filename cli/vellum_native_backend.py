@@ -23,6 +23,13 @@ RESULT_SCHEMA = "vellum.backend.result.v1"
 SCENARIO_SCHEMA = "vellum.scenario.v1"
 CAPTURE_MATRIX_SCHEMA = "vellum.capture-matrix.v1"
 SUPPORTED_TARGET = "macos"
+MAX_SCENARIO_STEPS = 1000
+MAX_SCENARIO_TARGET_BYTES = 1024
+MAX_SCENARIO_INPUT_BYTES = 64 * 1024
+SUPPORTED_SCENARIO_KEYS = {
+    "Enter", "Escape", "Backspace", "Tab", "ArrowUp", "ArrowDown",
+    "ArrowLeft", "ArrowRight", "Home", "End", "Delete",
+}
 
 
 class BackendFailure(RuntimeError):
@@ -139,6 +146,7 @@ def project_context(project_argument: str) -> dict[str, Any]:
         "application_id": application_id,
         "display_name": display_name.strip(),
         "version": manifest["app"]["version"],
+        "capabilities": manifest["capabilities"],
     }
 
 
@@ -216,6 +224,7 @@ def build_app(context: dict[str, Any], sdk: Path) -> dict[str, Any]:
         "CFBundleVersion": "1",
         "LSMinimumSystemVersion": "15.0",
         "NSHighResolutionCapable": True,
+        "VellumPersistence": context["capabilities"]["persistence"],
     }
     with (contents / "Info.plist").open("wb") as output:
         plistlib.dump(info, output, sort_keys=True)
@@ -247,29 +256,85 @@ def scenario_arguments(context: dict[str, Any], scenario_value: str | None) -> t
     relative = name if name.endswith(".json") or "/" in name else f"tests/scenarios/{name}.json"
     scenario_path = safe_relative(project, relative, "scenario")
     scenario = load_json(scenario_path, SCENARIO_SCHEMA, "scenario")
+    if set(scenario) - {"schema", "name", "viewport", "steps"}:
+        raise BackendFailure("Scenario contains unknown fields", status="invalid_scenario")
+    def bounded_text(value: object, limit: int) -> bool:
+        if not isinstance(value, str) or not value or "\0" in value:
+            return False
+        try:
+            return len(value.encode("utf-8")) <= limit
+        except UnicodeEncodeError:
+            return False
+
+    scenario_name = scenario.get("name", name)
+    if not bounded_text(scenario_name, 256):
+        raise BackendFailure("Scenario name is invalid", status="invalid_scenario")
     arguments: list[str] = []
     viewport = scenario.get("viewport")
-    if not isinstance(viewport, dict):
+    if not isinstance(viewport, dict) or set(viewport) != {"width", "height"}:
         raise BackendFailure("Scenario viewport is required", status="invalid_scenario")
     for field, option in (("width", "--expect-width"), ("height", "--expect-height")):
         value = viewport.get(field)
         if not isinstance(value, int) or isinstance(value, bool) or value <= 0 or value > 16384:
             raise BackendFailure(f"Scenario viewport {field} is invalid", status="invalid_scenario")
         arguments.extend([option, str(value)])
-    for index, step in enumerate(scenario.get("steps", [])):
+    steps = scenario.get("steps")
+    if not isinstance(steps, list) or len(steps) > MAX_SCENARIO_STEPS:
+        raise BackendFailure("Scenario steps must be an array of at most 1000 actions", status="invalid_scenario")
+
+    def target_at(step: dict[str, Any], index: int, allowed: set[str]) -> str:
+        if set(step) not in ({"action", "target"}, {"action", "id"}) or not set(step) <= allowed:
+            raise BackendFailure(f"Scenario step {index} has unexpected fields", status="invalid_scenario")
+        target = step.get("target") or step.get("id")
+        if not bounded_text(target, MAX_SCENARIO_TARGET_BYTES):
+            raise BackendFailure(f"Scenario step {index} has an invalid target", status="invalid_scenario")
+        return target
+
+    for index, step in enumerate(steps):
         if not isinstance(step, dict) or not isinstance(step.get("action"), str):
             raise BackendFailure(f"Scenario step {index} is invalid", status="invalid_scenario")
         action = step["action"]
-        if action == "wait-for-idle" or action == "capture":
+        if action == "wait-for-idle":
+            if set(step) != {"action"}:
+                raise BackendFailure(f"Scenario step {index} has unexpected fields", status="invalid_scenario")
+            continue
+        if action == "capture":
+            if set(step) not in ({"action"}, {"action", "name"}) or \
+                    ("name" in step and (not isinstance(step["name"], str) or not step["name"])):
+                raise BackendFailure(f"Scenario step {index} has invalid capture fields", status="invalid_scenario")
             continue
         if action in {"press", "click"}:
-            target = step.get("target") or step.get("id")
-            if not isinstance(target, str) or not target:
-                raise BackendFailure(f"Scenario step {index} has no target", status="invalid_scenario")
+            target = target_at(step, index, {"action", "target", "id"})
             arguments.extend(["--press", target])
             continue
+        if action == "input":
+            if set(step) != {"action", "target", "text"}:
+                raise BackendFailure(f"Scenario step {index} has invalid input fields", status="invalid_scenario")
+            target = step["target"]
+            text = step["text"]
+            if not bounded_text(target, MAX_SCENARIO_TARGET_BYTES) or \
+                    not isinstance(text, str) or "\0" in text:
+                raise BackendFailure(f"Scenario step {index} has an invalid input payload", status="invalid_scenario")
+            try:
+                input_size = len(text.encode("utf-8"))
+            except UnicodeEncodeError:
+                input_size = MAX_SCENARIO_INPUT_BYTES + 1
+            if input_size > MAX_SCENARIO_INPUT_BYTES:
+                raise BackendFailure(f"Scenario step {index} has an invalid input payload", status="invalid_scenario")
+            arguments.extend(["--input", target, text])
+            continue
+        if action == "key":
+            if set(step) != {"action", "target", "key"}:
+                raise BackendFailure(f"Scenario step {index} has invalid key fields", status="invalid_scenario")
+            target = step["target"]
+            key = step["key"]
+            if not bounded_text(target, MAX_SCENARIO_TARGET_BYTES) or \
+                    not isinstance(key, str) or key not in SUPPORTED_SCENARIO_KEYS:
+                raise BackendFailure(f"Scenario step {index} has an invalid key payload", status="invalid_scenario")
+            arguments.extend(["--key", target, key])
+            continue
         raise BackendFailure(f"Unsupported scenario action: {action}", status="unsupported_scenario_action")
-    return arguments, str(scenario.get("name", name))
+    return arguments, scenario_name
 
 
 def parse_hex_color(value: object) -> tuple[int, int, int, int]:

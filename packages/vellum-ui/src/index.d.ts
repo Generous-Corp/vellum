@@ -22,6 +22,14 @@ export interface ElementProps {
     key?: string | number;
 }
 
+export interface TextInputProps extends Omit<ElementProps, 'children' | 'text' | 'source'> {
+    id: string;
+    value: string;
+    placeholder?: string;
+    onChange: EventHandler;
+    children?: never;
+}
+
 export interface VellumElement<Props = ElementProps> {
     readonly type: string | symbol | Component<Props>;
     readonly props: Readonly<Props>;
@@ -48,6 +56,7 @@ export declare const jsxs: typeof jsx;
 export declare const View: Component;
 export declare const Stack: Component;
 export declare const Text: Component;
+export declare const TextInput: Component<TextInputProps>;
 export declare const Button: Component;
 export declare const Image: Component;
 export declare const Canvas: Component;
@@ -149,6 +158,7 @@ declare global {
             view: ElementProps;
             stack: ElementProps;
             text: ElementProps;
+            'text-input': TextInputProps & { primitiveVersion: 1 };
             button: ElementProps;
             image: ElementProps;
             canvas: ElementProps;

@@ -51,6 +51,15 @@ snapshots and binds revision identity to the archive SHA-256. Consult conversion
 diagnostics after every import or reimport. Do not invent another route or
 silently discard unsupported properties.
 
+For editable native UI, use controlled `TextInput` v1 from `@vellum/ui` with a
+stable ID, string `value`, and `onChange`. Scenarios may use bounded `input` and
+named `key` actions; they are retained-tree actions, not DOM or arbitrary
+keyboard automation. To persist the versioned whole-app snapshot on macOS,
+explicitly set `persistence = "state-v1"` in `[capabilities]` and keep
+`createApp({id,stateVersion,...})` stable. Do not claim IME, selection/caret,
+clipboard editing, migration, database, sync, accessibility text, or mobile
+support from this lane.
+
 ## Ownership and maintenance
 
 - Tool-owned: `framework.lock`, `sources/imported/`, `design/ir/`, `design/generated/`,

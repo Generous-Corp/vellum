@@ -1,7 +1,8 @@
 # Interaction capture and montages
 
 Vellum scenarios address retained nodes by stable semantic ID. They can wait for
-idle, press or click a node, and request a capture without depending on whether
+idle, press or click a node, replace a controlled text input value, dispatch one
+of the bounded semantic keys, and request a capture without depending on whether
 the target is visible on the physical display. The native macOS backend runs
 the scenario against its offscreen Skia Graphite/Dawn surface and rejects a
 missing interaction target or unsupported action.
@@ -43,7 +44,31 @@ counts, compression boundaries, scanline filters, and accepted RGB/RGBA color
 formats before copying pixels. This makes montage generation available in a
 sterile consumer without Pillow, ImageMagick, a browser, or a visible window.
 
-The initial driver deliberately supports only `wait-for-idle`, `press`,
-`click`, and `capture`. Keyboard/text entry, pointer coordinates, accessibility
-queries, and richer synchronization must be added as versioned scenario actions
-with native-host tests; unknown actions fail rather than being ignored.
+An editable flow remains inspectable JSON and preserves action order:
+
+```json
+{
+  "schema": "vellum.scenario.v1",
+  "name": "rename-board",
+  "viewport": { "width": 640, "height": 400 },
+  "steps": [
+    { "action": "input", "target": "board-title", "text": "Roadmap" },
+    { "action": "key", "target": "board-title", "key": "Enter" },
+    { "action": "capture", "name": "renamed" }
+  ]
+}
+```
+
+`input` replaces the complete controlled value and emits `onChange` with
+`{value,inputType:"scenario"}`. It does not simulate individual keystrokes.
+`key` accepts exactly `Enter`, `Escape`, `Backspace`, `Tab`, the four arrow
+keys, `Home`, `End`, and `Delete`. `Enter` also emits `onSubmit` when authored;
+`Backspace` removes the final Unicode grapheme through `onChange`. Other keys
+require `onKeyDown`. Scenarios are limited to 1,000 actions, 1,024-byte target
+IDs, and 64 KiB UTF-8 input values. Unknown fields, unknown actions, malformed
+payloads, missing targets, and unavailable handlers fail rather than being
+ignored.
+
+This is semantic retained-tree automation, not browser automation. Pointer
+coordinates, accessibility queries, arbitrary key chords, arbitrary IME input,
+and richer synchronization are not supported.
