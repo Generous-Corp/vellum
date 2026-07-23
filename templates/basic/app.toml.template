@@ -15,12 +15,13 @@ mobile = []
 web = true
 
 [capabilities]
-files = "none"
-clipboard = false
-open_url = false
+commands = "denied"
+files = "denied"
+clipboard = "denied"
+open_url = "denied"
 network = false
 # Opt in with "state-v1" for bounded whole-app snapshots on the native host.
-persistence = "none"
+persistence = "denied"
 
 [native]
 components_manifest = "native/components.toml"

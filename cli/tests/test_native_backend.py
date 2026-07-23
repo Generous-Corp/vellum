@@ -191,7 +191,7 @@ class NativeBackendTests(unittest.TestCase):
             manifest_path = project / "app.toml"
             original = manifest_path.read_text(encoding="utf-8")
             manifest_path.write_text(
-                original.replace('persistence = "none"', 'persistence = "state-v1"'),
+                original.replace('persistence = "denied"', 'persistence = "state-v1"'),
                 encoding="utf-8",
             )
             sdk = fake_build_sdk(root)
@@ -206,7 +206,7 @@ class NativeBackendTests(unittest.TestCase):
                 self.assertEqual(plistlib.load(handle)["VellumPersistence"], "state-v1")
 
             manifest_path.write_text(
-                original.replace('persistence = "none"', 'persistence = "arbitrary"'),
+                original.replace('persistence = "denied"', 'persistence = "arbitrary"'),
                 encoding="utf-8",
             )
             rejected = run([

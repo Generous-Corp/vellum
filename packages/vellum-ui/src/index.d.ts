@@ -1,5 +1,53 @@
 export type VellumScalar = string | number | boolean;
 export type JsonValue = null | VellumScalar | JsonValue[] | { [key: string]: JsonValue };
+export type CapabilityDeclaration =
+    | 'denied'
+    | 'unsupported'
+    | 'v1'
+    | 'user-selected-text-v1'
+    | 'text-v1'
+    | 'external-v1'
+    | 'state-v1';
+export interface ServiceCapabilities {
+    commands?: 'v1' | 'denied' | 'unsupported';
+    files?: 'user-selected-text-v1' | 'denied' | 'unsupported';
+    clipboard?: 'text-v1' | 'denied' | 'unsupported';
+    open_url?: 'external-v1' | 'denied' | 'unsupported';
+    persistence?: 'state-v1' | 'denied' | 'unsupported';
+}
+export interface ServiceRequest {
+    protocol: 'vellum.services.v1';
+    kind: 'request';
+    id: string;
+    service: 'commands' | 'files' | 'clipboard' | 'open_url' | 'persistence';
+    operation: string;
+    arguments: Record<string, JsonValue>;
+}
+export type ServiceResponse =
+    | { protocol: 'vellum.services.v1'; kind: 'response'; id: string; ok: true; value: JsonValue }
+    | { protocol: 'vellum.services.v1'; kind: 'response'; id: string; ok: false;
+        error: { code: string; message: string } };
+export type ServiceProvider = (
+    request: ServiceRequest,
+) => ServiceResponse | Promise<ServiceResponse>;
+export interface Services {
+    commands: { execute(command: string, arguments_?: Record<string, JsonValue>): Promise<JsonValue> };
+    files: { selectText(options?: Record<string, JsonValue>): Promise<JsonValue> };
+    clipboard: { readText(): Promise<JsonValue>; writeText(text: string): Promise<JsonValue> };
+    openUrl(url: string): Promise<JsonValue>;
+    persistence: { loadState(): Promise<JsonValue>; saveState(state: JsonValue): Promise<JsonValue> };
+}
+export declare function createServices(
+    provider: ServiceProvider,
+    capabilities?: ServiceCapabilities,
+): Services;
+export declare const serviceCapabilities: Readonly<{
+    commands: 'v1';
+    files: 'user-selected-text-v1';
+    clipboard: 'text-v1';
+    open_url: 'external-v1';
+    persistence: 'state-v1';
+}>;
 
 export interface Style {
     [property: string]: VellumScalar;

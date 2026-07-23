@@ -6,6 +6,7 @@ import {
     Text,
     TextInput,
     createApp,
+    createServices,
     materializeDesign,
     mount,
     useMemo,
@@ -91,3 +92,21 @@ const imported = materializeDesign({
     actions: { 'main/root': { keyDown: 'handleKey' } },
 });
 void imported;
+
+const services = createServices(async (request) => ({
+    protocol: 'vellum.services.v1',
+    kind: 'response',
+    id: request.id,
+    ok: true,
+    value: null,
+}), {
+    commands: 'v1',
+    files: 'user-selected-text-v1',
+    clipboard: 'text-v1',
+    open_url: 'external-v1',
+    persistence: 'state-v1',
+});
+const selectedText: Promise<JsonValue> = services.files.selectText({
+    extensions: ['txt'],
+});
+void selectedText;

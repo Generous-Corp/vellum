@@ -1,5 +1,6 @@
 add_library(vellum-authoring SHARED
-    src/js_application.mm)
+    src/js_application.mm
+    src/service_bridge.cpp)
 add_library(Vellum::Authoring ALIAS vellum-authoring)
 
 set_target_properties(vellum-authoring PROPERTIES
@@ -18,3 +19,10 @@ target_link_libraries(vellum-authoring
     PRIVATE
         "-framework Foundation"
         "-framework JavaScriptCore")
+
+if(VELLUM_BUILD_TESTS)
+    add_executable(vellum-service-bridge-test
+        tests/service_bridge_test.cpp)
+    target_link_libraries(vellum-service-bridge-test PRIVATE Vellum::Authoring)
+    add_test(NAME vellum.service-bridge COMMAND vellum-service-bridge-test)
+endif()

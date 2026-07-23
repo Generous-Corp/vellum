@@ -291,16 +291,26 @@ def load_app_manifest(project: Path) -> dict[str, Any]:
         )
 
     capabilities = raw.get("capabilities", {})
-    _exact_keys(capabilities, {"files", "clipboard", "open_url", "network", "persistence"}, set(), "capabilities")
-    expected_capabilities = {
-        "files": "none", "clipboard": False, "open_url": False,
-        "network": False, "persistence": "none",
+    _exact_keys(
+        capabilities,
+        {"commands", "files", "clipboard", "open_url", "network", "persistence"},
+        set(),
+        "capabilities",
+    )
+    versions = {
+        "commands": "v1",
+        "files": "user-selected-text-v1",
+        "clipboard": "text-v1",
+        "open_url": "external-v1",
+        "persistence": "state-v1",
     }
-    if {**capabilities, "persistence": "none"} != expected_capabilities or \
-            capabilities["persistence"] not in {"none", "state-v1"}:
-        raise ManifestError(
-            "the initial host exposes only the optional persistence = \"state-v1\" capability"
-        )
+    for capability, version in versions.items():
+        if capabilities[capability] not in {version, "denied", "unsupported"}:
+            raise ManifestError(
+                f"[capabilities].{capability} must be {version}, denied, or unsupported"
+            )
+    if capabilities["network"] is not False:
+        raise ManifestError("[capabilities].network is unsupported and must remain false")
 
     native = raw.get("native", {})
     _exact_keys(native, {"components_manifest"}, set(), "native")
