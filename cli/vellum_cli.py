@@ -196,7 +196,7 @@ def _project_ui_payload(source: Path) -> dict[str, bytes]:
         )
     runtime_package = {
         key: package[key]
-        for key in ("name", "version", "description", "type", "license", "engines", "exports", "dependencies")
+        for key in ("name", "version", "description", "type", "license", "engines", "exports")
         if key in package
     }
     payload = {

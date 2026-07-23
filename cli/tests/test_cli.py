@@ -634,6 +634,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(installed.returncode, 0, installed.stdout + installed.stderr)
             package = json.loads((project / "node_modules/@vellum/ui/package.json").read_text())
             self.assertEqual(package["version"], "0.1.0-experimental.0")
+            self.assertNotIn("dependencies", package)
             self.assertFalse((project / ".vellum/packages/vellum-ui/node_modules").exists())
 
     def test_installed_sdk_metadata_enforces_exact_framework_pin(self) -> None:
