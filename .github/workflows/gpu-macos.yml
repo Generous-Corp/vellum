@@ -80,6 +80,10 @@ jobs:
           set -euo pipefail
           npm ci --prefix packages/vellum-ui
           npm test --prefix packages/vellum-ui
+          npm run --prefix packages/vellum-ui build:native-test -- \
+            "$RUNNER_TEMP/vellum-ui-native.iife.js"
+          printf 'VELLUM_AUTHORING_TEST_BUNDLE=%s\n' \
+            "$RUNNER_TEMP/vellum-ui-native.iife.js" >> "$GITHUB_ENV"
           fixture_root="$RUNNER_TEMP/phase3-installed"
           cp -R fixtures/authoring-phase3 "$fixture_root"
           mkdir -p "$RUNNER_TEMP/phase3-packages"
@@ -104,7 +108,7 @@ jobs:
           VELLUM_PROJECT_ROOT="$fixture_root" \
             node "$fixture_root/node_modules/@vellum/ui/scripts/build-project.mjs" \
               "$fixture_root/src/App.tsx" "$bundle"
-          printf 'VELLUM_AUTHORING_TEST_BUNDLE=%s\n' "$bundle" \
+          printf 'VELLUM_PHASE3_TEST_BUNDLE=%s\n' "$bundle" \
             >> "$GITHUB_ENV"
 
       - name: Build the release GPU slice
@@ -114,6 +118,7 @@ jobs:
             -DVELLUM_BUILD_TESTS=ON \
             -DVELLUM_REQUIRE_GPU=ON \
             -DVELLUM_AUTHORING_TEST_BUNDLE="$VELLUM_AUTHORING_TEST_BUNDLE" \
+            -DVELLUM_PHASE3_TEST_BUNDLE="$VELLUM_PHASE3_TEST_BUNDLE" \
             -DVELLUM_SKIA_ARCHIVE="$VELLUM_SKIA_ARCHIVE"
           cmake --build build-gpu --parallel
 

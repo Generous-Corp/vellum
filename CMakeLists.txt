@@ -22,6 +22,8 @@ option(VELLUM_ENABLE_AUTHORING "Build the native JavaScript/TypeScript applicati
 option(VELLUM_ENABLE_WEB "Build the experimental browser/Wasm proof" OFF)
 set(VELLUM_AUTHORING_TEST_BUNDLE "" CACHE FILEPATH
     "Optional @vellum/ui classic-script bundle for the real JavaScriptCore integration test")
+set(VELLUM_PHASE3_TEST_BUNDLE "" CACHE FILEPATH
+    "Optional unchanged Phase 3 classic-script bundle for the cross-runtime fixture test")
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -123,9 +125,16 @@ if(VELLUM_BUILD_TESTS)
             endif()
             add_test(NAME vellum.authoring-ui-bundle
                 COMMAND vellum-authoring-test "${VELLUM_AUTHORING_TEST_BUNDLE}")
+        endif()
+        if(VELLUM_PHASE3_TEST_BUNDLE)
+            if(NOT EXISTS "${VELLUM_PHASE3_TEST_BUNDLE}")
+                message(FATAL_ERROR
+                    "VELLUM_PHASE3_TEST_BUNDLE does not exist: "
+                    "${VELLUM_PHASE3_TEST_BUNDLE}")
+            endif()
             add_test(NAME vellum.authoring-phase3-fixture
                 COMMAND vellum-authoring-phase3-fixture-test
-                    "${VELLUM_AUTHORING_TEST_BUNDLE}")
+                    "${VELLUM_PHASE3_TEST_BUNDLE}")
         endif()
     endif()
 
