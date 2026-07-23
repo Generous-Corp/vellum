@@ -126,14 +126,20 @@ if(VELLUM_BUILD_TESTS)
         endif()
     endif()
 
-    add_test(NAME vellum.install-consumer
-        COMMAND "${CMAKE_COMMAND}"
-            "-DVELLUM_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
-            "-DVELLUM_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
-            "-DVELLUM_INSTALL_CONSUMER_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/apps/smoke-native/install-consumer"
-            "-DVELLUM_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
-            "-DTEST_CONFIG=$<CONFIG>"
-            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunInstallConsumer.cmake")
+    # This consumer proves that the native CMake package is relocatable. A
+    # WebAssembly configure produces a target-architecture package, so driving
+    # its consumer with the host compiler would only report a false
+    # 32-bit/64-bit package-version mismatch.
+    if(NOT EMSCRIPTEN)
+        add_test(NAME vellum.install-consumer
+            COMMAND "${CMAKE_COMMAND}"
+                "-DVELLUM_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+                "-DVELLUM_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+                "-DVELLUM_INSTALL_CONSUMER_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/apps/smoke-native/install-consumer"
+                "-DVELLUM_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
+                "-DTEST_CONFIG=$<CONFIG>"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunInstallConsumer.cmake")
+    endif()
     add_test(NAME vellum.sdk-artifact
         COMMAND "${Python3_EXECUTABLE}"
             -m unittest cli.tests.test_sdk_artifact
