@@ -250,6 +250,36 @@ def validate_scenario_evidence(evidence: dict[str, Any]) -> None:
         )
 
 
+def run_chrome_scenario(
+    url: str,
+    received: Any,
+    *,
+    chrome: str | None = None,
+    profile_factory: Any = tempfile.TemporaryDirectory,
+    process_factory: Any = subprocess.Popen,
+) -> None:
+    with profile_factory(prefix="vellum-web-chrome-") as profile:
+        process = process_factory([
+            chrome or chrome_path(), "--headless=new", "--disable-gpu-sandbox",
+            "--no-first-run", "--disable-background-networking",
+            f"--user-data-dir={profile}", url,
+        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True)
+        try:
+            if not received.wait(20):
+                raise BackendFailure(
+                    "Browser scenario proof timed out",
+                    status="test_failed",
+                )
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(5)
+
+
 def run_scenario(build: Path, scenario: Path) -> dict[str, Any]:
     scenario_copy = build / "__vellum_scenario.json"
     shutil.copy2(scenario, scenario_copy)
@@ -272,22 +302,13 @@ def run_scenario(build: Path, scenario: Path) -> dict[str, Any]:
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    process: subprocess.Popen[str] | None = None
     try:
-        with tempfile.TemporaryDirectory(prefix="vellum-web-chrome-") as profile:
-            process = subprocess.Popen([
-                chrome_path(), "--headless=new", "--disable-gpu-sandbox", "--no-first-run",
-                "--disable-background-networking", f"--user-data-dir={profile}",
-                f"http://127.0.0.1:{server.server_port}/index.html?vellum-scenario=/__vellum_scenario.json",
-            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True)
-            if not received.wait(20):
-                raise BackendFailure("Browser scenario proof timed out", status="test_failed")
+        run_chrome_scenario(
+            f"http://127.0.0.1:{server.server_port}/index.html"
+            "?vellum-scenario=/__vellum_scenario.json",
+            received,
+        )
     finally:
-        if process and process.poll() is None:
-            process.terminate()
-            try: process.wait(5)
-            except subprocess.TimeoutExpired:
-                process.kill(); process.wait(5)
         server.shutdown(); thread.join(5)
         scenario_copy.unlink(missing_ok=True)
     validate_scenario_evidence(evidence)

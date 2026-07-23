@@ -15,6 +15,7 @@ finally:
     sys.path.pop(0)
 
 validate_scenario_evidence = BACKEND_MODULE["validate_scenario_evidence"]
+run_chrome_scenario = BACKEND_MODULE["run_chrome_scenario"]
 BackendFailure = BACKEND_MODULE["BackendFailure"]
 
 
@@ -58,6 +59,107 @@ class WebScenarioEvidenceTests(unittest.TestCase):
         del evidence["canvasDataBytes"]
         with self.assertRaises(BackendFailure):
             validate_scenario_evidence(evidence)
+
+    def test_chrome_stops_before_its_temporary_profile_is_removed(self) -> None:
+        events: list[str] = []
+
+        class Profile:
+            def __enter__(self) -> str:
+                events.append("profile-enter")
+                return "/temporary/chrome-profile"
+
+            def __exit__(self, *args: object) -> None:
+                events.append("profile-exit")
+
+        class Process:
+            running = True
+
+            def poll(self) -> int | None:
+                return None if self.running else 0
+
+            def terminate(self) -> None:
+                events.append("terminate")
+                self.running = False
+
+            def wait(self, timeout: int) -> int:
+                events.append(f"wait-{timeout}")
+                return 0
+
+            def kill(self) -> None:
+                events.append("kill")
+                self.running = False
+
+        class Received:
+            def wait(self, timeout: int) -> bool:
+                events.append(f"evidence-{timeout}")
+                return True
+
+        process = Process()
+        run_chrome_scenario(
+            "http://127.0.0.1/example",
+            Received(),
+            chrome="/fake/chrome",
+            profile_factory=lambda **_kwargs: Profile(),
+            process_factory=lambda *_args, **_kwargs: process,
+        )
+        self.assertEqual(
+            events,
+            [
+                "profile-enter",
+                "evidence-20",
+                "terminate",
+                "wait-5",
+                "profile-exit",
+            ],
+        )
+
+    def test_chrome_timeout_still_stops_before_profile_cleanup(self) -> None:
+        events: list[str] = []
+
+        class Profile:
+            def __enter__(self) -> str:
+                events.append("profile-enter")
+                return "/temporary/chrome-profile"
+
+            def __exit__(self, *args: object) -> None:
+                events.append("profile-exit")
+
+        class Process:
+            running = True
+
+            def poll(self) -> int | None:
+                return None if self.running else 0
+
+            def terminate(self) -> None:
+                events.append("terminate")
+                self.running = False
+
+            def wait(self, _timeout: int) -> int:
+                events.append("wait")
+                return 0
+
+            def kill(self) -> None:
+                events.append("kill")
+                self.running = False
+
+        class Received:
+            def wait(self, _timeout: int) -> bool:
+                events.append("timeout")
+                return False
+
+        process = Process()
+        with self.assertRaisesRegex(BackendFailure, "timed out"):
+            run_chrome_scenario(
+                "http://127.0.0.1/example",
+                Received(),
+                chrome="/fake/chrome",
+                profile_factory=lambda **_kwargs: Profile(),
+                process_factory=lambda *_args, **_kwargs: process,
+            )
+        self.assertEqual(
+            events,
+            ["profile-enter", "timeout", "terminate", "wait", "profile-exit"],
+        )
 
 
 if __name__ == "__main__":
