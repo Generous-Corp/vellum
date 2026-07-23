@@ -40,6 +40,20 @@ function App() {
         throw new Error('phase3-source-map-proof');
     };
 
+    const copyTitle = () => {
+        services.clipboard.writeText(title).then(
+            () => setStatus('clipboard-complete'),
+            (error) => setStatus(`clipboard-${String(error.code)}`),
+        );
+    };
+
+    const openDocumentation = () => {
+        services.urls.openExternal('https://vellum.dev/').then(
+            () => setStatus('url-complete'),
+            (error) => setStatus(`url-${String(error.code)}`),
+        );
+    };
+
     return (
         <View id="phase3-app" accessibilityLabel="Phase 3 board">
             <Design
@@ -84,10 +98,10 @@ function App() {
             <button id="open" onPress={() => services.files.openText()}>
                 Open
             </button>
-            <button id="copy" onPress={() => services.clipboard.writeText(title)}>
+            <button id="copy" onPress={copyTitle}>
                 Copy
             </button>
-            <button id="docs" onPress={() => services.urls.openExternal('https://vellum.dev/')}>
+            <button id="docs" onPress={openDocumentation}>
                 Documentation
             </button>
             <button id="mapped-error" onPress={throwMappedError}>

@@ -197,9 +197,9 @@ class Phase3ContractsTest(unittest.TestCase):
                 "$",
             )
 
-    def test_gate_is_honestly_pending_and_uses_one_entry(self) -> None:
+    def test_gate_tracks_runtime_evidence_without_overclaiming_native_parity(self) -> None:
         manifest = load_json(FIXTURE_DIRECTORY / "gate-manifest.json")
-        self.assertTrue(manifest["contractOnly"])
+        self.assertFalse(manifest["contractOnly"])
         self.assertEqual(manifest["gate"]["status"], "pending")
         self.assertEqual(manifest["application"]["entry"], "src/App.tsx")
         self.assertEqual(
@@ -209,13 +209,29 @@ class Phase3ContractsTest(unittest.TestCase):
             manifest["application"]["mustRemainByteIdenticalAcrossRuntimes"]
         )
         self.assertGreaterEqual(len(manifest["requirements"]), 15)
+        statuses = {
+            requirement["id"]: requirement["status"]
+            for requirement in manifest["requirements"]
+        }
         self.assertEqual(
-            {requirement["status"] for requirement in manifest["requirements"]},
-            {"pending"},
+            {identifier for identifier, status in statuses.items() if status == "pending"},
+            {
+                "keyboard-pointer-touch",
+                "capability-checked-commands",
+                "capability-checked-files",
+            },
         )
         for requirement in manifest["requirements"]:
             evidence = FIXTURE_DIRECTORY / requirement["contractEvidence"]
             self.assertTrue(evidence.exists(), requirement["id"])
+            self.assertIn(requirement["status"], {"passed", "pending"})
+            runtime_evidence = requirement.get("runtimeEvidence")
+            self.assertIsInstance(runtime_evidence, list, requirement["id"])
+            self.assertGreater(len(runtime_evidence), 0, requirement["id"])
+            for relative in runtime_evidence:
+                path = (FIXTURE_DIRECTORY / relative).resolve()
+                self.assertTrue(path.is_relative_to(ROOT), requirement["id"])
+                self.assertTrue(path.is_file(), f"{requirement['id']}: {path}")
 
         entry = FIXTURE_DIRECTORY / manifest["application"]["entry"]
         digest = hashlib.sha256(entry.read_bytes()).hexdigest()

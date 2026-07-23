@@ -28,6 +28,25 @@ bool contains_text(const vellum::graphics::SceneNode &node,
   return false;
 }
 
+void append_text(const vellum::graphics::SceneNode& node, std::string& output) {
+  if (!node.text.empty()) {
+    if (!output.empty()) output += " | ";
+    output += node.text;
+  }
+  for (const auto& child : node.children) append_text(child, output);
+}
+
+std::string service_host(std::string_view clipboard,
+                         std::string_view open_url) {
+  return "globalThis.__vellumServiceHost={capabilities:{commands:'v1',"
+         "files:'denied',clipboard:'" +
+         std::string(clipboard) + "',open_url:'" + std::string(open_url) +
+         "',persistence:'state-v1'},requests:[],request(request){"
+         "this.requests.push(request);return Promise.resolve({"
+         "protocol:'vellum.services.v1',kind:'response',id:request.id,"
+         "ok:true,value:null});}};\n";
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -44,8 +63,10 @@ int main(int argc, char **argv) {
   }
 
   std::string error;
+  const std::string enabled_source =
+      service_host("text-v1", "external-v1") + source.str();
   auto application =
-      vellum::authoring::JsApplication::create(source.str(), &error);
+      vellum::authoring::JsApplication::create(enabled_source, &error);
   if (!application) {
     std::cerr << error << '\n';
     return 1;
@@ -81,6 +102,61 @@ int main(int argc, char **argv) {
                                 : error)
               << '\n';
     return 1;
+  }
+
+  std::string snapshot;
+  if (!application->snapshot_state(snapshot, &error)) {
+    std::cerr << "fixture state snapshot failed: " << error << '\n';
+    return 1;
+  }
+  auto reloaded =
+      vellum::authoring::JsApplication::create(enabled_source, &error);
+  if (!reloaded || !reloaded->render(rendered, &error) ||
+      !reloaded->restore_state(snapshot, rendered, &error) ||
+      !contains_text(rendered.scene.root, "Board: Roadmap")) {
+    std::cerr << "fixture state continuity failed: " << error << '\n';
+    return 1;
+  }
+  application = std::move(reloaded);
+
+  for (const auto* target : {"copy", "docs"}) {
+    const auto* service = interaction(rendered, target, "press");
+    if (service == nullptr ||
+        !application->dispatch(service->action, "null", rendered, &error) ||
+        !application->wait_for_idle(32, rendered, pump, &error)) {
+      std::cerr << "fixture enabled service failed for " << target << ": "
+                << error << '\n';
+      return 1;
+    }
+  }
+  if (!contains_text(rendered.scene.root, "url-complete")) {
+    std::cerr << "fixture URL service did not complete\n";
+    return 1;
+  }
+
+  auto denied = vellum::authoring::JsApplication::create(
+      service_host("denied", "denied") + source.str(), &error);
+  if (!denied || !denied->render(rendered, &error) ||
+      !denied->wait_for_idle(32, rendered, pump, &error)) {
+    std::cerr << "fixture denied service setup failed: " << error << '\n';
+    return 1;
+  }
+  for (const auto& denied_service :
+       {std::pair{"copy", "clipboard-capability-denied"},
+        std::pair{"docs", "url-capability-denied"}}) {
+    const auto* denied_action =
+        interaction(rendered, denied_service.first, "press");
+    if (denied_action == nullptr ||
+        !denied->dispatch(denied_action->action, "null", rendered, &error) ||
+        !denied->wait_for_idle(32, rendered, pump, &error) ||
+        !contains_text(rendered.scene.root, denied_service.second)) {
+      std::string texts;
+      append_text(rendered.scene.root, texts);
+      std::cerr << "fixture denied service did not fail closed for "
+                << denied_service.first << ": " << error
+                << " tree=" << texts << '\n';
+      return 1;
+    }
   }
 
   const auto *mapped = interaction(rendered, "mapped-error", "press");

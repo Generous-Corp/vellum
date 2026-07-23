@@ -111,8 +111,15 @@ class Transcript:
 class WebReloadServer:
     CLIENT = (
         "<script data-vellum-dev>"
-        "new EventSource('/__vellum_dev_events').addEventListener('reload',"
-        "()=>location.reload());</script>"
+        "const k='vellum.dev.state.v1';"
+        "addEventListener('load',()=>{"
+        "const s=sessionStorage.getItem(k);"
+        "if(s&&globalThis.__vellum?.restoreStateJSON){"
+        "sessionStorage.removeItem(k);globalThis.__vellum.restoreStateJSON(s);}});"
+        "new EventSource('/__vellum_dev_events').addEventListener('reload',()=>{"
+        "try{if(globalThis.__vellum?.snapshotStateJSON)"
+        "sessionStorage.setItem(k,globalThis.__vellum.snapshotStateJSON());}"
+        "finally{location.reload();}});</script>"
     ).encode("utf-8")
 
     def __init__(self, build_root: Path, port: int):

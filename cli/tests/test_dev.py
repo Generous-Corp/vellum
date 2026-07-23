@@ -210,6 +210,14 @@ class DevLoopTests(unittest.TestCase):
                     served = response.read()
                 self.assertIn(b"data-vellum-dev", served)
                 self.assertIn(b"EventSource('/__vellum_dev_events')", served)
+                self.assertIn(b"snapshotStateJSON", served)
+                self.assertIn(b"restoreStateJSON", served)
+                self.assertIn(b"sessionStorage", served)
+                self.assertIn(b"finally{location.reload();}", served)
+                self.assertLess(
+                    served.index(b"sessionStorage.removeItem(k)"),
+                    served.index(b"restoreStateJSON(s)"),
+                )
                 self.assertEqual(index.read_bytes(), original)
             finally:
                 server.close()

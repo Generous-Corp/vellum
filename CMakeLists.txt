@@ -123,6 +123,9 @@ if(VELLUM_BUILD_TESTS)
             endif()
             add_test(NAME vellum.authoring-ui-bundle
                 COMMAND vellum-authoring-test "${VELLUM_AUTHORING_TEST_BUNDLE}")
+            add_test(NAME vellum.authoring-phase3-fixture
+                COMMAND vellum-authoring-phase3-fixture-test
+                    "${VELLUM_AUTHORING_TEST_BUNDLE}")
         endif()
     endif()
 

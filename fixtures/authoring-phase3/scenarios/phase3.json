@@ -44,6 +44,28 @@
         }
       }
     },
+    {
+      "action": "service-result",
+      "target": "copy",
+      "service": {
+        "protocol": "vellum.services.v1",
+        "kind": "response",
+        "id": "request-copy-1",
+        "ok": true,
+        "value": null
+      }
+    },
+    {
+      "action": "service-result",
+      "target": "docs",
+      "service": {
+        "protocol": "vellum.services.v1",
+        "kind": "response",
+        "id": "request-url-1",
+        "ok": true,
+        "value": null
+      }
+    },
     { "action": "throw", "target": "mapped-error", "expect": "vellum://app/src/App.tsx" },
     { "action": "capture", "value": "phase3-final" }
   ]

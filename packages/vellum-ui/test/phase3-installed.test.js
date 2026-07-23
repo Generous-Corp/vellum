@@ -73,8 +73,29 @@ test('packed SDK builds and executes the unchanged Phase 3 fixture in both forma
         });
 
         const digest = createHash('sha256').update(readFileSync(entry)).digest('hex');
-        assert.equal(digest, '70793547f40461da6bc0806391f4446c95f6def6cddf735caffda5168b6cdefa');
+        const gate = JSON.parse(readFileSync(join(app, 'gate-manifest.json'), 'utf8'));
+        assert.equal(digest, gate.application.sourceSha256);
         assert.ok(readFileSync(native).length > 1000);
+        const requests = [];
+        globalThis.__vellumServiceHost = {
+            capabilities: {
+                commands: 'v1',
+                files: 'denied',
+                clipboard: 'text-v1',
+                open_url: 'external-v1',
+                persistence: 'state-v1',
+            },
+            request(request) {
+                requests.push(request);
+                return Promise.resolve({
+                    protocol: 'vellum.services.v1',
+                    kind: 'response',
+                    id: request.id,
+                    ok: true,
+                    value: null,
+                });
+            },
+        };
         await import(`${pathToFileURL(browser).href}?proof=${Date.now()}`);
         let tree = JSON.parse(globalThis.__vellum.renderJSON()).tree;
         assert.equal(tree.id, 'phase3-app');
@@ -94,6 +115,56 @@ test('packed SDK builds and executes the unchanged Phase 3 fixture in both forma
             JSON.stringify(find(tree, 'item-list')),
             /Board: Roadmap/,
         );
+        const snapshot = globalThis.__vellum.snapshotStateJSON();
+        globalThis.__vellum.dispatchJSON(JSON.stringify({
+            protocol: 'vellum.authoring-host.v1',
+            action: add,
+            payload: null,
+        }));
+        tree = JSON.parse(globalThis.__vellum.restoreStateJSON(snapshot)).tree;
+        assert.match(JSON.stringify(find(tree, 'item-list')), /Board: Roadmap/);
+        assert.equal(
+            JSON.stringify(find(tree, 'item-list')).match(/Board: Roadmap/g)?.length,
+            1,
+        );
+
+        for (const target of ['copy', 'docs']) {
+            const action = find(tree, target).events.press;
+            globalThis.__vellum.dispatchJSON(JSON.stringify({
+                protocol: 'vellum.authoring-host.v1',
+                action,
+                payload: null,
+            }));
+            await new Promise((resolve_) => setImmediate(resolve_));
+            tree = JSON.parse(globalThis.__vellum.pumpJSON()).tree;
+        }
+        assert.deepEqual(
+            requests.map(({ service, operation }) => ({ service, operation })),
+            [
+                { service: 'clipboard', operation: 'writeText' },
+                { service: 'open_url', operation: 'openExternal' },
+            ],
+        );
+        assert.equal(find(tree, 'status').children[0].text, 'url-complete');
+
+        globalThis.__vellumServiceHost = {
+            capabilities: { clipboard: 'denied', open_url: 'denied' },
+            request() {
+                throw new Error('denied services must not invoke their provider');
+            },
+        };
+        const deniedCopy = find(tree, 'copy').events.press;
+        globalThis.__vellum.dispatchJSON(JSON.stringify({
+            protocol: 'vellum.authoring-host.v1',
+            action: deniedCopy,
+            payload: null,
+        }));
+        await new Promise((resolve_) => setImmediate(resolve_));
+        tree = JSON.parse(globalThis.__vellum.pumpJSON()).tree;
+        assert.equal(
+            find(tree, 'status').children[0].text,
+            'clipboard-capability-denied',
+        );
         const mapped = find(tree, 'mapped-error').events.press;
         assert.throws(() => globalThis.__vellum.dispatchJSON(JSON.stringify({
             protocol: 'vellum.authoring-host.v1',
@@ -102,6 +173,7 @@ test('packed SDK builds and executes the unchanged Phase 3 fixture in both forma
         })), /phase3-source-map-proof/);
     } finally {
         delete globalThis.__vellum;
+        delete globalThis.__vellumServiceHost;
         rmSync(temporary, { recursive: true, force: true });
     }
 });
