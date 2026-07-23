@@ -24,6 +24,33 @@ function App() {
 mount(App);
 ```
 
+Imported DesignIR stays inspectable JSON. Applications opt into it from
+developer-owned code and bind behavior separately:
+
+```tsx
+import imported from "../ui/generated/main.materialized.json";
+import { createApp, materializeDesign, mount } from "@vellum/ui";
+
+mount(createApp({
+  id: "example.imported-app",
+  stateVersion: "1",
+  initialState: { boards: 0 },
+  actions: {
+    create(model) { return { boards: model.boards + 1 }; },
+  },
+  render() {
+    return materializeDesign(imported, {
+      viewport: { width: 800, height: 600 },
+      actions: { "main/create-button-v1": { press: "create" } },
+    });
+  },
+}));
+```
+
+Reimport replaces generated JSON while the application-owned action mapping
+and state remain untouched. Missing tokens, duplicate identities, unsupported
+node kinds, and unsupported events fail closed.
+
 Interactive nodes require explicit stable IDs. Generated DesignIR components
 already carry them; hand-written components should choose IDs that survive
 refactors and reimports. Event handlers and hook state remain developer-owned

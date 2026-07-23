@@ -13,3 +13,4 @@ export {
     useMemo,
     useState,
 } from './runtime.js';
+export { materializeDesign } from './design.js';

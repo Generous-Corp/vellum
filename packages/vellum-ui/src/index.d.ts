@@ -92,6 +92,30 @@ export declare function useMemo<Value>(
     dependencies: readonly unknown[],
 ): Value;
 
+export interface MaterializedDesignNode {
+    id: string;
+    kind: 'view' | 'text' | 'button' | 'image' | 'canvas';
+    name?: string;
+    text?: string;
+    properties?: Record<string, JsonValue>;
+    children: MaterializedDesignNode[];
+}
+export interface MaterializedDesignDocument {
+    root: MaterializedDesignNode;
+    tokens?: Record<string, { $type?: string; $value: JsonValue }>;
+}
+export interface MaterializeDesignOptions {
+    viewport?: { width?: number; height?: number; padding?: number };
+    actions?: Record<string, Partial<Record<
+        'press' | 'change' | 'submit' | 'keyDown',
+        EventHandler
+    >>>;
+}
+export declare function materializeDesign(
+    document: MaterializedDesignDocument,
+    options?: MaterializeDesignOptions,
+): VellumElement;
+
 declare global {
     namespace JSX {
         interface Element extends VellumElement {}

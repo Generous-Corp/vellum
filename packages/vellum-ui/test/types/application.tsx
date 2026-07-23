@@ -4,6 +4,7 @@ import {
     Stack,
     Text,
     createApp,
+    materializeDesign,
     mount,
     useMemo,
     useState,
@@ -49,3 +50,15 @@ const app = createApp<Model>({
 const bridge = mount(app);
 const rendered: string = bridge.renderJSON();
 void rendered;
+
+const imported = materializeDesign({
+    root: {
+        id: 'main/root',
+        kind: 'view',
+        children: [],
+    },
+}, {
+    viewport: { width: 640, height: 400 },
+    actions: { 'main/root': { keyDown: 'handleKey' } },
+});
+void imported;
