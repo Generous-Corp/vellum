@@ -1,14 +1,26 @@
 {
-  "schema_version": 1,
-  "state": "prepared",
-  "generated_at": null,
-  "pending": 0,
-  "overdue": 0,
-  "events": [],
   "activation_blockers": [
     "authority-not-transferred",
-    "dedicated-cross-repository-credentials-not-provisioned",
-    "private-repository-required-check-enforcement-unavailable",
-    "burl-disposition-not-ratified"
-  ]
+    "dedicated-app-trust-policy-not-enabled",
+    "immutable-vellum-authority-start-not-recorded",
+    "landed-pulp-freeze-evidence-not-recorded",
+    "pulp-repository-or-reader-app-id-unpinned",
+    "pulp-required-check-producers-unpinned",
+    "vellum-dispatcher-app-id-unpinned",
+    "vellum-repository-or-reader-app-id-unpinned",
+    "vellum-required-check-producers-unpinned"
+  ],
+  "budget_violations": [],
+  "coverage_gaps": [],
+  "events": [],
+  "generated_at": "2026-07-23T03:00:00Z",
+  "health": "pass",
+  "maximum_pending_age_days": 0.0,
+  "observatory_effort_percent": 0.0,
+  "overdue": 0,
+  "pending": 0,
+  "release_blockers": [],
+  "repeated_generic_fixes": {},
+  "schema_version": 2,
+  "state": "prepared"
 }

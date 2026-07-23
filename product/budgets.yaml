@@ -14,6 +14,9 @@ observatory:
   ordinary_framework_classification_business_days: 3
   other_classification_days: 7
   maximum_pending_events: 20
+  maximum_overdue_events: 0
+  maximum_pending_event_age_days: 7
+  maximum_repeated_generic_fixes: 2
   maximum_framework_effort_percent: 15
 notes:
   - These are private experimental targets, not public performance claims.

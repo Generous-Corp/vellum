@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "state": "prepared",
+  "source_repository": "Generous-Corp/pulp",
+  "framework_repository": "Generous-Corp/vellum",
+  "pulp_extraction_base": "2ccff748f0d59da34b01ce1fbceabcf19f452731",
+  "historical_seed_commit": "e4f8c96fcfd19bac433252c36fdf5bfa681e6d25",
+  "source_manifest": "../cut-manifest.json",
+  "authority_groups": [
+    {
+      "id": "native-design-kernel-v1",
+      "lineage_mode": "history-seed-ancestor-active-reimplementation",
+      "pulp_legacy_slices": [
+        "canvas-kernel",
+        "capture-primitives",
+        "design-schema-compiler",
+        "macos-shell",
+        "render-skia-dawn",
+        "retained-ui-kernel"
+      ],
+      "vellum_implementation_paths": [
+        "apps/",
+        "authoring/",
+        "foundation/",
+        "graphics/",
+        "packages/vellum-design-ir/",
+        "packages/vellum-ui/",
+        "runtime/"
+      ],
+      "required_vellum_checks": [
+        "forbidden-deps",
+        "provenance-verify",
+        "sterile-consumer"
+      ],
+      "required_pulp_checks": [
+        "Vellum freeze",
+        "Vellum trusted freeze"
+      ]
+    }
+  ],
+  "excluded_from_transfer": [
+    "canvas-kernel-deferred",
+    "capture-primitives-deferred",
+    "design-schema-compiler-deferred",
+    "legacy-figma-schema",
+    "legal-provenance",
+    "macos-shell-deferred",
+    "pulp-audio-plugin-product",
+    "pulp-tooling-surface",
+    "render-skia-dawn-deferred",
+    "retained-ui-kernel-deferred",
+    "runtime-assets",
+    "runtime-assets-deferred"
+  ],
+  "invariants": {
+    "historical_projection_may_exist_only_in_ancestry": true,
+    "historical_projection_editable_at_authority_start": false,
+    "pulp_legacy_copy_frozen_only_after_atomic_activation": true,
+    "synchronized_editable_copies_allowed": false
+  }
+}

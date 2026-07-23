@@ -57,4 +57,11 @@ Before Pulp can consume Vellum:
 4. Pulp must migrate in a bounded change to an immutable Vellum version.
 5. Both repositories must record the dependency and ownership transition.
 
-No authority-transfer handshake is active at this checkpoint.
+No authority-transfer handshake is active at this checkpoint. The prepared,
+fail-closed protocol is documented in
+[`provenance/authority/README.md`](../provenance/authority/README.md), and the
+two-way, non-synchronizing change ledger is documented in
+[`provenance/pulp-observatory/README.md`](../provenance/pulp-observatory/README.md).
+The protocol distinguishes the exact historical seed from a later evolved
+authority-start commit; it never requires the retired Pulp source projection to
+be restored at Vellum's active tip.

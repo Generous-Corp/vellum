@@ -37,6 +37,31 @@ jobs:
           python3 tools/agent_instructions/verify.py --json \
             > "$RUNNER_TEMP/agent-instructions-report.json"
 
+      - name: Verify prepared authority protocol and negative controls
+        run: |
+          python3 tools/provenance/test_verify_authority_activation.py
+          python3 tools/provenance/verify_authority_activation.py verify-prepared \
+            > "$RUNNER_TEMP/authority-prepared-report.json"
+
+      - name: Check out exact observed Pulp cursor
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: Generous-Corp/pulp
+          ref: 50e703a43528f926182f216bfe16819a605831cc
+          path: .observatory-pulp
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify two-way observatory health and negative controls
+        run: |
+          python3 tools/provenance/test_observatory.py
+          python3 tools/provenance/observatory.py verify \
+            --pulp-repo .observatory-pulp \
+            --vellum-repo . \
+            --pulp-target 50e703a43528f926182f216bfe16819a605831cc \
+            --vellum-target "$GITHUB_SHA" \
+            --output "$RUNNER_TEMP/observatory-health-report.json"
+
       - name: Upload verification evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -46,5 +71,7 @@ jobs:
             ${{ runner.temp }}/provenance-report.json
             ${{ runner.temp }}/pulp-tooling-disposition-report.json
             ${{ runner.temp }}/agent-instructions-report.json
+            ${{ runner.temp }}/authority-prepared-report.json
+            ${{ runner.temp }}/observatory-health-report.json
           if-no-files-found: error
           retention-days: 90

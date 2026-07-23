@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "state": "template-not-evidence",
+  "pulp_activation_commit": "<40-hex-landed-pulp-commit>",
+  "ownership_projection_path": ".github/vellum-ownership.json",
+  "ownership_projection_blob": "<40-hex-git-blob>",
+  "authority_event_path": ".github/vellum-change-events/<event>.json",
+  "authority_event_blob": "<40-hex-git-blob>",
+  "checks": [
+    {
+      "name": "Vellum freeze",
+      "head_sha": "<40-hex-landed-pulp-commit>",
+      "conclusion": "success",
+      "app_id": "<trusted-app-id>",
+      "check_run_id": "<github-check-run-id>",
+      "details_url": "<github-check-details-url>"
+    },
+    {
+      "name": "Vellum trusted freeze",
+      "head_sha": "<40-hex-landed-pulp-commit>",
+      "conclusion": "success",
+      "app_id": "<trusted-app-id>",
+      "check_run_id": "<github-check-run-id>",
+      "details_url": "<github-check-details-url>"
+    }
+  ],
+  "branch_protection": {
+    "strict": true,
+    "required_contexts": ["Vellum freeze", "Vellum trusted freeze"]
+  },
+  "retrieved_at": "<UTC timestamp>"
+}

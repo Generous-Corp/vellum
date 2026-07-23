@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vellum.invalid/schemas/pulp-observatory-event-v1.json",
+  "title": "Pulp/Vellum observatory event v1",
+  "oneOf": [
+    {"$ref": "#/$defs/observation"},
+    {"$ref": "#/$defs/resolution"}
+  ],
+  "$defs": {
+    "sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "strings": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "disposition": {
+      "enum": ["pending", "not-applicable", "port-required", "ported", "superseded", "Pulp-only", "framework-only"]
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "event_id", "kind", "source_repository", "source_commit",
+        "discovered_at", "scan_cursor", "direction", "mapped_contracts", "mapped_paths",
+        "transitive_paths", "rename_candidates", "patch_id", "include_dependency_deltas",
+        "schema_api_deltas", "class", "severity", "disposition", "rationale", "owner",
+        "linked_commits", "linked_pull_requests", "contract_tests", "contract_keys",
+        "shared_contract_release_blocker", "effort_minutes"
+      ],
+      "properties": {
+        "schema_version": {"const": 1},
+        "event_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,160}$"},
+        "kind": {"const": "observation"},
+        "source_repository": {"enum": ["Generous-Corp/pulp", "Generous-Corp/vellum"]},
+        "source_commit": {"$ref": "#/$defs/sha"},
+        "discovered_at": {"type": "string", "format": "date-time"},
+        "scan_cursor": {
+          "type": "object", "additionalProperties": false,
+          "required": ["from_commit", "to_commit"],
+          "properties": {"from_commit": {"$ref": "#/$defs/sha"}, "to_commit": {"$ref": "#/$defs/sha"}}
+        },
+        "direction": {"enum": ["Pulp-to-framework", "framework-to-Pulp"]},
+        "mapped_contracts": {"$ref": "#/$defs/strings"},
+        "mapped_paths": {"$ref": "#/$defs/strings"},
+        "transitive_paths": {"$ref": "#/$defs/strings"},
+        "rename_candidates": {"type": "array"},
+        "patch_id": {"oneOf": [{"$ref": "#/$defs/sha"}, {"type": "null"}]},
+        "include_dependency_deltas": {"$ref": "#/$defs/strings"},
+        "schema_api_deltas": {"$ref": "#/$defs/strings"},
+        "class": {"enum": ["security", "correctness", "schema", "importer", "rendering", "platform", "test", "build", "documentation", "pulp-specific"]},
+        "severity": {"enum": [null, "P0", "P1", "P2", "P3"]},
+        "disposition": {"$ref": "#/$defs/disposition"},
+        "rationale": {"type": "string", "minLength": 1},
+        "owner": {"type": "string", "minLength": 1},
+        "linked_commits": {"$ref": "#/$defs/strings"},
+        "linked_pull_requests": {"$ref": "#/$defs/strings"},
+        "contract_tests": {"$ref": "#/$defs/strings"},
+        "contract_keys": {"$ref": "#/$defs/strings"},
+        "shared_contract_release_blocker": {"type": "boolean"},
+        "effort_minutes": {"type": "integer", "minimum": 0}
+      }
+    },
+    "resolution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "event_id", "kind", "created_at", "resolves", "disposition",
+        "rationale", "owner", "linked_commits", "linked_pull_requests", "contract_tests",
+        "shared_contract_release_blocker", "effort_minutes"
+      ],
+      "properties": {
+        "schema_version": {"const": 1},
+        "event_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,160}$"},
+        "kind": {"const": "resolution"},
+        "created_at": {"type": "string", "format": "date-time"},
+        "resolves": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,160}$"},
+        "disposition": {"$ref": "#/$defs/disposition"},
+        "rationale": {"type": "string", "minLength": 1},
+        "owner": {"type": "string", "minLength": 1},
+        "linked_commits": {"$ref": "#/$defs/strings"},
+        "linked_pull_requests": {"$ref": "#/$defs/strings"},
+        "contract_tests": {"$ref": "#/$defs/strings"},
+        "shared_contract_release_blocker": {"type": "boolean"},
+        "effort_minutes": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}

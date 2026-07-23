@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "state": "pending-pulp-activation",
+  "source_repository": "Generous-Corp/pulp",
+  "framework_repository": "Generous-Corp/vellum",
+  "pulp_extraction_base": "<40-hex-pulp-extraction-base>",
+  "historical_seed_commit": "<40-hex-vellum-history-seed>",
+  "authority_start_commit": "<40-hex-vellum-product-commit>",
+  "authority_record_ref": "refs/heads/authority/<immutable-name>",
+  "cut_manifest_sha256": "<64-hex-canonical-json-sha256>",
+  "authority_groups": [
+    {
+      "id": "native-design-kernel-v1",
+      "lineage_mode": "history-seed-ancestor-active-reimplementation",
+      "pulp_legacy_slices": [],
+      "pulp_source_projection": {},
+      "vellum_implementation_projection": {}
+    }
+  ],
+  "pulp_activation": null,
+  "approved_by": "@danielraffel",
+  "approved_at": "<UTC timestamp>"
+}

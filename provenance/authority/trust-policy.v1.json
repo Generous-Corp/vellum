@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "state": "disabled-until-dedicated-apps-and-required-checks-exist",
+  "repositories": {
+    "pulp": {
+      "full_name": "Generous-Corp/pulp",
+      "private": false,
+      "repository_id": null,
+      "reader_app_id": null,
+      "required_check_app_ids": {
+        "Vellum freeze": null,
+        "Vellum trusted freeze": null
+      }
+    },
+    "vellum": {
+      "full_name": "Generous-Corp/vellum",
+      "private": true,
+      "repository_id": null,
+      "reader_app_id": null,
+      "dispatcher_app_id": null,
+      "required_check_app_ids": {
+        "forbidden-deps": null,
+        "provenance-verify": null,
+        "sterile-consumer": null
+      }
+    }
+  }
+}

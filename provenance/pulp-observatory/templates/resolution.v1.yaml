@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-<unique-id>",
+  "kind": "resolution",
+  "created_at": "<UTC timestamp>",
+  "resolves": "<observation-event-id>",
+  "disposition": "not-applicable",
+  "rationale": "<reviewed disposition rationale>",
+  "owner": "@danielraffel",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "contract_tests": [],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 0
+}
