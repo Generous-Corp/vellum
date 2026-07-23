@@ -1,0 +1,22 @@
+{
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-07-23T17:46:22Z",
+  "disposition": "superseded",
+  "effort_minutes": 0,
+  "event_id": "resolution-pulp-e5e5d24232046abbc48f5122c1f94cd64a883beb",
+  "kind": "resolution",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Integration merge, recovered-stack remerge, or duplicate propagation with no independent contract beyond substantive source observations already classified in this ledger.",
+  "resolves": "pulp-e5e5d24232046abbc48f5122c1f94cd64a883beb",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

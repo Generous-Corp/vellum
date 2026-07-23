@@ -1,0 +1,71 @@
+{
+  "class": "schema",
+  "contract_keys": [
+    "canvas-kernel",
+    "design-schema-compiler",
+    "pulp-design-import-tooling",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-07-23T17:39:34Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "pulp-6e06ae1ecefffb369e5cd8146939e85ea142260d",
+  "include_dependency_deltas": [
+    "core/view/include/pulp/view/svg_path_widget.hpp",
+    "test/cmake/render_gpu_surface_tests.cmake"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel",
+    "design-schema-compiler",
+    "pulp-design-import-tooling",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "core/canvas/src/recording_canvas.cpp",
+    "core/view/include/pulp/view/svg_path_widget.hpp",
+    "core/view/src/design_codegen.cpp",
+    "core/view/src/design_import_native_common.cpp",
+    "core/view/src/design_ir_json.cpp",
+    "core/view/src/svg_path_widget.cpp",
+    "core/view/src/widget_bridge/svg_api.cpp",
+    "core/view/src/widget_bridge_api_manifest.tsv",
+    "test/test_design_import_codegen.cpp",
+    "test/test_design_import_ir.cpp",
+    "tools/import-design/fig/paths.mjs",
+    "tools/import-design/fig/paths.test.mjs",
+    "tools/import-design/fig/scene.mjs",
+    "tools/import-design/material_audit.mjs",
+    "tools/import-design/material_audit.test.mjs"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "06372153b342544e92d4ca7a308ed926e491e7ab",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "451597baf9f1d0b8473ec7c29e6d21b5ce6e5d4a",
+    "to_commit": "694961ac436ec0c53b80305843899ef94ae1ca46"
+  },
+  "schema_api_deltas": [
+    "core/view/src/design_ir_json.cpp"
+  ],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "6e06ae1ecefffb369e5cd8146939e85ea142260d",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": [
+    "test/cmake/render_gpu_surface_tests.cmake"
+  ]
+}

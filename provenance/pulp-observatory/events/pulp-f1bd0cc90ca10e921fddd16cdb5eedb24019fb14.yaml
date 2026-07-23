@@ -1,0 +1,57 @@
+{
+  "class": "schema",
+  "contract_keys": [
+    "design-schema-compiler",
+    "pulp-design-import-tooling",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-07-23T17:39:34Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "pulp-f1bd0cc90ca10e921fddd16cdb5eedb24019fb14",
+  "include_dependency_deltas": [],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "design-schema-compiler",
+    "pulp-design-import-tooling",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "core/view/src/design_codegen.cpp",
+    "core/view/src/design_cpp_codegen.cpp",
+    "core/view/src/design_import_native_common.cpp",
+    "core/view/src/design_ir_json.cpp",
+    "test/test_design_import_cpp_codegen.cpp",
+    "test/test_design_import_ir.cpp",
+    "test/test_design_import_native_materializer.cpp",
+    "tools/import-design/fig/paths.mjs",
+    "tools/import-design/fig/paths.test.mjs",
+    "tools/import-design/fig/scene.mjs"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": null,
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "451597baf9f1d0b8473ec7c29e6d21b5ce6e5d4a",
+    "to_commit": "694961ac436ec0c53b80305843899ef94ae1ca46"
+  },
+  "schema_api_deltas": [
+    "core/view/src/design_ir_json.cpp"
+  ],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "f1bd0cc90ca10e921fddd16cdb5eedb24019fb14",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": []
+}
