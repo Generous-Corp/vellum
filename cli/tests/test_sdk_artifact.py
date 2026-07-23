@@ -8,6 +8,7 @@ from pathlib import Path
 import runpy
 import shutil
 import subprocess
+import struct
 import sys
 import tarfile
 import tempfile
@@ -24,9 +25,23 @@ CONSUMER = REPO / "apps/smoke-native/install-consumer"
 
 @unittest.skipUnless(shutil.which("cmake") and (shutil.which("shasum") or shutil.which("sha256sum")), "CMake/checksum tools unavailable")
 class SdkArtifactTests(unittest.TestCase):
-    def test_installed_app_host_omits_nondeterministic_macho_uuid(self) -> None:
-        cmake = (REPO / "apps/app-host/CMakeLists.txt").read_text(encoding="utf-8")
-        self.assertIn("target_link_options(vellum-app-host PRIVATE -Wl,-no_uuid)", cmake)
+    def test_macho_uuid_rewrite_is_deterministic_and_fail_closed(self) -> None:
+        module = runpy.run_path(str(BUILDER))
+        rewrite = module["rewrite_macho_uuid"]
+        artifact_error = module["ArtifactError"]
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "host"
+            command = struct.pack("<II", 0x1B, 24) + b"0123456789abcdef"
+            header = struct.pack("<IIIIIIII", 0xFEEDFACF, 0, 0, 0, 1, len(command), 0, 0)
+            path.write_bytes(header + command + b"payload")
+            identity = bytes(range(16))
+            rewrite(path, identity)
+            first = path.read_bytes()
+            self.assertEqual(first[40:56], identity)
+            rewrite(path, identity)
+            self.assertEqual(path.read_bytes(), first)
+            with self.assertRaises(artifact_error):
+                rewrite(path, b"short")
 
     def run_checked(self, arguments: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
         completed = subprocess.run(arguments, cwd=cwd, text=True, capture_output=True, check=False)

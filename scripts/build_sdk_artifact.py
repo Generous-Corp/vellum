@@ -19,6 +19,7 @@ from pathlib import Path
 import platform
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import tarfile
@@ -171,6 +172,57 @@ def normalize_static_archive(path: Path) -> None:
     if offset != len(data):
         raise ArtifactError(f"installed static library has trailing malformed data: {path}")
     path.write_bytes(data)
+
+
+def rewrite_macho_uuid(path: Path, identity: bytes) -> None:
+    """Replace one thin 64-bit Mach-O LC_UUID without changing its layout."""
+
+    if len(identity) != 16:
+        raise ArtifactError("Mach-O UUID identity must contain exactly 16 bytes")
+    data = bytearray(path.read_bytes())
+    if len(data) < 32 or data[:4] != b"\xcf\xfa\xed\xfe":
+        raise ArtifactError(f"installed native host is not a thin little-endian Mach-O 64 file: {path}")
+    command_count, command_bytes = struct.unpack_from("<II", data, 16)
+    command_end = 32 + command_bytes
+    if command_end > len(data):
+        raise ArtifactError(f"installed native host has malformed Mach-O load commands: {path}")
+    offset = 32
+    uuid_offsets: list[int] = []
+    for _ in range(command_count):
+        if offset + 8 > command_end:
+            raise ArtifactError(f"installed native host has a truncated Mach-O command: {path}")
+        command, size = struct.unpack_from("<II", data, offset)
+        if size < 8 or offset + size > command_end:
+            raise ArtifactError(f"installed native host has an invalid Mach-O command size: {path}")
+        if command == 0x1B:
+            if size != 24:
+                raise ArtifactError(f"installed native host has a malformed LC_UUID: {path}")
+            uuid_offsets.append(offset + 8)
+        offset += size
+    if offset != command_end or len(uuid_offsets) != 1:
+        raise ArtifactError(f"installed native host must contain exactly one LC_UUID: {path}")
+    uuid_offset = uuid_offsets[0]
+    data[uuid_offset:uuid_offset + 16] = identity
+    path.write_bytes(data)
+
+
+def normalize_macho_executable(path: Path, commit: str, target: str) -> None:
+    """Give the installed host a deterministic launchable UUID and ad-hoc signature."""
+
+    identity = bytearray(hashlib.sha256(
+        f"vellum-app-host\0{commit}\0{target}".encode("utf-8")
+    ).digest()[:16])
+    identity[6] = (identity[6] & 0x0F) | 0x50
+    identity[8] = (identity[8] & 0x3F) | 0x80
+    rewrite_macho_uuid(path, bytes(identity))
+    codesign = shutil.which("codesign")
+    if codesign is None:
+        raise ArtifactError("deterministic Darwin artifacts require codesign")
+    run([
+        codesign, "--force", "--sign", "-", "--identifier",
+        "org.generous.vellum.app-host", str(path),
+    ])
+    run([codesign, "--verify", "--strict", str(path)])
 
 
 def target_name() -> str:
@@ -370,6 +422,8 @@ def build(args: argparse.Namespace) -> dict[str, object]:
         run(["cmake", "--install", str(build_dir), "--config", "Release", "--prefix", str(install_tree)])
         for archive in sorted(install_tree.rglob("*.a")):
             normalize_static_archive(archive)
+        if skia_archive and target == "darwin-arm64":
+            normalize_macho_executable(install_tree / "bin/vellum-app-host", commit, target)
         if skia_archive and not (
             installed_cmake_target(install_tree, "Gpu") and
             installed_cmake_target(install_tree, "Authoring") and
