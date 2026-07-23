@@ -173,6 +173,20 @@ class PulpZipSecurityTests(unittest.TestCase):
             with mock.patch.object(DISPATCHER.os, "read", side_effect=mutate_after_first_read):
                 self.assert_archive_failure(archive, "source_archive_mutated")
 
+    def test_native_commands_bypass_import_source_parsing(self) -> None:
+        completed = subprocess.CompletedProcess(["backend"], 0)
+        with mock.patch.object(DISPATCHER.subprocess, "run", return_value=completed) as invoked:
+            actual = DISPATCHER.invoke_backend_with_archive_staging(
+                Path("/installed/vellum-native-backend"),
+                "capture",
+                ["--scenario", "smoke", "--output", "artifacts/proof.png"],
+            )
+        self.assertIs(actual, completed)
+        invoked.assert_called_once_with([
+            "/installed/vellum-native-backend", "capture",
+            "--scenario", "smoke", "--output", "artifacts/proof.png",
+        ], check=False)
+
 
 @unittest.skipUnless(shutil.which("node"), "Node.js unavailable")
 class PulpZipJourneyTests(unittest.TestCase):

@@ -376,6 +376,8 @@ def stage_pulp_archive(path: Path):
 def invoke_backend_with_archive_staging(
     backend: Path, command: str, forwarded: list[str]
 ) -> subprocess.CompletedProcess[Any]:
+    if command not in IMPORT_COMMANDS:
+        return subprocess.run([str(backend), command, *forwarded], check=False)
     source = source_argument(forwarded, command)
     if source is None or not is_pulp_zip_candidate(source[1]):
         return subprocess.run([str(backend), command, *forwarded], check=False)
