@@ -47,7 +47,7 @@ class AgentInstructionArtifactTests(unittest.TestCase):
             for relative in (SKILL_RELATIVE, MANIFEST_RELATIVE):
                 self.assertEqual((payload / relative).read_bytes(), (REPO / relative).read_bytes())
 
-            archive = root / "vellum-sdk-0.1.0-test-host.tar.gz"
+            archive = root / "vellum-sdk-0.1.1-test-host.tar.gz"
             builder["write_archive"](payload, archive)
             checksums = root / "SHA256SUMS"
             checksums.write_text(

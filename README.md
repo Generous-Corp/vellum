@@ -31,7 +31,7 @@ Its authorship and exact blobs remain auditable in Git history and immutable
 
 ## Five-minute private release start (macOS 15.0+ arm64)
 
-The following is the exact `v0.1.0` tagged-release flow; it does not claim that
+The following is the exact `v0.1.1` tagged-release flow; it does not claim that
 the private release has already been published. Because both the repository and
 release are private, install and authenticate
 [GitHub CLI 2.75.0 or newer](https://cli.github.com/) first (`gh auth login`,
@@ -61,13 +61,13 @@ it acquire and verify the matching installer core and macOS 15.0+ arm64 SDK:
 
 ```sh
 bootstrap_dir="$(mktemp -d)"
-gh release download v0.1.0 \
+gh release download v0.1.1 \
   --repo Generous-Corp/vellum \
   --pattern install.sh \
   --dir "$bootstrap_dir"
-gh release verify-asset v0.1.0 "$bootstrap_dir/install.sh" \
+gh release verify-asset v0.1.1 "$bootstrap_dir/install.sh" \
   --repo Generous-Corp/vellum
-sh "$bootstrap_dir/install.sh" --version 0.1.0
+sh "$bootstrap_dir/install.sh" --version 0.1.1
 export PATH="$HOME/.local/bin:$PATH"
 vellum --json doctor --require-target macos
 
@@ -99,7 +99,7 @@ one row for each bootstrap file, and verify them before executing either script:
 
 ```sh
 bootstrap_dir="$(mktemp -d)"
-gh release download v0.1.0 \
+gh release download v0.1.1 \
   --repo Generous-Corp/vellum \
   --pattern SHA256SUMS \
   --pattern install.sh \
@@ -107,7 +107,7 @@ gh release download v0.1.0 \
   --dir "$bootstrap_dir"
 for asset in install.sh install_core.py SHA256SUMS
 do
-  gh release verify-asset v0.1.0 "$bootstrap_dir/$asset" \
+  gh release verify-asset v0.1.1 "$bootstrap_dir/$asset" \
     --repo Generous-Corp/vellum
 done
 (
@@ -121,7 +121,7 @@ done
   cat install.sh.sha256 install_core.py.sha256 > bootstrap.sha256
   shasum -a 256 -c bootstrap.sha256
 )
-sh "$bootstrap_dir/install.sh" --version 0.1.0
+sh "$bootstrap_dir/install.sh" --version 0.1.1
 ```
 
 Both paths verify the initial bootstrap against GitHub's immutable-release
@@ -169,7 +169,7 @@ python3 scripts/build_sdk_artifact.py \
   --node-provenance /path/to/node-provenance.json \
   --output-dir dist --json
 ./scripts/install.sh \
-  --archive dist/vellum-sdk-0.1.0-darwin-arm64.tar.gz \
+  --archive dist/vellum-sdk-0.1.1-darwin-arm64.tar.gz \
   --checksums dist/SHA256SUMS
 
 app_dir="$(mktemp -d)/palette-board"
@@ -268,10 +268,10 @@ python3 scripts/build_sdk_artifact.py \
   --node-provenance /path/to/node-provenance.json \
   --output-dir dist --json
 python3 scripts/verify_sdk_artifact.py \
-  --archive dist/vellum-sdk-0.1.0-darwin-arm64.tar.gz \
+  --archive dist/vellum-sdk-0.1.1-darwin-arm64.tar.gz \
   --checksums dist/SHA256SUMS --json
 ./scripts/install.sh \
-  --archive dist/vellum-sdk-0.1.0-darwin-arm64.tar.gz \
+  --archive dist/vellum-sdk-0.1.1-darwin-arm64.tar.gz \
   --checksums dist/SHA256SUMS
 ```
 
@@ -331,10 +331,10 @@ proves the imported design is embedded in the application bundle, exercises
 build/run/test/capture/package, and builds/tests a sterile CMake consumer
 without a Vellum or Pulp checkout.
 
-The exact `v0.1.0` release is consumed without a moving `latest` pointer:
+The exact `v0.1.1` release is consumed without a moving `latest` pointer:
 
 ```sh
-./scripts/install.sh --version 0.1.0
+./scripts/install.sh --version 0.1.1
 ```
 
 The release `SHA256SUMS` covers the SDK archive, `install.sh`, and
@@ -347,8 +347,8 @@ immutable release is published. After downloading the assets, verify that
 release attestation and an asset with:
 
 ```sh
-gh release verify v0.1.0 --repo Generous-Corp/vellum
-gh release verify-asset v0.1.0 ./vellum-sdk-0.1.0-darwin-arm64.tar.gz \
+gh release verify v0.1.1 --repo Generous-Corp/vellum
+gh release verify-asset v0.1.1 ./vellum-sdk-0.1.1-darwin-arm64.tar.gz \
   --repo Generous-Corp/vellum
 ```
 

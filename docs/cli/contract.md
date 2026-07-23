@@ -37,7 +37,7 @@ or commit; verified installs pin the archive SHA exactly.
 ```json
 {
   "schema": "vellum.cli.result.v1",
-  "cli_version": "0.1.0",
+  "cli_version": "0.1.1",
   "command": "build",
   "ok": false,
   "status": "capability_unavailable",
