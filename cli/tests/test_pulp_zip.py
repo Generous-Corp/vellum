@@ -244,6 +244,9 @@ class PulpZipJourneyTests(unittest.TestCase):
             provenance = json.loads((snapshot / "provenance.json").read_text())
             self.assertEqual(provenance["sourceArtifact"]["sha256"], f"sha256:{archive_hash}")
             self.assertEqual(provenance["sourceArtifact"]["member"], "scene.pulp.json")
+            checked = self.invoke("design", "check", cwd=project)
+            self.assertEqual(checked.returncode, 0, checked.stdout)
+            self.assertEqual(json.loads(checked.stdout)["status"], "design_clean")
 
             unchanged = self.invoke(
                 "reimport", "--source", str(ARCHIVE_FIXTURE), cwd=project,
@@ -290,6 +293,9 @@ class PulpZipJourneyTests(unittest.TestCase):
             self.assertEqual(active["snapshotHash"], f"sha256:{changed_hash}")
             document = json.loads((project / "design/ir/app.designir.json").read_text())
             self.assertEqual(document["root"]["children"][0]["text"], "Updated ZIP Design")
+            checked = self.invoke("design", "check", cwd=project)
+            self.assertEqual(checked.returncode, 0, checked.stdout)
+            self.assertEqual(json.loads(checked.stdout)["status"], "design_clean")
 
     def test_public_create_from_figma_zip_completes_initial_import(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

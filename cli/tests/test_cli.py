@@ -520,6 +520,58 @@ class CliTests(unittest.TestCase):
                 ],
             )
 
+    def test_design_check_and_diff_use_stable_nested_cli_protocol(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root / "app"
+            self.assertEqual(invoke("create", "Design", "-d", str(project)).returncode, 0)
+            backend = root / "vellum-backend"
+            backend.write_text(
+                f"#!{sys.executable}\n"
+                "import json, sys\n"
+                "operation = sys.argv[1]\n"
+                "status = 'design_clean' if operation == 'design-check' else 'design_diff'\n"
+                "print(json.dumps({'schema':'vellum.backend.result.v1','ok':True,'status':status,'message':'ok','data':{'argv':sys.argv[1:]},'diagnostics':[]}))\n",
+                encoding="utf-8",
+            )
+            backend.chmod(0o755)
+            for operation, expected_backend, expected_status in (
+                ("check", "design-check", "design_clean"),
+                ("diff", "design-diff", "design_diff"),
+            ):
+                completed = invoke(
+                    "design", operation, "--as", "shell", "--json",
+                    cwd=project / "src",
+                    env={"VELLUM_BACKEND": str(backend)},
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                payload = json.loads(completed.stdout)
+                self.assertEqual(payload["schema"], "vellum.cli.result.v1")
+                self.assertEqual(payload["command"], "design")
+                self.assertEqual(payload["status"], expected_status)
+                self.assertEqual(payload["data"]["operation"], operation)
+                self.assertEqual(
+                    payload["data"]["backend"]["data"]["argv"],
+                    [
+                        expected_backend, "--project", str(project.resolve()), "--json",
+                        "--framework-version", "0.1.2", "--cli-api", "1",
+                        "--as", "shell",
+                    ],
+                )
+
+    def test_design_check_validates_project_lock_before_backend_discovery(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary)
+            (project / "framework.lock").write_text(
+                '{"schema":"wrong"}\n',
+                encoding="utf-8",
+            )
+            completed = invoke("design", "check", "--json", cwd=project)
+            self.assertEqual(completed.returncode, 3)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["command"], "design")
+            self.assertEqual(payload["status"], "invalid_project_lock")
+
     def test_run_forwards_finite_no_window_modes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

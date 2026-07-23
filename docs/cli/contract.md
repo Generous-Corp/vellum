@@ -85,6 +85,7 @@ stable outer schema.
 | `doctor [--fix]` | yes | reports backend availability |
 | `dev --target macos|web` | yes (supervisor) | watches, builds, and drives a target reload adapter; see [Development loop](dev.md) |
 | `import` / `reimport` | no | implemented by the installed `@vellum/design-ir` backend |
+| `design check` / `design diff` | no | deterministically regenerate the active source and authored overlay without writing; `check` fails on generated drift and `diff` reports it |
 | `build` / `run` | no | macOS 15.0+ arm64 GPU artifact builds/launches a real `.app`; finite `run --self-test` is available |
 | `test` / `capture` | no | macOS 15.0+ arm64 GPU artifact executes bounded scenarios, captures PNGs, and composes bounded capture matrices/montages |
 | `package` | no | macOS 15.0+ arm64 GPU artifact creates an ad-hoc-signed `.app` |

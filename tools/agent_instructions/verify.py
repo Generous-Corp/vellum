@@ -16,7 +16,7 @@ from typing import Any
 MANIFEST_RELATIVE = Path(".agents/skills/vellum-app-authoring/manifest.v1.json")
 EXPECTED_SCHEMA = "vellum.agent-instructions.v1"
 EXPECTED_LIFECYCLE = (
-    "create", "doctor", "import", "reimport", "build", "dev", "run",
+    "create", "doctor", "import", "reimport", "design", "build", "dev", "run",
     "test", "capture", "package",
 )
 EXPECTED_TOOL_OWNED = {
@@ -79,14 +79,19 @@ def cli_surface(cli: Any) -> tuple[set[str], dict[str, set[str]]]:
     )
     if subparsers is None:
         raise VerificationError("CLI parser has no command surface")
-    commands = {
-        name: {
+    def flags(parser: argparse.ArgumentParser) -> set[str]:
+        values = {
             flag
             for action in parser._actions
             for flag in action.option_strings
         }
-        for name, parser in subparsers.choices.items()
-    }
+        for action in parser._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                for child in action.choices.values():
+                    values.update(flags(child))
+        return values
+
+    commands = {name: flags(parser) for name, parser in subparsers.choices.items()}
     return global_flags, commands
 
 

@@ -33,6 +33,8 @@ vellum --json create "Imported App" --directory "$app" --template basic --from f
 vellum --json doctor --fix --require-target macos --project "$app"
 vellum --json import "$figma_export" --source-type figma --as main --project "$app"
 vellum --json reimport --source "$updated_export" --as main --project "$app"
+vellum --json design check --as main --project "$app"
+vellum --json design diff --as main --project "$app"
 vellum --json build --target macos --project "$app"
 vellum --json dev --target macos --project "$app" --transcript "$app/.vellum/state/dev-transcript.jsonl"
 vellum --json run --target macos --project "$app"
@@ -76,6 +78,11 @@ support from this lane.
   files. Preserve stable imported identities and review orphan/conflict reports.
 - After reimport, inspect the diff, run interaction scenarios, capture affected
   screens, and package only after tests pass.
+- Run `vellum --json design check --as main --project "$app"` before testing or
+  packaging. It regenerates the active imported source and authored overlay in
+  memory and fails if tool-owned output has drifted. Use
+  `vellum --json design diff --as main --project "$app"` for the stable
+  path/hash/size report; neither command rewrites the project.
 - After editing `design/overlays/`, reimport the current source even when its
   bytes did not change. `reimport_rematerialized` means generated UI, binding,
   or resolved-token receipts were rematerialized; `reimport_unchanged` means

@@ -960,6 +960,38 @@ def backend_command(args: argparse.Namespace, forwarded: list[str]) -> dict[str,
         diagnostics=backend_payload.get("diagnostics", []),
     )
 
+def design_command(args: argparse.Namespace) -> dict[str, Any]:
+    root, lock = load_project(args.project)
+    sdk = load_sdk_metadata()
+    validate_project_sdk(lock, sdk)
+    available = sdk[1]["capabilities"]["commands"].get("import") if sdk is not None else None
+    if sdk is not None and available is not True:
+        raise CliFailure(
+            "The installed SDK does not provide deterministic design inspection.",
+            status="capability_unavailable",
+            exit_code=EXIT_UNAVAILABLE,
+        )
+    backend_name = f"design-{args.design_command}"
+    backend_payload, return_code = invoke_backend(
+        backend_name,
+        root,
+        lock,
+        ["--as", args.source_key],
+    )
+    return result(
+        "design",
+        ok=return_code == 0 and bool(backend_payload.get("ok")),
+        status=str(backend_payload.get("status", "backend_failed")),
+        message=str(backend_payload.get("message", "Design inspection completed.")),
+        data={
+            "operation": args.design_command,
+            "project_root": str(root),
+            "project_id": lock["project"]["id"],
+            "backend": backend_payload,
+        },
+        diagnostics=backend_payload.get("diagnostics", []),
+    )
+
 
 def invoke_backend(
     command: str, root: Path, lock: dict[str, Any], forwarded: list[str]
@@ -1059,6 +1091,23 @@ def parser() -> argparse.ArgumentParser:
         help="stop with an error after this many seconds (required in test mode)",
     )
 
+    design = commands.add_parser(
+        "design",
+        help="inspect imported design output without modifying the project",
+    )
+    design_actions = design.add_subparsers(dest="design_command", required=True)
+    for name in ("check", "diff"):
+        action = design_actions.add_parser(
+            name,
+            help=(
+                "fail when generated design differs from deterministic regeneration"
+                if name == "check"
+                else "report deterministic generated-design differences"
+            ),
+        )
+        action.add_argument("--project")
+        action.add_argument("--as", dest="source_key", default="main")
+
     backend_specs = {
         "import": [
             ("source", {}),
@@ -1147,6 +1196,8 @@ def main(argv: Iterable[str] | None = None) -> int:
                     status="invalid_arguments", exit_code=EXIT_USAGE,
                 )
             payload = dev_project(args)
+        elif args.command == "design":
+            payload = design_command(args)
         else:
             payload = backend_command(args, forwarded_arguments(args))
         emit(payload, json_output=args.json)

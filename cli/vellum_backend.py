@@ -22,6 +22,7 @@ import zipfile
 RESULT_SCHEMA = "vellum.backend.result.v1"
 SDK_METADATA_SCHEMA = "vellum.sdk-artifact.v1"
 IMPORT_COMMANDS = {"import", "reimport"}
+DESIGN_COMMANDS = {"design-check", "design-diff"}
 NATIVE_COMMANDS = {"build", "run", "test", "capture", "package"}
 MAX_ARCHIVE_BYTES = 256 * 1024 * 1024
 MAX_ARCHIVE_MEMBERS = 10_000
@@ -89,7 +90,7 @@ def load_metadata(root: Path) -> dict[str, Any]:
 
 def backend_path(root: Path, command: str, arguments: list[str]) -> Path:
     bin_dir = root / "bin"
-    if command in IMPORT_COMMANDS:
+    if command in IMPORT_COMMANDS | DESIGN_COMMANDS:
         names = ("vellum-import-backend.cmd",) if os.name == "nt" else ("vellum-import-backend",)
     else:
         target = option_value(arguments, "--target") or "macos"
@@ -405,7 +406,7 @@ def main() -> int:
     if len(sys.argv) < 2:
         return emit_failure("invalid_arguments", "backend command is required", exit_code=2)
     command = sys.argv[1]
-    if command not in IMPORT_COMMANDS | NATIVE_COMMANDS:
+    if command not in IMPORT_COMMANDS | DESIGN_COMMANDS | NATIVE_COMMANDS:
         return emit_failure("unsupported_command", f"vellum-backend does not implement '{command}'", exit_code=2)
     forwarded = sys.argv[2:]
     try:
@@ -423,7 +424,8 @@ def main() -> int:
                 exit_code=3,
             )
         target = option_value(forwarded, "--target") if command in NATIVE_COMMANDS else None
-        available = metadata["capabilities"]["commands"].get(command)
+        capability = "import" if command in DESIGN_COMMANDS else command
+        available = metadata["capabilities"]["commands"].get(capability)
         if target is not None:
             available = metadata["capabilities"].get("targets", {}).get(target, {}).get(
                 "commands", {}
