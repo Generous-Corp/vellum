@@ -240,8 +240,10 @@ class SdkArtifactTests(unittest.TestCase):
             self.assertTrue(authoring["text_input_v1"]["native_direct_text"])
             self.assertTrue(authoring["scenario_v1"]["input"])
             self.assertTrue(authoring["persistence"]["state_v1"])
-            self.assertFalse(authoring["text_input_v1"]["ime_composition"])
-            self.assertFalse(authoring["text_input_v1"]["accessibility_text"])
+            self.assertTrue(authoring["text_input_v1"]["ime_composition"])
+            self.assertTrue(authoring["text_input_v1"]["caret_and_selection"])
+            self.assertTrue(authoring["text_input_v1"]["accessibility_text"])
+            self.assertFalse(authoring["text_input_v1"]["clipboard_editing"])
             self.assertFalse(authoring["persistence"]["migration_api"])
 
     def test_reproducible_archive_installs_into_sterile_consumer(self) -> None:

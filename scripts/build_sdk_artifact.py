@@ -187,10 +187,10 @@ def derive_capabilities(payload: Path, install_tree: Path) -> dict[str, object]:
                 "retained_tree": ui_runtime,
                 "native_pointer_focus": native_ready,
                 "native_direct_text": native_ready,
-                "ime_composition": False,
-                "caret_and_selection": False,
+                "ime_composition": native_ready or web_ready,
+                "caret_and_selection": native_ready or web_ready,
                 "clipboard_editing": False,
-                "accessibility_text": False,
+                "accessibility_text": native_ready or web_ready,
                 "mobile": False,
             },
             "scenario_v1": {
