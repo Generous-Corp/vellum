@@ -63,6 +63,10 @@
 | `pulp-fd60b4830073cae4d89b897cbbddb65095ec713d` | Pulp-to-framework | schema | superseded | 2026-07-28T17:39:34Z |
 | `pulp-fe0a04c5d096f4614b80b533bea4bf641e09c352` | Pulp-to-framework | rendering | superseded | 2026-07-28T17:39:34Z |
 | `pulp-febc4780b70f979dcd3df99701801f4091630582` | Pulp-to-framework | importer | superseded | 2026-07-28T17:39:34Z |
+| `vellum-014aa0527c0ca82fdf3ceebe4603c9d58cc401fa` | framework-to-Pulp | schema | framework-only | 2026-07-28T18:49:37Z |
+| `vellum-299f53280d40411cd97682cdfc91382de9ba1707` | framework-to-Pulp | schema | framework-only | 2026-07-28T18:49:37Z |
+| `vellum-ba8517f720a6bd2d8baf4e72b679b7cee34cbedb` | framework-to-Pulp | importer | framework-only | 2026-07-28T18:49:37Z |
+| `vellum-c9864460811381f5552652b8ba4f408c1b13e235` | framework-to-Pulp | schema | framework-only | 2026-07-28T18:49:37Z |
 
 ## Activation blockers
 
