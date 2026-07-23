@@ -71,6 +71,34 @@ jobs:
           shasum -a 256 "$RUNNER_TEMP/vellum-gpu-proof.png" \
             > "$RUNNER_TEMP/vellum-gpu-proof.sha256"
 
+      - name: Prove the installed SDK artifact is reproducible
+        shell: bash
+        run: |
+          set -euo pipefail
+          first="$RUNNER_TEMP/sdk-first"
+          second="$RUNNER_TEMP/sdk-second"
+          python3 scripts/build_sdk_artifact.py \
+            --skia-archive "$VELLUM_SKIA_ARCHIVE" \
+            --output-dir "$first" --json > "$RUNNER_TEMP/sdk-first.json"
+          python3 scripts/build_sdk_artifact.py \
+            --skia-archive "$VELLUM_SKIA_ARCHIVE" \
+            --output-dir "$second" --json > "$RUNNER_TEMP/sdk-second.json"
+          archive="vellum-sdk-0.1.0-darwin-arm64.tar.gz"
+          cmp "$first/$archive" "$second/$archive"
+          cmp "$first/SHA256SUMS" "$second/SHA256SUMS"
+          shasum -a 256 "$first/$archive" > "$RUNNER_TEMP/vellum-sdk.sha256"
+          python3 scripts/verify_sdk_artifact.py \
+            --archive "$first/$archive" \
+            --checksums "$first/SHA256SUMS" --json \
+            > "$RUNNER_TEMP/sdk-verification.json"
+          python3 scripts/validate_installed_sdk.py \
+            --archive "$first/$archive" \
+            --checksums "$first/SHA256SUMS" \
+            --forbid-path "$GITHUB_WORKSPACE" --json \
+            > "$RUNNER_TEMP/sdk-installed-validation.json"
+          cp "$first/$archive" "$RUNNER_TEMP/$archive"
+          cp "$first/SHA256SUMS" "$RUNNER_TEMP/SHA256SUMS"
+
       - name: Verify the binary deployment boundary
         shell: bash
         run: |
@@ -93,5 +121,12 @@ jobs:
             ${{ runner.temp }}/vellum-gpu-proof.sha256
             ${{ runner.temp }}/vellum-gpu-dylib-load-commands.txt
             ${{ runner.temp }}/vellum-gpu-app-load-commands.txt
+            ${{ runner.temp }}/vellum-sdk-0.1.0-darwin-arm64.tar.gz
+            ${{ runner.temp }}/SHA256SUMS
+            ${{ runner.temp }}/vellum-sdk.sha256
+            ${{ runner.temp }}/sdk-first.json
+            ${{ runner.temp }}/sdk-second.json
+            ${{ runner.temp }}/sdk-verification.json
+            ${{ runner.temp }}/sdk-installed-validation.json
           if-no-files-found: error
           retention-days: 90
