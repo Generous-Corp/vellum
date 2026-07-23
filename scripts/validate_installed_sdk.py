@@ -14,13 +14,22 @@ import sys
 import tempfile
 from typing import Iterable
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
 from verify_sdk_artifact import (
     payload_contamination_findings,
     should_scan_payload_content,
 )
 
 
-REPO = Path(__file__).resolve().parents[1]
+REPO = SCRIPT_DIR.parents[0]
+SUPPORT_ROOT = (
+    SCRIPT_DIR / "sterile-support"
+    if (SCRIPT_DIR / "sterile-support").is_dir()
+    else REPO
+)
 
 
 class ValidationError(RuntimeError):
@@ -38,6 +47,46 @@ def installed_contamination_findings(prefix: Path) -> list[dict[str, str]]:
     return findings
 
 
+def checkout_contamination_findings(search_roots: Iterable[Path]) -> list[str]:
+    """Find source-checkout markers in the bounded roots supplied by CI.
+
+    A sterile runner can still have an empty GitHub workspace directory. What
+    it may not have is a Vellum checkout or cache that could satisfy an
+    accidental relative/source dependency.
+    """
+    findings: list[str] = []
+    markers = (
+        Path(".git"),
+        Path("provenance/pulp-extraction.json"),
+        Path("scripts/build_sdk_artifact.py"),
+    )
+    for raw_root in search_roots:
+        root = raw_root.expanduser().resolve()
+        if not root.exists():
+            continue
+        candidates = [root]
+        if root.is_dir():
+            candidates.extend(
+                path for path in root.iterdir()
+                if path.is_dir() and not path.is_symlink()
+            )
+        for candidate in candidates:
+            present = [
+                marker.as_posix()
+                for marker in markers
+                if (candidate / marker).exists()
+            ]
+            if (
+                ".git" in present
+                and (
+                    "provenance/pulp-extraction.json" in present
+                    or "scripts/build_sdk_artifact.py" in present
+                )
+            ):
+                findings.append(str(candidate))
+    return sorted(set(findings))
+
+
 def run(arguments: list[str], *, cwd: Path | None = None,
         env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     completed = subprocess.run(arguments, cwd=cwd, text=True, capture_output=True, check=False,
@@ -50,10 +99,22 @@ def run(arguments: list[str], *, cwd: Path | None = None,
     return completed
 
 
-def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[str, object]:
+def validate(
+    archive: Path,
+    checksums: Path,
+    forbid_path: Path | None,
+    runner_search_roots: Iterable[Path] = (),
+) -> dict[str, object]:
+    runner_roots = [path.resolve() for path in runner_search_roots]
+    checkout_findings = checkout_contamination_findings(runner_roots)
+    if checkout_findings:
+        raise ValidationError(
+            "sterile runner contains a Vellum source checkout: "
+            + ", ".join(checkout_findings)
+        )
     verification = json.loads(
         run([
-            sys.executable, str(REPO / "scripts/verify_sdk_artifact.py"),
+            sys.executable, str(SCRIPT_DIR / "verify_sdk_artifact.py"),
             "--archive", str(archive), "--checksums", str(checksums), "--json",
         ]).stdout
     )
@@ -65,17 +126,17 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
             no_external_node if verification["claims"].get("node_runtime") else os.environ
         )
         installed = run([
-            "sh", str(REPO / "scripts/install.sh"),
+            "sh", str(SCRIPT_DIR / "install.sh"),
             "--archive", str(archive), "--checksums", str(checksums),
             "--install-dir", str(prefix),
         ], cwd=root)
         reinstalled = run([
-            "sh", str(REPO / "scripts/install.sh"),
+            "sh", str(SCRIPT_DIR / "install.sh"),
             "--archive", str(archive), "--checksums", str(checksums),
             "--install-dir", str(prefix),
         ], cwd=root)
         verified_install = run([
-            "sh", str(REPO / "scripts/install.sh"),
+            "sh", str(SCRIPT_DIR / "install.sh"),
             "--verify-installed", "--install-dir", str(prefix),
         ], cwd=root)
         if (
@@ -121,7 +182,10 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
             )
 
         consumer_source = root / "consumer-source"
-        shutil.copytree(REPO / "apps/smoke-native/install-consumer", consumer_source)
+        shutil.copytree(
+            SUPPORT_ROOT / "apps/smoke-native/install-consumer",
+            consumer_source,
+        )
         consumer_build = root / "consumer-build"
         sdk_prefix = prefix / "lib/vellum/sdk"
         run([
@@ -194,7 +258,7 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
         ], cwd=project, env=journey_env).stdout)
         imported = json.loads(run([
             str(prefix / "bin/vellum"), "import",
-            str(REPO / "fixtures/design-ir/revision-a.source.json"),
+            str(SUPPORT_ROOT / "fixtures/design-ir/revision-a.source.json"),
             "--source-type", "figma", "--as", "main", "--json",
         ], cwd=project, env=journey_env).stdout)
         authored_source = project / "src/App.tsx"
@@ -231,7 +295,7 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
         )
         reimported = json.loads(run([
             str(prefix / "bin/vellum"), "reimport",
-            "--source", str(REPO / "fixtures/design-ir/revision-b.source.json"),
+            "--source", str(SUPPORT_ROOT / "fixtures/design-ir/revision-b.source.json"),
             "--as", "main", "--json",
         ], cwd=project, env=journey_env).stdout)
         active_revision = json.loads(
@@ -284,7 +348,7 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
             str(prefix / "bin/vellum"), "create", "Sterile ZIP App",
             "--directory", str(zip_project),
             "--from", "figma",
-            str(REPO / "fixtures/design-ir/pulp-emitter-generic.pulp.zip"),
+            str(SUPPORT_ROOT / "fixtures/design-ir/pulp-emitter-generic.pulp.zip"),
             "--json",
         ], cwd=root, env=journey_env).stdout)
         zip_lock = json.loads(
@@ -298,7 +362,10 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
             zip_created.get("status") == "created"
             and zip_lock.get("sourceArtifactKind") == "pulp-zip"
             and zip_snapshot.read_bytes()
-            == (REPO / "fixtures/design-ir/pulp-emitter-generic.pulp.zip").read_bytes()
+            == (
+                SUPPORT_ROOT
+                / "fixtures/design-ir/pulp-emitter-generic.pulp.zip"
+            ).read_bytes()
         )
         if not zip_snapshot_verified:
             raise ValidationError("installed CLI create --from figma ZIP journey did not complete")
@@ -527,11 +594,11 @@ vellum_component_entry_v1(void) { return &descriptor; }
         unrelated.parent.mkdir(parents=True)
         unrelated.write_text("not owned by Vellum\n", encoding="utf-8")
         uninstalled = run([
-            "sh", str(REPO / "scripts/install.sh"),
+            "sh", str(SCRIPT_DIR / "install.sh"),
             "--uninstall", "--install-dir", str(prefix),
         ], cwd=root)
         uninstalled_again = run([
-            "sh", str(REPO / "scripts/install.sh"),
+            "sh", str(SCRIPT_DIR / "install.sh"),
             "--uninstall", "--install-dir", str(prefix),
         ], cwd=root)
         uninstall_preserved_unrelated = (
@@ -548,6 +615,7 @@ vellum_component_entry_v1(void) { return &descriptor; }
 
     checks = {
         "checksum_and_payload_manifest": True,
+        "runner_has_no_framework_checkout": not checkout_findings,
         "artifact_contamination_scan": verification["contamination_free"],
         "clean_prefix_install": True,
         "transactional_exact_reinstall": True,
@@ -623,11 +691,23 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--archive", type=Path, required=True)
     parser.add_argument("--checksums", type=Path, required=True)
     parser.add_argument("--forbid-path", type=Path, default=REPO)
+    parser.add_argument(
+        "--runner-search-root",
+        action="append",
+        default=[],
+        type=Path,
+        help="bounded root that must not contain a Vellum source checkout",
+    )
     parser.add_argument("--output", type=Path)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
     try:
-        evidence = validate(args.archive.resolve(), args.checksums.resolve(), args.forbid_path)
+        evidence = validate(
+            args.archive.resolve(),
+            args.checksums.resolve(),
+            args.forbid_path,
+            args.runner_search_root,
+        )
     except (OSError, json.JSONDecodeError, ValidationError) as error:
         print(f"vellum-installed-sdk-validation: {error}", file=sys.stderr)
         return 1
