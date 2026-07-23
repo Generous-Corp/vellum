@@ -80,6 +80,11 @@ support from this lane.
 - When the framework needs a fix, change Vellum in its own repository, verify
   and publish a new immutable SDK artifact, then update the application lock.
   Never vendor or patch framework internals inside an application.
+- For a bounded custom visualization, declare its app-owned source in
+  `native/components.toml` and render it with `CustomComponent`. Include only
+  `<vellum/components/abi.h>`. Declare `web = "fallback"` with JSX fallback UI,
+  or `web = "wasm"` with a separate `wasm_source`; never imply native code is
+  portable without one of those explicit paths.
 
 `capability_unavailable` with exit code 4 is an honest terminal result for that
 operation. A developer or agent may install the required verified artifact, or

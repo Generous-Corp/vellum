@@ -120,6 +120,10 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
             (prefix / "lib/vellum/vellum_native_backend.py").is_file() and
             (prefix / "lib/vellum/bin/vellum-native-backend").is_file()
         )
+        component_abi_present = (
+            (sdk_prefix / "include/vellum/components/abi.h").is_file() and
+            "Vellum::ComponentAbi" in package_text
+        )
         if gpu_claimed and (
             "Vellum::Gpu" not in package_text or
             "Vellum::Authoring" not in package_text or
@@ -141,6 +145,9 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
         ))
         if web_claimed and not web_present:
             raise ValidationError("web command claims have no complete installed runtime/backend")
+        custom_claimed = verification["claims"].get("custom_components") is True
+        if custom_claimed and not component_abi_present:
+            raise ValidationError("custom component claim has no installed ABI target/header")
 
         project = root / "application"
         created = json.loads(run([
@@ -218,6 +225,7 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
         native_capture_produced = False
         native_montage_produced = False
         native_package_produced = False
+        custom_component_produced = False
         if native_enabled:
             for name, arguments in {
                 "build": ["build"],
@@ -235,7 +243,7 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
             }.items():
                 native_results[name] = json.loads(run([
                     str(prefix / "bin/vellum"), *arguments, "--json",
-                ], cwd=project).stdout)
+                ], cwd=project, env=journey_env).stdout)
             if any(not value.get("ok") for value in native_results.values()):
                 raise ValidationError("installed native CLI journey did not complete")
             native_bundle = project / ".vellum/build/macos/sterile-artifact-app.app/Contents/Resources/app.js"
@@ -301,6 +309,105 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
             web_node_self_contained = "SDK-local" in node_check["detail"]
             if not web_reproducible or not web_runtime_exact or not web_node_self_contained:
                 raise ValidationError("installed web reproducibility/runtime/Node proof failed")
+        if custom_claimed:
+            custom_project = root / "custom-component-application"
+            custom_created = json.loads(run([
+                str(prefix / "bin/vellum"), "create", "Custom Component App",
+                "--directory", str(custom_project), "--no-verify", "--json",
+            ], cwd=root, env=journey_env).stdout)
+            if custom_created.get("status") != "created":
+                raise ValidationError("installed CLI did not create the custom component app")
+            (custom_project / "src/App.tsx").write_text(
+                '''import { CustomComponent, Stack, Text, View } from "@vellum/ui";\n\n'''
+                '''export function App() {\n'''
+                '''  return (\n'''
+                '''    <Stack id="custom-root" style={{ width: 640, height: 400, padding: 32, gap: 18, backgroundColor: "#0f172a" }}>\n'''
+                '''      <Text id="custom-title" style={{ height: 36, fontSize: 24, color: "#f8fafc" }}>App-owned C++ bars</Text>\n'''
+                '''      <CustomComponent id="level-meter" component="level-meter" properties={{ boost: true }} style={{ width: 560, height: 240 }}\n'''
+                '''        fallback={<View id="level-meter-fallback" style={{ width: 560, height: 240, backgroundColor: "#334155" }} />} />\n'''
+                '''    </Stack>\n'''
+                '''  );\n'''
+                '''}\n''',
+                encoding="utf-8",
+            )
+            (custom_project / "native/components.toml").write_text(
+                '[manifest]\n'
+                'schema = "vellum.components.v1"\n'
+                'components = ["level-meter"]\n\n'
+                '[component.level-meter]\n'
+                'native_source = "native/level-meter.cpp"\n'
+                'web = "fallback"\n',
+                encoding="utf-8",
+            )
+            (custom_project / "native/level-meter.cpp").write_text(
+                r'''#include <vellum/components/abi.h>
+#include <cstdio>
+#include <cstring>
+
+static int render_meter(const vellum_component_render_context_v1* context) {
+    if (context == nullptr || context->abi_version != VELLUM_COMPONENT_ABI_VERSION ||
+        context->emit == nullptr || context->properties_json == nullptr) return 0;
+    const bool boost = std::strstr(context->properties_json, "\\\"boost\\\":true") != nullptr;
+    const float values[] = {0.18F, 0.42F, 0.76F, 0.54F, 0.91F, 0.63F,
+                            0.32F, 0.70F, 0.48F, 0.84F, 0.58F, 0.96F};
+    const float gap = 8.0F;
+    const float width = (context->bounds.width - gap * 11.0F) / 12.0F;
+    for (int index = 0; index < 12; ++index) {
+        char suffix[32];
+        std::snprintf(suffix, sizeof(suffix), "bar-%d", index);
+        const float height = context->bounds.height * values[index];
+        vellum_component_paint_command_v1 command{};
+        command.struct_size = sizeof(command);
+        command.kind = VELLUM_COMPONENT_PAINT_RECTANGLE_V1;
+        command.id_suffix = suffix;
+        command.bounds = {index * (width + gap), context->bounds.height - height, width, height};
+        command.fill = boost
+            ? vellum_component_color_v1{0.08F, 0.72F, 0.65F, 1.0F}
+            : vellum_component_color_v1{0.39F, 0.45F, 0.55F, 1.0F};
+        command.corner_radius = 6.0F;
+        if (context->emit(context->emit_user_data, &command) != 1) return 0;
+    }
+    return 1;
+}
+
+static const vellum_component_descriptor_v1 descriptor{
+    sizeof(vellum_component_descriptor_v1), VELLUM_COMPONENT_ABI_VERSION,
+    "level-meter", render_meter,
+};
+
+extern "C" VELLUM_COMPONENT_EXPORT const vellum_component_descriptor_v1*
+vellum_component_entry_v1(void) { return &descriptor; }
+''',
+                encoding="utf-8",
+            )
+            custom_capture = custom_project / "artifacts/custom-component.png"
+            custom_results = {
+                "build": json.loads(run([
+                    str(prefix / "bin/vellum"), "build", "--json",
+                ], cwd=custom_project, env=journey_env).stdout),
+                "capture": json.loads(run([
+                    str(prefix / "bin/vellum"), "capture", "--scenario", "smoke",
+                    "--output", "artifacts/custom-component.png", "--json",
+                ], cwd=custom_project, env=journey_env).stdout),
+                "package": json.loads(run([
+                    str(prefix / "bin/vellum"), "package", "--output", "dist", "--json",
+                ], cwd=custom_project, env=journey_env).stdout),
+            }
+            custom_app = custom_project / ".vellum/build/macos/custom-component-app.app"
+            custom_module = custom_app / "Contents/PlugIns/VellumComponents/level-meter.dylib"
+            custom_package_module = (
+                custom_project / "dist/custom-component-app.app/Contents/PlugIns/"
+                "VellumComponents/level-meter.dylib"
+            )
+            custom_component_produced = (
+                all(value.get("ok") for value in custom_results.values())
+                and custom_results["build"].get("data", {}).get("backend", {}).get("data", {}).get("components") == ["level-meter"]
+                and "components=1" in custom_results["capture"].get("data", {}).get("backend", {}).get("data", {}).get("host_output", "")
+                and custom_module.is_file() and custom_package_module.is_file()
+                and custom_capture.is_file() and custom_capture.read_bytes()[:4] == b"\x89PNG"
+            )
+            if not custom_component_produced:
+                raise ValidationError("installed app-owned custom C++ component journey did not complete")
 
     checks = {
         "checksum_and_payload_manifest": True,
@@ -311,6 +418,7 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
         "relocatable_cmake_package": True,
         "gpu_authoring_ui_payload": not gpu_claimed or ui_present,
         "native_backend_payload": not native_claimed or native_present,
+        "custom_component_abi": not verification["claims"].get("custom_components") or component_abi_present,
         "sterile_consumer_configure": True,
         "sterile_consumer_build": True,
         "sterile_consumer_test": True,
@@ -341,6 +449,7 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
         "installed_web_reproducible_package": not web_claimed or web_reproducible,
         "installed_web_exact_wasm": not web_claimed or web_runtime_exact,
         "installed_sdk_local_node": not web_claimed or web_node_self_contained,
+        "installed_custom_cpp_component": not custom_claimed or custom_component_produced,
     }
     if not all(checks.values()):
         failed = sorted(name for name, passed in checks.items() if not passed)

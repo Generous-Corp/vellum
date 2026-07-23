@@ -159,6 +159,7 @@ if ($LocalRoot) {
     "cmake_sdk": false,
     "authoring_cli": true,
     "gpu_renderer": false,
+    "custom_components": false,
     "commands": {
       "import": true,
       "reimport": true,

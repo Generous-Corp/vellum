@@ -6,6 +6,8 @@
 #include <vellum/graphics/capture_stats.hpp>
 #include <vellum/graphics/skia_dawn_surface.hpp>
 
+#include "component_registry.hpp"
+
 #include <algorithm>
 #include <cstdint>
 #include <filesystem>
@@ -26,6 +28,8 @@ using vellum::authoring::JsApplication;
 using vellum::authoring::RenderedApplication;
 using vellum::authoring::TextInputControl;
 using vellum::graphics::SkiaDawnSurface;
+using vellum::app_host::ComponentModuleSpec;
+using vellum::app_host::ComponentRegistry;
 
 std::string cpp_string(NSString* value) {
     if (value == nil) return {};
@@ -45,6 +49,7 @@ struct Options final {
     std::filesystem::path capture;
     std::filesystem::path state_file;
     std::vector<AutomationStep> steps;
+    std::vector<ComponentModuleSpec> components;
     std::optional<std::uint32_t> expected_width;
     std::optional<std::uint32_t> expected_height;
     bool no_window = false;
@@ -53,7 +58,8 @@ struct Options final {
 void usage() {
     std::cerr << "usage: vellum-app-host [--bundle FILE] [--self-test|--no-window] "
                  "[--press NODE_ID] [--input NODE_ID TEXT] [--key NODE_ID KEY] "
-                 "[--state-file FILE] [--expect-width N --expect-height N] [--capture PNG]\n";
+                 "[--component ID=DYLIB] [--state-file FILE] "
+                 "[--expect-width N --expect-height N] [--capture PNG]\n";
 }
 
 constexpr std::size_t kMaximumAutomationSteps = 1000U;
@@ -93,6 +99,7 @@ std::optional<Options> parse_options(int argc, const char* argv[]) {
             options.no_window = true;
         } else if (argument == "--bundle" || argument == "--capture" ||
                    argument == "--state-file" || argument == "--press" ||
+                   argument == "--component" ||
                    argument == "--expect-width" ||
                    argument == "--expect-height") {
             if (++index >= argc) return std::nullopt;
@@ -106,6 +113,14 @@ std::optional<Options> parse_options(int argc, const char* argv[]) {
                 const std::string node_id = argv[index];
                 if (!valid_node_id(node_id)) return std::nullopt;
                 options.steps.push_back({AutomationStep::Kind::press, node_id, {}});
+            }
+            if (argument == "--component") {
+                ComponentModuleSpec spec;
+                std::string error;
+                if (!vellum::app_host::parse_component_module_spec(argv[index], spec, &error)) {
+                    return std::nullopt;
+                }
+                options.components.push_back(std::move(spec));
             }
             if (argument == "--expect-width") {
                 options.expected_width = positive_dimension(argv[index]);
@@ -143,6 +158,27 @@ std::filesystem::path bundled_application_script() {
                              std::filesystem::path(resource.UTF8String);
 }
 
+std::vector<ComponentModuleSpec> bundled_component_modules() {
+    NSString* plugins = NSBundle.mainBundle.builtInPlugInsPath;
+    if (plugins == nil) return {};
+    const std::filesystem::path directory =
+        std::filesystem::path(plugins.UTF8String) / "VellumComponents";
+    std::error_code error;
+    if (!std::filesystem::is_directory(directory, error)) return {};
+    std::vector<ComponentModuleSpec> output;
+    for (const auto& entry : std::filesystem::directory_iterator(directory, error)) {
+        if (error) return {};
+        if (entry.is_regular_file() && entry.path().extension() == ".dylib") {
+            output.push_back({.component_id = entry.path().stem().string(),
+                              .path = entry.path()});
+        }
+    }
+    std::sort(output.begin(), output.end(), [](const auto& left, const auto& right) {
+        return left.component_id < right.component_id;
+    });
+    return output;
+}
+
 bool read_file(const std::filesystem::path& path, std::string& output) {
     std::ifstream input(path, std::ios::binary);
     std::ostringstream contents;
@@ -170,6 +206,14 @@ bool validate_gpu(const SkiaDawnSurface& surface, bool native, std::string* erro
     }
     if (error) *error = "renderer is not native Skia Graphite on Dawn/Metal";
     return false;
+}
+
+bool load_components(const std::vector<ComponentModuleSpec>& specs,
+                     ComponentRegistry& registry, std::string* error) {
+    for (const auto& spec : specs) {
+        if (!registry.load(spec, error)) return false;
+    }
+    return true;
 }
 
 bool press_node(JsApplication& application, RenderedApplication& rendered,
@@ -381,6 +425,11 @@ bool write_png(SkiaDawnSurface& surface, const std::filesystem::path& output,
 int run_headless(const Options& options, std::string_view bundle) {
     @autoreleasepool {
         std::string error;
+        ComponentRegistry components;
+        if (!load_components(options.components, components, &error)) {
+            std::cerr << error << '\n';
+            return 1;
+        }
         auto application = JsApplication::create(bundle, &error);
         RenderedApplication rendered;
         if (!application || !application->render(rendered, &error)) {
@@ -388,6 +437,10 @@ int run_headless(const Options& options, std::string_view bundle) {
             return 1;
         }
         if (!restore_persisted_state(*application, rendered, options.state_file, &error)) {
+            std::cerr << error << '\n';
+            return 1;
+        }
+        if (!components.expand(rendered.scene, &error)) {
             std::cerr << error << '\n';
             return 1;
         }
@@ -400,6 +453,7 @@ int run_headless(const Options& options, std::string_view bundle) {
                     : key_node(*application, rendered, step.node_id, step.value,
                                @"scenario", &error);
             if (!succeeded ||
+                !components.expand(rendered.scene, &error) ||
                 !persist_state(*application, options.state_file, &error)) {
                 std::cerr << error << '\n';
                 return 1;
@@ -447,6 +501,7 @@ int run_headless(const Options& options, std::string_view bundle) {
                   << " height=" << pixel_height
                   << " interactions=" << rendered.interactions.size()
                   << " text_inputs=" << rendered.text_inputs.size()
+                  << " components=" << components.size()
                   << " png_bytes=" << png_bytes << '\n';
     }
     return 0;
@@ -472,11 +527,14 @@ std::filesystem::path packaged_state_path() {
     return std::filesystem::path(state.path.UTF8String);
 }
 
+std::vector<ComponentModuleSpec> interactive_component_specs;
+
 }  // namespace
 
 @interface VellumApplicationView : NSView {
 @private
     std::unique_ptr<JsApplication> _application;
+    std::unique_ptr<ComponentRegistry> _components;
     RenderedApplication _rendered;
     std::unique_ptr<SkiaDawnSurface> _surface;
     std::filesystem::path _persistencePath;
@@ -484,24 +542,32 @@ std::filesystem::path packaged_state_path() {
 }
 - (instancetype)initWithFrame:(NSRect)frame
                        bundle:(const std::string&)bundle
+                   components:(const std::vector<ComponentModuleSpec>&)components
               persistencePath:(const std::filesystem::path&)persistencePath;
 @end
 
 @implementation VellumApplicationView
 - (instancetype)initWithFrame:(NSRect)frame
                        bundle:(const std::string&)bundle
+                   components:(const std::vector<ComponentModuleSpec>&)components
               persistencePath:(const std::filesystem::path&)persistencePath {
     self = [super initWithFrame:frame];
     if (self) {
         std::string error;
+        _components = std::make_unique<ComponentRegistry>();
         _application = JsApplication::create(bundle, &error);
-        if (!_application || !_application->render(_rendered, &error)) {
+        if (!load_components(components, *_components, &error) || !_application ||
+            !_application->render(_rendered, &error)) {
             NSLog(@"Vellum application initialization failed: %s", error.c_str());
             return nil;
         }
         _persistencePath = persistencePath;
         if (!restore_persisted_state(*_application, _rendered, _persistencePath, &error)) {
             NSLog(@"Vellum persisted state restore failed: %s", error.c_str());
+            return nil;
+        }
+        if (!_components->expand(_rendered.scene, &error)) {
+            NSLog(@"Vellum custom component expansion failed: %s", error.c_str());
             return nil;
         }
         self.wantsLayer = YES;
@@ -516,6 +582,7 @@ std::filesystem::path packaged_state_path() {
 - (BOOL)acceptsFirstResponder { return YES; }
 
 - (BOOL)finishMutation:(std::string*)error {
+    if (!_components->expand(_rendered.scene, error)) return NO;
     if (!persist_state(*_application, _persistencePath, error)) return NO;
     if (_surface && !_surface->render(_rendered.scene, error)) return NO;
     return YES;
@@ -627,9 +694,12 @@ std::filesystem::path packaged_state_path() {
     const std::string bundle(
         static_cast<const char*>(self.bundleData.bytes), self.bundleData.length);
     std::string error;
+    ComponentRegistry components;
     auto probe = JsApplication::create(bundle, &error);
     RenderedApplication rendered;
-    if (!probe || !probe->render(rendered, &error)) {
+    if (!load_components(interactive_component_specs, components, &error) ||
+        !probe || !probe->render(rendered, &error) ||
+        !components.expand(rendered.scene, &error)) {
         NSLog(@"Vellum application failed: %s", error.c_str());
         [NSApp terminate:nil];
         return;
@@ -645,7 +715,10 @@ std::filesystem::path packaged_state_path() {
         ?: @"Vellum Application";
     const std::filesystem::path persistence_path = packaged_state_path();
     self.window.contentView = [[VellumApplicationView alloc]
-        initWithFrame:frame bundle:bundle persistencePath:persistence_path];
+        initWithFrame:frame
+               bundle:bundle
+           components:interactive_component_specs
+      persistencePath:persistence_path];
     if (self.window.contentView == nil) {
         [NSApp terminate:nil];
         return;
@@ -669,6 +742,7 @@ int main(int argc, const char* argv[]) {
     }
     Options options = *parsed;
     if (options.bundle.empty()) options.bundle = bundled_application_script();
+    if (options.components.empty()) options.components = bundled_component_modules();
     std::string bundle;
     if (options.bundle.empty() || !read_file(options.bundle, bundle)) {
         std::cerr << "could not read application bundle: " << options.bundle << '\n';
@@ -678,6 +752,7 @@ int main(int argc, const char* argv[]) {
         !options.state_file.empty()) {
         return run_headless(options, bundle);
     }
+    interactive_component_specs = options.components;
     @autoreleasepool {
         NSApplication* application = NSApplication.sharedApplication;
         application.activationPolicy = NSApplicationActivationPolicyRegular;

@@ -216,6 +216,10 @@ def derived_capabilities(contents: dict[str, bytes], target: str) -> dict[str, o
                     record.get("sha256") != sha256_bytes(content):
                 raise VerificationError(f"web payload content mismatch: {name}")
     web_ready = web_runtime and ui_runtime and node_runtime
+    custom_components = (
+        native_ready and payload_has_cmake_target(contents, "ComponentAbi") and
+        "sdk/include/vellum/components/abi.h" in contents
+    )
     commands = {name: False for name in COMMANDS}
     commands["import"] = import_backend
     commands["reimport"] = import_backend
@@ -228,6 +232,7 @@ def derived_capabilities(contents: dict[str, bytes], target: str) -> dict[str, o
         "authoring_cli": "vellum_cli.py" in contents,
         "gpu_renderer": gpu_renderer,
         "node_runtime": node_runtime,
+        "custom_components": custom_components,
         "commands": commands,
         "authoring": {
             "text_input_v1": {
@@ -326,12 +331,13 @@ def verify(archive: Path, checksums: Path) -> dict[str, object]:
             not isinstance(capabilities, dict)
             or set(capabilities) != {
                 "cmake_sdk", "authoring_cli", "gpu_renderer", "node_runtime",
-                "commands", "authoring", "targets",
+                "custom_components", "commands", "authoring", "targets",
             }
             or not isinstance(capabilities.get("cmake_sdk"), bool)
             or not isinstance(capabilities.get("authoring_cli"), bool)
             or not isinstance(capabilities.get("gpu_renderer"), bool)
             or not isinstance(capabilities.get("node_runtime"), bool)
+            or not isinstance(capabilities.get("custom_components"), bool)
             or not isinstance(capabilities.get("commands"), dict)
             or not isinstance(capabilities.get("authoring"), dict)
             or set(capabilities["commands"]) != COMMANDS

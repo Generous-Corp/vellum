@@ -13,6 +13,8 @@ APP_MANIFEST_NAME = "app.toml"
 LOCK_NAME = "framework.lock"
 LOCK_SCHEMA = "vellum.project-lock.v1"
 SUPPORTED_DESKTOP_TARGET = "macos"
+COMPONENT_MANIFEST_SCHEMA = "vellum.components.v1"
+_COMPONENT_ID = re.compile(r"[a-z][a-z0-9-]{0,63}")
 
 
 class ManifestError(ValueError):
@@ -149,6 +151,80 @@ def _project_relative(value: Any, label: str) -> None:
     path = Path(value)
     if path.is_absolute() or ".." in path.parts:
         raise ManifestError(f"{label} must remain inside the project")
+
+
+def _project_file(project: Path, value: Any, label: str, suffixes: set[str]) -> str:
+    _project_relative(value, label)
+    relative = Path(value)
+    if relative.suffix.lower() not in suffixes:
+        raise ManifestError(f"{label} has an unsupported file type")
+    root = project.resolve()
+    resolved = (root / relative).resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError as error:
+        raise ManifestError(f"{label} escapes the project") from error
+    if not resolved.is_file():
+        raise ManifestError(f"{label} does not exist: {value}")
+    return relative.as_posix()
+
+
+def load_components_manifest(project: Path, relative_path: str) -> list[dict[str, Any]]:
+    _project_relative(relative_path, "[native].components_manifest")
+    root = project.resolve()
+    path = (root / relative_path).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError as error:
+        raise ManifestError("native components manifest escapes the project") from error
+    raw = parse_app_toml(path)
+    manifest = raw.get("manifest", {})
+    _exact_keys(manifest, {"schema", "components"}, set(), "manifest")
+    if manifest["schema"] != COMPONENT_MANIFEST_SCHEMA:
+        raise ManifestError(f"[manifest].schema must be {COMPONENT_MANIFEST_SCHEMA}")
+    identifiers = manifest["components"]
+    if not isinstance(identifiers, list) or len(identifiers) > 32:
+        raise ManifestError("[manifest].components must contain at most 32 identifiers")
+    if len(set(identifiers)) != len(identifiers) or any(
+        not isinstance(identifier, str) or not _COMPONENT_ID.fullmatch(identifier)
+        for identifier in identifiers
+    ):
+        raise ManifestError("[manifest].components contains an invalid or duplicate identifier")
+    expected_sections = {"manifest", *(f"component.{identifier}" for identifier in identifiers)}
+    unknown_sections = sorted(set(raw) - expected_sections)
+    missing_sections = sorted(expected_sections - set(raw))
+    if unknown_sections or missing_sections:
+        raise ManifestError(
+            "component tables differ from the declaration: "
+            f"missing={missing_sections} unknown={unknown_sections}"
+        )
+    output: list[dict[str, Any]] = []
+    for identifier in identifiers:
+        section_name = f"component.{identifier}"
+        component = raw[section_name]
+        _exact_keys(component, {"native_source", "web"}, {"wasm_source"}, section_name)
+        native_source = _project_file(
+            root, component["native_source"], f"[{section_name}].native_source",
+            {".c", ".cc", ".cpp", ".cxx"},
+        )
+        web = component["web"]
+        if web not in {"fallback", "wasm"}:
+            raise ManifestError(f"[{section_name}].web must be fallback or wasm")
+        wasm_source = component.get("wasm_source")
+        if web == "wasm":
+            wasm_source = _project_file(
+                root, wasm_source, f"[{section_name}].wasm_source",
+                {".c", ".cc", ".cpp", ".cxx"},
+            )
+        elif wasm_source is not None:
+            raise ManifestError(f"[{section_name}].wasm_source requires web = \"wasm\"")
+        output.append({
+            "id": identifier,
+            "native_source": native_source,
+            "web": web,
+            "wasm_source": wasm_source,
+        })
+    return output
 
 
 def load_app_manifest(project: Path) -> dict[str, Any]:

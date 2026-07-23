@@ -15,7 +15,9 @@ import sys
 import tempfile
 from typing import Any, Iterable
 
-from vellum_manifest import LOCK_NAME, LOCK_SCHEMA, ManifestError, load_app_manifest
+from vellum_manifest import (
+    LOCK_NAME, LOCK_SCHEMA, ManifestError, load_app_manifest, load_components_manifest,
+)
 from vellum_png import PngError, montage, read_png, write_png
 
 
@@ -30,6 +32,9 @@ SUPPORTED_SCENARIO_KEYS = {
     "Enter", "Escape", "Backspace", "Tab", "ArrowUp", "ArrowDown",
     "ArrowLeft", "ArrowRight", "Home", "End", "Delete",
 }
+PRIVATE_VELLUM_INCLUDE = re.compile(
+    r'^\s*#\s*include\s*[<"](vellum/[^>"]+)[>"]', re.MULTILINE,
+)
 
 
 class BackendFailure(RuntimeError):
@@ -138,6 +143,12 @@ def project_context(project_argument: str) -> dict[str, Any]:
         raise BackendFailure("Package display_name is invalid", status="invalid_package")
     if manifest["packaging"].get("macos_format") != "app":
         raise BackendFailure("This SDK packages only a macOS .app", status="unsupported_target", exit_code=4)
+    try:
+        components = load_components_manifest(
+            project, manifest["native"]["components_manifest"]
+        )
+    except ManifestError as error:
+        raise BackendFailure(str(error), status="invalid_component_manifest") from error
     return {
         "root": project,
         "lock": lock,
@@ -147,6 +158,7 @@ def project_context(project_argument: str) -> dict[str, Any]:
         "display_name": display_name.strip(),
         "version": manifest["app"]["version"],
         "capabilities": manifest["capabilities"],
+        "components": components,
     }
 
 
@@ -189,6 +201,76 @@ def copy_frameworks(sdk: Path, destination: Path) -> list[str]:
     return names
 
 
+def validate_component_source(path: Path) -> None:
+    try:
+        content = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        raise BackendFailure(
+            f"Cannot read custom component source {path}: {error}",
+            status="invalid_component_source",
+        ) from error
+    if len(content.encode("utf-8")) > 4 * 1024 * 1024:
+        raise BackendFailure("Custom component source exceeds 4 MiB", status="invalid_component_source")
+    framework_includes = PRIVATE_VELLUM_INCLUDE.findall(content)
+    forbidden = sorted(set(framework_includes) - {"vellum/components/abi.h"})
+    if forbidden:
+        raise BackendFailure(
+            "Custom components may use only the public vellum/components/abi.h framework header; "
+            f"forbidden includes: {forbidden}",
+            status="private_component_api",
+        )
+
+
+def component_compiler() -> str:
+    xcrun = shutil.which("xcrun")
+    if xcrun:
+        return run_checked([xcrun, "--find", "clang++"]).stdout.strip()
+    compiler = shutil.which("clang++")
+    if compiler:
+        return compiler
+    raise BackendFailure("clang++ is required for native custom components", status="tool_unavailable")
+
+
+def build_component_modules(
+    context: dict[str, Any], sdk: Path, destination: Path,
+) -> list[dict[str, str]]:
+    declarations = context["components"]
+    if not declarations:
+        return []
+    metadata = load_json(sdk / "metadata.json", "vellum.sdk-artifact.v1", "sdk_metadata")
+    if metadata.get("capabilities", {}).get("custom_components") is not True:
+        raise BackendFailure(
+            "Installed SDK does not provide the custom component ABI",
+            status="capability_unavailable", exit_code=4,
+        )
+    sdk_include_root = sdk / "sdk/include"
+    abi = sdk_include_root / "vellum/components/abi.h"
+    if not abi.is_file():
+        raise BackendFailure("Installed SDK is missing the custom component ABI header", status="invalid_sdk")
+    include_root = context["root"] / ".vellum/build/component-abi/include"
+    projected_abi = include_root / "vellum/components/abi.h"
+    projected_abi.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(abi, projected_abi)
+    compiler = component_compiler()
+    destination.mkdir(parents=True)
+    modules: list[dict[str, str]] = []
+    for declaration in declarations:
+        source = safe_relative(
+            context["root"], declaration["native_source"],
+            f"custom component {declaration['id']} native source",
+        )
+        validate_component_source(source)
+        output = destination / f"{declaration['id']}.dylib"
+        run_checked([
+            compiler, "-std=c++20", "-dynamiclib", "-fvisibility=hidden",
+            "-fvisibility-inlines-hidden", "-DVELLUM_COMPONENT_BUILD=1",
+            "-I", str(include_root), str(source), "-o", str(output),
+            "-Wl,-undefined,error",
+        ], cwd=context["root"])
+        modules.append({"id": declaration["id"], "path": str(output)})
+    return modules
+
+
 def build_app(context: dict[str, Any], sdk: Path) -> dict[str, Any]:
     project: Path = context["root"]
     build_root = project / ".vellum/build/macos"
@@ -201,6 +283,7 @@ def build_app(context: dict[str, Any], sdk: Path) -> dict[str, Any]:
     executable_dir = contents / "MacOS"
     resources = contents / "Resources"
     frameworks = contents / "Frameworks"
+    component_directory = contents / "PlugIns/VellumComponents"
     executable_dir.mkdir(parents=True)
     resources.mkdir(parents=True)
     host = sdk / "sdk/bin/vellum-app-host"
@@ -219,6 +302,7 @@ def build_app(context: dict[str, Any], sdk: Path) -> dict[str, Any]:
     shutil.copy2(host, executable)
     executable.chmod(0o755)
     framework_names = copy_frameworks(sdk, frameworks)
+    component_modules = build_component_modules(context, sdk, component_directory)
     info = {
         "CFBundleDevelopmentRegion": "en",
         "CFBundleDisplayName": context["display_name"],
@@ -238,11 +322,16 @@ def build_app(context: dict[str, Any], sdk: Path) -> dict[str, Any]:
     if app.exists():
         shutil.rmtree(app)
     os.replace(staging, app)
+    installed_components = [
+        {"id": item["id"], "path": str(app / "Contents/PlugIns/VellumComponents" / f"{item['id']}.dylib")}
+        for item in component_modules
+    ]
     return {
         "app": app,
         "bundle": app / "Contents/Resources/app.js",
         "executable": app / f"Contents/MacOS/{context['slug']}",
         "frameworks": framework_names,
+        "components": installed_components,
     }
 
 
@@ -253,7 +342,16 @@ def ensure_app(context: dict[str, Any], sdk: Path, no_build: bool = False) -> di
         bundle = app / "Contents/Resources/app.js"
         if not executable.is_file() or not bundle.is_file():
             raise BackendFailure("No built app exists; run vellum build first", status="build_missing")
-        return {"app": app, "bundle": bundle, "executable": executable, "frameworks": []}
+        components = [{
+            "id": item["id"],
+            "path": str(app / "Contents/PlugIns/VellumComponents" / f"{item['id']}.dylib"),
+        } for item in context["components"]]
+        if any(not Path(item["path"]).is_file() for item in components):
+            raise BackendFailure("Built app is missing a declared custom component module", status="build_missing")
+        return {
+            "app": app, "bundle": bundle, "executable": executable,
+            "frameworks": [], "components": components,
+        }
     return build_app(context, sdk)
 
 
@@ -389,7 +487,12 @@ def capture_matrix(context: dict[str, Any], matrix_value: str) -> dict[str, Any]
 
 
 def execute_host(app: dict[str, Any], arguments: list[str]) -> subprocess.CompletedProcess[str]:
-    return run_checked([str(app["executable"]), "--self-test", *arguments])
+    components = [
+        argument
+        for item in app.get("components", [])
+        for argument in ("--component", f"{item['id']}={item['path']}")
+    ]
+    return run_checked([str(app["executable"]), "--self-test", *components, *arguments])
 
 
 def command_result(command: str, args: argparse.Namespace, context: dict[str, Any], sdk: Path) -> dict[str, Any]:
@@ -401,6 +504,7 @@ def command_result(command: str, args: argparse.Namespace, context: dict[str, An
             "app": str(app["app"]),
             "bundle": str(app["bundle"]),
             "frameworks": app["frameworks"],
+            "components": [item["id"] for item in app["components"]],
         })
     if command == "run":
         app = ensure_app(context, sdk, args.no_build)

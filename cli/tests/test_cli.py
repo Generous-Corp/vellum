@@ -116,7 +116,7 @@ class CliTests(unittest.TestCase):
                 "schema": "vellum.sdk-artifact.v1", "framework_version": "0.1.0",
                 "cli_version": "0.1.0-dev", "cli_api": 1, "source_commit": None,
                 "target": "local-development",
-                "capabilities": {"authoring_cli": True, "cmake_sdk": False, "gpu_renderer": False, "commands": commands},
+                "capabilities": {"authoring_cli": True, "cmake_sdk": False, "gpu_renderer": False, "custom_components": False, "commands": commands},
                 "files": [],
             }), encoding="utf-8")
             (sdk / "install-manifest.json").write_text(json.dumps({
@@ -319,6 +319,7 @@ class CliTests(unittest.TestCase):
                 "target": "local-development",
                 "capabilities": {
                     "authoring_cli": True, "cmake_sdk": False, "gpu_renderer": False,
+                    "custom_components": False,
                     "commands": {name: False for name in (
                         "import", "reimport", "build", "run", "test", "capture", "package"
                     )},
@@ -363,7 +364,7 @@ class CliTests(unittest.TestCase):
                 "capabilities": {
                     "authoring_cli": True,
                     "cmake_sdk": True,
-                    "gpu_renderer": False,
+                    "gpu_renderer": False, "custom_components": False,
                     "commands": {
                         "import": True,
                         "reimport": True,
@@ -396,7 +397,7 @@ class CliTests(unittest.TestCase):
             capabilities = {
                 "authoring_cli": True,
                 "cmake_sdk": True,
-                "gpu_renderer": False,
+                "gpu_renderer": False, "custom_components": False,
                 "commands": {
                     "import": True, "reimport": True, "build": False,
                     "run": False, "test": False, "capture": False, "package": False,

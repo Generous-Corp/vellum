@@ -47,6 +47,12 @@ bounded semantic key/submit dispatch. It does not yet provide a caret or
 selection model, IME composition, clipboard editing shortcuts, password input,
 accessibility text semantics, spellcheck, or mobile platform integration.
 
+`CustomComponent` is the explicit bridge to an app-owned C/C++ paint module.
+Its `component` name must be declared in `native/components.toml`, its
+`properties` are bounded JSON, and its `fallback` remains ordinary Vellum UI
+for targets without that module. The SDK's custom-component guide defines the
+versioned ABI and source-ownership contract.
+
 Imported DesignIR stays inspectable JSON. Applications opt into it from
 developer-owned code and bind behavior separately:
 

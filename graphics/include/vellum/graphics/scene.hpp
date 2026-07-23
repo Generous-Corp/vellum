@@ -25,6 +25,7 @@ struct SceneNode final {
         group,
         rectangle,
         text,
+        custom,
     };
 
     std::string id;
@@ -34,6 +35,8 @@ struct SceneNode final {
     float corner_radius = 0.0F;
     std::string text;
     float font_size = 14.0F;
+    std::string custom_component;
+    std::string custom_properties_json;
     std::vector<SceneNode> children;
 };
 

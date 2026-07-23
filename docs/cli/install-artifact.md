@@ -41,6 +41,11 @@ independently recomputed by the verifier. The default artifact claims the
 authoring CLI, deterministic DesignIR import/reimport, and CMake SDK while
 recording GPU rendering and native application commands as unavailable.
 
+GPU artifacts claim `custom_components` (native only) when the installed
+`Vellum::ComponentAbi` target, its versioned C header, the native host, and the
+complete native backend are all present. The verifier derives that claim again
+from archive bytes.
+
 Pass the verified pinned Skia archive explicitly to compose the installed
 `Vellum::Gpu` and `Vellum::Authoring` targets plus `@vellum/ui` and its exact
 esbuild/TypeScript dependencies:

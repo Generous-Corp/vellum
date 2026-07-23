@@ -143,6 +143,10 @@ def derive_capabilities(payload: Path, install_tree: Path) -> dict[str, object]:
         "index.html", "style.css", "vellum_host.js", "check_wasm_no_engine.py",
     ))
     web_ready = ui_runtime and node_runtime and web_backend and web_runtime
+    custom_components = (
+        native_ready and installed_cmake_target(install_tree, "ComponentAbi") and
+        (install_tree / "include/vellum/components/abi.h").is_file()
+    )
     commands = {name: False for name in COMMAND_NAMES}
     commands["import"] = import_backend
     commands["reimport"] = import_backend
@@ -155,6 +159,7 @@ def derive_capabilities(payload: Path, install_tree: Path) -> dict[str, object]:
         "authoring_cli": (payload / "vellum_cli.py").is_file(),
         "gpu_renderer": gpu_renderer,
         "node_runtime": node_runtime,
+        "custom_components": custom_components,
         "commands": commands,
         "authoring": {
             "text_input_v1": {

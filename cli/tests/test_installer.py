@@ -177,6 +177,7 @@ class InstallerTests(unittest.TestCase):
                         "cmake_sdk": True,
                         "authoring_cli": True,
                         "gpu_renderer": False,
+                        "custom_components": False,
                         "commands": {
                             "import": True,
                             "reimport": True,

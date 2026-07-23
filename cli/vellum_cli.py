@@ -14,7 +14,10 @@ import subprocess
 import sys
 from typing import Any, Iterable
 
-from vellum_manifest import APP_MANIFEST_NAME, LOCK_NAME, LOCK_SCHEMA, ManifestError, load_app_manifest
+from vellum_manifest import (
+    APP_MANIFEST_NAME, LOCK_NAME, LOCK_SCHEMA, ManifestError,
+    load_app_manifest, load_components_manifest,
+)
 
 
 CLI_VERSION = "0.1.0-dev"
@@ -596,6 +599,7 @@ def load_sdk_metadata() -> tuple[Path, dict[str, Any], dict[str, Any]] | None:
         or not isinstance(metadata.get("framework_version"), str)
         or metadata.get("cli_api") != CLI_API_VERSION
         or not isinstance(metadata.get("capabilities"), dict)
+        or not isinstance(metadata.get("capabilities", {}).get("custom_components"), bool)
         or not isinstance(metadata.get("capabilities", {}).get("commands"), dict)
         or set(metadata["capabilities"]["commands"]) != set(BACKEND_COMMANDS)
         or not all(isinstance(value, bool) for value in metadata["capabilities"]["commands"].values())
@@ -708,6 +712,24 @@ def doctor(args: argparse.Namespace) -> dict[str, Any]:
     elif sdk_error:
         sdk_detail = str(sdk_error)
     command_capabilities = sdk[1]["capabilities"]["commands"] if sdk else {}
+    component_count = 0
+    components_valid = True
+    component_detail = "not in a Vellum project"
+    if project_root:
+        try:
+            app_manifest = load_app_manifest(project_root)
+            components = load_components_manifest(
+                project_root, app_manifest["native"]["components_manifest"]
+            )
+            component_count = len(components)
+            component_detail = f"{component_count} declared"
+        except ManifestError as error:
+            components_valid = False
+            component_detail = str(error)
+            diagnostics.append({
+                "level": "error", "code": "invalid_component_manifest",
+                "message": str(error),
+            })
     ui_available = False
     ui_detail = "not in a Vellum project"
     if project_root:
@@ -743,6 +765,19 @@ def doctor(args: argparse.Namespace) -> dict[str, Any]:
         check_item("project-ui-package", required=bool(project_root and sdk and (sdk[0] / "ui/package.json").is_file()), available=ui_available, detail=ui_detail, fix="Run vellum doctor --fix with the exact project-locked SDK installed."),
         check_item("backend-dispatcher", required=bool(command_capabilities), available=backend is not None, detail=str(backend) if backend else "not installed in this extraction milestone", fix="Set VELLUM_SDK_ROOT or VELLUM_BACKEND when a backend artifact is available."),
         check_item("import-backend", required=import_required, available=bool(backend and command_capabilities.get("import") and command_capabilities.get("reimport")), detail="import and reimport available" if command_capabilities.get("import") and command_capabilities.get("reimport") else "unavailable"),
+        check_item(
+            "custom-components", required=component_count > 0 or not components_valid,
+            available=components_valid and bool(
+                component_count == 0 or
+                (sdk and sdk[1]["capabilities"].get("custom_components") is True)
+            ),
+            detail=component_detail if component_count == 0 else (
+                f"{component_count} declared; installed ABI available"
+                if sdk and sdk[1]["capabilities"].get("custom_components") is True
+                else f"{component_count} declared; installed ABI unavailable"
+            ),
+            fix="Install the exact GPU SDK artifact that provides the component ABI.",
+        ),
     ]
     required_ok = all(item["available"] for item in checks if item["required"])
     status = "ready" if required_ok else "needs_attention"

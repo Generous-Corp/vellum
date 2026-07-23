@@ -1,10 +1,12 @@
 add_executable(vellum-app-host
-    main.mm)
+    main.mm
+    component_registry.cpp)
 
 target_compile_features(vellum-app-host PRIVATE cxx_std_20)
 target_compile_options(vellum-app-host PRIVATE -fobjc-arc)
 target_link_libraries(vellum-app-host PRIVATE
     Vellum::Authoring
+    Vellum::ComponentAbi
     Vellum::Gpu
     "-framework Cocoa"
     "-framework Metal"
@@ -37,4 +39,33 @@ if(VELLUM_BUILD_TESTS AND VELLUM_AUTHORING_TEST_BUNDLE)
             "${VELLUM_AUTHORING_TEST_BUNDLE}")
     set_tests_properties(vellum.app-host-state-persistence PROPERTIES
         ENVIRONMENT "MTL_DEBUG_LAYER=0")
+endif()
+
+if(VELLUM_BUILD_TESTS)
+    add_library(vellum-unterminated-component MODULE
+        tests/unterminated_component.cpp)
+    target_link_libraries(vellum-unterminated-component PRIVATE Vellum::ComponentAbi)
+    set_target_properties(vellum-unterminated-component PROPERTIES
+        PREFIX ""
+        CXX_VISIBILITY_PRESET hidden)
+    add_library(vellum-unterminated-text-component MODULE
+        tests/unterminated_text_component.cpp)
+    target_link_libraries(vellum-unterminated-text-component PRIVATE Vellum::ComponentAbi)
+    set_target_properties(vellum-unterminated-text-component PROPERTIES
+        PREFIX ""
+        CXX_VISIBILITY_PRESET hidden)
+
+    add_executable(vellum-component-registry-test
+        component_registry.cpp
+        tests/component_registry_test.cpp)
+    target_include_directories(vellum-component-registry-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_link_libraries(vellum-component-registry-test PRIVATE
+        Vellum::ComponentAbi
+        Vellum::Graphics
+        ${CMAKE_DL_LIBS})
+    add_test(NAME vellum.component-registry-bounds
+        COMMAND vellum-component-registry-test
+            "$<TARGET_FILE:vellum-unterminated-component>"
+            "$<TARGET_FILE:vellum-unterminated-text-component>")
 endif()

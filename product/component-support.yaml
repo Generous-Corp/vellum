@@ -1,0 +1,18 @@
+schema_version: 1
+abi: vellum.component-abi.v1
+native:
+  macos_arm64:
+    installed_sdk_build: supported
+    app_owned_module: dylib
+    sterile_build_capture_package_proof: required
+web:
+  declared_fallback: supported-in-retained-tree
+  wasm_source:
+    abi_compile_and_execution_proof: supported
+    proof_command: scripts/verify_component_wasm.py
+    installed_web_backend_integration: unavailable
+    vellum_build_target_web: unavailable
+claims:
+  - custom_components artifact capability means native installed-SDK support only
+  - wasm proof does not imply browser packaging or installed web backend support
+  - web support becomes available only after an installed web build consumes the app-owned wasm module

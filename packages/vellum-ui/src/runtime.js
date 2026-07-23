@@ -5,6 +5,9 @@ const SNAPSHOT_SCHEMA = 'vellum.authoring-state.v1';
 const TEXT_INPUT_PRIMITIVE_VERSION = 1;
 const MAXIMUM_TEXT_INPUT_LENGTH = 65536;
 const MAXIMUM_TEXT_INPUT_PLACEHOLDER_LENGTH = 1024;
+const INTRINSIC_TYPES = new Set([
+    'view', 'stack', 'text', 'text-input', 'button', 'image', 'canvas', 'custom',
+]);
 
 let renderingRuntime = null;
 
@@ -144,6 +147,21 @@ export function TextInput(properties = {}) {
     return jsx('text-input', { ...properties, primitiveVersion: TEXT_INPUT_PRIMITIVE_VERSION });
 }
 TextInput.displayName = 'Vellum.TextInput';
+
+export function CustomComponent({ component, properties = {}, fallback, children, ...rest } = {}) {
+    if (typeof component !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(component)) {
+        throw new TypeError('CustomComponent component must be a lowercase declared identifier');
+    }
+    if (fallback !== undefined && children !== undefined) {
+        throw new TypeError('CustomComponent accepts fallback or children, not both');
+    }
+    return jsx('custom', {
+        ...rest,
+        component,
+        properties: durableValue(properties, `CustomComponent(${component}).properties`),
+        children: fallback ?? children ?? null,
+    });
+}
 
 function designToken(document, value) {
     if (typeof value !== 'string' || !value.startsWith('{') || !value.endsWith('}')) return value;
@@ -327,6 +345,9 @@ function materialize(value, runtime, path) {
     if (typeof value.type !== 'string') {
         throw new TypeError(`${path}.type must be a component or intrinsic string`);
     }
+    if (!INTRINSIC_TYPES.has(value.type)) {
+        throw new TypeError(`${path}.type is not a supported Vellum intrinsic`);
+    }
 
     const childValues = flattenChildren(value.props.children);
     if (value.type === 'text-input') {
@@ -397,6 +418,18 @@ function materialize(value, runtime, path) {
     if (style !== undefined) node.style = style;
     if (typeof value.props.text === 'string') node.text = value.props.text;
     if (typeof value.props.source === 'string') node.source = value.props.source;
+    if (value.type === 'custom') {
+        if (typeof value.props.component !== 'string' ||
+            !/^[a-z][a-z0-9-]{0,63}$/.test(value.props.component)) {
+            throw new TypeError(`${path}.component must be a lowercase declared identifier`);
+        }
+        if (value.props.properties === null || typeof value.props.properties !== 'object' ||
+            Array.isArray(value.props.properties)) {
+            throw new TypeError(`${path}.properties must be a plain JSON object`);
+        }
+        node.component = value.props.component;
+        node.properties = cloneJson(value.props.properties, `${path}.properties`);
+    }
     if (typeof value.props.accessibilityLabel === 'string') {
         node.accessibilityLabel = value.props.accessibilityLabel;
     }

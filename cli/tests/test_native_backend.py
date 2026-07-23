@@ -23,6 +23,7 @@ finally:
     sys.path.pop(0)
 capture_matrix = BACKEND_MODULE["capture_matrix"]
 scenario_arguments = BACKEND_MODULE["scenario_arguments"]
+validate_component_source = BACKEND_MODULE["validate_component_source"]
 BackendFailure = BACKEND_MODULE["BackendFailure"]
 
 
@@ -43,7 +44,7 @@ def fake_gpu_sdk(root: Path) -> Path:
     (sdk / "metadata.json").write_text(json.dumps({
         "schema": "vellum.sdk-artifact.v1",
         "target": "darwin-arm64",
-        "capabilities": {"gpu_renderer": True},
+        "capabilities": {"gpu_renderer": True, "custom_components": True},
     }), encoding="utf-8")
     return sdk
 
@@ -208,6 +209,50 @@ class NativeBackendTests(unittest.TestCase):
                 sys.executable, str(BACKEND), "build", "--project", str(project), "--json",
             ], env={"VELLUM_SDK_ROOT": str(sdk)})
             self.assertEqual(json.loads(rejected.stdout)["status"], "invalid_app_manifest")
+
+    def test_component_manifest_is_declared_and_private_framework_headers_fail(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = self.create_project(root)
+            source = project / "native/level-meter.cpp"
+            source.write_text('#include <vellum/components/abi.h>\n', encoding="utf-8")
+            (project / "native/components.toml").write_text(
+                '[manifest]\n'
+                'schema = "vellum.components.v1"\n'
+                'components = ["level-meter"]\n\n'
+                '[component.level-meter]\n'
+                'native_source = "native/level-meter.cpp"\n'
+                'web = "fallback"\n',
+                encoding="utf-8",
+            )
+            context = BACKEND_MODULE["project_context"](str(project))
+            self.assertEqual(context["components"], [{
+                "id": "level-meter", "native_source": "native/level-meter.cpp",
+                "web": "fallback", "wasm_source": None,
+            }])
+            validate_component_source(source)
+            doctor = run([
+                sys.executable, str(CLI), "doctor", "--project", str(project), "--json",
+            ], env={"VELLUM_SDK_ROOT": ""})
+            doctor_payload = json.loads(doctor.stdout)
+            component_check = next(
+                item for item in doctor_payload["data"]["checks"]
+                if item["name"] == "custom-components"
+            )
+            self.assertTrue(component_check["required"])
+            self.assertFalse(component_check["available"])
+
+            source.write_text('#include <vellum/graphics/scene.hpp>\n', encoding="utf-8")
+            with self.assertRaisesRegex(BackendFailure, "public vellum/components/abi.h"):
+                validate_component_source(source)
+
+            (project / "native/components.toml").write_text(
+                '[manifest]\nschema = "vellum.components.v1"\ncomponents = []\n\n'
+                '[component.undeclared]\nnative_source = "native/level-meter.cpp"\nweb = "fallback"\n',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(BackendFailure, "differ.*from the declaration"):
+                BACKEND_MODULE["project_context"](str(project))
 
 
 if __name__ == "__main__":

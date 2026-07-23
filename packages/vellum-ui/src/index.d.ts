@@ -61,6 +61,13 @@ export declare const Button: Component;
 export declare const Image: Component;
 export declare const Canvas: Component;
 
+export interface CustomComponentProps extends ElementProps {
+    component: string;
+    properties?: Record<string, JsonValue>;
+    fallback?: unknown;
+}
+export declare function CustomComponent(properties: CustomComponentProps): VellumElement;
+
 export interface DesignNode {
     id: string;
     kind: string;
@@ -162,6 +169,7 @@ declare global {
             button: ElementProps;
             image: ElementProps;
             canvas: ElementProps;
+            custom: CustomComponentProps;
         }
     }
 }

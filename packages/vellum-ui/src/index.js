@@ -1,6 +1,7 @@
 export {
     Button,
     Canvas,
+    CustomComponent,
     Design,
     Fragment,
     Image,

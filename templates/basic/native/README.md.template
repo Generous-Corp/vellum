@@ -2,4 +2,8 @@
 
 Custom C++ components are an explicit escape hatch. The basic app does not
 require native application code. Register future components in
-`native/components.toml`; do not add a second editable build manifest.
+`native/components.toml`; do not add a second editable build manifest. Each
+declared component owns a project-local C or C++ source file and must declare
+either an explicit browser fallback or a separate Wasm source. The native
+module may include only the versioned `<vellum/components/abi.h>` framework
+header.

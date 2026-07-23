@@ -117,6 +117,22 @@ std::string direct_text(NSDictionary* source) {
     return result;
 }
 
+std::optional<std::string> json_object(id value) {
+    if (![value isKindOfClass:NSDictionary.class] ||
+        ![NSJSONSerialization isValidJSONObject:value]) {
+        return std::nullopt;
+    }
+    NSError* error = nil;
+    NSData* data = [NSJSONSerialization dataWithJSONObject:value
+                                                   options:NSJSONWritingSortedKeys
+                                                     error:&error];
+    if (data == nil || error != nil || data.length > kMaximumJsonBytes) {
+        return std::nullopt;
+    }
+    NSString* text = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    return text == nil ? std::nullopt : std::optional<std::string>{cpp_string(text)};
+}
+
 bool materialize_node(
     NSDictionary* source,
     const vellum::graphics::Rect& proposed,
@@ -177,7 +193,20 @@ bool materialize_node(
     output.fill = parse_color(style[@"backgroundColor"])
         .value_or(vellum::graphics::Color::rgba(0.0F, 0.0F, 0.0F, 0.0F));
 
-    if ([type isEqualToString:@"text"] || [type isEqualToString:@"text-run"]) {
+    if ([type isEqualToString:@"custom"]) {
+        if (![source[@"component"] isKindOfClass:NSString.class]) {
+            set_error(error, "custom authoring node requires a component identifier");
+            return false;
+        }
+        const auto properties = json_object(source[@"properties"]);
+        if (!properties) {
+            set_error(error, "custom authoring node properties must be a bounded JSON object");
+            return false;
+        }
+        output.kind = vellum::graphics::SceneNode::Kind::custom;
+        output.custom_component = cpp_string(source[@"component"]);
+        output.custom_properties_json = *properties;
+    } else if ([type isEqualToString:@"text"] || [type isEqualToString:@"text-run"]) {
         output.kind = vellum::graphics::SceneNode::Kind::text;
         output.text = direct_text(source);
         output.font_size = std::max(1.0F, number_or(style, @"fontSize", 14.0F));

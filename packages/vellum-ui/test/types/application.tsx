@@ -1,5 +1,6 @@
 import {
     Button,
+    CustomComponent,
     Fragment,
     Stack,
     Text,
@@ -68,6 +69,16 @@ function EditableTitle(): VellumElement {
     );
 }
 void EditableTitle;
+
+const custom = (
+    <CustomComponent
+        id="meter"
+        component="level-meter"
+        properties={{ values: [0.2, 0.7, 0.4] }}
+        fallback={<Text id="meter-fallback">Meter unavailable</Text>}
+    />
+);
+void custom;
 
 const imported = materializeDesign({
     root: {

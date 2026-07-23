@@ -103,6 +103,11 @@ targets and missing payloads are errors, never successful no-ops.
 choice in its Info.plist; the host does not infer persistence from use of
 `useState` or `createApp`.
 
+An application may declare app-owned custom C++ paint components through the
+versioned manifest and ABI described in
+[`custom-components.md`](custom-components.md). They are compiled into the app,
+not into the installed SDK, and cannot include Vellum renderer internals.
+
 `doctor --fix` creates safe project-local cache/state directories and projects
 the exact locked UI package from the installed SDK into ignored `.vellum/`
 state. It does not silently install system packages or modify shell profiles.

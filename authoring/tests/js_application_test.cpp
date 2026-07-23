@@ -24,6 +24,13 @@ constexpr const char* kBundle = R"JS(
         { type: "button", id: "add", style: { width: 140, height: 44 },
           events: { press: "add:press" }, children: [
           { type: "text-run", id: "add/text", text: "Add board", children: [] }
+        ] },
+        { type: "custom", id: "meter", component: "level-meter",
+          properties: { values: [0.2, 0.7, 0.4] },
+          style: { width: 180, height: 48 }, children: [
+          { type: "view", id: "meter-fallback",
+            style: { width: 180, height: 48, backgroundColor: "#334155" },
+            children: [] }
         ] }
       ]
     }
@@ -95,6 +102,16 @@ int main(int argc, char** argv) {
          rendered.text_inputs[0].submit_action.empty())) {
         std::cerr << "TextInput v1 materialization failed\n";
         return 1;
+    }
+    if (!external_bundle) {
+        const auto* custom = vellum::graphics::find_node(rendered.scene, "meter");
+        if (custom == nullptr ||
+            custom->kind != vellum::graphics::SceneNode::Kind::custom ||
+            custom->custom_component != "level-meter" ||
+            custom->custom_properties_json.find("\"values\"") == std::string::npos ||
+            custom->children.size() != 1U || custom->children[0].id != "meter-fallback") {
+            return 1;
+        }
     }
     const std::string action = rendered.interactions[0].action;
     if (!application->dispatch(action, R"({"pointerType":"mouse"})",

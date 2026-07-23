@@ -1,2 +1,3 @@
-version = 1
+[manifest]
+schema = "vellum.components.v1"
 components = []

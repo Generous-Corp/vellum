@@ -40,6 +40,7 @@ endif()
 
 add_subdirectory(foundation)
 add_subdirectory(runtime)
+add_subdirectory(components)
 
 if(VELLUM_ENABLE_GPU)
     include(cmake/VellumSkiaDawn.cmake)
@@ -143,7 +144,7 @@ if(VELLUM_BUILD_TESTS)
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
 
-set(_vellum_install_targets vellum-foundation vellum-runtime)
+set(_vellum_install_targets vellum-foundation vellum-runtime vellum-component-abi)
 if(VELLUM_ENABLE_GRAPHICS)
     list(APPEND _vellum_install_targets vellum-graphics)
     if(TARGET vellum-gpu)

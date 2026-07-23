@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
     Button,
+    CustomComponent,
     Design,
     Stack,
     Text,
@@ -32,6 +33,28 @@ test('renders one deterministic serializable retained tree', () => {
     assert.equal(envelope.tree.children[0].children[0].text, 'Hello ');
     assert.equal(envelope.tree.children[0].children[1].text, '7');
     assert.equal(JSON.stringify(envelope).includes('function'), false);
+});
+
+test('serializes a declared custom component with an explicit portable fallback', () => {
+    const bridge = mount(() => jsx(CustomComponent, {
+        id: 'meter',
+        component: 'level-meter',
+        properties: { values: [0.2, 0.7, 0.4], accent: '#14b8a6' },
+        style: { width: 240, height: 96 },
+        children: jsx(View, {
+            id: 'meter-fallback',
+            style: { width: 240, height: 96, backgroundColor: '#14b8a6' },
+        }),
+    }));
+    const tree = JSON.parse(bridge.renderJSON()).tree;
+    assert.equal(tree.type, 'custom');
+    assert.equal(tree.component, 'level-meter');
+    assert.deepEqual(tree.properties.values, [0.2, 0.7, 0.4]);
+    assert.equal(tree.children[0].id, 'meter-fallback');
+
+    assert.throws(() => mount(() => jsx(CustomComponent, {
+        component: 'Private::Thing', properties: {},
+    })).renderJSON(), /lowercase declared identifier/);
 });
 
 test('dispatches inline JSX behavior and persists hook state', () => {
