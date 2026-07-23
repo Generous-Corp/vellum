@@ -17,9 +17,10 @@ jobs:
     name: gpu-macos-arm64
     runs-on: macos-15
     steps:
-      - name: Check out Vellum without credentials
+      - name: Check out full preserved Vellum history without credentials
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Download and verify the locked Skia and Dawn archive
