@@ -16,10 +16,12 @@ import tempfile
 from typing import Any, Iterable
 
 from vellum_manifest import LOCK_NAME, LOCK_SCHEMA, ManifestError, load_app_manifest
+from vellum_png import PngError, montage, read_png, write_png
 
 
 RESULT_SCHEMA = "vellum.backend.result.v1"
 SCENARIO_SCHEMA = "vellum.scenario.v1"
+CAPTURE_MATRIX_SCHEMA = "vellum.capture-matrix.v1"
 SUPPORTED_TARGET = "macos"
 
 
@@ -64,6 +66,7 @@ def load_json(path: Path, schema: str, label: str) -> dict[str, Any]:
 
 
 def safe_relative(project: Path, value: object, label: str) -> Path:
+    project = project.resolve()
     if not isinstance(value, str) or not value or "\0" in value:
         raise BackendFailure(f"{label} must be a non-empty project-relative path", status="invalid_project")
     candidate = Path(value)
@@ -269,6 +272,50 @@ def scenario_arguments(context: dict[str, Any], scenario_value: str | None) -> t
     return arguments, str(scenario.get("name", name))
 
 
+def parse_hex_color(value: object) -> tuple[int, int, int, int]:
+    if not isinstance(value, str) or not re.fullmatch(r"#[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?", value):
+        raise BackendFailure("Capture matrix background must be #RRGGBB or #RRGGBBAA", status="invalid_capture_matrix")
+    encoded = value[1:]
+    channels = tuple(int(encoded[index:index + 2], 16) for index in range(0, len(encoded), 2))
+    return (*channels, 255) if len(channels) == 3 else channels  # type: ignore[return-value]
+
+
+def capture_matrix(context: dict[str, Any], matrix_value: str) -> dict[str, Any]:
+    path = safe_relative(context["root"], matrix_value, "capture matrix")
+    matrix = load_json(path, CAPTURE_MATRIX_SCHEMA, "capture_matrix")
+    if set(matrix) - {"schema", "captures", "columns", "gap", "background"}:
+        raise BackendFailure("Capture matrix contains unknown fields", status="invalid_capture_matrix")
+    captures = matrix.get("captures")
+    if not isinstance(captures, list) or not 1 <= len(captures) <= 100:
+        raise BackendFailure("Capture matrix must contain 1-100 captures", status="invalid_capture_matrix")
+    normalized: list[dict[str, str]] = []
+    names: set[str] = set()
+    for index, item in enumerate(captures):
+        if not isinstance(item, dict) or set(item) != {"name", "scenario"}:
+            raise BackendFailure(f"Capture matrix item {index} is malformed", status="invalid_capture_matrix")
+        name = item.get("name")
+        scenario = item.get("scenario")
+        if not isinstance(name, str) or not re.fullmatch(r"[a-z0-9](?:[a-z0-9_-]{0,63})", name):
+            raise BackendFailure(f"Capture matrix item {index} has an invalid name", status="invalid_capture_matrix")
+        if name in names:
+            raise BackendFailure(f"Capture matrix name is duplicated: {name}", status="invalid_capture_matrix")
+        if not isinstance(scenario, str) or not scenario or "\0" in scenario:
+            raise BackendFailure(f"Capture matrix item {index} has an invalid scenario", status="invalid_capture_matrix")
+        names.add(name)
+        normalized.append({"name": name, "scenario": scenario})
+    columns = matrix.get("columns")
+    gap = matrix.get("gap", 16)
+    if columns is not None and (isinstance(columns, bool) or not isinstance(columns, int) or not 1 <= columns <= len(normalized)):
+        raise BackendFailure("Capture matrix columns are invalid", status="invalid_capture_matrix")
+    if isinstance(gap, bool) or not isinstance(gap, int) or not 0 <= gap <= 1024:
+        raise BackendFailure("Capture matrix gap is invalid", status="invalid_capture_matrix")
+    background = parse_hex_color(matrix.get("background", "#181A20"))
+    return {
+        "path": path, "captures": normalized, "columns": columns,
+        "gap": gap, "background": background,
+    }
+
+
 def execute_host(app: dict[str, Any], arguments: list[str]) -> subprocess.CompletedProcess[str]:
     return run_checked([str(app["executable"]), "--self-test", *arguments])
 
@@ -304,6 +351,64 @@ def command_result(command: str, args: argparse.Namespace, context: dict[str, An
         })
     if command == "capture":
         app = ensure_app(context, sdk)
+        if args.matrix:
+            if args.scenario:
+                raise BackendFailure("--matrix cannot be combined with --scenario", status="invalid_arguments", exit_code=2)
+            matrix = capture_matrix(context, args.matrix)
+            if args.montage:
+                montage_output = output_path(
+                    context["root"], args.output, "artifacts/montage.png", "montage output"
+                )
+                if montage_output.suffix.lower() != ".png":
+                    raise BackendFailure("Montage output must end in .png", status="invalid_arguments", exit_code=2)
+                capture_directory = montage_output.parent / f"{montage_output.stem}-captures"
+            else:
+                capture_directory = output_path(
+                    context["root"], args.output, "artifacts/captures", "capture output"
+                )
+                if capture_directory.suffix.lower() == ".png":
+                    raise BackendFailure("Matrix output without --montage must be a directory", status="invalid_arguments", exit_code=2)
+                montage_output = None
+            results: list[dict[str, Any]] = []
+            images = []
+            capture_directory.mkdir(parents=True, exist_ok=True)
+            for item in matrix["captures"]:
+                scenario_args, scenario_name = scenario_arguments(context, item["scenario"])
+                output = capture_directory / f"{item['name']}.png"
+                output.unlink(missing_ok=True)
+                completed = execute_host(app, [*scenario_args, "--capture", str(output)])
+                if not output.is_file():
+                    raise BackendFailure("Native host did not produce a matrix capture", status="capture_failed")
+                try:
+                    image = read_png(output)
+                except PngError as error:
+                    raise BackendFailure(f"Matrix capture is not a supported PNG: {error}", status="capture_failed") from error
+                images.append(image)
+                results.append({
+                    "name": item["name"], "scenario": scenario_name,
+                    "output": str(output), "width": image.width, "height": image.height,
+                    "bytes": output.stat().st_size, "host_output": completed.stdout.strip(),
+                })
+            montage_data = None
+            if montage_output is not None:
+                try:
+                    composed = montage(
+                        images, columns=matrix["columns"], gap=matrix["gap"],
+                        background=matrix["background"],
+                    )
+                    write_png(montage_output, composed)
+                except PngError as error:
+                    raise BackendFailure(f"Could not compose capture montage: {error}", status="capture_failed") from error
+                montage_data = {
+                    "output": str(montage_output), "width": composed.width,
+                    "height": composed.height, "bytes": montage_output.stat().st_size,
+                }
+            return result(command, ok=True, status="captured", message=f"Captured {len(results)} matrix views", data={
+                "target": SUPPORTED_TARGET, "matrix": str(matrix["path"]),
+                "captures": results, "montage": montage_data,
+            })
+        if args.montage:
+            raise BackendFailure("--montage requires --matrix", status="invalid_arguments", exit_code=2)
         scenario_args, scenario_name = scenario_arguments(context, args.scenario)
         output = output_path(context["root"], args.output, f"artifacts/{scenario_name}.png", "capture output")
         if output.suffix.lower() != ".png":
@@ -346,6 +451,9 @@ def parser(command: str) -> argparse.ArgumentParser:
         value.add_argument("--scenario")
     if command in {"capture", "package"}:
         value.add_argument("--output")
+    if command == "capture":
+        value.add_argument("--matrix")
+        value.add_argument("--montage", action="store_true")
     return value
 
 

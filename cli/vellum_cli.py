@@ -849,7 +849,10 @@ def parser() -> argparse.ArgumentParser:
             ("--no-window", {"action": "store_true"}),
         ],
         "test": [("--scenario", {})],
-        "capture": [("--scenario", {}), ("--output", {}), ("--target", {"default": "macos"})],
+        "capture": [
+            ("--scenario", {}), ("--matrix", {}), ("--montage", {"action": "store_true"}),
+            ("--output", {}), ("--target", {"default": "macos"}),
+        ],
         "package": [("--target", {"default": "macos"}), ("--output", {})],
     }
     for name, arguments in backend_specs.items():

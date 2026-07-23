@@ -116,7 +116,9 @@ def derive_capabilities(payload: Path, install_tree: Path) -> dict[str, object]:
         "ui/node_modules/esbuild/package.json",
         "ui/node_modules/typescript/package.json",
     ))
-    native_backend = (payload / "vellum_native_backend.py").is_file()
+    native_backend = all((payload / name).is_file() for name in (
+        "vellum_native_backend.py", "vellum_png.py",
+    ))
     native_host = all((install_tree / path).is_file() for path in (
         "bin/vellum-app-host",
         "lib/libvellum-authoring.dylib",
@@ -284,6 +286,7 @@ def copy_payload(
     shutil.copy2(repo / "cli/vellum_cli.py", payload / "vellum_cli.py")
     shutil.copy2(repo / "cli/vellum_backend.py", payload / "vellum_backend.py")
     shutil.copy2(repo / "cli/vellum_manifest.py", payload / "vellum_manifest.py")
+    shutil.copy2(repo / "cli/vellum_png.py", payload / "vellum_png.py")
     shutil.copytree(repo / ".agents", payload / ".agents")
     shutil.copytree(repo / "templates", payload / "templates")
     shutil.copytree(install_tree, payload / "sdk")

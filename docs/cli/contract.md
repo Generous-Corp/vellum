@@ -85,7 +85,7 @@ stable outer schema.
 | `doctor [--fix]` | yes | reports backend availability |
 | `import` / `reimport` | no | implemented by the installed `@vellum/design-ir` backend |
 | `build` / `run` | no | macOS arm64 GPU artifact builds/launches a real `.app`; finite `run --self-test` is available |
-| `test` / `capture` | no | macOS arm64 GPU artifact executes bounded scenarios and captures PNGs |
+| `test` / `capture` | no | macOS arm64 GPU artifact executes bounded scenarios, captures PNGs, and composes bounded capture matrices/montages |
 | `package` | no | macOS arm64 GPU artifact creates an ad-hoc-signed `.app` |
 
 Installed SDK metadata carries a boolean capability for every backend command.

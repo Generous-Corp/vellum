@@ -70,6 +70,12 @@ class SdkArtifactTests(unittest.TestCase):
                 for command in ("build", "run", "test", "capture", "package")
             ))
             (payload / "vellum_native_backend.py").write_text("# fixture\n", encoding="utf-8")
+            without_capture_support = derive_capabilities(payload, install_tree)
+            self.assertFalse(any(
+                without_capture_support["commands"][command]
+                for command in ("build", "run", "test", "capture", "package")
+            ))
+            (payload / "vellum_png.py").write_text("# fixture\n", encoding="utf-8")
             with_backend = derive_capabilities(payload, install_tree)
             self.assertTrue(all(
                 with_backend["commands"][command]

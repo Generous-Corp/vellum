@@ -58,6 +58,7 @@ class CliTests(unittest.TestCase):
                 Path("src/main.tsx"),
                 Path("native/README.md"),
                 Path("tests/scenarios/smoke.json"),
+                Path("tests/capture-matrix.json"),
                 Path("native/components.toml"),
             }
             self.assertTrue(required.issubset(set(first_files)))

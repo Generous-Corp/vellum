@@ -206,7 +206,7 @@ def verify(repo: Path) -> dict[str, Any]:
 
     invocation_rows = skill_invocations(skill_text, cli_contract["executable"])
     observed_commands: set[str] = set()
-    canonical_commands: set[str] = set()
+    observed_flags: dict[str, set[str]] = {command: set() for command in cli_steps}
     for line, flags in invocation_rows.items():
         command = invocation_command(line, set(commands))
         observed_commands.add(command)
@@ -214,17 +214,22 @@ def verify(repo: Path) -> dict[str, Any]:
         unknown = flags - allowed
         if unknown:
             raise VerificationError(f"SKILL.md references unknown {command} flags: {sorted(unknown)}")
-        declared = set(cli_steps[command]["flags"])
-        if flags == declared:
-            canonical_commands.add(command)
+        observed_flags[command].update(flags)
     if observed_commands != set(cli_steps):
         raise VerificationError(
             f"SKILL.md lifecycle commands are incomplete: observed={sorted(observed_commands)}"
         )
-    if canonical_commands != set(cli_steps):
+    mismatched = {
+        command: {
+            "declared": sorted(set(cli_steps[command]["flags"])),
+            "observed": sorted(observed_flags[command]),
+        }
+        for command in cli_steps
+        if observed_flags[command] != set(cli_steps[command]["flags"])
+    }
+    if mismatched:
         raise VerificationError(
-            "SKILL.md has no canonical manifest-matching invocation for commands: "
-            f"{sorted(set(cli_steps) - canonical_commands)}"
+            f"SKILL.md lifecycle flag coverage differs from the manifest: {mismatched}"
         )
     if installer_step is None:
         raise VerificationError("agent lifecycle has no installer step")

@@ -103,6 +103,7 @@ vellum build --target macos
 vellum run --target macos
 vellum test
 vellum capture --scenario smoke --output artifacts/smoke.png
+vellum capture --matrix tests/capture-matrix.json --montage --output artifacts/montage.png
 vellum package --target macos --output dist
 ```
 
@@ -126,6 +127,8 @@ into ignored `.vellum/packages/`, and `create` proves the lock with offline
 
 The accepted source contract, generated tree, ownership boundary, and conflict
 workflow are documented in [Import and reimport](docs/cli/import-reimport.md).
+The semantic interaction driver, offscreen capture path, and deterministic
+contact-sheet format are documented in [Interaction capture and montages](docs/cli/capture.md).
 
 Every command accepts `--json` before or after the command and emits one stable
 `vellum.cli.result.v1` object. See [the CLI contract](docs/cli/contract.md).

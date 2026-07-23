@@ -39,6 +39,7 @@ vellum --json build --target macos --project "$app"
 vellum --json run --target macos --project "$app"
 vellum --json test --scenario smoke --project "$app"
 vellum --json capture --scenario smoke --output "$app/artifacts/smoke.png" --target macos --project "$app"
+vellum --json capture --matrix tests/capture-matrix.json --montage --output artifacts/montage.png --target macos --project "$app"
 vellum --json package --target macos --output "$app/dist" --project "$app"
 ```
 

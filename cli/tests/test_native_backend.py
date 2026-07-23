@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import runpy
 import subprocess
 import sys
 import tempfile
@@ -12,6 +13,13 @@ import unittest
 REPO = Path(__file__).resolve().parents[2]
 CLI = REPO / "cli/vellum_cli.py"
 BACKEND = REPO / "cli/vellum_native_backend.py"
+sys.path.insert(0, str(REPO / "cli"))
+try:
+    BACKEND_MODULE = runpy.run_path(str(BACKEND))
+finally:
+    sys.path.pop(0)
+capture_matrix = BACKEND_MODULE["capture_matrix"]
+BackendFailure = BACKEND_MODULE["BackendFailure"]
 
 
 def run(arguments: list[str], *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -79,6 +87,22 @@ class NativeBackendTests(unittest.TestCase):
         payload = json.loads(completed.stdout)
         self.assertEqual(payload["schema"], "vellum.backend.result.v1")
         self.assertEqual(payload["status"], "invalid_arguments")
+
+    def test_capture_matrix_is_versioned_bounded_and_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = self.create_project(root)
+            parsed = capture_matrix({"root": project}, "tests/capture-matrix.json")
+            self.assertEqual(parsed["captures"], [{"name": "home", "scenario": "smoke"}])
+            self.assertEqual(parsed["columns"], 1)
+            self.assertEqual(parsed["background"], (24, 26, 32, 255))
+
+            matrix_path = project / "tests/capture-matrix.json"
+            value = json.loads(matrix_path.read_text(encoding="utf-8"))
+            value["captures"].append({"name": "home", "scenario": "smoke"})
+            matrix_path.write_text(json.dumps(value), encoding="utf-8")
+            with self.assertRaisesRegex(BackendFailure, "duplicated"):
+                capture_matrix({"root": project}, "tests/capture-matrix.json")
 
 
 if __name__ == "__main__":

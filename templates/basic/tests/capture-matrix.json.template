@@ -1,0 +1,9 @@
+{
+  "schema": "vellum.capture-matrix.v1",
+  "columns": 1,
+  "gap": 16,
+  "background": "#181A20",
+  "captures": [
+    { "name": "home", "scenario": "smoke" }
+  ]
+}

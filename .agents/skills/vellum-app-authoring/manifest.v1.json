@@ -63,7 +63,7 @@
       "step": "capture",
       "kind": "cli",
       "command": "capture",
-      "flags": ["--json", "--scenario", "--output", "--target", "--project"]
+      "flags": ["--json", "--scenario", "--matrix", "--montage", "--output", "--target", "--project"]
     },
     {
       "step": "package",

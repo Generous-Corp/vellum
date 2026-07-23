@@ -11,6 +11,7 @@ vellum build
 vellum run
 vellum test
 vellum capture --scenario smoke --output artifacts/smoke.png
+vellum capture --matrix tests/capture-matrix.json --montage --output artifacts/montage.png
 vellum package --output dist
 ```
 

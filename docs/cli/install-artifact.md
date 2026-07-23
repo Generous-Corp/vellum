@@ -11,6 +11,7 @@ The gzip-compressed tar has this root layout:
 vellum_cli.py
 vellum_backend.py
 vellum_manifest.py
+vellum_png.py
 templates/basic/...
 metadata.json
 sdk/include/...

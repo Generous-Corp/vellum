@@ -163,6 +163,8 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
         native_enabled = verification["claims"]["gpu_renderer"] is True
         native_results: dict[str, dict[str, object]] = {}
         native_capture = project / "artifacts/installed-proof.png"
+        native_montage = project / "artifacts/installed-montage.png"
+        native_matrix_capture = project / "artifacts/installed-montage-captures/home.png"
         native_package = project / "dist/sterile-artifact-app.app"
         imported_bundle_contains_design = False
         native_capture_produced = False
@@ -175,6 +177,10 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
                 "capture": [
                     "capture", "--scenario", "smoke", "--output",
                     "artifacts/installed-proof.png",
+                ],
+                "montage": [
+                    "capture", "--matrix", "tests/capture-matrix.json", "--montage",
+                    "--output", "artifacts/installed-montage.png",
                 ],
                 "package": ["package", "--output", "dist"],
             }.items():
@@ -193,6 +199,12 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
                 raise ValidationError("installed native app did not embed the imported DesignIR")
             if (not native_capture.is_file() or native_capture.read_bytes()[:4] != b"\x89PNG"):
                 raise ValidationError("installed native capture did not produce a PNG")
+            if (
+                not native_montage.is_file() or native_montage.read_bytes()[:4] != b"\x89PNG"
+                or not native_matrix_capture.is_file()
+                or native_results["montage"].get("data", {}).get("backend", {}).get("data", {}).get("montage") is None
+            ):
+                raise ValidationError("installed capture matrix did not produce a PNG montage and source capture")
             if not (native_package / "Contents/MacOS/sterile-artifact-app").is_file():
                 raise ValidationError("installed native package did not produce a runnable .app")
             native_capture_produced = True
@@ -226,6 +238,9 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
         "installed_native_scenario": not native_enabled or native_results["test"]["status"] == "tests_passed",
         "installed_imported_design_bundle": not native_enabled or imported_bundle_contains_design,
         "installed_native_capture": not native_enabled or native_capture_produced,
+        "installed_native_montage": not native_enabled or (
+            native_montage.is_file() and native_matrix_capture.is_file()
+        ),
         "installed_native_package": not native_enabled or native_package_produced,
     }
     if not all(checks.values()):
