@@ -8,15 +8,46 @@ sources:
     reimport: supported
   figma:
     channel: supported
-    accepted_artifact: credential-free generic Figma plugin export v1 JSON
+    accepted_artifact: single-root audio-free Pulp Figma plugin JSON export
     provider_access: none
     reimport: supported
+    pinned_contract:
+      format_version: 2026.05-figma-plugin-v1
+      parser_version: 0.1.0
+      compat_schema_version: "0.3"
+      schema: https://pulp.dev/schemas/figma-plugin-export-v1.json
+    current_pulp_emitter_node_types:
+      frame: direct-view-node-kind-with-property-diagnostics
+      text: direct-text-node-kind-with-property-diagnostics
+      ellipse: diagnosed-view-lowering
+      image: diagnosed-view-placeholder
+      vector: diagnosed-view-placeholder
+    legacy_compatibility_node_types:
+      button: diagnosed-button-lowering
+      col: diagnosed-view-lowering
+      input: diagnosed-view-placeholder
+      label: diagnosed-text-lowering
+      panel: diagnosed-view-lowering
+      path: diagnosed-view-placeholder
+      row: diagnosed-view-lowering
+    integrity:
+      content_hash_wire_forms:
+        - 64-lower-or-upper-hex
+        - sha256:64-lower-or-upper-hex
+      canonical_form: sha256:64-lower-hex
+      verified_on:
+        - import
+        - changed-reimport
+        - unchanged-reimport
     limitations:
       - does not accept arbitrary .fig files
       - does not call the Figma REST API
-      - accepts only the generic Figma node subset
+      - accepts exactly one root and rejects the synthetic multi-export root
+      - .pulp.zip ingestion is unavailable; provide scene.pulp.json beside assets
+      - the current Pulp extractor can audio-promote generic-looking layer names
       - rejects audio-widget nodes and audio-specific binding fields
-      - unsupported properties remain explicit diagnostics
+      - image and vector assets are preserved but not painted by the native host
+      - unsupported properties and fields remain explicit diagnostics and extensions
   figma-rest:
     channel: unavailable
   figma-file:

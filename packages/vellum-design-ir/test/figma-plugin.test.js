@@ -1,16 +1,23 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import {
     decodeFigmaPluginExport,
     normalizeImport,
 } from '../src/index.js';
 
+const repository = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+const fixtures = join(repository, 'fixtures', 'design-ir');
+
 function genericExport() {
     return {
         $schema: 'https://pulp.dev/schemas/figma-plugin-export-v1.json',
         format_version: '2026.05-figma-plugin-v1',
-        parser_version: '0.2.0',
+        parser_version: '0.1.0',
         compat_schema_version: '0.3',
         provenance: {
             adapter: 'figma-plugin',
@@ -27,7 +34,7 @@ function genericExport() {
             version: 1,
             assets: [{
                 asset_id: 'mark',
-                content_hash: 'sha256:deadbeef',
+                content_hash: 'd'.repeat(64),
                 local_path: 'assets/mark.svg',
                 mime: 'image/svg+xml',
                 width: 24,
@@ -95,11 +102,12 @@ test('decodes a generic Figma plugin export into deterministic DesignIR input', 
         unit: 'px', value: 12,
     });
     assert.equal(document.assets[0].id, 'mark');
+    assert.equal(document.assets[0].contentHash, `sha256:${'d'.repeat(64)}`);
     assert.equal(document.assets[0].uri, 'assets/mark.svg');
     assert.ok(document.diagnostics.some((diagnostic) =>
         diagnostic.code === 'figma-property-preserved-not-materialized' &&
         diagnostic.property === 'box_shadow' &&
-        diagnostic.disposition === 'extension',
+        diagnostic.disposition === 'unsupported',
     ));
     assert.ok(document.diagnostics.some((diagnostic) =>
         diagnostic.code === 'font-substitution' && diagnostic.disposition === 'lowered',
@@ -124,7 +132,7 @@ test('fails closed on audio-widget kinds, fields, and binding attributes', () =>
     }
 });
 
-test('rejects unknown formats and non-generic node types', () => {
+test('rejects unknown formats, parser revisions, and non-generic node types', () => {
     const unknownFormat = genericExport();
     unknownFormat.format_version = 'future-format';
     assert.throws(
@@ -132,7 +140,17 @@ test('rejects unknown formats and non-generic node types', () => {
             sourceHash: `sha256:${'c'.repeat(64)}`,
             sourceKey: 'main',
         }),
-        /unsupported Figma plugin format/,
+        /format_version/,
+    );
+
+    const unknownParser = genericExport();
+    unknownParser.parser_version = '0.2.0';
+    assert.throws(
+        () => decodeFigmaPluginExport(unknownParser, {
+            sourceHash: `sha256:${'c'.repeat(64)}`,
+            sourceKey: 'main',
+        }),
+        /parser_version/,
     );
 
     const unknownNode = genericExport();
@@ -142,6 +160,154 @@ test('rejects unknown formats and non-generic node types', () => {
             sourceHash: `sha256:${'d'.repeat(64)}`,
             sourceKey: 'main',
         }),
-        /generic Figma subset/,
+        /pinned Figma subset/,
     );
 });
+
+test('checked-in proof is byte-produced by the pinned Pulp serializer and asset cache', async () => {
+    const fixturePath = join(fixtures, 'pulp-emitter-generic.export.json');
+    const receipt = JSON.parse(await readFile(
+        join(fixtures, 'pulp-emitter-generic.receipt.json'),
+        'utf8',
+    ));
+    const fixtureBytes = await readFile(fixturePath);
+    assert.equal(receipt.schema, 'vellum.pulp-figma-emitter-fixture-receipt.v1');
+    assert.equal(receipt.emitter.repository, 'Generous-Corp/pulp');
+    assert.match(receipt.emitter.commit, /^[0-9a-f]{40}$/);
+    assert.deepEqual(
+        Object.keys(receipt.emitter.sourceBlobs).sort(),
+        [
+            'tools/figma-plugin/src/assets.ts',
+            'tools/figma-plugin/src/extract-model.ts',
+            'tools/figma-plugin/src/serialize.ts',
+        ],
+    );
+    for (const blob of Object.values(receipt.emitter.sourceBlobs)) {
+        assert.match(blob, /^[0-9a-f]{40}$/);
+    }
+    assert.equal(sha256(fixtureBytes), receipt.fixture.sha256);
+
+    const inputBytes = await readFile(join(fixtures, receipt.generatorInput.path));
+    assert.equal(sha256(inputBytes), receipt.generatorInput.sha256);
+
+    const assetBytes = await readFile(join(fixtures, receipt.asset.path));
+    assert.equal(sha256(assetBytes), receipt.asset.sha256);
+    const envelope = JSON.parse(fixtureBytes.toString('utf8'));
+    assert.equal(envelope.parser_version, '0.1.0');
+    assert.equal(envelope.asset_manifest.assets[0].content_hash, receipt.asset.sha256);
+
+    const document = normalizeImport(decodeFigmaPluginExport(envelope, {
+        sourceHash: `sha256:${sha256(fixtureBytes)}`,
+        sourceKey: 'main',
+    }));
+    assert.deepEqual(
+        [document.root.kind, ...document.root.children.map((node) => node.kind)],
+        ['view', 'text', 'view'],
+    );
+    assert.equal(document.assets[0].contentHash, `sha256:${receipt.asset.sha256}`);
+    assert.equal(
+        document.root.children[1].extensions['dev.vellum.figma-plugin.v1'].assetRef,
+        envelope.root.children[1].asset_ref,
+    );
+    assert.ok(document.diagnostics.some((diagnostic) =>
+        diagnostic.code === 'figma-node-preserved-not-materialized' &&
+        diagnostic.detail.sourceKind === 'image' &&
+        diagnostic.disposition === 'unsupported',
+    ));
+    assert.ok(document.diagnostics.some((diagnostic) =>
+        diagnostic.property === 'font_family' && diagnostic.disposition === 'unsupported',
+    ));
+});
+
+test("neutral audio_widget:'none' mask wrappers lower without accepting audio behavior", () => {
+    const input = genericExport();
+    input.root.children.push({
+        attributes: { mask_role: 'clip' },
+        audio_widget: 'none',
+        children: [],
+        constraints: { horizontal: 'CENTER', vertical: 'CENTER' },
+        figma_node_id: '1:9',
+        name: 'Mask ellipse',
+        style: { background_color: '#ffffff', height: 40, width: 40 },
+        type: 'ellipse',
+    });
+    const document = normalizeImport(decodeFigmaPluginExport(input, {
+        sourceHash: `sha256:${'e'.repeat(64)}`,
+        sourceKey: 'main',
+    }));
+    const ellipse = document.root.children.at(-1);
+    assert.equal(ellipse.kind, 'view');
+    assert.equal(ellipse.properties.paint.borderRadius, 20);
+    assert.equal(
+        ellipse.extensions['dev.vellum.figma-plugin.v1'].audioWidgetSentinel,
+        'none',
+    );
+    assert.deepEqual(
+        ellipse.extensions['dev.vellum.figma-plugin.v1'].sourceFields.constraints,
+        { horizontal: 'CENTER', vertical: 'CENTER' },
+    );
+    assert.ok(document.diagnostics.some((diagnostic) =>
+        diagnostic.code === 'figma-audio-none-sentinel-ignored',
+    ));
+});
+
+test('maps every known Pulp diagnostic loss kind and preserves property and anchor evidence', () => {
+    const expectations = new Map([
+        ['capture_partial', 'unsupported'],
+        ['fallback_used', 'lowered'],
+        ['rasterized', 'rasterized'],
+        ['recognition_unavailable', 'unsupported'],
+        ['unknown', 'unsupported'],
+        ['unresolved_asset', 'unsupported'],
+        ['unsupported_node', 'unsupported'],
+        ['unsupported_property', 'unsupported'],
+    ]);
+    for (const [kind, disposition] of expectations) {
+        const input = genericExport();
+        input.diagnostics = [{
+            anchor_id: 'figma:1:3',
+            code: `source-${kind}`,
+            kind,
+            message: `Source reported ${kind}`,
+            path: '/root/children/0',
+            property: 'filter',
+            provider_detail: { retained: true },
+            severity: 'warning',
+        }];
+        const document = normalizeImport(decodeFigmaPluginExport(input, {
+            sourceHash: `sha256:${'f'.repeat(64)}`,
+            sourceKey: 'main',
+        }));
+        const diagnostic = document.diagnostics.find((item) => item.code === `source-${kind}`);
+        assert.equal(diagnostic.disposition, disposition);
+        assert.equal(diagnostic.property, 'filter');
+        assert.equal(diagnostic.detail.sourceAnchorId, 'figma:1:3');
+        assert.deepEqual(diagnostic.detail.sourceFields.provider_detail, { retained: true });
+    }
+
+    const input = genericExport();
+    input.diagnostics[0].kind = 'future_loss_kind';
+    assert.throws(
+        () => decodeFigmaPluginExport(input, {
+            sourceHash: `sha256:${'f'.repeat(64)}`,
+            sourceKey: 'main',
+        }),
+        /diagnostic kind/,
+    );
+});
+
+test('rejects synthetic multi-selection roots explicitly', () => {
+    const input = genericExport();
+    input.root.name = '<multi-export>';
+    assert.throws(
+        () => decodeFigmaPluginExport(input, {
+            sourceHash: `sha256:${'1'.repeat(64)}`,
+            sourceKey: 'main',
+        }),
+        /exactly one root frame/,
+    );
+});
+
+function sha256(bytes) {
+    return createHash('sha256').update(bytes).digest('hex');
+}

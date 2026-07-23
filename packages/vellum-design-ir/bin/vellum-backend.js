@@ -23,6 +23,7 @@ import {
     parseAuthoredOverlay,
     parseDesignIR,
     reimportDesign,
+    normalizeSha256ContentHash,
     stableStringify,
     summarizeDesignIR,
 } from '../src/index.js';
@@ -158,6 +159,10 @@ async function reimportDesignFilesystem(project, args) {
         lockedSource.activeRevision === loaded.revision &&
         lockedSource.snapshotHash === loaded.sourceHash
     ) {
+        // The source JSON being byte-identical does not prove that sibling
+        // asset bytes still match their declared content hashes. Re-run the
+        // same asset plan used by import before taking the unchanged fast path.
+        const assets = await planAssets(sourcePath, loaded.document, paths);
         const applied = applyAuthoredOverlay(previous, overlay);
         if (applied.conflicts.length > 0) {
             return failure(
@@ -179,7 +184,7 @@ async function reimportDesignFilesystem(project, args) {
             files: [],
             sourceKey,
             summary: summarizeDesignIR(previous),
-        });
+        }, [...loaded.backendDiagnostics, ...assets.diagnostics]);
     }
     const result = reimportDesign(previous, loaded.document, overlay);
     const assets = await planAssets(sourcePath, loaded.document, paths);
@@ -375,6 +380,12 @@ async function loadSource(sourcePath, { sourceKey, sourceType }) {
         fail('source_too_large', `Import source exceeds ${MAX_SOURCE_BYTES} bytes`);
     }
     const sourceBytes = await readFile(file);
+    if (basename(file).toLowerCase().endsWith('.pulp.zip') || hasZipMagic(sourceBytes)) {
+        fail(
+            'source_archive_unsupported',
+            'Pulp .pulp.zip ingestion is not implemented yet; provide scene.pulp.json and its sibling assets directory',
+        );
+    }
     let input;
     try {
         input = JSON.parse(sourceBytes.toString('utf8'));
@@ -413,6 +424,15 @@ async function loadSource(sourcePath, { sourceKey, sourceType }) {
     return { backendDiagnostics: [], document, revision, sourceBytes, sourceHash };
 }
 
+function hasZipMagic(bytes) {
+    if (bytes.length < 4 || bytes[0] !== 0x50 || bytes[1] !== 0x4b) return false;
+    return (
+        (bytes[2] === 0x03 && bytes[3] === 0x04) ||
+        (bytes[2] === 0x05 && bytes[3] === 0x06) ||
+        (bytes[2] === 0x07 && bytes[3] === 0x08)
+    );
+}
+
 async function planAssets(sourcePath, document, paths) {
     const manifest = [];
     const copies = [];
@@ -429,7 +449,18 @@ async function planAssets(sourcePath, document, paths) {
                 }
                 const bytes = await readFile(sourceAsset);
                 const digest = `sha256:${sha256(bytes)}`;
-                if (asset.contentHash?.startsWith('sha256:') && asset.contentHash !== digest) {
+                let declaredHash;
+                if (asset.contentHash !== undefined) {
+                    try {
+                        declaredHash = normalizeSha256ContentHash(
+                            asset.contentHash,
+                            `assets.${asset.id}.contentHash`,
+                        );
+                    } catch (error) {
+                        fail('invalid_asset_hash', error.message);
+                    }
+                }
+                if (declaredHash !== undefined && declaredHash !== digest) {
                     fail('asset_hash_mismatch', `Asset '${asset.id}' does not match its declared hash`);
                 }
                 const relativeAsset = normalizeAssetPath(asset.uri);

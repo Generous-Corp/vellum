@@ -1,0 +1,28 @@
+{
+  "asset": {
+    "path": "assets/232f99e462d7fca342dc8b89e403ec88ae947e8807428df25127beed1e166b6a.svg",
+    "sha256": "232f99e462d7fca342dc8b89e403ec88ae947e8807428df25127beed1e166b6a"
+  },
+  "emitter": {
+    "commit": "50e703a43528f926182f216bfe16819a605831cc",
+    "repository": "Generous-Corp/pulp",
+    "sourceBlobs": {
+      "tools/figma-plugin/src/assets.ts": "95194987835344d8aafa9582be3af4b29c6a6ff8",
+      "tools/figma-plugin/src/extract-model.ts": "4c29e3d46790f02de903f99975b52c2d354f1a85",
+      "tools/figma-plugin/src/serialize.ts": "b9aecdd6e8da0681b42d0c153521aa085f34f6ee"
+    },
+    "sourceRef": "origin/main"
+  },
+  "fixture": {
+    "formatVersion": "2026.05-figma-plugin-v1",
+    "parserVersion": "0.1.0",
+    "path": "pulp-emitter-generic.export.json",
+    "sha256": "810e9a38bab16a086006f02b390acc31be5a6133f22195e94593b42f5a969d92"
+  },
+  "generatedAt": "2026-07-22T12:00:00.000Z",
+  "generatorInput": {
+    "path": "pulp-emitter-generic.input.json",
+    "sha256": "9b77d1d669f7a21ac58afae8dcc40e8e465b4630ab7e4f378cc152a31e25723c"
+  },
+  "schema": "vellum.pulp-figma-emitter-fixture-receipt.v1"
+}

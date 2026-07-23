@@ -20,7 +20,13 @@ export {
     namespacedIdentity,
 } from './identity.js';
 export { assertNoDuplicateIdentities, normalizeImport } from './normalize.js';
-export { decodeFigmaPluginExport, FIGMA_PLUGIN_FORMAT } from './figma-plugin.js';
+export {
+    decodeFigmaPluginExport,
+    FIGMA_PLUGIN_COMPAT_SCHEMA_VERSION,
+    FIGMA_PLUGIN_FORMAT,
+    FIGMA_PLUGIN_PARSER_VERSION,
+} from './figma-plugin.js';
+export { normalizeSha256ContentHash } from './assets.js';
 export { applyAuthoredOverlay, emptyAuthoredOverlay, resolveReference } from './overlay.js';
 export { reimportDesign } from './reimport.js';
 export { canonicalize, deepClone, fnv1a32, jsonEqual, stableStringify } from './stable-json.js';

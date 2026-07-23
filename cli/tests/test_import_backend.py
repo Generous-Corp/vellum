@@ -133,7 +133,7 @@ class ImportBackendTests(unittest.TestCase):
             self.assertEqual(graph_path.read_bytes(), graph_before)
             self.assertEqual(authored_source.read_bytes(), authored_before)
 
-    def test_real_figma_plugin_envelope_imports_and_reimports_with_stable_behavior(self) -> None:
+    def test_compatibility_figma_envelopes_reimport_with_stable_behavior(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             app = self.create(root)
@@ -177,6 +177,40 @@ class ImportBackendTests(unittest.TestCase):
                 for child in updated["root"]["children"][2]["children"]
             }
             self.assertEqual(card_ids, {"main/1:6", "main/1:7", "main/1:9"})
+
+    def test_pinned_pulp_emitter_output_reaches_materialized_ui_with_verified_asset(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = self.create(root)
+            source = FIXTURES / "pulp-emitter-generic.export.json"
+            completed = invoke("import", str(source), "--source-type", "figma", cwd=app)
+            self.assertEqual(completed.returncode, 0, completed.stdout)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["status"], "imported")
+
+            document = json.loads((app / "design/ir/design-ir.json").read_text())
+            self.assertEqual(document["source"]["provenance"]["parserVersion"], "0.1.0")
+            self.assertEqual(document["root"]["id"], "main/1:2")
+            self.assertEqual(
+                [document["root"]["kind"]] + [
+                    child["kind"] for child in document["root"]["children"]
+                ],
+                ["view", "text", "view"],
+            )
+            asset = document["assets"][0]
+            self.assertRegex(asset["contentHash"], r"^sha256:[0-9a-f]{64}$")
+            copied = app / "assets/generated/main/files" / asset["uri"]
+            self.assertTrue(copied.is_file())
+            self.assertEqual(
+                hashlib.sha256(copied.read_bytes()).hexdigest(),
+                asset["contentHash"].removeprefix("sha256:"),
+            )
+            materialized = json.loads((app / "ui/generated/main.materialized.json").read_text())
+            self.assertEqual(materialized["root"]["children"][0]["text"], "Emitter Proof")
+
+            unchanged = invoke("reimport", "--source", str(source), cwd=app)
+            self.assertEqual(unchanged.returncode, 0, unchanged.stdout)
+            self.assertEqual(json.loads(unchanged.stdout)["status"], "reimport_unchanged")
 
     def test_partial_backend_keeps_native_capabilities_honestly_unavailable(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -287,6 +321,71 @@ class ImportBackendTests(unittest.TestCase):
             self.assertEqual(rejected.returncode, 5, rejected.stdout)
             self.assertEqual(json.loads(rejected.stdout)["status"], "asset_hash_mismatch")
             self.assertFalse((app / "design/import.lock.json").exists())
+
+    def test_bare_asset_hashes_are_verified_on_import_and_unchanged_reimport(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = self.create(root)
+            source_root = root / "source"
+            source_root.mkdir()
+            asset_path = source_root / "mark.svg"
+            original = b"<svg xmlns='http://www.w3.org/2000/svg'><path d='M0 0'/></svg>\n"
+            asset_path.write_bytes(original)
+            source = json.loads((FIXTURES / "revision-a.source.json").read_text())
+            source["source"]["revision"] = "bare-hash-a"
+            source["assets"] = [{
+                "contentHash": hashlib.sha256(original).hexdigest(),
+                "id": "mark",
+                "mimeType": "image/svg+xml",
+                "uri": "mark.svg",
+            }]
+            source_path = source_root / "source.json"
+            source_path.write_text(json.dumps(source), encoding="utf-8")
+
+            imported = invoke("import", str(source_path), cwd=app)
+            self.assertEqual(imported.returncode, 0, imported.stdout)
+            canonical = json.loads((app / "design/ir/design-ir.json").read_text())
+            self.assertEqual(
+                canonical["assets"][0]["contentHash"],
+                "sha256:" + hashlib.sha256(original).hexdigest(),
+            )
+
+            asset_path.write_bytes(b"changed after the source JSON was locked\n")
+            rejected = invoke("reimport", "--source", str(source_path), cwd=app)
+            self.assertEqual(rejected.returncode, 5, rejected.stdout)
+            self.assertEqual(json.loads(rejected.stdout)["status"], "asset_hash_mismatch")
+
+            shutil.rmtree(app)
+            app = self.create(root)
+            bad = json.loads(source_path.read_text())
+            bad["source"]["revision"] = "bare-hash-bad"
+            bad["assets"][0]["contentHash"] = "0" * 64
+            bad_path = source_root / "bad.json"
+            bad_path.write_text(json.dumps(bad), encoding="utf-8")
+            rejected = invoke("import", str(bad_path), cwd=app)
+            self.assertEqual(rejected.returncode, 5, rejected.stdout)
+            self.assertEqual(json.loads(rejected.stdout)["status"], "asset_hash_mismatch")
+
+    def test_pulp_zip_is_rejected_with_an_explicit_current_limitation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = self.create(root)
+            archive = root / "design.pulp.zip"
+            archive.write_bytes(b"PK\x03\x04not-a-real-archive")
+            rejected = invoke("import", str(archive), cwd=app)
+            self.assertEqual(rejected.returncode, 5, rejected.stdout)
+            payload = json.loads(rejected.stdout)
+            self.assertEqual(payload["status"], "source_archive_unsupported")
+            self.assertIn("scene.pulp.json", payload["message"])
+
+            empty_archive = root / "empty.pulp.zip"
+            empty_archive.write_bytes(b"PK\x05\x06" + b"\0" * 18)
+            rejected = invoke("import", str(empty_archive), cwd=app)
+            self.assertEqual(rejected.returncode, 5, rejected.stdout)
+            self.assertEqual(
+                json.loads(rejected.stdout)["status"],
+                "source_archive_unsupported",
+            )
 
     @unittest.skipIf(os.name == "nt", "symlink semantics differ on Windows")
     def test_import_refuses_symlinked_generated_output_parent(self) -> None:

@@ -1,0 +1,147 @@
+{
+  "$schema": "https://pulp.dev/schemas/figma-plugin-export-v1.json",
+  "format_version": "2026.05-figma-plugin-v1",
+  "parser_version": "0.1.0",
+  "compat_schema_version": "0.3",
+  "provenance": {
+    "adapter": "figma-plugin",
+    "version": "0.2.0",
+    "source_uri": "figma://vellum-generic-proof/1:2",
+    "exported_at": "2026-07-22T12:00:00.000Z"
+  },
+  "library_manifest": null,
+  "tokens": {
+    "colors": {
+      "accent": "#14b8a6",
+      "canvas": "#0f172a"
+    },
+    "dimensions": {
+      "spacing": 20
+    },
+    "strings": {
+      "title": "Emitter Proof"
+    }
+  },
+  "asset_manifest": {
+    "version": 1,
+    "assets": [
+      {
+        "asset_id": "svg-232f99e462d7",
+        "original_uri": "figma://nodeExport/1:4/SVG",
+        "original_uri_aliases": [],
+        "local_path": "assets/232f99e462d7fca342dc8b89e403ec88ae947e8807428df25127beed1e166b6a.svg",
+        "content_hash": "232f99e462d7fca342dc8b89e403ec88ae947e8807428df25127beed1e166b6a",
+        "mime": "image/svg+xml",
+        "width": 32,
+        "height": 32
+      }
+    ]
+  },
+  "font_family_assets": [],
+  "diagnostics": [],
+  "root": {
+    "type": "frame",
+    "name": "Emitter Proof",
+    "figma_node_id": "1:2",
+    "style": {
+      "background_color": "#0f172a",
+      "border_radius": 12,
+      "height": 240,
+      "width": 420
+    },
+    "layout": {
+      "direction": "column",
+      "display": "flex",
+      "gap": 20,
+      "padding": {
+        "bottom": 20,
+        "left": 20,
+        "right": 20,
+        "top": 20
+      }
+    },
+    "figma": {
+      "parent_id": null,
+      "z_order": 0,
+      "absolute_transform": [
+        [
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0
+        ]
+      ],
+      "visible": true,
+      "locked": false,
+      "blend_mode": "NORMAL"
+    },
+    "children": [
+      {
+        "type": "text",
+        "name": "Title",
+        "figma_node_id": "1:3",
+        "content": "Emitter Proof",
+        "style": {
+          "color": "#f8fafc",
+          "font_family": "Inter",
+          "font_size": 28,
+          "font_weight": 700,
+          "height": 34,
+          "width": 260
+        },
+        "figma": {
+          "parent_id": "1:2",
+          "z_order": 0,
+          "absolute_transform": [
+            [
+              1,
+              0,
+              20
+            ],
+            [
+              0,
+              1,
+              20
+            ]
+          ],
+          "visible": true,
+          "locked": false,
+          "blend_mode": "NORMAL"
+        }
+      },
+      {
+        "type": "image",
+        "name": "Add mark",
+        "figma_node_id": "1:4",
+        "asset_ref": "svg-232f99e462d7",
+        "style": {
+          "height": 32,
+          "width": 32
+        },
+        "figma": {
+          "parent_id": "1:2",
+          "z_order": 1,
+          "absolute_transform": [
+            [
+              1,
+              0,
+              20
+            ],
+            [
+              0,
+              1,
+              78
+            ]
+          ],
+          "visible": true,
+          "locked": false,
+          "blend_mode": "NORMAL"
+        }
+      }
+    ]
+  }
+}

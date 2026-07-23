@@ -2,9 +2,17 @@
 
 Experimental, dependency-free canonical DesignIR and safe reimport primitives for Vellum.
 
-The `decodeFigmaPluginExport()` entry point accepts the generic,
-credential-free Figma plugin v1 envelope, preserves provider identities and
-conversion diagnostics, and rejects audio-widget fields before normalization.
+The `decodeFigmaPluginExport()` entry point accepts the pinned single-root,
+audio-free Pulp Figma plugin envelope (format `2026.05-figma-plugin-v1`, parser
+`0.1.0`, compatibility schema `0.3`), preserves provider identities and source
+evidence, and rejects audio-widget fields before normalization. The `frame` and
+`text` node kinds map directly into the native host, but unsupported fields on
+those nodes are still preserved and diagnosed. Current Pulp `ellipse` output
+lowers to a rounded view; images, vectors, legacy compatibility shapes, and
+unmaterialized fields carry explicit diagnostics and remain inspectable in
+extensions. Pulp's bare 64-hex asset hashes normalize to canonical
+`sha256:<hex>`. The package does not call Figma, accept arbitrary provider
+files, or ingest `.pulp.zip` yet.
 
 The package owns only generated design data and the algorithm that composes it with developer-owned overlays. It deliberately keeps behavior out of generated files:
 

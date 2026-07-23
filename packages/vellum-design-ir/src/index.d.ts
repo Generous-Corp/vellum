@@ -7,6 +7,9 @@ export const REIMPORT_REPORT_VERSION: 1;
 export const COMPILER_NAME: '@vellum/design-ir';
 export const COMPILER_VERSION: string;
 export const FIGMA_PLUGIN_FORMAT: '2026.05-figma-plugin-v1';
+export const FIGMA_PLUGIN_PARSER_VERSION: '0.1.0';
+export const FIGMA_PLUGIN_COMPAT_SCHEMA_VERSION: '0.3';
+export function normalizeSha256ContentHash(value: string, path?: string): string;
 
 export type JsonPrimitive = null | boolean | number | string;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };

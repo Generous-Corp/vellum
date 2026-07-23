@@ -1,9 +1,21 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import { createApp, materializeDesign, mount } from '../src/index.js';
+import {
+    decodeFigmaPluginExport,
+    normalizeImport,
+} from '../../vellum-design-ir/src/index.js';
 
 const protocol = 'vellum.authoring-host.v1';
+const fixtures = join(
+    dirname(fileURLToPath(import.meta.url)),
+    '..', '..', '..', 'fixtures', 'design-ir',
+);
 
 function fixture() {
     return {
@@ -72,4 +84,38 @@ test('fails closed on unresolved tokens, duplicate ids, and unsupported kinds', 
     const unsupported = fixture();
     unsupported.root.children[0].kind = 'video';
     assert.throws(() => materializeDesign(unsupported), /unsupported materialized design node kind/);
+});
+
+test('materializes pinned Pulp emitter output into the capture-ready retained host tree', async () => {
+    const sourceBytes = await readFile(join(fixtures, 'pulp-emitter-generic.export.json'));
+    const sourceHash = createHash('sha256').update(sourceBytes).digest('hex');
+    const document = normalizeImport(decodeFigmaPluginExport(
+        JSON.parse(sourceBytes.toString('utf8')),
+        { sourceHash: `sha256:${sourceHash}`, sourceKey: 'main' },
+    ));
+    const app = createApp({
+        id: 'pulp-emitter-proof',
+        stateVersion: '1',
+        initialState: { presses: 0 },
+        actions: { tap: (model) => ({ presses: model.presses + 1 }) },
+        render: () => materializeDesign(document, {
+            actions: { 'main/1:2': { press: 'tap' } },
+            viewport: { height: 240, padding: 20, width: 420 },
+        }),
+    });
+    const bridge = mount(app);
+    let tree = JSON.parse(bridge.renderJSON()).tree;
+    assert.equal(tree.type, 'stack');
+    assert.equal(tree.style.backgroundColor, '#0f172a');
+    assert.equal(tree.children[0].type, 'text');
+    assert.equal(tree.children[0].text, 'Emitter Proof');
+    assert.equal(tree.children[1].type, 'view');
+    assert.equal(typeof tree.events.press, 'string');
+
+    tree = JSON.parse(bridge.dispatchJSON(JSON.stringify({
+        action: tree.events.press,
+        protocol,
+    }))).tree;
+    assert.equal(tree.id, 'main/1:2');
+    assert.equal(JSON.parse(bridge.snapshotStateJSON()).state.model.presses, 1);
 });

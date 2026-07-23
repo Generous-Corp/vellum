@@ -60,6 +60,17 @@ export function validateDesignIR(value, options = {}) {
             requireObject(asset, path, issues);
             if (!isObject(asset)) return;
             string(asset.id, `${path}.id`, issues);
+            if (
+                asset.contentHash !== undefined &&
+                (typeof asset.contentHash !== 'string' ||
+                    !/^sha256:[0-9a-f]{64}$/.test(asset.contentHash))
+            ) {
+                issues.push(issue(
+                    `${path}.contentHash`,
+                    'format',
+                    "contentHash must be canonical lowercase 'sha256:<64 hex>'",
+                ));
+            }
             if (assetIds.has(asset.id)) issues.push(issue(`${path}.id`, 'duplicate-id', 'asset id is duplicated'));
             assetIds.add(asset.id);
             for (const field of ['height', 'width']) {

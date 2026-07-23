@@ -13,6 +13,7 @@ import {
 } from './identity.js';
 import { canonicalize, deepClone } from './stable-json.js';
 import { normalizeTokens } from './tokens.js';
+import { normalizeSha256ContentHash } from './assets.js';
 import { validateDesignIR } from './validate.js';
 
 const KNOWN_NODE_FIELDS = new Set([
@@ -171,7 +172,13 @@ function normalizeAssets(assets) {
         if (seen.has(id)) throw new TypeError(`duplicate asset id '${id}'`);
         seen.add(id);
         const value = { id };
-        for (const field of ['contentHash', 'mimeType', 'uri']) {
+        if (asset.contentHash !== undefined) {
+            value.contentHash = normalizeSha256ContentHash(
+                asset.contentHash,
+                `assets[${index}].contentHash`,
+            );
+        }
+        for (const field of ['mimeType', 'uri']) {
             if (asset[field] !== undefined) value[field] = String(asset[field]);
         }
         for (const field of ['height', 'width']) {
