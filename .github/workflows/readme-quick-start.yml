@@ -1,0 +1,28 @@
+name: README clean release proof
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  clean-release:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Execute authenticated README quick start
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/readme_exec.py \
+            --execute-profile clean-release \
+            --evidence-dir "$RUNNER_TEMP/readme-clean-release"
+      - name: Retain transcript, environment, and timings
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: readme-clean-release-${{ github.run_id }}
+          path: ${{ runner.temp }}/readme-clean-release
+          if-no-files-found: error
+          retention-days: 90

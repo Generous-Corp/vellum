@@ -40,6 +40,7 @@ provides the immutable-release verification commands used by the installer.
 
 Verify the supported host and bootstrap prerequisites first:
 
+<!-- readme-exec: id=release-prerequisites profile=clean-release -->
 ```sh
 test "$(uname -s)" = Darwin
 test "$(uname -m)" = arm64
@@ -59,6 +60,7 @@ CMake, and Ninja are not prerequisites for this release path.
 The fastest authenticated path downloads the version-pinned bootstrap and lets
 it acquire and verify the matching installer core and macOS 15.0+ arm64 SDK:
 
+<!-- readme-exec: id=release-install-create-run profile=clean-release -->
 ```sh
 bootstrap_dir="$(mktemp -d)"
 gh release download v0.1.1 \
@@ -81,6 +83,7 @@ vellum run --no-build
 default, so the first application is validated before `run` launches it. To
 start from a supported Pulp Figma-plugin export instead, use:
 
+<!-- readme-exec: id=figma-imported-start skip=requires-user-supplied-export -->
 ```sh
 vellum create "Imported App" \
   --from figma /absolute/path/to/frame.pulp.zip \
@@ -97,6 +100,7 @@ For the cautious bootstrap path, download the checksum manifest and both
 bootstrap files together, select their exact basename entries, require exactly
 one row for each bootstrap file, and verify them before executing either script:
 
+<!-- readme-exec: id=cautious-bootstrap skip=alternative-to-quick-start -->
 ```sh
 bootstrap_dir="$(mktemp -d)"
 gh release download v0.1.1 \
@@ -132,6 +136,7 @@ advertised.
 
 The checkout-only development path remains available for CLI and import work:
 
+<!-- readme-exec: id=checkout-development-install skip=unverified-development-path -->
 ```sh
 git clone git@github.com:Generous-Corp/vellum.git
 cd vellum
@@ -149,6 +154,7 @@ Download and verify the exact Skia/Dawn toolchain recorded in
 [`DEPENDENCIES.md`](DEPENDENCIES.md), then configure Vellum with its extraction
 root:
 
+<!-- readme-exec: id=source-sdk-build skip=source-build-not-release-quick-start -->
 ```sh
 curl -fL \
   https://github.com/danielraffel/skia-builder/releases/download/chrome/m150/skia-build-mac-arm64-gpu-release.zip \
@@ -185,6 +191,7 @@ over Dawn/Metal, no fallback, semantic interaction routing, and non-blank output
 
 On Windows PowerShell, the equivalent local-development installer is:
 
+<!-- readme-exec: id=windows-development-install skip=unsupported-clean-release-host -->
 ```powershell
 .\scripts\install.ps1 -LocalRoot $PWD
 $env:Path = "$HOME\.local\bin;$env:Path"
@@ -193,6 +200,7 @@ vellum create "Vellum Hello" -d "$env:TEMP\vellum-hello"
 
 ## CLI journey
 
+<!-- readme-exec: id=cli-journey skip=illustrative-requires-prepared-project -->
 ```sh
 vellum create MyApp
 cd myapp
@@ -260,6 +268,7 @@ normalizes archive metadata, and emits both `SHA256SUMS` and machine-readable
 evidence. Building twice from the same source commit and toolchain is covered
 by the integration test.
 
+<!-- readme-exec: id=local-sdk-artifact skip=source-build-not-release-quick-start -->
 ```sh
 python3 scripts/build_sdk_artifact.py \
   --skia-archive /tmp/vellum-skia-m150.zip \
@@ -278,6 +287,7 @@ python3 scripts/verify_sdk_artifact.py \
 To compose the pinned GPU and authoring SDK into the artifact, pass the Skia
 archive verified in the preceding section:
 
+<!-- readme-exec: id=gpu-sdk-artifact skip=source-build-not-release-quick-start -->
 ```sh
 python3 scripts/build_sdk_artifact.py \
   --skia-archive /tmp/vellum-skia-m150.zip \
@@ -316,6 +326,7 @@ receipts and refuses incomplete, modified, or unmanaged state.
 Keep a verified `install.sh` and `install_core.py` together to inspect or remove
 an installation:
 
+<!-- readme-exec: id=installed-maintenance skip=destructive-or-post-install-maintenance -->
 ```sh
 sh ./install.sh --verify-installed
 sh ./install.sh --uninstall
@@ -333,6 +344,7 @@ without a Vellum or Pulp checkout.
 
 The exact `v0.1.1` release is consumed without a moving `latest` pointer:
 
+<!-- readme-exec: id=version-install-only skip=subset-of-release-quick-start -->
 ```sh
 ./scripts/install.sh --version 0.1.1
 ```
@@ -346,6 +358,7 @@ repository from the automatic release attestation GitHub creates when an
 immutable release is published. After downloading the assets, verify that
 release attestation and an asset with:
 
+<!-- readme-exec: id=release-attestation-check skip=post-download-verification-example -->
 ```sh
 gh release verify v0.1.1 --repo Generous-Corp/vellum
 gh release verify-asset v0.1.1 ./vellum-sdk-0.1.1-darwin-arm64.tar.gz \
@@ -388,3 +401,9 @@ private release.
   Its offline verifier checks immutable identities, repository separation, the
   evidence ladder, and the framework-first fix protocol:
   `python3 tools/provenance/verify_downstream_consumers.py`.
+- README shell blocks are fail-closed classified by
+  `python3 scripts/readme_exec.py --lint`. The manually dispatched clean-release
+  proof retains its environment, transcript, and timings. Performance targets
+  remain explicitly unratified in
+  [`product/budget-ratification.v1.json`](product/budget-ratification.v1.json)
+  until a reviewed clean run supplies complete evidence.
