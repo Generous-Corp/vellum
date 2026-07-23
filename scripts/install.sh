@@ -294,8 +294,8 @@ if [ -n "$local_root" ]; then
   cat > "$temporary/metadata.json" <<'JSON'
 {
   "schema": "vellum.sdk-artifact.v1",
-  "framework_version": "0.1.1",
-  "cli_version": "0.1.1",
+  "framework_version": "0.1.2",
+  "cli_version": "0.1.2",
   "cli_api": 1,
   "source_commit": null,
   "target": "local-development",
@@ -323,7 +323,7 @@ JSON
   "verified": false,
   "artifact": null,
   "artifact_sha256": null,
-  "framework_version": "0.1.1",
+  "framework_version": "0.1.2",
   "target": "local-development",
   "source_commit": null
 }

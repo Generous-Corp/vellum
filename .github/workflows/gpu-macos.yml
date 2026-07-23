@@ -15,6 +15,12 @@ concurrency:
   group: vellum-gpu-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  VELLUM_RELEASE_VERSION: 0.1.2
+  VELLUM_RELEASE_TAG: v0.1.2
+  VELLUM_RELEASE_ARCHIVE: vellum-sdk-0.1.2-darwin-arm64.tar.gz
+  VELLUM_RELEASE_NAME: Vellum 0.1.2 experimental SDK
+
 jobs:
   gpu-macos-arm64:
     name: gpu-macos-arm64
@@ -154,7 +160,11 @@ jobs:
             --node-license "$node_license" \
             --node-provenance "$RUNNER_TEMP/node-provenance.json" \
             --output-dir "$second" --json > "$RUNNER_TEMP/sdk-second.json"
-          archive="vellum-sdk-0.1.1-darwin-arm64.tar.gz"
+          test "$(python3 cli/vellum_cli.py --version)" = \
+            "vellum $VELLUM_RELEASE_VERSION"
+          archive="$VELLUM_RELEASE_ARCHIVE"
+          test "$archive" = \
+            "vellum-sdk-$VELLUM_RELEASE_VERSION-darwin-arm64.tar.gz"
           cmp "$first/$archive" "$second/$archive"
           cmp "$first/SHA256SUMS" "$second/SHA256SUMS"
           (cd scripts && shasum -a 256 -c INSTALLER_SHA256SUMS)
@@ -242,7 +252,12 @@ jobs:
         run: |
           set -euo pipefail
           tag="$GITHUB_REF_NAME"
-          test "$tag" = "v0.1.1"
+          test "$VELLUM_RELEASE_TAG" = "v$VELLUM_RELEASE_VERSION"
+          test "$tag" = "$VELLUM_RELEASE_TAG"
+          test "$VELLUM_RELEASE_ARCHIVE" = \
+            "vellum-sdk-$VELLUM_RELEASE_VERSION-darwin-arm64.tar.gz"
+          test "$VELLUM_RELEASE_NAME" = \
+            "Vellum $VELLUM_RELEASE_VERSION experimental SDK"
           verify_remote_tag_ref() {
             local remote_type
             local remote_tag_object_sha
@@ -264,7 +279,7 @@ jobs:
             fi
           }
           verify_remote_tag_ref
-          version="${tag#v}"
+          version="$VELLUM_RELEASE_VERSION"
           test "$(python3 cli/vellum_cli.py --version)" = "vellum $version"
           python3 -c '
           import json, sys
@@ -283,7 +298,7 @@ jobs:
           broad platform support claim.
           EOF
           base_assets=(
-            "vellum-sdk-0.1.1-darwin-arm64.tar.gz=$RUNNER_TEMP/vellum-sdk-0.1.1-darwin-arm64.tar.gz"
+            "$VELLUM_RELEASE_ARCHIVE=$RUNNER_TEMP/$VELLUM_RELEASE_ARCHIVE"
             "install.sh=$RUNNER_TEMP/install.sh"
             "install_core.py=$RUNNER_TEMP/install_core.py"
             "SHA256SUMS=$RUNNER_TEMP/SHA256SUMS"
@@ -308,7 +323,7 @@ jobs:
             python3 scripts/select_release.py \
               --releases-json "$releases_json" \
               --tag "$tag" \
-              --expected-name "Vellum 0.1.1 experimental SDK" \
+              --expected-name "$VELLUM_RELEASE_NAME" \
               --expected-body-file "$notes" \
               --expected-author "github-actions[bot]" \
               "${resumable_asset_args[@]}" \
@@ -347,7 +362,7 @@ jobs:
               --repo "$GITHUB_REPOSITORY" \
               --draft \
               --verify-tag \
-              --title "Vellum 0.1.1 experimental SDK" \
+              --title "$VELLUM_RELEASE_NAME" \
               --notes-file "$notes"
             wait_for_created_release
             release_state=draft
@@ -417,7 +432,7 @@ jobs:
 
           gh release verify "$tag" --repo "$GITHUB_REPOSITORY"
           gh release verify-asset "$tag" \
-            "$RUNNER_TEMP/vellum-sdk-0.1.1-darwin-arm64.tar.gz" \
+            "$RUNNER_TEMP/$VELLUM_RELEASE_ARCHIVE" \
             --repo "$GITHUB_REPOSITORY"
           gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" \
             > "$RUNNER_TEMP/release-published.json"
@@ -439,7 +454,7 @@ jobs:
             ${{ runner.temp }}/vellum-gpu-proof.sha256
             ${{ runner.temp }}/vellum-gpu-dylib-load-commands.txt
             ${{ runner.temp }}/vellum-gpu-app-load-commands.txt
-            ${{ runner.temp }}/vellum-sdk-0.1.1-darwin-arm64.tar.gz
+            ${{ runner.temp }}/${{ env.VELLUM_RELEASE_ARCHIVE }}
             ${{ runner.temp }}/install.sh
             ${{ runner.temp }}/install_core.py
             ${{ runner.temp }}/SHA256SUMS

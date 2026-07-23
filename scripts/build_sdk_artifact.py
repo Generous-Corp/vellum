@@ -29,7 +29,7 @@ from typing import Iterable
 
 
 REPO = Path(__file__).resolve().parents[1]
-FRAMEWORK_VERSION = "0.1.1"
+FRAMEWORK_VERSION = "0.1.2"
 CLI_VERSION = FRAMEWORK_VERSION
 CLI_API = 1
 METADATA_SCHEMA = "vellum.sdk-artifact.v1"
