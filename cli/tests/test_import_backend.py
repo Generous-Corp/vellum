@@ -188,7 +188,7 @@ class ImportBackendTests(unittest.TestCase):
             payload = json.loads(completed.stdout)
             self.assertEqual(payload["status"], "imported")
 
-            document = json.loads((app / "design/ir/design-ir.json").read_text())
+            document = json.loads((app / "design/ir/app.designir.json").read_text())
             self.assertEqual(document["source"]["provenance"]["parserVersion"], "0.1.0")
             self.assertEqual(document["root"]["id"], "main/1:2")
             self.assertEqual(
@@ -344,7 +344,7 @@ class ImportBackendTests(unittest.TestCase):
 
             imported = invoke("import", str(source_path), cwd=app)
             self.assertEqual(imported.returncode, 0, imported.stdout)
-            canonical = json.loads((app / "design/ir/design-ir.json").read_text())
+            canonical = json.loads((app / "design/ir/app.designir.json").read_text())
             self.assertEqual(
                 canonical["assets"][0]["contentHash"],
                 "sha256:" + hashlib.sha256(original).hexdigest(),
