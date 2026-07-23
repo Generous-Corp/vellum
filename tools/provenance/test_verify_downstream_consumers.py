@@ -28,23 +28,23 @@ class DownstreamConsumerRegistryTests(unittest.TestCase):
     def test_palette_board_proof_is_pinned_to_reviewed_tuple(self) -> None:
         framework = self.registry["framework"]
         consumer = self.registry["consumers"][0]
-        self.assertEqual(framework["version"], "v0.1.1")
+        self.assertEqual(framework["version"], "v0.1.6")
         self.assertEqual(
             framework["sourceCommit"],
-            "e282eb6b133c1275eda4c7338acf817e18af599c",
+            "9595737b1903819bc497ee41f870b0f36e667c42",
         )
         self.assertEqual(
             framework["artifact"]["sha256"],
-            "1866345a14d74d19da053f08bb4b61ecae98ef98dfd53b0cd38b174281f2ccd5",
+            "cb2a6372f266a8baeb6f7b52c273cb453daa798846b6abf7c59e45dab38e652b",
         )
         self.assertEqual(consumer["id"], "vellum-palette-board")
         self.assertEqual(
             consumer["commit"],
-            "c8f23db2af615b0c1d480d058eef8a03867f738a",
+            "7137e045b6a135595704b06b009fdc3c19691410",
         )
         self.assertEqual(
             consumer["evidenceDigest"]["sha256"],
-            "24c89d7509335661ccfb5e812fcb9da3af5ab6d0398a2695bdbc200f7c1d70f8",
+            "b2072e7c1e05e1015091bb4a2cdb4c2f7fca6eebf0b49b3334dc3d3c15780423",
         )
 
     def test_cli_is_offline_and_accepts_explicit_registry(self) -> None:
@@ -55,7 +55,7 @@ class DownstreamConsumerRegistryTests(unittest.TestCase):
 
     def test_rejects_abbreviated_consumer_commit(self) -> None:
         self.assert_invalid(
-            lambda value: value["consumers"][0].__setitem__("commit", "c8f23db"),
+            lambda value: value["consumers"][0].__setitem__("commit", "7137e04"),
             "immutable full value",
         )
 
