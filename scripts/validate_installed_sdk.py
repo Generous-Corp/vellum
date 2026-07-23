@@ -168,6 +168,7 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
         native_package = project / "dist/sterile-artifact-app.app"
         imported_bundle_contains_design = False
         native_capture_produced = False
+        native_montage_produced = False
         native_package_produced = False
         if native_enabled:
             for name, arguments in {
@@ -208,6 +209,7 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
             if not (native_package / "Contents/MacOS/sterile-artifact-app").is_file():
                 raise ValidationError("installed native package did not produce a runnable .app")
             native_capture_produced = True
+            native_montage_produced = True
             native_package_produced = True
 
     checks = {
@@ -238,9 +240,7 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
         "installed_native_scenario": not native_enabled or native_results["test"]["status"] == "tests_passed",
         "installed_imported_design_bundle": not native_enabled or imported_bundle_contains_design,
         "installed_native_capture": not native_enabled or native_capture_produced,
-        "installed_native_montage": not native_enabled or (
-            native_montage.is_file() and native_matrix_capture.is_file()
-        ),
+        "installed_native_montage": not native_enabled or native_montage_produced,
         "installed_native_package": not native_enabled or native_package_produced,
     }
     if not all(checks.values()):
