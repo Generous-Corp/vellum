@@ -108,6 +108,20 @@ TSX. Missing or malformed maps fail closed as `VELLUM_SOURCE_MAP_MISSING` or
 `VELLUM_SOURCE_MAP_INVALID` instead of returning an opaque generated-bundle
 location.
 
+Application components can use `useState`, `useMemo`, and `useEffect` from the
+same unchanged TSX source in native JavaScriptCore and browser JavaScript.
+Effects run after a committed retained-tree render, rerun only when declared
+dependencies change, and invoke their cleanup before replacement or unmount.
+Timers and Promise callbacks invalidate the versioned host pump rather than
+requiring a DOM event loop.
+
+The exported `services` singleton is the application-facing, capability-checked
+surface. It provides command declaration/execution, user-selected text files,
+clipboard text, external URLs, and persistence. Platform shells install the
+provider boundary; an undeclared or absent provider fails with a stable
+capability error. `createServices` remains available for dependency-injected
+components and tests.
+
 Native persistence is separately capability-gated in `app.toml` with
 `persistence = "state-v1"` under `[capabilities]`. On macOS this restores the
 whole versioned Vellum snapshot from Application Support before the first

@@ -1,3 +1,5 @@
+import { services } from './services.js';
+
 const ELEMENT = Symbol.for('vellum.element');
 const FRAGMENT = Symbol.for('vellum.fragment');
 const PROTOCOL = 'vellum.authoring-host.v1';
@@ -379,6 +381,40 @@ export function useMemo(factory, dependencies) {
     return record.value;
 }
 
+function dependenciesMatch(previous, next) {
+    return previous !== null && next !== null &&
+        previous.length === next.length &&
+        previous.every((value, index) => Object.is(value, next[index]));
+}
+
+export function useEffect(effect, dependencies) {
+    if (typeof effect !== 'function') {
+        throw new TypeError('useEffect requires an effect function');
+    }
+    if (dependencies !== undefined && !Array.isArray(dependencies)) {
+        throw new TypeError('useEffect dependencies must be an array or undefined');
+    }
+    const { frameId, frame, index } = activeHook('useEffect');
+    const nextDependencies = dependencies === undefined ? null : [...dependencies];
+    if (index >= frame.hooks.length) {
+        if (frame.established) throw new Error(`hook order changed in ${frameId}`);
+        frame.hooks.push({
+            kind: 'effect',
+            dependencies: undefined,
+            cleanup: null,
+            effect: null,
+            pending: false,
+        });
+    }
+    const record = frame.hooks[index];
+    if (record.kind !== 'effect') throw new Error(`hook kind changed in ${frameId}`);
+    const changed = record.dependencies === undefined ||
+        !dependenciesMatch(record.dependencies, nextDependencies);
+    record.effect = effect;
+    record.pending = changed;
+    record.nextDependencies = nextDependencies;
+}
+
 function validateStyle(style, path) {
     if (style === undefined) return undefined;
     if (style === null || typeof style !== 'object' || Array.isArray(style)) {
@@ -529,6 +565,12 @@ function materialize(value, runtime, path) {
     if (typeof value.props.accessibilityLabel === 'string') {
         node.accessibilityLabel = value.props.accessibilityLabel;
     }
+    if (value.props.scroll !== undefined) {
+        if (!['horizontal', 'vertical'].includes(value.props.scroll)) {
+            throw new TypeError(`${path}.scroll must be horizontal or vertical`);
+        }
+        node.scroll = value.props.scroll;
+    }
     if (value.type === 'text-input') {
         node.primitiveVersion = TEXT_INPUT_PRIMITIVE_VERSION;
         node.value = value.props.value;
@@ -544,14 +586,26 @@ function cloneFrames(frames, resetMemo = false) {
         output.set(id, {
             established: frame.established,
             cursor: 0,
-            hooks: frame.hooks.map((hook) => hook.kind === 'state'
-                ? { kind: 'state', value: durableValue(hook.value, `${id}.state`) }
-                : {
+            hooks: frame.hooks.map((hook) => {
+                if (hook.kind === 'state') {
+                    return { kind: 'state', value: durableValue(hook.value, `${id}.state`) };
+                }
+                if (hook.kind === 'effect') {
+                    return {
+                        kind: 'effect',
+                        dependencies: hook.dependencies,
+                        cleanup: hook.cleanup,
+                        effect: hook.effect,
+                        pending: false,
+                    };
+                }
+                return {
                     kind: 'memo',
                     initialized: resetMemo ? false : hook.initialized,
                     value: resetMemo ? undefined : hook.value,
                     dependencies: resetMemo ? null : hook.dependencies,
-                }),
+                };
+            }),
         });
     }
     return output;
@@ -657,6 +711,10 @@ class Runtime {
             for (const id of [...state.frames.keys()]) {
                 if (!state.visitedFrames.has(id)) state.frames.delete(id);
             }
+            const rootStyle = materialized[0].style ?? Object.create(null);
+            if (typeof rootStyle.width !== 'number') rootStyle.width = 800;
+            if (typeof rootStyle.height !== 'number') rootStyle.height = 600;
+            materialized[0].style = rootStyle;
             return { frames: state.frames, handlers: state.handlers, tree: materialized[0] };
         } finally {
             this.renderState = null;
@@ -665,6 +723,7 @@ class Runtime {
     }
 
     commitRender(baseFrames = this.frames, model = this.model) {
+        const previousFrames = this.frames;
         const candidate = this.renderCandidate(baseFrames, model);
         this.frames = candidate.frames;
         this.handlers = candidate.handlers;
@@ -672,6 +731,47 @@ class Runtime {
         this.lastTree = candidate.tree;
         this.dirty = false;
         this.revision += 1;
+        const effects = [];
+        for (const [frameId, frame] of candidate.frames) {
+            frame.hooks.forEach((hook, index) => {
+                if (hook.kind !== 'effect' || !hook.pending) return;
+                effects.push({
+                    frameId,
+                    index,
+                    cleanup: hook.cleanup,
+                    effect: hook.effect,
+                    dependencies: hook.nextDependencies,
+                });
+                hook.pending = false;
+                delete hook.nextDependencies;
+            });
+        }
+        for (const [frameId, frame] of previousFrames) {
+            if (candidate.frames.has(frameId)) continue;
+            frame.hooks.forEach((hook) => {
+                if (hook.kind === 'effect' && typeof hook.cleanup === 'function') {
+                    effects.push({ cleanup: hook.cleanup, removed: true });
+                }
+            });
+        }
+        if (effects.length > 0) {
+            Promise.resolve().then(() => {
+                for (const job of effects) {
+                    if (typeof job.cleanup === 'function') job.cleanup();
+                    if (job.removed) continue;
+                    const current = this.frames.get(job.frameId)?.hooks[job.index];
+                    if (!current || current.kind !== 'effect' || current.effect !== job.effect) {
+                        continue;
+                    }
+                    const cleanup = job.effect();
+                    if (cleanup !== undefined && typeof cleanup !== 'function') {
+                        throw new TypeError('useEffect must return a cleanup function or undefined');
+                    }
+                    current.cleanup = cleanup ?? null;
+                    current.dependencies = job.dependencies;
+                }
+            });
+        }
         return this.lastTree;
     }
 
@@ -773,16 +873,32 @@ class Runtime {
             if (!source || typeof source.id !== 'string' || source.id.length === 0 ||
                 !Array.isArray(source.hooks) || !Array.isArray(source.values) ||
                 seen.has(source.id) ||
-                source.hooks.some((kind) => kind !== 'state' && kind !== 'memo')) {
+                source.hooks.some((kind) =>
+                    kind !== 'state' && kind !== 'memo' && kind !== 'effect')) {
                 throw new Error('Vellum state snapshot contains an invalid component frame');
             }
             seen.add(source.id);
             const frame = {
                 established: true,
                 cursor: 0,
-                hooks: source.hooks.map((kind) => kind === 'state'
-                    ? { kind: 'state', value: null }
-                    : { kind: 'memo', initialized: false, value: undefined, dependencies: null }),
+                hooks: source.hooks.map((kind) => {
+                    if (kind === 'state') return { kind: 'state', value: null };
+                    if (kind === 'effect') {
+                        return {
+                            kind: 'effect',
+                            dependencies: undefined,
+                            cleanup: null,
+                            effect: null,
+                            pending: false,
+                        };
+                    }
+                    return {
+                        kind: 'memo',
+                        initialized: false,
+                        value: undefined,
+                        dependencies: null,
+                    };
+                }),
             };
             const expected = source.hooks.filter((kind) => kind === 'state').length;
             if (source.values.length !== expected) {
@@ -873,6 +989,9 @@ export function mount(application) {
         },
         isDirty() {
             return runtime.dirty;
+        },
+        hasCommand(command) {
+            return services.commands.has(command);
         },
     });
     Object.defineProperty(globalThis, '__vellum', {

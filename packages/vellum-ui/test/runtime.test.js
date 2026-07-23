@@ -12,6 +12,7 @@ import {
     createApp,
     jsx,
     mount,
+    useEffect,
     useMemo,
     useState,
 } from '../src/index.js';
@@ -93,6 +94,36 @@ test('browser timers and promises settle through the same bounded pump state', a
     assert.deepEqual(order, ['first', 'promise', 'late']);
 });
 
+test('useEffect runs after commit, respects dependencies, and cleans up', async () => {
+    const events = [];
+    let setValue;
+    function EffectFixture() {
+        const [value, update] = useState('first');
+        setValue = update;
+        useEffect(() => {
+            events.push(`start:${value}`);
+            return () => events.push(`stop:${value}`);
+        }, [value]);
+        return jsx(View, {
+            id: 'effect-root',
+            style: { width: 100, height: 100 },
+            children: jsx(Text, { id: 'effect-value', children: value }),
+        });
+    }
+    const bridge = mount(EffectFixture);
+    bridge.renderJSON();
+    assert.deepEqual(events, []);
+    await Promise.resolve();
+    assert.deepEqual(events, ['start:first']);
+    setValue('second');
+    bridge.pumpJSON();
+    await Promise.resolve();
+    assert.deepEqual(events, ['start:first', 'stop:first', 'start:second']);
+    bridge.renderJSON();
+    await Promise.resolve();
+    assert.deepEqual(events, ['start:first', 'stop:first', 'start:second']);
+});
+
 test('renders one deterministic serializable retained tree', () => {
     const bridge = mount(() => jsx(View, {
         id: 'screen',
@@ -108,6 +139,19 @@ test('renders one deterministic serializable retained tree', () => {
     assert.equal(envelope.tree.children[0].children[0].text, 'Hello ');
     assert.equal(envelope.tree.children[0].children[1].text, '7');
     assert.equal(JSON.stringify(envelope).includes('function'), false);
+});
+
+test('retains declared scroll containers for native and browser hosts', () => {
+    const tree = JSON.parse(mount(() => jsx(Stack, {
+        id: 'scroll-list',
+        scroll: 'vertical',
+        children: jsx(Text, { children: 'Scrollable' }),
+    })).renderJSON()).tree;
+    assert.equal(tree.scroll, 'vertical');
+    assert.throws(() => mount(() => jsx(Stack, {
+        id: 'invalid-scroll',
+        scroll: 'diagonal',
+    })).renderJSON(), /scroll must be horizontal or vertical/);
 });
 
 test('serializes a declared custom component with an explicit portable fallback', () => {

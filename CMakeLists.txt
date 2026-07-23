@@ -111,6 +111,10 @@ if(VELLUM_BUILD_TESTS)
             authoring/tests/js_application_test.cpp)
         target_link_libraries(vellum-authoring-test PRIVATE Vellum::Authoring)
         add_test(NAME vellum.authoring COMMAND vellum-authoring-test)
+        add_executable(vellum-authoring-phase3-fixture-test
+            authoring/tests/phase3_fixture_test.cpp)
+        target_link_libraries(
+            vellum-authoring-phase3-fixture-test PRIVATE Vellum::Authoring)
         if(VELLUM_AUTHORING_TEST_BUNDLE)
             if(NOT EXISTS "${VELLUM_AUTHORING_TEST_BUNDLE}")
                 message(FATAL_ERROR

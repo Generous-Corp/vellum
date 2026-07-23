@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createServices, serviceCapabilities } from '../src/index.js';
+import {
+    createServices,
+    installServiceHost,
+    serviceCapabilities,
+    services,
+} from '../src/index.js';
 
 const all = { ...serviceCapabilities };
 
@@ -57,4 +62,51 @@ test('provider denials and malformed response envelopes fail closed', async () =
     const throwing = createServices(() => { throw new Error('host detail'); }, all);
     await assert.rejects(throwing.clipboard.readText(),
         (value) => value.code === 'service-failed' && !value.message.includes('host detail'));
+});
+
+test('singleton services expose fixture-friendly commands, files, clipboard, and URLs', async () => {
+    const requests = [];
+    const uninstall = installServiceHost(async (request) => {
+        requests.push(request);
+        return {
+            protocol: 'vellum.services.v1',
+            kind: 'response',
+            id: request.id,
+            ok: true,
+            value: request.operation,
+        };
+    }, {
+        commands: 'v1',
+        files: 'user-selected-text-v1',
+        clipboard: 'text-v1',
+        open_url: 'external-v1',
+    });
+    try {
+        services.commands.define([{
+            id: 'fixture.singleton.command',
+            title: 'Fixture command',
+            shortcut: 'Primary+N',
+        }]);
+        assert.equal(services.commands.has('fixture.singleton.command'), true);
+        assert.equal(await services.files.openText(), 'selectText');
+        assert.equal(await services.clipboard.writeText('hello'), 'writeText');
+        assert.equal(
+            await services.urls.openExternal('https://vellum.dev/'),
+            'openExternal',
+        );
+        assert.deepEqual(
+            requests.map(({ service, operation }) => ({ service, operation })),
+            [
+                { service: 'files', operation: 'selectText' },
+                { service: 'clipboard', operation: 'writeText' },
+                { service: 'open_url', operation: 'openExternal' },
+            ],
+        );
+    } finally {
+        uninstall();
+    }
+    await assert.rejects(
+        services.files.openText(),
+        (error) => error.code === 'capability-denied',
+    );
 });

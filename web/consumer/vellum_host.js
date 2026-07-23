@@ -114,6 +114,7 @@ function directText(node) {
 }
 
 let interactions = [];
+let scrollContainers = [];
 function emitCustomNode(node, proposed, absoluteX, absoluteY, componentApi) {
     const properties = JSON.stringify(node.properties || {});
     if (!componentApi.render(node.id, properties, proposed.width, proposed.height)) {
@@ -152,6 +153,9 @@ function lowerNode(node, proposed, parentX, parentY) {
     const style = node.style || {};
     const absoluteX = parentX + proposed.x;
     const absoluteY = parentY + proposed.y;
+    if (node.scroll) {
+        scrollContainers.push({id: node.id, direction: node.scroll});
+    }
     if (node.type === 'custom') {
         const declaration = componentDeclarations.get(node.component);
         if (!declaration) throw new Error(`custom component is undeclared: ${node.component}`);
@@ -221,12 +225,20 @@ function render() {
     if (!(width > 0 && height > 0)) throw new Error('web root requires positive width and height');
     if (!api.begin(width, height, ...color(style.backgroundColor, '#f8fafc'))) throw new Error('Wasm rejected frame');
     interactions = [];
+    scrollContainers = [];
     lowerNode(tree, {x: 0, y: 0, width, height}, 0, 0);
     if (!api.render()) throw new Error('Wasm did not render');
-    return {digest: api.digest() >>> 0, commandCount: api.count(), width, height};
+    return {digest: api.digest() >>> 0, commandCount: api.count(), width, height, tree};
 }
 
 if (!api.start()) throw new Error('shared C++ runtime did not start');
+globalThis.__vellumHostV2 = Object.freeze({
+    invalidateJSON() {
+        requestAnimationFrame(() => {
+            if (bridge.isDirty()) current = render();
+        });
+    },
+});
 let current = render();
 canvas.addEventListener('click', event => {
     const rect = canvas.getBoundingClientRect();
@@ -267,12 +279,15 @@ async function runScenario(path) {
     const response = await fetch(path);
     if (!response.ok) throw new Error(`scenario request failed: ${response.status}`);
     const scenario = await response.json();
-    if (scenario.schema !== 'vellum.scenario.v1' || !Array.isArray(scenario.steps) ||
-        !scenario.viewport || !Number.isInteger(scenario.viewport.width) ||
-        !Number.isInteger(scenario.viewport.height)) {
+    if (!['vellum.scenario.v1', 'vellum.scenario.v2'].includes(scenario.schema) ||
+        !Array.isArray(scenario.steps) ||
+        (scenario.schema === 'vellum.scenario.v1' &&
+         (!scenario.viewport || !Number.isInteger(scenario.viewport.width) ||
+          !Number.isInteger(scenario.viewport.height)))) {
         throw new Error('unsupported scenario document');
     }
-    if (current.width !== scenario.viewport.width || current.height !== scenario.viewport.height) {
+    if (scenario.viewport &&
+        (current.width !== scenario.viewport.width || current.height !== scenario.viewport.height)) {
         throw new Error(
             `scenario viewport mismatch: expected ${scenario.viewport.width}x` +
             `${scenario.viewport.height}, rendered ${current.width}x${current.height}`,
@@ -283,11 +298,31 @@ async function runScenario(path) {
     const presses = [];
     const inputs = [];
     const keys = [];
+    const touches = [];
+    const assertions = [];
+    const services = [];
+    const throws = [];
+    function findNode(node, target) {
+        if (node.id === target) return node;
+        for (const child of node.children || []) {
+            const found = findNode(child, target);
+            if (found) return found;
+        }
+        return null;
+    }
+    function nodeText(node) {
+        if (!node) return '';
+        if (typeof node.text === 'string') return node.text;
+        if (typeof node.value === 'string') return node.value;
+        return (node.children || []).map(nodeText).join('');
+    }
     for (const step of scenario.steps) {
         if (step.action === 'wait-for-idle') {
-            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            await new Promise(resolve => requestAnimationFrame(() =>
+                requestAnimationFrame(resolve)));
+            if (bridge.isDirty()) current = render();
         } else if (step.action === 'capture') {
-            captures.push({name: step.name || 'capture', ...current});
+            captures.push({name: step.name || step.value || 'capture', ...current});
         } else if (step.action === 'press' || step.action === 'click') {
             const target = step.target || step.id;
             const hit = interaction(target);
@@ -295,35 +330,97 @@ async function runScenario(path) {
             const before = current.digest;
             dispatch(hit.events.press, null);
             presses.push({target: hit.id, before, after: current.digest, changed: before !== current.digest});
+        } else if (step.action === 'touch') {
+            const hit = interaction(step.target);
+            if (!hit.events.press) {
+                throw new Error(`scenario target is not touch-pressable: ${step.target}`);
+            }
+            const before = current.digest;
+            dispatch(hit.events.press, step.event?.payload ?? {pointerType: 'touch'});
+            touches.push({
+                target: hit.id,
+                before,
+                after: current.digest,
+                changed: before !== current.digest,
+            });
         } else if (step.action === 'input') {
             const hit = interaction(step.target, 'text-input');
             if (!hit.events.change) throw new Error(`scenario target is not editable: ${step.target}`);
-            dispatch(hit.events.change, {value: step.text, inputType: 'scenario'});
-            inputs.push({target: step.target, bytes: new TextEncoder().encode(step.text).length,
+            const text = step.text ?? step.value;
+            dispatch(hit.events.change, {value: text, inputType: 'scenario'});
+            inputs.push({target: step.target, bytes: new TextEncoder().encode(text).length,
                 executed: true});
         } else if (step.action === 'key') {
             let hit = interaction(step.target, 'text-input');
             let executed = false;
+            const key = step.key ?? step.value;
             if (hit.events.keyDown) {
-                dispatch(hit.events.keyDown, {key: step.key, repeat: false, source: 'scenario'});
+                dispatch(hit.events.keyDown, {key, repeat: false, source: 'scenario'});
                 executed = true;
                 hit = interaction(step.target, 'text-input');
             }
-            if (step.key === 'Enter' && hit.events.submit) {
+            if (key === 'Enter' && hit.events.submit) {
                 dispatch(hit.events.submit, {value: hit.value, source: 'scenario'});
                 executed = true;
                 hit = interaction(step.target, 'text-input');
             }
-            if (step.key === 'Backspace' && hit.events.change) {
+            if (key === 'Backspace' && hit.events.change) {
                 dispatch(hit.events.change, {
                     value: withoutLastGrapheme(hit.value), inputType: 'scenario',
                 });
                 executed = true;
             }
             if (!executed) {
-                throw new Error(`text input has no handler for semantic key: ${step.key}`);
+                throw new Error(`text input has no handler for semantic key: ${key}`);
             }
-            keys.push({target: step.target, key: step.key, executed: true});
+            keys.push({target: step.target, key, executed: true});
+        } else if (step.action === 'assert-text') {
+            const actual = nodeText(findNode(current.tree, step.target));
+            if (!actual.includes(String(step.expect))) {
+                throw new Error(
+                    `scenario text assertion failed for ${step.target}: ${actual}`,
+                );
+            }
+            assertions.push({action: step.action, target: step.target, passed: true});
+        } else if (step.action === 'command') {
+            if (!bridge.hasCommand(step.target)) {
+                throw new Error(`scenario command is not defined: ${step.target}`);
+            }
+            assertions.push({action: step.action, target: step.target, passed: true});
+        } else if (step.action === 'service-result') {
+            if (step.service?.ok === false && typeof step.service.error?.code === 'string') {
+                globalThis.__vellumExpectedRejections ??= [];
+                globalThis.__vellumExpectedRejections.push(step.service.error.code);
+            }
+            globalThis.__vellumServiceHost.responses.push(step.service);
+            const hit = interaction(step.target);
+            if (!hit.events.press) {
+                throw new Error(`scenario service target is not pressable: ${step.target}`);
+            }
+            dispatch(hit.events.press, null);
+            await Promise.resolve();
+            services.push({
+                target: step.target,
+                requested: globalThis.__vellumServiceHost.requests.at(-1)?.service,
+                supplied: true,
+            });
+        } else if (step.action === 'throw') {
+            const hit = interaction(step.target);
+            if (!hit.events.press) {
+                throw new Error(`scenario throw target is not pressable: ${step.target}`);
+            }
+            let diagnostic;
+            try {
+                dispatch(hit.events.press, null);
+            } catch (error) {
+                diagnostic = typeof globalThis.__vellumMapExceptionJSON === 'function'
+                    ? JSON.parse(globalThis.__vellumMapExceptionJSON(error)) : null;
+            }
+            if (!diagnostic ||
+                !JSON.stringify(diagnostic).includes(String(step.expect))) {
+                throw new Error(`scenario expected mapped throw from ${step.target}`);
+            }
+            throws.push({target: step.target, diagnostic, passed: true});
         } else {
             throw new Error(`unsupported scenario action: ${step.action}`);
         }
@@ -333,7 +430,8 @@ async function runScenario(path) {
     }
     return {schema: 'vellum.web-proof.v1', scenario: scenario.name, backend: api.backend(),
         authoringRuntime: 'browser JavaScript', initial, final: current,
-        captures, presses, inputs, keys, components: [...componentEvidence.values()],
+        captures, presses, inputs, keys, touches, assertions, services, throws,
+        scrollContainers, components: [...componentEvidence.values()],
         canvasDataBytes: canvas.toDataURL('image/png').length};
 }
 

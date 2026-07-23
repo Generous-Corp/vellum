@@ -106,6 +106,12 @@ class WebScenarioEvidenceTests(unittest.TestCase):
                     "viewport": {"width": 720, "height": 540}, "steps": [step],
                 })
 
+    def test_unchanged_phase3_scenario_is_accepted_by_installed_web_backend(self) -> None:
+        scenario = json.loads((
+            REPO / "fixtures/authoring-phase3/scenarios/phase3.json"
+        ).read_text(encoding="utf-8"))
+        validate_scenario_document(scenario)
+
     def test_component_source_rejects_private_framework_headers(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             source = Path(temporary) / "component.cpp"

@@ -11,6 +11,27 @@
     <canvas id="vellum-canvas" aria-label="{{APP_NAME}}"></canvas>
     <p id="vellum-status">Starting Vellum…</p>
     <script>
+      globalThis.__vellumServiceHost = {
+        capabilities: {
+          commands: 'v1', files: 'user-selected-text-v1',
+          clipboard: 'text-v1', open_url: 'external-v1',
+          persistence: 'state-v1'
+        },
+        responses: [],
+        requests: [],
+        request(request) {
+          this.requests.push(request);
+          const response = this.responses.shift();
+          if (!response) return Promise.resolve({
+            protocol: 'vellum.services.v1', kind: 'response', id: request.id,
+            ok: false, error: {
+              code: 'capability-denied',
+              message: `No scenario response was provided for ${request.service}.`
+            }
+          });
+          return Promise.resolve({...response, id: request.id});
+        }
+      };
       function reportVellumError(value) {
         const message = String(value && (value.stack || value.message) || value);
         document.body.dataset.vellumError = message;
@@ -32,7 +53,17 @@
           body: JSON.stringify({bootError: message, diagnostic}) }).catch(() => {});
       }
       addEventListener('error', event => reportVellumError(event.error || event.message));
-      addEventListener('unhandledrejection', event => reportVellumError(event.reason));
+      addEventListener('unhandledrejection', event => {
+        const expected = globalThis.__vellumExpectedRejections;
+        const index = Array.isArray(expected)
+          ? expected.indexOf(event.reason && event.reason.code) : -1;
+        if (index >= 0) {
+          expected.splice(index, 1);
+          event.preventDefault();
+          return;
+        }
+        reportVellumError(event.reason);
+      });
     </script>
     <script type="module" src="./app.js"></script>
     <script type="module" src="./vellum_host.js"></script>

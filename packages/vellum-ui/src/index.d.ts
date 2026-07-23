@@ -48,6 +48,39 @@ export declare const serviceCapabilities: Readonly<{
     open_url: 'external-v1';
     persistence: 'state-v1';
 }>;
+export declare function installServiceHost(
+    provider: ServiceProvider,
+    capabilities?: ServiceCapabilities,
+): () => void;
+export declare const services: Readonly<{
+    commands: Readonly<{
+        define(definitions: readonly {
+            id: string;
+            title: string;
+            shortcut?: string;
+        }[]): void;
+        execute(command: string, arguments_?: Record<string, JsonValue>): Promise<JsonValue>;
+        has(command: string): boolean;
+        definitions(): readonly {
+            id: string;
+            title: string;
+            shortcut?: string;
+        }[];
+    }>;
+    files: Readonly<{
+        openText(options?: Record<string, JsonValue>): Promise<JsonValue>;
+        selectText(options?: Record<string, JsonValue>): Promise<JsonValue>;
+    }>;
+    clipboard: Readonly<{
+        readText(): Promise<JsonValue>;
+        writeText(text: string): Promise<JsonValue>;
+    }>;
+    urls: Readonly<{ openExternal(url: string): Promise<JsonValue> }>;
+    persistence: Readonly<{
+        loadState(): Promise<JsonValue>;
+        saveState(state: JsonValue): Promise<JsonValue>;
+    }>;
+}>;
 
 export interface Style {
     [property: string]: VellumScalar;
@@ -62,6 +95,7 @@ export interface ElementProps {
     text?: string;
     source?: string;
     accessibilityLabel?: string;
+    scroll?: 'horizontal' | 'vertical';
     onPress?: EventHandler;
     onChange?: EventHandler;
     onSubmit?: EventHandler;
@@ -171,6 +205,7 @@ export interface VellumBridge {
     restoreStateJSON(snapshotJSON: string): string;
     pumpJSON(): string;
     isDirty(): boolean;
+    hasCommand(command: string): boolean;
 }
 export type WidenScalar<Value> = Value extends string ? string
     : Value extends number ? number
@@ -189,6 +224,10 @@ export declare function useMemo<Value>(
     factory: () => Value,
     dependencies: readonly unknown[],
 ): Value;
+export declare function useEffect(
+    effect: () => void | (() => void),
+    dependencies?: readonly unknown[],
+): void;
 
 export interface MaterializedDesignNode {
     id: string;
