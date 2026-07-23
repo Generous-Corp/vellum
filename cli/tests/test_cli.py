@@ -222,6 +222,12 @@ class CliTests(unittest.TestCase):
             backend.write_text(
                 f"#!{sys.executable}\n"
                 "import json, sys\n"
+                "from pathlib import Path\n"
+                "args = sys.argv[1:]\n"
+                "project = Path(args[args.index('--project') + 1])\n"
+                "design = json.loads((project / 'design/ir/app.designir.json').read_text())\n"
+                "design['root'] = {'properties': {'layout': {'width': 420, 'height': 240}}}\n"
+                "(project / 'design/ir/app.designir.json').write_text(json.dumps(design))\n"
                 "print(json.dumps({'schema':'vellum.backend.result.v1','ok':True,'status':'imported','message':'ok','data':{'argv':sys.argv[1:]},'diagnostics':[]}))\n",
                 encoding="utf-8",
             )
@@ -248,6 +254,7 @@ class CliTests(unittest.TestCase):
                 {"action": "wait-for-idle"},
                 {"action": "capture", "name": "imported-design"},
             ])
+            self.assertEqual(smoke["viewport"], {"width": 420, "height": 240})
 
     def test_create_refuses_file_destination_without_traceback(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -269,6 +270,28 @@ def adapt_smoke_scenario_for_imported_design(root: Path) -> None:
         {"action": "wait-for-idle"},
         {"action": "capture", "name": "imported-design"},
     ]
+    try:
+        design = json.loads(
+            (root / "design/ir/app.designir.json").read_text(encoding="utf-8")
+        )
+        layout = design["root"]["properties"]["layout"]
+        dimensions = {
+            field: int(layout[field])
+            for field in ("width", "height")
+            if (
+                isinstance(layout.get(field), (int, float))
+                and not isinstance(layout.get(field), bool)
+                and math.isfinite(layout[field])
+                and 1 <= int(layout[field]) <= 16384
+            )
+        }
+        if set(dimensions) == {"width", "height"}:
+            scenario["viewport"] = dimensions
+    except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError):
+        # The backend owns DesignIR validation. Retaining the template viewport
+        # here makes the subsequent native test fail honestly if a backend ever
+        # claims success without materializing a usable root layout.
+        pass
     scenario_path.write_text(
         json.dumps(scenario, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
