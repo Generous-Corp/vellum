@@ -89,10 +89,19 @@ def cli_surface(cli: Any) -> tuple[set[str], dict[str, set[str]]]:
 def skill_invocations(text: str, executable: str) -> dict[str, set[str]]:
     invocations: dict[str, set[str]] = {}
     prefix = executable + " "
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line.startswith(prefix):
-            continue
+    candidates = [
+        raw_line.strip()
+        for raw_line in text.splitlines()
+        if raw_line.strip().startswith(prefix)
+    ]
+    candidates.extend(
+        match.group(1)
+        for match in re.finditer(
+            rf"`({re.escape(executable)} [^`\n]+)`",
+            text,
+        )
+    )
+    for line in candidates:
         try:
             tokens = shlex.split(line)
         except ValueError as error:
@@ -166,6 +175,7 @@ def verify(repo: Path) -> dict[str, Any]:
     if not isinstance(lifecycle, list) or tuple(item.get("step") for item in lifecycle if isinstance(item, dict)) != EXPECTED_LIFECYCLE:
         raise VerificationError("agent lifecycle is incomplete or out of canonical order")
     cli_steps: dict[str, dict[str, Any]] = {}
+    installer_step: dict[str, Any] | None = None
     available_installer_flags = installer_flags(repo)
     for item in lifecycle:
         if not isinstance(item, dict) or set(item) != {"step", "kind", "command", "flags"}:
@@ -179,6 +189,7 @@ def verify(repo: Path) -> dict[str, Any]:
             unknown = set(flags) - available_installer_flags
             if unknown:
                 raise VerificationError(f"installer instructions reference unknown flags: {sorted(unknown)}")
+            installer_step = item
             continue
         if item["kind"] != "cli" or item["command"] != item["step"] or item["command"] not in commands:
             raise VerificationError(f"lifecycle references unknown CLI command: {item['command']}")
@@ -190,6 +201,7 @@ def verify(repo: Path) -> dict[str, Any]:
 
     invocation_rows = skill_invocations(skill_text, cli_contract["executable"])
     observed_commands: set[str] = set()
+    canonical_commands: set[str] = set()
     for line, flags in invocation_rows.items():
         command = invocation_command(line, set(commands))
         observed_commands.add(command)
@@ -198,15 +210,31 @@ def verify(repo: Path) -> dict[str, Any]:
         if unknown:
             raise VerificationError(f"SKILL.md references unknown {command} flags: {sorted(unknown)}")
         declared = set(cli_steps[command]["flags"])
-        if flags != declared:
-            raise VerificationError(
-                f"SKILL.md {command} flags differ from manifest: "
-                f"observed={sorted(flags)} declared={sorted(declared)}"
-            )
+        if flags == declared:
+            canonical_commands.add(command)
     if observed_commands != set(cli_steps):
         raise VerificationError(
             f"SKILL.md lifecycle commands are incomplete: observed={sorted(observed_commands)}"
         )
+    if canonical_commands != set(cli_steps):
+        raise VerificationError(
+            "SKILL.md has no canonical manifest-matching invocation for commands: "
+            f"{sorted(set(cli_steps) - canonical_commands)}"
+        )
+    if installer_step is None:
+        raise VerificationError("agent lifecycle has no installer step")
+    installer_lines = [
+        line.strip()
+        for line in skill_text.splitlines()
+        if line.strip().startswith("./scripts/install.sh ")
+    ]
+    if len(installer_lines) != 1:
+        raise VerificationError("SKILL.md must contain exactly one canonical installer invocation")
+    installer_observed_flags = {
+        token for token in shlex.split(installer_lines[0])[1:] if token.startswith("-")
+    }
+    if installer_observed_flags != set(installer_step["flags"]):
+        raise VerificationError("SKILL.md installer flags differ from manifest")
 
     channels = source_channels(repo / "product/source-support.yaml")
     supported = sorted(route for route, channel in channels.items() if channel == "supported")

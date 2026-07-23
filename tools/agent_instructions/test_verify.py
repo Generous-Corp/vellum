@@ -60,6 +60,19 @@ class AgentInstructionVerificationTests(unittest.TestCase):
             with self.assertRaisesRegex(VerificationError, "unknown build flags"):
                 verify(root)
 
+    def test_rejects_unknown_flag_in_inline_cli_reference(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.fixture(root)
+            skill = (root / SKILL).read_text(encoding="utf-8")
+            skill = skill.replace(
+                "`vellum --json doctor --fix`",
+                "`vellum --json doctor --fix --install-everything`",
+            )
+            (root / SKILL).write_text(skill, encoding="utf-8")
+            with self.assertRaisesRegex(VerificationError, "unknown doctor flags"):
+                verify(root)
+
     def test_rejects_unsupported_source_claim(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
