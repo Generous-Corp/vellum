@@ -41,6 +41,28 @@ class VerifyExtractionTests(unittest.TestCase):
                 "pulp-public-namespace", "audio-plugin-sdk"
             })
 
+    def test_default_inventory_scans_authoring_and_ui_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "authoring").mkdir()
+            (root / "authoring/host.mm").write_text(
+                "auto legacy = pulp::view::host();\n", encoding="utf-8"
+            )
+            (root / "packages/vellum-ui/src").mkdir(parents=True)
+            (root / "packages/vellum-ui/src/runtime.js").write_text(
+                "const forbidden = '@pulp/audio';\n", encoding="utf-8"
+            )
+
+            findings = verify_extraction.scan_active_surface(root)
+
+            self.assertEqual(
+                {finding["path"] for finding in findings},
+                {
+                    "authoring/host.mm",
+                    "packages/vellum-ui/src/runtime.js",
+                },
+            )
+
     def test_active_scan_ignores_historical_evidence_outside_inventory(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

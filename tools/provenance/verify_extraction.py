@@ -30,11 +30,13 @@ EXPECTED_HASHES = {
 EXPECTED_ACTIVE_ROOTS = (
     "CMakeLists.txt",
     "apps",
+    "authoring",
     "cli",
     "cmake",
     "foundation",
     "graphics",
     "packages/vellum-design-ir",
+    "packages/vellum-ui",
     "runtime",
     "scripts",
     "templates",

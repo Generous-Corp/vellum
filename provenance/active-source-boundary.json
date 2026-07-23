@@ -4,11 +4,13 @@
   "active_source_roots": [
     "CMakeLists.txt",
     "apps",
+    "authoring",
     "cli",
     "cmake",
     "foundation",
     "graphics",
     "packages/vellum-design-ir",
+    "packages/vellum-ui",
     "runtime",
     "scripts",
     "templates"
