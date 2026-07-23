@@ -118,6 +118,14 @@ workflow are documented in [Import and reimport](docs/cli/import-reimport.md).
 Every command accepts `--json` before or after the command and emits one stable
 `vellum.cli.result.v1` object. See [the CLI contract](docs/cli/contract.md).
 
+Agents and automation should follow the versioned
+[Vellum application-authoring skill](.agents/skills/vellum-app-authoring/SKILL.md).
+Its adjacent machine-readable manifest is checked against the real CLI parser,
+source-support policy, ownership boundary, and capability-failure semantics by
+`python3 tools/agent_instructions/verify.py --json`; instructions cannot name a
+command, flag, or import route that the checked-in product surface does not
+support.
+
 ## Build and install an immutable local SDK artifact
 
 The builder performs a Release build, creates a relocatable CMake install tree,

@@ -1,0 +1,103 @@
+{
+  "schema": "vellum.agent-instructions.v1",
+  "version": 1,
+  "skill": {
+    "name": "vellum-app-authoring",
+    "path": ".agents/skills/vellum-app-authoring/SKILL.md"
+  },
+  "cli": {
+    "api": 1,
+    "resultSchema": "vellum.cli.result.v1",
+    "executable": "vellum"
+  },
+  "lifecycle": [
+    {
+      "step": "install",
+      "kind": "installer",
+      "command": "scripts/install.sh",
+      "flags": ["--archive", "--checksums", "--install-dir"]
+    },
+    {
+      "step": "create",
+      "kind": "cli",
+      "command": "create",
+      "flags": ["--json", "--directory", "--template"]
+    },
+    {
+      "step": "doctor",
+      "kind": "cli",
+      "command": "doctor",
+      "flags": ["--json", "--fix", "--project"]
+    },
+    {
+      "step": "import",
+      "kind": "cli",
+      "command": "import",
+      "flags": ["--json", "--source-type", "--as", "--project"]
+    },
+    {
+      "step": "reimport",
+      "kind": "cli",
+      "command": "reimport",
+      "flags": ["--json", "--source", "--as", "--project"]
+    },
+    {
+      "step": "build",
+      "kind": "cli",
+      "command": "build",
+      "flags": ["--json", "--target", "--project"]
+    },
+    {
+      "step": "run",
+      "kind": "cli",
+      "command": "run",
+      "flags": ["--json", "--target", "--project"]
+    },
+    {
+      "step": "test",
+      "kind": "cli",
+      "command": "test",
+      "flags": ["--json", "--scenario", "--project"]
+    },
+    {
+      "step": "capture",
+      "kind": "cli",
+      "command": "capture",
+      "flags": ["--json", "--scenario", "--output", "--target", "--project"]
+    },
+    {
+      "step": "package",
+      "kind": "cli",
+      "command": "package",
+      "flags": ["--json", "--target", "--output", "--project"]
+    }
+  ],
+  "supportedSourceTypes": ["design-ir", "figma"],
+  "ownership": {
+    "toolOwned": [
+      "sources/imported",
+      "design/ir",
+      "design/generated",
+      "tokens/imported",
+      "assets/generated",
+      "ui/generated"
+    ],
+    "developerOwned": [
+      "src",
+      "components",
+      "design/overlays",
+      "tokens",
+      "assets",
+      "native",
+      "platforms",
+      "tests",
+      "packaging"
+    ]
+  },
+  "capabilityFailure": {
+    "status": "capability_unavailable",
+    "exitCode": 4,
+    "fallbackAllowed": false
+  },
+  "frameworkMutationPolicy": "release-only"
+}

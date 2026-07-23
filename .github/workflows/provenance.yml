@@ -31,6 +31,12 @@ jobs:
           python3 tools/provenance/verify_pulp_tooling_disposition.py \
             --output "$RUNNER_TEMP/pulp-tooling-disposition-report.json"
 
+      - name: Verify versioned agent-authoring instructions
+        run: |
+          python3 tools/agent_instructions/test_verify.py
+          python3 tools/agent_instructions/verify.py --json \
+            > "$RUNNER_TEMP/agent-instructions-report.json"
+
       - name: Upload verification evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -39,5 +45,6 @@ jobs:
           path: |
             ${{ runner.temp }}/provenance-report.json
             ${{ runner.temp }}/pulp-tooling-disposition-report.json
+            ${{ runner.temp }}/agent-instructions-report.json
           if-no-files-found: error
           retention-days: 90

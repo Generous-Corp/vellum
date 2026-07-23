@@ -1,0 +1,64 @@
+# Vellum application authoring
+
+Use this skill for the installed Vellum project lifecycle. Its contract is
+`vellum.agent-instructions.v1`; the adjacent `manifest.v1.json` is the
+machine-readable authority.
+
+## Before changing an application
+
+1. Read `vellum.lock.json`, `AGENTS.md`, and `.vellum/agent-instructions.md`.
+2. Run `vellum --json doctor --fix`. `--fix` only creates safe project-local
+   cache/state directories; it does not install system software.
+3. Inspect the JSON `ok`, `status`, `diagnostics`, and capability checks. If a
+   requested capability is unavailable, stop and report it. Do not bypass the
+   lock, invent output, or patch framework code into the application.
+
+Install only an immutable SDK artifact with its matching checksum manifest:
+
+```sh
+./scripts/install.sh --archive "$sdk_archive" --checksums "$sdk_checksums" --install-dir "$prefix"
+```
+
+Do not treat a local-development install as verified or assume that a hosted
+release exists.
+
+## Lifecycle
+
+Use JSON mode for automation and preserve the exact artifact identity written
+to the project lock.
+
+```sh
+vellum --json create "My App" --directory "$app" --template basic
+vellum --json doctor --fix --project "$app"
+vellum --json import "$figma_export" --source-type figma --as main --project "$app"
+vellum --json reimport --source "$updated_export" --as main --project "$app"
+vellum --json build --target macos --project "$app"
+vellum --json run --target macos --project "$app"
+vellum --json test --scenario smoke --project "$app"
+vellum --json capture --scenario smoke --output "$app/artifacts/smoke.png" --target macos --project "$app"
+vellum --json package --target macos --output "$app/dist" --project "$app"
+```
+
+The only supported import source types are `figma` and `design-ir`. The first
+means Vellum's bounded, credential-free plugin-export subset, not an arbitrary
+design file. Consult conversion diagnostics after every import or reimport.
+Do not invent another route or silently discard unsupported properties.
+
+## Ownership and maintenance
+
+- Tool-owned: `sources/imported/`, `design/ir/`, `design/generated/`,
+  `tokens/imported/`, `assets/generated/`, and `ui/generated/`. Change these
+  only by import/reimport.
+- Developer-owned: `src/`, `components/`, `design/overlays/`, editable theme
+  tokens and assets, `native/`, `platforms/`, `tests/`, and `packaging/`.
+- Keep behavior, state, navigation, services, and overrides in developer-owned
+  files. Preserve stable imported identities and review orphan/conflict reports.
+- After reimport, inspect the diff, run interaction scenarios, capture affected
+  screens, and package only after tests pass.
+- When the framework needs a fix, change Vellum in its own repository, verify
+  and publish a new immutable SDK artifact, then update the application lock.
+  Never vendor or patch framework internals inside an application.
+
+`capability_unavailable` with exit code 4 is an honest terminal result for that
+operation. A developer or agent may install the required verified artifact, or
+report the missing capability; it must not substitute a different runtime.
