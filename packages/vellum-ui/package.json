@@ -24,11 +24,18 @@
   "files": [
     "LICENSE.md",
     "README.md",
+    "scripts",
     "src"
   ],
   "scripts": {
-    "test": "node --test test/*.test.js",
+    "build:native-test": "node scripts/build-native-test.mjs",
+    "test:types": "tsc --project test/types/tsconfig.json --noEmit",
+    "test": "node --test test/*.test.js && npm run test:types",
     "check": "npm test"
   },
-  "dependencies": {}
+  "dependencies": {},
+  "devDependencies": {
+    "esbuild": "0.28.1",
+    "typescript": "7.0.2"
+  }
 }

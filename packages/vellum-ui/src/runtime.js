@@ -1,52 +1,89 @@
 const ELEMENT = Symbol.for('vellum.element');
 const FRAGMENT = Symbol.for('vellum.fragment');
 const PROTOCOL = 'vellum.authoring-host.v1';
+const SNAPSHOT_SCHEMA = 'vellum.authoring-state.v1';
 
 let renderingRuntime = null;
 
-function canonicalize(value) {
-    if (value === null || typeof value !== 'object') return value;
-    if (Array.isArray(value)) return value.map(canonicalize);
-    return Object.fromEntries(
-        Object.keys(value)
-            .sort()
-            .filter((key) => value[key] !== undefined)
-            .map((key) => [key, canonicalize(value[key])]),
-    );
-}
-
-function stableStringify(value) {
-    return JSON.stringify(canonicalize(value));
-}
-
-function assertJsonValue(value, path = 'value', ancestors = new Set()) {
+function assertPlainJson(value, path = 'value', ancestors = new Set()) {
     if (value === null || ['string', 'boolean'].includes(typeof value)) return;
     if (typeof value === 'number') {
         if (!Number.isFinite(value)) throw new TypeError(`${path} must be finite`);
         return;
     }
-    if (typeof value !== 'object') {
-        throw new TypeError(`${path} is not JSON-serializable`);
-    }
+    if (typeof value !== 'object') throw new TypeError(`${path} is not JSON-serializable`);
     if (ancestors.has(value)) throw new TypeError(`${path} contains a cycle`);
+    const symbols = Object.getOwnPropertySymbols(value);
+    if (symbols.length > 0) throw new TypeError(`${path} contains symbol properties`);
     ancestors.add(value);
     if (Array.isArray(value)) {
-        value.forEach((item, index) => assertJsonValue(item, `${path}[${index}]`, ancestors));
+        const names = Object.getOwnPropertyNames(value);
+        const indexes = names.filter((name) => name !== 'length');
+        if (indexes.length !== value.length ||
+            indexes.some((name, index) => name !== String(index))) {
+            throw new TypeError(`${path} must be a dense array without extra properties`);
+        }
+        for (const name of names) {
+            if (name === 'length') continue;
+            const descriptor = Object.getOwnPropertyDescriptor(value, name);
+            if (!descriptor?.enumerable || descriptor.get || descriptor.set) {
+                throw new TypeError(`${path}[${name}] has unsupported property semantics`);
+            }
+        }
+        value.forEach((item, index) => assertPlainJson(item, `${path}[${index}]`, ancestors));
     } else {
         const prototype = Object.getPrototypeOf(value);
         if (prototype !== Object.prototype && prototype !== null) {
             throw new TypeError(`${path} must be a plain object`);
         }
-        for (const [key, item] of Object.entries(value)) {
-            assertJsonValue(item, `${path}.${key}`, ancestors);
+        for (const name of Object.getOwnPropertyNames(value)) {
+            const descriptor = Object.getOwnPropertyDescriptor(value, name);
+            if (!descriptor?.enumerable || descriptor.get || descriptor.set) {
+                throw new TypeError(`${path}.${name} has unsupported property semantics`);
+            }
+            assertPlainJson(descriptor.value, `${path}.${name}`, ancestors);
         }
     }
     ancestors.delete(value);
 }
 
+function canonicalize(value) {
+    if (value === null || typeof value !== 'object') return value;
+    if (Array.isArray(value)) return value.map(canonicalize);
+    const output = Object.create(null);
+    for (const key of Object.keys(value).sort()) output[key] = canonicalize(value[key]);
+    return output;
+}
+
+function stableStringify(value) {
+    assertPlainJson(value);
+    return JSON.stringify(canonicalize(value));
+}
+
 function cloneJson(value, path = 'value') {
-    assertJsonValue(value, path);
+    assertPlainJson(value, path);
     return JSON.parse(stableStringify(value));
+}
+
+function freezeJson(value) {
+    if (value && typeof value === 'object') {
+        for (const item of Object.values(value)) freezeJson(item);
+        Object.freeze(value);
+    }
+    return value;
+}
+
+function durableValue(value, path) {
+    return freezeJson(cloneJson(value, path));
+}
+
+function fnv1a32(value) {
+    let hash = 0x811c9dc5;
+    for (let index = 0; index < value.length; index += 1) {
+        hash ^= value.charCodeAt(index);
+        hash = Math.imul(hash, 0x01000193);
+    }
+    return (hash >>> 0).toString(36);
 }
 
 function flattenChildren(value, output = []) {
@@ -58,23 +95,40 @@ function flattenChildren(value, output = []) {
     return output;
 }
 
+function escapedIdentity(value) {
+    const text = String(value);
+    let encoded = `${text.length}:`;
+    for (let index = 0; index < text.length; index += 1) {
+        encoded += text.charCodeAt(index).toString(16).padStart(4, '0');
+    }
+    return encoded;
+}
+
+function elementPath(parent, child, index) {
+    if (child && child.$$typeof === ELEMENT) {
+        if (child.props.key !== undefined) return `${parent}/key:${escapedIdentity(child.props.key)}`;
+        if (typeof child.props.id === 'string' && child.props.id.length > 0) {
+            return `${parent}/id:${escapedIdentity(child.props.id)}`;
+        }
+    }
+    return `${parent}/index:${index}`;
+}
+
 export function jsx(type, properties = {}, key) {
     const props = properties == null ? {} : { ...properties };
     if (key !== undefined) props.key = key;
-    return Object.freeze({
-        $$typeof: ELEMENT,
-        type,
-        props: Object.freeze(props),
-    });
+    return Object.freeze({ $$typeof: ELEMENT, type, props: Object.freeze(props) });
 }
 
 export const jsxs = jsx;
 export const Fragment = FRAGMENT;
 
 function primitive(type) {
-    return function VellumPrimitive(properties = {}) {
+    const component = function VellumPrimitive(properties = {}) {
         return jsx(type, properties);
     };
+    component.displayName = `Vellum.${type}`;
+    return component;
 }
 
 export const View = primitive('view');
@@ -84,62 +138,58 @@ export const Button = primitive('button');
 export const Image = primitive('image');
 export const Canvas = primitive('canvas');
 
-function assertRuntime(hook) {
-    if (renderingRuntime === null) {
-        throw new Error(`${hook} must be called while rendering a mounted Vellum component`);
+function activeHook(kind) {
+    if (renderingRuntime === null || renderingRuntime.renderState === null ||
+        renderingRuntime.renderState.frameStack.length === 0) {
+        throw new Error(`${kind} must be called while rendering a mounted Vellum component`);
     }
-    return renderingRuntime;
+    const runtime = renderingRuntime;
+    const state = runtime.renderState;
+    const frameId = state.frameStack[state.frameStack.length - 1];
+    const frame = state.frames.get(frameId);
+    const index = frame.cursor++;
+    return { runtime, state, frameId, frame, index };
 }
 
 export function useState(initialValue) {
-    const runtime = assertRuntime('useState');
-    const index = runtime.hookCursor++;
-    if (index >= runtime.hooks.length) {
-        if (runtime.hasRendered) {
-            throw new Error('hook order changed between renders');
-        }
-        runtime.hooks.push({
-            kind: 'state',
-            value: typeof initialValue === 'function' ? initialValue() : initialValue,
-        });
+    const { runtime, frameId, frame, index } = activeHook('useState');
+    if (index >= frame.hooks.length) {
+        if (frame.established) throw new Error(`hook order changed in ${frameId}`);
+        const initial = typeof initialValue === 'function' ? initialValue() : initialValue;
+        frame.hooks.push({ kind: 'state', value: durableValue(initial, `${frameId}[${index}]`) });
     }
-    const record = runtime.hooks[index];
-    if (!record || record.kind !== 'state') {
-        throw new Error('hook kind changed between renders');
-    }
+    const record = frame.hooks[index];
+    if (record.kind !== 'state') throw new Error(`hook kind changed in ${frameId}`);
     const setValue = (nextValue) => {
-        const previous = record.value;
-        record.value = typeof nextValue === 'function'
-            ? nextValue(previous)
-            : nextValue;
+        if (runtime.renderState !== null) throw new Error('state cannot change during render');
+        const frames = runtime.mutationFrames ?? runtime.frames;
+        const target = frames.get(frameId)?.hooks[index];
+        if (!target || target.kind !== 'state') throw new Error('state hook is no longer mounted');
+        const next = typeof nextValue === 'function' ? nextValue(target.value) : nextValue;
+        target.value = durableValue(next, `${frameId}[${index}]`);
         runtime.dirty = true;
     };
     return [record.value, setValue];
 }
 
 export function useMemo(factory, dependencies) {
-    const runtime = assertRuntime('useMemo');
-    const index = runtime.hookCursor++;
-    let prior = runtime.hooks[index];
-    if (!prior && runtime.hasRendered) {
-        throw new Error('hook order changed between renders');
-    }
-    if (prior && prior.kind !== 'memo') {
-        throw new Error('hook kind changed between renders');
-    }
+    const { frameId, frame, index } = activeHook('useMemo');
     const nextDependencies = Array.isArray(dependencies) ? [...dependencies] : null;
-    const unchanged = prior && nextDependencies && prior.dependencies &&
-        prior.dependencies.length === nextDependencies.length &&
-        prior.dependencies.every((value, item) => Object.is(value, nextDependencies[item]));
-    if (!unchanged) {
-        runtime.hooks[index] = {
-            kind: 'memo',
-            value: factory(),
-            dependencies: nextDependencies,
-        };
-        prior = runtime.hooks[index];
+    if (index >= frame.hooks.length) {
+        if (frame.established) throw new Error(`hook order changed in ${frameId}`);
+        frame.hooks.push({ kind: 'memo', initialized: false, value: undefined, dependencies: null });
     }
-    return prior.value;
+    const record = frame.hooks[index];
+    if (record.kind !== 'memo') throw new Error(`hook kind changed in ${frameId}`);
+    const unchanged = record.initialized && nextDependencies && record.dependencies &&
+        record.dependencies.length === nextDependencies.length &&
+        record.dependencies.every((value, item) => Object.is(value, nextDependencies[item]));
+    if (!unchanged) {
+        record.value = factory();
+        record.dependencies = nextDependencies;
+        record.initialized = true;
+    }
+    return record.value;
 }
 
 function validateStyle(style, path) {
@@ -147,8 +197,20 @@ function validateStyle(style, path) {
     if (style === null || typeof style !== 'object' || Array.isArray(style)) {
         throw new TypeError(`${path}.style must be an object`);
     }
-    const result = {};
-    for (const [name, value] of Object.entries(style)) {
+    const prototype = Object.getPrototypeOf(style);
+    if (prototype !== Object.prototype && prototype !== null) {
+        throw new TypeError(`${path}.style must be a plain object`);
+    }
+    if (Object.getOwnPropertySymbols(style).length > 0) {
+        throw new TypeError(`${path}.style contains symbol properties`);
+    }
+    const result = Object.create(null);
+    for (const name of Object.getOwnPropertyNames(style)) {
+        const descriptor = Object.getOwnPropertyDescriptor(style, name);
+        if (!descriptor?.enumerable || descriptor.get || descriptor.set) {
+            throw new TypeError(`${path}.style.${name} has unsupported property semantics`);
+        }
+        const value = descriptor.value;
         if (!['string', 'number', 'boolean'].includes(typeof value)) {
             throw new TypeError(`${path}.style.${name} is not serializable`);
         }
@@ -160,49 +222,50 @@ function validateStyle(style, path) {
     return result;
 }
 
-function textNode(value, path) {
-    return {
-        type: 'text-run',
-        id: `${path}/text`,
-        text: String(value),
-        children: [],
-    };
+function textNode(value, runtime, path) {
+    const id = `${path}/text`;
+    if (runtime.renderState.nodeIds.has(id)) throw new Error(`duplicate Vellum node id: ${id}`);
+    runtime.renderState.nodeIds.add(id);
+    return { type: 'text-run', id, text: String(value), children: [] };
 }
 
 function materialize(value, runtime, path) {
     if (typeof value === 'string' || typeof value === 'number') {
-        return [textNode(value, path)];
+        return [textNode(value, runtime, path)];
     }
-    if (!value || value.$$typeof !== ELEMENT) {
-        throw new TypeError(`${path} is not a Vellum element`);
-    }
-
+    if (!value || value.$$typeof !== ELEMENT) throw new TypeError(`${path} is not a Vellum element`);
     if (value.type === FRAGMENT) {
         return flattenChildren(value.props.children).flatMap((child, index) =>
-            materialize(child, runtime, `${path}/${index}`));
+            materialize(child, runtime, elementPath(path, child, index)));
     }
     if (typeof value.type === 'function') {
-        return materialize(value.type(value.props), runtime, path);
+        const componentIdentity = runtime.componentIdentity(value.type);
+        const frameId = `${path}/component:${escapedIdentity(componentIdentity)}`;
+        if (runtime.renderState.visitedFrames.has(frameId) &&
+            typeof value.props.id === 'string' && runtime.renderState.nodeIds.has(value.props.id)) {
+            throw new Error(`duplicate Vellum node id: ${value.props.id}`);
+        }
+        const ownedPath = `${path}/owner:${escapedIdentity(componentIdentity)}`;
+        return runtime.withFrame(
+            frameId,
+            () => materialize(value.type(value.props), runtime, ownedPath),
+        );
     }
     if (typeof value.type !== 'string') {
         throw new TypeError(`${path}.type must be a component or intrinsic string`);
     }
 
     const children = flattenChildren(value.props.children).flatMap((child, index) =>
-        materialize(child, runtime, `${path}/${index}`));
+        materialize(child, runtime, elementPath(path, child, index)));
     const id = typeof value.props.id === 'string' && value.props.id.length > 0
-        ? value.props.id
-        : `${path}/${value.type}`;
-    if (runtime.nodeIds.has(id)) {
-        throw new Error(`duplicate Vellum node id: ${id}`);
-    }
-    runtime.nodeIds.add(id);
+        ? value.props.id : `${path}/${value.type}`;
+    const state = runtime.renderState;
+    if (state.nodeIds.has(id)) throw new Error(`duplicate Vellum node id: ${id}`);
+    state.nodeIds.add(id);
     const events = {};
     for (const [property, eventName] of [
-        ['onPress', 'press'],
-        ['onChange', 'change'],
-        ['onSubmit', 'submit'],
-        ['onKeyDown', 'keyDown'],
+        ['onPress', 'press'], ['onChange', 'change'],
+        ['onSubmit', 'submit'], ['onKeyDown', 'keyDown'],
     ]) {
         const handler = value.props[property];
         if (handler === undefined) continue;
@@ -210,102 +273,265 @@ function materialize(value, runtime, path) {
             throw new Error(`${path}.${property} requires an explicit stable id`);
         }
         if (typeof handler === 'function') {
-            const action = `${id}:${eventName}`;
-            if (runtime.namedActions.has(action)) {
-                throw new Error(`inline Vellum action collides with named action: ${action}`);
-            }
-            runtime.handlers.set(action, handler);
+            const action = `inline:${escapedIdentity(id)}:${eventName}`;
+            state.handlers.set(action, handler);
             events[eventName] = action;
         } else if (typeof handler === 'string' && handler.length > 0) {
-            events[eventName] = handler;
+            if (!runtime.namedActions.has(handler)) {
+                throw new Error(`unknown named Vellum action: ${handler}`);
+            }
+            events[eventName] = `named:${handler}`;
         } else {
             throw new TypeError(`${path}.${property} must be a function or action name`);
         }
     }
-
     const node = {
         type: value.type,
         id,
-        style: validateStyle(value.props.style, path),
-        text: typeof value.props.text === 'string' ? value.props.text : undefined,
-        source: typeof value.props.source === 'string' ? value.props.source : undefined,
-        accessibilityLabel: typeof value.props.accessibilityLabel === 'string'
-            ? value.props.accessibilityLabel
-            : undefined,
-        events: Object.keys(events).length > 0 ? events : undefined,
         children,
     };
+    const style = validateStyle(value.props.style, path);
+    if (style !== undefined) node.style = style;
+    if (typeof value.props.text === 'string') node.text = value.props.text;
+    if (typeof value.props.source === 'string') node.source = value.props.source;
+    if (typeof value.props.accessibilityLabel === 'string') {
+        node.accessibilityLabel = value.props.accessibilityLabel;
+    }
+    if (Object.keys(events).length > 0) node.events = events;
     return [node];
+}
+
+function cloneFrames(frames, resetMemo = false) {
+    const output = new Map();
+    for (const [id, frame] of frames) {
+        output.set(id, {
+            established: frame.established,
+            cursor: 0,
+            hooks: frame.hooks.map((hook) => hook.kind === 'state'
+                ? { kind: 'state', value: durableValue(hook.value, `${id}.state`) }
+                : {
+                    kind: 'memo',
+                    initialized: resetMemo ? false : hook.initialized,
+                    value: resetMemo ? undefined : hook.value,
+                    dependencies: resetMemo ? null : hook.dependencies,
+                }),
+        });
+    }
+    return output;
+}
+
+function frameFingerprint(frames) {
+    const shape = [...frames.entries()]
+        .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+        .map(([id, frame]) => ({ id, hooks: frame.hooks.map((hook) => hook.kind) }));
+    return fnv1a32(stableStringify(shape));
 }
 
 class Runtime {
     constructor(render, options = {}) {
         if (typeof render !== 'function') throw new TypeError('createApp requires a render function');
         this.renderFunction = render;
-        this.hooks = [];
-        this.hookCursor = 0;
+        this.applicationId = options.id || render.name || 'anonymous-vellum-app';
+        if (typeof this.applicationId !== 'string' || this.applicationId.length === 0) {
+            throw new TypeError('Vellum application id must be a non-empty string');
+        }
+        this.frames = new Map();
         this.handlers = new Map();
-        this.nodeIds = new Set();
         this.namedActions = new Map(Object.entries(options.actions ?? {}));
-        this.model = options.initialState ?? null;
+        for (const [name, action] of this.namedActions) {
+            if (!name || typeof action !== 'function') {
+                throw new TypeError('Vellum named actions must map non-empty names to functions');
+            }
+        }
+        this.model = durableValue(options.initialState ?? null, 'initialState');
+        this.componentTypes = new Map();
+        this.renderState = null;
+        this.mutationFrames = null;
         this.dirty = true;
         this.lastTree = null;
-        this.hasRendered = false;
     }
 
-    render() {
-        this.hookCursor = 0;
-        this.handlers = new Map();
-        this.nodeIds = new Set();
-        const prior = renderingRuntime;
+    componentIdentity(component) {
+        const explicit = component.vellumId;
+        const name = explicit ?? component.displayName ?? component.name ?? 'Anonymous';
+        if (typeof name !== 'string' || name.length === 0) {
+            throw new TypeError('Vellum component identity must be a non-empty string');
+        }
+        const identity = explicit === undefined
+            ? `${name}@${fnv1a32(Function.prototype.toString.call(component))}`
+            : `explicit:${name}`;
+        const prior = this.componentTypes.get(identity);
+        if (prior !== undefined && prior !== component) {
+            throw new Error(
+                `ambiguous Vellum component identity: ${name}; assign distinct vellumId values`,
+            );
+        }
+        this.componentTypes.set(identity, component);
+        return identity;
+    }
+
+    withFrame(id, callback) {
+        const state = this.renderState;
+        let frame = state.frames.get(id);
+        if (!frame) {
+            frame = { established: false, cursor: 0, hooks: [] };
+            state.frames.set(id, frame);
+        }
+        if (state.visitedFrames.has(id)) throw new Error(`component frame rendered twice: ${id}`);
+        state.visitedFrames.add(id);
+        frame.cursor = 0;
+        state.frameStack.push(id);
+        try {
+            const result = callback();
+            if (frame.cursor !== frame.hooks.length) throw new Error(`hook order changed in ${id}`);
+            frame.established = true;
+            return result;
+        } finally {
+            state.frameStack.pop();
+        }
+    }
+
+    renderCandidate(baseFrames, model) {
+        const state = {
+            frames: cloneFrames(baseFrames),
+            handlers: new Map(),
+            nodeIds: new Set(),
+            visitedFrames: new Set(),
+            frameStack: [],
+        };
+        const priorRuntime = renderingRuntime;
+        this.renderState = state;
         renderingRuntime = this;
         try {
-            const root = this.renderFunction(this.model);
+            const rootName = this.renderFunction.name || 'Application';
+            const root = this.withFrame(`root/component:${escapedIdentity(rootName)}`, () =>
+                this.renderFunction(model));
             const materialized = materialize(root, this, 'root');
             if (materialized.length !== 1) {
                 throw new Error('a Vellum application must render exactly one root element');
             }
-            if (this.hookCursor !== this.hooks.length) {
-                throw new Error('hook order changed between renders');
+            for (const id of [...state.frames.keys()]) {
+                if (!state.visitedFrames.has(id)) state.frames.delete(id);
             }
-            this.lastTree = materialized[0];
-            this.dirty = false;
-            this.hasRendered = true;
-            return this.lastTree;
+            return { frames: state.frames, handlers: state.handlers, tree: materialized[0] };
         } finally {
-            renderingRuntime = prior;
+            this.renderState = null;
+            renderingRuntime = priorRuntime;
         }
+    }
+
+    commitRender(baseFrames = this.frames, model = this.model) {
+        const candidate = this.renderCandidate(baseFrames, model);
+        this.frames = candidate.frames;
+        this.handlers = candidate.handlers;
+        this.model = model;
+        this.lastTree = candidate.tree;
+        this.dirty = false;
+        return this.lastTree;
+    }
+
+    render() {
+        return this.commitRender();
     }
 
     dispatch(action, payload) {
-        const inline = this.handlers.get(action);
-        if (inline) {
-            inline(payload);
-        } else {
-            const named = this.namedActions.get(action);
-            if (!named) throw new Error(`unknown Vellum action: ${action}`);
-            const nextModel = named(this.model, payload);
-            if (nextModel !== undefined) this.model = nextModel;
-            this.dirty = true;
+        const workingFrames = cloneFrames(this.frames);
+        let workingModel = this.model;
+        this.mutationFrames = workingFrames;
+        try {
+            if (action.startsWith('inline:')) {
+                const handler = this.handlers.get(action);
+                if (!handler) throw new Error(`unknown Vellum action: ${action}`);
+                handler(payload);
+            } else if (action.startsWith('named:')) {
+                const name = action.slice('named:'.length);
+                const named = this.namedActions.get(name);
+                if (!named) throw new Error(`unknown Vellum action: ${action}`);
+                const nextModel = named(workingModel, payload);
+                if (nextModel !== undefined) workingModel = durableValue(nextModel, 'model');
+            } else {
+                throw new Error(`invalid Vellum action namespace: ${action}`);
+            }
+            return this.commitRender(workingFrames, workingModel);
+        } finally {
+            this.mutationFrames = null;
         }
-        return this.render();
     }
 
     snapshot() {
-        return cloneJson({ hooks: this.hooks, model: this.model }, 'state');
+        if (this.lastTree === null) this.render();
+        const stateFrames = [...this.frames.entries()]
+            .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+            .map(([id, frame]) => ({
+                id,
+                hooks: frame.hooks.map((hook) => hook.kind),
+                values: frame.hooks
+                    .map((hook, slot) => ({ hook, slot }))
+                    .filter(({ hook }) => hook.kind === 'state')
+                    .map(({ hook, slot }) => ({ slot, value: hook.value })),
+            }));
+        return {
+            schema_version: SNAPSHOT_SCHEMA,
+            application_id: this.applicationId,
+            layout_fingerprint: frameFingerprint(this.frames),
+            model: this.model,
+            frames: stateFrames,
+        };
     }
 
     restore(snapshot) {
-        if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
-            throw new TypeError('Vellum state snapshot must be an object');
+        assertPlainJson(snapshot, 'state');
+        if (!snapshot || snapshot.schema_version !== SNAPSHOT_SCHEMA ||
+            snapshot.application_id !== this.applicationId ||
+            typeof snapshot.layout_fingerprint !== 'string' ||
+            !Array.isArray(snapshot.frames)) {
+            throw new Error('Vellum state snapshot is incompatible with this application layout');
         }
-        if (!Array.isArray(snapshot.hooks)) {
-            throw new TypeError('Vellum state snapshot hooks must be an array');
+        const frames = new Map();
+        const seen = new Set();
+        for (const source of snapshot.frames) {
+            if (!source || typeof source.id !== 'string' || source.id.length === 0 ||
+                !Array.isArray(source.hooks) || !Array.isArray(source.values) ||
+                seen.has(source.id) ||
+                source.hooks.some((kind) => kind !== 'state' && kind !== 'memo')) {
+                throw new Error('Vellum state snapshot contains an invalid component frame');
+            }
+            seen.add(source.id);
+            const frame = {
+                established: true,
+                cursor: 0,
+                hooks: source.hooks.map((kind) => kind === 'state'
+                    ? { kind: 'state', value: null }
+                    : { kind: 'memo', initialized: false, value: undefined, dependencies: null }),
+            };
+            const expected = source.hooks.filter((kind) => kind === 'state').length;
+            if (source.values.length !== expected) {
+                throw new Error('Vellum state snapshot hook layout does not match');
+            }
+            const valueSlots = new Set();
+            for (const entry of source.values) {
+                if (!Number.isInteger(entry.slot) || entry.slot < 0 ||
+                    entry.slot >= frame.hooks.length || frame.hooks[entry.slot].kind !== 'state' ||
+                    valueSlots.has(entry.slot)) {
+                    throw new Error('Vellum state snapshot hook slot does not match');
+                }
+                valueSlots.add(entry.slot);
+                frame.hooks[entry.slot].value = durableValue(
+                    entry.value, `${source.id}[${entry.slot}]`);
+            }
+            frames.set(source.id, frame);
         }
-        const restored = cloneJson(snapshot, 'state');
-        this.hooks = restored.hooks;
-        this.model = restored.model ?? null;
-        this.dirty = true;
+        const model = durableValue(snapshot.model ?? null, 'model');
+        const candidate = this.renderCandidate(frames, model);
+        if (frameFingerprint(candidate.frames) !== snapshot.layout_fingerprint) {
+            throw new Error('Vellum state snapshot is incompatible with this application layout');
+        }
+        this.frames = candidate.frames;
+        this.handlers = candidate.handlers;
+        this.model = model;
+        this.lastTree = candidate.tree;
+        this.dirty = false;
+        return this.lastTree;
     }
 }
 
@@ -329,6 +555,7 @@ export function mount(application) {
             if (!request || request.protocol !== PROTOCOL || typeof request.action !== 'string') {
                 throw new Error(`invalid ${PROTOCOL} dispatch request`);
             }
+            assertPlainJson(request.payload ?? null, 'payload');
             return stableStringify({
                 protocol: PROTOCOL,
                 tree: runtime.dispatch(request.action, request.payload ?? null),
@@ -342,8 +569,7 @@ export function mount(application) {
             if (!envelope || envelope.protocol !== PROTOCOL) {
                 throw new Error(`invalid ${PROTOCOL} state snapshot`);
             }
-            runtime.restore(envelope.state);
-            return stableStringify({ protocol: PROTOCOL, tree: runtime.render() });
+            return stableStringify({ protocol: PROTOCOL, tree: runtime.restore(envelope.state) });
         },
     });
     Object.defineProperty(globalThis, '__vellum', {

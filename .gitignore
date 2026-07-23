@@ -1,6 +1,6 @@
 /build*/
 /dist/
-/node_modules/
+node_modules/
 /.vellum-cache/
 *.pyc
 __pycache__/
