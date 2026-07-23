@@ -18,21 +18,43 @@ web = "fallback"
 ```
 
 `web = "fallback"` means the JSX fallback is the explicit browser behavior.
-`web = "wasm"` instead requires a separate `wasm_source`. The Wasm proof tool
-compiles that app-owned source with Emscripten and executes it through the same
-descriptor, render-context, and paint-command ABI:
+`web = "wasm"` instead requires a `wasm_source`. The installed web backend
+links that source with Vellum's browser ABI adapter and packages an ES module
+and Wasm file with the static application:
+
+```toml
+[component.level-meter]
+native_source = "native/level-meter.cpp"
+web = "wasm"
+wasm_source = "native/level-meter.cpp"
+```
+
+The native and browser sources may be the same ABI-clean file or separate
+implementations. An activated Emscripten SDK providing `em++` is a build
+prerequisite. Vellum discovers it through `EMSDK`, `~/emsdk`, or `PATH`.
+
+Build and exercise the installed browser application normally:
+
+```sh
+vellum build --target web
+vellum test --target web --scenario smoke
+vellum package --target web
+```
+
+The standalone proof tool remains useful for checking a component without
+building an application:
 
 ```sh
 python3 scripts/verify_component_wasm.py --project path/to/app --json
 ```
 
-That is real Wasm execution evidence for the extension ABI. It is not yet a
-claim that the installed browser application backend packages the module; the
-browser target remains an incubation lane.
+For `web = "wasm"`, descriptor mismatches, missing compilers, malformed paint
+commands, empty output, and missing installed adapter/header files fail the
+build or scenario. Vellum never silently substitutes the JSX fallback. The
+fallback remains explicit behavior only for `web = "fallback"`.
 
 [`product/component-support.yaml`](../../product/component-support.yaml) is the
-machine-readable claim boundary. In particular, `vellum build --target web`
-does not yet incorporate app-owned Wasm components.
+machine-readable claim boundary.
 
 Use the component from TypeScript or JavaScript:
 
@@ -60,3 +82,9 @@ source and declaration stay in the application repository. `run`, `test`,
 after declaring one: it verifies that Xcode's selected `clang++` and macOS SDK
 are both available. The backend selects that SDK itself; applications do not
 set `SDKROOT` or maintain compiler flags.
+
+Browser scenarios support the same bounded semantic action vocabulary used by
+the native scenario lane: wait, capture evidence, press/click, controlled text
+input, and the documented semantic keys. This is interaction-contract parity;
+it does not claim native persistence or the native PNG capture/montage command
+on the web.

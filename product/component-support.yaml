@@ -10,9 +10,15 @@ web:
   wasm_source:
     abi_compile_and_execution_proof: supported
     proof_command: scripts/verify_component_wasm.py
-    installed_web_backend_integration: unavailable
-    vellum_build_target_web: unavailable
+    installed_web_backend_integration: supported
+    vellum_build_target_web: supported
+    app_owned_module: linked-es-module-and-wasm
+    compiler_prerequisite: activated-emscripten-sdk-with-em++
+    malformed_output: fail-closed
+    silent_fallback_for_wasm_declaration: forbidden
+    browser_scenario_proof: required
 claims:
-  - custom_components artifact capability means native installed-SDK support only
-  - wasm proof does not imply browser packaging or installed web backend support
-  - web support becomes available only after an installed web build consumes the app-owned wasm module
+  - custom_components requires the installed public ABI and browser adapter payload
+  - web wasm support is source-linked per application and does not dynamically load native modules
+  - web scenario action parity covers wait capture press click input and bounded semantic keys
+  - web scenario parity does not claim native persistence or web capture-montage command parity

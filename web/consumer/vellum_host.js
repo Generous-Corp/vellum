@@ -49,6 +49,60 @@ const api = {
     backend: module.cwrap('vellum_web_backend_name', 'string', []),
 };
 
+const componentDocument = await fetch('./vellum_components.json').then(response => {
+    if (!response.ok) throw new Error(`component manifest request failed: ${response.status}`);
+    return response.json();
+});
+if (componentDocument.schema !== 'vellum.web-components.v1' ||
+    !Array.isArray(componentDocument.components)) {
+    throw new Error('unsupported web component manifest');
+}
+const componentDeclarations = new Map();
+const componentModules = new Map();
+const componentEvidence = new Map();
+for (const declaration of componentDocument.components) {
+    if (!declaration || typeof declaration.id !== 'string' ||
+        componentDeclarations.has(declaration.id) ||
+        !['fallback', 'wasm'].includes(declaration.web)) {
+        throw new Error('invalid or duplicate web component declaration');
+    }
+    componentDeclarations.set(declaration.id, declaration);
+    if (declaration.web !== 'wasm') continue;
+    if (typeof declaration.module !== 'string' || typeof declaration.wasm !== 'string') {
+        throw new Error(`Wasm component payload is incomplete: ${declaration.id}`);
+    }
+    const imported = await import(`./${declaration.module}`);
+    const instance = await imported.default({
+        locateFile(path) {
+            return path.endsWith('.wasm') ? `./${declaration.wasm}` : path;
+        },
+    });
+    const componentApi = {
+        start: instance.cwrap('vellum_component_web_start', 'number', ['string']),
+        render: instance.cwrap(
+            'vellum_component_web_render', 'number',
+            ['string', 'string', 'number', 'number'],
+        ),
+        count: instance.cwrap('vellum_component_web_command_count', 'number', []),
+        kind: instance.cwrap('vellum_component_web_command_kind', 'number', ['number']),
+        suffix: instance.cwrap('vellum_component_web_command_suffix', 'string', ['number']),
+        number: instance.cwrap(
+            'vellum_component_web_command_number', 'number', ['number', 'number'],
+        ),
+        text: instance.cwrap('vellum_component_web_command_text', 'string', ['number']),
+        error: instance.cwrap('vellum_component_web_error', 'string', []),
+    };
+    if (!componentApi.start(declaration.id)) {
+        throw new Error(
+            `Wasm component descriptor failed: ${declaration.id}: ${componentApi.error()}`,
+        );
+    }
+    componentModules.set(declaration.id, componentApi);
+    componentEvidence.set(declaration.id, {
+        id: declaration.id, loaded: true, renders: 0, commands: 0,
+    });
+}
+
 function color(value, fallback) {
     const source = typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value) ? value : fallback;
     return [1, 3, 5].map(offset => Number.parseInt(source.slice(offset, offset + 2), 16) / 255).concat(1);
@@ -60,21 +114,78 @@ function directText(node) {
 }
 
 let interactions = [];
+function emitCustomNode(node, proposed, absoluteX, absoluteY, componentApi) {
+    const properties = JSON.stringify(node.properties || {});
+    if (!componentApi.render(node.id, properties, proposed.width, proposed.height)) {
+        throw new Error(`Wasm component render failed: ${node.component}: ${componentApi.error()}`);
+    }
+    const count = componentApi.count();
+    if (!(count > 0 && count <= 4096)) {
+        throw new Error(`Wasm component emitted an invalid command count: ${node.component}`);
+    }
+    for (let index = 0; index < count; ++index) {
+        const kind = componentApi.kind(index);
+        const suffix = componentApi.suffix(index);
+        const values = Array.from({length: 10}, (_, field) => componentApi.number(index, field));
+        const id = `${node.id}/custom/${suffix}`;
+        if (kind === 1) {
+            api.rectangle(
+                id, absoluteX + values[0], absoluteY + values[1], values[2], values[3],
+                values[8], values[4], values[5], values[6], values[7],
+            );
+        } else if (kind === 2) {
+            api.text(
+                id, componentApi.text(index), absoluteX + values[0], absoluteY + values[1],
+                values[2], values[3], values[9],
+                values[4], values[5], values[6], values[7],
+            );
+        } else {
+            throw new Error(`Wasm component emitted an unsupported command: ${node.component}`);
+        }
+    }
+    const evidence = componentEvidence.get(node.component);
+    evidence.renders += 1;
+    evidence.commands += count;
+}
+
 function lowerNode(node, proposed, parentX, parentY) {
     const style = node.style || {};
     const absoluteX = parentX + proposed.x;
     const absoluteY = parentY + proposed.y;
-    if (node.type === 'text' || node.type === 'text-run') {
+    if (node.type === 'custom') {
+        const declaration = componentDeclarations.get(node.component);
+        if (!declaration) throw new Error(`custom component is undeclared: ${node.component}`);
+        if (declaration.web === 'wasm') {
+            emitCustomNode(
+                node, proposed, absoluteX, absoluteY, componentModules.get(node.component),
+            );
+            return;
+        }
+    } else if (node.type === 'text' || node.type === 'text-run') {
         api.text(node.id, directText(node), absoluteX, absoluteY, proposed.width, proposed.height,
             Math.max(1, number(style, 'fontSize', 14)), ...color(style.color, '#111827'));
+    } else if (node.type === 'text-input') {
+        api.rectangle(
+            node.id, absoluteX, absoluteY, proposed.width, proposed.height,
+            Math.max(6, number(style, 'borderRadius', 6)),
+            ...color(style.backgroundColor, '#FFFFFF'),
+        );
+        api.text(
+            `${node.id}/value`, node.value || node.placeholder || '',
+            absoluteX + 12, absoluteY + 10, Math.max(0, proposed.width - 24),
+            Math.max(0, proposed.height - 20),
+            Math.max(1, number(style, 'fontSize', 14)), ...color(style.color, '#111827'),
+        );
     } else if (node.type === 'button' || style.backgroundColor) {
         const fill = node.type === 'button' && !style.backgroundColor ? '#14b8a6' : style.backgroundColor;
         api.rectangle(node.id, absoluteX, absoluteY, proposed.width, proposed.height,
             Math.max(0, number(style, 'borderRadius', node.type === 'button' ? 10 : 0)), ...color(fill, '#000000'));
     }
-    for (const action of Object.values(node.events || {})) {
-        interactions.push({ id: node.id, action, x: absoluteX, y: absoluteY,
-            width: proposed.width, height: proposed.height });
+    if (Object.keys(node.events || {}).length > 0) {
+        interactions.push({
+            id: node.id, type: node.type, value: node.value || '', events: node.events,
+            x: absoluteX, y: absoluteY, width: proposed.width, height: proposed.height,
+        });
     }
     if (node.type === 'button' && directText(node)) {
         api.text(`${node.id}/label`, directText(node), absoluteX + 16,
@@ -91,7 +202,8 @@ function lowerNode(node, proposed, parentX, parentY) {
         const childStyle = child.style || {};
         let width = number(childStyle, 'width', horizontal ? 0 : Math.max(0, proposed.width - padding * 2));
         let height = number(childStyle, 'height', child.type === 'text' || child.type === 'text-run'
-            ? number(childStyle, 'fontSize', 14) * 1.4 : child.type === 'button' ? 48 : 64);
+            ? number(childStyle, 'fontSize', 14) * 1.4
+            : child.type === 'button' || child.type === 'text-input' ? 48 : 64);
         const x = number(childStyle, 'x', isStack && horizontal ? cursor : padding);
         const y = number(childStyle, 'y', isStack && !horizontal ? cursor : padding);
         if (width <= 0 && horizontal) width = Math.max(0, proposed.width - cursor - padding);
@@ -111,7 +223,7 @@ function render() {
     interactions = [];
     lowerNode(tree, {x: 0, y: 0, width, height}, 0, 0);
     if (!api.render()) throw new Error('Wasm did not render');
-    return {digest: api.digest() >>> 0, commandCount: api.count()};
+    return {digest: api.digest() >>> 0, commandCount: api.count(), width, height};
 }
 
 if (!api.start()) throw new Error('shared C++ runtime did not start');
@@ -123,34 +235,95 @@ canvas.addEventListener('click', event => {
     const y = (event.clientY - rect.top) * canvas.height / rect.height / scale;
     const hit = [...interactions].reverse().find(item => x >= item.x && y >= item.y &&
         x <= item.x + item.width && y <= item.y + item.height);
-    if (hit) {
-        bridge.dispatchJSON(JSON.stringify({protocol: bridge.protocol, action: hit.action, payload: null}));
+    if (hit?.events?.press) {
+        bridge.dispatchJSON(JSON.stringify({
+            protocol: bridge.protocol, action: hit.events.press, payload: null,
+        }));
         current = render();
     }
 });
+
+function dispatch(action, payload) {
+    bridge.dispatchJSON(JSON.stringify({protocol: bridge.protocol, action, payload}));
+    current = render();
+}
+
+function interaction(target, type = null) {
+    const value = interactions.find(item => item.id === target && (type === null || item.type === type));
+    if (!value) throw new Error(`scenario target not found: ${target}`);
+    return value;
+}
+
+function withoutLastGrapheme(value) {
+    if (!value) return '';
+    if (typeof Intl.Segmenter === 'function') {
+        const segments = [...new Intl.Segmenter(undefined, {granularity: 'grapheme'}).segment(value)];
+        return value.slice(0, segments.at(-1).index);
+    }
+    return Array.from(value).slice(0, -1).join('');
+}
 
 async function runScenario(path) {
     const response = await fetch(path);
     if (!response.ok) throw new Error(`scenario request failed: ${response.status}`);
     const scenario = await response.json();
-    if (scenario.schema !== 'vellum.scenario.v1' || !Array.isArray(scenario.steps)) {
+    if (scenario.schema !== 'vellum.scenario.v1' || !Array.isArray(scenario.steps) ||
+        !scenario.viewport || !Number.isInteger(scenario.viewport.width) ||
+        !Number.isInteger(scenario.viewport.height)) {
         throw new Error('unsupported scenario document');
+    }
+    if (current.width !== scenario.viewport.width || current.height !== scenario.viewport.height) {
+        throw new Error(
+            `scenario viewport mismatch: expected ${scenario.viewport.width}x` +
+            `${scenario.viewport.height}, rendered ${current.width}x${current.height}`,
+        );
     }
     const initial = current;
     const captures = [];
     const presses = [];
+    const inputs = [];
+    const keys = [];
     for (const step of scenario.steps) {
         if (step.action === 'wait-for-idle') {
             await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
         } else if (step.action === 'capture') {
             captures.push({name: step.name || 'capture', ...current});
         } else if (step.action === 'press' || step.action === 'click') {
-            const hit = interactions.find(item => item.id === (step.target || step.id));
-            if (!hit) throw new Error(`scenario target not found: ${step.target || step.id}`);
+            const target = step.target || step.id;
+            const hit = interaction(target);
+            if (!hit.events.press) throw new Error(`scenario target is not pressable: ${target}`);
             const before = current.digest;
-            bridge.dispatchJSON(JSON.stringify({protocol: bridge.protocol, action: hit.action, payload: null}));
-            current = render();
+            dispatch(hit.events.press, null);
             presses.push({target: hit.id, before, after: current.digest, changed: before !== current.digest});
+        } else if (step.action === 'input') {
+            const hit = interaction(step.target, 'text-input');
+            if (!hit.events.change) throw new Error(`scenario target is not editable: ${step.target}`);
+            dispatch(hit.events.change, {value: step.text, inputType: 'scenario'});
+            inputs.push({target: step.target, bytes: new TextEncoder().encode(step.text).length,
+                executed: true});
+        } else if (step.action === 'key') {
+            let hit = interaction(step.target, 'text-input');
+            let executed = false;
+            if (hit.events.keyDown) {
+                dispatch(hit.events.keyDown, {key: step.key, repeat: false, source: 'scenario'});
+                executed = true;
+                hit = interaction(step.target, 'text-input');
+            }
+            if (step.key === 'Enter' && hit.events.submit) {
+                dispatch(hit.events.submit, {value: hit.value, source: 'scenario'});
+                executed = true;
+                hit = interaction(step.target, 'text-input');
+            }
+            if (step.key === 'Backspace' && hit.events.change) {
+                dispatch(hit.events.change, {
+                    value: withoutLastGrapheme(hit.value), inputType: 'scenario',
+                });
+                executed = true;
+            }
+            if (!executed) {
+                throw new Error(`text input has no handler for semantic key: ${step.key}`);
+            }
+            keys.push({target: step.target, key: step.key, executed: true});
         } else {
             throw new Error(`unsupported scenario action: ${step.action}`);
         }
@@ -159,7 +332,8 @@ async function runScenario(path) {
         throw new Error('every semantic press must change rendered state');
     }
     return {schema: 'vellum.web-proof.v1', scenario: scenario.name, backend: api.backend(),
-        authoringRuntime: 'browser JavaScript', initial, final: current, captures, presses,
+        authoringRuntime: 'browser JavaScript', initial, final: current,
+        captures, presses, inputs, keys, components: [...componentEvidence.values()],
         canvasDataBytes: canvas.toDataURL('image/png').length};
 }
 

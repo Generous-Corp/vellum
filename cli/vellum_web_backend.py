@@ -21,7 +21,7 @@ from typing import Any, Iterable
 
 from vellum_manifest import (
     LOCK_NAME, LOCK_SCHEMA, ManifestError, imported_materialized_design,
-    load_app_manifest,
+    load_app_manifest, load_components_manifest,
 )
 
 
@@ -29,6 +29,16 @@ RESULT_SCHEMA = "vellum.backend.result.v1"
 SCENARIO_SCHEMA = "vellum.scenario.v1"
 SUPPORTED_TARGET = "web"
 WEB_COMMANDS = {"build", "run", "test", "package"}
+MAX_SCENARIO_STEPS = 1000
+MAX_SCENARIO_TARGET_BYTES = 1024
+MAX_SCENARIO_INPUT_BYTES = 64 * 1024
+SUPPORTED_SCENARIO_KEYS = {
+    "Enter", "Escape", "Backspace", "Tab", "ArrowUp", "ArrowDown",
+    "ArrowLeft", "ArrowRight", "Home", "End", "Delete",
+}
+PRIVATE_VELLUM_INCLUDE = re.compile(
+    r'^\s*#\s*include\s*[<"](vellum/[^>"]+)[>"]', re.MULTILINE,
+)
 
 
 class BackendFailure(RuntimeError):
@@ -107,7 +117,16 @@ def project_context(project_value: str) -> dict[str, Any]:
     slug = lock.get("project", {}).get("slug")
     if not isinstance(slug, str) or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", slug):
         raise BackendFailure("Project lock has an invalid slug", status="invalid_project_lock")
-    return {"root": project, "lock": lock, "manifest": manifest, "entry": entry, "slug": slug}
+    try:
+        components = load_components_manifest(
+            project, manifest["native"]["components_manifest"]
+        )
+    except ManifestError as error:
+        raise BackendFailure(str(error), status="invalid_component_manifest") from error
+    return {
+        "root": project, "lock": lock, "manifest": manifest, "entry": entry,
+        "slug": slug, "components": components,
+    }
 
 
 def run_checked(arguments: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -125,6 +144,130 @@ def sdk_node(sdk: Path) -> Path:
         if node.is_file() and os.access(node, os.X_OK):
             return node
     raise BackendFailure("Installed SDK has no exact Node runtime", status="invalid_sdk")
+
+
+def discover_emxx() -> Path:
+    candidates = [
+        Path(os.environ["EMSDK"]) / "upstream/emscripten/em++"
+        if os.environ.get("EMSDK") else None,
+        Path.home() / "emsdk/upstream/emscripten/em++",
+        Path(shutil.which("em++")) if shutil.which("em++") else None,
+    ]
+    for candidate in candidates:
+        if candidate and candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate.resolve()
+    raise BackendFailure(
+        "em++ is required for declared web Wasm custom components; activate emsdk",
+        status="prerequisite_missing", exit_code=4,
+    )
+
+
+def emxx_command(emxx: Path) -> list[str]:
+    driver = emxx.with_name("em++.py")
+    if not driver.is_file():
+        return [str(emxx)]
+    candidates = [
+        Path(sys.executable), Path("/opt/homebrew/bin/python3"),
+        Path("/usr/local/bin/python3"),
+    ]
+    for candidate in candidates:
+        if not candidate.is_file():
+            continue
+        completed = subprocess.run(
+            [str(candidate), "-c", "import sys; print(int(sys.version_info >= (3, 10)))"],
+            text=True, capture_output=True, check=False,
+        )
+        if completed.returncode == 0 and completed.stdout.strip() == "1":
+            return [str(candidate), str(driver)]
+    raise BackendFailure(
+        "Emscripten requires Python 3.10 or newer",
+        status="prerequisite_missing", exit_code=4,
+    )
+
+
+def validate_component_source(path: Path) -> None:
+    try:
+        content = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        raise BackendFailure(
+            f"Cannot read custom component source {path}: {error}",
+            status="invalid_component_source",
+        ) from error
+    if len(content.encode("utf-8")) > 4 * 1024 * 1024:
+        raise BackendFailure(
+            "Custom component source exceeds 4 MiB",
+            status="invalid_component_source",
+        )
+    framework_includes = PRIVATE_VELLUM_INCLUDE.findall(content)
+    forbidden = sorted(set(framework_includes) - {"vellum/components/abi.h"})
+    if forbidden:
+        raise BackendFailure(
+            "Web custom components may use only the public "
+            "vellum/components/abi.h framework header; "
+            f"forbidden includes: {forbidden}",
+            status="private_component_api",
+        )
+
+
+def build_component_modules(
+    context: dict[str, Any], sdk: Path, destination: Path,
+) -> list[dict[str, str]]:
+    declarations = context["components"]
+    output: list[dict[str, str]] = []
+    wasm_declarations = [item for item in declarations if item["web"] == "wasm"]
+    if wasm_declarations:
+        metadata = load_json(sdk / "metadata.json", "vellum.sdk-artifact.v1", "sdk_metadata")
+        if metadata.get("capabilities", {}).get("custom_components") is not True:
+            raise BackendFailure(
+                "Installed SDK does not provide the custom component ABI",
+                status="capability_unavailable", exit_code=4,
+            )
+        include_root = sdk / "sdk/include"
+        abi = include_root / "vellum/components/abi.h"
+        adapter = sdk / "web/browser_component_adapter.cpp"
+        if not abi.is_file() or not adapter.is_file():
+            raise BackendFailure(
+                "Installed SDK is missing browser custom-component support",
+                status="invalid_sdk",
+            )
+        emxx = discover_emxx()
+        exported = (
+            "['_vellum_component_web_start','_vellum_component_web_render',"
+            "'_vellum_component_web_command_count','_vellum_component_web_command_kind',"
+            "'_vellum_component_web_command_suffix','_vellum_component_web_command_number',"
+            "'_vellum_component_web_command_text','_vellum_component_web_error']"
+        )
+        for declaration in wasm_declarations:
+            source = safe_relative(
+                context["root"], declaration["wasm_source"],
+                f"custom component {declaration['id']} Wasm source",
+            )
+            validate_component_source(source)
+            javascript_name = f"vellum_component_{declaration['id']}.js"
+            javascript = destination / javascript_name
+            run_checked([
+                *emxx_command(emxx), "-std=c++20", "-O2", "-sWASM=1",
+                "-sMODULARIZE=1", "-sEXPORT_ES6=1", "-sENVIRONMENT=web,node",
+                "-sFILESYSTEM=0", "-sASSERTIONS=1",
+                f"-sEXPORTED_FUNCTIONS={exported}",
+                "-sEXPORTED_RUNTIME_METHODS=['cwrap']",
+                "-I", str(include_root), str(adapter), str(source),
+                "-o", str(javascript),
+            ], cwd=context["root"])
+            wasm = javascript.with_suffix(".wasm")
+            if not javascript.is_file() or not wasm.is_file():
+                raise BackendFailure(
+                    f"Emscripten omitted the component payload for {declaration['id']}",
+                    status="tool_failed",
+                )
+            output.append({
+                "id": declaration["id"], "web": "wasm",
+                "module": javascript.name, "wasm": wasm.name,
+            })
+    for declaration in declarations:
+        if declaration["web"] == "fallback":
+            output.append({"id": declaration["id"], "web": "fallback"})
+    return sorted(output, key=lambda item: item["id"])
 
 
 def validate_web_payload(sdk: Path) -> dict[str, Any]:
@@ -167,6 +310,11 @@ def build_app(context: dict[str, Any], sdk: Path) -> dict[str, Any]:
     run_checked(command, cwd=project)
     for name in ("vellum_web_core.js", "vellum_web_core.wasm", "vellum_host.js", "style.css"):
         shutil.copy2(sdk / "web" / name, staging / name)
+    components = build_component_modules(context, sdk, staging)
+    (staging / "vellum_components.json").write_text(json.dumps({
+        "schema": "vellum.web-components.v1",
+        "components": components,
+    }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     index = (sdk / "web/index.html").read_text(encoding="utf-8").replace(
         "{{APP_NAME}}", html.escape(context["manifest"]["app"]["name"], quote=True)
     )
@@ -188,7 +336,11 @@ def build_app(context: dict[str, Any], sdk: Path) -> dict[str, Any]:
     if destination.exists():
         shutil.rmtree(destination)
     os.replace(staging, destination)
-    return {"root": destination, "bundle": bundle.name, "files": sorted(path.name for path in destination.iterdir())}
+    return {
+        "root": destination, "bundle": bundle.name,
+        "files": sorted(path.name for path in destination.iterdir()),
+        "components": components,
+    }
 
 
 def ensure_build(context: dict[str, Any], sdk: Path, no_build: bool = False) -> dict[str, Any]:
@@ -196,7 +348,22 @@ def ensure_build(context: dict[str, Any], sdk: Path, no_build: bool = False) -> 
     if no_build:
         if not (root / "build-manifest.json").is_file():
             raise BackendFailure("No prior web build exists", status="build_missing")
-        return {"root": root, "bundle": "app.js", "files": sorted(path.name for path in root.iterdir())}
+        component_manifest = load_json(
+            root / "vellum_components.json",
+            "vellum.web-components.v1",
+            "web_components",
+        )
+        components = component_manifest.get("components")
+        if not isinstance(components, list):
+            raise BackendFailure(
+                "Built web component manifest is malformed",
+                status="build_missing",
+            )
+        return {
+            "root": root, "bundle": "app.js",
+            "files": sorted(path.name for path in root.iterdir()),
+            "components": components,
+        }
     return build_app(context, sdk)
 
 
@@ -210,7 +377,9 @@ def chrome_path() -> str:
     return chrome
 
 
-def validate_scenario_evidence(evidence: dict[str, Any]) -> None:
+def validate_scenario_evidence(
+    evidence: dict[str, Any], *, expected_wasm_ids: list[str] | None = None
+) -> None:
     def valid_frame(value: object) -> bool:
         if not isinstance(value, dict):
             return False
@@ -226,6 +395,9 @@ def validate_scenario_evidence(evidence: dict[str, Any]) -> None:
         )
 
     presses = evidence.get("presses")
+    inputs = evidence.get("inputs")
+    keys = evidence.get("keys")
+    components = evidence.get("components")
     canvas_bytes = evidence.get("canvasDataBytes")
     if (
         evidence.get("schema") != "vellum.web-proof.v1"
@@ -243,9 +415,38 @@ def validate_scenario_evidence(evidence: dict[str, Any]) -> None:
                 isinstance(item, dict) and item.get("changed") is True
                 for item in presses
         )
+        or not isinstance(inputs, list)
+        or not all(isinstance(item, dict) and item.get("executed") is True for item in inputs)
+        or not isinstance(keys, list)
+        or not all(isinstance(item, dict) and item.get("executed") is True for item in keys)
+        or not isinstance(components, list)
     ):
         raise BackendFailure(
             f"Browser scenario proof failed: {evidence}",
+            status="test_failed",
+        )
+    expected = sorted(expected_wasm_ids or [])
+    observed: list[str] = []
+    for item in components:
+        if (
+            not isinstance(item, dict)
+            or not isinstance(item.get("id"), str)
+            or item.get("loaded") is not True
+            or not isinstance(item.get("renders"), int)
+            or isinstance(item.get("renders"), bool)
+            or item["renders"] < 0
+            or not isinstance(item.get("commands"), int)
+            or isinstance(item.get("commands"), bool)
+            or item["commands"] < 0
+        ):
+            raise BackendFailure(
+                f"Browser component proof failed: {components}",
+                status="test_failed",
+            )
+        observed.append(item["id"])
+    if sorted(observed) != expected or len(observed) != len(set(observed)):
+        raise BackendFailure(
+            f"Browser component inventory differs: expected={expected} observed={observed}",
             status="test_failed",
         )
 
@@ -280,7 +481,9 @@ def run_chrome_scenario(
                     process.wait(5)
 
 
-def run_scenario(build: Path, scenario: Path) -> dict[str, Any]:
+def run_scenario(
+    build: Path, scenario: Path, *, expected_wasm_ids: list[str] | None = None
+) -> dict[str, Any]:
     scenario_copy = build / "__vellum_scenario.json"
     shutil.copy2(scenario, scenario_copy)
     received = threading.Event()
@@ -311,8 +514,82 @@ def run_scenario(build: Path, scenario: Path) -> dict[str, Any]:
     finally:
         server.shutdown(); thread.join(5)
         scenario_copy.unlink(missing_ok=True)
-    validate_scenario_evidence(evidence)
+    validate_scenario_evidence(evidence, expected_wasm_ids=expected_wasm_ids)
     return evidence
+
+
+def validate_scenario_document(scenario: dict[str, Any]) -> None:
+    if set(scenario) - {"schema", "name", "viewport", "steps"}:
+        raise BackendFailure("Scenario contains unknown fields", status="invalid_scenario")
+    name = scenario.get("name")
+    try:
+        name_size = len(name.encode("utf-8")) if isinstance(name, str) else -1
+    except UnicodeEncodeError:
+        name_size = 257
+    if not isinstance(name, str) or not name or name_size > 256:
+        raise BackendFailure("Scenario name is invalid", status="invalid_scenario")
+    viewport = scenario.get("viewport")
+    if not isinstance(viewport, dict) or set(viewport) != {"width", "height"}:
+        raise BackendFailure("Scenario viewport is required", status="invalid_scenario")
+    for field in ("width", "height"):
+        item = viewport.get(field)
+        if not isinstance(item, int) or isinstance(item, bool) or not 0 < item <= 16384:
+            raise BackendFailure(
+                f"Scenario viewport {field} is invalid",
+                status="invalid_scenario",
+            )
+    steps = scenario.get("steps")
+    if not isinstance(steps, list) or len(steps) > MAX_SCENARIO_STEPS:
+        raise BackendFailure(
+            "Scenario steps must be an array of at most 1000 actions",
+            status="invalid_scenario",
+        )
+
+    def bounded(value: object, maximum: int) -> bool:
+        if not isinstance(value, str) or not value or "\0" in value:
+            return False
+        try:
+            return len(value.encode("utf-8")) <= maximum
+        except UnicodeEncodeError:
+            return False
+
+    for index, step in enumerate(steps):
+        if not isinstance(step, dict) or not isinstance(step.get("action"), str):
+            raise BackendFailure(f"Scenario step {index} is invalid", status="invalid_scenario")
+        action = step["action"]
+        if action == "wait-for-idle":
+            valid = set(step) == {"action"}
+        elif action == "capture":
+            valid = set(step) in ({"action"}, {"action", "name"}) and (
+                "name" not in step or bounded(step["name"], 256)
+            )
+        elif action in {"press", "click"}:
+            valid = set(step) in ({"action", "target"}, {"action", "id"}) and \
+                bounded(step.get("target") or step.get("id"), MAX_SCENARIO_TARGET_BYTES)
+        elif action == "input":
+            text = step.get("text")
+            try:
+                input_size = len(text.encode("utf-8")) if isinstance(text, str) else -1
+            except UnicodeEncodeError:
+                input_size = MAX_SCENARIO_INPUT_BYTES + 1
+            valid = set(step) == {"action", "target", "text"} and \
+                bounded(step.get("target"), MAX_SCENARIO_TARGET_BYTES) and \
+                isinstance(text, str) and "\0" not in text and \
+                input_size <= MAX_SCENARIO_INPUT_BYTES
+        elif action == "key":
+            valid = set(step) == {"action", "target", "key"} and \
+                bounded(step.get("target"), MAX_SCENARIO_TARGET_BYTES) and \
+                isinstance(step.get("key"), str) and step["key"] in SUPPORTED_SCENARIO_KEYS
+        else:
+            raise BackendFailure(
+                f"Unsupported scenario action: {action}",
+                status="unsupported_scenario_action",
+            )
+        if not valid:
+            raise BackendFailure(
+                f"Scenario step {index} has invalid fields",
+                status="invalid_scenario",
+            )
 
 
 def scenario_path(context: dict[str, Any], value: str | None) -> Path:
@@ -320,7 +597,8 @@ def scenario_path(context: dict[str, Any], value: str | None) -> Path:
     if not relative.endswith(".json") and "/" not in relative:
         relative = f"tests/scenarios/{relative}.json"
     path = safe_relative(context["root"], relative, "scenario")
-    load_json(path, SCENARIO_SCHEMA, "scenario")
+    scenario = load_json(path, SCENARIO_SCHEMA, "scenario")
+    validate_scenario_document(scenario)
     return path
 
 
@@ -345,7 +623,14 @@ def command_result(command: str, args: argparse.Namespace, context: dict[str, An
                       data={"target": "web", **{key: str(value) if isinstance(value, Path) else value for key, value in built.items()}})
     if command == "test" or (command == "run" and args.no_window):
         built = ensure_build(context, sdk, getattr(args, "no_build", False))
-        evidence = run_scenario(built["root"], scenario_path(context, args.scenario))
+        expected_wasm_ids = [
+            item["id"] for item in built.get("components", [])
+            if isinstance(item, dict) and item.get("web") == "wasm"
+        ]
+        evidence = run_scenario(
+            built["root"], scenario_path(context, args.scenario),
+            expected_wasm_ids=expected_wasm_ids,
+        )
         return result(command, ok=True, status="tests_passed", message="Web scenario passed in Chrome",
                       data={"target": "web", "build": str(built["root"]), "evidence": evidence})
     if command == "run":
