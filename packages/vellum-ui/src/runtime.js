@@ -1,4 +1,9 @@
 import { services } from './services.js';
+import {
+    cloneEffect,
+    registerEffect,
+    scheduleCommittedEffects,
+} from './effects.js';
 
 const ELEMENT = Symbol.for('vellum.element');
 const FRAGMENT = Symbol.for('vellum.fragment');
@@ -381,38 +386,9 @@ export function useMemo(factory, dependencies) {
     return record.value;
 }
 
-function dependenciesMatch(previous, next) {
-    return previous !== null && next !== null &&
-        previous.length === next.length &&
-        previous.every((value, index) => Object.is(value, next[index]));
-}
-
 export function useEffect(effect, dependencies) {
-    if (typeof effect !== 'function') {
-        throw new TypeError('useEffect requires an effect function');
-    }
-    if (dependencies !== undefined && !Array.isArray(dependencies)) {
-        throw new TypeError('useEffect dependencies must be an array or undefined');
-    }
     const { frameId, frame, index } = activeHook('useEffect');
-    const nextDependencies = dependencies === undefined ? null : [...dependencies];
-    if (index >= frame.hooks.length) {
-        if (frame.established) throw new Error(`hook order changed in ${frameId}`);
-        frame.hooks.push({
-            kind: 'effect',
-            dependencies: undefined,
-            cleanup: null,
-            effect: null,
-            pending: false,
-        });
-    }
-    const record = frame.hooks[index];
-    if (record.kind !== 'effect') throw new Error(`hook kind changed in ${frameId}`);
-    const changed = record.dependencies === undefined ||
-        !dependenciesMatch(record.dependencies, nextDependencies);
-    record.effect = effect;
-    record.pending = changed;
-    record.nextDependencies = nextDependencies;
+    registerEffect(frame, frameId, index, effect, dependencies);
 }
 
 function validateStyle(style, path) {
@@ -591,13 +567,7 @@ function cloneFrames(frames, resetMemo = false) {
                     return { kind: 'state', value: durableValue(hook.value, `${id}.state`) };
                 }
                 if (hook.kind === 'effect') {
-                    return {
-                        kind: 'effect',
-                        dependencies: hook.dependencies,
-                        cleanup: hook.cleanup,
-                        effect: hook.effect,
-                        pending: false,
-                    };
+                    return cloneEffect(hook);
                 }
                 return {
                     kind: 'memo',
@@ -731,47 +701,7 @@ class Runtime {
         this.lastTree = candidate.tree;
         this.dirty = false;
         this.revision += 1;
-        const effects = [];
-        for (const [frameId, frame] of candidate.frames) {
-            frame.hooks.forEach((hook, index) => {
-                if (hook.kind !== 'effect' || !hook.pending) return;
-                effects.push({
-                    frameId,
-                    index,
-                    cleanup: hook.cleanup,
-                    effect: hook.effect,
-                    dependencies: hook.nextDependencies,
-                });
-                hook.pending = false;
-                delete hook.nextDependencies;
-            });
-        }
-        for (const [frameId, frame] of previousFrames) {
-            if (candidate.frames.has(frameId)) continue;
-            frame.hooks.forEach((hook) => {
-                if (hook.kind === 'effect' && typeof hook.cleanup === 'function') {
-                    effects.push({ cleanup: hook.cleanup, removed: true });
-                }
-            });
-        }
-        if (effects.length > 0) {
-            Promise.resolve().then(() => {
-                for (const job of effects) {
-                    if (typeof job.cleanup === 'function') job.cleanup();
-                    if (job.removed) continue;
-                    const current = this.frames.get(job.frameId)?.hooks[job.index];
-                    if (!current || current.kind !== 'effect' || current.effect !== job.effect) {
-                        continue;
-                    }
-                    const cleanup = job.effect();
-                    if (cleanup !== undefined && typeof cleanup !== 'function') {
-                        throw new TypeError('useEffect must return a cleanup function or undefined');
-                    }
-                    current.cleanup = cleanup ?? null;
-                    current.dependencies = job.dependencies;
-                }
-            });
-        }
+        scheduleCommittedEffects(this, previousFrames, candidate.frames);
         return this.lastTree;
     }
 
