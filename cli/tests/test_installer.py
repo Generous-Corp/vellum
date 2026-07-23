@@ -132,6 +132,7 @@ class InstallerTests(unittest.TestCase):
             payload.mkdir()
             shutil.copy2(REPO / "cli/vellum_cli.py", payload / "vellum_cli.py")
             shutil.copy2(REPO / "cli/vellum_backend.py", payload / "vellum_backend.py")
+            shutil.copytree(REPO / ".agents", payload / ".agents")
             shutil.copytree(REPO / "templates", payload / "templates")
             shutil.copytree(REPO / "packages/vellum-design-ir", payload / "design-ir")
             (payload / "sdk/include").mkdir(parents=True)
@@ -166,6 +167,7 @@ class InstallerTests(unittest.TestCase):
             with tarfile.open(archive, "w:gz") as handle:
                 handle.add(payload / "vellum_cli.py", arcname="vellum_cli.py")
                 handle.add(payload / "vellum_backend.py", arcname="vellum_backend.py")
+                handle.add(payload / ".agents", arcname=".agents")
                 handle.add(payload / "templates", arcname="templates")
                 handle.add(payload / "design-ir", arcname="design-ir")
                 handle.add(payload / "sdk", arcname="sdk")

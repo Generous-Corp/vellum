@@ -81,6 +81,8 @@ copy_payload() {
   cp "$payload/vellum_backend.py" "$library/vellum_backend.py"
   cp "$payload/metadata.json" "$library/metadata.json"
   cp "$payload/install-manifest.json" "$library/install-manifest.json"
+  rm -rf "$library/.agents"
+  cp -R "$payload/.agents" "$library/.agents"
   rm -rf "$library/templates"
   cp -R "$payload/templates" "$library/templates"
   if [ -d "$payload/sdk" ]; then
@@ -150,14 +152,17 @@ copy_payload() {
 
 if [ -n "$local_root" ]; then
   [ -f "$local_root/cli/vellum_cli.py" ] && [ -f "$local_root/cli/vellum_backend.py" ] && \
+    [ -f "$local_root/.agents/skills/vellum-app-authoring/SKILL.md" ] && \
+    [ -f "$local_root/.agents/skills/vellum-app-authoring/manifest.v1.json" ] && \
     [ -d "$local_root/templates/basic" ] && [ -d "$local_root/packages/vellum-design-ir" ] || {
-    printf '%s\n' 'Local root lacks the CLI, dispatcher, templates, or DesignIR package.' >&2
+    printf '%s\n' 'Local root lacks the CLI, dispatcher, agent instructions, templates, or DesignIR package.' >&2
     exit 1
   }
   temporary=$(mktemp -d "${TMPDIR:-/tmp}/vellum-local.XXXXXX")
   trap 'rm -rf "$temporary"' EXIT HUP INT TERM
   cp "$local_root/cli/vellum_cli.py" "$temporary/vellum_cli.py"
   cp "$local_root/cli/vellum_backend.py" "$temporary/vellum_backend.py"
+  cp -R "$local_root/.agents" "$temporary/.agents"
   cp -R "$local_root/templates" "$temporary/templates"
   cat > "$temporary/metadata.json" <<'JSON'
 {
@@ -281,7 +286,7 @@ with tarfile.open(archive, "r:gz") as handle:
         raise SystemExit("archive contains duplicate member names")
     for member in members:
         path = PurePosixPath(member.name)
-        if (not path.parts or path.parts[0] not in {"vellum_cli.py", "vellum_backend.py", "vellum_native_backend.py", "templates", "sdk", "bin", "design-ir", "ui", "metadata.json"} or
+        if (not path.parts or path.parts[0] not in {".agents", "vellum_cli.py", "vellum_backend.py", "vellum_native_backend.py", "templates", "sdk", "bin", "design-ir", "ui", "metadata.json"} or
                 path.is_absolute() or ".." in path.parts or "\\" in member.name or ":" in path.parts[0] or
                 member.issym() or member.islnk() or not (member.isfile() or member.isdir())):
             raise SystemExit(f"unsafe archive member: {member.name}")
@@ -302,6 +307,8 @@ with tarfile.open(archive, "r:gz") as handle:
     handle.extractall(destination)
 PY
 [ -f "$temporary/vellum_cli.py" ] && [ -f "$temporary/vellum_backend.py" ] && \
+  [ -f "$temporary/.agents/skills/vellum-app-authoring/SKILL.md" ] && \
+  [ -f "$temporary/.agents/skills/vellum-app-authoring/manifest.v1.json" ] && \
   [ -d "$temporary/templates/basic" ] && [ -d "$temporary/design-ir" ] && \
   [ -f "$temporary/metadata.json" ] && [ -d "$temporary/sdk" ] || {
   printf '%s\n' 'Verified archive does not contain the Vellum SDK artifact layout.' >&2

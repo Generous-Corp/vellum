@@ -20,9 +20,13 @@ MAX_MEMBERS = 20_000
 MAX_BYTES = 4 * 1024**3
 COMMANDS = {"import", "reimport", "build", "run", "test", "capture", "package"}
 NATIVE_COMMANDS = {"build", "run", "test", "capture", "package"}
+AGENT_INSTRUCTION_FILES = {
+    ".agents/skills/vellum-app-authoring/SKILL.md",
+    ".agents/skills/vellum-app-authoring/manifest.v1.json",
+}
 SAFE_ROOTS = {
     "vellum_cli.py", "vellum_backend.py", "vellum_native_backend.py",
-    "templates", "sdk", "bin", "design-ir", "ui", "metadata.json",
+    ".agents", "templates", "sdk", "bin", "design-ir", "ui", "metadata.json",
 }
 FORBIDDEN_PAYLOAD_PATH_PATTERNS = {
     "retired-projection-path": re.compile(
@@ -250,6 +254,26 @@ def verify(archive: Path, checksums: Path) -> dict[str, object]:
             declared.add(name)
         if declared != expected_files:
             raise VerificationError("artifact metadata does not cover every payload file")
+        if not AGENT_INSTRUCTION_FILES.issubset(payload_contents):
+            raise VerificationError("SDK artifact has no complete versioned agent-authoring contract")
+        try:
+            agent_manifest = json.loads(
+                payload_contents[".agents/skills/vellum-app-authoring/manifest.v1.json"]
+            )
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise VerificationError(f"agent-authoring manifest is malformed: {error}") from error
+        agent_skill = agent_manifest.get("skill") if isinstance(agent_manifest, dict) else None
+        if (
+            not isinstance(agent_manifest, dict)
+            or agent_manifest.get("schema") != "vellum.agent-instructions.v1"
+            or agent_manifest.get("version") != 1
+            or not isinstance(agent_skill, dict)
+            or agent_skill.get("path")
+            != ".agents/skills/vellum-app-authoring/SKILL.md"
+            or b"vellum.agent-instructions.v1"
+            not in payload_contents[".agents/skills/vellum-app-authoring/SKILL.md"]
+        ):
+            raise VerificationError("agent-authoring manifest and skill are incompatible")
         if contamination_findings:
             first = contamination_findings[0]
             raise VerificationError(

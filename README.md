@@ -124,7 +124,8 @@ Its adjacent machine-readable manifest is checked against the real CLI parser,
 source-support policy, ownership boundary, and capability-failure semantics by
 `python3 tools/agent_instructions/verify.py --json`; instructions cannot name a
 command, flag, or import route that the checked-in product surface does not
-support.
+support. SDK artifacts install the same contract under
+`$VELLUM_SDK_ROOT/.agents/skills/vellum-app-authoring/`.
 
 ## Build and install an immutable local SDK artifact
 
