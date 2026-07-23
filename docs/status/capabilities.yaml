@@ -1,0 +1,54 @@
+{
+  "schema": "vellum.docs-status.v1",
+  "rows": [
+    {
+      "id": "macos-native",
+      "label": "macOS native application",
+      "status": "experimental",
+      "evidence": ["gpu-macos-arm64"],
+      "boundary": "macOS 15.0+ arm64; private exact-pin SDK; ad-hoc package"
+    },
+    {
+      "id": "figma-import",
+      "label": "Figma plugin export import/reimport",
+      "status": "experimental",
+      "evidence": ["product-quality", "gpu-macos-arm64"],
+      "boundary": "bounded single-root Pulp plugin JSON or `.pulp.zip`; not `.fig` or live REST"
+    },
+    {
+      "id": "browser-wasm",
+      "label": "Browser JavaScript plus shared C++ Wasm core",
+      "status": "partial",
+      "evidence": ["gpu-macos-arm64"],
+      "boundary": "Canvas2D presentation shell; no browser GPU-backend claim"
+    },
+    {
+      "id": "windows-native",
+      "label": "Windows native application",
+      "status": "planned",
+      "evidence": [],
+      "boundary": "local-development CLI bootstrap only; no native product evidence"
+    },
+    {
+      "id": "linux-native",
+      "label": "Linux native application",
+      "status": "planned",
+      "evidence": [],
+      "boundary": "no native product evidence"
+    },
+    {
+      "id": "ios-native",
+      "label": "iOS native application",
+      "status": "planned",
+      "evidence": [],
+      "boundary": "no simulator, device, or package evidence"
+    },
+    {
+      "id": "android-native",
+      "label": "Android native application",
+      "status": "planned",
+      "evidence": [],
+      "boundary": "no emulator, device, or package evidence"
+    }
+  ]
+}
