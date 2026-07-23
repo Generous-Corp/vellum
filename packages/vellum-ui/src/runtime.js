@@ -1,6 +1,7 @@
 const ELEMENT = Symbol.for('vellum.element');
 const FRAGMENT = Symbol.for('vellum.fragment');
 const PROTOCOL = 'vellum.authoring-host.v1';
+const ASYNC_HOST_PROTOCOL = 'vellum.authoring-host.v2';
 const SNAPSHOT_SCHEMA = 'vellum.authoring-state.v1';
 const TEXT_INPUT_PRIMITIVE_VERSION = 1;
 const MAXIMUM_TEXT_INPUT_LENGTH = 65536;
@@ -353,7 +354,7 @@ export function useState(initialValue) {
         if (!target || target.kind !== 'state') throw new Error('state hook is no longer mounted');
         const next = typeof nextValue === 'function' ? nextValue(target.value) : nextValue;
         target.value = durableValue(next, `${frameId}[${index}]`);
-        runtime.dirty = true;
+        runtime.markDirty('state');
     };
     return [record.value, setValue];
 }
@@ -589,6 +590,8 @@ class Runtime {
         this.mutationFrames = null;
         this.dirty = true;
         this.lastTree = null;
+        this.revision = 0;
+        this.invalidationHandler = null;
     }
 
     componentIdentity(component) {
@@ -668,7 +671,24 @@ class Runtime {
         this.model = model;
         this.lastTree = candidate.tree;
         this.dirty = false;
+        this.revision += 1;
         return this.lastTree;
+    }
+
+    markDirty(reason = 'state') {
+        const wasDirty = this.dirty;
+        this.dirty = true;
+        if (!wasDirty && this.mutationFrames === null && this.renderState === null) {
+            this.invalidationHandler?.(reason, this.revision + 1);
+        }
+    }
+
+    setInvalidationHandler(handler) {
+        this.invalidationHandler = handler;
+    }
+
+    renderIfDirty() {
+        return this.dirty || this.lastTree === null ? this.render() : this.lastTree;
     }
 
     render() {
@@ -805,8 +825,20 @@ export function createApp(options) {
 
 export function mount(application) {
     const runtime = application instanceof Runtime ? application : createApp(application);
+    runtime.setInvalidationHandler((reason, revision) => {
+        const host = globalThis.__vellumHostV2;
+        if (host && typeof host.invalidateJSON === 'function') {
+            host.invalidateJSON(stableStringify({
+                protocol: ASYNC_HOST_PROTOCOL,
+                kind: 'invalidate',
+                revision,
+                reason,
+            }));
+        }
+    });
     const bridge = Object.freeze({
         protocol: PROTOCOL,
+        hostProtocol: ASYNC_HOST_PROTOCOL,
         renderJSON() {
             return stableStringify({ protocol: PROTOCOL, tree: runtime.render() });
         },
@@ -830,6 +862,17 @@ export function mount(application) {
                 throw new Error(`invalid ${PROTOCOL} state snapshot`);
             }
             return stableStringify({ protocol: PROTOCOL, tree: runtime.restore(envelope.state) });
+        },
+        pumpJSON() {
+            return stableStringify({
+                protocol: ASYNC_HOST_PROTOCOL,
+                kind: 'render-result',
+                revision: runtime.revision + (runtime.dirty ? 1 : 0),
+                tree: runtime.renderIfDirty(),
+            });
+        },
+        isDirty() {
+            return runtime.dirty;
         },
     });
     Object.defineProperty(globalThis, '__vellum', {

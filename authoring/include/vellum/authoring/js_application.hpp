@@ -3,6 +3,8 @@
 #include <vellum/graphics/scene.hpp>
 
 #include <memory>
+#include <cstddef>
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -11,6 +13,14 @@ namespace vellum::authoring {
 
 inline constexpr std::string_view kAuthoringHostProtocol =
     "vellum.authoring-host.v1";
+inline constexpr std::string_view kAsyncAuthoringHostProtocol =
+    "vellum.authoring-host.v2";
+
+struct PumpResult final {
+    bool rendered = false;
+    bool idle = true;
+    std::size_t tasks_executed = 0;
+};
 
 struct Interaction final {
     std::string node_id;
@@ -67,6 +77,20 @@ public:
     [[nodiscard]] bool restore_state(
         std::string_view snapshot_json,
         RenderedApplication& output,
+        std::string* error = nullptr);
+    /// Advances the deterministic native timer clock, settles ready JavaScript
+    /// work, and materializes a dirty v2 bridge tree.
+    [[nodiscard]] bool pump(
+        std::uint64_t advance_milliseconds,
+        std::size_t maximum_tasks,
+        RenderedApplication& output,
+        PumpResult& result,
+        std::string* error = nullptr);
+    /// Advances to each next timer deadline until no work remains.
+    [[nodiscard]] bool wait_for_idle(
+        std::size_t maximum_tasks,
+        RenderedApplication& output,
+        PumpResult& result,
         std::string* error = nullptr);
 
 private:

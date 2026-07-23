@@ -116,10 +116,13 @@ export declare function createApp<Model extends JsonValue = JsonValue>(
 ): VellumApp<Model>;
 export interface VellumBridge {
     readonly protocol: 'vellum.authoring-host.v1';
+    readonly hostProtocol: 'vellum.authoring-host.v2';
     renderJSON(): string;
     dispatchJSON(requestJSON: string): string;
     snapshotStateJSON(): string;
     restoreStateJSON(snapshotJSON: string): string;
+    pumpJSON(): string;
+    isDirty(): boolean;
 }
 export type WidenScalar<Value> = Value extends string ? string
     : Value extends number ? number

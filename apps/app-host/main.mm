@@ -440,6 +440,11 @@ int run_headless(const Options& options, std::string_view bundle) {
             std::cerr << error << '\n';
             return 1;
         }
+        vellum::authoring::PumpResult idle;
+        if (!application->wait_for_idle(4096, rendered, idle, &error)) {
+            std::cerr << error << '\n';
+            return 1;
+        }
         if (!components.expand(rendered.scene, &error)) {
             std::cerr << error << '\n';
             return 1;
@@ -453,6 +458,7 @@ int run_headless(const Options& options, std::string_view bundle) {
                     : key_node(*application, rendered, step.node_id, step.value,
                                @"scenario", &error);
             if (!succeeded ||
+                !application->wait_for_idle(4096, rendered, idle, &error) ||
                 !components.expand(rendered.scene, &error) ||
                 !persist_state(*application, options.state_file, &error)) {
                 std::cerr << error << '\n';
@@ -539,6 +545,7 @@ std::vector<ComponentModuleSpec> interactive_component_specs;
     std::unique_ptr<SkiaDawnSurface> _surface;
     std::filesystem::path _persistencePath;
     std::string _focusedInputId;
+    NSTimer* _asyncTimer;
 }
 - (instancetype)initWithFrame:(NSRect)frame
                        bundle:(const std::string&)bundle
@@ -574,12 +581,37 @@ std::vector<ComponentModuleSpec> interactive_component_specs;
         self.layer = make_metal_layer(
             static_cast<std::uint32_t>(frame.size.width),
             static_cast<std::uint32_t>(frame.size.height), 1.0F);
+        __weak VellumApplicationView* weakSelf = self;
+        _asyncTimer = [NSTimer scheduledTimerWithTimeInterval:0.016
+                                                       repeats:YES
+                                                         block:^(NSTimer* timer) {
+            [weakSelf pumpAsyncWork:timer];
+        }];
     }
     return self;
 }
 
 - (BOOL)isFlipped { return YES; }
 - (BOOL)acceptsFirstResponder { return YES; }
+
+- (void)dealloc {
+    [_asyncTimer invalidate];
+}
+
+- (void)pumpAsyncWork:(NSTimer*)timer {
+    (void)timer;
+    if (!_application) return;
+    std::string error;
+    vellum::authoring::PumpResult result;
+    if (!_application->pump(16, 1024, _rendered, result, &error)) {
+        [_asyncTimer invalidate];
+        NSLog(@"Vellum asynchronous work failed: %s", error.c_str());
+        return;
+    }
+    if (result.rendered && ![self finishMutation:&error]) {
+        NSLog(@"Vellum asynchronous render failed: %s", error.c_str());
+    }
+}
 
 - (BOOL)finishMutation:(std::string*)error {
     if (!_components->expand(_rendered.scene, error)) return NO;

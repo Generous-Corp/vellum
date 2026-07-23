@@ -18,6 +18,81 @@ import {
 
 const protocol = 'vellum.authoring-host.v1';
 
+test('exposes the v2 invalidation pump for browser async settlement', async () => {
+    const invalidations = [];
+    globalThis.__vellumHostV2 = {
+        invalidateJSON(value) {
+            invalidations.push(JSON.parse(value));
+        },
+    };
+    try {
+        let resolveUpdate;
+        function AsyncState() {
+            const [value, setValue] = useState('initial');
+            resolveUpdate = () => Promise.resolve().then(() => setValue('settled'));
+            return jsx(View, {
+                id: 'async-root',
+                style: { width: 100, height: 100 },
+                children: jsx(Text, { id: 'async-value', children: value }),
+            });
+        }
+        const bridge = mount(AsyncState);
+        assert.equal(bridge.hostProtocol, 'vellum.authoring-host.v2');
+        bridge.renderJSON();
+        await resolveUpdate();
+        assert.equal(bridge.isDirty(), true);
+        assert.deepEqual(invalidations, [{
+            protocol: 'vellum.authoring-host.v2',
+            kind: 'invalidate',
+            revision: 2,
+            reason: 'state',
+        }]);
+        const pumped = JSON.parse(bridge.pumpJSON());
+        assert.equal(pumped.protocol, 'vellum.authoring-host.v2');
+        assert.equal(pumped.kind, 'render-result');
+        assert.equal(pumped.revision, 2);
+        assert.equal(pumped.tree.children[0].children[0].text, 'settled');
+        assert.equal(bridge.isDirty(), false);
+    } finally {
+        delete globalThis.__vellumHostV2;
+    }
+});
+
+test('browser timers and promises settle through the same bounded pump state', async () => {
+    const order = [];
+    let update;
+    function ScheduledState() {
+        const [value, setValue] = useState('initial');
+        update = setValue;
+        return jsx(View, {
+            id: 'scheduled-root',
+            style: { width: 100, height: 100 },
+            children: jsx(Text, { id: 'scheduled-value', children: value }),
+        });
+    }
+    const bridge = mount(ScheduledState);
+    bridge.renderJSON();
+    await new Promise((resolve) => {
+        setTimeout(() => {
+            order.push('first');
+            Promise.resolve().then(() => {
+                order.push('promise');
+                update(order.join(','));
+            });
+        }, 5);
+        const cancelled = setTimeout(() => order.push('cancelled'), 5);
+        clearTimeout(cancelled);
+        setTimeout(() => {
+            order.push('late');
+            update(order.join(','));
+            resolve();
+        }, 10);
+    });
+    const pumped = JSON.parse(bridge.pumpJSON());
+    assert.equal(pumped.tree.children[0].children[0].text, 'first,promise,late');
+    assert.deepEqual(order, ['first', 'promise', 'late']);
+});
+
 test('renders one deterministic serializable retained tree', () => {
     const bridge = mount(() => jsx(View, {
         id: 'screen',

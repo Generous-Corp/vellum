@@ -9,6 +9,7 @@
 #include <limits>
 #include <optional>
 #include <set>
+#include <tuple>
 #include <utility>
 
 namespace vellum::authoring {
@@ -20,6 +21,7 @@ constexpr std::size_t kMaximumNodes = 100000U;
 constexpr std::size_t kMaximumDepth = 256U;
 constexpr NSUInteger kMaximumTextInputBytes = 64U * 1024U;
 constexpr NSUInteger kMaximumPlaceholderBytes = 4U * 1024U;
+constexpr std::uint64_t kMaximumTimerDelayMilliseconds = 24ULL * 60ULL * 60ULL * 1000ULL;
 
 void set_error(std::string* destination, std::string value) {
     if (destination != nullptr) *destination = std::move(value);
@@ -377,7 +379,11 @@ bool parse_rendered_json(
         return false;
     }
     NSDictionary* envelope = static_cast<NSDictionary*>(value);
-    if (![envelope[@"protocol"] isEqual:@"vellum.authoring-host.v1"] ||
+    const bool legacy = [envelope[@"protocol"] isEqual:@"vellum.authoring-host.v1"];
+    const bool asynchronous =
+        [envelope[@"protocol"] isEqual:@"vellum.authoring-host.v2"] &&
+        [envelope[@"kind"] isEqual:@"render-result"];
+    if ((!legacy && !asynchronous) ||
         ![envelope[@"tree"] isKindOfClass:NSDictionary.class]) {
         set_error(error, "JavaScript authoring bridge protocol mismatch");
         return false;
@@ -423,6 +429,12 @@ public:
             return false;
         }
         context_ = [[JSContext alloc] init];
+        context_[@"setTimeout"] = ^NSNumber*(JSValue* callback, double delay) {
+            return @(schedule_timer(callback, delay));
+        };
+        context_[@"clearTimeout"] = ^(double identifier) {
+            cancel_timer(identifier);
+        };
         [context_ evaluateScript:source withSourceURL:[NSURL URLWithString:@"vellum-app.js"]];
         if (!consume_exception(error)) return false;
         JSValue* bridge = context_[@"__vellum"];
@@ -506,7 +518,154 @@ public:
         return call_tree(@"restoreStateJSON", @[value], output, error);
     }
 
+    bool pump(std::uint64_t advance_milliseconds, std::size_t maximum_tasks,
+              RenderedApplication& output, PumpResult& result, std::string* error) {
+        result = {};
+        if (maximum_tasks == 0U) {
+            set_error(error, "JavaScript pump maximum_tasks must be positive");
+            return false;
+        }
+        if (advance_milliseconds >
+            std::numeric_limits<std::uint64_t>::max() - clock_milliseconds_) {
+            set_error(error, "JavaScript timer clock overflow");
+            return false;
+        }
+        clock_milliseconds_ += advance_milliseconds;
+        if (!run_ready_tasks(maximum_tasks, result.tasks_executed, error)) return false;
+        if (has_ready_timer()) {
+            set_error(error, "JavaScript pump task limit exceeded");
+            return false;
+        }
+        if (!materialize_if_dirty(output, result.rendered, error)) return false;
+        bool dirty = false;
+        if (!bridge_dirty(dirty, error)) return false;
+        result.idle = timers_.empty() && !dirty;
+        return consume_exception(error);
+    }
+
+    bool wait_for_idle(std::size_t maximum_tasks, RenderedApplication& output,
+                       PumpResult& result, std::string* error) {
+        result = {};
+        if (maximum_tasks == 0U) {
+            set_error(error, "JavaScript wait_for_idle maximum_tasks must be positive");
+            return false;
+        }
+        while (!timers_.empty()) {
+            const auto next = std::min_element(
+                timers_.begin(), timers_.end(),
+                [](const Timer& left, const Timer& right) {
+                    return std::tie(left.due, left.order) < std::tie(right.due, right.order);
+                });
+            clock_milliseconds_ = std::max(clock_milliseconds_, next->due);
+            std::size_t executed = 0U;
+            if (!run_ready_tasks(maximum_tasks - result.tasks_executed, executed, error)) {
+                return false;
+            }
+            result.tasks_executed += executed;
+            if (result.tasks_executed >= maximum_tasks && !timers_.empty()) {
+                set_error(error, "JavaScript wait_for_idle task limit exceeded");
+                return false;
+            }
+        }
+        if (!materialize_if_dirty(output, result.rendered, error)) return false;
+        bool dirty = false;
+        if (!bridge_dirty(dirty, error)) return false;
+        result.idle = !dirty;
+        return consume_exception(error);
+    }
+
 private:
+    struct Timer final {
+        std::uint64_t id = 0;
+        std::uint64_t due = 0;
+        std::uint64_t order = 0;
+        __strong JSValue* callback = nil;
+    };
+
+    std::uint64_t schedule_timer(JSValue* callback, double delay) {
+        if (callback == nil || !callback.isObject) {
+            context_.exception = [JSValue valueWithNewErrorFromMessage:
+                @"setTimeout callback must be callable" inContext:context_];
+            return 0;
+        }
+        const double bounded = std::isfinite(delay)
+            ? std::clamp(delay, 0.0, static_cast<double>(kMaximumTimerDelayMilliseconds))
+            : 0.0;
+        const auto milliseconds = static_cast<std::uint64_t>(std::ceil(bounded));
+        const std::uint64_t identifier = next_timer_id_++;
+        timers_.push_back({
+            .id = identifier,
+            .due = clock_milliseconds_ + milliseconds,
+            .order = next_timer_order_++,
+            .callback = callback,
+        });
+        return identifier;
+    }
+
+    void cancel_timer(double identifier) {
+        if (!std::isfinite(identifier) || identifier < 1.0) return;
+        const auto value = static_cast<std::uint64_t>(identifier);
+        std::erase_if(timers_, [value](const Timer& timer) { return timer.id == value; });
+    }
+
+    bool has_ready_timer() const {
+        return std::any_of(timers_.begin(), timers_.end(), [&](const Timer& timer) {
+            return timer.due <= clock_milliseconds_;
+        });
+    }
+
+    bool run_ready_tasks(
+        std::size_t maximum_tasks, std::size_t& executed, std::string* error) {
+        executed = 0U;
+        while (executed < maximum_tasks) {
+            const auto next = std::min_element(
+                timers_.begin(), timers_.end(),
+                [](const Timer& left, const Timer& right) {
+                    return std::tie(left.due, left.order) < std::tie(right.due, right.order);
+                });
+            if (next == timers_.end() || next->due > clock_milliseconds_) break;
+            JSValue* callback = next->callback;
+            timers_.erase(next);
+            context_.exception = nil;
+            [callback callWithArguments:@[]];
+            if (!consume_exception(error)) return false;
+            // Returning through the JavaScriptCore API establishes a Promise
+            // job checkpoint; a no-op evaluation makes that boundary explicit.
+            [context_ evaluateScript:@"void 0"];
+            if (!consume_exception(error)) return false;
+            ++executed;
+        }
+        return true;
+    }
+
+    bool bridge_dirty(bool& dirty, std::string* error) {
+        dirty = false;
+        JSValue* bridge = context_[@"__vellum"];
+        JSValue* method = [bridge valueForProperty:@"isDirty"];
+        if (method == nil || method.isUndefined || !method.isObject) {
+            return consume_exception(error);
+        }
+        JSValue* result = [bridge invokeMethod:@"isDirty" withArguments:@[]];
+        if (!consume_exception(error)) return false;
+        dirty = result.toBool;
+        return true;
+    }
+
+    bool materialize_if_dirty(
+        RenderedApplication& output, bool& rendered, std::string* error) {
+        rendered = false;
+        JSValue* bridge = context_[@"__vellum"];
+        JSValue* method = [bridge valueForProperty:@"pumpJSON"];
+        bool dirty = false;
+        if (!bridge_dirty(dirty, error)) return false;
+        if (method == nil || method.isUndefined || !method.isObject || !dirty) {
+            return consume_exception(error);
+        }
+        if (!call_tree(@"pumpJSON", @[], output, error)) return false;
+        rendered = true;
+        return true;
+    }
+
     bool consume_exception(std::string* error) {
         JSValue* exception = context_.exception;
         if (exception == nil || exception.isUndefined || exception.isNull) return true;
@@ -536,6 +695,10 @@ private:
     }
 
     __strong JSContext* context_ = nil;
+    std::vector<Timer> timers_;
+    std::uint64_t clock_milliseconds_ = 0;
+    std::uint64_t next_timer_id_ = 1;
+    std::uint64_t next_timer_order_ = 1;
 };
 
 JsApplication::JsApplication(std::unique_ptr<Impl> impl) noexcept
@@ -573,6 +736,23 @@ bool JsApplication::restore_state(
     std::string_view snapshot_json, RenderedApplication& output,
     std::string* error) {
     @autoreleasepool { return impl_->restore(snapshot_json, output, error); }
+}
+
+bool JsApplication::pump(
+    std::uint64_t advance_milliseconds, std::size_t maximum_tasks,
+    RenderedApplication& output, PumpResult& result, std::string* error) {
+    @autoreleasepool {
+        return impl_->pump(
+            advance_milliseconds, maximum_tasks, output, result, error);
+    }
+}
+
+bool JsApplication::wait_for_idle(
+    std::size_t maximum_tasks, RenderedApplication& output,
+    PumpResult& result, std::string* error) {
+    @autoreleasepool {
+        return impl_->wait_for_idle(maximum_tasks, output, result, error);
+    }
 }
 
 }  // namespace vellum::authoring

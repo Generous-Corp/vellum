@@ -54,6 +54,67 @@ constexpr const char* kBundle = R"JS(
 })();
 )JS";
 
+constexpr const char* kAsyncBundle = R"JS(
+(() => {
+  let values = [];
+  let dirty = true;
+  let revision = 0;
+  const tree = () => ({
+    type: "stack", id: "async-screen",
+    style: { width: 320, height: 200 },
+    children: [{
+      type: "text", id: "async-value", children: [{
+        type: "text-run", id: "async-value/text",
+        text: values.length ? values.join(",") : "initial", children: []
+      }]
+    }]
+  });
+  const changed = (value) => {
+    values.push(value);
+    dirty = true;
+  };
+  setTimeout(() => {
+    changed("first");
+    Promise.resolve().then(() => changed("promise"));
+  }, 5);
+  const cancelled = setTimeout(() => changed("cancelled"), 5);
+  clearTimeout(cancelled);
+  setTimeout(() => changed("late"), 10);
+  const renderLegacy = () => {
+    dirty = false;
+    revision += 1;
+    return JSON.stringify({
+      protocol: "vellum.authoring-host.v1", tree: tree()
+    });
+  };
+  globalThis.__vellum = {
+    protocol: "vellum.authoring-host.v1",
+    hostProtocol: "vellum.authoring-host.v2",
+    renderJSON: renderLegacy,
+    dispatchJSON(request) {
+      if (JSON.parse(request).action === "runaway") {
+        const repeat = () => { changed("runaway"); setTimeout(repeat, 0); };
+        setTimeout(repeat, 0);
+      }
+      return renderLegacy();
+    },
+    snapshotStateJSON() {
+      return JSON.stringify({ protocol: "vellum.authoring-host.v1", state: null });
+    },
+    restoreStateJSON() { return renderLegacy(); },
+    isDirty() { return dirty; },
+    pumpJSON() {
+      dirty = false;
+      revision += 1;
+      return JSON.stringify({
+        protocol: "vellum.authoring-host.v2",
+        kind: "render-result", revision, tree: tree()
+      });
+    }
+  };
+})();
+)JS";
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -143,5 +204,34 @@ int main(int argc, char** argv) {
         "renderJSON(){return '{}'}}", &error);
     if (!malformed || malformed->render(rendered, &error) ||
         error.find("protocol mismatch") == std::string::npos) return 1;
+
+    auto asynchronous = vellum::authoring::JsApplication::create(kAsyncBundle, &error);
+    if (!asynchronous || !asynchronous->render(rendered, &error)) return 1;
+    vellum::authoring::PumpResult pump;
+    if (!asynchronous->pump(5, 8, rendered, pump, &error) ||
+        !pump.rendered || pump.idle || pump.tasks_executed != 1U) {
+        std::cerr << (error.empty() ? "first async pump failed" : error) << '\n';
+        return 1;
+    }
+    const auto* async_value =
+        vellum::graphics::find_node(rendered.scene, "async-value");
+    if (async_value == nullptr || async_value->text != "first,promise") return 1;
+    if (!asynchronous->wait_for_idle(8, rendered, pump, &error) ||
+        !pump.rendered || !pump.idle || pump.tasks_executed != 1U) {
+        std::cerr << (error.empty() ? "async wait-for-idle failed" : error) << '\n';
+        return 1;
+    }
+    async_value = vellum::graphics::find_node(rendered.scene, "async-value");
+    if (async_value == nullptr || async_value->text != "first,promise,late" ||
+        async_value->text.find("cancelled") != std::string::npos) return 1;
+
+    auto runaway = vellum::authoring::JsApplication::create(kAsyncBundle, &error);
+    if (!runaway || !runaway->render(rendered, &error) ||
+        !runaway->dispatch("runaway", "null", rendered, &error) ||
+        runaway->wait_for_idle(3, rendered, pump, &error) ||
+        error.find("task limit exceeded") == std::string::npos) {
+        std::cerr << "runaway timer protection failed: " << error << '\n';
+        return 1;
+    }
     return 0;
 }
