@@ -42,8 +42,8 @@ class DevLoopTests(unittest.TestCase):
         }
         (sdk / "metadata.json").write_text(json.dumps({
             "schema": "vellum.sdk-artifact.v1",
-            "framework_version": "0.1.3",
-            "cli_version": "0.1.3",
+            "framework_version": "0.1.4",
+            "cli_version": "0.1.4",
             "cli_api": 1,
             "source_commit": None,
             "target": "local-development",
@@ -64,7 +64,7 @@ class DevLoopTests(unittest.TestCase):
             "verified": False,
             "artifact": None,
             "artifact_sha256": None,
-            "framework_version": "0.1.3",
+            "framework_version": "0.1.4",
             "target": "local-development",
             "source_commit": None,
         }), encoding="utf-8")

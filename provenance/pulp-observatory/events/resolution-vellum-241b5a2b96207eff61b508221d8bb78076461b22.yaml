@@ -1,0 +1,18 @@
+{
+  "contract_tests": [
+    "vellum.authoring-phase3-contract",
+    "vellum.ui-runtime"
+  ],
+  "created_at": "2026-07-23T21:45:32Z",
+  "disposition": "framework-only",
+  "effort_minutes": 0,
+  "event_id": "resolution-vellum-241b5a2b96207eff61b508221d8bb78076461b22",
+  "kind": "resolution",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "The bundled esbuild runtime and v0.1.3 release-contract update make the standalone Vellum authoring SDK installable offline. Pulp retains its own CLI and authoring toolchain, so no Pulp source port is appropriate before a later dependency-adoption decision.",
+  "resolves": "vellum-241b5a2b96207eff61b508221d8bb78076461b22",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

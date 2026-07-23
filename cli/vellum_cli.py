@@ -23,7 +23,7 @@ from vellum_manifest import (
 )
 
 
-FRAMEWORK_VERSION = "0.1.3"
+FRAMEWORK_VERSION = "0.1.4"
 CLI_VERSION = FRAMEWORK_VERSION
 UI_VERSION = "0.1.0-experimental.0"
 CLI_API_VERSION = 1

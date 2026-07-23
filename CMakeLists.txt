@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(Vellum
-    VERSION 0.1.3
+    VERSION 0.1.4
     DESCRIPTION "Experimental audio-free native application kernel"
     LANGUAGES CXX)
 
