@@ -226,6 +226,11 @@ jobs:
             --expected-fingerprint \
               SHA256:eMlEuZcnW6NJDrKQBuN5EX1q69bOlIRPl6XmutVTgcs \
             --output "$RUNNER_TEMP/release-trust.json"
+          python3 scripts/verify_immutable_release_preflight.py \
+            --input provenance/immutable-release-preflight.json \
+            --repository "$GITHUB_REPOSITORY" \
+            --release-tag "$GITHUB_REF_NAME" \
+            --output "$RUNNER_TEMP/immutable-release-preflight.json"
           printf 'VELLUM_TAG_OBJECT_SHA=%s\n' \
             "$VELLUM_TAG_OBJECT_SHA" >> "$GITHUB_ENV"
 
@@ -268,9 +273,6 @@ jobs:
           if identity.get("framework_version") != expected or identity.get("cli_version") != expected:
               raise SystemExit("release artifact identity does not match its immutable tag")
           ' "$RUNNER_TEMP/sdk-verification.json" "$version"
-          test "$(
-            gh api "repos/$GITHUB_REPOSITORY/immutable-releases" --jq .enabled
-          )" = true
           gh release verify-asset --help >/dev/null
           notes="$RUNNER_TEMP/release-notes.md"
           cat > "$notes" <<'EOF'
@@ -307,6 +309,7 @@ jobs:
             "sdk-installed-validation.json=$RUNNER_TEMP/sdk-installed-validation.json"
             "web-payload.json=$RUNNER_TEMP/web-payload.json"
             "release-trust.json=$RUNNER_TEMP/release-trust.json"
+            "immutable-release-preflight.json=$RUNNER_TEMP/immutable-release-preflight.json"
           )
           verifier_args=()
           upload_args=()
@@ -400,6 +403,7 @@ jobs:
             ${{ runner.temp }}/sdk-installed-validation.json
             ${{ runner.temp }}/web-payload.json
             ${{ runner.temp }}/release-trust.json
+            ${{ runner.temp }}/immutable-release-preflight.json
             ${{ runner.temp }}/release-assets-verification.json
             ${{ runner.temp }}/release-assets-draft-verification.json
             ${{ runner.temp }}/release-assets-published-verification.json
