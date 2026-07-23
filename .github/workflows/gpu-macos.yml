@@ -11,6 +11,10 @@ permissions:
   attestations: read
   contents: write
 
+concurrency:
+  group: vellum-gpu-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   gpu-macos-arm64:
     name: gpu-macos-arm64
@@ -341,6 +345,13 @@ jobs:
             gh release upload "$tag" \
               "$RUNNER_TEMP/release-assets-verification.json" \
               --repo "$GITHUB_REPOSITORY" --clobber
+            gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" \
+              > "$release_json"
+            python3 scripts/verify_release_assets.py \
+              --release-json "$release_json" --tag "$tag" \
+              "${verifier_args[@]}" \
+              --asset "release-assets-verification.json=$RUNNER_TEMP/release-assets-verification.json" \
+              --output "$RUNNER_TEMP/release-assets-draft-verification.json"
             gh release edit "$tag" \
               --repo "$GITHUB_REPOSITORY" \
               --draft=false \
@@ -388,6 +399,7 @@ jobs:
             ${{ runner.temp }}/web-payload.json
             ${{ runner.temp }}/release-trust.json
             ${{ runner.temp }}/release-assets-verification.json
+            ${{ runner.temp }}/release-assets-draft-verification.json
             ${{ runner.temp }}/release-assets-published-verification.json
           if-no-files-found: error
           retention-days: 90

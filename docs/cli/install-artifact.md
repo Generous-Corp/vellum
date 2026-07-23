@@ -26,6 +26,8 @@ gh release download v0.1.0 \
   --repo Generous-Corp/vellum \
   --pattern install.sh \
   --dir "$bootstrap_dir"
+gh release verify-asset v0.1.0 "$bootstrap_dir/install.sh" \
+  --repo Generous-Corp/vellum
 sh "$bootstrap_dir/install.sh" --version 0.1.0
 export PATH="$HOME/.local/bin:$PATH"
 
@@ -35,11 +37,11 @@ cd "$app_dir"
 vellum run --no-build
 ```
 
-The initial bootstrap in that convenience path is trusted because it was
-selected and transferred through the authenticated GitHub CLI. The bootstrap
-then downloads `SHA256SUMS`, `install_core.py`, and the exact target archive,
-uses `gh release verify-asset` on all three, checks the installer-core and
-archive hashes again against `SHA256SUMS`, and only then executes the core.
+The convenience path verifies the initial bootstrap against GitHub's
+immutable-release attestation before executing it. The bootstrap then downloads
+`SHA256SUMS`, `install_core.py`, and the exact target archive, uses
+`gh release verify-asset` on all three, checks the installer-core and archive
+hashes again against `SHA256SUMS`, and only then executes the core.
 
 For a cautious bootstrap, download the release manifest and both scripts,
 extract only their exact basename entries, require exactly one row for each
@@ -53,6 +55,11 @@ gh release download v0.1.0 \
   --pattern install.sh \
   --pattern install_core.py \
   --dir "$bootstrap_dir"
+for asset in install.sh install_core.py SHA256SUMS
+do
+  gh release verify-asset v0.1.0 "$bootstrap_dir/$asset" \
+    --repo Generous-Corp/vellum
+done
 (
   cd "$bootstrap_dir"
   awk '$2 == "install.sh" || $2 == "*install.sh"' \

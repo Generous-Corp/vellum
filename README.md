@@ -65,6 +65,8 @@ gh release download v0.1.0 \
   --repo Generous-Corp/vellum \
   --pattern install.sh \
   --dir "$bootstrap_dir"
+gh release verify-asset v0.1.0 "$bootstrap_dir/install.sh" \
+  --repo Generous-Corp/vellum
 sh "$bootstrap_dir/install.sh" --version 0.1.0
 export PATH="$HOME/.local/bin:$PATH"
 vellum --json doctor --require-target macos
@@ -103,6 +105,11 @@ gh release download v0.1.0 \
   --pattern install.sh \
   --pattern install_core.py \
   --dir "$bootstrap_dir"
+for asset in install.sh install_core.py SHA256SUMS
+do
+  gh release verify-asset v0.1.0 "$bootstrap_dir/$asset" \
+    --repo Generous-Corp/vellum
+done
 (
   cd "$bootstrap_dir"
   awk '$2 == "install.sh" || $2 == "*install.sh"' \
@@ -117,10 +124,11 @@ gh release download v0.1.0 \
 sh "$bootstrap_dir/install.sh" --version 0.1.0
 ```
 
-The convenience path trusts the authenticated GitHub transfer for the initial
-bootstrap. Both paths then use GitHub release-asset digest verification and the
-release `SHA256SUMS` before the installer core extracts or activates SDK bytes.
-No private-release `curl | sh` path is advertised.
+Both paths verify the initial bootstrap against GitHub's immutable-release
+attestation before executing it. The installer then verifies the matching
+installer core, archive release digests, and release `SHA256SUMS` before it
+extracts or activates SDK bytes. No private-release `curl | sh` path is
+advertised.
 
 The checkout-only development path remains available for CLI and import work:
 
