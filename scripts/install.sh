@@ -118,6 +118,25 @@ require_node_20() {
   }
 }
 
+require_github_cli_release_verification() {
+  command -v gh >/dev/null 2>&1 || {
+    printf '%s\n' \
+      'GitHub CLI 2.75.0+ is required to authenticate and verify the private Vellum release.' >&2
+    exit 1
+  }
+  gh_version=$(gh --version 2>/dev/null | sed -n '1s/^gh version \([0-9][0-9.]*\).*$/\1/p')
+  python3 -c \
+    'import re, sys
+match = re.fullmatch(r"([0-9]+)\.([0-9]+)(?:\.[0-9]+)?", sys.argv[1])
+raise SystemExit(0 if match and tuple(map(int, match.groups()[:2])) >= (2, 75) else 1)' \
+    "$gh_version" &&
+    gh release verify-asset --help >/dev/null 2>&1 || {
+      printf 'GitHub CLI 2.75.0+ with release verify-asset support is required; found %s.\n' \
+        "${gh_version:-unknown}" >&2
+      exit 1
+    }
+}
+
 copy_payload() {
   payload=$1
   library="$install_prefix/lib/vellum"
@@ -369,11 +388,7 @@ raise SystemExit(0 if match and int(match.group(1)) >= 15 else 1)' \
   checksums="$release_temporary/SHA256SUMS"
   release_core="$release_temporary/install_core.py"
   if [ "$release_base" = "$official_release_base" ]; then
-    command -v gh >/dev/null 2>&1 || {
-      printf '%s\n' \
-        'GitHub CLI is required to authenticate the private Vellum release.' >&2
-      exit 1
-    }
+    require_github_cli_release_verification
     gh release download "v$version" \
       --repo Generous-Corp/vellum \
       --pattern SHA256SUMS \

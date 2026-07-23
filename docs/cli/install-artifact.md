@@ -9,9 +9,10 @@ they do not claim the tag or release has already been published.
 
 The Vellum repository and release are private. The application SDK requires
 macOS 15.0 or newer on arm64 plus Python 3.9 or newer. Install
-[GitHub CLI](https://cli.github.com/) and authenticate with `gh auth login`, or
-provide `GH_TOKEN`/`GITHUB_TOKEN` for unattended use. The fastest authenticated
-path is:
+[GitHub CLI 2.75.0 or newer](https://cli.github.com/) and authenticate with
+`gh auth login`, or provide `GH_TOKEN`/`GITHUB_TOKEN` for unattended use. The
+minimum version provides the immutable-release verification commands required
+by the installer. The fastest authenticated path is:
 
 Verified archive and release installation is currently exposed only through
 `install.sh` on the supported macOS target. `install.ps1` supports explicit
@@ -253,12 +254,14 @@ gh release verify-asset v0.1.0 ./vellum-sdk-0.1.0-darwin-arm64.tar.gz \
   --repo Generous-Corp/vellum
 ```
 
-`release-trust.json` records the exact tag and source commit, the retained
-signed-tag/reproducibility/digest/checksum/sterile-install controls, and the
-explicit attestation status. GitHub artifact attestations are unavailable for
-private repositories without GitHub Enterprise Cloud, so this incubation
-release does not claim one. See
-[GitHub security features](https://docs.github.com/en/code-security/getting-started/github-security-features#artifact-attestations).
+`release-trust.json` records the exact tag and source commit, the trusted-key
+signed-tag/same-run-repeatability/digest/checksum/sterile-install controls, and
+the explicit attestation status. GitHub Actions build artifact attestations are
+unavailable for private repositories without GitHub Enterprise Cloud, so this
+incubation release does not claim one. The separately generated immutable
+release attestation is required and verified. See
+[Immutable releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases)
+and [GitHub security features](https://docs.github.com/en/code-security/getting-started/github-security-features#artifact-attestations).
 
 These are release gates, not claims that `v0.1.0` exists before the tag workflow
 has completed. The local artifact flow exercises the same archive verification

@@ -8,6 +8,7 @@ on:
     tags: ['v[0-9]*']
 
 permissions:
+  attestations: read
   contents: write
 
 jobs:
@@ -176,11 +177,32 @@ jobs:
             --forbid-path "$GITHUB_WORKSPACE" --json \
             > "$RUNNER_TEMP/sdk-installed-validation.json"
 
+      - name: Verify the binary deployment boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          dylib=build-gpu/graphics/libvellum-gpu.dylib
+          app=build-gpu/apps/gpu-native/vellum-gpu-native.app/Contents/MacOS/vellum-gpu-native
+          otool -l "$dylib" > "$RUNNER_TEMP/vellum-gpu-dylib-load-commands.txt"
+          otool -l "$app" > "$RUNNER_TEMP/vellum-gpu-app-load-commands.txt"
+          rg -q 'minos 15\.0' "$RUNNER_TEMP/vellum-gpu-dylib-load-commands.txt"
+          rg -q 'minos 15\.0' "$RUNNER_TEMP/vellum-gpu-app-load-commands.txt"
+
       - name: Record private-release trust controls
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: |
           set -euo pipefail
+          test "$(git cat-file -t "$GITHUB_REF_NAME")" = tag
+          test "$(git rev-parse "$GITHUB_REF_NAME^{commit}")" = "$GITHUB_SHA"
+          git -c gpg.ssh.allowedSignersFile="$GITHUB_WORKSPACE/provenance/release-signers.allowed_signers" \
+            verify-tag "$GITHUB_REF_NAME"
+          test "$(
+            ssh-keygen -lf provenance/release-signers.allowed_signers |
+              awk '{ print $2 }'
+          )" = SHA256:eMlEuZcnW6NJDrKQBuN5EX1q69bOlIRPl6XmutVTgcs
+          VELLUM_TAG_OBJECT_SHA="$(git rev-parse "$GITHUB_REF_NAME")"
+          export VELLUM_TAG_OBJECT_SHA
           python3 - <<'PY'
           import json
           import os
@@ -191,7 +213,14 @@ jobs:
               "repository": os.environ["GITHUB_REPOSITORY"],
               "source_commit": os.environ["GITHUB_SHA"],
               "tag": os.environ["GITHUB_REF_NAME"],
-              "github_artifact_attestation": {
+              "tag_object_sha": os.environ["VELLUM_TAG_OBJECT_SHA"],
+              "trusted_release_signer": {
+                  "principal": "daniel.raffel@gmail.com",
+                  "ssh_fingerprint": (
+                      "SHA256:eMlEuZcnW6NJDrKQBuN5EX1q69bOlIRPl6XmutVTgcs"
+                  ),
+              },
+              "github_actions_build_attestation": {
                   "status": "unavailable",
                   "reason_code": "private-repository-enterprise-cloud-required",
                   "documentation": (
@@ -199,9 +228,17 @@ jobs:
                       "github-security-features#artifact-attestations"
                   ),
               },
+              "github_immutable_release_attestation": {
+                  "status": "required",
+                  "documentation": (
+                      "https://docs.github.com/en/code-security/concepts/"
+                      "supply-chain-security/immutable-releases"
+                  ),
+              },
               "retained_controls": [
-                  "signed-git-tag-reviewed-before-push",
-                  "source-bound-byte-reproducibility",
+                  "trusted-ssh-signed-annotated-tag-bound-to-source-commit",
+                  "same-run-byte-repeatability-bound-to-source-commit",
+                  "github-immutable-release-attestation",
                   "github-release-asset-digests",
                   "sha256sums",
                   "sterile-installed-sdk-validation",
@@ -230,6 +267,10 @@ jobs:
           if identity.get("framework_version") != expected or identity.get("cli_version") != expected:
               raise SystemExit("release artifact identity does not match its immutable tag")
           ' "$RUNNER_TEMP/sdk-verification.json" "$version"
+          test "$(
+            gh api "repos/$GITHUB_REPOSITORY/immutable-releases" --jq .enabled
+          )" = true
+          gh release verify-asset --help >/dev/null
           notes="$RUNNER_TEMP/release-notes.md"
           cat > "$notes" <<'EOF'
           Private experimental Vellum SDK for the first independent-application validation.
@@ -238,38 +279,91 @@ jobs:
           native and browser-Wasm proof lanes. It is not a Pulp dependency or a
           broad platform support claim.
           EOF
-          gh release create "$tag" \
-            --repo "$GITHUB_REPOSITORY" \
-            --draft \
-            --verify-tag \
-            --title "Vellum 0.1.0 experimental SDK" \
-            --notes-file "$notes"
-          gh release upload "$tag" \
-            "$RUNNER_TEMP/vellum-sdk-0.1.0-darwin-arm64.tar.gz" \
-            "$RUNNER_TEMP/install.sh" \
-            "$RUNNER_TEMP/install_core.py" \
-            "$RUNNER_TEMP/SHA256SUMS" \
-            "$RUNNER_TEMP/sdk-verification.json" \
-            "$RUNNER_TEMP/sdk-installed-validation.json" \
-            "$RUNNER_TEMP/web-payload.json" \
-            "$RUNNER_TEMP/release-trust.json" \
-            --repo "$GITHUB_REPOSITORY"
-          gh release edit "$tag" \
-            --repo "$GITHUB_REPOSITORY" \
-            --draft=false \
-            --latest=false
-          gh release verify "$tag" --repo "$GITHUB_REPOSITORY"
+          release_json="$RUNNER_TEMP/release.json"
+          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" \
+              > "$release_json" 2>/dev/null; then
+            release_state="$(
+              python3 -c 'import json,sys; print("draft" if json.load(open(sys.argv[1]))["draft"] else "published")' \
+                "$release_json"
+            )"
+          else
+            gh release create "$tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --draft \
+              --verify-tag \
+              --title "Vellum 0.1.0 experimental SDK" \
+              --notes-file "$notes"
+            release_state=draft
+          fi
 
-      - name: Verify the binary deployment boundary
-        shell: bash
-        run: |
-          set -euo pipefail
-          dylib=build-gpu/graphics/libvellum-gpu.dylib
-          app=build-gpu/apps/gpu-native/vellum-gpu-native.app/Contents/MacOS/vellum-gpu-native
-          otool -l "$dylib" > "$RUNNER_TEMP/vellum-gpu-dylib-load-commands.txt"
-          otool -l "$app" > "$RUNNER_TEMP/vellum-gpu-app-load-commands.txt"
-          rg -q 'minos 15\.0' "$RUNNER_TEMP/vellum-gpu-dylib-load-commands.txt"
-          rg -q 'minos 15\.0' "$RUNNER_TEMP/vellum-gpu-app-load-commands.txt"
+          base_assets=(
+            "vellum-sdk-0.1.0-darwin-arm64.tar.gz=$RUNNER_TEMP/vellum-sdk-0.1.0-darwin-arm64.tar.gz"
+            "install.sh=$RUNNER_TEMP/install.sh"
+            "install_core.py=$RUNNER_TEMP/install_core.py"
+            "SHA256SUMS=$RUNNER_TEMP/SHA256SUMS"
+            "sdk-verification.json=$RUNNER_TEMP/sdk-verification.json"
+            "sdk-installed-validation.json=$RUNNER_TEMP/sdk-installed-validation.json"
+            "web-payload.json=$RUNNER_TEMP/web-payload.json"
+            "release-trust.json=$RUNNER_TEMP/release-trust.json"
+          )
+          verifier_args=()
+          upload_args=()
+          for asset in "${base_assets[@]}"; do
+            verifier_args+=(--asset "$asset")
+            upload_args+=("${asset#*=}")
+          done
+
+          if [ "$release_state" = draft ]; then
+            gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" \
+              > "$release_json"
+            previous_verification_id="$(
+              python3 -c '
+          import json, sys
+          assets = json.load(open(sys.argv[1]))["assets"]
+          matches = [str(row["id"]) for row in assets if row["name"] == "release-assets-verification.json"]
+          if len(matches) > 1:
+              raise SystemExit("duplicate release-assets-verification.json assets")
+          print(matches[0] if matches else "")
+          ' "$release_json"
+            )"
+            if [ -n "$previous_verification_id" ]; then
+              gh api --method DELETE \
+                "repos/$GITHUB_REPOSITORY/releases/assets/$previous_verification_id"
+            fi
+            gh release upload "$tag" "${upload_args[@]}" \
+              --repo "$GITHUB_REPOSITORY" --clobber
+            gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" \
+              > "$release_json"
+            python3 scripts/verify_release_assets.py \
+              --release-json "$release_json" --tag "$tag" \
+              "${verifier_args[@]}" \
+              --output "$RUNNER_TEMP/release-assets-verification.json"
+            gh release upload "$tag" \
+              "$RUNNER_TEMP/release-assets-verification.json" \
+              --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --draft=false \
+              --latest=false
+          else
+            gh release download "$tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --pattern release-assets-verification.json \
+              --dir "$RUNNER_TEMP"
+          fi
+
+          gh release verify "$tag" --repo "$GITHUB_REPOSITORY"
+          gh release verify-asset "$tag" \
+            "$RUNNER_TEMP/vellum-sdk-0.1.0-darwin-arm64.tar.gz" \
+            --repo "$GITHUB_REPOSITORY"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" \
+            > "$RUNNER_TEMP/release-published.json"
+          python3 scripts/verify_release_assets.py \
+            --release-json "$RUNNER_TEMP/release-published.json" \
+            --tag "$tag" "${verifier_args[@]}" \
+            --asset "release-assets-verification.json=$RUNNER_TEMP/release-assets-verification.json" \
+            --require-published --require-immutable \
+            --output "$RUNNER_TEMP/release-assets-published-verification.json"
 
       - name: Upload retained GPU evidence
         if: always()
@@ -293,5 +387,7 @@ jobs:
             ${{ runner.temp }}/sdk-installed-validation.json
             ${{ runner.temp }}/web-payload.json
             ${{ runner.temp }}/release-trust.json
+            ${{ runner.temp }}/release-assets-verification.json
+            ${{ runner.temp }}/release-assets-published-verification.json
           if-no-files-found: error
           retention-days: 90

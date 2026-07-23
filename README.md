@@ -34,8 +34,9 @@ Its authorship and exact blobs remain auditable in Git history and immutable
 The following is the exact `v0.1.0` tagged-release flow; it does not claim that
 the private release has already been published. Because both the repository and
 release are private, install and authenticate
-[GitHub CLI](https://cli.github.com/) first (`gh auth login`, or set `GH_TOKEN`
-or `GITHUB_TOKEN` for an unattended agent).
+[GitHub CLI 2.75.0 or newer](https://cli.github.com/) first (`gh auth login`,
+or set `GH_TOKEN` or `GITHUB_TOKEN` for an unattended agent). This minimum
+provides the immutable-release verification commands used by the installer.
 
 Verify the supported host and bootstrap prerequisites first:
 
@@ -45,6 +46,8 @@ test "$(uname -m)" = arm64
 test "$(sw_vers -productVersion | awk -F. '{ print $1 }')" -ge 15
 python3 -c 'import sys; assert sys.version_info >= (3, 9)'
 command -v gh >/dev/null
+gh --version
+gh release verify-asset --help >/dev/null
 gh auth status --hostname github.com
 ```
 
@@ -329,10 +332,11 @@ The exact `v0.1.0` release is consumed without a moving `latest` pointer:
 The release `SHA256SUMS` covers the SDK archive, `install.sh`, and
 `install_core.py`. The source-controlled `scripts/INSTALLER_SHA256SUMS` covers
 the two bootstrap scripts and is checked when preparing the tag. Release
-publication also retains `release-trust.json`, which records that GitHub
-artifact attestations are unavailable for a private repository without
-GitHub Enterprise Cloud and names the controls used instead. After downloading
-the assets, verify the immutable release and an artifact with:
+publication also retains `release-trust.json`. It distinguishes unavailable
+GitHub Actions build artifact attestations for this private non-Enterprise
+repository from the automatic release attestation GitHub creates when an
+immutable release is published. After downloading the assets, verify that
+release attestation and an asset with:
 
 ```sh
 gh release verify v0.1.0 --repo Generous-Corp/vellum
@@ -340,11 +344,13 @@ gh release verify-asset v0.1.0 ./vellum-sdk-0.1.0-darwin-arm64.tar.gz \
   --repo Generous-Corp/vellum
 ```
 
-The private incubation release relies on a reviewed signed Git tag,
-source-bound byte reproducibility, GitHub release asset digests,
-`SHA256SUMS`, and sterile installed-SDK validation. It does not claim a GitHub
-artifact attestation. GitHub documents that limitation in
-[GitHub security features](https://docs.github.com/en/code-security/getting-started/github-security-features#artifact-attestations).
+The private incubation release relies on a trusted-key SSH-signed annotated Git
+tag bound to the exact source commit, same-run byte repeatability, GitHub's
+immutable-release attestation and asset digests, `SHA256SUMS`, and sterile
+installed-SDK validation. It does not claim a GitHub Actions build artifact
+attestation. GitHub documents the two distinct controls in
+[Immutable releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases)
+and [GitHub security features](https://docs.github.com/en/code-security/getting-started/github-security-features#artifact-attestations).
 
 Checksum verification protects downloaded bytes but does not make an
 unreviewed network script intrinsically safe. Review the pinned bootstrap or

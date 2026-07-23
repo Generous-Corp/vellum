@@ -209,6 +209,8 @@ class InstallerTests(unittest.TestCase):
             gh = fake_bin / "gh"
             gh.write_text(
                 "#!/bin/sh\n"
+                'if [ "$1" = "--version" ]; then printf "gh version 2.96.0 (test)\\n"; exit 0; fi\n'
+                'if [ "$1" = "release" ] && [ "$2" = "verify-asset" ] && [ "$3" = "--help" ]; then exit 0; fi\n'
                 'printf "GH_RELEASE_ACQUISITION_REACHED\\n" >&2\n'
                 "exit 19\n",
                 encoding="utf-8",
@@ -248,6 +250,42 @@ class InstallerTests(unittest.TestCase):
             self.assertNotEqual(accepted_boundary.returncode, 0)
             self.assertNotIn("require macOS 15.0 or newer", accepted_boundary.stderr)
             self.assertIn("GH_RELEASE_ACQUISITION_REACHED", accepted_boundary.stderr)
+
+    def test_official_release_requires_gh_release_verification_capability(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            for name, body in {
+                "uname": (
+                    '#!/bin/sh\ncase "$1" in -s) printf "Darwin\\n" ;; '
+                    '-m) printf "arm64\\n" ;; *) exit 2 ;; esac\n'
+                ),
+                "sw_vers": "#!/bin/sh\nprintf '15.0\\n'\n",
+                "gh": (
+                    '#!/bin/sh\nif [ "$1" = "--version" ]; then '
+                    'printf "gh version 2.74.2 (test)\\n"; exit 0; fi\n'
+                    'printf "UNSUPPORTED_GH_REACHED\\n" >&2\nexit 19\n'
+                ),
+            }.items():
+                path = fake_bin / name
+                path.write_text(body, encoding="utf-8")
+                path.chmod(0o755)
+            environment = {
+                **os.environ,
+                "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
+            }
+            rejected = _run_installer(
+                root / "prefix",
+                "--version", "0.1.0",
+                env=environment,
+            )
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn(
+                "GitHub CLI 2.75.0+ with release verify-asset support is required",
+                rejected.stderr,
+            )
+            self.assertNotIn("GH_RELEASE_ACQUISITION_REACHED", rejected.stderr)
 
     def test_local_install_runs_and_creates_project_outside_checkout(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
