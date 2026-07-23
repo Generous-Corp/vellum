@@ -52,6 +52,26 @@ jobs:
           cache: npm
           cache-dependency-path: packages/vellum-ui/package-lock.json
 
+      - name: Verify the exact release source contract
+        run: |
+          python3 -m unittest discover -s cli/tests -p 'test_*.py'
+          python3 -m unittest tools.agent_instructions.test_verify
+          python3 scripts/test_readme_exec.py
+          python3 scripts/readme_exec.py --lint
+          python3 scripts/test_readme_lint.py
+          python3 scripts/readme_lint.py
+          python3 scripts/test_docs_sync.py
+          python3 scripts/docs_sync.py --check
+          python3 scripts/test_sterile_acceptance_bundle.py
+          python3 scripts/test_verify_budget_ratification.py
+          python3 scripts/verify_budget_ratification.py
+          python3 tools/provenance/test_verify_downstream_consumers.py
+          python3 tools/provenance/verify_downstream_consumers.py
+          python3 tools/provenance/test_verify_extraction.py
+          python3 tools/provenance/verify_extraction.py \
+            --output "$RUNNER_TEMP/provenance-report.json"
+          npm run check --prefix packages/vellum-design-ir
+
       - name: Build the real TypeScript and JSX host fixture
         run: |
           npm ci --prefix packages/vellum-ui
