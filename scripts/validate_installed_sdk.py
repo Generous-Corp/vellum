@@ -165,6 +165,8 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
         native_capture = project / "artifacts/installed-proof.png"
         native_package = project / "dist/sterile-artifact-app.app"
         imported_bundle_contains_design = False
+        native_capture_produced = False
+        native_package_produced = False
         if native_enabled:
             for name, arguments in {
                 "build": ["build"],
@@ -193,6 +195,42 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
                 raise ValidationError("installed native capture did not produce a PNG")
             if not (native_package / "Contents/MacOS/sterile-artifact-app").is_file():
                 raise ValidationError("installed native package did not produce a runnable .app")
+            native_capture_produced = True
+            native_package_produced = True
+
+    checks = {
+        "checksum_and_payload_manifest": True,
+        "artifact_contamination_scan": verification["contamination_free"],
+        "clean_prefix_install": True,
+        "installed_artifact_identity": install_manifest == expected_manifest,
+        "installed_tree_contamination_scan": not contamination,
+        "relocatable_cmake_package": True,
+        "gpu_authoring_ui_payload": not gpu_claimed or ui_present,
+        "native_backend_payload": not native_claimed or native_present,
+        "sterile_consumer_configure": True,
+        "sterile_consumer_build": True,
+        "sterile_consumer_test": True,
+        "project_created_by_installed_cli": created.get("status") == "created",
+        "project_lock_matches_sdk": True,
+        "project_lock_pins_artifact_sha": lock["framework"].get("artifact") == expected_lock_identity,
+        "installed_cli_doctor": doctor.get("status") == "ready",
+        "installed_cli_import": imported.get("status") == "imported",
+        "installed_cli_reimport": reimported.get("status") == "reimported",
+        "active_reimport_revision": active_revision == "palette-board-b",
+        "native_capability_claim_consistent": all(
+            verification["claims"]["commands"][name] is native_enabled
+            for name in ("build", "run", "test", "capture", "package")
+        ),
+        "installed_native_build": not native_enabled or native_results["build"]["status"] == "built",
+        "installed_native_finite_run": not native_enabled or native_results["run"]["status"] == "self_test_passed",
+        "installed_native_scenario": not native_enabled or native_results["test"]["status"] == "tests_passed",
+        "installed_imported_design_bundle": not native_enabled or imported_bundle_contains_design,
+        "installed_native_capture": not native_enabled or native_capture_produced,
+        "installed_native_package": not native_enabled or native_package_produced,
+    }
+    if not all(checks.values()):
+        failed = sorted(name for name, passed in checks.items() if not passed)
+        raise ValidationError(f"installed SDK validation checks failed: {failed}")
 
     return {
         "schema": "vellum.installed-sdk-validation.v1",
@@ -204,36 +242,7 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
         "source_tree_clean": verification["source_tree_clean"],
         "target": verification["target"],
         "claims": verification["claims"],
-        "checks": {
-            "checksum_and_payload_manifest": True,
-            "artifact_contamination_scan": verification["contamination_free"],
-            "clean_prefix_install": True,
-            "installed_artifact_identity": install_manifest == expected_manifest,
-            "installed_tree_contamination_scan": not contamination,
-            "relocatable_cmake_package": True,
-            "gpu_authoring_ui_payload": not gpu_claimed or ui_present,
-            "native_backend_payload": not native_claimed or native_present,
-            "sterile_consumer_configure": True,
-            "sterile_consumer_build": True,
-            "sterile_consumer_test": True,
-            "project_created_by_installed_cli": created.get("status") == "created",
-            "project_lock_matches_sdk": True,
-            "project_lock_pins_artifact_sha": lock["framework"].get("artifact") == expected_lock_identity,
-            "installed_cli_doctor": doctor.get("status") == "ready",
-            "installed_cli_import": imported.get("status") == "imported",
-            "installed_cli_reimport": reimported.get("status") == "reimported",
-            "active_reimport_revision": active_revision == "palette-board-b",
-            "native_capability_claim_consistent": all(
-                verification["claims"]["commands"][name] is native_enabled
-                for name in ("build", "run", "test", "capture", "package")
-            ),
-            "installed_native_build": not native_enabled or native_results["build"]["status"] == "built",
-            "installed_native_finite_run": not native_enabled or native_results["run"]["status"] == "self_test_passed",
-            "installed_native_scenario": not native_enabled or native_results["test"]["status"] == "tests_passed",
-            "installed_imported_design_bundle": not native_enabled or imported_bundle_contains_design,
-            "installed_native_capture": not native_enabled or native_capture.is_file(),
-            "installed_native_package": not native_enabled or native_package.is_dir(),
-        },
+        "checks": checks,
     }
 
 
