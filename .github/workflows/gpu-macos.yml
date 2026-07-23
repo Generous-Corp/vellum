@@ -189,8 +189,8 @@ jobs:
           app=build-gpu/apps/gpu-native/vellum-gpu-native.app/Contents/MacOS/vellum-gpu-native
           otool -l "$dylib" > "$RUNNER_TEMP/vellum-gpu-dylib-load-commands.txt"
           otool -l "$app" > "$RUNNER_TEMP/vellum-gpu-app-load-commands.txt"
-          rg -q 'minos 15\.0' "$RUNNER_TEMP/vellum-gpu-dylib-load-commands.txt"
-          rg -q 'minos 15\.0' "$RUNNER_TEMP/vellum-gpu-app-load-commands.txt"
+          /usr/bin/grep -Eq 'minos 15\.0' "$RUNNER_TEMP/vellum-gpu-dylib-load-commands.txt"
+          /usr/bin/grep -Eq 'minos 15\.0' "$RUNNER_TEMP/vellum-gpu-app-load-commands.txt"
 
       - name: Record private-release trust controls
         if: startsWith(github.ref, 'refs/tags/v')
