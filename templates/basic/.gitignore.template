@@ -1,0 +1,8 @@
+.vellum/build/
+.vellum/cache/
+.vellum/packages/
+.vellum/state/
+artifacts/
+build/
+dist/
+node_modules/

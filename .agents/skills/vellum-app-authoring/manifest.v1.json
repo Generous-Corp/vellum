@@ -75,6 +75,7 @@
   "supportedSourceTypes": ["design-ir", "figma"],
   "ownership": {
     "toolOwned": [
+      "framework.lock",
       "sources/imported",
       "design/ir",
       "design/generated",
@@ -83,6 +84,9 @@
       "ui/generated"
     ],
     "developerOwned": [
+      "app.toml",
+      "package.json",
+      "package-lock.json",
       "src",
       "components",
       "design/overlays",

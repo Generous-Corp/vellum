@@ -142,7 +142,7 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
         active_revision = json.loads(
             (project / "design/import.lock.json").read_text(encoding="utf-8")
         )["sources"]["main"]["activeRevision"]
-        lock = json.loads((project / "vellum.lock.json").read_text(encoding="utf-8"))
+        lock = json.loads((project / "framework.lock").read_text(encoding="utf-8"))
         if lock["framework"]["version"] != verification["framework_version"]:
             raise ValidationError("created project lock does not match the installed SDK artifact")
         expected_lock_identity = {

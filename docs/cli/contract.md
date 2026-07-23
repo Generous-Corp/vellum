@@ -8,13 +8,15 @@ automation usable while unavailable capabilities fail honestly.
 
 Every command except `create`, `doctor`, `--help`, and `--version` searches from
 the requested path or current directory toward the filesystem root for
-`vellum.lock.json`. Version 1 pins:
+`framework.lock`. Version 1 pins:
 
 - schema `vellum.project-lock.v1`;
 - a deterministic 24-character project identity;
 - the exact framework version and installed artifact identity (verification
   state, SHA-256, target, and source commit), plus a separately versioned CLI
   protocol API;
+- the exact `@vellum/ui` package identity, which must agree with the committed
+  npm lock;
 - the source template and template version.
 
 An unsupported schema, malformed identity, CLI API mismatch, or installed SDK
@@ -22,7 +24,9 @@ artifact mismatch fails before a backend is invoked. The framework pin is
 passed to the backend, which must use
 the matching SDK. Separating CLI API compatibility from the framework pin lets
 the CLI gain backward-compatible fixes without making every existing project
-unopenable. The lock is application-owned and should be committed. Projects
+unopenable. The lock is tool-owned and should be committed. `app.toml`,
+`package.json`, and `package-lock.json` are developer-owned within their
+validated roles. Projects
 made from a local source install are explicitly marked unverified with no SHA
 or commit; verified installs pin the archive SHA exactly.
 
@@ -94,5 +98,6 @@ It reads only the installed host, libraries, UI bundler, and the application
 project. At this milestone it accepts exactly the `macos` target; unsupported
 targets and missing payloads are errors, never successful no-ops.
 
-`doctor --fix` only creates safe project-local cache and state directories. It
-does not silently install system packages or modify shell profiles.
+`doctor --fix` creates safe project-local cache/state directories and projects
+the exact locked UI package from the installed SDK into ignored `.vellum/`
+state. It does not silently install system packages or modify shell profiles.

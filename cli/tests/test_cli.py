@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -45,20 +46,22 @@ class CliTests(unittest.TestCase):
                 self.assertEqual((first / relative).read_bytes(), (second / relative).read_bytes())
 
             required = {
-                Path("vellum.lock.json"),
+                Path("app.toml"),
+                Path("framework.lock"),
+                Path("package-lock.json"),
                 Path("AGENTS.md"),
                 Path(".vellum/agent-instructions.md"),
                 Path("sources/imported/README.md"),
-                Path("design/ir/design-ir.json"),
+                Path("design/ir/app.designir.json"),
                 Path("ui/generated/Home.generated.tsx"),
                 Path("src/App.tsx"),
                 Path("src/main.tsx"),
                 Path("native/README.md"),
                 Path("tests/scenarios/smoke.json"),
-                Path("packaging/vellum.package.json"),
+                Path("native/components.toml"),
             }
             self.assertTrue(required.issubset(set(first_files)))
-            lock = json.loads((first / "vellum.lock.json").read_text())
+            lock = json.loads((first / "framework.lock").read_text())
             self.assertEqual(lock["project"]["id"], hashlib.sha256(b"vellum-project-v1:example-app").hexdigest()[:24])
             self.assertEqual(lock["framework"]["version"], "0.1.0")
             self.assertEqual(lock["framework"]["artifact"], {
@@ -99,7 +102,8 @@ class CliTests(unittest.TestCase):
             destination = Path(temporary) / "quoted"
             completed = invoke("create", 'A "Quoted" App', "-d", str(destination), "--json")
             self.assertEqual(completed.returncode, 0, completed.stderr)
-            self.assertEqual(json.loads((destination / "vellum.lock.json").read_text())["project"]["name"], 'A "Quoted" App')
+            self.assertEqual(json.loads((destination / "framework.lock").read_text())["project"]["name"], 'A "Quoted" App')
+            self.assertIn('name = "A \\"Quoted\\" App"', (destination / "app.toml").read_text())
             self.assertIn('title={"A \\"Quoted\\" App"}', (destination / "src/App.tsx").read_text())
 
     def test_json_mode_reports_argument_errors_as_json(self) -> None:
@@ -194,10 +198,79 @@ class CliTests(unittest.TestCase):
     def test_invalid_lock_fails_before_backend_discovery(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             project = Path(temporary)
-            (project / "vellum.lock.json").write_text('{"schema":"wrong"}\n', encoding="utf-8")
+            (project / "framework.lock").write_text('{"schema":"wrong"}\n', encoding="utf-8")
             completed = invoke("--json", "test", cwd=project)
             self.assertEqual(completed.returncode, 3)
             self.assertEqual(json.loads(completed.stdout)["status"], "invalid_project_lock")
+
+    def test_app_manifest_and_npm_lock_are_fail_closed_authorities(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary) / "app"
+            self.assertEqual(invoke("create", "Authority", "-d", str(project)).returncode, 0)
+
+            manifest_path = project / "app.toml"
+            original_manifest = manifest_path.read_text(encoding="utf-8")
+            manifest_path.write_text(
+                original_manifest.replace('entry = "src/main.tsx"', 'entry = "../escape.tsx"'),
+                encoding="utf-8",
+            )
+            invalid_manifest = invoke("build", "--json", cwd=project)
+            self.assertEqual(invalid_manifest.returncode, 3)
+            self.assertEqual(json.loads(invalid_manifest.stdout)["status"], "invalid_app_manifest")
+
+            manifest_path.write_text(original_manifest, encoding="utf-8")
+            package_lock_path = project / "package-lock.json"
+            package_lock = json.loads(package_lock_path.read_text(encoding="utf-8"))
+            package_lock["packages"][".vellum/packages/vellum-ui"]["version"] = "9.9.9"
+            package_lock_path.write_text(json.dumps(package_lock), encoding="utf-8")
+            invalid_package_lock = invoke("build", "--json", cwd=project)
+            self.assertEqual(invalid_package_lock.returncode, 3)
+            self.assertEqual(json.loads(invalid_package_lock.stdout)["status"], "invalid_package_lock")
+
+    def test_installed_ui_projection_satisfies_exact_npm_lock(self) -> None:
+        npm = shutil.which("npm")
+        if not npm:
+            self.skipTest("npm is unavailable")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sdk = root / "sdk"
+            sdk.mkdir()
+            shutil.copytree(REPO / "packages/vellum-ui", sdk / "ui")
+            (sdk / "metadata.json").write_text(json.dumps({
+                "schema": "vellum.sdk-artifact.v1",
+                "framework_version": "0.1.0",
+                "cli_version": "0.1.0-dev",
+                "cli_api": 1,
+                "source_commit": None,
+                "target": "local-development",
+                "capabilities": {
+                    "authoring_cli": True, "cmake_sdk": False, "gpu_renderer": False,
+                    "commands": {name: False for name in (
+                        "import", "reimport", "build", "run", "test", "capture", "package"
+                    )},
+                },
+                "files": [],
+            }), encoding="utf-8")
+            (sdk / "install-manifest.json").write_text(json.dumps({
+                "schema": "vellum.sdk-install.v1", "verified": False,
+                "artifact": None, "artifact_sha256": None,
+                "framework_version": "0.1.0", "target": "local-development",
+                "source_commit": None,
+            }), encoding="utf-8")
+            project = root / "app"
+            created = invoke(
+                "create", "Npm Consumer", "-d", str(project), "--json",
+                env={"VELLUM_SDK_ROOT": str(sdk)},
+            )
+            self.assertEqual(created.returncode, 0, created.stderr)
+            installed = subprocess.run(
+                [npm, "ci", "--ignore-scripts", "--no-audit", "--no-fund"],
+                cwd=project, text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(installed.returncode, 0, installed.stdout + installed.stderr)
+            package = json.loads((project / "node_modules/@vellum/ui/package.json").read_text())
+            self.assertEqual(package["version"], "0.1.0-experimental.0")
+            self.assertFalse((project / ".vellum/packages/vellum-ui/node_modules").exists())
 
     def test_installed_sdk_metadata_enforces_exact_framework_pin(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -280,7 +353,7 @@ class CliTests(unittest.TestCase):
             installed_env = {"VELLUM_SDK_ROOT": str(sdk)}
             created = invoke("create", "Pinned artifact", "-d", str(project), "--json", env=installed_env)
             self.assertEqual(created.returncode, 0, created.stderr)
-            lock = json.loads((project / "vellum.lock.json").read_text(encoding="utf-8"))
+            lock = json.loads((project / "framework.lock").read_text(encoding="utf-8"))
             self.assertEqual(lock["framework"]["artifact"]["sha256"], "b" * 64)
             self.assertTrue(lock["framework"]["artifact"]["verified"])
 
@@ -294,7 +367,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             project = Path(temporary) / "app"
             self.assertEqual(invoke("create", "Compatibility", "-d", str(project)).returncode, 0)
-            lock_path = project / "vellum.lock.json"
+            lock_path = project / "framework.lock"
             lock = json.loads(lock_path.read_text())
             lock["framework"]["version"] = "0.1.1"
             lock_path.write_text(json.dumps(lock), encoding="utf-8")

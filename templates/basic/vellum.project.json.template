@@ -1,7 +1,0 @@
-{
-  "schema": "vellum.project.v1",
-  "name": "{{PROJECT_NAME_JSON}}",
-  "entry": "src/main.tsx",
-  "generated_ui": "ui/generated",
-  "targets": ["macos"]
-}

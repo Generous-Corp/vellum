@@ -1,0 +1,30 @@
+[app]
+name = "{{PROJECT_NAME_JSON}}"
+identifier = "dev.vellum.{{PROJECT_SLUG}}"
+version = "0.1.0"
+entry = "src/main.tsx"
+design = "design/ir/app.designir.json"
+
+[runtime]
+profile = "portable"
+native_js_engine = "default"
+
+[targets]
+desktop = ["macos"]
+mobile = []
+web = false
+
+[capabilities]
+files = "none"
+clipboard = false
+open_url = false
+network = false
+persistence = "none"
+
+[native]
+components_manifest = "native/components.toml"
+
+[packaging]
+macos_format = "app"
+
+[packaging.overrides]

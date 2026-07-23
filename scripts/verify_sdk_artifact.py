@@ -25,7 +25,7 @@ AGENT_INSTRUCTION_FILES = {
     ".agents/skills/vellum-app-authoring/manifest.v1.json",
 }
 SAFE_ROOTS = {
-    "vellum_cli.py", "vellum_backend.py", "vellum_native_backend.py",
+    "vellum_cli.py", "vellum_backend.py", "vellum_manifest.py", "vellum_native_backend.py",
     ".agents", "templates", "sdk", "bin", "design-ir", "ui", "metadata.json",
 }
 FORBIDDEN_PAYLOAD_PATH_PATTERNS = {
@@ -134,6 +134,8 @@ def validate_ui_payload(contents: dict[str, bytes]) -> bool:
 
 
 def derived_capabilities(contents: dict[str, bytes]) -> dict[str, object]:
+    if "vellum_manifest.py" not in contents:
+        raise VerificationError("SDK artifact lacks the application manifest reader")
     cmake_sdk = "sdk/lib/cmake/Vellum/VellumConfig.cmake" in contents
     gpu_renderer = payload_has_cmake_target(contents, "Gpu")
     authoring_runtime = payload_has_cmake_target(contents, "Authoring")

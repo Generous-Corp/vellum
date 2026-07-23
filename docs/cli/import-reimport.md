@@ -33,7 +33,7 @@ Both commands support `--json`. The CLI writes deterministic, reviewable files:
 ```text
 sources/imported/main/<revision>/       immutable source and asset snapshot
 design/ir/sources/main.designir.json    canonical source DesignIR
-design/ir/design-ir.json                active aggregate for the one-source v0
+design/ir/app.designir.json             active aggregate for the one-source v0
 design/generated/                       component definitions and typed IDs
 design/overlays/main.authored.json      developer-owned bindings and overrides
 design/reports/                         import/reimport diagnostics and candidates

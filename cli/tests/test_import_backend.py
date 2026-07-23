@@ -66,7 +66,7 @@ class ImportBackendTests(unittest.TestCase):
                 "sources/imported/main/palette-board-a/source.json",
                 "sources/imported/main/palette-board-a/provenance.json",
                 "design/ir/sources/main.designir.json",
-                "design/ir/design-ir.json",
+                "design/ir/app.designir.json",
                 "design/generated/main.components.json",
                 "design/generated/node-ids.d.ts",
                 "design/overlays/main.authored.json",
@@ -145,7 +145,7 @@ class ImportBackendTests(unittest.TestCase):
             )
             self.assertEqual(imported.returncode, 0, imported.stdout)
             self.assertEqual(json.loads(imported.stdout)["status"], "imported")
-            document = json.loads((app / "design/ir/design-ir.json").read_text())
+            document = json.loads((app / "design/ir/app.designir.json").read_text())
             self.assertEqual(document["source"]["adapter"], "figma-plugin")
             self.assertEqual(document["source"]["providerFileKey"], "paletteboard")
             self.assertEqual(document["root"]["id"], "main/1:2")
@@ -170,7 +170,7 @@ class ImportBackendTests(unittest.TestCase):
             expected_revision = "figma-" + hashlib.sha256(source_b.read_bytes()).hexdigest()[:16]
             lock = json.loads((app / "design/import.lock.json").read_text())
             self.assertEqual(lock["sources"]["main"]["activeRevision"], expected_revision)
-            updated = json.loads((app / "design/ir/design-ir.json").read_text())
+            updated = json.loads((app / "design/ir/app.designir.json").read_text())
             self.assertEqual(updated["root"]["children"][0]["text"], "Palette Studio")
             card_ids = {
                 child["id"]

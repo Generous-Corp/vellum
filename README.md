@@ -96,6 +96,7 @@ vellum create "Vellum Hello" -d "$env:TEMP\vellum-hello"
 vellum create MyApp
 cd myapp
 vellum doctor --fix
+npm ci
 vellum import ./revision-a.source.json --source-type figma --as main
 vellum reimport --source ./revision-b.source.json --as main
 vellum build --target macos
@@ -111,6 +112,13 @@ components, platform modules, tests, and packaging configuration. The macOS GPU
 artifact implements this complete command lane. An artifact built without the
 pinned renderer advertises only import/reimport. Backends are discovered through
 `VELLUM_SDK_ROOT`, `VELLUM_BACKEND`, or `PATH`.
+
+Generated applications use `app.toml` as the sole editable authority for app
+identity, entry point, targets, capabilities, and packaging. `framework.lock`
+pins the exact SDK artifact and JS package identity. `package-lock.json` is an
+exact npm lock; an installed SDK projects immutable `@vellum/ui` runtime bytes
+into ignored `.vellum/packages/`, and `create` proves the lock with offline
+`npm ci` before reporting success.
 
 The accepted source contract, generated tree, ownership boundary, and conflict
 workflow are documented in [Import and reimport](docs/cli/import-reimport.md).
@@ -166,7 +174,7 @@ consumers can add that directory to `CMAKE_PREFIX_PATH` and use
 Every install writes `lib/vellum/install-manifest.json`. Verified installs
 record the archive SHA-256, target, version, and source commit; local installs
 are explicitly unverified and carry no fabricated hash. New projects pin this
-identity in `vellum.lock.json`, so a same-version but different SDK artifact is
+identity in `framework.lock`, so a same-version but different SDK artifact is
 rejected before backend execution.
 
 `scripts/validate_installed_sdk.py` verifies the archive, installs to a clean

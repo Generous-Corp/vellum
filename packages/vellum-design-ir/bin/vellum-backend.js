@@ -463,7 +463,7 @@ async function planAssets(sourcePath, document, paths) {
 function projectPaths(project, sourceKey, revision) {
     const snapshotRoot = join(project, 'sources', 'imported', sourceKey, revision);
     return {
-        aggregateIr: join(project, 'design', 'ir', 'design-ir.json'),
+        aggregateIr: join(project, 'design', 'ir', 'app.designir.json'),
         assetManifest: join(project, 'assets', 'generated', sourceKey, 'manifest.json'),
         generatedAssets: join(project, 'assets', 'generated', sourceKey, 'files'),
         generatedBindings: join(project, 'ui', 'generated', `${sourceKey}.bindings.json`),
@@ -498,7 +498,7 @@ async function loadOrCreateOverlay(path, sourceKey) {
 async function validateProject(project) {
     const root = await stat(project).catch(() => null);
     if (!root?.isDirectory()) fail('project_not_found', `Project directory does not exist: ${project}`);
-    const lock = await readRequiredJson(join(project, 'vellum.lock.json'), 'project lock');
+    const lock = await readRequiredJson(join(project, 'framework.lock'), 'project lock');
     if (lock.schema !== 'vellum.project-lock.v1') {
         fail('invalid_project_lock', `Unsupported project lock schema '${lock.schema ?? ''}'`);
     }

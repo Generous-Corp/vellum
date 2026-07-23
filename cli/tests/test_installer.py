@@ -38,7 +38,7 @@ class InstallerTests(unittest.TestCase):
                 check=False,
             )
             self.assertEqual(create.returncode, 0, create.stderr)
-            self.assertTrue((project / "vellum.lock.json").is_file())
+            self.assertTrue((project / "framework.lock").is_file())
             install_manifest = json.loads(
                 (prefix / "lib/vellum/install-manifest.json").read_text(encoding="utf-8")
             )
@@ -51,7 +51,7 @@ class InstallerTests(unittest.TestCase):
                 "target": "local-development",
                 "source_commit": None,
             })
-            lock = json.loads((project / "vellum.lock.json").read_text(encoding="utf-8"))
+            lock = json.loads((project / "framework.lock").read_text(encoding="utf-8"))
             self.assertEqual(lock["framework"]["artifact"], {
                 "verified": False,
                 "sha256": None,
@@ -132,6 +132,7 @@ class InstallerTests(unittest.TestCase):
             payload.mkdir()
             shutil.copy2(REPO / "cli/vellum_cli.py", payload / "vellum_cli.py")
             shutil.copy2(REPO / "cli/vellum_backend.py", payload / "vellum_backend.py")
+            shutil.copy2(REPO / "cli/vellum_manifest.py", payload / "vellum_manifest.py")
             shutil.copytree(REPO / ".agents", payload / ".agents")
             shutil.copytree(REPO / "templates", payload / "templates")
             shutil.copytree(REPO / "packages/vellum-design-ir", payload / "design-ir")
@@ -167,6 +168,7 @@ class InstallerTests(unittest.TestCase):
             with tarfile.open(archive, "w:gz") as handle:
                 handle.add(payload / "vellum_cli.py", arcname="vellum_cli.py")
                 handle.add(payload / "vellum_backend.py", arcname="vellum_backend.py")
+                handle.add(payload / "vellum_manifest.py", arcname="vellum_manifest.py")
                 handle.add(payload / ".agents", arcname=".agents")
                 handle.add(payload / "templates", arcname="templates")
                 handle.add(payload / "design-ir", arcname="design-ir")
@@ -200,7 +202,7 @@ class InstallerTests(unittest.TestCase):
                 check=False,
             )
             self.assertEqual(created.returncode, 0, created.stderr)
-            lock = json.loads((project / "vellum.lock.json").read_text(encoding="utf-8"))
+            lock = json.loads((project / "framework.lock").read_text(encoding="utf-8"))
             self.assertEqual(lock["framework"]["artifact"]["sha256"], digest)
             self.assertTrue(lock["framework"]["artifact"]["verified"])
 

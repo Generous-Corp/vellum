@@ -30,6 +30,7 @@ function Install-Payload([string]$Payload) {
     New-Item -ItemType Directory -Force -Path $library, $bin | Out-Null
     Copy-Item (Join-Path $Payload "vellum_cli.py") (Join-Path $library "vellum_cli.py") -Force
     Copy-Item (Join-Path $Payload "vellum_backend.py") (Join-Path $library "vellum_backend.py") -Force
+    Copy-Item (Join-Path $Payload "vellum_manifest.py") (Join-Path $library "vellum_manifest.py") -Force
     Copy-Item (Join-Path $Payload "metadata.json") (Join-Path $library "metadata.json") -Force
     Copy-Item (Join-Path $Payload "install-manifest.json") (Join-Path $library "install-manifest.json") -Force
     $agentDestination = Join-Path $library ".agents"
@@ -101,11 +102,12 @@ if ($LocalRoot) {
     if ($Archive -or $Checksums -or $Version) { throw "-LocalRoot cannot be combined with artifact or release options." }
     $cli = Join-Path $LocalRoot "cli\vellum_cli.py"
     $dispatcher = Join-Path $LocalRoot "cli\vellum_backend.py"
+    $manifestReader = Join-Path $LocalRoot "cli\vellum_manifest.py"
     $agentSkill = Join-Path $LocalRoot ".agents\skills\vellum-app-authoring\SKILL.md"
     $agentManifest = Join-Path $LocalRoot ".agents\skills\vellum-app-authoring\manifest.v1.json"
     $templates = Join-Path $LocalRoot "templates\basic"
     $designIrPackage = Join-Path $LocalRoot "packages\vellum-design-ir"
-    if (!(Test-Path $cli) -or !(Test-Path $dispatcher) -or !(Test-Path $agentSkill) -or
+    if (!(Test-Path $cli) -or !(Test-Path $dispatcher) -or !(Test-Path $manifestReader) -or !(Test-Path $agentSkill) -or
         !(Test-Path $agentManifest) -or !(Test-Path $templates) -or !(Test-Path $designIrPackage)) {
         throw "Local root lacks the CLI, dispatcher, agent instructions, templates, or DesignIR package."
     }
@@ -114,6 +116,7 @@ if ($LocalRoot) {
     try {
         Copy-Item $cli (Join-Path $temporary "vellum_cli.py")
         Copy-Item (Join-Path $LocalRoot "cli\vellum_backend.py") (Join-Path $temporary "vellum_backend.py")
+        Copy-Item (Join-Path $LocalRoot "cli\vellum_manifest.py") (Join-Path $temporary "vellum_manifest.py")
         Copy-Item (Join-Path $LocalRoot ".agents") (Join-Path $temporary ".agents") -Recurse
         Copy-Item (Join-Path $LocalRoot "templates") (Join-Path $temporary "templates") -Recurse
         $localMetadata = @'
@@ -225,7 +228,7 @@ with tarfile.open(archive, "r:gz") as handle:
         raise SystemExit("archive contains duplicate member names")
     for member in members:
         path = PurePosixPath(member.name)
-        if (not path.parts or path.parts[0] not in {".agents", "vellum_cli.py", "vellum_backend.py", "vellum_native_backend.py", "templates", "sdk", "bin", "design-ir", "ui", "metadata.json"} or
+        if (not path.parts or path.parts[0] not in {".agents", "vellum_cli.py", "vellum_backend.py", "vellum_manifest.py", "vellum_native_backend.py", "templates", "sdk", "bin", "design-ir", "ui", "metadata.json"} or
                 path.is_absolute() or ".." in path.parts or "\\" in member.name or ":" in path.parts[0] or
                 member.issym() or member.islnk() or not (member.isfile() or member.isdir())):
             raise SystemExit(f"unsafe archive member: {member.name}")
@@ -249,6 +252,7 @@ with tarfile.open(archive, "r:gz") as handle:
     if ($LASTEXITCODE -ne 0) { throw "Archive extraction validation failed." }
     if (!(Test-Path (Join-Path $temporary "vellum_cli.py")) -or
         !(Test-Path (Join-Path $temporary "vellum_backend.py")) -or
+        !(Test-Path (Join-Path $temporary "vellum_manifest.py")) -or
         !(Test-Path (Join-Path $temporary ".agents\skills\vellum-app-authoring\SKILL.md")) -or
         !(Test-Path (Join-Path $temporary ".agents\skills\vellum-app-authoring\manifest.v1.json")) -or
         !(Test-Path (Join-Path $temporary "templates\basic")) -or

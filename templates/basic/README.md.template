@@ -6,12 +6,18 @@ Application behavior belongs in `src/`; generated design material belongs in
 
 ```sh
 vellum doctor --fix
+npm ci
 vellum build
 vellum run
 vellum test
 vellum capture --scenario smoke --output artifacts/smoke.png
 vellum package --output dist
 ```
+
+`app.toml` is the sole editable application, target, capability, and packaging
+manifest. `framework.lock` pins the exact SDK artifact and JavaScript package
+identity. `doctor --fix` materializes immutable SDK-provided package bytes under
+the ignored `.vellum/` directory; `npm ci` verifies the checked-in exact lock.
 
 When created by the native macOS SDK, the initial build and smoke scenario have
 already passed. SDKs without that capability and unsupported targets report

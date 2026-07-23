@@ -10,6 +10,7 @@ The gzip-compressed tar has this root layout:
 ```text
 vellum_cli.py
 vellum_backend.py
+vellum_manifest.py
 templates/basic/...
 metadata.json
 sdk/include/...
@@ -58,13 +59,15 @@ The installer creates three distinct executable roles under
 packaged. Import and native command implementations therefore cannot shadow one
 another. Node.js 20 or newer is required when installing this artifact. The GPU
 artifact contains its locked esbuild platform binary and TypeScript compiler;
-application builds do not run `npm install`.
+application builds do not resolve framework packages from the network. Project
+creation materializes the exact runtime package from the SDK and proves the
+committed npm lock with `npm ci`.
 
 The installer writes `$VELLUM_SDK_ROOT/install-manifest.json`. A verified
 archive install records the exact archive basename, SHA-256, target, framework
 version, and source commit. A `--local` install records `verified: false` with
 null archive, hash, and commit fields; it never manufactures release identity.
-`vellum create` copies that identity into `vellum.lock.json`, and later commands
+`vellum create` copies that identity into `framework.lock`, and later commands
 reject a different installed artifact even when its framework version matches.
 
 `SHA256SUMS` must contain exactly one basename entry for the archive. Both

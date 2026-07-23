@@ -6,9 +6,11 @@ machine-readable authority.
 
 ## Before changing an application
 
-1. Read `vellum.lock.json`, `AGENTS.md`, and `.vellum/agent-instructions.md`.
-2. Run `vellum --json doctor --fix`. `--fix` only creates safe project-local
-   cache/state directories; it does not install system software.
+1. Read `app.toml`, `framework.lock`, `AGENTS.md`, and
+   `.vellum/agent-instructions.md`.
+2. Run `vellum --json doctor --fix`. `--fix` creates safe project-local
+   cache/state directories and materializes the exact SDK-provided UI package;
+   it does not install system software.
 3. Inspect the JSON `ok`, `status`, `diagnostics`, and capability checks. If a
    requested capability is unavailable, stop and report it. Do not bypass the
    lock, invent output, or patch framework code into the application.
@@ -46,10 +48,11 @@ Do not invent another route or silently discard unsupported properties.
 
 ## Ownership and maintenance
 
-- Tool-owned: `sources/imported/`, `design/ir/`, `design/generated/`,
+- Tool-owned: `framework.lock`, `sources/imported/`, `design/ir/`, `design/generated/`,
   `tokens/imported/`, `assets/generated/`, and `ui/generated/`. Change these
   only by import/reimport.
-- Developer-owned: `src/`, `components/`, `design/overlays/`, editable theme
+- Developer-owned: `app.toml`, `package.json`, `package-lock.json`, `src/`,
+  `components/`, `design/overlays/`, editable theme
   tokens and assets, `native/`, `platforms/`, `tests/`, and `packaging/`.
 - Keep behavior, state, navigation, services, and overrides in developer-owned
   files. Preserve stable imported identities and review orphan/conflict reports.

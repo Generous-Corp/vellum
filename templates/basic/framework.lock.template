@@ -7,13 +7,16 @@
   },
   "framework": {
     "version": "{{FRAMEWORK_VERSION}}",
-    "artifact": {{ARTIFACT_IDENTITY_JSON}}
+    "artifact": {{ARTIFACT_IDENTITY_JSON}},
+    "jsPackages": {
+      "@vellum/ui": "{{UI_VERSION}}"
+    }
   },
   "cli": {
     "api": 1
   },
   "template": {
     "name": "basic",
-    "version": 1
+    "version": 2
   }
 }

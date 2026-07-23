@@ -283,6 +283,7 @@ def copy_payload(
 ) -> dict[str, object]:
     shutil.copy2(repo / "cli/vellum_cli.py", payload / "vellum_cli.py")
     shutil.copy2(repo / "cli/vellum_backend.py", payload / "vellum_backend.py")
+    shutil.copy2(repo / "cli/vellum_manifest.py", payload / "vellum_manifest.py")
     shutil.copytree(repo / ".agents", payload / ".agents")
     shutil.copytree(repo / "templates", payload / "templates")
     shutil.copytree(install_tree, payload / "sdk")

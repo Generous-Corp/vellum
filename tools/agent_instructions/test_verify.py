@@ -22,6 +22,7 @@ class AgentInstructionVerificationTests(unittest.TestCase):
     def fixture(self, root: Path) -> None:
         for relative in (
             "cli/vellum_cli.py",
+            "cli/vellum_manifest.py",
             "scripts/install.sh",
             "product/source-support.yaml",
             str(MANIFEST),

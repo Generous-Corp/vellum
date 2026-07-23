@@ -1,4 +1,5 @@
 # Optional native components
 
 Custom C++ components are an explicit escape hatch. The basic app does not
-require native application code.
+require native application code. Register future components in
+`native/components.toml`; do not add a second editable build manifest.

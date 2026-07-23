@@ -207,7 +207,7 @@ class SdkArtifactTests(unittest.TestCase):
                 "--directory", str(project), "--json",
             ], cwd=root)
             self.assertEqual(json.loads(created.stdout)["status"], "created")
-            lock = json.loads((project / "vellum.lock.json").read_text(encoding="utf-8"))
+            lock = json.loads((project / "framework.lock").read_text(encoding="utf-8"))
             self.assertEqual(lock["framework"]["version"], "0.1.0")
             self.assertEqual(lock["framework"]["artifact"], {
                 "verified": True,

@@ -64,14 +64,14 @@ class NativeBackendTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             project = self.create_project(root)
-            descriptor = json.loads((project / "vellum.project.json").read_text())
-            descriptor["entry"] = "../outside.tsx"
-            (project / "vellum.project.json").write_text(json.dumps(descriptor), encoding="utf-8")
+            manifest = (project / "app.toml").read_text(encoding="utf-8")
+            manifest = manifest.replace('entry = "src/main.tsx"', 'entry = "../outside.tsx"')
+            (project / "app.toml").write_text(manifest, encoding="utf-8")
             completed = run([
                 sys.executable, str(BACKEND), "build", "--project", str(project), "--json",
             ], env={"VELLUM_SDK_ROOT": str(fake_gpu_sdk(root))})
             self.assertEqual(completed.returncode, 1)
-            self.assertEqual(json.loads(completed.stdout)["status"], "invalid_project")
+            self.assertEqual(json.loads(completed.stdout)["status"], "invalid_app_manifest")
 
     def test_argument_errors_remain_json(self) -> None:
         completed = run([sys.executable, str(BACKEND), "build", "--json"])

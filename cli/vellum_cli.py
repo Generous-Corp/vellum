@@ -14,15 +14,16 @@ import subprocess
 import sys
 from typing import Any, Iterable
 
+from vellum_manifest import APP_MANIFEST_NAME, LOCK_NAME, LOCK_SCHEMA, ManifestError, load_app_manifest
+
 
 CLI_VERSION = "0.1.0-dev"
 FRAMEWORK_VERSION = "0.1.0"
+UI_VERSION = "0.1.0-experimental.0"
 CLI_API_VERSION = 1
 RESULT_SCHEMA = "vellum.cli.result.v1"
-LOCK_SCHEMA = "vellum.project-lock.v1"
 SDK_METADATA_SCHEMA = "vellum.sdk-artifact.v1"
 INSTALL_MANIFEST_SCHEMA = "vellum.sdk-install.v1"
-LOCK_NAME = "vellum.lock.json"
 BACKEND_NAMES = ("vellum-backend.cmd", "vellum-backend.exe") if os.name == "nt" else ("vellum-backend",)
 BACKEND_COMMANDS = ("import", "reimport", "build", "run", "test", "capture", "package")
 EXIT_USAGE = 2
@@ -129,6 +130,118 @@ def artifact_identity(install_manifest: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _load_json_file(path: Path, status: str) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise CliFailure(f"Cannot read {path}: {error}", status=status, exit_code=EXIT_PROJECT) from error
+    if not isinstance(value, dict):
+        raise CliFailure(f"Expected a JSON object in {path}.", status=status, exit_code=EXIT_PROJECT)
+    return value
+
+
+def validate_js_dependency_lock(root: Path, lock: dict[str, Any]) -> None:
+    package_path = root / "package.json"
+    package_lock_path = root / "package-lock.json"
+    package = _load_json_file(package_path, "invalid_package_manifest")
+    package_lock = _load_json_file(package_lock_path, "invalid_package_lock")
+    pinned = lock.get("framework", {}).get("jsPackages")
+    if pinned != {"@vellum/ui": UI_VERSION}:
+        raise CliFailure(
+            f"{LOCK_NAME} must pin exactly @vellum/ui {UI_VERSION}.",
+            status="invalid_project_lock", exit_code=EXIT_PROJECT,
+        )
+    dependency = "file:.vellum/packages/vellum-ui"
+    packages = package_lock.get("packages")
+    if (
+        package.get("dependencies") != {"@vellum/ui": dependency}
+        or package_lock.get("lockfileVersion") != 3
+        or not isinstance(packages, dict)
+        or packages.get("", {}).get("dependencies") != {"@vellum/ui": dependency}
+        or packages.get(".vellum/packages/vellum-ui", {}).get("version") != pinned["@vellum/ui"]
+        or packages.get("node_modules/@vellum/ui") != {
+            "resolved": ".vellum/packages/vellum-ui", "link": True,
+        }
+    ):
+        raise CliFailure(
+            "package.json and package-lock.json must retain the exact project-locked @vellum/ui SDK package.",
+            status="invalid_package_lock", exit_code=EXIT_PROJECT,
+        )
+
+
+def project_ui_package(root: Path) -> Path:
+    return root / ".vellum/packages/vellum-ui"
+
+
+def _project_ui_payload(source: Path) -> dict[str, bytes]:
+    package = _load_json_file(source / "package.json", "invalid_sdk_artifact")
+    if package.get("name") != "@vellum/ui" or package.get("version") != UI_VERSION:
+        raise CliFailure(
+            "installed SDK @vellum/ui identity does not match the project lock",
+            status="invalid_sdk_artifact", exit_code=EXIT_PROJECT,
+        )
+    runtime_package = {
+        key: package[key]
+        for key in ("name", "version", "description", "type", "license", "engines", "exports", "dependencies")
+        if key in package
+    }
+    payload = {
+        "package.json": (json.dumps(runtime_package, indent=2, sort_keys=True) + "\n").encode(),
+    }
+    for relative in (Path("LICENSE.md"), Path("README.md")):
+        path = source / relative
+        if path.is_file():
+            payload[relative.as_posix()] = path.read_bytes()
+    for path in sorted((source / "src").rglob("*")):
+        if path.is_file():
+            payload[path.relative_to(source).as_posix()] = path.read_bytes()
+    if not any(name.startswith("src/") for name in payload):
+        raise CliFailure("installed SDK @vellum/ui has no runtime sources", status="invalid_sdk_artifact", exit_code=EXIT_PROJECT)
+    return payload
+
+
+def ensure_project_ui_package(
+    root: Path, sdk: tuple[Path, dict[str, Any], dict[str, Any]] | None, *, fix: bool,
+) -> tuple[bool, str, bool]:
+    destination = project_ui_package(root)
+    source = sdk[0] / "ui" if sdk else None
+    expected = _project_ui_payload(source) if source is not None and (source / "package.json").is_file() else None
+    if destination.is_dir():
+        actual_names = {
+            path.relative_to(destination).as_posix()
+            for path in destination.rglob("*") if path.is_file()
+        }
+        available = expected is not None and actual_names == set(expected) and all(
+            (destination / name).read_bytes() == content for name, content in expected.items()
+        )
+        return available, str(destination) if available else "project-local @vellum/ui differs from the exact installed SDK projection", False
+    if not fix:
+        return False, "run vellum doctor --fix to materialize the project-locked UI package", False
+    if source is None or not (source / "package.json").is_file():
+        return False, "installed SDK does not contain @vellum/ui", False
+    if expected is None:
+        return False, "installed SDK does not contain a valid @vellum/ui runtime package", False
+    destination.mkdir(parents=True)
+    for name, content in expected.items():
+        output = destination / name
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(content)
+    return True, str(destination), True
+
+
+def install_project_js_dependencies(root: Path) -> tuple[bool, str]:
+    npm = shutil.which("npm")
+    if npm is None:
+        return False, "npm is required to install the exact project JavaScript lock"
+    completed = subprocess.run(
+        [npm, "ci", "--ignore-scripts", "--no-audit", "--no-fund"],
+        cwd=root, text=True, capture_output=True, check=False,
+    )
+    if completed.returncode:
+        return False, (completed.stderr or completed.stdout).strip() or "npm ci failed"
+    return True, (completed.stdout or "npm ci passed").strip()
+
+
 def create_project(args: argparse.Namespace) -> dict[str, Any]:
     if args.run and args.no_verify:
         raise CliFailure("--run cannot be combined with --no-verify.", status="invalid_arguments", exit_code=EXIT_USAGE)
@@ -165,6 +278,7 @@ def create_project(args: argparse.Namespace) -> dict[str, Any]:
         "PROJECT_ID": project_id,
         "CLI_VERSION": CLI_VERSION,
         "FRAMEWORK_VERSION": framework_version,
+        "UI_VERSION": UI_VERSION,
         "ARTIFACT_IDENTITY_JSON": json.dumps(
             installed_identity, sort_keys=True, separators=(",", ":")
         ),
@@ -177,9 +291,29 @@ def create_project(args: argparse.Namespace) -> dict[str, Any]:
         render_template(template, destination / output_relative, replacements)
         created.append(output_relative.as_posix())
 
+    # The exact JS package is a project-local view of immutable installed SDK
+    # bytes. It is generated state, never an editable framework copy.
+    setup_commands: list[dict[str, Any]] = []
+    if sdk is not None and (sdk[0] / "ui/package.json").is_file():
+        available, detail, _ = ensure_project_ui_package(destination, sdk, fix=True)
+        if not available:
+            raise CliFailure(detail, status="invalid_sdk_artifact", exit_code=EXIT_PROJECT)
+        npm_ok, npm_detail = install_project_js_dependencies(destination)
+        setup_commands.append({"command": "npm-ci", "status": "passed" if npm_ok else "failed"})
+        if not npm_ok:
+            return result(
+                "create", ok=False, status="create_validation_failed",
+                message="Created the project, but exact JavaScript dependency installation failed.",
+                data={
+                    "project_root": str(destination), "project_id": project_id,
+                    "files": created, "validation": {"status": "failed", "commands": setup_commands},
+                },
+                diagnostics=[{"level": "error", "code": "npm_ci_failed", "message": npm_detail}],
+            )
+
     validation: dict[str, Any] = {
         "status": "not_available",
-        "commands": [],
+        "commands": setup_commands,
         "detail": "No installed native SDK capability was available; scaffold only.",
     }
     if not args.no_verify and sdk is not None:
@@ -187,7 +321,7 @@ def create_project(args: argparse.Namespace) -> dict[str, Any]:
         validate_project_sdk(lock, sdk)
         capabilities = sdk[1]["capabilities"]["commands"]
         if capabilities.get("build") and capabilities.get("test"):
-            completed_commands: list[dict[str, Any]] = []
+            completed_commands: list[dict[str, Any]] = list(setup_commands)
             for command, forwarded in (("build", ["--target", "macos"]), ("test", ["--scenario", "smoke"])):
                 backend_payload, return_code = invoke_backend(
                     command, destination, lock, forwarded
@@ -309,6 +443,11 @@ def load_project(path: str | None) -> tuple[Path, dict[str, Any]]:
     project_id = lock.get("project", {}).get("id")
     if not isinstance(project_id, str) or not re.fullmatch(r"[0-9a-f]{24}", project_id):
         raise CliFailure(f"Invalid project id in {lock_path}.", status="invalid_project_lock", exit_code=EXIT_PROJECT)
+    try:
+        load_app_manifest(root)
+    except ManifestError as error:
+        raise CliFailure(str(error), status="invalid_app_manifest", exit_code=EXIT_PROJECT) from error
+    validate_js_dependency_lock(root, lock)
     return root, lock
 
 
@@ -438,7 +577,7 @@ def validate_project_sdk(
             diagnostics=[{
                 "level": "error",
                 "code": "framework_pin_mismatch",
-                "message": "Install the exact framework version pinned by vellum.lock.json; do not edit the lock to bypass compatibility.",
+                "message": f"Install the exact framework version pinned by {LOCK_NAME}; do not edit the lock to bypass compatibility.",
             }],
         )
     locked_artifact = lock["framework"]["artifact"]
@@ -451,7 +590,7 @@ def validate_project_sdk(
             diagnostics=[{
                 "level": "error",
                 "code": "artifact_pin_mismatch",
-                "message": "Install the exact artifact SHA pinned by vellum.lock.json; local-development locks remain explicitly unverified.",
+                "message": f"Install the exact artifact SHA pinned by {LOCK_NAME}; local-development locks remain explicitly unverified.",
             }],
         )
 
@@ -511,6 +650,18 @@ def doctor(args: argparse.Namespace) -> dict[str, Any]:
     elif sdk_error:
         sdk_detail = str(sdk_error)
     command_capabilities = sdk[1]["capabilities"]["commands"] if sdk else {}
+    ui_available = False
+    ui_detail = "not in a Vellum project"
+    if project_root:
+        try:
+            ui_available, ui_detail, ui_created = ensure_project_ui_package(
+                project_root, sdk, fix=bool(args.fix and sdk)
+            )
+            if ui_created:
+                created.append(".vellum/packages/vellum-ui")
+        except CliFailure as error:
+            ui_detail = str(error)
+            diagnostics.append({"level": "error", "code": error.status, "message": str(error)})
     node_available, node_detail = node_version()
     import_required = bool(command_capabilities.get("import") or command_capabilities.get("reimport"))
     checks = [
@@ -522,6 +673,7 @@ def doctor(args: argparse.Namespace) -> dict[str, Any]:
         check_item("node", required=import_required, available=node_available, detail=node_detail, fix="Install Node.js 20 or newer for import/reimport and TypeScript authoring tools."),
         check_item("sdk-artifact", required=sdk_configured, available=sdk is not None, detail=sdk_detail, fix="Install a checksummed SDK artifact for native CMake consumption."),
         check_item("project-sdk-compatibility", required=sdk_configured and project_lock is not None, available=sdk_error is None and (sdk is not None or not sdk_configured), detail="exact framework pin matched" if sdk and not sdk_error and project_lock else sdk_detail),
+        check_item("project-ui-package", required=bool(project_root and sdk and (sdk[0] / "ui/package.json").is_file()), available=ui_available, detail=ui_detail, fix="Run vellum doctor --fix with the exact project-locked SDK installed."),
         check_item("backend-dispatcher", required=bool(command_capabilities), available=backend is not None, detail=str(backend) if backend else "not installed in this extraction milestone", fix="Set VELLUM_SDK_ROOT or VELLUM_BACKEND when a backend artifact is available."),
         check_item("import-backend", required=import_required, available=bool(backend and command_capabilities.get("import") and command_capabilities.get("reimport")), detail="import and reimport available" if command_capabilities.get("import") and command_capabilities.get("reimport") else "unavailable"),
     ]

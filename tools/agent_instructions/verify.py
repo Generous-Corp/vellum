@@ -21,6 +21,7 @@ EXPECTED_LIFECYCLE = (
     "test", "capture", "package",
 )
 EXPECTED_TOOL_OWNED = {
+    "framework.lock",
     "sources/imported", "design/ir", "design/generated", "tokens/imported",
     "assets/generated", "ui/generated",
 }
@@ -36,7 +37,11 @@ def load_cli(repo: Path) -> Any:
     if spec is None or spec.loader is None:
         raise VerificationError(f"cannot load CLI module: {path}")
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    sys.path.insert(0, str(path.parent))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.pop(0)
     return module
 
 

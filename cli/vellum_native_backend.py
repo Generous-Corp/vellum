@@ -15,11 +15,10 @@ import sys
 import tempfile
 from typing import Any, Iterable
 
+from vellum_manifest import LOCK_NAME, LOCK_SCHEMA, ManifestError, load_app_manifest
+
 
 RESULT_SCHEMA = "vellum.backend.result.v1"
-LOCK_SCHEMA = "vellum.project-lock.v1"
-PROJECT_SCHEMA = "vellum.project.v1"
-PACKAGE_SCHEMA = "vellum.package.v1"
 SCENARIO_SCHEMA = "vellum.scenario.v1"
 SUPPORTED_TARGET = "macos"
 
@@ -104,28 +103,30 @@ def project_context(project_argument: str) -> dict[str, Any]:
     project = Path(project_argument).expanduser().resolve()
     if not project.is_dir():
         raise BackendFailure(f"Project directory does not exist: {project}", status="invalid_project")
-    lock = load_json(project / "vellum.lock.json", LOCK_SCHEMA, "project_lock")
-    project_file = load_json(project / "vellum.project.json", PROJECT_SCHEMA, "project")
-    package = load_json(project / "packaging/vellum.package.json", PACKAGE_SCHEMA, "package")
+    lock = load_json(project / LOCK_NAME, LOCK_SCHEMA, "project_lock")
+    try:
+        manifest = load_app_manifest(project)
+    except ManifestError as error:
+        raise BackendFailure(str(error), status="invalid_app_manifest") from error
     identity = lock.get("project", {}).get("id")
     slug = lock.get("project", {}).get("slug")
     if not isinstance(identity, str) or not re.fullmatch(r"[0-9a-f]{24}", identity):
         raise BackendFailure("Project lock has an invalid project id", status="invalid_project_lock")
     if not isinstance(slug, str) or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", slug):
         raise BackendFailure("Project lock has an invalid project slug", status="invalid_project_lock")
-    entry = safe_relative(project, project_file.get("entry"), "project entry")
+    entry = safe_relative(project, manifest["app"].get("entry"), "project entry")
     if not entry.is_file() or entry.suffix not in {".js", ".jsx", ".ts", ".tsx"}:
         raise BackendFailure(f"Project entry is missing or unsupported: {entry}", status="invalid_project")
-    targets = project_file.get("targets")
-    if targets != [SUPPORTED_TARGET]:
+    targets = manifest["targets"]
+    if targets != {"desktop": [SUPPORTED_TARGET], "mobile": [], "web": False}:
         raise BackendFailure("This SDK supports exactly the macos project target", status="unsupported_target", exit_code=4)
-    application_id = package.get("application_id")
-    display_name = package.get("display_name")
+    application_id = manifest["app"].get("identifier")
+    display_name = manifest["app"].get("name")
     if not isinstance(application_id, str) or not re.fullmatch(r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", application_id):
         raise BackendFailure("Package application_id is invalid", status="invalid_package")
     if not isinstance(display_name, str) or not display_name.strip() or len(display_name) > 100:
         raise BackendFailure("Package display_name is invalid", status="invalid_package")
-    if package.get("targets") != {"macos": {"format": "app"}}:
+    if manifest["packaging"].get("macos_format") != "app":
         raise BackendFailure("This SDK packages only a macOS .app", status="unsupported_target", exit_code=4)
     return {
         "root": project,
@@ -134,6 +135,7 @@ def project_context(project_argument: str) -> dict[str, Any]:
         "slug": slug,
         "application_id": application_id,
         "display_name": display_name.strip(),
+        "version": manifest["app"]["version"],
     }
 
 
@@ -207,7 +209,7 @@ def build_app(context: dict[str, Any], sdk: Path) -> dict[str, Any]:
         "CFBundleInfoDictionaryVersion": "6.0",
         "CFBundleName": context["display_name"],
         "CFBundlePackageType": "APPL",
-        "CFBundleShortVersionString": "0.0.1",
+        "CFBundleShortVersionString": context["version"],
         "CFBundleVersion": "1",
         "LSMinimumSystemVersion": "15.0",
         "NSHighResolutionCapable": True,
