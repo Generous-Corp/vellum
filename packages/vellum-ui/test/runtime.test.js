@@ -119,3 +119,40 @@ test('rejects non-serializable and cyclic state instead of silently losing it', 
     }));
     assert.throws(() => functionBridge.snapshotStateJSON(), /not JSON-serializable/);
 });
+
+test('rejects duplicate stable IDs, action collisions, and changed hook order', () => {
+    const duplicate = mount(() => jsx(View, {
+        id: 'root',
+        children: [
+            jsx(Text, { id: 'same', children: 'A' }),
+            jsx(Text, { id: 'same', children: 'B' }),
+        ],
+    }));
+    assert.throws(() => duplicate.renderJSON(), /duplicate Vellum node id: same/);
+
+    const collision = mount(createApp({
+        initialState: null,
+        actions: { 'button:press': () => null },
+        render: () => jsx(Button, { id: 'button', onPress() {} }),
+    }));
+    assert.throws(() => collision.renderJSON(), /collides with named action/);
+
+    let includeHook = false;
+    const conditional = mount(() => {
+        if (includeHook) useState(1);
+        return jsx(View, { id: 'conditional' });
+    });
+    conditional.renderJSON();
+    includeHook = true;
+    assert.throws(() => conditional.renderJSON(), /hook order changed/);
+
+    let switchHook = false;
+    const changedKind = mount(() => {
+        if (switchHook) useMemo(() => 1, []);
+        else useState(1);
+        return jsx(View, { id: 'kind' });
+    });
+    changedKind.renderJSON();
+    switchHook = true;
+    assert.throws(() => changedKind.renderJSON(), /hook kind changed/);
+});

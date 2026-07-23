@@ -95,32 +95,51 @@ export function useState(initialValue) {
     const runtime = assertRuntime('useState');
     const index = runtime.hookCursor++;
     if (index >= runtime.hooks.length) {
-        runtime.hooks.push(
-            typeof initialValue === 'function' ? initialValue() : initialValue,
-        );
+        if (runtime.hasRendered) {
+            throw new Error('hook order changed between renders');
+        }
+        runtime.hooks.push({
+            kind: 'state',
+            value: typeof initialValue === 'function' ? initialValue() : initialValue,
+        });
+    }
+    const record = runtime.hooks[index];
+    if (!record || record.kind !== 'state') {
+        throw new Error('hook kind changed between renders');
     }
     const setValue = (nextValue) => {
-        const previous = runtime.hooks[index];
-        runtime.hooks[index] = typeof nextValue === 'function'
+        const previous = record.value;
+        record.value = typeof nextValue === 'function'
             ? nextValue(previous)
             : nextValue;
         runtime.dirty = true;
     };
-    return [runtime.hooks[index], setValue];
+    return [record.value, setValue];
 }
 
 export function useMemo(factory, dependencies) {
     const runtime = assertRuntime('useMemo');
     const index = runtime.hookCursor++;
-    const prior = runtime.hooks[index];
+    let prior = runtime.hooks[index];
+    if (!prior && runtime.hasRendered) {
+        throw new Error('hook order changed between renders');
+    }
+    if (prior && prior.kind !== 'memo') {
+        throw new Error('hook kind changed between renders');
+    }
     const nextDependencies = Array.isArray(dependencies) ? [...dependencies] : null;
     const unchanged = prior && nextDependencies && prior.dependencies &&
         prior.dependencies.length === nextDependencies.length &&
         prior.dependencies.every((value, item) => Object.is(value, nextDependencies[item]));
     if (!unchanged) {
-        runtime.hooks[index] = { value: factory(), dependencies: nextDependencies };
+        runtime.hooks[index] = {
+            kind: 'memo',
+            value: factory(),
+            dependencies: nextDependencies,
+        };
+        prior = runtime.hooks[index];
     }
-    return runtime.hooks[index].value;
+    return prior.value;
 }
 
 function validateStyle(style, path) {
@@ -174,6 +193,10 @@ function materialize(value, runtime, path) {
     const id = typeof value.props.id === 'string' && value.props.id.length > 0
         ? value.props.id
         : `${path}/${value.type}`;
+    if (runtime.nodeIds.has(id)) {
+        throw new Error(`duplicate Vellum node id: ${id}`);
+    }
+    runtime.nodeIds.add(id);
     const events = {};
     for (const [property, eventName] of [
         ['onPress', 'press'],
@@ -188,6 +211,9 @@ function materialize(value, runtime, path) {
         }
         if (typeof handler === 'function') {
             const action = `${id}:${eventName}`;
+            if (runtime.namedActions.has(action)) {
+                throw new Error(`inline Vellum action collides with named action: ${action}`);
+            }
             runtime.handlers.set(action, handler);
             events[eventName] = action;
         } else if (typeof handler === 'string' && handler.length > 0) {
@@ -219,15 +245,18 @@ class Runtime {
         this.hooks = [];
         this.hookCursor = 0;
         this.handlers = new Map();
+        this.nodeIds = new Set();
         this.namedActions = new Map(Object.entries(options.actions ?? {}));
         this.model = options.initialState ?? null;
         this.dirty = true;
         this.lastTree = null;
+        this.hasRendered = false;
     }
 
     render() {
         this.hookCursor = 0;
         this.handlers = new Map();
+        this.nodeIds = new Set();
         const prior = renderingRuntime;
         renderingRuntime = this;
         try {
@@ -241,6 +270,7 @@ class Runtime {
             }
             this.lastTree = materialized[0];
             this.dirty = false;
+            this.hasRendered = true;
             return this.lastTree;
         } finally {
             renderingRuntime = prior;
