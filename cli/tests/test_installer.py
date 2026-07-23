@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 import shutil
 import subprocess
@@ -38,6 +39,30 @@ class InstallerTests(unittest.TestCase):
             )
             self.assertEqual(create.returncode, 0, create.stderr)
             self.assertTrue((project / "vellum.lock.json").is_file())
+            source = root / "revision-a.source.json"
+            updated_source = root / "revision-b.source.json"
+            shutil.copy2(REPO / "fixtures/design-ir/revision-a.source.json", source)
+            shutil.copy2(REPO / "fixtures/design-ir/revision-b.source.json", updated_source)
+            imported = subprocess.run(
+                [str(prefix / "bin/vellum"), "import", str(source), "--json"],
+                cwd=project,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(imported.returncode, 0, imported.stdout)
+            self.assertTrue((project / "design/ir/sources/main.designir.json").is_file())
+            self.assertTrue((prefix / "lib/vellum/bin/vellum-backend").is_file())
+            reimported = subprocess.run(
+                [str(prefix / "bin/vellum"), "reimport", "--source", str(updated_source), "--json"],
+                cwd=project,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(reimported.returncode, 0, reimported.stdout)
+            active = json.loads((project / "design/import.lock.json").read_text())
+            self.assertEqual(active["sources"]["main"]["activeRevision"], "palette-board-b")
 
     def test_archive_hash_is_verified_before_extraction(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

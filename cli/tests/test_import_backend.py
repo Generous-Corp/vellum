@@ -1,0 +1,282 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+
+
+REPO = Path(__file__).resolve().parents[2]
+CLI = REPO / "cli" / "vellum_cli.py"
+BACKEND = REPO / "packages" / "vellum-design-ir" / "bin" / "vellum-backend.js"
+FIXTURES = REPO / "fixtures" / "design-ir"
+
+
+def invoke(*arguments: str, cwd: Path, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(CLI), "--json", *arguments],
+        cwd=cwd,
+        text=True,
+        capture_output=True,
+        check=False,
+        env={**os.environ, "VELLUM_BACKEND": str(BACKEND), **(env or {})},
+    )
+
+
+def json_files(root: Path) -> dict[str, bytes]:
+    owned_roots = ("assets/generated", "design", "sources/imported", "tokens/imported", "ui/generated")
+    return {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for prefix in owned_roots
+        for path in sorted((root / prefix).rglob("*"))
+        if path.is_file()
+    }
+
+
+class ImportBackendTests(unittest.TestCase):
+    def create(self, parent: Path, directory: str = "app") -> Path:
+        app = parent / directory
+        completed = invoke("create", "Import App", "--directory", str(app), cwd=parent)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        return app
+
+    def test_public_cli_import_and_reimport_preserve_authored_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = self.create(root)
+            imported = invoke(
+                "import",
+                str(FIXTURES / "revision-a.source.json"),
+                "--source-type",
+                "figma",
+                "--as",
+                "main",
+                cwd=app,
+            )
+            self.assertEqual(imported.returncode, 0, imported.stdout)
+            payload = json.loads(imported.stdout)
+            self.assertEqual(payload["status"], "imported")
+
+            required = {
+                "sources/imported/main/palette-board-a/source.json",
+                "sources/imported/main/palette-board-a/provenance.json",
+                "design/ir/sources/main.designir.json",
+                "design/ir/design-ir.json",
+                "design/generated/main.components.json",
+                "design/generated/node-ids.d.ts",
+                "design/overlays/main.authored.json",
+                "design/reports/main.import-report.json",
+                "design/import.lock.json",
+                "tokens/imported/main.tokens.json",
+                "assets/generated/main/manifest.json",
+                "ui/generated/main.materialized.json",
+                "ui/generated/main.bindings.json",
+            }
+            self.assertTrue(required.issubset(json_files(app)))
+
+            overlay = FIXTURES / "authored.overlay.json"
+            overlay_path = app / "design/overlays/main.authored.json"
+            overlay_path.write_bytes(overlay.read_bytes())
+            graph_path = app / "design/imports.json"
+            graph = json.loads(graph_path.read_text())
+            graph["sources"]["main"]["mount"] = "app-root"
+            graph_path.write_text(json.dumps(graph, indent=2) + "\n", encoding="utf-8")
+            authored_source = app / "src/App.tsx"
+            authored_source.write_text(
+                authored_source.read_text(encoding="utf-8") + "\n// developer-owned behavior\n",
+                encoding="utf-8",
+            )
+            overlay_before = overlay_path.read_bytes()
+            graph_before = graph_path.read_bytes()
+            authored_before = authored_source.read_bytes()
+
+            reimported = invoke(
+                "reimport",
+                "--source",
+                str(FIXTURES / "revision-b.source.json"),
+                "--as",
+                "main",
+                cwd=app,
+            )
+            self.assertEqual(reimported.returncode, 0, reimported.stdout)
+            reimport_payload = json.loads(reimported.stdout)
+            self.assertEqual(reimport_payload["status"], "reimported")
+            self.assertEqual(overlay_path.read_bytes(), overlay_before)
+            self.assertEqual(graph_path.read_bytes(), graph_before)
+            self.assertEqual(authored_source.read_bytes(), authored_before)
+
+            lock = json.loads((app / "design/import.lock.json").read_text())
+            self.assertEqual(lock["sources"]["main"]["activeRevision"], "palette-board-b")
+            report = json.loads(
+                (app / "design/reports/main.palette-board-b.reimport-report.json").read_text()
+            )
+            self.assertTrue(report["accepted"])
+            self.assertEqual(report["summary"]["conflicts"], 0)
+            self.assertGreater(report["summary"]["heuristicCandidates"], 0)
+            bindings = json.loads((app / "ui/generated/main.bindings.json").read_text())
+            self.assertEqual(bindings["bindings"][0]["resolvedNodeId"], "main/create-button-v2")
+
+            unchanged = invoke(
+                "reimport",
+                "--source",
+                str(FIXTURES / "revision-b.source.json"),
+                cwd=app,
+            )
+            self.assertEqual(unchanged.returncode, 0, unchanged.stdout)
+            self.assertEqual(json.loads(unchanged.stdout)["status"], "reimport_unchanged")
+            self.assertEqual(overlay_path.read_bytes(), overlay_before)
+            self.assertEqual(graph_path.read_bytes(), graph_before)
+            self.assertEqual(authored_source.read_bytes(), authored_before)
+
+    def test_partial_backend_keeps_native_capabilities_honestly_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = self.create(root)
+            completed = invoke("build", cwd=app)
+            self.assertEqual(completed.returncode, 4, completed.stdout)
+            payload = json.loads(completed.stdout)
+            self.assertFalse(payload["ok"])
+            self.assertEqual(payload["status"], "capability_unavailable")
+
+    def test_conflicted_reimport_retains_review_artifacts_without_advancing_active_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = self.create(root)
+            imported = invoke("import", str(FIXTURES / "revision-a.source.json"), cwd=app)
+            self.assertEqual(imported.returncode, 0, imported.stdout)
+            overlay_path = app / "design/overlays/main.authored.json"
+            overlay_path.write_bytes((FIXTURES / "authored-with-orphan.overlay.json").read_bytes())
+            active_ir = app / "design/ir/sources/main.designir.json"
+            lock_path = app / "design/import.lock.json"
+            active_before = active_ir.read_bytes()
+            lock_before = lock_path.read_bytes()
+            overlay_before = overlay_path.read_bytes()
+            authored_before = (app / "src/App.tsx").read_bytes()
+
+            completed = invoke(
+                "reimport",
+                "--source",
+                str(FIXTURES / "revision-b.source.json"),
+                cwd=app,
+            )
+            self.assertEqual(completed.returncode, 5, completed.stdout)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["status"], "reimport_conflict")
+            self.assertEqual(active_ir.read_bytes(), active_before)
+            self.assertEqual(lock_path.read_bytes(), lock_before)
+            self.assertEqual(overlay_path.read_bytes(), overlay_before)
+            self.assertEqual((app / "src/App.tsx").read_bytes(), authored_before)
+            self.assertTrue(
+                (app / "design/reports/main.palette-board-b.candidate.designir.json").is_file()
+            )
+            report = json.loads(
+                (app / "design/reports/main.palette-board-b.reimport-report.json").read_text()
+            )
+            self.assertFalse(report["accepted"])
+            self.assertGreater(len(report["conflicts"]), 0)
+
+    def test_import_outputs_are_deterministic_across_project_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            apps = [self.create(root, name) for name in ("first", "second")]
+            for app in apps:
+                completed = invoke("import", str(FIXTURES / "revision-a.source.json"), cwd=app)
+                self.assertEqual(completed.returncode, 0, completed.stdout)
+            self.assertEqual(json_files(apps[0]), json_files(apps[1]))
+
+    def test_assets_are_copied_and_hash_checked(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = self.create(root)
+            source_root = root / "source"
+            (source_root / "assets").mkdir(parents=True)
+            asset_bytes = b"<svg xmlns='http://www.w3.org/2000/svg'/>\n"
+            (source_root / "assets/mark.svg").write_bytes(asset_bytes)
+            source = json.loads((FIXTURES / "revision-a.source.json").read_text())
+            source["source"]["revision"] = "assets-a"
+            source["assets"] = [{
+                "contentHash": "sha256:" + hashlib.sha256(asset_bytes).hexdigest(),
+                "id": "mark",
+                "mimeType": "image/svg+xml",
+                "uri": "assets/mark.svg",
+            }]
+            source_path = source_root / "source.json"
+            source_path.write_text(json.dumps(source), encoding="utf-8")
+
+            completed = invoke("import", str(source_path), cwd=app)
+            self.assertEqual(completed.returncode, 0, completed.stdout)
+            self.assertEqual(
+                (app / "sources/imported/main/assets-a/assets/mark.svg").read_bytes(),
+                asset_bytes,
+            )
+            self.assertEqual(
+                (app / "assets/generated/main/files/assets/mark.svg").read_bytes(),
+                asset_bytes,
+            )
+
+            source["source"]["revision"] = "assets-b"
+            source["assets"] = []
+            updated_source = source_root / "updated.json"
+            updated_source.write_text(json.dumps(source), encoding="utf-8")
+            reimported = invoke("reimport", "--source", str(updated_source), cwd=app)
+            self.assertEqual(reimported.returncode, 0, reimported.stdout)
+            self.assertFalse((app / "assets/generated/main/files/assets/mark.svg").exists())
+            self.assertTrue((app / "sources/imported/main/assets-a/assets/mark.svg").is_file())
+
+            shutil.rmtree(app)
+            app = self.create(root)
+            source["source"]["revision"] = "assets-a"
+            source["assets"] = [{
+                "contentHash": "sha256:" + "0" * 64,
+                "id": "mark",
+                "mimeType": "image/svg+xml",
+                "uri": "assets/mark.svg",
+            }]
+            source_path.write_text(json.dumps(source), encoding="utf-8")
+            rejected = invoke("import", str(source_path), cwd=app)
+            self.assertEqual(rejected.returncode, 5, rejected.stdout)
+            self.assertEqual(json.loads(rejected.stdout)["status"], "asset_hash_mismatch")
+            self.assertFalse((app / "design/import.lock.json").exists())
+
+    @unittest.skipIf(os.name == "nt", "symlink semantics differ on Windows")
+    def test_import_refuses_symlinked_generated_output_parent(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = self.create(root)
+            outside = root / "outside"
+            outside.mkdir()
+            shutil.rmtree(app / "design")
+            (app / "design").symlink_to(outside, target_is_directory=True)
+            rejected = invoke("import", str(FIXTURES / "revision-a.source.json"), cwd=app)
+            self.assertEqual(rejected.returncode, 5, rejected.stdout)
+            self.assertEqual(json.loads(rejected.stdout)["status"], "unsafe_output_path")
+            self.assertEqual(list(outside.iterdir()), [])
+
+    @unittest.skipIf(os.name == "nt", "symlink semantics differ on Windows")
+    def test_import_refuses_asset_symlink_escape(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = self.create(root)
+            source_root = root / "source"
+            source_root.mkdir()
+            outside = root / "outside.svg"
+            outside.write_text("secret", encoding="utf-8")
+            (source_root / "mark.svg").symlink_to(outside)
+            source = json.loads((FIXTURES / "revision-a.source.json").read_text())
+            source["source"]["revision"] = "symlink-a"
+            source["assets"] = [{"id": "mark", "uri": "mark.svg"}]
+            source_path = source_root / "source.json"
+            source_path.write_text(json.dumps(source), encoding="utf-8")
+            rejected = invoke("import", str(source_path), cwd=app)
+            self.assertEqual(rejected.returncode, 5, rejected.stdout)
+            self.assertEqual(json.loads(rejected.stdout)["status"], "unsafe_asset_uri")
+            self.assertFalse((app / "design/import.lock.json").exists())
+
+
+if __name__ == "__main__":
+    unittest.main()

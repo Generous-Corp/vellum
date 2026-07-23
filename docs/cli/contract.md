@@ -68,7 +68,7 @@ stable outer schema.
 |---|---:|---|
 | `create` | yes | none |
 | `doctor [--fix]` | yes | reports backend availability |
-| `import` / `reimport` | no | deterministic importer and DesignIR compiler |
+| `import` / `reimport` | no | implemented by the installed `@vellum/design-ir` backend |
 | `build` / `run` | no | platform build and runtime host |
 | `test` / `capture` | no | scenario driver and capture provider |
 | `package` | no | target packager |

@@ -75,7 +75,23 @@ copy_payload() {
   elif [ ! -f "$library/metadata.json" ]; then
     cp "$payload/metadata.json" "$library/metadata.json"
   fi
-  if [ -f "$payload/bin/vellum-backend" ]; then
+  if [ -d "$payload/design-ir" ]; then
+    command -v node >/dev/null 2>&1 || {
+      printf '%s\n' 'Node.js 20+ is required for the import/reimport backend.' >&2
+      exit 1
+    }
+    rm -rf "$library/design-ir"
+    cp -R "$payload/design-ir" "$library/design-ir"
+    mkdir -p "$library/bin"
+    {
+      printf '%s\n' '#!/bin/sh' 'set -eu'
+      # shellcheck disable=SC2016
+      printf '%s\n' 'bindir=$(CDPATH="" cd -- "$(dirname -- "$0")" && pwd)'
+      # shellcheck disable=SC2016
+      printf '%s\n' 'exec node "$bindir/../design-ir/bin/vellum-backend.js" "$@"'
+    } > "$library/bin/vellum-backend"
+    chmod 755 "$library/bin/vellum-backend"
+  elif [ -f "$payload/bin/vellum-backend" ]; then
     mkdir -p "$library/bin"
     cp "$payload/bin/vellum-backend" "$library/bin/vellum-backend"
     chmod 755 "$library/bin/vellum-backend"
@@ -124,8 +140,9 @@ if [ -n "$local_root" ]; then
   "files": []
 }
 JSON
+  cp -R "$local_root/packages/vellum-design-ir" "$temporary/design-ir"
   printf '%s\n' 'LOCAL DEVELOPMENT INSTALL: source bytes are not release-verified.'
-  printf '%s\n' 'No native runtime/backend is included unless present separately.'
+  printf '%s\n' 'The DesignIR import/reimport backend is included; native build/runtime remains separate.'
   copy_payload "$temporary"
   exit 0
 fi
@@ -209,7 +226,7 @@ with tarfile.open(archive, "r:gz") as handle:
         raise SystemExit("archive contains duplicate member names")
     for member in members:
         path = PurePosixPath(member.name)
-        if (not path.parts or path.parts[0] not in {"vellum_cli.py", "templates", "sdk", "bin", "metadata.json"} or
+        if (not path.parts or path.parts[0] not in {"vellum_cli.py", "templates", "sdk", "bin", "design-ir", "metadata.json"} or
                 path.is_absolute() or ".." in path.parts or "\\" in member.name or ":" in path.parts[0] or
                 member.issym() or member.islnk() or not (member.isfile() or member.isdir())):
             raise SystemExit(f"unsafe archive member: {member.name}")

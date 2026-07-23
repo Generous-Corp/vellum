@@ -22,7 +22,7 @@ RESULT_SCHEMA = "vellum.cli.result.v1"
 LOCK_SCHEMA = "vellum.project-lock.v1"
 SDK_METADATA_SCHEMA = "vellum.sdk-artifact.v1"
 LOCK_NAME = "vellum.lock.json"
-BACKEND_NAME = "vellum-backend.exe" if os.name == "nt" else "vellum-backend"
+BACKEND_NAMES = ("vellum-backend.exe", "vellum-backend.cmd") if os.name == "nt" else ("vellum-backend",)
 EXIT_USAGE = 2
 EXIT_PROJECT = 3
 EXIT_UNAVAILABLE = 4
@@ -201,11 +201,15 @@ def locate_backend() -> Path | None:
         return candidate.resolve() if candidate.is_file() and os.access(candidate, os.X_OK) else None
     sdk_root = os.environ.get("VELLUM_SDK_ROOT")
     if sdk_root:
-        candidate = Path(sdk_root).expanduser() / "bin" / BACKEND_NAME
-        if candidate.is_file() and os.access(candidate, os.X_OK):
-            return candidate.resolve()
-    located = shutil.which(BACKEND_NAME)
-    return Path(located).resolve() if located else None
+        for name in BACKEND_NAMES:
+            candidate = Path(sdk_root).expanduser() / "bin" / name
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return candidate.resolve()
+    for name in BACKEND_NAMES:
+        located = shutil.which(name)
+        if located:
+            return Path(located).resolve()
+    return None
 
 
 def load_sdk_metadata() -> tuple[Path, dict[str, Any]] | None:
@@ -390,8 +394,15 @@ def parser() -> argparse.ArgumentParser:
     doctor_parser.add_argument("--project")
 
     backend_specs = {
-        "import": [("source", {}), ("--source-type", {"choices": ["figma", "web", "claude", "design-ir"], "default": "figma"})],
-        "reimport": [("--source", {})],
+        "import": [
+            ("source", {}),
+            ("--source-type", {"choices": ["figma", "design-ir"], "default": "figma"}),
+            ("--as", {"dest": "source_key", "default": "main"}),
+        ],
+        "reimport": [
+            ("--source", {"required": True}),
+            ("--as", {"dest": "source_key", "default": "main"}),
+        ],
         "build": [("--target", {"default": "macos"})],
         "run": [("--target", {"default": "macos"}), ("--no-build", {"action": "store_true"})],
         "test": [("--scenario", {})],
@@ -440,6 +451,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         emit(payload, json_output=args.json)
         if payload["ok"]:
             return 0
+        if payload["status"] == "capability_unavailable":
+            return EXIT_UNAVAILABLE
         return EXIT_PROJECT if args.command == "doctor" else EXIT_BACKEND
     except CliFailure as error:
         emit(result(command, ok=False, status=error.status, message=str(error), diagnostics=error.diagnostics), json_output=json_output)

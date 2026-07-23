@@ -28,10 +28,25 @@ function Install-Payload([string]$Payload) {
     } elseif (!(Test-Path (Join-Path $library "metadata.json"))) {
         Copy-Item (Join-Path $Payload "metadata.json") (Join-Path $library "metadata.json") -Force
     }
-    $backend = Join-Path $Payload "bin\vellum-backend.exe"
-    if (Test-Path $backend) {
+    $designIr = Join-Path $Payload "design-ir"
+    if (Test-Path $designIr) {
+        if (!(Get-Command node -ErrorAction SilentlyContinue)) { throw "Node.js 20+ is required for import/reimport." }
+        $designIrDestination = Join-Path $library "design-ir"
+        Remove-Item $designIrDestination -Recurse -Force -ErrorAction SilentlyContinue
+        Copy-Item $designIr $designIrDestination -Recurse
         New-Item -ItemType Directory -Force -Path (Join-Path $library "bin") | Out-Null
-        Copy-Item $backend (Join-Path $library "bin\vellum-backend.exe") -Force
+        $backendLauncher = @'
+@echo off
+node "%~dp0..\design-ir\bin\vellum-backend.js" %*
+'@
+        $backendLauncher = $backendLauncher.Replace("`n", "`r`n")
+        [IO.File]::WriteAllText((Join-Path $library "bin\vellum-backend.cmd"), $backendLauncher)
+    } else {
+        $backend = Join-Path $Payload "bin\vellum-backend.exe"
+        if (Test-Path $backend) {
+            New-Item -ItemType Directory -Force -Path (Join-Path $library "bin") | Out-Null
+            Copy-Item $backend (Join-Path $library "bin\vellum-backend.exe") -Force
+        }
     }
     $launcher = @'
 @echo off
@@ -72,7 +87,8 @@ if ($LocalRoot) {
   "files": []
 }
 '@ | Set-Content (Join-Path $temporary "metadata.json") -Encoding UTF8
-        Write-Warning "LOCAL DEVELOPMENT INSTALL: source bytes are not release-verified; no native backend is included by default."
+        Copy-Item (Join-Path $LocalRoot "packages\vellum-design-ir") (Join-Path $temporary "design-ir") -Recurse
+        Write-Warning "LOCAL DEVELOPMENT INSTALL: source bytes are not release-verified; import/reimport is included but no native backend is included by default."
         Install-Payload $temporary
     } finally { Remove-Item $temporary -Recurse -Force -ErrorAction SilentlyContinue }
     exit 0
@@ -142,7 +158,7 @@ with tarfile.open(archive, "r:gz") as handle:
         raise SystemExit("archive contains duplicate member names")
     for member in members:
         path = PurePosixPath(member.name)
-        if (not path.parts or path.parts[0] not in {"vellum_cli.py", "templates", "sdk", "bin", "metadata.json"} or
+        if (not path.parts or path.parts[0] not in {"vellum_cli.py", "templates", "sdk", "bin", "design-ir", "metadata.json"} or
                 path.is_absolute() or ".." in path.parts or "\\" in member.name or ":" in path.parts[0] or
                 member.issym() or member.islnk() or not (member.isfile() or member.isdir())):
             raise SystemExit(f"unsafe archive member: {member.name}")

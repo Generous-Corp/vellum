@@ -1,7 +1,10 @@
 # Vellum agent contract v1
 
 - Treat `sources/imported/` as immutable source snapshots.
-- Treat `design/ir/` and `ui/generated/` as tool-owned output.
+- Treat `design/ir/`, `design/generated/`, `tokens/imported/`,
+  `assets/generated/`, and `ui/generated/` as tool-owned output.
+- Treat `design/overlays/` as developer-owned behavior and customization that
+  import/reimport must preserve byte-for-byte.
 - Put application behavior, state, and safe extensions in `src/` and
   `components/`.
 - Never silently discard unsupported import properties. Preserve diagnostics

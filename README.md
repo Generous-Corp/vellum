@@ -9,7 +9,8 @@ This repository is at the independent-validation milestone. The project CLI
 and repository shape are usable. An audio-free native C++ kernel, reproducible
 checksummed CMake SDK artifact, and macOS CoreGraphics smoke application are
 executable.
-Import, CLI-driven native builds, Skia/Dawn GPU rendering, and packaging remain
+The public CLI now has an installed, deterministic DesignIR JSON import and safe
+reimport backend. Native builds, Skia/Dawn GPU rendering, and packaging remain
 SDK-backend capabilities and report `capability_unavailable` until implemented.
 
 ## Five-minute local-development start
@@ -48,8 +49,8 @@ vellum create "Vellum Hello" -d "$env:TEMP\vellum-hello"
 vellum create MyApp
 cd myapp
 vellum doctor --fix
-vellum import ./design.pulp.zip --source-type figma
-vellum reimport
+vellum import ./revision-a.source.json --source-type figma --as main
+vellum reimport --source ./revision-b.source.json --as main
 vellum build --target macos
 vellum run --target macos
 vellum test
@@ -59,9 +60,13 @@ vellum package --target macos --output dist
 
 `create` is deterministic and separates imported snapshots, normalized
 DesignIR, generated UI, tokens/assets, hand-written app logic, optional native
-components, platform modules, tests, and packaging configuration. Runtime
-commands require a compatible `vellum-backend` discovered through
+components, platform modules, tests, and packaging configuration. The installed
+backend currently implements JSON DesignIR import/reimport; native runtime
+commands require additional backend capabilities. Backends are discovered through
 `VELLUM_SDK_ROOT`, `VELLUM_BACKEND`, or `PATH`.
+
+The accepted source contract, generated tree, ownership boundary, and conflict
+workflow are documented in [Import and reimport](docs/cli/import-reimport.md).
 
 Every command accepts `--json` before or after the command and emits one stable
 `vellum.cli.result.v1` object. See [the CLI contract](docs/cli/contract.md).

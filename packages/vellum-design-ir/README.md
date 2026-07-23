@@ -48,6 +48,12 @@ vellum-design-ir reimport \
 
 All machine output uses recursively sorted JSON object keys and a trailing newline. Reimport exits `0` when accepted, `2` when a valid report contains unresolved authored conflicts, and `1` for invalid input.
 
+The package also installs `vellum-backend`, the filesystem adapter used by the
+public Python CLI. It snapshots source bytes and assets, writes normalized IR,
+tokens, generated component definitions, typed IDs, diagnostics, and the import
+lock, and performs overlay-preserving reimport transactions. See
+[`docs/cli/import-reimport.md`](../../docs/cli/import-reimport.md).
+
 ## Ownership contract
 
 | Data | Owner | Reimport may rewrite it? |
@@ -79,6 +85,8 @@ The package includes three public JSON Schemas:
 ## Current limits
 
 - This is an overlay-aware reimport engine, not a general source-code three-way merger.
-- Source adapters, generated components, asset copying, aggregate multi-source composition, and lock-file acceptance are separate layers.
+- The filesystem backend accepts adapter source-model or canonical DesignIR
+  JSON. Provider-specific archive decoding and aggregate multi-source
+  composition remain separate layers.
 - Heuristic candidate scoring is intentionally conservative and never mutates aliases.
 - The compact FNV fingerprint is deterministic identity evidence, not a cryptographic content hash.

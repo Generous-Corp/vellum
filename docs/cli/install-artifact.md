@@ -14,14 +14,22 @@ metadata.json
 sdk/include/...
 sdk/lib/cmake/Vellum/...
 sdk/lib/libvellum-*.a
+design-ir/bin/vellum-backend.js
+design-ir/src/...
+design-ir/schema/...
 bin/vellum-backend        # optional on Unix
 bin/vellum-backend.exe    # optional on Windows
 ```
 
 `metadata.json` uses `vellum.sdk-artifact.v1`, records framework and CLI
 compatibility, inventories every payload file by SHA-256, and states capability
-claims. The current artifact claims the authoring CLI and CMake SDK only; it
-explicitly records `native_backend=false` and `gpu_renderer=false`.
+claims. The current artifact claims the authoring CLI, deterministic DesignIR
+import/reimport, and CMake SDK; it explicitly records native application and GPU
+rendering capabilities as unavailable.
+
+When `design-ir/` is present, the installers generate the platform launcher
+(`vellum-backend` or `vellum-backend.cmd`) that runs its packaged backend. A
+future native backend executable may occupy the optional `bin/` slot instead.
 
 `SHA256SUMS` must contain exactly one basename entry for the archive. Both
 installers calculate SHA-256 and abort before extraction when the entry is
