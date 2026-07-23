@@ -1,0 +1,60 @@
+{
+  "class": "platform",
+  "contract_keys": [
+    "capture-primitives",
+    "macos-shell",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.capture-stats",
+    "vellum.gpu-native"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-07-23T20:56:36Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-dd1ebad3a36e8d08aae2479dad8077a1c694bb54",
+  "include_dependency_deltas": [
+    "apps/app-host/CMakeLists.txt",
+    "apps/app-host/options.hpp",
+    "apps/app-host/text_semantics.hpp",
+    "authoring/include/vellum/authoring/js_application.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "capture-primitives",
+    "macos-shell",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "apps/app-host/CMakeLists.txt",
+    "apps/app-host/main.mm",
+    "apps/app-host/options.cpp",
+    "apps/app-host/options.hpp",
+    "apps/app-host/test_phase3_scenario.py",
+    "apps/app-host/text_semantics.hpp",
+    "apps/app-host/text_semantics.mm",
+    "authoring/include/vellum/authoring/js_application.hpp",
+    "authoring/src/js_application.mm",
+    "cli/vellum_native_backend.py"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "800f279b69330c6b0c29be4599a25bd7cf6faf26",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "9acf1af73bf5e0eb71e2380c5ca3821c8cfb20a3",
+    "to_commit": "8b7170d3862bea6b4a32b93dafa55536bacec1b4"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "dd1ebad3a36e8d08aae2479dad8077a1c694bb54",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}

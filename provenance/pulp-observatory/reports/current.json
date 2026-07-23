@@ -841,9 +841,71 @@
       ],
       "source_commit": "a7cb861ade33dab5100299bcee5c333dbf92f720",
       "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "test",
+      "deadline": "2026-07-30T20:56:36Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-41865e60147059cc5449187f8fa8dcbd90c36ee9",
+      "mapped_contracts": [
+        "retained-ui-kernel"
+      ],
+      "source_commit": "41865e60147059cc5449187f8fa8dcbd90c36ee9",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "schema",
+      "deadline": "2026-07-28T20:56:36Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-612366a1c1a906e0f57e4cc8e78c3a90fa8a3ea6",
+      "mapped_contracts": [
+        "design-schema-compiler"
+      ],
+      "source_commit": "612366a1c1a906e0f57e4cc8e78c3a90fa8a3ea6",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "test",
+      "deadline": "2026-07-30T20:56:36Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-8b7170d3862bea6b4a32b93dafa55536bacec1b4",
+      "mapped_contracts": [
+        "retained-ui-kernel"
+      ],
+      "source_commit": "8b7170d3862bea6b4a32b93dafa55536bacec1b4",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "platform",
+      "deadline": "2026-07-28T20:56:36Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-98ecbc1c71bc748920f76dc5130ee9b8fa142387",
+      "mapped_contracts": [
+        "capture-primitives"
+      ],
+      "source_commit": "98ecbc1c71bc748920f76dc5130ee9b8fa142387",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "platform",
+      "deadline": "2026-07-28T20:56:36Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-dd1ebad3a36e8d08aae2479dad8077a1c694bb54",
+      "mapped_contracts": [
+        "capture-primitives",
+        "macos-shell",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "dd1ebad3a36e8d08aae2479dad8077a1c694bb54",
+      "source_repository": "Generous-Corp/vellum"
     }
   ],
-  "generated_at": "2026-07-23T19:54:40Z",
+  "generated_at": "2026-07-23T20:57:25Z",
   "health": "pass",
   "maximum_pending_age_days": 0.0,
   "observatory_effort_percent": 0.0,

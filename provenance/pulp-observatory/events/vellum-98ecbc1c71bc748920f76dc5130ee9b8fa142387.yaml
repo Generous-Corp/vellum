@@ -1,0 +1,53 @@
+{
+  "class": "platform",
+  "contract_keys": [
+    "capture-primitives"
+  ],
+  "contract_tests": [
+    "vellum.capture-stats",
+    "vellum.gpu-native"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-07-23T20:56:36Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-98ecbc1c71bc748920f76dc5130ee9b8fa142387",
+  "include_dependency_deltas": [
+    "apps/minimal-scene/CMakeLists.txt",
+    "apps/smoke-native/install-consumer/CMakeLists.txt"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "capture-primitives"
+  ],
+  "mapped_paths": [
+    "apps/minimal-scene/CMakeLists.txt",
+    "apps/minimal-scene/README.md",
+    "apps/minimal-scene/main.cpp",
+    "apps/smoke-native/install-consumer/CMakeLists.txt",
+    "apps/smoke-native/install-consumer/main.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "d19ed2442978cd8c18c339a3f94e69c37cfaedd1",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [
+    {
+      "new_path": "apps/minimal-scene/main.cpp",
+      "old_path": "apps/smoke-native/install-consumer/main.cpp",
+      "similarity_percent": 98
+    }
+  ],
+  "scan_cursor": {
+    "from_commit": "9acf1af73bf5e0eb71e2380c5ca3821c8cfb20a3",
+    "to_commit": "8b7170d3862bea6b4a32b93dafa55536bacec1b4"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "98ecbc1c71bc748920f76dc5130ee9b8fa142387",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}
