@@ -24,6 +24,10 @@ CONSUMER = REPO / "apps/smoke-native/install-consumer"
 
 @unittest.skipUnless(shutil.which("cmake") and (shutil.which("shasum") or shutil.which("sha256sum")), "CMake/checksum tools unavailable")
 class SdkArtifactTests(unittest.TestCase):
+    def test_installed_app_host_omits_nondeterministic_macho_uuid(self) -> None:
+        cmake = (REPO / "apps/app-host/CMakeLists.txt").read_text(encoding="utf-8")
+        self.assertIn("target_link_options(vellum-app-host PRIVATE -Wl,-no_uuid)", cmake)
+
     def run_checked(self, arguments: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
         completed = subprocess.run(arguments, cwd=cwd, text=True, capture_output=True, check=False)
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)

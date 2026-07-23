@@ -3,6 +3,10 @@ add_executable(vellum-app-host
 
 target_compile_features(vellum-app-host PRIVATE cxx_std_20)
 target_compile_options(vellum-app-host PRIVATE -fobjc-arc)
+# ld64 derives LC_UUID from link-time state, which also changes its automatic
+# ad-hoc signature. The installed host is content-addressed, so omit that
+# non-semantic identifier and let release packaging add its final signature.
+target_link_options(vellum-app-host PRIVATE -Wl,-no_uuid)
 target_link_libraries(vellum-app-host PRIVATE
     Vellum::Authoring
     Vellum::Gpu
