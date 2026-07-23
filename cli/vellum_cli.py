@@ -38,6 +38,35 @@ EXIT_UNAVAILABLE = 4
 EXIT_BACKEND = 5
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
+PUBLIC_TEMPLATES = ("blank", "imported-app", "cpp-component")
+TEMPLATE_LAYERS = {
+    "basic": ("basic",),  # Compatibility alias retained for existing projects.
+    "blank": ("basic", "blank"),
+    "imported-app": ("basic", "imported-app"),
+    "cpp-component": ("basic", "cpp-component"),
+}
+TEMPLATE_REQUIRED_FILES = {
+    "app.toml.template",
+    "framework.lock.template",
+    "package.json.template",
+    "package-lock.json.template",
+    "src/App.tsx.template",
+    "src/main.tsx.template",
+    "tests/scenarios/smoke.json.template",
+    "native/components.toml.template",
+}
+TEMPLATE_VARIANT_REQUIRED_FILES = {
+    "cpp-component": {
+        "native/level-meter.cpp.template",
+        "native/components.toml.template",
+    },
+}
+TEMPLATE_TOKENS = {
+    "PROJECT_NAME", "PROJECT_NAME_JSON", "PROJECT_SLUG", "PROJECT_ID",
+    "CLI_VERSION", "FRAMEWORK_VERSION", "UI_VERSION",
+    "ARTIFACT_IDENTITY_JSON", "TEMPLATE_NAME",
+}
+TEMPLATE_TOKEN_RE = re.compile(r"{{([A-Z][A-Z0-9_]*)}}")
 
 
 class CliFailure(RuntimeError):
@@ -116,6 +145,83 @@ def render_template(source: Path, destination: Path, replacements: dict[str, str
         content = content.replace("{{" + token + "}}", value)
     destination.write_text(content, encoding="utf-8")
     destination.chmod(source.stat().st_mode & 0o777)
+
+
+def selected_template(requested: str | None, has_import: bool) -> str:
+    if requested == "basic":
+        return "basic"
+    if requested is None:
+        return "imported-app" if has_import else "blank"
+    if requested == "imported-app" and not has_import:
+        raise CliFailure(
+            "The imported-app template requires --from figma FILE or --from design-ir FILE.",
+            status="template_requires_source",
+            exit_code=EXIT_USAGE,
+        )
+    if requested != "imported-app" and has_import:
+        raise CliFailure(
+            "create --from selects the imported-app template; omit --template or use --template imported-app.",
+            status="template_source_mismatch",
+            exit_code=EXIT_USAGE,
+        )
+    return requested
+
+
+def template_files(root: Path, template_name: str) -> dict[str, Path]:
+    layers = TEMPLATE_LAYERS.get(template_name)
+    if layers is None:
+        raise CliFailure(
+            f"Unknown template: {template_name}",
+            status="unknown_template",
+            exit_code=EXIT_USAGE,
+        )
+    files: dict[str, Path] = {}
+    for layer in layers:
+        source = root / layer
+        if not source.is_dir():
+            raise CliFailure(
+                f"Template layer is not installed: {layer}",
+                status="templates_unavailable",
+                exit_code=EXIT_UNAVAILABLE,
+            )
+        for path in sorted(source.rglob("*")):
+            if path.is_symlink():
+                raise CliFailure(
+                    f"Template contains a symbolic link: {path.relative_to(root)}",
+                    status="invalid_template",
+                    exit_code=EXIT_PROJECT,
+                )
+            if not path.is_file():
+                continue
+            relative = path.relative_to(source).as_posix()
+            if not relative.endswith(".template"):
+                raise CliFailure(
+                    f"Template file lacks the .template suffix: {layer}/{relative}",
+                    status="invalid_template",
+                    exit_code=EXIT_PROJECT,
+                )
+            files[relative] = path
+    required = TEMPLATE_REQUIRED_FILES | TEMPLATE_VARIANT_REQUIRED_FILES.get(
+        template_name, set()
+    )
+    missing = sorted(required - set(files))
+    if missing:
+        raise CliFailure(
+            f"Template {template_name} is missing required files: {', '.join(missing)}",
+            status="invalid_template",
+            exit_code=EXIT_PROJECT,
+        )
+    for relative, path in files.items():
+        unknown = sorted(set(TEMPLATE_TOKEN_RE.findall(
+            path.read_text(encoding="utf-8")
+        )) - TEMPLATE_TOKENS)
+        if unknown:
+            raise CliFailure(
+                f"Template {template_name}/{relative} has unknown placeholders: {', '.join(unknown)}",
+                status="invalid_template",
+                exit_code=EXIT_PROJECT,
+            )
+    return files
 
 
 def unverified_artifact_identity() -> dict[str, Any]:
@@ -311,9 +417,8 @@ def create_project(args: argparse.Namespace) -> dict[str, Any]:
             status="destination_not_empty",
             exit_code=EXIT_PROJECT,
         )
-    source = template_root() / args.template
-    if not source.is_dir():
-        raise CliFailure(f"Unknown template: {args.template}", status="unknown_template", exit_code=EXIT_USAGE)
+    template_name = selected_template(args.template, args.import_source is not None)
+    sources = template_files(template_root(), template_name)
     sdk = load_sdk_metadata()
     import_request: tuple[str, Path, str] | None = None
     if args.import_source:
@@ -362,11 +467,12 @@ def create_project(args: argparse.Namespace) -> dict[str, Any]:
         "ARTIFACT_IDENTITY_JSON": json.dumps(
             installed_identity, sort_keys=True, separators=(",", ":")
         ),
+        "TEMPLATE_NAME": template_name,
     }
     destination.mkdir(parents=True, exist_ok=True)
     created: list[str] = []
-    for template in sorted(path for path in source.rglob("*") if path.is_file()):
-        relative = template.relative_to(source)
+    for relative_name, template in sorted(sources.items()):
+        relative = Path(relative_name)
         output_relative = Path(str(relative).removesuffix(".template"))
         render_template(template, destination / output_relative, replacements)
         created.append(output_relative.as_posix())
@@ -478,7 +584,8 @@ def create_project(args: argparse.Namespace) -> dict[str, Any]:
         data={
             "project_root": str(destination),
             "project_id": project_id,
-            "template": args.template,
+            "template": template_name,
+            "template_requested": args.template,
             "artifact": installed_identity,
             "files": created,
             "validation": validation,
@@ -1052,7 +1159,14 @@ def parser() -> argparse.ArgumentParser:
     create = commands.add_parser("create", help="create a deterministic Vellum project")
     create.add_argument("name")
     create.add_argument("--directory", "-d")
-    create.add_argument("--template", default="basic")
+    create.add_argument(
+        "--template",
+        choices=(*PUBLIC_TEMPLATES, "basic"),
+        help=(
+            "project shape: blank (default), imported-app (requires --from), "
+            "or cpp-component; basic is a compatibility alias"
+        ),
+    )
     create.add_argument(
         "--from", dest="import_source", nargs=2, metavar=("SOURCE_TYPE", "SOURCE"),
         choices=None,

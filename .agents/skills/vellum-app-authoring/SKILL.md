@@ -28,8 +28,9 @@ Use JSON mode for automation and preserve the exact artifact identity written
 to the project lock.
 
 ```sh
-vellum --json create "My App" --directory "$app" --template basic
-vellum --json create "Imported App" --directory "$app" --template basic --from figma "$figma_export" --as main
+vellum --json create "My App" --directory "$app" --template blank
+vellum --json create "Imported App" --directory "$app" --template imported-app --from figma "$figma_export" --as main
+vellum --json create "Visualization App" --directory "$app" --template cpp-component
 vellum --json doctor --fix --require-target macos --project "$app"
 vellum --json import "$figma_export" --source-type figma --as main --project "$app"
 vellum --json reimport --source "$updated_export" --as main --project "$app"
@@ -56,6 +57,12 @@ not unpack it yourself. Vellum retains the archive and scene as immutable
 snapshots and binds revision identity to the archive SHA-256. Consult conversion
 diagnostics after every import or reimport. Do not invent another route or
 silently discard unsupported properties.
+
+Use the public template whose ownership boundary matches the application.
+`blank` is the normal TypeScript starting point, `imported-app` requires and
+retains an initial design source, and `cpp-component` adds the bounded app-owned
+C++ ABI example. Do not copy files between templates or invent another shape;
+extend the generated project through its documented developer-owned paths.
 
 For editable native UI, use controlled `TextInput` v1 from `@vellum/ui` with a
 stable ID, string `value`, and `onChange`. Scenarios may use bounded `input` and

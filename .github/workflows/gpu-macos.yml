@@ -220,6 +220,20 @@ jobs:
           /usr/bin/grep -Eq 'minos 15\.0' "$RUNNER_TEMP/vellum-gpu-dylib-load-commands.txt"
           /usr/bin/grep -Eq 'minos 15\.0' "$RUNNER_TEMP/vellum-gpu-app-load-commands.txt"
 
+      - name: Smoke every public template through the installed SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix="$RUNNER_TEMP/templates-smoke-sdk"
+          sh "$RUNNER_TEMP/install.sh" \
+            --archive "$RUNNER_TEMP/$VELLUM_RELEASE_ARCHIVE" \
+            --checksums "$RUNNER_TEMP/SHA256SUMS" \
+            --install-dir "$prefix"
+          python3 scripts/templates_smoke.py \
+            --install-prefix "$prefix" \
+            --output "$RUNNER_TEMP/templates-smoke.json" \
+            --json > "$RUNNER_TEMP/templates-smoke.stdout.json"
+
       - name: Record private-release trust controls
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
@@ -476,6 +490,8 @@ jobs:
             ${{ runner.temp }}/sdk-first.json
             ${{ runner.temp }}/sdk-second.json
             ${{ runner.temp }}/sdk-verification.json
+            ${{ runner.temp }}/templates-smoke.json
+            ${{ runner.temp }}/templates-smoke.stdout.json
             ${{ runner.temp }}/vellum-sterile-acceptance.tar.gz
             ${{ runner.temp }}/sterile-acceptance-bundle.json
             ${{ runner.temp }}/web-payload.json

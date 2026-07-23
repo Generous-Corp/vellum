@@ -1,0 +1,15 @@
+# {{PROJECT_NAME}}
+
+This application was created with Vellum's `blank` template. It is the smallest
+maintainable application shape: one developer-owned TypeScript entry, one
+generated example screen, a finite interaction scenario, explicit capabilities,
+and exact SDK/package locks.
+
+```sh
+vellum doctor --fix --require-target macos
+vellum build --target macos
+vellum test --scenario smoke --target macos
+vellum run --target macos
+```
+
+Replace or extend `src/App.tsx`; do not edit `ui/generated/` by hand.

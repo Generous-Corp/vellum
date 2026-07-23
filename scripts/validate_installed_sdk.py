@@ -183,7 +183,7 @@ def validate(
 
         consumer_source = root / "consumer-source"
         shutil.copytree(
-            SUPPORT_ROOT / "apps/smoke-native/install-consumer",
+            SUPPORT_ROOT / "apps/minimal-scene",
             consumer_source,
         )
         consumer_build = root / "consumer-build"
@@ -477,94 +477,22 @@ def validate(
             custom_project = root / "custom-component-application"
             custom_created = json.loads(run([
                 str(prefix / "bin/vellum"), "create", "Custom Component App",
-                "--directory", str(custom_project), "--no-verify", "--json",
+                "--directory", str(custom_project), "--template", "cpp-component",
+                "--no-verify", "--json",
             ], cwd=root, env=journey_env).stdout)
-            if custom_created.get("status") != "created":
+            if (
+                custom_created.get("status") != "created"
+                or custom_created.get("data", {}).get("template") != "cpp-component"
+            ):
                 raise ValidationError("installed CLI did not create the custom component app")
-            (custom_project / "src/App.tsx").write_text(
-                '''import { Button, CustomComponent, Stack, Text, useState, View } from "@vellum/ui";\n\n'''
-                '''export function App() {\n'''
-                '''  const [boost, setBoost] = useState(false);\n'''
-                '''  return (\n'''
-                '''    <Stack id="custom-root" style={{ width: 640, height: 400, padding: 32, gap: 18, backgroundColor: "#0f172a" }}>\n'''
-                '''      <Text id="custom-title" style={{ height: 36, fontSize: 24, color: "#f8fafc" }}>App-owned C++ bars</Text>\n'''
-                '''      <Button id="toggle-boost" onPress={() => setBoost((value) => !value)} style={{ width: 180, height: 42 }}>Toggle boost</Button>\n'''
-                '''      <CustomComponent id="level-meter" component="level-meter" properties={{ boost }} style={{ width: 560, height: 220 }}\n'''
-                '''        fallback={<View id="level-meter-fallback" style={{ width: 560, height: 240, backgroundColor: "#334155" }} />} />\n'''
-                '''    </Stack>\n'''
-                '''  );\n'''
-                '''}\n''',
-                encoding="utf-8",
-            )
-            (custom_project / "tests/scenarios/smoke.json").write_text(
-                json.dumps({
-                    "schema": "vellum.scenario.v1",
-                    "name": "custom-component-mutation",
-                    "viewport": {"width": 640, "height": 400},
-                    "steps": [
-                        {"action": "wait-for-idle"},
-                        {"action": "capture", "name": "before"},
-                        {"action": "press", "target": "toggle-boost"},
-                        {"action": "wait-for-idle"},
-                        {"action": "capture", "name": "after"},
-                    ],
-                }, indent=2, sort_keys=True) + "\n",
-                encoding="utf-8",
-            )
-            (custom_project / "native/components.toml").write_text(
-                '[manifest]\n'
-                'schema = "vellum.components.v1"\n'
-                'components = ["level-meter"]\n\n'
-                '[component.level-meter]\n'
-                'native_source = "native/level-meter.cpp"\n'
-                'web = "fallback"\n',
-                encoding="utf-8",
-            )
-            (custom_project / "native/level-meter.cpp").write_text(
-                r'''#include <vellum/components/abi.h>
-#include <cstdio>
-#include <cstring>
-
-static int render_meter(const vellum_component_render_context_v1* context) {
-    if (context == nullptr || context->abi_version != VELLUM_COMPONENT_ABI_VERSION ||
-        context->emit == nullptr || context->properties_json == nullptr) return 0;
-    const bool boost = std::strstr(context->properties_json, "\\\"boost\\\":true") != nullptr;
-    const float values[] = {0.18F, 0.42F, 0.76F, 0.54F, 0.91F, 0.63F,
-                            0.32F, 0.70F, 0.48F, 0.84F, 0.58F, 0.96F};
-    const float gap = 8.0F;
-    const float width = (context->bounds.width - gap * 11.0F) / 12.0F;
-    for (int index = 0; index < 12; ++index) {
-        char suffix[32];
-        std::snprintf(suffix, sizeof(suffix), "bar-%d", index);
-        const float height = context->bounds.height * values[index];
-        vellum_component_paint_command_v1 command{};
-        command.struct_size = sizeof(command);
-        command.kind = VELLUM_COMPONENT_PAINT_RECTANGLE_V1;
-        command.id_suffix = suffix;
-        command.bounds = {index * (width + gap), context->bounds.height - height, width, height};
-        command.fill = boost
-            ? vellum_component_color_v1{0.08F, 0.72F, 0.65F, 1.0F}
-            : vellum_component_color_v1{0.39F, 0.45F, 0.55F, 1.0F};
-        command.corner_radius = 6.0F;
-        if (context->emit(context->emit_user_data, &command) != 1) return 0;
-    }
-    return 1;
-}
-
-static const vellum_component_descriptor_v1 descriptor{
-    sizeof(vellum_component_descriptor_v1), VELLUM_COMPONENT_ABI_VERSION,
-    "level-meter", render_meter,
-};
-
-extern "C" VELLUM_COMPONENT_EXPORT const vellum_component_descriptor_v1*
-vellum_component_entry_v1(void) { return &descriptor; }
-''',
-                encoding="utf-8",
-            )
             custom_capture = custom_project / "artifacts/custom-component.png"
             custom_results = {
                 "build": json.loads(run([
                     str(prefix / "bin/vellum"), "build", "--json",
+                ], cwd=custom_project, env=journey_env).stdout),
+                "test": json.loads(run([
+                    str(prefix / "bin/vellum"), "test", "--scenario", "smoke",
+                    "--json",
                 ], cwd=custom_project, env=journey_env).stdout),
                 "capture": json.loads(run([
                     str(prefix / "bin/vellum"), "capture", "--scenario", "smoke",
@@ -632,6 +560,9 @@ vellum_component_entry_v1(void) { return &descriptor; }
         "sterile_consumer_build": True,
         "sterile_consumer_test": True,
         "project_created_by_installed_cli": created.get("status") == "created",
+        "installed_blank_template_selected": (
+            created.get("data", {}).get("template") == "blank"
+        ),
         "project_lock_matches_sdk": True,
         "project_lock_pins_artifact_sha": lock["framework"].get("artifact") == expected_lock_identity,
         "installed_cli_doctor": doctor.get("status") == "ready",
@@ -643,6 +574,9 @@ vellum_component_entry_v1(void) { return &descriptor; }
             and resolved_bindings[0].get("resolvedNodeId") == "main/create-button-v2"
         ),
         "installed_cli_pulp_zip_create_from": zip_created.get("status") == "created",
+        "installed_imported_template_selected": (
+            zip_created.get("data", {}).get("template") == "imported-app"
+        ),
         "installed_pulp_zip_snapshot": zip_snapshot_verified,
         "native_capability_claim_consistent": all(
             verification["claims"]["targets"]["macos"]["commands"][name] is native_enabled
@@ -666,6 +600,10 @@ vellum_component_entry_v1(void) { return &descriptor; }
             not web_claimed or web_same_source_imported_behavior
         ),
         "installed_custom_cpp_component": not custom_claimed or custom_component_produced,
+        "installed_cpp_component_template_selected": (
+            not custom_claimed
+            or custom_created.get("data", {}).get("template") == "cpp-component"
+        ),
     }
     if not all(checks.values()):
         failed = sorted(name for name, passed in checks.items() if not passed)

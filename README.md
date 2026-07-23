@@ -221,7 +221,7 @@ commit.
 
 | Command | Purpose |
 | --- | --- |
-| `vellum create` | Scaffold and validate an exact-pinned independent project |
+| `vellum create` | Scaffold `blank`, `imported-app`, or `cpp-component` and validate the exact-pinned project |
 | `vellum doctor` | Inspect requirements and repair safe project-local state |
 | `vellum import`, `vellum reimport` | Materialize or update a supported immutable design source |
 | `vellum build`, `vellum run`, `vellum dev` | Build, launch, or watch a declared target |

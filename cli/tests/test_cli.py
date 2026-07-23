@@ -242,6 +242,8 @@ class CliTests(unittest.TestCase):
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
             payload = json.loads(completed.stdout)
+            self.assertEqual(payload["data"]["template"], "imported-app")
+            self.assertIsNone(payload["data"]["template_requested"])
             self.assertEqual(payload["data"]["validation"]["commands"], [
                 {"command": "import", "status": "imported"}
             ])

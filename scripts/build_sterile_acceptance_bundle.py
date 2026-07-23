@@ -23,8 +23,8 @@ SCRIPT_FILES = (
     "verify_sdk_artifact.py",
 )
 SUPPORT_FILES = (
-    "apps/smoke-native/install-consumer/CMakeLists.txt",
-    "apps/smoke-native/install-consumer/main.cpp",
+    "apps/minimal-scene/CMakeLists.txt",
+    "apps/minimal-scene/main.cpp",
     "fixtures/design-ir/revision-a.source.json",
     "fixtures/design-ir/revision-b.source.json",
     "fixtures/design-ir/pulp-emitter-generic.pulp.zip",

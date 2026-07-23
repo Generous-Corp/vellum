@@ -1,0 +1,17 @@
+# {{PROJECT_NAME}}
+
+This application was created with Vellum's `imported-app` template. The initial
+design snapshot, normalized DesignIR, tokens, assets, generated UI, diagnostics,
+and import receipt were materialized by `vellum create --from`.
+
+Keep behavior in `src/` and imported output under the tool-owned paths described
+by `AGENTS.md`. To update the design without overwriting behavior:
+
+```sh
+vellum reimport --source path/to/revision.pulp.zip --as main
+vellum design check --as main
+vellum test --scenario smoke
+```
+
+The initial smoke scenario proves that the imported scene boots and renders. Add
+semantic actions only after binding them to stable imported identities.

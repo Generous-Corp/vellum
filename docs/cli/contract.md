@@ -30,6 +30,25 @@ validated roles. Projects
 made from a local source install are explicitly marked unverified with no SHA
 or commit; verified installs pin the archive SHA exactly.
 
+## Create templates
+
+`vellum create` exposes three product shapes. They share one canonical project
+base and differ only where the application genuinely differs:
+
+- `--template blank` is the default and contains the smallest interactive
+  TypeScript application and finite smoke scenario;
+- `--template imported-app` requires `--from figma FILE` or
+  `--from design-ir FILE`; omitting `--template` while using `--from` selects
+  it automatically;
+- `--template cpp-component` adds one app-owned component ABI source,
+  declaration, JSX use, fallback, and mutation scenario.
+
+`basic` remains an explicit compatibility alias for projects and automation
+created before these names were public. A source cannot be combined with
+`blank` or `cpp-component`; this fails before the destination is written.
+Successful create JSON reports both the effective `template` and nullable
+`template_requested` fields under `data`.
+
 ## JSON result
 
 `--json` emits exactly one compact object:
@@ -81,7 +100,7 @@ stable outer schema.
 
 | Command | CLI-only today | Backend capability |
 |---|---:|---|
-| `create [--no-verify] [--run]` | yes | with a native SDK, builds and tests by default; `--run` launches |
+| `create [--template blank|imported-app|cpp-component] [--no-verify] [--run]` | yes | with a native SDK, builds and tests by default; `--run` launches |
 | `doctor [--fix]` | yes | reports backend availability |
 | `dev --target macos|web` | yes (supervisor) | watches, builds, and drives a target reload adapter; see [Development loop](dev.md) |
 | `import` / `reimport` | no | implemented by the installed `@vellum/design-ir` backend |

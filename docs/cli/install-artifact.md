@@ -85,7 +85,10 @@ vellum_cli.py
 vellum_backend.py
 vellum_manifest.py
 vellum_png.py
-templates/basic/...
+templates/basic/...                 # canonical shared base
+templates/blank/...
+templates/imported-app/...
+templates/cpp-component/...
 metadata.json
 sdk/include/...
 sdk/lib/cmake/Vellum/...
@@ -245,6 +248,22 @@ installed CLI import and reimport from
 two fixture revisions, verifies that the accepted active revision advances,
 embeds the materialized imported design in a real `.app`, and exercises the
 installed build/run/test/capture/package journey.
+
+The template gate uses only the installed launcher and SDK bytes:
+
+```sh
+python3 scripts/templates_smoke.py \
+  --install-prefix /absolute/installed/prefix \
+  --output dist/templates-smoke.json --json
+```
+
+It scaffolds `blank`, imports a generated deterministic DesignIR source through
+`imported-app`, and scaffolds `cpp-component`; each project then runs installed
+`doctor --fix`, `build`, and `test`. The lower-level CMake package proof has one
+canonical source entry at [`apps/minimal-scene`](../../apps/minimal-scene).
+Copy that directory outside this checkout and run its documented
+configure/build/CTest recipe with `CMAKE_PREFIX_PATH` set to the installed
+`VELLUM_SDK_ROOT`.
 
 The tagged-release workflow publishes a draft only after reproducibility,
 artifact verification, and installed-SDK validation pass. It uploads the SDK,

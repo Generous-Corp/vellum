@@ -135,7 +135,7 @@ if(VELLUM_BUILD_TESTS)
             COMMAND "${CMAKE_COMMAND}"
                 "-DVELLUM_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
                 "-DVELLUM_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
-                "-DVELLUM_INSTALL_CONSUMER_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/apps/smoke-native/install-consumer"
+                "-DVELLUM_INSTALL_CONSUMER_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/apps/minimal-scene"
                 "-DVELLUM_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
                 "-DTEST_CONFIG=$<CONFIG>"
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunInstallConsumer.cmake")

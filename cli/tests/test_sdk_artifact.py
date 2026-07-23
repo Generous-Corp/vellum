@@ -21,7 +21,7 @@ BUILDER = REPO / "scripts/build_sdk_artifact.py"
 VERIFIER = REPO / "scripts/verify_sdk_artifact.py"
 VALIDATOR = REPO / "scripts/validate_installed_sdk.py"
 INSTALLER = REPO / "scripts/install.sh"
-CONSUMER = REPO / "apps/smoke-native/install-consumer"
+CONSUMER = REPO / "apps/minimal-scene"
 
 
 @unittest.skipUnless(shutil.which("cmake") and (shutil.which("shasum") or shutil.which("sha256sum")), "CMake/checksum tools unavailable")

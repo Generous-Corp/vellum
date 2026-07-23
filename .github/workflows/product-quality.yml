@@ -38,6 +38,9 @@ jobs:
           python3 scripts/readme_lint.py
           python3 scripts/test_docs_sync.py
           python3 scripts/docs_sync.py --check
+          python3 cli/tests/test_templates.py
+          python3 scripts/template_guard.py
+          python3 scripts/test_templates_smoke.py
           python3 scripts/test_sterile_acceptance_bundle.py
           python3 scripts/test_verify_budget_ratification.py
           python3 scripts/verify_budget_ratification.py

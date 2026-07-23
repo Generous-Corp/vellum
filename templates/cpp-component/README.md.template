@@ -1,0 +1,16 @@
+# {{PROJECT_NAME}}
+
+This application was created with Vellum's `cpp-component` template. It extends
+the normal TypeScript application with one app-owned `level-meter` component
+through the bounded `vellum.component-abi.v1` escape hatch.
+
+```sh
+vellum doctor --fix --require-target macos
+vellum build --target macos
+vellum test --scenario smoke --target macos
+vellum run --target macos
+```
+
+`native/level-meter.cpp` is application code. It includes only the installed
+component ABI header and must not include renderer, Skia, Dawn, scene, or Pulp
+headers. Its declared browser behavior is the JSX fallback.
