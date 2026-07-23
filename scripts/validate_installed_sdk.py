@@ -380,16 +380,33 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
             if custom_created.get("status") != "created":
                 raise ValidationError("installed CLI did not create the custom component app")
             (custom_project / "src/App.tsx").write_text(
-                '''import { CustomComponent, Stack, Text, View } from "@vellum/ui";\n\n'''
+                '''import { Button, CustomComponent, Stack, Text, useState, View } from "@vellum/ui";\n\n'''
                 '''export function App() {\n'''
+                '''  const [boost, setBoost] = useState(false);\n'''
                 '''  return (\n'''
                 '''    <Stack id="custom-root" style={{ width: 640, height: 400, padding: 32, gap: 18, backgroundColor: "#0f172a" }}>\n'''
                 '''      <Text id="custom-title" style={{ height: 36, fontSize: 24, color: "#f8fafc" }}>App-owned C++ bars</Text>\n'''
-                '''      <CustomComponent id="level-meter" component="level-meter" properties={{ boost: true }} style={{ width: 560, height: 240 }}\n'''
+                '''      <Button id="toggle-boost" onPress={() => setBoost((value) => !value)} style={{ width: 180, height: 42 }}>Toggle boost</Button>\n'''
+                '''      <CustomComponent id="level-meter" component="level-meter" properties={{ boost }} style={{ width: 560, height: 220 }}\n'''
                 '''        fallback={<View id="level-meter-fallback" style={{ width: 560, height: 240, backgroundColor: "#334155" }} />} />\n'''
                 '''    </Stack>\n'''
                 '''  );\n'''
                 '''}\n''',
+                encoding="utf-8",
+            )
+            (custom_project / "tests/scenarios/smoke.json").write_text(
+                json.dumps({
+                    "schema": "vellum.scenario.v1",
+                    "name": "custom-component-mutation",
+                    "viewport": {"width": 640, "height": 400},
+                    "steps": [
+                        {"action": "wait-for-idle"},
+                        {"action": "capture", "name": "before"},
+                        {"action": "press", "target": "toggle-boost"},
+                        {"action": "wait-for-idle"},
+                        {"action": "capture", "name": "after"},
+                    ],
+                }, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
             (custom_project / "native/components.toml").write_text(
