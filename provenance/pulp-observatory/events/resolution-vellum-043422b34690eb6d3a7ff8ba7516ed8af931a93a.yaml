@@ -1,0 +1,20 @@
+{
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.capture-stats",
+    "vellum.gpu-native"
+  ],
+  "created_at": "2026-07-23T19:42:35Z",
+  "disposition": "framework-only",
+  "effort_minutes": 0,
+  "event_id": "resolution-vellum-043422b34690eb6d3a7ff8ba7516ed8af931a93a",
+  "kind": "resolution",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Vellum-owned deterministic development loop and reload transcript contract. Any later Pulp adoption must consume the released Vellum behavior through adapter and contract tests, not synchronized source copies.",
+  "resolves": "vellum-043422b34690eb6d3a7ff8ba7516ed8af931a93a",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

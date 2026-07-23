@@ -67,6 +67,11 @@
 | `vellum-299f53280d40411cd97682cdfc91382de9ba1707` | framework-to-Pulp | schema | framework-only | 2026-07-28T18:49:37Z |
 | `vellum-ba8517f720a6bd2d8baf4e72b679b7cee34cbedb` | framework-to-Pulp | importer | framework-only | 2026-07-28T18:49:37Z |
 | `vellum-c9864460811381f5552652b8ba4f408c1b13e235` | framework-to-Pulp | schema | framework-only | 2026-07-28T18:49:37Z |
+| `vellum-043422b34690eb6d3a7ff8ba7516ed8af931a93a` | framework-to-Pulp | schema | framework-only | 2026-07-28T19:42:35Z |
+| `vellum-304795e8b47f43ec0f4df6e7fbd89afca75f73eb` | framework-to-Pulp | correctness | framework-only | 2026-07-28T19:42:35Z |
+| `vellum-5f543cc56e5c2f81c1f669cbdd1e2b6228b96af5` | framework-to-Pulp | schema | framework-only | 2026-07-28T19:42:35Z |
+| `vellum-9915b08b03b983691f5fd78632ea93c79660386c` | framework-to-Pulp | test | framework-only | 2026-07-30T19:42:35Z |
+| `vellum-a7cb861ade33dab5100299bcee5c333dbf92f720` | framework-to-Pulp | schema | framework-only | 2026-07-28T19:42:35Z |
 
 ## Activation blockers
 
