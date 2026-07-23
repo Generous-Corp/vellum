@@ -368,13 +368,27 @@ def validate_ui_payload(contents: dict[str, bytes]) -> bool:
         raise InstallError(
             f"@vellum/ui dependency metadata is malformed: {error}"
         ) from error
-    dependencies = package.get("devDependencies")
-    locked_dependencies = lock.get("packages", {}).get("", {}).get(
-        "devDependencies"
+    runtime_dependencies = package.get("dependencies")
+    development_dependencies = package.get("devDependencies")
+    locked_root = lock.get("packages", {}).get("", {})
+    locked_runtime_dependencies = locked_root.get("dependencies")
+    locked_development_dependencies = locked_root.get("devDependencies")
+    dependency_maps = (
+        runtime_dependencies,
+        development_dependencies,
+        locked_runtime_dependencies,
+        locked_development_dependencies,
+    )
+    dependencies = (
+        {**runtime_dependencies, **development_dependencies}
+        if all(isinstance(value, dict) for value in dependency_maps)
+        else {}
     )
     if (
-        not isinstance(dependencies, dict)
-        or dependencies != locked_dependencies
+        not all(isinstance(value, dict) for value in dependency_maps)
+        or runtime_dependencies != locked_runtime_dependencies
+        or development_dependencies != locked_development_dependencies
+        or set(runtime_dependencies) & set(development_dependencies)
         or set(dependencies) != {"esbuild", "typescript"}
         or any(
             not isinstance(version, str)

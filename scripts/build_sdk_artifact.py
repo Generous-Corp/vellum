@@ -101,8 +101,18 @@ def prepare_ui_payload(repo: Path, payload: Path) -> None:
             shutil.copy2(item, destination / entry)
 
     package = json.loads((destination / "package.json").read_text(encoding="utf-8"))
-    dependencies = package.get("devDependencies")
-    if not isinstance(dependencies, dict) or not dependencies:
+    runtime_dependencies = package.get("dependencies")
+    development_dependencies = package.get("devDependencies")
+    if (
+        not isinstance(runtime_dependencies, dict)
+        or not isinstance(development_dependencies, dict)
+        or set(runtime_dependencies) & set(development_dependencies)
+    ):
+        raise ArtifactError(
+            "@vellum/ui authoring dependencies must be disjoint exact runtime and development maps"
+        )
+    dependencies = {**runtime_dependencies, **development_dependencies}
+    if set(dependencies) != {"esbuild", "typescript"}:
         raise ArtifactError("@vellum/ui has no pinned authoring dependencies")
     if any(not isinstance(version, str) or version[:1] in {"^", "~", ">", "<", "*"}
            for version in dependencies.values()):
