@@ -282,24 +282,6 @@ jobs:
           native and browser-Wasm proof lanes. It is not a Pulp dependency or a
           broad platform support claim.
           EOF
-          release_json="$RUNNER_TEMP/release.json"
-          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" \
-              > "$release_json" 2>/dev/null; then
-            release_state="$(
-              python3 -c 'import json,sys; print("draft" if json.load(open(sys.argv[1]))["draft"] else "published")' \
-                "$release_json"
-            )"
-          else
-            verify_remote_tag_ref
-            gh release create "$tag" \
-              --repo "$GITHUB_REPOSITORY" \
-              --draft \
-              --verify-tag \
-              --title "Vellum 0.1.0 experimental SDK" \
-              --notes-file "$notes"
-            release_state=draft
-          fi
-
           base_assets=(
             "vellum-sdk-0.1.0-darwin-arm64.tar.gz=$RUNNER_TEMP/vellum-sdk-0.1.0-darwin-arm64.tar.gz"
             "install.sh=$RUNNER_TEMP/install.sh"
@@ -311,6 +293,52 @@ jobs:
             "release-trust.json=$RUNNER_TEMP/release-trust.json"
             "immutable-release-preflight.json=$RUNNER_TEMP/immutable-release-preflight.json"
           )
+          resumable_asset_args=(
+            --allowed-asset "release-assets-verification.json"
+          )
+          for asset in "${base_assets[@]}"; do
+            resumable_asset_args+=(--allowed-asset "${asset%%=*}")
+          done
+          release_json="$RUNNER_TEMP/release.json"
+          releases_json="$RUNNER_TEMP/releases.json"
+          load_release_by_tag() {
+            gh api --paginate --slurp \
+              "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              > "$releases_json"
+            python3 scripts/select_release.py \
+              --releases-json "$releases_json" \
+              --tag "$tag" \
+              --expected-name "Vellum 0.1.0 experimental SDK" \
+              --expected-body-file "$notes" \
+              --expected-author "github-actions[bot]" \
+              "${resumable_asset_args[@]}" \
+              --output "$release_json"
+          }
+          if load_release_by_tag; then
+            release_state="$(
+              python3 -c 'import json,sys; print("draft" if json.load(open(sys.argv[1]))["draft"] else "published")' \
+                "$release_json"
+            )"
+          else
+            selection_status=$?
+            if [ "$selection_status" -ne 4 ]; then
+              exit "$selection_status"
+            fi
+            verify_remote_tag_ref
+            gh release create "$tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --draft \
+              --verify-tag \
+              --title "Vellum 0.1.0 experimental SDK" \
+              --notes-file "$notes"
+            load_release_by_tag
+            release_state=draft
+          fi
+          release_id="$(
+            python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' \
+              "$release_json"
+          )"
+
           verifier_args=()
           upload_args=()
           for asset in "${base_assets[@]}"; do
@@ -319,7 +347,7 @@ jobs:
           done
 
           if [ "$release_state" = draft ]; then
-            gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" \
+            gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" \
               > "$release_json"
             previous_verification_id="$(
               python3 -c '
@@ -339,7 +367,7 @@ jobs:
             verify_remote_tag_ref
             gh release upload "$tag" "${upload_args[@]}" \
               --repo "$GITHUB_REPOSITORY" --clobber
-            gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" \
+            gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" \
               > "$release_json"
             python3 scripts/verify_release_assets.py \
               --release-json "$release_json" --tag "$tag" \
@@ -349,7 +377,7 @@ jobs:
             gh release upload "$tag" \
               "$RUNNER_TEMP/release-assets-verification.json" \
               --repo "$GITHUB_REPOSITORY" --clobber
-            gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" \
+            gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" \
               > "$release_json"
             python3 scripts/verify_release_assets.py \
               --release-json "$release_json" --tag "$tag" \
@@ -357,10 +385,11 @@ jobs:
               --asset "release-assets-verification.json=$RUNNER_TEMP/release-assets-verification.json" \
               --output "$RUNNER_TEMP/release-assets-draft-verification.json"
             verify_remote_tag_ref
-            gh release edit "$tag" \
-              --repo "$GITHUB_REPOSITORY" \
-              --draft=false \
-              --latest=false
+            gh api --method PATCH \
+              "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+              -F draft=false \
+              -f make_latest=false \
+              > "$release_json"
           else
             gh release download "$tag" \
               --repo "$GITHUB_REPOSITORY" \
