@@ -35,6 +35,11 @@ SUPPORT_FILES = (
     "fixtures/authoring-phase3/vendor/pure-esm-leaf/package.json",
     "fixtures/authoring-phase3/vendor/pure-esm-root/index.js",
     "fixtures/authoring-phase3/vendor/pure-esm-root/package.json",
+    "web/consumer/index.html",
+    "web/consumer/style.css",
+    "web/consumer/text_semantics.js",
+    "web/consumer/vellum_host.js",
+    "web/tests/run_text_semantics_browser.py",
 )
 
 

@@ -352,6 +352,30 @@ def validate(
         ))
         if web_claimed and not web_present:
             raise ValidationError("web command claims have no complete installed runtime/backend")
+        installed_phase3_browser_scenario = True
+        if web_claimed:
+            phase3_browser = run([
+                sys.executable,
+                str(
+                    SUPPORT_ROOT
+                    / "web/tests/run_text_semantics_browser.py"
+                ),
+                "--core-root", str(library / "web"),
+                "--source-root", str(SUPPORT_ROOT),
+                "--fixture", "phase3",
+                "--node", str(library / "node/bin/node"),
+                "--build-script",
+                str(library / "ui/scripts/build-project.mjs"),
+            ], cwd=root, env=journey_env)
+            installed_phase3_browser_scenario = (
+                '"changed":true' in phase3_browser.stdout
+                and '"target":"mapped-error"' in phase3_browser.stdout
+                and '"target":"title-input"' in phase3_browser.stdout
+            )
+            if not installed_phase3_browser_scenario:
+                raise ValidationError(
+                    "installed exact Phase 3 browser scenario evidence is incomplete"
+                )
         custom_claimed = verification["claims"].get("custom_components") is True
         if custom_claimed and not component_abi_present:
             raise ValidationError("custom component claim has no installed ABI target/header")
@@ -708,6 +732,7 @@ def validate(
         "installed_web_same_source_imported_behavior": (
             not web_claimed or web_same_source_imported_behavior
         ),
+        "installed_phase3_browser_scenario": installed_phase3_browser_scenario,
         "installed_custom_cpp_component": not custom_claimed or custom_component_produced,
         "installed_cpp_component_template_selected": (
             not custom_claimed

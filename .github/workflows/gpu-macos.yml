@@ -146,6 +146,11 @@ jobs:
             --source-commit "$GITHUB_SHA" \
             --output "$RUNNER_TEMP/web-payload" \
             --json > "$RUNNER_TEMP/web-payload.json"
+          python3 web/tests/run_text_semantics_browser.py \
+            --core-root "$RUNNER_TEMP/web-payload" \
+            --source-root "$GITHUB_WORKSPACE" \
+            --fixture phase3 \
+            > "$RUNNER_TEMP/phase3-browser-evidence.json"
 
       - name: Verify renderer provenance and byte identity
         run: |
@@ -528,6 +533,7 @@ jobs:
             ${{ runner.temp }}/vellum-sterile-acceptance.tar.gz
             ${{ runner.temp }}/sterile-acceptance-bundle.json
             ${{ runner.temp }}/web-payload.json
+            ${{ runner.temp }}/phase3-browser-evidence.json
             ${{ runner.temp }}/release-trust.json
             ${{ runner.temp }}/immutable-release-preflight.json
             ${{ runner.temp }}/release-assets-verification.json

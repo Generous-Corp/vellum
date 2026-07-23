@@ -21,6 +21,8 @@ def main() -> int:
     parser.add_argument(
         "--fixture", choices=("text", "phase3"), default="text",
     )
+    parser.add_argument("--node", type=Path)
+    parser.add_argument("--build-script", type=Path)
     args = parser.parse_args()
     chrome = shutil.which("google-chrome")
     mac_chrome = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
@@ -28,9 +30,16 @@ def main() -> int:
         chrome = str(mac_chrome)
     if not chrome:
         raise SystemExit("Google Chrome is required")
-    node = shutil.which("node")
+    node = str(args.node.resolve()) if args.node else shutil.which("node")
     if not node:
         raise SystemExit("Node is required")
+    build_script = (
+        args.build_script.resolve()
+        if args.build_script
+        else args.source_root / "packages/vellum-ui/scripts/build-project.mjs"
+    )
+    if not build_script.is_file():
+        raise SystemExit(f"Vellum UI build script is missing: {build_script}")
 
     with tempfile.TemporaryDirectory(prefix="vellum-text-browser-") as temporary:
         root = Path(temporary)
@@ -53,19 +62,13 @@ def main() -> int:
             shutil.copytree(
                 args.source_root / "fixtures/authoring-phase3", app_root,
             )
-            package = app_root / "package.json"
-            manifest = json.loads(package.read_text(encoding="utf-8"))
-            manifest["dependencies"].pop("@vellum/ui")
-            package.write_text(
-                json.dumps(manifest, indent=2) + "\n", encoding="utf-8",
-            )
-            npm = shutil.which("npm")
-            if not npm:
-                raise SystemExit("npm is required for the exact Phase-3 fixture")
-            subprocess.run([
-                npm, "install", "--offline", "--ignore-scripts", "--no-audit",
-                "--no-fund", "--package-lock=false", "--prefix", str(app_root),
-            ], check=True)
+            modules = app_root / "node_modules/@vellum"
+            modules.mkdir(parents=True)
+            for name in ("pure-esm-root", "pure-esm-leaf"):
+                shutil.copytree(
+                    app_root / f"vendor/{name}",
+                    modules / f"fixture-{name}",
+                )
             entry = app_root / "src/App.tsx"
             scenario = app_root / "scenarios/phase3.json"
         else:
@@ -76,12 +79,17 @@ def main() -> int:
         environment = dict(os.environ)
         environment["VELLUM_BUILD_FORMAT"] = "esm"
         environment["VELLUM_PROJECT_ROOT"] = str(app_root)
-        subprocess.run([
+        built = subprocess.run([
             node,
-            str(args.source_root / "packages/vellum-ui/scripts/build-project.mjs"),
+            str(build_script),
             str(entry),
             str(root / "app.js"),
-        ], env=environment, check=True)
+        ], env=environment, text=True, capture_output=True, check=False)
+        if built.returncode:
+            raise SystemExit(
+                "browser fixture build failed:\n"
+                f"{built.stdout}{built.stderr}"
+            )
 
         received = threading.Event()
         evidence: dict[str, object] = {}
@@ -153,9 +161,11 @@ def main() -> int:
             if assertions != [
                 {"action": "assert-text", "target": "item-list", "passed": True},
                 {"action": "command", "target": "item.add", "passed": True},
-            ] or services != [{
-                "target": "open", "requested": "files", "supplied": True,
-            }] or not isinstance(throws, list) or len(throws) != 1 or \
+            ] or services != [
+                {"target": "open", "requested": "files", "supplied": True},
+                {"target": "copy", "requested": "clipboard", "supplied": True},
+                {"target": "docs", "requested": "open_url", "supplied": True},
+            ] or not isinstance(throws, list) or len(throws) != 1 or \
                     throws[0].get("target") != "mapped-error" or \
                     "vellum://app/src/App.tsx" not in json.dumps(throws[0]) or \
                     scroll != [{"id": "item-list", "direction": "vertical"}] or \
