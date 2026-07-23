@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vellum.dev/schema/dev-transcript-v1.schema.json",
+  "title": "Vellum development-loop transcript record v1",
+  "type": "object",
+  "required": ["schema", "sequence", "event", "data"],
+  "properties": {
+    "schema": {
+      "const": "vellum.dev.transcript.v1"
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "event": {
+      "enum": [
+        "session-started",
+        "build-finished",
+        "adapter-ready",
+        "adapter-failed",
+        "change-detected",
+        "reload-skipped",
+        "reload-completed",
+        "session-stopped"
+      ]
+    },
+    "data": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": false
+}

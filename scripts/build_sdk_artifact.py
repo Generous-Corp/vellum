@@ -485,6 +485,7 @@ def copy_payload(
     node_provenance: dict[str, str] | None = None,
 ) -> dict[str, object]:
     shutil.copy2(repo / "cli/vellum_cli.py", payload / "vellum_cli.py")
+    shutil.copy2(repo / "cli/vellum_dev.py", payload / "vellum_dev.py")
     shutil.copy2(repo / "cli/vellum_backend.py", payload / "vellum_backend.py")
     shutil.copy2(repo / "cli/vellum_manifest.py", payload / "vellum_manifest.py")
     shutil.copy2(repo / "cli/vellum_png.py", payload / "vellum_png.py")

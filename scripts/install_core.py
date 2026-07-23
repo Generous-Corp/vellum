@@ -48,6 +48,7 @@ SAFE_ROOTS = {
     "ui",
     "vellum_backend.py",
     "vellum_cli.py",
+    "vellum_dev.py",
     "vellum_manifest.py",
     "vellum_native_backend.py",
     "vellum_png.py",
@@ -449,7 +450,7 @@ def derived_capabilities(
     payload_records: dict[str, dict[str, object]],
     target: str,
 ) -> dict[str, object]:
-    if not {"vellum_manifest.py", "vellum_png.py"}.issubset(contents):
+    if not {"vellum_dev.py", "vellum_manifest.py", "vellum_png.py"}.issubset(contents):
         raise InstallError(
             "SDK artifact lacks application manifest or capture support"
         )

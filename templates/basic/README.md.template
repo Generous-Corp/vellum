@@ -7,6 +7,7 @@ Application behavior belongs in `src/`; generated design material belongs in
 ```sh
 vellum doctor --fix --require-target macos
 vellum build --target macos
+vellum dev --target macos
 vellum test --target macos
 vellum run --target macos
 vellum capture --scenario smoke --output artifacts/smoke.png
@@ -18,6 +19,7 @@ The optional browser lane requires Chrome:
 
 ```sh
 vellum build --target web
+vellum dev --target web
 vellum test --target web
 vellum run --target web
 vellum package --target web --output dist-web
@@ -25,6 +27,11 @@ vellum package --target web --output dist-web
 
 `run --target web` returns the exact finite local-server command for the static
 build; it does not leave a hidden background process.
+
+`dev` owns an interactive watch/rebuild/reload session and writes a versioned
+transcript under `.vellum/state/`. Native reload is a process restart (with
+continuity only for explicit `persistence = "state-v1"`); web reload is a
+full-page reload and currently resets in-memory state.
 
 `app.toml` is the sole editable application, target, capability, and packaging
 manifest. `framework.lock` pins the exact SDK artifact and JavaScript package

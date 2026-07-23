@@ -83,6 +83,7 @@ stable outer schema.
 |---|---:|---|
 | `create [--no-verify] [--run]` | yes | with a native SDK, builds and tests by default; `--run` launches |
 | `doctor [--fix]` | yes | reports backend availability |
+| `dev --target macos|web` | yes (supervisor) | watches, builds, and drives a target reload adapter; see [Development loop](dev.md) |
 | `import` / `reimport` | no | implemented by the installed `@vellum/design-ir` backend |
 | `build` / `run` | no | macOS 15.0+ arm64 GPU artifact builds/launches a real `.app`; finite `run --self-test` is available |
 | `test` / `capture` | no | macOS 15.0+ arm64 GPU artifact executes bounded scenarios, captures PNGs, and composes bounded capture matrices/montages |

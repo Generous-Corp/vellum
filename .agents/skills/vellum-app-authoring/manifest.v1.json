@@ -42,6 +42,12 @@
       "flags": ["--json", "--target", "--project"]
     },
     {
+      "step": "dev",
+      "kind": "cli",
+      "command": "dev",
+      "flags": ["--json", "--target", "--project", "--transcript"]
+    },
+    {
       "step": "run",
       "kind": "cli",
       "command": "run",

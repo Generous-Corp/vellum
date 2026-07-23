@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -29,6 +30,7 @@ build_component_modules = BACKEND_MODULE["build_component_modules"]
 component_sdk_root = BACKEND_MODULE["component_sdk_root"]
 build_app = BACKEND_MODULE["build_app"]
 BackendFailure = BACKEND_MODULE["BackendFailure"]
+command_result = BACKEND_MODULE["command_result"]
 
 
 def run(arguments: list[str], *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -109,6 +111,36 @@ class NativeBackendTests(unittest.TestCase):
             self.assertEqual(payload["schema"], "vellum.backend.result.v1")
             self.assertEqual(payload["status"], "unsupported_target")
             self.assertFalse(payload["ok"])
+
+    def test_dev_reload_gracefully_quits_then_relaunches_with_honest_continuity(self) -> None:
+        app = {"app": Path("/tmp/reload-proof.app")}
+        context = {
+            "application_id": "dev.vellum.reload-proof",
+            "capabilities": {"persistence": "state-v1"},
+        }
+        args = SimpleNamespace(
+            target="macos", no_build=True, self_test=False,
+            no_window=False, dev_reload=True,
+        )
+        completed = subprocess.CompletedProcess(["osascript"], 0, "", "")
+        with (
+            mock.patch.dict(
+                command_result.__globals__,
+                {"ensure_app": mock.Mock(return_value=app)},
+            ),
+            mock.patch.object(
+                command_result.__globals__["subprocess"], "run",
+                return_value=completed,
+            ) as stop,
+            mock.patch.dict(
+                command_result.__globals__,
+                {"run_checked": mock.Mock(return_value=completed)},
+            ),
+        ):
+            payload = command_result("run", args, context, Path("/tmp/sdk"))
+        self.assertEqual(payload["status"], "reloaded")
+        self.assertEqual(payload["data"]["continuity"], "persisted-state-v1")
+        self.assertIn('application id "dev.vellum.reload-proof"', stop.call_args.args[0][2])
 
     def test_entry_cannot_escape_project(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -208,6 +208,7 @@ vellum doctor --fix
 vellum import ./revision-a.source.json --source-type figma --as main
 vellum reimport --source ./revision-b.source.json --as main
 vellum build --target macos
+vellum dev --target macos
 vellum run --target macos
 vellum test
 vellum capture --scenario smoke --output artifacts/smoke.png
@@ -248,6 +249,9 @@ The accepted source contract, generated tree, ownership boundary, and conflict
 workflow are documented in [Import and reimport](docs/cli/import-reimport.md).
 The semantic interaction driver, offscreen capture path, and deterministic
 contact-sheet format are documented in [Interaction capture and montages](docs/cli/capture.md).
+The deterministic watch/build/reload supervisor, its evidence transcript, and
+native/web state-continuity limits are documented in
+[Development loop](docs/cli/dev.md).
 
 Every command accepts `--json` before or after the command and emits one stable
 `vellum.cli.result.v1` object. See [the CLI contract](docs/cli/contract.md).

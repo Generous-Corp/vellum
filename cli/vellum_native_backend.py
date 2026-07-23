@@ -555,9 +555,26 @@ def command_result(command: str, args: argparse.Namespace, context: dict[str, An
             return result(command, ok=True, status="self_test_passed", message="Native app self-test passed", data={
                 "target": SUPPORTED_TARGET, "app": str(app["app"]), "host_output": completed.stdout.strip(),
             })
+        if args.dev_reload:
+            script = f'tell application id {json.dumps(context["application_id"])} to quit'
+            stopped = subprocess.run(
+                ["osascript", "-e", script], text=True, capture_output=True, check=False
+            )
+            if stopped.returncode != 0:
+                raise BackendFailure(
+                    "Could not stop the running native app before hot reload: "
+                    + (stopped.stderr.strip() or stopped.stdout.strip() or "unknown osascript error"),
+                    status="reload_stop_failed",
+                )
         run_checked(["open", str(app["app"])])
-        return result(command, ok=True, status="launched", message=f"Launched {app['app']}", data={
+        status = "reloaded" if args.dev_reload else "launched"
+        return result(command, ok=True, status=status, message=f"{status.title()} {app['app']}", data={
             "target": SUPPORTED_TARGET, "app": str(app["app"]),
+            "continuity": (
+                "persisted-state-v1"
+                if args.dev_reload and context["capabilities"]["persistence"] == "state-v1"
+                else "none"
+            ),
         })
     if command == "test":
         app = ensure_app(context, sdk)
@@ -665,6 +682,7 @@ def parser(command: str) -> argparse.ArgumentParser:
         value.add_argument("--no-build", action="store_true")
         value.add_argument("--self-test", action="store_true")
         value.add_argument("--no-window", action="store_true")
+        value.add_argument("--dev-reload", action="store_true")
     if command in {"test", "capture"}:
         value.add_argument("--scenario")
     if command in {"capture", "package"}:

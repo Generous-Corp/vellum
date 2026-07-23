@@ -51,6 +51,7 @@ def _build_verified_fixture(
     payload = root / f"{fixture_name}-payload"
     payload.mkdir()
     shutil.copy2(REPO / "cli/vellum_cli.py", payload / "vellum_cli.py")
+    shutil.copy2(REPO / "cli/vellum_dev.py", payload / "vellum_dev.py")
     shutil.copy2(REPO / "cli/vellum_backend.py", payload / "vellum_backend.py")
     shutil.copy2(REPO / "cli/vellum_manifest.py", payload / "vellum_manifest.py")
     shutil.copy2(REPO / "cli/vellum_png.py", payload / "vellum_png.py")

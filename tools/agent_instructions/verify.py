@@ -16,7 +16,7 @@ from typing import Any
 MANIFEST_RELATIVE = Path(".agents/skills/vellum-app-authoring/manifest.v1.json")
 EXPECTED_SCHEMA = "vellum.agent-instructions.v1"
 EXPECTED_LIFECYCLE = (
-    "create", "doctor", "import", "reimport", "build", "run",
+    "create", "doctor", "import", "reimport", "build", "dev", "run",
     "test", "capture", "package",
 )
 EXPECTED_TOOL_OWNED = {

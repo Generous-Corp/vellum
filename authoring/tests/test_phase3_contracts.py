@@ -153,6 +153,7 @@ class Phase3ContractsTest(unittest.TestCase):
     def test_all_schemas_are_offline_json_and_versioned(self) -> None:
         expected = {
             "authoring-host-v2.schema.json": "authoring-host-v2.schema.json",
+            "dev-transcript-v1.schema.json": "dev-transcript-v1.schema.json",
             "events-v2.schema.json": "events-v2.schema.json",
             "services-v1.schema.json": "services-v1.schema.json",
             "scenario-v2.schema.json": "scenario-v2.schema.json",

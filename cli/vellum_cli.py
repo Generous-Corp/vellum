@@ -15,6 +15,8 @@ import subprocess
 import sys
 from typing import Any, Iterable
 
+import vellum_dev
+
 from vellum_manifest import (
     APP_MANIFEST_NAME, LOCK_NAME, LOCK_SCHEMA, ManifestError,
     load_app_manifest, load_components_manifest,
@@ -917,6 +919,21 @@ def doctor(args: argparse.Namespace) -> dict[str, Any]:
     )
 
 
+def dev_project(args: argparse.Namespace) -> dict[str, Any]:
+    root, lock = load_project(args.project)
+    sdk = load_sdk_metadata()
+    validate_project_sdk(lock, sdk)
+    try:
+        return vellum_dev.run(
+            args, root, lock, sdk, invoke_backend, result,
+            unavailable_exit=EXIT_UNAVAILABLE,
+        )
+    except vellum_dev.DevError as error:
+        raise CliFailure(
+            str(error), status=error.status, exit_code=error.exit_code
+        ) from error
+
+
 def backend_command(args: argparse.Namespace, forwarded: list[str]) -> dict[str, Any]:
     root, lock = load_project(args.project)
     sdk = load_sdk_metadata()
@@ -1021,6 +1038,27 @@ def parser() -> argparse.ArgumentParser:
         help="fail unless the installed SDK provides the complete requested application lane",
     )
 
+    dev = commands.add_parser("dev", help="watch portable app sources and reload a native or web app")
+    dev.add_argument("--project")
+    dev.add_argument("--target", choices=["macos", "web"], default="macos")
+    dev.add_argument("--transcript", help="write the versioned JSONL dev-loop transcript here")
+    dev.add_argument("--poll-interval", type=float, default=0.2, help=argparse.SUPPRESS)
+    dev.add_argument("--debounce", type=float, default=0.1, help=argparse.SUPPRESS)
+    dev.add_argument("--port", type=int, default=0, help="web dev-server port; 0 chooses a free port")
+    dev.add_argument("--no-open", action="store_true", help="do not open the browser for a web session")
+    dev.add_argument(
+        "--test-mode", action="store_true",
+        help="verify each rebuild through the finite no-window runtime adapter",
+    )
+    dev.add_argument(
+        "--max-reloads", type=int,
+        help="stop after this many successful reloads (required in test mode)",
+    )
+    dev.add_argument(
+        "--timeout", type=float,
+        help="stop with an error after this many seconds (required in test mode)",
+    )
+
     backend_specs = {
         "import": [
             ("source", {}),
@@ -1082,6 +1120,33 @@ def main(argv: Iterable[str] | None = None) -> int:
             payload = create_project(args)
         elif args.command == "doctor":
             payload = doctor(args)
+        elif args.command == "dev":
+            if args.poll_interval <= 0 or args.debounce < 0:
+                raise CliFailure(
+                    "dev polling values must be positive.",
+                    status="invalid_arguments", exit_code=EXIT_USAGE,
+                )
+            if args.max_reloads is not None and args.max_reloads < 1:
+                raise CliFailure(
+                    "--max-reloads must be at least 1.",
+                    status="invalid_arguments", exit_code=EXIT_USAGE,
+                )
+            if args.timeout is not None and args.timeout <= 0:
+                raise CliFailure(
+                    "--timeout must be positive.",
+                    status="invalid_arguments", exit_code=EXIT_USAGE,
+                )
+            if not 0 <= args.port <= 65535:
+                raise CliFailure(
+                    "--port must be between 0 and 65535.",
+                    status="invalid_arguments", exit_code=EXIT_USAGE,
+                )
+            if args.test_mode and (args.max_reloads is None or args.timeout is None):
+                raise CliFailure(
+                    "--test-mode requires bounded --max-reloads and --timeout.",
+                    status="invalid_arguments", exit_code=EXIT_USAGE,
+                )
+            payload = dev_project(args)
         else:
             payload = backend_command(args, forwarded_arguments(args))
         emit(payload, json_output=args.json)
