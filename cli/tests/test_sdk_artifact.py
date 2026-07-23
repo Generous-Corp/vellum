@@ -119,7 +119,11 @@ class SdkArtifactTests(unittest.TestCase):
                          version="v22.16.0", target="darwin-arm64")
 
     def test_native_backend_resolves_only_sdk_local_node(self) -> None:
-        module = runpy.run_path(str(REPO / "cli/vellum_native_backend.py"))
+        sys.path.insert(0, str(REPO / "cli"))
+        try:
+            module = runpy.run_path(str(REPO / "cli/vellum_native_backend.py"))
+        finally:
+            sys.path.pop(0)
         sdk_node = module["sdk_node"]
         backend_failure = module["BackendFailure"]
         with tempfile.TemporaryDirectory() as temporary:
