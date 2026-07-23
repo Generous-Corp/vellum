@@ -9,6 +9,18 @@ in the active inventory.
 Vellum does not include audio, MIDI, DSP, plug-in formats, plug-in hosting, or
 audio-device dependencies.
 
+## Installed authoring tool dependency
+
+The macOS arm64 GPU SDK carries esbuild 0.28.1 and its matching
+`@esbuild/darwin-arm64` binary so a created application can bundle TS, JS, and
+JSX without installing project-local packages. Both packages are MIT licensed.
+Their exact npm tarball integrities are locked by
+`packages/vellum-ui/package-lock.json` and repeated in
+`provenance/third-party-lock.json`. The SDK builder installs them with
+`npm ci --ignore-scripts` into a temporary directory, copies only these two
+packages into the payload, and inventories the resulting installed bytes by
+SHA-256 in `metadata.json`.
+
 ## Active renderer dependency
 
 The macOS arm64 GPU proof uses one byte-locked prebuilt renderer artifact:

@@ -130,6 +130,8 @@ def artifact_identity(install_manifest: dict[str, Any]) -> dict[str, Any]:
 
 
 def create_project(args: argparse.Namespace) -> dict[str, Any]:
+    if args.run and args.no_verify:
+        raise CliFailure("--run cannot be combined with --no-verify.", status="invalid_arguments", exit_code=EXIT_USAGE)
     slug = slugify(args.name)
     destination = Path(args.directory or slug).expanduser().resolve()
     if destination.exists() and (not destination.is_dir() or any(destination.iterdir())):
@@ -141,6 +143,16 @@ def create_project(args: argparse.Namespace) -> dict[str, Any]:
     source = template_root() / args.template
     if not source.is_dir():
         raise CliFailure(f"Unknown template: {args.template}", status="unknown_template", exit_code=EXIT_USAGE)
+    sdk = load_sdk_metadata()
+    if args.run and (
+        sdk is None
+        or not all(sdk[1]["capabilities"]["commands"].get(name) for name in ("build", "run", "test"))
+    ):
+        raise CliFailure(
+            "--run requires an installed SDK with native build, test, and run capabilities.",
+            status="capability_unavailable",
+            exit_code=EXIT_UNAVAILABLE,
+        )
 
     sdk = load_sdk_metadata()
     framework_version = sdk[1]["framework_version"] if sdk else FRAMEWORK_VERSION
@@ -165,6 +177,56 @@ def create_project(args: argparse.Namespace) -> dict[str, Any]:
         render_template(template, destination / output_relative, replacements)
         created.append(output_relative.as_posix())
 
+    validation: dict[str, Any] = {
+        "status": "not_available",
+        "commands": [],
+        "detail": "No installed native SDK capability was available; scaffold only.",
+    }
+    if not args.no_verify and sdk is not None:
+        lock = json.loads((destination / LOCK_NAME).read_text(encoding="utf-8"))
+        validate_project_sdk(lock, sdk)
+        capabilities = sdk[1]["capabilities"]["commands"]
+        if capabilities.get("build") and capabilities.get("test"):
+            completed_commands: list[dict[str, Any]] = []
+            for command, forwarded in (("build", ["--target", "macos"]), ("test", ["--scenario", "smoke"])):
+                backend_payload, return_code = invoke_backend(
+                    command, destination, lock, forwarded
+                )
+                completed_commands.append({"command": command, "status": backend_payload.get("status")})
+                if return_code != 0 or not backend_payload.get("ok"):
+                    return result(
+                        "create",
+                        ok=False,
+                        status="create_validation_failed",
+                        message=f"Created the project, but native '{command}' validation failed.",
+                        data={
+                            "project_root": str(destination),
+                            "project_id": project_id,
+                            "files": created,
+                            "validation": {"status": "failed", "commands": completed_commands},
+                            "backend": backend_payload,
+                        },
+                        diagnostics=backend_payload.get("diagnostics", []),
+                    )
+            validation = {"status": "passed", "commands": completed_commands}
+            if args.run:
+                backend_payload, return_code = invoke_backend(
+                    "run", destination, lock, ["--target", "macos", "--no-build"]
+                )
+                validation["commands"].append({"command": "run", "status": backend_payload.get("status")})
+                if return_code != 0 or not backend_payload.get("ok"):
+                    return result(
+                        "create", ok=False, status="create_run_failed",
+                        message="Created and validated the project, but launch failed.",
+                        data={"project_root": str(destination), "validation": validation, "backend": backend_payload},
+                        diagnostics=backend_payload.get("diagnostics", []),
+                    )
+        elif args.run:
+            raise CliFailure(
+                "--run requires an installed SDK with native build and run capabilities.",
+                status="capability_unavailable",
+                exit_code=EXIT_UNAVAILABLE,
+            )
     return result(
         "create",
         ok=True,
@@ -176,6 +238,7 @@ def create_project(args: argparse.Namespace) -> dict[str, Any]:
             "template": args.template,
             "artifact": installed_identity,
             "files": created,
+            "validation": validation,
             "next_steps": [f"cd {destination}", "vellum doctor", "vellum build"],
         },
     )
@@ -484,10 +547,24 @@ def backend_command(args: argparse.Namespace, forwarded: list[str]) -> dict[str,
             status="capability_unavailable",
             exit_code=EXIT_UNAVAILABLE,
         )
+    backend_payload, return_code = invoke_backend(args.command, root, lock, forwarded)
+    return result(
+        args.command,
+        ok=return_code == 0 and bool(backend_payload.get("ok")),
+        status=str(backend_payload.get("status", "backend_failed")),
+        message=str(backend_payload.get("message", f"Backend completed '{args.command}'.")),
+        data={"project_root": str(root), "project_id": lock["project"]["id"], "backend": backend_payload},
+        diagnostics=backend_payload.get("diagnostics", []),
+    )
+
+
+def invoke_backend(
+    command: str, root: Path, lock: dict[str, Any], forwarded: list[str]
+) -> tuple[dict[str, Any], int]:
     backend = locate_backend()
     if backend is None:
         raise CliFailure(
-            f"'{args.command}' needs the Vellum SDK backend, which is not installed in this extraction milestone.",
+            f"'{command}' needs the Vellum SDK backend, which is not installed in this extraction milestone.",
             status="capability_unavailable",
             exit_code=EXIT_UNAVAILABLE,
             diagnostics=[{
@@ -497,7 +574,7 @@ def backend_command(args: argparse.Namespace, forwarded: list[str]) -> dict[str,
             }],
         )
     invocation = [
-        str(backend), args.command,
+        str(backend), command,
         "--project", str(root),
         "--json",
         "--framework-version", lock["framework"]["version"],
@@ -516,7 +593,7 @@ def backend_command(args: argparse.Namespace, forwarded: list[str]) -> dict[str,
         backend_payload = json.loads(completed.stdout)
     except json.JSONDecodeError as error:
         raise CliFailure(
-            f"Backend returned invalid JSON for '{args.command}'.",
+            f"Backend returned invalid JSON for '{command}'.",
             status="backend_protocol_error",
             exit_code=EXIT_BACKEND,
             diagnostics=[{"level": "error", "code": "invalid_backend_json", "message": completed.stderr.strip() or str(error)}],
@@ -526,14 +603,9 @@ def backend_command(args: argparse.Namespace, forwarded: list[str]) -> dict[str,
     backend_diagnostics = backend_payload.get("diagnostics", [])
     if not isinstance(backend_diagnostics, list) or not all(isinstance(item, dict) for item in backend_diagnostics):
         raise CliFailure("Backend diagnostics must be an array of objects.", status="backend_protocol_error", exit_code=EXIT_BACKEND)
-    return result(
-        args.command,
-        ok=completed.returncode == 0 and bool(backend_payload.get("ok")),
-        status=str(backend_payload.get("status", "backend_failed")),
-        message=str(backend_payload.get("message", f"Backend completed '{args.command}'.")),
-        data={"project_root": str(root), "project_id": lock["project"]["id"], "backend": backend_payload},
-        diagnostics=backend_diagnostics,
-    )
+    if backend_payload.get("schema") not in {None, "vellum.backend.result.v1"}:
+        raise CliFailure("Backend response has an unsupported schema.", status="backend_protocol_error", exit_code=EXIT_BACKEND)
+    return backend_payload, completed.returncode
 
 
 def parser() -> argparse.ArgumentParser:
@@ -546,6 +618,8 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("name")
     create.add_argument("--directory", "-d")
     create.add_argument("--template", default="basic")
+    create.add_argument("--no-verify", action="store_true", help="scaffold without installed native build/test proof")
+    create.add_argument("--run", action="store_true", help="launch after the default build/test proof")
 
     doctor_parser = commands.add_parser("doctor", help="inspect authoring and SDK prerequisites")
     doctor_parser.add_argument("--fix", action="store_true", help="create safe project-local cache/state directories")
@@ -562,7 +636,12 @@ def parser() -> argparse.ArgumentParser:
             ("--as", {"dest": "source_key", "default": "main"}),
         ],
         "build": [("--target", {"default": "macos"})],
-        "run": [("--target", {"default": "macos"}), ("--no-build", {"action": "store_true"})],
+        "run": [
+            ("--target", {"default": "macos"}),
+            ("--no-build", {"action": "store_true"}),
+            ("--self-test", {"action": "store_true"}),
+            ("--no-window", {"action": "store_true"}),
+        ],
         "test": [("--scenario", {})],
         "capture": [("--scenario", {}), ("--output", {}), ("--target", {"default": "macos"})],
         "package": [("--target", {"default": "macos"}), ("--output", {})],

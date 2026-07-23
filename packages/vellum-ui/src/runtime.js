@@ -138,6 +138,72 @@ export const Button = primitive('button');
 export const Image = primitive('image');
 export const Canvas = primitive('canvas');
 
+function designToken(document, value) {
+    if (typeof value !== 'string' || !value.startsWith('{') || !value.endsWith('}')) return value;
+    const reference = value.slice(1, -1);
+    const namespace = document?.source?.namespace;
+    const token = document?.tokens?.[reference] ??
+        (namespace ? document?.tokens?.[`${namespace}.${reference}`] : undefined);
+    return token?.$value ?? value;
+}
+
+function designStyle(document, node, root) {
+    const properties = node.properties ?? {};
+    const layout = properties.layout ?? {};
+    const paint = properties.paint ?? {};
+    const text = properties.text ?? {};
+    const style = {};
+    if (root) {
+        style.width = 640;
+        style.height = 400;
+        style.padding = 24;
+    } else if (node.kind === 'view') {
+        style.height = 112;
+    }
+    if (layout.direction === 'row') style.direction = 'horizontal';
+    if (typeof layout.gap === 'number') style.gap = layout.gap;
+    if (typeof layout.padding === 'number') style.padding = layout.padding;
+    if (typeof paint.backgroundColor === 'string') {
+        style.backgroundColor = designToken(document, paint.backgroundColor);
+    }
+    if (typeof paint.borderRadius === 'number') style.borderRadius = paint.borderRadius;
+    if (typeof text.fontSize === 'number') style.fontSize = text.fontSize;
+    if (typeof paint.color === 'string') style.color = designToken(document, paint.color);
+    if (node.kind === 'button') {
+        style.width ??= 180;
+        style.height ??= 48;
+    }
+    return style;
+}
+
+function designElement(document, node, actions, root = false) {
+    if (!node || typeof node !== 'object' || typeof node.id !== 'string' ||
+        !Array.isArray(node.children)) {
+        throw new TypeError('Design requires normalized DesignIR nodes');
+    }
+    const type = node.kind === 'button' ? 'button'
+        : node.kind === 'text' ? 'text'
+            : node.properties?.layout?.display === 'flex' || root ? 'stack' : 'view';
+    const properties = {
+        id: node.id,
+        style: designStyle(document, node, root),
+        children: node.kind === 'text' || node.kind === 'button'
+            ? node.text ?? node.name ?? ''
+            : node.children.map((child) => designElement(document, child, actions)),
+    };
+    const action = actions?.[node.id];
+    if (action !== undefined) properties.onPress = action;
+    return jsx(type, properties);
+}
+
+export function Design({ document, actions = {} }) {
+    if (!document || typeof document !== 'object' || !document.root ||
+        typeof actions !== 'object' || actions === null || Array.isArray(actions)) {
+        throw new TypeError('Design requires a normalized document and an action map');
+    }
+    return designElement(document, document.root, actions, true);
+}
+
 function activeHook(kind) {
     if (renderingRuntime === null || renderingRuntime.renderState === null ||
         renderingRuntime.renderState.frameStack.length === 0) {

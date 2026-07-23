@@ -1,6 +1,7 @@
 export {
     Button,
     Canvas,
+    Design,
     Fragment,
     Image,
     Stack,

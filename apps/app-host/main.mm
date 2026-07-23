@@ -29,12 +29,24 @@ struct Options final {
     std::filesystem::path bundle;
     std::filesystem::path capture;
     std::vector<std::string> presses;
+    std::optional<std::uint32_t> expected_width;
+    std::optional<std::uint32_t> expected_height;
     bool no_window = false;
 };
 
 void usage() {
     std::cerr << "usage: vellum-app-host [--bundle FILE] [--self-test|--no-window] "
-                 "[--press NODE_ID] [--capture PNG]\n";
+                 "[--press NODE_ID] [--expect-width N --expect-height N] [--capture PNG]\n";
+}
+
+std::optional<std::uint32_t> positive_dimension(std::string_view text) {
+    try {
+        const auto value = std::stoul(std::string(text));
+        if (value == 0U || value > 16384U) return std::nullopt;
+        return static_cast<std::uint32_t>(value);
+    } catch (...) {
+        return std::nullopt;
+    }
 }
 
 std::optional<Options> parse_options(int argc, const char* argv[]) {
@@ -44,11 +56,20 @@ std::optional<Options> parse_options(int argc, const char* argv[]) {
         if (argument == "--self-test" || argument == "--no-window") {
             options.no_window = true;
         } else if (argument == "--bundle" || argument == "--capture" ||
-                   argument == "--press") {
+                   argument == "--press" || argument == "--expect-width" ||
+                   argument == "--expect-height") {
             if (++index >= argc) return std::nullopt;
             if (argument == "--bundle") options.bundle = argv[index];
             if (argument == "--capture") options.capture = argv[index];
             if (argument == "--press") options.presses.emplace_back(argv[index]);
+            if (argument == "--expect-width") {
+                options.expected_width = positive_dimension(argv[index]);
+                if (!options.expected_width) return std::nullopt;
+            }
+            if (argument == "--expect-height") {
+                options.expected_height = positive_dimension(argv[index]);
+                if (!options.expected_height) return std::nullopt;
+            }
         } else {
             return std::nullopt;
         }
@@ -149,6 +170,12 @@ int run_headless(const Options& options, std::string_view bundle) {
         }
         const auto width = static_cast<std::uint32_t>(rendered.scene.width);
         const auto height = static_cast<std::uint32_t>(rendered.scene.height);
+        if ((options.expected_width && *options.expected_width != width) ||
+            (options.expected_height && *options.expected_height != height)) {
+            std::cerr << "rendered viewport " << width << 'x' << height
+                      << " does not match scenario viewport\n";
+            return 1;
+        }
         auto surface = SkiaDawnSurface::create(
             {.width = width, .height = height, .scale = 1.0F}, &error);
         if (!surface || !validate_gpu(*surface, false, &error) ||
@@ -159,10 +186,17 @@ int run_headless(const Options& options, std::string_view bundle) {
         std::vector<std::uint8_t> rgba;
         std::uint32_t pixel_width = 0;
         std::uint32_t pixel_height = 0;
-        if (!surface->capture_rgba(rgba, pixel_width, pixel_height, &error) ||
-            !vellum::graphics::passes_content_floor(
-                vellum::graphics::analyze_capture_rgba(rgba, pixel_width, pixel_height))) {
-            std::cerr << (error.empty() ? "rendered frame failed content floor" : error) << '\n';
+        if (!surface->capture_rgba(rgba, pixel_width, pixel_height, &error)) {
+            std::cerr << error << '\n';
+            return 1;
+        }
+        const auto stats = vellum::graphics::analyze_capture_rgba(
+            rgba, pixel_width, pixel_height);
+        if (!vellum::graphics::passes_content_floor(stats)) {
+            std::cerr << "rendered frame failed content floor: colors="
+                      << stats.unique_colors << " stddev="
+                      << stats.luminance_standard_deviation << " content="
+                      << stats.non_background_pixels << '\n';
             return 1;
         }
         std::size_t png_bytes = 0;

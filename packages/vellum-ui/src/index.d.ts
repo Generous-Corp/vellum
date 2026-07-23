@@ -52,6 +52,25 @@ export declare const Button: Component;
 export declare const Image: Component;
 export declare const Canvas: Component;
 
+export interface DesignNode {
+    id: string;
+    kind: string;
+    name?: string;
+    text?: string;
+    properties: Record<string, JsonValue>;
+    children: DesignNode[];
+}
+export interface DesignDocument {
+    source?: { namespace?: string };
+    root: DesignNode;
+    tokens?: Record<string, { $value?: JsonValue }>;
+}
+export interface DesignProps {
+    document: DesignDocument;
+    actions?: Record<string, EventHandler>;
+}
+export declare function Design(properties: DesignProps): VellumElement;
+
 export interface AppOptions<Model extends JsonValue = JsonValue> {
     id?: string;
     stateVersion?: string;

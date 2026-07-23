@@ -160,6 +160,40 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
         if active_revision != "palette-board-b":
             raise ValidationError("installed CLI reimport did not advance the active revision")
 
+        native_enabled = verification["claims"]["gpu_renderer"] is True
+        native_results: dict[str, dict[str, object]] = {}
+        native_capture = project / "artifacts/installed-proof.png"
+        native_package = project / "dist/sterile-artifact-app.app"
+        imported_bundle_contains_design = False
+        if native_enabled:
+            for name, arguments in {
+                "build": ["build"],
+                "run": ["run", "--self-test", "--no-build"],
+                "test": ["test", "--scenario", "smoke"],
+                "capture": [
+                    "capture", "--scenario", "smoke", "--output",
+                    "artifacts/installed-proof.png",
+                ],
+                "package": ["package", "--output", "dist"],
+            }.items():
+                native_results[name] = json.loads(run([
+                    str(prefix / "bin/vellum"), *arguments, "--json",
+                ], cwd=project).stdout)
+            if any(not value.get("ok") for value in native_results.values()):
+                raise ValidationError("installed native CLI journey did not complete")
+            native_bundle = project / ".vellum/build/macos/sterile-artifact-app.app/Contents/Resources/app.js"
+            imported_bundle_contains_design = (
+                native_bundle.is_file()
+                and "Palette Board" in native_bundle.read_text(encoding="utf-8")
+                and "main/app-root" in native_bundle.read_text(encoding="utf-8")
+            )
+            if not imported_bundle_contains_design:
+                raise ValidationError("installed native app did not embed the imported DesignIR")
+            if (not native_capture.is_file() or native_capture.read_bytes()[:4] != b"\x89PNG"):
+                raise ValidationError("installed native capture did not produce a PNG")
+            if not (native_package / "Contents/MacOS/sterile-artifact-app").is_file():
+                raise ValidationError("installed native package did not produce a runnable .app")
+
     return {
         "schema": "vellum.installed-sdk-validation.v1",
         "ok": True,
@@ -189,6 +223,16 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
             "installed_cli_import": imported.get("status") == "imported",
             "installed_cli_reimport": reimported.get("status") == "reimported",
             "active_reimport_revision": active_revision == "palette-board-b",
+            "native_capability_claim_consistent": all(
+                verification["claims"]["commands"][name] is native_enabled
+                for name in ("build", "run", "test", "capture", "package")
+            ),
+            "installed_native_build": not native_enabled or native_results["build"]["status"] == "built",
+            "installed_native_finite_run": not native_enabled or native_results["run"]["status"] == "self_test_passed",
+            "installed_native_scenario": not native_enabled or native_results["test"]["status"] == "tests_passed",
+            "installed_imported_design_bundle": not native_enabled or imported_bundle_contains_design,
+            "installed_native_capture": not native_enabled or native_capture.is_file(),
+            "installed_native_package": not native_enabled or native_package.is_dir(),
         },
     }
 

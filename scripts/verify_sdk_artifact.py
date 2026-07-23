@@ -101,6 +101,8 @@ def validate_ui_payload(contents: dict[str, bytes]) -> bool:
     required = {
         "ui/package.json", "ui/package-lock.json", "ui/src/index.js",
         "ui/node_modules/esbuild/package.json",
+        "ui/node_modules/@esbuild/darwin-arm64/package.json",
+        "ui/node_modules/@esbuild/darwin-arm64/bin/esbuild",
         "ui/node_modules/typescript/package.json",
     }
     if not required.issubset(contents):
@@ -134,7 +136,14 @@ def derived_capabilities(contents: dict[str, bytes]) -> dict[str, object]:
     ui_runtime = validate_ui_payload(contents)
     import_backend = "design-ir/bin/vellum-backend.js" in contents
     native_backend = "vellum_native_backend.py" in contents
-    native_ready = gpu_renderer and authoring_runtime and ui_runtime and native_backend
+    native_host = all(path in contents for path in (
+        "sdk/bin/vellum-app-host",
+        "sdk/lib/libvellum-authoring.dylib",
+        "sdk/lib/libvellum-gpu.dylib",
+    ))
+    native_ready = (
+        gpu_renderer and authoring_runtime and ui_runtime and native_backend and native_host
+    )
     commands = {name: False for name in COMMANDS}
     commands["import"] = import_backend
     commands["reimport"] = import_backend
@@ -251,6 +260,8 @@ def verify(archive: Path, checksums: Path) -> dict[str, object]:
             raise VerificationError("SDK artifact capability claims do not match installed payloads")
         if capabilities["commands"]["import"] is not True or capabilities["commands"]["reimport"] is not True:
             raise VerificationError("SDK artifact must expose its packaged import/reimport backend")
+        if capabilities["gpu_renderer"] and metadata["target"] != "darwin-arm64":
+            raise VerificationError("native GPU application capability is currently darwin-arm64 only")
 
     return {
         "schema": "vellum.sdk-artifact-verification.v1",

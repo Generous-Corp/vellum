@@ -1,0 +1,85 @@
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+
+
+REPO = Path(__file__).resolve().parents[2]
+CLI = REPO / "cli/vellum_cli.py"
+BACKEND = REPO / "cli/vellum_native_backend.py"
+
+
+def run(arguments: list[str], *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        arguments,
+        cwd=REPO,
+        text=True,
+        capture_output=True,
+        check=False,
+        env={**os.environ, **(env or {})},
+    )
+
+
+def fake_gpu_sdk(root: Path) -> Path:
+    sdk = root / "sdk"
+    sdk.mkdir()
+    (sdk / "metadata.json").write_text(json.dumps({
+        "schema": "vellum.sdk-artifact.v1",
+        "target": "darwin-arm64",
+        "capabilities": {"gpu_renderer": True},
+    }), encoding="utf-8")
+    return sdk
+
+
+class NativeBackendTests(unittest.TestCase):
+    def create_project(self, root: Path) -> Path:
+        project = root / "application"
+        completed = run([sys.executable, str(CLI), "create", "Native Test", "-d", str(project), "--json"])
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        return project
+
+    def test_unsupported_target_fails_with_stable_backend_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = self.create_project(root)
+            completed = run([
+                sys.executable, str(BACKEND), "build", "--project", str(project),
+                "--json", "--target", "web",
+            ], env={"VELLUM_SDK_ROOT": str(fake_gpu_sdk(root))})
+            self.assertEqual(completed.returncode, 4)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(set(payload), {
+                "schema", "command", "ok", "status", "message", "data", "diagnostics"
+            })
+            self.assertEqual(payload["schema"], "vellum.backend.result.v1")
+            self.assertEqual(payload["status"], "unsupported_target")
+            self.assertFalse(payload["ok"])
+
+    def test_entry_cannot_escape_project(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = self.create_project(root)
+            descriptor = json.loads((project / "vellum.project.json").read_text())
+            descriptor["entry"] = "../outside.tsx"
+            (project / "vellum.project.json").write_text(json.dumps(descriptor), encoding="utf-8")
+            completed = run([
+                sys.executable, str(BACKEND), "build", "--project", str(project), "--json",
+            ], env={"VELLUM_SDK_ROOT": str(fake_gpu_sdk(root))})
+            self.assertEqual(completed.returncode, 1)
+            self.assertEqual(json.loads(completed.stdout)["status"], "invalid_project")
+
+    def test_argument_errors_remain_json(self) -> None:
+        completed = run([sys.executable, str(BACKEND), "build", "--json"])
+        self.assertEqual(completed.returncode, 2)
+        payload = json.loads(completed.stdout)
+        self.assertEqual(payload["schema"], "vellum.backend.result.v1")
+        self.assertEqual(payload["status"], "invalid_arguments")
+
+
+if __name__ == "__main__":
+    unittest.main()

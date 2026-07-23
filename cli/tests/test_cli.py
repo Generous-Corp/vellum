@@ -52,6 +52,7 @@ class CliTests(unittest.TestCase):
                 Path("design/ir/design-ir.json"),
                 Path("ui/generated/Home.generated.tsx"),
                 Path("src/App.tsx"),
+                Path("src/main.tsx"),
                 Path("native/README.md"),
                 Path("tests/scenarios/smoke.json"),
                 Path("packaging/vellum.package.json"),
@@ -75,6 +76,14 @@ class CliTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 3)
             self.assertEqual(json.loads(completed.stdout)["status"], "destination_not_empty")
             self.assertEqual((destination / "owned.txt").read_text(), "keep")
+
+    def test_create_run_fails_honestly_without_native_sdk(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary) / "app"
+            completed = invoke("create", "Cannot Run", "-d", str(destination), "--run", "--json")
+            self.assertEqual(completed.returncode, 4)
+            self.assertEqual(json.loads(completed.stdout)["status"], "capability_unavailable")
+            self.assertFalse(destination.exists())
 
     def test_create_refuses_file_destination_without_traceback(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -159,6 +168,28 @@ class CliTests(unittest.TestCase):
                     "--target", "web",
                 ],
             )
+
+    def test_run_forwards_finite_no_window_modes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root / "app"
+            self.assertEqual(invoke("create", "Backend", "-d", str(project)).returncode, 0)
+            backend = root / "vellum-backend"
+            backend.write_text(
+                f"#!{sys.executable}\n"
+                "import json, sys\n"
+                "print(json.dumps({'schema':'vellum.backend.result.v1','ok':True,'status':'self_test_passed','message':'ok','data':{'argv':sys.argv[1:]},'diagnostics':[]}))\n",
+                encoding="utf-8",
+            )
+            backend.chmod(0o755)
+            completed = invoke(
+                "run", "--self-test", "--no-window", "--no-build", "--json",
+                cwd=project,
+                env={"VELLUM_BACKEND": str(backend)},
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            forwarded = json.loads(completed.stdout)["data"]["backend"]["data"]["argv"]
+            self.assertEqual(forwarded[-3:], ["--no-build", "--self-test", "--no-window"])
 
     def test_invalid_lock_fails_before_backend_discovery(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

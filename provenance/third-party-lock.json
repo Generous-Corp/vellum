@@ -8,6 +8,17 @@
       "license": "multiple; see NOTICE.md and runtime_toolchain_dependencies",
       "sha256": "13b0e9818c3b05db661af85cb1e2bf2ef10e30d468b81351dd90295237d17734",
       "surface": "byte-locked build input statically linked into the optional installed vellum-gpu shared library; source association and exhaustive legal inventory remain release-blocked"
+    },
+    {
+      "name": "esbuild and @esbuild/darwin-arm64",
+      "version": "0.28.1",
+      "license": "MIT",
+      "source": "https://github.com/evanw/esbuild",
+      "npm_integrity": {
+        "esbuild": "sha512-HrJrvZv5ayxBzPfwphOoNzkzOIIlifzk0KJrGK2c8R4+LKpMtpYLQeUdjnwjWv/LZlkH2laZk+4w78pi99D4Vw==",
+        "@esbuild/darwin-arm64": "sha512-TZbWkQY7kvTAXbXUT7uVACR5cMHsDiSz9z7ZKAX/RTq/WJEk3QyRr0wZpNhBDX+/0CtdqUIJlOiodQcta6tY3Q=="
+      },
+      "surface": "redistributed in the optional macOS arm64 SDK as the installed TS/JS/JSX application bundler and platform binary"
     }
   ],
   "runtime_toolchain_dependencies": {

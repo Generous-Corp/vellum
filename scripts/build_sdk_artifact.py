@@ -4,7 +4,8 @@
 The archive is the installation boundary: it contains the authoring CLI,
 DesignIR import backend, SDK metadata, and a relocatable CMake install tree.
 An explicit pinned-Skia mode additionally composes the GPU/authoring runtime,
-the TypeScript UI package, and a native backend when that implementation exists.
+the generic native application host, the TypeScript UI package, and the native
+CLI backend when every required payload is present.
 """
 
 from __future__ import annotations
@@ -116,7 +117,14 @@ def derive_capabilities(payload: Path, install_tree: Path) -> dict[str, object]:
         "ui/node_modules/typescript/package.json",
     ))
     native_backend = (payload / "vellum_native_backend.py").is_file()
-    native_ready = gpu_renderer and authoring_runtime and ui_runtime and native_backend
+    native_host = all((install_tree / path).is_file() for path in (
+        "bin/vellum-app-host",
+        "lib/libvellum-authoring.dylib",
+        "lib/libvellum-gpu.dylib",
+    ))
+    native_ready = (
+        gpu_renderer and authoring_runtime and ui_runtime and native_backend and native_host
+    )
     commands = {name: False for name in COMMAND_NAMES}
     commands["import"] = import_backend
     commands["reimport"] = import_backend
@@ -359,15 +367,26 @@ def build(args: argparse.Namespace) -> dict[str, object]:
             normalize_static_archive(archive)
         if skia_archive and not (
             installed_cmake_target(install_tree, "Gpu") and
-            installed_cmake_target(install_tree, "Authoring")
+            installed_cmake_target(install_tree, "Authoring") and
+            (install_tree / "bin/vellum-app-host").is_file() and
+            (install_tree / "lib/libvellum-authoring.dylib").is_file() and
+            (install_tree / "lib/libvellum-gpu.dylib").is_file()
         ):
             raise ArtifactError(
-                "--skia-archive build did not install both Vellum::Gpu and Vellum::Authoring"
+                "--skia-archive build did not install the complete native application runtime"
             )
+        if skia_archive and target != "darwin-arm64":
+            raise ArtifactError("native application artifacts currently require target darwin-arm64")
         metadata = copy_payload(
             repo, install_tree, payload, commit, source_tree_clean, target,
             include_ui=bool(skia_archive),
         )
+        if skia_archive and not all(
+            metadata["capabilities"]["commands"][name] for name in NATIVE_COMMANDS
+        ):
+            raise ArtifactError(
+                "--skia-archive payload did not derive every native application capability"
+            )
 
         asset_name = f"vellum-sdk-{FRAMEWORK_VERSION}-{target}.tar.gz"
         archive = output_dir / asset_name
@@ -407,7 +426,7 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument(
         "--skia-archive",
         type=Path,
-        help="compose the exact pinned Skia/Dawn GPU, Authoring, and @vellum/ui payload",
+        help="compose the exact pinned native GPU host, Authoring, @vellum/ui, and CLI payload",
     )
     value.add_argument("--json", action="store_true")
     return value

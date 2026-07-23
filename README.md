@@ -12,18 +12,19 @@ OS WebView as the primary UI runtime?
 This repository is being built toward the independent-validation milestone.
 The project CLI and repository shape are usable. An audio-free native C++
 kernel, deterministic DesignIR import/reimport, hardened JS/TS/JSX retained-tree
-runtime, JavaScriptCore host, installable CMake SDK, CoreGraphics smoke app, and
-a retained scene rendered through Skia Graphite, Dawn, and Metal are executable
-in-tree.
-The public CLI does not yet drive native builds, GPU rendering, or packaging;
-those commands continue to report `capability_unavailable` until their backend
-integration is complete.
+runtime, JavaScriptCore host, installable CMake SDK, and a retained scene
+rendered through Skia Graphite, Dawn, and Metal are executable in-tree. A
+macOS arm64 SDK artifact built with the pinned renderer also provides the first
+installed native backend: it bundles authored TS/JS/JSX and optional imported
+DesignIR, builds and runs a real `.app`, executes finite scenarios, captures a
+GPU PNG, and emits an ad-hoc-signed application package using installed bytes
+only. Other targets remain unavailable and fail closed.
 
 The history-preserving Pulp projection has been removed from the active tip.
 Its authorship and exact blobs remain auditable in Git history and immutable
 `provenance/` records; Vellum does not maintain a synchronized editable copy.
 
-## Five-minute local-development start
+## Five-minute authoring start
 
 No public SDK release exists yet. Install the CLI from this checkout, create a
 sterile application, and inspect exactly what is and is not ready:
@@ -41,11 +42,11 @@ vellum doctor --fix
 vellum --json build
 ```
 
-The final command intentionally fails with structured `capability_unavailable`
-output because the current SDK artifact has no application backend. It must not
-pretend that a renderer or package was produced.
+The checkout-only development install intentionally has no native backend, so
+the final command returns structured `capability_unavailable`. Use the pinned
+artifact flow below for the installed native journey.
 
-## Pinned macOS GPU proof
+## Pinned macOS native SDK and first app
 
 Download and verify the exact Skia/Dawn toolchain recorded in
 [`DEPENDENCIES.md`](DEPENDENCIES.md), then configure Vellum with its extraction
@@ -64,14 +65,22 @@ cmake -S . -B build-gpu \
   -DVELLUM_SKIA_ARCHIVE=/tmp/vellum-skia-m150.zip
 cmake --build build-gpu --parallel
 ctest --test-dir build-gpu --output-on-failure
-./build-gpu/apps/gpu-native/vellum-gpu-native.app/Contents/MacOS/vellum-gpu-native \
-  --self-test --capture /tmp/vellum-gpu-proof.png
+python3 scripts/build_sdk_artifact.py \
+  --skia-archive /tmp/vellum-skia-m150.zip --output-dir dist --json
+./scripts/install.sh \
+  --archive dist/vellum-sdk-0.1.0-darwin-arm64.tar.gz \
+  --checksums dist/SHA256SUMS
+
+app_dir="$(mktemp -d)/palette-board"
+vellum create "Palette Board" --directory "$app_dir"
+cd "$app_dir"
+vellum run --no-build
 ```
 
-The self-test fails unless the renderer reports Skia Graphite over Dawn/Metal,
-uses a native `CAMetalLayer`, reports no fallback, resolves a semantic node ID,
-and produces non-blank pixels plus a PNG capture. This is renderer evidence,
-not yet the external application milestone.
+With this SDK, `create` scaffolds, builds, and runs the finite smoke scenario by
+default; it fails if any proof step fails. `--run` may be passed directly to
+`create` to launch after validation. The packaged host must report Skia Graphite
+over Dawn/Metal, no fallback, semantic interaction routing, and non-blank output.
 
 On Windows PowerShell, the equivalent local-development installer is:
 
@@ -98,9 +107,9 @@ vellum package --target macos --output dist
 
 `create` is deterministic and separates imported snapshots, normalized
 DesignIR, generated UI, tokens/assets, hand-written app logic, optional native
-components, platform modules, tests, and packaging configuration. The installed
-backend currently implements JSON DesignIR import/reimport; native runtime
-commands require additional backend capabilities. Backends are discovered through
+components, platform modules, tests, and packaging configuration. The macOS GPU
+artifact implements this complete command lane. An artifact built without the
+pinned renderer advertises only import/reimport. Backends are discovered through
 `VELLUM_SDK_ROOT`, `VELLUM_BACKEND`, or `PATH`.
 
 The accepted source contract, generated tree, ownership boundary, and conflict
@@ -117,7 +126,8 @@ evidence. Building twice from the same source commit and toolchain is covered
 by the integration test.
 
 ```sh
-python3 scripts/build_sdk_artifact.py --output-dir dist --json
+python3 scripts/build_sdk_artifact.py \
+  --skia-archive /tmp/vellum-skia-m150.zip --output-dir dist --json
 python3 scripts/verify_sdk_artifact.py \
   --archive dist/vellum-sdk-0.1.0-darwin-arm64.tar.gz \
   --checksums dist/SHA256SUMS --json
@@ -151,9 +161,11 @@ identity in `vellum.lock.json`, so a same-version but different SDK artifact is
 rejected before backend execution.
 
 `scripts/validate_installed_sdk.py` verifies the archive, installs to a clean
-prefix, creates an app through the installed CLI, checks its project lock
-against SDK metadata, imports and reimports two design revisions, and
-builds/tests a sterile CMake consumer without a Vellum or Pulp checkout.
+prefix, creates and validates an app through the installed CLI, checks its
+project lock against SDK metadata, imports and reimports two design revisions,
+proves the imported design is embedded in the application bundle, exercises
+build/run/test/capture/package, and builds/tests a sterile CMake consumer
+without a Vellum or Pulp checkout.
 
 No hosted Vellum release exists yet. Once an exact versioned release contains
 the same archive and `SHA256SUMS`, the installer can consume it without a
@@ -177,9 +189,10 @@ immutable, checksummed release exists.
 - macOS and browser/Wasm are the first proof targets; other platforms should
   not be claimed before executable evidence exists.
 - Import compatibility is a documented subset, not arbitrary DOM/CSS support.
-- The GPU self-test proves one retained-scene path and installed SDK boundary.
-  It does not yet prove DesignIR materialization, JS/TS/JSX behavior, browser
-  Wasm, CLI packaging, or the external demonstration application.
+- The installed macOS lane proves DesignIR materialization, JS/TS/JSX behavior,
+  native GPU rendering, finite testing, capture, and `.app` packaging. It does
+  not prove browser/Wasm, other native targets, release notarization, arbitrary
+  web compatibility, or the external demonstration application.
 - Ownership and provenance are described in
   [`docs/ownership.md`](docs/ownership.md),
   [`provenance/pulp-extraction.json`](provenance/pulp-extraction.json), and

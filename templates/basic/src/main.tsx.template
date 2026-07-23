@@ -1,0 +1,8 @@
+import { createApp, mount } from "@vellum/ui";
+import { App } from "./App";
+
+mount(createApp({
+  id: "{{PROJECT_ID}}",
+  stateVersion: "1",
+  render: App,
+}));

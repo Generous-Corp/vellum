@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
     Button,
+    Design,
     Stack,
     Text,
     View,
@@ -89,6 +90,47 @@ test('supports named model actions for imported/generated components', () => {
         action: tree.events.press,
     }))).tree;
     assert.equal(tree.children[0].text, 'Boards 2');
+});
+
+test('materializes normalized DesignIR and binds behavior by stable node id', () => {
+    let presses = 0;
+    const document = {
+        source: { namespace: 'main' },
+        tokens: {
+            'main.color.canvas': { $value: '#0f172a' },
+            'main.color.accent': { $value: '#22c55e' },
+        },
+        root: {
+            id: 'main/root',
+            kind: 'view',
+            properties: {
+                layout: { display: 'flex', direction: 'column', gap: 12 },
+                paint: { backgroundColor: '{color.canvas}' },
+            },
+            children: [{
+                id: 'main/action',
+                kind: 'button',
+                text: 'Create board',
+                properties: { paint: { backgroundColor: '{color.accent}' } },
+                children: [],
+            }],
+        },
+    };
+    const bridge = mount(() => jsx(Design, {
+        document,
+        actions: { 'main/action': () => { presses += 1; } },
+    }));
+    let tree = JSON.parse(bridge.renderJSON()).tree;
+    assert.equal(tree.id, 'main/root');
+    assert.equal(tree.style.backgroundColor, '#0f172a');
+    assert.equal(tree.children[0].style.backgroundColor, '#22c55e');
+    assert.equal(tree.children[0].children[0].text, 'Create board');
+    tree = JSON.parse(bridge.dispatchJSON(JSON.stringify({
+        protocol,
+        action: tree.children[0].events.press,
+    }))).tree;
+    assert.equal(presses, 1);
+    assert.equal(tree.id, 'main/root');
 });
 
 test('requires explicit stable IDs on interactive nodes', () => {

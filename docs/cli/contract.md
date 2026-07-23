@@ -77,17 +77,22 @@ stable outer schema.
 
 | Command | CLI-only today | Backend capability |
 |---|---:|---|
-| `create` | yes | none |
+| `create [--no-verify] [--run]` | yes | with a native SDK, builds and tests by default; `--run` launches |
 | `doctor [--fix]` | yes | reports backend availability |
 | `import` / `reimport` | no | implemented by the installed `@vellum/design-ir` backend |
-| `build` / `run` | no | unavailable; future native backend |
-| `test` / `capture` | no | unavailable; future native backend |
-| `package` | no | unavailable; future native backend |
+| `build` / `run` | no | macOS arm64 GPU artifact builds/launches a real `.app`; finite `run --self-test` is available |
+| `test` / `capture` | no | macOS arm64 GPU artifact executes bounded scenarios and captures PNGs |
+| `package` | no | macOS arm64 GPU artifact creates an ad-hoc-signed `.app` |
 
 Installed SDK metadata carries a boolean capability for every backend command.
 The CLI rejects a false capability before dispatch, so the existence of the
 import backend never implies that native build, run, capture, or packaging is
 available.
+
+The native backend response uses the exact `vellum.backend.result.v1` schema.
+It reads only the installed host, libraries, UI bundler, and the application
+project. At this milestone it accepts exactly the `macos` target; unsupported
+targets and missing payloads are errors, never successful no-ops.
 
 `doctor --fix` only creates safe project-local cache and state directories. It
 does not silently install system packages or modify shell profiles.

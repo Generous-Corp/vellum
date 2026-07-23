@@ -1,0 +1,4 @@
+declare module "@vellum/imported" {
+  import type { DesignDocument } from "@vellum/ui";
+  export const importedDesign: DesignDocument | null;
+}

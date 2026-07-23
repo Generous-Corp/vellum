@@ -13,6 +13,6 @@ vellum capture --scenario smoke --output artifacts/smoke.png
 vellum package --output dist
 ```
 
-The extraction milestone may report `capability_unavailable` for build and
-runtime commands until an SDK backend is installed. That is an honest product
-boundary, not a successful no-op.
+When created by the native macOS SDK, the initial build and smoke scenario have
+already passed. SDKs without that capability and unsupported targets report
+`capability_unavailable`; that is an error, not a successful no-op.
