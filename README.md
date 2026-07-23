@@ -29,27 +29,82 @@ The history-preserving Pulp projection has been removed from the active tip.
 Its authorship and exact blobs remain auditable in Git history and immutable
 `provenance/` records; Vellum does not maintain a synchronized editable copy.
 
-## Five-minute authoring start
+## Five-minute private release start
 
-No public SDK release exists yet. Install the CLI from this checkout, create a
-sterile application, and inspect exactly what is and is not ready:
+The following is the exact `v0.1.0` tagged-release flow; it does not claim that
+the private release has already been published. Because both the repository and
+release are private, install and authenticate
+[GitHub CLI](https://cli.github.com/) first (`gh auth login`, or set `GH_TOKEN`
+or `GITHUB_TOKEN` for an unattended agent).
+
+The fastest authenticated path downloads the version-pinned bootstrap and lets
+it acquire and verify the matching installer core and macOS arm64 SDK:
+
+```sh
+bootstrap_dir="$(mktemp -d)"
+gh release download v0.1.0 \
+  --repo Generous-Corp/vellum \
+  --pattern install.sh \
+  --dir "$bootstrap_dir"
+sh "$bootstrap_dir/install.sh" --version 0.1.0
+export PATH="$HOME/.local/bin:$PATH"
+
+app_dir="$(mktemp -d)/vellum-hello"
+vellum create "Vellum Hello" --directory "$app_dir"
+cd "$app_dir"
+vellum run --no-build
+```
+
+`vellum create` scaffolds, builds, and runs the finite smoke scenario by
+default, so the first application is validated before `run` launches it. To
+start from a supported Figma export instead, use:
+
+```sh
+vellum create "Imported App" \
+  --from figma /absolute/path/to/frame.pulp.zip \
+  --run
+```
+
+For the cautious bootstrap path, download the checksum manifest and both
+bootstrap files together, select their exact basename entries, require exactly
+two matches, and verify them before executing either script:
+
+```sh
+bootstrap_dir="$(mktemp -d)"
+gh release download v0.1.0 \
+  --repo Generous-Corp/vellum \
+  --pattern SHA256SUMS \
+  --pattern install.sh \
+  --pattern install_core.py \
+  --dir "$bootstrap_dir"
+(
+  cd "$bootstrap_dir"
+  awk '$2 == "install.sh" || $2 == "*install.sh" ||
+       $2 == "install_core.py" || $2 == "*install_core.py"' \
+    SHA256SUMS > bootstrap.sha256
+  test "$(awk 'END { print NR }' bootstrap.sha256)" -eq 2
+  shasum -a 256 -c bootstrap.sha256
+)
+sh "$bootstrap_dir/install.sh" --version 0.1.0
+```
+
+The convenience path trusts the authenticated GitHub transfer for the initial
+bootstrap. Both paths then use GitHub release-asset digest verification and the
+release `SHA256SUMS` before the installer core extracts or activates SDK bytes.
+No private-release `curl | sh` path is advertised.
+
+The checkout-only development path remains available for CLI and import work:
 
 ```sh
 git clone git@github.com:Generous-Corp/vellum.git
 cd vellum
 ./scripts/install.sh --local "$PWD"
 export PATH="$HOME/.local/bin:$PATH"
-
-tmp_app="$(mktemp -d)/vellum-hello"
-vellum create "Vellum Hello" --directory "$tmp_app"
-cd "$tmp_app"
-vellum doctor --fix
-vellum --json build
 ```
 
-The checkout-only development install intentionally has no native backend, so
-the final command returns structured `capability_unavailable`. Use the pinned
-artifact flow below for the installed native journey.
+That explicitly unverified development install intentionally has no native
+backend; use the tagged release or a verified local SDK artifact for the
+installed native journey.
 
 ## Pinned macOS native SDK and first app
 
@@ -201,15 +256,37 @@ targets and an offline-ready `@vellum/ui` toolchain. Native CLI commands remain
 unavailable unless a real `cli/vellum_native_backend.py` exists; artifact
 metadata is derived from the payload and cannot claim a missing backend.
 
-The installed CMake tree is under the chosen prefix at `lib/vellum/sdk`;
-consumers can add that directory to `CMAKE_PREFIX_PATH` and use
+Verified installs are immutable and content-addressed under
+`PREFIX/lib/vellum-installs/<version>-<target>-<archive-sha256>`.
+`PREFIX/lib/vellum` is the exact active-version symlink, and
+`PREFIX/bin/vellum` is the managed stable launcher. The active CMake tree is
+therefore available at `PREFIX/lib/vellum/sdk`; consumers can add that
+directory to `CMAKE_PREFIX_PATH` and use
 `find_package(Vellum CONFIG REQUIRED)`.
 
-Every install writes `lib/vellum/install-manifest.json`. Verified installs
-record the archive SHA-256, target, version, and source commit; local installs
-are explicitly unverified and carry no fabricated hash. New projects pin this
-identity in `framework.lock`, so a same-version but different SDK artifact is
-rejected before backend execution.
+Every immutable install writes an ownership receipt and
+`install-manifest.json`. Verified installs record the archive SHA-256, target,
+version, and source commit; local installs are explicitly unverified and carry
+no fabricated hash. New projects pin this identity in `framework.lock`, so a
+same-version but different SDK artifact is rejected before backend execution.
+
+An exact reinstall verifies and reuses the content-addressed install instead of
+editing it. Installation is serialized by a prefix lock; archive extraction and
+self-test happen before activation; and activation rolls the launcher, active
+pointer, and state back to the previously verified SDK if the transaction
+fails. The uninstaller removes only files covered by verified ownership
+receipts and refuses incomplete, modified, or unmanaged state.
+
+Keep a verified `install.sh` and `install_core.py` together to inspect or remove
+an installation:
+
+```sh
+sh ./install.sh --verify-installed
+sh ./install.sh --uninstall
+```
+
+Pass the same `--install-dir PREFIX` used during installation when it was not
+the default `$HOME/.local`.
 
 `scripts/validate_installed_sdk.py` verifies the archive, installs to a clean
 prefix, creates and validates an app through the installed CLI, checks its
@@ -218,20 +295,31 @@ proves the imported design is embedded in the application bundle, exercises
 build/run/test/capture/package, and builds/tests a sterile CMake consumer
 without a Vellum or Pulp checkout.
 
-No hosted Vellum release exists yet. Once an exact versioned release contains
-the same archive and `SHA256SUMS`, the installer can consume it without a
-moving `latest` pointer:
+No hosted Vellum release is claimed here yet. Once the exact `v0.1.0` release is
+published, the installer consumes it without a moving `latest` pointer:
 
 ```sh
 ./scripts/install.sh --version 0.1.0
 ```
 
-For a cautious future network install, download the version-pinned installer,
-archive, and checksum manifest separately; verify the installer source before
-running it; then pass the local archive and manifest as above. Checksum
-verification protects downloaded bytes but does not make an unreviewed network
-script intrinsically safe. No `curl | sh` command is advertised before an
-immutable, checksummed release exists.
+The release `SHA256SUMS` covers the SDK archive, `install.sh`, and
+`install_core.py`. The source-controlled `scripts/INSTALLER_SHA256SUMS` covers
+the two bootstrap scripts and is checked when preparing the tag. Release
+publication also creates artifact attestations. After downloading the assets,
+verify the immutable release and an artifact with:
+
+```sh
+gh release verify v0.1.0 --repo Generous-Corp/vellum
+gh release verify-asset v0.1.0 ./vellum-sdk-0.1.0-darwin-arm64.tar.gz \
+  --repo Generous-Corp/vellum
+gh attestation verify ./vellum-sdk-0.1.0-darwin-arm64.tar.gz \
+  --repo Generous-Corp/vellum
+```
+
+Checksum verification protects downloaded bytes but does not make an
+unreviewed network script intrinsically safe. Review the pinned bootstrap or
+use the cautious path above; no `curl | sh` command is advertised for the
+private release.
 
 ## Current boundary
 

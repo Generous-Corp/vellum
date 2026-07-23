@@ -3,12 +3,16 @@
 set -eu
 
 install_prefix=${VELLUM_INSTALL_DIR:-"$HOME/.local"}
+script_dir=$(CDPATH="" cd -- "$(dirname -- "$0")" && pwd)
 local_root=
 archive=
 checksums=
 version=
-release_base=${VELLUM_RELEASE_BASE_URL:-https://github.com/Generous-Corp/vellum/releases/download}
+official_release_base=https://github.com/Generous-Corp/vellum/releases/download
+release_base=${VELLUM_RELEASE_BASE_URL:-$official_release_base}
 release_target=
+uninstall=false
+verify_installed=false
 
 usage() {
   printf '%s\n' \
@@ -16,10 +20,13 @@ usage() {
     '  scripts/install.sh --local PATH [--install-dir PREFIX]' \
     '  scripts/install.sh --archive FILE --checksums SHA256SUMS [--install-dir PREFIX]' \
     '  scripts/install.sh --version VERSION [--release-base-url URL] [--target TARGET]' \
+    '  scripts/install.sh --verify-installed [--install-dir PREFIX]' \
+    '  scripts/install.sh --uninstall [--install-dir PREFIX]' \
     '' \
-    'No public release is published yet. --local is an explicitly unverified' \
-    'development install. Artifact and exact-version release modes verify' \
-    'SHA-256 before extracting.'
+    'Private exact-version installs require an authenticated GitHub CLI.' \
+    '--local is an explicitly unverified development install. Artifact and' \
+    'exact-version release modes verify release digests and SHA-256 before' \
+    'extracting.'
 }
 
 while [ "$#" -gt 0 ]; do
@@ -31,10 +38,27 @@ while [ "$#" -gt 0 ]; do
     --release-base-url) [ "$#" -ge 2 ] || { usage >&2; exit 2; }; release_base=$2; shift 2 ;;
     --target) [ "$#" -ge 2 ] || { usage >&2; exit 2; }; release_target=$2; shift 2 ;;
     --install-dir) [ "$#" -ge 2 ] || { usage >&2; exit 2; }; install_prefix=$2; shift 2 ;;
+    --verify-installed) verify_installed=true; shift ;;
+    --uninstall) uninstall=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) printf 'Unknown argument: %s\n' "$1" >&2; usage >&2; exit 2 ;;
   esac
 done
+
+command -v python3 >/dev/null 2>&1 || {
+  printf '%s\n' 'Python 3 is required by the Vellum installer.' >&2
+  exit 1
+}
+install_prefix=$(python3 -c \
+  'from pathlib import Path; import sys
+p = Path(sys.argv[1]).expanduser().resolve()
+if p == Path("/") or p == Path.home().resolve() or len(p.parts) < 3:
+    raise SystemExit(2)
+print(p)' \
+  "$install_prefix") || {
+    printf '%s\n' 'Refusing an unsafe or overly broad install prefix.' >&2
+    exit 2
+  }
 
 if [ -n "$local_root" ] && { [ -n "$archive" ] || [ -n "$checksums" ] || [ -n "$version" ]; }; then
   printf '%s\n' '--local cannot be combined with artifact or release options.' >&2
@@ -44,9 +68,24 @@ if [ -n "$version" ] && { [ -n "$archive" ] || [ -n "$checksums" ]; }; then
   printf '%s\n' '--version cannot be combined with --archive or --checksums.' >&2
   exit 2
 fi
-case "$install_prefix" in
-  ''|'/'|'.') printf 'Refusing unsafe install prefix: %s\n' "$install_prefix" >&2; exit 2 ;;
-esac
+if [ "$uninstall" = true ] || [ "$verify_installed" = true ]; then
+  [ "$uninstall" != "$verify_installed" ] || {
+    printf '%s\n' '--uninstall and --verify-installed cannot be combined.' >&2
+    exit 2
+  }
+  [ -z "$local_root" ] && [ -z "$archive" ] && [ -z "$checksums" ] && [ -z "$version" ] || {
+    printf '%s\n' 'Installer lifecycle actions cannot be combined with install inputs.' >&2
+    exit 2
+  }
+  [ -f "$script_dir/install_core.py" ] || {
+    printf 'Transactional installer core is missing: %s\n' "$script_dir/install_core.py" >&2
+    exit 1
+  }
+  if [ "$uninstall" = true ]; then
+    exec python3 "$script_dir/install_core.py" uninstall --prefix "$install_prefix"
+  fi
+  exec python3 "$script_dir/install_core.py" verify-installed --prefix "$install_prefix"
+fi
 
 sha256_file() {
   if command -v shasum >/dev/null 2>&1; then
@@ -178,6 +217,25 @@ copy_payload() {
 }
 
 if [ -n "$local_root" ]; then
+  for managed_path in \
+    "$install_prefix/lib/vellum" \
+    "$install_prefix/bin/vellum" \
+    "$install_prefix/lib/vellum-installs" \
+    "$install_prefix/lib/vellum-cache" \
+    "$install_prefix/lib/vellum-installer-state.json" \
+    "$install_prefix/.vellum-installer.lock"
+  do
+    if [ -e "$managed_path" ] || [ -L "$managed_path" ]; then
+      printf 'Refusing unmanaged or transactional local-install path: %s\n' \
+        "$managed_path" >&2
+      exit 1
+    fi
+  done
+  if [ -L "$install_prefix/lib" ] || [ -L "$install_prefix/bin" ]; then
+    printf '%s\n' \
+      'Refusing symlinked local-install storage. Use a separate --install-dir.' >&2
+    exit 1
+  fi
   [ -f "$local_root/cli/vellum_cli.py" ] && [ -f "$local_root/cli/vellum_backend.py" ] && \
     [ -f "$local_root/cli/vellum_manifest.py" ] && \
     [ -f "$local_root/cli/vellum_png.py" ] && \
@@ -187,8 +245,20 @@ if [ -n "$local_root" ]; then
     printf '%s\n' 'Local root lacks the CLI, dispatcher, agent instructions, templates, or DesignIR package.' >&2
     exit 1
   }
+  mkdir -p "$install_prefix"
+  local_lock="$install_prefix/.vellum-local-installing"
+  mkdir "$local_lock" 2>/dev/null || {
+    printf '%s\n' 'Another Vellum local install is already using this prefix.' >&2
+    exit 1
+  }
+  if [ -e "$install_prefix/.vellum-installer.lock" ] || \
+     [ -L "$install_prefix/.vellum-installer.lock" ]; then
+    rmdir "$local_lock"
+    printf '%s\n' 'A transactional Vellum operation owns this prefix.' >&2
+    exit 1
+  fi
   temporary=$(mktemp -d "${TMPDIR:-/tmp}/vellum-local.XXXXXX")
-  trap 'rm -rf "$temporary"' EXIT HUP INT TERM
+  trap 'rm -rf "$temporary"; rmdir "$local_lock" 2>/dev/null || true' EXIT HUP INT TERM
   cp "$local_root/cli/vellum_cli.py" "$temporary/vellum_cli.py"
   cp "$local_root/cli/vellum_backend.py" "$temporary/vellum_backend.py"
   cp "$local_root/cli/vellum_manifest.py" "$temporary/vellum_manifest.py"
@@ -260,19 +330,92 @@ if [ -n "$version" ]; then
     release_target="$release_os-$release_arch"
   fi
   case "$release_target" in *[!0-9A-Za-z._-]*|'') printf '%s\n' 'Release target contains unsafe characters.' >&2; exit 2 ;; esac
-  command -v curl >/dev/null 2>&1 || { printf '%s\n' 'curl is required for exact-version release installs.' >&2; exit 1; }
   release_temporary=$(mktemp -d "${TMPDIR:-/tmp}/vellum-release.XXXXXX")
   trap 'rm -rf "$release_temporary"' EXIT HUP INT TERM
   archive_name="vellum-sdk-$version-$release_target.tar.gz"
   release_url="${release_base%/}/v$version"
   archive="$release_temporary/$archive_name"
   checksums="$release_temporary/SHA256SUMS"
-  curl -fsSL "$release_url/$archive_name" -o "$archive"
-  curl -fsSL "$release_url/SHA256SUMS" -o "$checksums"
+  release_core="$release_temporary/install_core.py"
+  if [ "$release_base" = "$official_release_base" ]; then
+    command -v gh >/dev/null 2>&1 || {
+      printf '%s\n' \
+        'GitHub CLI is required to authenticate the private Vellum release.' >&2
+      exit 1
+    }
+    gh release download "v$version" \
+      --repo Generous-Corp/vellum \
+      --pattern SHA256SUMS \
+      --pattern install_core.py \
+      --pattern "$archive_name" \
+      --dir "$release_temporary" \
+      --clobber || {
+      printf '%s\n' 'Could not authenticate the private Vellum release. Set GH_TOKEN/GITHUB_TOKEN or run gh auth login.' >&2
+      exit 1
+    }
+    for release_asset in "$checksums" "$release_core" "$archive"
+    do
+      gh release verify-asset "v$version" "$release_asset" \
+        --repo Generous-Corp/vellum >/dev/null || {
+        printf 'GitHub release digest verification failed for %s.\n' \
+          "$(basename "$release_asset")" >&2
+        exit 1
+      }
+    done
+  else
+    case "$release_base" in
+      https://*|file://*) ;;
+      *) printf '%s\n' 'Custom release URLs must use HTTPS or file://.' >&2; exit 2 ;;
+    esac
+    command -v curl >/dev/null 2>&1 || {
+      printf '%s\n' 'curl is required for custom release URLs.' >&2
+      exit 1
+    }
+    curl -q --proto '=https,file' --proto-redir '=https,file' \
+      -fsSL "$release_url/SHA256SUMS" -o "$checksums" || {
+      printf 'Could not download the Vellum release manifest from %s.\n' "$release_url" >&2
+      exit 1
+    }
+    curl -q --proto '=https,file' --proto-redir '=https,file' \
+      -fsSL "$release_url/install_core.py" -o "$release_core" || {
+      printf '%s\n' 'Release is missing install_core.py.' >&2
+      exit 1
+    }
+    curl -q --proto '=https,file' --proto-redir '=https,file' \
+      -fsSL "$release_url/$archive_name" -o "$archive" || {
+      printf 'Release is missing %s.\n' "$archive_name" >&2
+      exit 1
+    }
+  fi
+  [ -f "$checksums" ] || {
+    printf '%s\n' 'Release is missing SHA256SUMS.' >&2
+    exit 1
+  }
+  [ -f "$release_core" ] || {
+    printf '%s\n' 'Release is missing install_core.py.' >&2
+    exit 1
+  }
+  [ -f "$archive" ] || {
+    printf 'Release is missing %s.\n' "$archive_name" >&2
+    exit 1
+  }
+  core_matches=$(awk '$2 == "install_core.py" || $2 == "*install_core.py" { print $1 }' "$checksums")
+  core_count=$(printf '%s\n' "$core_matches" | awk 'NF { count++ } END { print count + 0 }')
+  [ "$core_count" -eq 1 ] || {
+    printf 'Expected exactly one checksum for install_core.py; found %s.\n' "$core_count" >&2
+    exit 1
+  }
+  core_expected=$(printf '%s\n' "$core_matches" | awk 'NF { print; exit }')
+  core_actual=$(sha256_file "$release_core")
+  [ "$core_expected" = "$core_actual" ] || {
+    printf '%s\n' 'SHA-256 mismatch for install_core.py. Refusing to execute it.' >&2
+    exit 1
+  }
+  script_dir=$release_temporary
 fi
 
 if [ -z "$archive" ] || [ -z "$checksums" ]; then
-  printf '%s\n' 'No Vellum release is published. Choose --local, provide a verified archive plus SHA256SUMS, or request an exact version once published.' >&2
+  printf '%s\n' 'Choose --local, provide an archive plus SHA256SUMS, or request an exact private release version.' >&2
   usage >&2
   exit 2
 fi
@@ -295,77 +438,20 @@ actual=$(sha256_file "$archive")
   exit 1
 }
 printf 'Verified SHA-256: %s\n' "$actual"
-
-if [ -n "$release_temporary" ]; then
-  temporary="$release_temporary/extracted"
-  mkdir "$temporary"
-else
-  temporary=$(mktemp -d "${TMPDIR:-/tmp}/vellum-install.XXXXXX")
-  trap 'rm -rf "$temporary"' EXIT HUP INT TERM
-fi
-python3 - "$archive" "$temporary" <<'PY'
-from pathlib import PurePosixPath
-import json
-import sys
-import tarfile
-
-archive, destination = sys.argv[1:]
-with tarfile.open(archive, "r:gz") as handle:
-    members = handle.getmembers()
-    if len(members) > 20_000 or sum(member.size for member in members) > 4 * 1024**3:
-        raise SystemExit("archive exceeds installer safety limits")
-    if len({member.name for member in members}) != len(members):
-        raise SystemExit("archive contains duplicate member names")
-    for member in members:
-        path = PurePosixPath(member.name)
-        if (not path.parts or path.parts[0] not in {".agents", "vellum_cli.py", "vellum_backend.py", "vellum_manifest.py", "vellum_png.py", "vellum_native_backend.py", "vellum_web_backend.py", "templates", "sdk", "bin", "design-ir", "ui", "web", "node", "metadata.json"} or
-                path.is_absolute() or ".." in path.parts or "\\" in member.name or ":" in path.parts[0] or
-                member.issym() or member.islnk() or not (member.isfile() or member.isdir())):
-            raise SystemExit(f"unsafe archive member: {member.name}")
-    try:
-        metadata_member = handle.getmember("metadata.json")
-        metadata_file = handle.extractfile(metadata_member)
-        metadata = json.load(metadata_file) if metadata_file else None
-    except (KeyError, json.JSONDecodeError) as error:
-        raise SystemExit(f"invalid SDK artifact metadata: {error}")
-    if (not isinstance(metadata, dict) or metadata.get("schema") != "vellum.sdk-artifact.v1" or
-            not isinstance(metadata.get("framework_version"), str) or not metadata["framework_version"] or
-            metadata.get("cli_api") != 1 or
-            not isinstance(metadata.get("target"), str) or not metadata["target"] or
-            not isinstance(metadata.get("source_commit"), str) or
-            len(metadata["source_commit"]) != 40 or
-            any(character not in "0123456789abcdef" for character in metadata["source_commit"])):
-        raise SystemExit("incompatible SDK artifact metadata")
-    handle.extractall(destination)
-PY
-[ -f "$temporary/vellum_cli.py" ] && [ -f "$temporary/vellum_backend.py" ] && \
-  [ -f "$temporary/vellum_manifest.py" ] && \
-  [ -f "$temporary/vellum_png.py" ] && \
-  [ -f "$temporary/.agents/skills/vellum-app-authoring/SKILL.md" ] && \
-  [ -f "$temporary/.agents/skills/vellum-app-authoring/manifest.v1.json" ] && \
-  [ -d "$temporary/templates/basic" ] && [ -d "$temporary/design-ir" ] && \
-  [ -f "$temporary/metadata.json" ] && [ -d "$temporary/sdk" ] || {
-  printf '%s\n' 'Verified archive does not contain the Vellum SDK artifact layout.' >&2
+[ -f "$script_dir/install_core.py" ] || {
+  printf 'Transactional installer core is missing: %s\n' "$script_dir/install_core.py" >&2
   exit 1
 }
-python3 - "$temporary/metadata.json" "$temporary/install-manifest.json" "$archive_name" "$actual" <<'PY'
-import json
-from pathlib import Path
-import sys
-
-metadata_path, output_path, artifact, digest = sys.argv[1:]
-metadata = json.loads(Path(metadata_path).read_text(encoding="utf-8"))
-manifest = {
-    "schema": "vellum.sdk-install.v1",
-    "verified": True,
-    "artifact": artifact,
-    "artifact_sha256": digest.lower(),
-    "framework_version": metadata["framework_version"],
-    "target": metadata["target"],
-    "source_commit": metadata["source_commit"],
-}
-Path(output_path).write_text(
-    json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-)
-PY
-copy_payload "$temporary"
+if [ -n "$version" ]; then
+  python3 "$script_dir/install_core.py" install \
+    --archive "$archive" \
+    --checksums "$checksums" \
+    --prefix "$install_prefix" \
+    --expected-version "$version" \
+    --expected-target "$release_target"
+else
+  python3 "$script_dir/install_core.py" install \
+    --archive "$archive" \
+    --checksums "$checksums" \
+    --prefix "$install_prefix"
+fi

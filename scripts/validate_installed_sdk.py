@@ -27,8 +27,15 @@ class ValidationError(RuntimeError):
 def installed_contamination_findings(prefix: Path) -> list[dict[str, str]]:
     findings: list[dict[str, str]] = []
     for path in sorted(item for item in prefix.rglob("*") if item.is_file()):
+        relative = path.relative_to(prefix)
+        if relative.parts[:2] == ("lib", "vellum-cache"):
+            # The exact archive has already been expanded and scanned member by
+            # member by verify_sdk_artifact.py. Scanning compressed bytes as
+            # source text creates false positives and does not describe the
+            # active installed SDK tree.
+            continue
         findings.extend(
-            payload_contamination_findings(path.relative_to(prefix).as_posix(), path.read_bytes())
+            payload_contamination_findings(relative.as_posix(), path.read_bytes())
         )
     return findings
 
@@ -59,11 +66,28 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
         journey_env = (
             no_external_node if verification["claims"].get("node_runtime") else os.environ
         )
-        run([
+        installed = run([
             "sh", str(REPO / "scripts/install.sh"),
             "--archive", str(archive), "--checksums", str(checksums),
             "--install-dir", str(prefix),
         ], cwd=root)
+        reinstalled = run([
+            "sh", str(REPO / "scripts/install.sh"),
+            "--archive", str(archive), "--checksums", str(checksums),
+            "--install-dir", str(prefix),
+        ], cwd=root)
+        verified_install = run([
+            "sh", str(REPO / "scripts/install.sh"),
+            "--verify-installed", "--install-dir", str(prefix),
+        ], cwd=root)
+        if (
+            "Vellum installer: installed" not in installed.stdout
+            or "Vellum installer: already_installed" not in reinstalled.stdout
+            or "Vellum installer: verified" not in verified_install.stdout
+        ):
+            raise ValidationError(
+                "transactional install, exact reinstall, or verification did not complete"
+            )
 
         install_manifest_path = prefix / "lib/vellum/install-manifest.json"
         try:
@@ -488,10 +512,36 @@ vellum_component_entry_v1(void) { return &descriptor; }
             if not custom_component_produced:
                 raise ValidationError("installed app-owned custom C++ component journey did not complete")
 
+        unrelated = prefix / "share/unrelated/keep.txt"
+        unrelated.parent.mkdir(parents=True)
+        unrelated.write_text("not owned by Vellum\n", encoding="utf-8")
+        uninstalled = run([
+            "sh", str(REPO / "scripts/install.sh"),
+            "--uninstall", "--install-dir", str(prefix),
+        ], cwd=root)
+        uninstalled_again = run([
+            "sh", str(REPO / "scripts/install.sh"),
+            "--uninstall", "--install-dir", str(prefix),
+        ], cwd=root)
+        uninstall_preserved_unrelated = (
+            "Vellum installer: uninstalled" in uninstalled.stdout
+            and "Vellum installer: already_absent" in uninstalled_again.stdout
+            and unrelated.read_text(encoding="utf-8") == "not owned by Vellum\n"
+            and not (prefix / "lib/vellum").exists()
+            and not (prefix / "bin/vellum").exists()
+        )
+        if not uninstall_preserved_unrelated:
+            raise ValidationError(
+                "transactional uninstall was not idempotent or removed unrelated prefix data"
+            )
+
     checks = {
         "checksum_and_payload_manifest": True,
         "artifact_contamination_scan": verification["contamination_free"],
         "clean_prefix_install": True,
+        "transactional_exact_reinstall": True,
+        "transactional_install_verification": True,
+        "transactional_uninstall_preserves_unrelated": uninstall_preserved_unrelated,
         "installed_artifact_identity": install_manifest == expected_manifest,
         "installed_tree_contamination_scan": not contamination,
         "relocatable_cmake_package": True,

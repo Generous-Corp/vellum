@@ -4,6 +4,7 @@ import copy
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import runpy
 import shutil
@@ -136,8 +137,21 @@ class SdkArtifactTests(unittest.TestCase):
             local_node.chmod(0o755)
             self.assertEqual(sdk_node(sdk), local_node)
 
-    def run_checked(self, arguments: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-        completed = subprocess.run(arguments, cwd=cwd, text=True, capture_output=True, check=False)
+    def run_checked(
+        self,
+        arguments: list[str],
+        *,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        completed = subprocess.run(
+            arguments,
+            cwd=cwd,
+            text=True,
+            capture_output=True,
+            check=False,
+            env=env,
+        )
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
         return completed
 
@@ -303,16 +317,35 @@ class SdkArtifactTests(unittest.TestCase):
                 release_dir = root / "release/v0.1.0"
                 release_dir.mkdir(parents=True)
                 shutil.copy2(first_archive, release_dir / first_archive.name)
-                shutil.copy2(first_sums, release_dir / "SHA256SUMS")
+                shutil.copy2(INSTALLER, release_dir / "install.sh")
+                shutil.copy2(
+                    REPO / "scripts/install_core.py",
+                    release_dir / "install_core.py",
+                )
+                release_assets = (
+                    release_dir / first_archive.name,
+                    release_dir / "install.sh",
+                    release_dir / "install_core.py",
+                )
+                (release_dir / "SHA256SUMS").write_text(
+                    "".join(
+                        f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n"
+                        for path in sorted(release_assets, key=lambda item: item.name)
+                    ),
+                    encoding="utf-8",
+                )
                 release_prefix = root / "release-prefix"
+                release_temporary = root / "release-temporary"
+                release_temporary.mkdir()
                 release_install = self.run_checked([
                     "sh", str(INSTALLER), "--version", "0.1.0",
                     "--target", "test-host",
                     "--release-base-url", (root / "release").as_uri(),
                     "--install-dir", str(release_prefix),
-                ])
+                ], env={**os.environ, "TMPDIR": str(release_temporary)})
                 self.assertIn("Verified SHA-256", release_install.stdout)
                 self.assertTrue((release_prefix / "lib/vellum/sdk/lib/cmake/Vellum/VellumConfig.cmake").is_file())
+                self.assertEqual(list(release_temporary.iterdir()), [])
             shutil.copytree(CONSUMER, root / "consumer-source")
             consumer_build = root / "consumer-build"
             self.run_checked([

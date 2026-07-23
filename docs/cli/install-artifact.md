@@ -1,9 +1,64 @@
 # SDK artifact and installer contract
 
-No release artifact is hosted in the extraction milestone. The repository can
-build a reproducible local artifact, and the installers support local
-development, verified local archive, and exact-version release modes so the
-release boundary is executable before publication.
+The repository builds a reproducible local artifact, and the installer supports
+local development, verified local archive, and an exact-version private release
+mode. The commands below describe the exact `v0.1.0` tagged-release contract;
+they do not claim the tag or release has already been published.
+
+## Private tagged-release installation
+
+The Vellum repository and release are private. Install
+[GitHub CLI](https://cli.github.com/) and authenticate with `gh auth login`, or
+provide `GH_TOKEN`/`GITHUB_TOKEN` for unattended use. The fastest authenticated
+path is:
+
+```sh
+bootstrap_dir="$(mktemp -d)"
+gh release download v0.1.0 \
+  --repo Generous-Corp/vellum \
+  --pattern install.sh \
+  --dir "$bootstrap_dir"
+sh "$bootstrap_dir/install.sh" --version 0.1.0
+export PATH="$HOME/.local/bin:$PATH"
+
+app_dir="$(mktemp -d)/vellum-hello"
+vellum create "Vellum Hello" --directory "$app_dir"
+cd "$app_dir"
+vellum run --no-build
+```
+
+The initial bootstrap in that convenience path is trusted because it was
+selected and transferred through the authenticated GitHub CLI. The bootstrap
+then downloads `SHA256SUMS`, `install_core.py`, and the exact target archive,
+uses `gh release verify-asset` on all three, checks the installer-core and
+archive hashes again against `SHA256SUMS`, and only then executes the core.
+
+For a cautious bootstrap, download the release manifest and both scripts,
+extract only their exact basename entries, require exactly two entries, and
+verify them before execution:
+
+```sh
+bootstrap_dir="$(mktemp -d)"
+gh release download v0.1.0 \
+  --repo Generous-Corp/vellum \
+  --pattern SHA256SUMS \
+  --pattern install.sh \
+  --pattern install_core.py \
+  --dir "$bootstrap_dir"
+(
+  cd "$bootstrap_dir"
+  awk '$2 == "install.sh" || $2 == "*install.sh" ||
+       $2 == "install_core.py" || $2 == "*install_core.py"' \
+    SHA256SUMS > bootstrap.sha256
+  test "$(awk 'END { print NR }' bootstrap.sha256)" -eq 2
+  shasum -a 256 -c bootstrap.sha256
+)
+sh "$bootstrap_dir/install.sh" --version 0.1.0
+```
+
+Do not replace either flow with `curl | sh`: anonymous `curl` does not provide
+the private GitHub authentication used by this release contract, and piping a
+network script executes it before it can be reviewed or checksummed.
 
 The gzip-compressed tar has this root layout:
 
@@ -97,17 +152,55 @@ application builds do not resolve framework packages from the network. Project
 creation materializes the exact runtime package from the SDK and proves the
 committed npm lock with `npm ci`.
 
-The installer writes `$VELLUM_SDK_ROOT/install-manifest.json`. A verified
-archive install records the exact archive basename, SHA-256, target, framework
-version, and source commit. A `--local` install records `verified: false` with
-null archive, hash, and commit fields; it never manufactures release identity.
-`vellum create` copies that identity into `framework.lock`, and later commands
-reject a different installed artifact even when its framework version matches.
+The verified installer stores SDKs immutably at
+`PREFIX/lib/vellum-installs/<version>-<target>-<archive-sha256>`. It caches the
+verified archive by SHA-256 at `PREFIX/lib/vellum-cache`, then exposes exactly
+one active SDK through the `PREFIX/lib/vellum` symlink and managed
+`PREFIX/bin/vellum` launcher. The active SDK's `install-manifest.json` records
+the exact archive basename, SHA-256, target, framework version, and source
+commit. `vellum create` copies that identity into `framework.lock`, and later
+commands reject a different installed artifact even when its framework version
+matches.
 
-`SHA256SUMS` must contain exactly one basename entry for the archive. Both
-installers calculate SHA-256 and abort before extraction when the entry is
-missing, duplicated, malformed, or mismatched. Release mode requires an exact
-version and resolves one archive name from OS/architecture; `latest` is rejected.
+Each immutable SDK has a complete file/directory ownership receipt. A prefix
+lock serializes installation, verification, and removal. The installer safely
+extracts into staging, verifies the metadata inventory, runs `vellum --version`
+against staged bytes, and only then atomically activates the new install. If
+activation fails, it restores the prior active pointer, launcher, and installer
+state. Reinstalling the exact artifact verifies and reuses the existing
+content-addressed SDK; it never edits that SDK in place. Corrupt cache entries,
+modified installed bytes, incomplete activation state, symlink escapes, and
+unmanaged launchers fail closed.
+
+Keep a verified `install.sh` and `install_core.py` adjacent for lifecycle
+commands:
+
+```sh
+sh ./install.sh --verify-installed
+sh ./install.sh --uninstall
+```
+
+Use `--install-dir PREFIX` on installation and lifecycle commands to select a
+prefix other than `$HOME/.local`. `--verify-installed` checks the active
+pointer, ownership receipt, installed hashes and modes, managed launcher,
+installer state, and CLI self-test. `--uninstall` first performs the same
+verification, then removes only receipt-owned SDK files, owned archive-cache
+entries, the managed launcher, active pointer, and installer state. It refuses
+modified or unmanaged content and leaves unrelated prefix files untouched.
+
+A `--local` install is a separate, explicitly unverified development mode. It
+records `verified: false` with null archive, hash, and commit fields and never
+manufactures release identity. It is not installed into, or mixed with, the
+transactional immutable layout.
+
+The release `SHA256SUMS` contains exactly one basename entry each for the SDK
+archive, `install.sh`, and `install_core.py`. The installer requires exactly one
+entry for every file it verifies and aborts before extraction or core execution
+when an entry is missing, duplicated, malformed, or mismatched. The
+source-controlled `scripts/INSTALLER_SHA256SUMS` covers `install.sh` and
+`install_core.py` and is checked as part of tag preparation. Release mode
+requires an exact version, derives one archive basename from OS/architecture,
+and rejects `latest`.
 
 Build and validate the artifact:
 
@@ -135,7 +228,24 @@ two fixture revisions, verifies that the accepted active revision advances,
 embeds the materialized imported design in a real `.app`, and exercises the
 installed build/run/test/capture/package journey.
 
-A production release must additionally provide immutable versioned assets,
-GitHub asset digests, release provenance/attestation, and a separately
-reviewable installer checksum. Those controls are intentionally not claimed by
-the current local artifact flow.
+The tagged-release workflow publishes a draft only after reproducibility,
+artifact verification, and installed-SDK validation pass. It uploads the SDK,
+the two installer scripts, `SHA256SUMS`, and retained evidence; creates build
+provenance attestations for the SDK, scripts, and checksum manifest; then
+publishes the immutable, non-`latest` private release and verifies it.
+
+After authenticated download, independently inspect GitHub's release
+verification, asset digest, and attestation:
+
+```sh
+gh release verify v0.1.0 --repo Generous-Corp/vellum
+gh release verify-asset v0.1.0 ./vellum-sdk-0.1.0-darwin-arm64.tar.gz \
+  --repo Generous-Corp/vellum
+gh attestation verify ./vellum-sdk-0.1.0-darwin-arm64.tar.gz \
+  --repo Generous-Corp/vellum
+```
+
+These are release gates, not claims that `v0.1.0` exists before the tag workflow
+has completed. The local artifact flow exercises the same archive verification
+and transactional installation logic but cannot claim hosted release
+immutability, GitHub asset digests, or GitHub attestations.

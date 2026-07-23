@@ -153,18 +153,29 @@ jobs:
           archive="vellum-sdk-0.1.0-darwin-arm64.tar.gz"
           cmp "$first/$archive" "$second/$archive"
           cmp "$first/SHA256SUMS" "$second/SHA256SUMS"
+          (cd scripts && shasum -a 256 -c INSTALLER_SHA256SUMS)
           shasum -a 256 "$first/$archive" > "$RUNNER_TEMP/vellum-sdk.sha256"
+          cp "$first/$archive" "$RUNNER_TEMP/$archive"
+          cp scripts/install.sh "$RUNNER_TEMP/install.sh"
+          cp scripts/install_core.py "$RUNNER_TEMP/install_core.py"
+          (
+            cd "$RUNNER_TEMP"
+            shasum -a 256 \
+              "$archive" \
+              install.sh \
+              install_core.py \
+              | LC_ALL=C sort > SHA256SUMS
+            shasum -a 256 -c SHA256SUMS
+          )
           python3 scripts/verify_sdk_artifact.py \
-            --archive "$first/$archive" \
-            --checksums "$first/SHA256SUMS" --json \
+            --archive "$RUNNER_TEMP/$archive" \
+            --checksums "$RUNNER_TEMP/SHA256SUMS" --json \
             > "$RUNNER_TEMP/sdk-verification.json"
           python3 scripts/validate_installed_sdk.py \
-            --archive "$first/$archive" \
-            --checksums "$first/SHA256SUMS" \
+            --archive "$RUNNER_TEMP/$archive" \
+            --checksums "$RUNNER_TEMP/SHA256SUMS" \
             --forbid-path "$GITHUB_WORKSPACE" --json \
             > "$RUNNER_TEMP/sdk-installed-validation.json"
-          cp "$first/$archive" "$RUNNER_TEMP/$archive"
-          cp "$first/SHA256SUMS" "$RUNNER_TEMP/SHA256SUMS"
 
       - name: Attest the immutable release inputs
         if: startsWith(github.ref, 'refs/tags/v')
@@ -172,6 +183,8 @@ jobs:
         with:
           subject-path: |
             ${{ runner.temp }}/vellum-sdk-0.1.0-darwin-arm64.tar.gz
+            ${{ runner.temp }}/install.sh
+            ${{ runner.temp }}/install_core.py
             ${{ runner.temp }}/SHA256SUMS
 
       - name: Publish the verified private release
@@ -199,6 +212,8 @@ jobs:
             --notes-file "$notes"
           gh release upload "$tag" \
             "$RUNNER_TEMP/vellum-sdk-0.1.0-darwin-arm64.tar.gz" \
+            "$RUNNER_TEMP/install.sh" \
+            "$RUNNER_TEMP/install_core.py" \
             "$RUNNER_TEMP/SHA256SUMS" \
             "$RUNNER_TEMP/sdk-verification.json" \
             "$RUNNER_TEMP/sdk-installed-validation.json" \
@@ -233,6 +248,8 @@ jobs:
             ${{ runner.temp }}/vellum-gpu-dylib-load-commands.txt
             ${{ runner.temp }}/vellum-gpu-app-load-commands.txt
             ${{ runner.temp }}/vellum-sdk-0.1.0-darwin-arm64.tar.gz
+            ${{ runner.temp }}/install.sh
+            ${{ runner.temp }}/install_core.py
             ${{ runner.temp }}/SHA256SUMS
             ${{ runner.temp }}/vellum-sdk.sha256
             ${{ runner.temp }}/sdk-first.json
