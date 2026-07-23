@@ -19,6 +19,7 @@ option(VELLUM_ENABLE_GRAPHICS "Build the initial platform graphics backend" ON)
 option(VELLUM_ENABLE_GPU "Build the pinned Skia Graphite + Dawn GPU backend when its artifact is available" ON)
 option(VELLUM_REQUIRE_GPU "Fail configure unless the requested Skia/Dawn GPU backend is available" OFF)
 option(VELLUM_ENABLE_AUTHORING "Build the native JavaScript/TypeScript application host" ON)
+option(VELLUM_ENABLE_WEB "Build the experimental browser/Wasm proof" OFF)
 set(VELLUM_AUTHORING_TEST_BUNDLE "" CACHE FILEPATH
     "Optional @vellum/ui classic-script bundle for the real JavaScriptCore integration test")
 
@@ -46,6 +47,16 @@ endif()
 
 if(VELLUM_ENABLE_GRAPHICS)
     add_subdirectory(graphics)
+endif()
+
+if(VELLUM_ENABLE_WEB)
+    if(NOT EMSCRIPTEN)
+        message(FATAL_ERROR "VELLUM_ENABLE_WEB requires the Emscripten toolchain")
+    endif()
+    if(NOT VELLUM_ENABLE_GRAPHICS)
+        message(FATAL_ERROR "VELLUM_ENABLE_WEB requires VELLUM_ENABLE_GRAPHICS")
+    endif()
+    add_subdirectory(web)
 endif()
 
 if(APPLE AND VELLUM_ENABLE_GRAPHICS AND VELLUM_ENABLE_AUTHORING)
@@ -87,6 +98,11 @@ if(VELLUM_BUILD_TESTS)
             graphics/tests/capture_stats_test.cpp)
         target_link_libraries(vellum-capture-stats-test PRIVATE Vellum::Graphics)
         add_test(NAME vellum.capture-stats COMMAND vellum-capture-stats-test)
+
+        add_executable(vellum-paint-command-test
+            graphics/tests/paint_command_test.cpp)
+        target_link_libraries(vellum-paint-command-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.paint-command COMMAND vellum-paint-command-test)
     endif()
 
     if(TARGET vellum-authoring)

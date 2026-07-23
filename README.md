@@ -18,7 +18,11 @@ macOS arm64 SDK artifact built with the pinned renderer also provides the first
 installed native backend: it bundles authored TS/JS/JSX and optional imported
 DesignIR, builds and runs a real `.app`, executes finite scenarios, captures a
 GPU PNG, and emits an ad-hoc-signed application package using installed bytes
-only. Other targets remain unavailable and fail closed.
+only. An experimental browser proof now runs browser JavaScript against the
+shared C++ runtime, retained scene, and paint-command traversal compiled to
+Wasm, with Canvas2D as an explicitly identified presentation shell. It is not
+yet a CLI, GPU-backend, packaging, or compatibility claim. Other supported
+targets remain unavailable and fail closed.
 
 The history-preserving Pulp projection has been removed from the active tip.
 Its authorship and exact blobs remain auditable in Git history and immutable
@@ -213,13 +217,16 @@ immutable, checksummed release exists.
 
 - No Pulp audio, plug-in, host, or product adapters belong in Vellum.
 - Pulp does not consume this repository during independent validation.
-- macOS and browser/Wasm are the first proof targets; other platforms should
+- macOS and browser/Wasm are the first proof targets; the browser proof and its
+  exact non-claims are documented in
+  [Browser/Wasm proof](docs/web/browser-wasm-proof.md). Other platforms should
   not be claimed before executable evidence exists.
 - Import compatibility is a documented subset, not arbitrary DOM/CSS support.
 - The installed macOS lane proves DesignIR materialization, JS/TS/JSX behavior,
   native GPU rendering, finite testing, capture, and `.app` packaging. It does
-  not prove browser/Wasm, other native targets, release notarization, arbitrary
-  web compatibility, or the external demonstration application.
+  not prove a browser GPU backend, browser CLI/package workflow, other
+  native targets, release notarization, arbitrary web compatibility, or the
+  external demonstration application.
 - Ownership and provenance are described in
   [`docs/ownership.md`](docs/ownership.md),
   [`provenance/pulp-extraction.json`](provenance/pulp-extraction.json), and

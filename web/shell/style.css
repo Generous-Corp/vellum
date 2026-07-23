@@ -1,0 +1,6 @@
+:root { color-scheme: dark; font-family: ui-sans-serif, system-ui, sans-serif; }
+body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #090e1a; }
+main { display: grid; gap: 14px; }
+canvas { width: min(640px, calc(100vw - 32px)); height: auto; border-radius: 16px; box-shadow: 0 24px 80px #0008; }
+p, pre { width: 640px; max-width: calc(100vw - 32px); margin: 0; color: #a7f3d0; }
+pre { color: #94a3b8; white-space: pre-wrap; font-size: 12px; }

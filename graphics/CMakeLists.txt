@@ -1,10 +1,6 @@
-if(NOT APPLE)
-    message(FATAL_ERROR "The initial Vellum graphics backend requires Apple CoreGraphics")
-endif()
-
 add_library(vellum-graphics
-    src/core_graphics_canvas.mm
-    src/capture_stats.cpp)
+    src/capture_stats.cpp
+    src/paint_command.cpp)
 add_library(Vellum::Graphics ALIAS vellum-graphics)
 
 set_target_properties(vellum-graphics PROPERTIES
@@ -17,11 +13,15 @@ target_include_directories(vellum-graphics
 
 target_compile_features(vellum-graphics PUBLIC cxx_std_20)
 target_link_libraries(vellum-graphics
-    PUBLIC Vellum::Runtime
-    PRIVATE
+    PUBLIC Vellum::Runtime)
+
+if(APPLE)
+    target_sources(vellum-graphics PRIVATE src/core_graphics_canvas.mm)
+    target_link_libraries(vellum-graphics PRIVATE
         "-framework CoreGraphics"
         "-framework CoreText"
         "-framework Foundation")
+endif()
 
 if(VELLUM_HAS_SKIA_DAWN)
     add_library(vellum-gpu SHARED

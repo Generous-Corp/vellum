@@ -1,4 +1,5 @@
 #include <vellum/graphics/skia_dawn_surface.hpp>
+#include <vellum/graphics/paint_command.hpp>
 
 #import <QuartzCore/CAMetalLayer.h>
 
@@ -71,32 +72,31 @@ SkColor4f sk_color(Color color) {
     return {color.red, color.green, color.blue, color.alpha};
 }
 
-void paint_node(SkCanvas& canvas, const SceneNode& node, float parent_x, float parent_y) {
-    const float x = parent_x + node.bounds.x;
-    const float y = parent_y + node.bounds.y;
+void paint_command(SkCanvas& canvas, const PaintCommand& command) {
     SkPaint paint;
     paint.setAntiAlias(true);
-    paint.setColor4f(sk_color(node.fill));
+    paint.setColor4f(sk_color(command.fill));
 
-    if (node.kind == SceneNode::Kind::rectangle) {
-        const auto rect = SkRect::MakeXYWH(x, y, node.bounds.width, node.bounds.height);
-        if (node.corner_radius > 0.0F) {
-            canvas.drawRoundRect(rect, node.corner_radius, node.corner_radius, paint);
+    if (command.kind == PaintCommand::Kind::rectangle) {
+        const auto rect = SkRect::MakeXYWH(
+            command.bounds.x, command.bounds.y,
+            command.bounds.width, command.bounds.height);
+        if (command.corner_radius > 0.0F) {
+            canvas.drawRoundRect(
+                rect, command.corner_radius, command.corner_radius, paint);
         } else {
             canvas.drawRect(rect, paint);
         }
-    } else if (node.kind == SceneNode::Kind::text && !node.text.empty()) {
+    } else if (command.kind == PaintCommand::Kind::text && !command.text.empty()) {
         static const sk_sp<SkFontMgr> font_manager = SkFontMgr_New_CoreText(nullptr);
         const auto typeface = font_manager
             ? font_manager->matchFamilyStyle("Helvetica Neue", SkFontStyle::Normal())
             : nullptr;
-        SkFont font(typeface, std::max(node.font_size, 1.0F));
+        SkFont font(typeface, command.font_size);
         font.setEdging(SkFont::Edging::kAntiAlias);
-        canvas.drawString(node.text.c_str(), x, y + node.font_size, font, paint);
-    }
-
-    for (const auto& child : node.children) {
-        paint_node(canvas, child, x, y);
+        canvas.drawString(
+            command.text.c_str(), command.bounds.x,
+            command.bounds.y + command.font_size, font, paint);
     }
 }
 
@@ -427,7 +427,9 @@ private:
         canvas->resetMatrix();
         canvas->clear(sk_color(scene.background));
         canvas->scale(config_.scale, config_.scale);
-        paint_node(*canvas, scene.root, 0.0F, 0.0F);
+        for (const auto& command : make_paint_commands(scene)) {
+            paint_command(*canvas, command);
+        }
         canvas->restore();
 
         auto recording = recorder_->snap();
