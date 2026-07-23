@@ -37,7 +37,7 @@ or commit; verified installs pin the archive SHA exactly.
 ```json
 {
   "schema": "vellum.cli.result.v1",
-  "cli_version": "0.1.0-dev",
+  "cli_version": "0.1.0",
   "command": "build",
   "ok": false,
   "status": "capability_unavailable",
@@ -84,9 +84,9 @@ stable outer schema.
 | `create [--no-verify] [--run]` | yes | with a native SDK, builds and tests by default; `--run` launches |
 | `doctor [--fix]` | yes | reports backend availability |
 | `import` / `reimport` | no | implemented by the installed `@vellum/design-ir` backend |
-| `build` / `run` | no | macOS arm64 GPU artifact builds/launches a real `.app`; finite `run --self-test` is available |
-| `test` / `capture` | no | macOS arm64 GPU artifact executes bounded scenarios, captures PNGs, and composes bounded capture matrices/montages |
-| `package` | no | macOS arm64 GPU artifact creates an ad-hoc-signed `.app` |
+| `build` / `run` | no | macOS 15.0+ arm64 GPU artifact builds/launches a real `.app`; finite `run --self-test` is available |
+| `test` / `capture` | no | macOS 15.0+ arm64 GPU artifact executes bounded scenarios, captures PNGs, and composes bounded capture matrices/montages |
+| `package` | no | macOS 15.0+ arm64 GPU artifact creates an ad-hoc-signed `.app` |
 
 Installed SDK metadata carries a boolean capability for every backend command.
 The CLI rejects a false capability before dispatch, so the existence of the

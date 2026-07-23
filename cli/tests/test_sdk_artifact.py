@@ -26,6 +26,29 @@ CONSUMER = REPO / "apps/smoke-native/install-consumer"
 
 @unittest.skipUnless(shutil.which("cmake") and (shutil.which("shasum") or shutil.which("sha256sum")), "CMake/checksum tools unavailable")
 class SdkArtifactTests(unittest.TestCase):
+    def test_artifact_builder_rejects_cli_release_identity_drift(self) -> None:
+        module = runpy.run_path(str(BUILDER))
+        verify_cli_identity = module["verify_cli_identity"]
+        artifact_error = module["ArtifactError"]
+        verify_cli_identity(REPO)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            shutil.copytree(REPO / "cli", root / "cli")
+            cli = root / "cli/vellum_cli.py"
+            source = cli.read_text(encoding="utf-8")
+            cli.write_text(
+                source.replace(
+                    "CLI_VERSION = FRAMEWORK_VERSION",
+                    'CLI_VERSION = "9.9.9"',
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                artifact_error, "authoring CLI identity must be exactly"
+            ):
+                verify_cli_identity(root)
+
     def test_web_payload_and_node_are_exact_fail_closed_inputs(self) -> None:
         module = runpy.run_path(str(BUILDER))
         copy_web_payload = module["copy_web_payload"]
@@ -257,6 +280,8 @@ class SdkArtifactTests(unittest.TestCase):
             ])
             verification = json.loads(verified.stdout)
             self.assertTrue(verification["ok"])
+            self.assertEqual(verification["framework_version"], "0.1.0")
+            self.assertEqual(verification["cli_version"], "0.1.0")
             self.assertTrue(verification["contamination_free"])
             self.assertEqual(verification["contamination_findings"], [])
             self.assertEqual(verification["claims"]["gpu_renderer"], False)
@@ -264,6 +289,37 @@ class SdkArtifactTests(unittest.TestCase):
             self.assertEqual(verification["claims"]["commands"]["reimport"], True)
             for command in ("build", "run", "test", "capture", "package"):
                 self.assertEqual(verification["claims"]["commands"][command], False)
+
+            drifted_archive = root / "vellum-sdk-drifted-cli.tar.gz"
+            with tarfile.open(first_archive, "r:gz") as source, tarfile.open(
+                drifted_archive, "w:gz"
+            ) as output:
+                for member in source.getmembers():
+                    file_object = source.extractfile(member) if member.isfile() else None
+                    if member.name == "metadata.json":
+                        drifted_metadata = json.load(file_object)
+                        drifted_metadata["cli_version"] = "9.9.9"
+                        content = (
+                            json.dumps(drifted_metadata, indent=2, sort_keys=True) + "\n"
+                        ).encode()
+                        replacement = copy.copy(member)
+                        replacement.size = len(content)
+                        output.addfile(replacement, io.BytesIO(content))
+                    else:
+                        output.addfile(member, file_object)
+            drifted_sums = root / "DRIFTED-SHA256SUMS"
+            drifted_sums.write_text(
+                f"{hashlib.sha256(drifted_archive.read_bytes()).hexdigest()}  "
+                f"{drifted_archive.name}\n",
+                encoding="utf-8",
+            )
+            drifted = subprocess.run([
+                sys.executable, str(VERIFIER),
+                "--archive", str(drifted_archive),
+                "--checksums", str(drifted_sums), "--json",
+            ], text=True, capture_output=True, check=False)
+            self.assertNotEqual(drifted.returncode, 0)
+            self.assertIn("CLI version does not match", drifted.stderr)
 
             forged_archive = root / "vellum-sdk-forged-claims.tar.gz"
             with tarfile.open(first_archive, "r:gz") as source, tarfile.open(forged_archive, "w:gz") as output:
@@ -299,6 +355,7 @@ class SdkArtifactTests(unittest.TestCase):
             ])
             validation = json.loads(validated.stdout)
             self.assertTrue(validation["ok"])
+            self.assertEqual(validation["cli_version"], "0.1.0")
             self.assertTrue(all(validation["checks"].values()))
 
             prefix = root / "prefix"

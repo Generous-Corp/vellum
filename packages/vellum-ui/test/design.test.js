@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { createApp, materializeDesign, mount } from '../src/index.js';
+import { createApp, Design, materializeDesign, mount } from '../src/index.js';
 import {
     decodeFigmaPluginExport,
     normalizeImport,
@@ -70,6 +70,98 @@ test('materializes imported design with stable ids, tokens, viewport, and behavi
     }))).tree;
     assert.equal(tree.children[0].id, 'main/create');
     assert.equal(JSON.parse(bridge.snapshotStateJSON()).state.model.presses, 1);
+});
+
+test('Design preserves imported root, text, and nested flex dimensions', () => {
+    const document = fixture();
+    document.source = { key: 'main', namespace: 'main', revision: 'revision-a' };
+    document.root.properties.layout = {
+        display: 'flex',
+        direction: 'column',
+        gap: 16,
+        height: 400,
+        padding: 24,
+        width: 640,
+    };
+    document.root.children = [{
+        id: 'main/title',
+        kind: 'text',
+        name: 'Title',
+        text: 'Palette Board',
+        properties: { text: { color: '#f8fafc', fontSize: 28 } },
+        children: [],
+    }, {
+        id: 'main/cards',
+        kind: 'view',
+        name: 'Cards',
+        properties: {
+            layout: {
+                direction: 'row',
+                display: 'flex',
+                gap: 12,
+                height: 190,
+                width: 592,
+            },
+        },
+        children: [{
+            id: 'main/cyan',
+            kind: 'view',
+            name: 'Cyan',
+            properties: {
+                layout: { height: 190, width: 286 },
+                paint: { backgroundColor: '#38bdf8' },
+            },
+            children: [],
+        }, {
+            id: 'main/violet',
+            kind: 'view',
+            name: 'Violet',
+            properties: {
+                layout: { height: 190, width: 286 },
+                paint: { backgroundColor: '#8b5cf6' },
+            },
+            children: [],
+        }],
+    }];
+    const app = createApp({
+        id: 'design-component-layout',
+        stateVersion: '1',
+        initialState: {},
+        render: () => Design({ document }),
+    });
+    const tree = JSON.parse(mount(app).renderJSON()).tree;
+
+    assert.deepEqual(tree.style, {
+        backgroundColor: '#0f172a',
+        direction: 'vertical',
+        gap: 16,
+        height: 400,
+        padding: 24,
+        width: 640,
+    });
+    assert.deepEqual(tree.children[0].style, {
+        color: '#f8fafc',
+        fontSize: 28,
+    });
+    assert.deepEqual(tree.children[1].style, {
+        direction: 'horizontal',
+        gap: 12,
+        height: 190,
+        width: 592,
+    });
+    assert.equal(tree.children[1].children[0].style.width, 286);
+    assert.equal(tree.children[1].children[1].style.width, 286);
+
+    const materializedTree = JSON.parse(mount(createApp({
+        id: 'materialized-design-layout',
+        stateVersion: '1',
+        initialState: {},
+        render: () => materializeDesign(document),
+    })).renderJSON()).tree;
+    assert.equal(materializedTree.style.width, 640);
+    assert.equal(materializedTree.style.height, 400);
+    assert.equal(materializedTree.style.padding, 24);
+    assert.equal(materializedTree.children[1].children[1].style.width, 286);
 });
 
 test('fails closed on unresolved tokens, duplicate ids, and unsupported kinds', () => {

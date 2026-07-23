@@ -178,22 +178,24 @@ function designStyle(document, node, root) {
     const paint = properties.paint ?? {};
     const text = properties.text ?? {};
     const style = {};
+    for (const property of ['x', 'y', 'width', 'height', 'padding', 'gap']) {
+        if (typeof layout[property] === 'number' && Number.isFinite(layout[property])) {
+            style[property] = layout[property];
+        }
+    }
     if (root) {
-        style.width = 640;
-        style.height = 400;
-        style.padding = 24;
-    } else if (node.kind === 'view') {
-        style.height = 112;
+        style.width ??= 800;
+        style.height ??= 600;
+        style.padding ??= 0;
     }
     if (layout.direction === 'row') style.direction = 'horizontal';
-    if (typeof layout.gap === 'number') style.gap = layout.gap;
-    if (typeof layout.padding === 'number') style.padding = layout.padding;
+    else if (layout.direction === 'column') style.direction = 'vertical';
     if (typeof paint.backgroundColor === 'string') {
         style.backgroundColor = designToken(document, paint.backgroundColor);
     }
     if (typeof paint.borderRadius === 'number') style.borderRadius = paint.borderRadius;
     if (typeof text.fontSize === 'number') style.fontSize = text.fontSize;
-    if (typeof paint.color === 'string') style.color = designToken(document, paint.color);
+    if (typeof text.color === 'string') style.color = designToken(document, text.color);
     if (node.kind === 'button') {
         style.width ??= 180;
         style.height ??= 48;

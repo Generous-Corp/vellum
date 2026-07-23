@@ -7,10 +7,17 @@ they do not claim the tag or release has already been published.
 
 ## Private tagged-release installation
 
-The Vellum repository and release are private. Install
+The Vellum repository and release are private. The application SDK requires
+macOS 15.0 or newer on arm64 plus Python 3.9 or newer. Install
 [GitHub CLI](https://cli.github.com/) and authenticate with `gh auth login`, or
 provide `GH_TOKEN`/`GITHUB_TOKEN` for unattended use. The fastest authenticated
 path is:
+
+Verified archive and release installation is currently exposed only through
+`install.sh` on the supported macOS target. `install.ps1` supports explicit
+`-LocalRoot` development installs only; its archive and release parameters fail
+closed before reading, downloading, extracting, or installing anything. This
+prevents PowerShell from becoming a second artifact-verification authority.
 
 ```sh
 bootstrap_dir="$(mktemp -d)"
@@ -34,8 +41,8 @@ uses `gh release verify-asset` on all three, checks the installer-core and
 archive hashes again against `SHA256SUMS`, and only then executes the core.
 
 For a cautious bootstrap, download the release manifest and both scripts,
-extract only their exact basename entries, require exactly two entries, and
-verify them before execution:
+extract only their exact basename entries, require exactly one row for each
+bootstrap file, and verify them before execution:
 
 ```sh
 bootstrap_dir="$(mktemp -d)"
@@ -47,10 +54,13 @@ gh release download v0.1.0 \
   --dir "$bootstrap_dir"
 (
   cd "$bootstrap_dir"
-  awk '$2 == "install.sh" || $2 == "*install.sh" ||
-       $2 == "install_core.py" || $2 == "*install_core.py"' \
-    SHA256SUMS > bootstrap.sha256
-  test "$(awk 'END { print NR }' bootstrap.sha256)" -eq 2
+  awk '$2 == "install.sh" || $2 == "*install.sh"' \
+    SHA256SUMS > install.sh.sha256
+  awk '$2 == "install_core.py" || $2 == "*install_core.py"' \
+    SHA256SUMS > install_core.py.sha256
+  test "$(awk 'END { print NR }' install.sh.sha256)" -eq 1
+  test "$(awk 'END { print NR }' install_core.py.sha256)" -eq 1
+  cat install.sh.sha256 install_core.py.sha256 > bootstrap.sha256
   shasum -a 256 -c bootstrap.sha256
 )
 sh "$bootstrap_dir/install.sh" --version 0.1.0
@@ -149,8 +159,8 @@ license, and provenance; verified installation does not require system Node.
 Local development installs remain an explicit system-Node fallback. The GPU
 artifact contains its locked esbuild platform binary and TypeScript compiler;
 application builds do not resolve framework packages from the network. Project
-creation materializes the exact runtime package from the SDK and proves the
-committed npm lock with `npm ci`.
+creation validates the committed npm lock's exact shape and materializes the
+exact runtime package directly from SDK bytes without external npm.
 
 The verified installer stores SDKs immutably at
 `PREFIX/lib/vellum-installs/<version>-<target>-<archive-sha256>`. It caches the

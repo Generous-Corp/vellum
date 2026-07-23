@@ -66,6 +66,19 @@ The machine-readable route contract is
 Claude Design, React-project, HTML, REST, and `.fig` routes are not silently
 accepted by the normal CLI.
 
+For the current deterministic Figma route:
+
+1. Install the existing **Design for Pulp** Figma plugin using its
+   [step-by-step guide](https://github.com/danielraffel/pulp/blob/main/docs/guides/figma-plugin.md).
+2. Select one frame in Figma and choose **Export to Pulp**.
+3. Pass the downloaded `.pulp.json` or `.pulp.zip` directly to Vellum. Do not
+   unpack or rewrite it.
+
+This exporter is an acknowledged temporary upstream dependency, not Pulp
+runtime coupling: the resulting application and its installed build do not
+depend on Pulp. A Vellum-owned exporter is still required before this route can
+be called a fully independent public on-ramp.
+
 From an installed local-development CLI:
 
 ```sh
@@ -92,6 +105,7 @@ design/overlays/main.authored.json      developer-owned bindings and overrides
 design/reports/                         import/reimport diagnostics and candidates
 design/import.lock.json                 accepted active revision and hashes
 tokens/imported/                        generated primitive tokens
+tokens/generated/                       resolved primitive/semantic/theme layers
 assets/generated/                       copied assets and provenance manifest
 ui/generated/                           materialized UI and resolved bindings
 src/, components/, native/              developer-owned and never rewritten
@@ -102,8 +116,19 @@ structured visual overrides, semantic tokens, or theme overrides. Reimport
 reapplies that file without rewriting it. If a binding or override no longer
 resolves, reimport fails, keeps the current DesignIR and lock active, and writes
 the candidate DesignIR plus a conflict report for review. Fix the overlay and
-rerun the same command. A source snapshot revision can never be replaced with
-different bytes.
+rerun the same command. When only the authored overlay changed, reimporting the
+same immutable source rematerializes affected generated UI, binding receipts,
+and resolved token-layer receipts and reports `reimport_rematerialized`; a
+second identical run reports `reimport_unchanged`. The rematerialized status
+also covers repair of missing or modified tool-owned derived output; it does not
+claim what caused that drift. A source snapshot revision can never be replaced
+with different bytes.
+
+Import and reimport are serialized per project from the first import-state read
+through commit or rollback. A second process waits for a bounded interval rather
+than deriving from a stale revision. The tool recovers a lock whose same-host
+owner has exited, and conservatively reclaims incomplete lock metadata only
+after a grace period; live locks are never replaced during normal waits.
 
 The TSX application imports both `importedDesign` and `importedBindings` from
 the build-provided `@vellum/imported` module. `Design` connects each generated

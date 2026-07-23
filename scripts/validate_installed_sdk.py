@@ -106,6 +106,15 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
         if install_manifest != expected_manifest:
             raise ValidationError("installed SDK identity does not match the verified archive")
 
+        installed_cli_version = run(
+            [str(prefix / "bin/vellum"), "--version"], cwd=root
+        ).stdout.strip()
+        expected_cli_version = f"vellum {verification['cli_version']}"
+        if installed_cli_version != expected_cli_version:
+            raise ValidationError(
+                "installed CLI identity does not match the verified archive"
+            )
+
         contamination = installed_contamination_findings(prefix)
         if contamination:
             first = contamination[0]
@@ -543,6 +552,7 @@ vellum_component_entry_v1(void) { return &descriptor; }
         "transactional_install_verification": True,
         "transactional_uninstall_preserves_unrelated": uninstall_preserved_unrelated,
         "installed_artifact_identity": install_manifest == expected_manifest,
+        "installed_cli_identity": installed_cli_version == expected_cli_version,
         "installed_tree_contamination_scan": not contamination,
         "relocatable_cmake_package": True,
         "gpu_authoring_ui_payload": not gpu_claimed or ui_present,
@@ -597,6 +607,7 @@ vellum_component_entry_v1(void) { return &descriptor; }
         "artifact": verification["artifact"],
         "artifact_sha256": verification["sha256"],
         "framework_version": verification["framework_version"],
+        "cli_version": verification["cli_version"],
         "source_commit": verification["source_commit"],
         "source_tree_clean": verification["source_tree_clean"],
         "target": verification["target"],

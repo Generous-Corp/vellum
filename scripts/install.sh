@@ -46,7 +46,14 @@ while [ "$#" -gt 0 ]; do
 done
 
 command -v python3 >/dev/null 2>&1 || {
-  printf '%s\n' 'Python 3 is required by the Vellum installer.' >&2
+  printf '%s\n' \
+    'Python 3.9+ is required. On macOS, run `xcode-select --install` or install Python 3.9+ from python.org.' >&2
+  exit 1
+}
+python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' || {
+  python_version=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:3])))' 2>/dev/null || printf unknown)
+  printf 'Python 3.9+ is required; found %s. Install current Xcode Command Line Tools or Python from python.org.\n' \
+    "$python_version" >&2
   exit 1
 }
 install_prefix=$(python3 -c \
@@ -269,7 +276,7 @@ if [ -n "$local_root" ]; then
 {
   "schema": "vellum.sdk-artifact.v1",
   "framework_version": "0.1.0",
-  "cli_version": "0.1.0-dev",
+  "cli_version": "0.1.0",
   "cli_api": 1,
   "source_commit": null,
   "target": "local-development",
@@ -330,6 +337,30 @@ if [ -n "$version" ]; then
     release_target="$release_os-$release_arch"
   fi
   case "$release_target" in *[!0-9A-Za-z._-]*|'') printf '%s\n' 'Release target contains unsafe characters.' >&2; exit 2 ;; esac
+  if [ "$release_base" = "$official_release_base" ]; then
+    if [ "$(uname -s)" != "Darwin" ] || [ "$(uname -m)" != "arm64" ] || \
+       [ "$release_target" != "darwin-arm64" ]; then
+      printf 'Vellum v%s application SDK releases currently support only macOS 15.0+ arm64; detected %s %s and target %s.\n' \
+        "$version" "$(uname -s)" "$(uname -m)" "$release_target" >&2
+      exit 1
+    fi
+    command -v sw_vers >/dev/null 2>&1 || {
+      printf '%s\n' \
+        'Vellum application SDK releases require macOS 15.0 or newer, but sw_vers is unavailable.' >&2
+      exit 1
+    }
+    macos_version=$(sw_vers -productVersion 2>/dev/null || true)
+    python3 -c \
+      'import re, sys
+value = sys.argv[1]
+match = re.fullmatch(r"([0-9]+)(?:\.[0-9]+){0,2}", value)
+raise SystemExit(0 if match and int(match.group(1)) >= 15 else 1)' \
+      "$macos_version" || {
+      printf 'Vellum application SDK releases require macOS 15.0 or newer; found %s.\n' \
+        "${macos_version:-unknown}" >&2
+      exit 1
+    }
+  fi
   release_temporary=$(mktemp -d "${TMPDIR:-/tmp}/vellum-release.XXXXXX")
   trap 'rm -rf "$release_temporary"' EXIT HUP INT TERM
   archive_name="vellum-sdk-$version-$release_target.tar.gz"

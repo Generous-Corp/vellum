@@ -15,6 +15,10 @@ import {
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import process from 'node:process';
 import {
+    acquireImportOperationLock,
+    releaseImportOperationLock,
+} from './import-operation-lock.js';
+import {
     applyAuthoredOverlay,
     decodeFigmaPluginExport,
     emptyAuthoredOverlay,
@@ -51,16 +55,25 @@ try {
     const project = resolve(args.project);
     await validateProject(project);
     let payload;
-    if (command === 'import') payload = await importDesign(project, args);
-    else if (command === 'reimport') payload = await reimportDesignFilesystem(project, args);
-    else if (['build', 'run', 'test', 'capture', 'package'].includes(command)) {
-        fail(
-            'capability_unavailable',
-            `The installed backend does not yet provide the '${command}' capability`,
-            { exitCode: 4 },
-        );
+    if (command === 'import' || command === 'reimport') {
+        const lease = await acquireImportOperationLock(project, assertSafeOutputPath);
+        try {
+            payload = command === 'import'
+                ? await importDesign(project, args)
+                : await reimportDesignFilesystem(project, args);
+        } finally {
+            await releaseImportOperationLock(project, lease, assertSafeOutputPath);
+        }
+    } else {
+        if (['build', 'run', 'test', 'capture', 'package'].includes(command)) {
+            fail(
+                'capability_unavailable',
+                `The installed backend does not yet provide the '${command}' capability`,
+                { exitCode: 4 },
+            );
+        }
+        else fail('unsupported_command', `vellum-backend does not implement '${command ?? ''}'`);
     }
-    else fail('unsupported_command', `vellum-backend does not implement '${command ?? ''}'`);
     process.stdout.write(stableStringify(payload, { space: 0 }));
 } catch (error) {
     const status = error.status ?? 'backend_error';
@@ -78,7 +91,7 @@ try {
 
 async function importDesign(project, args) {
     const sourcePath = requiredSource(args);
-    const sourceKey = validateSourceKey(args['source-key'] ?? 'main');
+    const sourceKey = requestedSourceKey(args);
     const sourceType = args['source-type'] ?? 'figma';
     const loaded = await loadSource(sourcePath, {
         sourceArchive: sourceArchiveArguments(args),
@@ -144,7 +157,7 @@ async function importDesign(project, args) {
 
 async function reimportDesignFilesystem(project, args) {
     const sourcePath = requiredSource(args);
-    const sourceKey = validateSourceKey(args['source-key'] ?? 'main');
+    const sourceKey = requestedSourceKey(args);
     const pathsForLock = projectPaths(project, sourceKey, 'pending');
     const importLock = await readRequiredJson(pathsForLock.importLock, 'design import lock');
     if (importLock.schema !== IMPORT_LOCK_SCHEMA) {
@@ -199,11 +212,50 @@ async function reimportDesignFilesystem(project, args) {
                 2,
             );
         }
+        const generated = generatedFiles({
+            applied,
+            assets,
+            document: previous,
+            overlayCreated: false,
+            overlayValue: overlay,
+            paths,
+            project,
+            sourceHash: loaded.sourceHash,
+            sourceKey,
+            sourceArtifact: loaded.sourceArtifact,
+            sourceName: loaded.sourceName,
+            sourceType: lockedSource.adapter,
+        });
+        const refreshed = new Map();
+        for (const path of [
+            paths.materializedUi,
+            paths.generatedBindings,
+            paths.resolvedTokenLayers,
+        ]) {
+            const expected = generated.get(path);
+            const current = await readFile(path).catch((error) => {
+                if (error.code === 'ENOENT') return null;
+                throw error;
+            });
+            if (current === null || !current.equals(expected)) refreshed.set(path, expected);
+        }
+        if (refreshed.size > 0) {
+            await writeTransaction(project, refreshed, {
+                preconditions: new Map([
+                    [paths.overlay, overlayBytesBefore],
+                    [paths.importGraph, importGraphBytesBefore],
+                ]),
+            });
+        }
         await assertBytesUnchanged(paths.overlay, overlayBytesBefore);
         await assertBytesUnchanged(paths.importGraph, importGraphBytesBefore);
-        return success('reimport_unchanged', `Source '${sourceKey}' is already at revision '${loaded.revision}'`, {
+        const status = refreshed.size > 0 ? 'reimport_rematerialized' : 'reimport_unchanged';
+        const message = refreshed.size > 0
+            ? `Rematerialized derived output for unchanged source '${sourceKey}' at revision '${loaded.revision}'`
+            : `Source '${sourceKey}' is already at revision '${loaded.revision}'`;
+        return success(status, message, {
             activeRevision: loaded.revision,
-            files: [],
+            files: relativeFiles(project, refreshed),
             sourceKey,
             summary: summarizeDesignIR(previous),
         }, [...loaded.backendDiagnostics, ...assets.diagnostics]);
@@ -240,7 +292,12 @@ async function reimportDesignFilesystem(project, args) {
 
     if (!result.accepted) {
         reviewFiles.set(paths.pendingIr, jsonBytes(loaded.document));
-        await writeTransaction(project, reviewFiles);
+        await writeTransaction(project, reviewFiles, {
+            preconditions: new Map([
+                [paths.overlay, overlayBytesBefore],
+                [paths.importGraph, importGraphBytesBefore],
+            ]),
+        });
         await assertBytesUnchanged(paths.overlay, overlayBytesBefore);
         await assertBytesUnchanged(paths.importGraph, importGraphBytesBefore);
         return failure('reimport_conflict', 'Reimport requires authored conflict resolution', {
@@ -280,6 +337,10 @@ async function reimportDesignFilesystem(project, args) {
     const staleAssets = await staleGeneratedAssets(paths.generatedAssets, assets.copies);
     await writeTransaction(project, generated, {
         removals: [paths.pendingIr, ...staleAssets],
+        preconditions: new Map([
+            [paths.overlay, overlayBytesBefore],
+            [paths.importGraph, importGraphBytesBefore],
+        ]),
     });
     await assertBytesUnchanged(paths.overlay, overlayBytesBefore);
     await assertBytesUnchanged(paths.importGraph, importGraphBytesBefore);
@@ -352,6 +413,7 @@ function generatedFiles(context) {
                 sourceArtifact.kind === 'pulp-zip' ? paths.snapshotArchive : paths.snapshotSource,
             ),
             tokens: relative(project, paths.importedTokens),
+            resolvedTokenLayers: relative(project, paths.resolvedTokenLayers),
         },
         lossReport: document.lossReport,
         revision: document.source.revision,
@@ -378,6 +440,12 @@ function generatedFiles(context) {
     }));
     files.set(paths.nodeIds, Buffer.from(nodeIdsTypescript(componentDefinitions), 'utf8'));
     files.set(paths.importedTokens, jsonBytes(document.tokens));
+    files.set(paths.resolvedTokenLayers, jsonBytes({
+        layers: applied.tokenLayers,
+        revision: document.source.revision,
+        schema: 'vellum.resolved-token-layers.v1',
+        sourceKey,
+    }));
     files.set(paths.assetManifest, jsonBytes({
         assets: assets.manifest,
         revision: document.source.revision,
@@ -634,6 +702,7 @@ function projectPaths(project, sourceKey, revision) {
         pendingIr: join(project, 'design', 'reports', `${sourceKey}.${revision}.candidate.designir.json`),
         project,
         reimportReport: join(project, 'design', 'reports', `${sourceKey}.${revision}.reimport-report.json`),
+        resolvedTokenLayers: join(project, 'tokens', 'generated', `${sourceKey}.layers.json`),
         snapshotAssets: snapshotRoot,
         snapshotArchive: join(snapshotRoot, 'source.pulp.zip'),
         snapshotProvenance: join(snapshotRoot, 'provenance.json'),
@@ -744,8 +813,13 @@ function snapshotProvenance({
 
 async function writeTransaction(project, files, options = {}) {
     const entries = [...files.entries()].sort(([left], [right]) => left.localeCompare(right));
+    const preconditions = options.preconditions ?? new Map();
+    if (!(preconditions instanceof Map)) {
+        fail('invalid_transaction', 'Transaction preconditions must be a map');
+    }
     for (const [path] of entries) await assertSafeOutputPath(project, path);
     for (const path of options.removals ?? []) await assertSafeOutputPath(project, path);
+    for (const [path] of preconditions) await assertSafeOutputPath(project, path);
     await assertSafeOutputPath(project, join(project, '.vellum', 'transactions', '.probe'));
     const transaction = join(project, '.vellum', 'transactions', `${process.pid}-${sha256(Buffer.from(entries.map(([path]) => path).join('\n'))).slice(0, 12)}`);
     await rm(transaction, { force: true, recursive: true });
@@ -759,6 +833,9 @@ async function writeTransaction(project, files, options = {}) {
             const stagedPath = join(staged, relativePath);
             await mkdir(dirname(stagedPath), { recursive: true });
             await writeFile(stagedPath, bytes);
+        }
+        for (const [path, expected] of preconditions) {
+            await assertBytesUnchanged(path, expected);
         }
         for (const [path] of entries) {
             const relativePath = relative(project, path);
@@ -782,6 +859,9 @@ async function writeTransaction(project, files, options = {}) {
             await copyFile(path, backupPath);
             await rm(path);
             touched.push({ backupPath, existed: true, path });
+        }
+        for (const [path, expected] of preconditions) {
+            await assertBytesUnchanged(path, expected);
         }
     } catch (error) {
         for (const item of touched.reverse()) {
@@ -835,6 +915,13 @@ function validateSourceKey(value) {
         fail('invalid_source_key', 'Source key must be lowercase kebab-case and at most 64 characters');
     }
     return value;
+}
+
+function requestedSourceKey(args) {
+    if (args.as !== undefined && args['source-key'] !== undefined) {
+        fail('invalid_arguments', '--as and --source-key cannot be combined');
+    }
+    return validateSourceKey(args.as ?? args['source-key'] ?? 'main');
 }
 
 function validateRevision(value) {

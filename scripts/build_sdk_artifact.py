@@ -30,7 +30,7 @@ from typing import Iterable
 
 REPO = Path(__file__).resolve().parents[1]
 FRAMEWORK_VERSION = "0.1.0"
-CLI_VERSION = "0.1.0-dev"
+CLI_VERSION = FRAMEWORK_VERSION
 CLI_API = 1
 METADATA_SCHEMA = "vellum.sdk-artifact.v1"
 EVIDENCE_SCHEMA = "vellum.sdk-artifact-evidence.v1"
@@ -61,6 +61,23 @@ def run(arguments: list[str], *, cwd: Path | None = None) -> None:
         raise ArtifactError(
             f"command failed ({completed.returncode}): {' '.join(arguments)}\n"
             f"{completed.stdout}"
+        )
+
+
+def verify_cli_identity(repo: Path) -> None:
+    cli = repo / "cli/vellum_cli.py"
+    completed = subprocess.run(
+        [sys.executable, str(cli), "--version"],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    expected = f"vellum {CLI_VERSION}"
+    if completed.returncode or completed.stdout.strip() != expected:
+        detail = (completed.stdout + completed.stderr).strip()
+        raise ArtifactError(
+            f"authoring CLI identity must be exactly {expected!r}; got {detail!r}"
         )
 
 
@@ -525,6 +542,7 @@ def copy_payload(
 def build(args: argparse.Namespace) -> dict[str, object]:
     repo = args.repo.resolve()
     output_dir = args.output_dir.resolve()
+    verify_cli_identity(repo)
     commit, source_tree_clean = source_identity(repo, args.source_commit, args.allow_dirty)
     target = args.target or target_name()
     skia_archive = args.skia_archive.resolve() if args.skia_archive else None

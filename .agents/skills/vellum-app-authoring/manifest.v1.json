@@ -12,12 +12,6 @@
   },
   "lifecycle": [
     {
-      "step": "install",
-      "kind": "installer",
-      "command": "scripts/install.sh",
-      "flags": ["--archive", "--checksums", "--install-dir"]
-    },
-    {
       "step": "create",
       "kind": "cli",
       "command": "create",
@@ -27,7 +21,7 @@
       "step": "doctor",
       "kind": "cli",
       "command": "doctor",
-      "flags": ["--json", "--fix", "--project"]
+      "flags": ["--json", "--fix", "--require-target", "--project"]
     },
     {
       "step": "import",
@@ -80,6 +74,7 @@
       "design/ir",
       "design/generated",
       "tokens/imported",
+      "tokens/generated",
       "assets/generated",
       "ui/generated"
     ],

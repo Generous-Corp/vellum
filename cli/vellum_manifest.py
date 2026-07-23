@@ -14,6 +14,7 @@ LOCK_NAME = "framework.lock"
 LOCK_SCHEMA = "vellum.project-lock.v1"
 SUPPORTED_DESKTOP_TARGET = "macos"
 COMPONENT_MANIFEST_SCHEMA = "vellum.components.v1"
+IMPORT_LOCK_SCHEMA = "vellum.design-import-lock.v1"
 _COMPONENT_ID = re.compile(r"[a-z][a-z0-9-]{0,63}")
 
 
@@ -225,6 +226,36 @@ def load_components_manifest(project: Path, relative_path: str) -> list[dict[str
             "wasm_source": wasm_source,
         })
     return output
+
+
+def imported_materialized_design(project: Path) -> Path | None:
+    """Resolve the one-source v0 generated design without assuming its key."""
+    root = project.resolve()
+    lock_path = root / "design/import.lock.json"
+    if not lock_path.exists():
+        return None
+    try:
+        lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ManifestError(f"cannot read design import lock: {error}") from error
+    sources = lock.get("sources") if isinstance(lock, dict) else None
+    if (
+        not isinstance(lock, dict) or
+        lock.get("schema") != IMPORT_LOCK_SCHEMA or
+        not isinstance(sources, dict) or
+        len(sources) != 1
+    ):
+        raise ManifestError("design import lock must contain exactly one v1 source")
+    source_key = next(iter(sources))
+    if not isinstance(source_key, str) or not _COMPONENT_ID.fullmatch(source_key):
+        raise ManifestError("design import lock contains an invalid source key")
+    materialized = root / "ui/generated" / f"{source_key}.materialized.json"
+    bindings = root / "ui/generated" / f"{source_key}.bindings.json"
+    if not materialized.is_file() or not bindings.is_file():
+        raise ManifestError(
+            f"generated design and bindings are missing for source '{source_key}'"
+        )
+    return materialized
 
 
 def load_app_manifest(project: Path) -> dict[str, Any]:

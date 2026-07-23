@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -24,6 +25,9 @@ finally:
 capture_matrix = BACKEND_MODULE["capture_matrix"]
 scenario_arguments = BACKEND_MODULE["scenario_arguments"]
 validate_component_source = BACKEND_MODULE["validate_component_source"]
+build_component_modules = BACKEND_MODULE["build_component_modules"]
+component_sdk_root = BACKEND_MODULE["component_sdk_root"]
+build_app = BACKEND_MODULE["build_app"]
 BackendFailure = BACKEND_MODULE["BackendFailure"]
 
 
@@ -253,6 +257,167 @@ class NativeBackendTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(BackendFailure, "differ.*from the declaration"):
                 BACKEND_MODULE["project_context"](str(project))
+
+    def test_component_build_selects_macos_sdk_and_uses_relocatable_install_name(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = self.create_project(root)
+            source = project / "native/gamut-field.cpp"
+            source.write_text('#include <vellum/components/abi.h>\n', encoding="utf-8")
+            (project / "native/components.toml").write_text(
+                '[manifest]\n'
+                'schema = "vellum.components.v1"\n'
+                'components = ["gamut-field"]\n\n'
+                '[component.gamut-field]\n'
+                'native_source = "native/gamut-field.cpp"\n'
+                'web = "fallback"\n',
+                encoding="utf-8",
+            )
+            sdk = fake_gpu_sdk(root)
+            abi = sdk / "sdk/include/vellum/components/abi.h"
+            abi.parent.mkdir(parents=True)
+            abi.write_text("/* public ABI */\n", encoding="utf-8")
+            context = BACKEND_MODULE["project_context"](str(project))
+            selected_sdk = root / "MacOSX.sdk"
+            selected_sdk.mkdir()
+            commands: list[tuple[list[str], Path | None]] = []
+
+            def record_command(
+                arguments: list[str], *, cwd: Path | None = None,
+            ) -> subprocess.CompletedProcess[str]:
+                commands.append((arguments, cwd))
+                return subprocess.CompletedProcess(arguments, 0, "", "")
+
+            with mock.patch.dict(build_component_modules.__globals__, {
+                "component_compiler": lambda: "/toolchain/usr/bin/clang++",
+                "component_sdk_root": lambda: selected_sdk,
+                "run_checked": record_command,
+            }):
+                modules = build_component_modules(
+                    context, sdk, root / "VellumComponents",
+                )
+
+            self.assertEqual(modules, [{
+                "id": "gamut-field",
+                "path": str(root / "VellumComponents/gamut-field.dylib"),
+            }])
+            self.assertEqual(len(commands), 1)
+            arguments, cwd = commands[0]
+            self.assertEqual(cwd, project.resolve())
+            self.assertEqual(
+                arguments[arguments.index("-isysroot"):arguments.index("-isysroot") + 2],
+                ["-isysroot", str(selected_sdk)],
+            )
+            self.assertIn("-mmacosx-version-min=15.0", arguments)
+            self.assertIn("-Wl,-install_name,@rpath/gamut-field.dylib", arguments)
+
+    def test_native_build_bundles_the_declared_non_main_import_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = self.create_project(root)
+            (project / "design").mkdir(exist_ok=True)
+            (project / "design/import.lock.json").write_text(json.dumps({
+                "graphVersion": 1,
+                "schema": "vellum.design-import-lock.v1",
+                "sources": {
+                    "shell": {
+                        "activeRevision": "revision-a",
+                    },
+                },
+            }), encoding="utf-8")
+            generated = project / "ui/generated"
+            generated.mkdir(parents=True, exist_ok=True)
+            materialized = generated / "shell.materialized.json"
+            materialized.write_text('{"root":{}}\n', encoding="utf-8")
+            (generated / "shell.bindings.json").write_text(
+                '{"bindings":[]}\n', encoding="utf-8",
+            )
+            sdk = fake_build_sdk(root)
+            context = BACKEND_MODULE["project_context"](str(project))
+            commands: list[list[str]] = []
+
+            def record_command(
+                arguments: list[str], *, cwd: Path | None = None,
+            ) -> subprocess.CompletedProcess[str]:
+                commands.append(arguments)
+                return subprocess.CompletedProcess(arguments, 0, "", "")
+
+            with mock.patch.dict(build_app.__globals__, {"run_checked": record_command}):
+                build_app(context, sdk)
+
+            self.assertEqual(len(commands), 1)
+            self.assertEqual(Path(commands[0][-1]), materialized.resolve())
+
+    def test_component_sdk_root_uses_selected_xcode_macos_sdk_not_sdkroot_env(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            selected_sdk = Path(temporary) / "MacOSX.sdk"
+            selected_sdk.mkdir()
+            commands: list[list[str]] = []
+
+            def fake_run_checked(
+                arguments: list[str], *, cwd: Path | None = None,
+            ) -> subprocess.CompletedProcess[str]:
+                commands.append(arguments)
+                return subprocess.CompletedProcess(
+                    arguments, 0, f"{selected_sdk}\n", "",
+                )
+
+            with (
+                mock.patch.dict(component_sdk_root.__globals__, {
+                    "run_checked": fake_run_checked,
+                }),
+                mock.patch("shutil.which", return_value="/usr/bin/xcrun"),
+                mock.patch.dict(os.environ, {"SDKROOT": "/caller/must/not/set-this"}),
+            ):
+                self.assertEqual(component_sdk_root(), selected_sdk.resolve())
+
+            self.assertEqual(commands, [[
+                "/usr/bin/xcrun", "--sdk", "macosx", "--show-sdk-path",
+            ]])
+
+    @unittest.skipUnless(sys.platform == "darwin", "requires the macOS toolchain")
+    def test_component_builds_without_sdkroot_and_has_relocatable_macho_id(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = self.create_project(root)
+            source = project / "native/gamut-field.cpp"
+            source.write_text('#include <vellum/components/abi.h>\n', encoding="utf-8")
+            (project / "native/components.toml").write_text(
+                '[manifest]\n'
+                'schema = "vellum.components.v1"\n'
+                'components = ["gamut-field"]\n\n'
+                '[component.gamut-field]\n'
+                'native_source = "native/gamut-field.cpp"\n'
+                'web = "fallback"\n',
+                encoding="utf-8",
+            )
+            sdk = fake_gpu_sdk(root)
+            abi = sdk / "sdk/include/vellum/components/abi.h"
+            abi.parent.mkdir(parents=True)
+            shutil.copy2(
+                REPO / "components/include/vellum/components/abi.h", abi,
+            )
+            context = BACKEND_MODULE["project_context"](str(project))
+            environment = dict(os.environ)
+            environment.pop("SDKROOT", None)
+
+            with mock.patch.dict(os.environ, environment, clear=True):
+                modules = build_component_modules(
+                    context, sdk, root / "VellumComponents",
+                )
+
+            output = Path(modules[0]["path"])
+            self.assertTrue(output.is_file())
+            identity = subprocess.run(
+                ["otool", "-D", str(output)],
+                text=True, capture_output=True, check=True,
+            ).stdout.splitlines()
+            self.assertIn("@rpath/gamut-field.dylib", identity)
+            load_commands = subprocess.run(
+                ["otool", "-l", str(output)],
+                text=True, capture_output=True, check=True,
+            ).stdout
+            self.assertRegex(load_commands, r"(?m)^\s+minos 15\.0$")
 
 
 if __name__ == "__main__":

@@ -56,4 +56,7 @@ duplicate commands, malformed bounds/colors, and ABI mismatches.
 `vellum build` owns the generated compile invocation under `.vellum/build` and
 puts the resulting dylib in `Contents/PlugIns/VellumComponents`. The editable
 source and declaration stay in the application repository. `run`, `test`,
-`capture`, and `package` use the same bundled module.
+`capture`, and `package` use the same bundled module. Run `vellum doctor`
+after declaring one: it verifies that Xcode's selected `clang++` and macOS SDK
+are both available. The backend selects that SDK itself; applications do not
+set `SDKROOT` or maintain compiler flags.

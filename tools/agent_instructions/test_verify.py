@@ -67,8 +67,8 @@ class AgentInstructionVerificationTests(unittest.TestCase):
             self.fixture(root)
             skill = (root / SKILL).read_text(encoding="utf-8")
             skill = skill.replace(
-                "`vellum --json doctor --fix`",
-                "`vellum --json doctor --fix --install-everything`",
+                "`vellum --json doctor --fix --require-target macos`",
+                "`vellum --json doctor --fix --require-target macos --install-everything`",
             )
             (root / SKILL).write_text(skill, encoding="utf-8")
             with self.assertRaisesRegex(VerificationError, "unknown doctor flags"):
@@ -91,6 +91,15 @@ class AgentInstructionVerificationTests(unittest.TestCase):
             with (root / SKILL).open("a", encoding="utf-8") as handle:
                 handle.write("\nImport html applications directly.\n")
             with self.assertRaisesRegex(VerificationError, "unsupported source routes"):
+                verify(root)
+
+    def test_rejects_repository_relative_installer_in_downstream_skill(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.fixture(root)
+            with (root / SKILL).open("a", encoding="utf-8") as handle:
+                handle.write("\n./scripts/install.sh --version 0.1.0\n")
+            with self.assertRaisesRegex(VerificationError, "repository-relative installer"):
                 verify(root)
 
 

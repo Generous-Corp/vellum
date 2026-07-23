@@ -151,7 +151,7 @@ if ($LocalRoot) {
 {
   "schema": "vellum.sdk-artifact.v1",
   "framework_version": "0.1.0",
-  "cli_version": "0.1.0-dev",
+  "cli_version": "0.1.0",
   "cli_api": 1,
   "source_commit": null,
   "target": "local-development",
@@ -193,117 +193,10 @@ if ($LocalRoot) {
     exit 0
 }
 
-if ($Version) {
-    if ($Archive -or $Checksums) { throw "-Version cannot be combined with -Archive or -Checksums." }
-    $Version = $Version.TrimStart("v")
-    if (!$Version -or $Version -eq "latest" -or $Version -notmatch '^[0-9A-Za-z._-]+$') {
-        throw "Release installs require a safe exact version, not latest."
-    }
-    if (!$Target) {
-        if ($IsMacOS) { $os = "darwin" }
-        elseif ($IsLinux) { $os = "linux" }
-        else { $os = "windows" }
-        $architecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
-        if ($architecture -eq "arm64") { $arch = "arm64" }
-        elseif ($architecture -eq "x64") { $arch = "x86_64" }
-        else { throw "Unsupported release architecture: $architecture" }
-        $Target = "$os-$arch"
-    }
-    if ($Target -notmatch '^[0-9A-Za-z._-]+$') { throw "Release target contains unsafe characters." }
-    $download = Join-Path ([IO.Path]::GetTempPath()) ("vellum-release-" + [guid]::NewGuid())
-    New-Item -ItemType Directory -Path $download | Out-Null
-    $archiveName = "vellum-sdk-$Version-$Target.tar.gz"
-    $releaseUrl = "$($ReleaseBaseUrl.TrimEnd('/'))/v$Version"
-    $Archive = Join-Path $download $archiveName
-    $Checksums = Join-Path $download "SHA256SUMS"
-    try {
-        Invoke-WebRequest "$releaseUrl/$archiveName" -OutFile $Archive
-        Invoke-WebRequest "$releaseUrl/SHA256SUMS" -OutFile $Checksums
-    } catch {
-        Remove-Item $download -Recurse -Force -ErrorAction SilentlyContinue
-        throw
-    }
-}
-
-if (!$Archive -or !$Checksums) {
-    throw "No Vellum release is published. Use -LocalRoot, provide -Archive plus -Checksums, or request an exact version once published."
-}
-if (!(Test-Path $Archive) -or !(Test-Path $Checksums)) { throw "Archive or checksum manifest not found." }
-
-$archiveName = Split-Path $Archive -Leaf
-$matching = Get-Content $Checksums | ForEach-Object {
-    if ($_ -match '^([0-9A-Fa-f]{64})\s+\*?(.+)$' -and $Matches[2] -ceq $archiveName) { $Matches[1].ToLowerInvariant() }
-} | Where-Object { $_ }
-if (@($matching).Count -ne 1) { throw "Expected exactly one checksum for $archiveName; found $(@($matching).Count)." }
-$actual = (Get-FileHash -Algorithm SHA256 $Archive).Hash.ToLowerInvariant()
-if ($actual -cne $matching[0]) { throw "SHA-256 mismatch for $archiveName. Refusing to extract." }
-Write-Host "Verified SHA-256: $actual"
-
-$temporary = Join-Path ([IO.Path]::GetTempPath()) ("vellum-install-" + [guid]::NewGuid())
-New-Item -ItemType Directory -Path $temporary | Out-Null
-try {
-    $extractor = @'
-from pathlib import PurePosixPath
-import json
-import sys
-import tarfile
-
-archive, destination = sys.argv[1:]
-with tarfile.open(archive, "r:gz") as handle:
-    members = handle.getmembers()
-    if len(members) > 20_000 or sum(member.size for member in members) > 4 * 1024**3:
-        raise SystemExit("archive exceeds installer safety limits")
-    if len({member.name for member in members}) != len(members):
-        raise SystemExit("archive contains duplicate member names")
-    for member in members:
-        path = PurePosixPath(member.name)
-        if (not path.parts or path.parts[0] not in {".agents", "vellum_cli.py", "vellum_backend.py", "vellum_manifest.py", "vellum_png.py", "vellum_native_backend.py", "vellum_web_backend.py", "templates", "sdk", "bin", "design-ir", "ui", "web", "node", "metadata.json"} or
-                path.is_absolute() or ".." in path.parts or "\\" in member.name or ":" in path.parts[0] or
-                member.issym() or member.islnk() or not (member.isfile() or member.isdir())):
-            raise SystemExit(f"unsafe archive member: {member.name}")
-    try:
-        metadata_member = handle.getmember("metadata.json")
-        metadata_file = handle.extractfile(metadata_member)
-        metadata = json.load(metadata_file) if metadata_file else None
-    except (KeyError, json.JSONDecodeError) as error:
-        raise SystemExit(f"invalid SDK artifact metadata: {error}")
-    if (not isinstance(metadata, dict) or metadata.get("schema") != "vellum.sdk-artifact.v1" or
-            not isinstance(metadata.get("framework_version"), str) or not metadata["framework_version"] or
-            metadata.get("cli_api") != 1 or
-            not isinstance(metadata.get("target"), str) or not metadata["target"] or
-            not isinstance(metadata.get("source_commit"), str) or
-            len(metadata["source_commit"]) != 40 or
-            any(character not in "0123456789abcdef" for character in metadata["source_commit"])):
-        raise SystemExit("incompatible SDK artifact metadata")
-    handle.extractall(destination)
-'@
-    $extractor | python - $Archive $temporary
-    if ($LASTEXITCODE -ne 0) { throw "Archive extraction validation failed." }
-    if (!(Test-Path (Join-Path $temporary "vellum_cli.py")) -or
-        !(Test-Path (Join-Path $temporary "vellum_backend.py")) -or
-        !(Test-Path (Join-Path $temporary "vellum_manifest.py")) -or
-        !(Test-Path (Join-Path $temporary "vellum_png.py")) -or
-        !(Test-Path (Join-Path $temporary ".agents\skills\vellum-app-authoring\SKILL.md")) -or
-        !(Test-Path (Join-Path $temporary ".agents\skills\vellum-app-authoring\manifest.v1.json")) -or
-        !(Test-Path (Join-Path $temporary "templates\basic")) -or
-        !(Test-Path (Join-Path $temporary "design-ir")) -or
-        !(Test-Path (Join-Path $temporary "metadata.json")) -or
-        !(Test-Path (Join-Path $temporary "sdk"))) {
-        throw "Verified archive does not contain the Vellum SDK artifact layout."
-    }
-    $metadata = Get-Content (Join-Path $temporary "metadata.json") -Raw | ConvertFrom-Json
-    $installManifest = [ordered]@{
-        schema = "vellum.sdk-install.v1"
-        verified = $true
-        artifact = $archiveName
-        artifact_sha256 = $actual
-        framework_version = $metadata.framework_version
-        target = $metadata.target
-        source_commit = $metadata.source_commit
-    }
-    Write-Utf8NoBom (Join-Path $temporary "install-manifest.json") ($installManifest | ConvertTo-Json)
-    Install-Payload $temporary
-} finally {
-    Remove-Item $temporary -Recurse -Force -ErrorAction SilentlyContinue
-    if ($download) { Remove-Item $download -Recurse -Force -ErrorAction SilentlyContinue }
-}
+throw @"
+Verified archive and release installation are unavailable in PowerShell for
+Vellum v0.1.0. The application SDK currently supports macOS 15.0+ arm64; use
+scripts/install.sh there. That installer delegates archive verification,
+extraction, immutable storage, and activation to the canonical install_core.py.
+PowerShell currently supports only -LocalRoot development installs.
+"@

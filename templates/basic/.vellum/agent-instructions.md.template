@@ -2,7 +2,7 @@
 
 - Treat `framework.lock` as tool-owned and `sources/imported/` as immutable
   source snapshots.
-- Treat `design/ir/`, `design/generated/`, `tokens/imported/`,
+- Treat `design/ir/`, `design/generated/`, `tokens/imported/`, `tokens/generated/`,
   `assets/generated/`, and `ui/generated/` as tool-owned output.
 - Treat `design/overlays/` as developer-owned behavior and customization that
   import/reimport must preserve byte-for-byte.

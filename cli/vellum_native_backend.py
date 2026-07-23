@@ -16,7 +16,8 @@ import tempfile
 from typing import Any, Iterable
 
 from vellum_manifest import (
-    LOCK_NAME, LOCK_SCHEMA, ManifestError, load_app_manifest, load_components_manifest,
+    LOCK_NAME, LOCK_SCHEMA, ManifestError, imported_materialized_design,
+    load_app_manifest, load_components_manifest,
 )
 from vellum_png import PngError, montage, read_png, write_png
 
@@ -25,6 +26,7 @@ RESULT_SCHEMA = "vellum.backend.result.v1"
 SCENARIO_SCHEMA = "vellum.scenario.v1"
 CAPTURE_MATRIX_SCHEMA = "vellum.capture-matrix.v1"
 SUPPORTED_TARGET = "macos"
+MACOS_MINIMUM_VERSION = "15.0"
 MAX_SCENARIO_STEPS = 1000
 MAX_SCENARIO_TARGET_BYTES = 1024
 MAX_SCENARIO_INPUT_BYTES = 64 * 1024
@@ -231,6 +233,28 @@ def component_compiler() -> str:
     raise BackendFailure("clang++ is required for native custom components", status="tool_unavailable")
 
 
+def component_sdk_root() -> Path:
+    xcrun = shutil.which("xcrun")
+    if not xcrun:
+        raise BackendFailure(
+            "xcrun is required to locate the macOS SDK for native custom components",
+            status="tool_unavailable",
+        )
+    value = run_checked([xcrun, "--sdk", "macosx", "--show-sdk-path"]).stdout.strip()
+    if not value:
+        raise BackendFailure(
+            "xcrun did not return a macOS SDK path for native custom components",
+            status="tool_unavailable",
+        )
+    root = Path(value).expanduser().resolve()
+    if not root.is_dir():
+        raise BackendFailure(
+            f"xcrun returned a missing macOS SDK path: {root}",
+            status="tool_unavailable",
+        )
+    return root
+
+
 def build_component_modules(
     context: dict[str, Any], sdk: Path, destination: Path,
 ) -> list[dict[str, str]]:
@@ -252,6 +276,7 @@ def build_component_modules(
     projected_abi.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(abi, projected_abi)
     compiler = component_compiler()
+    macos_sdk = component_sdk_root()
     destination.mkdir(parents=True)
     modules: list[dict[str, str]] = []
     for declaration in declarations:
@@ -264,7 +289,10 @@ def build_component_modules(
         run_checked([
             compiler, "-std=c++20", "-dynamiclib", "-fvisibility=hidden",
             "-fvisibility-inlines-hidden", "-DVELLUM_COMPONENT_BUILD=1",
+            "-isysroot", str(macos_sdk),
+            f"-mmacosx-version-min={MACOS_MINIMUM_VERSION}",
             "-I", str(include_root), str(source), "-o", str(output),
+            f"-Wl,-install_name,@rpath/{declaration['id']}.dylib",
             "-Wl,-undefined,error",
         ], cwd=context["root"])
         modules.append({"id": declaration["id"], "path": str(output)})
@@ -294,8 +322,11 @@ def build_app(context: dict[str, Any], sdk: Path) -> dict[str, Any]:
         raise BackendFailure("Installed SDK has no @vellum/ui project bundler", status="invalid_sdk")
     bundle = resources / "app.js"
     bundle_command = [str(sdk_node(sdk)), str(bundler), str(context["entry"]), str(bundle)]
-    imported_design = project / "ui/generated/main.materialized.json"
-    if imported_design.is_file():
+    try:
+        imported_design = imported_materialized_design(project)
+    except ManifestError as error:
+        raise BackendFailure(str(error), status="invalid_imported_design") from error
+    if imported_design is not None:
         bundle_command.append(str(imported_design))
     run_checked(bundle_command)
     executable = executable_dir / context["slug"]
@@ -313,7 +344,7 @@ def build_app(context: dict[str, Any], sdk: Path) -> dict[str, Any]:
         "CFBundlePackageType": "APPL",
         "CFBundleShortVersionString": context["version"],
         "CFBundleVersion": "1",
-        "LSMinimumSystemVersion": "15.0",
+        "LSMinimumSystemVersion": MACOS_MINIMUM_VERSION,
         "NSHighResolutionCapable": True,
         "VellumPersistence": context["capabilities"]["persistence"],
     }

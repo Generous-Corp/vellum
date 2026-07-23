@@ -122,12 +122,16 @@ function materializeNode(node, context, depth, root = false) {
 export function materializeDesign(document, options = {}) {
     plainObject(document, 'design');
     const root = document.root;
+    const rootLayout = root?.properties?.layout &&
+        typeof root.properties.layout === 'object' &&
+        !Array.isArray(root.properties.layout)
+        ? root.properties.layout : {};
     const tokens = document.tokens === undefined ? {} : plainObject(document.tokens, 'design.tokens');
     const actions = options.actions === undefined ? {} : plainObject(options.actions, 'options.actions');
     const viewport = {
-        width: options.viewport?.width ?? 800,
-        height: options.viewport?.height ?? 600,
-        padding: options.viewport?.padding ?? 0,
+        width: options.viewport?.width ?? rootLayout.width ?? 800,
+        height: options.viewport?.height ?? rootLayout.height ?? 600,
+        padding: options.viewport?.padding ?? rootLayout.padding ?? 0,
     };
     for (const [name, value] of Object.entries(viewport)) {
         if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 ||

@@ -9,10 +9,16 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 REPO = Path(__file__).resolve().parents[2]
 CLI = REPO / "cli" / "vellum_cli.py"
+sys.path.insert(0, str(CLI.parent))
+try:
+    import vellum_cli as cli_module
+finally:
+    sys.path.pop(0)
 
 
 def invoke(*arguments: str, cwd: Path | None = None, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -27,6 +33,11 @@ def invoke(*arguments: str, cwd: Path | None = None, env: dict[str, str] | None 
 
 
 class CliTests(unittest.TestCase):
+    def test_version_matches_the_immutable_framework_release(self) -> None:
+        completed = invoke("--version")
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stdout.strip(), "vellum 0.1.0")
+
     def test_create_is_deterministic_and_has_maintainable_shape(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -62,6 +73,10 @@ class CliTests(unittest.TestCase):
                 Path("native/components.toml"),
             }
             self.assertTrue(required.issubset(set(first_files)))
+            self.assertNotIn(
+                "npm ci",
+                (first / "README.md").read_text(encoding="utf-8"),
+            )
             lock = json.loads((first / "framework.lock").read_text())
             self.assertEqual(lock["project"]["id"], hashlib.sha256(b"vellum-project-v1:example-app").hexdigest()[:24])
             self.assertEqual(lock["framework"]["version"], "0.1.0")
@@ -101,7 +116,7 @@ class CliTests(unittest.TestCase):
             (sdk / "metadata.json").write_text(json.dumps({
                 "schema": "vellum.sdk-artifact.v1",
                 "framework_version": "0.1.0",
-                "cli_version": "0.1.0-dev",
+                "cli_version": "0.1.0",
                 "cli_api": 1,
                 "source_commit": None,
                 "target": "test-host",
@@ -193,7 +208,7 @@ class CliTests(unittest.TestCase):
             }
             (sdk / "metadata.json").write_text(json.dumps({
                 "schema": "vellum.sdk-artifact.v1", "framework_version": "0.1.0",
-                "cli_version": "0.1.0-dev", "cli_api": 1, "source_commit": None,
+                "cli_version": "0.1.0", "cli_api": 1, "source_commit": None,
                 "target": "local-development",
                 "capabilities": {"authoring_cli": True, "cmake_sdk": False, "gpu_renderer": False, "custom_components": False, "commands": commands},
                 "files": [],
@@ -306,6 +321,150 @@ class CliTests(unittest.TestCase):
             self.assertTrue(compiler["required"])
             self.assertFalse(compiler["available"])
             self.assertIn("xcode-select --install", compiler["fix"])
+
+    def test_doctor_required_target_fails_instead_of_reporting_cli_only_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary) / "app"
+            self.assertEqual(
+                invoke("create", "Target Doctor", "-d", str(project)).returncode,
+                0,
+            )
+            completed = invoke(
+                "doctor", "--project", str(project),
+                "--require-target", "macos", "--json",
+                env={"VELLUM_SDK_ROOT": ""},
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["status"], "needs_attention")
+            target = next(
+                item
+                for item in payload["data"]["checks"]
+                if item["name"] == "target-macos"
+            )
+            self.assertTrue(target["required"])
+            self.assertFalse(target["available"])
+
+    def test_doctor_requires_chrome_only_for_requested_web_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sdk = root / "sdk"
+            sdk.mkdir()
+            native_commands = {
+                name: True
+                for name in ("build", "run", "test", "capture", "package")
+            }
+            web_commands = {
+                **native_commands,
+                "capture": False,
+            }
+            all_commands = {
+                "import": True,
+                "reimport": True,
+                **native_commands,
+            }
+            (sdk / "metadata.json").write_text(json.dumps({
+                "schema": "vellum.sdk-artifact.v1",
+                "framework_version": "0.1.0",
+                "cli_version": "0.1.0",
+                "cli_api": 1,
+                "source_commit": None,
+                "target": "dual-target-test",
+                "capabilities": {
+                    "authoring_cli": True,
+                    "cmake_sdk": True,
+                    "gpu_renderer": True,
+                    "custom_components": False,
+                    "commands": all_commands,
+                    "targets": {
+                        "macos": {"commands": native_commands},
+                        "web": {"commands": web_commands},
+                    },
+                },
+                "files": [],
+            }), encoding="utf-8")
+            (sdk / "install-manifest.json").write_text(json.dumps({
+                "schema": "vellum.sdk-install.v1",
+                "verified": False,
+                "artifact": None,
+                "artifact_sha256": None,
+                "framework_version": "0.1.0",
+                "target": "dual-target-test",
+                "source_commit": None,
+            }), encoding="utf-8")
+            node = sdk / "node/bin/node"
+            node.parent.mkdir(parents=True)
+            node.write_text("#!/bin/sh\nprintf 'v20.0.0\\n'\n", encoding="utf-8")
+            node.chmod(0o755)
+            backend = sdk / "bin/vellum-backend"
+            backend.parent.mkdir()
+            backend.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+            backend.chmod(0o755)
+
+            project = root / "app"
+            installed_environment = {"VELLUM_SDK_ROOT": str(sdk)}
+            created = invoke(
+                "create", "Dual Target", "--directory", str(project),
+                "--no-verify", "--json", env=installed_environment,
+            )
+            self.assertEqual(created.returncode, 0, created.stderr)
+
+            def run_doctor(target: str) -> dict[str, object]:
+                arguments = cli_module.parser().parse_args([
+                    "doctor", "--project", str(project),
+                    "--require-target", target,
+                ])
+                original_is_file = Path.is_file
+                original_which = shutil.which
+                with (
+                    mock.patch.dict(
+                        os.environ,
+                        {"VELLUM_SDK_ROOT": str(sdk)},
+                        clear=False,
+                    ),
+                    mock.patch.object(
+                        cli_module,
+                        "component_compiler_status",
+                        return_value=(False, "not installed"),
+                    ),
+                    mock.patch.object(
+                        cli_module.Path,
+                        "is_file",
+                        autospec=True,
+                        side_effect=lambda path: (
+                            False
+                            if str(path)
+                            == "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+                            else original_is_file(path)
+                        ),
+                    ),
+                    mock.patch.object(
+                        cli_module.shutil,
+                        "which",
+                        side_effect=lambda name: (
+                            None if name == "google-chrome" else original_which(name)
+                        ),
+                    ),
+                ):
+                    return cli_module.doctor(arguments)
+
+            native = run_doctor("macos")
+            native_chrome = next(
+                item for item in native["data"]["checks"]
+                if item["name"] == "chrome"
+            )
+            self.assertTrue(native["ok"])
+            self.assertFalse(native_chrome["required"])
+            self.assertFalse(native_chrome["available"])
+
+            web = run_doctor("web")
+            web_chrome = next(
+                item for item in web["data"]["checks"]
+                if item["name"] == "chrome"
+            )
+            self.assertFalse(web["ok"])
+            self.assertTrue(web_chrome["required"])
+            self.assertFalse(web_chrome["available"])
 
     def test_backend_command_fails_honestly_with_stable_json(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -436,7 +595,7 @@ class CliTests(unittest.TestCase):
             (sdk / "metadata.json").write_text(json.dumps({
                 "schema": "vellum.sdk-artifact.v1",
                 "framework_version": "0.1.0",
-                "cli_version": "0.1.0-dev",
+                "cli_version": "0.1.0",
                 "cli_api": 1,
                 "source_commit": None,
                 "target": "local-development",
@@ -529,7 +688,7 @@ class CliTests(unittest.TestCase):
             metadata = {
                 "schema": "vellum.sdk-artifact.v1",
                 "framework_version": "0.1.0",
-                "cli_version": "0.1.0-dev",
+                "cli_version": "0.1.0",
                 "cli_api": 1,
                 "source_commit": "a" * 40,
                 "target": "test-host",

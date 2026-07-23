@@ -5,10 +5,13 @@ import json
 import os
 from pathlib import Path
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
+import uuid
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -29,7 +32,10 @@ def invoke(*arguments: str, cwd: Path, env: dict[str, str] | None = None) -> sub
 
 
 def json_files(root: Path) -> dict[str, bytes]:
-    owned_roots = ("assets/generated", "design", "sources/imported", "tokens/imported", "ui/generated")
+    owned_roots = (
+        "assets/generated", "design", "sources/imported",
+        "tokens/generated", "tokens/imported", "ui/generated",
+    )
     return {
         path.relative_to(root).as_posix(): path.read_bytes()
         for prefix in owned_roots
@@ -73,6 +79,7 @@ class ImportBackendTests(unittest.TestCase):
                 "design/reports/main.import-report.json",
                 "design/import.lock.json",
                 "tokens/imported/main.tokens.json",
+                "tokens/generated/main.layers.json",
                 "assets/generated/main/manifest.json",
                 "ui/generated/main.materialized.json",
                 "ui/generated/main.bindings.json",
@@ -134,6 +141,249 @@ class ImportBackendTests(unittest.TestCase):
             self.assertEqual(overlay_path.read_bytes(), overlay_before)
             self.assertEqual(graph_path.read_bytes(), graph_before)
             self.assertEqual(authored_source.read_bytes(), authored_before)
+
+    def test_public_source_key_and_unchanged_source_rematerialize_authored_overlay(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = self.create(root)
+            source = FIXTURES / "figma-plugin-a.export.json"
+            imported = invoke(
+                "import", str(source), "--source-type", "figma", "--as", "shell", cwd=app,
+            )
+            self.assertEqual(imported.returncode, 0, imported.stdout)
+            payload = json.loads(imported.stdout)
+            self.assertEqual(payload["data"]["backend"]["data"]["sourceKey"], "shell")
+            self.assertTrue((app / "ui/generated/shell.bindings.json").is_file())
+            self.assertFalse((app / "ui/generated/main.bindings.json").exists())
+
+            overlay_path = app / "design/overlays/shell.authored.json"
+            overlay = json.loads(overlay_path.read_text())
+            overlay["bindings"] = [{
+                "action": "openSettings",
+                "event": "press",
+                "nodeId": "shell/1:4",
+            }]
+            overlay_path.write_text(json.dumps(overlay, indent=2) + "\n", encoding="utf-8")
+            overlay_before = overlay_path.read_bytes()
+
+            reimported = invoke(
+                "reimport", "--source", str(source), "--as", "shell", cwd=app,
+            )
+            self.assertEqual(reimported.returncode, 0, reimported.stdout)
+            reimport_payload = json.loads(reimported.stdout)
+            self.assertEqual(reimport_payload["status"], "reimport_rematerialized")
+            self.assertEqual(reimport_payload["data"]["backend"]["data"]["files"], [
+                "ui/generated/shell.bindings.json",
+            ])
+            bindings = json.loads((app / "ui/generated/shell.bindings.json").read_text())
+            self.assertEqual(bindings["sourceKey"], "shell")
+            self.assertEqual(bindings["bindings"][0]["action"], "openSettings")
+            self.assertEqual(bindings["bindings"][0]["resolvedNodeId"], "shell/1:4")
+            self.assertEqual(overlay_path.read_bytes(), overlay_before)
+
+            unchanged = invoke(
+                "reimport", "--source", str(source), "--as", "shell", cwd=app,
+            )
+            self.assertEqual(unchanged.returncode, 0, unchanged.stdout)
+            self.assertEqual(json.loads(unchanged.stdout)["status"], "reimport_unchanged")
+
+            overlay = json.loads(overlay_path.read_text())
+            overlay["overrides"] = [{
+                "nodeId": "shell/1:6",
+                "path": "properties.paint.backgroundColor",
+                "value": "#0ea5e9",
+            }]
+            overlay_path.write_text(json.dumps(overlay, indent=2) + "\n", encoding="utf-8")
+            rematerialized = invoke(
+                "reimport", "--source", str(source), "--as", "shell", cwd=app,
+            )
+            self.assertEqual(rematerialized.returncode, 0, rematerialized.stdout)
+            payload = json.loads(rematerialized.stdout)
+            self.assertEqual(payload["status"], "reimport_rematerialized")
+            self.assertEqual(payload["data"]["backend"]["data"]["files"], [
+                "ui/generated/shell.materialized.json",
+            ])
+            materialized = json.loads(
+                (app / "ui/generated/shell.materialized.json").read_text()
+            )
+            cyan = materialized["root"]["children"][2]["children"][0]
+            self.assertEqual(cyan["properties"]["paint"]["backgroundColor"], "#0ea5e9")
+
+            overlay = json.loads(overlay_path.read_text())
+            overlay["semanticTokens"] = {"color.action": "{shell.color.accent}"}
+            overlay_path.write_text(json.dumps(overlay, indent=2) + "\n", encoding="utf-8")
+            retokenized = invoke(
+                "reimport", "--source", str(source), "--as", "shell", cwd=app,
+            )
+            self.assertEqual(retokenized.returncode, 0, retokenized.stdout)
+            payload = json.loads(retokenized.stdout)
+            self.assertEqual(payload["status"], "reimport_rematerialized")
+            self.assertEqual(payload["data"]["backend"]["data"]["files"], [
+                "tokens/generated/shell.layers.json",
+            ])
+            layers = json.loads(
+                (app / "tokens/generated/shell.layers.json").read_text()
+            )
+            self.assertEqual(layers["layers"]["semantic"]["color.action"], "#22c55e")
+
+            bindings_path = app / "ui/generated/shell.bindings.json"
+            bindings_path.write_text("{}\n", encoding="utf-8")
+            repaired = invoke(
+                "reimport", "--source", str(source), "--as", "shell", cwd=app,
+            )
+            self.assertEqual(repaired.returncode, 0, repaired.stdout)
+            payload = json.loads(repaired.stdout)
+            self.assertEqual(payload["status"], "reimport_rematerialized")
+            self.assertEqual(payload["data"]["backend"]["data"]["files"], [
+                "ui/generated/shell.bindings.json",
+            ])
+            self.assertEqual(
+                json.loads(bindings_path.read_text())["bindings"][0]["action"],
+                "openSettings",
+            )
+
+    def test_two_queued_reimports_serialize_and_leave_one_coherent_revision(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = self.create(root)
+            source_a = FIXTURES / "revision-a.source.json"
+            source_b = FIXTURES / "revision-b.source.json"
+            source_c = root / "revision-c.source.json"
+            revision_c = json.loads(source_b.read_text(encoding="utf-8"))
+            revision_c["source"]["revision"] = "palette-board-c"
+            revision_c["root"]["name"] = "Palette board C"
+            source_c.write_text(
+                json.dumps(revision_c, sort_keys=True, separators=(",", ":")) + "\n",
+                encoding="utf-8",
+            )
+            imported = invoke(
+                "import", str(source_a), "--source-type", "figma", "--as", "main", cwd=app,
+            )
+            self.assertEqual(imported.returncode, 0, imported.stdout)
+
+            lock = app / ".vellum/locks/design-import.lock"
+            lock.mkdir(parents=True)
+            nonce = str(uuid.uuid4())
+            (lock / "owner.json").write_text(json.dumps({
+                "acquiredAt": "2026-07-22T00:00:00.000Z",
+                "hostname": socket.gethostname(),
+                "nonce": nonce,
+                "pid": os.getpid(),
+                "schema": "vellum.import-operation-lock.v1",
+            }), encoding="utf-8")
+
+            environment = {**os.environ, "VELLUM_BACKEND": str(BACKEND)}
+            command = [
+                sys.executable, str(CLI), "--json", "reimport",
+                "--source", "", "--as", "main",
+            ]
+            first_command = list(command)
+            first_command[first_command.index("")] = str(source_b)
+            second_command = list(command)
+            second_command[second_command.index("")] = str(source_c)
+            first = subprocess.Popen(
+                first_command, cwd=app, text=True,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment,
+            )
+            second = subprocess.Popen(
+                second_command, cwd=app, text=True,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment,
+            )
+            try:
+                time.sleep(0.35)
+                self.assertIsNone(first.poll(), "first reimport did not wait for the live lock")
+                self.assertIsNone(second.poll(), "second reimport did not wait for the live lock")
+                self.assertEqual(
+                    json.loads((lock / "owner.json").read_text())["nonce"],
+                    nonce,
+                    "a live owner lock was replaced",
+                )
+                shutil.rmtree(lock)
+                first_stdout, first_stderr = first.communicate(timeout=15)
+                second_stdout, second_stderr = second.communicate(timeout=15)
+            finally:
+                for process in (first, second):
+                    if process.poll() is None:
+                        process.kill()
+                        process.communicate()
+
+            self.assertEqual(first.returncode, 0, first_stderr or first_stdout)
+            self.assertEqual(second.returncode, 0, second_stderr or second_stdout)
+            self.assertEqual(json.loads(first_stdout)["status"], "reimported")
+            self.assertEqual(json.loads(second_stdout)["status"], "reimported")
+            active = json.loads(
+                (app / "design/import.lock.json").read_text(encoding="utf-8")
+            )["sources"]["main"]["activeRevision"]
+            self.assertIn(active, {"palette-board-b", "palette-board-c"})
+            revision_receipts = [
+                json.loads(path.read_text(encoding="utf-8"))["source"]["revision"]
+                for path in (
+                    app / "design/ir/sources/main.designir.json",
+                    app / "design/ir/app.designir.json",
+                    app / "ui/generated/main.materialized.json",
+                )
+            ]
+            revision_receipts.extend([
+                json.loads(path.read_text(encoding="utf-8"))["revision"]
+                for path in (
+                    app / "design/generated/main.components.json",
+                    app / "ui/generated/main.bindings.json",
+                    app / "tokens/generated/main.layers.json",
+                    app / "assets/generated/main/manifest.json",
+                )
+            ])
+            self.assertEqual(revision_receipts, [active] * len(revision_receipts))
+            self.assertFalse(lock.exists())
+
+    def test_dead_and_stale_import_locks_recover_without_recursive_project_deletion(self) -> None:
+        for mode in ("dead-owner", "missing-owner"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                app = self.create(root)
+                lock = app / ".vellum/locks/design-import.lock"
+                lock.mkdir(parents=True)
+                if mode == "dead-owner":
+                    dead_pid = 2_147_483_647
+                    with self.assertRaises(ProcessLookupError):
+                        os.kill(dead_pid, 0)
+                    (lock / "owner.json").write_text(json.dumps({
+                        "acquiredAt": "2026-07-22T00:00:00.000Z",
+                        "hostname": socket.gethostname(),
+                        "nonce": str(uuid.uuid4()),
+                        "pid": dead_pid,
+                        "schema": "vellum.import-operation-lock.v1",
+                    }), encoding="utf-8")
+                else:
+                    stale = time.time() - 120
+                    os.utime(lock, (stale, stale))
+                completed = invoke(
+                    "import", str(FIXTURES / "revision-a.source.json"),
+                    "--source-type", "figma", "--as", "main", cwd=app,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stdout)
+                self.assertEqual(json.loads(completed.stdout)["status"], "imported")
+                self.assertFalse(lock.exists())
+                self.assertTrue((app / "src/App.tsx").is_file())
+
+    def test_import_lock_root_symlink_fails_with_stable_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = self.create(root)
+            outside = root / "outside"
+            outside.mkdir()
+            sentinel = outside / "keep.txt"
+            sentinel.write_text("keep\n", encoding="utf-8")
+            os.symlink(outside, app / ".vellum/locks")
+
+            completed = invoke(
+                "import", str(FIXTURES / "revision-a.source.json"),
+                "--source-type", "figma", "--as", "main", cwd=app,
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["status"], "unsafe_output_path")
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep\n")
+            self.assertFalse((app / "design/import.lock.json").exists())
 
     def test_compatibility_figma_envelopes_reimport_with_stable_behavior(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

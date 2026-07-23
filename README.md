@@ -14,8 +14,8 @@ The project CLI and repository shape are usable. An audio-free native C++
 kernel, deterministic DesignIR import/reimport, hardened JS/TS/JSX retained-tree
 runtime, JavaScriptCore host, installable CMake SDK, and a retained scene
 rendered through Skia Graphite, Dawn, and Metal are executable in-tree. A
-macOS arm64 SDK artifact built with the pinned renderer also provides the first
-installed native backend: it bundles authored TS/JS/JSX and optional imported
+macOS 15.0+ arm64 SDK artifact built with the pinned renderer also provides the
+first installed native backend: it bundles authored TS/JS/JSX and optional imported
 DesignIR, builds and runs a real `.app`, executes finite scenarios, captures a
 GPU PNG, and emits an ad-hoc-signed application package using installed bytes
 only. An experimental browser proof now runs browser JavaScript against the
@@ -29,7 +29,7 @@ The history-preserving Pulp projection has been removed from the active tip.
 Its authorship and exact blobs remain auditable in Git history and immutable
 `provenance/` records; Vellum does not maintain a synchronized editable copy.
 
-## Five-minute private release start
+## Five-minute private release start (macOS 15.0+ arm64)
 
 The following is the exact `v0.1.0` tagged-release flow; it does not claim that
 the private release has already been published. Because both the repository and
@@ -37,8 +37,24 @@ release are private, install and authenticate
 [GitHub CLI](https://cli.github.com/) first (`gh auth login`, or set `GH_TOKEN`
 or `GITHUB_TOKEN` for an unattended agent).
 
+Verify the supported host and bootstrap prerequisites first:
+
+```sh
+test "$(uname -s)" = Darwin
+test "$(uname -m)" = arm64
+test "$(sw_vers -productVersion | awk -F. '{ print $1 }')" -ge 15
+python3 -c 'import sys; assert sys.version_info >= (3, 9)'
+command -v gh >/dev/null
+gh auth status --hostname github.com
+```
+
+If Python is missing or too old, install the current Xcode Command Line Tools
+with `xcode-select --install` or a current Python from python.org. The SDK
+bundles its exact Node runtime and application build tools; system Node, npm,
+CMake, and Ninja are not prerequisites for this release path.
+
 The fastest authenticated path downloads the version-pinned bootstrap and lets
-it acquire and verify the matching installer core and macOS arm64 SDK:
+it acquire and verify the matching installer core and macOS 15.0+ arm64 SDK:
 
 ```sh
 bootstrap_dir="$(mktemp -d)"
@@ -48,6 +64,7 @@ gh release download v0.1.0 \
   --dir "$bootstrap_dir"
 sh "$bootstrap_dir/install.sh" --version 0.1.0
 export PATH="$HOME/.local/bin:$PATH"
+vellum --json doctor --require-target macos
 
 app_dir="$(mktemp -d)/vellum-hello"
 vellum create "Vellum Hello" --directory "$app_dir"
@@ -57,7 +74,7 @@ vellum run --no-build
 
 `vellum create` scaffolds, builds, and runs the finite smoke scenario by
 default, so the first application is validated before `run` launches it. To
-start from a supported Figma export instead, use:
+start from a supported Pulp Figma-plugin export instead, use:
 
 ```sh
 vellum create "Imported App" \
@@ -65,9 +82,15 @@ vellum create "Imported App" \
   --run
 ```
 
+This is the bounded, credential-free plugin JSON/`.pulp.zip` contract documented
+in [Import and reimport](docs/cli/import-reimport.md), not a `.fig` file or
+arbitrary Figma API response. The first release retains the exact exported
+bytes and conversion diagnostics; a Vellum-owned exporter remains an explicit
+product limitation.
+
 For the cautious bootstrap path, download the checksum manifest and both
 bootstrap files together, select their exact basename entries, require exactly
-two matches, and verify them before executing either script:
+one row for each bootstrap file, and verify them before executing either script:
 
 ```sh
 bootstrap_dir="$(mktemp -d)"
@@ -79,10 +102,13 @@ gh release download v0.1.0 \
   --dir "$bootstrap_dir"
 (
   cd "$bootstrap_dir"
-  awk '$2 == "install.sh" || $2 == "*install.sh" ||
-       $2 == "install_core.py" || $2 == "*install_core.py"' \
-    SHA256SUMS > bootstrap.sha256
-  test "$(awk 'END { print NR }' bootstrap.sha256)" -eq 2
+  awk '$2 == "install.sh" || $2 == "*install.sh"' \
+    SHA256SUMS > install.sh.sha256
+  awk '$2 == "install_core.py" || $2 == "*install_core.py"' \
+    SHA256SUMS > install_core.py.sha256
+  test "$(awk 'END { print NR }' install.sh.sha256)" -eq 1
+  test "$(awk 'END { print NR }' install_core.py.sha256)" -eq 1
+  cat install.sh.sha256 install_core.py.sha256 > bootstrap.sha256
   shasum -a 256 -c bootstrap.sha256
 )
 sh "$bootstrap_dir/install.sh" --version 0.1.0
@@ -160,7 +186,6 @@ vellum create "Vellum Hello" -d "$env:TEMP\vellum-hello"
 vellum create MyApp
 cd myapp
 vellum doctor --fix
-npm ci
 vellum import ./revision-a.source.json --source-type figma --as main
 vellum reimport --source ./revision-b.source.json --as main
 vellum build --target macos
@@ -188,9 +213,9 @@ pinned renderer advertises only import/reimport. Backends are discovered through
 Generated applications use `app.toml` as the sole editable authority for app
 identity, entry point, targets, capabilities, and packaging. `framework.lock`
 pins the exact SDK artifact and JS package identity. `package-lock.json` is an
-exact npm lock; an installed SDK projects immutable `@vellum/ui` runtime bytes
-into ignored `.vellum/packages/`, and `create` proves the lock with offline
-`npm ci` before reporting success.
+exact npm lock; an installed SDK validates its exact shape, projects immutable
+`@vellum/ui` runtime bytes into ignored `.vellum/packages/`, and materializes
+those bytes without external npm before `create` reports success.
 
 The native authoring slice includes a controlled, versioned `TextInput`,
 pointer focus, direct key/text dispatch, bounded semantic `input`/`key`

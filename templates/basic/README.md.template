@@ -5,19 +5,26 @@ Application behavior belongs in `src/`; generated design material belongs in
 `ui/generated/` and should not be hand-edited.
 
 ```sh
-vellum doctor --fix
-npm ci
+vellum doctor --fix --require-target macos
+vellum build --target macos
+vellum test --target macos
+vellum run --target macos
+vellum capture --scenario smoke --output artifacts/smoke.png
+vellum capture --matrix tests/capture-matrix.json --montage --output artifacts/montage.png
+vellum package --target macos --output dist
+```
+
+The optional browser lane requires Chrome:
+
+```sh
 vellum build --target web
 vellum test --target web
 vellum run --target web
-vellum capture --scenario smoke --output artifacts/smoke.png
-vellum capture --matrix tests/capture-matrix.json --montage --output artifacts/montage.png
-vellum package --output dist
+vellum package --target web --output dist-web
 ```
 
 `run --target web` returns the exact finite local-server command for the static
-build; it does not leave a hidden background process. The macOS commands remain
-available from an SDK artifact that advertises that target.
+build; it does not leave a hidden background process.
 
 `app.toml` is the sole editable application, target, capability, and packaging
 manifest. `framework.lock` pins the exact SDK artifact and JavaScript package

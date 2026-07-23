@@ -19,7 +19,10 @@ import tempfile
 import threading
 from typing import Any, Iterable
 
-from vellum_manifest import LOCK_NAME, LOCK_SCHEMA, ManifestError, load_app_manifest
+from vellum_manifest import (
+    LOCK_NAME, LOCK_SCHEMA, ManifestError, imported_materialized_design,
+    load_app_manifest,
+)
 
 
 RESULT_SCHEMA = "vellum.backend.result.v1"
@@ -155,8 +158,11 @@ def build_app(context: dict[str, Any], sdk: Path) -> dict[str, Any]:
     bundle = staging / "app.js"
     command = [str(sdk_node(sdk)), str(sdk / "ui/scripts/build-project.mjs"),
                str(context["entry"]), str(bundle)]
-    imported = project / "ui/generated/main.materialized.json"
-    if imported.is_file():
+    try:
+        imported = imported_materialized_design(project)
+    except ManifestError as error:
+        raise BackendFailure(str(error), status="invalid_imported_design") from error
+    if imported is not None:
         command.append(str(imported))
     run_checked(command, cwd=project)
     for name in ("vellum_web_core.js", "vellum_web_core.wasm", "vellum_host.js", "style.css"):

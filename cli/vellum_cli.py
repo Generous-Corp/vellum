@@ -20,8 +20,8 @@ from vellum_manifest import (
 )
 
 
-CLI_VERSION = "0.1.0-dev"
 FRAMEWORK_VERSION = "0.1.0"
+CLI_VERSION = FRAMEWORK_VERSION
 UI_VERSION = "0.1.0-experimental.0"
 CLI_API_VERSION = 1
 RESULT_SCHEMA = "vellum.cli.result.v1"
@@ -363,7 +363,11 @@ def create_project(args: argparse.Namespace) -> dict[str, Any]:
                     "project_root": str(destination), "project_id": project_id,
                     "files": created, "validation": {"status": "failed", "commands": setup_commands},
                 },
-                diagnostics=[{"level": "error", "code": "npm_ci_failed", "message": npm_detail}],
+                diagnostics=[{
+                    "level": "error",
+                    "code": "js_dependency_materialization_failed",
+                    "message": npm_detail,
+                }],
             )
 
     lock = json.loads((destination / LOCK_NAME).read_text(encoding="utf-8"))
@@ -698,23 +702,37 @@ def node_version(executable: str | None = None) -> tuple[bool, str]:
 
 def component_compiler_status() -> tuple[bool, str]:
     xcrun = shutil.which("xcrun")
-    if xcrun:
-        try:
-            completed = subprocess.run(
-                [xcrun, "--find", "clang++"],
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-        except OSError as error:
-            return False, str(error)
-        compiler = completed.stdout.strip()
-        if completed.returncode == 0 and compiler and Path(compiler).is_file():
-            return True, compiler
-        detail = completed.stderr.strip() or completed.stdout.strip()
-        return False, detail or "xcrun could not locate clang++"
-    compiler = shutil.which("clang++")
-    return (True, compiler) if compiler else (False, "clang++ not found")
+    if not xcrun:
+        return False, "xcrun not found"
+    try:
+        compiler_result = subprocess.run(
+            [xcrun, "--sdk", "macosx", "--find", "clang++"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        sdk_result = subprocess.run(
+            [xcrun, "--sdk", "macosx", "--show-sdk-path"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except OSError as error:
+        return False, str(error)
+    compiler = compiler_result.stdout.strip()
+    sdk = sdk_result.stdout.strip()
+    if (
+        compiler_result.returncode == 0 and
+        sdk_result.returncode == 0 and
+        compiler and Path(compiler).is_file() and
+        sdk and Path(sdk).is_dir()
+    ):
+        return True, f"{compiler} (macOS SDK {sdk})"
+    detail = (
+        compiler_result.stderr.strip() or sdk_result.stderr.strip() or
+        compiler_result.stdout.strip() or sdk_result.stdout.strip()
+    )
+    return False, detail or "xcrun could not locate clang++ and the macOS SDK"
 
 
 def doctor(args: argparse.Namespace) -> dict[str, Any]:
@@ -793,8 +811,29 @@ def doctor(args: argparse.Namespace) -> dict[str, Any]:
     if embedded_node:
         node_detail = f"{node_detail} (SDK-local {embedded_node})"
     import_required = bool(command_capabilities.get("import") or command_capabilities.get("reimport"))
-    web_commands = sdk[1]["capabilities"].get("targets", {}).get("web", {}).get("commands", {}) if sdk else {}
-    web_required = any(web_commands.values())
+    required_target = args.require_target
+    web_required = required_target == "web"
+    required_target_commands = (
+        ("build", "run", "test", "capture", "package")
+        if required_target == "macos"
+        else ("build", "run", "test", "package")
+    )
+    selected_target_commands = (
+        sdk[1]["capabilities"].get("targets", {}).get(required_target, {}).get("commands", {})
+        if sdk and required_target else {}
+    )
+    target_available = bool(
+        required_target and
+        all(selected_target_commands.get(name) is True for name in required_target_commands)
+    )
+    target_detail = (
+        f"{required_target} commands available: {', '.join(required_target_commands)}"
+        if target_available
+        else (
+            f"{required_target} requires: {', '.join(required_target_commands)}"
+            if required_target else "no target required"
+        )
+    )
     compiler_available, compiler_detail = component_compiler_status()
     checks = [
         check_item("python", required=True, available=sys.version_info >= (3, 9), detail=sys.version.split()[0]),
@@ -805,6 +844,16 @@ def doctor(args: argparse.Namespace) -> dict[str, Any]:
         check_item("node", required=import_required or web_required, available=node_available, detail=node_detail, fix="Install an SDK with its exact Node runtime or provide Node.js 20+."),
         check_item("chrome", required=web_required, available=bool(shutil.which("google-chrome") or Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome").is_file()), detail=shutil.which("google-chrome") or ("/Applications/Google Chrome.app" if Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome").is_file() else "not found"), fix="Install Chrome to execute web scenarios."),
         check_item("sdk-artifact", required=sdk_configured, available=sdk is not None, detail=sdk_detail, fix="Install a checksummed SDK artifact for native CMake consumption."),
+        check_item(
+            f"target-{required_target}" if required_target else "target",
+            required=required_target is not None,
+            available=target_available,
+            detail=target_detail,
+            fix=(
+                f"Install an exact SDK artifact providing the complete {required_target} application lane."
+                if required_target else None
+            ),
+        ),
         check_item("project-sdk-compatibility", required=sdk_configured and project_lock is not None, available=sdk_error is None and (sdk is not None or not sdk_configured), detail="exact framework pin matched" if sdk and not sdk_error and project_lock else sdk_detail),
         check_item("project-ui-package", required=bool(project_root and sdk and (sdk[0] / "ui/package.json").is_file()), available=ui_available, detail=ui_detail, fix="Run vellum doctor --fix with the exact project-locked SDK installed."),
         check_item("backend-dispatcher", required=bool(command_capabilities), available=backend is not None, detail=str(backend) if backend else "not installed in this extraction milestone", fix="Set VELLUM_SDK_ROOT or VELLUM_BACKEND when a backend artifact is available."),
@@ -944,6 +993,10 @@ def parser() -> argparse.ArgumentParser:
     doctor_parser = commands.add_parser("doctor", help="inspect authoring and SDK prerequisites")
     doctor_parser.add_argument("--fix", action="store_true", help="create safe project-local cache/state directories")
     doctor_parser.add_argument("--project")
+    doctor_parser.add_argument(
+        "--require-target", choices=["macos", "web"],
+        help="fail unless the installed SDK provides the complete requested application lane",
+    )
 
     backend_specs = {
         "import": [

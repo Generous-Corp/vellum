@@ -8,21 +8,19 @@ machine-readable authority.
 
 1. Read `app.toml`, `framework.lock`, `AGENTS.md`, and
    `.vellum/agent-instructions.md`.
-2. Run `vellum --json doctor --fix`. `--fix` creates safe project-local
+2. Run `vellum --json doctor --fix --require-target macos`. `--fix` creates safe project-local
    cache/state directories and materializes the exact SDK-provided UI package;
    it does not install system software.
 3. Inspect the JSON `ok`, `status`, `diagnostics`, and capability checks. If a
    requested capability is unavailable, stop and report it. Do not bypass the
    lock, invent output, or patch framework code into the application.
 
-Install only an immutable SDK artifact with its matching checksum manifest:
-
-```sh
-./scripts/install.sh --archive "$sdk_archive" --checksums "$sdk_checksums" --install-dir "$prefix"
-```
-
-Do not treat a local-development install as verified or assume that a hosted
-release exists.
+This downstream application skill begins after the authenticated release
+bootstrap has installed `vellum`; an application repository does not contain a
+framework installer. If the installed CLI is unavailable, stop and follow the
+official release bootstrap outside the application. Do not invent a
+repository-relative installer, treat a local-development install as verified,
+or assume that a hosted release exists.
 
 ## Lifecycle
 
@@ -32,7 +30,7 @@ to the project lock.
 ```sh
 vellum --json create "My App" --directory "$app" --template basic
 vellum --json create "Imported App" --directory "$app" --template basic --from figma "$figma_export" --as main
-vellum --json doctor --fix --project "$app"
+vellum --json doctor --fix --require-target macos --project "$app"
 vellum --json import "$figma_export" --source-type figma --as main --project "$app"
 vellum --json reimport --source "$updated_export" --as main --project "$app"
 vellum --json build --target macos --project "$app"
@@ -68,7 +66,7 @@ support from this lane.
 ## Ownership and maintenance
 
 - Tool-owned: `framework.lock`, `sources/imported/`, `design/ir/`, `design/generated/`,
-  `tokens/imported/`, `assets/generated/`, and `ui/generated/`. Change these
+  `tokens/imported/`, `tokens/generated/`, `assets/generated/`, and `ui/generated/`. Change these
   only by import/reimport.
 - Developer-owned: `app.toml`, `package.json`, `package-lock.json`, `src/`,
   `components/`, `design/overlays/`, editable theme
@@ -77,6 +75,10 @@ support from this lane.
   files. Preserve stable imported identities and review orphan/conflict reports.
 - After reimport, inspect the diff, run interaction scenarios, capture affected
   screens, and package only after tests pass.
+- After editing `design/overlays/`, reimport the current source even when its
+  bytes did not change. `reimport_rematerialized` means generated UI, binding,
+  or resolved-token receipts were rematerialized; `reimport_unchanged` means
+  both source and derived output were already current.
 - When the framework needs a fix, change Vellum in its own repository, verify
   and publish a new immutable SDK artifact, then update the application lock.
   Never vendor or patch framework internals inside an application.

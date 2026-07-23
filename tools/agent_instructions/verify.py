@@ -9,7 +9,6 @@ import json
 from pathlib import Path
 import re
 import shlex
-import subprocess
 import sys
 from typing import Any
 
@@ -17,13 +16,13 @@ from typing import Any
 MANIFEST_RELATIVE = Path(".agents/skills/vellum-app-authoring/manifest.v1.json")
 EXPECTED_SCHEMA = "vellum.agent-instructions.v1"
 EXPECTED_LIFECYCLE = (
-    "install", "create", "doctor", "import", "reimport", "build", "run",
+    "create", "doctor", "import", "reimport", "build", "run",
     "test", "capture", "package",
 )
 EXPECTED_TOOL_OWNED = {
     "framework.lock",
     "sources/imported", "design/ir", "design/generated", "tokens/imported",
-    "assets/generated", "ui/generated",
+    "tokens/generated", "assets/generated", "ui/generated",
 }
 
 
@@ -123,18 +122,6 @@ def invocation_command(line: str, known_commands: set[str]) -> str:
     return matches[0]
 
 
-def installer_flags(repo: Path) -> set[str]:
-    completed = subprocess.run(
-        ["sh", str(repo / "scripts/install.sh"), "--help"],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if completed.returncode:
-        raise VerificationError(f"installer --help failed: {completed.stderr.strip()}")
-    return set(re.findall(r"--[a-z0-9-]+", completed.stdout))
-
-
 def verify(repo: Path) -> dict[str, Any]:
     repo = repo.resolve()
     manifest_path = repo / MANIFEST_RELATIVE
@@ -165,6 +152,10 @@ def verify(repo: Path) -> dict[str, Any]:
     skill_text = skill_path.read_text(encoding="utf-8")
     if EXPECTED_SCHEMA not in skill_text:
         raise VerificationError("skill does not declare its manifest schema")
+    if re.search(r"(?m)^\s*(?:sh\s+)?\./scripts/install\.sh(?:\s|$)", skill_text):
+        raise VerificationError(
+            "downstream application instructions cannot reference a repository-relative installer"
+        )
 
     cli = load_cli(repo)
     cli_contract = manifest["cli"]
@@ -180,22 +171,12 @@ def verify(repo: Path) -> dict[str, Any]:
     if not isinstance(lifecycle, list) or tuple(item.get("step") for item in lifecycle if isinstance(item, dict)) != EXPECTED_LIFECYCLE:
         raise VerificationError("agent lifecycle is incomplete or out of canonical order")
     cli_steps: dict[str, dict[str, Any]] = {}
-    installer_step: dict[str, Any] | None = None
-    available_installer_flags = installer_flags(repo)
     for item in lifecycle:
         if not isinstance(item, dict) or set(item) != {"step", "kind", "command", "flags"}:
             raise VerificationError("lifecycle entry is malformed")
         flags = item["flags"]
         if not isinstance(flags, list) or not flags or len(flags) != len(set(flags)) or not all(isinstance(flag, str) for flag in flags):
             raise VerificationError(f"lifecycle flags are malformed for {item['step']}")
-        if item["kind"] == "installer":
-            if item["step"] != "install" or item["command"] != "scripts/install.sh":
-                raise VerificationError("install lifecycle entry does not name the real installer")
-            unknown = set(flags) - available_installer_flags
-            if unknown:
-                raise VerificationError(f"installer instructions reference unknown flags: {sorted(unknown)}")
-            installer_step = item
-            continue
         if item["kind"] != "cli" or item["command"] != item["step"] or item["command"] not in commands:
             raise VerificationError(f"lifecycle references unknown CLI command: {item['command']}")
         allowed = global_flags | commands[item["command"]]
@@ -231,21 +212,6 @@ def verify(repo: Path) -> dict[str, Any]:
         raise VerificationError(
             f"SKILL.md lifecycle flag coverage differs from the manifest: {mismatched}"
         )
-    if installer_step is None:
-        raise VerificationError("agent lifecycle has no installer step")
-    installer_lines = [
-        line.strip()
-        for line in skill_text.splitlines()
-        if line.strip().startswith("./scripts/install.sh ")
-    ]
-    if len(installer_lines) != 1:
-        raise VerificationError("SKILL.md must contain exactly one canonical installer invocation")
-    installer_observed_flags = {
-        token for token in shlex.split(installer_lines[0])[1:] if token.startswith("-")
-    }
-    if installer_observed_flags != set(installer_step["flags"]):
-        raise VerificationError("SKILL.md installer flags differ from manifest")
-
     channels = source_channels(repo / "product/source-support.yaml")
     supported = sorted(route for route, channel in channels.items() if channel == "supported")
     if manifest["supportedSourceTypes"] != supported:

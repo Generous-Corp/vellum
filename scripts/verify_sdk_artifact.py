@@ -1,441 +1,51 @@
 #!/usr/bin/env python3
-"""Fail-closed verification for a Vellum SDK archive and its payload manifest."""
+"""Fail-closed verification for a Vellum SDK archive and its payload manifest.
+
+`install_core.py` is the self-contained canonical artifact-contract authority
+used by both release installation and this standalone verification surface.
+"""
 
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
-from pathlib import PurePosixPath, Path
-import re
+from pathlib import Path
 import sys
-import tarfile
 from typing import Iterable
 
 
-SCHEMA = "vellum.sdk-artifact.v1"
-SHA_RE = re.compile(r"^[0-9a-f]{64}$")
-COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
-MAX_MEMBERS = 20_000
-MAX_BYTES = 4 * 1024**3
-COMMANDS = {"import", "reimport", "build", "run", "test", "capture", "package"}
-NATIVE_COMMANDS = {"build", "run", "test", "capture", "package"}
-NODE_PROVENANCE_SCHEMA = "vellum.node-runtime-provenance.v1"
-AGENT_INSTRUCTION_FILES = {
-    ".agents/skills/vellum-app-authoring/SKILL.md",
-    ".agents/skills/vellum-app-authoring/manifest.v1.json",
-}
-SAFE_ROOTS = {
-    "vellum_cli.py", "vellum_backend.py", "vellum_manifest.py", "vellum_png.py",
-    "vellum_native_backend.py", "vellum_web_backend.py", ".agents", "templates",
-    "sdk", "bin", "design-ir", "ui", "web", "node", "metadata.json",
-}
-FORBIDDEN_PAYLOAD_PATH_PATTERNS = {
-    "retired-projection-path": re.compile(
-        r"(?:^|/)(?:core|external/(?:fonts|nanosvg)|packages/pulp-import-ir|tools/figma-plugin)(?:/|$)",
-        re.IGNORECASE,
-    ),
-    "pulp-named-payload": re.compile(r"(?:^|/)(?:pulp(?:[-_][^/]*)?)(?:/|$)", re.IGNORECASE),
-}
-FORBIDDEN_PAYLOAD_CONTENT_PATTERNS = {
-    "pulp-public-namespace": re.compile(
-        rb"(?:\bnamespace\s+pulp\b|\bpulp::|#\s*include\s*[<\"]pulp/)",
-        re.IGNORECASE,
-    ),
-    "pulp-package-or-target": re.compile(
-        rb"(?:@pulp/|\bPULP_[A-Z0-9_]+|\bpulp[-_]"
-        rb"(?:audio|canvas|format|gpu|graph|host|midi|plugin|render|runtime|signal|view)\b)",
-        re.IGNORECASE,
-    ),
-    "audio-plugin-sdk": re.compile(rb"\b(?:AudioUnit|VST3|CLAP|LV2|Oboe)\b", re.IGNORECASE),
-}
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from install_core import (  # noqa: E402
+    InstallError as CanonicalInstallError,
+    payload_contamination_findings,
+    verify_archive_contract,
+)
+
+FRAMEWORK_VERSION = "0.1.0"
+CLI_VERSION = FRAMEWORK_VERSION
 
 
 class VerificationError(RuntimeError):
     pass
 
 
-def payload_contamination_findings(name: str, content: bytes) -> list[dict[str, str]]:
-    findings: list[dict[str, str]] = []
-    for rule, pattern in FORBIDDEN_PAYLOAD_PATH_PATTERNS.items():
-        match = pattern.search(name)
-        if match:
-            findings.append({"rule": rule, "path": name, "match": match.group(0)})
-    for rule, pattern in FORBIDDEN_PAYLOAD_CONTENT_PATTERNS.items():
-        match = pattern.search(content)
-        if match:
-            findings.append(
-                {
-                    "rule": rule,
-                    "path": name,
-                    "match": match.group(0).decode("utf-8", errors="replace")[:120],
-                }
-            )
-    return findings
-
-
-def checksum_entry(archive: Path, checksums: Path) -> str:
-    matches: list[str] = []
-    for line in checksums.read_text(encoding="utf-8").splitlines():
-        parts = line.split(maxsplit=1)
-        if len(parts) != 2:
-            continue
-        name = parts[1].removeprefix("*")
-        if name == archive.name:
-            matches.append(parts[0].lower())
-    if len(matches) != 1 or not SHA_RE.fullmatch(matches[0]):
-        raise VerificationError(f"expected exactly one valid checksum for {archive.name}")
-    return matches[0]
-
-
-def sha256_bytes(value: bytes) -> str:
-    return hashlib.sha256(value).hexdigest()
-
-
-def payload_has_cmake_target(contents: dict[str, bytes], target: str) -> bool:
-    marker = f"Vellum::{target}".encode()
-    return any(
-        name.startswith("sdk/lib/cmake/Vellum/") and name.endswith(".cmake") and
-        marker in content
-        for name, content in contents.items()
-    )
-
-
-def validate_ui_payload(contents: dict[str, bytes]) -> bool:
-    if not any(name.startswith("ui/") for name in contents):
-        return False
-    required = {
-        "ui/package.json", "ui/package-lock.json", "ui/src/index.js",
-        "ui/node_modules/esbuild/package.json",
-        "ui/node_modules/@esbuild/darwin-arm64/package.json",
-        "ui/node_modules/@esbuild/darwin-arm64/bin/esbuild",
-        "ui/node_modules/typescript/package.json",
-    }
-    if not required.issubset(contents):
-        raise VerificationError("@vellum/ui payload is incomplete")
-    try:
-        package = json.loads(contents["ui/package.json"])
-        lock = json.loads(contents["ui/package-lock.json"])
-        installed = {
-            name: json.loads(contents[f"ui/node_modules/{name}/package.json"])["version"]
-            for name in ("esbuild", "typescript")
-        }
-    except (KeyError, TypeError, json.JSONDecodeError) as error:
-        raise VerificationError(f"@vellum/ui dependency metadata is malformed: {error}") from error
-    dependencies = package.get("devDependencies")
-    locked_dependencies = lock.get("packages", {}).get("", {}).get("devDependencies")
-    if (
-        not isinstance(dependencies, dict) or dependencies != locked_dependencies or
-        set(dependencies) != {"esbuild", "typescript"} or
-        any(not isinstance(version, str) or version[:1] in {"^", "~", ">", "<", "*"}
-            for version in dependencies.values()) or
-        installed != dependencies
-    ):
-        raise VerificationError("@vellum/ui dependencies do not match their exact lock")
-    return True
-
-
-def validate_node_runtime(contents: dict[str, bytes], target: str) -> bool:
-    node_paths = {name for name in contents if name.startswith("node/")}
-    if not node_paths:
-        return False
-    binaries = node_paths & {"node/bin/node", "node/bin/node.exe"}
-    required = {*binaries, "node/LICENSE", "node/provenance.json"}
-    if len(binaries) != 1 or node_paths != required:
-        raise VerificationError("SDK-local Node runtime is partial or has unknown files")
-    try:
-        provenance = json.loads(contents["node/provenance.json"])
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise VerificationError(f"Node provenance is malformed: {error}") from error
-    fields = {
-        "schema", "name", "version", "target", "source_url", "distribution_sha256",
-        "binary_sha256", "license_file", "license_sha256",
-    }
-    binary = next(iter(binaries))
-    if (
-        not isinstance(provenance, dict) or set(provenance) != fields
-        or provenance.get("schema") != NODE_PROVENANCE_SCHEMA
-        or provenance.get("name") != "Node.js"
-        or not isinstance(provenance.get("version"), str)
-        or re.fullmatch(r"\d+(?:\.\d+){1,2}", provenance["version"]) is None
-        or provenance.get("target") != target
-        or not isinstance(provenance.get("source_url"), str)
-        or not provenance["source_url"].startswith("https://")
-        or provenance.get("license_file") != "LICENSE"
-        or provenance.get("binary_sha256") != sha256_bytes(contents[binary])
-        or provenance.get("license_sha256") != sha256_bytes(contents["node/LICENSE"])
-        or re.fullmatch(r"[0-9a-f]{64}", provenance.get("distribution_sha256", "")) is None
-        or len(contents["node/LICENSE"]) < 100
-    ):
-        raise VerificationError("Node license/provenance does not match the packaged runtime")
-    return True
-
-
-def derived_capabilities(contents: dict[str, bytes], target: str) -> dict[str, object]:
-    if not {"vellum_manifest.py", "vellum_png.py"}.issubset(contents):
-        raise VerificationError("SDK artifact lacks application manifest or capture support")
-    cmake_sdk = "sdk/lib/cmake/Vellum/VellumConfig.cmake" in contents
-    gpu_renderer = payload_has_cmake_target(contents, "Gpu")
-    authoring_runtime = payload_has_cmake_target(contents, "Authoring")
-    ui_runtime = validate_ui_payload(contents)
-    import_backend = "design-ir/bin/vellum-backend.js" in contents
-    native_backend = {"vellum_native_backend.py", "vellum_png.py"}.issubset(contents)
-    native_host = all(path in contents for path in (
-        "sdk/bin/vellum-app-host",
-        "sdk/lib/libvellum-authoring.dylib",
-        "sdk/lib/libvellum-gpu.dylib",
-    ))
-    node_runtime = validate_node_runtime(contents, target)
-    native_ready = (
-        gpu_renderer and authoring_runtime and ui_runtime and native_backend and
-        native_host and node_runtime
-    )
-    web_required = {
-        "web/manifest.json", "web/vellum_web_core.js", "web/vellum_web_core.wasm",
-        "web/index.html", "web/style.css", "web/vellum_host.js",
-        "web/check_wasm_no_engine.py", "vellum_web_backend.py",
-    }
-    web_runtime = web_required.issubset(contents)
-    web_present = any(name.startswith("web/") for name in contents) or "vellum_web_backend.py" in contents
-    if web_present and not web_runtime:
-        raise VerificationError("web payload is partial")
-    if web_runtime:
-        try:
-            web_manifest = json.loads(contents["web/manifest.json"])
-        except json.JSONDecodeError as error:
-            raise VerificationError(f"web payload manifest is malformed: {error}") from error
-        if web_manifest.get("schema") != "vellum.web-payload.v1":
-            raise VerificationError("web payload schema is unsupported")
-        records = web_manifest.get("files")
-        expected_names = {name.removeprefix("web/") for name in web_required if name.startswith("web/")}
-        if not isinstance(records, dict) or set(records) != expected_names - {"manifest.json"}:
-            raise VerificationError("web payload manifest inventory is incomplete")
-        for name, record in records.items():
-            content = contents[f"web/{name}"]
-            if not isinstance(record, dict) or record.get("size") != len(content) or \
-                    record.get("sha256") != sha256_bytes(content):
-                raise VerificationError(f"web payload content mismatch: {name}")
-    web_ready = web_runtime and ui_runtime and node_runtime
-    custom_components = (
-        native_ready and payload_has_cmake_target(contents, "ComponentAbi") and
-        "sdk/include/vellum/components/abi.h" in contents
-    )
-    commands = {name: False for name in COMMANDS}
-    commands["import"] = import_backend
-    commands["reimport"] = import_backend
-    for name in NATIVE_COMMANDS:
-        commands[name] = native_ready
-    for name in {"build", "run", "test", "package"}:
-        commands[name] = commands[name] or web_ready
-    return {
-        "cmake_sdk": cmake_sdk,
-        "authoring_cli": "vellum_cli.py" in contents,
-        "gpu_renderer": gpu_renderer,
-        "node_runtime": node_runtime,
-        "custom_components": custom_components,
-        "commands": commands,
-        "authoring": {
-            "text_input_v1": {
-                "retained_tree": ui_runtime,
-                "native_pointer_focus": native_ready,
-                "native_direct_text": native_ready,
-                "ime_composition": False,
-                "caret_and_selection": False,
-                "clipboard_editing": False,
-                "accessibility_text": False,
-                "mobile": False,
-            },
-            "scenario_v1": {
-                "input": native_ready,
-                "key": native_ready,
-                "maximum_steps": 1000,
-                "maximum_input_utf8_bytes": 64 * 1024,
-                "keys": [
-                    "Enter", "Escape", "Backspace", "Tab", "ArrowUp", "ArrowDown",
-                    "ArrowLeft", "ArrowRight", "Home", "End", "Delete",
-                ] if native_ready else [],
-            },
-            "persistence": {
-                "state_v1": native_ready,
-                "macos_application_support": native_ready,
-                "atomic_snapshot_write": native_ready,
-                "migration_api": False,
-                "key_value_store": False,
-                "sync": False,
-            },
-        },
-        "targets": {
-            "macos": {"commands": {name: native_ready for name in NATIVE_COMMANDS}},
-            "web": {"commands": {
-                name: (web_ready if name in {"build", "run", "test", "package"} else False)
-                for name in NATIVE_COMMANDS
-            }},
-        },
-    }
-
-
 def verify(archive: Path, checksums: Path) -> dict[str, object]:
-    expected = checksum_entry(archive, checksums)
-    actual = sha256_bytes(archive.read_bytes())
-    if actual != expected:
-        raise VerificationError(f"SHA-256 mismatch for {archive.name}")
-
-    with tarfile.open(archive, "r:gz") as handle:
-        members = handle.getmembers()
-        if len(members) > MAX_MEMBERS or sum(member.size for member in members) > MAX_BYTES:
-            raise VerificationError("archive exceeds verification safety limits")
-        by_name = {member.name: member for member in members}
-        if len(by_name) != len(members):
-            raise VerificationError("archive contains duplicate member names")
-        for member in members:
-            path = PurePosixPath(member.name)
-            if (
-                not path.parts
-                or path.parts[0] not in SAFE_ROOTS
-                or path.is_absolute()
-                or ".." in path.parts
-                or "\\" in member.name
-                or member.issym()
-                or member.islnk()
-                or not (member.isfile() or member.isdir())
-            ):
-                raise VerificationError(f"unsafe archive member: {member.name}")
-        metadata_member = by_name.get("metadata.json")
-        if metadata_member is None or not metadata_member.isfile():
-            raise VerificationError("archive has no metadata.json")
-        extracted = handle.extractfile(metadata_member)
-        if extracted is None:
-            raise VerificationError("could not read metadata.json")
-        metadata = json.load(extracted)
-        if not isinstance(metadata, dict) or metadata.get("schema") != SCHEMA:
-            raise VerificationError("unsupported SDK artifact metadata")
-        required_metadata = {
-            "schema", "framework_version", "cli_version", "cli_api",
-            "source_commit", "source_tree_clean", "target", "capabilities", "files",
-        }
-        if set(metadata) != required_metadata:
-            raise VerificationError("SDK artifact metadata has missing or unknown fields")
-        if (
-            not isinstance(metadata["framework_version"], str)
-            or not isinstance(metadata["cli_version"], str)
-            or metadata["cli_api"] != 1
-            or not isinstance(metadata["source_commit"], str)
-            or not COMMIT_RE.fullmatch(metadata["source_commit"])
-            or not isinstance(metadata["source_tree_clean"], bool)
-            or not isinstance(metadata["target"], str)
-            or not metadata["target"]
-        ):
-            raise VerificationError("SDK artifact compatibility/provenance fields are malformed")
-        capabilities = metadata["capabilities"]
-        if (
-            not isinstance(capabilities, dict)
-            or set(capabilities) != {
-                "cmake_sdk", "authoring_cli", "gpu_renderer", "node_runtime",
-                "custom_components", "commands", "authoring", "targets",
-            }
-            or not isinstance(capabilities.get("cmake_sdk"), bool)
-            or not isinstance(capabilities.get("authoring_cli"), bool)
-            or not isinstance(capabilities.get("gpu_renderer"), bool)
-            or not isinstance(capabilities.get("node_runtime"), bool)
-            or not isinstance(capabilities.get("custom_components"), bool)
-            or not isinstance(capabilities.get("commands"), dict)
-            or not isinstance(capabilities.get("authoring"), dict)
-            or set(capabilities["commands"]) != COMMANDS
-            or not all(isinstance(value, bool) for value in capabilities["commands"].values())
-            or set(capabilities.get("targets", {})) != {"macos", "web"}
-            or any(
-                not isinstance(capabilities["targets"].get(target), dict) or
-                set(capabilities["targets"][target]) != {"commands"} or
-                set(capabilities["targets"][target]["commands"]) != NATIVE_COMMANDS or
-                not all(isinstance(value, bool) for value in capabilities["targets"][target]["commands"].values())
-                for target in ("macos", "web")
-            )
-        ):
-            raise VerificationError("SDK artifact capability claims are malformed")
-        files = metadata.get("files")
-        if not isinstance(files, list):
-            raise VerificationError("artifact metadata has no file inventory")
-        if files != sorted(files, key=lambda row: row.get("path", "") if isinstance(row, dict) else ""):
-            raise VerificationError("artifact file inventory is not in canonical path order")
-        expected_files = {member.name for member in members if member.isfile() and member.name != "metadata.json"}
-        declared: set[str] = set()
-        payload_contents: dict[str, bytes] = {}
-        contamination_findings: list[dict[str, str]] = []
-        for row in files:
-            if not isinstance(row, dict) or set(row) != {"path", "sha256", "size", "executable"}:
-                raise VerificationError("artifact file inventory row is malformed")
-            name = row["path"]
-            if not isinstance(name, str) or name in declared or name not in expected_files:
-                raise VerificationError(f"artifact file inventory path is invalid: {name!r}")
-            member = by_name[name]
-            payload = handle.extractfile(member)
-            if payload is None:
-                raise VerificationError(f"could not read artifact member: {name}")
-            content = payload.read()
-            if row["size"] != len(content) or row["sha256"] != sha256_bytes(content):
-                raise VerificationError(f"artifact payload does not match metadata: {name}")
-            if row["executable"] is not bool(member.mode & 0o100):
-                raise VerificationError(f"artifact executable mode does not match metadata: {name}")
-            contamination_findings.extend(payload_contamination_findings(name, content))
-            payload_contents[name] = content
-            declared.add(name)
-        if declared != expected_files:
-            raise VerificationError("artifact metadata does not cover every payload file")
-        if capabilities["node_runtime"]:
-            node_rows = [row for row in files if row["path"] in {"node/bin/node", "node/bin/node.exe"}]
-            if len(node_rows) != 1 or node_rows[0]["executable"] is not True:
-                raise VerificationError("SDK-local Node runtime is not uniquely executable")
-        if not AGENT_INSTRUCTION_FILES.issubset(payload_contents):
-            raise VerificationError("SDK artifact has no complete versioned agent-authoring contract")
-        try:
-            agent_manifest = json.loads(
-                payload_contents[".agents/skills/vellum-app-authoring/manifest.v1.json"]
-            )
-        except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise VerificationError(f"agent-authoring manifest is malformed: {error}") from error
-        agent_skill = agent_manifest.get("skill") if isinstance(agent_manifest, dict) else None
-        if (
-            not isinstance(agent_manifest, dict)
-            or agent_manifest.get("schema") != "vellum.agent-instructions.v1"
-            or agent_manifest.get("version") != 1
-            or not isinstance(agent_skill, dict)
-            or agent_skill.get("path")
-            != ".agents/skills/vellum-app-authoring/SKILL.md"
-            or b"vellum.agent-instructions.v1"
-            not in payload_contents[".agents/skills/vellum-app-authoring/SKILL.md"]
-        ):
-            raise VerificationError("agent-authoring manifest and skill are incompatible")
-        if contamination_findings:
-            first = contamination_findings[0]
-            raise VerificationError(
-                f"artifact contamination: {first['rule']} in {first['path']}"
-            )
-        actual_capabilities = derived_capabilities(payload_contents, metadata["target"])
-        if capabilities != actual_capabilities:
-            raise VerificationError("SDK artifact capability claims do not match installed payloads")
-        if "web/manifest.json" in payload_contents and json.loads(
-            payload_contents["web/manifest.json"]
-        ).get("source_commit") != metadata["source_commit"]:
-            raise VerificationError("web payload source commit does not match SDK provenance")
-        if capabilities["commands"]["import"] is not True or capabilities["commands"]["reimport"] is not True:
-            raise VerificationError("SDK artifact must expose its packaged import/reimport backend")
-        if capabilities["gpu_renderer"] and metadata["target"] != "darwin-arm64":
-            raise VerificationError("native GPU application capability is currently darwin-arm64 only")
-
-    return {
-        "schema": "vellum.sdk-artifact-verification.v1",
-        "ok": True,
-        "artifact": archive.name,
-        "sha256": actual,
-        "framework_version": metadata.get("framework_version"),
-        "source_commit": metadata.get("source_commit"),
-        "source_tree_clean": metadata.get("source_tree_clean"),
-        "target": metadata.get("target"),
-        "claims": metadata.get("capabilities"),
-        "file_count": len(declared),
-        "contamination_free": True,
-        "contamination_findings": [],
-    }
+    try:
+        result = verify_archive_contract(archive, checksums)
+    except CanonicalInstallError as error:
+        raise VerificationError(str(error)) from error
+    if result["framework_version"] != FRAMEWORK_VERSION:
+        raise VerificationError(
+            "SDK framework version does not match this immutable verifier"
+        )
+    if result["cli_version"] != CLI_VERSION:
+        raise VerificationError(
+            "SDK CLI version does not match this immutable verifier"
+        )
+    return result
 
 
 def main(argv: Iterable[str] | None = None) -> int:
@@ -446,7 +56,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         result = verify(args.archive, args.checksums)
-    except (OSError, tarfile.TarError, json.JSONDecodeError, VerificationError) as error:
+    except (OSError, UnicodeError, json.JSONDecodeError, VerificationError) as error:
         print(f"vellum-sdk-verify: {error}", file=sys.stderr)
         return 1
     if args.json:

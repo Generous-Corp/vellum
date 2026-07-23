@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import io
 import json
 import os
 from pathlib import Path
+import runpy
 import shutil
 import stat
 import subprocess
@@ -17,6 +19,7 @@ import unittest
 REPO = Path(__file__).resolve().parents[2]
 INSTALLER = REPO / "scripts" / "install.sh"
 INSTALLER_CORE = REPO / "scripts" / "install_core.py"
+ARTIFACT_VERIFIER = REPO / "scripts" / "verify_sdk_artifact.py"
 INSTALLER_SOURCE_SUMS = REPO / "scripts" / "INSTALLER_SHA256SUMS"
 
 
@@ -60,14 +63,16 @@ def _build_verified_fixture(
         json.dumps({
             "schema": "vellum.sdk-artifact.v1",
             "framework_version": framework_version,
-            "cli_version": "0.1.0-dev",
+            "cli_version": "0.1.0",
             "cli_api": 1,
             "source_commit": source_commit,
+            "source_tree_clean": True,
             "target": target,
             "capabilities": {
-                "cmake_sdk": True,
+                "cmake_sdk": False,
                 "authoring_cli": True,
                 "gpu_renderer": False,
+                "node_runtime": False,
                 "custom_components": False,
                 "commands": {
                     "import": True,
@@ -77,6 +82,53 @@ def _build_verified_fixture(
                     "test": False,
                     "capture": False,
                     "package": False,
+                },
+                "authoring": {
+                    "text_input_v1": {
+                        "retained_tree": False,
+                        "native_pointer_focus": False,
+                        "native_direct_text": False,
+                        "ime_composition": False,
+                        "caret_and_selection": False,
+                        "clipboard_editing": False,
+                        "accessibility_text": False,
+                        "mobile": False,
+                    },
+                    "scenario_v1": {
+                        "input": False,
+                        "key": False,
+                        "maximum_steps": 1000,
+                        "maximum_input_utf8_bytes": 64 * 1024,
+                        "keys": [],
+                    },
+                    "persistence": {
+                        "state_v1": False,
+                        "macos_application_support": False,
+                        "atomic_snapshot_write": False,
+                        "migration_api": False,
+                        "key_value_store": False,
+                        "sync": False,
+                    },
+                },
+                "targets": {
+                    "macos": {
+                        "commands": {
+                            "build": False,
+                            "run": False,
+                            "test": False,
+                            "capture": False,
+                            "package": False,
+                        },
+                    },
+                    "web": {
+                        "commands": {
+                            "build": False,
+                            "run": False,
+                            "test": False,
+                            "capture": False,
+                            "package": False,
+                        },
+                    },
                 },
             },
             "files": _artifact_inventory(payload),
@@ -89,6 +141,24 @@ def _build_verified_fixture(
             handle.add(path, arcname=path.name)
     digest = _sha256(archive)
     sums = root / f"{fixture_name}-SHA256SUMS"
+    sums.write_text(f"{digest}  {archive.name}\n", encoding="utf-8")
+    return archive, sums, digest
+
+
+def _repack_fixture(
+    payload: Path, archive: Path, sums: Path
+) -> tuple[Path, Path, str]:
+    metadata_path = payload / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["files"] = _artifact_inventory(payload)
+    metadata_path.write_text(
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    with tarfile.open(archive, "w:gz") as handle:
+        for path in sorted(payload.iterdir()):
+            handle.add(path, arcname=path.name)
+    digest = _sha256(archive)
     sums.write_text(f"{digest}  {archive.name}\n", encoding="utf-8")
     return archive, sums, digest
 
@@ -118,6 +188,66 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(set(rows), {"install.sh", "install_core.py"})
         self.assertEqual(rows["install.sh"], _sha256(INSTALLER))
         self.assertEqual(rows["install_core.py"], _sha256(INSTALLER_CORE))
+
+    def test_official_release_requires_macos_15_or_newer(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            uname = fake_bin / "uname"
+            uname.write_text(
+                "#!/bin/sh\n"
+                'case "$1" in\n'
+                '  -s) printf "Darwin\\n" ;;\n'
+                '  -m) printf "arm64\\n" ;;\n'
+                "  *) exit 2 ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            uname.chmod(0o755)
+            sw_vers = fake_bin / "sw_vers"
+            gh = fake_bin / "gh"
+            gh.write_text(
+                "#!/bin/sh\n"
+                'printf "GH_RELEASE_ACQUISITION_REACHED\\n" >&2\n'
+                "exit 19\n",
+                encoding="utf-8",
+            )
+            gh.chmod(0o755)
+            environment = {
+                **os.environ,
+                "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
+            }
+
+            sw_vers.write_text(
+                "#!/bin/sh\nprintf '14.7.6\\n'\n",
+                encoding="utf-8",
+            )
+            sw_vers.chmod(0o755)
+            rejected = _run_installer(
+                root / "rejected-prefix",
+                "--version", "0.1.0",
+                env=environment,
+            )
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn(
+                "require macOS 15.0 or newer; found 14.7.6",
+                rejected.stderr,
+            )
+            self.assertNotIn("GH_RELEASE_ACQUISITION_REACHED", rejected.stderr)
+
+            sw_vers.write_text(
+                "#!/bin/sh\nprintf '15.0\\n'\n",
+                encoding="utf-8",
+            )
+            accepted_boundary = _run_installer(
+                root / "accepted-prefix",
+                "--version", "0.1.0",
+                env=environment,
+            )
+            self.assertNotEqual(accepted_boundary.returncode, 0)
+            self.assertNotIn("require macOS 15.0 or newer", accepted_boundary.stderr)
+            self.assertIn("GH_RELEASE_ACQUISITION_REACHED", accepted_boundary.stderr)
 
     def test_local_install_runs_and_creates_project_outside_checkout(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -308,6 +438,241 @@ class InstallerTests(unittest.TestCase):
             self.assertIn("exactly one checksum", missing.stderr)
             self.assertFalse(missing_prefix.exists())
 
+    def test_installer_enforces_the_canonical_artifact_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive, _sums, _digest = _build_verified_fixture(root)
+            forged = root / "vellum-sdk-forged-contract.tar.gz"
+            with tarfile.open(archive, "r:gz") as source:
+                with tarfile.open(forged, "w:gz") as output:
+                    for member in source.getmembers():
+                        stream = (
+                            source.extractfile(member)
+                            if member.isfile()
+                            else None
+                        )
+                        if member.name == "metadata.json":
+                            metadata = json.load(stream)
+                            del metadata["source_tree_clean"]
+                            content = (
+                                json.dumps(
+                                    metadata, indent=2, sort_keys=True
+                                )
+                                + "\n"
+                            ).encode()
+                            replacement = copy.copy(member)
+                            replacement.size = len(content)
+                            output.addfile(replacement, io.BytesIO(content))
+                        else:
+                            output.addfile(member, stream)
+            sums = root / "FORGED-SHA256SUMS"
+            sums.write_text(
+                f"{_sha256(forged)}  {forged.name}\n",
+                encoding="utf-8",
+            )
+
+            canonical = subprocess.run(
+                [
+                    sys.executable,
+                    str(ARTIFACT_VERIFIER),
+                    "--archive",
+                    str(forged),
+                    "--checksums",
+                    str(sums),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            installed = _run_installer(
+                root / "prefix",
+                "--archive",
+                str(forged),
+                "--checksums",
+                str(sums),
+            )
+            self.assertNotEqual(canonical.returncode, 0)
+            self.assertNotEqual(installed.returncode, 0)
+            expected = "metadata has missing or unknown fields"
+            self.assertIn(expected, canonical.stderr)
+            self.assertIn(expected, installed.stderr)
+            self.assertFalse((root / "prefix/lib/vellum").exists())
+
+    def test_cli_version_must_equal_framework_version(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive, sums, _digest = _build_verified_fixture(root)
+            verified = subprocess.run(
+                [
+                    sys.executable,
+                    str(ARTIFACT_VERIFIER),
+                    "--archive",
+                    str(archive),
+                    "--checksums",
+                    str(sums),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(verified.returncode, 0, verified.stderr)
+            self.assertEqual(
+                json.loads(verified.stdout)["cli_version"], "0.1.0"
+            )
+
+            payload = root / "test-payload"
+            metadata_path = payload / "metadata.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata["cli_version"] = "0.1.1"
+            metadata_path.write_text(
+                json.dumps(metadata, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            _repack_fixture(payload, archive, sums)
+            canonical = subprocess.run(
+                [
+                    sys.executable,
+                    str(ARTIFACT_VERIFIER),
+                    "--archive",
+                    str(archive),
+                    "--checksums",
+                    str(sums),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            installed = _run_installer(
+                root / "prefix",
+                "--archive",
+                str(archive),
+                "--checksums",
+                str(sums),
+            )
+            for result in (canonical, installed):
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(
+                    "CLI version does not match framework version",
+                    result.stderr,
+                )
+
+    def test_checksum_manifest_has_byte_and_line_limits(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive, _sums, digest = _build_verified_fixture(root)
+            exact = f"{digest}  {archive.name}\n"
+
+            oversized = root / "OVERSIZED-SHA256SUMS"
+            oversized.write_text(
+                exact + "#" * (1024 * 1024),
+                encoding="utf-8",
+            )
+            oversized_result = _run_installer(
+                root / "oversized-prefix",
+                "--archive",
+                str(archive),
+                "--checksums",
+                str(oversized),
+            )
+            self.assertNotEqual(oversized_result.returncode, 0)
+            self.assertIn(
+                "checksum manifest exceeds the installer size limit",
+                oversized_result.stderr,
+            )
+
+            too_many_lines = root / "TOO-MANY-LINES-SHA256SUMS"
+            too_many_lines.write_text(
+                exact + ("ignored\n" * 10_001),
+                encoding="utf-8",
+            )
+            lines_result = _run_installer(
+                root / "lines-prefix",
+                "--archive",
+                str(archive),
+                "--checksums",
+                str(too_many_lines),
+            )
+            self.assertNotEqual(lines_result.returncode, 0)
+            self.assertIn(
+                "checksum manifest exceeds the installer line limit",
+                lines_result.stderr,
+            )
+
+    def test_contract_retention_has_per_file_and_total_memory_limits(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive, sums, _digest = _build_verified_fixture(root)
+
+            per_file_core = runpy.run_path(str(INSTALLER_CORE))
+            per_file_core["verify_archive_contract"].__globals__[
+                "MAX_RETAINED_FILE_BYTES"
+            ] = 1
+            with self.assertRaisesRegex(
+                per_file_core["InstallError"], "per-file memory limit"
+            ):
+                per_file_core["verify_archive_contract"](archive, sums)
+
+            total_core = runpy.run_path(str(INSTALLER_CORE))
+            total_globals = total_core[
+                "verify_archive_contract"
+            ].__globals__
+            total_globals["MAX_RETAINED_FILE_BYTES"] = 1024**3
+            total_globals["MAX_RETAINED_TOTAL_BYTES"] = 1
+            with self.assertRaisesRegex(
+                total_core["InstallError"], "total memory limit"
+            ):
+                total_core["verify_archive_contract"](archive, sums)
+
+    def test_managed_regular_file_hardlinks_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive, sums, digest = _build_verified_fixture(root)
+            cases = {
+                "installed payload": lambda prefix: (
+                    prefix / "lib/vellum"
+                ).resolve()
+                / "vellum_cli.py",
+                "verified cache": lambda prefix: (
+                    prefix
+                    / "lib/vellum-cache"
+                    / digest
+                    / archive.name
+                ),
+                "launcher": lambda prefix: prefix / "bin/vellum",
+                "state": lambda prefix: (
+                    prefix / "lib/vellum-installer-state.json"
+                ),
+                "lock": lambda prefix: prefix / ".vellum-installer.lock",
+            }
+            for name, managed_path in cases.items():
+                with self.subTest(name=name):
+                    prefix = root / f"prefix-{name.replace(' ', '-')}"
+                    installed = _run_installer(
+                        prefix,
+                        "--archive",
+                        str(archive),
+                        "--checksums",
+                        str(sums),
+                    )
+                    self.assertEqual(
+                        installed.returncode, 0, installed.stderr
+                    )
+                    outside = root / f"{name.replace(' ', '-')}.link"
+                    os.link(managed_path(prefix), outside)
+                    verified = _run_installer(
+                        prefix, "--verify-installed"
+                    )
+                    self.assertNotEqual(verified.returncode, 0)
+                    self.assertTrue(
+                        "unexpected hard links" in verified.stderr
+                        or "launcher is missing or unmanaged"
+                        in verified.stderr,
+                        verified.stderr,
+                    )
+
     def test_exact_reinstall_is_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -320,6 +685,20 @@ class InstallerTests(unittest.TestCase):
             )
             self.assertEqual(first.returncode, 0, first.stderr)
             active_before = (prefix / "lib/vellum").resolve()
+            activation_paths = (
+                prefix / "bin/vellum",
+                prefix / "lib/vellum",
+                prefix / "lib/vellum-installer-state.json",
+            )
+            activation_before = {
+                path: (
+                    path.lstat().st_ino,
+                    path.lstat().st_mtime_ns,
+                    stat.S_IMODE(path.lstat().st_mode),
+                    path.lstat().st_size,
+                )
+                for path in activation_paths
+            }
             second = _run_installer(
                 prefix,
                 "--archive", str(archive),
@@ -331,6 +710,19 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(
                 [path.name for path in (prefix / "lib/vellum-installs").iterdir()],
                 [f"0.1.0-test-{digest}"],
+            )
+            self.assertEqual(
+                {
+                    path: (
+                        path.lstat().st_ino,
+                        path.lstat().st_mtime_ns,
+                        stat.S_IMODE(path.lstat().st_mode),
+                        path.lstat().st_size,
+                    )
+                    for path in activation_paths
+                },
+                activation_before,
+                "an exact verified reinstall must not replace activation files",
             )
             verified = _run_installer(prefix, "--verify-installed")
             self.assertEqual(verified.returncode, 0, verified.stderr)
@@ -446,7 +838,10 @@ class InstallerTests(unittest.TestCase):
                 "--checksums", str(sums),
             )
             self.assertNotEqual(completed.returncode, 0)
-            self.assertIn("incompatible SDK artifact metadata", completed.stderr)
+            self.assertIn(
+                "artifact compatibility/provenance fields are malformed",
+                completed.stderr,
+            )
             self.assertFalse((root / "outside").exists())
 
     def test_requested_release_identity_must_match_artifact_metadata(self) -> None:
