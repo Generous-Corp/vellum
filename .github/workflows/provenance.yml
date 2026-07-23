@@ -25,11 +25,19 @@ jobs:
           python3 tools/provenance/verify_extraction.py \
             --output "$RUNNER_TEMP/provenance-report.json"
 
+      - name: Verify pinned Pulp tooling disposition
+        run: |
+          python3 tools/provenance/test_verify_pulp_tooling_disposition.py
+          python3 tools/provenance/verify_pulp_tooling_disposition.py \
+            --output "$RUNNER_TEMP/pulp-tooling-disposition-report.json"
+
       - name: Upload verification evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: provenance-report
-          path: ${{ runner.temp }}/provenance-report.json
+          path: |
+            ${{ runner.temp }}/provenance-report.json
+            ${{ runner.temp }}/pulp-tooling-disposition-report.json
           if-no-files-found: error
           retention-days: 90

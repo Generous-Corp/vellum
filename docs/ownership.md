@@ -51,6 +51,9 @@ Before Pulp can consume Vellum:
 2. The exact Pulp-to-Vellum API and adapter boundary must be reviewed.
 3. Changes observed in Pulp since extraction must be classified as Vellum
    fixes, Pulp-only behavior, or intentionally obsolete behavior.
+   The pinned [Pulp tooling-disposition observation](provenance/pulp-tooling-disposition.md)
+   is the machine-readable baseline for commands, flags, skills, MCP tools,
+   and plugin registrations; no entry may disappear implicitly.
 4. Pulp must migrate in a bounded change to an immutable Vellum version.
 5. Both repositories must record the dependency and ownership transition.
 

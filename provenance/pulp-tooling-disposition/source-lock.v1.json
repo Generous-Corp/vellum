@@ -1,0 +1,515 @@
+{
+  "schema_version": 1,
+  "record_kind": "pulp-tooling-disposition-observation",
+  "purpose": "Preserve the complete Pulp developer-tooling inventory during independent Vellum validation so a later, separately approved Pulp adoption cannot silently drop commands, flags, skills, MCP tools, or plugin registrations.",
+  "status": {
+    "authority_transfer": false,
+    "pulp_adoption": false,
+    "pulp_remains_owner": true,
+    "note": "This is an immutable observation of Pulp tooling, not a transfer, adoption decision, or Vellum API promise."
+  },
+  "pulp_source": {
+    "repository": "https://github.com/Generous-Corp/pulp.git",
+    "commit": "b63008422a7a0657e428a3d9deb947698855b7b3",
+    "authoritative_map": {
+      "path": "docs/status/pulp-tooling-disposition.json",
+      "git_blob_sha1": "7b8e603d9569a463cbe16c68f7d2472b52774305",
+      "sha256": "421100ebd9d15890a60fb9871a4eb96329e9fc374c9f41b7ca15208e68704446",
+      "vellum_snapshot_path": "provenance/pulp-tooling-disposition/pulp-tooling-disposition.v1.json"
+    },
+    "concrete_source_blobs": {
+      "cli": [
+        {
+          "path": "docs/status/cli-commands.yaml",
+          "git_mode": "100644",
+          "git_blob_sha1": "7bef7a22141d267c6cab6ac26c5bd8ce4ae3e430"
+        },
+        {
+          "path": "experimental/pulp-rs/src/main.rs",
+          "git_mode": "100644",
+          "git_blob_sha1": "bfd9c862d8ad0dd9c03ec46c23fb9138ce3ec68a"
+        },
+        {
+          "path": "tools/cli/pulp_cli.cpp",
+          "git_mode": "100644",
+          "git_blob_sha1": "90c82886c2192b7975a5b05aa04c6d3db64d2349"
+        }
+      ],
+      "claude_commands": [
+        {
+          "path": ".claude/commands/audio-compare.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "34c635a63fb6cc3ea616fc9501ba38dbe3bf03cb"
+        },
+        {
+          "path": ".claude/commands/audio-harness.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "b6b79bb3abc82a681f7c37f053e5a1c9a7b95520"
+        },
+        {
+          "path": ".claude/commands/audio-inspect.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "07c1071ea3b23818a5676b1d9db5114dc484c655"
+        },
+        {
+          "path": ".claude/commands/bake.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "9b41dc03040be9e727f375acdb4f389699b08bec"
+        },
+        {
+          "path": ".claude/commands/ci-host.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "cb86eceed35f07cb3f11a49acda114d2c1613a4a"
+        },
+        {
+          "path": ".claude/commands/ci.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "c6c88ea6fa7b1307492baa0af1da8cf4c204d07a"
+        },
+        {
+          "path": ".claude/commands/codex-consult.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "74a0a3b868d14dde969d9944edd5fddbe79de5b3"
+        },
+        {
+          "path": ".claude/commands/content.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "88955ca4be449073fea4f720b9f77bb084733428"
+        },
+        {
+          "path": ".claude/commands/coverage-diff.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "f542f28455b74f21382e98a4c6fa1e9e461d6ec5"
+        },
+        {
+          "path": ".claude/commands/create.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "7d8d02bd375ef5106e3ab7538193134949c06009"
+        },
+        {
+          "path": ".claude/commands/design.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "12605044125380c1dcf41981b3312ddff8ce2c33"
+        },
+        {
+          "path": ".claude/commands/docs.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "3a39679fab00959d09bc8c365dc56d4b2754a71c"
+        },
+        {
+          "path": ".claude/commands/doctor.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "f011709de79a1f3427ea6741895072fa5c4113b0"
+        },
+        {
+          "path": ".claude/commands/import-design.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "325f6790a20484972b45a1e3946b00921bf223cb"
+        },
+        {
+          "path": ".claude/commands/inspect.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "16c3bf2117356ccfa9c754a9a4de2d4cb88c4582"
+        },
+        {
+          "path": ".claude/commands/kit.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "4f045601205dd955995abf01ab8a5ab082c882f1"
+        },
+        {
+          "path": ".claude/commands/minos.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "9bc6d77a633b8dd4a337bf0507bf43ecc925c6a7"
+        },
+        {
+          "path": ".claude/commands/motion.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "a35e146cfc37bb531a370f7afdec6f3909d4a270"
+        },
+        {
+          "path": ".claude/commands/pr.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "9db696d19be4da86806eaf12161658cf1ad85ba6"
+        },
+        {
+          "path": ".claude/commands/prototype-loop.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "64fa3b9d54ecf80590308142819f064efd3b25b8"
+        },
+        {
+          "path": ".claude/commands/run.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "952d2dcc1601e2518a9bc6799e71fb812d41ae59"
+        },
+        {
+          "path": ".claude/commands/ship.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "b8d4e12158b80072f863c55d7650c4b97d4567a7"
+        },
+        {
+          "path": ".claude/commands/status.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "a0866e8393b0580866b88e5a6208bda88c4bffcb"
+        },
+        {
+          "path": ".claude/commands/test.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "a5a1d31da869938526fa3d19e754852276e7e40b"
+        },
+        {
+          "path": ".claude/commands/trace.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "9adde378db969f10cbf80779c53de71f80c00c09"
+        },
+        {
+          "path": ".claude/commands/upgrade.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "f8da76fac9c74f573b62272cdd3fbd7a422b6992"
+        },
+        {
+          "path": ".claude/commands/validate.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "e4ff4b070b423b542dab7db019cdba39cd5ac315"
+        },
+        {
+          "path": ".claude/commands/version.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "02673f7630b4a8fe69c593c5780d4c689f441a46"
+        }
+      ],
+      "agent_skills": [
+        {
+          "path": ".agents/skills/aax/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "a35b182737f91a5fc11b3a1e8d81f94c8d510382"
+        },
+        {
+          "path": ".agents/skills/android/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "565e7ea791deb08770209a823ea39c53536fb816"
+        },
+        {
+          "path": ".agents/skills/ara/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "a7c79a2e5e5f47ddf8697f690fd052d646e6ec02"
+        },
+        {
+          "path": ".agents/skills/audio-harness/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "1d01553d934b21728d916205af7121e22181933b"
+        },
+        {
+          "path": ".agents/skills/audio-headless-debug/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "f291447ca704f217385814ab142d6eaa0cbb372d"
+        },
+        {
+          "path": ".agents/skills/auv2/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "d10a3c129a7c6e4c136f89dbc290f6533e28419e"
+        },
+        {
+          "path": ".agents/skills/auv3/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "cde49a635560fdaf39661ab2e272bc2a507740aa"
+        },
+        {
+          "path": ".agents/skills/ci/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "1114f8d67edb0065c8b1970e3839cd28dc92cf7d"
+        },
+        {
+          "path": ".agents/skills/clap/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "d9bc667aaafed0adf5bd1971ecdfb38b59309c59"
+        },
+        {
+          "path": ".agents/skills/cli-maintenance/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "0610d066c66bc31315cd31d2c197139a8a882864"
+        },
+        {
+          "path": ".agents/skills/cmajor-external/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "7550997649e20cdeb3b8e18ab0d9c918ef4e7129"
+        },
+        {
+          "path": ".agents/skills/code-comments/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "8d6eacce9abc42223b2c185404edff553e424285"
+        },
+        {
+          "path": ".agents/skills/content/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "277ab54a9a391ed901b63779cdc2c09f169125a4"
+        },
+        {
+          "path": ".agents/skills/daw-smoke/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "f031d1b2e1ff4466714bbb303cc097fbe0659a1c"
+        },
+        {
+          "path": ".agents/skills/engine/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "ef6451239a37afbcba44a32d1e5895c0ef537705"
+        },
+        {
+          "path": ".agents/skills/faust/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "aafc9d58743584972ad1ea2f7042fdada73b0247"
+        },
+        {
+          "path": ".agents/skills/friction-report/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "008a68d96e5c3569a27f22699437701af99467df"
+        },
+        {
+          "path": ".agents/skills/handoff/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "04c45b722edc0de4bc5331e3961ef56759bd1373"
+        },
+        {
+          "path": ".agents/skills/heritage-profile/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "eeb579d42e83f5a9a60d6189957d862ae1bf9a88"
+        },
+        {
+          "path": ".agents/skills/hosting/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "b58ccd8dc78d9570a7e4d2191cbaef3bda1aab16"
+        },
+        {
+          "path": ".agents/skills/import-design/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "466f07801af9a5aac6165356f3a0b213233e94a6"
+        },
+        {
+          "path": ".agents/skills/installable-tools/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "24bb26c014e11d9bea4e9ee8cd224187e715699e"
+        },
+        {
+          "path": ".agents/skills/intel-canary/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "21730aa5a8e4952d2d82e6582d00bf12f49b2027"
+        },
+        {
+          "path": ".agents/skills/ios/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "3157741cd63f43c1e70ac2d2d50afc5fa38cf1c8"
+        },
+        {
+          "path": ".agents/skills/jsfx-subset/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "175dd4161f13ac05e8f814cdb7ac89b6c64eda53"
+        },
+        {
+          "path": ".agents/skills/kits/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "34c21635b1227a9fe167cae7e21c628995d7a007"
+        },
+        {
+          "path": ".agents/skills/moonbase/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "9fa5888c9ffc10647a122a8b3e722e5bfc88d77a"
+        },
+        {
+          "path": ".agents/skills/motion/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "49ddc6530834f8df00894eb989b2d56dc0d9d2de"
+        },
+        {
+          "path": ".agents/skills/mpe/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "c37b154603c639811bbd750e28b1ee3beaf5122d"
+        },
+        {
+          "path": ".agents/skills/packages/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "4259b8ebd7680b938a9b4867121aaf4c3394ce3b"
+        },
+        {
+          "path": ".agents/skills/playback/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "d25ee55fc64580c75c38b0369ac37337a4b9466d"
+        },
+        {
+          "path": ".agents/skills/pr-batching/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "060ef668568db5024c9c3844aab819475e41f360"
+        },
+        {
+          "path": ".agents/skills/pr-review-sweep/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "10a55153ec3fac52296cd2cdc820f8422e6cdd17"
+        },
+        {
+          "path": ".agents/skills/prototype-loop/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "63f10258334db94c8b856f9445f284c10e527912"
+        },
+        {
+          "path": ".agents/skills/pulp-web-demo/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "7640b512cded51b4d61ca63a53ed36cfd5d76d68"
+        },
+        {
+          "path": ".agents/skills/screenshot-sync/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "6caa16ae01e8f5a1c313cbf308669f2b07666f16"
+        },
+        {
+          "path": ".agents/skills/screenshot/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "aa845572b42475066bcf6bbd4b622697deec75ca"
+        },
+        {
+          "path": ".agents/skills/sdf-text/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "a83056f7414a3dfbfa37cc56d272cabbaba134c9"
+        },
+        {
+          "path": ".agents/skills/ship/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "ef099b4d4feb167ca7c2dfa931e91b8d7ceecb85"
+        },
+        {
+          "path": ".agents/skills/skia-gpu-build/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "fcf39172ef8f9aba906a3936c83d47cbd631ec0f"
+        },
+        {
+          "path": ".agents/skills/streams/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "9cf9d9d74c91c34606e90248cc695db0865b25cf"
+        },
+        {
+          "path": ".agents/skills/stretch/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "04b99f3c5fc1077fa4e9607c823c26283b78bfb5"
+        },
+        {
+          "path": ".agents/skills/tart-ci/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "3cbc3c59e0aeabcb716ad8978d65e91bfb8b8c3c"
+        },
+        {
+          "path": ".agents/skills/threejs-bridge/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "b257da9f191d6765d5c4c02dbc64628e3db0baf4"
+        },
+        {
+          "path": ".agents/skills/timebase/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "15671b5ceaf19545cf313d2db360741e8bde47e6"
+        },
+        {
+          "path": ".agents/skills/timeline/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "75e2b59031c542c7ec7ea9ab2d85835090c41429"
+        },
+        {
+          "path": ".agents/skills/trace-analysis/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "aa188feda5f1d2fe0298ff52d3fb3c5da0784433"
+        },
+        {
+          "path": ".agents/skills/trace-sql/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "7471191f2b822a42feb127f7a76c9ecc954238ef"
+        },
+        {
+          "path": ".agents/skills/update-demos/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "ed54d107607de07c83ed8b97eda589820f75ecfe"
+        },
+        {
+          "path": ".agents/skills/upgrade/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "a781491909e8719eb5ebe5bdbab607432f4b5e61"
+        },
+        {
+          "path": ".agents/skills/video-proof/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "22b7e04565d209924f28bbfb9427389581470dca"
+        },
+        {
+          "path": ".agents/skills/view-bridge/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "224db7fde91235fbf06bbc22b28d29a1b3de691e"
+        },
+        {
+          "path": ".agents/skills/vst3/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "ab35ebdffb59b3a750c942ed7546567cb1330845"
+        },
+        {
+          "path": ".agents/skills/web-plugins/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "6bbbd2a99d7e3eec97d995b641de8a3ec9acadff"
+        },
+        {
+          "path": ".agents/skills/webview-ui/SKILL.md",
+          "git_mode": "100644",
+          "git_blob_sha1": "6038c00b7751a4109c4a698f14c74e497d7ebd06"
+        }
+      ],
+      "mcp_tools": [
+        {
+          "path": "tools/mcp/pulp_mcp.cpp",
+          "git_mode": "100644",
+          "git_blob_sha1": "fb7df7913ef7d8b858893b13695e849ade916de8"
+        }
+      ],
+      "plugin_registrations": [
+        {
+          "path": ".claude-plugin/marketplace.json",
+          "git_mode": "100644",
+          "git_blob_sha1": "8e39232351e748c1fa3b35ddc932564658abc111"
+        },
+        {
+          "path": ".claude-plugin/plugin.json",
+          "git_mode": "100644",
+          "git_blob_sha1": "f3c6836a46dcf3cbd562ef400b5cfdfcc03c331c"
+        },
+        {
+          "path": ".mcp.json",
+          "git_mode": "100644",
+          "git_blob_sha1": "143ccecaec6a556bd82d8d74fc698e9d7a2ff85f"
+        }
+      ]
+    },
+    "concrete_source_blob_count": 90,
+    "concrete_source_blobs_sha256": "32fc04c980cb13164b628b5cf0030bb1fc83dd707583489b524d192a2a8ed7b0"
+  },
+  "inventory_counts": {
+    "cli": 54,
+    "claude_commands": 28,
+    "agent_skills": 55,
+    "mcp_tools": 65,
+    "plugin_registrations": 3
+  },
+  "required_inventory_categories": [
+    "agent_skills",
+    "claude_commands",
+    "cli",
+    "mcp_tools",
+    "plugin_registrations"
+  ],
+  "required_source_categories": [
+    "agent_skills",
+    "claude_commands",
+    "cli",
+    "mcp_tools",
+    "plugin_registrations"
+  ],
+  "allowed_dispositions": [
+    "candidate-shared-later",
+    "excluded",
+    "pulp-owned"
+  ],
+  "verification": {
+    "command": "python3 tools/provenance/verify_pulp_tooling_disposition.py",
+    "policy": "Changing the pinned Pulp commit, map digest, source-blob digest, or expected counts requires an explicit reviewed baseline update. Regeneration is never automatic."
+  }
+}
