@@ -8,12 +8,14 @@ sources:
     reimport: supported
   figma:
     channel: supported
-    accepted_artifact: credential-free Vellum Figma adapter source JSON
+    accepted_artifact: credential-free generic Figma plugin export v1 JSON
     provider_access: none
     reimport: supported
     limitations:
       - does not accept arbitrary .fig files
       - does not call the Figma REST API
+      - accepts only the generic Figma node subset
+      - rejects audio-widget nodes and audio-specific binding fields
       - unsupported properties remain explicit diagnostics
   figma-rest:
     channel: unavailable

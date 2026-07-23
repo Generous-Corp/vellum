@@ -1,17 +1,20 @@
 # Import and reimport
 
 The installed DesignIR backend connects the public Python `vellum` CLI to
-`@vellum/design-ir`. This experimental lane accepts JSON in either of these
+`@vellum/design-ir`. This experimental lane accepts JSON in any of these
 contracts:
 
+- a credential-free `2026.05-figma-plugin-v1` export containing only the
+  generic Figma node subset;
 - a Vellum adapter source model containing `source`, `root`, optional `tokens`,
   `assets`, and `diagnostics` fields;
 - canonical `https://vellum.dev/schemas/design-ir/v1` JSON.
 
-The friendly `--source-type figma` name currently means a checked-in,
-credential-free Figma adapter source model. It does not yet decode an arbitrary
-`.fig`, REST response, or Pulp archive. That source decoder remains a separate
-milestone. The machine-readable route contract is
+The `--source-type figma` route decodes the generic, credential-free Figma
+plugin envelope directly. It preserves Figma node IDs, tokens, assets, source
+provenance, and unsupported-property diagnostics. It fails closed if an export
+contains audio-widget kinds or audio-specific binding fields. It does not decode
+an arbitrary `.fig`, REST response, or provider archive. The machine-readable route contract is
 [`product/source-support.yaml`](../../product/source-support.yaml); unavailable
 Claude Design, React-project, HTML, REST, and `.fig` routes are not silently
 accepted by the normal CLI.

@@ -16,6 +16,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import process from 'node:process';
 import {
     applyAuthoredOverlay,
+    decodeFigmaPluginExport,
     emptyAuthoredOverlay,
     indexTree,
     normalizeImport,
@@ -392,10 +393,13 @@ async function loadSource(sourcePath, { sourceKey, sourceType }) {
             );
         }
     } else {
+        if (sourceType === 'figma' && input?.format_version === '2026.05-figma-plugin-v1') {
+            input = decodeFigmaPluginExport(input, { sourceHash, sourceKey });
+        }
         if (!input?.source || !input?.root) {
             fail(
                 'unsupported_source_contract',
-                'This backend accepts a Vellum adapter source model or canonical DesignIR JSON',
+                'This backend accepts a generic Figma plugin export, Vellum adapter source model, or canonical DesignIR JSON',
             );
         }
         const normalizedInput = structuredClone(input);

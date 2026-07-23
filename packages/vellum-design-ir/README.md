@@ -2,6 +2,10 @@
 
 Experimental, dependency-free canonical DesignIR and safe reimport primitives for Vellum.
 
+The `decodeFigmaPluginExport()` entry point accepts the generic,
+credential-free Figma plugin v1 envelope, preserves provider identities and
+conversion diagnostics, and rejects audio-widget fields before normalization.
+
 The package owns only generated design data and the algorithm that composes it with developer-owned overlays. It deliberately keeps behavior out of generated files:
 
 - immutable source snapshots are decoded by an adapter;

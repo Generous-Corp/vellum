@@ -133,6 +133,51 @@ class ImportBackendTests(unittest.TestCase):
             self.assertEqual(graph_path.read_bytes(), graph_before)
             self.assertEqual(authored_source.read_bytes(), authored_before)
 
+    def test_real_figma_plugin_envelope_imports_and_reimports_with_stable_behavior(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = self.create(root)
+            source_a = FIXTURES / "figma-plugin-a.export.json"
+            source_b = FIXTURES / "figma-plugin-b.export.json"
+
+            imported = invoke(
+                "import", str(source_a), "--source-type", "figma", "--as", "main", cwd=app,
+            )
+            self.assertEqual(imported.returncode, 0, imported.stdout)
+            self.assertEqual(json.loads(imported.stdout)["status"], "imported")
+            document = json.loads((app / "design/ir/design-ir.json").read_text())
+            self.assertEqual(document["source"]["adapter"], "figma-plugin")
+            self.assertEqual(document["source"]["providerFileKey"], "paletteboard")
+            self.assertEqual(document["root"]["id"], "main/1:2")
+
+            overlay_path = app / "design/overlays/main.authored.json"
+            overlay = json.loads(overlay_path.read_text())
+            overlay["bindings"] = [{
+                "action": "createBoard",
+                "event": "press",
+                "nodeId": "main/1:8",
+            }]
+            overlay_path.write_text(json.dumps(overlay, indent=2) + "\n", encoding="utf-8")
+            overlay_before = overlay_path.read_bytes()
+
+            reimported = invoke("reimport", "--source", str(source_b), "--as", "main", cwd=app)
+            self.assertEqual(reimported.returncode, 0, reimported.stdout)
+            self.assertEqual(json.loads(reimported.stdout)["status"], "reimported")
+            self.assertEqual(overlay_path.read_bytes(), overlay_before)
+            bindings = json.loads((app / "ui/generated/main.bindings.json").read_text())
+            self.assertEqual(bindings["bindings"][0]["resolvedNodeId"], "main/1:8")
+
+            expected_revision = "figma-" + hashlib.sha256(source_b.read_bytes()).hexdigest()[:16]
+            lock = json.loads((app / "design/import.lock.json").read_text())
+            self.assertEqual(lock["sources"]["main"]["activeRevision"], expected_revision)
+            updated = json.loads((app / "design/ir/design-ir.json").read_text())
+            self.assertEqual(updated["root"]["children"][0]["text"], "Palette Studio")
+            card_ids = {
+                child["id"]
+                for child in updated["root"]["children"][2]["children"]
+            }
+            self.assertEqual(card_ids, {"main/1:6", "main/1:7", "main/1:9"})
+
     def test_partial_backend_keeps_native_capabilities_honestly_unavailable(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

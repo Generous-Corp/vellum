@@ -6,6 +6,7 @@ export const AUTHORED_OVERLAY_VERSION: 1;
 export const REIMPORT_REPORT_VERSION: 1;
 export const COMPILER_NAME: '@vellum/design-ir';
 export const COMPILER_VERSION: string;
+export const FIGMA_PLUGIN_FORMAT: '2026.05-figma-plugin-v1';
 
 export type JsonPrimitive = null | boolean | number | string;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
@@ -211,6 +212,10 @@ export function normalizeTokens(rawTokens: unknown, sourceKey: string): Record<s
 export function resolveTokenLayers(document: DesignIR, overlay?: Partial<AuthoredOverlay>): TokenLayers;
 export function diffTokens(previous: DesignIR['tokens'], next: DesignIR['tokens']): unknown[];
 export function normalizeImport(input: ImportSourceModel, options?: { compilerVersion?: string }): DesignIR;
+export function decodeFigmaPluginExport(
+    input: unknown,
+    options: { sourceKey: string; sourceHash: string; revision?: string },
+): ImportSourceModel;
 export function assertNoDuplicateIdentities(document: DesignIR): void;
 export function emptyAuthoredOverlay(sourceKey: string): AuthoredOverlay;
 export function applyAuthoredOverlay(document: DesignIR, overlay: AuthoredOverlay): OverlayApplication;
