@@ -5,6 +5,7 @@ on:
   pull_request:
   push:
     branches: [main]
+    tags: ['v[0-9]*']
 
 permissions:
   contents: read

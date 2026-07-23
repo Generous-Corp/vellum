@@ -8,6 +8,17 @@ ROOT = Path(__file__).resolve().parents[1]
 README = ROOT / "README.md"
 MARKER = re.compile(r"<!-- readme-exec: ([^>]+) -->\s*\n```(sh|powershell)\n")
 FIELDS = re.compile(r"([a-z][a-z0-9-]*)=([A-Za-z0-9._-]+)")
+MANUAL_REASONS = frozenset({
+    "alternative-to-quick-start",
+    "destructive-or-post-install-maintenance",
+    "illustrative-requires-prepared-project",
+    "post-download-verification-example",
+    "requires-user-supplied-export",
+    "source-build-not-release-quick-start",
+    "subset-of-release-quick-start",
+    "unsupported-clean-release-host",
+    "unverified-development-path",
+})
 
 class Error(ValueError): pass
 
@@ -23,10 +34,12 @@ def parse(path: Path) -> list[dict[str, str]]:
     result, seen = [], set()
     for marker in markers:
         fields = dict(FIELDS.findall(marker.group(1)))
-        if "id" not in fields or (("profile" in fields) == ("skip" in fields)):
-            raise Error("each marker needs id and exactly one of profile or skip")
-        if set(fields) - {"id", "profile", "skip"}:
+        if "id" not in fields or (("profile" in fields) == ("manual" in fields)):
+            raise Error("each marker needs id and exactly one of profile or manual")
+        if set(fields) - {"id", "profile", "manual"}:
             raise Error("marker has unknown fields")
+        if "manual" in fields and fields["manual"] not in MANUAL_REASONS:
+            raise Error(f"unknown manual reason: {fields['manual']}")
         if fields["id"] in seen:
             raise Error(f"duplicate id: {fields['id']}")
         seen.add(fields["id"])
@@ -38,6 +51,8 @@ def parse(path: Path) -> list[dict[str, str]]:
 
 def execute(blocks: list[dict[str, str]], profile_name: str, evidence: Path) -> int:
     chosen = [b for b in blocks if b.get("profile") == profile_name]
+    manual = [{"id": b["id"], "reason": b["manual"]}
+              for b in blocks if "manual" in b]
     if not chosen or any(b["language"] != "sh" for b in chosen):
         raise Error("profile must contain executable sh blocks")
     if not (os.getenv("GH_TOKEN") or os.getenv("GITHUB_TOKEN")):
@@ -46,7 +61,9 @@ def execute(blocks: list[dict[str, str]], profile_name: str, evidence: Path) -> 
     env_record = {"schema": "vellum.readme-exec-environment.v1",
                   "profile": profile_name, "platform": platform.platform(),
                   "machine": platform.machine(), "python": platform.python_version(),
-                  "releaseAuthenticationPresent": True}
+                  "releaseAuthenticationPresent": True,
+                  "manualBlockCount": len(manual),
+                  "manualBlocks": manual}
     (evidence/"environment.json").write_text(
         json.dumps(env_record, indent=2, sort_keys=True)+"\n")
     safe_keys = {"CI","GH_TOKEN","GITHUB_TOKEN","HOME","LANG","LC_ALL","PATH",
@@ -65,7 +82,9 @@ def execute(blocks: list[dict[str, str]], profile_name: str, evidence: Path) -> 
             if run.returncode: status = "failed"; break
     (evidence/"timings.json").write_text(json.dumps(
         {"schema":"vellum.readme-exec-result.v1","profile":profile_name,
-         "status":status,"blocks":timings}, indent=2, sort_keys=True)+"\n")
+         "status":status,"blocks":timings,
+         "manualBlockCount":len(manual),"manualBlocks":manual},
+        indent=2, sort_keys=True)+"\n")
     return 0 if status == "passed" else 1
 
 def main(argv=None) -> int:

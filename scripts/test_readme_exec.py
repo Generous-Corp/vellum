@@ -18,10 +18,13 @@ class Tests(unittest.TestCase):
             r.parse(self.temp("```sh\ntrue\n```\n"))
     def test_non_adjacent_marker_fails_closed(self):
         with self.assertRaisesRegex(r.Error,"every sh"):
-            r.parse(self.temp("<!-- readme-exec: id=x skip=y -->\ntext\n```sh\ntrue\n```\n"))
-    def test_profile_xor_skip(self):
+            r.parse(self.temp("<!-- readme-exec: id=x manual=requires-user-supplied-export -->\ntext\n```sh\ntrue\n```\n"))
+    def test_profile_xor_manual(self):
         with self.assertRaisesRegex(r.Error,"exactly one"):
-            r.parse(self.temp("<!-- readme-exec: id=x profile=p skip=y -->\n```sh\ntrue\n```\n"))
+            r.parse(self.temp("<!-- readme-exec: id=x profile=p manual=requires-user-supplied-export -->\n```sh\ntrue\n```\n"))
+    def test_arbitrary_manual_reason_fails_closed(self):
+        with self.assertRaisesRegex(r.Error,"unknown manual reason"):
+            r.parse(self.temp("<!-- readme-exec: id=x manual=whatever -->\n```sh\ntrue\n```\n"))
     def test_auth_required(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ,{"GH_TOKEN":"","GITHUB_TOKEN":""}):
             with self.assertRaisesRegex(r.Error,"requires"):
@@ -34,4 +37,16 @@ class Tests(unittest.TestCase):
             self.assertIn("output",(path/"transcript.log").read_text())
             self.assertIn('"exitCode": 7',(path/"timings.json").read_text())
             self.assertTrue((path/"environment.json").is_file())
+    def test_manual_annotations_are_retained(self):
+        blocks=[
+            {"id":"x","profile":"p","language":"sh","command":"true"},
+            {"id":"y","manual":"requires-user-supplied-export",
+             "language":"sh","command":"false"},
+        ]
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ,{"GH_TOKEN":"x"}):
+            path=Path(d)
+            self.assertEqual(r.execute(blocks,"p",path),0)
+            evidence=(path/"timings.json").read_text()
+            self.assertIn('"manualBlockCount": 1',evidence)
+            self.assertIn('"requires-user-supplied-export"',evidence)
 if __name__=="__main__": unittest.main(verbosity=2)
