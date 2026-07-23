@@ -241,21 +241,26 @@ installed build/run/test/capture/package journey.
 The tagged-release workflow publishes a draft only after reproducibility,
 artifact verification, and installed-SDK validation pass. It uploads the SDK,
 the two installer scripts, `SHA256SUMS`, and retained evidence; creates build
-provenance attestations for the SDK, scripts, and checksum manifest; then
-publishes the immutable, non-`latest` private release and verifies it.
+trust evidence for the private repository's available controls; then publishes
+the immutable, non-`latest` private release and verifies it.
 
 After authenticated download, independently inspect GitHub's release
-verification, asset digest, and attestation:
+verification and asset digest:
 
 ```sh
 gh release verify v0.1.0 --repo Generous-Corp/vellum
 gh release verify-asset v0.1.0 ./vellum-sdk-0.1.0-darwin-arm64.tar.gz \
   --repo Generous-Corp/vellum
-gh attestation verify ./vellum-sdk-0.1.0-darwin-arm64.tar.gz \
-  --repo Generous-Corp/vellum
 ```
+
+`release-trust.json` records the exact tag and source commit, the retained
+signed-tag/reproducibility/digest/checksum/sterile-install controls, and the
+explicit attestation status. GitHub artifact attestations are unavailable for
+private repositories without GitHub Enterprise Cloud, so this incubation
+release does not claim one. See
+[GitHub security features](https://docs.github.com/en/code-security/getting-started/github-security-features#artifact-attestations).
 
 These are release gates, not claims that `v0.1.0` exists before the tag workflow
 has completed. The local artifact flow exercises the same archive verification
 and transactional installation logic but cannot claim hosted release
-immutability, GitHub asset digests, or GitHub attestations.
+immutability or GitHub asset digests.
