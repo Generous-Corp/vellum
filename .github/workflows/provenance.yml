@@ -13,7 +13,7 @@ permissions:
 jobs:
   provenance-verify:
     name: provenance-verify
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.VELLUM_LINUX_RUNS_ON_JSON || '"ubuntu-latest"') }}
     steps:
       - name: Check out full preserved history
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
