@@ -498,6 +498,10 @@ function materialize(value, runtime, path) {
     for (const [property, eventName] of [
         ['onPress', 'press'], ['onChange', 'change'],
         ['onSubmit', 'submit'], ['onKeyDown', 'keyDown'],
+        ['onSelectionChange', 'selectionChange'],
+        ['onCompositionStart', 'compositionStart'],
+        ['onCompositionUpdate', 'compositionUpdate'],
+        ['onCompositionEnd', 'compositionEnd'],
     ]) {
         const handler = value.props[property];
         if (handler === undefined) continue;
@@ -538,8 +542,32 @@ function materialize(value, runtime, path) {
         node.component = value.props.component;
         node.properties = cloneJson(value.props.properties, `${path}.properties`);
     }
-    if (typeof value.props.accessibilityLabel === 'string') {
-        node.accessibilityLabel = value.props.accessibilityLabel;
+    for (const property of ['accessibilityLabel', 'accessibilityValue']) {
+        if (value.props[property] !== undefined && typeof value.props[property] !== 'string') {
+            throw new TypeError(`${path}.${property} must be a string`);
+        }
+        if (typeof value.props[property] === 'string') node[property] = value.props[property];
+    }
+    if (value.props.accessibilityRole !== undefined) {
+        const roles = new Set(['button', 'group', 'image', 'list', 'text', 'text-field']);
+        if (!roles.has(value.props.accessibilityRole)) {
+            throw new TypeError(`${path}.accessibilityRole is unsupported`);
+        }
+        node.accessibilityRole = value.props.accessibilityRole;
+    }
+    if (value.props.accessibilityState !== undefined) {
+        const semanticState = cloneJson(
+            value.props.accessibilityState, `${path}.accessibilityState`,
+        );
+        const names = Object.keys(semanticState);
+        if (names.some((name) =>
+            !['disabled', 'selected', 'checked', 'expanded'].includes(name)) ||
+            names.some((name) => name === 'checked'
+                ? ![true, false, 'mixed'].includes(semanticState[name])
+                : typeof semanticState[name] !== 'boolean')) {
+            throw new TypeError(`${path}.accessibilityState has unsupported fields or values`);
+        }
+        node.accessibilityState = semanticState;
     }
     if (value.props.scroll !== undefined) {
         if (!['horizontal', 'vertical'].includes(value.props.scroll)) {
@@ -551,6 +579,18 @@ function materialize(value, runtime, path) {
         node.primitiveVersion = TEXT_INPUT_PRIMITIVE_VERSION;
         node.value = value.props.value;
         if (value.props.placeholder !== undefined) node.placeholder = value.props.placeholder;
+        if (value.props.selection !== undefined) {
+            const selection = value.props.selection;
+            if (selection === null || typeof selection !== 'object' ||
+                !Number.isInteger(selection.start) || !Number.isInteger(selection.end) ||
+                selection.start < 0 || selection.end < selection.start ||
+                selection.end > value.props.value.length) {
+                throw new TypeError(
+                    `${path}.TextInput selection must be an ordered UTF-16 range within value`,
+                );
+            }
+            node.selection = { start: selection.start, end: selection.end };
+        }
     }
     if (Object.keys(events).length > 0) node.events = events;
     return [node];

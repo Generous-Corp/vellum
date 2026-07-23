@@ -217,6 +217,40 @@ class NativeBackendTests(unittest.TestCase):
                     scenario_arguments({"root": project}, "editor")
                 self.assertEqual(caught.exception.status, "invalid_scenario")
 
+    def test_v2_text_composition_and_accessibility_steps_map_to_native_host(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = self.create_project(Path(temporary))
+            scenario_path = project / "tests/scenarios/text-v2.json"
+            scenario_path.write_text(json.dumps({
+                "schema": "vellum.scenario.v2",
+                "name": "text semantics",
+                "steps": [
+                    {"action": "focus", "target": "title-input"},
+                    {"action": "input", "target": "title-input", "value": "GPU Notes"},
+                    {"action": "key", "target": "title-input", "value": "ArrowLeft"},
+                    {"action": "compose", "target": "title-input", "value": "日本語"},
+                    {
+                        "action": "assert-accessibility",
+                        "target": "title-input",
+                        "expect": {
+                            "label": "Board title",
+                            "role": "text-field",
+                            "value": "GPU Notes日本語",
+                        },
+                    },
+                ],
+            }), encoding="utf-8")
+            arguments, name = scenario_arguments({"root": project}, "text-v2")
+            self.assertEqual(name, "text semantics")
+            self.assertEqual(arguments, [
+                "--focus", "title-input",
+                "--input", "title-input", "GPU Notes",
+                "--key", "title-input", "ArrowLeft",
+                "--compose", "title-input", "日本語",
+                "--assert-accessibility", "title-input",
+                '{"label":"Board title","role":"text-field","value":"GPU Notes日本語"}',
+            ])
+
     def test_state_v1_persistence_is_explicit_and_other_values_fail_closed(self) -> None:
         if not shutil.which("node"):
             self.skipTest("node is unavailable")

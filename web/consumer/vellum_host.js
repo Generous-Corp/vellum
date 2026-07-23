@@ -1,7 +1,9 @@
 import createVellumCore from './vellum_web_core.js';
+import {BrowserSemanticAdapter, inferredSemanticRole} from './text_semantics.js';
 
 const canvas = document.querySelector('#vellum-canvas');
 const status = document.querySelector('#vellum-status');
+const accessibilityRoot = document.querySelector('#vellum-accessibility');
 const context = canvas.getContext('2d');
 
 function cssColor(red, green, blue, alpha) {
@@ -115,6 +117,9 @@ function directText(node) {
 
 let interactions = [];
 let scrollContainers = [];
+const semanticAdapter = new BrowserSemanticAdapter(
+    accessibilityRoot, {dispatch, interaction},
+);
 function emitCustomNode(node, proposed, absoluteX, absoluteY, componentApi) {
     const properties = JSON.stringify(node.properties || {});
     if (!componentApi.render(node.id, properties, proposed.width, proposed.height)) {
@@ -188,6 +193,24 @@ function lowerNode(node, proposed, parentX, parentY) {
     if (Object.keys(node.events || {}).length > 0) {
         interactions.push({
             id: node.id, type: node.type, value: node.value || '', events: node.events,
+            selection: node.selection || null,
+            x: absoluteX, y: absoluteY, width: proposed.width, height: proposed.height,
+        });
+    }
+    if (node.type === 'text-input' || node.type === 'button' ||
+        typeof node.accessibilityLabel === 'string' ||
+        typeof node.accessibilityValue === 'string' ||
+        node.accessibilityRole || node.accessibilityState) {
+        semanticAdapter.record({
+            id: node.id,
+            type: node.type,
+            role: inferredSemanticRole(node),
+            label: node.accessibilityLabel || (node.type === 'button' ? directText(node) : ''),
+            value: node.accessibilityValue ??
+                (node.type === 'text-input' ? (node.value || '') : ''),
+            state: node.accessibilityState || {},
+            events: node.events || {},
+            selection: node.selection || null,
             x: absoluteX, y: absoluteY, width: proposed.width, height: proposed.height,
         });
     }
@@ -226,8 +249,10 @@ function render() {
     if (!api.begin(width, height, ...color(style.backgroundColor, '#f8fafc'))) throw new Error('Wasm rejected frame');
     interactions = [];
     scrollContainers = [];
+    semanticAdapter.beginFrame();
     lowerNode(tree, {x: 0, y: 0, width, height}, 0, 0);
     if (!api.render()) throw new Error('Wasm did not render');
+    semanticAdapter.sync(width, height);
     return {digest: api.digest() >>> 0, commandCount: api.count(), width, height, tree};
 }
 
@@ -302,6 +327,8 @@ async function runScenario(path) {
     const assertions = [];
     const services = [];
     const throws = [];
+    const compositions = [];
+    const accessibility = [];
     function findNode(node, target) {
         if (node.id === target) return node;
         for (const child of node.children || []) {
@@ -343,11 +370,25 @@ async function runScenario(path) {
                 after: current.digest,
                 changed: before !== current.digest,
             });
+        } else if (step.action === 'focus') {
+            const element = semanticAdapter.element(step.target);
+            if (!(element instanceof HTMLInputElement)) {
+                throw new Error(`scenario target is not focusable text: ${step.target}`);
+            }
+            element.focus();
         } else if (step.action === 'input') {
             const hit = interaction(step.target, 'text-input');
             if (!hit.events.change) throw new Error(`scenario target is not editable: ${step.target}`);
             const text = step.text ?? step.value;
-            dispatch(hit.events.change, {value: text, inputType: 'scenario'});
+            const element = semanticAdapter.element(step.target);
+            if (!(element instanceof HTMLInputElement)) {
+                throw new Error(`scenario target lacks browser text semantics: ${step.target}`);
+            }
+            element.value = text;
+            element.setSelectionRange(text.length, text.length);
+            element.dispatchEvent(new InputEvent('input', {
+                bubbles: true, inputType: 'insertText', data: text,
+            }));
             inputs.push({target: step.target, bytes: new TextEncoder().encode(text).length,
                 executed: true});
         } else if (step.action === 'key') {
@@ -358,6 +399,15 @@ async function runScenario(path) {
                 dispatch(hit.events.keyDown, {key, repeat: false, source: 'scenario'});
                 executed = true;
                 hit = interaction(step.target, 'text-input');
+            }
+            if ([
+                'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown',
+                'Home', 'End', 'Escape', 'Tab', 'Delete',
+            ].includes(key)) {
+                // Scenario drivers compare framework event semantics, not a
+                // browser's trusted-event default editing behavior. Real user
+                // key events still move the native input caret normally.
+                executed = true;
             }
             if (key === 'Enter' && hit.events.submit) {
                 dispatch(hit.events.submit, {value: hit.value, source: 'scenario'});
@@ -374,6 +424,53 @@ async function runScenario(path) {
                 throw new Error(`text input has no handler for semantic key: ${key}`);
             }
             keys.push({target: step.target, key, executed: true});
+        } else if (step.action === 'compose') {
+            const element = semanticAdapter.element(step.target);
+            if (!(element instanceof HTMLInputElement)) {
+                throw new Error(`scenario composition target is not editable: ${step.target}`);
+            }
+            const text = step.text ?? step.value;
+            element.dispatchEvent(new CompositionEvent(
+                'compositionstart', {bubbles: true, data: ''},
+            ));
+            element.dispatchEvent(new CompositionEvent(
+                'compositionupdate', {bubbles: true, data: text},
+            ));
+            const start = element.selectionStart;
+            const end = element.selectionEnd;
+            element.value =
+                element.value.slice(0, start) + text + element.value.slice(end);
+            element.setSelectionRange(start + text.length, start + text.length);
+            element.dispatchEvent(new InputEvent('input', {
+                bubbles: true, inputType: 'insertCompositionText', data: text,
+                isComposing: true,
+            }));
+            element.dispatchEvent(new CompositionEvent(
+                'compositionend', {bubbles: true, data: text},
+            ));
+            compositions.push({
+                target: step.target, value: element.value,
+                selection: {start: element.selectionStart, end: element.selectionEnd},
+            });
+        } else if (step.action === 'assert-accessibility') {
+            const element = semanticAdapter.element(step.target);
+            if (!element) throw new Error(`semantic target not found: ${step.target}`);
+            const actual = {
+                label: element.getAttribute('aria-label') || '',
+                role: element.dataset.vellumRole || '',
+                browserRole: element.getAttribute('role') || '',
+                value: element instanceof HTMLInputElement
+                    ? element.value : element.getAttribute('aria-valuetext') || '',
+            };
+            for (const [key, value] of Object.entries(step.expect || {})) {
+                if (actual[key] !== value) {
+                    throw new Error(
+                        `accessibility ${key} mismatch for ${step.target}: ` +
+                        `${JSON.stringify(actual[key])} != ${JSON.stringify(value)}`,
+                    );
+                }
+            }
+            accessibility.push({target: step.target, ...actual});
         } else if (step.action === 'assert-text') {
             const actual = nodeText(findNode(current.tree, step.target));
             if (!actual.includes(String(step.expect))) {
@@ -431,6 +528,7 @@ async function runScenario(path) {
     return {schema: 'vellum.web-proof.v1', scenario: scenario.name, backend: api.backend(),
         authoringRuntime: 'browser JavaScript', initial, final: current,
         captures, presses, inputs, keys, touches, assertions, services, throws,
+        compositions, accessibility,
         scrollContainers, components: [...componentEvidence.values()],
         canvasDataBytes: canvas.toDataURL('image/png').length};
 }

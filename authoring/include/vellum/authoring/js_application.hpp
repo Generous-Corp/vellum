@@ -38,6 +38,36 @@ struct TextInputControl final {
     std::string change_action;
     std::string submit_action;
     std::string key_down_action;
+    std::string selection_change_action;
+    std::string composition_start_action;
+    std::string composition_update_action;
+    std::string composition_end_action;
+    /// UTF-16 code-unit offsets, matching JavaScript String and platform APIs.
+    std::size_t selection_start = 0;
+    std::size_t selection_end = 0;
+    vellum::graphics::Rect bounds;
+};
+
+struct AccessibilityState final {
+    bool disabled = false;
+    bool selected = false;
+    bool checked = false;
+    bool mixed = false;
+    bool expanded = false;
+    bool has_checked = false;
+    bool has_expanded = false;
+};
+
+/// A deterministic semantic projection of the retained tree. Platform hosts
+/// expose these nodes through their native accessibility APIs; the browser host
+/// mirrors the same projection into an explicit DOM accessibility overlay.
+struct AccessibilityNode final {
+    std::string node_id;
+    std::string role;
+    std::string label;
+    std::string value;
+    AccessibilityState state;
+    std::vector<std::string> actions;
     vellum::graphics::Rect bounds;
 };
 
@@ -45,6 +75,7 @@ struct RenderedApplication final {
     vellum::graphics::Scene scene;
     std::vector<Interaction> interactions;
     std::vector<TextInputControl> text_inputs;
+    std::vector<AccessibilityNode> accessibility_nodes;
 };
 
 /// Executes a bundled Vellum JavaScript/TypeScript application through the

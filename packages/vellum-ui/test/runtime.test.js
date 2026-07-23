@@ -254,6 +254,38 @@ test('TextInput v1 is controlled, serializable, and dispatches semantic input ev
     assert.equal(tree.children[1].children[0].text, 'Roadmap:true');
 });
 
+test('TextInput serializes UTF-16 selection, composition handlers, and semantic state', () => {
+    const events = [];
+    const bridge = mount(() => jsx(TextInput, {
+        id: 'localized-title',
+        value: 'A😀B',
+        selection: {start: 1, end: 3},
+        accessibilityLabel: 'Localized title',
+        accessibilityValue: 'A, emoji, B',
+        accessibilityState: {disabled: false, selected: true},
+        onChange: payload => events.push(['change', payload]),
+        onSelectionChange: payload => events.push(['selection', payload]),
+        onCompositionStart: payload => events.push(['start', payload]),
+        onCompositionUpdate: payload => events.push(['update', payload]),
+        onCompositionEnd: payload => events.push(['end', payload]),
+    }));
+    const input = JSON.parse(bridge.renderJSON()).tree;
+    assert.deepEqual(input.selection, {start: 1, end: 3});
+    assert.equal(input.accessibilityLabel, 'Localized title');
+    assert.equal(input.accessibilityValue, 'A, emoji, B');
+    assert.deepEqual(input.accessibilityState, {disabled: false, selected: true});
+    for (const [name, expected] of [
+        ['selectionChange', 'selection'], ['compositionStart', 'start'],
+        ['compositionUpdate', 'update'], ['compositionEnd', 'end'],
+    ]) {
+        bridge.dispatchJSON(JSON.stringify({
+            protocol, action: input.events[name],
+            payload: {text: 'に', selection: {start: 2, end: 2}},
+        }));
+        assert.equal(events.at(-1)[0], expected);
+    }
+});
+
 test('TextInput v1 rejects unversioned, uncontrolled, and oversized payloads', () => {
     assert.throws(
         () => mount(() => jsx('text-input', { id: 'raw', value: '', onChange() {} })).renderJSON(),
@@ -268,6 +300,13 @@ test('TextInput v1 rejects unversioned, uncontrolled, and oversized payloads', (
             id: 'too-long', value: 'x'.repeat(65537), onChange() {},
         })).renderJSON(),
         /at most 65536 code units/,
+    );
+    assert.throws(
+        () => mount(() => jsx(TextInput, {
+            id: 'bad-selection', value: 'abc', selection: {start: 1, end: 4},
+            onChange() {},
+        })).renderJSON(),
+        /ordered UTF-16 range/,
     );
 });
 

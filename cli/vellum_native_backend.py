@@ -20,20 +20,17 @@ from vellum_manifest import (
     load_app_manifest, load_components_manifest,
 )
 from vellum_png import PngError, montage, read_png, write_png
+from vellum_scenario import (
+    SCENARIO_SCHEMAS,
+    ScenarioValidationError,
+    validate_scenario_document,
+)
 
 
 RESULT_SCHEMA = "vellum.backend.result.v1"
-SCENARIO_SCHEMA = "vellum.scenario.v1"
 CAPTURE_MATRIX_SCHEMA = "vellum.capture-matrix.v1"
 SUPPORTED_TARGET = "macos"
 MACOS_MINIMUM_VERSION = "15.0"
-MAX_SCENARIO_STEPS = 1000
-MAX_SCENARIO_TARGET_BYTES = 1024
-MAX_SCENARIO_INPUT_BYTES = 64 * 1024
-SUPPORTED_SCENARIO_KEYS = {
-    "Enter", "Escape", "Backspace", "Tab", "ArrowUp", "ArrowDown",
-    "ArrowLeft", "ArrowRight", "Home", "End", "Delete",
-}
 PRIVATE_VELLUM_INCLUDE = re.compile(
     r'^\s*#\s*include\s*[<"](vellum/[^>"]+)[>"]', re.MULTILINE,
 )
@@ -401,85 +398,68 @@ def scenario_arguments(context: dict[str, Any], scenario_value: str | None) -> t
     name = scenario_value or "smoke"
     relative = name if name.endswith(".json") or "/" in name else f"tests/scenarios/{name}.json"
     scenario_path = safe_relative(project, relative, "scenario")
-    scenario = load_json(scenario_path, SCENARIO_SCHEMA, "scenario")
-    if set(scenario) - {"schema", "name", "viewport", "steps"}:
-        raise BackendFailure("Scenario contains unknown fields", status="invalid_scenario")
-    def bounded_text(value: object, limit: int) -> bool:
-        if not isinstance(value, str) or not value or "\0" in value:
-            return False
-        try:
-            return len(value.encode("utf-8")) <= limit
-        except UnicodeEncodeError:
-            return False
+    try:
+        scenario = json.loads(scenario_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise BackendFailure(
+            f"Cannot read scenario at {scenario_path}: {error}",
+            status="invalid_scenario",
+        ) from error
+    if not isinstance(scenario, dict) or scenario.get("schema") not in SCENARIO_SCHEMAS:
+        raise BackendFailure(
+            f"Unsupported scenario schema at {scenario_path}",
+            status="invalid_scenario",
+        )
+    try:
+        validate_scenario_document(scenario)
+    except ScenarioValidationError as error:
+        status = (
+            "unsupported_scenario_action"
+            if str(error).startswith("Unsupported scenario action:")
+            else "invalid_scenario"
+        )
+        raise BackendFailure(str(error), status=status) from error
 
-    scenario_name = scenario.get("name", name)
-    if not bounded_text(scenario_name, 256):
-        raise BackendFailure("Scenario name is invalid", status="invalid_scenario")
+    scenario_name = scenario["name"]
     arguments: list[str] = []
     viewport = scenario.get("viewport")
-    if not isinstance(viewport, dict) or set(viewport) != {"width", "height"}:
-        raise BackendFailure("Scenario viewport is required", status="invalid_scenario")
-    for field, option in (("width", "--expect-width"), ("height", "--expect-height")):
-        value = viewport.get(field)
-        if not isinstance(value, int) or isinstance(value, bool) or value <= 0 or value > 16384:
-            raise BackendFailure(f"Scenario viewport {field} is invalid", status="invalid_scenario")
-        arguments.extend([option, str(value)])
-    steps = scenario.get("steps")
-    if not isinstance(steps, list) or len(steps) > MAX_SCENARIO_STEPS:
-        raise BackendFailure("Scenario steps must be an array of at most 1000 actions", status="invalid_scenario")
+    if viewport:
+        arguments.extend(["--expect-width", str(viewport["width"])])
+        arguments.extend(["--expect-height", str(viewport["height"])])
 
-    def target_at(step: dict[str, Any], index: int, allowed: set[str]) -> str:
-        if set(step) not in ({"action", "target"}, {"action", "id"}) or not set(step) <= allowed:
-            raise BackendFailure(f"Scenario step {index} has unexpected fields", status="invalid_scenario")
-        target = step.get("target") or step.get("id")
-        if not bounded_text(target, MAX_SCENARIO_TARGET_BYTES):
-            raise BackendFailure(f"Scenario step {index} has an invalid target", status="invalid_scenario")
-        return target
-
-    for index, step in enumerate(steps):
-        if not isinstance(step, dict) or not isinstance(step.get("action"), str):
-            raise BackendFailure(f"Scenario step {index} is invalid", status="invalid_scenario")
+    for step in scenario["steps"]:
         action = step["action"]
-        if action == "wait-for-idle":
-            if set(step) != {"action"}:
-                raise BackendFailure(f"Scenario step {index} has unexpected fields", status="invalid_scenario")
-            continue
-        if action == "capture":
-            if set(step) not in ({"action"}, {"action", "name"}) or \
-                    ("name" in step and (not isinstance(step["name"], str) or not step["name"])):
-                raise BackendFailure(f"Scenario step {index} has invalid capture fields", status="invalid_scenario")
+        if action in {"wait-for-idle", "capture"}:
             continue
         if action in {"press", "click"}:
-            target = target_at(step, index, {"action", "target", "id"})
+            target = step.get("target") or step["id"]
             arguments.extend(["--press", target])
             continue
+        if action == "focus":
+            arguments.extend(["--focus", step["target"]])
+            continue
         if action == "input":
-            if set(step) != {"action", "target", "text"}:
-                raise BackendFailure(f"Scenario step {index} has invalid input fields", status="invalid_scenario")
-            target = step["target"]
-            text = step["text"]
-            if not bounded_text(target, MAX_SCENARIO_TARGET_BYTES) or \
-                    not isinstance(text, str) or "\0" in text:
-                raise BackendFailure(f"Scenario step {index} has an invalid input payload", status="invalid_scenario")
-            try:
-                input_size = len(text.encode("utf-8"))
-            except UnicodeEncodeError:
-                input_size = MAX_SCENARIO_INPUT_BYTES + 1
-            if input_size > MAX_SCENARIO_INPUT_BYTES:
-                raise BackendFailure(f"Scenario step {index} has an invalid input payload", status="invalid_scenario")
-            arguments.extend(["--input", target, text])
+            value_key = "value" if "value" in step else "text"
+            arguments.extend(["--input", step["target"], step[value_key]])
             continue
         if action == "key":
-            if set(step) != {"action", "target", "key"}:
-                raise BackendFailure(f"Scenario step {index} has invalid key fields", status="invalid_scenario")
-            target = step["target"]
-            key = step["key"]
-            if not bounded_text(target, MAX_SCENARIO_TARGET_BYTES) or \
-                    not isinstance(key, str) or key not in SUPPORTED_SCENARIO_KEYS:
-                raise BackendFailure(f"Scenario step {index} has an invalid key payload", status="invalid_scenario")
-            arguments.extend(["--key", target, key])
+            value_key = "value" if "value" in step else "key"
+            arguments.extend(["--key", step["target"], step[value_key]])
             continue
-        raise BackendFailure(f"Unsupported scenario action: {action}", status="unsupported_scenario_action")
+        if action == "compose":
+            value_key = "value" if "value" in step else "text"
+            arguments.extend(["--compose", step["target"], step[value_key]])
+            continue
+        if action == "assert-accessibility":
+            arguments.extend([
+                "--assert-accessibility", step["target"],
+                json.dumps(
+                    step["expect"], sort_keys=True, separators=(",", ":"),
+                    ensure_ascii=False,
+                ),
+            ])
+            continue
+        raise AssertionError(f"validated scenario action was not lowered: {action}")
     return arguments, scenario_name
 
 

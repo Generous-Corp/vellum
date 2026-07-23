@@ -112,6 +112,36 @@ class WebScenarioEvidenceTests(unittest.TestCase):
         ).read_text(encoding="utf-8"))
         validate_scenario_document(scenario)
 
+    def test_v2_text_composition_and_accessibility_contract(self) -> None:
+        validate_scenario_document({
+            "schema": "vellum.scenario.v2",
+            "name": "text semantics",
+            "steps": [
+                {"action": "focus", "target": "title-input"},
+                {"action": "input", "target": "title-input", "value": "GPU Notes"},
+                {"action": "key", "target": "title-input", "value": "ArrowLeft"},
+                {"action": "compose", "target": "title-input", "value": "日本語"},
+                {
+                    "action": "assert-accessibility",
+                    "target": "title-input",
+                    "expect": {
+                        "label": "Board title",
+                        "role": "text-field",
+                        "value": "GPU Notes日本語",
+                    },
+                },
+            ],
+        })
+        for step in [
+            {"action": "compose", "target": "title-input", "value": "\0"},
+            {"action": "assert-accessibility", "target": "title-input",
+             "expect": {"role": 42}},
+        ]:
+            with self.subTest(step=step["action"]), self.assertRaises(BackendFailure):
+                validate_scenario_document({
+                    "schema": "vellum.scenario.v2", "name": "invalid", "steps": [step],
+                })
+
     def test_component_source_rejects_private_framework_headers(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             source = Path(temporary) / "component.cpp"

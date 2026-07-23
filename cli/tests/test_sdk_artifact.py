@@ -60,6 +60,7 @@ class SdkArtifactTests(unittest.TestCase):
             names = (
                 "vellum_web_core.js", "vellum_web_core.wasm", "index.html",
                 "style.css", "vellum_host.js", "browser_component_adapter.cpp",
+                "text_semantics.js",
                 "check_wasm_no_engine.py",
             )
             records = {}
@@ -229,6 +230,7 @@ class SdkArtifactTests(unittest.TestCase):
                 for command in ("build", "run", "test", "capture", "package")
             ))
             (payload / "vellum_png.py").write_text("# fixture\n", encoding="utf-8")
+            (payload / "vellum_scenario.py").write_text("# fixture\n", encoding="utf-8")
             with_backend = derive_capabilities(payload, install_tree)
             self.assertTrue(all(
                 with_backend["commands"][command]

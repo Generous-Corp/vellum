@@ -95,11 +95,23 @@ export interface ElementProps {
     text?: string;
     source?: string;
     accessibilityLabel?: string;
+    accessibilityValue?: string;
+    accessibilityRole?: 'button' | 'group' | 'image' | 'list' | 'text' | 'text-field';
+    accessibilityState?: {
+        disabled?: boolean;
+        selected?: boolean;
+        checked?: boolean | 'mixed';
+        expanded?: boolean;
+    };
     scroll?: 'horizontal' | 'vertical';
     onPress?: EventHandler;
     onChange?: EventHandler;
     onSubmit?: EventHandler;
     onKeyDown?: EventHandler;
+    onSelectionChange?: EventHandler;
+    onCompositionStart?: EventHandler;
+    onCompositionUpdate?: EventHandler;
+    onCompositionEnd?: EventHandler;
     children?: unknown;
     key?: string | number;
 }
@@ -108,6 +120,8 @@ export interface TextInputProps extends Omit<ElementProps, 'children' | 'text' |
     id: string;
     value: string;
     placeholder?: string;
+    /** Ordered offsets in UTF-16 code units, matching JS String and platform text APIs. */
+    selection?: { start: number; end: number };
     onChange: EventHandler;
     children?: never;
 }

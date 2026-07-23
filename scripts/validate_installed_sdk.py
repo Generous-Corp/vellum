@@ -149,6 +149,7 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
         ui_present = (prefix / "lib/vellum/ui/package.json").is_file()
         native_present = (
             (prefix / "lib/vellum/vellum_native_backend.py").is_file() and
+            (prefix / "lib/vellum/vellum_scenario.py").is_file() and
             (prefix / "lib/vellum/bin/vellum-native-backend").is_file()
         )
         component_abi_present = (
@@ -169,8 +170,11 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
         )
         web_present = all((prefix / "lib/vellum" / path).is_file() for path in (
             "vellum_web_backend.py", "bin/vellum-web-backend",
+            "vellum_scenario.py",
             "web/manifest.json", "web/vellum_web_core.js", "web/vellum_web_core.wasm",
-            "web/vellum_host.js", "web/browser_component_adapter.cpp",
+            "web/vellum_host.js",
+            "web/browser_component_adapter.cpp",
+            "web/text_semantics.js",
         )) and any((prefix / "lib/vellum" / path).is_file() for path in (
             "node/bin/node", "node/bin/node.exe",
         ))

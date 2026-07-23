@@ -25,10 +25,14 @@ foreach(_vellum_web_asset index.html style.css demo.js)
         "${CMAKE_BINARY_DIR}/web-dist/${_vellum_web_asset}"
         COPYONLY)
 endforeach()
-configure_file(
-    "${PROJECT_SOURCE_DIR}/packages/vellum-ui/src/runtime.js"
-    "${CMAKE_BINARY_DIR}/web-dist/vellum-ui/runtime.js"
-    COPYONLY)
+set(_vellum_ui_runtime_modules
+    design.js effects.js index.js jsx-runtime.js runtime.js services.js)
+foreach(_vellum_ui_module IN LISTS _vellum_ui_runtime_modules)
+    configure_file(
+        "${PROJECT_SOURCE_DIR}/packages/vellum-ui/src/${_vellum_ui_module}"
+        "${CMAKE_BINARY_DIR}/web-dist/vellum-ui/${_vellum_ui_module}"
+        COPYONLY)
+endforeach()
 
 add_custom_command(TARGET vellum-web-core POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E copy_directory
@@ -36,10 +40,14 @@ add_custom_command(TARGET vellum-web-core POST_BUILD
         "$<TARGET_FILE_DIR:vellum-web-core>"
     COMMAND "${CMAKE_COMMAND}" -E make_directory
         "$<TARGET_FILE_DIR:vellum-web-core>/vellum-ui"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-        "${PROJECT_SOURCE_DIR}/packages/vellum-ui/src/runtime.js"
-        "$<TARGET_FILE_DIR:vellum-web-core>/vellum-ui/runtime.js"
     VERBATIM)
+foreach(_vellum_ui_module IN LISTS _vellum_ui_runtime_modules)
+    add_custom_command(TARGET vellum-web-core POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${PROJECT_SOURCE_DIR}/packages/vellum-ui/src/${_vellum_ui_module}"
+            "$<TARGET_FILE_DIR:vellum-web-core>/vellum-ui/${_vellum_ui_module}"
+        VERBATIM)
+endforeach()
 
 if(VELLUM_BUILD_TESTS)
     find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter)
@@ -55,4 +63,15 @@ if(VELLUM_BUILD_TESTS)
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_browser_smoke.py"
             --root "$<TARGET_FILE_DIR:vellum-web-core>")
+    add_test(NAME vellum.web.text-ime-accessibility
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_text_semantics_browser.py"
+            --core-root "$<TARGET_FILE_DIR:vellum-web-core>"
+            --source-root "${PROJECT_SOURCE_DIR}")
+    add_test(NAME vellum.web.phase3-exact-browser
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_text_semantics_browser.py"
+            --core-root "$<TARGET_FILE_DIR:vellum-web-core>"
+            --source-root "${PROJECT_SOURCE_DIR}"
+            --fixture phase3)
 endif()

@@ -138,7 +138,7 @@ def derive_capabilities(payload: Path, install_tree: Path) -> dict[str, object]:
         "ui/node_modules/typescript/package.json",
     ))
     native_backend = all((payload / name).is_file() for name in (
-        "vellum_native_backend.py", "vellum_png.py",
+        "vellum_native_backend.py", "vellum_png.py", "vellum_scenario.py",
     ))
     native_host = all((install_tree / path).is_file() for path in (
         "bin/vellum-app-host",
@@ -154,11 +154,14 @@ def derive_capabilities(payload: Path, install_tree: Path) -> dict[str, object]:
         gpu_renderer and authoring_runtime and ui_runtime and native_backend and
         native_host and node_runtime
     )
-    web_backend = (payload / "vellum_web_backend.py").is_file()
+    web_backend = all((payload / name).is_file() for name in (
+        "vellum_web_backend.py", "vellum_scenario.py",
+    ))
     web_runtime = all((payload / "web" / name).is_file() for name in (
         "manifest.json", "vellum_web_core.js", "vellum_web_core.wasm",
         "index.html", "style.css", "vellum_host.js",
-        "browser_component_adapter.cpp", "check_wasm_no_engine.py",
+        "browser_component_adapter.cpp", "text_semantics.js",
+        "check_wasm_no_engine.py",
     ))
     web_ready = ui_runtime and node_runtime and web_backend and web_runtime
     custom_components = (
@@ -489,6 +492,7 @@ def copy_payload(
     shutil.copy2(repo / "cli/vellum_backend.py", payload / "vellum_backend.py")
     shutil.copy2(repo / "cli/vellum_manifest.py", payload / "vellum_manifest.py")
     shutil.copy2(repo / "cli/vellum_png.py", payload / "vellum_png.py")
+    shutil.copy2(repo / "cli/vellum_scenario.py", payload / "vellum_scenario.py")
     shutil.copytree(repo / ".agents", payload / ".agents")
     shutil.copytree(repo / "templates", payload / "templates")
     shutil.copytree(install_tree, payload / "sdk")

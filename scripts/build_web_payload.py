@@ -71,7 +71,7 @@ def build(repo: Path, output: Path, source_commit: str | None) -> dict[str, obje
             if not source.is_file():
                 raise WebPayloadError(f"Emscripten build omitted {name}")
             shutil.copy2(source, staging / name)
-        for name in ("index.html", "style.css", "vellum_host.js"):
+        for name in ("index.html", "style.css", "vellum_host.js", "text_semantics.js"):
             shutil.copy2(repo / "web/consumer" / name, staging / name)
         shutil.copy2(
             repo / "components/wasm/browser_component_adapter.cpp",

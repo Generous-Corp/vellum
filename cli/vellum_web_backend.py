@@ -23,19 +23,15 @@ from vellum_manifest import (
     LOCK_NAME, LOCK_SCHEMA, ManifestError, imported_materialized_design,
     load_app_manifest, load_components_manifest,
 )
+from vellum_scenario import (
+    ScenarioValidationError,
+    validate_scenario_document as validate_shared_scenario_document,
+)
 
 
 RESULT_SCHEMA = "vellum.backend.result.v1"
-SCENARIO_SCHEMAS = {"vellum.scenario.v1", "vellum.scenario.v2"}
 SUPPORTED_TARGET = "web"
 WEB_COMMANDS = {"build", "run", "test", "package"}
-MAX_SCENARIO_STEPS = 1000
-MAX_SCENARIO_TARGET_BYTES = 1024
-MAX_SCENARIO_INPUT_BYTES = 64 * 1024
-SUPPORTED_SCENARIO_KEYS = {
-    "Enter", "Escape", "Backspace", "Tab", "ArrowUp", "ArrowDown",
-    "ArrowLeft", "ArrowRight", "Home", "End", "Delete",
-}
 PRIVATE_VELLUM_INCLUDE = re.compile(
     r'^\s*#\s*include\s*[<"](vellum/[^>"]+)[>"]', re.MULTILINE,
 )
@@ -322,7 +318,10 @@ def build_app(context: dict[str, Any], sdk: Path) -> dict[str, Any]:
             "Installed UI bundler omitted the required application source map",
             status="tool_failed",
         )
-    for name in ("vellum_web_core.js", "vellum_web_core.wasm", "vellum_host.js", "style.css"):
+    for name in (
+        "vellum_web_core.js", "vellum_web_core.wasm", "vellum_host.js",
+        "text_semantics.js", "style.css",
+    ):
         shutil.copy2(sdk / "web" / name, staging / name)
     components = build_component_modules(context, sdk, staging)
     (staging / "vellum_components.json").write_text(json.dumps({
@@ -533,106 +532,17 @@ def run_scenario(
 
 
 def validate_scenario_document(scenario: dict[str, Any]) -> None:
-    if set(scenario) - {"schema", "name", "viewport", "steps"}:
-        raise BackendFailure("Scenario contains unknown fields", status="invalid_scenario")
-    name = scenario.get("name")
     try:
-        name_size = len(name.encode("utf-8")) if isinstance(name, str) else -1
-    except UnicodeEncodeError:
-        name_size = 257
-    if not isinstance(name, str) or not name or name_size > 256:
-        raise BackendFailure("Scenario name is invalid", status="invalid_scenario")
-    schema = scenario.get("schema")
-    if schema not in SCENARIO_SCHEMAS:
-        raise BackendFailure("Scenario schema is unsupported", status="invalid_scenario")
-    viewport = scenario.get("viewport")
-    if schema == "vellum.scenario.v1" or viewport is not None:
-        if not isinstance(viewport, dict) or set(viewport) != {"width", "height"}:
-            raise BackendFailure("Scenario viewport is required", status="invalid_scenario")
-        for field in ("width", "height"):
-            item = viewport.get(field)
-            if not isinstance(item, int) or isinstance(item, bool) or not 0 < item <= 16384:
-                raise BackendFailure(
-                    f"Scenario viewport {field} is invalid",
-                    status="invalid_scenario",
-                )
-    steps = scenario.get("steps")
-    if not isinstance(steps, list) or len(steps) > MAX_SCENARIO_STEPS:
-        raise BackendFailure(
-            "Scenario steps must be an array of at most 1000 actions",
-            status="invalid_scenario",
+        validate_shared_scenario_document(scenario)
+    except ScenarioValidationError as error:
+        status = (
+            "unsupported_scenario_action"
+            if str(error).startswith("Unsupported scenario action:")
+            else "invalid_scenario"
         )
-
-    def bounded(value: object, maximum: int) -> bool:
-        if not isinstance(value, str) or not value or "\0" in value:
-            return False
-        try:
-            return len(value.encode("utf-8")) <= maximum
-        except UnicodeEncodeError:
-            return False
-
-    for index, step in enumerate(steps):
-        if not isinstance(step, dict) or not isinstance(step.get("action"), str):
-            raise BackendFailure(f"Scenario step {index} is invalid", status="invalid_scenario")
-        action = step["action"]
-        if action == "wait-for-idle":
-            valid = set(step) == {"action"}
-        elif action == "capture":
-            valid = set(step) in (
-                {"action"}, {"action", "name"}, {"action", "value"},
-            ) and (
-                not ({"name", "value"} & set(step)) or
-                bounded(step.get("name") or step.get("value"), 256)
-            )
-        elif action in {"press", "click"}:
-            valid = set(step) in ({"action", "target"}, {"action", "id"}) and \
-                bounded(step.get("target") or step.get("id"), MAX_SCENARIO_TARGET_BYTES)
-        elif action == "input":
-            text = step.get("text") if schema == "vellum.scenario.v1" else step.get("value")
-            try:
-                input_size = len(text.encode("utf-8")) if isinstance(text, str) else -1
-            except UnicodeEncodeError:
-                input_size = MAX_SCENARIO_INPUT_BYTES + 1
-            valid = set(step) == {
-                "action", "target",
-                "text" if schema == "vellum.scenario.v1" else "value",
-            } and \
-                bounded(step.get("target"), MAX_SCENARIO_TARGET_BYTES) and \
-                isinstance(text, str) and "\0" not in text and \
-                input_size <= MAX_SCENARIO_INPUT_BYTES
-        elif action == "key":
-            key = step.get("key") if schema == "vellum.scenario.v1" else step.get("value")
-            valid = set(step) == {
-                "action", "target",
-                "key" if schema == "vellum.scenario.v1" else "value",
-            } and \
-                bounded(step.get("target"), MAX_SCENARIO_TARGET_BYTES) and \
-                isinstance(key, str) and key in SUPPORTED_SCENARIO_KEYS
-        elif schema == "vellum.scenario.v2" and action in {
-            "press", "focus", "compose", "command", "assert-text",
-            "assert-state", "assert-accessibility", "throw",
-        }:
-            valid = set(step).issubset({"action", "target", "value", "expect"}) and \
-                set(step).issuperset({"action", "target"}) and \
-                bounded(step.get("target"), MAX_SCENARIO_TARGET_BYTES)
-        elif schema == "vellum.scenario.v2" and action in {"pointer", "touch"}:
-            valid = set(step) == {"action", "target", "event"} and \
-                bounded(step.get("target"), MAX_SCENARIO_TARGET_BYTES) and \
-                isinstance(step.get("event"), dict)
-        elif schema == "vellum.scenario.v2" and action == "service-result":
-            valid = set(step) == {"action", "target", "service"} and \
-                bounded(step.get("target"), MAX_SCENARIO_TARGET_BYTES) and \
-                isinstance(step.get("service"), dict)
-        else:
-            raise BackendFailure(
-                f"Unsupported scenario action: {action}",
-                status="unsupported_scenario_action",
-            )
-        if not valid:
-            raise BackendFailure(
-                f"Scenario step {index} has invalid fields",
-                status="invalid_scenario",
-            )
+        raise BackendFailure(
+            str(error), status=status
+        ) from error
 
 
 def scenario_path(context: dict[str, Any], value: str | None) -> Path:

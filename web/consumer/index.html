@@ -8,7 +8,10 @@
     <link rel="stylesheet" href="./style.css">
   </head>
   <body>
-    <canvas id="vellum-canvas" aria-label="{{APP_NAME}}"></canvas>
+    <div id="vellum-surface">
+      <canvas id="vellum-canvas" aria-hidden="true"></canvas>
+      <div id="vellum-accessibility" aria-label="{{APP_NAME}}"></div>
+    </div>
     <p id="vellum-status">Starting Vellum…</p>
     <script>
       globalThis.__vellumServiceHost = {

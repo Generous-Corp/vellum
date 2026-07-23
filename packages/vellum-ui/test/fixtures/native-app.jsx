@@ -13,7 +13,14 @@ function NativeBundleProof() {
                 id="native-title-input"
                 value={title}
                 placeholder="Board title"
+                selection={{start: title.length, end: title.length}}
+                accessibilityLabel="Board title"
+                accessibilityValue={title}
                 onChange={(payload) => setTitle(payload.value)}
+                onSelectionChange={() => {}}
+                onCompositionStart={() => {}}
+                onCompositionUpdate={() => {}}
+                onCompositionEnd={() => {}}
                 onSubmit={() => setCount((value) => value + 1)}
             />
         </Stack>

@@ -91,7 +91,19 @@ struct MaterializeContext final {
     std::size_t nodes = 0;
     std::vector<Interaction>* interactions = nullptr;
     std::vector<TextInputControl>* text_inputs = nullptr;
+    std::vector<AccessibilityNode>* accessibility_nodes = nullptr;
 };
+
+std::string inferred_accessibility_role(NSString* type, NSDictionary* source) {
+    if ([source[@"accessibilityRole"] isKindOfClass:NSString.class]) {
+        return cpp_string(source[@"accessibilityRole"]);
+    }
+    if ([type isEqualToString:@"text-input"]) return "text-field";
+    if ([type isEqualToString:@"button"]) return "button";
+    if ([type isEqualToString:@"text"] || [type isEqualToString:@"text-run"]) return "text";
+    if ([type isEqualToString:@"image"]) return "image";
+    return "group";
+}
 
 float default_height(NSString* type, NSDictionary* style) {
     if ([type isEqualToString:@"text"] || [type isEqualToString:@"text-run"]) {
@@ -164,6 +176,8 @@ bool materialize_node(
     const bool is_text_input = [type isEqualToString:@"text-input"];
     NSString* input_value = nil;
     NSString* input_placeholder = nil;
+    NSUInteger selection_start = 0U;
+    NSUInteger selection_end = 0U;
     if (is_text_input) {
         NSNumber* primitive_version = [source[@"primitiveVersion"]
             isKindOfClass:NSNumber.class] ? source[@"primitiveVersion"] : nil;
@@ -187,6 +201,29 @@ bool materialize_node(
         if (array_or_empty(source[@"children"]).count != 0U) {
             set_error(error, "text-input v1 does not accept retained-tree children");
             return false;
+        }
+        selection_start = input_value.length;
+        selection_end = input_value.length;
+        if (source[@"selection"] != nil) {
+            if (![source[@"selection"] isKindOfClass:NSDictionary.class]) {
+                set_error(error, "text-input selection must be an object");
+                return false;
+            }
+            NSDictionary* selection = source[@"selection"];
+            NSNumber* start = [selection[@"start"] isKindOfClass:NSNumber.class]
+                ? selection[@"start"] : nil;
+            NSNumber* end = [selection[@"end"] isKindOfClass:NSNumber.class]
+                ? selection[@"end"] : nil;
+            if (start == nil || end == nil || start.doubleValue != start.unsignedLongLongValue ||
+                end.doubleValue != end.unsignedLongLongValue ||
+                start.unsignedLongLongValue > end.unsignedLongLongValue ||
+                end.unsignedLongLongValue > input_value.length) {
+                set_error(error,
+                    "text-input selection must be an ordered UTF-16 range within value");
+                return false;
+            }
+            selection_start = start.unsignedIntegerValue;
+            selection_end = end.unsignedIntegerValue;
         }
     }
     output.id = identity;
@@ -262,6 +299,12 @@ bool materialize_node(
             .change_action = action(@"change"),
             .submit_action = action(@"submit"),
             .key_down_action = action(@"keyDown"),
+            .selection_change_action = action(@"selectionChange"),
+            .composition_start_action = action(@"compositionStart"),
+            .composition_update_action = action(@"compositionUpdate"),
+            .composition_end_action = action(@"compositionEnd"),
+            .selection_start = selection_start,
+            .selection_end = selection_end,
             .bounds = {
                 absolute_x + proposed.x,
                 absolute_y + proposed.y,
@@ -269,6 +312,74 @@ bool materialize_node(
                 proposed.height,
             },
         });
+    }
+
+    const bool semantic = is_text_input || [type isEqualToString:@"button"] ||
+        [source[@"accessibilityLabel"] isKindOfClass:NSString.class] ||
+        [source[@"accessibilityValue"] isKindOfClass:NSString.class] ||
+        source[@"accessibilityRole"] != nil || source[@"accessibilityState"] != nil;
+    if (semantic) {
+        if ((source[@"accessibilityLabel"] != nil &&
+             ![source[@"accessibilityLabel"] isKindOfClass:NSString.class]) ||
+            (source[@"accessibilityValue"] != nil &&
+             ![source[@"accessibilityValue"] isKindOfClass:NSString.class]) ||
+            (source[@"accessibilityRole"] != nil &&
+             ![source[@"accessibilityRole"] isKindOfClass:NSString.class]) ||
+            (source[@"accessibilityState"] != nil &&
+             ![source[@"accessibilityState"] isKindOfClass:NSDictionary.class])) {
+            set_error(error, "accessibility label/value/role/state has an invalid type");
+            return false;
+        }
+        NSDictionary* semantic_state = dictionary_or_empty(source[@"accessibilityState"]);
+        AccessibilityNode node{
+            .node_id = identity,
+            .role = inferred_accessibility_role(type, source),
+            .label = [source[@"accessibilityLabel"] isKindOfClass:NSString.class]
+                ? cpp_string(source[@"accessibilityLabel"]) : direct_text(source),
+            .value = [source[@"accessibilityValue"] isKindOfClass:NSString.class]
+                ? cpp_string(source[@"accessibilityValue"])
+                : (is_text_input ? cpp_string(input_value) : std::string{}),
+            .bounds = {
+                absolute_x + proposed.x,
+                absolute_y + proposed.y,
+                proposed.width,
+                proposed.height,
+            },
+        };
+        const auto boolean = [&](NSString* name, bool& destination, bool* present = nullptr) {
+            id raw = semantic_state[name];
+            if (raw == nil) return true;
+            if (![raw isKindOfClass:NSNumber.class]) return false;
+            destination = [raw boolValue];
+            if (present != nullptr) *present = true;
+            return true;
+        };
+        if (!boolean(@"disabled", node.state.disabled) ||
+            !boolean(@"selected", node.state.selected) ||
+            !boolean(@"expanded", node.state.expanded, &node.state.has_expanded)) {
+            set_error(error, "accessibility state values must be booleans");
+            return false;
+        }
+        if (semantic_state[@"checked"] != nil) {
+            node.state.has_checked = true;
+            if ([semantic_state[@"checked"] isKindOfClass:NSString.class] &&
+                [semantic_state[@"checked"] isEqualToString:@"mixed"]) {
+                node.state.mixed = true;
+            } else if ([semantic_state[@"checked"] isKindOfClass:NSNumber.class]) {
+                node.state.checked = [semantic_state[@"checked"] boolValue];
+            } else {
+                set_error(error, "accessibility checked state must be boolean or mixed");
+                return false;
+            }
+        }
+        if ([events[@"press"] isKindOfClass:NSString.class]) {
+            node.actions.push_back("press");
+        }
+        if (is_text_input) {
+            node.actions.push_back("focus");
+            node.actions.push_back("set-value");
+        }
+        context.accessibility_nodes->push_back(std::move(node));
     }
 
     NSArray* children = array_or_empty(source[@"children"]);
@@ -404,6 +515,7 @@ bool parse_rendered_json(
     MaterializeContext context{
         .interactions = &candidate.interactions,
         .text_inputs = &candidate.text_inputs,
+        .accessibility_nodes = &candidate.accessibility_nodes,
     };
     if (!materialize_node(
             tree, {0.0F, 0.0F, width, height}, 0.0F, 0.0F, 0U,

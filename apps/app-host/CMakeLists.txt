@@ -1,5 +1,8 @@
 add_executable(vellum-app-host
     main.mm
+    macos_accessibility.mm
+    options.cpp
+    text_semantics.mm
     component_registry.cpp)
 
 target_compile_features(vellum-app-host PRIVATE cxx_std_20)
@@ -23,13 +26,18 @@ install(TARGETS vellum-app-host
 
 if(VELLUM_BUILD_TESTS AND VELLUM_AUTHORING_TEST_BUNDLE)
     find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter)
+    find_program(VELLUM_NODE_EXECUTABLE NAMES node)
     add_test(NAME vellum.app-host
         COMMAND vellum-app-host
             --bundle "${VELLUM_AUTHORING_TEST_BUNDLE}"
             --self-test
             --press native-increment
+            --focus native-title-input
             --input native-title-input "Native board"
-            --key native-title-input Enter)
+            --key native-title-input Enter
+            --compose native-title-input "日本語"
+            --assert-accessibility native-title-input
+                "{\"label\":\"Board title\",\"role\":\"text-field\",\"value\":\"Native board日本語\"}")
     set_tests_properties(vellum.app-host PROPERTIES
         ENVIRONMENT "MTL_DEBUG_LAYER=0")
     add_test(NAME vellum.app-host-state-persistence
@@ -39,9 +47,29 @@ if(VELLUM_BUILD_TESTS AND VELLUM_AUTHORING_TEST_BUNDLE)
             "${VELLUM_AUTHORING_TEST_BUNDLE}")
     set_tests_properties(vellum.app-host-state-persistence PROPERTIES
         ENVIRONMENT "MTL_DEBUG_LAYER=0")
+    if(VELLUM_NODE_EXECUTABLE)
+        add_test(NAME vellum.app-host-text-ime-accessibility
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/test_text_semantics.py"
+                "$<TARGET_FILE:vellum-app-host>"
+                "${PROJECT_SOURCE_DIR}"
+                "${VELLUM_NODE_EXECUTABLE}")
+        set_tests_properties(vellum.app-host-text-ime-accessibility PROPERTIES
+            ENVIRONMENT "MTL_DEBUG_LAYER=0")
+    endif()
 endif()
 
 if(VELLUM_BUILD_TESTS)
+    add_executable(vellum-macos-accessibility-test
+        macos_accessibility.mm
+        tests/macos_accessibility_test.mm)
+    target_compile_options(vellum-macos-accessibility-test PRIVATE -fobjc-arc)
+    target_link_libraries(vellum-macos-accessibility-test PRIVATE
+        Vellum::Authoring
+        "-framework Cocoa")
+    add_test(NAME vellum.macos-accessibility
+        COMMAND vellum-macos-accessibility-test)
+
     add_library(vellum-unterminated-component MODULE
         tests/unterminated_component.cpp)
     target_link_libraries(vellum-unterminated-component PRIVATE Vellum::ComponentAbi)

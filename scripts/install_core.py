@@ -52,6 +52,7 @@ SAFE_ROOTS = {
     "vellum_manifest.py",
     "vellum_native_backend.py",
     "vellum_png.py",
+    "vellum_scenario.py",
     "vellum_web_backend.py",
     "web",
 }
@@ -462,6 +463,7 @@ def derived_capabilities(
     native_backend = {
         "vellum_native_backend.py",
         "vellum_png.py",
+        "vellum_scenario.py",
     }.issubset(contents)
     native_host = all(
         path in contents
@@ -490,8 +492,10 @@ def derived_capabilities(
         "web/style.css",
         "web/vellum_host.js",
         "web/browser_component_adapter.cpp",
+        "web/text_semantics.js",
         "web/check_wasm_no_engine.py",
         "vellum_web_backend.py",
+        "vellum_scenario.py",
     }
     web_runtime = web_required.issubset(contents)
     web_present = (
