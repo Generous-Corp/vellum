@@ -12,6 +12,9 @@
   manifests, while preserving their validated schemas and exact pins.
 - Never silently discard unsupported import properties. Preserve diagnostics
   and conversion losses with the imported snapshot.
+- Pass supported Pulp `.pulp.zip` Figma exports directly to `vellum import` or
+  `create --from figma`; do not unpack or rewrite the archive. Its SHA-256 and
+  original bytes are part of the immutable source evidence.
 - Use stable imported component identities; do not replace generated identities
   with names based on array position.
 - Keep platform-specific work in `platforms/` and optional native extensions in

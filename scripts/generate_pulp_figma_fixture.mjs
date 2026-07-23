@@ -12,6 +12,7 @@ const SOURCE_PATHS = [
     'tools/figma-plugin/src/assets.ts',
     'tools/figma-plugin/src/extract-model.ts',
     'tools/figma-plugin/src/serialize.ts',
+    'tools/figma-plugin/src/ui.ts',
 ];
 const FIXED_EXPORTED_AT = '2026-07-22T12:00:00.000Z';
 
@@ -22,6 +23,12 @@ const outputDirectory = resolve(args['output-dir'] ?? 'fixtures/design-ir');
 const inputPath = resolve(args.input ?? 'fixtures/design-ir/pulp-emitter-generic.input.json');
 const esbuildRoot = resolve(args['esbuild-root'] ?? repository);
 if (!args['pulp-checkout']) throw new Error('--pulp-checkout is required');
+const fflatePackagePath = join(
+    esbuildRoot,
+    'tools/figma-plugin/node_modules/fflate/package.json',
+);
+const fflatePackageBytes = await readFile(fflatePackagePath);
+const fflatePackage = JSON.parse(fflatePackageBytes.toString('utf8'));
 
 const commit = git(repository, ['rev-parse', sourceRef]).trim();
 const sourceBlobs = Object.fromEntries(SOURCE_PATHS.map((path) => {
@@ -42,7 +49,11 @@ try {
     const bundle = join(temporary, 'generate.mjs');
     const serializePath = join(repository, 'tools/figma-plugin/src/serialize.ts');
     const assetsPath = join(repository, 'tools/figma-plugin/src/assets.ts');
-    await writeFile(entry, emitterEntry(serializePath, assetsPath), 'utf8');
+    const fflatePath = join(
+        esbuildRoot,
+        'tools/figma-plugin/node_modules/fflate/esm/index.mjs',
+    );
+    await writeFile(entry, emitterEntry(serializePath, assetsPath, fflatePath), 'utf8');
     const esbuildModule = join(
         esbuildRoot,
         'tools/figma-plugin/node_modules/esbuild/lib/main.js',
@@ -66,16 +77,28 @@ try {
     const result = JSON.parse(generated.stdout);
     const fixtureBytes = Buffer.from(`${JSON.stringify(result.envelope, null, 2)}\n`, 'utf8');
     const assetBytes = Buffer.from(result.assetBase64, 'base64');
+    const archiveBytes = Buffer.from(result.archiveBase64, 'base64');
     const asset = result.envelope.asset_manifest.assets[0];
     const assetPath = join(outputDirectory, asset.local_path);
     await mkdir(dirname(assetPath), { recursive: true });
     await writeFile(join(outputDirectory, 'pulp-emitter-generic.export.json'), fixtureBytes);
+    await writeFile(join(outputDirectory, 'pulp-emitter-generic.pulp.zip'), archiveBytes);
     await writeFile(assetPath, assetBytes);
 
     const receipt = {
         asset: {
             path: asset.local_path,
             sha256: sha256(assetBytes),
+        },
+        archive: {
+            path: 'pulp-emitter-generic.pulp.zip',
+            sceneMember: 'scene.pulp.json',
+            sha256: sha256(archiveBytes),
+            writer: {
+                name: fflatePackage.name,
+                packageJsonSha256: sha256(fflatePackageBytes),
+                version: fflatePackage.version,
+            },
         },
         emitter: {
             commit,
@@ -105,11 +128,12 @@ try {
     await rm(temporary, { recursive: true, force: true });
 }
 
-function emitterEntry(serializePath, assetsPath) {
+function emitterEntry(serializePath, assetsPath, fflatePath) {
     return `
 import { readFile } from 'node:fs/promises';
 import { AssetCache } from ${JSON.stringify(assetsPath)};
 import { serializeExport } from ${JSON.stringify(serializePath)};
+import { zipSync } from ${JSON.stringify(fflatePath)};
 
 const input = JSON.parse(await readFile(process.env.VELLUM_FIGMA_FIXTURE_INPUT, 'utf8'));
 const assetBytes = Buffer.from(input.asset.svg, 'utf8');
@@ -132,7 +156,15 @@ const envelope = serializeExport([input.root], [], {
     assets,
     fontFamilyAssets: [],
 });
-process.stdout.write(JSON.stringify({ assetBase64: assetBytes.toString('base64'), envelope }));
+const archive = zipSync({
+    'scene.pulp.json': new TextEncoder().encode(JSON.stringify(envelope, null, 2)),
+    [envelope.asset_manifest.assets[0].local_path]: assetBytes,
+});
+process.stdout.write(JSON.stringify({
+    archiveBase64: Buffer.from(archive).toString('base64'),
+    assetBase64: assetBytes.toString('base64'),
+    envelope,
+}));
 `;
 }
 

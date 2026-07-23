@@ -8,7 +8,7 @@ sources:
     reimport: supported
   figma:
     channel: supported
-    accepted_artifact: single-root audio-free Pulp Figma plugin JSON export
+    accepted_artifact: single-root audio-free Pulp Figma plugin JSON or .pulp.zip export
     provider_access: none
     reimport: supported
     pinned_contract:
@@ -31,6 +31,24 @@ sources:
       path: diagnosed-view-placeholder
       row: diagnosed-view-lowering
     integrity:
+      pulp_zip:
+        scene_files: exactly-one-.pulp.json
+        original_archive_snapshot: immutable
+        revision_identity: archive-sha256
+        extraction_dependency: python-standard-library
+        rejected_members:
+          - traversal-or-noncanonical-path
+          - absolute-backslash-or-drive-path
+          - link-or-special-file
+          - duplicate-or-case-collision
+        bounded:
+          archive_bytes: 268435456
+          members: 10000
+          member_bytes: 134217728
+          member_path_bytes: 1024
+          scene_bytes: 16777216
+          total_uncompressed_bytes: 536870912
+          compression_ratio: 200
       content_hash_wire_forms:
         - 64-lower-or-upper-hex
         - sha256:64-lower-or-upper-hex
@@ -43,7 +61,6 @@ sources:
       - does not accept arbitrary .fig files
       - does not call the Figma REST API
       - accepts exactly one root and rejects the synthetic multi-export root
-      - .pulp.zip ingestion is unavailable; provide scene.pulp.json beside assets
       - the current Pulp extractor can audio-promote generic-looking layer names
       - rejects audio-widget nodes and audio-specific binding fields
       - image and vector assets are preserved but not painted by the native host

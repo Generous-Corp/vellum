@@ -160,6 +160,30 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
         if active_revision != "palette-board-b":
             raise ValidationError("installed CLI reimport did not advance the active revision")
 
+        zip_project = root / "zip-application"
+        zip_created = json.loads(run([
+            str(prefix / "bin/vellum"), "create", "Sterile ZIP App",
+            "--directory", str(zip_project),
+            "--from", "figma",
+            str(REPO / "fixtures/design-ir/pulp-emitter-generic.pulp.zip"),
+            "--no-verify", "--json",
+        ], cwd=root).stdout)
+        zip_lock = json.loads(
+            (zip_project / "design/import.lock.json").read_text(encoding="utf-8")
+        )["sources"]["main"]
+        zip_snapshot = (
+            zip_project / "sources/imported/main" /
+            zip_lock["activeRevision"] / "source.pulp.zip"
+        )
+        zip_snapshot_verified = (
+            zip_created.get("status") == "created"
+            and zip_lock.get("sourceArtifactKind") == "pulp-zip"
+            and zip_snapshot.read_bytes()
+            == (REPO / "fixtures/design-ir/pulp-emitter-generic.pulp.zip").read_bytes()
+        )
+        if not zip_snapshot_verified:
+            raise ValidationError("installed CLI create --from figma ZIP journey did not complete")
+
         native_enabled = verification["claims"]["gpu_renderer"] is True
         native_results: dict[str, dict[str, object]] = {}
         native_capture = project / "artifacts/installed-proof.png"
@@ -231,6 +255,8 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
         "installed_cli_import": imported.get("status") == "imported",
         "installed_cli_reimport": reimported.get("status") == "reimported",
         "active_reimport_revision": active_revision == "palette-board-b",
+        "installed_cli_pulp_zip_create_from": zip_created.get("status") == "created",
+        "installed_pulp_zip_snapshot": zip_snapshot_verified,
         "native_capability_claim_consistent": all(
             verification["claims"]["commands"][name] is native_enabled
             for name in ("build", "run", "test", "capture", "package")

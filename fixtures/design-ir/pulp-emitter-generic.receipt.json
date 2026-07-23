@@ -3,13 +3,24 @@
     "path": "assets/232f99e462d7fca342dc8b89e403ec88ae947e8807428df25127beed1e166b6a.svg",
     "sha256": "232f99e462d7fca342dc8b89e403ec88ae947e8807428df25127beed1e166b6a"
   },
+  "archive": {
+    "path": "pulp-emitter-generic.pulp.zip",
+    "sceneMember": "scene.pulp.json",
+    "sha256": "4dbf3adac050ef679e875569d80582ccf6435a54542e437d2464f7f90dd4d8ce",
+    "writer": {
+      "name": "fflate",
+      "packageJsonSha256": "5922d8150b307bc0e4e441491c779c45379e9913d348848fca8d5cf02db4d134",
+      "version": "0.8.3"
+    }
+  },
   "emitter": {
     "commit": "50e703a43528f926182f216bfe16819a605831cc",
     "repository": "Generous-Corp/pulp",
     "sourceBlobs": {
       "tools/figma-plugin/src/assets.ts": "95194987835344d8aafa9582be3af4b29c6a6ff8",
       "tools/figma-plugin/src/extract-model.ts": "4c29e3d46790f02de903f99975b52c2d354f1a85",
-      "tools/figma-plugin/src/serialize.ts": "b9aecdd6e8da0681b42d0c153521aa085f34f6ee"
+      "tools/figma-plugin/src/serialize.ts": "b9aecdd6e8da0681b42d0c153521aa085f34f6ee",
+      "tools/figma-plugin/src/ui.ts": "89af98ff33e5e75ca7b66db88d4bb2e88e3f3537"
     },
     "sourceRef": "origin/main"
   },

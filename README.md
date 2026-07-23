@@ -109,7 +109,10 @@ vellum package --target macos --output dist
 
 The one-command imported path is
 `vellum create "Imported App" --from figma ./frame.pulp.zip --run`; it uses
-the permanent source key `main` unless `--as` supplies another key.
+the permanent source key `main` unless `--as` supplies another key. The
+installed dispatcher safely stages the normal Pulp archive shape without an
+external unzip command and retains the original bytes as immutable source
+evidence.
 
 `create` is deterministic and separates imported snapshots, normalized
 DesignIR, generated UI, tokens/assets, hand-written app logic, optional native

@@ -12,7 +12,9 @@ lowers to a rounded view; images, vectors, legacy compatibility shapes, and
 unmaterialized fields carry explicit diagnostics and remain inspectable in
 extensions. Pulp's bare 64-hex asset hashes normalize to canonical
 `sha256:<hex>`. The package does not call Figma, accept arbitrary provider
-files, or ingest `.pulp.zip` yet.
+files, or parse ZIP containers itself. The installed Python dispatcher
+validates and stages supported `.pulp.zip` inputs, then supplies this backend
+with the scene/assets tree and an archive SHA-256 receipt.
 
 The package owns only generated design data and the algorithm that composes it with developer-owned overlays. It deliberately keeps behavior out of generated files:
 

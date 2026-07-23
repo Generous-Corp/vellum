@@ -180,6 +180,7 @@ test('checked-in proof is byte-produced by the pinned Pulp serializer and asset 
             'tools/figma-plugin/src/assets.ts',
             'tools/figma-plugin/src/extract-model.ts',
             'tools/figma-plugin/src/serialize.ts',
+            'tools/figma-plugin/src/ui.ts',
         ],
     );
     for (const blob of Object.values(receipt.emitter.sourceBlobs)) {
@@ -192,6 +193,11 @@ test('checked-in proof is byte-produced by the pinned Pulp serializer and asset 
 
     const assetBytes = await readFile(join(fixtures, receipt.asset.path));
     assert.equal(sha256(assetBytes), receipt.asset.sha256);
+    const archiveBytes = await readFile(join(fixtures, receipt.archive.path));
+    assert.equal(sha256(archiveBytes), receipt.archive.sha256);
+    assert.equal(receipt.archive.sceneMember, 'scene.pulp.json');
+    assert.equal(receipt.archive.writer.name, 'fflate');
+    assert.match(receipt.archive.writer.version, /^0\.8\./);
     const envelope = JSON.parse(fixtureBytes.toString('utf8'));
     assert.equal(envelope.parser_version, '0.1.0');
     assert.equal(envelope.asset_manifest.assets[0].content_hash, receipt.asset.sha256);

@@ -106,6 +106,32 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(unavailable.returncode, 4, unavailable.stdout)
             self.assertEqual(json.loads(unavailable.stdout)["status"], "capability_unavailable")
 
+            zip_project = root / "zip-consumer"
+            zip_created = subprocess.run(
+                [
+                    str(prefix / "bin/vellum"), "create", "ZIP Consumer",
+                    "-d", str(zip_project), "--from", "figma",
+                    str(REPO / "fixtures/design-ir/pulp-emitter-generic.pulp.zip"),
+                    "--no-verify", "--json",
+                ],
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(zip_created.returncode, 0, zip_created.stdout + zip_created.stderr)
+            zip_lock = json.loads((zip_project / "design/import.lock.json").read_text())
+            zip_source = zip_lock["sources"]["main"]
+            self.assertEqual(zip_source["sourceArtifactKind"], "pulp-zip")
+            zip_snapshot = (
+                zip_project / "sources/imported/main" /
+                zip_source["activeRevision"] / "source.pulp.zip"
+            )
+            self.assertEqual(
+                zip_snapshot.read_bytes(),
+                (REPO / "fixtures/design-ir/pulp-emitter-generic.pulp.zip").read_bytes(),
+            )
+
     def test_local_install_requires_node_20_or_newer(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

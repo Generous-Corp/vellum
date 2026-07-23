@@ -35,6 +35,7 @@ const IMPORT_REPORT_SCHEMA = 'vellum.design-import-report.v1';
 const ASSET_MANIFEST_SCHEMA = 'vellum.design-assets.v1';
 const GENERATED_COMPONENT_SCHEMA = 'vellum.generated-components.v1';
 const MAX_SOURCE_BYTES = 16 * 1024 * 1024;
+const MAX_ARCHIVE_BYTES = 256 * 1024 * 1024;
 const MAX_ASSET_BYTES = 128 * 1024 * 1024;
 const MAX_ASSET_COUNT = 10_000;
 const MAX_NODE_COUNT = 100_000;
@@ -78,7 +79,11 @@ async function importDesign(project, args) {
     const sourcePath = requiredSource(args);
     const sourceKey = validateSourceKey(args['source-key'] ?? 'main');
     const sourceType = args['source-type'] ?? 'figma';
-    const loaded = await loadSource(sourcePath, { sourceKey, sourceType });
+    const loaded = await loadSource(sourcePath, {
+        sourceArchive: sourceArchiveArguments(args),
+        sourceKey,
+        sourceType,
+    });
     const paths = projectPaths(project, sourceKey, loaded.revision);
     const importLock = await readOptionalJson(paths.importLock);
     if (importLock?.sources?.[sourceKey]) {
@@ -109,11 +114,16 @@ async function importDesign(project, args) {
         project,
         sourceHash: loaded.sourceHash,
         sourceKey,
-        sourceName: basename(sourcePath),
+        sourceArtifact: loaded.sourceArtifact,
+        sourceName: loaded.sourceName,
         sourceType,
     });
     await assertImmutableSnapshot(paths.snapshotSource, loaded.sourceBytes);
     files.set(paths.snapshotSource, loaded.sourceBytes);
+    if (loaded.archiveBytes) {
+        await assertImmutableSnapshot(paths.snapshotArchive, loaded.archiveBytes);
+        files.set(paths.snapshotArchive, loaded.archiveBytes);
+    }
     await assertImmutableSnapshot(paths.snapshotProvenance, files.get(paths.snapshotProvenance));
     for (const asset of assets.copies) {
         await assertImmutableSnapshot(asset.snapshotPath, asset.bytes);
@@ -142,9 +152,16 @@ async function reimportDesignFilesystem(project, args) {
     const lockedSource = importLock.sources?.[sourceKey];
     if (!lockedSource) fail('source_not_imported', `Source '${sourceKey}' has not been imported`);
     const loaded = await loadSource(sourcePath, {
+        sourceArchive: sourceArchiveArguments(args),
         sourceKey,
         sourceType: lockedSource.adapter,
     });
+    if ((lockedSource.sourceArtifactKind ?? 'json') !== loaded.sourceArtifact.kind) {
+        fail(
+            'source_artifact_kind_mismatch',
+            `Source '${sourceKey}' must remain a '${lockedSource.sourceArtifactKind ?? 'json'}' artifact`,
+        );
+    }
     const paths = projectPaths(project, sourceKey, loaded.revision);
     const previous = parseDesignIR(await readFile(paths.sourceIr, 'utf8'));
     const importGraphBytesBefore = await readFile(paths.importGraph);
@@ -163,6 +180,10 @@ async function reimportDesignFilesystem(project, args) {
         // asset bytes still match their declared content hashes. Re-run the
         // same asset plan used by import before taking the unchanged fast path.
         const assets = await planAssets(sourcePath, loaded.document, paths);
+        await assertImmutableSnapshot(paths.snapshotSource, loaded.sourceBytes);
+        if (loaded.archiveBytes) {
+            await assertImmutableSnapshot(paths.snapshotArchive, loaded.archiveBytes);
+        }
         const applied = applyAuthoredOverlay(previous, overlay);
         if (applied.conflicts.length > 0) {
             return failure(
@@ -197,7 +218,8 @@ async function reimportDesignFilesystem(project, args) {
             revision: loaded.revision,
             sourceHash: loaded.sourceHash,
             sourceKey,
-            sourceName: basename(sourcePath),
+            sourceArtifact: loaded.sourceArtifact,
+            sourceName: loaded.sourceName,
             sourceType: lockedSource.adapter,
         }))],
         [paths.reimportReport, jsonBytes(result.report)],
@@ -206,6 +228,10 @@ async function reimportDesignFilesystem(project, args) {
         paths.snapshotProvenance,
         reviewFiles.get(paths.snapshotProvenance),
     );
+    if (loaded.archiveBytes) {
+        await assertImmutableSnapshot(paths.snapshotArchive, loaded.archiveBytes);
+        reviewFiles.set(paths.snapshotArchive, loaded.archiveBytes);
+    }
     for (const asset of assets.copies) {
         await assertImmutableSnapshot(asset.snapshotPath, asset.bytes);
         reviewFiles.set(asset.snapshotPath, asset.bytes);
@@ -239,7 +265,8 @@ async function reimportDesignFilesystem(project, args) {
         project,
         sourceHash: loaded.sourceHash,
         sourceKey,
-        sourceName: basename(sourcePath),
+        sourceArtifact: loaded.sourceArtifact,
+        sourceName: loaded.sourceName,
         sourceType: lockedSource.adapter,
     });
     generated.delete(paths.importReport);
@@ -276,6 +303,7 @@ function generatedFiles(context) {
         project,
         sourceHash,
         sourceKey,
+        sourceArtifact,
         sourceName,
         sourceType,
     } = context;
@@ -303,6 +331,7 @@ function generatedFiles(context) {
                 formatVersion: document.source.formatVersion,
                 namespace: document.source.namespace,
                 snapshotHash: sourceHash,
+                sourceArtifactKind: sourceArtifact.kind,
             },
         },
     };
@@ -317,6 +346,10 @@ function generatedFiles(context) {
             normalizedDesignIr: relative(project, paths.sourceIr),
             overlay: relative(project, paths.overlay),
             snapshot: relative(project, paths.snapshotSource),
+            sourceArtifact: relative(
+                project,
+                sourceArtifact.kind === 'pulp-zip' ? paths.snapshotArchive : paths.snapshotSource,
+            ),
             tokens: relative(project, paths.importedTokens),
         },
         lossReport: document.lossReport,
@@ -327,6 +360,7 @@ function generatedFiles(context) {
             key: sourceKey,
             name: sourceName,
             snapshotHash: sourceHash,
+            sourceArtifact,
         },
         summary: summarizeDesignIR(document),
     };
@@ -360,6 +394,7 @@ function generatedFiles(context) {
         revision: document.source.revision,
         sourceHash,
         sourceKey,
+        sourceArtifact,
         sourceName,
         sourceType,
     })));
@@ -367,7 +402,7 @@ function generatedFiles(context) {
     return files;
 }
 
-async function loadSource(sourcePath, { sourceKey, sourceType }) {
+async function loadSource(sourcePath, { sourceArchive, sourceKey, sourceType }) {
     if (!['figma', 'design-ir'].includes(sourceType)) {
         fail('unsupported_source_type', `Unsupported source type '${sourceType}'`);
     }
@@ -380,19 +415,32 @@ async function loadSource(sourcePath, { sourceKey, sourceType }) {
         fail('source_too_large', `Import source exceeds ${MAX_SOURCE_BYTES} bytes`);
     }
     const sourceBytes = await readFile(file);
-    if (basename(file).toLowerCase().endsWith('.pulp.zip') || hasZipMagic(sourceBytes)) {
+    if (sourceArchive === null && (
+        basename(file).toLowerCase().endsWith('.pulp.zip') || hasZipMagic(sourceBytes)
+    )) {
         fail(
-            'source_archive_unsupported',
-            'Pulp .pulp.zip ingestion is not implemented yet; provide scene.pulp.json and its sibling assets directory',
+            'source_archive_requires_dispatcher',
+            'Pulp ZIP sources must enter through the installed vellum CLI dispatcher',
         );
     }
+    const archive = await loadStagedSourceArchive(sourceArchive, sourceType);
     let input;
     try {
         input = JSON.parse(sourceBytes.toString('utf8'));
     } catch (error) {
         fail('invalid_source_json', `Import source is not valid JSON: ${error.message}`);
     }
-    const sourceHash = `sha256:${sha256(sourceBytes)}`;
+    if (archive && !(
+        input?.$schema === 'https://pulp.dev/schemas/figma-plugin-export-v1.json' &&
+        input?.format_version === '2026.05-figma-plugin-v1'
+    )) {
+        fail(
+            'invalid_source_archive',
+            'Pulp ZIP scene must use the pinned Figma plugin export contract',
+        );
+    }
+    const sceneHash = `sha256:${sha256(sourceBytes)}`;
+    const sourceHash = archive?.sha256 ?? sceneHash;
     enforceSourceLimits(input);
     let document;
     if (input?.$schema === 'https://vellum.dev/schemas/design-ir/v1') {
@@ -421,7 +469,27 @@ async function loadSource(sourcePath, { sourceKey, sourceType }) {
         document = normalizeImport(normalizedInput);
     }
     const revision = validateRevision(document.source.revision);
-    return { backendDiagnostics: [], document, revision, sourceBytes, sourceHash };
+    const sourceArtifact = archive ? {
+        kind: 'pulp-zip',
+        member: archive.member,
+        name: archive.name,
+        sceneSha256: sceneHash,
+        sha256: archive.sha256,
+    } : {
+        kind: 'json',
+        name: basename(file),
+        sha256: sceneHash,
+    };
+    return {
+        archiveBytes: archive?.bytes ?? null,
+        backendDiagnostics: [],
+        document,
+        revision,
+        sourceArtifact,
+        sourceBytes,
+        sourceHash,
+        sourceName: sourceArtifact.name,
+    };
 }
 
 function hasZipMagic(bytes) {
@@ -431,6 +499,60 @@ function hasZipMagic(bytes) {
         (bytes[2] === 0x05 && bytes[3] === 0x06) ||
         (bytes[2] === 0x07 && bytes[3] === 0x08)
     );
+}
+
+function sourceArchiveArguments(args) {
+    const values = {
+        member: args['source-archive-member'],
+        name: args['source-archive-name'],
+        path: args['source-archive'],
+        sha256: args['source-archive-sha256'],
+    };
+    const present = Object.values(values).filter((value) => value !== undefined).length;
+    if (present === 0) return null;
+    if (present !== Object.keys(values).length) {
+        fail('invalid_source_archive', 'Staged Pulp archive metadata is incomplete');
+    }
+    return values;
+}
+
+async function loadStagedSourceArchive(value, sourceType) {
+    if (value === null) return null;
+    if (sourceType !== 'figma') {
+        fail('invalid_source_archive', 'Pulp ZIP sources require the figma source type');
+    }
+    if (
+        typeof value.name !== 'string' || !value.name ||
+        basename(value.name) !== value.name || value.name.includes('\\')
+    ) {
+        fail('invalid_source_archive', 'Staged Pulp archive name is unsafe');
+    }
+    if (!isSafeRelativeAsset(value.member) || !value.member.toLowerCase().endsWith('.pulp.json')) {
+        fail('invalid_source_archive', 'Staged Pulp archive scene member is unsafe');
+    }
+    let expectedHash;
+    try {
+        expectedHash = normalizeSha256ContentHash(value.sha256, 'source archive SHA-256');
+    } catch (error) {
+        fail('invalid_source_archive', error.message);
+    }
+    const archivePath = resolve(value.path);
+    const metadata = await lstat(archivePath).catch(() => null);
+    if (!metadata?.isFile() || metadata.isSymbolicLink()) {
+        fail('invalid_source_archive', 'Staged Pulp archive must be a regular file');
+    }
+    if (metadata.size > MAX_ARCHIVE_BYTES) {
+        fail('source_archive_too_large', `Pulp source archive exceeds ${MAX_ARCHIVE_BYTES} bytes`);
+    }
+    const bytes = await readFile(archivePath);
+    const actualHash = `sha256:${sha256(bytes)}`;
+    if (actualHash !== expectedHash) {
+        fail('source_archive_mutated', 'Staged Pulp archive bytes do not match the dispatcher receipt');
+    }
+    if (bytes.length < 4 || bytes[0] !== 0x50 || bytes[1] !== 0x4b) {
+        fail('invalid_source_archive', 'Staged Pulp source is not a ZIP archive');
+    }
+    return { bytes, member: value.member, name: value.name, sha256: actualHash };
 }
 
 async function planAssets(sourcePath, document, paths) {
@@ -510,6 +632,7 @@ function projectPaths(project, sourceKey, revision) {
         project,
         reimportReport: join(project, 'design', 'reports', `${sourceKey}.${revision}.reimport-report.json`),
         snapshotAssets: snapshotRoot,
+        snapshotArchive: join(snapshotRoot, 'source.pulp.zip'),
         snapshotProvenance: join(snapshotRoot, 'provenance.json'),
         snapshotSource: join(snapshotRoot, 'source.json'),
         sourceIr: join(project, 'design', 'ir', 'sources', `${sourceKey}.designir.json`),
@@ -590,7 +713,15 @@ function nodeIdsTypescript(components) {
     ].join('\n');
 }
 
-function snapshotProvenance({ assets, revision, sourceHash, sourceKey, sourceName, sourceType }) {
+function snapshotProvenance({
+    assets,
+    revision,
+    sourceArtifact,
+    sourceHash,
+    sourceKey,
+    sourceName,
+    sourceType,
+}) {
     return {
         assets: assets.map((asset) => ({
             contentHash: asset.contentHash ?? null,
@@ -600,6 +731,7 @@ function snapshotProvenance({ assets, revision, sourceHash, sourceKey, sourceNam
         })),
         revision,
         schema: 'vellum.source-snapshot.v1',
+        sourceArtifact,
         sourceHash,
         sourceKey,
         sourceName,

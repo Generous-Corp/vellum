@@ -44,9 +44,12 @@ vellum --json package --target macos --output "$app/dist" --project "$app"
 ```
 
 The only supported import source types are `figma` and `design-ir`. The first
-means Vellum's bounded, credential-free plugin-export subset, not an arbitrary
-design file. Consult conversion diagnostics after every import or reimport.
-Do not invent another route or silently discard unsupported properties.
+means Vellum's bounded, credential-free plugin-export JSON or its actual
+`.pulp.zip` container, not an arbitrary design file. Pass the ZIP directly; do
+not unpack it yourself. Vellum retains the archive and scene as immutable
+snapshots and binds revision identity to the archive SHA-256. Consult conversion
+diagnostics after every import or reimport. Do not invent another route or
+silently discard unsupported properties.
 
 ## Ownership and maintenance
 

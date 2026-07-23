@@ -366,7 +366,7 @@ class ImportBackendTests(unittest.TestCase):
             self.assertEqual(rejected.returncode, 5, rejected.stdout)
             self.assertEqual(json.loads(rejected.stdout)["status"], "asset_hash_mismatch")
 
-    def test_pulp_zip_is_rejected_with_an_explicit_current_limitation(self) -> None:
+    def test_internal_node_backend_requires_secure_dispatcher_for_pulp_zip(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             app = self.create(root)
@@ -375,8 +375,8 @@ class ImportBackendTests(unittest.TestCase):
             rejected = invoke("import", str(archive), cwd=app)
             self.assertEqual(rejected.returncode, 5, rejected.stdout)
             payload = json.loads(rejected.stdout)
-            self.assertEqual(payload["status"], "source_archive_unsupported")
-            self.assertIn("scene.pulp.json", payload["message"])
+            self.assertEqual(payload["status"], "source_archive_requires_dispatcher")
+            self.assertIn("installed vellum CLI dispatcher", payload["message"])
 
             empty_archive = root / "empty.pulp.zip"
             empty_archive.write_bytes(b"PK\x05\x06" + b"\0" * 18)
@@ -384,7 +384,7 @@ class ImportBackendTests(unittest.TestCase):
             self.assertEqual(rejected.returncode, 5, rejected.stdout)
             self.assertEqual(
                 json.loads(rejected.stdout)["status"],
-                "source_archive_unsupported",
+                "source_archive_requires_dispatcher",
             )
 
     @unittest.skipIf(os.name == "nt", "symlink semantics differ on Windows")
