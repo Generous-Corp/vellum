@@ -27,6 +27,26 @@ CONSUMER = REPO / "apps/minimal-scene"
 
 @unittest.skipUnless(shutil.which("cmake") and (shutil.which("shasum") or shutil.which("sha256sum")), "CMake/checksum tools unavailable")
 class SdkArtifactTests(unittest.TestCase):
+    def test_installed_backend_inspection_does_not_write_bytecode(self) -> None:
+        module = runpy.run_path(str(VALIDATOR))
+        load_backend = module["load_installed_native_backend"]
+        with tempfile.TemporaryDirectory() as temporary:
+            library = Path(temporary)
+            (library / "vellum_bytecode_probe.py").write_text(
+                "VALUE = 'loaded without mutation'\n",
+                encoding="utf-8",
+            )
+            (library / "vellum_native_backend.py").write_text(
+                "from vellum_bytecode_probe import VALUE\n",
+                encoding="utf-8",
+            )
+            try:
+                backend = load_backend(library)
+                self.assertEqual(backend.VALUE, "loaded without mutation")
+                self.assertEqual(list(library.rglob("__pycache__")), [])
+            finally:
+                sys.modules.pop("vellum_bytecode_probe", None)
+
     def test_installed_browser_scenario_resolves_payload_from_prefix(self) -> None:
         module = runpy.run_path(str(VALIDATOR))
         validate_browser = module["validate_installed_phase3_browser"]
@@ -331,8 +351,8 @@ class SdkArtifactTests(unittest.TestCase):
             ])
             verification = json.loads(verified.stdout)
             self.assertTrue(verification["ok"])
-            self.assertEqual(verification["framework_version"], "0.1.5")
-            self.assertEqual(verification["cli_version"], "0.1.5")
+            self.assertEqual(verification["framework_version"], "0.1.6")
+            self.assertEqual(verification["cli_version"], "0.1.6")
             self.assertTrue(verification["contamination_free"])
             self.assertEqual(verification["contamination_findings"], [])
             self.assertEqual(verification["claims"]["gpu_renderer"], False)
@@ -406,7 +426,7 @@ class SdkArtifactTests(unittest.TestCase):
             ])
             validation = json.loads(validated.stdout)
             self.assertTrue(validation["ok"])
-            self.assertEqual(validation["cli_version"], "0.1.5")
+            self.assertEqual(validation["cli_version"], "0.1.6")
             self.assertTrue(all(validation["checks"].values()))
 
             prefix = root / "prefix"
@@ -422,7 +442,7 @@ class SdkArtifactTests(unittest.TestCase):
             self.assertEqual(install_manifest["source_commit"], current_head)
             self.assertTrue(install_manifest["verified"])
             if shutil.which("curl"):
-                release_dir = root / "release/v0.1.5"
+                release_dir = root / "release/v0.1.6"
                 release_dir.mkdir(parents=True)
                 shutil.copy2(first_archive, release_dir / first_archive.name)
                 shutil.copy2(INSTALLER, release_dir / "install.sh")
@@ -446,7 +466,7 @@ class SdkArtifactTests(unittest.TestCase):
                 release_temporary = root / "release-temporary"
                 release_temporary.mkdir()
                 release_install = self.run_checked([
-                    "sh", str(INSTALLER), "--version", "0.1.5",
+                    "sh", str(INSTALLER), "--version", "0.1.6",
                     "--target", "test-host",
                     "--release-base-url", (root / "release").as_uri(),
                     "--install-dir", str(release_prefix),
@@ -477,7 +497,7 @@ class SdkArtifactTests(unittest.TestCase):
             ], cwd=root)
             self.assertEqual(json.loads(created.stdout)["status"], "created")
             lock = json.loads((project / "framework.lock").read_text(encoding="utf-8"))
-            self.assertEqual(lock["framework"]["version"], "0.1.5")
+            self.assertEqual(lock["framework"]["version"], "0.1.6")
             self.assertEqual(lock["framework"]["artifact"], {
                 "verified": True,
                 "sha256": verification["sha256"],

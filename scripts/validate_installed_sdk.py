@@ -100,6 +100,26 @@ def run(arguments: list[str], *, cwd: Path | None = None,
     return completed
 
 
+def load_installed_native_backend(library: Path) -> object:
+    """Inspect the installed adapter without mutating the immutable SDK tree."""
+    backend_path = library / "vellum_native_backend.py"
+    previous_dont_write_bytecode = sys.dont_write_bytecode
+    sys.path.insert(0, str(library))
+    try:
+        sys.dont_write_bytecode = True
+        spec = importlib.util.spec_from_file_location(
+            "vellum_installed_native_backend", backend_path
+        )
+        if spec is None or spec.loader is None:
+            raise ValidationError("cannot load installed native scenario adapter")
+        backend = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(backend)
+        return backend
+    finally:
+        sys.dont_write_bytecode = previous_dont_write_bytecode
+        sys.path.remove(str(library))
+
+
 def validate_installed_phase3(prefix: Path, root: Path,
                               env: dict[str, str]) -> bool:
     """Run the unchanged scenario using only installed SDK/runtime bytes."""
@@ -130,30 +150,19 @@ def validate_installed_phase3(prefix: Path, root: Path,
         },
     )
 
-    backend_path = library / "vellum_native_backend.py"
-    sys.path.insert(0, str(library))
-    try:
-        spec = importlib.util.spec_from_file_location(
-            "vellum_installed_native_backend", backend_path
-        )
-        if spec is None or spec.loader is None:
-            raise ValidationError("cannot load installed native scenario adapter")
-        backend = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(backend)
-        capabilities = {
-            "commands": "v1",
-            "files": "denied",
-            "clipboard": "text-v1",
-            "open_url": "external-v1",
-            "network": False,
-            "persistence": "state-v1",
-        }
-        arguments, scenario_name = backend.scenario_arguments(
-            {"root": fixture, "capabilities": capabilities},
-            "scenarios/phase3.json",
-        )
-    finally:
-        sys.path.remove(str(library))
+    backend = load_installed_native_backend(library)
+    capabilities = {
+        "commands": "v1",
+        "files": "denied",
+        "clipboard": "text-v1",
+        "open_url": "external-v1",
+        "network": False,
+        "persistence": "state-v1",
+    }
+    arguments, scenario_name = backend.scenario_arguments(
+        {"root": fixture, "capabilities": capabilities},
+        "scenarios/phase3.json",
+    )
 
     if scenario_name != "unchanged authoring fixture on native and browser":
         raise ValidationError("installed Phase 3 scenario identity drifted")
