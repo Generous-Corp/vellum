@@ -16,9 +16,11 @@ from typing import Any, Iterable
 
 
 CLI_VERSION = "0.1.0-dev"
+FRAMEWORK_VERSION = "0.1.0"
 CLI_API_VERSION = 1
 RESULT_SCHEMA = "vellum.cli.result.v1"
 LOCK_SCHEMA = "vellum.project-lock.v1"
+SDK_METADATA_SCHEMA = "vellum.sdk-artifact.v1"
 LOCK_NAME = "vellum.lock.json"
 BACKEND_NAME = "vellum-backend.exe" if os.name == "nt" else "vellum-backend"
 EXIT_USAGE = 2
@@ -125,6 +127,7 @@ def create_project(args: argparse.Namespace) -> dict[str, Any]:
         "PROJECT_SLUG": slug,
         "PROJECT_ID": project_id,
         "CLI_VERSION": CLI_VERSION,
+        "FRAMEWORK_VERSION": FRAMEWORK_VERSION,
     }
     destination.mkdir(parents=True, exist_ok=True)
     created: list[str] = []
@@ -205,6 +208,60 @@ def locate_backend() -> Path | None:
     return Path(located).resolve() if located else None
 
 
+def load_sdk_metadata() -> tuple[Path, dict[str, Any]] | None:
+    sdk_root_value = os.environ.get("VELLUM_SDK_ROOT")
+    if not sdk_root_value:
+        return None
+    sdk_root = Path(sdk_root_value).expanduser().resolve()
+    metadata_path = sdk_root / "metadata.json"
+    if not metadata_path.is_file():
+        raise CliFailure(
+            f"VELLUM_SDK_ROOT has no artifact metadata: {metadata_path}",
+            status="invalid_sdk_artifact",
+            exit_code=EXIT_PROJECT,
+        )
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise CliFailure(
+            f"Cannot read SDK artifact metadata at {metadata_path}: {error}",
+            status="invalid_sdk_artifact",
+            exit_code=EXIT_PROJECT,
+        ) from error
+    if (
+        not isinstance(metadata, dict)
+        or metadata.get("schema") != SDK_METADATA_SCHEMA
+        or not isinstance(metadata.get("framework_version"), str)
+        or metadata.get("cli_api") != CLI_API_VERSION
+        or not isinstance(metadata.get("capabilities"), dict)
+    ):
+        raise CliFailure(
+            f"SDK artifact metadata is incompatible: {metadata_path}",
+            status="invalid_sdk_artifact",
+            exit_code=EXIT_PROJECT,
+        )
+    return sdk_root, metadata
+
+
+def validate_project_sdk(lock: dict[str, Any], sdk: tuple[Path, dict[str, Any]] | None) -> None:
+    if sdk is None:
+        return
+    sdk_root, metadata = sdk
+    locked_version = lock["framework"]["version"]
+    installed_version = metadata["framework_version"]
+    if locked_version != installed_version:
+        raise CliFailure(
+            f"Project requires Vellum {locked_version}, but SDK {installed_version} is installed at {sdk_root}.",
+            status="sdk_version_mismatch",
+            exit_code=EXIT_PROJECT,
+            diagnostics=[{
+                "level": "error",
+                "code": "framework_pin_mismatch",
+                "message": "Install the exact framework version pinned by vellum.lock.json; do not edit the lock to bypass compatibility.",
+            }],
+        )
+
+
 def check_item(name: str, *, required: bool, available: bool, detail: str, fix: str | None = None) -> dict[str, Any]:
     return {"name": name, "required": required, "available": available, "detail": detail, "fix": fix}
 
@@ -212,9 +269,10 @@ def check_item(name: str, *, required: bool, available: bool, detail: str, fix: 
 def doctor(args: argparse.Namespace) -> dict[str, Any]:
     diagnostics: list[dict[str, Any]] = []
     project_root: Path | None = None
+    project_lock: dict[str, Any] | None = None
     lock_valid = False
     try:
-        project_root, _ = load_project(args.project)
+        project_root, project_lock = load_project(args.project)
         lock_valid = True
     except CliFailure as error:
         if args.project:
@@ -230,6 +288,21 @@ def doctor(args: argparse.Namespace) -> dict[str, Any]:
             created.append(relative)
 
     backend = locate_backend()
+    sdk_configured = bool(os.environ.get("VELLUM_SDK_ROOT"))
+    sdk: tuple[Path, dict[str, Any]] | None = None
+    sdk_error: CliFailure | None = None
+    try:
+        sdk = load_sdk_metadata()
+        if project_lock:
+            validate_project_sdk(project_lock, sdk)
+    except CliFailure as error:
+        sdk_error = error
+        diagnostics.append({"level": "error", "code": error.status, "message": str(error)})
+    sdk_detail = "not installed"
+    if sdk:
+        sdk_detail = f"{sdk[1]['framework_version']} at {sdk[0]}"
+    elif sdk_error:
+        sdk_detail = str(sdk_error)
     checks = [
         check_item("python", required=True, available=sys.version_info >= (3, 9), detail=sys.version.split()[0]),
         check_item("project-lock", required=bool(args.project), available=lock_valid, detail=str(project_root) if project_root else "not in a Vellum project"),
@@ -237,6 +310,8 @@ def doctor(args: argparse.Namespace) -> dict[str, Any]:
         check_item("cmake", required=False, available=bool(shutil.which("cmake")), detail=shutil.which("cmake") or "not found", fix="Install CMake for native builds."),
         check_item("ninja", required=False, available=bool(shutil.which("ninja")), detail=shutil.which("ninja") or "not found", fix="Install Ninja for native builds."),
         check_item("node", required=False, available=bool(shutil.which("node")), detail=shutil.which("node") or "not found", fix="Install Node.js for TypeScript authoring tools."),
+        check_item("sdk-artifact", required=sdk_configured, available=sdk is not None, detail=sdk_detail, fix="Install a checksummed SDK artifact for native CMake consumption."),
+        check_item("project-sdk-compatibility", required=sdk_configured and project_lock is not None, available=sdk_error is None and (sdk is not None or not sdk_configured), detail="exact framework pin matched" if sdk and not sdk_error and project_lock else sdk_detail),
         check_item("native-backend", required=False, available=backend is not None, detail=str(backend) if backend else "not installed in this extraction milestone", fix="Set VELLUM_SDK_ROOT or VELLUM_BACKEND when a backend artifact is available."),
     ]
     required_ok = all(item["available"] for item in checks if item["required"])
@@ -253,6 +328,7 @@ def doctor(args: argparse.Namespace) -> dict[str, Any]:
 
 def backend_command(args: argparse.Namespace, forwarded: list[str]) -> dict[str, Any]:
     root, lock = load_project(args.project)
+    validate_project_sdk(lock, load_sdk_metadata())
     backend = locate_backend()
     if backend is None:
         raise CliFailure(

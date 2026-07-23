@@ -15,8 +15,9 @@ the requested path or current directory toward the filesystem root for
 - the exact framework version plus a separately versioned CLI protocol API;
 - the source template and template version.
 
-An unsupported schema, malformed identity, or CLI API mismatch fails before a
-backend is invoked. The framework pin is passed to the backend, which must use
+An unsupported schema, malformed identity, CLI API mismatch, or installed SDK
+artifact mismatch fails before a backend is invoked. The framework pin is
+passed to the backend, which must use
 the matching SDK. Separating CLI API compatibility from the framework pin lets
 the CLI gain backward-compatible fixes without making every existing project
 unopenable. The lock is application-owned and should be committed.

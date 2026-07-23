@@ -59,6 +59,7 @@ class CliTests(unittest.TestCase):
             self.assertTrue(required.issubset(set(first_files)))
             lock = json.loads((first / "vellum.lock.json").read_text())
             self.assertEqual(lock["project"]["id"], hashlib.sha256(b"vellum-project-v1:example-app").hexdigest()[:24])
+            self.assertEqual(lock["framework"]["version"], "0.1.0")
 
     def test_create_refuses_nonempty_destination(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -156,6 +157,24 @@ class CliTests(unittest.TestCase):
             completed = invoke("--json", "test", cwd=project)
             self.assertEqual(completed.returncode, 3)
             self.assertEqual(json.loads(completed.stdout)["status"], "invalid_project_lock")
+
+    def test_installed_sdk_metadata_enforces_exact_framework_pin(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root / "app"
+            self.assertEqual(invoke("create", "Pinned", "-d", str(project)).returncode, 0)
+            sdk = root / "sdk"
+            sdk.mkdir()
+            (sdk / "metadata.json").write_text(json.dumps({
+                "schema": "vellum.sdk-artifact.v1",
+                "framework_version": "0.2.0",
+                "cli_version": "0.2.0",
+                "cli_api": 1,
+                "capabilities": {},
+            }), encoding="utf-8")
+            completed = invoke("build", "--json", cwd=project, env={"VELLUM_SDK_ROOT": str(sdk)})
+            self.assertEqual(completed.returncode, 3)
+            self.assertEqual(json.loads(completed.stdout)["status"], "sdk_version_mismatch")
 
     def test_cli_api_mismatch_requires_migration_but_framework_patch_does_not(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

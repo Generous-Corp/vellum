@@ -7,6 +7,7 @@ import subprocess
 import tarfile
 import tempfile
 import unittest
+import json
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -45,10 +46,27 @@ class InstallerTests(unittest.TestCase):
             payload.mkdir()
             shutil.copy2(REPO / "cli/vellum_cli.py", payload / "vellum_cli.py")
             shutil.copytree(REPO / "templates", payload / "templates")
+            (payload / "sdk/include").mkdir(parents=True)
+            (payload / "sdk/include/placeholder.hpp").write_text("// fixture\n", encoding="utf-8")
+            (payload / "metadata.json").write_text(
+                json.dumps({
+                    "schema": "vellum.sdk-artifact.v1",
+                    "framework_version": "0.1.0",
+                    "cli_version": "0.1.0-dev",
+                    "cli_api": 1,
+                    "source_commit": "a" * 40,
+                    "target": "test",
+                    "capabilities": {"cmake_sdk": True, "authoring_cli": True, "native_backend": False, "gpu_renderer": False},
+                    "files": [],
+                }),
+                encoding="utf-8",
+            )
             archive = root / "vellum-sdk-test.tar.gz"
             with tarfile.open(archive, "w:gz") as handle:
                 handle.add(payload / "vellum_cli.py", arcname="vellum_cli.py")
                 handle.add(payload / "templates", arcname="templates")
+                handle.add(payload / "sdk", arcname="sdk")
+                handle.add(payload / "metadata.json", arcname="metadata.json")
             digest = hashlib.sha256(archive.read_bytes()).hexdigest()
             sums = root / "SHA256SUMS"
             sums.write_text(f"{digest}  {archive.name}\n", encoding="utf-8")

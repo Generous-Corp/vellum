@@ -6,8 +6,9 @@ JavaScript behavior, and ship a GPU-rendered application without Chromium or an
 OS WebView as the primary UI runtime?
 
 This repository is at the independent-validation milestone. The project CLI
-and repository shape are usable. An audio-free native C++ kernel, installable
-CMake SDK, and macOS CoreGraphics smoke application are executable in-tree.
+and repository shape are usable. An audio-free native C++ kernel, reproducible
+checksummed CMake SDK artifact, and macOS CoreGraphics smoke application are
+executable.
 Import, CLI-driven native builds, Skia/Dawn GPU rendering, and packaging remain
 SDK-backend capabilities and report `capability_unavailable` until implemented.
 
@@ -29,9 +30,9 @@ vellum doctor --fix
 vellum --json build
 ```
 
-The final command intentionally fails with structured
-`capability_unavailable` output until the native SDK backend is installed. It
-must not pretend that a renderer or package was produced.
+The final command intentionally fails with structured `capability_unavailable`
+output because the current SDK artifact has no application backend. It must not
+pretend that a renderer or package was produced.
 
 On Windows PowerShell, the equivalent local-development installer is:
 
@@ -65,25 +66,46 @@ commands require a compatible `vellum-backend` discovered through
 Every command accepts `--json` before or after the command and emits one stable
 `vellum.cli.result.v1` object. See [the CLI contract](docs/cli/contract.md).
 
-## Installer verification
+## Build and install an immutable local SDK artifact
 
-The local-development installer copies files from an already trusted checkout;
-it is explicitly not release verification. A future release archive must be
-accompanied by `SHA256SUMS`, and both installers refuse to extract an archive
-without exactly one matching SHA-256 entry:
+The builder performs a Release build, creates a relocatable CMake install tree,
+normalizes archive metadata, and emits both `SHA256SUMS` and machine-readable
+evidence. Building twice from the same source commit and toolchain is covered
+by the integration test.
 
 ```sh
+python3 scripts/build_sdk_artifact.py --output-dir dist --json
+python3 scripts/verify_sdk_artifact.py \
+  --archive dist/vellum-sdk-0.1.0-darwin-arm64.tar.gz \
+  --checksums dist/SHA256SUMS --json
 ./scripts/install.sh \
-  --archive ./vellum-sdk-darwin-arm64.tar.gz \
-  --checksums ./SHA256SUMS
+  --archive dist/vellum-sdk-0.1.0-darwin-arm64.tar.gz \
+  --checksums dist/SHA256SUMS
+```
+
+The installed CMake tree is under the chosen prefix at `lib/vellum/sdk`;
+consumers can add that directory to `CMAKE_PREFIX_PATH` and use
+`find_package(Vellum CONFIG REQUIRED)`.
+
+`scripts/validate_installed_sdk.py` verifies the archive, installs to a clean
+prefix, creates an app through the installed CLI, checks its project lock
+against SDK metadata, and builds/tests a sterile CMake consumer without a
+Vellum or Pulp checkout.
+
+No hosted Vellum release exists yet. Once an exact versioned release contains
+the same archive and `SHA256SUMS`, the installer can consume it without a
+moving `latest` pointer:
+
+```sh
+./scripts/install.sh --version 0.1.0
 ```
 
 For a cautious future network install, download the version-pinned installer,
 archive, and checksum manifest separately; verify the installer source before
 running it; then pass the local archive and manifest as above. Checksum
-verification protects the downloaded bytes but does not make an unreviewed
-network script intrinsically safe. No `curl | sh` command is advertised before
-there is an immutable, checksummed release to install.
+verification protects downloaded bytes but does not make an unreviewed network
+script intrinsically safe. No `curl | sh` command is advertised before an
+immutable, checksummed release exists.
 
 ## Current boundary
 

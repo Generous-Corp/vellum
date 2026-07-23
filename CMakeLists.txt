@@ -40,6 +40,7 @@ endif()
 
 if(VELLUM_BUILD_TESTS)
     enable_testing()
+    find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter)
 
     add_executable(vellum-foundation-test
         foundation/tests/foundation_test.cpp)
@@ -59,6 +60,10 @@ if(VELLUM_BUILD_TESTS)
             "-DVELLUM_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
             "-DTEST_CONFIG=$<CONFIG>"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunInstallConsumer.cmake")
+    add_test(NAME vellum.sdk-artifact
+        COMMAND "${Python3_EXECUTABLE}"
+            -m unittest cli.tests.test_sdk_artifact
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
 
 set(_vellum_install_targets vellum-foundation vellum-runtime)
