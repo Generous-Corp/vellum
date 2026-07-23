@@ -1,5 +1,5 @@
 import { mkdir, readFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { build } from 'esbuild';
@@ -13,8 +13,19 @@ const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const entry = resolve(process.argv[2]);
 const output = resolve(process.argv[3]);
 let importedDesign = null;
+let importedBindings = null;
 if (process.argv[4]) {
-    importedDesign = JSON.parse(await readFile(resolve(process.argv[4]), 'utf8'));
+    const importedDesignPath = resolve(process.argv[4]);
+    importedDesign = JSON.parse(await readFile(importedDesignPath, 'utf8'));
+    const bindingName = basename(importedDesignPath).replace(
+        /\.materialized\.json$/, '.bindings.json',
+    );
+    if (bindingName === basename(importedDesignPath)) {
+        throw new Error('materialized DesignIR must use the .materialized.json suffix');
+    }
+    importedBindings = JSON.parse(
+        await readFile(join(dirname(importedDesignPath), bindingName), 'utf8'),
+    );
 }
 await mkdir(dirname(output), { recursive: true });
 await build({
@@ -38,7 +49,9 @@ await build({
                 path: '@vellum/imported', namespace: 'vellum-imported',
             }));
             buildContext.onLoad({ filter: /.*/, namespace: 'vellum-imported' }, () => ({
-                contents: `export const importedDesign = ${JSON.stringify(importedDesign)};`,
+                contents:
+                    `export const importedDesign = ${JSON.stringify(importedDesign)};\n` +
+                    `export const importedBindings = ${JSON.stringify(importedBindings)};`,
                 loader: 'js',
             }));
         },

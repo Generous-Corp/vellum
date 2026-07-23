@@ -34,6 +34,7 @@ const IMPORT_GRAPH_SCHEMA = 'vellum.design-imports.v1';
 const IMPORT_REPORT_SCHEMA = 'vellum.design-import-report.v1';
 const ASSET_MANIFEST_SCHEMA = 'vellum.design-assets.v1';
 const GENERATED_COMPONENT_SCHEMA = 'vellum.generated-components.v1';
+const GENERATED_BINDINGS_SCHEMA = 'vellum.generated-bindings.v1';
 const MAX_SOURCE_BYTES = 16 * 1024 * 1024;
 const MAX_ARCHIVE_BYTES = 256 * 1024 * 1024;
 const MAX_ASSET_BYTES = 128 * 1024 * 1024;
@@ -386,6 +387,8 @@ function generatedFiles(context) {
     files.set(paths.materializedUi, jsonBytes(applied.materialized));
     files.set(paths.generatedBindings, jsonBytes({
         bindings: applied.resolvedBindings,
+        revision: document.source.revision,
+        schema: GENERATED_BINDINGS_SCHEMA,
         sourceKey,
     }));
     files.set(paths.importReport, jsonBytes(importReport));

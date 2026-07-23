@@ -181,7 +181,7 @@ test('supports named model actions for imported/generated components', () => {
 test('materializes normalized DesignIR and binds behavior by stable node id', () => {
     let presses = 0;
     const document = {
-        source: { namespace: 'main' },
+        source: { key: 'main', namespace: 'main', revision: 'board-b' },
         tokens: {
             'main.color.canvas': { $value: '#0f172a' },
             'main.color.accent': { $value: '#22c55e' },
@@ -217,6 +217,100 @@ test('materializes normalized DesignIR and binds behavior by stable node id', ()
     }))).tree;
     assert.equal(presses, 1);
     assert.equal(tree.id, 'main/root');
+});
+
+test('connects generated reimport bindings to developer-owned named actions', () => {
+    let presses = 0;
+    const document = {
+        source: { key: 'main', namespace: 'main', revision: 'board-b' },
+        root: {
+            id: 'main/root',
+            kind: 'view',
+            properties: {},
+            children: [{
+                id: 'main/create-v2',
+                kind: 'button',
+                text: 'Create board',
+                properties: {},
+                children: [],
+            }],
+        },
+    };
+    const bindings = {
+        schema: 'vellum.generated-bindings.v1',
+        revision: 'board-b',
+        sourceKey: 'main',
+        bindings: [{
+            action: 'boards.create',
+            event: 'press',
+            originalNodeId: 'main/create-v1',
+            resolvedNodeId: 'main/create-v2',
+        }],
+    };
+    const bridge = mount(() => jsx(Design, {
+        actions: { 'boards.create': () => { presses += 1; } },
+        bindings,
+        document,
+    }));
+    let tree = JSON.parse(bridge.renderJSON()).tree;
+    assert.equal(typeof tree.children[0].events.press, 'string');
+    tree = JSON.parse(bridge.dispatchJSON(JSON.stringify({
+        protocol,
+        action: tree.children[0].events.press,
+    }))).tree;
+    assert.equal(presses, 1);
+    assert.equal(tree.children[0].id, 'main/create-v2');
+
+    assert.throws(() => mount(() => jsx(Design, {
+        actions: {},
+        bindings,
+        document,
+    })).renderJSON(), /has no developer-owned action/);
+    assert.throws(() => mount(() => jsx(Design, {
+        actions: { 'boards.create': () => {} },
+        bindings: {
+            ...bindings,
+            bindings: [{ ...bindings.bindings[0], resolvedNodeId: 'main/missing' }],
+        },
+        document,
+    })).renderJSON(), /binding target is missing/);
+    assert.throws(() => mount(() => jsx(Design, {
+        actions: {},
+        bindings: {
+            ...bindings,
+            bindings: [{ ...bindings.bindings[0], action: 'toString' }],
+        },
+        document,
+    })).renderJSON(), /has no developer-owned action/);
+    assert.throws(() => mount(() => jsx(Design, {
+        actions: { 'boards.create': () => {} },
+        bindings: { ...bindings, revision: 'board-a' },
+        document,
+    })).renderJSON(), /revision does not match/);
+    assert.throws(() => mount(() => jsx(Design, {
+        actions: { 'boards.create': () => {} },
+        bindings: { ...bindings, sourceKey: 'other' },
+        document,
+    })).renderJSON(), /source does not match/);
+    assert.throws(() => mount(() => jsx(Design, {
+        actions: { 'boards.create': () => {} },
+        bindings: {
+            ...bindings,
+            bindings: [
+                bindings.bindings[0],
+                { ...bindings.bindings[0] },
+            ],
+        },
+        document,
+    })).renderJSON(), /duplicate Design binding/);
+    assert.throws(() => mount(() => jsx(Design, {
+        actions: { 'boards.create': () => {} },
+        bindings: {
+            ...bindings,
+            bindings: [{ ...bindings.bindings[0], event: 'hover' }],
+        },
+        document,
+    })).renderJSON(), /unsupported event/);
 });
 
 test('requires explicit stable IDs on interactive nodes', () => {

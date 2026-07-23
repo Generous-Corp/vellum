@@ -119,6 +119,8 @@ class ImportBackendTests(unittest.TestCase):
             self.assertEqual(report["summary"]["conflicts"], 0)
             self.assertGreater(report["summary"]["heuristicCandidates"], 0)
             bindings = json.loads((app / "ui/generated/main.bindings.json").read_text())
+            self.assertEqual(bindings["schema"], "vellum.generated-bindings.v1")
+            self.assertEqual(bindings["revision"], "palette-board-b")
             self.assertEqual(bindings["bindings"][0]["resolvedNodeId"], "main/create-button-v2")
 
             unchanged = invoke(
@@ -164,10 +166,12 @@ class ImportBackendTests(unittest.TestCase):
             self.assertEqual(reimported.returncode, 0, reimported.stdout)
             self.assertEqual(json.loads(reimported.stdout)["status"], "reimported")
             self.assertEqual(overlay_path.read_bytes(), overlay_before)
+            expected_revision = "figma-" + hashlib.sha256(source_b.read_bytes()).hexdigest()[:16]
             bindings = json.loads((app / "ui/generated/main.bindings.json").read_text())
+            self.assertEqual(bindings["schema"], "vellum.generated-bindings.v1")
+            self.assertEqual(bindings["revision"], expected_revision)
             self.assertEqual(bindings["bindings"][0]["resolvedNodeId"], "main/1:8")
 
-            expected_revision = "figma-" + hashlib.sha256(source_b.read_bytes()).hexdigest()[:16]
             lock = json.loads((app / "design/import.lock.json").read_text())
             self.assertEqual(lock["sources"]["main"]["activeRevision"], expected_revision)
             updated = json.loads((app / "design/ir/app.designir.json").read_text())

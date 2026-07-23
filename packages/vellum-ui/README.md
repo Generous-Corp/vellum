@@ -54,31 +54,32 @@ for targets without that module. The SDK's custom-component guide defines the
 versioned ABI and source-ownership contract.
 
 Imported DesignIR stays inspectable JSON. Applications opt into it from
-developer-owned code and bind behavior separately:
+developer-owned code. Generated binding receipts resolve stable design
+identities after reimport, while the named behavior stays in authored TSX:
 
 ```tsx
-import imported from "../ui/generated/main.materialized.json";
-import { createApp, materializeDesign, mount } from "@vellum/ui";
+import { importedBindings, importedDesign } from "@vellum/imported";
+import { Design, useState } from "@vellum/ui";
 
-mount(createApp({
-  id: "example.imported-app",
-  stateVersion: "1",
-  initialState: { boards: 0 },
-  actions: {
-    create(model) { return { boards: model.boards + 1 }; },
-  },
-  render() {
-    return materializeDesign(imported, {
-      viewport: { width: 800, height: 600 },
-      actions: { "main/create-button-v1": { press: "create" } },
-    });
-  },
-}));
+export function App() {
+  const [boards, setBoards] = useState(0);
+  return (
+    <Design
+      document={importedDesign}
+      bindings={importedBindings}
+      actions={{
+        "boards.create": () => setBoards((count) => count + 1),
+      }}
+    />
+  );
+}
 ```
 
-Reimport replaces generated JSON while the application-owned action mapping
-and state remain untouched. Missing tokens, duplicate identities, unsupported
-node kinds, and unsupported events fail closed.
+The developer-owned overlay binds a design identity to `boards.create`.
+Reimport may resolve that binding to a reviewed alias and rewrites only the
+generated receipt; the action registry and state remain untouched. A receipt
+whose action is absent from the registry or whose resolved node no longer
+exists fails closed.
 
 Interactive nodes require explicit stable IDs. Generated DesignIR components
 already carry them; hand-written components should choose IDs that survive

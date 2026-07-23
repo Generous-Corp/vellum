@@ -77,13 +77,25 @@ export interface DesignNode {
     children: DesignNode[];
 }
 export interface DesignDocument {
-    source?: { namespace?: string };
+    source?: { key?: string; namespace?: string; revision?: string };
     root: DesignNode;
     tokens?: Record<string, { $value?: JsonValue }>;
+}
+export interface DesignBinding {
+    action: string;
+    event: 'press' | 'change' | 'submit' | 'keyDown';
+    resolvedNodeId: string;
+}
+export interface DesignBindingsDocument {
+    schema: 'vellum.generated-bindings.v1';
+    bindings: DesignBinding[];
+    revision: string;
+    sourceKey: string;
 }
 export interface DesignProps {
     document: DesignDocument;
     actions?: Record<string, EventHandler>;
+    bindings?: DesignBindingsDocument | null;
 }
 export declare function Design(properties: DesignProps): VellumElement;
 

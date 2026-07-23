@@ -162,6 +162,38 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
             str(REPO / "fixtures/design-ir/revision-a.source.json"),
             "--source-type", "figma", "--as", "main", "--json",
         ], cwd=project, env=journey_env).stdout)
+        authored_source = project / "src/App.tsx"
+        authored_source.write_text(
+            '''import { importedBindings, importedDesign } from "@vellum/imported";\n'''
+            '''import { Design, Stack, Text, useState } from "@vellum/ui";\n\n'''
+            '''export function App() {\n'''
+            '''  const [boards, setBoards] = useState(0);\n'''
+            '''  if (!importedDesign) throw new Error("imported design is required");\n'''
+            '''  return (\n'''
+            '''    <Stack id="app-shell" style={{ width: 640, height: 400, gap: 8, backgroundColor: "#111827" }}>\n'''
+            '''      <Text id="board-count" style={{ height: 28, fontSize: 18, color: "#ffffff" }}>Boards created: {boards}</Text>\n'''
+            '''      <Design document={importedDesign} bindings={importedBindings}\n'''
+            '''        actions={{ "boards.create": () => setBoards((count) => count + 1) }} />\n'''
+            '''    </Stack>\n'''
+            '''  );\n'''
+            '''}\n''',
+            encoding="utf-8",
+        )
+        authored_source_before = authored_source.read_bytes()
+        authored_overlay = project / "design/overlays/main.authored.json"
+        overlay = json.loads(authored_overlay.read_text(encoding="utf-8"))
+        overlay["aliases"] = {
+            "main/create-button-v1": "main/create-button-v2",
+        }
+        overlay["bindings"] = [{
+            "action": "boards.create",
+            "event": "press",
+            "nodeId": "main/create-button-v1",
+        }]
+        authored_overlay.write_text(
+            json.dumps(overlay, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
         reimported = json.loads(run([
             str(prefix / "bin/vellum"), "reimport",
             "--source", str(REPO / "fixtures/design-ir/revision-b.source.json"),
@@ -187,6 +219,30 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
             raise ValidationError("installed CLI import/reimport journey did not complete")
         if active_revision != "palette-board-b":
             raise ValidationError("installed CLI reimport did not advance the active revision")
+        if authored_source.read_bytes() != authored_source_before:
+            raise ValidationError("installed CLI reimport overwrote developer-owned application code")
+        resolved_bindings = json.loads(
+            (project / "ui/generated/main.bindings.json").read_text(encoding="utf-8")
+        )["bindings"]
+        if (
+            len(resolved_bindings) != 1
+            or resolved_bindings[0].get("action") != "boards.create"
+            or resolved_bindings[0].get("resolvedNodeId") != "main/create-button-v2"
+        ):
+            raise ValidationError("installed CLI reimport did not preserve authored behavior")
+        imported_scenario = project / "tests/scenarios/smoke.json"
+        imported_scenario.write_text(json.dumps({
+            "schema": "vellum.scenario.v1",
+            "name": "imported-smoke",
+            "viewport": {"width": 640, "height": 400},
+            "steps": [
+                {"action": "wait-for-idle"},
+                {"action": "capture", "name": "before"},
+                {"action": "press", "target": "main/create-button-v2"},
+                {"action": "wait-for-idle"},
+                {"action": "capture", "name": "after"},
+            ],
+        }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
         zip_project = root / "zip-application"
         zip_created = json.loads(run([
@@ -272,12 +328,9 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
         web_reproducible = False
         web_runtime_exact = False
         web_node_self_contained = False
+        web_same_source_imported_behavior = False
         if web_claimed:
-            web_project = root / "web-application"
-            web_results["create"] = json.loads(run([
-                str(prefix / "bin/vellum"), "create", "Sterile Web App",
-                "--directory", str(web_project), "--no-verify", "--json",
-            ], cwd=root, env=no_external_node).stdout)
+            web_project = project
             for name, arguments in {
                 "build": ["build", "--target", "web"],
                 "test": ["test", "--target", "web", "--scenario", "smoke"],
@@ -291,8 +344,8 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
             if any(not value.get("ok") for value in web_results.values()):
                 raise ValidationError("installed web CLI journey did not complete")
             archives = [
-                web_project / "dist-a/sterile-web-app-web.tar.gz",
-                web_project / "dist-b/sterile-web-app-web.tar.gz",
+                web_project / "dist-a/sterile-artifact-app-web.tar.gz",
+                web_project / "dist-b/sterile-artifact-app-web.tar.gz",
             ]
             web_reproducible = (
                 all(path.is_file() for path in archives) and
@@ -307,7 +360,16 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
             ], cwd=web_project, env=no_external_node).stdout)
             node_check = next(item for item in web_doctor["data"]["checks"] if item["name"] == "node")
             web_node_self_contained = "SDK-local" in node_check["detail"]
-            if not web_reproducible or not web_runtime_exact or not web_node_self_contained:
+            web_bundle = web_project / ".vellum/build/web/app.js"
+            web_same_source_imported_behavior = (
+                web_bundle.is_file()
+                and "main/create-button-v2" in web_bundle.read_text(encoding="utf-8")
+                and "boards.create" in web_bundle.read_text(encoding="utf-8")
+            )
+            if (
+                not web_reproducible or not web_runtime_exact
+                or not web_node_self_contained or not web_same_source_imported_behavior
+            ):
                 raise ValidationError("installed web reproducibility/runtime/Node proof failed")
         if custom_claimed:
             custom_project = root / "custom-component-application"
@@ -429,6 +491,10 @@ vellum_component_entry_v1(void) { return &descriptor; }
         "installed_cli_import": imported.get("status") == "imported",
         "installed_cli_reimport": reimported.get("status") == "reimported",
         "active_reimport_revision": active_revision == "palette-board-b",
+        "authored_behavior_survives_reimport": (
+            len(resolved_bindings) == 1
+            and resolved_bindings[0].get("resolvedNodeId") == "main/create-button-v2"
+        ),
         "installed_cli_pulp_zip_create_from": zip_created.get("status") == "created",
         "installed_pulp_zip_snapshot": zip_snapshot_verified,
         "native_capability_claim_consistent": all(
@@ -449,6 +515,9 @@ vellum_component_entry_v1(void) { return &descriptor; }
         "installed_web_reproducible_package": not web_claimed or web_reproducible,
         "installed_web_exact_wasm": not web_claimed or web_runtime_exact,
         "installed_sdk_local_node": not web_claimed or web_node_self_contained,
+        "installed_web_same_source_imported_behavior": (
+            not web_claimed or web_same_source_imported_behavior
+        ),
         "installed_custom_cpp_component": not custom_claimed or custom_component_produced,
     }
     if not all(checks.values()):

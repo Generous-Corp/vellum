@@ -1,6 +1,6 @@
 import { HomeScreen } from "../ui/generated/Home.generated";
 import { Design, useState } from "@vellum/ui";
-import { importedDesign } from "@vellum/imported";
+import { importedBindings, importedDesign } from "@vellum/imported";
 
 export function App() {
   const [count, setCount] = useState(0);
@@ -8,7 +8,8 @@ export function App() {
     return (
       <Design
         document={importedDesign}
-        actions={{ "main/create-button-v1": () => setCount((value) => value + 1) }}
+        bindings={importedBindings}
+        actions={{}}
       />
     );
   }

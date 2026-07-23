@@ -1,4 +1,5 @@
 declare module "@vellum/imported" {
-  import type { DesignDocument } from "@vellum/ui";
+  import type { DesignBindingsDocument, DesignDocument } from "@vellum/ui";
+  export const importedBindings: DesignBindingsDocument | null;
   export const importedDesign: DesignDocument | null;
 }

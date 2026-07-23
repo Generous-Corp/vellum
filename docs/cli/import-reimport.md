@@ -105,6 +105,25 @@ the candidate DesignIR plus a conflict report for review. Fix the overlay and
 rerun the same command. A source snapshot revision can never be replaced with
 different bytes.
 
+The TSX application imports both `importedDesign` and `importedBindings` from
+the build-provided `@vellum/imported` module. `Design` connects each generated
+binding receipt's action name to a developer-owned function:
+
+```tsx
+<Design
+  document={importedDesign}
+  bindings={importedBindings}
+  actions={{ "boards.create": () => createBoard() }}
+/>
+```
+
+Application code never needs to adopt a replacement provider ID. When a
+reviewed alias changes `main/create-button-v1` to
+`main/create-button-v2`, reimport updates the generated receipt and leaves the
+action name and TSX byte-identical. Missing actions, unsupported events, and
+resolved identities absent from the imported design fail the build/runtime
+render rather than silently dropping behavior.
+
 `cli/tests/test_import_backend.py` executes this public command sequence,
 checks deterministic output in different filesystem locations, proves authored
 files remain byte-identical, verifies raw Pulp asset hashes (including the

@@ -201,7 +201,74 @@ function designStyle(document, node, root) {
     return style;
 }
 
-function designElement(document, node, actions, root = false) {
+const DESIGN_EVENT_PROPERTIES = Object.freeze({
+    press: 'onPress',
+    change: 'onChange',
+    submit: 'onSubmit',
+    keyDown: 'onKeyDown',
+});
+
+function resolvedDesignActions(document, bindings, actions) {
+    if (bindings === null || bindings === undefined) return new Map();
+    if (typeof bindings !== 'object' || Array.isArray(bindings) ||
+        !Array.isArray(bindings.bindings)) {
+        throw new TypeError('Design bindings require a generated binding document');
+    }
+    if (bindings.schema !== 'vellum.generated-bindings.v1') {
+        throw new Error(`unsupported Design binding schema: ${String(bindings.schema)}`);
+    }
+    const sourceKey = document.source?.key ?? document.source?.namespace;
+    if (typeof sourceKey !== 'string' || sourceKey.length === 0 ||
+        bindings.sourceKey !== sourceKey) {
+        throw new Error('Design binding source does not match imported design');
+    }
+    if (typeof document.source?.revision !== 'string' ||
+        document.source.revision.length === 0 ||
+        bindings.revision !== document.source.revision) {
+        throw new Error('Design binding revision does not match imported design');
+    }
+    const resolved = new Map();
+    for (const [index, binding] of bindings.bindings.entries()) {
+        if (!binding || typeof binding !== 'object' || Array.isArray(binding) ||
+            typeof binding.resolvedNodeId !== 'string' ||
+            binding.resolvedNodeId.length === 0 ||
+            typeof binding.action !== 'string' || binding.action.length === 0 ||
+            typeof binding.event !== 'string') {
+            throw new TypeError(`Design binding ${index} is invalid`);
+        }
+        const property = DESIGN_EVENT_PROPERTIES[binding.event];
+        if (!property) {
+            throw new Error(
+                `Design binding ${index} uses unsupported event '${binding.event}'`,
+            );
+        }
+        if (!Object.hasOwn(actions, binding.action)) {
+            throw new Error(
+                `Design binding '${binding.action}' has no developer-owned action`,
+            );
+        }
+        const handler = actions[binding.action];
+        if (typeof handler !== 'function' &&
+            !(typeof handler === 'string' && handler.length > 0)) {
+            throw new TypeError(
+                `Design action '${binding.action}' must be a function or action name`,
+            );
+        }
+        const byEvent = resolved.get(binding.resolvedNodeId) ?? new Map();
+        if (byEvent.has(property)) {
+            throw new Error(
+                `duplicate Design binding for ${binding.resolvedNodeId}.${binding.event}`,
+            );
+        }
+        byEvent.set(property, handler);
+        resolved.set(binding.resolvedNodeId, byEvent);
+    }
+    return resolved;
+}
+
+function designElement(
+    document, node, actions, bindings, visitedBindings, legacyActions, root = false,
+) {
     if (!node || typeof node !== 'object' || typeof node.id !== 'string' ||
         !Array.isArray(node.children)) {
         throw new TypeError('Design requires normalized DesignIR nodes');
@@ -214,19 +281,45 @@ function designElement(document, node, actions, root = false) {
         style: designStyle(document, node, root),
         children: node.kind === 'text' || node.kind === 'button'
             ? node.text ?? node.name ?? ''
-            : node.children.map((child) => designElement(document, child, actions)),
+            : node.children.map((child) =>
+                designElement(
+                    document, child, actions, bindings, visitedBindings, legacyActions,
+                )),
     };
-    const action = actions?.[node.id];
-    if (action !== undefined) properties.onPress = action;
+    if (legacyActions) {
+        const action = actions?.[node.id];
+        if (action !== undefined) properties.onPress = action;
+    }
+    const generated = bindings.get(node.id);
+    if (generated !== undefined) {
+        visitedBindings.add(node.id);
+        for (const [property, handler] of generated) {
+            if (properties[property] !== undefined) {
+                throw new Error(`Design action conflicts with generated binding for ${node.id}`);
+            }
+            properties[property] = handler;
+        }
+    }
     return jsx(type, properties);
 }
 
-export function Design({ document, actions = {} }) {
+export function Design({ document, actions = {}, bindings = null }) {
     if (!document || typeof document !== 'object' || !document.root ||
         typeof actions !== 'object' || actions === null || Array.isArray(actions)) {
         throw new TypeError('Design requires a normalized document and an action map');
     }
-    return designElement(document, document.root, actions, true);
+    const resolvedBindings = resolvedDesignActions(document, bindings, actions);
+    const visitedBindings = new Set();
+    const result = designElement(
+        document, document.root, actions, resolvedBindings, visitedBindings,
+        bindings === null || bindings === undefined, true,
+    );
+    for (const nodeId of resolvedBindings.keys()) {
+        if (!visitedBindings.has(nodeId)) {
+            throw new Error(`Design binding target is missing from imported design: ${nodeId}`);
+        }
+    }
+    return result;
 }
 
 function activeHook(kind) {
