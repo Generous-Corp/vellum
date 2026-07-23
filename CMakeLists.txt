@@ -134,6 +134,10 @@ if(VELLUM_BUILD_TESTS)
         COMMAND "${Python3_EXECUTABLE}"
             -m unittest cli.tests.test_sdk_artifact
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.authoring-phase3-contracts
+        COMMAND "${Python3_EXECUTABLE}"
+            authoring/tests/test_phase3_contracts.py
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME vellum.provenance-unit
         COMMAND "${Python3_EXECUTABLE}"
             tools/provenance/test_verify_extraction.py

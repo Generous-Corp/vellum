@@ -1,0 +1,36 @@
+{
+  "schema": "vellum.authoring-phase3-gate.v1",
+  "purpose": "Declare the unchanged dual-runtime Phase 3 acceptance fixture without claiming unsupported runtime behavior.",
+  "contractOnly": true,
+  "application": {
+    "entry": "src/App.tsx",
+    "sourceSha256": "70793547f40461da6bc0806391f4446c95f6def6cddf735caffda5168b6cdefa",
+    "mustRemainByteIdenticalAcrossRuntimes": true,
+    "runtimes": [
+      "native",
+      "browser"
+    ],
+    "scenario": "scenarios/phase3.json"
+  },
+  "gate": {
+    "status": "pending",
+    "mayBePromotedWhen": "Every requirement is supported and the unchanged entry and scenario pass from installed artifacts on both runtimes."
+  },
+  "requirements": [
+    { "id": "imported-design-button", "status": "pending", "contractEvidence": "src/imported-design.json" },
+    { "id": "editable-text-selection", "status": "pending", "contractEvidence": "src/App.tsx" },
+    { "id": "list-and-scroll", "status": "pending", "contractEvidence": "src/App.tsx" },
+    { "id": "state-update", "status": "pending", "contractEvidence": "src/App.tsx" },
+    { "id": "timer-and-promise", "status": "pending", "contractEvidence": "src/App.tsx" },
+    { "id": "source-mapped-error", "status": "pending", "contractEvidence": "golden/host-diagnostic.json" },
+    { "id": "keyboard-pointer-touch", "status": "pending", "contractEvidence": "scenarios/phase3.json" },
+    { "id": "ime-composition", "status": "pending", "contractEvidence": "golden/composition-event.json" },
+    { "id": "accessibility-sync", "status": "pending", "contractEvidence": "scenarios/phase3.json" },
+    { "id": "pure-esm-transitive-dependency", "status": "pending", "contractEvidence": "vendor/pure-esm-root/package.json" },
+    { "id": "capability-checked-commands", "status": "pending", "contractEvidence": "src/App.tsx" },
+    { "id": "capability-checked-files", "status": "pending", "contractEvidence": "golden/service-denied.json" },
+    { "id": "capability-checked-clipboard", "status": "pending", "contractEvidence": "src/App.tsx" },
+    { "id": "capability-checked-urls", "status": "pending", "contractEvidence": "src/App.tsx" },
+    { "id": "hot-reload-state-continuity", "status": "pending", "contractEvidence": "src/App.tsx" }
+  ]
+}

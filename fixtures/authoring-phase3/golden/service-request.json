@@ -1,0 +1,10 @@
+{
+  "protocol": "vellum.services.v1",
+  "kind": "request",
+  "id": "request-open-1",
+  "service": "files",
+  "operation": "openText",
+  "arguments": {
+    "multiple": false
+  }
+}

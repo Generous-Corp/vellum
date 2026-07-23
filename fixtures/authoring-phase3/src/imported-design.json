@@ -1,0 +1,29 @@
+{
+  "source": {
+    "key": "phase3-fixture",
+    "namespace": "phase3",
+    "revision": "1"
+  },
+  "root": {
+    "id": "phase3/imported-root",
+    "kind": "view",
+    "name": "Imported dashboard frame",
+    "properties": {},
+    "children": [
+      {
+        "id": "phase3/imported-add",
+        "kind": "button",
+        "name": "Imported add item button",
+        "text": "Add item",
+        "properties": {},
+        "children": []
+      }
+    ]
+  },
+  "tokens": {
+    "phase3.color.accent": {
+      "$type": "color",
+      "$value": "#6657e8"
+    }
+  }
+}

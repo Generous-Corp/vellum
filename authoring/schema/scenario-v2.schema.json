@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vellum.dev/schema/scenario-v2.schema.json",
+  "title": "Vellum authoring scenario v2",
+  "type": "object",
+  "required": ["schema", "name", "steps"],
+  "properties": {
+    "schema": { "const": "vellum.scenario.v2" },
+    "name": { "type": "string", "minLength": 1 },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/step" }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "step": {
+      "type": "object",
+      "required": ["action"],
+      "properties": {
+        "action": {
+          "enum": [
+            "wait-for-idle",
+            "press",
+            "pointer",
+            "touch",
+            "focus",
+            "input",
+            "key",
+            "compose",
+            "command",
+            "service-result",
+            "assert-text",
+            "assert-state",
+            "assert-accessibility",
+            "capture",
+            "throw"
+          ]
+        },
+        "target": { "type": "string" },
+        "value": {},
+        "event": { "$ref": "events-v2.schema.json" },
+        "service": { "$ref": "services-v1.schema.json" },
+        "expect": {}
+      },
+      "additionalProperties": false
+    }
+  }
+}

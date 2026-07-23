@@ -1,0 +1,8 @@
+{
+  "protocol": "vellum.authoring-host.v2",
+  "kind": "ready",
+  "runtime": "native",
+  "supportedFeatures": [
+    "render"
+  ]
+}

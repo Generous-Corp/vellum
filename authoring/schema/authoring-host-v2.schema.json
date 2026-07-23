@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vellum.dev/schema/authoring-host-v2.schema.json",
+  "title": "Vellum authoring host protocol v2",
+  "oneOf": [
+    { "$ref": "#/$defs/ready" },
+    { "$ref": "#/$defs/invalidate" },
+    { "$ref": "#/$defs/renderResult" },
+    { "$ref": "#/$defs/diagnostic" }
+  ],
+  "$defs": {
+    "base": {
+      "type": "object",
+      "required": ["protocol", "kind"],
+      "properties": {
+        "protocol": { "const": "vellum.authoring-host.v2" },
+        "kind": { "type": "string" }
+      }
+    },
+    "ready": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object",
+          "required": ["kind", "runtime", "supportedFeatures"],
+          "properties": {
+            "protocol": { "const": "vellum.authoring-host.v2" },
+            "kind": { "const": "ready" },
+            "runtime": { "enum": ["native", "browser"] },
+            "supportedFeatures": {
+              "type": "array",
+              "items": { "type": "string" },
+              "uniqueItems": true
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "invalidate": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object",
+          "required": ["kind", "revision", "reason"],
+          "properties": {
+            "protocol": { "const": "vellum.authoring-host.v2" },
+            "kind": { "const": "invalidate" },
+            "revision": { "type": "integer", "minimum": 1 },
+            "reason": {
+              "enum": ["state", "timer", "promise", "service", "reload"]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "renderResult": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object",
+          "required": ["kind", "revision", "tree"],
+          "properties": {
+            "protocol": { "const": "vellum.authoring-host.v2" },
+            "kind": { "const": "render-result" },
+            "revision": { "type": "integer", "minimum": 0 },
+            "tree": { "type": "object" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "diagnostic": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object",
+          "required": ["kind", "severity", "code", "message"],
+          "properties": {
+            "protocol": { "const": "vellum.authoring-host.v2" },
+            "kind": { "const": "diagnostic" },
+            "severity": { "enum": ["error", "warning", "info"] },
+            "code": { "type": "string", "pattern": "^VELLUM_[A-Z0-9_]+$" },
+            "message": { "type": "string", "minLength": 1 },
+            "source": { "$ref": "#/$defs/source" },
+            "stack": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/source" }
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "source": {
+      "type": "object",
+      "required": ["file", "line", "column"],
+      "properties": {
+        "file": { "type": "string", "pattern": "^vellum://app/" },
+        "line": { "type": "integer", "minimum": 1 },
+        "column": { "type": "integer", "minimum": 1 },
+        "function": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

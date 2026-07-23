@@ -1,0 +1,14 @@
+{
+  "protocol": "vellum.events.v2",
+  "sequence": 6,
+  "target": "title-input",
+  "type": "compositionEnd",
+  "payload": {
+    "text": "日本語",
+    "value": "GPU Notes日本語",
+    "selection": {
+      "start": 11,
+      "end": 11
+    }
+  }
+}
