@@ -28,6 +28,13 @@ SUPPORT_FILES = (
     "fixtures/design-ir/revision-a.source.json",
     "fixtures/design-ir/revision-b.source.json",
     "fixtures/design-ir/pulp-emitter-generic.pulp.zip",
+    "fixtures/authoring-phase3/scenarios/phase3.json",
+    "fixtures/authoring-phase3/src/App.tsx",
+    "fixtures/authoring-phase3/src/imported-design.json",
+    "fixtures/authoring-phase3/vendor/pure-esm-leaf/index.js",
+    "fixtures/authoring-phase3/vendor/pure-esm-leaf/package.json",
+    "fixtures/authoring-phase3/vendor/pure-esm-root/index.js",
+    "fixtures/authoring-phase3/vendor/pure-esm-root/package.json",
 )
 
 

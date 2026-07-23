@@ -40,6 +40,11 @@ class SterileAcceptanceBundleTest(unittest.TestCase):
             self.assertIn(
                 "vellum-sterile-acceptance/validate_installed_sdk.py", names
             )
+            self.assertIn(
+                "vellum-sterile-acceptance/sterile-support/"
+                "fixtures/authoring-phase3/scenarios/phase3.json",
+                names,
+            )
             self.assertNotIn(
                 "vellum-sterile-acceptance/scripts/build_sdk_artifact.py", names
             )

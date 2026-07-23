@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -97,6 +98,109 @@ def run(arguments: list[str], *, cwd: Path | None = None,
             f"{completed.stdout}{completed.stderr}"
         )
     return completed
+
+
+def validate_installed_phase3(prefix: Path, root: Path,
+                              env: dict[str, str]) -> bool:
+    """Run the unchanged scenario using only installed SDK/runtime bytes."""
+    fixture = root / "phase3-installed"
+    shutil.copytree(
+        SUPPORT_ROOT / "fixtures/authoring-phase3",
+        fixture,
+    )
+    modules = fixture / "node_modules/@vellum"
+    modules.mkdir(parents=True)
+    for name in ("pure-esm-root", "pure-esm-leaf"):
+        shutil.copytree(
+            fixture / f"vendor/{name}",
+            modules / f"fixture-{name}",
+        )
+
+    library = prefix / "lib/vellum"
+    node = library / "node/bin/node"
+    build_script = library / "ui/scripts/build-project.mjs"
+    bundle = fixture / "build/app.js"
+    run(
+        [str(node), str(build_script), str(fixture / "src/App.tsx"), str(bundle)],
+        cwd=fixture,
+        env={
+            **env,
+            "VELLUM_BUILD_FORMAT": "iife",
+            "VELLUM_PROJECT_ROOT": str(fixture),
+        },
+    )
+
+    backend_path = library / "vellum_native_backend.py"
+    sys.path.insert(0, str(library))
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "vellum_installed_native_backend", backend_path
+        )
+        if spec is None or spec.loader is None:
+            raise ValidationError("cannot load installed native scenario adapter")
+        backend = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(backend)
+        capabilities = {
+            "commands": "v1",
+            "files": "denied",
+            "clipboard": "text-v1",
+            "open_url": "external-v1",
+            "network": False,
+            "persistence": "state-v1",
+        }
+        arguments, scenario_name = backend.scenario_arguments(
+            {"root": fixture, "capabilities": capabilities},
+            "scenarios/phase3.json",
+        )
+    finally:
+        sys.path.remove(str(library))
+
+    if scenario_name != "unchanged authoring fixture on native and browser":
+        raise ValidationError("installed Phase 3 scenario identity drifted")
+    host = library / "sdk/bin/vellum-app-host"
+    completed = run(
+        [str(host), "--bundle", str(bundle), "--self-test", *arguments],
+        cwd=fixture,
+        env=env,
+    )
+    if (
+        "renderer=Skia Graphite backend=Metal fallback=false"
+        not in completed.stdout
+        or "text_inputs=1" not in completed.stdout
+    ):
+        raise ValidationError(
+            "installed Phase 3 scenario did not use the native GPU/text host"
+        )
+
+    capability_json = json.dumps(
+        capabilities, sort_keys=True, separators=(",", ":")
+    )
+    for label, negative in {
+        "unknown-command": ["--command", "missing.command"],
+        "wrong-text": ["--assert-text", "item-list", "not present"],
+        "unchanged-touch": [
+            "--touch", "open", '{"pointerType":"touch"}',
+        ],
+        "wrong-throw": [
+            "--expected-throw", "mapped-error", "vellum://wrong.tsx",
+        ],
+    }.items():
+        rejected = subprocess.run(
+            [
+                str(host), "--bundle", str(bundle), "--self-test",
+                "--service-capabilities", capability_json, *negative,
+            ],
+            cwd=fixture,
+            text=True,
+            capture_output=True,
+            check=False,
+            env=env,
+        )
+        if rejected.returncode == 0:
+            raise ValidationError(
+                f"installed Phase 3 negative control passed: {label}"
+            )
+    return True
 
 
 def validate(
@@ -228,6 +332,10 @@ def validate(
             raise ValidationError("GPU artifact is missing its installed GPU/authoring/UI payload")
         if native_claimed and not native_present:
             raise ValidationError("native command claims have no installed native backend")
+        installed_phase3_scenario = (
+            validate_installed_phase3(prefix, root, journey_env)
+            if native_claimed else True
+        )
         web_claimed = all(
             verification["claims"]["targets"]["web"]["commands"][command]
             for command in ("build", "run", "test", "package")
@@ -585,6 +693,7 @@ def validate(
         "installed_native_build": not native_enabled or native_results["build"]["status"] == "built",
         "installed_native_finite_run": not native_enabled or native_results["run"]["status"] == "self_test_passed",
         "installed_native_scenario": not native_enabled or native_results["test"]["status"] == "tests_passed",
+        "installed_phase3_unchanged_scenario": installed_phase3_scenario,
         "installed_imported_design_bundle": not native_enabled or imported_bundle_contains_design,
         "installed_native_capture": not native_enabled or native_capture_produced,
         "installed_native_montage": not native_enabled or native_montage_produced,
