@@ -13,6 +13,7 @@ import struct
 import sys
 import tarfile
 import tempfile
+from types import SimpleNamespace
 import unittest
 
 
@@ -26,6 +27,51 @@ CONSUMER = REPO / "apps/minimal-scene"
 
 @unittest.skipUnless(shutil.which("cmake") and (shutil.which("shasum") or shutil.which("sha256sum")), "CMake/checksum tools unavailable")
 class SdkArtifactTests(unittest.TestCase):
+    def test_installed_browser_scenario_resolves_payload_from_prefix(self) -> None:
+        module = runpy.run_path(str(VALIDATOR))
+        validate_browser = module["validate_installed_phase3_browser"]
+        validation_error = module["ValidationError"]
+        calls: list[tuple[list[str], Path | None]] = []
+
+        def fake_run(arguments: list[str], *, cwd: Path | None = None,
+                     env: dict[str, str] | None = None) -> SimpleNamespace:
+            calls.append((arguments, cwd))
+            return SimpleNamespace(
+                stdout=(
+                    '{"changed":true,"target":"mapped-error"}\n'
+                    '{"target":"title-input"}\n'
+                )
+            )
+
+        original_run = validate_browser.__globals__["run"]
+        validate_browser.__globals__["run"] = fake_run
+        try:
+            prefix = Path("/installed/vellum")
+            root = Path("/sterile/work")
+            self.assertTrue(validate_browser(prefix, root, {"PATH": "/usr/bin"}))
+            arguments, cwd = calls.pop()
+            self.assertEqual(cwd, root)
+            self.assertIn(
+                "/installed/vellum/lib/vellum/web",
+                arguments,
+            )
+            self.assertIn(
+                "/installed/vellum/lib/vellum/node/bin/node",
+                arguments,
+            )
+            self.assertIn(
+                "/installed/vellum/lib/vellum/ui/scripts/build-project.mjs",
+                arguments,
+            )
+
+            validate_browser.__globals__["run"] = lambda *args, **kwargs: SimpleNamespace(
+                stdout='{"changed":true,"target":"title-input"}\n'
+            )
+            with self.assertRaisesRegex(validation_error, "evidence is incomplete"):
+                validate_browser(prefix, root, {"PATH": "/usr/bin"})
+        finally:
+            validate_browser.__globals__["run"] = original_run
+
     def test_artifact_builder_rejects_cli_release_identity_drift(self) -> None:
         module = runpy.run_path(str(BUILDER))
         verify_cli_identity = module["verify_cli_identity"]

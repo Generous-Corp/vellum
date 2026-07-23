@@ -203,6 +203,31 @@ def validate_installed_phase3(prefix: Path, root: Path,
     return True
 
 
+def validate_installed_phase3_browser(prefix: Path, root: Path,
+                                      env: dict[str, str]) -> bool:
+    """Run the exact browser scenario using only installed SDK/runtime bytes."""
+    library = prefix / "lib/vellum"
+    phase3_browser = run([
+        sys.executable,
+        str(SUPPORT_ROOT / "web/tests/run_text_semantics_browser.py"),
+        "--core-root", str(library / "web"),
+        "--source-root", str(SUPPORT_ROOT),
+        "--fixture", "phase3",
+        "--node", str(library / "node/bin/node"),
+        "--build-script", str(library / "ui/scripts/build-project.mjs"),
+    ], cwd=root, env=env)
+    complete = (
+        '"changed":true' in phase3_browser.stdout
+        and '"target":"mapped-error"' in phase3_browser.stdout
+        and '"target":"title-input"' in phase3_browser.stdout
+    )
+    if not complete:
+        raise ValidationError(
+            "installed exact Phase 3 browser scenario evidence is incomplete"
+        )
+    return True
+
+
 def validate(
     archive: Path,
     checksums: Path,
@@ -354,28 +379,9 @@ def validate(
             raise ValidationError("web command claims have no complete installed runtime/backend")
         installed_phase3_browser_scenario = True
         if web_claimed:
-            phase3_browser = run([
-                sys.executable,
-                str(
-                    SUPPORT_ROOT
-                    / "web/tests/run_text_semantics_browser.py"
-                ),
-                "--core-root", str(library / "web"),
-                "--source-root", str(SUPPORT_ROOT),
-                "--fixture", "phase3",
-                "--node", str(library / "node/bin/node"),
-                "--build-script",
-                str(library / "ui/scripts/build-project.mjs"),
-            ], cwd=root, env=journey_env)
-            installed_phase3_browser_scenario = (
-                '"changed":true' in phase3_browser.stdout
-                and '"target":"mapped-error"' in phase3_browser.stdout
-                and '"target":"title-input"' in phase3_browser.stdout
+            installed_phase3_browser_scenario = validate_installed_phase3_browser(
+                prefix, root, journey_env
             )
-            if not installed_phase3_browser_scenario:
-                raise ValidationError(
-                    "installed exact Phase 3 browser scenario evidence is incomplete"
-                )
         custom_claimed = verification["claims"].get("custom_components") is True
         if custom_claimed and not component_abi_present:
             raise ValidationError("custom component claim has no installed ABI target/header")
