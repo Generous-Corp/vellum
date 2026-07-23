@@ -166,6 +166,16 @@ observatory:
 
 
 class ObservatoryTests(unittest.TestCase):
+    def test_ci_verifies_pull_request_head_not_synthetic_merge(self) -> None:
+        workflow = (
+            observatory.ROOT / ".github/workflows/provenance.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "VELLUM_TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}",
+            workflow,
+        )
+        self.assertIn('--vellum-target "$VELLUM_TARGET_SHA"', workflow)
+
     def test_vellum_evidence_only_tail_is_accepted(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             repo = Path(temporary) / "vellum"
