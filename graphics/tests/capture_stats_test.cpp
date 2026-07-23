@@ -26,6 +26,34 @@ int main() {
         return 1;
     }
 
+    constexpr std::uint32_t sparse_width = 640;
+    constexpr std::uint32_t sparse_height = 400;
+    std::vector<std::uint8_t> sparse(
+        sparse_width * sparse_height * 4U, 255U);
+    for (std::size_t pixel = 0; pixel < sparse_width * sparse_height; ++pixel) {
+        const auto offset = pixel * 4U;
+        sparse[offset] = 15U;
+        sparse[offset + 1U] = 23U;
+        sparse[offset + 2U] = 42U;
+    }
+    for (std::size_t pixel = 0; pixel < 1280U; ++pixel) {
+        const auto offset = pixel * 4U;
+        sparse[offset] = static_cast<std::uint8_t>(
+            40U + 20U * (pixel % 5U));
+    }
+    if (!passes_content_floor(
+            analyze_capture_rgba(sparse, sparse_width, sparse_height))) {
+        return 1;
+    }
+    for (std::size_t pixel = 256U; pixel < 1280U; ++pixel) {
+        const auto offset = pixel * 4U;
+        sparse[offset] = 15U;
+    }
+    if (passes_content_floor(
+            analyze_capture_rgba(sparse, sparse_width, sparse_height))) {
+        return 1;
+    }
+
     std::vector<std::uint8_t> content(width * height * 4U, 255U);
     for (std::uint32_t y = 0; y < height; ++y) {
         for (std::uint32_t x = 0; x < width; ++x) {

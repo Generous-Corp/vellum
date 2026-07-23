@@ -274,7 +274,7 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
             "--directory", str(zip_project),
             "--from", "figma",
             str(REPO / "fixtures/design-ir/pulp-emitter-generic.pulp.zip"),
-            "--no-verify", "--json",
+            "--json",
         ], cwd=root, env=journey_env).stdout)
         zip_lock = json.loads(
             (zip_project / "design/import.lock.json").read_text(encoding="utf-8")

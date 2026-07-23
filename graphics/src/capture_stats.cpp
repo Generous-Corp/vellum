@@ -56,12 +56,14 @@ bool passes_content_floor(const CaptureStats& stats) noexcept {
     }
     const auto opaque_ratio =
         static_cast<double>(stats.opaque_pixels) / static_cast<double>(stats.pixel_count);
-    const auto content_ratio =
-        static_cast<double>(stats.non_background_pixels) /
-        static_cast<double>(stats.pixel_count);
-    return stats.unique_colors >= 8 &&
-           stats.luminance_standard_deviation >= 4.0 &&
-           opaque_ratio >= 0.90 && content_ratio >= 0.05;
+    const auto minimum_content = std::max<std::size_t>(
+        256U,
+        static_cast<std::size_t>(
+            std::ceil(static_cast<double>(stats.pixel_count) * 0.005)));
+    return stats.unique_colors >= 4 &&
+           stats.luminance_standard_deviation >= 0.05 &&
+           opaque_ratio >= 0.90 &&
+           stats.non_background_pixels >= minimum_content;
 }
 
 }  // namespace vellum::graphics
