@@ -1,0 +1,32 @@
+schema_version: 1
+default_channel: supported
+sources:
+  design-ir:
+    channel: supported
+    accepted_artifact: canonical Vellum DesignIR v1 JSON
+    provider_access: none
+    reimport: supported
+  figma:
+    channel: supported
+    accepted_artifact: credential-free Vellum Figma adapter source JSON
+    provider_access: none
+    reimport: supported
+    limitations:
+      - does not accept arbitrary .fig files
+      - does not call the Figma REST API
+      - unsupported properties remain explicit diagnostics
+  figma-rest:
+    channel: unavailable
+  figma-file:
+    channel: unavailable
+  claude-design:
+    channel: unavailable
+  react-project:
+    channel: unavailable
+  html:
+    channel: unavailable
+invariants:
+  - the normal CLI accepts only sources in the supported channel
+  - experimental routes require an explicit experimental flag
+  - unavailable routes are never advertised as working quick starts
+  - every accepted source is normalized into versioned inspectable DesignIR

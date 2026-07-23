@@ -1,5 +1,9 @@
 # Vellum
 
+> **Status: private, experimental, 0.x.** APIs, schemas, CLI names, and the
+> working name may change without notice. Exact-pin SDK compatibility only.
+> Not accepting external users.
+
 Vellum is an experimental, audio-free application framework extracted to test
 one product question: can a developer import a design, add TypeScript or
 JavaScript behavior, and ship a GPU-rendered application without Chromium or an

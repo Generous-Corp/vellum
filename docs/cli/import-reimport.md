@@ -11,7 +11,10 @@ contracts:
 The friendly `--source-type figma` name currently means a checked-in,
 credential-free Figma adapter source model. It does not yet decode an arbitrary
 `.fig`, REST response, or Pulp archive. That source decoder remains a separate
-milestone.
+milestone. The machine-readable route contract is
+[`product/source-support.yaml`](../../product/source-support.yaml); unavailable
+Claude Design, React-project, HTML, REST, and `.fig` routes are not silently
+accepted by the normal CLI.
 
 From an installed local-development CLI:
 
