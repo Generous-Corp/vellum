@@ -59,12 +59,13 @@ silently discard unsupported properties.
 
 For editable native UI, use controlled `TextInput` v1 from `@vellum/ui` with a
 stable ID, string `value`, and `onChange`. Scenarios may use bounded `input` and
-named `key` actions; they are retained-tree actions, not DOM or arbitrary
+named `key` actions; the v2 scenario contract additionally covers focus,
+selection, IME composition, and accessibility label/value/state assertions.
+These are retained-tree actions and semantic adapters, not DOM or arbitrary
 keyboard automation. To persist the versioned whole-app snapshot on macOS,
 explicitly set `persistence = "state-v1"` in `[capabilities]` and keep
-`createApp({id,stateVersion,...})` stable. Do not claim IME, selection/caret,
-clipboard editing, migration, database, sync, accessibility text, or mobile
-support from this lane.
+`createApp({id,stateVersion,...})` stable. Do not claim clipboard editing,
+migration, database, sync, or mobile support from this lane.
 
 ## Ownership and maintenance
 
