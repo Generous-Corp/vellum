@@ -3,6 +3,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { build } from 'esbuild';
+import { checkPortability } from './check-portability.mjs';
 
 if (process.argv.length < 4 || process.argv.length > 5) {
     process.stderr.write('usage: build-project.mjs ENTRY OUTPUT [MATERIALIZED_DESIGN_IR]\n');
@@ -12,6 +13,16 @@ if (process.argv.length < 4 || process.argv.length > 5) {
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const entry = resolve(process.argv[2]);
 const output = resolve(process.argv[3]);
+const format = process.env.VELLUM_BUILD_FORMAT ?? 'iife';
+if (!['iife', 'esm'].includes(format)) {
+    throw new Error('VELLUM_BUILD_FORMAT must be iife or esm');
+}
+const portabilityTarget = format === 'esm' ? 'web' : 'native';
+const portability = await checkPortability(entry, { target: portabilityTarget });
+if (portability.status !== 'passed') {
+    process.stderr.write(`${JSON.stringify(portability)}\n`);
+    process.exit(1);
+}
 let importedDesign = null;
 let importedBindings = null;
 if (process.argv[4]) {
@@ -32,7 +43,7 @@ await build({
     entryPoints: [entry],
     outfile: output,
     bundle: true,
-    format: 'iife',
+    format,
     platform: 'neutral',
     target: ['safari15'],
     jsx: 'automatic',

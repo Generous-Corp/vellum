@@ -93,6 +93,15 @@ Components normally derive identity from their name and implementation; set a
 unique static `vellumId` when state must survive an intentional implementation
 replacement or reimport.
 
+## Portable application builds
+
+`scripts/build-project.mjs` runs the transitive module graph through
+`scripts/check-portability.mjs` before bundling. Failures emit one
+`vellum.portability-diagnostics.v1` JSON object covering Node builtins, DOM
+globals, dynamic code, non-static dynamic imports, undeclared service
+capabilities, platform-only imports, and resolution failures. Native builds
+default to an IIFE; set `VELLUM_BUILD_FORMAT=esm` for the web ESM output.
+
 Native persistence is separately capability-gated in `app.toml` with
 `persistence = "state-v1"` under `[capabilities]`. On macOS this restores the
 whole versioned Vellum snapshot from Application Support before the first
