@@ -204,6 +204,7 @@ copy_payload() {
       printf '%s\n' '#!/bin/sh' 'set -eu'
       # shellcheck disable=SC2016
       printf '%s\n' 'bindir=$(CDPATH="" cd -- "$(dirname -- "$0")" && pwd)'
+      printf '%s\n' 'export PYTHONDONTWRITEBYTECODE=1'
       # shellcheck disable=SC2016
       printf '%s\n' 'exec python3 "$bindir/../vellum_native_backend.py" "$@"'
     } > "$library/bin/vellum-native-backend"
@@ -213,6 +214,7 @@ copy_payload() {
     {
       printf '%s\n' '#!/bin/sh' 'set -eu'
       printf '%s\n' 'bindir=$(CDPATH="" cd -- "$(dirname -- "$0")" && pwd)'
+      printf '%s\n' 'export PYTHONDONTWRITEBYTECODE=1'
       printf '%s\n' 'exec python3 "$bindir/../vellum_web_backend.py" "$@"'
     } > "$library/bin/vellum-web-backend"
     chmod 755 "$library/bin/vellum-web-backend"
@@ -221,6 +223,7 @@ copy_payload() {
     printf '%s\n' '#!/bin/sh' 'set -eu'
     # shellcheck disable=SC2016
     printf '%s\n' 'bindir=$(CDPATH="" cd -- "$(dirname -- "$0")" && pwd)'
+    printf '%s\n' 'export PYTHONDONTWRITEBYTECODE=1'
     # shellcheck disable=SC2016
     printf '%s\n' 'exec python3 "$bindir/../vellum_backend.py" "$@"'
   } > "$library/bin/vellum-backend"
@@ -234,6 +237,7 @@ copy_payload() {
     printf '%s\n' 'prefix=$(CDPATH="" cd -- "$bindir/.." && pwd)'
     # shellcheck disable=SC2016
     printf '%s\n' 'export VELLUM_SDK_ROOT="$prefix/lib/vellum"'
+    printf '%s\n' 'export PYTHONDONTWRITEBYTECODE=1'
     # shellcheck disable=SC2016
     printf '%s\n' 'exec python3 "$VELLUM_SDK_ROOT/vellum_cli.py" "$@"'
   } > "$bindir/vellum"
@@ -297,8 +301,8 @@ if [ -n "$local_root" ]; then
   cat > "$temporary/metadata.json" <<'JSON'
 {
   "schema": "vellum.sdk-artifact.v1",
-  "framework_version": "0.1.4",
-  "cli_version": "0.1.4",
+  "framework_version": "0.1.5",
+  "cli_version": "0.1.5",
   "cli_api": 1,
   "source_commit": null,
   "target": "local-development",
@@ -326,7 +330,7 @@ JSON
   "verified": false,
   "artifact": null,
   "artifact_sha256": null,
-  "framework_version": "0.1.4",
+  "framework_version": "0.1.5",
   "target": "local-development",
   "source_commit": null
 }

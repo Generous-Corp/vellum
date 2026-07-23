@@ -16,10 +16,10 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  VELLUM_RELEASE_VERSION: 0.1.4
-  VELLUM_RELEASE_TAG: v0.1.4
-  VELLUM_RELEASE_ARCHIVE: vellum-sdk-0.1.4-darwin-arm64.tar.gz
-  VELLUM_RELEASE_NAME: Vellum 0.1.4 experimental SDK
+  VELLUM_RELEASE_VERSION: 0.1.5
+  VELLUM_RELEASE_TAG: v0.1.5
+  VELLUM_RELEASE_ARCHIVE: vellum-sdk-0.1.5-darwin-arm64.tar.gz
+  VELLUM_RELEASE_NAME: Vellum 0.1.5 experimental SDK
 
 jobs:
   gpu-macos-arm64:

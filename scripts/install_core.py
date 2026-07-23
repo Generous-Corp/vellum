@@ -1101,6 +1101,7 @@ def sdk_launcher() -> str:
         'bindir=$(CDPATH="" cd -- "$(dirname -- "$0")" && pwd)',
         'sdk_root=$(CDPATH="" cd -- "$bindir/.." && pwd)',
         'export VELLUM_SDK_ROOT="$sdk_root"',
+        "export PYTHONDONTWRITEBYTECODE=1",
         'exec python3 "$sdk_root/vellum_cli.py" "$@"',
         "",
     ])
@@ -1112,6 +1113,7 @@ def backend_launcher(module: str) -> str:
         "set -eu",
         MANAGED_LAUNCHER_MARKER,
         'bindir=$(CDPATH="" cd -- "$(dirname -- "$0")" && pwd)',
+        "export PYTHONDONTWRITEBYTECODE=1",
         f'exec python3 "$bindir/../{module}" "$@"',
         "",
     ])

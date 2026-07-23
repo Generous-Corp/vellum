@@ -56,7 +56,7 @@ Successful create JSON reports both the effective `template` and nullable
 ```json
 {
   "schema": "vellum.cli.result.v1",
-  "cli_version": "0.1.4",
+  "cli_version": "0.1.5",
   "command": "build",
   "ok": false,
   "status": "capability_unavailable",
