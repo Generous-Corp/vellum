@@ -100,14 +100,70 @@
       ],
       "source_commit": "f1c7fdc39dee2f1c492d3bb4f0d03589370a308a",
       "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "schema",
+      "deadline": "2026-07-28T03:47:16Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "pending",
+      "event_id": "vellum-3e116e580568726dbd2d84c17388bcd1dd94431b",
+      "mapped_contracts": [
+        "canvas-kernel",
+        "capture-primitives",
+        "macos-shell",
+        "render-skia-dawn",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "3e116e580568726dbd2d84c17388bcd1dd94431b",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "correctness",
+      "deadline": "2026-07-28T03:47:16Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "pending",
+      "event_id": "vellum-7e54127818cd04c79c717f3865e20f68634195be",
+      "mapped_contracts": [
+        "capture-primitives",
+        "design-schema-compiler"
+      ],
+      "source_commit": "7e54127818cd04c79c717f3865e20f68634195be",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "schema",
+      "deadline": "2026-07-28T03:47:16Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "pending",
+      "event_id": "vellum-8f64fb8eef1f08f82ee1cd692c4e4a565978837c",
+      "mapped_contracts": [
+        "design-schema-compiler",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "8f64fb8eef1f08f82ee1cd692c4e4a565978837c",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "schema",
+      "deadline": "2026-07-28T03:47:16Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "pending",
+      "event_id": "vellum-d779f96ca86d3fadbf0d0d48cd32635c698bf818",
+      "mapped_contracts": [
+        "capture-primitives",
+        "macos-shell",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "d779f96ca86d3fadbf0d0d48cd32635c698bf818",
+      "source_repository": "Generous-Corp/vellum"
     }
   ],
-  "generated_at": "2026-07-23T02:42:26Z",
+  "generated_at": "2026-07-23T03:47:16Z",
   "health": "pass",
-  "maximum_pending_age_days": 0.0,
+  "maximum_pending_age_days": 0.045,
   "observatory_effort_percent": 0.0,
   "overdue": 0,
-  "pending": 7,
+  "pending": 11,
   "release_blockers": [],
   "repeated_generic_fixes": {},
   "schema_version": 2,

@@ -5,9 +5,12 @@ on:
   pull_request:
   push:
     branches: [main]
+    tags: ['v[0-9]*']
 
 permissions:
-  contents: read
+  attestations: write
+  contents: write
+  id-token: write
 
 jobs:
   gpu-macos-arm64:
@@ -55,6 +58,31 @@ jobs:
             -DVELLUM_AUTHORING_TEST_BUNDLE="$RUNNER_TEMP/vellum-ui-native.iife.js" \
             -DVELLUM_SKIA_ARCHIVE="$VELLUM_SKIA_ARCHIVE"
           cmake --build build-gpu --parallel
+
+      - name: Install the pinned Emscripten SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          emsdk="$RUNNER_TEMP/emsdk"
+          git init "$emsdk"
+          git -C "$emsdk" remote add origin https://github.com/emscripten-core/emsdk.git
+          git -C "$emsdk" fetch --depth=1 origin \
+            7f06d88dc04b71a08d0c275df9cb68337e7128fd
+          git -C "$emsdk" checkout --detach FETCH_HEAD
+          "$emsdk/emsdk" install 6.0.2
+          "$emsdk/emsdk" activate 6.0.2
+          printf 'VELLUM_EMSDK=%s\n' "$emsdk" >> "$GITHUB_ENV"
+
+      - name: Build the source-matched browser payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          export EMSDK_QUIET=1
+          source "$VELLUM_EMSDK/emsdk_env.sh"
+          python3 scripts/build_web_payload.py \
+            --source-commit "$GITHUB_SHA" \
+            --output "$RUNNER_TEMP/web-payload" \
+            --json > "$RUNNER_TEMP/web-payload.json"
 
       - name: Verify renderer provenance and byte identity
         run: |
@@ -110,12 +138,14 @@ jobs:
           PY
           python3 scripts/build_sdk_artifact.py \
             --skia-archive "$VELLUM_SKIA_ARCHIVE" \
+            --web-payload "$RUNNER_TEMP/web-payload" \
             --node-binary "$node_binary" \
             --node-license "$node_license" \
             --node-provenance "$RUNNER_TEMP/node-provenance.json" \
             --output-dir "$first" --json > "$RUNNER_TEMP/sdk-first.json"
           python3 scripts/build_sdk_artifact.py \
             --skia-archive "$VELLUM_SKIA_ARCHIVE" \
+            --web-payload "$RUNNER_TEMP/web-payload" \
             --node-binary "$node_binary" \
             --node-license "$node_license" \
             --node-provenance "$RUNNER_TEMP/node-provenance.json" \
@@ -135,6 +165,50 @@ jobs:
             > "$RUNNER_TEMP/sdk-installed-validation.json"
           cp "$first/$archive" "$RUNNER_TEMP/$archive"
           cp "$first/SHA256SUMS" "$RUNNER_TEMP/SHA256SUMS"
+
+      - name: Attest the immutable release inputs
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/attest@36051bcae73b7c2a8a6945a48cbf80953c6baa35
+        with:
+          subject-path: |
+            ${{ runner.temp }}/vellum-sdk-0.1.0-darwin-arm64.tar.gz
+            ${{ runner.temp }}/SHA256SUMS
+
+      - name: Publish the verified private release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          test "$tag" = "v0.1.0"
+          notes="$RUNNER_TEMP/release-notes.md"
+          cat > "$notes" <<'EOF'
+          Private experimental Vellum SDK for the first independent-application validation.
+
+          This release is intentionally limited to the documented macOS native and
+          browser-Wasm proof lanes. It is not a Pulp dependency or a broad platform
+          support claim.
+          EOF
+          gh release create "$tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft \
+            --verify-tag \
+            --title "Vellum 0.1.0 experimental SDK" \
+            --notes-file "$notes"
+          gh release upload "$tag" \
+            "$RUNNER_TEMP/vellum-sdk-0.1.0-darwin-arm64.tar.gz" \
+            "$RUNNER_TEMP/SHA256SUMS" \
+            "$RUNNER_TEMP/sdk-verification.json" \
+            "$RUNNER_TEMP/sdk-installed-validation.json" \
+            "$RUNNER_TEMP/web-payload.json" \
+            --repo "$GITHUB_REPOSITORY"
+          gh release edit "$tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft=false \
+            --latest=false
+          gh release verify "$tag" --repo "$GITHUB_REPOSITORY"
 
       - name: Verify the binary deployment boundary
         shell: bash
@@ -165,5 +239,6 @@ jobs:
             ${{ runner.temp }}/sdk-second.json
             ${{ runner.temp }}/sdk-verification.json
             ${{ runner.temp }}/sdk-installed-validation.json
+            ${{ runner.temp }}/web-payload.json
           if-no-files-found: error
           retention-days: 90

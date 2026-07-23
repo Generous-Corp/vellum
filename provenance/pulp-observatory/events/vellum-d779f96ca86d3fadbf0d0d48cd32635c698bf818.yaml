@@ -1,0 +1,64 @@
+{
+  "class": "schema",
+  "contract_keys": [
+    "capture-primitives",
+    "macos-shell",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.capture-stats",
+    "vellum.gpu-native"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-07-23T03:47:16Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-d779f96ca86d3fadbf0d0d48cd32635c698bf818",
+  "include_dependency_deltas": [
+    "apps/app-host/CMakeLists.txt",
+    "authoring/include/vellum/authoring/js_application.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "capture-primitives",
+    "macos-shell",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "apps/app-host/CMakeLists.txt",
+    "apps/app-host/main.mm",
+    "apps/app-host/test_state_persistence.py",
+    "authoring/include/vellum/authoring/js_application.hpp",
+    "authoring/src/js_application.mm",
+    "authoring/tests/js_application_test.cpp",
+    "cli/vellum_native_backend.py",
+    "packages/vellum-ui/README.md",
+    "packages/vellum-ui/src/index.d.ts",
+    "packages/vellum-ui/src/index.js",
+    "packages/vellum-ui/src/runtime.js",
+    "packages/vellum-ui/test/fixtures/native-app.jsx",
+    "packages/vellum-ui/test/runtime.test.js",
+    "packages/vellum-ui/test/types/application.tsx"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "d95d297fabf662f985d796a06e05e4bccbe322e0",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "de7b7a3c516ab8ee0567386023d4da5d48a56b78",
+    "to_commit": "c2f93864a2b108c06bd39bc0cce06ee81007f7c6"
+  },
+  "schema_api_deltas": [
+    "packages/vellum-ui/src/index.d.ts"
+  ],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "d779f96ca86d3fadbf0d0d48cd32635c698bf818",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}
