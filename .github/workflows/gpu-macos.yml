@@ -314,6 +314,24 @@ jobs:
               "${resumable_asset_args[@]}" \
               --output "$release_json"
           }
+          wait_for_created_release() {
+            local attempt
+            local selection_status
+            for attempt in {1..10}; do
+              if load_release_by_tag; then
+                return 0
+              fi
+              selection_status=$?
+              if [ "$selection_status" -ne 4 ]; then
+                return "$selection_status"
+              fi
+              if [ "$attempt" -lt 10 ]; then
+                sleep 2
+              fi
+            done
+            echo "::error::Created release did not become list-visible within 18 seconds"
+            return 4
+          }
           if load_release_by_tag; then
             release_state="$(
               python3 -c 'import json,sys; print("draft" if json.load(open(sys.argv[1]))["draft"] else "published")' \
@@ -331,7 +349,7 @@ jobs:
               --verify-tag \
               --title "Vellum 0.1.1 experimental SDK" \
               --notes-file "$notes"
-            load_release_by_tag
+            wait_for_created_release
             release_state=draft
           fi
           release_id="$(
