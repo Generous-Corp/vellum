@@ -153,18 +153,26 @@ def validate_js_dependency_lock(root: Path, lock: dict[str, Any]) -> None:
         )
     dependency = "file:.vellum/packages/vellum-ui"
     packages = package_lock.get("packages")
+    dependencies = package.get("dependencies")
+    root_lock = packages.get("") if isinstance(packages, dict) else None
     if (
-        package.get("dependencies") != {"@vellum/ui": dependency}
+        not isinstance(dependencies, dict)
+        or dependencies.get("@vellum/ui") != dependency
+        or any(not isinstance(name, str) or not name or not isinstance(version, str) or not version
+               for name, version in dependencies.items())
         or package_lock.get("lockfileVersion") != 3
         or not isinstance(packages, dict)
-        or packages.get("", {}).get("dependencies") != {"@vellum/ui": dependency}
+        or not isinstance(root_lock, dict)
+        or root_lock.get("name") != package.get("name")
+        or root_lock.get("version") != package.get("version")
+        or root_lock.get("dependencies") != dependencies
         or packages.get(".vellum/packages/vellum-ui", {}).get("version") != pinned["@vellum/ui"]
         or packages.get("node_modules/@vellum/ui") != {
             "resolved": ".vellum/packages/vellum-ui", "link": True,
         }
     ):
         raise CliFailure(
-            "package.json and package-lock.json must retain the exact project-locked @vellum/ui SDK package.",
+            "package.json and package-lock.json must agree and retain the exact project-locked @vellum/ui SDK package.",
             status="invalid_package_lock", exit_code=EXIT_PROJECT,
         )
 

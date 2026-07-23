@@ -227,6 +227,22 @@ class CliTests(unittest.TestCase):
             self.assertEqual(invalid_package_lock.returncode, 3)
             self.assertEqual(json.loads(invalid_package_lock.stdout)["status"], "invalid_package_lock")
 
+            # Application dependencies remain developer-owned. The framework
+            # validates agreement with the npm lock without claiming exclusive
+            # ownership of the dependency graph.
+            package = json.loads((project / "package.json").read_text(encoding="utf-8"))
+            package["dependencies"]["example-app-library"] = "1.2.3"
+            (project / "package.json").write_text(json.dumps(package), encoding="utf-8")
+            package_lock["packages"][".vellum/packages/vellum-ui"]["version"] = "0.1.0-experimental.0"
+            package_lock["packages"][""]["dependencies"]["example-app-library"] = "1.2.3"
+            package_lock["packages"]["node_modules/example-app-library"] = {
+                "version": "1.2.3", "resolved": "https://example.invalid/example-app-library.tgz"
+            }
+            package_lock_path.write_text(json.dumps(package_lock), encoding="utf-8")
+            developer_dependency = invoke("build", "--json", cwd=project)
+            self.assertEqual(developer_dependency.returncode, 4)
+            self.assertEqual(json.loads(developer_dependency.stdout)["status"], "capability_unavailable")
+
     def test_installed_ui_projection_satisfies_exact_npm_lock(self) -> None:
         npm = shutil.which("npm")
         if not npm:
