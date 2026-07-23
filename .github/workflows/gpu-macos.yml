@@ -195,63 +195,39 @@ jobs:
       - name: Record private-release trust controls
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          test "$(git cat-file -t "$GITHUB_REF_NAME")" = tag
-          test "$(git rev-parse "$GITHUB_REF_NAME^{commit}")" = "$GITHUB_SHA"
-          git -c gpg.ssh.allowedSignersFile="$GITHUB_WORKSPACE/provenance/release-signers.allowed_signers" \
-            verify-tag "$GITHUB_REF_NAME"
-          test "$(
-            ssh-keygen -lf provenance/release-signers.allowed_signers |
-              awk '{ print $2 }'
-          )" = SHA256:eMlEuZcnW6NJDrKQBuN5EX1q69bOlIRPl6XmutVTgcs
-          VELLUM_TAG_OBJECT_SHA="$(git rev-parse "$GITHUB_REF_NAME")"
+          if ! remote_row="$(
+            gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$GITHUB_REF_NAME" \
+              --jq '[.object.type, .object.sha] | @tsv'
+          )"; then
+            echo "::error::Could not resolve remote release tag ref"
+            exit 1
+          fi
+          read -r remote_type VELLUM_TAG_OBJECT_SHA <<EOF
+          $remote_row
+          EOF
+          if [ "$remote_type" != tag ]; then
+            echo "::error::Remote release ref is $remote_type, not an annotated tag"
+            exit 1
+          fi
           export VELLUM_TAG_OBJECT_SHA
-          python3 - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          evidence = {
-              "schema": "vellum.release-trust.v1",
-              "repository": os.environ["GITHUB_REPOSITORY"],
-              "source_commit": os.environ["GITHUB_SHA"],
-              "tag": os.environ["GITHUB_REF_NAME"],
-              "tag_object_sha": os.environ["VELLUM_TAG_OBJECT_SHA"],
-              "trusted_release_signer": {
-                  "principal": "daniel.raffel@gmail.com",
-                  "ssh_fingerprint": (
-                      "SHA256:eMlEuZcnW6NJDrKQBuN5EX1q69bOlIRPl6XmutVTgcs"
-                  ),
-              },
-              "github_actions_build_attestation": {
-                  "status": "unavailable",
-                  "reason_code": "private-repository-enterprise-cloud-required",
-                  "documentation": (
-                      "https://docs.github.com/en/code-security/getting-started/"
-                      "github-security-features#artifact-attestations"
-                  ),
-              },
-              "github_immutable_release_attestation": {
-                  "status": "required",
-                  "documentation": (
-                      "https://docs.github.com/en/code-security/concepts/"
-                      "supply-chain-security/immutable-releases"
-                  ),
-              },
-              "retained_controls": [
-                  "trusted-ssh-signed-annotated-tag-bound-to-source-commit",
-                  "same-run-byte-repeatability-bound-to-source-commit",
-                  "github-immutable-release-attestation",
-                  "github-release-asset-digests",
-                  "sha256sums",
-                  "sterile-installed-sdk-validation",
-              ],
-          }
-          Path(os.environ["RUNNER_TEMP"], "release-trust.json").write_text(
-              json.dumps(evidence, indent=2, sort_keys=True) + "\n"
-          )
-          PY
+          python3 scripts/verify_release_tag.py \
+            --repo "$GITHUB_WORKSPACE" \
+            --repository "$GITHUB_REPOSITORY" \
+            --tag-name "$GITHUB_REF_NAME" \
+            --tag-object-sha "$VELLUM_TAG_OBJECT_SHA" \
+            --source-commit "$GITHUB_SHA" \
+            --allowed-signers \
+              "$GITHUB_WORKSPACE/provenance/release-signers.allowed_signers" \
+            --expected-principal daniel.raffel@gmail.com \
+            --expected-fingerprint \
+              SHA256:eMlEuZcnW6NJDrKQBuN5EX1q69bOlIRPl6XmutVTgcs \
+            --output "$RUNNER_TEMP/release-trust.json"
+          printf 'VELLUM_TAG_OBJECT_SHA=%s\n' \
+            "$VELLUM_TAG_OBJECT_SHA" >> "$GITHUB_ENV"
 
       - name: Publish the verified private release
         if: startsWith(github.ref, 'refs/tags/v')
@@ -262,6 +238,27 @@ jobs:
           set -euo pipefail
           tag="$GITHUB_REF_NAME"
           test "$tag" = "v0.1.0"
+          verify_remote_tag_ref() {
+            local remote_type
+            local remote_tag_object_sha
+            local remote_row
+            if ! remote_row="$(
+              gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" \
+                --jq '[.object.type, .object.sha] | @tsv'
+            )"; then
+              echo "::error::Could not resolve remote release tag ref refs/tags/$tag"
+              exit 1
+            fi
+            read -r remote_type remote_tag_object_sha <<EOF
+          $remote_row
+          EOF
+            if [ "$remote_type" != tag ] ||
+                [ "$remote_tag_object_sha" != "$VELLUM_TAG_OBJECT_SHA" ]; then
+              echo "::error::Remote release ref refs/tags/$tag changed: expected tag $VELLUM_TAG_OBJECT_SHA, got $remote_type $remote_tag_object_sha"
+              exit 1
+            fi
+          }
+          verify_remote_tag_ref
           version="${tag#v}"
           test "$(python3 cli/vellum_cli.py --version)" = "vellum $version"
           python3 -c '
@@ -291,6 +288,7 @@ jobs:
                 "$release_json"
             )"
           else
+            verify_remote_tag_ref
             gh release create "$tag" \
               --repo "$GITHUB_REPOSITORY" \
               --draft \
@@ -331,9 +329,11 @@ jobs:
           ' "$release_json"
             )"
             if [ -n "$previous_verification_id" ]; then
+              verify_remote_tag_ref
               gh api --method DELETE \
                 "repos/$GITHUB_REPOSITORY/releases/assets/$previous_verification_id"
             fi
+            verify_remote_tag_ref
             gh release upload "$tag" "${upload_args[@]}" \
               --repo "$GITHUB_REPOSITORY" --clobber
             gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" \
@@ -342,6 +342,7 @@ jobs:
               --release-json "$release_json" --tag "$tag" \
               "${verifier_args[@]}" \
               --output "$RUNNER_TEMP/release-assets-verification.json"
+            verify_remote_tag_ref
             gh release upload "$tag" \
               "$RUNNER_TEMP/release-assets-verification.json" \
               --repo "$GITHUB_REPOSITORY" --clobber
@@ -352,6 +353,7 @@ jobs:
               "${verifier_args[@]}" \
               --asset "release-assets-verification.json=$RUNNER_TEMP/release-assets-verification.json" \
               --output "$RUNNER_TEMP/release-assets-draft-verification.json"
+            verify_remote_tag_ref
             gh release edit "$tag" \
               --repo "$GITHUB_REPOSITORY" \
               --draft=false \
