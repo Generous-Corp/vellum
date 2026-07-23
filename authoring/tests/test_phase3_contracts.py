@@ -197,10 +197,11 @@ class Phase3ContractsTest(unittest.TestCase):
                 "$",
             )
 
-    def test_gate_tracks_runtime_evidence_without_overclaiming_native_parity(self) -> None:
+    def test_gate_tracks_complete_installed_dual_runtime_evidence(self) -> None:
         manifest = load_json(FIXTURE_DIRECTORY / "gate-manifest.json")
         self.assertFalse(manifest["contractOnly"])
-        self.assertEqual(manifest["gate"]["status"], "pending")
+        self.assertEqual(manifest["gate"]["status"], "passed")
+        self.assertEqual(manifest["gate"]["blockedBy"], [])
         self.assertEqual(manifest["application"]["entry"], "src/App.tsx")
         self.assertEqual(
             manifest["application"]["runtimes"], ["native", "browser"]
@@ -214,12 +215,8 @@ class Phase3ContractsTest(unittest.TestCase):
             for requirement in manifest["requirements"]
         }
         self.assertEqual(
-            {identifier for identifier, status in statuses.items() if status == "pending"},
-            {
-                "keyboard-pointer-touch",
-                "capability-checked-commands",
-                "capability-checked-files",
-            },
+            {identifier for identifier, status in statuses.items() if status != "passed"},
+            set(),
         )
         for requirement in manifest["requirements"]:
             evidence = FIXTURE_DIRECTORY / requirement["contractEvidence"]

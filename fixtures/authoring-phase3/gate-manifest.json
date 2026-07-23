@@ -1,6 +1,6 @@
 {
   "schema": "vellum.authoring-phase3-gate.v1",
-  "purpose": "Track executable evidence for the unchanged dual-runtime Phase 3 acceptance fixture without promoting unproven native scenario-driver behavior.",
+  "purpose": "Track executable installed-artifact evidence for the unchanged dual-runtime Phase 3 acceptance fixture.",
   "contractOnly": false,
   "application": {
     "entry": "src/App.tsx",
@@ -13,13 +13,10 @@
     "scenario": "scenarios/phase3.json"
   },
   "gate": {
-    "status": "pending",
-    "achieved": "The exact TSX builds from a packed UI SDK and executes in JavaScriptCore and browser ESM. Both engines prove serializable state continuity and capability-checked clipboard and external-URL success and denial paths.",
-    "blockedBy": [
-      "The native scenario adapter does not yet lower the unchanged scenario's command, service-result, assert-text, touch, and expected-throw actions.",
-      "The full unchanged scenario therefore has browser evidence but not one equivalent native scenario result driven from installed artifacts."
-    ],
-    "mayBePromotedWhen": "Every requirement is passed and the unchanged entry and scenario pass from installed artifacts on both runtimes."
+    "status": "passed",
+    "achieved": "The byte-identical TSX and scenario execute from installed artifacts in JavaScriptCore on the Skia/Dawn/Metal host and in browser JavaScript against the shared C++ Wasm core. Both lanes prove the complete interaction, text, service, error, accessibility, and state contract.",
+    "blockedBy": [],
+    "mayBePromotedWhen": "Satisfied: every requirement is passed and the unchanged entry and scenario execute from installed artifacts on both runtimes."
   },
   "requirements": [
     {
@@ -78,10 +75,12 @@
     },
     {
       "id": "keyboard-pointer-touch",
-      "status": "pending",
+      "status": "passed",
       "contractEvidence": "scenarios/phase3.json",
       "runtimeEvidence": [
-        "../../web/consumer/vellum_host.js"
+        "../../apps/app-host/test_phase3_scenario.py",
+        "../../web/tests/run_text_semantics_browser.py",
+        "../../scripts/validate_installed_sdk.py"
       ]
     },
     {
@@ -113,19 +112,23 @@
     },
     {
       "id": "capability-checked-commands",
-      "status": "pending",
+      "status": "passed",
       "contractEvidence": "src/App.tsx",
       "runtimeEvidence": [
-        "../../web/consumer/vellum_host.js"
+        "../../apps/app-host/test_phase3_scenario.py",
+        "../../web/tests/run_text_semantics_browser.py",
+        "../../scripts/validate_installed_sdk.py"
       ]
     },
     {
       "id": "capability-checked-files",
-      "status": "pending",
+      "status": "passed",
       "contractEvidence": "golden/service-denied.json",
       "runtimeEvidence": [
         "../../packages/vellum-ui/test/services.test.js",
-        "../../web/consumer/vellum_host.js"
+        "../../apps/app-host/test_phase3_scenario.py",
+        "../../web/tests/run_text_semantics_browser.py",
+        "../../scripts/validate_installed_sdk.py"
       ]
     },
     {
