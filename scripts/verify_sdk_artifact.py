@@ -21,6 +21,7 @@ if str(SCRIPT_DIR) not in sys.path:
 from install_core import (  # noqa: E402
     InstallError as CanonicalInstallError,
     payload_contamination_findings,
+    should_scan_payload_content,
     verify_archive_contract,
 )
 

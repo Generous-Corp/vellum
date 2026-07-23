@@ -14,7 +14,10 @@ import sys
 import tempfile
 from typing import Iterable
 
-from verify_sdk_artifact import payload_contamination_findings
+from verify_sdk_artifact import (
+    payload_contamination_findings,
+    should_scan_payload_content,
+)
 
 
 REPO = Path(__file__).resolve().parents[1]
@@ -27,15 +30,10 @@ class ValidationError(RuntimeError):
 def installed_contamination_findings(prefix: Path) -> list[dict[str, str]]:
     findings: list[dict[str, str]] = []
     for path in sorted(item for item in prefix.rglob("*") if item.is_file()):
-        relative = path.relative_to(prefix)
-        if relative.parts[:2] == ("lib", "vellum-cache"):
-            # The exact archive has already been expanded and scanned member by
-            # member by verify_sdk_artifact.py. Scanning compressed bytes as
-            # source text creates false positives and does not describe the
-            # active installed SDK tree.
-            continue
+        relative = path.relative_to(prefix).as_posix()
+        content = path.read_bytes() if should_scan_payload_content(relative) else b""
         findings.extend(
-            payload_contamination_findings(relative.as_posix(), path.read_bytes())
+            payload_contamination_findings(relative, content)
         )
     return findings
 

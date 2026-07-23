@@ -30,6 +30,10 @@ def write_json(path: Path, value: object) -> None:
     write(path, json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
+def real_mapping() -> dict[str, object]:
+    return observatory.load_json(observatory.ROOT / observatory.MAP_PATH)
+
+
 def init_repo(path: Path, first_path: str) -> tuple[str, str]:
     path.mkdir()
     run(path, "git", "init", "-b", "main")
@@ -156,6 +160,89 @@ observatory:
 
 
 class ObservatoryTests(unittest.TestCase):
+    def test_pulp_root_cmake_is_transitive_only_with_direct_mapped_change(self) -> None:
+        mapping = {
+            "id": "render",
+            "pulp_paths": ["core/render/"],
+            "vellum_paths": ["graphics/"],
+            "contract_tests": ["render-contract"],
+        }
+        direct_and_root = observatory.mapped_change(
+            [
+                {"status": "M", "path": "core/render/render.cpp"},
+                {"status": "M", "path": "CMakeLists.txt"},
+            ],
+            [mapping],
+            "pulp",
+            ["CMakeLists.txt"],
+        )
+        self.assertIsNotNone(direct_and_root)
+        assert direct_and_root is not None
+        self.assertEqual(direct_and_root["mapped_paths"], ["core/render/render.cpp"])
+        self.assertEqual(direct_and_root["transitive_paths"], ["CMakeLists.txt"])
+
+        root_only = observatory.mapped_change(
+            [{"status": "M", "path": "CMakeLists.txt"}],
+            [mapping],
+            "pulp",
+            ["CMakeLists.txt"],
+        )
+        self.assertIsNone(root_only)
+
+    def test_new_macos_platform_file_maps_shell_and_gpu_contract(self) -> None:
+        mapping = real_mapping()
+        mapped = observatory.mapped_change(
+            [{"status": "A", "path": "core/view/platform/mac/multi_window_coordinator.mm"}],
+            mapping["mappings"],
+            "pulp",
+            mapping["transitive_path_rules"],
+        )
+        self.assertIsNotNone(mapped)
+        assert mapped is not None
+        self.assertEqual(mapped["mapped_contracts"], ["macos-shell", "retained-ui-kernel"])
+        self.assertIn("vellum.gpu-native", mapped["contract_tests"])
+
+    def test_pulp_upstream_tooling_paths_are_observed_without_release_blocker(self) -> None:
+        mapping = real_mapping()
+        cases = {
+            "tools/figma-plugin/src/serialize.ts": ["pulp-figma-exporter"],
+            "tools/import-design/pulp_import_design.cpp": ["pulp-design-import-tooling"],
+            "tools/screenshot/pulp_screenshot.cpp": ["pulp-screenshot-harness"],
+            "tools/import-design/montage.py": [
+                "pulp-design-import-tooling",
+                "pulp-screenshot-harness",
+            ],
+        }
+        for path, expected_contracts in cases.items():
+            with self.subTest(path=path):
+                mapped = observatory.mapped_change(
+                    [{"status": "M", "path": path}],
+                    mapping["mappings"],
+                    "pulp",
+                    mapping["transitive_path_rules"],
+                )
+                self.assertIsNotNone(mapped)
+                assert mapped is not None
+                self.assertEqual(mapped["mapped_contracts"], expected_contracts)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            pulp = Path(temporary) / "pulp"
+            pulp_base, pulp_head = init_repo(pulp, "tools/figma-plugin/src/serialize.ts")
+            event = observatory.observation_for_commit(
+                source="pulp",
+                repository="Generous-Corp/pulp",
+                repo=pulp,
+                commit=pulp_head,
+                cursor_from=pulp_base,
+                cursor_to=pulp_head,
+                discovered_at="2026-07-22T20:00:00Z",
+                mappings=mapping["mappings"],
+                transitive_rules=mapping["transitive_path_rules"],
+            )
+            self.assertIsNotNone(event)
+            assert event is not None
+            self.assertFalse(event["shared_contract_release_blocker"])
+
     def test_reconcile_then_verify_is_positive_control(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             top = Path(temporary)

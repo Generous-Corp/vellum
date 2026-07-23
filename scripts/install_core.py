@@ -100,6 +100,72 @@ FORBIDDEN_PAYLOAD_CONTENT_PATTERNS = {
         rb"\b(?:AudioUnit|VST3|CLAP|LV2|Oboe)\b", re.IGNORECASE
     ),
 }
+CONTENT_SCAN_SUFFIXES = frozenset({
+    ".c",
+    ".cc",
+    ".cmake",
+    ".cpp",
+    ".cs",
+    ".css",
+    ".cxx",
+    ".entitlements",
+    ".frag",
+    ".glsl",
+    ".go",
+    ".gradle",
+    ".h",
+    ".hh",
+    ".hpp",
+    ".html",
+    ".hxx",
+    ".in",
+    ".inc",
+    ".ini",
+    ".java",
+    ".js",
+    ".json",
+    ".jsx",
+    ".kt",
+    ".kts",
+    ".lock",
+    ".m",
+    ".manifest",
+    ".map",
+    ".md",
+    ".metal",
+    ".mjs",
+    ".mm",
+    ".pc",
+    ".plist",
+    ".properties",
+    ".ps1",
+    ".py",
+    ".rs",
+    ".sh",
+    ".sksl",
+    ".svg",
+    ".swift",
+    ".template",
+    ".toml",
+    ".ts",
+    ".tsx",
+    ".txt",
+    ".vert",
+    ".wgsl",
+    ".xml",
+    ".yaml",
+    ".yml",
+})
+CONTENT_SCAN_BASENAMES = frozenset({
+    "LICENSE",
+    "Makefile",
+    "NOTICE",
+    "vellum",
+    "vellum-backend",
+    "vellum-import-backend",
+    "vellum-native-backend",
+    "vellum-web-backend",
+})
 PROBE_ENV_ALLOWLIST = {
     "HOME",
     "LANG",
@@ -159,6 +225,22 @@ def sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
+def should_scan_payload_content(name: str) -> bool:
+    """Return whether a payload path is explicitly known to contain text.
+
+    Path rules apply to every payload. Content rules apply only to this
+    allowlist so executable/native/Wasm/archive/image/font bytes cannot produce
+    accidental text-regex matches. Binary integrity remains covered by the
+    archive inventory, checksums, and payload-specific provenance checks.
+    """
+
+    path = PurePosixPath(name)
+    return (
+        path.name in CONTENT_SCAN_BASENAMES
+        or path.suffix.lower() in CONTENT_SCAN_SUFFIXES
+    )
+
+
 def payload_contamination_findings(
     name: str, content: bytes
 ) -> list[dict[str, str]]:
@@ -169,18 +251,19 @@ def payload_contamination_findings(
             findings.append(
                 {"rule": rule, "path": name, "match": match.group(0)}
             )
-    for rule, pattern in FORBIDDEN_PAYLOAD_CONTENT_PATTERNS.items():
-        match = pattern.search(content)
-        if match:
-            findings.append(
-                {
-                    "rule": rule,
-                    "path": name,
-                    "match": match.group(0).decode(
-                        "utf-8", errors="replace"
-                    )[:120],
-                }
-            )
+    if should_scan_payload_content(name):
+        for rule, pattern in FORBIDDEN_PAYLOAD_CONTENT_PATTERNS.items():
+            match = pattern.search(content)
+            if match:
+                findings.append(
+                    {
+                        "rule": rule,
+                        "path": name,
+                        "match": match.group(0).decode(
+                            "utf-8", errors="replace"
+                        )[:120],
+                    }
+                )
     return findings
 
 
@@ -205,25 +288,27 @@ def inspect_payload_stream(
     retained = bytearray() if retain else None
     tail = b""
     findings = payload_contamination_findings(name, b"")
+    scan_content = should_scan_payload_content(name)
     for chunk in iter(lambda: handle.read(1024 * 1024), b""):
         size += len(chunk)
         digest.update(chunk)
         if retained is not None:
             retained.extend(chunk)
-        window = tail + chunk
-        for rule, pattern in FORBIDDEN_PAYLOAD_CONTENT_PATTERNS.items():
-            match = pattern.search(window)
-            if match:
-                findings.append(
-                    {
-                        "rule": rule,
-                        "path": name,
-                        "match": match.group(0).decode(
-                            "utf-8", errors="replace"
-                        )[:120],
-                    }
-                )
-        tail = window[-CONTAMINATION_OVERLAP_BYTES:]
+        if scan_content:
+            window = tail + chunk
+            for rule, pattern in FORBIDDEN_PAYLOAD_CONTENT_PATTERNS.items():
+                match = pattern.search(window)
+                if match:
+                    findings.append(
+                        {
+                            "rule": rule,
+                            "path": name,
+                            "match": match.group(0).decode(
+                                "utf-8", errors="replace"
+                            )[:120],
+                        }
+                    )
+            tail = window[-CONTAMINATION_OVERLAP_BYTES:]
     return (
         size,
         digest.hexdigest(),

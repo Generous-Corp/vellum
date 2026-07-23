@@ -285,7 +285,10 @@ def mapped_change(
         path for path in all_paths
         if path not in mapped_paths
         and PurePosixPath(path).parts
-        and PurePosixPath(path).parts[0] in roots
+        and (
+            PurePosixPath(path).parts[0] in roots
+            or (source == "pulp" and path == "CMakeLists.txt")
+        )
         and transitive_match(path, transitive_rules)
     )
     renames = []

@@ -38,7 +38,7 @@
     },
     {
       "id": "macos-shell",
-      "pulp_paths": ["core/view/platform/mac/window_host_mac", "core/view/platform/mac/accessibility_mac"],
+      "pulp_paths": ["core/view/platform/mac/"],
       "vellum_paths": ["apps/app-host/", "apps/gpu-native/", "authoring/src/js_application.mm"],
       "symbols": ["pulp::view::WindowHost", "vellum-app-host"],
       "targets": ["pulp-view", "vellum-app-host"],
@@ -68,6 +68,39 @@
       "platform_hosts": [],
       "contract_tests": ["vellum-ui", "vellum.authoring"],
       "authority": "pulp-authoritative-untransferred"
+    },
+    {
+      "id": "pulp-figma-exporter",
+      "pulp_paths": ["tools/figma-plugin/"],
+      "vellum_paths": [],
+      "symbols": [],
+      "targets": [],
+      "schemas": ["figma-plugin-export-v1"],
+      "platform_hosts": [],
+      "contract_tests": ["vellum-design-ir"],
+      "authority": "pulp-only"
+    },
+    {
+      "id": "pulp-design-import-tooling",
+      "pulp_paths": ["tools/import-design/", "test/fixtures/imports/", "test/test_cli_import_design", "test/test_design_import", "test/test_import_design", "test/test_import_montage"],
+      "vellum_paths": [],
+      "symbols": [],
+      "targets": [],
+      "schemas": [],
+      "platform_hosts": [],
+      "contract_tests": ["vellum-design-ir", "vellum-design-ir-sterile-consumer"],
+      "authority": "pulp-only"
+    },
+    {
+      "id": "pulp-screenshot-harness",
+      "pulp_paths": ["tools/screenshot/", "tools/import-design/montage.py", "tools/scripts/capture-all-screenshots.sh", "test/test_design_import_screenshot_parity.cpp", "test/test_import_montage.py", "test/test_screenshot"],
+      "vellum_paths": [],
+      "symbols": [],
+      "targets": [],
+      "schemas": [],
+      "platform_hosts": ["macos", "headless"],
+      "contract_tests": ["vellum.capture-stats", "vellum.gpu-native"],
+      "authority": "pulp-only"
     },
     {
       "id": "legacy-figma-schema",
