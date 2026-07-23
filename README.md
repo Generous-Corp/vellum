@@ -5,13 +5,15 @@ one product question: can a developer import a design, add TypeScript or
 JavaScript behavior, and ship a GPU-rendered application without Chromium or an
 OS WebView as the primary UI runtime?
 
-This repository is at the independent-validation milestone. The project CLI
-and repository shape are usable. An audio-free native C++ kernel, reproducible
-checksummed CMake SDK artifact, and macOS CoreGraphics smoke application are
-executable.
-The public CLI now has an installed, deterministic DesignIR JSON import and safe
-reimport backend. Native builds, Skia/Dawn GPU rendering, and packaging remain
-SDK-backend capabilities and report `capability_unavailable` until implemented.
+This repository is being built toward the independent-validation milestone.
+The project CLI and repository shape are usable. An audio-free native C++
+kernel, deterministic DesignIR import/reimport, hardened JS/TS/JSX retained-tree
+runtime, JavaScriptCore host, installable CMake SDK, CoreGraphics smoke app, and
+a retained scene rendered through Skia Graphite, Dawn, and Metal are executable
+in-tree.
+The public CLI does not yet drive native builds, GPU rendering, or packaging;
+those commands continue to report `capability_unavailable` until their backend
+integration is complete.
 
 The history-preserving Pulp projection has been removed from the active tip.
 Its authorship and exact blobs remain auditable in Git history and immutable
@@ -38,6 +40,34 @@ vellum --json build
 The final command intentionally fails with structured `capability_unavailable`
 output because the current SDK artifact has no application backend. It must not
 pretend that a renderer or package was produced.
+
+## Pinned macOS GPU proof
+
+Download and verify the exact Skia/Dawn toolchain recorded in
+[`DEPENDENCIES.md`](DEPENDENCIES.md), then configure Vellum with its extraction
+root:
+
+```sh
+curl -fL \
+  https://github.com/danielraffel/skia-builder/releases/download/chrome/m150/skia-build-mac-arm64-gpu-release.zip \
+  -o /tmp/vellum-skia-m150.zip
+printf '%s  %s\n' \
+  13b0e9818c3b05db661af85cb1e2bf2ef10e30d468b81351dd90295237d17734 \
+  /tmp/vellum-skia-m150.zip | shasum -a 256 -c -
+cmake -S . -B build-gpu \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DVELLUM_REQUIRE_GPU=ON \
+  -DVELLUM_SKIA_ARCHIVE=/tmp/vellum-skia-m150.zip
+cmake --build build-gpu --parallel
+ctest --test-dir build-gpu --output-on-failure
+./build-gpu/apps/gpu-native/vellum-gpu-native.app/Contents/MacOS/vellum-gpu-native \
+  --self-test --capture /tmp/vellum-gpu-proof.png
+```
+
+The self-test fails unless the renderer reports Skia Graphite over Dawn/Metal,
+uses a native `CAMetalLayer`, reports no fallback, resolves a semantic node ID,
+and produces non-blank pixels plus a PNG capture. This is renderer evidence,
+not yet the external application milestone.
 
 On Windows PowerShell, the equivalent local-development installer is:
 
@@ -123,6 +153,10 @@ immutable, checksummed release exists.
 - macOS and browser/Wasm are the first proof targets; other platforms should
   not be claimed before executable evidence exists.
 - Import compatibility is a documented subset, not arbitrary DOM/CSS support.
-- The current macOS smoke proves the native lifecycle and graphics package with
-  CoreGraphics. It is not evidence that the required Skia/Dawn GPU slice or
-  retained view tree is complete.
+- The GPU self-test proves one retained-scene path and installed SDK boundary.
+  It does not yet prove DesignIR materialization, JS/TS/JSX behavior, browser
+  Wasm, CLI packaging, or the external demonstration application.
+- Ownership and provenance are described in
+  [`docs/ownership.md`](docs/ownership.md),
+  [`provenance/pulp-extraction.json`](provenance/pulp-extraction.json), and
+  [`provenance/ownership-map.yaml`](provenance/ownership-map.yaml).

@@ -1,22 +1,234 @@
 {
-  "schema_version": 1,
-  "status": "active-surface-audited",
+  "schema_version": 2,
+  "status": "incubation-byte-locked-not-release-attested",
   "dependencies": [],
-  "redistributed_third_party_source_or_binaries": false,
-  "developer_prerequisites": [
-    "CMake 3.24 or newer",
-    "C++20 compiler",
-    "Python 3.9 or newer",
-    "Node.js 20 or newer",
-    "npm",
-    "Apple Xcode command-line tools and system frameworks for the macOS proof"
-  ],
-  "pending_renderer_integration": {
-    "state": "not-present-at-this-tip",
-    "release_blocked_until": [
-      "renderer artifact bytes and transitive source identities are locked",
-      "redistributed licenses and notices are complete",
-      "the installed artifact scan passes with the renderer enabled"
+  "runtime_toolchain_dependencies": {
+    "state": "renderer-artifact-byte-locked",
+    "renderer": {
+      "state": "artifact-bytes-proven-source-association-not-attested",
+      "release_eligibility": "blocked",
+      "release_blockers": [
+        {
+          "id": "renderer-source-to-asset-attestation-missing",
+          "detail": "The asset hash is proven, but no signed provenance or embedded manifest connects those bytes to the declared Skia and builder commits."
+        },
+        {
+          "id": "renderer-transitive-legal-inventory-unproven",
+          "detail": "The artifact contains no SBOM, build graph, or license manifest. Archive-member and global-symbol inspection identified the bundled components listed below, but cannot prove that the list is exhaustive. A release-producing builder must emit and attest an exhaustive transitive source/license manifest."
+        },
+        {
+          "id": "renderer-toolchain-abi-identity-missing",
+          "detail": "The exact compiler build, linker identity, and C++ standard-library ABI are not recorded by the asset."
+        }
+      ],
+      "consumer_boundary": "selected static archive members are linked into the installed vellum-gpu shared library; the prebuilt archive is not installed",
+      "artifact": {
+        "repository": "https://github.com/danielraffel/skia-builder",
+        "release_tag": "chrome/m150",
+        "name": "skia-build-mac-arm64-gpu-release.zip",
+        "url": "https://github.com/danielraffel/skia-builder/releases/download/chrome%2Fm150/skia-build-mac-arm64-gpu-release.zip",
+        "sha256": "13b0e9818c3b05db661af85cb1e2bf2ef10e30d468b81351dd90295237d17734",
+        "builder_commit": "9b0215b1b2f4f3f06bac493c7e43fdeb0d35f9bc",
+        "target": "macos-arm64",
+        "configuration": "Release",
+        "archive_root": "build/mac-gpu/lib/Release/arm64",
+        "legal_files_in_artifact": [],
+        "legal_files_note": "The sealed asset contains no license or notice manifest. NOTICE.md is reconstructed from the exact upstream source revisions below. A source-to-asset attestation is still absent."
+      },
+      "features": {
+        "graphite": true,
+        "dawn": true,
+        "metal": true,
+        "skia_use_system_libjpeg_turbo": false,
+        "skia_use_system_libpng": false,
+        "skia_use_system_zlib": false,
+        "skia_use_system_expat": false,
+        "skia_use_system_icu": false,
+        "skia_use_system_harfbuzz": false,
+        "skia_use_system_libwebp": false,
+        "skia_use_libwebp_decode": true,
+        "skia_use_libwebp_encode": false,
+        "skia_use_expat": true,
+        "skia_use_icu": true,
+        "skia_enable_svg": true,
+        "skia_enable_skottie": true,
+        "skia_enable_skparagraph": true
+      },
+      "source_identities": {
+        "skia": {
+          "repository": "https://skia.googlesource.com/skia",
+          "ref": "refs/heads/chrome/m150",
+          "commit": "587c5b0f5a7b0260826a0c19094c2d952195066e",
+          "license": "BSD-3-Clause",
+          "evidence": "The branch tip and DEPS were resolved from the primary Skia repository. The asset identifies milestone m150 but does not embed this exact Skia commit."
+        },
+        "dawn": {
+          "repository": "https://dawn.googlesource.com/dawn",
+          "commit": "63f25feec51e9351fb25222b6d5de1af791d7c4f",
+          "license": "BSD-3-Clause",
+          "evidence": "Skia DEPS pins this revision and build/include/dawn/dawn_version.h embeds the same 20-byte commit."
+        },
+        "builder": {
+          "repository": "https://github.com/danielraffel/skia-builder",
+          "commit": "9b0215b1b2f4f3f06bac493c7e43fdeb0d35f9bc",
+          "evidence": "The release tag resolves to this commit. The commit is not embedded in the asset and GitHub provides no source-to-asset attestation for this release."
+        }
+      },
+      "headers": {
+        "root": "build/include",
+        "file_count": 805,
+        "construction_specific_sha256": "96e1c7b0c8ac20f5b7a2832aafa3370e79a3ee8e386777ba71cf4ce332778c8b",
+        "digest_command": "from build/include: find . -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256 | shasum -a 256",
+        "canonical_tree_hash": false
+      },
+      "archives": [
+        {
+          "name": "libdawn_combined.a",
+          "sha256": "8fad85ccedc8a7a9baf781a6e639be522baa9ba5805848a6ede1c6523619d3fe"
+        },
+        {
+          "name": "libskia.a",
+          "sha256": "7820bb79b92ef3262a036b94f33f16c1e023cb9c5c29728ac71b1e59f86799e6"
+        },
+        {
+          "name": "libskottie.a",
+          "sha256": "d0ca85af24e8bdc5c462108b97f7d1a1b6c7a3082c5e7119356e49b910f1e103"
+        },
+        {
+          "name": "libskparagraph.a",
+          "sha256": "c42749062e926f051efb69fd652d6afe3acc516a94095a81c6dc9f842a9456c6"
+        },
+        {
+          "name": "libsksg.a",
+          "sha256": "507f5262b5f17f26abf65941776b4bb4b673ce5a2a465430ea78f184b157b3f1"
+        },
+        {
+          "name": "libskshaper.a",
+          "sha256": "6970686ed4c22e93d26148a745a8bf83e25e0194d86fdf334558baed237537a1"
+        },
+        {
+          "name": "libskunicode_core.a",
+          "sha256": "b25d297c885ed831f58300255cc896a45a7464eeeadbbdc139341598b20bd058"
+        },
+        {
+          "name": "libskunicode_icu.a",
+          "sha256": "4d575f963f282fe7bfe1f101e1d49c9c72f6628b4cc9eff23a31f97fd1f9ea01"
+        },
+        {
+          "name": "libsvg.a",
+          "sha256": "c236faed2d71cdde78b29662f6d6b076e8ff284361dba36ce460c21db4ff2b05"
+        }
+      ],
+      "observed_macho": {
+        "skia": {
+          "archive": "libskia.a",
+          "representative_member": "libskia.SkCamera.o",
+          "platform": "macos",
+          "minimum_os": "11.0",
+          "sdk": "15.5"
+        },
+        "dawn": {
+          "archive": "libdawn_combined.a",
+          "representative_member": "dawn_proc.cpp.o",
+          "platform": "macos",
+          "minimum_os": "15.0",
+          "sdk": "15.5"
+        },
+        "effective_minimum_os": "15.0",
+        "evidence_limit": "These values are observed LC_BUILD_VERSION data from representative object members, not a proof that every member has the same tuple."
+      },
+      "bundled_components": [
+        {
+          "name": "Expat",
+          "parent_archive": "libskia.a",
+          "commit": "6154446fccefbf3ca644894f598969113b0c7bcd",
+          "license": "MIT",
+          "primary_source": "https://chromium.googlesource.com/external/github.com/libexpat/libexpat",
+          "binary_evidence": "libexpat.* archive members"
+        },
+        {
+          "name": "libjpeg-turbo",
+          "parent_archive": "libskia.a",
+          "commit": "e14cbfaa85529d47f9f55b0f104a579c1061f9ad",
+          "version": "3.1.0 Chromium snapshot",
+          "license": "IJG AND Zlib; BSD-3-Clause applies to the TurboJPEG API/build system, which was not identified among the libskia archive members",
+          "primary_source": "https://chromium.googlesource.com/chromium/deps/libjpeg_turbo",
+          "binary_evidence": "libjpeg.*, libjpeg12.*, and libjpeg16.* archive members"
+        },
+        {
+          "name": "libpng",
+          "parent_archive": "libskia.a",
+          "commit": "d5515b5b8be3901aac04e5bd8bd5c89f287bcd33",
+          "version": "1.6.56",
+          "license": "Libpng-2.0",
+          "primary_source": "https://skia.googlesource.com/third_party/libpng",
+          "binary_evidence": "libpng.* archive members"
+        },
+        {
+          "name": "libwebp",
+          "parent_archive": "libskia.a",
+          "commit": "845d5476a866141ba35ac133f856fa62f0b7445f",
+          "license": "BSD-3-Clause",
+          "primary_source": "https://chromium.googlesource.com/webm/libwebp",
+          "binary_evidence": "libwebp.* and libwebp_sse41.* archive members"
+        },
+        {
+          "name": "Wuffs",
+          "parent_archive": "libskia.a",
+          "commit": "e3f919ccfe3ef542cfc983a82146070258fb57f8",
+          "license": "Apache-2.0",
+          "primary_source": "https://skia.googlesource.com/external/github.com/google/wuffs-mirror-release-c",
+          "binary_evidence": "libwuffs.wuffs-v0.3.o archive member"
+        },
+        {
+          "name": "Chromium zlib",
+          "parent_archive": "libskia.a",
+          "commit": "646b7f569718921d7d4b5b8e22572ff6c76f2596",
+          "version": "1.3.0.1-motley",
+          "license": "Zlib",
+          "primary_source": "https://chromium.googlesource.com/chromium/src/third_party/zlib",
+          "binary_evidence": "libzlib.* and zlib_* archive members"
+        },
+        {
+          "name": "Abseil",
+          "parent_archive": "libdawn_combined.a",
+          "commit": "d16e32215c3ab90ba57c2e904a5344d85c7353e4",
+          "license": "Apache-2.0",
+          "primary_source": "https://chromium.googlesource.com/chromium/src/third_party/abseil-cpp",
+          "binary_evidence": "absl:: global symbols and Abseil implementation members such as raw_hash_set.cc.o and crc32c.cc.o"
+        },
+        {
+          "name": "PartitionAlloc",
+          "parent_archive": "libdawn_combined.a",
+          "commit": "76c74af3a92809278b20d6816865a296d4704ca6",
+          "license": "BSD-3-Clause",
+          "primary_source": "https://chromium.googlesource.com/chromium/src/base/allocator/partition_allocator",
+          "binary_evidence": "partition_alloc:: global symbols and allocator implementation members such as low_level_alloc.cc.o"
+        }
+      ],
+      "bundled_components_completeness": {
+        "claim": "observed-not-exhaustive",
+        "method": "Skia and Dawn DEPS correlation plus static-archive member names and exported C++ symbol namespaces",
+        "missing_evidence": "builder-emitted exhaustive link graph, SBOM, license manifest, and source-to-object mapping"
+      },
+      "identity_limits": [
+        "The release has no signed provenance or source-to-asset attestation connecting the asset bytes to the builder and Skia commits.",
+        "The exact Skia commit and builder commit are not embedded in the asset; only the Dawn commit is embedded.",
+        "The exact compiler build, C++ standard-library ABI, and linker identity are not recorded by the asset.",
+        "The artifact is not claimed reproducible from source.",
+        "The asset contains no upstream license bundle; Vellum's NOTICE is reconstructed from primary-source license files at the locked revisions.",
+        "Archive membership proves packaged object code, not that every member is retained by the static linker's dead-code selection in a particular vellum-gpu binary."
+      ]
+    },
+    "not_yet_required_by_the_active_slice": [
+      "Yoga"
+    ],
+    "developer_supplied_prerequisites": [
+      "CMake >= 3.24",
+      "C++20 compiler",
+      "Python 3",
+      "Node.js and npm",
+      "Xcode command-line tools and system JavaScriptCore for macOS"
     ]
   },
   "historical_seed_dependencies": {

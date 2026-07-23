@@ -48,5 +48,25 @@ vellum_owned_slices:
     state: framework-reimplemented-no-transfer
   - id: vellum-platform-graphics
     state: framework-reimplemented-no-transfer
+  - id: vellum-authoring-js
+    state: framework-reimplemented-no-transfer
+    implementation:
+      - packages/vellum-ui
+  - id: vellum-native-javascriptcore-host
+    state: framework-reimplemented-no-transfer
+    implementation:
+      - authoring
+    evidence:
+      - vellum.authoring
+  - id: vellum-skia-dawn-renderer
+    state: framework-reimplemented-no-transfer
+    implementation:
+      - graphics/include/vellum/graphics/scene.hpp
+      - graphics/include/vellum/graphics/skia_dawn_surface.hpp
+      - graphics/src/skia_dawn_surface.mm
+      - apps/gpu-native/main.mm
+    evidence:
+      - vellum.gpu-native
+      - vellum.install-consumer
   - id: vellum-cli
     state: framework-reimplemented-no-transfer

@@ -1,0 +1,82 @@
+name: Locked macOS GPU proof
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  gpu-macos-arm64:
+    name: gpu-macos-arm64
+    runs-on: macos-15
+    steps:
+      - name: Check out Vellum without credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Download and verify the locked Skia and Dawn archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/skia-build-mac-arm64-gpu-release.zip"
+          curl --fail --location --silent --show-error \
+            https://github.com/danielraffel/skia-builder/releases/download/chrome/m150/skia-build-mac-arm64-gpu-release.zip \
+            --output "$archive"
+          printf '%s  %s\n' \
+            13b0e9818c3b05db661af85cb1e2bf2ef10e30d468b81351dd90295237d17734 \
+            "$archive" | shasum -a 256 -c -
+          printf 'VELLUM_SKIA_ARCHIVE=%s\n' "$archive" >> "$GITHUB_ENV"
+
+      - name: Build the release GPU slice
+        run: |
+          cmake -S . -B build-gpu \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DVELLUM_BUILD_TESTS=ON \
+            -DVELLUM_REQUIRE_GPU=ON \
+            -DVELLUM_SKIA_ARCHIVE="$VELLUM_SKIA_ARCHIVE"
+          cmake --build build-gpu --parallel
+
+      - name: Verify renderer provenance and byte identity
+        run: |
+          python3 tools/provenance/verify_renderer_dependency.py \
+            --archive "$VELLUM_SKIA_ARCHIVE" \
+            --require-macho
+
+      - name: Run native, capture, and sterile-consumer tests
+        run: |
+          ctest --test-dir build-gpu --output-on-failure
+          ./build-gpu/apps/gpu-native/vellum-gpu-native.app/Contents/MacOS/vellum-gpu-native \
+            --self-test --capture "$RUNNER_TEMP/vellum-gpu-proof.png" \
+            | tee "$RUNNER_TEMP/vellum-gpu-proof.txt"
+          file "$RUNNER_TEMP/vellum-gpu-proof.png"
+          shasum -a 256 "$RUNNER_TEMP/vellum-gpu-proof.png" \
+            > "$RUNNER_TEMP/vellum-gpu-proof.sha256"
+
+      - name: Verify the binary deployment boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          dylib=build-gpu/graphics/libvellum-gpu.dylib
+          app=build-gpu/apps/gpu-native/vellum-gpu-native.app/Contents/MacOS/vellum-gpu-native
+          otool -l "$dylib" > "$RUNNER_TEMP/vellum-gpu-dylib-load-commands.txt"
+          otool -l "$app" > "$RUNNER_TEMP/vellum-gpu-app-load-commands.txt"
+          rg -q 'minos 15\.0' "$RUNNER_TEMP/vellum-gpu-dylib-load-commands.txt"
+          rg -q 'minos 15\.0' "$RUNNER_TEMP/vellum-gpu-app-load-commands.txt"
+
+      - name: Upload retained GPU evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: vellum-gpu-macos-arm64-evidence
+          path: |
+            ${{ runner.temp }}/vellum-gpu-proof.png
+            ${{ runner.temp }}/vellum-gpu-proof.txt
+            ${{ runner.temp }}/vellum-gpu-proof.sha256
+            ${{ runner.temp }}/vellum-gpu-dylib-load-commands.txt
+            ${{ runner.temp }}/vellum-gpu-app-load-commands.txt
+          if-no-files-found: error
+          retention-days: 90
