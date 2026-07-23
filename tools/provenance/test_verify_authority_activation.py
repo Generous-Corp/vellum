@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
+import shutil
+import subprocess
+import tempfile
 import unittest
 from unittest import mock
 
@@ -28,10 +32,251 @@ class FakeGitHub:
 class AuthorityActivationTests(unittest.TestCase):
     def test_current_repository_is_prepared_and_cannot_activate(self) -> None:
         root = MODULE_PATH.parents[2]
-        result = activation.verify_prepared(root)
-        self.assertEqual(result["status"], "prepared-not-active")
+        with tempfile.TemporaryDirectory() as directory:
+            prepared = Path(directory)
+            (prepared / activation.PLAN_PATH.parent).mkdir(parents=True)
+            shutil.copy2(root / activation.PLAN_PATH, prepared / activation.PLAN_PATH)
+            shutil.copy2(root / activation.TRUST_PATH, prepared / activation.TRUST_PATH)
+            result = activation.verify_prepared(prepared)
+            self.assertEqual(result["status"], "prepared-not-active")
+            records = prepared / "provenance/authority/records"
+            records.mkdir(parents=True)
+            (records / "pending.json").write_text("{}\n", encoding="utf-8")
+            with self.assertRaisesRegex(
+                activation.ActivationError, "must not contain"
+            ):
+                activation.verify_prepared(prepared)
         with self.assertRaisesRegex(activation.ActivationError, "not enabled"):
             activation.validate_trust_policy(activation.load_json(root / activation.TRUST_PATH))
+
+    def test_pending_record_must_be_exact_single_commit_and_ref(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            subprocess.run(
+                ["git", "config", "user.name", "Vellum Test"],
+                cwd=root,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.email", "vellum-test@example.invalid"],
+                cwd=root,
+                check=True,
+            )
+            (root / "authority-start.txt").write_text("start\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=root, check=True)
+            subprocess.run(
+                ["git", "commit", "-q", "-m", "authority start"],
+                cwd=root,
+                check=True,
+            )
+            authority_start = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            record_path = (
+                root
+                / "provenance/authority/records/native-design-kernel-v1.json"
+            )
+            record_path.parent.mkdir(parents=True)
+            record = {
+                "schema_version": 2,
+                "state": "pending-pulp-activation",
+                "source_repository": "Generous-Corp/pulp",
+                "framework_repository": "Generous-Corp/vellum",
+                "pulp_extraction_base": "a" * 40,
+                "historical_seed_commit": "b" * 40,
+                "pulp_candidate_commit": "c" * 40,
+                "pulp_ownership_projection_blob": "d" * 40,
+                "authority_start_commit": authority_start,
+                "authority_record_ref": (
+                    "refs/heads/authority/native-design-kernel-v1"
+                ),
+                "cut_manifest_sha256": "e" * 64,
+                "authority_groups": [
+                    {
+                        "id": "native-design-kernel-v1",
+                        "lineage_mode": (
+                            "history-seed-ancestor-active-reimplementation"
+                        ),
+                        "pulp_legacy_slices": ["render"],
+                        "pulp_historical_seed_projection": {
+                            "render.cpp": {
+                                "blob": "f" * 40,
+                                "mode": "100644",
+                                "classification": "framework-core",
+                            }
+                        },
+                        "pulp_activation_candidate_projection": {
+                            "render.cpp": {
+                                "blob": "1" * 40,
+                                "mode": "100644",
+                            }
+                        },
+                        "vellum_implementation_projection": {
+                            "graphics/render.cpp": {
+                                "blob": "2" * 40,
+                                "mode": "100644",
+                            }
+                        },
+                    }
+                ],
+                "pulp_activation": None,
+                "approved_by": "@danielraffel",
+                "approved_at": "2026-07-23T23:23:20Z",
+            }
+            record_path.write_text(
+                json.dumps(record, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            subprocess.run(["git", "add", "."], cwd=root, check=True)
+            subprocess.run(
+                ["git", "commit", "-q", "-m", "authority record"],
+                cwd=root,
+                check=True,
+            )
+            record_commit = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            relative_record = record_path.relative_to(root).as_posix()
+            with mock.patch.object(
+                activation, "verify_structural_record", return_value=record
+            ):
+                result = activation.verify_pending_record(
+                    root=root,
+                    pulp_repo=root,
+                    pulp_ownership_commit="c" * 40,
+                    record_path=relative_record,
+                    authority_record_commit=record_commit,
+                    expected_authority_ref=record["authority_record_ref"],
+                    require_head=True,
+                )
+                self.assertEqual(result["status"], "pending-pulp-activation")
+                with self.assertRaisesRegex(
+                    activation.ActivationError, "expected checkout ref"
+                ):
+                    activation.verify_pending_record(
+                        root=root,
+                        pulp_repo=root,
+                        pulp_ownership_commit="c" * 40,
+                        record_path=relative_record,
+                        authority_record_commit=record_commit,
+                        expected_authority_ref="refs/heads/authority/wrong",
+                        require_head=True,
+                    )
+
+                record_path.write_text("{}\n", encoding="utf-8")
+                with self.assertRaisesRegex(
+                    activation.ActivationError, "authority record fields differ"
+                ):
+                    activation.verify_pending_record(
+                        root=root,
+                        pulp_repo=root,
+                        pulp_ownership_commit="c" * 40,
+                        record_path=relative_record,
+                        authority_record_commit=record_commit,
+                        expected_authority_ref=record["authority_record_ref"],
+                        require_head=True,
+                    )
+                record_path.write_text(
+                    json.dumps(record, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+
+                (root / "extra.txt").write_text("extra\n", encoding="utf-8")
+                subprocess.run(["git", "add", "."], cwd=root, check=True)
+                subprocess.run(
+                    ["git", "commit", "-q", "-m", "intervening"],
+                    cwd=root,
+                    check=True,
+                )
+                intervening_commit = subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=root,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
+                with self.assertRaisesRegex(
+                    activation.ActivationError, "exact record commit"
+                ):
+                    activation.verify_pending_record(
+                        root=root,
+                        pulp_repo=root,
+                        pulp_ownership_commit="c" * 40,
+                        record_path=relative_record,
+                        authority_record_commit=record_commit,
+                        expected_authority_ref=record["authority_record_ref"],
+                        require_head=True,
+                    )
+                with self.assertRaisesRegex(
+                    activation.ActivationError, "directly after"
+                ):
+                    activation.verify_pending_record(
+                        root=root,
+                        pulp_repo=root,
+                        pulp_ownership_commit="c" * 40,
+                        record_path=relative_record,
+                        authority_record_commit=intervening_commit,
+                        expected_authority_ref=record["authority_record_ref"],
+                        require_head=True,
+                    )
+
+                subprocess.run(
+                    ["git", "reset", "--soft", authority_start],
+                    cwd=root,
+                    check=True,
+                )
+                subprocess.run(
+                    ["git", "commit", "-q", "-m", "record plus extra"],
+                    cwd=root,
+                    check=True,
+                )
+                combined_commit = subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=root,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
+                with self.assertRaisesRegex(
+                    activation.ActivationError, "add only"
+                ):
+                    activation.verify_pending_record(
+                        root=root,
+                        pulp_repo=root,
+                        pulp_ownership_commit="c" * 40,
+                        record_path=relative_record,
+                        authority_record_commit=combined_commit,
+                        expected_authority_ref=record["authority_record_ref"],
+                        require_head=True,
+                    )
+
+    def test_authority_workflows_expose_exact_required_checks(self) -> None:
+        root = MODULE_PATH.parents[2]
+        provenance = (root / ".github/workflows/provenance.yml").read_text(
+            encoding="utf-8"
+        )
+        gpu = (root / ".github/workflows/gpu-macos.yml").read_text(
+            encoding="utf-8"
+        )
+        for workflow in (provenance, gpu):
+            self.assertIn("branches: [main, 'authority/**']", workflow)
+        self.assertIn("forbidden-deps:\n    name: forbidden-deps", provenance)
+        self.assertIn(
+            "provenance-verify:\n    name: provenance-verify", provenance
+        )
+        self.assertIn("verify-pending", provenance)
+        self.assertIn(
+            "sterile-consumer:\n    name: sterile-consumer", gpu
+        )
 
     def test_historical_unresolved_requires_explicit_candidate_selection(self) -> None:
         group = {"pulp_legacy_slices": ["render"]}

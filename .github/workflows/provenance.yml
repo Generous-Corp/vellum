@@ -4,13 +4,38 @@ on:
   workflow_dispatch:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, 'authority/**']
     tags: ['v[0-9]*']
 
 permissions:
   contents: read
 
 jobs:
+  forbidden-deps:
+    name: forbidden-deps
+    runs-on: ${{ fromJSON(vars.VELLUM_LINUX_RUNS_ON_JSON || '"ubuntu-latest"') }}
+    steps:
+      - name: Check out the exact source tree
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify active-source quarantine and forbidden dependencies
+        run: |
+          python3 tools/provenance/test_verify_extraction.py
+          python3 tools/provenance/verify_extraction.py \
+            --output "$RUNNER_TEMP/forbidden-deps-report.json"
+
+      - name: Retain forbidden-dependency evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: vellum-forbidden-deps
+          path: ${{ runner.temp }}/forbidden-deps-report.json
+          if-no-files-found: error
+          retention-days: 90
+
   provenance-verify:
     name: provenance-verify
     runs-on: ${{ fromJSON(vars.VELLUM_LINUX_RUNS_ON_JSON || '"ubuntu-latest"') }}
@@ -41,11 +66,72 @@ jobs:
           python3 tools/agent_instructions/verify.py --json \
             > "$RUNNER_TEMP/agent-instructions-report.json"
 
-      - name: Verify prepared authority protocol and negative controls
+      - name: Test authority protocol and negative controls
         run: |
           python3 tools/provenance/test_verify_authority_activation.py
+
+      - name: Verify prepared authority protocol
+        if: ${{ !startsWith(github.ref, 'refs/heads/authority/') }}
+        run: |
           python3 tools/provenance/verify_authority_activation.py verify-prepared \
             > "$RUNNER_TEMP/authority-prepared-report.json"
+
+      - name: Resolve the pending authority record
+        if: startsWith(github.ref, 'refs/heads/authority/')
+        id: authority-record
+        env:
+          EXPECTED_AUTHORITY_REF: ${{ github.ref }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          records = sorted(
+              Path("provenance/authority/records").glob("*.json")
+          )
+          if len(records) != 1:
+              raise SystemExit(
+                  "authority ref must contain exactly one direct pending record"
+              )
+          record = json.loads(records[0].read_text(encoding="utf-8"))
+          if record.get("authority_record_ref") != os.environ[
+              "EXPECTED_AUTHORITY_REF"
+          ]:
+              raise SystemExit(
+                  "pending record does not name the checked-out authority ref"
+              )
+          with Path(os.environ["GITHUB_OUTPUT"]).open(
+              "a", encoding="utf-8"
+          ) as output:
+              output.write(f"path={records[0].as_posix()}\n")
+              output.write(
+                  f"pulp-candidate={record['pulp_candidate_commit']}\n"
+              )
+          PY
+
+      - name: Check out the exact Pulp activation candidate
+        if: startsWith(github.ref, 'refs/heads/authority/')
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: Generous-Corp/pulp
+          ref: ${{ steps.authority-record.outputs.pulp-candidate }}
+          path: .authority-pulp
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify the committed pending authority record
+        if: startsWith(github.ref, 'refs/heads/authority/')
+        run: |
+          python3 tools/provenance/verify_authority_activation.py \
+            verify-pending \
+            --pulp-repo .authority-pulp \
+            --pulp-ownership-commit \
+              '${{ steps.authority-record.outputs.pulp-candidate }}' \
+            --record-path '${{ steps.authority-record.outputs.path }}' \
+            --authority-record-commit "$GITHUB_SHA" \
+            --expected-authority-ref "$GITHUB_REF" \
+            --output "$RUNNER_TEMP/authority-pending-report.json"
 
       - name: Resolve the committed Pulp observatory cursor
         id: observatory-cursor
@@ -99,6 +185,7 @@ jobs:
             ${{ runner.temp }}/pulp-tooling-disposition-report.json
             ${{ runner.temp }}/agent-instructions-report.json
             ${{ runner.temp }}/authority-prepared-report.json
+            ${{ runner.temp }}/authority-pending-report.json
             ${{ runner.temp }}/observatory-health-report.json
           if-no-files-found: error
           retention-days: 90

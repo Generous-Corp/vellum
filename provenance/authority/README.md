@@ -44,6 +44,26 @@ Commit that generated record by itself. Protect the authority ref at that exact
 record commit. Required checks must be strict and bound to pinned GitHub App
 producers.
 
+The `authority/**` workflow lane verifies the pending record without creating
+a circular dependency on its own check runs. It checks out the record's exact
+Pulp candidate and runs:
+
+```sh
+python3 tools/provenance/verify_authority_activation.py verify-pending \
+  --pulp-repo /path/to/exact-pulp-candidate \
+  --pulp-ownership-commit <exact-prepared-pulp-sha> \
+  --record-path provenance/authority/records/native-design-kernel-v1.json \
+  --authority-record-commit <exact-record-commit> \
+  --expected-authority-ref refs/heads/authority/native-design-kernel-v1
+```
+
+That offline gate proves the record is structurally reproducible, is the only
+change in one non-merge commit directly after the authority-start commit, and
+names the checked-out authority ref. The same exact commit must receive the
+independent `forbidden-deps`, `provenance-verify`, and `sterile-consumer`
+checks. Live protected-ref, check-producer, and installation-scope validation
+remains part of `verify-active`; `verify-pending` cannot self-attest it.
+
 ## Activate
 
 `verify-active` needs all of the following at once:

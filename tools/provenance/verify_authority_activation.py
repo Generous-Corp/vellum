@@ -434,6 +434,102 @@ def verify_structural_record(
     return record
 
 
+def verify_record_commit_layout(
+    *,
+    root: Path,
+    record: dict[str, object],
+    record_path: str,
+    authority_record_commit: str,
+    expected_authority_ref: str | None = None,
+    require_head: bool = False,
+) -> dict[str, object]:
+    if (
+        not record_path.startswith("provenance/authority/records/")
+        or not record_path.endswith(".json")
+        or ".." in PurePosixPath(record_path).parts
+        or PurePosixPath(record_path).parent
+        != PurePosixPath("provenance/authority/records")
+    ):
+        raise ActivationError(
+            "authority record must be a direct JSON artifact under "
+            "provenance/authority/records"
+        )
+    if (
+        expected_authority_ref is not None
+        and record["authority_record_ref"] != expected_authority_ref
+    ):
+        raise ActivationError(
+            "authority record ref differs from the expected checkout ref"
+        )
+    record_commit = require_commit(
+        root, authority_record_commit, "authority record commit"
+    )
+    if require_head and git(root, "rev-parse", "HEAD") != record_commit:
+        raise ActivationError(
+            "authority record verification must run at the exact record commit"
+        )
+    authority_start = require_commit(
+        root, record["authority_start_commit"], "authority-start commit"
+    )
+    parents = git(root, "show", "-s", "--format=%P", record_commit).split()
+    if parents != [authority_start]:
+        raise ActivationError(
+            "authority record must be one non-merge commit directly after "
+            "the authority-start commit"
+        )
+    committed = json_at(root, record_commit, record_path)
+    if committed != record:
+        raise ActivationError(
+            "authority record bytes/content differ at the exact record commit"
+        )
+    changed = git(
+        root,
+        "diff",
+        "--name-status",
+        authority_start,
+        record_commit,
+    ).splitlines()
+    if changed != [f"A\t{record_path}"]:
+        raise ActivationError(
+            "authority record commit must add only the pending authority record"
+        )
+    return {
+        "status": "pending-pulp-activation",
+        "authority_start_commit": authority_start,
+        "authority_record_commit": record_commit,
+        "authority_record_ref": record["authority_record_ref"],
+        "pulp_candidate_commit": record["pulp_candidate_commit"],
+        "record_path": record_path,
+    }
+
+
+def verify_pending_record(
+    *,
+    root: Path,
+    pulp_repo: Path,
+    pulp_ownership_commit: str,
+    record_path: str,
+    authority_record_commit: str,
+    expected_authority_ref: str | None = None,
+    require_head: bool = False,
+) -> dict[str, object]:
+    record = validate_record_shape(load_json(root / record_path))
+    verify_structural_record(
+        root=root,
+        pulp_repo=pulp_repo,
+        pulp_ownership_commit=pulp_ownership_commit,
+        record=record,
+    )
+    return verify_record_commit_layout(
+        root=root,
+        record=record,
+        record_path=record_path,
+        authority_record_commit=authority_record_commit,
+        expected_authority_ref=expected_authority_ref,
+        require_head=require_head,
+    )
+
+
 def validate_trust_policy(policy: object) -> dict[str, object]:
     if not isinstance(policy, dict) or policy.get("schema_version") != 1:
         raise ActivationError("trust policy must be schema v1")
@@ -587,16 +683,12 @@ def verify_pending_live(
         raise ActivationError("Pulp trust-policy checks differ from the transfer plan")
     vellum = policy["repositories"]["vellum"]
     verify_repository(github, vellum_token, vellum, app_jwt=vellum_app_jwt)
-    require_commit(root, authority_record_commit, "authority record commit")
-    require_ancestor(root, str(record["authority_start_commit"]), authority_record_commit, "authority record lineage")
-    if not record_path.startswith("provenance/authority/records/") or not record_path.endswith(".json") or ".." in PurePosixPath(record_path).parts:
-        raise ActivationError("authority record must be a direct JSON artifact under provenance/authority/records")
-    committed = json_at(root, authority_record_commit, record_path)
-    if committed != record:
-        raise ActivationError("authority record bytes/content differ at the exact record commit")
-    changed = git(root, "diff", "--name-only", str(record["authority_start_commit"]), authority_record_commit).splitlines()
-    if changed != [record_path]:
-        raise ActivationError("authority record commit must add only the pending authority record")
+    verify_record_commit_layout(
+        root=root,
+        record=record,
+        record_path=record_path,
+        authority_record_commit=authority_record_commit,
+    )
     verify_protected_ref(
         github=github, token=vellum_token, full_name="Generous-Corp/vellum",
         ref=str(record["authority_record_ref"]), commit=authority_record_commit,
@@ -789,6 +881,13 @@ def main(argv: list[str] | None = None) -> int:
     build.add_argument("--authority-record-ref", required=True)
     build.add_argument("--approved-at", required=True)
     build.add_argument("--output", type=Path, required=True)
+    verify_pending = subparsers.add_parser("verify-pending")
+    verify_pending.add_argument("--pulp-repo", type=Path, required=True)
+    verify_pending.add_argument("--pulp-ownership-commit", required=True)
+    verify_pending.add_argument("--record-path", required=True)
+    verify_pending.add_argument("--authority-record-commit", required=True)
+    verify_pending.add_argument("--expected-authority-ref", required=True)
+    verify_pending.add_argument("--output", type=Path)
     verify_active = subparsers.add_parser("verify-active")
     verify_active.add_argument("--pulp-repo", type=Path, required=True)
     verify_active.add_argument("--pulp-ownership-commit", required=True)
@@ -812,12 +911,35 @@ def main(argv: list[str] | None = None) -> int:
             )
             args.output.parent.mkdir(parents=True, exist_ok=True)
             args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        elif args.command == "verify-pending":
+            result = verify_pending_record(
+                root=root,
+                pulp_repo=args.pulp_repo.resolve(),
+                pulp_ownership_commit=args.pulp_ownership_commit,
+                record_path=args.record_path,
+                authority_record_commit=args.authority_record_commit,
+                expected_authority_ref=args.expected_authority_ref,
+                require_head=True,
+            )
+            if args.output:
+                args.output.parent.mkdir(parents=True, exist_ok=True)
+                args.output.write_text(
+                    json.dumps(result, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
         else:
             record = validate_record_shape(load_json(args.record))
-            verify_structural_record(
-                root=root, pulp_repo=args.pulp_repo.resolve(),
-                pulp_ownership_commit=args.pulp_ownership_commit, record=record,
+            verify_pending_record(
+                root=root,
+                pulp_repo=args.pulp_repo.resolve(),
+                pulp_ownership_commit=args.pulp_ownership_commit,
+                record_path=args.record_path,
+                authority_record_commit=args.authority_record_commit,
             )
+            if record != validate_record_shape(load_json(root / args.record_path)):
+                raise ActivationError(
+                    "supplied authority record differs from the committed record path"
+                )
             vellum_token = os.environ.get("VELLUM_AUTHORITY_READER_TOKEN")
             pulp_token = os.environ.get("PULP_AUTHORITY_READER_TOKEN")
             vellum_app_jwt = os.environ.get("VELLUM_AUTHORITY_APP_JWT")
