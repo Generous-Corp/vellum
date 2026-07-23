@@ -59,6 +59,18 @@ if(VELLUM_BUILD_TESTS AND VELLUM_AUTHORING_TEST_BUNDLE)
     endif()
 endif()
 
+if(VELLUM_BUILD_TESTS AND VELLUM_PHASE3_TEST_BUNDLE)
+    find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME vellum.app-host-phase3-scenario
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/test_phase3_scenario.py"
+            "$<TARGET_FILE:vellum-app-host>"
+            "${PROJECT_SOURCE_DIR}"
+            "${VELLUM_PHASE3_TEST_BUNDLE}")
+    set_tests_properties(vellum.app-host-phase3-scenario PROPERTIES
+        ENVIRONMENT "MTL_DEBUG_LAYER=0")
+endif()
+
 if(VELLUM_BUILD_TESTS)
     add_executable(vellum-macos-accessibility-test
         macos_accessibility.mm

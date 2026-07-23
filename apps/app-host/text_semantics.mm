@@ -323,4 +323,67 @@ bool assert_accessibility_node(
     return true;
 }
 
+bool assert_node_text(
+    const authoring::RenderedApplication& rendered,
+    std::string_view node_id,
+    std::string_view expected,
+    std::string* error) {
+    const auto* node = vellum::graphics::find_node(rendered.scene, node_id);
+    if (node == nullptr) {
+        if (error) *error = "text assertion target is missing: " + std::string(node_id);
+        return false;
+    }
+    std::string actual;
+    const auto append =
+        [&](const auto& self, const vellum::graphics::SceneNode& item) -> void {
+            actual += item.text;
+            for (const auto& child : item.children) self(self, child);
+        };
+    append(append, *node);
+    if (actual.find(expected) == std::string::npos) {
+        if (error) {
+            *error = "scenario text assertion failed for " + std::string(node_id) +
+                     ": " + actual;
+        }
+        return false;
+    }
+    return true;
+}
+
+bool touch_node(
+    authoring::JsApplication& application,
+    authoring::RenderedApplication& rendered,
+    std::string_view node_id,
+    std::string_view event_json,
+    std::string* error) {
+    const auto interaction = std::find_if(
+        rendered.interactions.begin(), rendered.interactions.end(),
+        [node_id](const authoring::Interaction& item) {
+            return item.node_id == node_id && item.event == "press";
+        });
+    if (interaction == rendered.interactions.end()) {
+        if (error) {
+            *error = "scenario touch target is missing or not pressable: " +
+                     std::string(node_id);
+        }
+        return false;
+    }
+    std::string before;
+    if (!application.snapshot_state(before, error) ||
+        !application.dispatch(
+            interaction->action, event_json, rendered, error)) {
+        return false;
+    }
+    std::string after;
+    if (!application.snapshot_state(after, error)) return false;
+    if (before == after) {
+        if (error) {
+            *error = "scenario touch did not change application state: " +
+                     std::string(node_id);
+        }
+        return false;
+    }
+    return true;
+}
+
 }  // namespace vellum::app_host::text_semantics

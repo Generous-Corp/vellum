@@ -605,6 +605,110 @@ public:
         return call_tree(@"dispatchJSON", @[request_json], output, error);
     }
 
+    bool configure_service_host(
+        std::string_view capabilities_json, std::string* error) {
+        NSString* encoded = ns_string(capabilities_json);
+        NSData* data = [encoded dataUsingEncoding:NSUTF8StringEncoding];
+        NSError* parse_error = nil;
+        id capabilities = data == nil ? nil : [NSJSONSerialization
+            JSONObjectWithData:data options:0 error:&parse_error];
+        if (![capabilities isKindOfClass:NSDictionary.class] ||
+            ![NSJSONSerialization isValidJSONObject:capabilities]) {
+            set_error(error, "service capabilities must be a JSON object");
+            return false;
+        }
+        context_.exception = nil;
+        context_[@"__vellumNativeServiceCapabilities"] = capabilities;
+        [context_ evaluateScript:
+            @"globalThis.__vellumServiceHost={"
+             "capabilities:globalThis.__vellumNativeServiceCapabilities,"
+             "responses:[],requests:[],"
+             "request(request){"
+               "this.requests.push(request);"
+               "const response=this.responses.shift();"
+               "if(!response)return Promise.reject(new Error('no queued service response'));"
+               "return Promise.resolve({...response,id:request.id});"
+             "}"
+             "};"
+             "delete globalThis.__vellumNativeServiceCapabilities;"];
+        return consume_exception(error);
+    }
+
+    bool enqueue_service_response(
+        std::string_view response_json, std::string* error) {
+        NSString* encoded = ns_string(response_json);
+        NSData* data = [encoded dataUsingEncoding:NSUTF8StringEncoding];
+        NSError* parse_error = nil;
+        id response = data == nil ? nil : [NSJSONSerialization
+            JSONObjectWithData:data options:0 error:&parse_error];
+        if (![response isKindOfClass:NSDictionary.class] ||
+            ![NSJSONSerialization isValidJSONObject:response]) {
+            set_error(error, "service response must be a JSON object");
+            return false;
+        }
+        NSDictionary* envelope = static_cast<NSDictionary*>(response);
+        NSDictionary* detail = [envelope[@"error"] isKindOfClass:NSDictionary.class]
+            ? static_cast<NSDictionary*>(envelope[@"error"]) : nil;
+        if ([envelope[@"ok"] isEqual:@NO] &&
+            [detail[@"code"] isEqual:@"capability-denied"]) {
+            // A denied capability rejects before a provider request exists.
+            // Do not leave its illustrative response queued for the next
+            // granted service operation.
+            return true;
+        }
+        context_.exception = nil;
+        JSValue* host = context_[@"__vellumServiceHost"];
+        JSValue* responses = [host valueForProperty:@"responses"];
+        JSValue* push = [responses valueForProperty:@"push"];
+        if (host == nil || host.isUndefined || responses == nil ||
+            responses.isUndefined || push == nil || !push.isObject) {
+            set_error(error, "native service host is not configured");
+            return false;
+        }
+        [responses invokeMethod:@"push" withArguments:@[response]];
+        return consume_exception(error);
+    }
+
+    bool service_response_queue_empty(bool& empty, std::string* error) {
+        empty = false;
+        context_.exception = nil;
+        JSValue* host = context_[@"__vellumServiceHost"];
+        JSValue* responses = [host valueForProperty:@"responses"];
+        JSValue* length = [responses valueForProperty:@"length"];
+        if (host == nil || host.isUndefined || responses == nil ||
+            responses.isUndefined || length == nil || !length.isNumber) {
+            set_error(error, "native service host is not configured");
+            return false;
+        }
+        empty = length.toInt32 == 0;
+        return consume_exception(error);
+    }
+
+    bool has_command(
+        std::string_view command, bool& present, std::string* error) {
+        present = false;
+        NSString* value = ns_string(command);
+        if (value == nil || value.length == 0U) {
+            set_error(error, "command must be non-empty valid UTF-8");
+            return false;
+        }
+        context_.exception = nil;
+        JSValue* bridge = context_[@"__vellum"];
+        JSValue* method = [bridge valueForProperty:@"hasCommand"];
+        if (method == nil || method.isUndefined || !method.isObject) {
+            set_error(error, "application bridge does not expose the command registry");
+            return false;
+        }
+        JSValue* result = [bridge invokeMethod:@"hasCommand" withArguments:@[value]];
+        if (!consume_exception(error)) return false;
+        if (result == nil || !result.isBoolean) {
+            set_error(error, "application command registry returned a non-boolean result");
+            return false;
+        }
+        present = result.toBool;
+        return true;
+    }
+
     bool snapshot(std::string& output, std::string* error) {
         NSString* result = call_string(@"snapshotStateJSON", @[], error);
         if (result == nil) return false;
@@ -883,6 +987,32 @@ bool JsApplication::dispatch(
     std::string_view action, std::string_view payload_json,
     RenderedApplication& output, std::string* error) {
     @autoreleasepool { return impl_->dispatch(action, payload_json, output, error); }
+}
+
+bool JsApplication::configure_service_host(
+    std::string_view capabilities_json, std::string* error) {
+    @autoreleasepool {
+        return impl_->configure_service_host(capabilities_json, error);
+    }
+}
+
+bool JsApplication::enqueue_service_response(
+    std::string_view response_json, std::string* error) {
+    @autoreleasepool {
+        return impl_->enqueue_service_response(response_json, error);
+    }
+}
+
+bool JsApplication::service_response_queue_empty(
+    bool& empty, std::string* error) {
+    @autoreleasepool {
+        return impl_->service_response_queue_empty(empty, error);
+    }
+}
+
+bool JsApplication::has_command(
+    std::string_view command, bool& present, std::string* error) {
+    @autoreleasepool { return impl_->has_command(command, present, error); }
 }
 
 bool JsApplication::snapshot_state(std::string& output_json, std::string* error) {

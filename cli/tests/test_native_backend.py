@@ -251,6 +251,40 @@ class NativeBackendTests(unittest.TestCase):
                 '{"label":"Board title","role":"text-field","value":"GPU Notes日本語"}',
             ])
 
+    def test_phase3_v2_actions_lower_to_ordered_native_host_contract(self) -> None:
+        scenario = REPO / "fixtures/authoring-phase3/scenarios/phase3.json"
+        capabilities = {
+            "commands": "v1",
+            "files": "denied",
+            "clipboard": "text-v1",
+            "open_url": "external-v1",
+            "network": False,
+            "persistence": "state-v1",
+        }
+        arguments, name = scenario_arguments(
+            {"root": REPO / "fixtures/authoring-phase3",
+             "capabilities": capabilities},
+            str(scenario.relative_to(REPO / "fixtures/authoring-phase3")),
+        )
+        self.assertEqual(name, "unchanged authoring fixture on native and browser")
+        self.assertEqual(arguments[:2], [
+            "--service-capabilities",
+            json.dumps(capabilities, sort_keys=True, separators=(",", ":")),
+        ])
+        self.assertIn("--assert-text", arguments)
+        self.assertIn("--touch", arguments)
+        self.assertIn("--command", arguments)
+        self.assertEqual(arguments.count("--service-result"), 3)
+        self.assertIn("--expected-throw", arguments)
+        self.assertLess(arguments.index("--assert-text"), arguments.index("--touch"))
+        self.assertLess(arguments.index("--touch"), arguments.index("--command"))
+        self.assertLess(arguments.index("--command"), arguments.index("--service-result"))
+        self.assertLess(
+            max(index for index, value in enumerate(arguments)
+                if value == "--service-result"),
+            arguments.index("--expected-throw"),
+        )
+
     def test_state_v1_persistence_is_explicit_and_other_values_fail_closed(self) -> None:
         if not shutil.which("node"):
             self.skipTest("node is unavailable")

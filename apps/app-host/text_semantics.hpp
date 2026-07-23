@@ -65,4 +65,17 @@ bool assert_accessibility_node(
     std::string_view expected_json,
     std::string* error);
 
+bool assert_node_text(
+    const authoring::RenderedApplication& rendered,
+    std::string_view node_id,
+    std::string_view expected,
+    std::string* error);
+
+bool touch_node(
+    authoring::JsApplication& application,
+    authoring::RenderedApplication& rendered,
+    std::string_view node_id,
+    std::string_view event_json,
+    std::string* error);
+
 }  // namespace vellum::app_host::text_semantics

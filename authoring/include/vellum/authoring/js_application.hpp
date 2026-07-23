@@ -103,6 +103,19 @@ public:
         std::string_view payload_json,
         RenderedApplication& output,
         std::string* error = nullptr);
+    [[nodiscard]] bool configure_service_host(
+        std::string_view capabilities_json,
+        std::string* error = nullptr);
+    [[nodiscard]] bool enqueue_service_response(
+        std::string_view response_json,
+        std::string* error = nullptr);
+    [[nodiscard]] bool service_response_queue_empty(
+        bool& empty,
+        std::string* error = nullptr);
+    [[nodiscard]] bool has_command(
+        std::string_view command,
+        bool& present,
+        std::string* error = nullptr);
     [[nodiscard]] bool snapshot_state(
         std::string& output_json, std::string* error = nullptr);
     [[nodiscard]] bool restore_state(

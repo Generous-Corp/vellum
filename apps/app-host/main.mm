@@ -200,7 +200,11 @@ int run_headless(const Options& options, std::string_view bundle) {
         }
         auto application = JsApplication::create(bundle, &error);
         RenderedApplication rendered;
-        if (!application || !application->render(rendered, &error)) {
+        if (!application ||
+            (!options.service_capabilities.empty() &&
+             !application->configure_service_host(
+                 options.service_capabilities, &error)) ||
+            !application->render(rendered, &error)) {
             std::cerr << error << '\n';
             return 1;
         }
@@ -244,6 +248,59 @@ int run_headless(const Options& options, std::string_view bundle) {
                     succeeded = assert_accessibility_node(
                         rendered, step.node_id, step.value, &error);
                     break;
+                case AutomationStep::Kind::assert_text:
+                    succeeded = assert_node_text(
+                        rendered, step.node_id, step.value, &error);
+                    break;
+                case AutomationStep::Kind::touch:
+                    succeeded = touch_node(
+                        *application, rendered, step.node_id, step.value, &error);
+                    break;
+                case AutomationStep::Kind::command: {
+                    bool present = false;
+                    succeeded = application->has_command(
+                        step.node_id, present, &error) && present;
+                    if (!succeeded && error.empty()) {
+                        error = "scenario command is not defined: " + step.node_id;
+                    }
+                    break;
+                }
+                case AutomationStep::Kind::service_result: {
+                    succeeded =
+                        application->enqueue_service_response(step.value, &error) &&
+                        press_node(
+                            *application, rendered, step.node_id, &error);
+                    bool empty = false;
+                    if (succeeded) {
+                        succeeded = application->service_response_queue_empty(
+                            empty, &error) && empty;
+                        if (!succeeded && error.empty()) {
+                            error = "scenario service response was not consumed by " +
+                                    step.node_id;
+                        }
+                    }
+                    break;
+                }
+                case AutomationStep::Kind::expected_throw: {
+                    const bool dispatched = press_node(
+                        *application, rendered, step.node_id, &error);
+                    std::string comparable = error;
+                    for (std::size_t position = 0;
+                         (position = comparable.find("\\/", position)) !=
+                             std::string::npos;) {
+                        comparable.replace(position, 2U, "/");
+                        ++position;
+                    }
+                    succeeded =
+                        !dispatched &&
+                        comparable.find(step.value) != std::string::npos;
+                    if (succeeded) {
+                        error.clear();
+                    } else if (dispatched) {
+                        error = "scenario expected mapped throw from " + step.node_id;
+                    }
+                    break;
+                }
             }
             if (!succeeded ||
                 !application->wait_for_idle(4096, rendered, idle, &error) ||

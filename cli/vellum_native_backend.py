@@ -422,6 +422,15 @@ def scenario_arguments(context: dict[str, Any], scenario_value: str | None) -> t
 
     scenario_name = scenario["name"]
     arguments: list[str] = []
+    capabilities = context.get("capabilities")
+    if isinstance(capabilities, dict):
+        arguments.extend([
+            "--service-capabilities",
+            json.dumps(
+                capabilities, sort_keys=True, separators=(",", ":"),
+                ensure_ascii=False,
+            ),
+        ])
     viewport = scenario.get("viewport")
     if viewport:
         arguments.extend(["--expect-width", str(viewport["width"])])
@@ -457,6 +466,35 @@ def scenario_arguments(context: dict[str, Any], scenario_value: str | None) -> t
                     step["expect"], sort_keys=True, separators=(",", ":"),
                     ensure_ascii=False,
                 ),
+            ])
+            continue
+        if action == "assert-text":
+            arguments.extend(["--assert-text", step["target"], str(step["expect"])])
+            continue
+        if action == "touch":
+            arguments.extend([
+                "--touch", step["target"],
+                json.dumps(
+                    step["event"].get("payload"),
+                    sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+                ),
+            ])
+            continue
+        if action == "command":
+            arguments.extend(["--command", step["target"]])
+            continue
+        if action == "service-result":
+            arguments.extend([
+                "--service-result", step["target"],
+                json.dumps(
+                    step["service"], sort_keys=True, separators=(",", ":"),
+                    ensure_ascii=False,
+                ),
+            ])
+            continue
+        if action == "throw":
+            arguments.extend([
+                "--expected-throw", step["target"], str(step.get("expect", "")),
             ])
             continue
         raise AssertionError(f"validated scenario action was not lowered: {action}")
