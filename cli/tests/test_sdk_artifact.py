@@ -331,8 +331,8 @@ class SdkArtifactTests(unittest.TestCase):
             ])
             verification = json.loads(verified.stdout)
             self.assertTrue(verification["ok"])
-            self.assertEqual(verification["framework_version"], "0.1.2")
-            self.assertEqual(verification["cli_version"], "0.1.2")
+            self.assertEqual(verification["framework_version"], "0.1.3")
+            self.assertEqual(verification["cli_version"], "0.1.3")
             self.assertTrue(verification["contamination_free"])
             self.assertEqual(verification["contamination_findings"], [])
             self.assertEqual(verification["claims"]["gpu_renderer"], False)
@@ -406,7 +406,7 @@ class SdkArtifactTests(unittest.TestCase):
             ])
             validation = json.loads(validated.stdout)
             self.assertTrue(validation["ok"])
-            self.assertEqual(validation["cli_version"], "0.1.2")
+            self.assertEqual(validation["cli_version"], "0.1.3")
             self.assertTrue(all(validation["checks"].values()))
 
             prefix = root / "prefix"
@@ -422,7 +422,7 @@ class SdkArtifactTests(unittest.TestCase):
             self.assertEqual(install_manifest["source_commit"], current_head)
             self.assertTrue(install_manifest["verified"])
             if shutil.which("curl"):
-                release_dir = root / "release/v0.1.2"
+                release_dir = root / "release/v0.1.3"
                 release_dir.mkdir(parents=True)
                 shutil.copy2(first_archive, release_dir / first_archive.name)
                 shutil.copy2(INSTALLER, release_dir / "install.sh")
@@ -446,7 +446,7 @@ class SdkArtifactTests(unittest.TestCase):
                 release_temporary = root / "release-temporary"
                 release_temporary.mkdir()
                 release_install = self.run_checked([
-                    "sh", str(INSTALLER), "--version", "0.1.2",
+                    "sh", str(INSTALLER), "--version", "0.1.3",
                     "--target", "test-host",
                     "--release-base-url", (root / "release").as_uri(),
                     "--install-dir", str(release_prefix),
@@ -477,7 +477,7 @@ class SdkArtifactTests(unittest.TestCase):
             ], cwd=root)
             self.assertEqual(json.loads(created.stdout)["status"], "created")
             lock = json.loads((project / "framework.lock").read_text(encoding="utf-8"))
-            self.assertEqual(lock["framework"]["version"], "0.1.2")
+            self.assertEqual(lock["framework"]["version"], "0.1.3")
             self.assertEqual(lock["framework"]["artifact"], {
                 "verified": True,
                 "sha256": verification["sha256"],

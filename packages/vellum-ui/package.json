@@ -36,6 +36,9 @@
   "dependencies": {
     "esbuild": "0.28.1"
   },
+  "bundleDependencies": [
+    "esbuild"
+  ],
   "devDependencies": {
     "typescript": "7.0.2"
   }

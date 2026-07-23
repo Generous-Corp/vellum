@@ -25,7 +25,7 @@ from install_core import (  # noqa: E402
     verify_archive_contract,
 )
 
-FRAMEWORK_VERSION = "0.1.2"
+FRAMEWORK_VERSION = "0.1.3"
 CLI_VERSION = FRAMEWORK_VERSION
 
 
