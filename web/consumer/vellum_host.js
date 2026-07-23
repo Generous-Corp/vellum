@@ -155,8 +155,8 @@ async function runScenario(path) {
             throw new Error(`unsupported scenario action: ${step.action}`);
         }
     }
-    if (presses.length === 0 || presses.some(item => !item.changed)) {
-        throw new Error('scenario must contain a state-changing semantic press');
+    if (presses.some(item => !item.changed)) {
+        throw new Error('every semantic press must change rendered state');
     }
     return {schema: 'vellum.web-proof.v1', scenario: scenario.name, backend: api.backend(),
         authoringRuntime: 'browser JavaScript', initial, final: current, captures, presses,

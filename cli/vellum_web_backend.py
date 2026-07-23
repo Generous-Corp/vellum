@@ -204,6 +204,46 @@ def chrome_path() -> str:
     return chrome
 
 
+def validate_scenario_evidence(evidence: dict[str, Any]) -> None:
+    def valid_frame(value: object) -> bool:
+        if not isinstance(value, dict):
+            return False
+        digest = value.get("digest")
+        command_count = value.get("commandCount")
+        return (
+            isinstance(digest, int)
+            and not isinstance(digest, bool)
+            and digest >= 0
+            and isinstance(command_count, int)
+            and not isinstance(command_count, bool)
+            and command_count > 0
+        )
+
+    presses = evidence.get("presses")
+    canvas_bytes = evidence.get("canvasDataBytes")
+    if (
+        evidence.get("schema") != "vellum.web-proof.v1"
+        or evidence.get("bootError")
+        or evidence.get("backend") != "wasm-shared-cpp-core+canvas2d-shell"
+        or evidence.get("authoringRuntime") != "browser JavaScript"
+        or not valid_frame(evidence.get("initial"))
+        or not valid_frame(evidence.get("final"))
+        or not isinstance(evidence.get("captures"), list)
+        or not isinstance(canvas_bytes, int)
+        or isinstance(canvas_bytes, bool)
+        or canvas_bytes < 1000
+        or not isinstance(presses, list)
+        or not all(
+                isinstance(item, dict) and item.get("changed") is True
+                for item in presses
+        )
+    ):
+        raise BackendFailure(
+            f"Browser scenario proof failed: {evidence}",
+            status="test_failed",
+        )
+
+
 def run_scenario(build: Path, scenario: Path) -> dict[str, Any]:
     scenario_copy = build / "__vellum_scenario.json"
     shutil.copy2(scenario, scenario_copy)
@@ -244,9 +284,7 @@ def run_scenario(build: Path, scenario: Path) -> dict[str, Any]:
                 process.kill(); process.wait(5)
         server.shutdown(); thread.join(5)
         scenario_copy.unlink(missing_ok=True)
-    if evidence.get("schema") != "vellum.web-proof.v1" or evidence.get("bootError") or \
-            not evidence.get("presses") or not all(item.get("changed") for item in evidence["presses"]):
-        raise BackendFailure(f"Browser scenario proof failed: {evidence}", status="test_failed")
+    validate_scenario_evidence(evidence)
     return evidence
 
 

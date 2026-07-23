@@ -255,6 +255,26 @@ def install_project_js_dependencies(root: Path) -> tuple[bool, str]:
     return True, "materialized exact project-locked @vellum/ui without external npm"
 
 
+def adapt_smoke_scenario_for_imported_design(root: Path) -> None:
+    """Keep the initial proof honest when a design replaces the basic UI.
+
+    The basic template owns an interactive ``increment`` control. An imported
+    design does not inherit that application behavior, so its initial smoke
+    scenario proves boot and rendering without inventing semantics for buttons
+    that came from the design source.
+    """
+    scenario_path = root / "tests/scenarios/smoke.json"
+    scenario = json.loads(scenario_path.read_text(encoding="utf-8"))
+    scenario["steps"] = [
+        {"action": "wait-for-idle"},
+        {"action": "capture", "name": "imported-design"},
+    ]
+    scenario_path.write_text(
+        json.dumps(scenario, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
 def create_project(args: argparse.Namespace) -> dict[str, Any]:
     if args.run and args.no_verify:
         raise CliFailure("--run cannot be combined with --no-verify.", status="invalid_arguments", exit_code=EXIT_USAGE)
@@ -367,6 +387,7 @@ def create_project(args: argparse.Namespace) -> dict[str, Any]:
                 },
                 diagnostics=backend_payload.get("diagnostics", []),
             )
+        adapt_smoke_scenario_for_imported_design(destination)
 
     validation: dict[str, Any] = {
         "status": "not_available",
@@ -403,7 +424,8 @@ def create_project(args: argparse.Namespace) -> dict[str, Any]:
             validation = {"status": "passed", "commands": completed_commands}
             if args.run:
                 backend_payload, return_code = invoke_backend(
-                    "run", destination, lock, ["--target", validation_target, "--no-build", "--no-window"]
+                    "run", destination, lock,
+                    ["--target", validation_target, "--no-build"],
                 )
                 validation["commands"].append({"command": "run", "status": backend_payload.get("status")})
                 if return_code != 0 or not backend_payload.get("ok"):
@@ -674,6 +696,27 @@ def node_version(executable: str | None = None) -> tuple[bool, str]:
     return bool(completed.returncode == 0 and match and int(match.group(1)) >= 20), rendered
 
 
+def component_compiler_status() -> tuple[bool, str]:
+    xcrun = shutil.which("xcrun")
+    if xcrun:
+        try:
+            completed = subprocess.run(
+                [xcrun, "--find", "clang++"],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        except OSError as error:
+            return False, str(error)
+        compiler = completed.stdout.strip()
+        if completed.returncode == 0 and compiler and Path(compiler).is_file():
+            return True, compiler
+        detail = completed.stderr.strip() or completed.stdout.strip()
+        return False, detail or "xcrun could not locate clang++"
+    compiler = shutil.which("clang++")
+    return (True, compiler) if compiler else (False, "clang++ not found")
+
+
 def doctor(args: argparse.Namespace) -> dict[str, Any]:
     diagnostics: list[dict[str, Any]] = []
     project_root: Path | None = None
@@ -752,6 +795,7 @@ def doctor(args: argparse.Namespace) -> dict[str, Any]:
     import_required = bool(command_capabilities.get("import") or command_capabilities.get("reimport"))
     web_commands = sdk[1]["capabilities"].get("targets", {}).get("web", {}).get("commands", {}) if sdk else {}
     web_required = any(web_commands.values())
+    compiler_available, compiler_detail = component_compiler_status()
     checks = [
         check_item("python", required=True, available=sys.version_info >= (3, 9), detail=sys.version.split()[0]),
         check_item("project-lock", required=bool(args.project), available=lock_valid, detail=str(project_root) if project_root else "not in a Vellum project"),
@@ -777,6 +821,16 @@ def doctor(args: argparse.Namespace) -> dict[str, Any]:
                 else f"{component_count} declared; installed ABI unavailable"
             ),
             fix="Install the exact GPU SDK artifact that provides the component ABI.",
+        ),
+        check_item(
+            "custom-component-compiler",
+            required=component_count > 0,
+            available=compiler_available,
+            detail=compiler_detail,
+            fix=(
+                "Install the Xcode Command Line Tools with "
+                "`xcode-select --install`, then accept any required Xcode license."
+            ),
         ),
     ]
     required_ok = all(item["available"] for item in checks if item["required"])

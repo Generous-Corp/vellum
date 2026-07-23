@@ -89,6 +89,85 @@ class CliTests(unittest.TestCase):
             self.assertEqual(json.loads(completed.stdout)["status"], "capability_unavailable")
             self.assertFalse(destination.exists())
 
+    def test_create_run_launches_after_build_and_test_proof(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sdk = root / "sdk"
+            sdk.mkdir()
+            commands = {
+                "import": False, "reimport": False, "build": True, "run": True,
+                "test": True, "capture": False, "package": False,
+            }
+            (sdk / "metadata.json").write_text(json.dumps({
+                "schema": "vellum.sdk-artifact.v1",
+                "framework_version": "0.1.0",
+                "cli_version": "0.1.0-dev",
+                "cli_api": 1,
+                "source_commit": None,
+                "target": "test-host",
+                "capabilities": {
+                    "authoring_cli": True,
+                    "cmake_sdk": False,
+                    "gpu_renderer": False,
+                    "custom_components": False,
+                    "commands": commands,
+                    "targets": {
+                        "macos": {
+                            "commands": {
+                                "build": True,
+                                "run": True,
+                                "test": True,
+                            },
+                        },
+                    },
+                },
+                "files": [],
+            }), encoding="utf-8")
+            (sdk / "install-manifest.json").write_text(json.dumps({
+                "schema": "vellum.sdk-install.v1",
+                "verified": False,
+                "artifact": None,
+                "artifact_sha256": None,
+                "framework_version": "0.1.0",
+                "target": "test-host",
+                "source_commit": None,
+            }), encoding="utf-8")
+            invocations = root / "invocations.jsonl"
+            backend = root / "backend"
+            backend.write_text(
+                f"#!{sys.executable}\n"
+                "import json, os, sys\n"
+                "with open(os.environ['VELLUM_TEST_INVOCATIONS'], 'a', encoding='utf-8') as output:\n"
+                "    output.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+                "command = sys.argv[1]\n"
+                "status = {'build':'built','test':'tests_passed','run':'launched'}[command]\n"
+                "print(json.dumps({'schema':'vellum.backend.result.v1','ok':True,'status':status,'message':'ok','data':{},'diagnostics':[]}))\n",
+                encoding="utf-8",
+            )
+            backend.chmod(0o755)
+            destination = root / "app"
+            completed = invoke(
+                "create", "Launchable", "-d", str(destination), "--run", "--json",
+                env={
+                    "VELLUM_SDK_ROOT": str(sdk),
+                    "VELLUM_BACKEND": str(backend),
+                    "VELLUM_TEST_INVOCATIONS": str(invocations),
+                },
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            calls = [
+                json.loads(line)
+                for line in invocations.read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual([call[0] for call in calls], ["build", "test", "run"])
+            self.assertIn("--no-build", calls[-1])
+            self.assertNotIn("--no-window", calls[-1])
+            validation = json.loads(completed.stdout)["data"]["validation"]
+            self.assertEqual(validation["commands"][-1], {
+                "command": "run",
+                "status": "launched",
+            })
+
     def test_create_from_requires_import_capability_before_writing(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -145,6 +224,15 @@ class CliTests(unittest.TestCase):
             self.assertEqual(payload["data"]["validation"]["commands"], [
                 {"command": "import", "status": "imported"}
             ])
+            smoke = json.loads(
+                (destination / "tests/scenarios/smoke.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(smoke["steps"], [
+                {"action": "wait-for-idle"},
+                {"action": "capture", "name": "imported-design"},
+            ])
 
     def test_create_refuses_file_destination_without_traceback(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -183,6 +271,41 @@ class CliTests(unittest.TestCase):
             self.assertEqual(payload["data"]["project_root"], str(project.resolve()))
             self.assertTrue((project / ".vellum/cache").is_dir())
             self.assertTrue((project / ".vellum/state").is_dir())
+
+    def test_doctor_requires_a_compiler_for_declared_custom_components(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary) / "app"
+            self.assertEqual(
+                invoke("create", "Component Doctor", "-d", str(project)).returncode,
+                0,
+            )
+            (project / "native/components.toml").write_text(
+                '[manifest]\n'
+                'schema = "vellum.components.v1"\n'
+                'components = ["gamut-field"]\n\n'
+                '[component.gamut-field]\n'
+                'native_source = "native/gamut-field.cpp"\n'
+                'web = "fallback"\n',
+                encoding="utf-8",
+            )
+            (project / "native/gamut-field.cpp").write_text(
+                '#include <vellum/components/abi.h>\n',
+                encoding="utf-8",
+            )
+            completed = invoke(
+                "doctor", "--project", str(project), "--json",
+                env={"PATH": "/path-that-does-not-exist"},
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            payload = json.loads(completed.stdout)
+            compiler = next(
+                item
+                for item in payload["data"]["checks"]
+                if item["name"] == "custom-component-compiler"
+            )
+            self.assertTrue(compiler["required"])
+            self.assertFalse(compiler["available"])
+            self.assertIn("xcode-select --install", compiler["fix"])
 
     def test_backend_command_fails_honestly_with_stable_json(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
