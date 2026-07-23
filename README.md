@@ -320,8 +320,7 @@ proves the imported design is embedded in the application bundle, exercises
 build/run/test/capture/package, and builds/tests a sterile CMake consumer
 without a Vellum or Pulp checkout.
 
-No hosted Vellum release is claimed here yet. Once the exact `v0.1.0` release is
-published, the installer consumes it without a moving `latest` pointer:
+The exact `v0.1.0` release is consumed without a moving `latest` pointer:
 
 ```sh
 ./scripts/install.sh --version 0.1.0
