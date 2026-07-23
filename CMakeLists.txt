@@ -62,6 +62,9 @@ if(VELLUM_BUILD_SMOKE_NATIVE)
 endif()
 
 if(APPLE AND TARGET vellum-gpu)
+    if(TARGET vellum-authoring)
+        add_subdirectory(apps/app-host)
+    endif()
     add_subdirectory(apps/gpu-native)
 endif()
 
