@@ -1,59 +1,21 @@
 schema_version: 1
-status: open
-milestone: phase-1-audio-free-kernel
+status: closed
+milestone: phase-1-raw-seed-retirement
+open_debt_count: 0
 policy:
   exported_forbidden_edges_allowed: 0
   linked_forbidden_edges_allowed: 0
   installed_forbidden_edges_allowed: 0
   runnable_forbidden_edges_allowed: 0
-debts:
-  - id: raw-seed-unresolved-classification
-    owner: framework-core
-    expires_at_milestone: phase-1-audio-free-kernel
-    rationale: >-
-      The history-preserving seed contains 39 files whose Pulp build or API
-      boundaries are not yet audio-neutral. They remain source-only quarantine:
-      no active target, installed artifact, package, or runnable fixture may
-      reference them. Each path must be split, reimplemented, positively
-      classified, or removed before Phase 1 can pass.
-    containment_proof: tools/provenance/verify_extraction.py
-    paths:
-      - core/canvas/CMakeLists.txt
-      - core/canvas/include/pulp/canvas/font_options.hpp
-      - core/canvas/include/pulp/canvas/font_resolver.hpp
-      - core/canvas/include/pulp/canvas/font_scope.hpp
-      - core/canvas/src/font_resolver.cpp
-      - core/canvas/src/font_scope.cpp
-      - core/render/CMakeLists.txt
-      - core/render/include/pulp/render/bench/perf_counters.hpp
-      - core/view/include/pulp/view/design_import.hpp
-      - core/view/include/pulp/view/design_ir.hpp
-      - core/view/include/pulp/view/design_sources.hpp
-      - core/view/include/pulp/view/theme.hpp
-      - core/view/include/pulp/view/view.hpp
-      - core/view/include/pulp/view/view_fwd.hpp
-      - core/view/include/pulp/view/widgets.hpp
-      - core/view/include/pulp/view/widgets/svg_line.hpp
-      - core/view/include/pulp/view/widgets/svg_rect.hpp
-      - core/view/platform/mac/window_host_mac.mm
-      - core/view/platform/mac/window_host_mac_capture.h
-      - core/view/platform/mac/window_host_mac_capture.mm
-      - core/view/platform/mac/window_host_mac_geometry.mm
-      - core/view/platform/mac/window_host_mac_internal.hpp
-      - core/view/platform/mac/window_host_mac_view.h
-      - core/view/src/design_import.cpp
-      - core/view/src/design_import_internal.hpp
-      - core/view/src/design_import_native_common.cpp
-      - core/view/src/design_import_native_common.hpp
-      - core/view/src/design_ir_analysis.cpp
-      - core/view/src/design_ir_helpers.hpp
-      - core/view/src/design_ir_json.cpp
-      - core/view/src/design_ir_normalize.cpp
-      - core/view/src/theme.cpp
-      - core/view/src/view.cpp
-      - core/view/src/widgets.cpp
-      - core/view/src/widgets/label.cpp
-      - core/view/src/widgets/svg_line.cpp
-      - core/view/src/widgets/svg_rect.cpp
-      - core/view/src/widgets/visualizers.cpp
-      - packages/pulp-import-ir/src/types.ts
+historical_seed:
+  manifest: ../cut-manifest.json
+  manifest_entry_count: 235
+  unresolved_entry_count_at_cut: 39
+  retired_active_path_count: 232
+  disposition: retained-in-git-history-and-immutable-provenance-only
+debts: []
+closure_evidence:
+  - tools/provenance/verify_extraction.py
+  - provenance/active-source-boundary.json
+  - scripts/verify_sdk_artifact.py
+  - scripts/validate_installed_sdk.py

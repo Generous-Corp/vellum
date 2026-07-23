@@ -1,19 +1,19 @@
 schema_version: 1
-state: prepared
+state: historical-seed-retired
 source_manifest: ../cut-manifest.json
 mappings:
   - legacy_prefix: core/canvas/
     vellum_module: graphics-canvas
-    authority: pulp-authoritative-untransferred
+    authority: historical-only-not-an-active-copy
   - legacy_prefix: core/render/
     vellum_module: graphics-render
-    authority: pulp-authoritative-untransferred
+    authority: historical-only-not-an-active-copy
   - legacy_prefix: core/view/
     vellum_module: ui-and-design-runtime
-    authority: pulp-authoritative-untransferred
+    authority: historical-only-not-an-active-copy
   - legacy_prefix: packages/pulp-import-ir/
     vellum_module: design-compiler
-    authority: pulp-authoritative-untransferred
+    authority: historical-only-not-an-active-copy
   - legacy_prefix: tools/figma-plugin/schema/
     vellum_module: none
     authority: pulp-only

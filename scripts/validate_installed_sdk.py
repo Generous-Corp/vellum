@@ -12,12 +12,23 @@ import sys
 import tempfile
 from typing import Iterable
 
+from verify_sdk_artifact import payload_contamination_findings
+
 
 REPO = Path(__file__).resolve().parents[1]
 
 
 class ValidationError(RuntimeError):
     pass
+
+
+def installed_contamination_findings(prefix: Path) -> list[dict[str, str]]:
+    findings: list[dict[str, str]] = []
+    for path in sorted(item for item in prefix.rglob("*") if item.is_file()):
+        findings.extend(
+            payload_contamination_findings(path.relative_to(prefix).as_posix(), path.read_bytes())
+        )
+    return findings
 
 
 def run(arguments: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -45,6 +56,13 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
             "--archive", str(archive), "--checksums", str(checksums),
             "--install-dir", str(prefix),
         ], cwd=root)
+
+        contamination = installed_contamination_findings(prefix)
+        if contamination:
+            first = contamination[0]
+            raise ValidationError(
+                f"installed SDK contamination: {first['rule']} in {first['path']}"
+            )
 
         consumer_source = root / "consumer-source"
         shutil.copytree(REPO / "apps/smoke-native/install-consumer", consumer_source)
@@ -111,7 +129,9 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
         "claims": verification["claims"],
         "checks": {
             "checksum_and_payload_manifest": True,
+            "artifact_contamination_scan": verification["contamination_free"],
             "clean_prefix_install": True,
+            "installed_tree_contamination_scan": not contamination,
             "relocatable_cmake_package": True,
             "sterile_consumer_configure": True,
             "sterile_consumer_build": True,

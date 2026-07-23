@@ -2,37 +2,37 @@ schema_version: 1
 framework_repository: Generous-Corp/vellum
 freeze_owner: "@danielraffel"
 activation:
-  state: prepared
+  state: independent-validation
   pulp_extraction_base: 2ccff748f0d59da34b01ce1fbceabcf19f452731
   vellum_authority_commit: null
   pulp_activation_commit: null
   accepted_by: null
   accepted_at: null
 
-# The exact path-level projection is generated in Pulp and is preserved in
-# cut-manifest.json. No row below is authoritative until the two-repository
-# activation handshake records immutable commits on both sides.
-slices:
+# The historical projection remains byte-locked in cut-manifest.json and Git
+# history. It is not present as editable source at the active tip and no source
+# authority has transferred. The rows below describe historical lineage only.
+historical_slices:
   - id: canvas-kernel
-    state: pulp-authoritative-untransferred
+    state: historical-seed-retired-not-active
     source_projection: cut-manifest.json
   - id: capture-primitives
-    state: pulp-authoritative-untransferred
+    state: historical-seed-retired-not-active
     source_projection: cut-manifest.json
   - id: design-schema-compiler
-    state: pulp-authoritative-untransferred
+    state: historical-seed-retired-not-active
     source_projection: cut-manifest.json
   - id: macos-shell
-    state: pulp-authoritative-untransferred
+    state: historical-seed-retired-not-active
     source_projection: cut-manifest.json
   - id: retained-ui-kernel
-    state: pulp-authoritative-untransferred
+    state: historical-seed-retired-not-active
     source_projection: cut-manifest.json
   - id: render-kernel
-    state: pulp-authoritative-untransferred
+    state: historical-seed-retired-not-active
     source_projection: cut-manifest.json
   - id: legal-provenance
-    state: copied-attribution-not-transferred
+    state: historical-record-only
     source_projection: cut-manifest.json
   - id: legacy-figma-schema
     state: pulp-only
@@ -41,9 +41,7 @@ slices:
   - id: pulp-cli-plugin-mcp
     state: pulp-only
 
-reimplemented_slices:
-  # New Vellum-only source may be added here only after it has its own tests and
-  # a provenance note. It does not cause matching Pulp source to transfer.
+vellum_owned_slices:
   - id: vellum-foundation
     state: framework-reimplemented-no-transfer
   - id: vellum-design-ir

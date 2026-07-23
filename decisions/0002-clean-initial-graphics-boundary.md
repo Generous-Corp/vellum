@@ -14,8 +14,8 @@ backend with no transferred Pulp source. It proves the app lifecycle, drawing
 API shape, native window, pixel content floor, install/export boundary, and
 sterile consumer without claiming the required Skia/Dawn GPU runtime exists.
 
-The history-preserved Pulp canvas remains source-only input to the later GPU
-slice. Before any of it becomes authoritative or installed, Vellum must create
-clean Skia/Dawn targets, eliminate all unresolved dependency debt, replace
-`pulp/*` public identities, and pass the forbidden-dependency and sterile-SDK
-gates.
+The history-preserved canvas may be consulted through Git history when
+designing a later GPU slice, but Decision 0003 removes it from the active tip.
+Any GPU implementation must arrive as Vellum-owned source with clean Skia/Dawn
+targets, Vellum public identities, complete dependency provenance, and passing
+source, artifact, and sterile-install gates.

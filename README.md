@@ -13,6 +13,10 @@ The public CLI now has an installed, deterministic DesignIR JSON import and safe
 reimport backend. Native builds, Skia/Dawn GPU rendering, and packaging remain
 SDK-backend capabilities and report `capability_unavailable` until implemented.
 
+The history-preserving Pulp projection has been removed from the active tip.
+Its authorship and exact blobs remain auditable in Git history and immutable
+`provenance/` records; Vellum does not maintain a synchronized editable copy.
+
 ## Five-minute local-development start
 
 No public SDK release exists yet. Install the CLI from this checkout, create a

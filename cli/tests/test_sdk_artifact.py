@@ -63,6 +63,8 @@ class SdkArtifactTests(unittest.TestCase):
             ])
             verification = json.loads(verified.stdout)
             self.assertTrue(verification["ok"])
+            self.assertTrue(verification["contamination_free"])
+            self.assertEqual(verification["contamination_findings"], [])
             self.assertEqual(verification["claims"]["gpu_renderer"], False)
             self.assertEqual(verification["claims"]["commands"]["import"], True)
             self.assertEqual(verification["claims"]["commands"]["reimport"], True)

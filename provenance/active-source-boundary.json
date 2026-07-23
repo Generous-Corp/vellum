@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "status": "raw-seed-retired",
+  "active_source_roots": [
+    "CMakeLists.txt",
+    "apps",
+    "cli",
+    "cmake",
+    "foundation",
+    "graphics",
+    "packages/vellum-design-ir",
+    "runtime",
+    "scripts",
+    "templates"
+  ],
+  "retired_prefixes": [
+    "core/",
+    "external/fonts/",
+    "external/nanosvg/",
+    "packages/pulp-import-ir/",
+    "tools/figma-plugin/"
+  ],
+  "historical_evidence": [
+    "provenance/cut-manifest.json",
+    "provenance/cut-paths.txt",
+    "provenance/filter-repo-commit-map.txt",
+    "provenance/filter-repo-ref-map.txt",
+    "provenance/pulp-extraction.json"
+  ],
+  "rules": {
+    "retired_paths_at_active_tip": 0,
+    "active_files_matching_historical_seed_blobs": 0,
+    "forbidden_namespace_or_product_references": 0,
+    "open_extraction_debts": 0
+  }
+}

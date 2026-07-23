@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Verify Vellum's prepared extraction and active build quarantine.
+"""Verify immutable extraction history and the retired active-source boundary.
 
-This intentionally uses only the Python standard library so it can run before
-the SDK/bootstrap exists. It proves provenance and containment; it does not
-turn a prepared ownership record into an active one.
+The historical cut manifest and filter maps describe the original projection.
+They are verified against the preserved seed commit, not against HEAD. HEAD is
+checked independently to prove that the projection is no longer an editable
+source copy and cannot leak into Vellum's build, SDK, or authoring surface.
 """
 
 from __future__ import annotations
@@ -26,21 +27,24 @@ EXPECTED_HASHES = {
     "filter-repo-commit-map.txt": "c2bfb2665fbecfdab2407c02143bea0f8bf9d18cc779abb12293ff29b7f909c7",
     "filter-repo-ref-map.txt": "ef7546204c7bcbdffbd7bee4d234a2956a201bf51a287de1385afe9a15b01582",
 }
-ACTIVE_ROOTS = (
+EXPECTED_ACTIVE_ROOTS = (
     "CMakeLists.txt",
+    "apps",
+    "cli",
     "cmake",
     "foundation",
-    "runtime",
-    "modules",
-    "authoring",
-    "platforms",
-    "testkit",
-    "apps",
-    "examples",
-    "cli",
-    "templates",
-    "scripts",
+    "graphics",
     "packages/vellum-design-ir",
+    "runtime",
+    "scripts",
+    "templates",
+)
+EXPECTED_RETIRED_PREFIXES = (
+    "core/",
+    "external/fonts/",
+    "external/nanosvg/",
+    "packages/pulp-import-ir/",
+    "tools/figma-plugin/",
 )
 TEXT_SUFFIXES = {
     "",
@@ -64,18 +68,22 @@ TEXT_SUFFIXES = {
     ".yml",
 }
 FORBIDDEN_ACTIVE_PATTERNS = {
-    "pulp-private-repository-reference": re.compile(
-        r"(?:github\.com[:/]Generous-Corp/pulp(?:\.git)?|\.\./pulp(?:/|$))",
+    "pulp-public-namespace": re.compile(
+        r"(?:\bnamespace\s+pulp\b|\bpulp::|#\s*include\s*[<\"]pulp/)",
         re.IGNORECASE,
     ),
-    "audio-plugin-include": re.compile(
-        r"(?:#\s*include\s*[<\"]pulp/(?:audio|format|gpu_audio|graph|host|midi|playback|signal)/|"
-        r"\bpulp::(?:audio|format|gpu_audio|graph|host|midi|playback|signal)::)"
-    ),
-    "audio-plugin-target": re.compile(
-        r"\bpulp[-_:]{1,2}(?:audio|format|gpu_audio|graph|host|midi|playback|signal)\b",
+    "pulp-package-or-target": re.compile(
+        r"(?:@pulp/|\bPULP_[A-Z0-9_]+|\bpulp[-_]"
+        r"(?:audio|canvas|format|gpu|graph|host|midi|plugin|render|runtime|signal|view)\b)",
         re.IGNORECASE,
     ),
+    "audio-plugin-sdk": re.compile(
+        r"\b(?:AudioUnit|VST3|CLAP|LV2|Oboe)\b",
+        re.IGNORECASE,
+    ),
+}
+POLICY_IMPLEMENTATION_PATHS = {
+    "scripts/verify_sdk_artifact.py",
 }
 
 
@@ -85,6 +93,11 @@ def sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def git_blob_sha(content: bytes) -> str:
+    header = f"blob {len(content)}\0".encode("ascii")
+    return hashlib.sha1(header + content).hexdigest()  # noqa: S324 - Git object identity
 
 
 def git(root: Path, *args: str) -> str:
@@ -104,23 +117,21 @@ def seed_blobs(root: Path) -> dict[str, str]:
     return blobs
 
 
-def debt_paths(path: Path) -> set[str]:
-    in_paths = False
-    paths: set[str] = set()
+def top_level_scalar(path: Path, key: str) -> str | None:
+    prefix = f"{key}:"
     for line in path.read_text(encoding="utf-8").splitlines():
-        if line == "    paths:":
-            in_paths = True
-            continue
-        if in_paths and line.startswith("      - "):
-            paths.add(line.removeprefix("      - ").strip())
-        elif in_paths and line and not line.startswith("      "):
-            in_paths = False
-    return paths
+        if line.startswith(prefix):
+            return line.removeprefix(prefix).strip()
+    return None
 
 
-def active_text_files(root: Path) -> Iterable[Path]:
+def configured_boundary(root: Path) -> dict[str, object]:
+    return json.loads((root / "provenance/active-source-boundary.json").read_text())
+
+
+def active_files(root: Path, roots: Iterable[str]) -> Iterable[Path]:
     seen: set[Path] = set()
-    for relative in ACTIVE_ROOTS:
+    for relative in roots:
         candidate = root / relative
         if candidate.is_file():
             files = [candidate]
@@ -129,32 +140,63 @@ def active_text_files(root: Path) -> Iterable[Path]:
         else:
             continue
         for path in files:
-            if path in seen or path.suffix.lower() not in TEXT_SUFFIXES:
+            if path in seen:
                 continue
-            if any(part in {"node_modules", "build", ".git"} for part in path.parts):
+            if any(part in {"node_modules", "__pycache__", ".git"} for part in path.parts):
                 continue
             seen.add(path)
             yield path
 
 
-def scan_active_surface(root: Path) -> list[dict[str, object]]:
+def scan_active_surface(root: Path, roots: Iterable[str] = EXPECTED_ACTIVE_ROOTS) -> list[dict[str, object]]:
     findings: list[dict[str, object]] = []
-    for path in active_text_files(root):
+    for path in active_files(root, roots):
+        if path.relative_to(root).as_posix() in POLICY_IMPLEMENTATION_PATHS:
+            continue
+        if path.suffix.lower() not in TEXT_SUFFIXES:
+            continue
         try:
             text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             continue
         for name, pattern in FORBIDDEN_ACTIVE_PATTERNS.items():
             for match in pattern.finditer(text):
-                line = text.count("\n", 0, match.start()) + 1
                 findings.append(
                     {
                         "rule": name,
-                        "path": str(path.relative_to(root)),
-                        "line": line,
+                        "path": path.relative_to(root).as_posix(),
+                        "line": text.count("\n", 0, match.start()) + 1,
                         "match": match.group(0)[:120],
                     }
                 )
+    return findings
+
+
+def retired_path_findings(root: Path, prefixes: Iterable[str]) -> list[str]:
+    tracked = set(git(root, "ls-files").splitlines())
+    findings: set[str] = set()
+    for prefix in prefixes:
+        findings.update(path for path in tracked if path.startswith(prefix))
+        candidate = root / prefix.rstrip("/")
+        if candidate.is_file():
+            findings.add(candidate.relative_to(root).as_posix())
+        elif candidate.is_dir():
+            findings.update(
+                path.relative_to(root).as_posix()
+                for path in candidate.rglob("*")
+                if path.is_file()
+            )
+    return sorted(findings)
+
+
+def copied_seed_findings(
+    root: Path, roots: Iterable[str], historical_blob_ids: set[str]
+) -> list[dict[str, str]]:
+    findings: list[dict[str, str]] = []
+    for path in active_files(root, roots):
+        blob = git_blob_sha(path.read_bytes())
+        if blob in historical_blob_ids:
+            findings.append({"path": path.relative_to(root).as_posix(), "git_blob_sha": blob})
     return findings
 
 
@@ -172,42 +214,37 @@ def verify(root: Path) -> dict[str, object]:
     extraction = json.loads((provenance / "pulp-extraction.json").read_text())
     if extraction["source"]["commit"] != EXPECTED_SOURCE:
         errors.append("pulp-extraction.json source commit drifted")
-    if extraction["authority"]["state"] != "prepared":
-        errors.append("authority changed from prepared without active verification support")
+    declared_hashes = {
+        "cut-manifest.json": extraction["cut"]["manifest_sha256"],
+        "cut-paths.txt": extraction["cut"]["path_specification_sha256"],
+        "filter-repo-commit-map.txt": extraction["history_extraction"]["commit_map_sha256"],
+        "filter-repo-ref-map.txt": extraction["history_extraction"]["ref_map_sha256"],
+    }
+    if declared_hashes != EXPECTED_HASHES:
+        errors.append("pulp-extraction.json immutable digest declarations drifted")
 
     manifest = json.loads((provenance / "cut-manifest.json").read_text())
     entries = manifest.get("entries", [])
-    checks["manifest_entry_count"] = len(entries)
-    if len(entries) != 235:
+    unresolved = [entry for entry in entries if entry["classification"] == "unresolved"]
+    checks["historical_manifest_entry_count"] = len(entries)
+    checks["historical_unresolved_entry_count"] = len(unresolved)
+    if len(entries) != extraction["cut"]["entry_count"] or len(entries) != 235:
         errors.append(f"cut manifest has {len(entries)} entries, expected 235")
+    if len(unresolved) != extraction["cut"]["unresolved_entry_count"] or len(unresolved) != 39:
+        errors.append(f"cut manifest has {len(unresolved)} unresolved entries, expected 39")
     if len({entry["source_path"] for entry in entries}) != len(entries):
         errors.append("cut manifest contains duplicate source paths")
-
-    unresolved = {
-        entry["source_path"]
-        for entry in entries
-        if entry["classification"] == "unresolved"
-    }
-    declared_debt = debt_paths(provenance / "extraction-debt/initial.yaml")
-    checks["unresolved_entry_count"] = len(unresolved)
-    checks["declared_debt_path_count"] = len(declared_debt)
-    if unresolved != declared_debt:
-        errors.append(
-            "unresolved manifest paths and extraction debt differ: "
-            f"missing={sorted(unresolved - declared_debt)}, "
-            f"extra={sorted(declared_debt - unresolved)}"
-        )
 
     blobs = seed_blobs(root)
     blob_mismatches = []
     for entry in entries:
-        path = entry["source_path"]
-        actual = blobs.get(path)
+        historical_path = entry["source_path"]
+        actual = blobs.get(historical_path)
         if actual != entry["git_blob_sha"]:
             blob_mismatches.append(
-                {"path": path, "expected": entry["git_blob_sha"], "actual": actual}
+                {"path": historical_path, "expected": entry["git_blob_sha"], "actual": actual}
             )
-    checks["seed_blob_mismatches"] = blob_mismatches
+    checks["historical_seed_blob_mismatches"] = blob_mismatches
     if blob_mismatches:
         errors.append(f"{len(blob_mismatches)} filtered-seed blobs differ from the cut manifest")
 
@@ -219,35 +256,67 @@ def verify(root: Path) -> dict[str, object]:
     checks["source_commit_map_row"] = source_row
     if source_row != "0" * 40:
         errors.append("expected source tip to map to zero because it touched no selected path")
-
     ref_map = (provenance / "filter-repo-ref-map.txt").read_text()
-    expected_ref_row = f"{EXPECTED_SOURCE} {FILTERED_SEED} refs/heads/main"
-    if expected_ref_row not in ref_map:
+    if f"{EXPECTED_SOURCE} {FILTERED_SEED} refs/heads/main" not in ref_map:
         errors.append("filtered main ref mapping is missing or changed")
 
-    active_findings = scan_active_surface(root)
+    boundary = configured_boundary(root)
+    active_roots = tuple(boundary.get("active_source_roots", []))
+    retired_prefixes = tuple(boundary.get("retired_prefixes", []))
+    if active_roots != EXPECTED_ACTIVE_ROOTS:
+        errors.append("active source roots differ from the required complete inventory")
+    if retired_prefixes != EXPECTED_RETIRED_PREFIXES:
+        errors.append("retired prefixes differ from the required extraction boundary")
+
+    inventory = sorted(path.relative_to(root).as_posix() for path in active_files(root, active_roots))
+    checks["active_source_file_count"] = len(inventory)
+    checks["active_source_files"] = inventory
+
+    retired_findings = retired_path_findings(root, retired_prefixes)
+    checks["retired_path_findings"] = retired_findings
+    if retired_findings:
+        errors.append(f"active tip still contains {len(retired_findings)} retired projection paths")
+
+    historical_source_blobs = {
+        entry["git_blob_sha"]
+        for entry in entries
+        if entry["source_path"] not in {"DEPENDENCIES.md", "LICENSE.md", "NOTICE.md"}
+    }
+    copied_findings = copied_seed_findings(root, active_roots, historical_source_blobs)
+    checks["active_historical_blob_matches"] = copied_findings
+    if copied_findings:
+        errors.append(f"active source contains {len(copied_findings)} exact historical seed copies")
+
+    active_findings = scan_active_surface(root, active_roots)
     checks["active_forbidden_findings"] = active_findings
     if active_findings:
         errors.append(f"active build/authoring surface has {len(active_findings)} forbidden references")
 
-    root_cmake = root / "CMakeLists.txt"
-    if root_cmake.exists():
-        cmake_text = root_cmake.read_text(encoding="utf-8")
-        if re.search(r"add_subdirectory\s*\(\s*core(?:/|\s*\))", cmake_text):
-            errors.append("root CMake activates quarantined raw core/ sources")
+    debt = provenance / "extraction-debt/initial.yaml"
+    debt_status = top_level_scalar(debt, "status")
+    open_debt_count = top_level_scalar(debt, "open_debt_count")
+    debt_text = debt.read_text(encoding="utf-8")
+    checks["extraction_debt"] = {"status": debt_status, "open_debt_count": open_debt_count}
+    if debt_status != "closed" or open_debt_count != "0" or "\ndebts: []\n" not in debt_text:
+        errors.append("extraction debt must be closed with zero open rows after seed retirement")
 
-    for dependency in json.loads((provenance / "third-party-lock.json").read_text())[
-        "dependencies"
-    ]:
+    dependency_lock = json.loads((provenance / "third-party-lock.json").read_text())
+    dependencies = dependency_lock.get("dependencies")
+    if not isinstance(dependencies, list):
+        errors.append("third-party dependency inventory is malformed")
+        dependencies = []
+    for dependency in dependencies:
         if "path" in dependency and "sha256" in dependency:
-            actual = sha256(root / dependency["path"])
-            if actual != dependency["sha256"]:
+            dependency_path = root / dependency["path"]
+            if not dependency_path.is_file() or sha256(dependency_path) != dependency["sha256"]:
                 errors.append(f"third-party checksum mismatch: {dependency['path']}")
+    checks["active_third_party_dependency_count"] = len(dependencies)
 
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "status": "pass" if not errors else "fail",
-        "prepared_authority_only": True,
+        "authority_transferred": False,
+        "raw_seed_present_at_active_tip": bool(retired_findings or copied_findings),
         "checks": checks,
         "errors": errors,
     }

@@ -19,10 +19,48 @@ COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 MAX_MEMBERS = 20_000
 MAX_BYTES = 4 * 1024**3
 COMMANDS = {"import", "reimport", "build", "run", "test", "capture", "package"}
+FORBIDDEN_PAYLOAD_PATH_PATTERNS = {
+    "retired-projection-path": re.compile(
+        r"(?:^|/)(?:core|external/(?:fonts|nanosvg)|packages/pulp-import-ir|tools/figma-plugin)(?:/|$)",
+        re.IGNORECASE,
+    ),
+    "pulp-named-payload": re.compile(r"(?:^|/)(?:pulp(?:[-_][^/]*)?)(?:/|$)", re.IGNORECASE),
+}
+FORBIDDEN_PAYLOAD_CONTENT_PATTERNS = {
+    "pulp-public-namespace": re.compile(
+        rb"(?:\bnamespace\s+pulp\b|\bpulp::|#\s*include\s*[<\"]pulp/)",
+        re.IGNORECASE,
+    ),
+    "pulp-package-or-target": re.compile(
+        rb"(?:@pulp/|\bPULP_[A-Z0-9_]+|\bpulp[-_]"
+        rb"(?:audio|canvas|format|gpu|graph|host|midi|plugin|render|runtime|signal|view)\b)",
+        re.IGNORECASE,
+    ),
+    "audio-plugin-sdk": re.compile(rb"\b(?:AudioUnit|VST3|CLAP|LV2|Oboe)\b", re.IGNORECASE),
+}
 
 
 class VerificationError(RuntimeError):
     pass
+
+
+def payload_contamination_findings(name: str, content: bytes) -> list[dict[str, str]]:
+    findings: list[dict[str, str]] = []
+    for rule, pattern in FORBIDDEN_PAYLOAD_PATH_PATTERNS.items():
+        match = pattern.search(name)
+        if match:
+            findings.append({"rule": rule, "path": name, "match": match.group(0)})
+    for rule, pattern in FORBIDDEN_PAYLOAD_CONTENT_PATTERNS.items():
+        match = pattern.search(content)
+        if match:
+            findings.append(
+                {
+                    "rule": rule,
+                    "path": name,
+                    "match": match.group(0).decode("utf-8", errors="replace")[:120],
+                }
+            )
+    return findings
 
 
 def checksum_entry(archive: Path, checksums: Path) -> str:
@@ -118,6 +156,7 @@ def verify(archive: Path, checksums: Path) -> dict[str, object]:
             raise VerificationError("artifact file inventory is not in canonical path order")
         expected_files = {member.name for member in members if member.isfile() and member.name != "metadata.json"}
         declared: set[str] = set()
+        contamination_findings: list[dict[str, str]] = []
         for row in files:
             if not isinstance(row, dict) or set(row) != {"path", "sha256", "size", "executable"}:
                 raise VerificationError("artifact file inventory row is malformed")
@@ -133,9 +172,15 @@ def verify(archive: Path, checksums: Path) -> dict[str, object]:
                 raise VerificationError(f"artifact payload does not match metadata: {name}")
             if row["executable"] is not bool(member.mode & 0o100):
                 raise VerificationError(f"artifact executable mode does not match metadata: {name}")
+            contamination_findings.extend(payload_contamination_findings(name, content))
             declared.add(name)
         if declared != expected_files:
             raise VerificationError("artifact metadata does not cover every payload file")
+        if contamination_findings:
+            first = contamination_findings[0]
+            raise VerificationError(
+                f"artifact contamination: {first['rule']} in {first['path']}"
+            )
 
     return {
         "schema": "vellum.sdk-artifact-verification.v1",
@@ -148,6 +193,8 @@ def verify(archive: Path, checksums: Path) -> dict[str, object]:
         "target": metadata.get("target"),
         "claims": metadata.get("capabilities"),
         "file_count": len(declared),
+        "contamination_free": True,
+        "contamination_findings": [],
     }
 
 
