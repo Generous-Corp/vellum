@@ -129,8 +129,13 @@ def project_context(project_value: str) -> dict[str, Any]:
     }
 
 
-def run_checked(arguments: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-    completed = subprocess.run(arguments, cwd=cwd, text=True, capture_output=True, check=False)
+def run_checked(
+    arguments: list[str], *, cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    completed = subprocess.run(
+        arguments, cwd=cwd, env=env, text=True, capture_output=True, check=False
+    )
     if completed.returncode:
         raise BackendFailure(
             f"Command failed ({completed.returncode}): {' '.join(arguments)}\n"
@@ -307,7 +312,16 @@ def build_app(context: dict[str, Any], sdk: Path) -> dict[str, Any]:
         raise BackendFailure(str(error), status="invalid_imported_design") from error
     if imported is not None:
         command.append(str(imported))
-    run_checked(command, cwd=project)
+    run_checked(
+        command, cwd=project,
+        env={**os.environ, "VELLUM_BUILD_FORMAT": "esm"},
+    )
+    source_map = bundle.with_suffix(f"{bundle.suffix}.map")
+    if not source_map.is_file():
+        raise BackendFailure(
+            "Installed UI bundler omitted the required application source map",
+            status="tool_failed",
+        )
     for name in ("vellum_web_core.js", "vellum_web_core.wasm", "vellum_host.js", "style.css"):
         shutil.copy2(sdk / "web" / name, staging / name)
     components = build_component_modules(context, sdk, staging)

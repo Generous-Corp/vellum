@@ -76,8 +76,11 @@ def fake_build_sdk(root: Path) -> Path:
     bundler = sdk / "ui/scripts/build-project.mjs"
     bundler.parent.mkdir(parents=True)
     bundler.write_text(
-        "import { copyFileSync } from 'node:fs';\n"
-        "copyFileSync(process.argv[2], process.argv[3]);\n",
+        "import { copyFileSync, writeFileSync } from 'node:fs';\n"
+        "copyFileSync(process.argv[2], process.argv[3]);\n"
+        "writeFileSync(process.argv[3] + '.map', "
+        "\"{\\\"version\\\":3,\\\"sources\\\":[\\\"vellum://app/src/main.tsx\\\"],"
+        "\\\"sourcesContent\\\":[\\\"\\\"],\\\"names\\\":[],\\\"mappings\\\":\\\"\\\"}\\n\");\n",
         encoding="utf-8",
     )
     return sdk
@@ -340,6 +343,11 @@ class NativeBackendTests(unittest.TestCase):
                 arguments: list[str], *, cwd: Path | None = None,
             ) -> subprocess.CompletedProcess[str]:
                 commands.append(arguments)
+                bundle = Path(arguments[3])
+                bundle.write_text("void 0;\n", encoding="utf-8")
+                bundle.with_suffix(f"{bundle.suffix}.map").write_text(
+                    '{"version":3}\n', encoding="utf-8",
+                )
                 return subprocess.CompletedProcess(arguments, 0, "", "")
 
             with mock.patch.dict(build_app.__globals__, {"run_checked": record_command}):

@@ -14,13 +14,27 @@
       function reportVellumError(value) {
         const message = String(value && (value.stack || value.message) || value);
         document.body.dataset.vellumError = message;
+        let diagnostic = null;
+        try {
+          if (typeof globalThis.__vellumMapExceptionJSON === 'function') {
+            diagnostic = JSON.parse(globalThis.__vellumMapExceptionJSON(value));
+            document.body.dataset.vellumDiagnostic = JSON.stringify(diagnostic);
+          }
+        } catch (mappingError) {
+          diagnostic = {
+            protocol: 'vellum.authoring-host.v2', kind: 'diagnostic',
+            severity: 'error', code: 'VELLUM_SOURCE_MAP_INVALID',
+            message: String(mappingError && mappingError.message || mappingError),
+          };
+          document.body.dataset.vellumDiagnostic = JSON.stringify(diagnostic);
+        }
         fetch('/__vellum_proof', { method: 'POST', headers: {'content-type':'application/json'},
-          body: JSON.stringify({bootError: message}) }).catch(() => {});
+          body: JSON.stringify({bootError: message, diagnostic}) }).catch(() => {});
       }
       addEventListener('error', event => reportVellumError(event.error || event.message));
       addEventListener('unhandledrejection', event => reportVellumError(event.reason));
     </script>
-    <script src="./app.js"></script>
+    <script type="module" src="./app.js"></script>
     <script type="module" src="./vellum_host.js"></script>
   </body>
 </html>

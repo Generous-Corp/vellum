@@ -6,14 +6,14 @@
   "message": "phase3-source-map-proof",
   "source": {
     "file": "vellum://app/src/App.tsx",
-    "line": 35,
+    "line": 40,
     "column": 15,
     "function": "throwMappedError"
   },
   "stack": [
     {
       "file": "vellum://app/src/App.tsx",
-      "line": 35,
+      "line": 40,
       "column": 15,
       "function": "throwMappedError"
     }

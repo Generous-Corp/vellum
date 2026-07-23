@@ -115,6 +115,38 @@ constexpr const char* kAsyncBundle = R"JS(
 })();
 )JS";
 
+constexpr const char* kMappedErrorBundle = R"JS(
+(() => {
+  globalThis.__vellumMapExceptionJSON = error => JSON.stringify({
+    protocol: "vellum.authoring-host.v2",
+    kind: "diagnostic",
+    severity: "error",
+    code: "VELLUM_RUNTIME_EXCEPTION",
+    message: error.message,
+    source: {
+      file: "vellum://app/src/App.tsx", line: 40, column: 15,
+      function: "throwMappedError"
+    },
+    stack: [{
+      file: "vellum://app/src/App.tsx", line: 40, column: 15,
+      function: "throwMappedError"
+    }]
+  });
+  globalThis.__vellum = {
+    protocol: "vellum.authoring-host.v1",
+    renderJSON() {
+      return JSON.stringify({
+        protocol: "vellum.authoring-host.v1",
+        tree: {type: "button", id: "mapped-error",
+          style: {width: 320, height: 200},
+          events: {press: "mapped-error:press"}, children: []}
+      });
+    },
+    dispatchJSON() { throw new Error("phase3-source-map-proof"); }
+  };
+})();
+)JS";
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -231,6 +263,37 @@ int main(int argc, char** argv) {
         runaway->wait_for_idle(3, rendered, pump, &error) ||
         error.find("task limit exceeded") == std::string::npos) {
         std::cerr << "runaway timer protection failed: " << error << '\n';
+        return 1;
+    }
+
+    auto mapped = vellum::authoring::JsApplication::create(kMappedErrorBundle, &error);
+    if (!mapped || !mapped->render(rendered, &error) ||
+        mapped->dispatch("mapped-error:press", "null", rendered, &error) ||
+        mapped->last_diagnostic_json() != error ||
+        error.find("\"code\":\"VELLUM_RUNTIME_EXCEPTION\"") == std::string::npos ||
+        error.find("\"file\":\"vellum:\\/\\/app\\/src\\/App.tsx\"") ==
+            std::string::npos ||
+        error.find("\"line\":40") == std::string::npos) {
+        std::cerr << "structured mapped exception failed: " << error << '\n';
+        return 1;
+    }
+
+    auto missing_map = vellum::authoring::JsApplication::create(
+        "globalThis.__vellum={protocol:'vellum.authoring-host.v1',"
+        "renderJSON(){throw new Error('missing map')}}", &error);
+    if (!missing_map || missing_map->render(rendered, &error) ||
+        error.find("\"code\":\"VELLUM_SOURCE_MAP_MISSING\"") == std::string::npos) {
+        std::cerr << "missing source map did not fail closed: " << error << '\n';
+        return 1;
+    }
+
+    auto malformed_map = vellum::authoring::JsApplication::create(
+        "globalThis.__vellumMapExceptionJSON=()=>'{bad';"
+        "globalThis.__vellum={protocol:'vellum.authoring-host.v1',"
+        "renderJSON(){throw new Error('bad map')}}", &error);
+    if (!malformed_map || malformed_map->render(rendered, &error) ||
+        error.find("\"code\":\"VELLUM_SOURCE_MAP_INVALID\"") == std::string::npos) {
+        std::cerr << "malformed source map did not fail closed: " << error << '\n';
         return 1;
     }
     return 0;

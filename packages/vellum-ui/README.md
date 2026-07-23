@@ -101,6 +101,12 @@ replacement or reimport.
 globals, dynamic code, non-static dynamic imports, undeclared service
 capabilities, platform-only imports, and resolution failures. Native builds
 default to an IIFE; set `VELLUM_BUILD_FORMAT=esm` for the web ESM output.
+Both formats emit an external `app.js.map`; application sources use stable
+`vellum://app/...` URLs. Runtime failures expose
+`vellum.authoring-host.v2` diagnostic envelopes mapped back to TypeScript or
+TSX. Missing or malformed maps fail closed as `VELLUM_SOURCE_MAP_MISSING` or
+`VELLUM_SOURCE_MAP_INVALID` instead of returning an opaque generated-bundle
+location.
 
 Native persistence is separately capability-gated in `app.toml` with
 `persistence = "state-v1"` under `[capabilities]`. On macOS this restores the

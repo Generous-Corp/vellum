@@ -574,6 +574,8 @@ public:
         return consume_exception(error);
     }
 
+    std::string last_diagnostic_json() const { return last_diagnostic_json_; }
+
 private:
     struct Timer final {
         std::uint64_t id = 0;
@@ -669,8 +671,51 @@ private:
     bool consume_exception(std::string* error) {
         JSValue* exception = context_.exception;
         if (exception == nil || exception.isUndefined || exception.isNull) return true;
-        set_error(error, "JavaScript exception: " + cpp_string(exception.toString));
         context_.exception = nil;
+        NSString* code = @"VELLUM_SOURCE_MAP_MISSING";
+        NSString* message = exception.toString ?: @"JavaScript exception";
+        JSValue* mapper = context_[@"__vellumMapExceptionJSON"];
+        if (mapper != nil && !mapper.isUndefined && mapper.isObject) {
+            JSValue* mapped = [mapper callWithArguments:@[exception]];
+            JSValue* mapping_exception = context_.exception;
+            context_.exception = nil;
+            if (mapping_exception == nil || mapping_exception.isUndefined ||
+                mapping_exception.isNull) {
+                NSString* encoded = mapped != nil && mapped.isString
+                    ? mapped.toString : nil;
+                NSData* data = [encoded dataUsingEncoding:NSUTF8StringEncoding];
+                NSError* parse_error = nil;
+                id value = data == nil ? nil : [NSJSONSerialization
+                    JSONObjectWithData:data options:0 error:&parse_error];
+                NSDictionary* diagnostic = [value isKindOfClass:NSDictionary.class]
+                    ? static_cast<NSDictionary*>(value) : nil;
+                if (parse_error == nil && diagnostic != nil &&
+                    [diagnostic[@"protocol"] isEqual:@"vellum.authoring-host.v2"] &&
+                    [diagnostic[@"kind"] isEqual:@"diagnostic"] &&
+                    [diagnostic[@"code"] isEqual:@"VELLUM_RUNTIME_EXCEPTION"] &&
+                    [diagnostic[@"message"] isKindOfClass:NSString.class] &&
+                    [diagnostic[@"source"] isKindOfClass:NSDictionary.class] &&
+                    [diagnostic[@"stack"] isKindOfClass:NSArray.class]) {
+                    const auto canonical = json_object(diagnostic);
+                    if (canonical.has_value()) {
+                        last_diagnostic_json_ = *canonical;
+                        set_error(error, last_diagnostic_json_);
+                        return false;
+                    }
+                }
+            }
+            code = @"VELLUM_SOURCE_MAP_INVALID";
+        }
+        NSDictionary* fallback = @{
+            @"protocol": @"vellum.authoring-host.v2",
+            @"kind": @"diagnostic",
+            @"severity": @"error",
+            @"code": code,
+            @"message": message,
+        };
+        last_diagnostic_json_ = json_object(fallback).value_or(
+            R"({"code":"VELLUM_SOURCE_MAP_INVALID","kind":"diagnostic","message":"could not encode JavaScript exception","protocol":"vellum.authoring-host.v2","severity":"error"})");
+        set_error(error, last_diagnostic_json_);
         return false;
     }
 
@@ -678,11 +723,10 @@ private:
         context_.exception = nil;
         JSValue* bridge = context_[@"__vellum"];
         JSValue* result = [bridge invokeMethod:method withArguments:arguments];
-        if (!consume_exception(error) || result == nil || !result.isString) {
-            if (result == nil || !result.isString) {
-                set_error(error, "JavaScript authoring bridge method did not return a string: " +
-                                 cpp_string(method));
-            }
+        if (!consume_exception(error)) return nil;
+        if (result == nil || !result.isString) {
+            set_error(error, "JavaScript authoring bridge method did not return a string: " +
+                             cpp_string(method));
             return nil;
         }
         return result.toString;
@@ -699,6 +743,7 @@ private:
     std::uint64_t clock_milliseconds_ = 0;
     std::uint64_t next_timer_id_ = 1;
     std::uint64_t next_timer_order_ = 1;
+    std::string last_diagnostic_json_;
 };
 
 JsApplication::JsApplication(std::unique_ptr<Impl> impl) noexcept
@@ -753,6 +798,10 @@ bool JsApplication::wait_for_idle(
     @autoreleasepool {
         return impl_->wait_for_idle(maximum_tasks, output, result, error);
     }
+}
+
+std::string JsApplication::last_diagnostic_json() const {
+    return impl_->last_diagnostic_json();
 }
 
 }  // namespace vellum::authoring

@@ -328,7 +328,13 @@ def build_app(context: dict[str, Any], sdk: Path) -> dict[str, Any]:
         raise BackendFailure(str(error), status="invalid_imported_design") from error
     if imported_design is not None:
         bundle_command.append(str(imported_design))
-    run_checked(bundle_command)
+    run_checked(bundle_command, cwd=project)
+    source_map = bundle.with_suffix(f"{bundle.suffix}.map")
+    if not source_map.is_file():
+        raise BackendFailure(
+            "Installed UI bundler omitted the required application source map",
+            status="tool_failed",
+        )
     executable = executable_dir / context["slug"]
     shutil.copy2(host, executable)
     executable.chmod(0o755)
@@ -360,6 +366,7 @@ def build_app(context: dict[str, Any], sdk: Path) -> dict[str, Any]:
     return {
         "app": app,
         "bundle": app / "Contents/Resources/app.js",
+        "source_map": app / "Contents/Resources/app.js.map",
         "executable": app / f"Contents/MacOS/{context['slug']}",
         "frameworks": framework_names,
         "components": installed_components,
@@ -373,6 +380,9 @@ def ensure_app(context: dict[str, Any], sdk: Path, no_build: bool = False) -> di
         bundle = app / "Contents/Resources/app.js"
         if not executable.is_file() or not bundle.is_file():
             raise BackendFailure("No built app exists; run vellum build first", status="build_missing")
+        source_map = bundle.with_suffix(f"{bundle.suffix}.map")
+        if not source_map.is_file():
+            raise BackendFailure("Built app is missing its source map", status="build_missing")
         components = [{
             "id": item["id"],
             "path": str(app / "Contents/PlugIns/VellumComponents" / f"{item['id']}.dylib"),
@@ -381,7 +391,7 @@ def ensure_app(context: dict[str, Any], sdk: Path, no_build: bool = False) -> di
             raise BackendFailure("Built app is missing a declared custom component module", status="build_missing")
         return {
             "app": app, "bundle": bundle, "executable": executable,
-            "frameworks": [], "components": components,
+            "source_map": source_map, "frameworks": [], "components": components,
         }
     return build_app(context, sdk)
 
@@ -534,6 +544,7 @@ def command_result(command: str, args: argparse.Namespace, context: dict[str, An
             "target": SUPPORTED_TARGET,
             "app": str(app["app"]),
             "bundle": str(app["bundle"]),
+            "source_map": str(app["source_map"]),
             "frameworks": app["frameworks"],
             "components": [item["id"] for item in app["components"]],
         })

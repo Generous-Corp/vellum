@@ -1,9 +1,10 @@
-import { mkdir, readFile } from 'node:fs/promises';
+import { access, mkdir, readFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { build } from 'esbuild';
 import { checkPortability } from './check-portability.mjs';
+import { finalizeBundleSourceMap } from './source-map.mjs';
 
 if (process.argv.length < 4 || process.argv.length > 5) {
     process.stderr.write('usage: build-project.mjs ENTRY OUTPUT [MATERIALIZED_DESIGN_IR]\n');
@@ -38,6 +39,24 @@ if (process.argv[4]) {
         await readFile(join(dirname(importedDesignPath), bindingName), 'utf8'),
     );
 }
+
+async function findProjectRoot(start) {
+    let directory = dirname(start);
+    while (true) {
+        for (const marker of ['app.toml', 'vellum.lock']) {
+            try {
+                await access(join(directory, marker));
+                return directory;
+            } catch (error) {
+                if (error.code !== 'ENOENT') throw error;
+            }
+        }
+        const parent = dirname(directory);
+        if (parent === directory) return dirname(start);
+        directory = parent;
+    }
+}
+
 await mkdir(dirname(output), { recursive: true });
 await build({
     entryPoints: [entry],
@@ -46,6 +65,8 @@ await build({
     format,
     platform: 'neutral',
     target: ['safari15'],
+    sourcemap: 'external',
+    sourcesContent: true,
     jsx: 'automatic',
     jsxImportSource: '@vellum/ui',
     alias: {
@@ -68,5 +89,10 @@ await build({
         },
     }],
     logLevel: 'warning',
+});
+await finalizeBundleSourceMap({
+    bundlePath: output,
+    projectRoot: process.env.VELLUM_PROJECT_ROOT ?? await findProjectRoot(entry),
+    packageRoot,
 });
 process.stdout.write(`${output}\n`);

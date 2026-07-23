@@ -92,6 +92,9 @@ public:
         RenderedApplication& output,
         PumpResult& result,
         std::string* error = nullptr);
+    /// Returns the last versioned authoring-host diagnostic emitted for a
+    /// JavaScript exception. The value is empty before the first exception.
+    [[nodiscard]] std::string last_diagnostic_json() const;
 
 private:
     class Impl;
