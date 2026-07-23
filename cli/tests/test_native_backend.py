@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import plistlib
 import runpy
+import shlex
 import shutil
 import subprocess
 import sys
@@ -49,6 +50,16 @@ def fake_gpu_sdk(root: Path) -> Path:
 
 def fake_build_sdk(root: Path) -> Path:
     sdk = fake_gpu_sdk(root)
+    node = shutil.which("node")
+    if node is None:
+        raise RuntimeError("the native backend fixture requires Node")
+    sdk_node = sdk / "node/bin/node"
+    sdk_node.parent.mkdir(parents=True)
+    sdk_node.write_text(
+        f"#!/bin/sh\nexec {shlex.quote(node)} \"$@\"\n",
+        encoding="utf-8",
+    )
+    sdk_node.chmod(0o755)
     host = sdk / "sdk/bin/vellum-app-host"
     host.parent.mkdir(parents=True)
     host.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
