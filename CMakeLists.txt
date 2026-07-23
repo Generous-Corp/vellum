@@ -142,6 +142,14 @@ if(VELLUM_BUILD_TESTS)
         COMMAND "${Python3_EXECUTABLE}"
             tools/provenance/verify_extraction.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.downstream-consumer-registry-unit
+        COMMAND "${Python3_EXECUTABLE}"
+            tools/provenance/test_verify_downstream_consumers.py
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.downstream-consumer-registry
+        COMMAND "${Python3_EXECUTABLE}"
+            tools/provenance/verify_downstream_consumers.py
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
 
 set(_vellum_install_targets vellum-foundation vellum-runtime vellum-component-abi)

@@ -383,3 +383,8 @@ private release.
   [`docs/ownership.md`](docs/ownership.md),
   [`provenance/pulp-extraction.json`](provenance/pulp-extraction.json), and
   [`provenance/ownership-map.yaml`](provenance/ownership-map.yaml).
+- Independent downstream proofs are pinned in
+  [`provenance/downstream-consumers.v1.json`](provenance/downstream-consumers.v1.json).
+  Its offline verifier checks immutable identities, repository separation, the
+  evidence ladder, and the framework-first fix protocol:
+  `python3 tools/provenance/verify_downstream_consumers.py`.

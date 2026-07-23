@@ -36,6 +36,14 @@ Vellum. Pulp continues to own and evolve its implementation independently. The
 observatory cursor can record later Pulp changes for evaluation, but it is not
 a synchronization mechanism and does not create shared ownership.
 
+Validated independent applications remain separate consumers. The
+[downstream-consumer registry](../provenance/downstream-consumers.v1.json)
+pins each proof to a full consumer commit, immutable Vellum release tuple, and
+evidence digest. Its framework-first protocol requires reusable defects to be
+fixed and released in Vellum before the consumer updates its pin and reruns the
+evidence ladder; an application-side workaround requires an explicit,
+time-bounded exception record.
+
 If Vellum fails product validation, no transfer or reversal is necessary: the
 active implementations were never shared. If Vellum succeeds, Pulp adoption is
 a separate consumer migration. It should replace selected Pulp implementation
