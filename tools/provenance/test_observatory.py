@@ -166,6 +166,45 @@ observatory:
 
 
 class ObservatoryTests(unittest.TestCase):
+    def test_active_cursors_may_advance_beyond_authority_coordinates(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            top = Path(temporary)
+            pulp = top / "pulp"
+            vellum = top / "vellum"
+            _, pulp_coordinate = init_repo(pulp, "unmapped/pulp.cpp")
+            vellum_base, vellum_coordinate = init_repo(
+                vellum, "unmapped/vellum.cpp"
+            )
+            write(pulp / "unmapped/pulp.cpp", "int value = 3;\n")
+            pulp_head = commit_all(pulp, "post-activation pulp change")
+            write(vellum / "unmapped/vellum.cpp", "int value = 3;\n")
+            vellum_head = commit_all(vellum, "post-activation vellum change")
+            lock = {
+                "state": "active",
+                "pulp_activation_commit": pulp_coordinate,
+                "vellum_authority_record_commit": vellum_coordinate,
+            }
+            cursor = {
+                "pulp": {"last_scanned_commit": pulp_head},
+                "vellum": {"last_scanned_commit": vellum_head},
+            }
+
+            observatory.verify_active_cursor_ancestry(
+                lock, cursor, pulp, vellum
+            )
+
+            cursor["vellum"]["last_scanned_commit"] = vellum_base
+            with self.assertRaisesRegex(
+                observatory.ObservatoryError,
+                "must include its authority coordinate",
+            ):
+                observatory.verify_active_cursor_ancestry(
+                    lock,
+                    cursor,
+                    pulp,
+                    vellum,
+                )
+
     def test_ci_verifies_pull_request_head_not_synthetic_merge(self) -> None:
         workflow = (
             observatory.ROOT / ".github/workflows/provenance.yml"

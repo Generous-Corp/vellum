@@ -795,15 +795,33 @@ def validate_lock_map_cursor(root: Path) -> tuple[dict[str, object], dict[str, o
         parse_utc(reconciled, "cursor.reconciled_at")
     if state == "active":
         if (
-            cursor["pulp"].get("last_scanned_commit")
-            != lock["pulp_activation_commit"]
-            or cursor["vellum"].get("last_scanned_commit")
-            != lock["vellum_authority_record_commit"]
-            or not isinstance(cursor["pulp"].get("last_dispatch_event"), str)
+            not isinstance(cursor["pulp"].get("last_dispatch_event"), str)
             or not cursor["pulp"]["last_dispatch_event"]
         ):
-            raise ObservatoryError("active cursor differs from authority coordinates")
+            raise ObservatoryError("active cursor lacks its authority dispatch event")
     return lock, mapping, cursor, budgets
+
+
+def verify_active_cursor_ancestry(
+    lock: dict[str, object],
+    cursor: dict[str, object],
+    pulp_repo: Path | None,
+    vellum_repo: Path | None,
+) -> None:
+    if lock.get("state") != "active":
+        return
+    for source, repo, coordinate in (
+        ("pulp", pulp_repo, lock["pulp_activation_commit"]),
+        ("vellum", vellum_repo, lock["vellum_authority_record_commit"]),
+    ):
+        if repo is None:
+            continue
+        require_ancestor(
+            repo,
+            str(coordinate),
+            str(cursor[source]["last_scanned_commit"]),
+            f"cursor.{source} must include its authority coordinate",
+        )
 
 
 def expected_observations(
@@ -1098,6 +1116,7 @@ def verify(
     pulp_target: str | None = None, vellum_target: str | None = None
 ) -> dict[str, object]:
     lock, mapping, cursor, budgets = validate_lock_map_cursor(root)
+    verify_active_cursor_ancestry(lock, cursor, pulp_repo, vellum_repo)
     events = load_events(root)
     verify_append_only(root, git_base)
     gaps = coverage_gaps(
@@ -1126,6 +1145,7 @@ def reconcile(
 ) -> dict[str, object]:
     now = parse_utc(now_text, "--now")
     lock, mapping, cursor, budgets = validate_lock_map_cursor(root)
+    verify_active_cursor_ancestry(lock, cursor, pulp_repo, vellum_repo)
     mappings = mapping["mappings"]
     rules = mapping.get("transitive_path_rules", [])
     assert isinstance(mappings, list) and isinstance(rules, list)
