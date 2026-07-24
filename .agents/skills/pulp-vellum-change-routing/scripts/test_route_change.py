@@ -343,6 +343,33 @@ class RoutingScenariosTest(unittest.TestCase):
             self.assertEqual(contradictory["status"], "decision_required")
             self.assertIn("contradicts", contradictory["reasons"][0])
 
+            tree = subprocess.run(
+                ["git", "-C", str(vellum), "rev-parse", "HEAD^{tree}"],
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+            ).stdout.strip()
+            unrelated = subprocess.run(
+                ["git", "-C", str(vellum), "commit-tree", tree],
+                check=True,
+                input="unrelated commit\n",
+                text=True,
+                stdout=subprocess.PIPE,
+            ).stdout.strip()
+            outside_history = ROUTER.route(
+                ROUTER.load_authority(vellum, pulp),
+                source_repo="pulp",
+                paths=["core/canvas/src/text_layout.cpp"],
+                intent="generic",
+                operation="framework-backport",
+                framework_commit=unrelated,
+            )
+            self.assertEqual(outside_history["status"], "decision_required")
+            self.assertIn(
+                "outside the selected Vellum HEAD history",
+                outside_history["reasons"][0],
+            )
+
     def test_paths_and_framework_backport_mode_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             vellum, pulp = make_fixture(Path(temporary))
@@ -577,6 +604,68 @@ class RoutingScenariosTest(unittest.TestCase):
                 emergency_owner="@owner",
                 emergency_created="2026-07-24",
                 emergency_expiry="2026-08-01",
+                emergency_follow_up="https://github.com/Generous-Corp/vellum/issues/1",
+                now=dt.date(2026, 7, 24),
+            )
+            self.assertEqual(rewritten["status"], "decision_required")
+            self.assertTrue(
+                any("append-only" in reason for reason in rewritten["reasons"])
+            )
+
+    def test_emergency_rejects_merge_resolution_event_rewrite(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            vellum, pulp = make_fixture(Path(temporary))
+            branch = subprocess.run(
+                ["git", "-C", str(pulp), "branch", "--show-current"],
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+            ).stdout.strip()
+            subprocess.run(
+                ["git", "-C", str(pulp), "checkout", "-qb", "event-side"],
+                check=True,
+            )
+            (pulp / "side.txt").write_text("side\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(pulp), "add", "."], check=True)
+            subprocess.run(
+                ["git", "-C", str(pulp), "commit", "-qm", "side"],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(pulp), "checkout", "-q", branch],
+                check=True,
+            )
+            (pulp / "main.txt").write_text("main\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(pulp), "add", "."], check=True)
+            subprocess.run(
+                ["git", "-C", str(pulp), "commit", "-qm", "main"],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(pulp), "merge", "--no-commit", "event-side"],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            event_path = pulp / EMERGENCY_EVENT
+            event = json.loads(event_path.read_text(encoding="utf-8"))
+            event["expiry"] = "2026-08-02"
+            write_json(event_path, event)
+            subprocess.run(["git", "-C", str(pulp), "add", "."], check=True)
+            subprocess.run(
+                ["git", "-C", str(pulp), "commit", "-qm", "merge with event rewrite"],
+                check=True,
+            )
+
+            rewritten = ROUTER.route(
+                ROUTER.load_authority(vellum, pulp),
+                source_repo="pulp",
+                paths=["core/canvas/src/text_layout.cpp"],
+                intent="emergency",
+                emergency_event=EMERGENCY_EVENT,
+                emergency_owner="@owner",
+                emergency_created="2026-07-24",
+                emergency_expiry="2026-08-02",
                 emergency_follow_up="https://github.com/Generous-Corp/vellum/issues/1",
                 now=dt.date(2026, 7, 24),
             )

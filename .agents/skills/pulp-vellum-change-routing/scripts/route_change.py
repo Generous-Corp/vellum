@@ -532,6 +532,7 @@ def _validate_emergency(
         "log",
         "--format=",
         "--name-status",
+        "--diff-merges=separate",
         "--no-renames",
         f"{authority.coordinates['pulp_activation_commit']}..{authority.pulp_head}",
         "--",
@@ -607,6 +608,16 @@ def _commit_exists(repo: Path, commit: str) -> bool:
     return completed.returncode == 0
 
 
+def _commit_is_ancestor(repo: Path, commit: str, head: str) -> bool:
+    completed = subprocess.run(
+        ["git", "-C", str(repo), "merge-base", "--is-ancestor", commit, head],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return completed.returncode == 0
+
+
 def _validate_adoption_contract(
     authority: Authority, contract_text: str
 ) -> list[str]:
@@ -666,6 +677,12 @@ def _validate_adoption_contract(
         return ["SDK adoption contract has an invalid SDK source commit"]
     if not _commit_exists(authority.vellum, source_commit):
         return ["SDK adoption contract source commit does not resolve in Vellum"]
+    if not _commit_is_ancestor(
+        authority.vellum, source_commit, authority.vellum_head
+    ):
+        return [
+            "SDK adoption contract source commit is outside the selected Vellum HEAD history"
+        ]
     if (
         not isinstance(artifact_sha256, str)
         or not SHA256_RE.fullmatch(artifact_sha256)
@@ -815,6 +832,15 @@ def route(
             return _result(
                 "decision_required",
                 reasons=["framework backport commit does not resolve in the supplied Vellum checkout"],
+            )
+        if not _commit_is_ancestor(
+            authority.vellum, framework_commit, authority.vellum_head
+        ):
+            return _result(
+                "decision_required",
+                reasons=[
+                    "framework backport commit is outside the selected Vellum HEAD history"
+                ],
             )
         if counterpart_result == "not-affected":
             return _result(
