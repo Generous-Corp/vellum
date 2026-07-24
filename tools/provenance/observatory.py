@@ -588,6 +588,8 @@ def activation_blockers(root: Path, lock: dict[str, object]) -> list[str]:
             blockers.append(f"{name}-required-check-producers-unpinned")
     if lock.get("vellum_authority_start_commit") is None:
         blockers.append("immutable-vellum-authority-start-not-recorded")
+    if lock.get("vellum_authority_record_commit") is None:
+        blockers.append("immutable-vellum-authority-record-not-recorded")
     if lock.get("pulp_activation_commit") is None:
         blockers.append("landed-pulp-freeze-evidence-not-recorded")
     return sorted(set(blockers))
@@ -713,6 +715,30 @@ def validate_lock_map_cursor(root: Path) -> tuple[dict[str, object], dict[str, o
         raise ObservatoryError("observatory provenance.lock schema_version must be 2")
     if lock.get("state") not in {"prepared", "active"}:
         raise ObservatoryError("observatory lock state must be prepared or active")
+    state = str(lock["state"])
+    coordinates = (
+        "vellum_authority_start_commit",
+        "vellum_authority_record_commit",
+        "pulp_activation_commit",
+    )
+    if state == "prepared":
+        if (
+            any(lock.get(field) is not None for field in coordinates)
+            or lock.get("ownership_schema_version") != 1
+            or lock.get("transfer_plan") != "../authority/transfer-plan.v1.json"
+        ):
+            raise ObservatoryError("prepared observatory lock carries active coordinates")
+    else:
+        if (
+            any(
+                not isinstance(lock.get(field), str)
+                or not SHA_RE.fullmatch(str(lock[field]))
+                for field in coordinates
+            )
+            or lock.get("ownership_schema_version") != 2
+            or lock.get("transfer_plan") != "../authority/transfer-plan.v2.json"
+        ):
+            raise ObservatoryError("active observatory lock lacks exact coordinates")
     policy = lock.get("policy")
     if policy != {
         "synchronized_editable_copies_allowed": False,
@@ -722,6 +748,9 @@ def validate_lock_map_cursor(root: Path) -> tuple[dict[str, object], dict[str, o
         raise ObservatoryError("observatory anti-synchronization policy drifted")
     if not isinstance(mapping, dict) or mapping.get("schema_version") != 2:
         raise ObservatoryError("legacy path map schema_version must be 2")
+    expected_mapping_state = "prepared-no-transfer" if state == "prepared" else "active"
+    if mapping.get("state") != expected_mapping_state:
+        raise ObservatoryError("legacy path map phase differs from observatory lock")
     mappings = mapping.get("mappings")
     if not isinstance(mappings, list) or not mappings:
         raise ObservatoryError("legacy path map needs mappings")
@@ -738,6 +767,16 @@ def validate_lock_map_cursor(root: Path) -> tuple[dict[str, object], dict[str, o
         ids.add(identifier)
         for field in ("pulp_paths", "vellum_paths", "symbols", "targets", "schemas", "platform_hosts", "contract_tests"):
             validate_string_list(item.get(field), f"mapping.{identifier}.{field}", sorted_unique=False)
+        authority = item.get("authority")
+        allowed_authorities = (
+            {"pulp-authoritative-untransferred", "pulp-only"}
+            if state == "prepared"
+            else {"vellum-authoritative-transferred", "pulp-only"}
+        )
+        if authority not in allowed_authorities:
+            raise ObservatoryError(
+                f"legacy mapping authority differs for phase: {identifier}"
+            )
     if not isinstance(cursor, dict) or cursor.get("schema_version") != 2 or cursor.get("state") not in {"prepared", "active"}:
         raise ObservatoryError("cursor schema/state is invalid")
     if cursor.get("state") != lock.get("state"):
@@ -754,6 +793,16 @@ def validate_lock_map_cursor(root: Path) -> tuple[dict[str, object], dict[str, o
     reconciled = cursor.get("reconciled_at")
     if reconciled is not None:
         parse_utc(reconciled, "cursor.reconciled_at")
+    if state == "active":
+        if (
+            cursor["pulp"].get("last_scanned_commit")
+            != lock["pulp_activation_commit"]
+            or cursor["vellum"].get("last_scanned_commit")
+            != lock["vellum_authority_record_commit"]
+            or not isinstance(cursor["pulp"].get("last_dispatch_event"), str)
+            or not cursor["pulp"]["last_dispatch_event"]
+        ):
+            raise ObservatoryError("active cursor differs from authority coordinates")
     return lock, mapping, cursor, budgets
 
 
@@ -870,6 +919,97 @@ def coverage_gaps(
     return gaps
 
 
+def _json_at_commit(repo: Path, commit: str, path: Path) -> dict[str, object]:
+    try:
+        value = json.loads(git(repo, "show", f"{commit}:{path.as_posix()}"))
+    except json.JSONDecodeError as error:
+        raise ObservatoryError(f"{commit}:{path} is not JSON") from error
+    if not isinstance(value, dict):
+        raise ObservatoryError(f"{commit}:{path} must be an object")
+    return value
+
+
+def _is_exact_authority_reconciliation(
+    repo: Path, before: str, commit: str, entries: list[dict[str, object]]
+) -> bool:
+    expected_paths = {
+        "provenance/ownership-map.yaml",
+        "provenance/pulp-extraction.json",
+        LOCK_PATH.as_posix(),
+        MAP_PATH.as_posix(),
+        CURSOR_PATH.as_posix(),
+        REPORT_JSON_PATH.as_posix(),
+        REPORT_MD_PATH.as_posix(),
+    }
+    if {
+        str(entry.get("path"))
+        for entry in entries
+        if entry.get("status") == "M" and "old_path" not in entry
+    } != expected_paths or len(entries) != len(expected_paths):
+        return False
+    old_lock = _json_at_commit(repo, before, LOCK_PATH)
+    lock = _json_at_commit(repo, commit, LOCK_PATH)
+    legacy = _json_at_commit(repo, commit, MAP_PATH)
+    cursor = _json_at_commit(repo, commit, CURSOR_PATH)
+    extraction = _json_at_commit(repo, commit, Path("provenance/pulp-extraction.json"))
+    report = _json_at_commit(repo, commit, REPORT_JSON_PATH)
+    coordinates = (
+        "vellum_authority_start_commit",
+        "vellum_authority_record_commit",
+        "pulp_activation_commit",
+    )
+    extraction_authority = extraction.get("authority")
+    if not isinstance(extraction_authority, dict):
+        return False
+    if (
+        old_lock.get("state") != "prepared"
+        or any(old_lock.get(field) is not None for field in coordinates)
+        or old_lock.get("ownership_schema_version") != 1
+        or old_lock.get("transfer_plan") != "../authority/transfer-plan.v1.json"
+        or lock.get("state") != "active"
+        or lock.get("vellum_authority_record_commit") != before
+        or any(
+            not isinstance(lock.get(field), str)
+            or not SHA_RE.fullmatch(str(lock[field]))
+            for field in coordinates
+        )
+        or lock.get("ownership_schema_version") != 2
+        or lock.get("transfer_plan") != "../authority/transfer-plan.v2.json"
+        or cursor.get("state") != "active"
+        or cursor.get("vellum", {}).get("last_scanned_commit") != before
+        or cursor.get("pulp", {}).get("last_scanned_commit")
+        != lock.get("pulp_activation_commit")
+        or not isinstance(cursor.get("pulp", {}).get("last_dispatch_event"), str)
+        or cursor.get("pulp", {}).get("last_dispatch_event")
+        != extraction_authority.get("pulp_authority_event_id")
+        or legacy.get("state") != "active"
+        or extraction.get("status") != "active"
+        or extraction_authority.get("state") != "active"
+        or extraction_authority.get("ownership_start_commit")
+        != lock.get("vellum_authority_start_commit")
+        or extraction_authority.get("authority_record_commit") != before
+        or extraction_authority.get("pulp_activation_commit")
+        != lock.get("pulp_activation_commit")
+        or report.get("state") != "active"
+        or report.get("health") != "pass"
+        or report.get("activation_blockers") != []
+        or report.get("coverage_gaps") != []
+    ):
+        return False
+    ownership = git(
+        repo, "show", f"{commit}:provenance/ownership-map.yaml"
+    )
+    return (
+        ownership.startswith("schema_version: 2\n")
+        and "\n  state: active\n" in ownership
+        and f"\n  vellum_authority_record_commit: {before}\n" in ownership
+        and f"\n  vellum_authority_start_commit: {lock.get('vellum_authority_start_commit')}\n"
+        in ownership
+        and f"\n  pulp_activation_commit: {lock.get('pulp_activation_commit')}\n"
+        in ownership
+    )
+
+
 def verify_vellum_observatory_tail(repo: Path, cursor: str, target: str) -> None:
     """Prove that commits after the reconciled source cursor contain evidence only."""
     require_commit(repo, cursor, "cursor.vellum.last_scanned_commit")
@@ -900,7 +1040,11 @@ def verify_vellum_observatory_tail(repo: Path, cursor: str, target: str) -> None
             raise ObservatoryError(
                 f"Vellum observatory evidence tail is discontinuous: {commit}"
             )
-        for entry in parse_diff_entries(repo, commit):
+        entries = parse_diff_entries(repo, commit)
+        if _is_exact_authority_reconciliation(repo, previous, commit, entries):
+            previous = commit
+            continue
+        for entry in entries:
             status = str(entry["status"])
             path = str(entry["path"])
             if "old_path" in entry:

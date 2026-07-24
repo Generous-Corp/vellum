@@ -98,8 +98,34 @@ token from the pinned dispatcher App and private-key secret; its repository
 scope is one Vellum repository and its only write capability is the Contents
 permission required by `repository_dispatch`.
 
-After the landed Pulp commit is verified, the observatory advances and records
-the acknowledgement. A missed dispatch is recovered from Pulp's durable event;
+After the landed Pulp commit is verified, download the retained
+`pulp-activation-evidence.json` and `authority-active.json` artifacts from the
+successful `authority-active` job. From a clean checkout at the exact authority
+record commit, materialize the durable active state:
+
+```sh
+python3 tools/provenance/finalize_authority_reconciliation.py \
+  --pulp-repo /path/to/exact-pulp-history \
+  --vellum-repo . \
+  --record-path provenance/authority/records/native-design-kernel-v1.json \
+  --authority-record-commit <exact-record-commit> \
+  --pulp-evidence /path/to/pulp-activation-evidence.json \
+  --active-proof /path/to/authority-active.json \
+  --write \
+  --output /path/to/reconciliation-result.json
+```
+
+Commit exactly the seven generated provenance/observatory files as the direct
+child of the record commit, then fast-forward Vellum `main` to that
+reconciliation commit. The finalizer re-proves the record-only commit, exact
+Pulp transition, immutable coordinates, check producers, candidate-source
+identity, and live proof before writing. Its transaction restores every
+replaced file if a write fails. The ordinary observatory tail accepts only
+this exact prepared-to-active seven-file transition; it does not generally
+allow authority files in evidence-only commits.
+
+That reconciliation advances the observatory and records the durable
+acknowledgement. A missed dispatch is recovered from Pulp's append-only event;
 it never rolls authority back and never starts source synchronization.
 
 If selected Pulp source or the prepared ownership path set changes after a

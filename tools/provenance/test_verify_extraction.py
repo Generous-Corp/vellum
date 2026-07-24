@@ -23,6 +23,43 @@ ARTIFACT_SPEC.loader.exec_module(verify_sdk_artifact)
 
 
 class VerifyExtractionTests(unittest.TestCase):
+    def test_authority_phase_is_cross_bound_to_active_lock(self) -> None:
+        start = "a" * 40
+        record = "b" * 40
+        activation = "c" * 40
+        extraction = {
+            "status": "active",
+            "authority": {
+                "state": "active",
+                "ownership_start_commit": start,
+                "authority_record_commit": record,
+                "authority_record_path": "provenance/authority/records/native.json",
+                "authority_ref": "refs/tags/authority/native",
+                "pulp_activation_commit": activation,
+                "pulp_authority_event_path": ".github/vellum-change-events/active.json",
+                "pulp_authority_event_id": "active",
+                "accepted_by": "@owner",
+                "accepted_at": "2026-07-24T02:00:00Z",
+            },
+        }
+        lock = {
+            "state": "active",
+            "vellum_authority_start_commit": start,
+            "vellum_authority_record_commit": record,
+            "pulp_activation_commit": activation,
+        }
+        self.assertEqual(
+            verify_extraction.verify_authority_phase(extraction, lock), (True, [])
+        )
+        extraction["authority"]["pulp_activation_commit"] = "d" * 40
+        transferred, errors = verify_extraction.verify_authority_phase(
+            extraction, lock
+        )
+        self.assertFalse(transferred)
+        self.assertIn(
+            "active extraction authority has invalid pulp_activation_commit", errors
+        )
+
     def test_git_blob_identity_matches_git_format(self) -> None:
         self.assertEqual(
             verify_extraction.git_blob_sha(b"test content\n"),
