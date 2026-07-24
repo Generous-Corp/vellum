@@ -78,6 +78,7 @@ jobs:
             --output "$RUNNER_TEMP/authority-tag-trust.json"
           {
             printf 'tag=%s\n' "$AUTHORITY_TAG"
+            printf 'id=%s\n' "${AUTHORITY_TAG#authority/}"
             printf 'tag-object=%s\n' "$tag_object_sha"
             printf 'commit=%s\n' "$record_commit"
           } >> "$GITHUB_OUTPUT"
@@ -145,15 +146,16 @@ jobs:
       - name: Publish or verify the immutable authority release
         env:
           AUTHORITY_TAG: ${{ steps.authority.outputs.tag }}
+          AUTHORITY_ID: ${{ steps.authority.outputs.id }}
           RECORD_COMMIT: ${{ steps.authority.outputs.commit }}
           TAG_OBJECT: ${{ steps.authority.outputs.tag-object }}
           GH_TOKEN: ${{ steps.finalizer-token.outputs.token }}
         run: |
           set -euo pipefail
-          title="Vellum authority: native-design-kernel-v1"
+          title="Vellum authority: $AUTHORITY_ID"
           notes="$RUNNER_TEMP/authority-release-notes.md"
           cat > "$notes" <<EOF
-          Immutable source-authority record for native-design-kernel-v1.
+          Immutable source-authority record for $AUTHORITY_ID.
 
           Record commit: $RECORD_COMMIT
           Signed annotated tag object: $TAG_OBJECT
