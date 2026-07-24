@@ -48,7 +48,9 @@ HOSTED_LABELS = (
 
 class RunnerPolicyTests(unittest.TestCase):
     def test_every_workflow_uses_an_explicit_self_hosted_fallback(self) -> None:
-        workflow_paths = sorted(WORKFLOWS.glob("*.yml"))
+        workflow_paths = sorted(
+            [*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]
+        )
         self.assertEqual(
             [path.name for path in workflow_paths],
             sorted(EXPECTED_RUNNERS),
