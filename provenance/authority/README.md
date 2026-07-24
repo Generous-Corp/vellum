@@ -1,11 +1,11 @@
 # Prepared source-authority handoff
 
-Nothing in this directory activates authority. `transfer-plan.v2.json` names
-candidate Pulp legacy slices and their active Vellum implementation boundary.
-`trust-policy.v1.json` is deliberately disabled and contains null repository,
-App, and check-producer identities, so the active verifier cannot pass today.
-The v1 plan and pending-record template are retained only as design lineage;
-new records use schema v2.
+Nothing in this directory activates authority by itself.
+`transfer-plan.v2.json` names candidate Pulp legacy slices and their active
+Vellum implementation boundary. `trust-policy.v1.json` pins the exact
+repository, repository-scoped reader/dispatcher App, and check-producer
+identities used by the fail-closed handshake. The v1 plan and pending-record
+template are retained only as design lineage; new records use schema v2.
 
 The handoff preserves three exact identities:
 
@@ -34,15 +34,22 @@ product commit, build the record from exact commits:
 python3 tools/provenance/verify_authority_activation.py build-record \
   --pulp-repo /path/to/pulp \
   --pulp-ownership-commit <exact-prepared-pulp-sha> \
-  --authority-start-commit <exact-vellum-product-sha> \
-  --authority-record-ref refs/heads/authority/native-design-kernel-v1 \
-  --approved-at <utc-timestamp> \
+  --authority-start-commit <exact-vellum-ready-product-sha> \
+  --authority-record-ref refs/tags/authority/native-design-kernel-v1 \
+  --approved-at <owner-approved-utc-timestamp> \
   --output provenance/authority/records/native-design-kernel-v1.json
 ```
 
-Commit that generated record by itself. Protect the authority ref at that exact
-record commit. Required checks must be strict and bound to pinned GitHub App
-producers.
+The authority-start commit must pass `verify-ready`: trust identities and
+required-check producers are pinned, their required check names match the
+transfer plan, and no pending record exists yet.
+
+Commit that generated record by itself. Create a signed annotated
+`authority/*` tag at that exact record commit, run the required checks, and
+publish an immutable private GitHub Release for that tag. The immutable
+release is the protected-ref mechanism for a private repository on the current
+GitHub plan; a mutable tag or lightweight tag is rejected. Required checks
+must still be successful and bound to pinned GitHub App producers.
 
 The `authority/**` workflow lane verifies the pending record without creating
 a circular dependency on its own check runs. It checks out the record's exact
@@ -54,7 +61,7 @@ python3 tools/provenance/verify_authority_activation.py verify-pending \
   --pulp-ownership-commit <exact-prepared-pulp-sha> \
   --record-path provenance/authority/records/native-design-kernel-v1.json \
   --authority-record-commit <exact-record-commit> \
-  --expected-authority-ref refs/heads/authority/native-design-kernel-v1
+  --expected-authority-ref refs/tags/authority/native-design-kernel-v1
 ```
 
 That offline gate proves the record is structurally reproducible, is the only

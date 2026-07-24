@@ -4,8 +4,8 @@ on:
   workflow_dispatch:
   pull_request:
   push:
-    branches: [main, 'authority/**']
-    tags: ['v[0-9]*']
+    branches: [main]
+    tags: ['v[0-9]*', 'authority/**']
 
 permissions:
   contents: read
@@ -70,14 +70,14 @@ jobs:
         run: |
           python3 tools/provenance/test_verify_authority_activation.py
 
-      - name: Verify prepared authority protocol
-        if: ${{ !startsWith(github.ref, 'refs/heads/authority/') }}
+      - name: Verify authority-start control plane
+        if: ${{ !startsWith(github.ref, 'refs/tags/authority/') }}
         run: |
-          python3 tools/provenance/verify_authority_activation.py verify-prepared \
-            > "$RUNNER_TEMP/authority-prepared-report.json"
+          python3 tools/provenance/verify_authority_activation.py verify-ready \
+            > "$RUNNER_TEMP/authority-ready-report.json"
 
       - name: Resolve the pending authority record
-        if: startsWith(github.ref, 'refs/heads/authority/')
+        if: startsWith(github.ref, 'refs/tags/authority/')
         id: authority-record
         env:
           EXPECTED_AUTHORITY_REF: ${{ github.ref }}
@@ -110,8 +110,39 @@ jobs:
               )
           PY
 
+      - name: Verify the pinned owner signature on the authority tag
+        if: startsWith(github.ref, 'refs/tags/authority/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          remote_row="$(
+            gh api \
+              "repos/$GITHUB_REPOSITORY/git/ref/tags/$GITHUB_REF_NAME" \
+              --jq '[.object.type, .object.sha] | @tsv'
+          )"
+          read -r remote_type tag_object_sha <<EOF
+          $remote_row
+          EOF
+          test "$remote_type" = tag
+          if ! git cat-file -e "$tag_object_sha^{tag}" 2>/dev/null; then
+            git fetch --no-tags origin "refs/tags/$GITHUB_REF_NAME"
+          fi
+          python3 scripts/verify_release_tag.py \
+            --repo "$GITHUB_WORKSPACE" \
+            --repository "$GITHUB_REPOSITORY" \
+            --tag-name "$GITHUB_REF_NAME" \
+            --tag-object-sha "$tag_object_sha" \
+            --source-commit "$GITHUB_SHA" \
+            --allowed-signers \
+              "$GITHUB_WORKSPACE/provenance/release-signers.allowed_signers" \
+            --expected-principal daniel.raffel@gmail.com \
+            --expected-fingerprint \
+              SHA256:eMlEuZcnW6NJDrKQBuN5EX1q69bOlIRPl6XmutVTgcs \
+            --output "$RUNNER_TEMP/authority-tag-trust.json"
+
       - name: Check out the exact Pulp activation candidate
-        if: startsWith(github.ref, 'refs/heads/authority/')
+        if: startsWith(github.ref, 'refs/tags/authority/')
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: Generous-Corp/pulp
@@ -121,7 +152,7 @@ jobs:
           persist-credentials: false
 
       - name: Verify the committed pending authority record
-        if: startsWith(github.ref, 'refs/heads/authority/')
+        if: startsWith(github.ref, 'refs/tags/authority/')
         run: |
           python3 tools/provenance/verify_authority_activation.py \
             verify-pending \
@@ -184,8 +215,9 @@ jobs:
             ${{ runner.temp }}/provenance-report.json
             ${{ runner.temp }}/pulp-tooling-disposition-report.json
             ${{ runner.temp }}/agent-instructions-report.json
-            ${{ runner.temp }}/authority-prepared-report.json
+            ${{ runner.temp }}/authority-ready-report.json
             ${{ runner.temp }}/authority-pending-report.json
+            ${{ runner.temp }}/authority-tag-trust.json
             ${{ runner.temp }}/observatory-health-report.json
           if-no-files-found: error
           retention-days: 90

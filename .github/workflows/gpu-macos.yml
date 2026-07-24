@@ -4,8 +4,8 @@ on:
   workflow_dispatch:
   pull_request:
   push:
-    branches: [main, 'authority/**']
-    tags: ['v[0-9]*']
+    branches: [main]
+    tags: ['v[0-9]*', 'authority/**']
 
 permissions:
   attestations: read

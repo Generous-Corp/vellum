@@ -1,27 +1,27 @@
 {
   "schema_version": 1,
-  "state": "disabled-until-dedicated-apps-and-required-checks-exist",
+  "state": "enabled",
   "repositories": {
     "pulp": {
       "full_name": "Generous-Corp/pulp",
       "private": false,
-      "repository_id": null,
-      "reader_app_id": null,
+      "repository_id": 1203111607,
+      "reader_app_id": 3878000,
       "required_check_app_ids": {
-        "Vellum freeze": null,
-        "Vellum trusted freeze": null
+        "Vellum freeze": 15368,
+        "Vellum trusted freeze": 15368
       }
     },
     "vellum": {
       "full_name": "Generous-Corp/vellum",
       "private": true,
-      "repository_id": null,
-      "reader_app_id": null,
-      "dispatcher_app_id": null,
+      "repository_id": 1309219868,
+      "reader_app_id": 3878000,
+      "dispatcher_app_id": 3878000,
       "required_check_app_ids": {
-        "forbidden-deps": null,
-        "provenance-verify": null,
-        "sterile-consumer": null
+        "forbidden-deps": 15368,
+        "provenance-verify": 15368,
+        "sterile-consumer": 15368
       }
     }
   }
