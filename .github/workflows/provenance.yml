@@ -69,15 +69,56 @@ jobs:
       - name: Test authority protocol and negative controls
         run: |
           python3 tools/provenance/test_verify_authority_activation.py
+          python3 tools/provenance/test_finalize_authority_reconciliation.py
+
+      - name: Resolve the exact authority lifecycle phase
+        id: authority-phase
+        env:
+          AUTHORITY_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          lock = json.loads(
+              Path(
+                  "provenance/pulp-observatory/provenance.lock"
+              ).read_text(encoding="utf-8")
+          )
+          state = lock.get("state")
+          records = sorted(
+              Path("provenance/authority/records").glob("*.json")
+          )
+          tagged = os.environ["AUTHORITY_REF"].startswith(
+              "refs/tags/authority/"
+          )
+          if tagged and state == "prepared" and len(records) == 1:
+              phase = "tagged-pending"
+          elif not tagged and state == "prepared" and not records:
+              phase = "ready"
+          elif not tagged and state == "active" and len(records) == 1:
+              phase = "active"
+          else:
+              raise SystemExit(
+                  "authority lifecycle state/ref/record count is incoherent: "
+                  f"state={state!r} tagged={tagged} records={len(records)}"
+              )
+          with Path(os.environ["GITHUB_OUTPUT"]).open(
+              "a", encoding="utf-8"
+          ) as output:
+              output.write(f"phase={phase}\n")
+          PY
 
       - name: Verify authority-start control plane
-        if: ${{ !startsWith(github.ref, 'refs/tags/authority/') }}
+        if: steps.authority-phase.outputs.phase == 'ready'
         run: |
           python3 tools/provenance/verify_authority_activation.py verify-ready \
             > "$RUNNER_TEMP/authority-ready-report.json"
 
       - name: Resolve the pending authority record
-        if: startsWith(github.ref, 'refs/tags/authority/')
+        if: steps.authority-phase.outputs.phase == 'tagged-pending'
         id: authority-record
         env:
           EXPECTED_AUTHORITY_REF: ${{ github.ref }}
@@ -121,7 +162,7 @@ jobs:
           PY
 
       - name: Verify the pinned owner signature on the authority tag
-        if: startsWith(github.ref, 'refs/tags/authority/')
+        if: steps.authority-phase.outputs.phase == 'tagged-pending'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -152,7 +193,7 @@ jobs:
             --output "$RUNNER_TEMP/authority-tag-trust.json"
 
       - name: Check out the exact Pulp activation candidate
-        if: startsWith(github.ref, 'refs/tags/authority/')
+        if: steps.authority-phase.outputs.phase == 'tagged-pending'
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: Generous-Corp/pulp
@@ -162,7 +203,7 @@ jobs:
           persist-credentials: false
 
       - name: Verify the committed pending authority record
-        if: startsWith(github.ref, 'refs/tags/authority/')
+        if: steps.authority-phase.outputs.phase == 'tagged-pending'
         run: |
           python3 tools/provenance/verify_authority_activation.py \
             verify-pending \

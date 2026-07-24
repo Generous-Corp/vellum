@@ -294,6 +294,21 @@ class AuthorityActivationTests(unittest.TestCase):
         )
         self.assertIn("verify-pending", provenance)
         self.assertIn(
+            "test_finalize_authority_reconciliation.py", provenance
+        )
+        self.assertIn(
+            "Resolve the exact authority lifecycle phase", provenance
+        )
+        self.assertIn(
+            "phase = \"tagged-pending\"", provenance
+        )
+        self.assertIn("phase = \"ready\"", provenance)
+        self.assertIn("phase = \"active\"", provenance)
+        self.assertIn(
+            "if: steps.authority-phase.outputs.phase == 'ready'",
+            provenance,
+        )
+        self.assertIn(
             "authority-start={authority_start}", provenance
         )
         self.assertIn(
