@@ -770,6 +770,7 @@ def route(
             emergency_expiry,
             emergency_follow_up,
             slices,
+            set(contract_tests),
             now or dt.datetime.now(dt.timezone.utc).date(),
         )
         if problems:

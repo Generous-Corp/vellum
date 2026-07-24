@@ -68,6 +68,7 @@ def validate_emergency(
     expiry: str | None,
     follow_up: str | None,
     matched_slices: set[str],
+    required_tests: set[str],
     now: dt.date,
 ) -> list[str]:
     """Validate an emergency against immutable, append-only Pulp event state."""
@@ -127,14 +128,18 @@ def validate_emergency(
         problems.append("emergency Pulp event slices must exactly match the routed slices")
     if not isinstance(event.get("rationale"), str) or not event["rationale"].strip():
         problems.append("emergency Pulp event requires rationale")
-    if (
-        not isinstance(event.get("tests"), list)
-        or any(
-            not isinstance(value, str) or not value
-            for value in event.get("tests", [])
-        )
-    ):
+    event_tests = event.get("tests")
+    valid_tests = (
+        isinstance(event_tests, list)
+        and bool(event_tests)
+        and all(isinstance(value, str) and bool(value) for value in event_tests)
+    )
+    if not valid_tests:
         problems.append("emergency Pulp event tests must be a string array")
+    elif not required_tests.issubset(set(event_tests)):
+        problems.append(
+            "emergency Pulp event tests do not cover every required contract test"
+        )
     try:
         event_history = _git_text(
             authority.pulp,
