@@ -22,6 +22,10 @@ EXPECTED_RUNNERS = {
         "VELLUM_MACOS_RUNS_ON_JSON",
         '["self-hosted","macOS","ARM64","vellum-build-macos"]',
     ),
+    "merge-on-green.yml": (
+        "VELLUM_LINUX_RUNS_ON_JSON",
+        '["self-hosted","Linux","ARM64","vellum-build-linux"]',
+    ),
     "product-quality.yml": (
         "VELLUM_LINUX_RUNS_ON_JSON",
         '["self-hosted","Linux","ARM64","vellum-build-linux"]',

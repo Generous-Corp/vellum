@@ -1,0 +1,47 @@
+name: Merge Vellum PR on green
+
+on:
+  workflow_run:
+    workflows:
+      - Locked macOS GPU proof
+      - Product contract
+      - Provenance and forbidden dependencies
+      - README clean release proof
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vellum-merge-steward-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    name: merge-exact-green-head
+    if: github.event.workflow_run.event == 'pull_request'
+    runs-on: ${{ fromJSON(vars.VELLUM_LINUX_RUNS_ON_JSON || '["self-hosted","Linux","ARM64","vellum-build-linux"]') }}
+    timeout-minutes: 10
+    steps:
+      - name: Check out trusted merge policy from main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Mint a one-repository merge steward token
+        id: steward-token
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3
+        with:
+          app-id: ${{ secrets.SHIPYARD_APP_ID }}
+          private-key: ${{ secrets.SHIPYARD_APP_PRIVATE_KEY }}
+          owner: Generous-Corp
+          repositories: vellum
+          permission-actions: read
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Merge only when every exact-head gate is green
+        env:
+          GH_TOKEN: ${{ steps.steward-token.outputs.token }}
+        run: python3 scripts/merge_on_green.py
