@@ -12,6 +12,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 
 import {
+    blankSdkInstallPathComments,
     finalizeBundleSourceMap,
     normalizeSourceMap,
 } from '../scripts/source-map.mjs';
@@ -158,4 +159,75 @@ test('source-map loading fails closed for missing and malformed maps', async () 
         }, { mapPath: `${bundlePath}.map`, projectRoot: directory, packageRoot }),
         /invalid base64 VLQ/,
     );
+});
+
+test('blanking SDK install-path comments preserves generated line geometry', () => {
+    const posix = '// ../lib/vellum-installs/0.1.0-test-abc/ui/src/runtime.js';
+    const windows = '// ..\\lib\\vellum-installs\\0.1.0-test-abc\\ui\\src\\design.js';
+    const bundle = [
+        posix,
+        'var runtime = 1;',
+        windows,
+        'var design = 2;',
+        '// src/App.tsx',
+        '// an authored comment mentioning vellum-installs in prose',
+        'export { runtime, design };',
+        '',
+    ].join('\n');
+
+    const blanked = blankSdkInstallPathComments(bundle);
+    const before = bundle.split('\n');
+    const after = blanked.split('\n');
+
+    assert.equal(after.length, before.length);
+    assert.equal(blanked.includes('vellum-installs/0.1.0-test-abc'), false);
+    assert.equal(blanked.includes('vellum-installs\\0.1.0-test-abc'), false);
+    assert.equal(after[0], '');
+    assert.equal(after[2], '');
+    for (const index of [1, 3, 4, 5, 6, 7]) {
+        assert.equal(after[index], before[index]);
+    }
+});
+
+test('blanking SDK install-path comments keeps CRLF bundles line-aligned', () => {
+    const bundle = [
+        '// ../lib/vellum-installs/0.1.0-test-abc/ui/src/runtime.js',
+        'var runtime = 1;',
+        '',
+    ].join('\r\n');
+
+    const blanked = blankSdkInstallPathComments(bundle);
+
+    assert.equal(blanked, ['', 'var runtime = 1;', ''].join('\r\n'));
+});
+
+test('finalizing a bundle blanks SDK install-path comments in the written output', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'vellum-source-map-relocatable-'));
+    const bundlePath = join(directory, 'app.js');
+    writeFileSync(bundlePath, [
+        '// ../lib/vellum-installs/0.1.0-test-abc/ui/src/runtime.js',
+        'var runtime = 1;',
+        '// src/App.tsx',
+        'var app = runtime;',
+        '//# sourceMappingURL=app.js.map',
+        '',
+    ].join('\n'));
+    writeFileSync(`${bundlePath}.map`, JSON.stringify({
+        version: 3,
+        sources: ['src/App.tsx'],
+        sourcesContent: ['export const app = 1;\n'],
+        names: [],
+        mappings: 'AAAA',
+    }));
+
+    await finalizeBundleSourceMap({ bundlePath, projectRoot: directory, packageRoot });
+
+    const written = readFileSync(bundlePath, 'utf8');
+    assert.equal(written.includes('vellum-installs'), false);
+    assert.deepEqual(written.split('\n').slice(0, 4), [
+        '',
+        'var runtime = 1;',
+        '// src/App.tsx',
+        'var app = runtime;',
+    ]);
 });

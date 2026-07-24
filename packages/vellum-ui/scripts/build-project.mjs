@@ -67,7 +67,6 @@ await build({
     target: ['safari15'],
     sourcemap: 'external',
     sourcesContent: true,
-    minifyWhitespace: true,
     jsx: 'automatic',
     jsxImportSource: '@vellum/ui',
     alias: {

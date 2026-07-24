@@ -127,6 +127,18 @@ export function normalizeSourceMap(raw, {
     };
 }
 
+// esbuild labels every bundled file with a leading `// <path>` comment. When the
+// SDK is consumed from an install prefix those labels embed the install
+// location, which makes the generated bundle non-relocatable. Blank the comment
+// text in place and keep its newline: the runtime footer resolves stack frames
+// through generated line and column numbers, so removing the line itself would
+// shift every mapping below it out of alignment.
+const SDK_INSTALL_PATH_COMMENT = /^\/\/ [^\r\n]*[\\/]vellum-installs[\\/][^\r\n]*(?=\r?$)/gm;
+
+export function blankSdkInstallPathComments(bundle) {
+    return bundle.replace(SDK_INSTALL_PATH_COMMENT, '');
+}
+
 export function runtimeFooter(map) {
     if (map?.schema !== SOURCE_MAP_SCHEMA || !Array.isArray(map.lines)) {
         throw new Error('cannot emit malformed Vellum source map');
@@ -209,6 +221,7 @@ export async function finalizeBundleSourceMap({
     });
     let bundle = await readFile(bundlePath, 'utf8');
     bundle = bundle.replace(/\n?\/\/# sourceMappingURL=.*?(?:\n|$)/g, '\n');
+    bundle = blankSdkInstallPathComments(bundle);
     const footer = runtimeFooter(normalized);
     const mapName = encodeURIComponent(bundlePath.split(/[\\/]/).at(-1) + '.map');
     await writeFile(bundlePath, `${bundle}${footer}//# sourceMappingURL=${mapName}\n`);
