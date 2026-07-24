@@ -194,6 +194,49 @@ class ObservatoryTests(unittest.TestCase):
 
             observatory.verify_vellum_observatory_tail(repo, source, evidence)
 
+    def test_tree_identical_merge_does_not_duplicate_observation_or_break_tail(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary) / "vellum"
+            init_repo(repo, "unmapped/source.cpp")
+            write(repo / observatory.REPORT_MD_PATH, "current\n")
+            cursor = commit_all(repo, "seed report")
+            run(repo, "git", "checkout", "-b", "evidence")
+            write(repo / observatory.REPORT_MD_PATH, "updated\n")
+            evidence = commit_all(repo, "record evidence")
+            run(repo, "git", "checkout", "main")
+            run(repo, "git", "merge", "--no-ff", "evidence", "-m", "merge evidence")
+            merged = run(repo, "git", "rev-parse", "HEAD")
+
+            self.assertEqual(
+                observatory.tree_identical_scanned_parent(
+                    repo, merged, cursor
+                ),
+                evidence,
+            )
+            self.assertIsNone(
+                observatory.observation_for_commit(
+                    source="vellum",
+                    repository="Generous-Corp/vellum",
+                    repo=repo,
+                    commit=merged,
+                    cursor_from=cursor,
+                    cursor_to=merged,
+                    discovered_at="2026-07-24T00:00:00Z",
+                    mappings=[{
+                        "id": "render",
+                        "pulp_paths": ["core/render/"],
+                        "vellum_paths": ["graphics/"],
+                        "contract_tests": ["render-contract"],
+                    }],
+                    transitive_rules=[],
+                )
+            )
+            observatory.verify_vellum_observatory_tail(
+                repo, cursor, merged
+            )
+
     def test_vellum_evidence_tail_rejects_unmapped_product_change(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             repo = Path(temporary) / "vellum"

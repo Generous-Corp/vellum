@@ -214,6 +214,36 @@ def require_ancestor(repo: Path, ancestor: str, descendant: str, field: str) -> 
         raise ObservatoryError(f"{field}: {ancestor} is not an ancestor of {descendant}")
 
 
+def is_ancestor(repo: Path, ancestor: str, descendant: str) -> bool:
+    completed = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+        cwd=repo,
+        capture_output=True,
+    )
+    if completed.returncode not in (0, 1):
+        raise ObservatoryError(
+            f"cannot compare Git ancestry: {ancestor} -> {descendant}"
+        )
+    return completed.returncode == 0
+
+
+def tree_identical_scanned_parent(
+    repo: Path, commit: str, cursor_from: str
+) -> str | None:
+    """Return a scanned parent when a merge adds no tree beyond that parent."""
+    row = git(repo, "rev-list", "--parents", "-n", "1", commit).split()
+    if len(row) < 3:
+        return None
+    commit_tree = git(repo, "rev-parse", f"{commit}^{{tree}}")
+    for parent in row[1:]:
+        if (
+            is_ancestor(repo, cursor_from, parent)
+            and git(repo, "rev-parse", f"{parent}^{{tree}}") == commit_tree
+        ):
+            return parent
+    return None
+
+
 def path_matches(path: str, patterns: Iterable[str]) -> bool:
     return any(path.startswith(pattern) for pattern in patterns)
 
@@ -354,6 +384,11 @@ def observation_for_commit(
     *, source: str, repository: str, repo: Path, commit: str, cursor_from: str,
     cursor_to: str, discovered_at: str, mappings: list[dict[str, object]], transitive_rules: list[str]
 ) -> dict[str, object] | None:
+    if (
+        source == "vellum"
+        and tree_identical_scanned_parent(repo, commit, cursor_from) is not None
+    ):
+        return None
     entries = parse_diff_entries(repo, commit)
     mapped = mapped_change(entries, mappings, source, transitive_rules)
     if mapped is None:
@@ -846,11 +881,24 @@ def verify_vellum_observatory_tail(repo: Path, cursor: str, target: str) -> None
         REPORT_MD_PATH.as_posix(),
     }
     events_prefix = EVENTS_PATH.as_posix() + "/"
+    previous = cursor
     for commit in commits_between(repo, cursor, target):
         parents = git(repo, "rev-list", "--parents", "-n", "1", commit).split()
+        if (
+            len(parents) == 3
+            and previous in parents[1:]
+            and git(repo, "rev-parse", f"{commit}^{{tree}}")
+            == git(repo, "rev-parse", f"{previous}^{{tree}}")
+        ):
+            previous = commit
+            continue
         if len(parents) != 2:
             raise ObservatoryError(
                 f"Vellum observatory evidence tail must be linear: {commit}"
+            )
+        if parents[1] != previous:
+            raise ObservatoryError(
+                f"Vellum observatory evidence tail is discontinuous: {commit}"
             )
         for entry in parse_diff_entries(repo, commit):
             status = str(entry["status"])
@@ -874,6 +922,7 @@ def verify_vellum_observatory_tail(repo: Path, cursor: str, target: str) -> None
                 f"Vellum observatory evidence tail contains non-evidence change at "
                 f"{commit}: {status} {path}"
             )
+        previous = commit
 
 
 def verify_append_only(root: Path, git_base: str | None) -> None:
