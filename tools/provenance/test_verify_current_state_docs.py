@@ -18,6 +18,18 @@ ROOT = SCRIPT.parents[2]
 
 
 class Tests(unittest.TestCase):
+    def test_workflow_checks_documents_only_after_active_phase_resolution(self) -> None:
+        workflow = (ROOT / ".github/workflows/provenance.yml").read_text(
+            encoding="utf-8"
+        )
+        phase = workflow.index("- name: Resolve the exact authority lifecycle phase")
+        documents = workflow.index("- name: Verify active repository documentation")
+        self.assertGreater(documents, phase)
+        self.assertIn(
+            "if: steps.authority-phase.outputs.phase == 'active'",
+            workflow[documents : documents + 240],
+        )
+
     def test_repository_documents_match_active_state(self) -> None:
         verifier.verify_documents(ROOT)
 

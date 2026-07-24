@@ -858,8 +858,33 @@ class RoutingScenariosTest(unittest.TestCase):
             )
             self.assertEqual(unrelated["status"], "decision_required")
             self.assertEqual(
-                unrelated["conflicts"],
-                ["pulp", "transferred"],
+                unrelated["unmapped_paths"],
+                ["core/new_product/CMakeLists.txt"],
+            )
+
+            unseeded = ROUTER.route(
+                ROUTER.load_authority(vellum, pulp),
+                source_repo="pulp",
+                paths=["CMakeLists.txt"],
+                intent="generic",
+            )
+            self.assertEqual(unseeded["status"], "decision_required")
+            self.assertEqual(unseeded["unmapped_paths"], ["CMakeLists.txt"])
+
+            unsupported_counterpart = ROUTER.route(
+                ROUTER.load_authority(vellum, pulp),
+                source_repo="vellum",
+                paths=["scripts/install_core.py"],
+                intent="generic",
+                counterpart_result="affected",
+            )
+            self.assertEqual(
+                unsupported_counterpart["status"],
+                "decision_required",
+            )
+            self.assertIn(
+                "no Pulp counterpart contract",
+                unsupported_counterpart["reasons"][0],
             )
 
     def test_generic_pulp_counterpart_must_be_checked(self) -> None:

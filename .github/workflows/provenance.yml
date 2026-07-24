@@ -72,7 +72,6 @@ jobs:
           python3 tools/provenance/test_verify_authority_activation.py
           python3 tools/provenance/test_finalize_authority_reconciliation.py
           python3 tools/provenance/test_verify_current_state_docs.py
-          python3 tools/provenance/verify_current_state_docs.py
           python3 .agents/skills/pulp-vellum-change-routing/scripts/test_route_change.py
 
       - name: Resolve the exact authority lifecycle phase
@@ -114,6 +113,10 @@ jobs:
           ) as output:
               output.write(f"phase={phase}\n")
           PY
+
+      - name: Verify active repository documentation
+        if: steps.authority-phase.outputs.phase == 'active'
+        run: python3 tools/provenance/verify_current_state_docs.py
 
       - name: Verify authority-start control plane
         if: steps.authority-phase.outputs.phase == 'ready'

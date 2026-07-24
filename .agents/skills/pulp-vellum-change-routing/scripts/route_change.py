@@ -638,6 +638,13 @@ def route(
                 required_tests=contract_tests,
                 reasons=["Pulp-specific intent cannot be implemented first in a Vellum path"],
             )
+        if counterpart_result != "not-checked" and not contracts:
+            return _result(
+                "decision_required",
+                reasons=[
+                    "counterpart result was supplied but no Pulp counterpart contract applies"
+                ],
+            )
         disposition = "framework-only"
         secondary = None
         if contracts and counterpart_result == "not-checked":
@@ -675,6 +682,7 @@ def route(
     slices: set[str] = set()
     unmapped_shared: list[str] = []
     unmapped_native: list[str] = []
+    unseeded_transitive: list[str] = []
     transitive_paths: list[str] = []
     for path, matches in exact_by_path.items():
         if matches:
@@ -701,9 +709,12 @@ def route(
             if len(seed_states) == 1:
                 states.update(seed_states)
                 transitive_paths.append(path)
+            elif not seed_states:
+                states.add("unseeded-transitive")
+                unseeded_transitive.append(path)
             else:
-                states.add("pulp")
-                unmapped_native.append(path)
+                states.update(seed_states)
+                transitive_paths.append(path)
         else:
             states.add("pulp")
             unmapped_native.append(path)
@@ -717,6 +728,18 @@ def route(
             transitive_paths=transitive_paths,
             unmapped_paths=unmapped_shared,
             reasons=["new Pulp path is absent from the exact projection but matches a broad shared counterpart"],
+        )
+    if "unseeded-transitive" in states:
+        return _result(
+            "decision_required",
+            matched_slices=sorted(slices),
+            counterpart_contracts=contracts,
+            required_tests=contract_tests,
+            transitive_paths=transitive_paths,
+            unmapped_paths=unseeded_transitive,
+            reasons=[
+                "transitive Pulp path has no related exact ownership seed"
+            ],
         )
     if len(states) > 1:
         return _result(
