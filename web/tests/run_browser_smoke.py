@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -17,11 +18,11 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", required=True, type=Path)
     args = parser.parse_args()
-    chrome = shutil.which("google-chrome")
+    chrome = os.environ.get("VELLUM_CHROME_PATH") or shutil.which("google-chrome")
     if chrome is None:
         application = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
         chrome = str(application) if application.is_file() else None
-    if chrome is None:
+    if chrome is None or not Path(chrome).is_file():
         raise SystemExit("Google Chrome is required for the browser proof")
     received = threading.Event()
     result: dict[str, object] = {}

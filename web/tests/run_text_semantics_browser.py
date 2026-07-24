@@ -24,11 +24,11 @@ def main() -> int:
     parser.add_argument("--node", type=Path)
     parser.add_argument("--build-script", type=Path)
     args = parser.parse_args()
-    chrome = shutil.which("google-chrome")
+    chrome = os.environ.get("VELLUM_CHROME_PATH") or shutil.which("google-chrome")
     mac_chrome = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
     if not chrome and mac_chrome.is_file():
         chrome = str(mac_chrome)
-    if not chrome:
+    if not chrome or not Path(chrome).is_file():
         raise SystemExit("Google Chrome is required")
     node = str(args.node.resolve()) if args.node else shutil.which("node")
     if not node:

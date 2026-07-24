@@ -56,8 +56,9 @@ NODE24_ACTION_PINS = {
     "actions/download-artifact": "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",  # v8.0.1
     "actions/setup-node": "820762786026740c76f36085b0efc47a31fe5020",  # v7.0.0
     "actions/upload-artifact": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",  # v7.0.1
+    "browser-actions/setup-chrome": "2e1d749697dd1612b833dba4a722266286fbefcd",  # v2.1.2
 }
-ACTION_USE = re.compile(r"^\s*-?\s*uses:\s+(actions/[^@\s]+)@([0-9a-f]{40})\s*$")
+ACTION_USE = re.compile(r"^\s*-?\s*uses:\s+([^./\s][^@\s]+)@([0-9a-f]{40})\s*$")
 
 
 class RunnerPolicyTests(unittest.TestCase):
@@ -86,17 +87,17 @@ class RunnerPolicyTests(unittest.TestCase):
                     for hosted_label in HOSTED_LABELS:
                         self.assertNotIn(hosted_label, line)
 
-    def test_official_actions_are_pinned_to_reviewed_node24_releases(self) -> None:
+    def test_external_actions_are_pinned_to_reviewed_node24_releases(self) -> None:
         for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]):
             for line_number, line in enumerate(
                 path.read_text(encoding="utf-8").splitlines(), start=1
             ):
-                if "uses: actions/" not in line:
+                if "uses:" not in line or "uses: ./" in line:
                     continue
                 match = ACTION_USE.match(line)
                 self.assertIsNotNone(
                     match,
-                    f"{path.name}:{line_number}: official action must use a full commit SHA",
+                    f"{path.name}:{line_number}: external action must use a full commit SHA",
                 )
                 action, pin = match.groups()
                 self.assertIn(
