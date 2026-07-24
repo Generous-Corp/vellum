@@ -152,10 +152,11 @@
         "source_repo": "pulp",
         "intent": "emergency",
         "paths": ["core/canvas/src/text_layout.cpp"],
+        "emergency_event": ".github/vellum-change-events/20260724-routing-emergency.json",
         "emergency_owner": "@owner",
         "emergency_created": "2026-07-24",
         "emergency_expiry": "2026-08-01",
-        "emergency_follow_up": "https://github.com/Generous-Corp/vellum/issues/123",
+        "emergency_follow_up": "https://github.com/Generous-Corp/vellum/issues/1",
         "now": "2026-07-24"
       },
       "expected": {

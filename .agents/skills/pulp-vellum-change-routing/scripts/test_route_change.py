@@ -28,6 +28,7 @@ RECORD_COMMIT = "a" * 40
 PULP_COMMIT = "b" * 40
 RECORD_PATH = "provenance/authority/records/native-design-kernel-v1.json"
 EVENT_ID = "20260724-authority-activation"
+EMERGENCY_EVENT = ".github/vellum-change-events/20260724-routing-emergency.json"
 
 
 def write_json(path: Path, value: Any) -> None:
@@ -256,6 +257,22 @@ activation:
             },
         },
     )
+    write_json(
+        pulp / EMERGENCY_EVENT,
+        {
+            "schema_version": 1,
+            "event_id": "20260724-routing-emergency",
+            "kind": "change",
+            "created_at": "2026-07-24T12:03:00Z",
+            "slices": ["canvas-kernel"],
+            "rationale": "Bounded routing test emergency.",
+            "tests": ["vellum.gpu-native"],
+            "disposition": "emergency-exception",
+            "owner": "@owner",
+            "expiry": "2026-08-01",
+            "follow_up": "https://github.com/Generous-Corp/vellum/issues/1",
+        },
+    )
     subprocess.run(["git", "-C", str(pulp), "add", "."], check=True)
     subprocess.run(["git", "-C", str(pulp), "commit", "-qm", "adopt SDK"], check=True)
     return vellum, pulp
@@ -388,13 +405,17 @@ class RoutingScenariosTest(unittest.TestCase):
                 now=dt.date(2026, 7, 24),
             )
             self.assertEqual(missing_emergency["status"], "decision_required")
-            self.assertGreaterEqual(len(missing_emergency["reasons"]), 3)
+            self.assertIn(
+                "committed Pulp event",
+                missing_emergency["reasons"][0],
+            )
 
             expired_emergency = ROUTER.route(
                 authority,
                 source_repo="pulp",
                 paths=["core/canvas/src/text_layout.cpp"],
                 intent="emergency",
+                emergency_event=EMERGENCY_EVENT,
                 emergency_owner="@owner",
                 emergency_created="2026-07-20",
                 emergency_expiry="2026-07-23",
@@ -408,6 +429,7 @@ class RoutingScenariosTest(unittest.TestCase):
                 source_repo="pulp",
                 paths=["core/canvas/src/text_layout.cpp"],
                 intent="emergency",
+                emergency_event=EMERGENCY_EVENT,
                 emergency_owner="@owner",
                 emergency_created="2026-07-01",
                 emergency_expiry="2026-08-01",
@@ -501,6 +523,7 @@ class RoutingScenariosTest(unittest.TestCase):
                 source_repo="pulp",
                 paths=["core/canvas/src/text_layout.cpp"],
                 intent="emergency",
+                emergency_event=EMERGENCY_EVENT,
                 emergency_owner="@",
                 emergency_created="2026-07-24",
                 emergency_expiry="2026-07-25",
@@ -525,6 +548,26 @@ class RoutingScenariosTest(unittest.TestCase):
             with self.assertRaisesRegex(
                 ROUTER.AuthorityError,
                 "authority disagrees on vellum_commit",
+            ):
+                ROUTER.load_authority(vellum, pulp)
+
+    def test_counterpart_map_metadata_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            vellum, pulp = make_fixture(Path(temporary))
+            mapping_path = (
+                vellum / "provenance/pulp-observatory/legacy-path-map.yaml"
+            )
+            mapping = json.loads(mapping_path.read_text(encoding="utf-8"))
+            mapping["mappings"][0]["contract_tests"] = None
+            write_json(mapping_path, mapping)
+            subprocess.run(["git", "-C", str(vellum), "add", "."], check=True)
+            subprocess.run(
+                ["git", "-C", str(vellum), "commit", "-qm", "malformed map"],
+                check=True,
+            )
+            with self.assertRaisesRegex(
+                ROUTER.AuthorityError,
+                "contract_tests must be a string array",
             ):
                 ROUTER.load_authority(vellum, pulp)
 

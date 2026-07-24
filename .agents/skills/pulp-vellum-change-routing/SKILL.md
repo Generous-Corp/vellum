@@ -46,9 +46,11 @@ broadly mapped shared area is not silently transferred; it requires a decision.
   Pulp-owned integration work in Pulp. A transferred path may use a Pulp
   `pulp-only` event only when the change is genuinely Pulp-specific.
 - **Emergency in a transferred Pulp path:** require an accountable `@owner`, a
-  GitHub follow-up issue, an explicit creation date, and an unexpired date no
-  more than 14 days after that creation date. Repair Vellum in parallel and
-  reconcile before expiry. Do not extend the window by rerunning the router.
+  GitHub follow-up issue, an explicit creation date, and a committed append-only
+  Pulp change event at `--emergency-event`. The event must match the affected
+  slices and supplied metadata, and its expiry may be no more than 14 days after
+  its durable `created_at`. Repair Vellum in parallel and reconcile before
+  expiry. Do not extend the window by rerunning the router.
 - **Excluded or untransferred Pulp behavior:** Pulp owns the current
   implementation. Check an analogous Vellum contract independently; do not call
   the result a framework backport unless the protocol actually applies.
@@ -81,6 +83,7 @@ Refuse or flag:
   path inside a broad shared counterpart;
 - a floating, malformed, or locally unresolved framework backport commit;
 - expired or incomplete emergency metadata;
+- an emergency without matching committed append-only Pulp event evidence;
 - automatic copying, patch application, or blind cherry-picking between repos;
 - treating `excluded` as Vellum-owned, treating discovery as a decision, or
   silently reversing authority.

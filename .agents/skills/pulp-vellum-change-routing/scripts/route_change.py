@@ -347,6 +347,33 @@ def load_authority(vellum: Path, pulp: Path) -> Authority:
     mappings = counterpart.get("mappings")
     if not isinstance(mappings, list):
         raise AuthorityError("counterpart mappings must be an array")
+    mapping_ids: set[str] = set()
+    for mapping in mappings:
+        if not isinstance(mapping, dict):
+            raise AuthorityError("counterpart map contains a malformed row")
+        mapping_id = mapping.get("id")
+        if (
+            not isinstance(mapping_id, str)
+            or not mapping_id
+            or mapping_id in mapping_ids
+        ):
+            raise AuthorityError("counterpart mapping IDs must be present and unique")
+        mapping_ids.add(mapping_id)
+        for field in ("pulp_paths", "vellum_paths", "contract_tests"):
+            values = mapping.get(field)
+            if (
+                not isinstance(values, list)
+                or any(not isinstance(value, str) or not value for value in values)
+            ):
+                raise AuthorityError(
+                    f"counterpart mapping {mapping_id} {field} must be a string array"
+                )
+    transitive_rules = counterpart.get("transitive_path_rules", [])
+    if (
+        not isinstance(transitive_rules, list)
+        or any(not isinstance(rule, str) or not rule for rule in transitive_rules)
+    ):
+        raise AuthorityError("counterpart transitive_path_rules must be a string array")
     return Authority(
         vellum,
         pulp,
@@ -429,17 +456,104 @@ def _result(status: str, **values: Any) -> dict[str, Any]:
 
 
 def _validate_emergency(
+    authority: Authority,
+    event_path: str | None,
     owner: str | None,
     created: str | None,
     expiry: str | None,
     follow_up: str | None,
+    matched_slices: set[str],
     now: dt.date,
 ) -> list[str]:
     problems: list[str] = []
+    parsed_path = PurePosixPath(event_path or "")
+    if (
+        not event_path
+        or parsed_path.is_absolute()
+        or "\\" in event_path
+        or any(part in {".", ".."} for part in parsed_path.parts)
+        or parsed_path.as_posix() != event_path
+        or parsed_path.parent.as_posix() != ".github/vellum-change-events"
+        or parsed_path.suffix != ".json"
+    ):
+        return [
+            "emergency requires a normalized committed Pulp event under .github/vellum-change-events"
+        ]
+    try:
+        event_text = _git_text(
+            authority.pulp, "show", f"{authority.pulp_head}:{event_path}"
+        )
+    except AuthorityError:
+        return ["emergency Pulp event is not committed at the supplied Pulp HEAD"]
+    try:
+        event = json.loads(event_text)
+    except json.JSONDecodeError:
+        return ["emergency Pulp event must be valid committed JSON"]
+    if not isinstance(event, dict):
+        return ["emergency Pulp event must contain an object"]
+    required = {
+        "schema_version",
+        "event_id",
+        "kind",
+        "created_at",
+        "slices",
+        "rationale",
+        "tests",
+        "disposition",
+        "owner",
+        "expiry",
+        "follow_up",
+    }
+    if set(event) != required:
+        problems.append("emergency Pulp event has missing or unknown fields")
+    if (
+        event.get("schema_version") != 1
+        or event.get("event_id") != parsed_path.stem
+        or event.get("kind") != "change"
+        or event.get("disposition") != "emergency-exception"
+    ):
+        problems.append("emergency Pulp event identity or disposition is invalid")
+    if (
+        not isinstance(event.get("slices"), list)
+        or set(event.get("slices", [])) != matched_slices
+        or any(not isinstance(value, str) or not value for value in event.get("slices", []))
+    ):
+        problems.append("emergency Pulp event slices must exactly match the routed slices")
+    for field in ("rationale",):
+        if not isinstance(event.get(field), str) or not event[field].strip():
+            problems.append(f"emergency Pulp event requires {field}")
+    if (
+        not isinstance(event.get("tests"), list)
+        or any(not isinstance(value, str) or not value for value in event.get("tests", []))
+    ):
+        problems.append("emergency Pulp event tests must be a string array")
+    history = _git_text(
+        authority.pulp,
+        "log",
+        "--format=%H",
+        "--",
+        event_path,
+    ).splitlines()
+    if len(history) != 1:
+        problems.append("emergency Pulp event must be append-only and committed exactly once")
     if not owner or not OWNER_RE.fullmatch(owner):
         problems.append("emergency owner must be a valid @account or @organization/team")
+    elif event.get("owner") != owner:
+        problems.append("emergency owner disagrees with the committed Pulp event")
     if not follow_up or not ISSUE_RE.fullmatch(follow_up):
         problems.append("emergency follow-up must be a GitHub issue URL")
+    elif event.get("follow_up") != follow_up:
+        problems.append("emergency follow-up disagrees with the committed Pulp event")
+    try:
+        created_at = dt.datetime.fromisoformat(
+            str(event.get("created_at", "")).replace("Z", "+00:00")
+        )
+    except ValueError:
+        created_at = None
+        problems.append("emergency Pulp event created_at must be an ISO-8601 timestamp")
+    if created_at is not None and created_at.tzinfo is None:
+        problems.append("emergency Pulp event created_at must include a timezone")
+        created_at = None
     try:
         created_date = dt.date.fromisoformat(created or "")
     except ValueError:
@@ -448,12 +562,18 @@ def _validate_emergency(
     else:
         if created_date > now:
             problems.append("emergency creation date cannot be in the future")
+        if created_at is not None and created_date != created_at.date():
+            problems.append(
+                "emergency creation date disagrees with the committed Pulp event"
+            )
     try:
         expiry_date = dt.date.fromisoformat(expiry or "")
     except ValueError:
         expiry_date = None
         problems.append("emergency expiry must be YYYY-MM-DD")
     if expiry_date is not None:
+        if event.get("expiry") != expiry:
+            problems.append("emergency expiry disagrees with the committed Pulp event")
         if expiry_date < now:
             problems.append("emergency is already expired")
         if created_date is not None:
@@ -553,6 +673,7 @@ def route(
     operation: str = "route",
     framework_commit: str | None = None,
     adoption_contract: str | None = None,
+    emergency_event: str | None = None,
     emergency_owner: str | None = None,
     emergency_created: str | None = None,
     emergency_expiry: str | None = None,
@@ -694,16 +815,11 @@ def route(
                 ],
             )
 
-    if intent == "emergency":
-        problems = _validate_emergency(
-            emergency_owner,
-            emergency_created,
-            emergency_expiry,
-            emergency_follow_up,
-            now or dt.datetime.now(dt.timezone.utc).date(),
+    if intent == "emergency" and source_repo != "pulp":
+        return _result(
+            "decision_required",
+            reasons=["emergency exceptions apply only to transferred Pulp paths"],
         )
-        if problems:
-            return _result("decision_required", reasons=problems)
 
     if source_repo == "vellum":
         if intent == "pulp-specific":
@@ -803,6 +919,23 @@ def route(
         )
 
     transferred = states == {"transferred"}
+    if intent == "emergency":
+        problems = _validate_emergency(
+            authority,
+            emergency_event,
+            emergency_owner,
+            emergency_created,
+            emergency_expiry,
+            emergency_follow_up,
+            slices,
+            now or dt.datetime.now(dt.timezone.utc).date(),
+        )
+        if problems:
+            return _result(
+                "decision_required",
+                matched_slices=sorted(slices),
+                reasons=problems,
+            )
     if operation == "framework-backport" and not transferred:
         return _result(
             "decision_required",
@@ -913,6 +1046,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--framework-commit")
     parser.add_argument("--adoption-contract")
+    parser.add_argument("--emergency-event")
     parser.add_argument("--emergency-owner")
     parser.add_argument("--emergency-created")
     parser.add_argument("--emergency-expiry")
@@ -935,6 +1069,7 @@ def main(argv: list[str] | None = None) -> int:
             operation=args.operation,
             framework_commit=args.framework_commit,
             adoption_contract=args.adoption_contract,
+            emergency_event=args.emergency_event,
             emergency_owner=args.emergency_owner,
             emergency_created=args.emergency_created,
             emergency_expiry=args.emergency_expiry,
