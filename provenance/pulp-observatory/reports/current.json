@@ -1,10 +1,5 @@
 {
-  "activation_blockers": [
-    "authority-not-transferred",
-    "immutable-vellum-authority-record-not-recorded",
-    "immutable-vellum-authority-start-not-recorded",
-    "landed-pulp-freeze-evidence-not-recorded"
-  ],
+  "activation_blockers": [],
   "budget_violations": [],
   "coverage_gaps": [],
   "events": [
@@ -924,7 +919,7 @@
       "source_repository": "Generous-Corp/vellum"
     }
   ],
-  "generated_at": "2026-07-24T08:57:09Z",
+  "generated_at": "2026-07-24T14:48:00Z",
   "health": "pass",
   "maximum_pending_age_days": 0.0,
   "observatory_effort_percent": 0.0,
@@ -933,5 +928,5 @@
   "release_blockers": [],
   "repeated_generic_fixes": {},
   "schema_version": 2,
-  "state": "prepared"
+  "state": "active"
 }

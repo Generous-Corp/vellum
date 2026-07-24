@@ -1,17 +1,22 @@
-schema_version: 1
+schema_version: 2
 framework_repository: Generous-Corp/vellum
 freeze_owner: "@danielraffel"
 activation:
-  state: independent-validation
+  state: active
   pulp_extraction_base: 2ccff748f0d59da34b01ce1fbceabcf19f452731
-  vellum_authority_commit: null
-  pulp_activation_commit: null
-  accepted_by: null
-  accepted_at: null
+  vellum_authority_start_commit: bf51a86f8a24dbf7bc26a72a6afa6db062f4b605
+  vellum_authority_record_commit: a106a02816a0cde53daac83f36a6630d664f6637
+  authority_record_path: provenance/authority/records/native-design-kernel-v1-attempt-2.json
+  authority_ref: refs/tags/authority/native-design-kernel-v1-attempt-2
+  pulp_activation_commit: 28d74338ff57e91bb5690308ec9502ebf2fcf09d
+  pulp_authority_event_path: .github/vellum-change-events/20260724-authority-activation-attempt-2.json
+  pulp_authority_event_id: 20260724-authority-activation-attempt-2
+  accepted_by: "@danielraffel"
+  accepted_at: "2026-07-24T12:03:00Z"
 
 # The historical projection remains byte-locked in cut-manifest.json and Git
 # history. It is not present as editable source at the active tip and no source
-# authority has transferred. The rows below describe historical lineage only.
+# authority is active in Vellum. The rows below remain historical lineage only.
 historical_slices:
   - id: canvas-kernel
     state: historical-seed-retired-not-active
@@ -43,23 +48,23 @@ historical_slices:
 
 vellum_owned_slices:
   - id: vellum-foundation
-    state: framework-reimplemented-no-transfer
+    state: framework-authoritative-active
   - id: vellum-design-ir
-    state: framework-reimplemented-no-transfer
+    state: framework-authoritative-active
   - id: vellum-platform-graphics
-    state: framework-reimplemented-no-transfer
+    state: framework-authoritative-active
   - id: vellum-authoring-js
-    state: framework-reimplemented-no-transfer
+    state: framework-authoritative-active
     implementation:
       - packages/vellum-ui
   - id: vellum-native-javascriptcore-host
-    state: framework-reimplemented-no-transfer
+    state: framework-authoritative-active
     implementation:
       - authoring
     evidence:
       - vellum.authoring
   - id: vellum-skia-dawn-renderer
-    state: framework-reimplemented-no-transfer
+    state: framework-authoritative-active
     implementation:
       - graphics/include/vellum/graphics/scene.hpp
       - graphics/include/vellum/graphics/skia_dawn_surface.hpp

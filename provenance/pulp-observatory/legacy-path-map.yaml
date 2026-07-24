@@ -1,119 +1,262 @@
 {
-  "schema_version": 2,
-  "state": "prepared-no-transfer",
-  "source_manifest": "../cut-manifest.json",
   "mappings": [
     {
+      "authority": "vellum-authoritative-transferred",
+      "contract_tests": [
+        "vellum.gpu-native",
+        "vellum.install-consumer"
+      ],
       "id": "canvas-kernel",
-      "pulp_paths": ["core/canvas/"],
-      "vellum_paths": ["graphics/"],
-      "symbols": ["pulp::canvas::*", "vellum::graphics::*"],
-      "targets": ["pulp-canvas", "Vellum::Graphics"],
-      "schemas": [],
       "platform_hosts": [],
-      "contract_tests": ["vellum.gpu-native", "vellum.install-consumer"],
-      "authority": "pulp-authoritative-untransferred"
+      "pulp_paths": [
+        "core/canvas/"
+      ],
+      "schemas": [],
+      "symbols": [
+        "pulp::canvas::*",
+        "vellum::graphics::*"
+      ],
+      "targets": [
+        "pulp-canvas",
+        "Vellum::Graphics"
+      ],
+      "vellum_paths": [
+        "graphics/"
+      ]
     },
     {
+      "authority": "vellum-authoritative-transferred",
+      "contract_tests": [
+        "vellum.capture-stats",
+        "vellum.gpu-native"
+      ],
       "id": "capture-primitives",
-      "pulp_paths": ["core/view/include/pulp/view/screenshot", "core/view/src/screenshot", "core/view/platform/mac/screenshot", "core/view/platform/mac/window_host_mac_capture"],
-      "vellum_paths": ["graphics/include/vellum/graphics/capture_stats.hpp", "graphics/src/capture_stats.cpp", "apps/", "cli/vellum_native_backend.py"],
-      "symbols": ["pulp::view::render_to_*", "vellum::graphics::analyze_capture_rgba"],
-      "targets": ["pulp-view", "Vellum::Graphics", "vellum-app-host"],
-      "schemas": ["vellum.capture.v1"],
-      "platform_hosts": ["macos"],
-      "contract_tests": ["vellum.capture-stats", "vellum.gpu-native"],
-      "authority": "pulp-authoritative-untransferred"
+      "platform_hosts": [
+        "macos"
+      ],
+      "pulp_paths": [
+        "core/view/include/pulp/view/screenshot",
+        "core/view/src/screenshot",
+        "core/view/platform/mac/screenshot",
+        "core/view/platform/mac/window_host_mac_capture"
+      ],
+      "schemas": [
+        "vellum.capture.v1"
+      ],
+      "symbols": [
+        "pulp::view::render_to_*",
+        "vellum::graphics::analyze_capture_rgba"
+      ],
+      "targets": [
+        "pulp-view",
+        "Vellum::Graphics",
+        "vellum-app-host"
+      ],
+      "vellum_paths": [
+        "graphics/include/vellum/graphics/capture_stats.hpp",
+        "graphics/src/capture_stats.cpp",
+        "apps/",
+        "cli/vellum_native_backend.py"
+      ]
     },
     {
+      "authority": "vellum-authoritative-transferred",
+      "contract_tests": [
+        "vellum-design-ir",
+        "vellum-design-ir-sterile-consumer"
+      ],
       "id": "design-schema-compiler",
-      "pulp_paths": ["core/view/include/pulp/view/design_", "core/view/src/design_", "core/view/src/anchor_strategy", "packages/pulp-import-ir/"],
-      "vellum_paths": ["packages/vellum-design-ir/", "fixtures/design-ir/", "cli/vellum_backend.py"],
-      "symbols": ["pulp::view::DesignIR", "@vellum/design-ir"],
-      "targets": ["pulp-import-ir", "@vellum/design-ir"],
-      "schemas": ["design-ir-v1", "reimport-report-v1"],
       "platform_hosts": [],
-      "contract_tests": ["vellum-design-ir", "vellum-design-ir-sterile-consumer"],
-      "authority": "pulp-authoritative-untransferred"
+      "pulp_paths": [
+        "core/view/include/pulp/view/design_",
+        "core/view/src/design_",
+        "core/view/src/anchor_strategy",
+        "packages/pulp-import-ir/"
+      ],
+      "schemas": [
+        "design-ir-v1",
+        "reimport-report-v1"
+      ],
+      "symbols": [
+        "pulp::view::DesignIR",
+        "@vellum/design-ir"
+      ],
+      "targets": [
+        "pulp-import-ir",
+        "@vellum/design-ir"
+      ],
+      "vellum_paths": [
+        "packages/vellum-design-ir/",
+        "fixtures/design-ir/",
+        "cli/vellum_backend.py"
+      ]
     },
     {
+      "authority": "vellum-authoritative-transferred",
+      "contract_tests": [
+        "vellum.gpu-native",
+        "vellum.authoring"
+      ],
       "id": "macos-shell",
-      "pulp_paths": ["core/view/platform/mac/"],
-      "vellum_paths": ["apps/app-host/", "apps/gpu-native/", "authoring/src/js_application.mm"],
-      "symbols": ["pulp::view::WindowHost", "vellum-app-host"],
-      "targets": ["pulp-view", "vellum-app-host"],
+      "platform_hosts": [
+        "macos"
+      ],
+      "pulp_paths": [
+        "core/view/platform/mac/"
+      ],
       "schemas": [],
-      "platform_hosts": ["macos"],
-      "contract_tests": ["vellum.gpu-native", "vellum.authoring"],
-      "authority": "pulp-authoritative-untransferred"
+      "symbols": [
+        "pulp::view::WindowHost",
+        "vellum-app-host"
+      ],
+      "targets": [
+        "pulp-view",
+        "vellum-app-host"
+      ],
+      "vellum_paths": [
+        "apps/app-host/",
+        "apps/gpu-native/",
+        "authoring/src/js_application.mm"
+      ]
     },
     {
+      "authority": "vellum-authoritative-transferred",
+      "contract_tests": [
+        "vellum.gpu-native",
+        "vellum.install-consumer"
+      ],
       "id": "render-skia-dawn",
-      "pulp_paths": ["core/render/"],
-      "vellum_paths": ["graphics/include/vellum/graphics/scene.hpp", "graphics/include/vellum/graphics/skia_dawn_surface.hpp", "graphics/src/skia_dawn_surface.mm"],
-      "symbols": ["pulp::render::*", "vellum::graphics::SkiaDawnSurface"],
-      "targets": ["pulp-render", "Vellum::Graphics"],
+      "platform_hosts": [
+        "macos",
+        "headless"
+      ],
+      "pulp_paths": [
+        "core/render/"
+      ],
       "schemas": [],
-      "platform_hosts": ["macos", "headless"],
-      "contract_tests": ["vellum.gpu-native", "vellum.install-consumer"],
-      "authority": "pulp-authoritative-untransferred"
+      "symbols": [
+        "pulp::render::*",
+        "vellum::graphics::SkiaDawnSurface"
+      ],
+      "targets": [
+        "pulp-render",
+        "Vellum::Graphics"
+      ],
+      "vellum_paths": [
+        "graphics/include/vellum/graphics/scene.hpp",
+        "graphics/include/vellum/graphics/skia_dawn_surface.hpp",
+        "graphics/src/skia_dawn_surface.mm"
+      ]
     },
     {
+      "authority": "vellum-authoritative-transferred",
+      "contract_tests": [
+        "vellum-ui",
+        "vellum.authoring"
+      ],
       "id": "retained-ui-kernel",
-      "pulp_paths": ["core/view/"],
-      "vellum_paths": ["packages/vellum-ui/", "authoring/"],
-      "symbols": ["pulp::view::View", "@vellum/ui"],
-      "targets": ["pulp-view", "@vellum/ui", "Vellum::Authoring"],
-      "schemas": ["vellum.scene.v1"],
       "platform_hosts": [],
-      "contract_tests": ["vellum-ui", "vellum.authoring"],
-      "authority": "pulp-authoritative-untransferred"
+      "pulp_paths": [
+        "core/view/"
+      ],
+      "schemas": [
+        "vellum.scene.v1"
+      ],
+      "symbols": [
+        "pulp::view::View",
+        "@vellum/ui"
+      ],
+      "targets": [
+        "pulp-view",
+        "@vellum/ui",
+        "Vellum::Authoring"
+      ],
+      "vellum_paths": [
+        "packages/vellum-ui/",
+        "authoring/"
+      ]
     },
     {
+      "authority": "pulp-only",
+      "contract_tests": [
+        "vellum-design-ir"
+      ],
       "id": "pulp-figma-exporter",
-      "pulp_paths": ["tools/figma-plugin/"],
-      "vellum_paths": [],
+      "platform_hosts": [],
+      "pulp_paths": [
+        "tools/figma-plugin/"
+      ],
+      "schemas": [
+        "figma-plugin-export-v1"
+      ],
       "symbols": [],
       "targets": [],
-      "schemas": ["figma-plugin-export-v1"],
-      "platform_hosts": [],
-      "contract_tests": ["vellum-design-ir"],
-      "authority": "pulp-only"
+      "vellum_paths": []
     },
     {
+      "authority": "pulp-only",
+      "contract_tests": [
+        "vellum-design-ir",
+        "vellum-design-ir-sterile-consumer"
+      ],
       "id": "pulp-design-import-tooling",
-      "pulp_paths": ["tools/import-design/", "test/fixtures/imports/", "test/test_cli_import_design", "test/test_design_import", "test/test_import_design", "test/test_import_montage"],
-      "vellum_paths": [],
+      "platform_hosts": [],
+      "pulp_paths": [
+        "tools/import-design/",
+        "test/fixtures/imports/",
+        "test/test_cli_import_design",
+        "test/test_design_import",
+        "test/test_import_design",
+        "test/test_import_montage"
+      ],
+      "schemas": [],
       "symbols": [],
       "targets": [],
-      "schemas": [],
-      "platform_hosts": [],
-      "contract_tests": ["vellum-design-ir", "vellum-design-ir-sterile-consumer"],
-      "authority": "pulp-only"
+      "vellum_paths": []
     },
     {
+      "authority": "pulp-only",
+      "contract_tests": [
+        "vellum.capture-stats",
+        "vellum.gpu-native"
+      ],
       "id": "pulp-screenshot-harness",
-      "pulp_paths": ["tools/screenshot/", "tools/import-design/montage.py", "tools/scripts/capture-all-screenshots.sh", "test/test_design_import_screenshot_parity.cpp", "test/test_import_montage.py", "test/test_screenshot"],
-      "vellum_paths": [],
+      "platform_hosts": [
+        "macos",
+        "headless"
+      ],
+      "pulp_paths": [
+        "tools/screenshot/",
+        "tools/import-design/montage.py",
+        "tools/scripts/capture-all-screenshots.sh",
+        "test/test_design_import_screenshot_parity.cpp",
+        "test/test_import_montage.py",
+        "test/test_screenshot"
+      ],
+      "schemas": [],
       "symbols": [],
       "targets": [],
-      "schemas": [],
-      "platform_hosts": ["macos", "headless"],
-      "contract_tests": ["vellum.capture-stats", "vellum.gpu-native"],
-      "authority": "pulp-only"
+      "vellum_paths": []
     },
     {
+      "authority": "pulp-only",
+      "contract_tests": [],
       "id": "legacy-figma-schema",
-      "pulp_paths": ["tools/figma-plugin/schema/"],
-      "vellum_paths": [],
+      "platform_hosts": [],
+      "pulp_paths": [
+        "tools/figma-plugin/schema/"
+      ],
+      "schemas": [
+        "figma-plugin-export-v1"
+      ],
       "symbols": [],
       "targets": [],
-      "schemas": ["figma-plugin-export-v1"],
-      "platform_hosts": [],
-      "contract_tests": [],
-      "authority": "pulp-only"
+      "vellum_paths": []
     }
   ],
+  "schema_version": 2,
+  "source_manifest": "../cut-manifest.json",
+  "state": "active",
   "transitive_path_rules": [
     "CMakeLists.txt",
     "package.json",

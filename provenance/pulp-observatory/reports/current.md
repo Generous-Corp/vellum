@@ -1,6 +1,6 @@
 # Pulp/Vellum observatory health
 
-- State: `prepared`
+- State: `active`
 - Health: `pass`
 - Pending events: 0
 - Overdue events: 0
@@ -82,9 +82,6 @@
 
 ## Activation blockers
 
-- `authority-not-transferred`
-- `immutable-vellum-authority-record-not-recorded`
-- `immutable-vellum-authority-start-not-recorded`
-- `landed-pulp-freeze-evidence-not-recorded`
+None.
 
 This report is generated. The observatory never applies source patches.

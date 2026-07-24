@@ -1,21 +1,21 @@
 {
-  "schema_version": 2,
-  "state": "prepared",
-  "pulp_repository": "Generous-Corp/pulp",
-  "pulp_extraction_base": "2ccff748f0d59da34b01ce1fbceabcf19f452731",
-  "vellum_repository": "Generous-Corp/vellum",
-  "vellum_history_seed": "e4f8c96fcfd19bac433252c36fdf5bfa681e6d25",
-  "vellum_authority_start_commit": null,
-  "vellum_authority_record_commit": null,
-  "pulp_activation_commit": null,
-  "ownership_schema_version": 1,
-  "event_schema_version": 1,
   "cursor_schema_version": 2,
-  "source_projection": "../cut-manifest.json",
-  "transfer_plan": "../authority/transfer-plan.v1.json",
+  "event_schema_version": 1,
+  "ownership_schema_version": 2,
   "policy": {
-    "synchronized_editable_copies_allowed": false,
     "automatic_patch_application_allowed": false,
-    "one_active_authority_required": true
-  }
+    "one_active_authority_required": true,
+    "synchronized_editable_copies_allowed": false
+  },
+  "pulp_activation_commit": "28d74338ff57e91bb5690308ec9502ebf2fcf09d",
+  "pulp_extraction_base": "2ccff748f0d59da34b01ce1fbceabcf19f452731",
+  "pulp_repository": "Generous-Corp/pulp",
+  "schema_version": 2,
+  "source_projection": "../cut-manifest.json",
+  "state": "active",
+  "transfer_plan": "../authority/transfer-plan.v2.json",
+  "vellum_authority_record_commit": "a106a02816a0cde53daac83f36a6630d664f6637",
+  "vellum_authority_start_commit": "bf51a86f8a24dbf7bc26a72a6afa6db062f4b605",
+  "vellum_history_seed": "e4f8c96fcfd19bac433252c36fdf5bfa681e6d25",
+  "vellum_repository": "Generous-Corp/vellum"
 }
