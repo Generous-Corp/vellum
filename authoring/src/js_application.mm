@@ -35,7 +35,11 @@ NSString* ns_string(std::string_view value) {
 std::string cpp_string(NSString* value) {
     if (value == nil) return {};
     const char* utf8 = value.UTF8String;
-    return utf8 == nullptr ? std::string{} : std::string{utf8};
+    if (utf8 == nullptr) return {};
+    return std::string{
+        utf8,
+        static_cast<std::size_t>(
+            [value lengthOfBytesUsingEncoding:NSUTF8StringEncoding])};
 }
 
 std::optional<std::string> json_object(id value) {

@@ -277,6 +277,30 @@ class ObservatoryTests(unittest.TestCase):
 
             observatory.verify_append_only(root, base)
 
+    def test_restored_event_mutation_is_rejected_against_git_base(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run(root, "git", "init", "-b", "main")
+            run(root, "git", "config", "user.email", "observatory@example.invalid")
+            run(root, "git", "config", "user.name", "Observatory Test")
+            event = root / observatory.EVENTS_PATH / "event.yaml"
+            original = '{"event_id":"event","disposition":"pending"}\n'
+            write(event, original)
+            run(root, "git", "add", ".")
+            run(root, "git", "commit", "-m", "base event")
+            base = run(root, "git", "rev-parse", "HEAD")
+            write(event, '{"event_id":"event","disposition":"ported"}\n')
+            run(root, "git", "add", ".")
+            run(root, "git", "commit", "-m", "mutate event")
+            write(event, original)
+            run(root, "git", "add", ".")
+            run(root, "git", "commit", "-m", "restore event")
+
+            with self.assertRaisesRegex(
+                observatory.ObservatoryError, "append-only"
+            ):
+                observatory.verify_append_only(root, base)
+
     def test_pulp_cursor_cannot_move_backward_against_git_base(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             top = Path(temporary)

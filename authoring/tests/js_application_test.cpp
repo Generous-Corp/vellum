@@ -283,6 +283,19 @@ int main(int argc, char** argv) {
     if (!malformed || malformed->render(rendered, &error) ||
         error.find("protocol mismatch") == std::string::npos) return 1;
 
+    auto embedded_nul = vellum::authoring::JsApplication::create(
+        "globalThis.__vellum={protocol:'vellum.authoring-host.v1',"
+        "renderJSON(){return JSON.stringify({"
+        "protocol:'vellum.authoring-host.v1',"
+        "tree:{type:'stack',id:'screen',children:[]}})+'\\0trailing'}}",
+        &error);
+    if (!embedded_nul || embedded_nul->render(rendered, &error) ||
+        error.find("invalid envelope") == std::string::npos) {
+        std::cerr << "embedded NUL bridge result did not fail closed: "
+                  << error << '\n';
+        return 1;
+    }
+
     auto semantic = vellum::authoring::JsApplication::create(
         kTextSemanticsBundle, &error);
     if (!semantic || !semantic->render(rendered, &error) ||

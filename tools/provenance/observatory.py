@@ -1099,34 +1099,61 @@ def verify_append_only(
     require_commit(root, git_base, "git base")
     head = git(root, "rev-parse", "HEAD")
     require_ancestor(root, git_base, head, "append-only comparison")
-    # Inspect path mutations, not Git's similarity classification. A newly
-    # appended event can legitimately resemble an existing event; with copy
-    # detection enabled Git reports that addition as Cnnn and creates a false
-    # append-only failure. With rename detection disabled, a real rename still
-    # exposes the forbidden deletion of the original path.
-    output = git(
-        root, "diff", "--name-status", "--no-renames",
-        f"{git_base}..{head}", "--", EVENTS_PATH.as_posix(),
-    )
-    bad = [line for line in output.splitlines() if line and not line.startswith("A\t")]
-    if bad:
-        raise ObservatoryError("observatory events are append-only; modified/deleted/renamed events: " + "; ".join(bad))
-    try:
-        previous = json.loads(git(root, "show", f"{git_base}:{CURSOR_PATH.as_posix()}"))
-    except ObservatoryError:
-        return
-    current = load_json(root / CURSOR_PATH)
-    for source in ("pulp", "vellum"):
-        before = previous[source]["last_scanned_commit"]
-        after = current[source]["last_scanned_commit"]
-        if before == after:
-            continue
-        repo = pulp_repo if source == "pulp" else (vellum_repo or root)
-        if repo is None:
-            raise ObservatoryError(
-                f"cannot verify cursor.{source} monotonicity without its source repository"
+    commits = git(
+        root, "rev-list", "--reverse", "--topo-order", f"{git_base}..{head}"
+    ).splitlines()
+    for commit in commits:
+        parents = git(root, "rev-list", "--parents", "-n", "1", commit).split()[1:]
+        for parent in parents:
+            # Inspect every tree edge, including each merge parent. A newly
+            # appended event may resemble an old one, so disable similarity
+            # detection; a real rename remains visible as a forbidden deletion.
+            output = git(
+                root,
+                "diff",
+                "--name-status",
+                "--no-renames",
+                parent,
+                commit,
+                "--",
+                EVENTS_PATH.as_posix(),
             )
-        require_ancestor(repo, before, after, f"cursor.{source} cannot move backward")
+            bad = [
+                line
+                for line in output.splitlines()
+                if line and not line.startswith("A\t")
+            ]
+            if bad:
+                raise ObservatoryError(
+                    "observatory events are append-only; "
+                    f"commit {commit} modified/deleted/renamed events: "
+                    + "; ".join(bad)
+                )
+            try:
+                previous = json.loads(
+                    git(root, "show", f"{parent}:{CURSOR_PATH.as_posix()}")
+                )
+                current = json.loads(
+                    git(root, "show", f"{commit}:{CURSOR_PATH.as_posix()}")
+                )
+            except ObservatoryError:
+                continue
+            for source in ("pulp", "vellum"):
+                before = previous[source]["last_scanned_commit"]
+                after = current[source]["last_scanned_commit"]
+                if before == after:
+                    continue
+                repo = pulp_repo if source == "pulp" else (vellum_repo or root)
+                if repo is None:
+                    raise ObservatoryError(
+                        f"cannot verify cursor.{source} monotonicity without its source repository"
+                    )
+                require_ancestor(
+                    repo,
+                    before,
+                    after,
+                    f"cursor.{source} cannot move backward at {commit}",
+                )
 
 
 def verify(
