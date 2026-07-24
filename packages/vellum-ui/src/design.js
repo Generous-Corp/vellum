@@ -38,7 +38,8 @@ function tokenValue(tokens, value, stack = []) {
     return resolved;
 }
 
-function retainedStyle(node, tokens, viewport, root) {
+function retainedStyle(document, node, viewport, root) {
+    const tokens = document.tokens ?? {};
     const properties = node.properties && typeof node.properties === 'object'
         ? node.properties : {};
     const layout = properties.layout && typeof properties.layout === 'object'
@@ -102,13 +103,14 @@ function materializeNode(node, context, depth, root = false) {
 
     const properties = {
         id: node.id,
-        style: retainedStyle(node, context.tokens, context.viewport, root),
+        style: retainedStyle(context.document, node, context.viewport, root),
         accessibilityLabel: typeof node.name === 'string' ? node.name : undefined,
         children: node.children.map((child) => materializeNode(child, context, depth + 1)),
     };
     if (typeof node.text === 'string') properties.text = node.text;
     const bindings = context.actions[node.id];
     if (bindings !== undefined) {
+        context.visitedActions.add(node.id);
         plainObject(bindings, `actions.${node.id}`);
         for (const [event, handler] of Object.entries(bindings)) {
             const property = EVENT_PROPERTIES[event];
@@ -119,14 +121,14 @@ function materializeNode(node, context, depth, root = false) {
     return jsx(componentFor(node), properties, node.id);
 }
 
-export function materializeDesign(document, options = {}) {
+function materialize(document, options, missingActionTarget) {
     plainObject(document, 'design');
     const root = document.root;
     const rootLayout = root?.properties?.layout &&
         typeof root.properties.layout === 'object' &&
         !Array.isArray(root.properties.layout)
         ? root.properties.layout : {};
-    const tokens = document.tokens === undefined ? {} : plainObject(document.tokens, 'design.tokens');
+    if (document.tokens !== undefined) plainObject(document.tokens, 'design.tokens');
     const actions = options.actions === undefined ? {} : plainObject(options.actions, 'options.actions');
     const viewport = {
         width: options.viewport?.width ?? rootLayout.width ?? 800,
@@ -139,11 +141,120 @@ export function materializeDesign(document, options = {}) {
             throw new TypeError(`viewport.${name} must be a valid finite dimension`);
         }
     }
-    return materializeNode(root, {
+    const context = {
         actions,
+        document,
         ids: new Set(),
         nodes: 0,
-        tokens,
+        visitedActions: new Set(),
         viewport,
-    }, 0, true);
+    };
+    const result = materializeNode(root, context, 0, true);
+    for (const nodeId of Object.keys(actions)) {
+        if (!context.visitedActions.has(nodeId)) {
+            throw new Error(missingActionTarget(nodeId));
+        }
+    }
+    return result;
+}
+
+function namespacedTokens(document) {
+    const tokens = document.tokens;
+    const namespace = document.source?.namespace;
+    if (!tokens || typeof namespace !== 'string' || namespace.length === 0) return tokens;
+    const aliases = Object.create(null);
+    for (const [name, token] of Object.entries(tokens)) {
+        aliases[name] = token;
+        const prefix = `${namespace}.`;
+        if (name.startsWith(prefix)) aliases[name.slice(prefix.length)] ??= token;
+    }
+    return aliases;
+}
+
+function normalizedDocument(document) {
+    if (!document || typeof document !== 'object' || Array.isArray(document)) return document;
+    const tokens = namespacedTokens(document);
+    return tokens === document.tokens ? document : { ...document, tokens };
+}
+
+export function materializeDesign(document, options = {}) {
+    return materialize(
+        normalizedDocument(document),
+        options,
+        (nodeId) => `materialized design action target is missing: ${nodeId}`,
+    );
+}
+
+function resolvedDesignActions(document, bindings, actions) {
+    if (bindings === null || bindings === undefined) {
+        const resolved = Object.create(null);
+        for (const [nodeId, handler] of Object.entries(actions)) {
+            resolved[nodeId] = { press: handler };
+        }
+        return resolved;
+    }
+    if (typeof bindings !== 'object' || Array.isArray(bindings) ||
+        !Array.isArray(bindings.bindings)) {
+        throw new TypeError('Design bindings require a generated binding document');
+    }
+    if (bindings.schema !== 'vellum.generated-bindings.v1') {
+        throw new Error(`unsupported Design binding schema: ${String(bindings.schema)}`);
+    }
+    const sourceKey = document.source?.key ?? document.source?.namespace;
+    if (typeof sourceKey !== 'string' || sourceKey.length === 0 ||
+        bindings.sourceKey !== sourceKey) {
+        throw new Error('Design binding source does not match imported design');
+    }
+    if (typeof document.source?.revision !== 'string' ||
+        document.source.revision.length === 0 ||
+        bindings.revision !== document.source.revision) {
+        throw new Error('Design binding revision does not match imported design');
+    }
+    const resolved = Object.create(null);
+    for (const [index, binding] of bindings.bindings.entries()) {
+        if (!binding || typeof binding !== 'object' || Array.isArray(binding) ||
+            typeof binding.resolvedNodeId !== 'string' ||
+            binding.resolvedNodeId.length === 0 ||
+            typeof binding.action !== 'string' || binding.action.length === 0 ||
+            typeof binding.event !== 'string') {
+            throw new TypeError(`Design binding ${index} is invalid`);
+        }
+        if (!Object.hasOwn(EVENT_PROPERTIES, binding.event)) {
+            throw new Error(
+                `Design binding ${index} uses unsupported event '${binding.event}'`,
+            );
+        }
+        if (!Object.hasOwn(actions, binding.action)) {
+            throw new Error(
+                `Design binding '${binding.action}' has no developer-owned action`,
+            );
+        }
+        const handler = actions[binding.action];
+        if (typeof handler !== 'function' &&
+            !(typeof handler === 'string' && handler.length > 0)) {
+            throw new TypeError(
+                `Design action '${binding.action}' must be a function or action name`,
+            );
+        }
+        const byEvent = resolved[binding.resolvedNodeId] ??= Object.create(null);
+        if (Object.hasOwn(byEvent, binding.event)) {
+            throw new Error(
+                `duplicate Design binding for ${binding.resolvedNodeId}.${binding.event}`,
+            );
+        }
+        byEvent[binding.event] = handler;
+    }
+    return resolved;
+}
+
+export function Design({ document, actions = {}, bindings = null }) {
+    if (!document || typeof document !== 'object' || !document.root ||
+        typeof actions !== 'object' || actions === null || Array.isArray(actions)) {
+        throw new TypeError('Design requires a normalized document and an action map');
+    }
+    return materialize(
+        normalizedDocument(document),
+        { actions: resolvedDesignActions(document, bindings, actions) },
+        (nodeId) => `Design binding target is missing from imported design: ${nodeId}`,
+    );
 }

@@ -110,6 +110,20 @@ function color(value, fallback) {
     return [1, 3, 5].map(offset => Number.parseInt(source.slice(offset, offset + 2), 16) / 255).concat(1);
 }
 function number(style, key, fallback) { return typeof style?.[key] === 'number' ? style[key] : fallback; }
+// Mirrors the retained-tree layout contract used by the native materializer.
+// The parity test fails if either consumer drifts from the checked-in evidence.
+const DEFAULT_BUTTON_HEIGHT = 44;
+const DEFAULT_TEXT_INPUT_HEIGHT = 44;
+const DEFAULT_GENERIC_HEIGHT = 0;
+const TEXT_LINE_HEIGHT_MULTIPLIER = 1.4;
+function defaultHeight(type, style) {
+    if (type === 'text' || type === 'text-run') {
+        return number(style, 'fontSize', 14) * TEXT_LINE_HEIGHT_MULTIPLIER;
+    }
+    if (type === 'button') return DEFAULT_BUTTON_HEIGHT;
+    if (type === 'text-input') return DEFAULT_TEXT_INPUT_HEIGHT;
+    return DEFAULT_GENERIC_HEIGHT;
+}
 function directText(node) {
     if (typeof node.text === 'string') return node.text;
     return (node.children || []).filter(child => child.type === 'text-run').map(child => child.text || '').join('');
@@ -228,9 +242,7 @@ function lowerNode(node, proposed, parentX, parentY) {
         if (child.type === 'text-run' && (node.type === 'text' || node.type === 'button')) continue;
         const childStyle = child.style || {};
         let width = number(childStyle, 'width', horizontal ? 0 : Math.max(0, proposed.width - padding * 2));
-        let height = number(childStyle, 'height', child.type === 'text' || child.type === 'text-run'
-            ? number(childStyle, 'fontSize', 14) * 1.4
-            : child.type === 'button' || child.type === 'text-input' ? 48 : 64);
+        let height = number(childStyle, 'height', defaultHeight(child.type, childStyle));
         const x = number(childStyle, 'x', isStack && horizontal ? cursor : padding);
         const y = number(childStyle, 'y', isStack && !horizontal ? cursor : padding);
         if (width <= 0 && horizontal) width = Math.max(0, proposed.width - cursor - padding);

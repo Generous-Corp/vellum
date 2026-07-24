@@ -76,7 +76,7 @@ test('bundles an external materialized design into the authored native path', ()
     vm.runInContext(bundle, context, { filename: output });
     const tree = JSON.parse(context.__vellum.renderJSON()).tree;
     assert.equal(tree.id, 'main/imported-root');
-    assert.equal(tree.children[0].children[0].text, 'Create board');
+    assert.equal(tree.children[0].text, 'Create board');
     assert.equal(typeof tree.children[0].events.press, 'string');
     context.__vellum.dispatchJSON(JSON.stringify({
         action: tree.children[0].events.press,

@@ -47,6 +47,40 @@ constexpr std::string_view kRenderedTree = R"JSON({
   }
 })JSON";
 
+constexpr std::string_view kImplicitLayoutTree = R"JSON({
+  "protocol": "vellum.authoring-host.v2",
+  "kind": "render-result",
+  "revision": 1,
+  "tree": {
+    "type": "stack",
+    "id": "layout-root",
+    "style": {"width": 300, "height": 100, "direction": "horizontal"},
+    "children": [
+      {
+        "type": "button",
+        "id": "default-button",
+        "style": {"width": 60},
+        "children": []
+      },
+      {
+        "type": "text-input",
+        "id": "default-input",
+        "primitiveVersion": 1,
+        "value": "",
+        "events": {"change": "input:change"},
+        "style": {"width": 60},
+        "children": []
+      },
+      {
+        "type": "view",
+        "id": "default-generic",
+        "style": {"width": 60},
+        "children": []
+      }
+    ]
+  }
+})JSON";
+
 }  // namespace
 
 int main() {
@@ -78,6 +112,22 @@ int main() {
         error != "JavaScript authoring bridge protocol mismatch" ||
         rendered.scene.width != original_width) {
         std::cerr << "invalid envelope did not fail atomically\n";
+        return 1;
+    }
+
+    if (!vellum::authoring::materialize_rendered_tree(
+            kImplicitLayoutTree, rendered, &error)) {
+        std::cerr << error << '\n';
+        return 1;
+    }
+    const auto* button = vellum::graphics::find_node(rendered.scene, "default-button");
+    const auto* input = vellum::graphics::find_node(rendered.scene, "default-input");
+    const auto* generic = vellum::graphics::find_node(rendered.scene, "default-generic");
+    if (button == nullptr || input == nullptr || generic == nullptr ||
+        button->bounds.height != 44.0F ||
+        input->bounds.height != 44.0F ||
+        generic->bounds.height != 0.0F) {
+        std::cerr << "implicit layout defaults diverged from the retained-tree contract\n";
         return 1;
     }
 

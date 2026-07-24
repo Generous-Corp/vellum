@@ -51,6 +51,9 @@ endforeach()
 
 if(VELLUM_BUILD_TESTS)
     find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME vellum.web.layout-contract
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_layout_contract.py")
     add_test(NAME vellum.web.no-engine
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_wasm_no_engine.py"

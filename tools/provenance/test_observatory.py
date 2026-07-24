@@ -166,6 +166,19 @@ observatory:
 
 
 class ObservatoryTests(unittest.TestCase):
+    def test_public_api_delegates_to_focused_observatory_modules(self) -> None:
+        ownership = {
+            observatory.load_json: "observatory_common",
+            observatory.observation_for_commit: "observatory_git",
+            observatory.validate_event: "observatory_events",
+            observatory.effective_observations: "observatory_events",
+            observatory.build_report: "observatory_report",
+            observatory.render_markdown: "observatory_report",
+        }
+        for function, expected_module in ownership.items():
+            with self.subTest(function=function.__name__):
+                self.assertEqual(function.__module__, expected_module)
+
     def test_active_cursors_may_advance_beyond_authority_coordinates(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             top = Path(temporary)

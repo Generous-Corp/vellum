@@ -1,0 +1,7 @@
+{
+  "schema": "vellum.layout-defaults.v1",
+  "buttonHeight": 44,
+  "genericHeight": 0,
+  "textInputHeight": 44,
+  "textLineHeightMultiplier": 1.4
+}

@@ -65,6 +65,8 @@ test('materializes imported design with stable ids, tokens, viewport, and behavi
     });
     assert.equal(tree.children[0].id, 'main/create');
     assert.equal(tree.children[0].style.backgroundColor, '#14b8a6');
+    assert.equal(tree.children[0].style.width, undefined);
+    assert.equal(tree.children[0].style.height, undefined);
     tree = JSON.parse(bridge.dispatchJSON(JSON.stringify({
         protocol, action: tree.children[0].events.press,
     }))).tree;
@@ -158,16 +160,14 @@ test('Design preserves imported root, text, and nested flex dimensions', () => {
         initialState: {},
         render: () => materializeDesign(document),
     })).renderJSON()).tree;
-    assert.equal(materializedTree.style.width, 640);
-    assert.equal(materializedTree.style.height, 400);
-    assert.equal(materializedTree.style.padding, 24);
-    assert.equal(materializedTree.children[1].children[1].style.width, 286);
+    assert.deepEqual(materializedTree, tree);
 });
 
 test('fails closed on unresolved tokens, duplicate ids, and unsupported kinds', () => {
     const unresolved = fixture();
     unresolved.root.properties.paint.backgroundColor = '{missing.token}';
     assert.throws(() => materializeDesign(unresolved), /unresolved design token/);
+    assert.throws(() => Design({ document: unresolved }), /unresolved design token/);
 
     const duplicate = fixture();
     duplicate.root.children.push({ ...duplicate.root.children[0] });
@@ -176,6 +176,14 @@ test('fails closed on unresolved tokens, duplicate ids, and unsupported kinds', 
     const unsupported = fixture();
     unsupported.root.children[0].kind = 'video';
     assert.throws(() => materializeDesign(unsupported), /unsupported materialized design node kind/);
+
+    assert.throws(() => materializeDesign(fixture(), {
+        actions: { missing: { press() {} } },
+    }), /action target is missing/);
+    assert.throws(() => Design({
+        actions: { missing() {} },
+        document: fixture(),
+    }), /binding target is missing/);
 });
 
 test('materializes pinned Pulp emitter output into the capture-ready retained host tree', async () => {

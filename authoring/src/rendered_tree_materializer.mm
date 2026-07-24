@@ -18,6 +18,13 @@ constexpr std::size_t kMaximumNodes = 100000U;
 constexpr std::size_t kMaximumDepth = 256U;
 constexpr NSUInteger kMaximumTextInputBytes = 64U * 1024U;
 constexpr NSUInteger kMaximumPlaceholderBytes = 4U * 1024U;
+// Retained-tree consumers share these defaults across native and web. Controls
+// retain the established 44-point density; zero keeps an unspecified generic
+// child eligible for the parent stack's remaining-axis fill behavior.
+constexpr float kDefaultButtonHeight = 44.0F;
+constexpr float kDefaultTextInputHeight = 44.0F;
+constexpr float kDefaultGenericHeight = 0.0F;
+constexpr float kTextLineHeightMultiplier = 1.4F;
 
 void set_error(std::string* destination, std::string value) {
     if (destination != nullptr) *destination = std::move(value);
@@ -100,12 +107,11 @@ std::string inferred_accessibility_role(NSString* type, NSDictionary* source) {
 
 float default_height(NSString* type, NSDictionary* style) {
     if ([type isEqualToString:@"text"] || [type isEqualToString:@"text-run"]) {
-        return number_or(style, @"fontSize", 14.0F) * 1.4F;
+        return number_or(style, @"fontSize", 14.0F) * kTextLineHeightMultiplier;
     }
-    if ([type isEqualToString:@"button"] || [type isEqualToString:@"text-input"]) {
-        return 44.0F;
-    }
-    return 0.0F;
+    if ([type isEqualToString:@"button"]) return kDefaultButtonHeight;
+    if ([type isEqualToString:@"text-input"]) return kDefaultTextInputHeight;
+    return kDefaultGenericHeight;
 }
 
 std::string direct_text(NSDictionary* source) {

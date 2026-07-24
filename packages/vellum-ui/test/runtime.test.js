@@ -368,7 +368,7 @@ test('materializes normalized DesignIR and binds behavior by stable node id', ()
     assert.equal(tree.id, 'main/root');
     assert.equal(tree.style.backgroundColor, '#0f172a');
     assert.equal(tree.children[0].style.backgroundColor, '#22c55e');
-    assert.equal(tree.children[0].children[0].text, 'Create board');
+    assert.equal(tree.children[0].text, 'Create board');
     tree = JSON.parse(bridge.dispatchJSON(JSON.stringify({
         protocol,
         action: tree.children[0].events.press,

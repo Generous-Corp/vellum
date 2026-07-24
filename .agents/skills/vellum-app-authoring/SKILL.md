@@ -1,3 +1,8 @@
+---
+name: vellum-app-authoring
+description: Build, import, test, capture, package, and maintain installed Vellum applications. Use for Vellum project lifecycle work, DesignIR import or reimport, native and web target validation, app-owned C++ components, generated ownership boundaries, and capability diagnostics.
+---
+
 # Vellum application authoring
 
 Use this skill for the installed Vellum project lifecycle. Its contract is

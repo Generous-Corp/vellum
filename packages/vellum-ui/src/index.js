@@ -2,7 +2,6 @@ export {
     Button,
     Canvas,
     CustomComponent,
-    Design,
     Fragment,
     Image,
     Stack,
@@ -17,7 +16,7 @@ export {
     useMemo,
     useState,
 } from './runtime.js';
-export { materializeDesign } from './design.js';
+export { Design, materializeDesign } from './design.js';
 export {
     createServices,
     installServiceHost,
