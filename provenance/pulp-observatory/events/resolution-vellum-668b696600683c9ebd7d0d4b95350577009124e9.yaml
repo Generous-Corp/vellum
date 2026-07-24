@@ -1,0 +1,18 @@
+{
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer"
+  ],
+  "created_at": "2026-07-24T07:16:13Z",
+  "disposition": "framework-only",
+  "effort_minutes": 0,
+  "event_id": "resolution-vellum-668b696600683c9ebd7d0d4b95350577009124e9",
+  "kind": "resolution",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Vellum-owned concurrent import correctness. Pulp remains on its existing implementation until a later dependency migration, so this must reach Pulp through a pinned Vellum release rather than a synchronized source copy.",
+  "resolves": "vellum-668b696600683c9ebd7d0d4b95350577009124e9",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}
