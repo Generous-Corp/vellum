@@ -1,0 +1,45 @@
+{
+  "class": "rendering",
+  "contract_keys": [
+    "macos-shell",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-07-24T20:20:00Z",
+  "disposition": "port-required",
+  "effort_minutes": 0,
+  "event_id": "vellum-fcbeb19917241fce3c6f777925851ca64bb6cc88",
+  "include_dependency_deltas": [],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "macos-shell",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "authoring/src/js_application.mm",
+    "authoring/src/rendered_tree_materializer.mm",
+    "authoring/tests/js_application_test.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "5e42884d1ced08d83a7409c97ec932637665e95a",
+  "rationale": "The full-length NSString conversion fixes a generic embedded-NUL truncation bug at Vellum's JavaScript-to-rendered-JSON boundary. Independent inspection found the same null-terminated NSString conversion at Pulp's JavaScriptCore JSON parsing boundary in core/view/src/js_jsc_engine.mm, so Pulp needs a separately implemented and tested fix rather than a source copy.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "e1f012e30c94fd1111db33d4a5cfd80613e8d1e0",
+    "to_commit": "fcbeb19917241fce3c6f777925851ca64bb6cc88"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "fcbeb19917241fce3c6f777925851ca64bb6cc88",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}

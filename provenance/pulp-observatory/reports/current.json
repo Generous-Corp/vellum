@@ -930,9 +930,22 @@
       ],
       "source_commit": "f85f4e1c01cc0e9aed1b5a1986a845a89c9538ad",
       "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "rendering",
+      "deadline": "2026-07-29T20:20:00Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "port-required",
+      "event_id": "vellum-fcbeb19917241fce3c6f777925851ca64bb6cc88",
+      "mapped_contracts": [
+        "macos-shell",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "fcbeb19917241fce3c6f777925851ca64bb6cc88",
+      "source_repository": "Generous-Corp/vellum"
     }
   ],
-  "generated_at": "2026-07-24T20:00:00Z",
+  "generated_at": "2026-07-24T20:20:00Z",
   "health": "pass",
   "maximum_pending_age_days": 0.0,
   "observatory_effort_percent": 0.0,

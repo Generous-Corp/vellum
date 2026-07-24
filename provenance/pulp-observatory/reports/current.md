@@ -80,6 +80,7 @@
 | `vellum-241b5a2b96207eff61b508221d8bb78076461b22` | framework-to-Pulp | build | framework-only | 2026-07-30T21:45:32Z |
 | `vellum-668b696600683c9ebd7d0d4b95350577009124e9` | framework-to-Pulp | schema | framework-only | 2026-07-29T07:16:13Z |
 | `vellum-f85f4e1c01cc0e9aed1b5a1986a845a89c9538ad` | framework-to-Pulp | schema | framework-only | 2026-07-29T17:30:49Z |
+| `vellum-fcbeb19917241fce3c6f777925851ca64bb6cc88` | framework-to-Pulp | rendering | port-required | 2026-07-29T20:20:00Z |
 
 ## Activation blockers
 
