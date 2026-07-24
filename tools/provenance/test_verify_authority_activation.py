@@ -352,6 +352,13 @@ class AuthorityActivationTests(unittest.TestCase):
         )
         self.assertIn("cancel-in-progress: false", release)
         self.assertIn("ref: main", release)
+        authority_runs_on = (
+            "runs-on: ${{ fromJSON(vars.VELLUM_AUTHORITY_RUNS_ON_JSON "
+            "|| '\"ubuntu-latest\"') }}"
+        )
+        for workflow in (release, active):
+            self.assertIn(authority_runs_on, workflow)
+            self.assertNotIn("runs-on: ubuntu-latest", workflow)
 
     def test_historical_unresolved_requires_explicit_candidate_selection(self) -> None:
         group = {"pulp_legacy_slices": ["render"]}
