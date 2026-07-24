@@ -1,0 +1,2103 @@
+{
+  "approved_at": "2026-07-24T09:16:07Z",
+  "approved_by": "@danielraffel",
+  "authority_groups": [
+    {
+      "id": "native-design-kernel-v1",
+      "lineage_mode": "history-seed-ancestor-active-reimplementation",
+      "pulp_activation_candidate_projection": {
+        "core/canvas/include/pulp/canvas/affine_transform.hpp": {
+          "blob": "c7d1708222f600a67ab69b8cf5b4b8e9ed260f41",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/attributed_string.hpp": {
+          "blob": "645f7b5121019d79c36596fcd70c0b7af347a1aa",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/bidi.hpp": {
+          "blob": "296bf3d80b93e45917fe66c7b810d5ea2f7e723a",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/box_shadow_cache.hpp": {
+          "blob": "dce8d1319b8af876c2ffef5c7ea50d3e7eaa0795",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/bundled_fonts.hpp": {
+          "blob": "175fa6dd872806f0c287ef1428788101fb8ca44b",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/canvas.hpp": {
+          "blob": "5c4202c6f24c2715e8f0f6f99977ecf17f7f1e9f",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/canvas_capability.hpp": {
+          "blob": "588165f75df248c6a0d404955507b33ed04e6727",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/emoji_segmenter.hpp": {
+          "blob": "3e00dca28138526ec1e1c1587ae04d1244adce89",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/font_flight_recorder.hpp": {
+          "blob": "266df83f8d5cd99a8801771518f1e99c3f99c595",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/image_convolution.hpp": {
+          "blob": "5c78d0cd6891baff0ac22b58f6b9c966f66f6057",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/image_file_cache.hpp": {
+          "blob": "da3321c9e277f9db8a8092ebd6005a8b6afe8107",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/msdf_atlas.hpp": {
+          "blob": "c2654987f2105b08c25c67f6344a87c07c199003",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/path.hpp": {
+          "blob": "ff5bc5323dc16b6f77d3b892ac13c5777e7cfd1e",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/path_to_sdf.hpp": {
+          "blob": "1c6a976d28cfd3c303449dfd66e5204f6f4faf6f",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/psdf_atlas.hpp": {
+          "blob": "89027b2aebca674083f6291416f14b54a17d9145",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/recording_canvas.hpp": {
+          "blob": "26437bef0ad26f71562150e8c843ce9cb902ad22",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/rectangle_list.hpp": {
+          "blob": "53d14878ea3ca630ccf36d7ca7d5288f00000df6",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/sdf_atlas.hpp": {
+          "blob": "8de855133b0d5498ebe59c4290dd34f7e1c1018c",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/sdf_atlas_cache.hpp": {
+          "blob": "0254eb791df2ef41e9f044c5095560a0735f20a5",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/sdf_effects.hpp": {
+          "blob": "a11c3cb7e4d365e13ccc77f498332e1e9e0a3f3c",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/sdf_software_renderer.hpp": {
+          "blob": "46ed4ac323062f665d2c17c376c030ad2f4d593b",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/sdf_text.hpp": {
+          "blob": "1c55a126aac7e219b26f6c32f5835d3f1a7fc3e9",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/shaped_text.hpp": {
+          "blob": "9e33fdd2ca8d7cb3e99482bc7f1e49080a3dc8a9",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/skia_canvas.hpp": {
+          "blob": "e76c1cfab8e7285d0959dc9c64b4fe83ae01d0f2",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/svg.hpp": {
+          "blob": "4c8d98c7990e2c7dbe843a3ee3258a2649004c0c",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/svg_dom_cache.hpp": {
+          "blob": "774b732f50693ef7e9b13ace88f62e842795d916",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/text_font_context.hpp": {
+          "blob": "e4c6da01301a3214c237486853e4ee7407d2a17b",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/text_layout.hpp": {
+          "blob": "51e919e83e5eb9d09e634ee335c642072a95cc38",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/text_run_planner.hpp": {
+          "blob": "87185707103d906652c5172fda6901c3883fe413",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/text_shaper.hpp": {
+          "blob": "2642bb3e6a7f929fe12e381223ac4978473b077a",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/text_utf8.hpp": {
+          "blob": "29f45b46abff5a0c790e0c0395548f4a15cea0cf",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/view_effect.hpp": {
+          "blob": "c659665b225efb11ab5f958778c4615c621be247",
+          "mode": "100644"
+        },
+        "core/canvas/shaders/msdf_text.sksl": {
+          "blob": "7e47958abd2a69a20f75f191e09ed0a37e898070",
+          "mode": "100644"
+        },
+        "core/canvas/shaders/sdf_text.sksl": {
+          "blob": "93c16f57d70de413615b3b51e37b9b7e68bcfa79",
+          "mode": "100644"
+        },
+        "core/canvas/shaders/sdf_text_effects.sksl": {
+          "blob": "6b0f63409d5d89667559443318db0c896e3c337c",
+          "mode": "100644"
+        },
+        "core/canvas/src/attributed_string.cpp": {
+          "blob": "590d8c2d9cad7456eb96fd4983e9442ea780944f",
+          "mode": "100644"
+        },
+        "core/canvas/src/bidi.cpp": {
+          "blob": "398cc746021de846f339faeacd79714685b51245",
+          "mode": "100644"
+        },
+        "core/canvas/src/box_shadow_cache.cpp": {
+          "blob": "77eed3ee2036c23d82319ae2f077488f194746ac",
+          "mode": "100644"
+        },
+        "core/canvas/src/bundled_fonts.cpp": {
+          "blob": "7bebacc2d180a2cf1019cc34917f424e106872b4",
+          "mode": "100644"
+        },
+        "core/canvas/src/color.cpp": {
+          "blob": "443f7bd844922096beee9950d2b8247e49ddca71",
+          "mode": "100644"
+        },
+        "core/canvas/src/emoji_segmenter.cpp": {
+          "blob": "80b077d18b24e6875273d68601a137f196a0aa20",
+          "mode": "100644"
+        },
+        "core/canvas/src/font_flight_recorder.cpp": {
+          "blob": "518d0861024ffd996f4f0bc3840f78016a8309bc",
+          "mode": "100644"
+        },
+        "core/canvas/src/font_options.cpp": {
+          "blob": "122e4cd6d7bfa82e5ea795db5b42472c985e1518",
+          "mode": "100644"
+        },
+        "core/canvas/src/font_registry_stubs.cpp": {
+          "blob": "c141bf50e9591be22fd195a16d559bf8785b622f",
+          "mode": "100644"
+        },
+        "core/canvas/src/image_file_cache.cpp": {
+          "blob": "5646e88b9bae42ee80b1d00074b9b9f8fa37e263",
+          "mode": "100644"
+        },
+        "core/canvas/src/msdf_atlas.cpp": {
+          "blob": "83e772ab7134d01a5c7de03f6e10aa6d408b983b",
+          "mode": "100644"
+        },
+        "core/canvas/src/named_shader_effects.cpp": {
+          "blob": "30340023e46db075dd1e8bf1be5835ea29c75c35",
+          "mode": "100644"
+        },
+        "core/canvas/src/named_shader_effects.hpp": {
+          "blob": "f1b3cc161bd837913d9db90e60ec40652f4968d9",
+          "mode": "100644"
+        },
+        "core/canvas/src/noto_color_emoji.cpp": {
+          "blob": "90b366f465882b86fe3e6bb68ad8e74cc95fb223",
+          "mode": "100644"
+        },
+        "core/canvas/src/noto_color_emoji_stub.cpp": {
+          "blob": "bd3c35159242eb83479bc7483ac62bb2cf1547de",
+          "mode": "100644"
+        },
+        "core/canvas/src/path.cpp": {
+          "blob": "418893636f49894d9261f158fada98dcd4c8f4cb",
+          "mode": "100644"
+        },
+        "core/canvas/src/path_to_sdf.cpp": {
+          "blob": "86b9e5392ed49d506cafeb82712f532591524d09",
+          "mode": "100644"
+        },
+        "core/canvas/src/recording_canvas.cpp": {
+          "blob": "0011f84d9d67fdd4de664112b1e779b97d2c7aae",
+          "mode": "100644"
+        },
+        "core/canvas/src/runtime_effect_cache.hpp": {
+          "blob": "450f99163679cf84c18b913c0ab9342efbb803ea",
+          "mode": "100644"
+        },
+        "core/canvas/src/sdf_atlas.cpp": {
+          "blob": "3bae0aec186284d42307b8e2166fe35a555b1eff",
+          "mode": "100644"
+        },
+        "core/canvas/src/sdf_atlas_cache.cpp": {
+          "blob": "04d90385d3eae9176ab59d47c2eea030b007fb59",
+          "mode": "100644"
+        },
+        "core/canvas/src/skia_canvas.cpp": {
+          "blob": "82d1942f11871558560e9e3af0a5bbd86d3d2278",
+          "mode": "100644"
+        },
+        "core/canvas/src/skia_canvas_box_shadow.cpp": {
+          "blob": "f88bf89462b0cf2d2715278e0354dd013023c7b1",
+          "mode": "100644"
+        },
+        "core/canvas/src/skia_canvas_filter.cpp": {
+          "blob": "c92e7f2b39f1c651c7aadd42ad8c95aa3f6b3a60",
+          "mode": "100644"
+        },
+        "core/canvas/src/skia_canvas_filter.hpp": {
+          "blob": "343070841972bc7645b63a4d9dd0282d3203a7a5",
+          "mode": "100644"
+        },
+        "core/canvas/src/skia_canvas_fonts.cpp": {
+          "blob": "e0e7099fe4610ea54abbe544bf74ca6386a8caf6",
+          "mode": "100644"
+        },
+        "core/canvas/src/skia_canvas_gradients.cpp": {
+          "blob": "8f446995a78ca634126907873383f41b2887ba1d",
+          "mode": "100644"
+        },
+        "core/canvas/src/skia_canvas_internal.hpp": {
+          "blob": "6ac07bdf6c08e1b777b6168d0edb0513a9669404",
+          "mode": "100644"
+        },
+        "core/canvas/src/skia_canvas_mask.cpp": {
+          "blob": "41d1b783c3786a9f130b3cab944729f878f5448d",
+          "mode": "100644"
+        },
+        "core/canvas/src/skia_canvas_opacity.cpp": {
+          "blob": "af8cbb667e6f86b9556d832d4bd66f7ee857df97",
+          "mode": "100644"
+        },
+        "core/canvas/src/skia_canvas_path.cpp": {
+          "blob": "bb21b3aa995c0725d27b9ae9b605b10d9bf1b258",
+          "mode": "100644"
+        },
+        "core/canvas/src/skia_canvas_shaders.cpp": {
+          "blob": "301facf4e7d2fc8c3db973aa73bcbc7c487cbbb1",
+          "mode": "100644"
+        },
+        "core/canvas/src/skia_canvas_text.cpp": {
+          "blob": "41e639efb2c18b2970feb394a40e99e3923b1307",
+          "mode": "100644"
+        },
+        "core/canvas/src/skia_chromium_raw_ptr_compat.cpp": {
+          "blob": "259e9d14b14b1c73547572fb573beacb7402fa3a",
+          "mode": "100644"
+        },
+        "core/canvas/src/skia_gradient_compat.hpp": {
+          "blob": "00381e562dac7872d9642becd416b19e45f99f1b",
+          "mode": "100644"
+        },
+        "core/canvas/src/skia_unicode.hpp": {
+          "blob": "b09b78d6b6221ac6ec8bd4c3bbfe839a778013cf",
+          "mode": "100644"
+        },
+        "core/canvas/src/svg.cpp": {
+          "blob": "71db8c2e40441c22551b007574ad4a173b9208ea",
+          "mode": "100644"
+        },
+        "core/canvas/src/svg_dom_cache.cpp": {
+          "blob": "72b98cd3198052856f50b8e8a7789eed671c9436",
+          "mode": "100644"
+        },
+        "core/canvas/src/text_font_context.cpp": {
+          "blob": "f8215f707228b56030517c8e8976237bf6a4c701",
+          "mode": "100644"
+        },
+        "core/canvas/src/text_layout.cpp": {
+          "blob": "22a3ddb093893d6f959ab7f6f3af7e41fa7fca91",
+          "mode": "100644"
+        },
+        "core/canvas/src/text_run_planner.cpp": {
+          "blob": "8257cd50abe7ee2d7aa655d9f1b0c8333f5eacce",
+          "mode": "100644"
+        },
+        "core/canvas/src/text_shaper.cpp": {
+          "blob": "9aac2a58ad7be463040694724526711692762e5b",
+          "mode": "100644"
+        },
+        "core/render/include/pulp/render/dirty_tracker.hpp": {
+          "blob": "29b3a463601c32c75e6b8831572d4cd754ce3c97",
+          "mode": "100644"
+        },
+        "core/render/include/pulp/render/gpu_render_time.hpp": {
+          "blob": "b668ecddc54b758927004169d48073bf0100d18f",
+          "mode": "100644"
+        },
+        "core/render/include/pulp/render/gpu_surface.hpp": {
+          "blob": "ac01dff7418c2a3c27a10f1c732cec8f731496af",
+          "mode": "100644"
+        },
+        "core/render/include/pulp/render/headless_surface.hpp": {
+          "blob": "0c00b51502809ab9274917371930eaea4edfc13b",
+          "mode": "100644"
+        },
+        "core/render/include/pulp/render/render_loop.hpp": {
+          "blob": "17045b68bcd51f276fa319d99f66abc04e8fd110",
+          "mode": "100644"
+        },
+        "core/render/include/pulp/render/render_pass.hpp": {
+          "blob": "66fbaf7a4dbf42d3d2d3859b3f0b0e97da90c3c4",
+          "mode": "100644"
+        },
+        "core/render/include/pulp/render/skia_surface.hpp": {
+          "blob": "3c9659aa9c71a0063c032968016de916f6fad1c9",
+          "mode": "100644"
+        },
+        "core/render/src/gpu_surface_dawn.cpp": {
+          "blob": "da0cdd1b44b16ce47aca28704a349b65be5a473c",
+          "mode": "100644"
+        },
+        "core/render/src/headless_surface.cpp": {
+          "blob": "77d4844175c705ccf7afa9a0b4a380e51c7a2b2c",
+          "mode": "100644"
+        },
+        "core/render/src/metal_surface_mac.mm": {
+          "blob": "e6f69479422783fafab49525a30bfb4aed19117f",
+          "mode": "100644"
+        },
+        "core/render/src/pulp_render_objc_names.h": {
+          "blob": "34f9c532ee6bed84ec17b04b9f5a81a9bbf7396b",
+          "mode": "100644"
+        },
+        "core/render/src/render_loop.cpp": {
+          "blob": "ca6123f669836b3d594457b1769b3f5687e271a6",
+          "mode": "100644"
+        },
+        "core/render/src/render_loop_apple.mm": {
+          "blob": "f310e2da18d0f1d0d41d2b4d6b4aafab21979b4d",
+          "mode": "100644"
+        },
+        "core/render/src/render_loop_emscripten.cpp": {
+          "blob": "6b2d6ebd5d8c6a4485a171fcab9c026e06e61ce3",
+          "mode": "100644"
+        },
+        "core/render/src/render_loop_state.hpp": {
+          "blob": "1a30fd3825275a56faa1e66e28e19785a7d65070",
+          "mode": "100644"
+        },
+        "core/render/src/skia_surface.cpp": {
+          "blob": "89d6c0fcabd2810cd7bf0f499954429b764f86a5",
+          "mode": "100644"
+        },
+        "core/render/src/skia_surface_ganesh.cpp": {
+          "blob": "93e9eae999318028ae7cda4c0821744dd6bfe080",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/accessibility.hpp": {
+          "blob": "e36e77fbcfd29fb3c49f4d36a4a26a7911f52903",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/accessibility_provider.hpp": {
+          "blob": "7b23f0ed16183b4175f634b84bde9f1acad0a147",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/accessibility_tree.hpp": {
+          "blob": "6e875576b4c9ef650342125c6038ef3ab82bbf4d",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/anchor_strategy.hpp": {
+          "blob": "52e601323a69aa86c1791a3f688688e2e44fa6f0",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/aria_roles.hpp": {
+          "blob": "0d3bcf41bddae266cdbba91fc6c0a3e9379c2157",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/asset_manager.hpp": {
+          "blob": "aac2d10f0f77644053394c9fc09cd9089ad09b04",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/buttons.hpp": {
+          "blob": "feeccddb9480a51ac9a7d46612878783162413b2",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/canvas_widget.hpp": {
+          "blob": "48a8cc8d8cc9494786a1c16a027b9b49b3f2c3fb",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/continuous_frames.hpp": {
+          "blob": "0720413a4582ea307ae09fb2dd2d20d88e580ecb",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/design_import.hpp": {
+          "blob": "d53249c5ecd210147025d087a878174b91237525",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/design_ir.hpp": {
+          "blob": "d000c1d56795cebfba19b96a543e9301ff374b26",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/design_sources.hpp": {
+          "blob": "c844beb5c88c1edf90f4cbddf92031a8a912e200",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/design_tokens.hpp": {
+          "blob": "7773625fc0d08c45a0199a99b800f476c76ac7d1",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/frame_clock.hpp": {
+          "blob": "6222d08912098e437ea81df57a28c858936cf84e",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/geometry.hpp": {
+          "blob": "67b8939a20b96aa225e68dad92d75641f8e752fe",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/gesture.hpp": {
+          "blob": "5e2cdfded2fcd7618d305a5a4433dc95c6d654d2",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/image_cache.hpp": {
+          "blob": "28161d902799831daef07dd9431c4bfa945e10fb",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/input_events.hpp": {
+          "blob": "966deaca21badcccb968ee48ef1d3714683c568b",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/pointer_dispatch.hpp": {
+          "blob": "c64dde1149490805a8b0ba31b337fde39a1ed59c",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/repaint_damage.hpp": {
+          "blob": "9c2150c70e962762525482e2bf7b76280a0c13c1",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/screenshot.hpp": {
+          "blob": "68696420be9e0a223bf6a97107a151f9bcaca760",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/screenshot_compare.hpp": {
+          "blob": "93ea0cf83ea778cb3a76d83ac8afb31414ddf683",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/svg_fragment.hpp": {
+          "blob": "3571353d55e5273143cfc36786a1be96d34fa81c",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/svg_path_widget.hpp": {
+          "blob": "95f5b2d6fed68689e061fd61020f7cbc1d70a1e6",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/value_source.hpp": {
+          "blob": "054d812c78f5117a3d17bb57bc2f1dad117c74ac",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/view.hpp": {
+          "blob": "58b4791dd9393136e701b4b83d1737141d1796d5",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/view_fwd.hpp": {
+          "blob": "d56845fe31d62353511e338780b13b4641eef10e",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/widget_painter.hpp": {
+          "blob": "9e2669810a393ce81a4d726c5e2ce50535f5fc5d",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/widgets.hpp": {
+          "blob": "820e9b94bd4e9d29fa7b6af148ffbf5e2e9efae7",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/widgets/svg_line.hpp": {
+          "blob": "bba9062e1ed3ca2d3a9e7e120e2fd5397ed425d5",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/widgets/svg_rect.hpp": {
+          "blob": "9032da6e33b237bb086adc803645a6583a953257",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/window_host.hpp": {
+          "blob": "e8aacaad10f420109fb1a09058c1aeaace851c2e",
+          "mode": "100644"
+        },
+        "core/view/platform/mac/accessibility_mac.mm": {
+          "blob": "2980f8bd05956395c32973a85aaed6163a7d8723",
+          "mode": "100644"
+        },
+        "core/view/platform/mac/screenshot_mac.mm": {
+          "blob": "5425788c55932242ed4cac8314344ddd24679b53",
+          "mode": "100644"
+        },
+        "core/view/platform/mac/window_host_mac.mm": {
+          "blob": "b775ab06519f9567d9f62e25ae1402ad98faae95",
+          "mode": "100644"
+        },
+        "core/view/platform/mac/window_host_mac_capture.h": {
+          "blob": "d0bbec2915e07be2a8d8f69722bd4d646f625196",
+          "mode": "100644"
+        },
+        "core/view/platform/mac/window_host_mac_capture.mm": {
+          "blob": "d776633e5f6fe2e97565f49665ed2d8e5870b906",
+          "mode": "100644"
+        },
+        "core/view/platform/mac/window_host_mac_geometry.mm": {
+          "blob": "7a9b7796219b46642ec73ce4b924005138c47702",
+          "mode": "100644"
+        },
+        "core/view/platform/mac/window_host_mac_internal.hpp": {
+          "blob": "c451345301d405c765807762525ca3c315103116",
+          "mode": "100644"
+        },
+        "core/view/platform/mac/window_host_mac_view.h": {
+          "blob": "eb2353680079fb0f7366037b503f468d2b6944c3",
+          "mode": "100644"
+        },
+        "core/view/src/accessibility.cpp": {
+          "blob": "2d41616c0c96f119424a7a0f9c0bb52d3a42009b",
+          "mode": "100644"
+        },
+        "core/view/src/accessibility_tree.cpp": {
+          "blob": "cfdf26e1ad2bed6488b340c2c1b68ec50b12e35c",
+          "mode": "100644"
+        },
+        "core/view/src/anchor_strategy.cpp": {
+          "blob": "1c994e8065f5d04caa32ce3683beed813451c1eb",
+          "mode": "100644"
+        },
+        "core/view/src/asset_manager.cpp": {
+          "blob": "0b8293edf889304221da734207ff39c8a3a6ffc1",
+          "mode": "100644"
+        },
+        "core/view/src/buttons.cpp": {
+          "blob": "2a39c0169d229dd8b751430a56db3fcc2fc92c76",
+          "mode": "100644"
+        },
+        "core/view/src/canvas_widget.cpp": {
+          "blob": "0526939b1da14795882e083ea35c22d5ebaf2417",
+          "mode": "100644"
+        },
+        "core/view/src/continuous_frames.cpp": {
+          "blob": "5948062cfc1c63f680bef2d0edb4db2c0197a069",
+          "mode": "100644"
+        },
+        "core/view/src/design_import.cpp": {
+          "blob": "af8bc9c8a6686e93574b43f166b5ec5fac15052e",
+          "mode": "100644"
+        },
+        "core/view/src/design_import_internal.hpp": {
+          "blob": "34420fb0483bc54e99ee8a2836a692d48e673452",
+          "mode": "100644"
+        },
+        "core/view/src/design_import_native_common.cpp": {
+          "blob": "6f732caa60bf61d8850a3af3b525ccc52a10bb55",
+          "mode": "100644"
+        },
+        "core/view/src/design_import_native_common.hpp": {
+          "blob": "b7ea4003a709bcf3e4afc894b2d7153ec8647cda",
+          "mode": "100644"
+        },
+        "core/view/src/design_ir_analysis.cpp": {
+          "blob": "d7a0a16668dfe213f2e89051e63a878fc5a61730",
+          "mode": "100644"
+        },
+        "core/view/src/design_ir_helpers.hpp": {
+          "blob": "2139301702e99e1ca5067e5ce1b8bb6a462aa2b9",
+          "mode": "100644"
+        },
+        "core/view/src/design_ir_json.cpp": {
+          "blob": "f90a40b9c5d0ede93b3e074913109f6538727231",
+          "mode": "100644"
+        },
+        "core/view/src/design_ir_normalize.cpp": {
+          "blob": "64168c07f831d9d3762ff83ed5696a5cc6494371",
+          "mode": "100644"
+        },
+        "core/view/src/design_tokens.cpp": {
+          "blob": "362416f9d8191ae6fec034b7e996b7812b81f9cc",
+          "mode": "100644"
+        },
+        "core/view/src/frame_clock.cpp": {
+          "blob": "dc6b0ae39c7d2e24777920dac15f1caeb7d63f46",
+          "mode": "100644"
+        },
+        "core/view/src/gesture.cpp": {
+          "blob": "6862c64ace8cd98ff5fc85ed4be35b4d098bb651",
+          "mode": "100644"
+        },
+        "core/view/src/image_cache.cpp": {
+          "blob": "e09bf73c3ac888adca41f50ef2555cedd37c96ef",
+          "mode": "100644"
+        },
+        "core/view/src/pointer_dispatch.cpp": {
+          "blob": "2ee149fd0a5f72480c795604432276ae862cc1ac",
+          "mode": "100644"
+        },
+        "core/view/src/repaint_damage.cpp": {
+          "blob": "e15c5f7ff38d3795f5c4f89df5ffaddea5311348",
+          "mode": "100644"
+        },
+        "core/view/src/screenshot_compare.cpp": {
+          "blob": "e73ab94e105018e79fbd90a4cca5c5757d9b935b",
+          "mode": "100644"
+        },
+        "core/view/src/screenshot_gpu.cpp": {
+          "blob": "89b7eab79779d84e4fc5efcb63874cb8a78b9501",
+          "mode": "100644"
+        },
+        "core/view/src/screenshot_skia.cpp": {
+          "blob": "385a37496a3b4e47798c109e3b4663cd88e9028c",
+          "mode": "100644"
+        },
+        "core/view/src/screenshot_stub.cpp": {
+          "blob": "cd7f55c87ac24f2a538524d490d0f436c9923903",
+          "mode": "100644"
+        },
+        "core/view/src/svg_path_widget.cpp": {
+          "blob": "0aea393ab97486a07e3b3f7a22163a7df26fe498",
+          "mode": "100644"
+        },
+        "core/view/src/view.cpp": {
+          "blob": "70a3e3a1644e7a5de7e794523f6cf4603145e0ec",
+          "mode": "100644"
+        },
+        "core/view/src/widgets.cpp": {
+          "blob": "6dc9973891c448b0643bd250eb8589f1620de38f",
+          "mode": "100644"
+        },
+        "core/view/src/widgets/label.cpp": {
+          "blob": "d0241a51ac90f91e46d59df8c74560653483a061",
+          "mode": "100644"
+        },
+        "core/view/src/widgets/svg_line.cpp": {
+          "blob": "7807b9d87737a93877edf8744afa10ff2a1823ee",
+          "mode": "100644"
+        },
+        "core/view/src/widgets/svg_rect.cpp": {
+          "blob": "0035a71b912a9df30b3d0d717def0ab4b5ba0023",
+          "mode": "100644"
+        },
+        "core/view/src/widgets/visualizers.cpp": {
+          "blob": "89f1ae7e0b0dd9d026c3b908e70fe68bf0ea36f3",
+          "mode": "100644"
+        },
+        "core/view/src/yoga_layout.cpp": {
+          "blob": "3ba7c9c6a0ab732dfc1cff6d9efcb2f39301a416",
+          "mode": "100644"
+        },
+        "packages/pulp-import-ir/src/anchors.ts": {
+          "blob": "1a8429d52609fa9b2a86f841d33aedd0f6fc900b",
+          "mode": "100644"
+        },
+        "packages/pulp-import-ir/src/diff.ts": {
+          "blob": "89896cb3723656e876cb38faef8d5284a881d9c3",
+          "mode": "100644"
+        },
+        "packages/pulp-import-ir/src/tweaks.ts": {
+          "blob": "1ceca3c0f82e4870b983167568213dd76f213512",
+          "mode": "100644"
+        },
+        "packages/pulp-import-ir/src/types.ts": {
+          "blob": "8cd0455314abbdcd50e59543d8f26fed2a57a17a",
+          "mode": "100644"
+        }
+      },
+      "pulp_historical_seed_projection": {
+        "core/canvas/include/pulp/canvas/affine_transform.hpp": {
+          "blob": "c7d1708222f600a67ab69b8cf5b4b8e9ed260f41",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/attributed_string.hpp": {
+          "blob": "645f7b5121019d79c36596fcd70c0b7af347a1aa",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/bidi.hpp": {
+          "blob": "296bf3d80b93e45917fe66c7b810d5ea2f7e723a",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/box_shadow_cache.hpp": {
+          "blob": "dce8d1319b8af876c2ffef5c7ea50d3e7eaa0795",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/bundled_fonts.hpp": {
+          "blob": "175fa6dd872806f0c287ef1428788101fb8ca44b",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/canvas.hpp": {
+          "blob": "5c4202c6f24c2715e8f0f6f99977ecf17f7f1e9f",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/canvas_capability.hpp": {
+          "blob": "588165f75df248c6a0d404955507b33ed04e6727",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/emoji_segmenter.hpp": {
+          "blob": "3e00dca28138526ec1e1c1587ae04d1244adce89",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/font_flight_recorder.hpp": {
+          "blob": "266df83f8d5cd99a8801771518f1e99c3f99c595",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/image_convolution.hpp": {
+          "blob": "5c78d0cd6891baff0ac22b58f6b9c966f66f6057",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/image_file_cache.hpp": {
+          "blob": "da3321c9e277f9db8a8092ebd6005a8b6afe8107",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/msdf_atlas.hpp": {
+          "blob": "c2654987f2105b08c25c67f6344a87c07c199003",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/path.hpp": {
+          "blob": "ff5bc5323dc16b6f77d3b892ac13c5777e7cfd1e",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/path_to_sdf.hpp": {
+          "blob": "1c6a976d28cfd3c303449dfd66e5204f6f4faf6f",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/psdf_atlas.hpp": {
+          "blob": "89027b2aebca674083f6291416f14b54a17d9145",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/recording_canvas.hpp": {
+          "blob": "26437bef0ad26f71562150e8c843ce9cb902ad22",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/rectangle_list.hpp": {
+          "blob": "53d14878ea3ca630ccf36d7ca7d5288f00000df6",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/sdf_atlas.hpp": {
+          "blob": "8de855133b0d5498ebe59c4290dd34f7e1c1018c",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/sdf_atlas_cache.hpp": {
+          "blob": "0254eb791df2ef41e9f044c5095560a0735f20a5",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/sdf_effects.hpp": {
+          "blob": "a11c3cb7e4d365e13ccc77f498332e1e9e0a3f3c",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/sdf_software_renderer.hpp": {
+          "blob": "46ed4ac323062f665d2c17c376c030ad2f4d593b",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/sdf_text.hpp": {
+          "blob": "1c55a126aac7e219b26f6c32f5835d3f1a7fc3e9",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/shaped_text.hpp": {
+          "blob": "9e33fdd2ca8d7cb3e99482bc7f1e49080a3dc8a9",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/skia_canvas.hpp": {
+          "blob": "e76c1cfab8e7285d0959dc9c64b4fe83ae01d0f2",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/svg.hpp": {
+          "blob": "4c8d98c7990e2c7dbe843a3ee3258a2649004c0c",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/svg_dom_cache.hpp": {
+          "blob": "774b732f50693ef7e9b13ace88f62e842795d916",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/text_font_context.hpp": {
+          "blob": "e4c6da01301a3214c237486853e4ee7407d2a17b",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/text_layout.hpp": {
+          "blob": "51e919e83e5eb9d09e634ee335c642072a95cc38",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/text_run_planner.hpp": {
+          "blob": "87185707103d906652c5172fda6901c3883fe413",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/text_shaper.hpp": {
+          "blob": "2642bb3e6a7f929fe12e381223ac4978473b077a",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/text_utf8.hpp": {
+          "blob": "29f45b46abff5a0c790e0c0395548f4a15cea0cf",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/include/pulp/canvas/view_effect.hpp": {
+          "blob": "c659665b225efb11ab5f958778c4615c621be247",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/shaders/msdf_text.sksl": {
+          "blob": "7e47958abd2a69a20f75f191e09ed0a37e898070",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/shaders/sdf_text.sksl": {
+          "blob": "93c16f57d70de413615b3b51e37b9b7e68bcfa79",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/shaders/sdf_text_effects.sksl": {
+          "blob": "6b0f63409d5d89667559443318db0c896e3c337c",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/attributed_string.cpp": {
+          "blob": "590d8c2d9cad7456eb96fd4983e9442ea780944f",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/bidi.cpp": {
+          "blob": "398cc746021de846f339faeacd79714685b51245",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/box_shadow_cache.cpp": {
+          "blob": "77eed3ee2036c23d82319ae2f077488f194746ac",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/bundled_fonts.cpp": {
+          "blob": "7bebacc2d180a2cf1019cc34917f424e106872b4",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/color.cpp": {
+          "blob": "443f7bd844922096beee9950d2b8247e49ddca71",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/emoji_segmenter.cpp": {
+          "blob": "80b077d18b24e6875273d68601a137f196a0aa20",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/font_flight_recorder.cpp": {
+          "blob": "518d0861024ffd996f4f0bc3840f78016a8309bc",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/font_options.cpp": {
+          "blob": "122e4cd6d7bfa82e5ea795db5b42472c985e1518",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/font_registry_stubs.cpp": {
+          "blob": "c141bf50e9591be22fd195a16d559bf8785b622f",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/image_file_cache.cpp": {
+          "blob": "5646e88b9bae42ee80b1d00074b9b9f8fa37e263",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/msdf_atlas.cpp": {
+          "blob": "83e772ab7134d01a5c7de03f6e10aa6d408b983b",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/named_shader_effects.cpp": {
+          "blob": "30340023e46db075dd1e8bf1be5835ea29c75c35",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/named_shader_effects.hpp": {
+          "blob": "f1b3cc161bd837913d9db90e60ec40652f4968d9",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/noto_color_emoji.cpp": {
+          "blob": "90b366f465882b86fe3e6bb68ad8e74cc95fb223",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/noto_color_emoji_stub.cpp": {
+          "blob": "bd3c35159242eb83479bc7483ac62bb2cf1547de",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/path.cpp": {
+          "blob": "418893636f49894d9261f158fada98dcd4c8f4cb",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/path_to_sdf.cpp": {
+          "blob": "86b9e5392ed49d506cafeb82712f532591524d09",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/recording_canvas.cpp": {
+          "blob": "4b83cbae17e2865beb23a486779eb9704756bb4c",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/runtime_effect_cache.hpp": {
+          "blob": "450f99163679cf84c18b913c0ab9342efbb803ea",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/sdf_atlas.cpp": {
+          "blob": "3bae0aec186284d42307b8e2166fe35a555b1eff",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/sdf_atlas_cache.cpp": {
+          "blob": "04d90385d3eae9176ab59d47c2eea030b007fb59",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/skia_canvas.cpp": {
+          "blob": "82d1942f11871558560e9e3af0a5bbd86d3d2278",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/skia_canvas_box_shadow.cpp": {
+          "blob": "f88bf89462b0cf2d2715278e0354dd013023c7b1",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/skia_canvas_filter.cpp": {
+          "blob": "c92e7f2b39f1c651c7aadd42ad8c95aa3f6b3a60",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/skia_canvas_filter.hpp": {
+          "blob": "343070841972bc7645b63a4d9dd0282d3203a7a5",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/skia_canvas_fonts.cpp": {
+          "blob": "e0e7099fe4610ea54abbe544bf74ca6386a8caf6",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/skia_canvas_gradients.cpp": {
+          "blob": "8f446995a78ca634126907873383f41b2887ba1d",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/skia_canvas_internal.hpp": {
+          "blob": "6ac07bdf6c08e1b777b6168d0edb0513a9669404",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/skia_canvas_mask.cpp": {
+          "blob": "41d1b783c3786a9f130b3cab944729f878f5448d",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/skia_canvas_opacity.cpp": {
+          "blob": "82d3f9edf6bc735eb8466907996b4d62c259692a",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/skia_canvas_path.cpp": {
+          "blob": "bb21b3aa995c0725d27b9ae9b605b10d9bf1b258",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/skia_canvas_shaders.cpp": {
+          "blob": "301facf4e7d2fc8c3db973aa73bcbc7c487cbbb1",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/skia_canvas_text.cpp": {
+          "blob": "41e639efb2c18b2970feb394a40e99e3923b1307",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/skia_chromium_raw_ptr_compat.cpp": {
+          "blob": "259e9d14b14b1c73547572fb573beacb7402fa3a",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/skia_gradient_compat.hpp": {
+          "blob": "00381e562dac7872d9642becd416b19e45f99f1b",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/skia_unicode.hpp": {
+          "blob": "b09b78d6b6221ac6ec8bd4c3bbfe839a778013cf",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/svg.cpp": {
+          "blob": "71db8c2e40441c22551b007574ad4a173b9208ea",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/svg_dom_cache.cpp": {
+          "blob": "72b98cd3198052856f50b8e8a7789eed671c9436",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/text_font_context.cpp": {
+          "blob": "f8215f707228b56030517c8e8976237bf6a4c701",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/text_layout.cpp": {
+          "blob": "22a3ddb093893d6f959ab7f6f3af7e41fa7fca91",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/text_run_planner.cpp": {
+          "blob": "8257cd50abe7ee2d7aa655d9f1b0c8333f5eacce",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/canvas/src/text_shaper.cpp": {
+          "blob": "9aac2a58ad7be463040694724526711692762e5b",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/render/include/pulp/render/dirty_tracker.hpp": {
+          "blob": "29b3a463601c32c75e6b8831572d4cd754ce3c97",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/render/include/pulp/render/gpu_render_time.hpp": {
+          "blob": "b668ecddc54b758927004169d48073bf0100d18f",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/render/include/pulp/render/gpu_surface.hpp": {
+          "blob": "ac01dff7418c2a3c27a10f1c732cec8f731496af",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/render/include/pulp/render/headless_surface.hpp": {
+          "blob": "0c00b51502809ab9274917371930eaea4edfc13b",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/render/include/pulp/render/render_loop.hpp": {
+          "blob": "17045b68bcd51f276fa319d99f66abc04e8fd110",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/render/include/pulp/render/render_pass.hpp": {
+          "blob": "66fbaf7a4dbf42d3d2d3859b3f0b0e97da90c3c4",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/render/include/pulp/render/skia_surface.hpp": {
+          "blob": "3c9659aa9c71a0063c032968016de916f6fad1c9",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/render/src/gpu_surface_dawn.cpp": {
+          "blob": "da0cdd1b44b16ce47aca28704a349b65be5a473c",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/render/src/headless_surface.cpp": {
+          "blob": "77d4844175c705ccf7afa9a0b4a380e51c7a2b2c",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/render/src/metal_surface_mac.mm": {
+          "blob": "e6f69479422783fafab49525a30bfb4aed19117f",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/render/src/pulp_render_objc_names.h": {
+          "blob": "34f9c532ee6bed84ec17b04b9f5a81a9bbf7396b",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/render/src/render_loop.cpp": {
+          "blob": "ca6123f669836b3d594457b1769b3f5687e271a6",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/render/src/render_loop_apple.mm": {
+          "blob": "f310e2da18d0f1d0d41d2b4d6b4aafab21979b4d",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/render/src/render_loop_emscripten.cpp": {
+          "blob": "6b2d6ebd5d8c6a4485a171fcab9c026e06e61ce3",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/render/src/render_loop_state.hpp": {
+          "blob": "1a30fd3825275a56faa1e66e28e19785a7d65070",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/render/src/skia_surface.cpp": {
+          "blob": "89d6c0fcabd2810cd7bf0f499954429b764f86a5",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/render/src/skia_surface_ganesh.cpp": {
+          "blob": "93e9eae999318028ae7cda4c0821744dd6bfe080",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/accessibility.hpp": {
+          "blob": "e36e77fbcfd29fb3c49f4d36a4a26a7911f52903",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/accessibility_provider.hpp": {
+          "blob": "7b23f0ed16183b4175f634b84bde9f1acad0a147",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/accessibility_tree.hpp": {
+          "blob": "6e875576b4c9ef650342125c6038ef3ab82bbf4d",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/anchor_strategy.hpp": {
+          "blob": "52e601323a69aa86c1791a3f688688e2e44fa6f0",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/aria_roles.hpp": {
+          "blob": "0d3bcf41bddae266cdbba91fc6c0a3e9379c2157",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/asset_manager.hpp": {
+          "blob": "aac2d10f0f77644053394c9fc09cd9089ad09b04",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/buttons.hpp": {
+          "blob": "feeccddb9480a51ac9a7d46612878783162413b2",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/canvas_widget.hpp": {
+          "blob": "48a8cc8d8cc9494786a1c16a027b9b49b3f2c3fb",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/continuous_frames.hpp": {
+          "blob": "0720413a4582ea307ae09fb2dd2d20d88e580ecb",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/design_import.hpp": {
+          "blob": "d53249c5ecd210147025d087a878174b91237525",
+          "classification": "unresolved",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/design_ir.hpp": {
+          "blob": "d000c1d56795cebfba19b96a543e9301ff374b26",
+          "classification": "unresolved",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/design_sources.hpp": {
+          "blob": "c844beb5c88c1edf90f4cbddf92031a8a912e200",
+          "classification": "unresolved",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/design_tokens.hpp": {
+          "blob": "7773625fc0d08c45a0199a99b800f476c76ac7d1",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/frame_clock.hpp": {
+          "blob": "6222d08912098e437ea81df57a28c858936cf84e",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/geometry.hpp": {
+          "blob": "67b8939a20b96aa225e68dad92d75641f8e752fe",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/gesture.hpp": {
+          "blob": "5e2cdfded2fcd7618d305a5a4433dc95c6d654d2",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/image_cache.hpp": {
+          "blob": "28161d902799831daef07dd9431c4bfa945e10fb",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/input_events.hpp": {
+          "blob": "966deaca21badcccb968ee48ef1d3714683c568b",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/pointer_dispatch.hpp": {
+          "blob": "c64dde1149490805a8b0ba31b337fde39a1ed59c",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/repaint_damage.hpp": {
+          "blob": "9c2150c70e962762525482e2bf7b76280a0c13c1",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/screenshot.hpp": {
+          "blob": "68696420be9e0a223bf6a97107a151f9bcaca760",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/screenshot_compare.hpp": {
+          "blob": "93ea0cf83ea778cb3a76d83ac8afb31414ddf683",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/svg_fragment.hpp": {
+          "blob": "3571353d55e5273143cfc36786a1be96d34fa81c",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/svg_path_widget.hpp": {
+          "blob": "631483f2a5c5f1247a8c1a43adeef6f2a43e831f",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/value_source.hpp": {
+          "blob": "054d812c78f5117a3d17bb57bc2f1dad117c74ac",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/view.hpp": {
+          "blob": "2b962ba6788d9c2a979e95ef5d5547c76d16ac2d",
+          "classification": "unresolved",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/view_fwd.hpp": {
+          "blob": "d56845fe31d62353511e338780b13b4641eef10e",
+          "classification": "unresolved",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/widget_painter.hpp": {
+          "blob": "9e2669810a393ce81a4d726c5e2ce50535f5fc5d",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/widgets.hpp": {
+          "blob": "820e9b94bd4e9d29fa7b6af148ffbf5e2e9efae7",
+          "classification": "unresolved",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/widgets/svg_line.hpp": {
+          "blob": "bba9062e1ed3ca2d3a9e7e120e2fd5397ed425d5",
+          "classification": "unresolved",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/widgets/svg_rect.hpp": {
+          "blob": "9032da6e33b237bb086adc803645a6583a953257",
+          "classification": "unresolved",
+          "mode": "100644"
+        },
+        "core/view/include/pulp/view/window_host.hpp": {
+          "blob": "e8aacaad10f420109fb1a09058c1aeaace851c2e",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/platform/mac/accessibility_mac.mm": {
+          "blob": "2980f8bd05956395c32973a85aaed6163a7d8723",
+          "classification": "platform-adapter",
+          "mode": "100644"
+        },
+        "core/view/platform/mac/screenshot_mac.mm": {
+          "blob": "5425788c55932242ed4cac8314344ddd24679b53",
+          "classification": "platform-adapter",
+          "mode": "100644"
+        },
+        "core/view/platform/mac/window_host_mac.mm": {
+          "blob": "b775ab06519f9567d9f62e25ae1402ad98faae95",
+          "classification": "unresolved",
+          "mode": "100644"
+        },
+        "core/view/platform/mac/window_host_mac_capture.h": {
+          "blob": "d0bbec2915e07be2a8d8f69722bd4d646f625196",
+          "classification": "unresolved",
+          "mode": "100644"
+        },
+        "core/view/platform/mac/window_host_mac_capture.mm": {
+          "blob": "d776633e5f6fe2e97565f49665ed2d8e5870b906",
+          "classification": "unresolved",
+          "mode": "100644"
+        },
+        "core/view/platform/mac/window_host_mac_geometry.mm": {
+          "blob": "7a9b7796219b46642ec73ce4b924005138c47702",
+          "classification": "unresolved",
+          "mode": "100644"
+        },
+        "core/view/platform/mac/window_host_mac_internal.hpp": {
+          "blob": "c451345301d405c765807762525ca3c315103116",
+          "classification": "unresolved",
+          "mode": "100644"
+        },
+        "core/view/platform/mac/window_host_mac_view.h": {
+          "blob": "eb2353680079fb0f7366037b503f468d2b6944c3",
+          "classification": "unresolved",
+          "mode": "100644"
+        },
+        "core/view/src/accessibility.cpp": {
+          "blob": "2d41616c0c96f119424a7a0f9c0bb52d3a42009b",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/src/accessibility_tree.cpp": {
+          "blob": "cfdf26e1ad2bed6488b340c2c1b68ec50b12e35c",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/src/anchor_strategy.cpp": {
+          "blob": "1c994e8065f5d04caa32ce3683beed813451c1eb",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/src/asset_manager.cpp": {
+          "blob": "0b8293edf889304221da734207ff39c8a3a6ffc1",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/src/buttons.cpp": {
+          "blob": "2a39c0169d229dd8b751430a56db3fcc2fc92c76",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/src/canvas_widget.cpp": {
+          "blob": "0526939b1da14795882e083ea35c22d5ebaf2417",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/src/continuous_frames.cpp": {
+          "blob": "5948062cfc1c63f680bef2d0edb4db2c0197a069",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/src/design_import.cpp": {
+          "blob": "af8bc9c8a6686e93574b43f166b5ec5fac15052e",
+          "classification": "unresolved",
+          "mode": "100644"
+        },
+        "core/view/src/design_import_internal.hpp": {
+          "blob": "34420fb0483bc54e99ee8a2836a692d48e673452",
+          "classification": "unresolved",
+          "mode": "100644"
+        },
+        "core/view/src/design_import_native_common.cpp": {
+          "blob": "f72f7c101052e824757b66fe7f8961633a7cb1d0",
+          "classification": "unresolved",
+          "mode": "100644"
+        },
+        "core/view/src/design_import_native_common.hpp": {
+          "blob": "443271f0c6c2de42ec08af638d0fad888d45e2f0",
+          "classification": "unresolved",
+          "mode": "100644"
+        },
+        "core/view/src/design_ir_analysis.cpp": {
+          "blob": "d7a0a16668dfe213f2e89051e63a878fc5a61730",
+          "classification": "unresolved",
+          "mode": "100644"
+        },
+        "core/view/src/design_ir_helpers.hpp": {
+          "blob": "2139301702e99e1ca5067e5ce1b8bb6a462aa2b9",
+          "classification": "unresolved",
+          "mode": "100644"
+        },
+        "core/view/src/design_ir_json.cpp": {
+          "blob": "9c0ada60c0bd2fbbb0245031cdcd76e2db076fa4",
+          "classification": "unresolved",
+          "mode": "100644"
+        },
+        "core/view/src/design_ir_normalize.cpp": {
+          "blob": "64168c07f831d9d3762ff83ed5696a5cc6494371",
+          "classification": "unresolved",
+          "mode": "100644"
+        },
+        "core/view/src/design_tokens.cpp": {
+          "blob": "362416f9d8191ae6fec034b7e996b7812b81f9cc",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/src/frame_clock.cpp": {
+          "blob": "dc6b0ae39c7d2e24777920dac15f1caeb7d63f46",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/src/gesture.cpp": {
+          "blob": "6862c64ace8cd98ff5fc85ed4be35b4d098bb651",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/src/image_cache.cpp": {
+          "blob": "e09bf73c3ac888adca41f50ef2555cedd37c96ef",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/src/pointer_dispatch.cpp": {
+          "blob": "2ee149fd0a5f72480c795604432276ae862cc1ac",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/src/repaint_damage.cpp": {
+          "blob": "e15c5f7ff38d3795f5c4f89df5ffaddea5311348",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/src/screenshot_compare.cpp": {
+          "blob": "e73ab94e105018e79fbd90a4cca5c5757d9b935b",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/src/screenshot_gpu.cpp": {
+          "blob": "89b7eab79779d84e4fc5efcb63874cb8a78b9501",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/src/screenshot_skia.cpp": {
+          "blob": "385a37496a3b4e47798c109e3b4663cd88e9028c",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/src/screenshot_stub.cpp": {
+          "blob": "cd7f55c87ac24f2a538524d490d0f436c9923903",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/src/svg_path_widget.cpp": {
+          "blob": "9376f3b606e0f6acf74da9f78acfa7ebb225c893",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "core/view/src/view.cpp": {
+          "blob": "26d9091f7dc026dd573ca78314a9f83312f3672d",
+          "classification": "unresolved",
+          "mode": "100644"
+        },
+        "core/view/src/widgets.cpp": {
+          "blob": "6dc9973891c448b0643bd250eb8589f1620de38f",
+          "classification": "unresolved",
+          "mode": "100644"
+        },
+        "core/view/src/widgets/label.cpp": {
+          "blob": "d0241a51ac90f91e46d59df8c74560653483a061",
+          "classification": "unresolved",
+          "mode": "100644"
+        },
+        "core/view/src/widgets/svg_line.cpp": {
+          "blob": "7807b9d87737a93877edf8744afa10ff2a1823ee",
+          "classification": "unresolved",
+          "mode": "100644"
+        },
+        "core/view/src/widgets/svg_rect.cpp": {
+          "blob": "0035a71b912a9df30b3d0d717def0ab4b5ba0023",
+          "classification": "unresolved",
+          "mode": "100644"
+        },
+        "core/view/src/widgets/visualizers.cpp": {
+          "blob": "89f1ae7e0b0dd9d026c3b908e70fe68bf0ea36f3",
+          "classification": "unresolved",
+          "mode": "100644"
+        },
+        "core/view/src/yoga_layout.cpp": {
+          "blob": "37179dbcbc2b07088c786e0dc50b978c5151c60c",
+          "classification": "framework-core",
+          "mode": "100644"
+        },
+        "packages/pulp-import-ir/src/anchors.ts": {
+          "blob": "1a8429d52609fa9b2a86f841d33aedd0f6fc900b",
+          "classification": "authoring-only",
+          "mode": "100644"
+        },
+        "packages/pulp-import-ir/src/diff.ts": {
+          "blob": "89896cb3723656e876cb38faef8d5284a881d9c3",
+          "classification": "authoring-only",
+          "mode": "100644"
+        },
+        "packages/pulp-import-ir/src/tweaks.ts": {
+          "blob": "1ceca3c0f82e4870b983167568213dd76f213512",
+          "classification": "authoring-only",
+          "mode": "100644"
+        },
+        "packages/pulp-import-ir/src/types.ts": {
+          "blob": "8cd0455314abbdcd50e59543d8f26fed2a57a17a",
+          "classification": "unresolved",
+          "mode": "100644"
+        }
+      },
+      "pulp_legacy_slices": [
+        "canvas-kernel",
+        "capture-primitives",
+        "design-schema-compiler",
+        "macos-shell",
+        "render-skia-dawn",
+        "retained-ui-kernel"
+      ],
+      "vellum_implementation_projection": {
+        "apps/app-host/CMakeLists.txt": {
+          "blob": "169e25e7cf60eb0b745c34661340289b8d284521",
+          "mode": "100644"
+        },
+        "apps/app-host/component_registry.cpp": {
+          "blob": "29a7b4da8750dbda77dfcf5464e808473f60a484",
+          "mode": "100644"
+        },
+        "apps/app-host/component_registry.hpp": {
+          "blob": "64c715e7dcf59691bf868ba8b52f5b5e4ff94437",
+          "mode": "100644"
+        },
+        "apps/app-host/macos_accessibility.hpp": {
+          "blob": "5b39da1c628ad91a1fb192fcbcc16f540d7425d9",
+          "mode": "100644"
+        },
+        "apps/app-host/macos_accessibility.mm": {
+          "blob": "b9f3fd83947afb1fc18191550fc7140e8d58685e",
+          "mode": "100644"
+        },
+        "apps/app-host/main.mm": {
+          "blob": "8244325991d03751d523d80ed036d29d2cf9ee77",
+          "mode": "100644"
+        },
+        "apps/app-host/options.cpp": {
+          "blob": "194c13235ae304f302c30ffd1627472231abe15f",
+          "mode": "100644"
+        },
+        "apps/app-host/options.hpp": {
+          "blob": "f561d80f345f74f550eb9028a7b0e6e9ecea2b57",
+          "mode": "100644"
+        },
+        "apps/app-host/test_phase3_scenario.py": {
+          "blob": "15f1e70cb3b3ea9f02d8055fa185dcf55ff7ffc7",
+          "mode": "100644"
+        },
+        "apps/app-host/test_state_persistence.py": {
+          "blob": "e3eea5ea24923fcb03607d2f8dbd9ae9e51e183f",
+          "mode": "100644"
+        },
+        "apps/app-host/test_text_semantics.py": {
+          "blob": "d69ab629fe35d3eb606fb68438b1de7d79be8278",
+          "mode": "100644"
+        },
+        "apps/app-host/tests/component_registry_test.cpp": {
+          "blob": "7a02c0ee93db591a30e74ba591132ba69ac426ba",
+          "mode": "100644"
+        },
+        "apps/app-host/tests/macos_accessibility_test.mm": {
+          "blob": "3a8c09c755f9d21f3277799429e54deb6f4c0380",
+          "mode": "100644"
+        },
+        "apps/app-host/tests/unterminated_component.cpp": {
+          "blob": "708a3c8eca706c9a16d00ebedff6d3f7a9b0d714",
+          "mode": "100644"
+        },
+        "apps/app-host/tests/unterminated_text_component.cpp": {
+          "blob": "4abadf06c32b7cf9c17802c093dde08ffa78c9c3",
+          "mode": "100644"
+        },
+        "apps/app-host/text_semantics.hpp": {
+          "blob": "4248bbb6996fff34eb497469742a0791dc02796a",
+          "mode": "100644"
+        },
+        "apps/app-host/text_semantics.mm": {
+          "blob": "3ca6698caa5b86a7207a54d7dbb90c2f4ff936bb",
+          "mode": "100644"
+        },
+        "apps/gpu-native/CMakeLists.txt": {
+          "blob": "1e46abb95c7261dca60ab0b5e0703113b634b4ad",
+          "mode": "100644"
+        },
+        "apps/gpu-native/main.mm": {
+          "blob": "62e99912aa508c516292798288b91fb44a1f0516",
+          "mode": "100644"
+        },
+        "apps/minimal-scene/CMakeLists.txt": {
+          "blob": "1b21ab5b87841a3899dda3fbb78a8fded1db7cb3",
+          "mode": "100644"
+        },
+        "apps/minimal-scene/README.md": {
+          "blob": "7eef7b70156979f7f13367c9bc3f4bad489b2b32",
+          "mode": "100644"
+        },
+        "apps/minimal-scene/main.cpp": {
+          "blob": "51e5280209009e5c8a6fb5b709ce9384911cb467",
+          "mode": "100644"
+        },
+        "apps/smoke-native/CMakeLists.txt": {
+          "blob": "b870383c37cb378103fd26f03ab79dd6ff0507d9",
+          "mode": "100644"
+        },
+        "apps/smoke-native/main.mm": {
+          "blob": "ed8949859ba501230ddd173356f39844928f3436",
+          "mode": "100644"
+        },
+        "authoring/CMakeLists.txt": {
+          "blob": "a376a5e35968601c1ddf3bc294084d296cffebe1",
+          "mode": "100644"
+        },
+        "authoring/include/vellum/authoring/js_application.hpp": {
+          "blob": "b05d584b57c9e910bc6149ab4be3bc958e64cb75",
+          "mode": "100644"
+        },
+        "authoring/include/vellum/authoring/service_bridge.hpp": {
+          "blob": "4780b45e4552edb3244e82d56b17632e753ec935",
+          "mode": "100644"
+        },
+        "authoring/schema/authoring-host-v2.schema.json": {
+          "blob": "297c17ff23909837a4a290b4657cbf6ed547e20f",
+          "mode": "100644"
+        },
+        "authoring/schema/dev-transcript-v1.schema.json": {
+          "blob": "fc1de258973688cc8e85997cadc2b286237b23db",
+          "mode": "100644"
+        },
+        "authoring/schema/events-v2.schema.json": {
+          "blob": "7a3b69a0298c3eba8cc4a9ab9cdf1267861c4aa0",
+          "mode": "100644"
+        },
+        "authoring/schema/scenario-v2.schema.json": {
+          "blob": "4073fd32bc0d16c46844f8391a48cc862ab826c7",
+          "mode": "100644"
+        },
+        "authoring/schema/services-v1.schema.json": {
+          "blob": "b489e6964c8422d3a75b01b62bf93c0abcd02b07",
+          "mode": "100644"
+        },
+        "authoring/src/js_application.mm": {
+          "blob": "c5e9c5d9bbcda3d1f338d1f30b74b1007538e30a",
+          "mode": "100644"
+        },
+        "authoring/src/service_bridge.cpp": {
+          "blob": "826800e822e5844b5cb898ecb85eefb24fcfac1c",
+          "mode": "100644"
+        },
+        "authoring/tests/js_application_test.cpp": {
+          "blob": "c7bdfbbf07ac8381c51770551d56eded60e38727",
+          "mode": "100644"
+        },
+        "authoring/tests/phase3_fixture_test.cpp": {
+          "blob": "a05b697331ebe7523836191e22d9538b869103d7",
+          "mode": "100644"
+        },
+        "authoring/tests/service_bridge_test.cpp": {
+          "blob": "5217ea3fbfd3bc9b17637ffd23a40cc6c4214653",
+          "mode": "100644"
+        },
+        "authoring/tests/test_phase3_contracts.py": {
+          "blob": "251bafca49ec5fbbfe7276853653a48df2da1757",
+          "mode": "100644"
+        },
+        "foundation/CMakeLists.txt": {
+          "blob": "7aa42a94030c82d5b796305c5a400a8d62a3fee4",
+          "mode": "100644"
+        },
+        "foundation/include/vellum/foundation/platform.hpp": {
+          "blob": "f0042c3f36bd83918b8175cc1cf8197828d1d0a9",
+          "mode": "100644"
+        },
+        "foundation/include/vellum/foundation/status.hpp": {
+          "blob": "c201b5a25cf306c945771944c2ca916661f8a253",
+          "mode": "100644"
+        },
+        "foundation/include/vellum/foundation/version.hpp.in": {
+          "blob": "e45a775442117ac969b7171fca7426a9b570381d",
+          "mode": "100644"
+        },
+        "foundation/src/platform.cpp": {
+          "blob": "c394ad8d08e4e866aa3cd173fd749218f33e6c01",
+          "mode": "100644"
+        },
+        "foundation/src/status.cpp": {
+          "blob": "7d21e468bbabf6a4783df1dee3a1510037d98871",
+          "mode": "100644"
+        },
+        "foundation/tests/foundation_test.cpp": {
+          "blob": "7832bd470ad8e5ba8cdd57786eb4821156f8bb3a",
+          "mode": "100644"
+        },
+        "graphics/CMakeLists.txt": {
+          "blob": "c4e48fca02005e94567e95f29e9e0c097229d743",
+          "mode": "100644"
+        },
+        "graphics/include/vellum/graphics/capture_stats.hpp": {
+          "blob": "4cded4447a760809a9aadd6f0a993cb0a25cb001",
+          "mode": "100644"
+        },
+        "graphics/include/vellum/graphics/color.hpp": {
+          "blob": "02a40005f147267977e026ddfc32b3751c7aef3f",
+          "mode": "100644"
+        },
+        "graphics/include/vellum/graphics/core_graphics_canvas.hpp": {
+          "blob": "0231b9a824c6abe2741837d1dc0bc14569c830e9",
+          "mode": "100644"
+        },
+        "graphics/include/vellum/graphics/paint_command.hpp": {
+          "blob": "22da6b8a20268cf31aaf963adea3ccf4cd9a0386",
+          "mode": "100644"
+        },
+        "graphics/include/vellum/graphics/scene.hpp": {
+          "blob": "65a7e28e7fd72f5e81cead6eae274a13f6d8ff6b",
+          "mode": "100644"
+        },
+        "graphics/include/vellum/graphics/skia_dawn_surface.hpp": {
+          "blob": "ea08157cc17a549ad66c7079a1217c6db8480e32",
+          "mode": "100644"
+        },
+        "graphics/src/capture_stats.cpp": {
+          "blob": "99f2427346e34903d519037839d3c122968162a0",
+          "mode": "100644"
+        },
+        "graphics/src/core_graphics_canvas.mm": {
+          "blob": "11cf6d69a7d5178ee36ac3b4c5a7611491d61177",
+          "mode": "100644"
+        },
+        "graphics/src/paint_command.cpp": {
+          "blob": "82442f37f870f9d5e305ec37f50ca06da7c85a5a",
+          "mode": "100644"
+        },
+        "graphics/src/skia_dawn_surface.mm": {
+          "blob": "887ecb54d1de67ebf626eb288dd4f49476b350a4",
+          "mode": "100644"
+        },
+        "graphics/tests/capture_stats_test.cpp": {
+          "blob": "667be225f686d62bd66bef3d79df6d23aa738f4e",
+          "mode": "100644"
+        },
+        "graphics/tests/paint_command_test.cpp": {
+          "blob": "ad12eea6321ca9437269d3d522d59dda37e3ec63",
+          "mode": "100644"
+        },
+        "packages/vellum-design-ir/LICENSE.md": {
+          "blob": "ff2024e79de22b201468741fd253ed8252259434",
+          "mode": "100644"
+        },
+        "packages/vellum-design-ir/README.md": {
+          "blob": "98bca1594044f601564fe742e8aa7072acdd449b",
+          "mode": "100644"
+        },
+        "packages/vellum-design-ir/bin/import-operation-lock.js": {
+          "blob": "3d13a25ddc90f647d9a502ba0c85e9780a6b597b",
+          "mode": "100644"
+        },
+        "packages/vellum-design-ir/bin/vellum-backend.js": {
+          "blob": "7399113724ff0a74a5c4168b442c87da6c48eca5",
+          "mode": "100755"
+        },
+        "packages/vellum-design-ir/bin/vellum-design-ir.js": {
+          "blob": "26e270bf8121070fd41707f11fd9f790709d08e3",
+          "mode": "100755"
+        },
+        "packages/vellum-design-ir/package.json": {
+          "blob": "691bbb473356fe53c7ecb445283d5eab58febc9a",
+          "mode": "100644"
+        },
+        "packages/vellum-design-ir/schema/authored-overlay-v1.schema.json": {
+          "blob": "57ca6ea13b67a6a803a1ed710e8a447603ca609f",
+          "mode": "100644"
+        },
+        "packages/vellum-design-ir/schema/design-ir-v1.schema.json": {
+          "blob": "7c7a684cf0883e76097e4b91e53fa8ab50c5fe35",
+          "mode": "100644"
+        },
+        "packages/vellum-design-ir/schema/reimport-report-v1.schema.json": {
+          "blob": "c9ad30cb264141ff0d276b1749759b6caac57f82",
+          "mode": "100644"
+        },
+        "packages/vellum-design-ir/scripts/sterile-consumer.mjs": {
+          "blob": "cb694867307919989841908576a1fc989e4ef6a8",
+          "mode": "100644"
+        },
+        "packages/vellum-design-ir/src/assets.js": {
+          "blob": "66031d906fb77f1a55d80ea386ea7687f22d6c57",
+          "mode": "100644"
+        },
+        "packages/vellum-design-ir/src/constants.js": {
+          "blob": "4749d683a4ccfbec3adcb9b3a77accd63ad8bde5",
+          "mode": "100644"
+        },
+        "packages/vellum-design-ir/src/diagnostics.js": {
+          "blob": "3687c4b062dec8df8a17abadf07eaf36630e114d",
+          "mode": "100644"
+        },
+        "packages/vellum-design-ir/src/errors.js": {
+          "blob": "7491cc6a18a724210ddb3fa21b139b00d3134de9",
+          "mode": "100644"
+        },
+        "packages/vellum-design-ir/src/figma-plugin.js": {
+          "blob": "3ab9889c24a09d90d4ed36479b456736edeb70c9",
+          "mode": "100644"
+        },
+        "packages/vellum-design-ir/src/identity.js": {
+          "blob": "2cb9ae2817c3093a0501d80957f70ed568dbeb39",
+          "mode": "100644"
+        },
+        "packages/vellum-design-ir/src/index.d.ts": {
+          "blob": "0bc100327d12a694193e1fdcd76667d0198beb31",
+          "mode": "100644"
+        },
+        "packages/vellum-design-ir/src/index.js": {
+          "blob": "84368c8d2e3297456047bb79091c1414b285c75b",
+          "mode": "100644"
+        },
+        "packages/vellum-design-ir/src/normalize.js": {
+          "blob": "221e7b0b7085fae3ccdc966b83ac0a7ae3ab872a",
+          "mode": "100644"
+        },
+        "packages/vellum-design-ir/src/overlay.js": {
+          "blob": "322bb79c05376b56bae2f748863220d2111ed46a",
+          "mode": "100644"
+        },
+        "packages/vellum-design-ir/src/reimport.js": {
+          "blob": "eb013b8f8afa1d5dd15d8513862f1c8454ed0062",
+          "mode": "100644"
+        },
+        "packages/vellum-design-ir/src/stable-json.js": {
+          "blob": "7a62f6db120eb24882269eaeaaa0b420ed405772",
+          "mode": "100644"
+        },
+        "packages/vellum-design-ir/src/tokens.js": {
+          "blob": "13bae726db123b04c2c7c38c905f6619f905a3a4",
+          "mode": "100644"
+        },
+        "packages/vellum-design-ir/src/validate.js": {
+          "blob": "6d17a38305526292f58442281485f7daf3b650c4",
+          "mode": "100644"
+        },
+        "packages/vellum-design-ir/test/cli.test.js": {
+          "blob": "4393bac04fc58f4e4baf6941046bf2f43cc811d5",
+          "mode": "100644"
+        },
+        "packages/vellum-design-ir/test/design-inspection.test.js": {
+          "blob": "78b6331b141dc605a1daf2334cc0681ae7fcffa2",
+          "mode": "100644"
+        },
+        "packages/vellum-design-ir/test/figma-plugin.test.js": {
+          "blob": "351b7c5ef591f379ceda3e52b381320780e9f437",
+          "mode": "100644"
+        },
+        "packages/vellum-design-ir/test/normalize.test.js": {
+          "blob": "a8c6b054209a6f9e82d0db099fb304a292ba430a",
+          "mode": "100644"
+        },
+        "packages/vellum-design-ir/test/reimport.test.js": {
+          "blob": "274e704fbb70f3da7ebd2893e1c18d950d3b842b",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/LICENSE.md": {
+          "blob": "eb8b94f4ca7aa0529a4b62d52486a80ae27ed32d",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/README.md": {
+          "blob": "66d0c1b992cece0d84dd67e9f366b7f908bf354a",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/package-lock.json": {
+          "blob": "95b1e708342f0a38648dd917d4d478861c237dc0",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/package.json": {
+          "blob": "f746b0d3a89263564ef5a3b1e72ad472896211b5",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/scripts/build-native-test.mjs": {
+          "blob": "c952f6ead06c4fab800429d67cb54e1ad7ab13f5",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/scripts/build-project.mjs": {
+          "blob": "a8dabd5db37c9f7971a13a290d59de5f653b75b3",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/scripts/check-portability.mjs": {
+          "blob": "218480fd0f1c7ea22dc298c0e0a2f4f30cdd3617",
+          "mode": "100755"
+        },
+        "packages/vellum-ui/scripts/source-map.mjs": {
+          "blob": "ba353cc63df311e3a5fe56ba36937e5dacbb63f0",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/src/design.js": {
+          "blob": "402c21a1105e763bf629d21ee9f1873b915ebf27",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/src/effects.js": {
+          "blob": "7d0d262bcc768d5476357c2a4d7bc3de147a5c1e",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/src/index.d.ts": {
+          "blob": "36b464c282ec8a76608538250287d83d605af6df",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/src/index.js": {
+          "blob": "697a9932320e44f45c9c5360f6ce7665b45ff5f6",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/src/jsx-runtime.d.ts": {
+          "blob": "8551112d373b79a07589ec9610ad08c2351d3034",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/src/jsx-runtime.js": {
+          "blob": "6a8e17614b3bd5e747bcbca40ccdb9935171fd0d",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/src/runtime.js": {
+          "blob": "f654e72bd3974afaf88521326dd11b87227f2258",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/src/services.js": {
+          "blob": "f39da07c214fa51969d6bc3e17f9657768fdabb1",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/test/bundle.test.js": {
+          "blob": "8d62a4e4c1ac1160c11dc551481de5ae356b2840",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/test/design.test.js": {
+          "blob": "54b1cf5229153b686c226890090f94a4654dd15b",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/test/fixtures/native-app.jsx": {
+          "blob": "8ef5def336e83edfe27bcaae356ddefaf1030263",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/test/fixtures/portability/app.toml": {
+          "blob": "ccee8903b5611acc8260fd86847ffb204a64ef9b",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/test/fixtures/portability/dom-global.js": {
+          "blob": "bf1e9dbd5faf22dbbe666d7da4ce33fc7649bd43",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/test/fixtures/portability/dynamic-code.js": {
+          "blob": "ee98378af43b4886722cdeeedad385d2e2d02c9e",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/test/fixtures/portability/dynamic-import.js": {
+          "blob": "b6498d1e6ba2c9a65ad01d50f263fbf80eccbf3c",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/test/fixtures/portability/node-builtin.js": {
+          "blob": "19f0037cb62fced283c33d2e26958bc7bc0180ae",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/test/fixtures/portability/platform-import.js": {
+          "blob": "290c2e5eb1f67db5ab64f7786a059321fcf19d7b",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/test/fixtures/portability/platforms/macos/value.js": {
+          "blob": "122fd495d2af47ff29cf542a723c5e88afa22cc1",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/test/fixtures/portability/portable.js": {
+          "blob": "8d7fe45c5c15b24c33eba4c319c9e057b4db7468",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/test/fixtures/portability/undeclared-capability.js": {
+          "blob": "505dbd15fe43fe3e5077f789604c8cda6d49a61a",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/test/fixtures/pure-esm-project/app.toml": {
+          "blob": "1e3712f2b3a6de35f22062f88c7039b5e77511cb",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/test/fixtures/pure-esm-project/main.js": {
+          "blob": "c560431aa9af2fc097998af09396b9b1eaaf3170",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/test/fixtures/pure-esm-project/packages/pure-esm-app/index.js": {
+          "blob": "ff5d4e0b45fa48ee36c4208a2066aa18970ff492",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/test/fixtures/pure-esm-project/packages/pure-esm-app/package.json": {
+          "blob": "8e7c30eda4983c45414193d28dd7c2a520fb1e6f",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/test/fixtures/pure-esm-project/packages/pure-esm-transitive/index.js": {
+          "blob": "9b07ee94d792c282b5b0589edc68a2163d2b84d8",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/test/fixtures/pure-esm-project/packages/pure-esm-transitive/package.json": {
+          "blob": "559a56ce67f9de32d097fae1997b444d76969f0e",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/test/phase3-installed.test.js": {
+          "blob": "8e74ba4b9fb06929ec03b30748486730dc6c0539",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/test/portability.test.js": {
+          "blob": "c54244edef290cb90d62a6781c19f7bd248d8fa2",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/test/runtime.test.js": {
+          "blob": "9b04d28a4864f165ae34e333fb6ce2913287080b",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/test/services.test.js": {
+          "blob": "7012f023d286726b1a7654a49aa60a9775843d37",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/test/source-map.test.js": {
+          "blob": "ad3c4917b5b267bbb87aadd7d59ef6cf34b600b4",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/test/types/application.tsx": {
+          "blob": "f77f2a50f876281ffd4d30c46d2521ec6981683d",
+          "mode": "100644"
+        },
+        "packages/vellum-ui/test/types/tsconfig.json": {
+          "blob": "bd8e86114b7edab931f2e3ee5d1b5bf235c0c770",
+          "mode": "100644"
+        },
+        "runtime/CMakeLists.txt": {
+          "blob": "1b5e56a9e1b8d4ff198cc660bf0c004fc69ec369",
+          "mode": "100644"
+        },
+        "runtime/include/vellum/runtime/kernel.hpp": {
+          "blob": "d661703eed806c6e592fae4b5ae4377a41b15bc2",
+          "mode": "100644"
+        },
+        "runtime/src/kernel.cpp": {
+          "blob": "929b9260f488ac7b788bc82e6f3928141700febe",
+          "mode": "100644"
+        },
+        "runtime/tests/kernel_test.cpp": {
+          "blob": "f4748f30a1d31769f8edd55f5bf1a48fcbd4879f",
+          "mode": "100644"
+        }
+      }
+    }
+  ],
+  "authority_record_ref": "refs/tags/authority/native-design-kernel-v1",
+  "authority_start_commit": "bf51a86f8a24dbf7bc26a72a6afa6db062f4b605",
+  "cut_manifest_sha256": "4a89bee88687a4d924286f42b99b3f91e92eaaf6280f832b8384e618aac16c84",
+  "framework_repository": "Generous-Corp/vellum",
+  "historical_seed_commit": "e4f8c96fcfd19bac433252c36fdf5bfa681e6d25",
+  "pulp_activation": null,
+  "pulp_candidate_commit": "d2697505a56a7b70fadb1ecfae84f7b43ccb9605",
+  "pulp_extraction_base": "2ccff748f0d59da34b01ce1fbceabcf19f452731",
+  "pulp_ownership_projection_blob": "ced2fc1ae3db7094691048b0f7b4a0542098905d",
+  "schema_version": 2,
+  "source_repository": "Generous-Corp/pulp",
+  "state": "pending-pulp-activation"
+}
