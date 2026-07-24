@@ -1099,8 +1099,13 @@ def verify_append_only(
     require_commit(root, git_base, "git base")
     head = git(root, "rev-parse", "HEAD")
     require_ancestor(root, git_base, head, "append-only comparison")
+    # Inspect path mutations, not Git's similarity classification. A newly
+    # appended event can legitimately resemble an existing event; with copy
+    # detection enabled Git reports that addition as Cnnn and creates a false
+    # append-only failure. With rename detection disabled, a real rename still
+    # exposes the forbidden deletion of the original path.
     output = git(
-        root, "diff", "--name-status", "-M", "-C", "--find-copies-harder",
+        root, "diff", "--name-status", "--no-renames",
         f"{git_base}..{head}", "--", EVENTS_PATH.as_posix(),
     )
     bad = [line for line in output.splitlines() if line and not line.startswith("A\t")]

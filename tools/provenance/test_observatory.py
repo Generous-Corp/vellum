@@ -233,7 +233,7 @@ class ObservatoryTests(unittest.TestCase):
         self.assertIn('--git-base "$observatory_git_base"', workflow)
 
     def test_existing_event_mutations_are_rejected_against_git_base(self) -> None:
-        for operation in ("modify", "delete", "rename", "copy"):
+        for operation in ("modify", "delete", "rename"):
             with self.subTest(operation=operation), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 run(root, "git", "init", "-b", "main")
@@ -250,14 +250,32 @@ class ObservatoryTests(unittest.TestCase):
                     event.unlink()
                 elif operation == "rename":
                     event.rename(event.with_name("renamed.yaml"))
-                else:
-                    write(event.with_name("copied.yaml"), event.read_text(encoding="utf-8"))
                 run(root, "git", "add", "-A")
                 run(root, "git", "commit", "-m", f"{operation} event")
                 with self.assertRaisesRegex(
                     observatory.ObservatoryError, "append-only"
                 ):
                     observatory.verify_append_only(root, base)
+
+    def test_similar_new_event_is_allowed_against_git_base(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run(root, "git", "init", "-b", "main")
+            run(root, "git", "config", "user.email", "observatory@example.invalid")
+            run(root, "git", "config", "user.name", "Observatory Test")
+            event = root / observatory.EVENTS_PATH / "event.yaml"
+            write(event, '{"event_id":"event","disposition":"pending"}\n')
+            run(root, "git", "add", ".")
+            run(root, "git", "commit", "-m", "base event")
+            base = run(root, "git", "rev-parse", "HEAD")
+            write(
+                event.with_name("similar-event.yaml"),
+                '{"event_id":"similar-event","disposition":"pending"}\n',
+            )
+            run(root, "git", "add", "-A")
+            run(root, "git", "commit", "-m", "append similar event")
+
+            observatory.verify_append_only(root, base)
 
     def test_pulp_cursor_cannot_move_backward_against_git_base(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
