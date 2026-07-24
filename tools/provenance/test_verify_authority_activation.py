@@ -22,8 +22,10 @@ SPEC.loader.exec_module(activation)
 class FakeGitHub:
     def __init__(self, responses: dict[str, object]):
         self.responses = responses
+        self.requests: list[tuple[str, str]] = []
 
     def get(self, path: str, token: str) -> object:
+        self.requests.append((path, token))
         if path not in self.responses:
             raise AssertionError(f"unexpected GitHub request: {path}")
         return self.responses[path]
@@ -334,6 +336,10 @@ class AuthorityActivationTests(unittest.TestCase):
         self.assertIn("permission-contents: read", active)
         self.assertIn("ref: main", active)
         self.assertIn(
+            "python3 tools/provenance/verify_authority_activation.py",
+            active,
+        )
+        self.assertNotIn(
             "python3 .authority-record/tools/provenance/"
             "verify_authority_activation.py",
             active,
@@ -553,15 +559,25 @@ class AuthorityActivationTests(unittest.TestCase):
         }
         responses = {
             "/app": {"id": 123},
-            "/installation": {"app_id": 123},
+            "/repos/Generous-Corp/vellum/installation": {"app_id": 123},
             "/repos/Generous-Corp/vellum": {"id": 777, "private": True, "archived": False},
             "/installation/repositories?per_page=100": {
                 "total_count": 1,
                 "repositories": [{"id": 777}],
             },
         }
+        github = FakeGitHub(responses)
         activation.verify_repository(
-            FakeGitHub(responses), "installation-token", expected, app_jwt="app-jwt"
+            github, "installation-token", expected, app_jwt="app-jwt"
+        )
+        self.assertIn(("/app", "app-jwt"), github.requests)
+        self.assertIn(
+            ("/repos/Generous-Corp/vellum/installation", "app-jwt"),
+            github.requests,
+        )
+        self.assertIn(
+            ("/installation/repositories?per_page=100", "installation-token"),
+            github.requests,
         )
 
         responses["/installation/repositories?per_page=100"] = {
@@ -653,7 +669,7 @@ class AuthorityActivationTests(unittest.TestCase):
             )
             responses = {
                 "/app": {"id": 3878000},
-                "/installation": {"app_id": 3878000},
+                "/repos/Generous-Corp/pulp/installation": {"app_id": 3878000},
                 "/repos/Generous-Corp/pulp": {
                     "id": 1203111607,
                     "private": False,

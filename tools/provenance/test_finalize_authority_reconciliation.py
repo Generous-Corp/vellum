@@ -40,6 +40,31 @@ def write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def restore_prepared_provenance_fixture(root: Path) -> None:
+    lock = finalizer.load_json(root / finalizer.LOCK_PATH)
+    if lock.get("state") != "active":
+        return
+    authority_start = lock.get("vellum_authority_start_commit")
+    if not isinstance(authority_start, str):
+        raise AssertionError("active fixture does not name its authority start")
+    for relative in (
+        finalizer.OWNERSHIP_PATH,
+        finalizer.EXTRACTION_PATH,
+        finalizer.CURSOR_PATH,
+        finalizer.LEGACY_MAP_PATH,
+        finalizer.LOCK_PATH,
+        finalizer.REPORT_JSON_PATH,
+        finalizer.REPORT_MD_PATH,
+    ):
+        content = subprocess.run(
+            ["git", "show", f"{authority_start}:{relative.as_posix()}"],
+            cwd=SOURCE_ROOT,
+            check=True,
+            capture_output=True,
+        ).stdout
+        (root / relative).write_bytes(content)
+
+
 class ReconciliationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -50,6 +75,7 @@ class ReconciliationTests(unittest.TestCase):
         self.pulp.mkdir()
         shutil.copytree(SOURCE_ROOT / "provenance", self.root / "provenance")
         shutil.copytree(SOURCE_ROOT / "product", self.root / "product")
+        restore_prepared_provenance_fixture(self.root)
         shutil.rmtree(self.root / finalizer.observatory.EVENTS_PATH)
         (self.root / finalizer.observatory.EVENTS_PATH).mkdir()
         git(self.root, "init", "-q")
