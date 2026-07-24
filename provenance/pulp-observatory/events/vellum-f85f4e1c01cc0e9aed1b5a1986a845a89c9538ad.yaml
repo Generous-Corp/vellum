@@ -1,0 +1,54 @@
+{
+  "class": "schema",
+  "contract_keys": [
+    "macos-shell",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-07-24T17:30:49Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-f85f4e1c01cc0e9aed1b5a1986a845a89c9538ad",
+  "include_dependency_deltas": [
+    "authoring/CMakeLists.txt",
+    "authoring/src/rendered_tree_materializer.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "macos-shell",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "authoring/CMakeLists.txt",
+    "authoring/schema/scenario-v2.schema.json",
+    "authoring/src/js_application.mm",
+    "authoring/src/rendered_tree_materializer.hpp",
+    "authoring/src/rendered_tree_materializer.mm",
+    "authoring/tests/rendered_tree_materializer_test.cpp",
+    "packages/vellum-ui/README.md"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "e1c15a998ea8490d96588dc8deec73954e364910",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "275981944775481a2e12a6fa406c64165693e4ce",
+    "to_commit": "f85f4e1c01cc0e9aed1b5a1986a845a89c9538ad"
+  },
+  "schema_api_deltas": [
+    "authoring/schema/scenario-v2.schema.json"
+  ],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "f85f4e1c01cc0e9aed1b5a1986a845a89c9538ad",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}
