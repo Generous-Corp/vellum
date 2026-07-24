@@ -38,6 +38,23 @@ the application updated its pin. That is the required framework-first
 development model, but it does not satisfy the stricter Phase 4
 zero-same-day-patch readiness gate.
 
+The retained private-incubation evidence also leaves three narrower Phase 2
+claims open:
+
+- `product/budgets.yaml` remains provisional because the clean hosted evidence
+  was not recorded as a normalized, owner-ratified timing set;
+- the cautious bootstrap uses a pinned signed tag, GitHub immutable-release
+  verification, and checksums, but does not yet provide the specification's
+  independent pinned-public-key detached signature route; and
+- transactional interruption recovery is covered by negative-control tests,
+  including a retry after a pre-activation failure, but that injected lifecycle
+  has not yet been replayed and retained as a checkout-free clean-VM transcript.
+
+These are explicit limitations, not implied passes or public release claims.
+They do not invalidate the demonstrated installed-product journey, but they
+must be closed or deliberately amended before claiming the complete v3 Phase 2
+gate.
+
 Decision: continue standalone validation. The framework has demonstrated that
 an interesting non-audio application can be built and maintained through its
 public installed-product surface. It has not yet earned Pulp dependency
