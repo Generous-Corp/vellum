@@ -291,6 +291,16 @@ def validate_web_payload(sdk: Path) -> dict[str, Any]:
     return manifest
 
 
+def contains_sdk_install_path(payload: bytes, install_prefix: Path) -> bool:
+    markers = {
+        str(install_prefix).encode(),
+        str(install_prefix.resolve()).encode(),
+        b"/vellum-installs/",
+        b"\\vellum-installs\\",
+    }
+    return any(marker in payload for marker in markers)
+
+
 def build_app(context: dict[str, Any], sdk: Path) -> dict[str, Any]:
     project: Path = context["root"]
     destination = project / ".vellum/build/web"
@@ -335,9 +345,11 @@ def build_app(context: dict[str, Any], sdk: Path) -> dict[str, Any]:
     detector = sdk / "web/check_wasm_no_engine.py"
     run_checked([sys.executable, str(detector), str(staging / "vellum_web_core.wasm")])
     run_checked([sys.executable, str(detector), "--negative-control"])
-    checkout = str(sdk.parent.parent.parent).encode()
+    install_prefix = sdk.parent.parent.parent
     for path in staging.iterdir():
-        if path.is_file() and checkout in path.read_bytes():
+        if path.is_file() and contains_sdk_install_path(
+            path.read_bytes(), install_prefix,
+        ):
             raise BackendFailure(f"Web output leaked an SDK install path: {path.name}", status="non_relocatable_output")
     import hashlib
     files = {path.name: hashlib.sha256(path.read_bytes()).hexdigest()

@@ -23,7 +23,9 @@ test('builds a DOM-free classic-script bundle for the native host', () => {
     assert.equal(tree.id, 'native-proof');
     assert.equal(tree.children[1].children[0].text, 'Count ');
     assert.equal(tree.children[1].children[1].text, '0');
-    assert.equal(readFileSync(output, 'utf8').includes('document.'), false);
+    const bundle = readFileSync(output, 'utf8');
+    assert.equal(bundle.includes('document.'), false);
+    assert.doesNotMatch(bundle, /^\/\/ .*ui\/src\//m);
 });
 
 test('bundles an external materialized design into the authored native path', () => {

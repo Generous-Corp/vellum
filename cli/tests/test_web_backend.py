@@ -24,10 +24,23 @@ run_chrome_scenario = BACKEND_MODULE["run_chrome_scenario"]
 validate_scenario_document = BACKEND_MODULE["validate_scenario_document"]
 validate_component_source = BACKEND_MODULE["validate_component_source"]
 build_component_modules = BACKEND_MODULE["build_component_modules"]
+contains_sdk_install_path = BACKEND_MODULE["contains_sdk_install_path"]
 BackendFailure = BACKEND_MODULE["BackendFailure"]
 
 
 class WebScenarioEvidenceTests(unittest.TestCase):
+    def test_sdk_path_detector_catches_absolute_and_relative_install_names(self) -> None:
+        prefix = Path("/private/tmp/vellum-sdk")
+        self.assertTrue(contains_sdk_install_path(
+            b"source: /private/tmp/vellum-sdk/lib/ui.js", prefix,
+        ))
+        self.assertTrue(contains_sdk_install_path(
+            b"source: ../vellum-installs/version/ui/src/runtime.js", prefix,
+        ))
+        self.assertFalse(contains_sdk_install_path(
+            b"source: vellum://sdk/ui/src/runtime.js", prefix,
+        ))
+
     @staticmethod
     def evidence(*, presses: list[dict[str, object]]) -> dict[str, object]:
         return {
