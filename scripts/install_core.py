@@ -1160,9 +1160,10 @@ def prepare_install_root(
         "target": metadata["target"],
         "source_commit": metadata["source_commit"],
     }
-    (root / "install-manifest.json").write_text(
+    write_text_atomic(
+        root / "install-manifest.json",
         json.dumps(manifest, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
+        0o644,
     )
     bin_dir = root / "bin"
     bin_dir.mkdir(exist_ok=True)

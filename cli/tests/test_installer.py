@@ -40,6 +40,22 @@ def _artifact_inventory(payload: Path) -> list[dict[str, object]]:
     ]
 
 
+def _normalize_fixture_member(info: tarfile.TarInfo) -> tarfile.TarInfo:
+    """Give installer fixtures the same canonical mode contract as real SDKs."""
+    info.mode = 0o755 if info.isdir() or info.mode & stat.S_IXUSR else 0o644
+    return info
+
+
+def _write_fixture_archive(payload: Path, archive: Path) -> None:
+    with tarfile.open(archive, "w:gz") as handle:
+        for path in sorted(payload.iterdir()):
+            handle.add(
+                path,
+                arcname=path.name,
+                filter=_normalize_fixture_member,
+            )
+
+
 def _build_verified_fixture(
     root: Path,
     *,
@@ -137,9 +153,7 @@ def _build_verified_fixture(
         encoding="utf-8",
     )
     archive = root / f"vellum-sdk-{fixture_name}.tar.gz"
-    with tarfile.open(archive, "w:gz") as handle:
-        for path in sorted(payload.iterdir()):
-            handle.add(path, arcname=path.name)
+    _write_fixture_archive(payload, archive)
     digest = _sha256(archive)
     sums = root / f"{fixture_name}-SHA256SUMS"
     sums.write_text(f"{digest}  {archive.name}\n", encoding="utf-8")
@@ -156,9 +170,7 @@ def _repack_fixture(
         json.dumps(metadata, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    with tarfile.open(archive, "w:gz") as handle:
-        for path in sorted(payload.iterdir()):
-            handle.add(path, arcname=path.name)
+    _write_fixture_archive(payload, archive)
     digest = _sha256(archive)
     sums.write_text(f"{digest}  {archive.name}\n", encoding="utf-8")
     return archive, sums, digest
@@ -476,6 +488,54 @@ class InstallerTests(unittest.TestCase):
             self.assertNotEqual(missing.returncode, 0)
             self.assertIn("exactly one checksum", missing.stderr)
             self.assertFalse(missing_prefix.exists())
+
+    def test_fixture_archive_and_install_manifest_modes_ignore_ambient_umask(self) -> None:
+        for ambient_umask in (0o002, 0o077):
+            with self.subTest(umask=oct(ambient_umask)):
+                with tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary)
+                    previous_umask = os.umask(ambient_umask)
+                    try:
+                        archive, sums, _ = _build_verified_fixture(
+                            root,
+                            fixture_name=f"umask-{ambient_umask:o}",
+                        )
+                        _repack_fixture(
+                            root / f"umask-{ambient_umask:o}-payload",
+                            archive,
+                            sums,
+                        )
+                        prefix = root / "prefix"
+                        installed = _run_installer(
+                            prefix,
+                            "--archive", str(archive),
+                            "--checksums", str(sums),
+                        )
+                    finally:
+                        os.umask(previous_umask)
+
+                    self.assertEqual(
+                        installed.returncode,
+                        0,
+                        installed.stdout + installed.stderr,
+                    )
+                    with tarfile.open(archive, "r:gz") as handle:
+                        for member in handle.getmembers():
+                            expected = (
+                                0o755
+                                if member.isdir() or member.mode & stat.S_IXUSR
+                                else 0o644
+                            )
+                            self.assertEqual(
+                                stat.S_IMODE(member.mode),
+                                expected,
+                                member.name,
+                            )
+                    manifest = prefix / "lib/vellum/install-manifest.json"
+                    self.assertEqual(
+                        stat.S_IMODE(manifest.stat().st_mode),
+                        0o644,
+                    )
 
     def test_installer_enforces_the_canonical_artifact_contract(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
