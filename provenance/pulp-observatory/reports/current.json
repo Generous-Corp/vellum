@@ -1,6 +1,7 @@
 {
   "activation_blockers": [
     "authority-not-transferred",
+    "immutable-vellum-authority-record-not-recorded",
     "immutable-vellum-authority-start-not-recorded",
     "landed-pulp-freeze-evidence-not-recorded"
   ],
@@ -911,7 +912,7 @@
       "source_repository": "Generous-Corp/vellum"
     }
   ],
-  "generated_at": "2026-07-24T00:17:17Z",
+  "generated_at": "2026-07-24T07:03:07Z",
   "health": "pass",
   "maximum_pending_age_days": 0.0,
   "observatory_effort_percent": 0.0,

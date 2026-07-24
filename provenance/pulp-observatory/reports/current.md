@@ -82,6 +82,7 @@
 ## Activation blockers
 
 - `authority-not-transferred`
+- `immutable-vellum-authority-record-not-recorded`
 - `immutable-vellum-authority-start-not-recorded`
 - `landed-pulp-freeze-evidence-not-recorded`
 
