@@ -256,6 +256,17 @@ def load_authority(vellum: Path, pulp: Path) -> Authority:
     slices = projection.get("slices")
     if not isinstance(slices, list):
         raise AuthorityError("Pulp projection slices must be an array")
+    for label, rows in (
+        ("Pulp activation projection", historical_slices),
+        ("Pulp projection", slices),
+    ):
+        ids = [
+            item.get("id")
+            for item in rows
+            if isinstance(item, dict) and isinstance(item.get("id"), str)
+        ]
+        if len(ids) != len(rows) or len(ids) != len(set(ids)):
+            raise AuthorityError(f"{label} slice IDs must be present and unique")
     current_by_id = {
         item.get("id"): item
         for item in slices

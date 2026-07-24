@@ -571,6 +571,25 @@ class RoutingScenariosTest(unittest.TestCase):
             vellum, pulp = make_fixture(Path(temporary))
             projection_path = pulp / ".github/vellum-ownership.json"
             projection = json.loads(projection_path.read_text(encoding="utf-8"))
+            duplicate = dict(projection["slices"][0])
+            duplicate["paths"] = ["core/canvas/src/injected.cpp"]
+            projection["slices"].insert(0, duplicate)
+            write_json(projection_path, projection)
+            subprocess.run(["git", "-C", str(pulp), "add", "."], check=True)
+            subprocess.run(
+                ["git", "-C", str(pulp), "commit", "-qm", "duplicate slice id"],
+                check=True,
+            )
+            with self.assertRaisesRegex(
+                ROUTER.AuthorityError,
+                "slice IDs must be present and unique",
+            ):
+                ROUTER.load_authority(vellum, pulp)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            vellum, pulp = make_fixture(Path(temporary))
+            projection_path = pulp / ".github/vellum-ownership.json"
+            projection = json.loads(projection_path.read_text(encoding="utf-8"))
             projection["slices"][3]["state"] = "framework-authoritative-transferred"
             projection["slices"][3]["authority"] = dict(
                 projection["slices"][0]["authority"]
