@@ -119,14 +119,11 @@ def validate_emergency(
         or event.get("disposition") != "emergency-exception"
     ):
         problems.append("emergency Pulp event identity or disposition is invalid")
-    if (
-        not isinstance(event.get("slices"), list)
-        or set(event.get("slices", [])) != matched_slices
-        or any(
-            not isinstance(value, str) or not value
-            for value in event.get("slices", [])
-        )
-    ):
+    event_slices = event.get("slices")
+    valid_slices = isinstance(event_slices, list) and all(
+        isinstance(value, str) and bool(value) for value in event_slices
+    )
+    if not valid_slices or set(event_slices) != matched_slices:
         problems.append("emergency Pulp event slices must exactly match the routed slices")
     if not isinstance(event.get("rationale"), str) or not event["rationale"].strip():
         problems.append("emergency Pulp event requires rationale")
@@ -158,8 +155,8 @@ def validate_emergency(
         problems.append(
             "Pulp change-event history after authority activation must be append-only"
         )
-    if sum(line == f"A\t{event_path}" for line in event_changes) != 1:
-        problems.append("emergency Pulp event must be committed exactly once")
+    if not any(line == f"A\t{event_path}" for line in event_changes):
+        problems.append("emergency Pulp event must have a committed introduction")
     if not owner or not OWNER_RE.fullmatch(owner):
         problems.append("emergency owner must be a valid @account or @organization/team")
     elif event.get("owner") != owner:

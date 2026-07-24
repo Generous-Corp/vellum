@@ -257,22 +257,21 @@ activation:
             },
         },
     )
-    write_json(
-        pulp / EMERGENCY_EVENT,
-        {
-            "schema_version": 1,
-            "event_id": "20260724-routing-emergency",
-            "kind": "change",
-            "created_at": "2026-07-24T12:03:00Z",
-            "slices": ["canvas-kernel"],
-            "rationale": "Bounded routing test emergency.",
-            "tests": ["vellum.gpu-native"],
-            "disposition": "emergency-exception",
-            "owner": "@owner",
-            "expiry": "2026-08-01",
-            "follow_up": "https://github.com/Generous-Corp/vellum/issues/1",
-        },
-    )
+    emergency_event = {
+        "schema_version": 1,
+        "event_id": "20260724-routing-emergency",
+        "kind": "change",
+        "created_at": "2026-07-24T12:03:00Z",
+        "slices": ["canvas-kernel"],
+        "rationale": "Bounded routing test emergency.",
+        "tests": ["vellum.gpu-native"],
+        "disposition": "emergency-exception",
+        "owner": "@owner",
+        "expiry": "2026-08-01",
+        "follow_up": "https://github.com/Generous-Corp/vellum/issues/1",
+    }
+    emergency_event.update(mutation.get("emergency_event", {}))
+    write_json(pulp / EMERGENCY_EVENT, emergency_event)
     subprocess.run(["git", "-C", str(pulp), "add", "."], check=True)
     subprocess.run(["git", "-C", str(pulp), "commit", "-qm", "adopt SDK"], check=True)
     return vellum, pulp
@@ -674,6 +673,79 @@ class RoutingScenariosTest(unittest.TestCase):
                 any("append-only" in reason for reason in rewritten["reasons"])
             )
 
+    def test_emergency_accepts_event_added_through_no_ff_merge(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            vellum, pulp = make_fixture(Path(temporary))
+            event_tip = subprocess.run(
+                ["git", "-C", str(pulp), "rev-parse", "HEAD"],
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+            ).stdout.strip()
+            event_parent = subprocess.run(
+                ["git", "-C", str(pulp), "rev-parse", "HEAD^"],
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+            ).stdout.strip()
+            subprocess.run(
+                [
+                    "git", "-C", str(pulp), "checkout", "-qb",
+                    "merge-event", event_parent,
+                ],
+                check=True,
+            )
+            (pulp / "main.txt").write_text("main\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(pulp), "add", "."], check=True)
+            subprocess.run(
+                ["git", "-C", str(pulp), "commit", "-qm", "main"],
+                check=True,
+            )
+            subprocess.run(
+                [
+                    "git", "-C", str(pulp), "merge", "--no-ff", "-qm",
+                    "merge event", event_tip,
+                ],
+                check=True,
+            )
+            result = ROUTER.route(
+                ROUTER.load_authority(vellum, pulp),
+                source_repo="pulp",
+                paths=["core/canvas/src/text_layout.cpp"],
+                intent="emergency",
+                emergency_event=EMERGENCY_EVENT,
+                emergency_owner="@owner",
+                emergency_created="2026-07-24",
+                emergency_expiry="2026-08-01",
+                emergency_follow_up="https://github.com/Generous-Corp/vellum/issues/1",
+                now=dt.date(2026, 7, 24),
+            )
+            self.assertEqual(result["status"], "routed")
+
+    def test_emergency_malformed_slice_array_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            vellum, pulp = make_fixture(
+                Path(temporary),
+                {"emergency_event": {"slices": [{}]}},
+            )
+            result = ROUTER.route(
+                ROUTER.load_authority(vellum, pulp),
+                source_repo="pulp",
+                paths=["core/canvas/src/text_layout.cpp"],
+                intent="emergency",
+                emergency_event=EMERGENCY_EVENT,
+                emergency_owner="@owner",
+                emergency_created="2026-07-24",
+                emergency_expiry="2026-08-01",
+                emergency_follow_up="https://github.com/Generous-Corp/vellum/issues/1",
+                now=dt.date(2026, 7, 24),
+            )
+            self.assertEqual(result["status"], "decision_required")
+            self.assertIn(
+                "slices must exactly match",
+                result["reasons"][0],
+            )
+
     def test_transferred_slice_authority_must_match_activation(self) -> None:
         bad_authority = {
             "event_id": EVENT_ID,
@@ -774,6 +846,21 @@ class RoutingScenariosTest(unittest.TestCase):
             self.assertEqual(result["status"], "routed")
             self.assertEqual(result["primary_repository"], "vellum")
             self.assertEqual(result["transitive_paths"], ["core/generated.cmake"])
+
+            unrelated = ROUTER.route(
+                ROUTER.load_authority(vellum, pulp),
+                source_repo="pulp",
+                paths=[
+                    "core/canvas/src/text_layout.cpp",
+                    "core/new_product/CMakeLists.txt",
+                ],
+                intent="generic",
+            )
+            self.assertEqual(unrelated["status"], "decision_required")
+            self.assertEqual(
+                unrelated["conflicts"],
+                ["pulp", "transferred"],
+            )
 
     def test_generic_pulp_counterpart_must_be_checked(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -665,15 +665,12 @@ def route(
         isinstance(rule, str) for rule in transitive_rules
     ):
         raise AuthorityError("counterpart transitive_path_rules must be a string array")
-    seed_states_by_root: dict[str, set[str]] = {}
+    exact_states: dict[str, str] = {}
     for path, matches in exact_by_path.items():
         if not matches:
             continue
         state = str(matches[0].get("state"))
-        routed_state = "transferred" if state == TRANSFERRED else "pulp"
-        parts = PurePosixPath(path).parts
-        if parts:
-            seed_states_by_root.setdefault(parts[0], set()).add(routed_state)
+        exact_states[path] = "transferred" if state == TRANSFERRED else "pulp"
     states: set[str] = set()
     slices: set[str] = set()
     unmapped_shared: list[str] = []
@@ -690,12 +687,17 @@ def route(
             states.add("unmapped-shared")
             unmapped_shared.append(path)
         elif _transitive_match(path, transitive_rules):
-            parts = PurePosixPath(path).parts
-            seed_states = (
-                set().union(*seed_states_by_root.values())
-                if path == "CMakeLists.txt" and seed_states_by_root
-                else seed_states_by_root.get(parts[0], set()) if parts else set()
-            )
+            transitive_parent = PurePosixPath(path).parent.parts
+            seed_states: set[str] = set()
+            for exact_path, exact_state in exact_states.items():
+                exact_parts = PurePosixPath(exact_path).parts
+                exact_parent = PurePosixPath(exact_path).parent.parts
+                if (
+                    exact_parts[: len(transitive_parent)] == transitive_parent
+                    or PurePosixPath(path).parts[: len(exact_parent)]
+                    == exact_parent
+                ):
+                    seed_states.add(exact_state)
             if len(seed_states) == 1:
                 states.update(seed_states)
                 transitive_paths.append(path)
