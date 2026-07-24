@@ -967,6 +967,19 @@ def doctor(args: argparse.Namespace) -> dict[str, Any]:
         )
     )
     compiler_available, compiler_detail = component_compiler_status()
+    # Mirror the web backend's browser discovery so doctor never contradicts
+    # what a web scenario would actually run.
+    chrome_pinned = os.environ.get("VELLUM_CHROME_PATH") or None
+    chrome_application = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+    if chrome_pinned is not None:
+        chrome_available = Path(chrome_pinned).is_file() and os.access(chrome_pinned, os.X_OK)
+        chrome_detail = chrome_pinned
+    else:
+        chrome_available = bool(shutil.which("google-chrome") or chrome_application.is_file())
+        chrome_detail = (
+            shutil.which("google-chrome")
+            or (str(chrome_application) if chrome_application.is_file() else "not found")
+        )
     checks = [
         check_item("python", required=True, available=sys.version_info >= (3, 9), detail=sys.version.split()[0]),
         check_item("project-lock", required=bool(args.project), available=lock_valid, detail=str(project_root) if project_root else "not in a Vellum project"),
@@ -974,7 +987,7 @@ def doctor(args: argparse.Namespace) -> dict[str, Any]:
         check_item("cmake", required=False, available=bool(shutil.which("cmake")), detail=shutil.which("cmake") or "not found", fix="Install CMake for native builds."),
         check_item("ninja", required=False, available=bool(shutil.which("ninja")), detail=shutil.which("ninja") or "not found", fix="Install Ninja for native builds."),
         check_item("node", required=import_required or web_required, available=node_available, detail=node_detail, fix="Install an SDK with its exact Node runtime or provide Node.js 20+."),
-        check_item("chrome", required=web_required, available=bool(shutil.which("google-chrome") or Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome").is_file()), detail=shutil.which("google-chrome") or ("/Applications/Google Chrome.app" if Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome").is_file() else "not found"), fix="Install Chrome to execute web scenarios."),
+        check_item("chrome", required=web_required, available=chrome_available, detail=chrome_detail, fix="Install Chrome to execute web scenarios, or point VELLUM_CHROME_PATH at an exact browser build."),
         check_item("sdk-artifact", required=sdk_configured, available=sdk is not None, detail=sdk_detail, fix="Install a checksummed SDK artifact for native CMake consumption."),
         check_item(
             f"target-{required_target}" if required_target else "target",

@@ -393,6 +393,19 @@ def ensure_build(context: dict[str, Any], sdk: Path, no_build: bool = False) -> 
 
 
 def chrome_path() -> str:
+    # A pinned browser is named through the environment, the same way the
+    # web/tests harnesses accept it. Reject an override that does not resolve
+    # rather than falling back to an installed browser: silently running a
+    # different build would defeat the pin the caller asked for.
+    override = os.environ.get("VELLUM_CHROME_PATH") or None
+    if override is not None:
+        candidate = Path(override)
+        if not candidate.is_file() or not os.access(candidate, os.X_OK):
+            raise BackendFailure(
+                f"VELLUM_CHROME_PATH does not name an executable browser: {override}",
+                status="prerequisite_missing", exit_code=4,
+            )
+        return str(candidate)
     chrome = shutil.which("google-chrome")
     application = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
     if not chrome and application.is_file():

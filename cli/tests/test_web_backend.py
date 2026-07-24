@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import json
+import os
 import runpy
 import shutil
 import subprocess
@@ -25,7 +26,44 @@ validate_scenario_document = BACKEND_MODULE["validate_scenario_document"]
 validate_component_source = BACKEND_MODULE["validate_component_source"]
 build_component_modules = BACKEND_MODULE["build_component_modules"]
 contains_sdk_install_path = BACKEND_MODULE["contains_sdk_install_path"]
+chrome_path = BACKEND_MODULE["chrome_path"]
 BackendFailure = BACKEND_MODULE["BackendFailure"]
+
+
+class ChromeDiscoveryTests(unittest.TestCase):
+    def test_pinned_browser_path_is_used_ahead_of_an_installed_browser(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            browser = Path(directory) / "Google Chrome for Testing"
+            browser.write_text("#!/bin/sh\n", encoding="utf-8")
+            browser.chmod(0o755)
+            with mock.patch.dict("os.environ", {"VELLUM_CHROME_PATH": str(browser)}), \
+                    mock.patch.object(shutil, "which", return_value="/usr/bin/google-chrome"):
+                self.assertEqual(chrome_path(), str(browser))
+
+    def test_unusable_pinned_browser_path_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            missing = Path(directory) / "absent-chrome"
+            unreadable = Path(directory) / "not-executable"
+            unreadable.write_text("", encoding="utf-8")
+            unreadable.chmod(0o644)
+            for candidate in (missing, unreadable):
+                with self.subTest(candidate=candidate.name):
+                    with mock.patch.dict(
+                        "os.environ", {"VELLUM_CHROME_PATH": str(candidate)}
+                    ), mock.patch.object(
+                        shutil, "which", return_value="/usr/bin/google-chrome"
+                    ):
+                        with self.assertRaises(BackendFailure) as raised:
+                            chrome_path()
+                    self.assertEqual(raised.exception.status, "prerequisite_missing")
+                    self.assertIn("VELLUM_CHROME_PATH", str(raised.exception))
+
+    def test_discovery_falls_back_when_no_browser_is_pinned(self) -> None:
+        environment = {key: value for key, value in os.environ.items()
+                       if key != "VELLUM_CHROME_PATH"}
+        with mock.patch.dict("os.environ", environment, clear=True), \
+                mock.patch.object(shutil, "which", return_value="/usr/bin/google-chrome"):
+            self.assertEqual(chrome_path(), "/usr/bin/google-chrome")
 
 
 class WebScenarioEvidenceTests(unittest.TestCase):
