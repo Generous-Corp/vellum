@@ -220,7 +220,7 @@ jobs:
           PULP_ACTIVATION_COMMIT: ${{ steps.coordinates.outputs.pulp-commit }}
           AUTHORITY_EVENT_PATH: ${{ steps.coordinates.outputs.event-path }}
         run: |
-          python3 .authority-record/tools/provenance/verify_authority_activation.py \
+          python3 tools/provenance/verify_authority_activation.py \
             --root .authority-record \
             build-pulp-evidence \
             --pulp-repo .activation-pulp \
@@ -239,7 +239,7 @@ jobs:
             jq -r .pulp_candidate_commit \
               ".authority-record/$AUTHORITY_RECORD_PATH"
           )"
-          python3 .authority-record/tools/provenance/verify_authority_activation.py \
+          python3 tools/provenance/verify_authority_activation.py \
             --root .authority-record \
             verify-active \
             --pulp-repo .activation-pulp \

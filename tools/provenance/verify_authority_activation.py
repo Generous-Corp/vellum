@@ -588,8 +588,11 @@ def verify_installation_scope(
     token: str,
     expected_repository_id: int,
     expected_app_id: int,
+    *,
+    full_name: str,
+    app_jwt: str,
 ) -> None:
-    identity = github.get("/installation", token)
+    identity = github.get(f"/repos/{full_name}/installation", app_jwt)
     if (
         not isinstance(identity, dict)
         or identity.get("app_id") != expected_app_id
@@ -626,6 +629,8 @@ def verify_repository(
         token,
         int(expected["repository_id"]),
         int(expected["reader_app_id"]),
+        full_name=str(expected["full_name"]),
+        app_jwt=app_jwt,
     )
 
 
