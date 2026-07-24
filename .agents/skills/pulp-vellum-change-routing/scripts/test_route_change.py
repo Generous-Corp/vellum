@@ -554,6 +554,25 @@ class RoutingScenariosTest(unittest.TestCase):
             ):
                 ROUTER.load_authority(vellum, pulp)
 
+        with tempfile.TemporaryDirectory() as temporary:
+            vellum, pulp = make_fixture(Path(temporary))
+            mapping_path = (
+                vellum / "provenance/pulp-observatory/legacy-path-map.yaml"
+            )
+            mapping = json.loads(mapping_path.read_text(encoding="utf-8"))
+            mapping["state"] = "prepared-no-transfer"
+            write_json(mapping_path, mapping)
+            subprocess.run(["git", "-C", str(vellum), "add", "."], check=True)
+            subprocess.run(
+                ["git", "-C", str(vellum), "commit", "-qm", "stale map"],
+                check=True,
+            )
+            with self.assertRaisesRegex(
+                ROUTER.AuthorityError,
+                "schema/state must be version 2 and active",
+            ):
+                ROUTER.load_authority(vellum, pulp)
+
     def test_exact_projection_rejects_duplicate_owners(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             vellum, pulp = make_fixture(Path(temporary))
@@ -639,6 +658,16 @@ class RoutingScenariosTest(unittest.TestCase):
             )
             self.assertEqual(unseeded["status"], "decision_required")
             self.assertEqual(unseeded["unmapped_paths"], ["CMakeLists.txt"])
+
+            unaffected = ROUTER.route(
+                ROUTER.load_authority(vellum, pulp),
+                source_repo="pulp",
+                paths=["core/canvas/src/text_layout.cpp"],
+                intent="generic",
+                counterpart_result="not-affected",
+            )
+            self.assertEqual(unaffected["status"], "decision_required")
+            self.assertIn("contradicts", unaffected["reasons"][0])
 
             unsupported_counterpart = ROUTER.route(
                 ROUTER.load_authority(vellum, pulp),

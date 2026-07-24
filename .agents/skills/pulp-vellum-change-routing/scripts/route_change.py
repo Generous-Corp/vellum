@@ -158,6 +158,10 @@ def load_authority(vellum: Path, pulp: Path) -> Authority:
     counterpart = _load_json(
         vellum / "provenance/pulp-observatory/legacy-path-map.yaml"
     )
+    if counterpart.get("schema_version") != 2 or counterpart.get("state") != "active":
+        raise AuthorityError(
+            "counterpart map schema/state must be version 2 and active"
+        )
 
     extraction_authority = extraction.get("authority")
     projection_activation = projection.get("activation")
@@ -787,6 +791,18 @@ def route(
         )
 
     if transferred and intent == "generic":
+        if counterpart_result == "not-affected":
+            return _result(
+                "decision_required",
+                primary_repository="pulp",
+                matched_slices=sorted(slices),
+                counterpart_contracts=contracts,
+                required_tests=contract_tests,
+                transitive_paths=transitive_paths,
+                reasons=[
+                    "generic transferred fix contradicts a counterpart result of not-affected"
+                ],
+            )
         return _result(
             "routed",
             primary_repository="vellum",

@@ -301,6 +301,33 @@ class ObservatoryTests(unittest.TestCase):
             ):
                 observatory.verify_append_only(root, base)
 
+    def test_deleted_and_readded_cursor_is_rejected_against_git_base(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run(root, "git", "init", "-b", "main")
+            run(root, "git", "config", "user.email", "observatory@example.invalid")
+            run(root, "git", "config", "user.name", "Observatory Test")
+            cursor = {
+                "pulp": {"last_scanned_commit": "a" * 40},
+                "vellum": {"last_scanned_commit": "b" * 40},
+            }
+            write_json(root / observatory.CURSOR_PATH, cursor)
+            run(root, "git", "add", ".")
+            run(root, "git", "commit", "-m", "base cursor")
+            base = run(root, "git", "rev-parse", "HEAD")
+            (root / observatory.CURSOR_PATH).unlink()
+            run(root, "git", "add", "-A")
+            run(root, "git", "commit", "-m", "delete cursor")
+            write_json(root / observatory.CURSOR_PATH, cursor)
+            run(root, "git", "add", ".")
+            run(root, "git", "commit", "-m", "restore cursor")
+
+            with self.assertRaisesRegex(
+                observatory.ObservatoryError,
+                "cursor must exist on every history edge",
+            ):
+                observatory.verify_append_only(root, base)
+
     def test_pulp_cursor_cannot_move_backward_against_git_base(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             top = Path(temporary)

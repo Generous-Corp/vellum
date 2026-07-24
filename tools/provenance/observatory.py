@@ -1102,6 +1102,11 @@ def verify_append_only(
     commits = git(
         root, "rev-list", "--reverse", "--topo-order", f"{git_base}..{head}"
     ).splitlines()
+    try:
+        json.loads(git(root, "show", f"{git_base}:{CURSOR_PATH.as_posix()}"))
+        base_has_cursor = True
+    except ObservatoryError:
+        base_has_cursor = False
     for commit in commits:
         parents = git(root, "rev-list", "--parents", "-n", "1", commit).split()[1:]
         for parent in parents:
@@ -1137,6 +1142,11 @@ def verify_append_only(
                     git(root, "show", f"{commit}:{CURSOR_PATH.as_posix()}")
                 )
             except ObservatoryError:
+                if base_has_cursor:
+                    raise ObservatoryError(
+                        f"observatory cursor must exist on every history edge: "
+                        f"{parent} -> {commit}"
+                    )
                 continue
             for source in ("pulp", "vellum"):
                 before = previous[source]["last_scanned_commit"]
