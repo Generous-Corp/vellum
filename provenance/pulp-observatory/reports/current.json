@@ -1,14 +1,8 @@
 {
   "activation_blockers": [
     "authority-not-transferred",
-    "dedicated-app-trust-policy-not-enabled",
     "immutable-vellum-authority-start-not-recorded",
-    "landed-pulp-freeze-evidence-not-recorded",
-    "pulp-repository-or-reader-app-id-unpinned",
-    "pulp-required-check-producers-unpinned",
-    "vellum-dispatcher-app-id-unpinned",
-    "vellum-repository-or-reader-app-id-unpinned",
-    "vellum-required-check-producers-unpinned"
+    "landed-pulp-freeze-evidence-not-recorded"
   ],
   "budget_violations": [],
   "coverage_gaps": [],
@@ -917,7 +911,7 @@
       "source_repository": "Generous-Corp/vellum"
     }
   ],
-  "generated_at": "2026-07-23T23:11:00Z",
+  "generated_at": "2026-07-24T00:12:00Z",
   "health": "pass",
   "maximum_pending_age_days": 0.0,
   "observatory_effort_percent": 0.0,
