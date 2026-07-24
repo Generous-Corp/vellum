@@ -17,7 +17,7 @@ permissions:
   contents: read
 jobs:
   clean-release:
-    runs-on: macos-15
+    runs-on: ${{ fromJSON(vars.VELLUM_MACOS_RUNS_ON_JSON || '["self-hosted","macOS","ARM64","vellum-build-macos"]') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262

@@ -13,7 +13,7 @@ permissions:
 jobs:
   product-quality:
     name: product-quality
-    runs-on: ${{ fromJSON(vars.VELLUM_LINUX_RUNS_ON_JSON || '"ubuntu-latest"') }}
+    runs-on: ${{ fromJSON(vars.VELLUM_LINUX_RUNS_ON_JSON || '["self-hosted","Linux","ARM64","vellum-build-linux"]') }}
     steps:
       - name: Check out full preserved history
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -38,6 +38,7 @@ jobs:
           python3 scripts/readme_lint.py
           python3 scripts/test_docs_sync.py
           python3 scripts/docs_sync.py --check
+          python3 scripts/test_ci_runner_policy.py
           python3 cli/tests/test_templates.py
           python3 scripts/template_guard.py
           python3 scripts/test_templates_smoke.py

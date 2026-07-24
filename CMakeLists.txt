@@ -160,6 +160,10 @@ if(VELLUM_BUILD_TESTS)
         COMMAND "${Python3_EXECUTABLE}"
             authoring/tests/test_phase3_contracts.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.ci-runner-policy
+        COMMAND "${Python3_EXECUTABLE}"
+            scripts/test_ci_runner_policy.py
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME vellum.provenance-unit
         COMMAND "${Python3_EXECUTABLE}"
             tools/provenance/test_verify_extraction.py

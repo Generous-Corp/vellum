@@ -360,7 +360,8 @@ class AuthorityActivationTests(unittest.TestCase):
         self.assertIn("ref: main", release)
         authority_runs_on = (
             "runs-on: ${{ fromJSON(vars.VELLUM_AUTHORITY_RUNS_ON_JSON "
-            "|| '\"ubuntu-latest\"') }}"
+            "|| '[\"self-hosted\",\"Linux\",\"ARM64\","
+            "\"vellum-authority-linux\"]') }}"
         )
         for workflow in (release, active):
             self.assertIn(authority_runs_on, workflow)

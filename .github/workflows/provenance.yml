@@ -13,7 +13,7 @@ permissions:
 jobs:
   forbidden-deps:
     name: forbidden-deps
-    runs-on: ${{ fromJSON(vars.VELLUM_LINUX_RUNS_ON_JSON || '"ubuntu-latest"') }}
+    runs-on: ${{ fromJSON(vars.VELLUM_LINUX_RUNS_ON_JSON || '["self-hosted","Linux","ARM64","vellum-build-linux"]') }}
     steps:
       - name: Check out the exact source tree
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -38,7 +38,7 @@ jobs:
 
   provenance-verify:
     name: provenance-verify
-    runs-on: ${{ fromJSON(vars.VELLUM_LINUX_RUNS_ON_JSON || '"ubuntu-latest"') }}
+    runs-on: ${{ fromJSON(vars.VELLUM_LINUX_RUNS_ON_JSON || '["self-hosted","Linux","ARM64","vellum-build-linux"]') }}
     env:
       VELLUM_TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       VELLUM_GIT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}

@@ -24,7 +24,7 @@ env:
 jobs:
   gpu-macos-arm64:
     name: gpu-macos-arm64
-    runs-on: ${{ fromJSON(vars.VELLUM_MACOS_RUNS_ON_JSON || '"macos-15"') }}
+    runs-on: ${{ fromJSON(vars.VELLUM_MACOS_RUNS_ON_JSON || '["self-hosted","macOS","ARM64","vellum-build-macos"]') }}
     steps:
       - name: Check out full preserved Vellum history without credentials
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -546,7 +546,7 @@ jobs:
   sterile-consumer:
     name: sterile-consumer
     needs: gpu-macos-arm64
-    runs-on: ${{ fromJSON(vars.VELLUM_MACOS_RUNS_ON_JSON || '"macos-15"') }}
+    runs-on: ${{ fromJSON(vars.VELLUM_MACOS_RUNS_ON_JSON || '["self-hosted","macOS","ARM64","vellum-build-macos"]') }}
     steps:
       - name: Download only the release-shaped inputs
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
