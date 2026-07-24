@@ -174,7 +174,39 @@ class ObservatoryTests(unittest.TestCase):
             "VELLUM_TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}",
             workflow,
         )
-        self.assertIn('--vellum-target "$VELLUM_TARGET_SHA"', workflow)
+        self.assertIn(
+            'observatory_vellum_target="$VELLUM_TARGET_SHA"', workflow
+        )
+        self.assertIn(
+            'observatory_vellum_target="$AUTHORITY_START_SHA"', workflow
+        )
+        self.assertIn(
+            '--vellum-target "$observatory_vellum_target"', workflow
+        )
+
+    def test_authority_record_is_rejected_as_an_ordinary_tail_but_start_passes(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary) / "vellum"
+            _, authority_start = init_repo(repo, "graphics/render.cpp")
+            record = (
+                repo
+                / "provenance/authority/records/native-design-kernel-v1.json"
+            )
+            write(record, '{"schema_version": 2}\n')
+            record_commit = commit_all(repo, "add authority record")
+
+            with self.assertRaisesRegex(
+                observatory.ObservatoryError, "non-evidence change"
+            ):
+                observatory.verify_vellum_observatory_tail(
+                    repo, authority_start, record_commit
+                )
+
+            observatory.verify_vellum_observatory_tail(
+                repo, authority_start, authority_start
+            )
 
     def test_vellum_evidence_only_tail_is_accepted(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

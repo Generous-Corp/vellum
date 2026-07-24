@@ -294,6 +294,13 @@ class AuthorityActivationTests(unittest.TestCase):
         )
         self.assertIn("verify-pending", provenance)
         self.assertIn(
+            "authority-start={authority_start}", provenance
+        )
+        self.assertIn(
+            'observatory_vellum_target="$AUTHORITY_START_SHA"',
+            provenance,
+        )
+        self.assertIn(
             "sterile-consumer:\n    name: sterile-consumer", gpu
         )
         self.assertIn("repositories: vellum", active)

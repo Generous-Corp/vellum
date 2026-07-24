@@ -85,6 +85,7 @@ jobs:
           python3 - <<'PY'
           import json
           import os
+          import re
           from pathlib import Path
 
           records = sorted(
@@ -101,6 +102,14 @@ jobs:
               raise SystemExit(
                   "pending record does not name the checked-out authority ref"
               )
+          authority_start = record.get("authority_start_commit")
+          if (
+              not isinstance(authority_start, str)
+              or re.fullmatch(r"[0-9a-f]{40}", authority_start) is None
+          ):
+              raise SystemExit(
+                  "pending record authority-start commit is not a full SHA"
+              )
           with Path(os.environ["GITHUB_OUTPUT"]).open(
               "a", encoding="utf-8"
           ) as output:
@@ -108,6 +117,7 @@ jobs:
               output.write(
                   f"pulp-candidate={record['pulp_candidate_commit']}\n"
               )
+              output.write(f"authority-start={authority_start}\n")
           PY
 
       - name: Verify the pinned owner signature on the authority tag
@@ -197,13 +207,21 @@ jobs:
           persist-credentials: false
 
       - name: Verify two-way observatory health and negative controls
+        env:
+          AUTHORITY_START_SHA: ${{ steps.authority-record.outputs.authority-start }}
         run: |
+          set -euo pipefail
+          observatory_vellum_target="$VELLUM_TARGET_SHA"
+          if [[ "$GITHUB_REF" == refs/tags/authority/* ]]; then
+            test "$AUTHORITY_START_SHA" != ""
+            observatory_vellum_target="$AUTHORITY_START_SHA"
+          fi
           python3 tools/provenance/test_observatory.py
           python3 tools/provenance/observatory.py verify \
             --pulp-repo .observatory-pulp \
             --vellum-repo . \
             --pulp-target "${{ steps.observatory-cursor.outputs.pulp-sha }}" \
-            --vellum-target "$VELLUM_TARGET_SHA" \
+            --vellum-target "$observatory_vellum_target" \
             --output "$RUNNER_TEMP/observatory-health-report.json"
 
       - name: Upload verification evidence
