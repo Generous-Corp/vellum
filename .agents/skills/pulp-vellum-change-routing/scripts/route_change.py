@@ -428,21 +428,41 @@ def _result(status: str, **values: Any) -> dict[str, Any]:
     }
 
 
-def _validate_emergency(owner: str | None, expiry: str | None, follow_up: str | None, now: dt.date) -> list[str]:
+def _validate_emergency(
+    owner: str | None,
+    created: str | None,
+    expiry: str | None,
+    follow_up: str | None,
+    now: dt.date,
+) -> list[str]:
     problems: list[str] = []
     if not owner or not OWNER_RE.fullmatch(owner):
         problems.append("emergency owner must be a valid @account or @organization/team")
     if not follow_up or not ISSUE_RE.fullmatch(follow_up):
         problems.append("emergency follow-up must be a GitHub issue URL")
     try:
+        created_date = dt.date.fromisoformat(created or "")
+    except ValueError:
+        created_date = None
+        problems.append("emergency creation date must be YYYY-MM-DD")
+    else:
+        if created_date > now:
+            problems.append("emergency creation date cannot be in the future")
+    try:
         expiry_date = dt.date.fromisoformat(expiry or "")
     except ValueError:
+        expiry_date = None
         problems.append("emergency expiry must be YYYY-MM-DD")
-    else:
+    if expiry_date is not None:
         if expiry_date < now:
             problems.append("emergency is already expired")
-        if expiry_date > now + dt.timedelta(days=14):
-            problems.append("emergency expiry is more than 14 days away")
+        if created_date is not None:
+            if expiry_date < created_date:
+                problems.append("emergency expiry predates its creation date")
+            if expiry_date > created_date + dt.timedelta(days=14):
+                problems.append(
+                    "emergency expiry is more than 14 days after its creation date"
+                )
     return problems
 
 
@@ -534,6 +554,7 @@ def route(
     framework_commit: str | None = None,
     adoption_contract: str | None = None,
     emergency_owner: str | None = None,
+    emergency_created: str | None = None,
     emergency_expiry: str | None = None,
     emergency_follow_up: str | None = None,
     now: dt.date | None = None,
@@ -663,10 +684,23 @@ def route(
                 "decision_required",
                 reasons=["framework backport commit does not resolve in the supplied Vellum checkout"],
             )
+        if counterpart_result == "not-affected":
+            return _result(
+                "decision_required",
+                counterpart_contracts=contracts,
+                required_tests=contract_tests,
+                reasons=[
+                    "framework backport contradicts a counterpart result of not-affected"
+                ],
+            )
 
     if intent == "emergency":
         problems = _validate_emergency(
-            emergency_owner, emergency_expiry, emergency_follow_up, now or dt.datetime.now(dt.timezone.utc).date()
+            emergency_owner,
+            emergency_created,
+            emergency_expiry,
+            emergency_follow_up,
+            now or dt.datetime.now(dt.timezone.utc).date(),
         )
         if problems:
             return _result("decision_required", reasons=problems)
@@ -777,7 +811,6 @@ def route(
         )
 
     if transferred and intent == "generic":
-        completed_backport = operation == "framework-backport"
         return _result(
             "routed",
             primary_repository="vellum",
@@ -785,18 +818,10 @@ def route(
             matched_slices=sorted(slices),
             counterpart_contracts=contracts,
             pulp_event_disposition="framework-backport",
-            observatory_disposition=(
-                "ported" if completed_backport else "port-required"
-            ),
+            observatory_disposition="port-required",
             required_tests=contract_tests,
             transitive_paths=transitive_paths,
-            reasons=[
-                (
-                    "validated framework backport links the Pulp adaptation to an existing immutable Vellum fix"
-                    if completed_backport
-                    else "generic fixes to transferred Pulp slices originate in Vellum"
-                )
-            ],
+            reasons=["generic fixes to transferred Pulp slices originate in Vellum"],
         )
     if transferred and intent == "pulp-specific":
         return _result(
@@ -889,6 +914,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--framework-commit")
     parser.add_argument("--adoption-contract")
     parser.add_argument("--emergency-owner")
+    parser.add_argument("--emergency-created")
     parser.add_argument("--emergency-expiry")
     parser.add_argument("--emergency-follow-up")
     parser.add_argument("--now", help="UTC date for deterministic emergency validation")
@@ -910,6 +936,7 @@ def main(argv: list[str] | None = None) -> int:
             framework_commit=args.framework_commit,
             adoption_contract=args.adoption_contract,
             emergency_owner=args.emergency_owner,
+            emergency_created=args.emergency_created,
             emergency_expiry=args.emergency_expiry,
             emergency_follow_up=args.emergency_follow_up,
             now=today,

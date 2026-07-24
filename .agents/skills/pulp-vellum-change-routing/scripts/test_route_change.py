@@ -312,7 +312,19 @@ class RoutingScenariosTest(unittest.TestCase):
             )
             self.assertEqual(result["status"], "routed")
             self.assertEqual(result["pulp_event_disposition"], "framework-backport")
-            self.assertEqual(result["observatory_disposition"], "ported")
+            self.assertEqual(result["observatory_disposition"], "port-required")
+
+            contradictory = ROUTER.route(
+                ROUTER.load_authority(vellum, pulp),
+                source_repo="pulp",
+                paths=["core/canvas/src/text_layout.cpp"],
+                intent="generic",
+                counterpart_result="not-affected",
+                operation="framework-backport",
+                framework_commit=commit,
+            )
+            self.assertEqual(contradictory["status"], "decision_required")
+            self.assertIn("contradicts", contradictory["reasons"][0])
 
     def test_paths_and_framework_backport_mode_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -384,11 +396,31 @@ class RoutingScenariosTest(unittest.TestCase):
                 paths=["core/canvas/src/text_layout.cpp"],
                 intent="emergency",
                 emergency_owner="@owner",
+                emergency_created="2026-07-20",
                 emergency_expiry="2026-07-23",
                 emergency_follow_up="https://github.com/Generous-Corp/vellum/issues/1",
                 now=dt.date(2026, 7, 24),
             )
             self.assertIn("emergency is already expired", expired_emergency["reasons"])
+
+            renewable_emergency = ROUTER.route(
+                authority,
+                source_repo="pulp",
+                paths=["core/canvas/src/text_layout.cpp"],
+                intent="emergency",
+                emergency_owner="@owner",
+                emergency_created="2026-07-01",
+                emergency_expiry="2026-08-01",
+                emergency_follow_up="https://github.com/Generous-Corp/vellum/issues/1",
+                now=dt.date(2026, 7, 24),
+            )
+            self.assertEqual(renewable_emergency["status"], "decision_required")
+            self.assertTrue(
+                any(
+                    "more than 14 days after its creation date" in reason
+                    for reason in renewable_emergency["reasons"]
+                )
+            )
 
             missing_adoption = ROUTER.route(
                 authority,
@@ -470,6 +502,7 @@ class RoutingScenariosTest(unittest.TestCase):
                 paths=["core/canvas/src/text_layout.cpp"],
                 intent="emergency",
                 emergency_owner="@",
+                emergency_created="2026-07-24",
                 emergency_expiry="2026-07-25",
                 emergency_follow_up="https://github.com/Generous-Corp/vellum/issues/1",
                 now=dt.date(2026, 7, 24),

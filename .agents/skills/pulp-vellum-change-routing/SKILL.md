@@ -46,8 +46,9 @@ broadly mapped shared area is not silently transferred; it requires a decision.
   Pulp-owned integration work in Pulp. A transferred path may use a Pulp
   `pulp-only` event only when the change is genuinely Pulp-specific.
 - **Emergency in a transferred Pulp path:** require an accountable `@owner`, a
-  GitHub follow-up issue, and an unexpired date no more than 14 days after
-  creation. Repair Vellum in parallel and reconcile before expiry.
+  GitHub follow-up issue, an explicit creation date, and an unexpired date no
+  more than 14 days after that creation date. Repair Vellum in parallel and
+  reconcile before expiry. Do not extend the window by rerunning the router.
 - **Excluded or untransferred Pulp behavior:** Pulp owns the current
   implementation. Check an analogous Vellum contract independently; do not call
   the result a framework backport unless the protocol actually applies.
