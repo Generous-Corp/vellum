@@ -52,12 +52,23 @@ class AuthorityActivationTests(unittest.TestCase):
                 activation.ActivationError, "must not contain"
             ):
                 activation.verify_prepared(prepared)
-        ready = activation.verify_ready(root)
-        self.assertEqual(ready["status"], "ready-for-pending-record")
-        policy = activation.validate_trust_policy(
-            activation.load_json(root / activation.TRUST_PATH)
-        )
-        self.assertEqual(policy["state"], "enabled")
+        with tempfile.TemporaryDirectory() as directory:
+            ready_root = Path(directory)
+            (ready_root / activation.PLAN_PATH.parent).mkdir(parents=True)
+            shutil.copy2(
+                root / activation.PLAN_PATH,
+                ready_root / activation.PLAN_PATH,
+            )
+            shutil.copy2(
+                root / activation.TRUST_PATH,
+                ready_root / activation.TRUST_PATH,
+            )
+            ready = activation.verify_ready(ready_root)
+            self.assertEqual(ready["status"], "ready-for-pending-record")
+            policy = activation.validate_trust_policy(
+                activation.load_json(ready_root / activation.TRUST_PATH)
+            )
+            self.assertEqual(policy["state"], "enabled")
 
     def test_pending_record_must_be_exact_single_commit_and_ref(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
