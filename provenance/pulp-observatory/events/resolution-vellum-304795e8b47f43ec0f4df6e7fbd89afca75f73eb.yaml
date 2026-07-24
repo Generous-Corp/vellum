@@ -1,0 +1,18 @@
+{
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "created_at": "2026-07-23T19:42:35Z",
+  "disposition": "framework-only",
+  "effort_minutes": 0,
+  "event_id": "resolution-vellum-304795e8b47f43ec0f4df6e7fbd89afca75f73eb",
+  "kind": "resolution",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Vellum-owned component effect lifecycle implementation. Any later Pulp adoption must consume the released Vellum behavior through adapter and contract tests, not synchronized source copies.",
+  "resolves": "vellum-304795e8b47f43ec0f4df6e7fbd89afca75f73eb",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

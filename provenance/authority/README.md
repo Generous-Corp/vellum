@@ -1,22 +1,29 @@
 # Prepared source-authority handoff
 
-Nothing in this directory activates authority. `transfer-plan.v1.json` names
+Nothing in this directory activates authority. `transfer-plan.v2.json` names
 candidate Pulp legacy slices and their active Vellum implementation boundary.
 `trust-policy.v1.json` is deliberately disabled and contains null repository,
 App, and check-producer identities, so the active verifier cannot pass today.
+The v1 plan and pending-record template are retained only as design lineage;
+new records use schema v2.
 
-The handoff preserves two exact identities:
+The handoff preserves three exact identities:
 
 1. `e4f8c96fcfd19bac433252c36fdf5bfa681e6d25` is the filtered historical
    seed. Its paths, modes, and blobs must match `cut-manifest.json`.
-2. A later immutable authority-start commit is the evolved, audio-free Vellum
+   Historical `unresolved` classifications remain unchanged.
+2. A later prepared Pulp ownership commit selects exact candidate paths and
+   records their then-current blobs and modes. This snapshot does not freeze
+   Pulp or transfer authority.
+3. A later immutable authority-start commit is the evolved, audio-free Vellum
    implementation. The seed must be its ancestor, but no retired Pulp path or
    exact historical source blob may be active there.
 
 This avoids the false requirement that renamed/reimplemented Vellum files stay
-byte-identical to Pulp forever. Each pending record instead binds the exact
-source projection to the exact active implementation projection under the
-explicit lineage mode `history-seed-ancestor-active-reimplementation`.
+byte-identical to Pulp forever. Each pending record binds the historical seed
+projection, the later activation-candidate projection, and the exact active
+implementation projection under the explicit lineage mode
+`history-seed-ancestor-active-reimplementation`.
 
 ## Prepare a record
 
@@ -53,8 +60,8 @@ producers.
 - strict Pulp branch protection binding both checks to those producers;
 - a dedicated one-repository Pulp reader installation token plus its matching
   App JWT; and
-- no mapped Pulp source change between the recorded extraction base and the
-  activation commit.
+- no selected Pulp source or ownership-path-set change between the recorded
+  candidate commit and the activation commit.
 
 Templates are not evidence and are rejected by the verifier. Installation
 tokens expire and must be minted by the trusted workflow from the pinned App
@@ -67,3 +74,8 @@ permission required by `repository_dispatch`.
 After the landed Pulp commit is verified, the observatory advances and records
 the acknowledgement. A missed dispatch is recovered from Pulp's durable event;
 it never rolls authority back and never starts source synchronization.
+
+If selected Pulp source or the prepared ownership path set changes after a
+candidate record is built, discard that pending attempt and build a new record
+from a later prepared Pulp candidate commit. Never update the historical cut
+manifest to represent that later state.

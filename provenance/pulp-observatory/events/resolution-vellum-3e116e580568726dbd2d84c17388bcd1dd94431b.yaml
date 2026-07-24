@@ -1,0 +1,21 @@
+{
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.capture-stats",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-07-23T17:46:22Z",
+  "disposition": "framework-only",
+  "effort_minutes": 0,
+  "event_id": "resolution-vellum-3e116e580568726dbd2d84c17388bcd1dd94431b",
+  "kind": "resolution",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Vellum-owned standalone framework behavior. Any later Pulp adoption must consume it through a pinned Vellum dependency and adapter tests, not synchronized source copies.",
+  "resolves": "vellum-3e116e580568726dbd2d84c17388bcd1dd94431b",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

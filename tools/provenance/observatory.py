@@ -788,7 +788,9 @@ def coverage_gaps(
         require_commit(repo, start, f"cursor.{source}.scan_base_commit")
         require_commit(repo, target, f"cursor.{source}.last_scanned_commit")
         require_ancestor(repo, start, target, f"cursor.{source}")
-        for commit in commits_between(repo, start, target):
+        scanned_commit_list = commits_between(repo, start, target)
+        scanned_commits = set(scanned_commit_list)
+        for commit in scanned_commit_list:
             probe = observation_for_commit(
                 source=source, repository=repository, repo=repo, commit=commit,
                 cursor_from=start, cursor_to=target,
@@ -801,9 +803,22 @@ def coverage_gaps(
                 gaps.append({"source": source, "commit": commit, "reason": "mapped-commit-has-no-event"})
             else:
                 verify_event_against_git(event, source, repo, mappings, rules)
+        for (event_repository, event_commit), event in observations.items():
+            if event_repository != repository:
+                continue
+            if event_commit not in scanned_commits:
+                gaps.append({
+                    "source": source,
+                    "commit": event_commit,
+                    "reason": "observation-outside-reconciled-cursor",
+                })
+                continue
+            verify_event_against_git(event, source, repo, mappings, rules)
         if requested_target is not None:
             require_commit(repo, requested_target, f"requested {source} target")
             require_ancestor(repo, target, requested_target, f"requested {source} target")
+            if source == "vellum" and target != requested_target:
+                verify_vellum_observatory_tail(repo, target, requested_target)
             for commit in commits_between(repo, target, requested_target):
                 probe = observation_for_commit(
                     source=source, repository=repository, repo=repo, commit=commit,
@@ -818,6 +833,47 @@ def coverage_gaps(
                         "reason": "mapped-commit-after-reconciled-cursor",
                     })
     return gaps
+
+
+def verify_vellum_observatory_tail(repo: Path, cursor: str, target: str) -> None:
+    """Prove that commits after the reconciled source cursor contain evidence only."""
+    require_commit(repo, cursor, "cursor.vellum.last_scanned_commit")
+    require_commit(repo, target, "requested vellum target")
+    require_ancestor(repo, cursor, target, "requested vellum target")
+    allowed_modified = {
+        CURSOR_PATH.as_posix(),
+        REPORT_JSON_PATH.as_posix(),
+        REPORT_MD_PATH.as_posix(),
+    }
+    events_prefix = EVENTS_PATH.as_posix() + "/"
+    for commit in commits_between(repo, cursor, target):
+        parents = git(repo, "rev-list", "--parents", "-n", "1", commit).split()
+        if len(parents) != 2:
+            raise ObservatoryError(
+                f"Vellum observatory evidence tail must be linear: {commit}"
+            )
+        for entry in parse_diff_entries(repo, commit):
+            status = str(entry["status"])
+            path = str(entry["path"])
+            if "old_path" in entry:
+                raise ObservatoryError(
+                    f"Vellum observatory evidence tail forbids rename/copy at {commit}: "
+                    f"{entry['old_path']} -> {path}"
+                )
+            if path in allowed_modified and status == "M":
+                continue
+            relative_event = path[len(events_prefix):] if path.startswith(events_prefix) else ""
+            if (
+                status == "A"
+                and relative_event
+                and "/" not in relative_event
+                and relative_event.endswith(".yaml")
+            ):
+                continue
+            raise ObservatoryError(
+                f"Vellum observatory evidence tail contains non-evidence change at "
+                f"{commit}: {status} {path}"
+            )
 
 
 def verify_append_only(root: Path, git_base: str | None) -> None:

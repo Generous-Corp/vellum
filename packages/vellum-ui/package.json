@@ -33,9 +33,13 @@
     "test": "node --test test/*.test.js && npm run test:types",
     "check": "npm test"
   },
-  "dependencies": {},
+  "dependencies": {
+    "esbuild": "0.28.1"
+  },
+  "bundleDependencies": [
+    "esbuild"
+  ],
   "devDependencies": {
-    "esbuild": "0.28.1",
     "typescript": "7.0.2"
   }
 }

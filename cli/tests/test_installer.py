@@ -45,12 +45,13 @@ def _build_verified_fixture(
     *,
     fixture_name: str = "test",
     source_commit: str = "a" * 40,
-    framework_version: str = "0.1.1",
+    framework_version: str = "0.1.6",
     target: str = "test",
 ) -> tuple[Path, Path, str]:
     payload = root / f"{fixture_name}-payload"
     payload.mkdir()
     shutil.copy2(REPO / "cli/vellum_cli.py", payload / "vellum_cli.py")
+    shutil.copy2(REPO / "cli/vellum_dev.py", payload / "vellum_dev.py")
     shutil.copy2(REPO / "cli/vellum_backend.py", payload / "vellum_backend.py")
     shutil.copy2(REPO / "cli/vellum_manifest.py", payload / "vellum_manifest.py")
     shutil.copy2(REPO / "cli/vellum_png.py", payload / "vellum_png.py")
@@ -63,7 +64,7 @@ def _build_verified_fixture(
         json.dumps({
             "schema": "vellum.sdk-artifact.v1",
             "framework_version": framework_version,
-            "cli_version": "0.1.1",
+            "cli_version": "0.1.6",
             "cli_api": 1,
             "source_commit": source_commit,
             "source_tree_clean": True,
@@ -228,7 +229,7 @@ class InstallerTests(unittest.TestCase):
             sw_vers.chmod(0o755)
             rejected = _run_installer(
                 root / "rejected-prefix",
-                "--version", "0.1.1",
+                "--version", "0.1.6",
                 env=environment,
             )
             self.assertNotEqual(rejected.returncode, 0)
@@ -244,7 +245,7 @@ class InstallerTests(unittest.TestCase):
             )
             accepted_boundary = _run_installer(
                 root / "accepted-prefix",
-                "--version", "0.1.1",
+                "--version", "0.1.6",
                 env=environment,
             )
             self.assertNotEqual(accepted_boundary.returncode, 0)
@@ -277,7 +278,7 @@ class InstallerTests(unittest.TestCase):
             }
             rejected = _run_installer(
                 root / "prefix",
-                "--version", "0.1.1",
+                "--version", "0.1.6",
                 env=environment,
             )
             self.assertNotEqual(rejected.returncode, 0)
@@ -317,7 +318,7 @@ class InstallerTests(unittest.TestCase):
                 "verified": False,
                 "artifact": None,
                 "artifact_sha256": None,
-                "framework_version": "0.1.1",
+                "framework_version": "0.1.6",
                 "target": "local-development",
                 "source_commit": None,
             })
@@ -557,7 +558,7 @@ class InstallerTests(unittest.TestCase):
             )
             self.assertEqual(verified.returncode, 0, verified.stderr)
             self.assertEqual(
-                json.loads(verified.stdout)["cli_version"], "0.1.1"
+                json.loads(verified.stdout)["cli_version"], "0.1.6"
             )
 
             payload = root / "test-payload"
@@ -747,7 +748,7 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual((prefix / "lib/vellum").resolve(), active_before)
             self.assertEqual(
                 [path.name for path in (prefix / "lib/vellum-installs").iterdir()],
-                [f"0.1.1-test-{digest}"],
+                [f"0.1.6-test-{digest}"],
             )
             self.assertEqual(
                 {
@@ -787,7 +788,7 @@ class InstallerTests(unittest.TestCase):
             )
             self.assertEqual(first.returncode, 0, first.stderr)
             active_before = (prefix / "lib/vellum").resolve()
-            self.assertEqual(active_before.name, f"0.1.1-test-{first_digest}")
+            self.assertEqual(active_before.name, f"0.1.6-test-{first_digest}")
 
             failed = _run_installer(
                 prefix,
@@ -800,7 +801,7 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual((prefix / "lib/vellum").resolve(), active_before)
             self.assertNotEqual(first_digest, second_digest)
             self.assertTrue(
-                (prefix / "lib/vellum-installs" / f"0.1.1-test-{second_digest}").is_dir()
+                (prefix / "lib/vellum-installs" / f"0.1.6-test-{second_digest}").is_dir()
             )
             version = subprocess.run(
                 [str(prefix / "bin/vellum"), "--version"],
@@ -895,7 +896,7 @@ class InstallerTests(unittest.TestCase):
                     "--archive", str(archive),
                     "--checksums", str(sums),
                     "--prefix", str(prefix),
-                    "--expected-version", "0.1.1",
+                    "--expected-version", "0.1.6",
                     "--expected-target", "wrong-target",
                 ],
                 text=True,
@@ -912,7 +913,7 @@ class InstallerTests(unittest.TestCase):
             archive = root / "vellum-sdk-collision.tar.gz"
             metadata = json.dumps({
                 "schema": "vellum.sdk-artifact.v1",
-                "framework_version": "0.1.1",
+                "framework_version": "0.1.6",
                 "cli_api": 1,
                 "source_commit": "a" * 40,
                 "target": "test",
@@ -1084,6 +1085,31 @@ class InstallerTests(unittest.TestCase):
             self.assertIn("Vellum installer: already_absent", second.stdout)
             self.assertEqual(unrelated.read_text(encoding="utf-8"), "not owned by Vellum\n")
             self.assertTrue(unrelated_bin.is_file())
+
+    def test_installed_python_launchers_do_not_mutate_sdk_with_bytecode(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive, sums, _ = _build_verified_fixture(root)
+            prefix = root / "prefix"
+            installed = _run_installer(
+                prefix,
+                "--archive", str(archive),
+                "--checksums", str(sums),
+            )
+            self.assertEqual(installed.returncode, 0, installed.stderr)
+            sdk = (prefix / "lib/vellum").resolve()
+            backend = subprocess.run(
+                [str(sdk / "bin/vellum-backend"), "--help"],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertIn(backend.returncode, {0, 2}, backend.stderr)
+            self.assertEqual(list(sdk.rglob("__pycache__")), [])
+            verified = _run_installer(prefix, "--verify-installed")
+            self.assertEqual(verified.returncode, 0, verified.stderr)
+            uninstalled = _run_installer(prefix, "--uninstall")
+            self.assertEqual(uninstalled.returncode, 0, uninstalled.stderr)
 
     def test_verified_archive_rejects_links(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

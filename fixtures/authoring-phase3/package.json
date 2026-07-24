@@ -1,0 +1,9 @@
+{
+  "name": "vellum-authoring-phase3-fixture",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@vellum/fixture-pure-esm-root": "file:vendor/pure-esm-root",
+    "@vellum/ui": "workspace:*"
+  }
+}

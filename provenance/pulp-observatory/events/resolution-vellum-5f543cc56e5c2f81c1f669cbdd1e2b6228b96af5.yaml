@@ -1,0 +1,18 @@
+{
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "created_at": "2026-07-23T19:42:35Z",
+  "disposition": "framework-only",
+  "effort_minutes": 0,
+  "event_id": "resolution-vellum-5f543cc56e5c2f81c1f669cbdd1e2b6228b96af5",
+  "kind": "resolution",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Vellum-owned independent application fixture execution and authoring semantics. Any later Pulp adoption must consume the released Vellum behavior through adapter and contract tests, not synchronized source copies.",
+  "resolves": "vellum-5f543cc56e5c2f81c1f669cbdd1e2b6228b96af5",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

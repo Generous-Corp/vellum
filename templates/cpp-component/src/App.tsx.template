@@ -1,0 +1,29 @@
+import {
+  Button,
+  CustomComponent,
+  Stack,
+  Text,
+  View,
+  useState,
+} from "@vellum/ui";
+
+export function App() {
+  const [boost, setBoost] = useState(false);
+  return (
+    <Stack id="custom-root" style={{ width: 640, height: 400, padding: 32, gap: 18, backgroundColor: "#0f172a" }}>
+      <Text id="custom-title" style={{ height: 36, fontSize: 24, color: "#f8fafc" }}>
+        {"{{PROJECT_NAME_JSON}}"}
+      </Text>
+      <Button id="toggle-boost" onPress={() => setBoost((value) => !value)} style={{ width: 180, height: 42 }}>
+        Toggle boost
+      </Button>
+      <CustomComponent
+        id="level-meter"
+        component="level-meter"
+        properties={{ boost }}
+        style={{ width: 560, height: 220 }}
+        fallback={<View id="level-meter-fallback" style={{ width: 560, height: 220, backgroundColor: "#334155" }} />}
+      />
+    </Stack>
+  );
+}

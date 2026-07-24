@@ -16,7 +16,7 @@
     "api": 1
   },
   "template": {
-    "name": "basic",
-    "version": 2
+    "name": "{{TEMPLATE_NAME}}",
+    "version": 3
   }
 }

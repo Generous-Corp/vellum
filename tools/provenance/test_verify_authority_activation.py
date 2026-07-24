@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import unittest
+from unittest import mock
 
 
 MODULE_PATH = Path(__file__).with_name("verify_authority_activation.py")
@@ -32,24 +33,133 @@ class AuthorityActivationTests(unittest.TestCase):
         with self.assertRaisesRegex(activation.ActivationError, "not enabled"):
             activation.validate_trust_policy(activation.load_json(root / activation.TRUST_PATH))
 
-    def test_source_projection_positive_control_then_rejects_unresolved(self) -> None:
+    def test_historical_unresolved_requires_explicit_candidate_selection(self) -> None:
         group = {"pulp_legacy_slices": ["render"]}
         ownership = {"slices": [{"id": "render", "state": "pulp-authoritative-untransferred", "paths": ["core/render/a.cpp"]}]}
         manifest = {"entries": [{
-            "source_path": "core/render/a.cpp", "classification": "framework-core",
+            "source_path": "core/render/a.cpp", "classification": "unresolved",
             "git_blob_sha": "a" * 40, "git_mode": "100644",
         }]}
         seed = {"core/render/a.cpp": {"blob": "a" * 40, "mode": "100644"}}
 
-        projection = activation.build_source_projection(
-            group=group, ownership=ownership, manifest=manifest, seed_tree=seed
+        paths = activation.selected_slice_paths(group=group, ownership=ownership)
+        projection = activation.build_historical_seed_projection(
+            paths=paths, manifest=manifest, seed_tree=seed
         )
         self.assertEqual(projection["core/render/a.cpp"]["blob"], "a" * 40)
+        self.assertEqual(projection["core/render/a.cpp"]["classification"], "unresolved")
 
-        manifest["entries"][0]["classification"] = "unresolved"
-        with self.assertRaisesRegex(activation.ActivationError, "not transferable"):
-            activation.build_source_projection(
-                group=group, ownership=ownership, manifest=manifest, seed_tree=seed
+        ownership["slices"][0]["state"] = "excluded"
+        with self.assertRaisesRegex(activation.ActivationError, "not authoritative"):
+            activation.selected_slice_paths(group=group, ownership=ownership)
+
+    def test_candidate_projection_can_evolve_from_historical_blob(self) -> None:
+        paths = ["core/render/a.cpp"]
+        manifest = {"entries": [{
+            "source_path": paths[0], "classification": "framework-core",
+            "git_blob_sha": "a" * 40, "git_mode": "100644",
+        }]}
+        historical = activation.build_historical_seed_projection(
+            paths=paths,
+            manifest=manifest,
+            seed_tree={paths[0]: {"blob": "a" * 40, "mode": "100644"}},
+        )
+        candidate = activation.build_activation_candidate_projection(
+            paths=paths,
+            candidate_tree={paths[0]: {"blob": "b" * 40, "mode": "100644"}},
+        )
+        self.assertEqual(historical[paths[0]]["blob"], "a" * 40)
+        self.assertEqual(candidate[paths[0]]["blob"], "b" * 40)
+
+    def test_historical_seed_mismatch_and_missing_candidate_fail(self) -> None:
+        paths = ["core/render/a.cpp"]
+        manifest = {"entries": [{
+            "source_path": paths[0], "classification": "framework-core",
+            "git_blob_sha": "a" * 40, "git_mode": "100644",
+        }]}
+        with self.assertRaisesRegex(activation.ActivationError, "historical seed"):
+            activation.build_historical_seed_projection(
+                paths=paths,
+                manifest=manifest,
+                seed_tree={paths[0]: {"blob": "b" * 40, "mode": "100644"}},
+            )
+        with self.assertRaisesRegex(activation.ActivationError, "absent at the candidate"):
+            activation.build_activation_candidate_projection(paths=paths, candidate_tree={})
+
+    def test_candidate_slice_paths_reject_duplicates(self) -> None:
+        group = {"pulp_legacy_slices": ["a", "b"]}
+        ownership = {"slices": [
+            {"id": "a", "state": "pulp-authoritative-untransferred", "paths": ["same.cpp"]},
+            {"id": "b", "state": "pulp-authoritative-untransferred", "paths": ["same.cpp"]},
+        ]}
+        with self.assertRaisesRegex(activation.ActivationError, "duplicate paths"):
+            activation.selected_slice_paths(group=group, ownership=ownership)
+
+    def test_record_shape_rejects_narrowed_candidate_path_set(self) -> None:
+        root = MODULE_PATH.parents[2]
+        record = activation.load_json(
+            root / "provenance/authority/templates/pending-authority-record.v2.json"
+        )
+        for field in (
+            "pulp_extraction_base", "historical_seed_commit", "pulp_candidate_commit",
+            "authority_start_commit",
+        ):
+            record[field] = "a" * 40
+        record["pulp_ownership_projection_blob"] = "b" * 40
+        record["cut_manifest_sha256"] = "c" * 64
+        record["authority_record_ref"] = "refs/heads/authority/test-v2"
+        record["approved_at"] = "2026-07-23T20:00:00Z"
+        group = record["authority_groups"][0]
+        group["pulp_historical_seed_projection"] = {
+            "a.cpp": {"blob": "a" * 40, "mode": "100644", "classification": "unresolved"}
+        }
+        group["pulp_activation_candidate_projection"] = {
+            "b.cpp": {"blob": "b" * 40, "mode": "100644"}
+        }
+        group["vellum_implementation_projection"] = {
+            "graphics/a.cpp": {"blob": "c" * 40, "mode": "100644"}
+        }
+        with self.assertRaisesRegex(activation.ActivationError, "path sets differ"):
+            activation.validate_record_shape(record)
+
+    def test_candidate_change_guard_has_positive_and_negative_controls(self) -> None:
+        with mock.patch.object(activation, "git", return_value=""):
+            activation.verify_candidate_unchanged(
+                pulp_repo=Path("/pulp"),
+                candidate_commit="a" * 40,
+                activation_commit="b" * 40,
+                paths=["core/render/a.cpp"],
+            )
+        with mock.patch.object(
+            activation, "git", return_value="core/render/a.cpp\ncore/render/b.cpp"
+        ):
+            with self.assertRaisesRegex(activation.ActivationError, "candidate source changed"):
+                activation.verify_candidate_unchanged(
+                    pulp_repo=Path("/pulp"),
+                    candidate_commit="a" * 40,
+                    activation_commit="b" * 40,
+                    paths=["core/render/a.cpp", "core/render/b.cpp"],
+                )
+
+    def test_activated_ownership_path_set_must_match_candidate(self) -> None:
+        slices = {
+            "render": {
+                "id": "render",
+                "state": "framework-authoritative-transferred",
+                "paths": ["core/render/a.cpp"],
+            }
+        }
+        activation.verify_activated_path_set(
+            slices=slices,
+            expected_slice_ids={"render"},
+            candidate_paths=["core/render/a.cpp"],
+        )
+        slices["render"]["paths"] = ["core/render/b.cpp"]
+        with self.assertRaisesRegex(activation.ActivationError, "path set differs"):
+            activation.verify_activated_path_set(
+                slices=slices,
+                expected_slice_ids={"render"},
+                candidate_paths=["core/render/a.cpp"],
             )
 
     def test_active_projection_must_not_restore_historical_blob(self) -> None:

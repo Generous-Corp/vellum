@@ -1,0 +1,20 @@
+{
+  "schema": "vellum.scenario.v2",
+  "name": "browser text selection, IME, and accessibility",
+  "viewport": {"width": 360, "height": 160},
+  "steps": [
+    {"action": "focus", "target": "title-input"},
+    {"action": "input", "target": "title-input", "value": "GPU Notes"},
+    {"action": "compose", "target": "title-input", "value": "日本語"},
+    {
+      "action": "assert-accessibility",
+      "target": "title-input",
+      "expect": {
+        "label": "Board title",
+        "role": "text-field",
+        "value": "GPU Notes日本語"
+      }
+    },
+    {"action": "capture", "name": "text-semantics"}
+  ]
+}

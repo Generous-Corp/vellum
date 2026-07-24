@@ -15,10 +15,16 @@ concurrency:
   group: vellum-gpu-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  VELLUM_RELEASE_VERSION: 0.1.6
+  VELLUM_RELEASE_TAG: v0.1.6
+  VELLUM_RELEASE_ARCHIVE: vellum-sdk-0.1.6-darwin-arm64.tar.gz
+  VELLUM_RELEASE_NAME: Vellum 0.1.6 experimental SDK
+
 jobs:
   gpu-macos-arm64:
     name: gpu-macos-arm64
-    runs-on: macos-15
+    runs-on: ${{ fromJSON(vars.VELLUM_MACOS_RUNS_ON_JSON || '"macos-15"') }}
     steps:
       - name: Check out full preserved Vellum history without credentials
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -46,12 +52,64 @@ jobs:
           cache: npm
           cache-dependency-path: packages/vellum-ui/package-lock.json
 
-      - name: Build the real TypeScript and JSX host fixture
+      - name: Verify the exact release source contract
         run: |
+          python3 -m unittest discover -s cli/tests -p 'test_*.py'
+          python3 -m unittest tools.agent_instructions.test_verify
+          python3 scripts/test_readme_exec.py
+          python3 scripts/readme_exec.py --lint
+          python3 scripts/test_readme_lint.py
+          python3 scripts/readme_lint.py
+          python3 scripts/test_docs_sync.py
+          python3 scripts/docs_sync.py --check
+          python3 scripts/template_guard.py
+          python3 scripts/test_templates_smoke.py
+          python3 scripts/test_sterile_acceptance_bundle.py
+          python3 scripts/test_verify_budget_ratification.py
+          python3 scripts/verify_budget_ratification.py
+          python3 tools/provenance/test_verify_downstream_consumers.py
+          python3 tools/provenance/verify_downstream_consumers.py
+          python3 tools/provenance/test_verify_extraction.py
+          python3 tools/provenance/verify_extraction.py \
+            --output "$RUNNER_TEMP/provenance-report.json"
+          npm run check --prefix packages/vellum-design-ir
+
+      - name: Build the installed TypeScript and JSX Phase 3 fixture
+        shell: bash
+        run: |
+          set -euo pipefail
           npm ci --prefix packages/vellum-ui
           npm test --prefix packages/vellum-ui
           npm run --prefix packages/vellum-ui build:native-test -- \
             "$RUNNER_TEMP/vellum-ui-native.iife.js"
+          printf 'VELLUM_AUTHORING_TEST_BUNDLE=%s\n' \
+            "$RUNNER_TEMP/vellum-ui-native.iife.js" >> "$GITHUB_ENV"
+          fixture_root="$RUNNER_TEMP/phase3-installed"
+          cp -R fixtures/authoring-phase3 "$fixture_root"
+          mkdir -p "$RUNNER_TEMP/phase3-packages"
+          package_json="$(
+            npm pack ./packages/vellum-ui \
+              --pack-destination "$RUNNER_TEMP/phase3-packages" --json
+          )"
+          archive_name="$(
+            node -e '
+              const fs = require("fs");
+              const value = JSON.parse(fs.readFileSync(0, "utf8"));
+              process.stdout.write(value[0].filename);
+            ' <<<"$package_json"
+          )"
+          npm pkg set \
+            "dependencies.@vellum/ui=file:$RUNNER_TEMP/phase3-packages/$archive_name" \
+            --prefix "$fixture_root"
+          npm install --offline --ignore-scripts --no-audit --no-fund \
+            --package-lock=false --prefix "$fixture_root"
+          bundle="$RUNNER_TEMP/vellum-phase3-native.iife.js"
+          VELLUM_BUILD_FORMAT=iife \
+          VELLUM_PROJECT_ROOT="$fixture_root" \
+            node "$fixture_root/node_modules/@vellum/ui/scripts/build-project.mjs" \
+              "$fixture_root/src/App.tsx" "$bundle"
+          printf 'VELLUM_PHASE3_TEST_BUNDLE=%s\n' "$bundle" \
+            >> "$GITHUB_ENV"
 
       - name: Build the release GPU slice
         run: |
@@ -59,7 +117,8 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DVELLUM_BUILD_TESTS=ON \
             -DVELLUM_REQUIRE_GPU=ON \
-            -DVELLUM_AUTHORING_TEST_BUNDLE="$RUNNER_TEMP/vellum-ui-native.iife.js" \
+            -DVELLUM_AUTHORING_TEST_BUNDLE="$VELLUM_AUTHORING_TEST_BUNDLE" \
+            -DVELLUM_PHASE3_TEST_BUNDLE="$VELLUM_PHASE3_TEST_BUNDLE" \
             -DVELLUM_SKIA_ARCHIVE="$VELLUM_SKIA_ARCHIVE"
           cmake --build build-gpu --parallel
 
@@ -87,6 +146,11 @@ jobs:
             --source-commit "$GITHUB_SHA" \
             --output "$RUNNER_TEMP/web-payload" \
             --json > "$RUNNER_TEMP/web-payload.json"
+          python3 web/tests/run_text_semantics_browser.py \
+            --core-root "$RUNNER_TEMP/web-payload" \
+            --source-root "$GITHUB_WORKSPACE" \
+            --fixture phase3 \
+            > "$RUNNER_TEMP/phase3-browser-evidence.json"
 
       - name: Verify renderer provenance and byte identity
         run: |
@@ -154,7 +218,11 @@ jobs:
             --node-license "$node_license" \
             --node-provenance "$RUNNER_TEMP/node-provenance.json" \
             --output-dir "$second" --json > "$RUNNER_TEMP/sdk-second.json"
-          archive="vellum-sdk-0.1.1-darwin-arm64.tar.gz"
+          test "$(python3 cli/vellum_cli.py --version)" = \
+            "vellum $VELLUM_RELEASE_VERSION"
+          archive="$VELLUM_RELEASE_ARCHIVE"
+          test "$archive" = \
+            "vellum-sdk-$VELLUM_RELEASE_VERSION-darwin-arm64.tar.gz"
           cmp "$first/$archive" "$second/$archive"
           cmp "$first/SHA256SUMS" "$second/SHA256SUMS"
           (cd scripts && shasum -a 256 -c INSTALLER_SHA256SUMS)
@@ -175,11 +243,9 @@ jobs:
             --archive "$RUNNER_TEMP/$archive" \
             --checksums "$RUNNER_TEMP/SHA256SUMS" --json \
             > "$RUNNER_TEMP/sdk-verification.json"
-          python3 scripts/validate_installed_sdk.py \
-            --archive "$RUNNER_TEMP/$archive" \
-            --checksums "$RUNNER_TEMP/SHA256SUMS" \
-            --forbid-path "$GITHUB_WORKSPACE" --json \
-            > "$RUNNER_TEMP/sdk-installed-validation.json"
+          python3 scripts/build_sterile_acceptance_bundle.py \
+            --output "$RUNNER_TEMP/vellum-sterile-acceptance.tar.gz" \
+            --json > "$RUNNER_TEMP/sterile-acceptance-bundle.json"
 
       - name: Verify the binary deployment boundary
         shell: bash
@@ -191,6 +257,20 @@ jobs:
           otool -l "$app" > "$RUNNER_TEMP/vellum-gpu-app-load-commands.txt"
           /usr/bin/grep -Eq 'minos 15\.0' "$RUNNER_TEMP/vellum-gpu-dylib-load-commands.txt"
           /usr/bin/grep -Eq 'minos 15\.0' "$RUNNER_TEMP/vellum-gpu-app-load-commands.txt"
+
+      - name: Smoke every public template through the installed SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix="$RUNNER_TEMP/templates-smoke-sdk"
+          sh "$RUNNER_TEMP/install.sh" \
+            --archive "$RUNNER_TEMP/$VELLUM_RELEASE_ARCHIVE" \
+            --checksums "$RUNNER_TEMP/SHA256SUMS" \
+            --install-dir "$prefix"
+          python3 scripts/templates_smoke.py \
+            --install-prefix "$prefix" \
+            --output "$RUNNER_TEMP/templates-smoke.json" \
+            --json > "$RUNNER_TEMP/templates-smoke.stdout.json"
 
       - name: Record private-release trust controls
         if: startsWith(github.ref, 'refs/tags/v')
@@ -234,7 +314,7 @@ jobs:
           printf 'VELLUM_TAG_OBJECT_SHA=%s\n' \
             "$VELLUM_TAG_OBJECT_SHA" >> "$GITHUB_ENV"
 
-      - name: Publish the verified private release
+      - name: Prepare the verified private draft release
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         env:
@@ -242,7 +322,12 @@ jobs:
         run: |
           set -euo pipefail
           tag="$GITHUB_REF_NAME"
-          test "$tag" = "v0.1.1"
+          test "$VELLUM_RELEASE_TAG" = "v$VELLUM_RELEASE_VERSION"
+          test "$tag" = "$VELLUM_RELEASE_TAG"
+          test "$VELLUM_RELEASE_ARCHIVE" = \
+            "vellum-sdk-$VELLUM_RELEASE_VERSION-darwin-arm64.tar.gz"
+          test "$VELLUM_RELEASE_NAME" = \
+            "Vellum $VELLUM_RELEASE_VERSION experimental SDK"
           verify_remote_tag_ref() {
             local remote_type
             local remote_tag_object_sha
@@ -264,7 +349,7 @@ jobs:
             fi
           }
           verify_remote_tag_ref
-          version="${tag#v}"
+          version="$VELLUM_RELEASE_VERSION"
           test "$(python3 cli/vellum_cli.py --version)" = "vellum $version"
           python3 -c '
           import json, sys
@@ -283,12 +368,11 @@ jobs:
           broad platform support claim.
           EOF
           base_assets=(
-            "vellum-sdk-0.1.1-darwin-arm64.tar.gz=$RUNNER_TEMP/vellum-sdk-0.1.1-darwin-arm64.tar.gz"
+            "$VELLUM_RELEASE_ARCHIVE=$RUNNER_TEMP/$VELLUM_RELEASE_ARCHIVE"
             "install.sh=$RUNNER_TEMP/install.sh"
             "install_core.py=$RUNNER_TEMP/install_core.py"
             "SHA256SUMS=$RUNNER_TEMP/SHA256SUMS"
             "sdk-verification.json=$RUNNER_TEMP/sdk-verification.json"
-            "sdk-installed-validation.json=$RUNNER_TEMP/sdk-installed-validation.json"
             "web-payload.json=$RUNNER_TEMP/web-payload.json"
             "release-trust.json=$RUNNER_TEMP/release-trust.json"
             "immutable-release-preflight.json=$RUNNER_TEMP/immutable-release-preflight.json"
@@ -308,7 +392,7 @@ jobs:
             python3 scripts/select_release.py \
               --releases-json "$releases_json" \
               --tag "$tag" \
-              --expected-name "Vellum 0.1.1 experimental SDK" \
+              --expected-name "$VELLUM_RELEASE_NAME" \
               --expected-body-file "$notes" \
               --expected-author "github-actions[bot]" \
               "${resumable_asset_args[@]}" \
@@ -320,8 +404,9 @@ jobs:
             for attempt in {1..10}; do
               if load_release_by_tag; then
                 return 0
+              else
+                selection_status=$?
               fi
-              selection_status=$?
               if [ "$selection_status" -ne 4 ]; then
                 return "$selection_status"
               fi
@@ -347,7 +432,7 @@ jobs:
               --repo "$GITHUB_REPOSITORY" \
               --draft \
               --verify-tag \
-              --title "Vellum 0.1.1 experimental SDK" \
+              --title "$VELLUM_RELEASE_NAME" \
               --notes-file "$notes"
             wait_for_created_release
             release_state=draft
@@ -402,12 +487,7 @@ jobs:
               "${verifier_args[@]}" \
               --asset "release-assets-verification.json=$RUNNER_TEMP/release-assets-verification.json" \
               --output "$RUNNER_TEMP/release-assets-draft-verification.json"
-            verify_remote_tag_ref
-            gh api --method PATCH \
-              "repos/$GITHUB_REPOSITORY/releases/$release_id" \
-              -F draft=false \
-              -f make_latest=false \
-              > "$release_json"
+            echo "Verified draft prepared; the source-free sterile job owns publication."
           else
             gh release download "$tag" \
               --repo "$GITHUB_REPOSITORY" \
@@ -415,18 +495,20 @@ jobs:
               --dir "$RUNNER_TEMP"
           fi
 
-          gh release verify "$tag" --repo "$GITHUB_REPOSITORY"
-          gh release verify-asset "$tag" \
-            "$RUNNER_TEMP/vellum-sdk-0.1.1-darwin-arm64.tar.gz" \
-            --repo "$GITHUB_REPOSITORY"
-          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" \
-            > "$RUNNER_TEMP/release-published.json"
-          python3 scripts/verify_release_assets.py \
-            --release-json "$RUNNER_TEMP/release-published.json" \
-            --tag "$tag" "${verifier_args[@]}" \
-            --asset "release-assets-verification.json=$RUNNER_TEMP/release-assets-verification.json" \
-            --require-published --require-immutable \
-            --output "$RUNNER_TEMP/release-assets-published-verification.json"
+          if [ "$release_state" = published ]; then
+            gh release verify "$tag" --repo "$GITHUB_REPOSITORY"
+            gh release verify-asset "$tag" \
+              "$RUNNER_TEMP/$VELLUM_RELEASE_ARCHIVE" \
+              --repo "$GITHUB_REPOSITORY"
+            gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" \
+              > "$RUNNER_TEMP/release-published.json"
+            python3 scripts/verify_release_assets.py \
+              --release-json "$RUNNER_TEMP/release-published.json" \
+              --tag "$tag" "${verifier_args[@]}" \
+              --asset "release-assets-verification.json=$RUNNER_TEMP/release-assets-verification.json" \
+              --require-published --require-immutable \
+              --output "$RUNNER_TEMP/release-assets-published-verification.json"
+          fi
 
       - name: Upload retained GPU evidence
         if: always()
@@ -439,7 +521,7 @@ jobs:
             ${{ runner.temp }}/vellum-gpu-proof.sha256
             ${{ runner.temp }}/vellum-gpu-dylib-load-commands.txt
             ${{ runner.temp }}/vellum-gpu-app-load-commands.txt
-            ${{ runner.temp }}/vellum-sdk-0.1.1-darwin-arm64.tar.gz
+            ${{ runner.temp }}/${{ env.VELLUM_RELEASE_ARCHIVE }}
             ${{ runner.temp }}/install.sh
             ${{ runner.temp }}/install_core.py
             ${{ runner.temp }}/SHA256SUMS
@@ -447,12 +529,205 @@ jobs:
             ${{ runner.temp }}/sdk-first.json
             ${{ runner.temp }}/sdk-second.json
             ${{ runner.temp }}/sdk-verification.json
-            ${{ runner.temp }}/sdk-installed-validation.json
+            ${{ runner.temp }}/templates-smoke.json
+            ${{ runner.temp }}/templates-smoke.stdout.json
+            ${{ runner.temp }}/vellum-sterile-acceptance.tar.gz
+            ${{ runner.temp }}/sterile-acceptance-bundle.json
             ${{ runner.temp }}/web-payload.json
+            ${{ runner.temp }}/phase3-browser-evidence.json
             ${{ runner.temp }}/release-trust.json
             ${{ runner.temp }}/immutable-release-preflight.json
             ${{ runner.temp }}/release-assets-verification.json
             ${{ runner.temp }}/release-assets-draft-verification.json
             ${{ runner.temp }}/release-assets-published-verification.json
+          if-no-files-found: error
+          retention-days: 90
+
+  sterile-consumer:
+    name: sterile-consumer
+    needs: gpu-macos-arm64
+    runs-on: ${{ fromJSON(vars.VELLUM_MACOS_RUNS_ON_JSON || '"macos-15"') }}
+    steps:
+      - name: Download only the release-shaped inputs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: vellum-gpu-macos-arm64-evidence
+          path: ${{ runner.temp }}/vellum-input
+
+      - name: Verify and extract the source-free acceptance bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          input="$RUNNER_TEMP/vellum-input"
+          bundle="$input/vellum-sterile-acceptance.tar.gz"
+          expected="$(
+            python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' \
+              "$input/sterile-acceptance-bundle.json"
+          )"
+          actual="$(shasum -a 256 "$bundle" | awk '{print $1}')"
+          test "$actual" = "$expected"
+          mkdir -p "$RUNNER_TEMP/sterile"
+          tar -xzf "$bundle" -C "$RUNNER_TEMP/sterile"
+          printf 'VELLUM_STERILE_ROOT=%s\n' \
+            "$RUNNER_TEMP/sterile/vellum-sterile-acceptance" >> "$GITHUB_ENV"
+
+      - name: Demonstrate the checkout-contamination negative control
+        shell: bash
+        run: |
+          set -euo pipefail
+          fake="$RUNNER_TEMP/negative-control/vellum"
+          mkdir -p "$fake/.git" "$fake/provenance"
+          printf '{}\n' > "$fake/provenance/pulp-extraction.json"
+          VELLUM_VALIDATOR="$VELLUM_STERILE_ROOT/validate_installed_sdk.py" \
+            SEARCH_ROOT="$RUNNER_TEMP/negative-control" python3 - <<'PY'
+          import importlib.util
+          import os
+          from pathlib import Path
+          spec = importlib.util.spec_from_file_location(
+              "validator", os.environ["VELLUM_VALIDATOR"]
+          )
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          findings = module.checkout_contamination_findings(
+              [Path(os.environ["SEARCH_ROOT"])]
+          )
+          if len(findings) != 1 or not findings[0].endswith("/vellum"):
+              raise SystemExit(f"negative control did not fail closed: {findings}")
+          PY
+          rm -rf "$RUNNER_TEMP/negative-control"
+
+      - name: Run the complete installed journey without a framework checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          input="$RUNNER_TEMP/vellum-input"
+          test ! -e "$GITHUB_WORKSPACE/.git"
+          python3 "$VELLUM_STERILE_ROOT/validate_installed_sdk.py" \
+            --archive "$input/$VELLUM_RELEASE_ARCHIVE" \
+            --checksums "$input/SHA256SUMS" \
+            --forbid-path "$GITHUB_WORKSPACE" \
+            --runner-search-root "$RUNNER_WORKSPACE" \
+            --output "$RUNNER_TEMP/sdk-installed-validation.json" \
+            --json > "$RUNNER_TEMP/sdk-installed-validation.stdout.json"
+
+      - name: Publish only after the source-free journey passes
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          input="$RUNNER_TEMP/vellum-input"
+          notes="$RUNNER_TEMP/release-notes.md"
+          cat > "$notes" <<'EOF'
+          Private experimental Vellum SDK for the first independent-application validation.
+
+          This release is intentionally limited to the documented macOS 15.0+ arm64
+          native and browser-Wasm proof lanes. It is not a Pulp dependency or a
+          broad platform support claim.
+          EOF
+          releases_json="$RUNNER_TEMP/releases.json"
+          release_json="$RUNNER_TEMP/release.json"
+          gh api --paginate --slurp \
+            "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            > "$releases_json"
+          python3 "$VELLUM_STERILE_ROOT/select_release.py" \
+            --releases-json "$releases_json" \
+            --tag "$tag" \
+            --expected-name "$VELLUM_RELEASE_NAME" \
+            --expected-body-file "$notes" \
+            --expected-author "github-actions[bot]" \
+            --allowed-asset "$VELLUM_RELEASE_ARCHIVE" \
+            --allowed-asset install.sh \
+            --allowed-asset install_core.py \
+            --allowed-asset SHA256SUMS \
+            --allowed-asset sdk-verification.json \
+            --allowed-asset web-payload.json \
+            --allowed-asset release-trust.json \
+            --allowed-asset immutable-release-preflight.json \
+            --allowed-asset release-assets-verification.json \
+            --output "$release_json"
+          release_id="$(
+            python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["draft"]; print(value["id"])' \
+              "$release_json"
+          )"
+          old_verification_id="$(
+            python3 -c '
+          import json,sys
+          rows=[str(row["id"]) for row in json.load(open(sys.argv[1]))["assets"]
+                if row["name"] == "release-assets-verification.json"]
+          assert len(rows) <= 1
+          print(rows[0] if rows else "")
+          ' "$release_json"
+          )"
+          if [ -n "$old_verification_id" ]; then
+            gh api --method DELETE \
+              "repos/$GITHUB_REPOSITORY/releases/assets/$old_verification_id"
+          fi
+          gh release upload "$tag" \
+            "$RUNNER_TEMP/sdk-installed-validation.json" \
+            --repo "$GITHUB_REPOSITORY" --clobber
+          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+            > "$release_json"
+          assets=(
+            "$VELLUM_RELEASE_ARCHIVE=$input/$VELLUM_RELEASE_ARCHIVE"
+            "install.sh=$input/install.sh"
+            "install_core.py=$input/install_core.py"
+            "SHA256SUMS=$input/SHA256SUMS"
+            "sdk-verification.json=$input/sdk-verification.json"
+            "sdk-installed-validation.json=$RUNNER_TEMP/sdk-installed-validation.json"
+            "web-payload.json=$input/web-payload.json"
+            "release-trust.json=$input/release-trust.json"
+            "immutable-release-preflight.json=$input/immutable-release-preflight.json"
+          )
+          verifier_args=()
+          for asset in "${assets[@]}"; do
+            verifier_args+=(--asset "$asset")
+          done
+          python3 "$VELLUM_STERILE_ROOT/verify_release_assets.py" \
+            --release-json "$release_json" --tag "$tag" \
+            "${verifier_args[@]}" \
+            --output "$RUNNER_TEMP/release-assets-verification.json"
+          gh release upload "$tag" \
+            "$RUNNER_TEMP/release-assets-verification.json" \
+            --repo "$GITHUB_REPOSITORY" --clobber
+          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+            > "$release_json"
+          python3 "$VELLUM_STERILE_ROOT/verify_release_assets.py" \
+            --release-json "$release_json" --tag "$tag" \
+            "${verifier_args[@]}" \
+            --asset "release-assets-verification.json=$RUNNER_TEMP/release-assets-verification.json" \
+            --output "$RUNNER_TEMP/release-assets-draft-verification.json"
+          gh api --method PATCH \
+            "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+            -F draft=false \
+            -f make_latest=false \
+            > "$RUNNER_TEMP/release-published.json"
+          gh release verify "$tag" --repo "$GITHUB_REPOSITORY"
+          gh release verify-asset "$tag" \
+            "$input/$VELLUM_RELEASE_ARCHIVE" \
+            --repo "$GITHUB_REPOSITORY"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" \
+            > "$RUNNER_TEMP/release-published.json"
+          python3 "$VELLUM_STERILE_ROOT/verify_release_assets.py" \
+            --release-json "$RUNNER_TEMP/release-published.json" \
+            --tag "$tag" "${verifier_args[@]}" \
+            --asset "release-assets-verification.json=$RUNNER_TEMP/release-assets-verification.json" \
+            --require-published --require-immutable \
+            --output "$RUNNER_TEMP/release-assets-published-verification.json"
+
+      - name: Retain the source-free journey evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: vellum-sterile-consumer-evidence
+          path: |
+            ${{ runner.temp }}/sdk-installed-validation.json
+            ${{ runner.temp }}/sdk-installed-validation.stdout.json
+            ${{ runner.temp }}/release-assets-verification.json
+            ${{ runner.temp }}/release-assets-draft-verification.json
+            ${{ runner.temp }}/release-assets-published-verification.json
+            ${{ runner.temp }}/release-published.json
           if-no-files-found: error
           retention-days: 90

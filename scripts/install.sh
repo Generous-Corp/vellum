@@ -143,6 +143,7 @@ copy_payload() {
   bindir="$install_prefix/bin"
   mkdir -p "$library" "$bindir"
   cp "$payload/vellum_cli.py" "$library/vellum_cli.py"
+  cp "$payload/vellum_dev.py" "$library/vellum_dev.py"
   cp "$payload/vellum_backend.py" "$library/vellum_backend.py"
   cp "$payload/vellum_manifest.py" "$library/vellum_manifest.py"
   cp "$payload/vellum_png.py" "$library/vellum_png.py"
@@ -203,6 +204,7 @@ copy_payload() {
       printf '%s\n' '#!/bin/sh' 'set -eu'
       # shellcheck disable=SC2016
       printf '%s\n' 'bindir=$(CDPATH="" cd -- "$(dirname -- "$0")" && pwd)'
+      printf '%s\n' 'export PYTHONDONTWRITEBYTECODE=1'
       # shellcheck disable=SC2016
       printf '%s\n' 'exec python3 "$bindir/../vellum_native_backend.py" "$@"'
     } > "$library/bin/vellum-native-backend"
@@ -212,6 +214,7 @@ copy_payload() {
     {
       printf '%s\n' '#!/bin/sh' 'set -eu'
       printf '%s\n' 'bindir=$(CDPATH="" cd -- "$(dirname -- "$0")" && pwd)'
+      printf '%s\n' 'export PYTHONDONTWRITEBYTECODE=1'
       printf '%s\n' 'exec python3 "$bindir/../vellum_web_backend.py" "$@"'
     } > "$library/bin/vellum-web-backend"
     chmod 755 "$library/bin/vellum-web-backend"
@@ -220,6 +223,7 @@ copy_payload() {
     printf '%s\n' '#!/bin/sh' 'set -eu'
     # shellcheck disable=SC2016
     printf '%s\n' 'bindir=$(CDPATH="" cd -- "$(dirname -- "$0")" && pwd)'
+    printf '%s\n' 'export PYTHONDONTWRITEBYTECODE=1'
     # shellcheck disable=SC2016
     printf '%s\n' 'exec python3 "$bindir/../vellum_backend.py" "$@"'
   } > "$library/bin/vellum-backend"
@@ -233,6 +237,7 @@ copy_payload() {
     printf '%s\n' 'prefix=$(CDPATH="" cd -- "$bindir/.." && pwd)'
     # shellcheck disable=SC2016
     printf '%s\n' 'export VELLUM_SDK_ROOT="$prefix/lib/vellum"'
+    printf '%s\n' 'export PYTHONDONTWRITEBYTECODE=1'
     # shellcheck disable=SC2016
     printf '%s\n' 'exec python3 "$VELLUM_SDK_ROOT/vellum_cli.py" "$@"'
   } > "$bindir/vellum"
@@ -262,7 +267,8 @@ if [ -n "$local_root" ]; then
       'Refusing symlinked local-install storage. Use a separate --install-dir.' >&2
     exit 1
   fi
-  [ -f "$local_root/cli/vellum_cli.py" ] && [ -f "$local_root/cli/vellum_backend.py" ] && \
+  [ -f "$local_root/cli/vellum_cli.py" ] && [ -f "$local_root/cli/vellum_dev.py" ] && \
+    [ -f "$local_root/cli/vellum_backend.py" ] && \
     [ -f "$local_root/cli/vellum_manifest.py" ] && \
     [ -f "$local_root/cli/vellum_png.py" ] && \
     [ -f "$local_root/.agents/skills/vellum-app-authoring/SKILL.md" ] && \
@@ -286,6 +292,7 @@ if [ -n "$local_root" ]; then
   temporary=$(mktemp -d "${TMPDIR:-/tmp}/vellum-local.XXXXXX")
   trap 'rm -rf "$temporary"; rmdir "$local_lock" 2>/dev/null || true' EXIT HUP INT TERM
   cp "$local_root/cli/vellum_cli.py" "$temporary/vellum_cli.py"
+  cp "$local_root/cli/vellum_dev.py" "$temporary/vellum_dev.py"
   cp "$local_root/cli/vellum_backend.py" "$temporary/vellum_backend.py"
   cp "$local_root/cli/vellum_manifest.py" "$temporary/vellum_manifest.py"
   cp "$local_root/cli/vellum_png.py" "$temporary/vellum_png.py"
@@ -294,8 +301,8 @@ if [ -n "$local_root" ]; then
   cat > "$temporary/metadata.json" <<'JSON'
 {
   "schema": "vellum.sdk-artifact.v1",
-  "framework_version": "0.1.1",
-  "cli_version": "0.1.1",
+  "framework_version": "0.1.6",
+  "cli_version": "0.1.6",
   "cli_api": 1,
   "source_commit": null,
   "target": "local-development",
@@ -323,7 +330,7 @@ JSON
   "verified": false,
   "artifact": null,
   "artifact_sha256": null,
-  "framework_version": "0.1.1",
+  "framework_version": "0.1.6",
   "target": "local-development",
   "source_commit": null
 }

@@ -1,8 +1,10 @@
 # Vellum
 
 > **Status: private, experimental, 0.x.** APIs, schemas, CLI names, and the
-> working name may change without notice. Exact-pin SDK compatibility only.
+> working name itself change without notice. Exact-pin SDK compatibility only.
 > Not accepting external users.
+
+## What this is
 
 Vellum is an experimental, audio-free application framework extracted to test
 one product question: can a developer import a design, add TypeScript or
@@ -29,9 +31,18 @@ The history-preserving Pulp projection has been removed from the active tip.
 Its authorship and exact blobs remain auditable in Git history and immutable
 `provenance/` records; Vellum does not maintain a synchronized editable copy.
 
-## Five-minute private release start (macOS 15.0+ arm64)
+## What this is not
 
-The following is the exact `v0.1.1` tagged-release flow; it does not claim that
+- It is not arbitrary HTML, CSS, DOM, website, or React-DOM compatibility.
+- It is not an audio, MIDI, DSP, plug-in-format, or plug-in-hosting framework.
+- It does not claim one renderer or WebGPU backend on every target.
+- It is not a public, stable, production-supported framework.
+- It does not claim smaller binaries, lower memory, or higher performance than
+  Electron, Tauri, Flutter, Qt, or React Native without equivalent benchmarks.
+
+## Quick start
+
+The following is the exact `v0.1.6` tagged-release flow; it does not claim that
 the private release has already been published. Because both the repository and
 release are private, install and authenticate
 [GitHub CLI 2.75.0 or newer](https://cli.github.com/) first (`gh auth login`,
@@ -40,6 +51,7 @@ provides the immutable-release verification commands used by the installer.
 
 Verify the supported host and bootstrap prerequisites first:
 
+<!-- readme-exec: id=release-prerequisites profile=clean-release -->
 ```sh
 test "$(uname -s)" = Darwin
 test "$(uname -m)" = arm64
@@ -59,15 +71,16 @@ CMake, and Ninja are not prerequisites for this release path.
 The fastest authenticated path downloads the version-pinned bootstrap and lets
 it acquire and verify the matching installer core and macOS 15.0+ arm64 SDK:
 
+<!-- readme-exec: id=release-install-create-run profile=clean-release -->
 ```sh
 bootstrap_dir="$(mktemp -d)"
-gh release download v0.1.1 \
+gh release download v0.1.6 \
   --repo Generous-Corp/vellum \
   --pattern install.sh \
   --dir "$bootstrap_dir"
-gh release verify-asset v0.1.1 "$bootstrap_dir/install.sh" \
+gh release verify-asset v0.1.6 "$bootstrap_dir/install.sh" \
   --repo Generous-Corp/vellum
-sh "$bootstrap_dir/install.sh" --version 0.1.1
+sh "$bootstrap_dir/install.sh" --version 0.1.6
 export PATH="$HOME/.local/bin:$PATH"
 vellum --json doctor --require-target macos
 
@@ -81,6 +94,7 @@ vellum run --no-build
 default, so the first application is validated before `run` launches it. To
 start from a supported Pulp Figma-plugin export instead, use:
 
+<!-- readme-exec: id=figma-imported-start manual=requires-user-supplied-export -->
 ```sh
 vellum create "Imported App" \
   --from figma /absolute/path/to/frame.pulp.zip \
@@ -97,9 +111,10 @@ For the cautious bootstrap path, download the checksum manifest and both
 bootstrap files together, select their exact basename entries, require exactly
 one row for each bootstrap file, and verify them before executing either script:
 
+<!-- readme-exec: id=cautious-bootstrap manual=alternative-to-quick-start -->
 ```sh
 bootstrap_dir="$(mktemp -d)"
-gh release download v0.1.1 \
+gh release download v0.1.6 \
   --repo Generous-Corp/vellum \
   --pattern SHA256SUMS \
   --pattern install.sh \
@@ -107,7 +122,7 @@ gh release download v0.1.1 \
   --dir "$bootstrap_dir"
 for asset in install.sh install_core.py SHA256SUMS
 do
-  gh release verify-asset v0.1.1 "$bootstrap_dir/$asset" \
+  gh release verify-asset v0.1.6 "$bootstrap_dir/$asset" \
     --repo Generous-Corp/vellum
 done
 (
@@ -121,7 +136,7 @@ done
   cat install.sh.sha256 install_core.py.sha256 > bootstrap.sha256
   shasum -a 256 -c bootstrap.sha256
 )
-sh "$bootstrap_dir/install.sh" --version 0.1.1
+sh "$bootstrap_dir/install.sh" --version 0.1.6
 ```
 
 Both paths verify the initial bootstrap against GitHub's immutable-release
@@ -132,6 +147,7 @@ advertised.
 
 The checkout-only development path remains available for CLI and import work:
 
+<!-- readme-exec: id=checkout-development-install manual=unverified-development-path -->
 ```sh
 git clone git@github.com:Generous-Corp/vellum.git
 cd vellum
@@ -143,12 +159,85 @@ That explicitly unverified development install intentionally has no native
 backend; use the tagged release or a verified local SDK artifact for the
 installed native journey.
 
-## Pinned macOS native SDK and first app
+## Requirements
+
+The private release quick start supports macOS 15.0 or newer on Apple silicon.
+It requires Python 3.9 or newer and an authenticated GitHub CLI 2.75.0 or newer
+with access to the private repository. The SDK bundles its exact Node runtime,
+application build tools, and pinned framework dependencies. Chrome is required
+only for browser scenarios. Source SDK development additionally requires the
+toolchain named in the detailed commands below.
+
+`vellum doctor` reports requirements as versioned JSON. `vellum doctor --fix`
+repairs project-local SDK material that can be changed safely and gives one
+actionable instruction for OS-owned or licensed prerequisites.
+
+## What was extracted and what stayed in Pulp
+
+Vellum owns its independently implemented retained scene model, rendering,
+layout, bounded design import and reimport, scripting surface, app shell,
+generic testkit/capture primitives, and application CLI.
+
+Pulp continues to own audio, MIDI, DSP, plug-in formats, plug-in hosting, audio
+widgets, audio DesignIR extensions, DAW integration, and Pulp product tooling.
+The exact machine-readable authority state is
+[`provenance/ownership-map.yaml`](provenance/ownership-map.yaml). The current
+authority handoff is prepared, not activated; Pulp does not consume Vellum.
+
+## Anatomy of a generated application
+
+`app.toml` is the developer-owned application, target, capability, and package
+authority. `framework.lock` pins one exact SDK artifact. Immutable design
+snapshots live under `sources/imported/`; normalized DesignIR, generated UI,
+tokens, assets, and reports are inspectable and tool-owned. Hand-written
+TypeScript/JavaScript lives under `src/`; optional application C++ lives under
+`native/`; scenarios and capture matrices live under `tests/`.
+
+Generated applications commit `.vellum/agent-instructions.md` and `AGENTS.md`
+so agents preserve the same generated-versus-authored boundary. See
+[Import and reimport](docs/cli/import-reimport.md) for the complete ownership
+and conflict contract.
+
+## Capability and platform status
+
+This table is generated from
+[`docs/status/capabilities.yaml`](docs/status/capabilities.yaml). `supported`
+is reserved for a capability whose named evidence check is green on the same
+commit.
+
+<!-- docs-sync: capabilities:start -->
+| Capability or target | Status | Evidence check | Honest boundary |
+| --- | --- | --- | --- |
+| macOS native application | experimental | `gpu-macos-arm64` | macOS 15.0+ arm64; private exact-pin SDK; ad-hoc package |
+| Figma plugin export import/reimport | experimental | `product-quality`, `gpu-macos-arm64` | bounded single-root Pulp plugin JSON or `.pulp.zip`; not `.fig` or live REST |
+| Browser JavaScript plus shared C++ Wasm core | partial | `gpu-macos-arm64` | Canvas2D presentation shell; no browser GPU-backend claim |
+| Windows native application | planned | none | local-development CLI bootstrap only; no native product evidence |
+| Linux native application | planned | none | no native product evidence |
+| iOS native application | planned | none | no simulator, device, or package evidence |
+| Android native application | planned | none | no emulator, device, or package evidence |
+<!-- docs-sync: capabilities:end -->
+
+## Commands
+
+| Command | Purpose |
+| --- | --- |
+| `vellum create` | Scaffold `blank`, `imported-app`, or `cpp-component` and validate the exact-pinned project |
+| `vellum doctor` | Inspect requirements and repair safe project-local state |
+| `vellum import`, `vellum reimport` | Materialize or update a supported immutable design source |
+| `vellum build`, `vellum run`, `vellum dev` | Build, launch, or watch a declared target |
+| `vellum test`, `vellum capture` | Run finite scenarios and retain visual evidence |
+| `vellum package` | Produce the target's current package format |
+
+Every command accepts `--json` before or after the command and emits one stable
+`vellum.cli.result.v1` object. See [the CLI contract](docs/cli/contract.md).
+
+### Pinned macOS native SDK and first app
 
 Download and verify the exact Skia/Dawn toolchain recorded in
 [`DEPENDENCIES.md`](DEPENDENCIES.md), then configure Vellum with its extraction
 root:
 
+<!-- readme-exec: id=source-sdk-build manual=source-build-not-release-quick-start -->
 ```sh
 curl -fL \
   https://github.com/danielraffel/skia-builder/releases/download/chrome/m150/skia-build-mac-arm64-gpu-release.zip \
@@ -169,7 +258,7 @@ python3 scripts/build_sdk_artifact.py \
   --node-provenance /path/to/node-provenance.json \
   --output-dir dist --json
 ./scripts/install.sh \
-  --archive dist/vellum-sdk-0.1.1-darwin-arm64.tar.gz \
+  --archive dist/vellum-sdk-0.1.6-darwin-arm64.tar.gz \
   --checksums dist/SHA256SUMS
 
 app_dir="$(mktemp -d)/palette-board"
@@ -185,14 +274,16 @@ over Dawn/Metal, no fallback, semantic interaction routing, and non-blank output
 
 On Windows PowerShell, the equivalent local-development installer is:
 
+<!-- readme-exec: id=windows-development-install manual=unsupported-clean-release-host -->
 ```powershell
 .\scripts\install.ps1 -LocalRoot $PWD
 $env:Path = "$HOME\.local\bin;$env:Path"
 vellum create "Vellum Hello" -d "$env:TEMP\vellum-hello"
 ```
 
-## CLI journey
+### CLI journey
 
+<!-- readme-exec: id=cli-journey manual=illustrative-requires-prepared-project -->
 ```sh
 vellum create MyApp
 cd myapp
@@ -200,6 +291,7 @@ vellum doctor --fix
 vellum import ./revision-a.source.json --source-type figma --as main
 vellum reimport --source ./revision-b.source.json --as main
 vellum build --target macos
+vellum dev --target macos
 vellum run --target macos
 vellum test
 vellum capture --scenario smoke --output artifacts/smoke.png
@@ -229,20 +321,22 @@ exact npm lock; an installed SDK validates its exact shape, projects immutable
 those bytes without external npm before `create` reports success.
 
 The native authoring slice includes a controlled, versioned `TextInput`,
-pointer focus, direct key/text dispatch, bounded semantic `input`/`key`
-scenarios, and opt-in `persistence = "state-v1"` whole-app snapshots on macOS.
-Its deliberately narrow limitations—including no IME composition, selection,
-clipboard editing, accessibility text semantics, general storage API, or state
-migration—are documented in [`@vellum/ui`](packages/vellum-ui/README.md) and
+pointer focus, direct key/text dispatch, caret and selection state, IME
+composition, synchronized accessibility text semantics, bounded semantic
+`input`/`key` scenarios, and opt-in `persistence = "state-v1"` whole-app
+snapshots on macOS. Its deliberately narrow limitations—including no
+clipboard editing, general storage API, state migration, synchronization, or
+mobile text host—are documented in
+[`@vellum/ui`](packages/vellum-ui/README.md) and
 [Interaction capture and montages](docs/cli/capture.md).
 
 The accepted source contract, generated tree, ownership boundary, and conflict
 workflow are documented in [Import and reimport](docs/cli/import-reimport.md).
 The semantic interaction driver, offscreen capture path, and deterministic
 contact-sheet format are documented in [Interaction capture and montages](docs/cli/capture.md).
-
-Every command accepts `--json` before or after the command and emits one stable
-`vellum.cli.result.v1` object. See [the CLI contract](docs/cli/contract.md).
+The deterministic watch/build/reload supervisor, its evidence transcript, and
+native/web state-continuity limits are documented in
+[Development loop](docs/cli/dev.md).
 
 Agents and automation should follow the versioned
 [Vellum application-authoring skill](.agents/skills/vellum-app-authoring/SKILL.md).
@@ -253,13 +347,14 @@ command, flag, or import route that the checked-in product surface does not
 support. SDK artifacts install the same contract under
 `$VELLUM_SDK_ROOT/.agents/skills/vellum-app-authoring/`.
 
-## Build and install an immutable local SDK artifact
+### Build and install an immutable local SDK artifact
 
 The builder performs a Release build, creates a relocatable CMake install tree,
 normalizes archive metadata, and emits both `SHA256SUMS` and machine-readable
 evidence. Building twice from the same source commit and toolchain is covered
 by the integration test.
 
+<!-- readme-exec: id=local-sdk-artifact manual=source-build-not-release-quick-start -->
 ```sh
 python3 scripts/build_sdk_artifact.py \
   --skia-archive /tmp/vellum-skia-m150.zip \
@@ -268,16 +363,17 @@ python3 scripts/build_sdk_artifact.py \
   --node-provenance /path/to/node-provenance.json \
   --output-dir dist --json
 python3 scripts/verify_sdk_artifact.py \
-  --archive dist/vellum-sdk-0.1.1-darwin-arm64.tar.gz \
+  --archive dist/vellum-sdk-0.1.6-darwin-arm64.tar.gz \
   --checksums dist/SHA256SUMS --json
 ./scripts/install.sh \
-  --archive dist/vellum-sdk-0.1.1-darwin-arm64.tar.gz \
+  --archive dist/vellum-sdk-0.1.6-darwin-arm64.tar.gz \
   --checksums dist/SHA256SUMS
 ```
 
 To compose the pinned GPU and authoring SDK into the artifact, pass the Skia
 archive verified in the preceding section:
 
+<!-- readme-exec: id=gpu-sdk-artifact manual=source-build-not-release-quick-start -->
 ```sh
 python3 scripts/build_sdk_artifact.py \
   --skia-archive /tmp/vellum-skia-m150.zip \
@@ -316,6 +412,7 @@ receipts and refuses incomplete, modified, or unmanaged state.
 Keep a verified `install.sh` and `install_core.py` together to inspect or remove
 an installation:
 
+<!-- readme-exec: id=installed-maintenance manual=destructive-or-post-install-maintenance -->
 ```sh
 sh ./install.sh --verify-installed
 sh ./install.sh --uninstall
@@ -331,10 +428,11 @@ proves the imported design is embedded in the application bundle, exercises
 build/run/test/capture/package, and builds/tests a sterile CMake consumer
 without a Vellum or Pulp checkout.
 
-The exact `v0.1.1` release is consumed without a moving `latest` pointer:
+The exact `v0.1.6` release is consumed without a moving `latest` pointer:
 
+<!-- readme-exec: id=version-install-only manual=subset-of-release-quick-start -->
 ```sh
-./scripts/install.sh --version 0.1.1
+./scripts/install.sh --version 0.1.6
 ```
 
 The release `SHA256SUMS` covers the SDK archive, `install.sh`, and
@@ -346,9 +444,10 @@ repository from the automatic release attestation GitHub creates when an
 immutable release is published. After downloading the assets, verify that
 release attestation and an asset with:
 
+<!-- readme-exec: id=release-attestation-check manual=post-download-verification-example -->
 ```sh
-gh release verify v0.1.1 --repo Generous-Corp/vellum
-gh release verify-asset v0.1.1 ./vellum-sdk-0.1.1-darwin-arm64.tar.gz \
+gh release verify v0.1.6 --repo Generous-Corp/vellum
+gh release verify-asset v0.1.6 ./vellum-sdk-0.1.6-darwin-arm64.tar.gz \
   --repo Generous-Corp/vellum
 ```
 
@@ -365,7 +464,7 @@ unreviewed network script intrinsically safe. Review the pinned bootstrap or
 use the cautious path above; no `curl | sh` command is advertised for the
 private release.
 
-## Current boundary
+## Ownership, provenance, and attribution
 
 - No Pulp audio, plug-in, host, or product adapters belong in Vellum.
 - Pulp does not consume this repository during independent validation.
@@ -383,3 +482,34 @@ private release.
   [`docs/ownership.md`](docs/ownership.md),
   [`provenance/pulp-extraction.json`](provenance/pulp-extraction.json), and
   [`provenance/ownership-map.yaml`](provenance/ownership-map.yaml).
+- Independent downstream proofs are pinned in
+  [`provenance/downstream-consumers.v1.json`](provenance/downstream-consumers.v1.json).
+  Its offline verifier checks immutable identities, repository separation, the
+  evidence ladder, and the framework-first fix protocol:
+  `python3 tools/provenance/verify_downstream_consumers.py`.
+- README shell blocks are fail-closed classified by
+  `python3 scripts/readme_exec.py --lint`. The manually dispatched clean-release
+  proof retains its environment, transcript, and timings. Performance targets
+  remain explicitly unratified in
+  [`product/budget-ratification.v1.json`](product/budget-ratification.v1.json)
+  until a reviewed clean run supplies complete evidence.
+
+The active implementation's lineage, exclusions, third-party dependencies, and
+attribution are recorded in [`docs/ownership.md`](docs/ownership.md),
+[`provenance/pulp-extraction.json`](provenance/pulp-extraction.json),
+[`provenance/ownership-map.yaml`](provenance/ownership-map.yaml),
+[`NOTICE.md`](NOTICE.md), and [`DEPENDENCIES.md`](DEPENDENCIES.md).
+
+## Versioning and support status
+
+Vellum is private experimental 0.x software. Projects pin one exact framework
+version, source commit, target tuple, SDK checksum, CLI API, and JS package
+identity in `framework.lock`. Exact-pin source/API compatibility is the current
+promise; there is no universal C++ ABI promise. Schemas and CLI names may change
+between explicitly reviewed upgrades. The working name is not permanent.
+
+## License
+
+Vellum's repository license is [MIT](LICENSE.md). Extracted-history attribution
+and third-party terms remain documented in [NOTICE.md](NOTICE.md) and
+[DEPENDENCIES.md](DEPENDENCIES.md).

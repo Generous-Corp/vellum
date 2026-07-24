@@ -8,19 +8,67 @@
     <link rel="stylesheet" href="./style.css">
   </head>
   <body>
-    <canvas id="vellum-canvas" aria-label="{{APP_NAME}}"></canvas>
+    <div id="vellum-surface">
+      <canvas id="vellum-canvas" aria-hidden="true"></canvas>
+      <div id="vellum-accessibility" aria-label="{{APP_NAME}}"></div>
+    </div>
     <p id="vellum-status">Starting Vellum…</p>
     <script>
+      globalThis.__vellumServiceHost = {
+        capabilities: {
+          commands: 'v1', files: 'user-selected-text-v1',
+          clipboard: 'text-v1', open_url: 'external-v1',
+          persistence: 'state-v1'
+        },
+        responses: [],
+        requests: [],
+        request(request) {
+          this.requests.push(request);
+          const response = this.responses.shift();
+          if (!response) return Promise.resolve({
+            protocol: 'vellum.services.v1', kind: 'response', id: request.id,
+            ok: false, error: {
+              code: 'capability-denied',
+              message: `No scenario response was provided for ${request.service}.`
+            }
+          });
+          return Promise.resolve({...response, id: request.id});
+        }
+      };
       function reportVellumError(value) {
         const message = String(value && (value.stack || value.message) || value);
         document.body.dataset.vellumError = message;
+        let diagnostic = null;
+        try {
+          if (typeof globalThis.__vellumMapExceptionJSON === 'function') {
+            diagnostic = JSON.parse(globalThis.__vellumMapExceptionJSON(value));
+            document.body.dataset.vellumDiagnostic = JSON.stringify(diagnostic);
+          }
+        } catch (mappingError) {
+          diagnostic = {
+            protocol: 'vellum.authoring-host.v2', kind: 'diagnostic',
+            severity: 'error', code: 'VELLUM_SOURCE_MAP_INVALID',
+            message: String(mappingError && mappingError.message || mappingError),
+          };
+          document.body.dataset.vellumDiagnostic = JSON.stringify(diagnostic);
+        }
         fetch('/__vellum_proof', { method: 'POST', headers: {'content-type':'application/json'},
-          body: JSON.stringify({bootError: message}) }).catch(() => {});
+          body: JSON.stringify({bootError: message, diagnostic}) }).catch(() => {});
       }
       addEventListener('error', event => reportVellumError(event.error || event.message));
-      addEventListener('unhandledrejection', event => reportVellumError(event.reason));
+      addEventListener('unhandledrejection', event => {
+        const expected = globalThis.__vellumExpectedRejections;
+        const index = Array.isArray(expected)
+          ? expected.indexOf(event.reason && event.reason.code) : -1;
+        if (index >= 0) {
+          expected.splice(index, 1);
+          event.preventDefault();
+          return;
+        }
+        reportVellumError(event.reason);
+      });
     </script>
-    <script src="./app.js"></script>
+    <script type="module" src="./app.js"></script>
     <script type="module" src="./vellum_host.js"></script>
   </body>
 </html>

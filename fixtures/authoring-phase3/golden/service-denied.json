@@ -1,0 +1,10 @@
+{
+  "protocol": "vellum.services.v1",
+  "kind": "response",
+  "id": "request-open-1",
+  "ok": false,
+  "error": {
+    "code": "capability-denied",
+    "message": "The files capability was not granted."
+  }
+}

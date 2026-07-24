@@ -1,0 +1,72 @@
+{
+  "schema": "vellum.scenario.v2",
+  "name": "unchanged authoring fixture on native and browser",
+  "steps": [
+    { "action": "wait-for-idle" },
+    { "action": "press", "target": "phase3/imported-add" },
+    { "action": "assert-text", "target": "item-list", "expect": "Board: Roadmap" },
+    { "action": "focus", "target": "title-input" },
+    { "action": "input", "target": "title-input", "value": "GPU Notes" },
+    { "action": "key", "target": "title-input", "value": "ArrowLeft" },
+    { "action": "compose", "target": "title-input", "value": "日本語" },
+    {
+      "action": "touch",
+      "target": "phase3/imported-add",
+      "event": {
+        "protocol": "vellum.events.v2",
+        "sequence": 7,
+        "target": "phase3/imported-add",
+        "type": "touch",
+        "payload": { "pointerType": "touch", "x": 20, "y": 20 }
+      }
+    },
+    { "action": "command", "target": "item.add" },
+    {
+      "action": "assert-accessibility",
+      "target": "title-input",
+      "expect": {
+        "label": "Board title",
+        "role": "text-field",
+        "value": "GPU Notes日本語"
+      }
+    },
+    {
+      "action": "service-result",
+      "target": "open",
+      "service": {
+        "protocol": "vellum.services.v1",
+        "kind": "response",
+        "id": "request-open-1",
+        "ok": false,
+        "error": {
+          "code": "capability-denied",
+          "message": "The files capability was not granted."
+        }
+      }
+    },
+    {
+      "action": "service-result",
+      "target": "copy",
+      "service": {
+        "protocol": "vellum.services.v1",
+        "kind": "response",
+        "id": "request-copy-1",
+        "ok": true,
+        "value": null
+      }
+    },
+    {
+      "action": "service-result",
+      "target": "docs",
+      "service": {
+        "protocol": "vellum.services.v1",
+        "kind": "response",
+        "id": "request-url-1",
+        "ok": true,
+        "value": null
+      }
+    },
+    { "action": "throw", "target": "mapped-error", "expect": "vellum://app/src/App.tsx" },
+    { "action": "capture", "value": "phase3-final" }
+  ]
+}

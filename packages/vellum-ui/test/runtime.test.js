@@ -12,11 +12,117 @@ import {
     createApp,
     jsx,
     mount,
+    useEffect,
     useMemo,
     useState,
 } from '../src/index.js';
 
 const protocol = 'vellum.authoring-host.v1';
+
+test('exposes the v2 invalidation pump for browser async settlement', async () => {
+    const invalidations = [];
+    globalThis.__vellumHostV2 = {
+        invalidateJSON(value) {
+            invalidations.push(JSON.parse(value));
+        },
+    };
+    try {
+        let resolveUpdate;
+        function AsyncState() {
+            const [value, setValue] = useState('initial');
+            resolveUpdate = () => Promise.resolve().then(() => setValue('settled'));
+            return jsx(View, {
+                id: 'async-root',
+                style: { width: 100, height: 100 },
+                children: jsx(Text, { id: 'async-value', children: value }),
+            });
+        }
+        const bridge = mount(AsyncState);
+        assert.equal(bridge.hostProtocol, 'vellum.authoring-host.v2');
+        bridge.renderJSON();
+        await resolveUpdate();
+        assert.equal(bridge.isDirty(), true);
+        assert.deepEqual(invalidations, [{
+            protocol: 'vellum.authoring-host.v2',
+            kind: 'invalidate',
+            revision: 2,
+            reason: 'state',
+        }]);
+        const pumped = JSON.parse(bridge.pumpJSON());
+        assert.equal(pumped.protocol, 'vellum.authoring-host.v2');
+        assert.equal(pumped.kind, 'render-result');
+        assert.equal(pumped.revision, 2);
+        assert.equal(pumped.tree.children[0].children[0].text, 'settled');
+        assert.equal(bridge.isDirty(), false);
+    } finally {
+        delete globalThis.__vellumHostV2;
+    }
+});
+
+test('browser timers and promises settle through the same bounded pump state', async () => {
+    const order = [];
+    let update;
+    function ScheduledState() {
+        const [value, setValue] = useState('initial');
+        update = setValue;
+        return jsx(View, {
+            id: 'scheduled-root',
+            style: { width: 100, height: 100 },
+            children: jsx(Text, { id: 'scheduled-value', children: value }),
+        });
+    }
+    const bridge = mount(ScheduledState);
+    bridge.renderJSON();
+    await new Promise((resolve) => {
+        setTimeout(() => {
+            order.push('first');
+            Promise.resolve().then(() => {
+                order.push('promise');
+                update(order.join(','));
+            });
+        }, 5);
+        const cancelled = setTimeout(() => order.push('cancelled'), 5);
+        clearTimeout(cancelled);
+        setTimeout(() => {
+            order.push('late');
+            update(order.join(','));
+            resolve();
+        }, 10);
+    });
+    const pumped = JSON.parse(bridge.pumpJSON());
+    assert.equal(pumped.tree.children[0].children[0].text, 'first,promise,late');
+    assert.deepEqual(order, ['first', 'promise', 'late']);
+});
+
+test('useEffect runs after commit, respects dependencies, and cleans up', async () => {
+    const events = [];
+    let setValue;
+    function EffectFixture() {
+        const [value, update] = useState('first');
+        setValue = update;
+        useEffect(() => {
+            events.push(`start:${value}`);
+            return () => events.push(`stop:${value}`);
+        }, [value]);
+        return jsx(View, {
+            id: 'effect-root',
+            style: { width: 100, height: 100 },
+            children: jsx(Text, { id: 'effect-value', children: value }),
+        });
+    }
+    const bridge = mount(EffectFixture);
+    bridge.renderJSON();
+    assert.deepEqual(events, []);
+    await Promise.resolve();
+    assert.deepEqual(events, ['start:first']);
+    setValue('second');
+    bridge.pumpJSON();
+    await Promise.resolve();
+    assert.deepEqual(events, ['start:first', 'stop:first', 'start:second']);
+    bridge.renderJSON();
+    await Promise.resolve();
+    assert.deepEqual(events, ['start:first', 'stop:first', 'start:second']);
+});
 
 test('renders one deterministic serializable retained tree', () => {
     const bridge = mount(() => jsx(View, {
@@ -33,6 +139,19 @@ test('renders one deterministic serializable retained tree', () => {
     assert.equal(envelope.tree.children[0].children[0].text, 'Hello ');
     assert.equal(envelope.tree.children[0].children[1].text, '7');
     assert.equal(JSON.stringify(envelope).includes('function'), false);
+});
+
+test('retains declared scroll containers for native and browser hosts', () => {
+    const tree = JSON.parse(mount(() => jsx(Stack, {
+        id: 'scroll-list',
+        scroll: 'vertical',
+        children: jsx(Text, { children: 'Scrollable' }),
+    })).renderJSON()).tree;
+    assert.equal(tree.scroll, 'vertical');
+    assert.throws(() => mount(() => jsx(Stack, {
+        id: 'invalid-scroll',
+        scroll: 'diagonal',
+    })).renderJSON(), /scroll must be horizontal or vertical/);
 });
 
 test('serializes a declared custom component with an explicit portable fallback', () => {
@@ -135,6 +254,38 @@ test('TextInput v1 is controlled, serializable, and dispatches semantic input ev
     assert.equal(tree.children[1].children[0].text, 'Roadmap:true');
 });
 
+test('TextInput serializes UTF-16 selection, composition handlers, and semantic state', () => {
+    const events = [];
+    const bridge = mount(() => jsx(TextInput, {
+        id: 'localized-title',
+        value: 'A😀B',
+        selection: {start: 1, end: 3},
+        accessibilityLabel: 'Localized title',
+        accessibilityValue: 'A, emoji, B',
+        accessibilityState: {disabled: false, selected: true},
+        onChange: payload => events.push(['change', payload]),
+        onSelectionChange: payload => events.push(['selection', payload]),
+        onCompositionStart: payload => events.push(['start', payload]),
+        onCompositionUpdate: payload => events.push(['update', payload]),
+        onCompositionEnd: payload => events.push(['end', payload]),
+    }));
+    const input = JSON.parse(bridge.renderJSON()).tree;
+    assert.deepEqual(input.selection, {start: 1, end: 3});
+    assert.equal(input.accessibilityLabel, 'Localized title');
+    assert.equal(input.accessibilityValue, 'A, emoji, B');
+    assert.deepEqual(input.accessibilityState, {disabled: false, selected: true});
+    for (const [name, expected] of [
+        ['selectionChange', 'selection'], ['compositionStart', 'start'],
+        ['compositionUpdate', 'update'], ['compositionEnd', 'end'],
+    ]) {
+        bridge.dispatchJSON(JSON.stringify({
+            protocol, action: input.events[name],
+            payload: {text: 'に', selection: {start: 2, end: 2}},
+        }));
+        assert.equal(events.at(-1)[0], expected);
+    }
+});
+
 test('TextInput v1 rejects unversioned, uncontrolled, and oversized payloads', () => {
     assert.throws(
         () => mount(() => jsx('text-input', { id: 'raw', value: '', onChange() {} })).renderJSON(),
@@ -149,6 +300,13 @@ test('TextInput v1 rejects unversioned, uncontrolled, and oversized payloads', (
             id: 'too-long', value: 'x'.repeat(65537), onChange() {},
         })).renderJSON(),
         /at most 65536 code units/,
+    );
+    assert.throws(
+        () => mount(() => jsx(TextInput, {
+            id: 'bad-selection', value: 'abc', selection: {start: 1, end: 4},
+            onChange() {},
+        })).renderJSON(),
+        /ordered UTF-16 range/,
     );
 });
 

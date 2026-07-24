@@ -93,6 +93,35 @@ Components normally derive identity from their name and implementation; set a
 unique static `vellumId` when state must survive an intentional implementation
 replacement or reimport.
 
+## Portable application builds
+
+`scripts/build-project.mjs` runs the transitive module graph through
+`scripts/check-portability.mjs` before bundling. Failures emit one
+`vellum.portability-diagnostics.v1` JSON object covering Node builtins, DOM
+globals, dynamic code, non-static dynamic imports, undeclared service
+capabilities, platform-only imports, and resolution failures. Native builds
+default to an IIFE; set `VELLUM_BUILD_FORMAT=esm` for the web ESM output.
+Both formats emit an external `app.js.map`; application sources use stable
+`vellum://app/...` URLs. Runtime failures expose
+`vellum.authoring-host.v2` diagnostic envelopes mapped back to TypeScript or
+TSX. Missing or malformed maps fail closed as `VELLUM_SOURCE_MAP_MISSING` or
+`VELLUM_SOURCE_MAP_INVALID` instead of returning an opaque generated-bundle
+location.
+
+Application components can use `useState`, `useMemo`, and `useEffect` from the
+same unchanged TSX source in native JavaScriptCore and browser JavaScript.
+Effects run after a committed retained-tree render, rerun only when declared
+dependencies change, and invoke their cleanup before replacement or unmount.
+Timers and Promise callbacks invalidate the versioned host pump rather than
+requiring a DOM event loop.
+
+The exported `services` singleton is the application-facing, capability-checked
+surface. It provides command declaration/execution, user-selected text files,
+clipboard text, external URLs, and persistence. Platform shells install the
+provider boundary; an undeclared or absent provider fails with a stable
+capability error. `createServices` remains available for dependency-injected
+components and tests.
+
 Native persistence is separately capability-gated in `app.toml` with
 `persistence = "state-v1"` under `[capabilities]`. On macOS this restores the
 whole versioned Vellum snapshot from Application Support before the first

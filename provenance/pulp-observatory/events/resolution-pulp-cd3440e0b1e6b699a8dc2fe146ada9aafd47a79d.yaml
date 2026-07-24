@@ -1,0 +1,18 @@
+{
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-07-23T17:46:22Z",
+  "disposition": "Pulp-only",
+  "effort_minutes": 0,
+  "event_id": "resolution-pulp-cd3440e0b1e6b699a8dc2fe146ada9aafd47a79d",
+  "kind": "resolution",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Pulp RuntimeShader layer-cropping behavior. Vellum exposes no named shader-effect API today; retain the invariant for future effects work without porting Pulp source.",
+  "resolves": "pulp-cd3440e0b1e6b699a8dc2fe146ada9aafd47a79d",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

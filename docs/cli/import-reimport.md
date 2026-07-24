@@ -111,6 +111,24 @@ ui/generated/                           materialized UI and resolved bindings
 src/, components/, native/              developer-owned and never rewritten
 ```
 
+Inspect active generated state without changing it:
+
+```sh
+vellum design check --as main
+vellum design diff --as main
+```
+
+Both operations validate the project lock, import graph, immutable snapshot
+identity, authored overlay, asset hashes, and source contract. They then run the
+same normalizer, overlay application, token resolution, component flattening,
+and materialization code used by import/reimport entirely in memory.
+`design check` returns `design_clean` or fails with `design_drift`.
+`design diff` returns `design_clean` or the non-mutating `design_diff` status.
+Each difference has a deterministic path, kind (`missing`, `modified`, or
+`unexpected`), byte sizes, and SHA-256 identities; neither operation repairs
+generated output. Use `reimport` to accept a new source or rematerialize an
+unchanged one.
+
 Edit `design/overlays/main.authored.json` to add bindings, reviewed aliases,
 structured visual overrides, semantic tokens, or theme overrides. Reimport
 reapplies that file without rewriting it. If a binding or override no longer

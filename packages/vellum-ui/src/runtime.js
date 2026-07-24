@@ -1,6 +1,14 @@
+import { services } from './services.js';
+import {
+    cloneEffect,
+    registerEffect,
+    scheduleCommittedEffects,
+} from './effects.js';
+
 const ELEMENT = Symbol.for('vellum.element');
 const FRAGMENT = Symbol.for('vellum.fragment');
 const PROTOCOL = 'vellum.authoring-host.v1';
+const ASYNC_HOST_PROTOCOL = 'vellum.authoring-host.v2';
 const SNAPSHOT_SCHEMA = 'vellum.authoring-state.v1';
 const TEXT_INPUT_PRIMITIVE_VERSION = 1;
 const MAXIMUM_TEXT_INPUT_LENGTH = 65536;
@@ -353,7 +361,7 @@ export function useState(initialValue) {
         if (!target || target.kind !== 'state') throw new Error('state hook is no longer mounted');
         const next = typeof nextValue === 'function' ? nextValue(target.value) : nextValue;
         target.value = durableValue(next, `${frameId}[${index}]`);
-        runtime.dirty = true;
+        runtime.markDirty('state');
     };
     return [record.value, setValue];
 }
@@ -376,6 +384,11 @@ export function useMemo(factory, dependencies) {
         record.initialized = true;
     }
     return record.value;
+}
+
+export function useEffect(effect, dependencies) {
+    const { frameId, frame, index } = activeHook('useEffect');
+    registerEffect(frame, frameId, index, effect, dependencies);
 }
 
 function validateStyle(style, path) {
@@ -485,6 +498,10 @@ function materialize(value, runtime, path) {
     for (const [property, eventName] of [
         ['onPress', 'press'], ['onChange', 'change'],
         ['onSubmit', 'submit'], ['onKeyDown', 'keyDown'],
+        ['onSelectionChange', 'selectionChange'],
+        ['onCompositionStart', 'compositionStart'],
+        ['onCompositionUpdate', 'compositionUpdate'],
+        ['onCompositionEnd', 'compositionEnd'],
     ]) {
         const handler = value.props[property];
         if (handler === undefined) continue;
@@ -525,13 +542,55 @@ function materialize(value, runtime, path) {
         node.component = value.props.component;
         node.properties = cloneJson(value.props.properties, `${path}.properties`);
     }
-    if (typeof value.props.accessibilityLabel === 'string') {
-        node.accessibilityLabel = value.props.accessibilityLabel;
+    for (const property of ['accessibilityLabel', 'accessibilityValue']) {
+        if (value.props[property] !== undefined && typeof value.props[property] !== 'string') {
+            throw new TypeError(`${path}.${property} must be a string`);
+        }
+        if (typeof value.props[property] === 'string') node[property] = value.props[property];
+    }
+    if (value.props.accessibilityRole !== undefined) {
+        const roles = new Set(['button', 'group', 'image', 'list', 'text', 'text-field']);
+        if (!roles.has(value.props.accessibilityRole)) {
+            throw new TypeError(`${path}.accessibilityRole is unsupported`);
+        }
+        node.accessibilityRole = value.props.accessibilityRole;
+    }
+    if (value.props.accessibilityState !== undefined) {
+        const semanticState = cloneJson(
+            value.props.accessibilityState, `${path}.accessibilityState`,
+        );
+        const names = Object.keys(semanticState);
+        if (names.some((name) =>
+            !['disabled', 'selected', 'checked', 'expanded'].includes(name)) ||
+            names.some((name) => name === 'checked'
+                ? ![true, false, 'mixed'].includes(semanticState[name])
+                : typeof semanticState[name] !== 'boolean')) {
+            throw new TypeError(`${path}.accessibilityState has unsupported fields or values`);
+        }
+        node.accessibilityState = semanticState;
+    }
+    if (value.props.scroll !== undefined) {
+        if (!['horizontal', 'vertical'].includes(value.props.scroll)) {
+            throw new TypeError(`${path}.scroll must be horizontal or vertical`);
+        }
+        node.scroll = value.props.scroll;
     }
     if (value.type === 'text-input') {
         node.primitiveVersion = TEXT_INPUT_PRIMITIVE_VERSION;
         node.value = value.props.value;
         if (value.props.placeholder !== undefined) node.placeholder = value.props.placeholder;
+        if (value.props.selection !== undefined) {
+            const selection = value.props.selection;
+            if (selection === null || typeof selection !== 'object' ||
+                !Number.isInteger(selection.start) || !Number.isInteger(selection.end) ||
+                selection.start < 0 || selection.end < selection.start ||
+                selection.end > value.props.value.length) {
+                throw new TypeError(
+                    `${path}.TextInput selection must be an ordered UTF-16 range within value`,
+                );
+            }
+            node.selection = { start: selection.start, end: selection.end };
+        }
     }
     if (Object.keys(events).length > 0) node.events = events;
     return [node];
@@ -543,14 +602,20 @@ function cloneFrames(frames, resetMemo = false) {
         output.set(id, {
             established: frame.established,
             cursor: 0,
-            hooks: frame.hooks.map((hook) => hook.kind === 'state'
-                ? { kind: 'state', value: durableValue(hook.value, `${id}.state`) }
-                : {
+            hooks: frame.hooks.map((hook) => {
+                if (hook.kind === 'state') {
+                    return { kind: 'state', value: durableValue(hook.value, `${id}.state`) };
+                }
+                if (hook.kind === 'effect') {
+                    return cloneEffect(hook);
+                }
+                return {
                     kind: 'memo',
                     initialized: resetMemo ? false : hook.initialized,
                     value: resetMemo ? undefined : hook.value,
                     dependencies: resetMemo ? null : hook.dependencies,
-                }),
+                };
+            }),
         });
     }
     return output;
@@ -589,6 +654,8 @@ class Runtime {
         this.mutationFrames = null;
         this.dirty = true;
         this.lastTree = null;
+        this.revision = 0;
+        this.invalidationHandler = null;
     }
 
     componentIdentity(component) {
@@ -654,6 +721,10 @@ class Runtime {
             for (const id of [...state.frames.keys()]) {
                 if (!state.visitedFrames.has(id)) state.frames.delete(id);
             }
+            const rootStyle = materialized[0].style ?? Object.create(null);
+            if (typeof rootStyle.width !== 'number') rootStyle.width = 800;
+            if (typeof rootStyle.height !== 'number') rootStyle.height = 600;
+            materialized[0].style = rootStyle;
             return { frames: state.frames, handlers: state.handlers, tree: materialized[0] };
         } finally {
             this.renderState = null;
@@ -662,13 +733,32 @@ class Runtime {
     }
 
     commitRender(baseFrames = this.frames, model = this.model) {
+        const previousFrames = this.frames;
         const candidate = this.renderCandidate(baseFrames, model);
         this.frames = candidate.frames;
         this.handlers = candidate.handlers;
         this.model = model;
         this.lastTree = candidate.tree;
         this.dirty = false;
+        this.revision += 1;
+        scheduleCommittedEffects(this, previousFrames, candidate.frames);
         return this.lastTree;
+    }
+
+    markDirty(reason = 'state') {
+        const wasDirty = this.dirty;
+        this.dirty = true;
+        if (!wasDirty && this.mutationFrames === null && this.renderState === null) {
+            this.invalidationHandler?.(reason, this.revision + 1);
+        }
+    }
+
+    setInvalidationHandler(handler) {
+        this.invalidationHandler = handler;
+    }
+
+    renderIfDirty() {
+        return this.dirty || this.lastTree === null ? this.render() : this.lastTree;
     }
 
     render() {
@@ -753,16 +843,32 @@ class Runtime {
             if (!source || typeof source.id !== 'string' || source.id.length === 0 ||
                 !Array.isArray(source.hooks) || !Array.isArray(source.values) ||
                 seen.has(source.id) ||
-                source.hooks.some((kind) => kind !== 'state' && kind !== 'memo')) {
+                source.hooks.some((kind) =>
+                    kind !== 'state' && kind !== 'memo' && kind !== 'effect')) {
                 throw new Error('Vellum state snapshot contains an invalid component frame');
             }
             seen.add(source.id);
             const frame = {
                 established: true,
                 cursor: 0,
-                hooks: source.hooks.map((kind) => kind === 'state'
-                    ? { kind: 'state', value: null }
-                    : { kind: 'memo', initialized: false, value: undefined, dependencies: null }),
+                hooks: source.hooks.map((kind) => {
+                    if (kind === 'state') return { kind: 'state', value: null };
+                    if (kind === 'effect') {
+                        return {
+                            kind: 'effect',
+                            dependencies: undefined,
+                            cleanup: null,
+                            effect: null,
+                            pending: false,
+                        };
+                    }
+                    return {
+                        kind: 'memo',
+                        initialized: false,
+                        value: undefined,
+                        dependencies: null,
+                    };
+                }),
             };
             const expected = source.hooks.filter((kind) => kind === 'state').length;
             if (source.values.length !== expected) {
@@ -805,8 +911,20 @@ export function createApp(options) {
 
 export function mount(application) {
     const runtime = application instanceof Runtime ? application : createApp(application);
+    runtime.setInvalidationHandler((reason, revision) => {
+        const host = globalThis.__vellumHostV2;
+        if (host && typeof host.invalidateJSON === 'function') {
+            host.invalidateJSON(stableStringify({
+                protocol: ASYNC_HOST_PROTOCOL,
+                kind: 'invalidate',
+                revision,
+                reason,
+            }));
+        }
+    });
     const bridge = Object.freeze({
         protocol: PROTOCOL,
+        hostProtocol: ASYNC_HOST_PROTOCOL,
         renderJSON() {
             return stableStringify({ protocol: PROTOCOL, tree: runtime.render() });
         },
@@ -830,6 +948,20 @@ export function mount(application) {
                 throw new Error(`invalid ${PROTOCOL} state snapshot`);
             }
             return stableStringify({ protocol: PROTOCOL, tree: runtime.restore(envelope.state) });
+        },
+        pumpJSON() {
+            return stableStringify({
+                protocol: ASYNC_HOST_PROTOCOL,
+                kind: 'render-result',
+                revision: runtime.revision + (runtime.dirty ? 1 : 0),
+                tree: runtime.renderIfDirty(),
+            });
+        },
+        isDirty() {
+            return runtime.dirty;
+        },
+        hasCommand(command) {
+            return services.commands.has(command);
         },
     });
     Object.defineProperty(globalThis, '__vellum', {

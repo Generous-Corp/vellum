@@ -1,0 +1,18 @@
+{
+  "contract_tests": [
+    "vellum.authoring-phase3-contract",
+    "vellum.ui-runtime"
+  ],
+  "created_at": "2026-07-23T20:56:36Z",
+  "disposition": "framework-only",
+  "effort_minutes": 0,
+  "event_id": "resolution-vellum-41865e60147059cc5449187f8fa8dcbd90c36ee9",
+  "kind": "resolution",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Vellum-owned standalone framework behavior. Any later Pulp adoption must consume it through a pinned Vellum dependency and adapter tests, not synchronized source copies.",
+  "resolves": "vellum-41865e60147059cc5449187f8fa8dcbd90c36ee9",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

@@ -7,6 +7,9 @@
 #include <vellum/graphics/skia_dawn_surface.hpp>
 
 #include "component_registry.hpp"
+#include "macos_accessibility.hpp"
+#include "options.hpp"
+#include "text_semantics.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -30,6 +33,11 @@ using vellum::authoring::TextInputControl;
 using vellum::graphics::SkiaDawnSurface;
 using vellum::app_host::ComponentModuleSpec;
 using vellum::app_host::ComponentRegistry;
+using vellum::app_host::MacAccessibilityBridge;
+using vellum::app_host::AutomationStep;
+using vellum::app_host::Options;
+using vellum::app_host::parse_options;
+using namespace vellum::app_host::text_semantics;
 
 std::string cpp_string(NSString* value) {
     if (value == nil) return {};
@@ -37,121 +45,7 @@ std::string cpp_string(NSString* value) {
     return utf8 == nullptr ? std::string{} : std::string{utf8};
 }
 
-struct AutomationStep final {
-    enum class Kind { press, input, key };
-    Kind kind;
-    std::string node_id;
-    std::string value;
-};
-
-struct Options final {
-    std::filesystem::path bundle;
-    std::filesystem::path capture;
-    std::filesystem::path state_file;
-    std::vector<AutomationStep> steps;
-    std::vector<ComponentModuleSpec> components;
-    std::optional<std::uint32_t> expected_width;
-    std::optional<std::uint32_t> expected_height;
-    bool no_window = false;
-};
-
-void usage() {
-    std::cerr << "usage: vellum-app-host [--bundle FILE] [--self-test|--no-window] "
-                 "[--press NODE_ID] [--input NODE_ID TEXT] [--key NODE_ID KEY] "
-                 "[--component ID=DYLIB] [--state-file FILE] "
-                 "[--expect-width N --expect-height N] [--capture PNG]\n";
-}
-
-constexpr std::size_t kMaximumAutomationSteps = 1000U;
-constexpr std::size_t kMaximumNodeIdBytes = 1024U;
-constexpr std::size_t kMaximumInputBytes = 64U * 1024U;
 constexpr std::size_t kMaximumStateBytes = 16U * 1024U * 1024U;
-
-bool valid_node_id(std::string_view value) {
-    return !value.empty() && value.size() <= kMaximumNodeIdBytes &&
-           value.find('\0') == std::string_view::npos;
-}
-
-bool valid_key(std::string_view value) {
-    constexpr std::string_view supported[] = {
-        "Enter", "Escape", "Backspace", "Tab", "ArrowUp", "ArrowDown",
-        "ArrowLeft", "ArrowRight", "Home", "End", "Delete",
-    };
-    return std::find(std::begin(supported), std::end(supported), value) !=
-           std::end(supported);
-}
-
-std::optional<std::uint32_t> positive_dimension(std::string_view text) {
-    try {
-        const auto value = std::stoul(std::string(text));
-        if (value == 0U || value > 16384U) return std::nullopt;
-        return static_cast<std::uint32_t>(value);
-    } catch (...) {
-        return std::nullopt;
-    }
-}
-
-std::optional<Options> parse_options(int argc, const char* argv[]) {
-    Options options;
-    for (int index = 1; index < argc; ++index) {
-        const std::string_view argument = argv[index];
-        if (argument == "--self-test" || argument == "--no-window") {
-            options.no_window = true;
-        } else if (argument == "--bundle" || argument == "--capture" ||
-                   argument == "--state-file" || argument == "--press" ||
-                   argument == "--component" ||
-                   argument == "--expect-width" ||
-                   argument == "--expect-height") {
-            if (++index >= argc) return std::nullopt;
-            if (argument == "--bundle") options.bundle = argv[index];
-            if (argument == "--capture") options.capture = argv[index];
-            if (argument == "--state-file") {
-                if (argv[index][0] == '\0') return std::nullopt;
-                options.state_file = argv[index];
-            }
-            if (argument == "--press") {
-                const std::string node_id = argv[index];
-                if (!valid_node_id(node_id)) return std::nullopt;
-                options.steps.push_back({AutomationStep::Kind::press, node_id, {}});
-            }
-            if (argument == "--component") {
-                ComponentModuleSpec spec;
-                std::string error;
-                if (!vellum::app_host::parse_component_module_spec(argv[index], spec, &error)) {
-                    return std::nullopt;
-                }
-                options.components.push_back(std::move(spec));
-            }
-            if (argument == "--expect-width") {
-                options.expected_width = positive_dimension(argv[index]);
-                if (!options.expected_width) return std::nullopt;
-            }
-            if (argument == "--expect-height") {
-                options.expected_height = positive_dimension(argv[index]);
-                if (!options.expected_height) return std::nullopt;
-            }
-        } else if (argument == "--input" || argument == "--key") {
-            if (index + 2 >= argc) return std::nullopt;
-            const std::string node_id = argv[++index];
-            const std::string value = argv[++index];
-            if (!valid_node_id(node_id) ||
-                (argument == "--input" && value.size() > kMaximumInputBytes) ||
-                (argument == "--key" && !valid_key(value))) {
-                return std::nullopt;
-            }
-            options.steps.push_back({
-                argument == "--input" ? AutomationStep::Kind::input : AutomationStep::Kind::key,
-                node_id,
-                value,
-            });
-        } else {
-            return std::nullopt;
-        }
-        if (options.steps.size() > kMaximumAutomationSteps) return std::nullopt;
-    }
-    return options;
-}
-
 std::filesystem::path bundled_application_script() {
     NSString* resource = [NSBundle.mainBundle pathForResource:@"app" ofType:@"js"];
     return resource == nil ? std::filesystem::path{} :
@@ -212,132 +106,6 @@ bool load_components(const std::vector<ComponentModuleSpec>& specs,
                      ComponentRegistry& registry, std::string* error) {
     for (const auto& spec : specs) {
         if (!registry.load(spec, error)) return false;
-    }
-    return true;
-}
-
-bool press_node(JsApplication& application, RenderedApplication& rendered,
-                std::string_view node_id, std::string* error) {
-    const auto interaction = std::find_if(
-        rendered.interactions.begin(), rendered.interactions.end(),
-        [node_id](const Interaction& item) {
-            return item.node_id == node_id && item.event == "press";
-        });
-    if (interaction == rendered.interactions.end()) {
-        if (error) *error = "scenario press target is missing or not pressable: " +
-                            std::string(node_id);
-        return false;
-    }
-    return application.dispatch(
-        interaction->action, R"({"pointerType":"automation"})", rendered, error);
-}
-
-const TextInputControl* find_text_input(
-    const RenderedApplication& rendered, std::string_view node_id) {
-    const auto input = std::find_if(
-        rendered.text_inputs.begin(), rendered.text_inputs.end(),
-        [node_id](const TextInputControl& item) { return item.node_id == node_id; });
-    return input == rendered.text_inputs.end() ? nullptr : &*input;
-}
-
-bool serialize_payload(NSDictionary* value, std::string& output, std::string* error) {
-    NSError* json_error = nil;
-    NSData* data = [NSJSONSerialization dataWithJSONObject:value options:0 error:&json_error];
-    if (data == nil || data.length > kMaximumInputBytes + 4096U) {
-        if (error) *error = "event payload could not be serialized within its bound";
-        return false;
-    }
-    NSString* text = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-    if (text == nil) {
-        if (error) *error = "event payload did not encode as UTF-8";
-        return false;
-    }
-    output.assign(text.UTF8String, [text lengthOfBytesUsingEncoding:NSUTF8StringEncoding]);
-    return true;
-}
-
-bool dispatch_payload(JsApplication& application, RenderedApplication& rendered,
-                      std::string_view action, NSDictionary* payload,
-                      std::string* error) {
-    std::string encoded;
-    return serialize_payload(payload, encoded, error) &&
-           application.dispatch(action, encoded, rendered, error);
-}
-
-bool input_node(JsApplication& application, RenderedApplication& rendered,
-                std::string_view node_id, std::string_view value,
-                NSString* source, std::string* error) {
-    const TextInputControl* input = find_text_input(rendered, node_id);
-    if (input == nullptr || input->change_action.empty()) {
-        if (error) *error = "scenario input target is missing or not editable: " +
-                            std::string(node_id);
-        return false;
-    }
-    NSString* text = [[NSString alloc]
-        initWithBytes:value.data() length:value.size() encoding:NSUTF8StringEncoding];
-    if (text == nil || value.size() > kMaximumInputBytes) {
-        if (error) *error = "text input value is invalid UTF-8 or exceeds 64 KiB";
-        return false;
-    }
-    const std::string action = input->change_action;
-    return dispatch_payload(application, rendered, action,
-        @{ @"value": text, @"inputType": source }, error);
-}
-
-std::string without_last_grapheme(std::string_view value) {
-    NSString* text = [[NSString alloc]
-        initWithBytes:value.data() length:value.size() encoding:NSUTF8StringEncoding];
-    if (text == nil || text.length == 0U) return {};
-    const NSRange range = [text rangeOfComposedCharacterSequenceAtIndex:text.length - 1U];
-    return cpp_string([text substringToIndex:range.location]);
-}
-
-bool key_node(JsApplication& application, RenderedApplication& rendered,
-              std::string_view node_id, std::string_view key,
-              NSString* source, std::string* error) {
-    const TextInputControl* input = find_text_input(rendered, node_id);
-    if (input == nullptr) {
-        if (error) *error = "scenario key target is missing or not a text input: " +
-                            std::string(node_id);
-        return false;
-    }
-    if (!valid_key(key)) {
-        if (error) *error = "unsupported semantic key: " + std::string(key);
-        return false;
-    }
-    NSString* key_text = [[NSString alloc]
-        initWithBytes:key.data() length:key.size() encoding:NSUTF8StringEncoding];
-    bool dispatched = false;
-    if (!input->key_down_action.empty()) {
-        const std::string action = input->key_down_action;
-        if (!dispatch_payload(application, rendered, action,
-                @{ @"key": key_text, @"repeat": @NO, @"source": source }, error)) {
-            return false;
-        }
-        dispatched = true;
-        input = find_text_input(rendered, node_id);
-        if (input == nullptr) {
-            if (error) *error = "key handler removed its text input target";
-            return false;
-        }
-    }
-    if (key == "Enter" && !input->submit_action.empty()) {
-        const std::string action = input->submit_action;
-        NSString* value = [[NSString alloc] initWithUTF8String:input->value.c_str()];
-        if (!dispatch_payload(application, rendered, action,
-                @{ @"value": value ?: @"", @"source": source }, error)) {
-            return false;
-        }
-        dispatched = true;
-    }
-    if (key == "Backspace" && !input->change_action.empty()) {
-        const std::string next_value = without_last_grapheme(input->value);
-        if (!input_node(application, rendered, node_id, next_value, source, error)) return false;
-        dispatched = true;
-    }
-    if (!dispatched) {
-        if (error) *error = "text input has no handler for semantic key: " + std::string(key);
-        return false;
     }
     return true;
 }
@@ -432,11 +200,20 @@ int run_headless(const Options& options, std::string_view bundle) {
         }
         auto application = JsApplication::create(bundle, &error);
         RenderedApplication rendered;
-        if (!application || !application->render(rendered, &error)) {
+        if (!application ||
+            (!options.service_capabilities.empty() &&
+             !application->configure_service_host(
+                 options.service_capabilities, &error)) ||
+            !application->render(rendered, &error)) {
             std::cerr << error << '\n';
             return 1;
         }
         if (!restore_persisted_state(*application, rendered, options.state_file, &error)) {
+            std::cerr << error << '\n';
+            return 1;
+        }
+        vellum::authoring::PumpResult idle;
+        if (!application->wait_for_idle(4096, rendered, idle, &error)) {
             std::cerr << error << '\n';
             return 1;
         }
@@ -445,14 +222,88 @@ int run_headless(const Options& options, std::string_view bundle) {
             return 1;
         }
         for (const auto& step : options.steps) {
-            const bool succeeded = step.kind == AutomationStep::Kind::press
-                ? press_node(*application, rendered, step.node_id, &error)
-                : step.kind == AutomationStep::Kind::input
-                    ? input_node(*application, rendered, step.node_id, step.value,
-                                 @"scenario", &error)
-                    : key_node(*application, rendered, step.node_id, step.value,
-                               @"scenario", &error);
+            bool succeeded = false;
+            switch (step.kind) {
+                case AutomationStep::Kind::press:
+                    succeeded = press_node(*application, rendered, step.node_id, &error);
+                    break;
+                case AutomationStep::Kind::input:
+                    succeeded = input_node(
+                        *application, rendered, step.node_id, step.value,
+                        @"scenario", &error);
+                    break;
+                case AutomationStep::Kind::key:
+                    succeeded = key_node(
+                        *application, rendered, step.node_id, step.value,
+                        @"scenario", &error);
+                    break;
+                case AutomationStep::Kind::focus:
+                    succeeded = focus_node(rendered, step.node_id, &error);
+                    break;
+                case AutomationStep::Kind::compose:
+                    succeeded = compose_node(
+                        *application, rendered, step.node_id, step.value, &error);
+                    break;
+                case AutomationStep::Kind::assert_accessibility:
+                    succeeded = assert_accessibility_node(
+                        rendered, step.node_id, step.value, &error);
+                    break;
+                case AutomationStep::Kind::assert_text:
+                    succeeded = assert_node_text(
+                        rendered, step.node_id, step.value, &error);
+                    break;
+                case AutomationStep::Kind::touch:
+                    succeeded = touch_node(
+                        *application, rendered, step.node_id, step.value, &error);
+                    break;
+                case AutomationStep::Kind::command: {
+                    bool present = false;
+                    succeeded = application->has_command(
+                        step.node_id, present, &error) && present;
+                    if (!succeeded && error.empty()) {
+                        error = "scenario command is not defined: " + step.node_id;
+                    }
+                    break;
+                }
+                case AutomationStep::Kind::service_result: {
+                    succeeded =
+                        application->enqueue_service_response(step.value, &error) &&
+                        press_node(
+                            *application, rendered, step.node_id, &error);
+                    bool empty = false;
+                    if (succeeded) {
+                        succeeded = application->service_response_queue_empty(
+                            empty, &error) && empty;
+                        if (!succeeded && error.empty()) {
+                            error = "scenario service response was not consumed by " +
+                                    step.node_id;
+                        }
+                    }
+                    break;
+                }
+                case AutomationStep::Kind::expected_throw: {
+                    const bool dispatched = press_node(
+                        *application, rendered, step.node_id, &error);
+                    std::string comparable = error;
+                    for (std::size_t position = 0;
+                         (position = comparable.find("\\/", position)) !=
+                             std::string::npos;) {
+                        comparable.replace(position, 2U, "/");
+                        ++position;
+                    }
+                    succeeded =
+                        !dispatched &&
+                        comparable.find(step.value) != std::string::npos;
+                    if (succeeded) {
+                        error.clear();
+                    } else if (dispatched) {
+                        error = "scenario expected mapped throw from " + step.node_id;
+                    }
+                    break;
+                }
+            }
             if (!succeeded ||
+                !application->wait_for_idle(4096, rendered, idle, &error) ||
                 !components.expand(rendered.scene, &error) ||
                 !persist_state(*application, options.state_file, &error)) {
                 std::cerr << error << '\n';
@@ -531,7 +382,7 @@ std::vector<ComponentModuleSpec> interactive_component_specs;
 
 }  // namespace
 
-@interface VellumApplicationView : NSView {
+@interface VellumApplicationView : NSView <NSTextInputClient> {
 @private
     std::unique_ptr<JsApplication> _application;
     std::unique_ptr<ComponentRegistry> _components;
@@ -539,6 +390,11 @@ std::vector<ComponentModuleSpec> interactive_component_specs;
     std::unique_ptr<SkiaDawnSurface> _surface;
     std::filesystem::path _persistencePath;
     std::string _focusedInputId;
+    NSRange _selectedTextRange;
+    NSRange _markedTextRange;
+    NSMutableAttributedString* _markedText;
+    std::unique_ptr<MacAccessibilityBridge> _accessibility;
+    NSTimer* _asyncTimer;
 }
 - (instancetype)initWithFrame:(NSRect)frame
                        bundle:(const std::string&)bundle
@@ -562,6 +418,28 @@ std::vector<ComponentModuleSpec> interactive_component_specs;
             return nil;
         }
         _persistencePath = persistencePath;
+        _selectedTextRange = NSMakeRange(NSNotFound, 0);
+        _markedTextRange = NSMakeRange(NSNotFound, 0);
+        _markedText = [[NSMutableAttributedString alloc] init];
+        __weak VellumApplicationView* weakOwner = self;
+        _accessibility = std::make_unique<MacAccessibilityBridge>(
+            self,
+            [weakOwner](std::string_view nodeId) {
+                VellumApplicationView* owner = weakOwner;
+                if (owner == nil) return false;
+                return [owner performSemanticPress:std::string(nodeId)] == YES;
+            },
+            [weakOwner](std::string_view nodeId) {
+                VellumApplicationView* owner = weakOwner;
+                if (owner == nil) return false;
+                return [owner focusSemanticInput:std::string(nodeId)] == YES;
+            },
+            [weakOwner](std::string_view nodeId, std::string_view value) {
+                VellumApplicationView* owner = weakOwner;
+                if (owner == nil) return false;
+                return [owner setSemanticInput:std::string(nodeId)
+                                         value:std::string(value)] == YES;
+            });
         if (!restore_persisted_state(*_application, _rendered, _persistencePath, &error)) {
             NSLog(@"Vellum persisted state restore failed: %s", error.c_str());
             return nil;
@@ -574,17 +452,80 @@ std::vector<ComponentModuleSpec> interactive_component_specs;
         self.layer = make_metal_layer(
             static_cast<std::uint32_t>(frame.size.width),
             static_cast<std::uint32_t>(frame.size.height), 1.0F);
+        _accessibility->sync(_rendered.accessibility_nodes);
+        __weak VellumApplicationView* weakSelf = self;
+        _asyncTimer = [NSTimer scheduledTimerWithTimeInterval:0.016
+                                                       repeats:YES
+                                                         block:^(NSTimer* timer) {
+            [weakSelf pumpAsyncWork:timer];
+        }];
     }
     return self;
 }
 
 - (BOOL)isFlipped { return YES; }
 - (BOOL)acceptsFirstResponder { return YES; }
+- (BOOL)isAccessibilityElement { return NO; }
+- (NSArray*)accessibilityChildren {
+    return _accessibility == nullptr ? @[] : _accessibility->children();
+}
+
+- (void)dealloc {
+    [_asyncTimer invalidate];
+}
+
+- (void)pumpAsyncWork:(NSTimer*)timer {
+    (void)timer;
+    if (!_application) return;
+    std::string error;
+    vellum::authoring::PumpResult result;
+    if (!_application->pump(16, 1024, _rendered, result, &error)) {
+        [_asyncTimer invalidate];
+        NSLog(@"Vellum asynchronous work failed: %s", error.c_str());
+        return;
+    }
+    if (result.rendered && ![self finishMutation:&error]) {
+        NSLog(@"Vellum asynchronous render failed: %s", error.c_str());
+    }
+}
 
 - (BOOL)finishMutation:(std::string*)error {
     if (!_components->expand(_rendered.scene, error)) return NO;
     if (!persist_state(*_application, _persistencePath, error)) return NO;
     if (_surface && !_surface->render(_rendered.scene, error)) return NO;
+    _accessibility->sync(_rendered.accessibility_nodes);
+    return YES;
+}
+
+- (BOOL)performSemanticPress:(const std::string&)nodeId {
+    std::string error;
+    if (!press_node(*_application, _rendered, nodeId, &error) ||
+        ![self finishMutation:&error]) {
+        NSLog(@"Vellum accessibility press failed: %s", error.c_str());
+        return NO;
+    }
+    return YES;
+}
+
+- (BOOL)focusSemanticInput:(const std::string&)nodeId {
+    const TextInputControl* input = find_text_input(_rendered, nodeId);
+    if (input == nullptr) return NO;
+    _focusedInputId = nodeId;
+    _selectedTextRange = NSMakeRange(
+        input->selection_start, input->selection_end - input->selection_start);
+    _markedTextRange = NSMakeRange(NSNotFound, 0);
+    return [self.window makeFirstResponder:self];
+}
+
+- (BOOL)setSemanticInput:(const std::string&)nodeId
+                   value:(const std::string&)value {
+    std::string error;
+    if (!input_node(
+            *_application, _rendered, nodeId, value, @"accessibility", &error) ||
+        ![self finishMutation:&error]) {
+        NSLog(@"Vellum accessibility value change failed: %s", error.c_str());
+        return NO;
+    }
     return YES;
 }
 
@@ -619,8 +560,16 @@ std::vector<ComponentModuleSpec> interactive_component_specs;
                    point.y <= item.bounds.y + item.bounds.height;
         });
     if (input != _rendered.text_inputs.end()) {
+        if (_focusedInputId != input->node_id) {
+            _selectedTextRange = NSMakeRange(
+                input->selection_start, input->selection_end - input->selection_start);
+            _markedTextRange = NSMakeRange(NSNotFound, 0);
+            [_markedText setAttributedString:
+                [[NSAttributedString alloc] initWithString:@""]];
+        }
         _focusedInputId = input->node_id;
         [self.window makeFirstResponder:self];
+        NSAccessibilityPostNotification(self, NSAccessibilityFocusedUIElementChangedNotification);
         return;
     }
     _focusedInputId.clear();
@@ -646,39 +595,232 @@ std::vector<ComponentModuleSpec> interactive_component_specs;
         [super keyDown:event];
         return;
     }
+    [self interpretKeyEvents:@[event]];
+}
+
+- (const TextInputControl*)focusedTextInput {
+    return _focusedInputId.empty() ? nullptr :
+        find_text_input(_rendered, _focusedInputId);
+}
+
+- (BOOL)dispatchTextAction:(const std::string&)action payload:(NSDictionary*)payload {
+    if (action.empty()) return YES;
     std::string error;
-    std::string semantic_key;
-    switch (event.keyCode) {
-        case 36: case 76: semantic_key = "Enter"; break;
-        case 53: semantic_key = "Escape"; break;
-        case 51: semantic_key = "Backspace"; break;
-        case 48: semantic_key = "Tab"; break;
-        case 123: semantic_key = "ArrowLeft"; break;
-        case 124: semantic_key = "ArrowRight"; break;
-        case 125: semantic_key = "ArrowDown"; break;
-        case 126: semantic_key = "ArrowUp"; break;
-        case 115: semantic_key = "Home"; break;
-        case 119: semantic_key = "End"; break;
-        case 117: semantic_key = "Delete"; break;
-        default: break;
+    if (!dispatch_payload(*_application, _rendered, action, payload, &error) ||
+        ![self finishMutation:&error]) {
+        NSLog(@"Vellum text interaction failed: %s", error.c_str());
+        return NO;
     }
-    bool changed = false;
-    if (!semantic_key.empty()) {
-        changed = key_node(
-            *_application, _rendered, _focusedInputId, semantic_key, @"keyboard", &error);
-    } else if ((event.modifierFlags &
-                (NSEventModifierFlagCommand | NSEventModifierFlagControl)) == 0U) {
-        NSString* characters = event.characters;
-        const TextInputControl* input = find_text_input(_rendered, _focusedInputId);
-        if (input != nullptr && characters.length > 0U) {
-            const std::string appended = input->value + cpp_string(characters);
-            changed = input_node(
-                *_application, _rendered, _focusedInputId, appended, @"keyboard", &error);
+    return YES;
+}
+
+- (void)publishSelection {
+    const TextInputControl* input = [self focusedTextInput];
+    if (input == nullptr || _selectedTextRange.location == NSNotFound) return;
+    [self dispatchTextAction:input->selection_change_action payload:@{
+        @"selection": @{
+            @"start": @(_selectedTextRange.location),
+            @"end": @(NSMaxRange(_selectedTextRange)),
+        },
+    }];
+    NSAccessibilityPostNotification(self, NSAccessibilitySelectedTextChangedNotification);
+}
+
+- (void)insertText:(id)value replacementRange:(NSRange)replacementRange {
+    const TextInputControl* input = [self focusedTextInput];
+    if (input == nullptr) return;
+    NSString* inserted = [value isKindOfClass:NSAttributedString.class]
+        ? [static_cast<NSAttributedString*>(value) string]
+        : ([value isKindOfClass:NSString.class] ? value : [value description]);
+    NSString* existing = [NSString stringWithUTF8String:input->value.c_str()] ?: @"";
+    NSRange target = replacementRange.location != NSNotFound
+        ? replacementRange
+        : (_markedTextRange.location != NSNotFound ? _markedTextRange : _selectedTextRange);
+    if (target.location == NSNotFound || NSMaxRange(target) > existing.length) {
+        target = NSMakeRange(existing.length, 0);
+    }
+    NSString* next = [existing stringByReplacingCharactersInRange:target withString:inserted];
+    _selectedTextRange = NSMakeRange(target.location + inserted.length, 0);
+    const bool endingComposition = _markedTextRange.location != NSNotFound;
+    _markedTextRange = NSMakeRange(NSNotFound, 0);
+    [_markedText setAttributedString:[[NSAttributedString alloc] initWithString:@""]];
+    const std::string changeAction = input->change_action;
+    if (![self dispatchTextAction:changeAction payload:@{
+            @"value": next,
+            @"inputType": endingComposition ? @"insertCompositionText" : @"insertText",
+            @"selection": @{
+                @"start": @(_selectedTextRange.location),
+                @"end": @(NSMaxRange(_selectedTextRange)),
+            },
+        }]) return;
+    input = [self focusedTextInput];
+    if (endingComposition && input != nullptr) {
+        [self dispatchTextAction:input->composition_end_action payload:@{
+            @"text": inserted,
+            @"value": next,
+            @"selection": @{
+                @"start": @(_selectedTextRange.location),
+                @"end": @(NSMaxRange(_selectedTextRange)),
+            },
+        }];
+    }
+    [self publishSelection];
+}
+
+- (void)setMarkedText:(id)value
+        selectedRange:(NSRange)selectedRange
+      replacementRange:(NSRange)replacementRange {
+    const TextInputControl* input = [self focusedTextInput];
+    if (input == nullptr) return;
+    NSAttributedString* attributed = [value isKindOfClass:NSAttributedString.class]
+        ? value : [[NSAttributedString alloc] initWithString:
+            ([value isKindOfClass:NSString.class] ? value : [value description])];
+    NSString* text = attributed.string;
+    NSString* existing = [NSString stringWithUTF8String:input->value.c_str()] ?: @"";
+    const bool starting = _markedTextRange.location == NSNotFound;
+    NSRange target = replacementRange.location != NSNotFound
+        ? replacementRange
+        : (starting ? _selectedTextRange : _markedTextRange);
+    if (target.location == NSNotFound || NSMaxRange(target) > existing.length) {
+        target = NSMakeRange(existing.length, 0);
+    }
+    NSString* next = [existing stringByReplacingCharactersInRange:target withString:text];
+    _markedTextRange = NSMakeRange(target.location, text.length);
+    const NSUInteger selectionOffset =
+        std::min(selectedRange.location, text.length);
+    const NSUInteger selectionLength =
+        std::min(selectedRange.length, text.length - selectionOffset);
+    _selectedTextRange = NSMakeRange(
+        target.location + selectionOffset, selectionLength);
+    [_markedText setAttributedString:attributed];
+    const std::string startAction = input->composition_start_action;
+    const std::string updateAction = input->composition_update_action;
+    const std::string changeAction = input->change_action;
+    if (starting && ![self dispatchTextAction:startAction payload:@{
+            @"text": @"", @"value": existing,
+            @"selection": @{
+                @"start": @(target.location), @"end": @(NSMaxRange(target)),
+            },
+        }]) return;
+    if (![self dispatchTextAction:changeAction payload:@{
+            @"value": next, @"inputType": @"insertCompositionText",
+            @"selection": @{
+                @"start": @(_selectedTextRange.location),
+                @"end": @(NSMaxRange(_selectedTextRange)),
+            },
+        }]) return;
+    input = [self focusedTextInput];
+    if (input != nullptr) {
+        [self dispatchTextAction:updateAction payload:@{
+            @"text": text, @"value": next,
+            @"selection": @{
+                @"start": @(_selectedTextRange.location),
+                @"end": @(NSMaxRange(_selectedTextRange)),
+            },
+        }];
+    }
+}
+
+- (void)unmarkText {
+    if (_markedTextRange.location == NSNotFound) return;
+    [self insertText:_markedText replacementRange:_markedTextRange];
+}
+
+- (NSRange)selectedRange { return _selectedTextRange; }
+- (NSRange)markedRange { return _markedTextRange; }
+- (BOOL)hasMarkedText { return _markedTextRange.location != NSNotFound; }
+- (NSArray<NSAttributedStringKey>*)validAttributesForMarkedText { return @[]; }
+
+- (NSAttributedString*)attributedSubstringForProposedRange:(NSRange)range
+                                               actualRange:(NSRangePointer)actualRange {
+    const TextInputControl* input = [self focusedTextInput];
+    if (input == nullptr) return nil;
+    NSString* value = [NSString stringWithUTF8String:input->value.c_str()] ?: @"";
+    const NSRange bounded = NSIntersectionRange(range, NSMakeRange(0, value.length));
+    if (actualRange != nullptr) *actualRange = bounded;
+    return [[NSAttributedString alloc] initWithString:
+        [value substringWithRange:bounded]];
+}
+
+- (NSUInteger)characterIndexForPoint:(NSPoint)point {
+    (void)point;
+    return _selectedTextRange.location == NSNotFound ? 0 : _selectedTextRange.location;
+}
+
+- (NSRect)firstRectForCharacterRange:(NSRange)range actualRange:(NSRangePointer)actualRange {
+    (void)range;
+    if (actualRange != nullptr) *actualRange = NSMakeRange(
+        _selectedTextRange.location == NSNotFound ? 0 : _selectedTextRange.location, 0);
+    const TextInputControl* input = [self focusedTextInput];
+    if (input == nullptr || self.window == nil) return NSZeroRect;
+    const NSRect local = NSMakeRect(
+        input->bounds.x, input->bounds.y,
+        input->bounds.width, input->bounds.height);
+    return [self.window convertRectToScreen:[self convertRect:local toView:nil]];
+}
+
+- (void)doCommandBySelector:(SEL)selector {
+    const TextInputControl* input = [self focusedTextInput];
+    if (input == nullptr) return;
+    NSString* key = nil;
+    if (selector == @selector(insertNewline:)) key = @"Enter";
+    else if (selector == @selector(deleteBackward:)) key = @"Backspace";
+    else if (selector == @selector(deleteForward:)) key = @"Delete";
+    else if (selector == @selector(moveLeft:)) key = @"ArrowLeft";
+    else if (selector == @selector(moveRight:)) key = @"ArrowRight";
+    else if (selector == @selector(moveUp:)) key = @"ArrowUp";
+    else if (selector == @selector(moveDown:)) key = @"ArrowDown";
+    else if (selector == @selector(moveToBeginningOfLine:)) key = @"Home";
+    else if (selector == @selector(moveToEndOfLine:)) key = @"End";
+    else if (selector == @selector(cancelOperation:)) key = @"Escape";
+    if (key == nil) return;
+
+    NSString* value = [NSString stringWithUTF8String:input->value.c_str()] ?: @"";
+    if ([key isEqualToString:@"Backspace"]) {
+        NSRange removal = _selectedTextRange;
+        if (removal.length == 0 && removal.location > 0) {
+            removal = [value rangeOfComposedCharacterSequenceAtIndex:removal.location - 1];
         }
-    }
-    if (changed && ![self finishMutation:&error]) changed = false;
-    if (!changed && !error.empty()) {
-        NSLog(@"Vellum key interaction failed: %s", error.c_str());
+        if (removal.length > 0) [self insertText:@"" replacementRange:removal];
+    } else if ([key isEqualToString:@"Delete"]) {
+        NSRange removal = _selectedTextRange;
+        if (removal.length == 0 && removal.location < value.length) {
+            removal = [value rangeOfComposedCharacterSequenceAtIndex:removal.location];
+        }
+        if (removal.length > 0) [self insertText:@"" replacementRange:removal];
+    } else if ([key isEqualToString:@"ArrowLeft"] && _selectedTextRange.location > 0) {
+        const NSRange previous =
+            [value rangeOfComposedCharacterSequenceAtIndex:_selectedTextRange.location - 1];
+        _selectedTextRange = NSMakeRange(previous.location, 0);
+        [self publishSelection];
+    } else if ([key isEqualToString:@"ArrowRight"]) {
+        NSUInteger next = NSMaxRange(_selectedTextRange);
+        if (next < value.length) {
+            next = NSMaxRange([value rangeOfComposedCharacterSequenceAtIndex:next]);
+        }
+        _selectedTextRange = NSMakeRange(next, 0);
+        [self publishSelection];
+    } else if ([key isEqualToString:@"Home"]) {
+        _selectedTextRange = NSMakeRange(0, 0);
+        [self publishSelection];
+    } else if ([key isEqualToString:@"End"]) {
+        _selectedTextRange = NSMakeRange(value.length, 0);
+        [self publishSelection];
+    } else {
+        std::string error;
+        if (key_node(*_application, _rendered, _focusedInputId,
+                     cpp_string(key), @"keyboard", &error) &&
+            [self finishMutation:&error]) {
+            const TextInputControl* current = [self focusedTextInput];
+            if (current != nullptr) {
+                NSString* currentValue =
+                    [NSString stringWithUTF8String:current->value.c_str()] ?: @"";
+                _selectedTextRange = NSMakeRange(
+                    currentValue.length, 0);
+            }
+        } else if (!error.empty()) {
+            NSLog(@"Vellum key command failed: %s", error.c_str());
+        }
     }
 }
 @end
@@ -737,7 +879,7 @@ std::vector<ComponentModuleSpec> interactive_component_specs;
 int main(int argc, const char* argv[]) {
     const auto parsed = parse_options(argc, argv);
     if (!parsed) {
-        usage();
+        vellum::app_host::print_usage();
         return 2;
     }
     Options options = *parsed;

@@ -9,6 +9,7 @@
 #include <limits>
 #include <optional>
 #include <set>
+#include <tuple>
 #include <utility>
 
 namespace vellum::authoring {
@@ -20,6 +21,7 @@ constexpr std::size_t kMaximumNodes = 100000U;
 constexpr std::size_t kMaximumDepth = 256U;
 constexpr NSUInteger kMaximumTextInputBytes = 64U * 1024U;
 constexpr NSUInteger kMaximumPlaceholderBytes = 4U * 1024U;
+constexpr std::uint64_t kMaximumTimerDelayMilliseconds = 24ULL * 60ULL * 60ULL * 1000ULL;
 
 void set_error(std::string* destination, std::string value) {
     if (destination != nullptr) *destination = std::move(value);
@@ -89,7 +91,19 @@ struct MaterializeContext final {
     std::size_t nodes = 0;
     std::vector<Interaction>* interactions = nullptr;
     std::vector<TextInputControl>* text_inputs = nullptr;
+    std::vector<AccessibilityNode>* accessibility_nodes = nullptr;
 };
+
+std::string inferred_accessibility_role(NSString* type, NSDictionary* source) {
+    if ([source[@"accessibilityRole"] isKindOfClass:NSString.class]) {
+        return cpp_string(source[@"accessibilityRole"]);
+    }
+    if ([type isEqualToString:@"text-input"]) return "text-field";
+    if ([type isEqualToString:@"button"]) return "button";
+    if ([type isEqualToString:@"text"] || [type isEqualToString:@"text-run"]) return "text";
+    if ([type isEqualToString:@"image"]) return "image";
+    return "group";
+}
 
 float default_height(NSString* type, NSDictionary* style) {
     if ([type isEqualToString:@"text"] || [type isEqualToString:@"text-run"]) {
@@ -162,6 +176,8 @@ bool materialize_node(
     const bool is_text_input = [type isEqualToString:@"text-input"];
     NSString* input_value = nil;
     NSString* input_placeholder = nil;
+    NSUInteger selection_start = 0U;
+    NSUInteger selection_end = 0U;
     if (is_text_input) {
         NSNumber* primitive_version = [source[@"primitiveVersion"]
             isKindOfClass:NSNumber.class] ? source[@"primitiveVersion"] : nil;
@@ -185,6 +201,29 @@ bool materialize_node(
         if (array_or_empty(source[@"children"]).count != 0U) {
             set_error(error, "text-input v1 does not accept retained-tree children");
             return false;
+        }
+        selection_start = input_value.length;
+        selection_end = input_value.length;
+        if (source[@"selection"] != nil) {
+            if (![source[@"selection"] isKindOfClass:NSDictionary.class]) {
+                set_error(error, "text-input selection must be an object");
+                return false;
+            }
+            NSDictionary* selection = source[@"selection"];
+            NSNumber* start = [selection[@"start"] isKindOfClass:NSNumber.class]
+                ? selection[@"start"] : nil;
+            NSNumber* end = [selection[@"end"] isKindOfClass:NSNumber.class]
+                ? selection[@"end"] : nil;
+            if (start == nil || end == nil || start.doubleValue != start.unsignedLongLongValue ||
+                end.doubleValue != end.unsignedLongLongValue ||
+                start.unsignedLongLongValue > end.unsignedLongLongValue ||
+                end.unsignedLongLongValue > input_value.length) {
+                set_error(error,
+                    "text-input selection must be an ordered UTF-16 range within value");
+                return false;
+            }
+            selection_start = start.unsignedIntegerValue;
+            selection_end = end.unsignedIntegerValue;
         }
     }
     output.id = identity;
@@ -260,6 +299,12 @@ bool materialize_node(
             .change_action = action(@"change"),
             .submit_action = action(@"submit"),
             .key_down_action = action(@"keyDown"),
+            .selection_change_action = action(@"selectionChange"),
+            .composition_start_action = action(@"compositionStart"),
+            .composition_update_action = action(@"compositionUpdate"),
+            .composition_end_action = action(@"compositionEnd"),
+            .selection_start = selection_start,
+            .selection_end = selection_end,
             .bounds = {
                 absolute_x + proposed.x,
                 absolute_y + proposed.y,
@@ -267,6 +312,74 @@ bool materialize_node(
                 proposed.height,
             },
         });
+    }
+
+    const bool semantic = is_text_input || [type isEqualToString:@"button"] ||
+        [source[@"accessibilityLabel"] isKindOfClass:NSString.class] ||
+        [source[@"accessibilityValue"] isKindOfClass:NSString.class] ||
+        source[@"accessibilityRole"] != nil || source[@"accessibilityState"] != nil;
+    if (semantic) {
+        if ((source[@"accessibilityLabel"] != nil &&
+             ![source[@"accessibilityLabel"] isKindOfClass:NSString.class]) ||
+            (source[@"accessibilityValue"] != nil &&
+             ![source[@"accessibilityValue"] isKindOfClass:NSString.class]) ||
+            (source[@"accessibilityRole"] != nil &&
+             ![source[@"accessibilityRole"] isKindOfClass:NSString.class]) ||
+            (source[@"accessibilityState"] != nil &&
+             ![source[@"accessibilityState"] isKindOfClass:NSDictionary.class])) {
+            set_error(error, "accessibility label/value/role/state has an invalid type");
+            return false;
+        }
+        NSDictionary* semantic_state = dictionary_or_empty(source[@"accessibilityState"]);
+        AccessibilityNode node{
+            .node_id = identity,
+            .role = inferred_accessibility_role(type, source),
+            .label = [source[@"accessibilityLabel"] isKindOfClass:NSString.class]
+                ? cpp_string(source[@"accessibilityLabel"]) : direct_text(source),
+            .value = [source[@"accessibilityValue"] isKindOfClass:NSString.class]
+                ? cpp_string(source[@"accessibilityValue"])
+                : (is_text_input ? cpp_string(input_value) : std::string{}),
+            .bounds = {
+                absolute_x + proposed.x,
+                absolute_y + proposed.y,
+                proposed.width,
+                proposed.height,
+            },
+        };
+        const auto boolean = [&](NSString* name, bool& destination, bool* present = nullptr) {
+            id raw = semantic_state[name];
+            if (raw == nil) return true;
+            if (![raw isKindOfClass:NSNumber.class]) return false;
+            destination = [raw boolValue];
+            if (present != nullptr) *present = true;
+            return true;
+        };
+        if (!boolean(@"disabled", node.state.disabled) ||
+            !boolean(@"selected", node.state.selected) ||
+            !boolean(@"expanded", node.state.expanded, &node.state.has_expanded)) {
+            set_error(error, "accessibility state values must be booleans");
+            return false;
+        }
+        if (semantic_state[@"checked"] != nil) {
+            node.state.has_checked = true;
+            if ([semantic_state[@"checked"] isKindOfClass:NSString.class] &&
+                [semantic_state[@"checked"] isEqualToString:@"mixed"]) {
+                node.state.mixed = true;
+            } else if ([semantic_state[@"checked"] isKindOfClass:NSNumber.class]) {
+                node.state.checked = [semantic_state[@"checked"] boolValue];
+            } else {
+                set_error(error, "accessibility checked state must be boolean or mixed");
+                return false;
+            }
+        }
+        if ([events[@"press"] isKindOfClass:NSString.class]) {
+            node.actions.push_back("press");
+        }
+        if (is_text_input) {
+            node.actions.push_back("focus");
+            node.actions.push_back("set-value");
+        }
+        context.accessibility_nodes->push_back(std::move(node));
     }
 
     NSArray* children = array_or_empty(source[@"children"]);
@@ -377,7 +490,11 @@ bool parse_rendered_json(
         return false;
     }
     NSDictionary* envelope = static_cast<NSDictionary*>(value);
-    if (![envelope[@"protocol"] isEqual:@"vellum.authoring-host.v1"] ||
+    const bool legacy = [envelope[@"protocol"] isEqual:@"vellum.authoring-host.v1"];
+    const bool asynchronous =
+        [envelope[@"protocol"] isEqual:@"vellum.authoring-host.v2"] &&
+        [envelope[@"kind"] isEqual:@"render-result"];
+    if ((!legacy && !asynchronous) ||
         ![envelope[@"tree"] isKindOfClass:NSDictionary.class]) {
         set_error(error, "JavaScript authoring bridge protocol mismatch");
         return false;
@@ -398,6 +515,7 @@ bool parse_rendered_json(
     MaterializeContext context{
         .interactions = &candidate.interactions,
         .text_inputs = &candidate.text_inputs,
+        .accessibility_nodes = &candidate.accessibility_nodes,
     };
     if (!materialize_node(
             tree, {0.0F, 0.0F, width, height}, 0.0F, 0.0F, 0U,
@@ -423,6 +541,12 @@ public:
             return false;
         }
         context_ = [[JSContext alloc] init];
+        context_[@"setTimeout"] = ^NSNumber*(JSValue* callback, double delay) {
+            return @(schedule_timer(callback, delay));
+        };
+        context_[@"clearTimeout"] = ^(double identifier) {
+            cancel_timer(identifier);
+        };
         [context_ evaluateScript:source withSourceURL:[NSURL URLWithString:@"vellum-app.js"]];
         if (!consume_exception(error)) return false;
         JSValue* bridge = context_[@"__vellum"];
@@ -481,6 +605,110 @@ public:
         return call_tree(@"dispatchJSON", @[request_json], output, error);
     }
 
+    bool configure_service_host(
+        std::string_view capabilities_json, std::string* error) {
+        NSString* encoded = ns_string(capabilities_json);
+        NSData* data = [encoded dataUsingEncoding:NSUTF8StringEncoding];
+        NSError* parse_error = nil;
+        id capabilities = data == nil ? nil : [NSJSONSerialization
+            JSONObjectWithData:data options:0 error:&parse_error];
+        if (![capabilities isKindOfClass:NSDictionary.class] ||
+            ![NSJSONSerialization isValidJSONObject:capabilities]) {
+            set_error(error, "service capabilities must be a JSON object");
+            return false;
+        }
+        context_.exception = nil;
+        context_[@"__vellumNativeServiceCapabilities"] = capabilities;
+        [context_ evaluateScript:
+            @"globalThis.__vellumServiceHost={"
+             "capabilities:globalThis.__vellumNativeServiceCapabilities,"
+             "responses:[],requests:[],"
+             "request(request){"
+               "this.requests.push(request);"
+               "const response=this.responses.shift();"
+               "if(!response)return Promise.reject(new Error('no queued service response'));"
+               "return Promise.resolve({...response,id:request.id});"
+             "}"
+             "};"
+             "delete globalThis.__vellumNativeServiceCapabilities;"];
+        return consume_exception(error);
+    }
+
+    bool enqueue_service_response(
+        std::string_view response_json, std::string* error) {
+        NSString* encoded = ns_string(response_json);
+        NSData* data = [encoded dataUsingEncoding:NSUTF8StringEncoding];
+        NSError* parse_error = nil;
+        id response = data == nil ? nil : [NSJSONSerialization
+            JSONObjectWithData:data options:0 error:&parse_error];
+        if (![response isKindOfClass:NSDictionary.class] ||
+            ![NSJSONSerialization isValidJSONObject:response]) {
+            set_error(error, "service response must be a JSON object");
+            return false;
+        }
+        NSDictionary* envelope = static_cast<NSDictionary*>(response);
+        NSDictionary* detail = [envelope[@"error"] isKindOfClass:NSDictionary.class]
+            ? static_cast<NSDictionary*>(envelope[@"error"]) : nil;
+        if ([envelope[@"ok"] isEqual:@NO] &&
+            [detail[@"code"] isEqual:@"capability-denied"]) {
+            // A denied capability rejects before a provider request exists.
+            // Do not leave its illustrative response queued for the next
+            // granted service operation.
+            return true;
+        }
+        context_.exception = nil;
+        JSValue* host = context_[@"__vellumServiceHost"];
+        JSValue* responses = [host valueForProperty:@"responses"];
+        JSValue* push = [responses valueForProperty:@"push"];
+        if (host == nil || host.isUndefined || responses == nil ||
+            responses.isUndefined || push == nil || !push.isObject) {
+            set_error(error, "native service host is not configured");
+            return false;
+        }
+        [responses invokeMethod:@"push" withArguments:@[response]];
+        return consume_exception(error);
+    }
+
+    bool service_response_queue_empty(bool& empty, std::string* error) {
+        empty = false;
+        context_.exception = nil;
+        JSValue* host = context_[@"__vellumServiceHost"];
+        JSValue* responses = [host valueForProperty:@"responses"];
+        JSValue* length = [responses valueForProperty:@"length"];
+        if (host == nil || host.isUndefined || responses == nil ||
+            responses.isUndefined || length == nil || !length.isNumber) {
+            set_error(error, "native service host is not configured");
+            return false;
+        }
+        empty = length.toInt32 == 0;
+        return consume_exception(error);
+    }
+
+    bool has_command(
+        std::string_view command, bool& present, std::string* error) {
+        present = false;
+        NSString* value = ns_string(command);
+        if (value == nil || value.length == 0U) {
+            set_error(error, "command must be non-empty valid UTF-8");
+            return false;
+        }
+        context_.exception = nil;
+        JSValue* bridge = context_[@"__vellum"];
+        JSValue* method = [bridge valueForProperty:@"hasCommand"];
+        if (method == nil || method.isUndefined || !method.isObject) {
+            set_error(error, "application bridge does not expose the command registry");
+            return false;
+        }
+        JSValue* result = [bridge invokeMethod:@"hasCommand" withArguments:@[value]];
+        if (!consume_exception(error)) return false;
+        if (result == nil || !result.isBoolean) {
+            set_error(error, "application command registry returned a non-boolean result");
+            return false;
+        }
+        present = result.toBool;
+        return true;
+    }
+
     bool snapshot(std::string& output, std::string* error) {
         NSString* result = call_string(@"snapshotStateJSON", @[], error);
         if (result == nil) return false;
@@ -506,12 +734,204 @@ public:
         return call_tree(@"restoreStateJSON", @[value], output, error);
     }
 
+    bool pump(std::uint64_t advance_milliseconds, std::size_t maximum_tasks,
+              RenderedApplication& output, PumpResult& result, std::string* error) {
+        result = {};
+        if (maximum_tasks == 0U) {
+            set_error(error, "JavaScript pump maximum_tasks must be positive");
+            return false;
+        }
+        if (advance_milliseconds >
+            std::numeric_limits<std::uint64_t>::max() - clock_milliseconds_) {
+            set_error(error, "JavaScript timer clock overflow");
+            return false;
+        }
+        clock_milliseconds_ += advance_milliseconds;
+        if (!run_ready_tasks(maximum_tasks, result.tasks_executed, error)) return false;
+        if (has_ready_timer()) {
+            set_error(error, "JavaScript pump task limit exceeded");
+            return false;
+        }
+        if (!materialize_if_dirty(output, result.rendered, error)) return false;
+        bool dirty = false;
+        if (!bridge_dirty(dirty, error)) return false;
+        result.idle = timers_.empty() && !dirty;
+        return consume_exception(error);
+    }
+
+    bool wait_for_idle(std::size_t maximum_tasks, RenderedApplication& output,
+                       PumpResult& result, std::string* error) {
+        result = {};
+        if (maximum_tasks == 0U) {
+            set_error(error, "JavaScript wait_for_idle maximum_tasks must be positive");
+            return false;
+        }
+        while (!timers_.empty()) {
+            const auto next = std::min_element(
+                timers_.begin(), timers_.end(),
+                [](const Timer& left, const Timer& right) {
+                    return std::tie(left.due, left.order) < std::tie(right.due, right.order);
+                });
+            clock_milliseconds_ = std::max(clock_milliseconds_, next->due);
+            std::size_t executed = 0U;
+            if (!run_ready_tasks(maximum_tasks - result.tasks_executed, executed, error)) {
+                return false;
+            }
+            result.tasks_executed += executed;
+            if (result.tasks_executed >= maximum_tasks && !timers_.empty()) {
+                set_error(error, "JavaScript wait_for_idle task limit exceeded");
+                return false;
+            }
+        }
+        if (!materialize_if_dirty(output, result.rendered, error)) return false;
+        bool dirty = false;
+        if (!bridge_dirty(dirty, error)) return false;
+        result.idle = !dirty;
+        return consume_exception(error);
+    }
+
+    std::string last_diagnostic_json() const { return last_diagnostic_json_; }
+
 private:
+    struct Timer final {
+        std::uint64_t id = 0;
+        std::uint64_t due = 0;
+        std::uint64_t order = 0;
+        __strong JSValue* callback = nil;
+    };
+
+    std::uint64_t schedule_timer(JSValue* callback, double delay) {
+        if (callback == nil || !callback.isObject) {
+            context_.exception = [JSValue valueWithNewErrorFromMessage:
+                @"setTimeout callback must be callable" inContext:context_];
+            return 0;
+        }
+        const double bounded = std::isfinite(delay)
+            ? std::clamp(delay, 0.0, static_cast<double>(kMaximumTimerDelayMilliseconds))
+            : 0.0;
+        const auto milliseconds = static_cast<std::uint64_t>(std::ceil(bounded));
+        const std::uint64_t identifier = next_timer_id_++;
+        timers_.push_back({
+            .id = identifier,
+            .due = clock_milliseconds_ + milliseconds,
+            .order = next_timer_order_++,
+            .callback = callback,
+        });
+        return identifier;
+    }
+
+    void cancel_timer(double identifier) {
+        if (!std::isfinite(identifier) || identifier < 1.0) return;
+        const auto value = static_cast<std::uint64_t>(identifier);
+        std::erase_if(timers_, [value](const Timer& timer) { return timer.id == value; });
+    }
+
+    bool has_ready_timer() const {
+        return std::any_of(timers_.begin(), timers_.end(), [&](const Timer& timer) {
+            return timer.due <= clock_milliseconds_;
+        });
+    }
+
+    bool run_ready_tasks(
+        std::size_t maximum_tasks, std::size_t& executed, std::string* error) {
+        executed = 0U;
+        while (executed < maximum_tasks) {
+            const auto next = std::min_element(
+                timers_.begin(), timers_.end(),
+                [](const Timer& left, const Timer& right) {
+                    return std::tie(left.due, left.order) < std::tie(right.due, right.order);
+                });
+            if (next == timers_.end() || next->due > clock_milliseconds_) break;
+            JSValue* callback = next->callback;
+            timers_.erase(next);
+            context_.exception = nil;
+            [callback callWithArguments:@[]];
+            if (!consume_exception(error)) return false;
+            // Returning through the JavaScriptCore API establishes a Promise
+            // job checkpoint; a no-op evaluation makes that boundary explicit.
+            [context_ evaluateScript:@"void 0"];
+            if (!consume_exception(error)) return false;
+            ++executed;
+        }
+        return true;
+    }
+
+    bool bridge_dirty(bool& dirty, std::string* error) {
+        dirty = false;
+        JSValue* bridge = context_[@"__vellum"];
+        JSValue* method = [bridge valueForProperty:@"isDirty"];
+        if (method == nil || method.isUndefined || !method.isObject) {
+            return consume_exception(error);
+        }
+        JSValue* result = [bridge invokeMethod:@"isDirty" withArguments:@[]];
+        if (!consume_exception(error)) return false;
+        dirty = result.toBool;
+        return true;
+    }
+
+    bool materialize_if_dirty(
+        RenderedApplication& output, bool& rendered, std::string* error) {
+        rendered = false;
+        JSValue* bridge = context_[@"__vellum"];
+        JSValue* method = [bridge valueForProperty:@"pumpJSON"];
+        bool dirty = false;
+        if (!bridge_dirty(dirty, error)) return false;
+        if (method == nil || method.isUndefined || !method.isObject || !dirty) {
+            return consume_exception(error);
+        }
+        if (!call_tree(@"pumpJSON", @[], output, error)) return false;
+        rendered = true;
+        return true;
+    }
+
     bool consume_exception(std::string* error) {
         JSValue* exception = context_.exception;
         if (exception == nil || exception.isUndefined || exception.isNull) return true;
-        set_error(error, "JavaScript exception: " + cpp_string(exception.toString));
         context_.exception = nil;
+        NSString* code = @"VELLUM_SOURCE_MAP_MISSING";
+        NSString* message = exception.toString ?: @"JavaScript exception";
+        JSValue* mapper = context_[@"__vellumMapExceptionJSON"];
+        if (mapper != nil && !mapper.isUndefined && mapper.isObject) {
+            JSValue* mapped = [mapper callWithArguments:@[exception]];
+            JSValue* mapping_exception = context_.exception;
+            context_.exception = nil;
+            if (mapping_exception == nil || mapping_exception.isUndefined ||
+                mapping_exception.isNull) {
+                NSString* encoded = mapped != nil && mapped.isString
+                    ? mapped.toString : nil;
+                NSData* data = [encoded dataUsingEncoding:NSUTF8StringEncoding];
+                NSError* parse_error = nil;
+                id value = data == nil ? nil : [NSJSONSerialization
+                    JSONObjectWithData:data options:0 error:&parse_error];
+                NSDictionary* diagnostic = [value isKindOfClass:NSDictionary.class]
+                    ? static_cast<NSDictionary*>(value) : nil;
+                if (parse_error == nil && diagnostic != nil &&
+                    [diagnostic[@"protocol"] isEqual:@"vellum.authoring-host.v2"] &&
+                    [diagnostic[@"kind"] isEqual:@"diagnostic"] &&
+                    [diagnostic[@"code"] isEqual:@"VELLUM_RUNTIME_EXCEPTION"] &&
+                    [diagnostic[@"message"] isKindOfClass:NSString.class] &&
+                    [diagnostic[@"source"] isKindOfClass:NSDictionary.class] &&
+                    [diagnostic[@"stack"] isKindOfClass:NSArray.class]) {
+                    const auto canonical = json_object(diagnostic);
+                    if (canonical.has_value()) {
+                        last_diagnostic_json_ = *canonical;
+                        set_error(error, last_diagnostic_json_);
+                        return false;
+                    }
+                }
+            }
+            code = @"VELLUM_SOURCE_MAP_INVALID";
+        }
+        NSDictionary* fallback = @{
+            @"protocol": @"vellum.authoring-host.v2",
+            @"kind": @"diagnostic",
+            @"severity": @"error",
+            @"code": code,
+            @"message": message,
+        };
+        last_diagnostic_json_ = json_object(fallback).value_or(
+            R"({"code":"VELLUM_SOURCE_MAP_INVALID","kind":"diagnostic","message":"could not encode JavaScript exception","protocol":"vellum.authoring-host.v2","severity":"error"})");
+        set_error(error, last_diagnostic_json_);
         return false;
     }
 
@@ -519,11 +939,10 @@ private:
         context_.exception = nil;
         JSValue* bridge = context_[@"__vellum"];
         JSValue* result = [bridge invokeMethod:method withArguments:arguments];
-        if (!consume_exception(error) || result == nil || !result.isString) {
-            if (result == nil || !result.isString) {
-                set_error(error, "JavaScript authoring bridge method did not return a string: " +
-                                 cpp_string(method));
-            }
+        if (!consume_exception(error)) return nil;
+        if (result == nil || !result.isString) {
+            set_error(error, "JavaScript authoring bridge method did not return a string: " +
+                             cpp_string(method));
             return nil;
         }
         return result.toString;
@@ -536,6 +955,11 @@ private:
     }
 
     __strong JSContext* context_ = nil;
+    std::vector<Timer> timers_;
+    std::uint64_t clock_milliseconds_ = 0;
+    std::uint64_t next_timer_id_ = 1;
+    std::uint64_t next_timer_order_ = 1;
+    std::string last_diagnostic_json_;
 };
 
 JsApplication::JsApplication(std::unique_ptr<Impl> impl) noexcept
@@ -565,6 +989,32 @@ bool JsApplication::dispatch(
     @autoreleasepool { return impl_->dispatch(action, payload_json, output, error); }
 }
 
+bool JsApplication::configure_service_host(
+    std::string_view capabilities_json, std::string* error) {
+    @autoreleasepool {
+        return impl_->configure_service_host(capabilities_json, error);
+    }
+}
+
+bool JsApplication::enqueue_service_response(
+    std::string_view response_json, std::string* error) {
+    @autoreleasepool {
+        return impl_->enqueue_service_response(response_json, error);
+    }
+}
+
+bool JsApplication::service_response_queue_empty(
+    bool& empty, std::string* error) {
+    @autoreleasepool {
+        return impl_->service_response_queue_empty(empty, error);
+    }
+}
+
+bool JsApplication::has_command(
+    std::string_view command, bool& present, std::string* error) {
+    @autoreleasepool { return impl_->has_command(command, present, error); }
+}
+
 bool JsApplication::snapshot_state(std::string& output_json, std::string* error) {
     @autoreleasepool { return impl_->snapshot(output_json, error); }
 }
@@ -573,6 +1023,27 @@ bool JsApplication::restore_state(
     std::string_view snapshot_json, RenderedApplication& output,
     std::string* error) {
     @autoreleasepool { return impl_->restore(snapshot_json, output, error); }
+}
+
+bool JsApplication::pump(
+    std::uint64_t advance_milliseconds, std::size_t maximum_tasks,
+    RenderedApplication& output, PumpResult& result, std::string* error) {
+    @autoreleasepool {
+        return impl_->pump(
+            advance_milliseconds, maximum_tasks, output, result, error);
+    }
+}
+
+bool JsApplication::wait_for_idle(
+    std::size_t maximum_tasks, RenderedApplication& output,
+    PumpResult& result, std::string* error) {
+    @autoreleasepool {
+        return impl_->wait_for_idle(maximum_tasks, output, result, error);
+    }
+}
+
+std::string JsApplication::last_diagnostic_json() const {
+    return impl_->last_diagnostic_json();
 }
 
 }  // namespace vellum::authoring

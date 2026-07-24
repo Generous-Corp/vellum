@@ -49,6 +49,12 @@ def init_repo(path: Path, first_path: str) -> tuple[str, str]:
     return base, run(path, "git", "rev-parse", "HEAD")
 
 
+def commit_all(repo: Path, message: str) -> str:
+    run(repo, "git", "add", ".")
+    run(repo, "git", "commit", "-m", message)
+    return run(repo, "git", "rev-parse", "HEAD")
+
+
 def make_state(root: Path, pulp_base: str, vellum_base: str) -> None:
     write(
         root / "product/budgets.yaml",
@@ -160,6 +166,62 @@ observatory:
 
 
 class ObservatoryTests(unittest.TestCase):
+    def test_ci_verifies_pull_request_head_not_synthetic_merge(self) -> None:
+        workflow = (
+            observatory.ROOT / ".github/workflows/provenance.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "VELLUM_TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}",
+            workflow,
+        )
+        self.assertIn('--vellum-target "$VELLUM_TARGET_SHA"', workflow)
+
+    def test_vellum_evidence_only_tail_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary) / "vellum"
+            init_repo(repo, "unmapped/source.cpp")
+            write(repo / observatory.CURSOR_PATH, "{}\n")
+            write(repo / observatory.REPORT_JSON_PATH, "{}\n")
+            write(repo / observatory.REPORT_MD_PATH, "current\n")
+            commit_all(repo, "seed observatory evidence")
+            write(repo / "graphics/render.cpp", "int value = 1;\n")
+            source = commit_all(repo, "mapped source change")
+            write(repo / observatory.CURSOR_PATH, '{"advanced": true}\n')
+            write(repo / observatory.REPORT_JSON_PATH, '{"health": "pass"}\n')
+            write(repo / observatory.REPORT_MD_PATH, "updated\n")
+            write(repo / observatory.EVENTS_PATH / f"vellum-{source}.yaml", "{}\n")
+            evidence = commit_all(repo, "record observatory evidence")
+
+            observatory.verify_vellum_observatory_tail(repo, source, evidence)
+
+    def test_vellum_evidence_tail_rejects_unmapped_product_change(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary) / "vellum"
+            _, source = init_repo(repo, "graphics/render.cpp")
+            write(repo / "README.md", "unobserved product documentation\n")
+            target = commit_all(repo, "unmapped product change")
+
+            with self.assertRaisesRegex(
+                observatory.ObservatoryError, "non-evidence change"
+            ):
+                observatory.verify_vellum_observatory_tail(repo, source, target)
+
+    def test_vellum_evidence_tail_rejects_event_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary) / "vellum"
+            _, source = init_repo(repo, "graphics/render.cpp")
+            event = repo / observatory.EVENTS_PATH / "vellum-event.yaml"
+            write(event, "{}\n")
+            added = commit_all(repo, "add evidence")
+            write(event, '{"tampered": true}\n')
+            target = commit_all(repo, "tamper evidence")
+
+            observatory.verify_vellum_observatory_tail(repo, source, added)
+            with self.assertRaisesRegex(
+                observatory.ObservatoryError, "non-evidence change"
+            ):
+                observatory.verify_vellum_observatory_tail(repo, source, target)
+
     def test_pulp_root_cmake_is_transitive_only_with_direct_mapped_change(self) -> None:
         mapping = {
             "id": "render",

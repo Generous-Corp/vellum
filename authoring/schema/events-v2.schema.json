@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vellum.dev/schema/events-v2.schema.json",
+  "title": "Vellum normalized application event v2",
+  "type": "object",
+  "required": ["protocol", "sequence", "target", "type", "payload"],
+  "properties": {
+    "protocol": { "const": "vellum.events.v2" },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "target": { "type": "string", "minLength": 1 },
+    "type": {
+      "enum": [
+        "press",
+        "pointerDown",
+        "pointerUp",
+        "touch",
+        "keyDown",
+        "focus",
+        "blur",
+        "change",
+        "selectionChange",
+        "compositionStart",
+        "compositionUpdate",
+        "compositionEnd",
+        "submit",
+        "command"
+      ]
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "value": { "type": "string" },
+        "text": { "type": "string" },
+        "key": { "type": "string" },
+        "inputType": { "type": "string" },
+        "repeat": { "type": "boolean" },
+        "source": { "enum": ["browser", "keyboard", "scenario", "accessibility"] },
+        "isComposing": { "type": "boolean" },
+        "command": { "type": "string" },
+        "pointerType": { "enum": ["mouse", "pen", "touch"] },
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "selection": { "$ref": "#/$defs/selection" },
+        "modifiers": {
+          "type": "array",
+          "items": { "enum": ["alt", "control", "meta", "shift"] },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "selection": {
+      "type": "object",
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    }
+  }
+}

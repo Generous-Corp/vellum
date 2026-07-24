@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -14,13 +15,22 @@ import sys
 import tempfile
 from typing import Iterable
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
 from verify_sdk_artifact import (
     payload_contamination_findings,
     should_scan_payload_content,
 )
 
 
-REPO = Path(__file__).resolve().parents[1]
+REPO = SCRIPT_DIR.parents[0]
+SUPPORT_ROOT = (
+    SCRIPT_DIR / "sterile-support"
+    if (SCRIPT_DIR / "sterile-support").is_dir()
+    else REPO
+)
 
 
 class ValidationError(RuntimeError):
@@ -38,6 +48,46 @@ def installed_contamination_findings(prefix: Path) -> list[dict[str, str]]:
     return findings
 
 
+def checkout_contamination_findings(search_roots: Iterable[Path]) -> list[str]:
+    """Find source-checkout markers in the bounded roots supplied by CI.
+
+    A sterile runner can still have an empty GitHub workspace directory. What
+    it may not have is a Vellum checkout or cache that could satisfy an
+    accidental relative/source dependency.
+    """
+    findings: list[str] = []
+    markers = (
+        Path(".git"),
+        Path("provenance/pulp-extraction.json"),
+        Path("scripts/build_sdk_artifact.py"),
+    )
+    for raw_root in search_roots:
+        root = raw_root.expanduser().resolve()
+        if not root.exists():
+            continue
+        candidates = [root]
+        if root.is_dir():
+            candidates.extend(
+                path for path in root.iterdir()
+                if path.is_dir() and not path.is_symlink()
+            )
+        for candidate in candidates:
+            present = [
+                marker.as_posix()
+                for marker in markers
+                if (candidate / marker).exists()
+            ]
+            if (
+                ".git" in present
+                and (
+                    "provenance/pulp-extraction.json" in present
+                    or "scripts/build_sdk_artifact.py" in present
+                )
+            ):
+                findings.append(str(candidate))
+    return sorted(set(findings))
+
+
 def run(arguments: list[str], *, cwd: Path | None = None,
         env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     completed = subprocess.run(arguments, cwd=cwd, text=True, capture_output=True, check=False,
@@ -50,10 +100,159 @@ def run(arguments: list[str], *, cwd: Path | None = None,
     return completed
 
 
-def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[str, object]:
+def load_installed_native_backend(library: Path) -> object:
+    """Inspect the installed adapter without mutating the immutable SDK tree."""
+    backend_path = library / "vellum_native_backend.py"
+    previous_dont_write_bytecode = sys.dont_write_bytecode
+    sys.path.insert(0, str(library))
+    try:
+        sys.dont_write_bytecode = True
+        spec = importlib.util.spec_from_file_location(
+            "vellum_installed_native_backend", backend_path
+        )
+        if spec is None or spec.loader is None:
+            raise ValidationError("cannot load installed native scenario adapter")
+        backend = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(backend)
+        return backend
+    finally:
+        sys.dont_write_bytecode = previous_dont_write_bytecode
+        sys.path.remove(str(library))
+
+
+def validate_installed_phase3(prefix: Path, root: Path,
+                              env: dict[str, str]) -> bool:
+    """Run the unchanged scenario using only installed SDK/runtime bytes."""
+    fixture = root / "phase3-installed"
+    shutil.copytree(
+        SUPPORT_ROOT / "fixtures/authoring-phase3",
+        fixture,
+    )
+    modules = fixture / "node_modules/@vellum"
+    modules.mkdir(parents=True)
+    for name in ("pure-esm-root", "pure-esm-leaf"):
+        shutil.copytree(
+            fixture / f"vendor/{name}",
+            modules / f"fixture-{name}",
+        )
+
+    library = prefix / "lib/vellum"
+    node = library / "node/bin/node"
+    build_script = library / "ui/scripts/build-project.mjs"
+    bundle = fixture / "build/app.js"
+    run(
+        [str(node), str(build_script), str(fixture / "src/App.tsx"), str(bundle)],
+        cwd=fixture,
+        env={
+            **env,
+            "VELLUM_BUILD_FORMAT": "iife",
+            "VELLUM_PROJECT_ROOT": str(fixture),
+        },
+    )
+
+    backend = load_installed_native_backend(library)
+    capabilities = {
+        "commands": "v1",
+        "files": "denied",
+        "clipboard": "text-v1",
+        "open_url": "external-v1",
+        "network": False,
+        "persistence": "state-v1",
+    }
+    arguments, scenario_name = backend.scenario_arguments(
+        {"root": fixture, "capabilities": capabilities},
+        "scenarios/phase3.json",
+    )
+
+    if scenario_name != "unchanged authoring fixture on native and browser":
+        raise ValidationError("installed Phase 3 scenario identity drifted")
+    host = library / "sdk/bin/vellum-app-host"
+    completed = run(
+        [str(host), "--bundle", str(bundle), "--self-test", *arguments],
+        cwd=fixture,
+        env=env,
+    )
+    if (
+        "renderer=Skia Graphite backend=Metal fallback=false"
+        not in completed.stdout
+        or "text_inputs=1" not in completed.stdout
+    ):
+        raise ValidationError(
+            "installed Phase 3 scenario did not use the native GPU/text host"
+        )
+
+    capability_json = json.dumps(
+        capabilities, sort_keys=True, separators=(",", ":")
+    )
+    for label, negative in {
+        "unknown-command": ["--command", "missing.command"],
+        "wrong-text": ["--assert-text", "item-list", "not present"],
+        "unchanged-touch": [
+            "--touch", "open", '{"pointerType":"touch"}',
+        ],
+        "wrong-throw": [
+            "--expected-throw", "mapped-error", "vellum://wrong.tsx",
+        ],
+    }.items():
+        rejected = subprocess.run(
+            [
+                str(host), "--bundle", str(bundle), "--self-test",
+                "--service-capabilities", capability_json, *negative,
+            ],
+            cwd=fixture,
+            text=True,
+            capture_output=True,
+            check=False,
+            env=env,
+        )
+        if rejected.returncode == 0:
+            raise ValidationError(
+                f"installed Phase 3 negative control passed: {label}"
+            )
+    return True
+
+
+def validate_installed_phase3_browser(prefix: Path, root: Path,
+                                      env: dict[str, str]) -> bool:
+    """Run the exact browser scenario using only installed SDK/runtime bytes."""
+    library = prefix / "lib/vellum"
+    phase3_browser = run([
+        sys.executable,
+        str(SUPPORT_ROOT / "web/tests/run_text_semantics_browser.py"),
+        "--core-root", str(library / "web"),
+        "--source-root", str(SUPPORT_ROOT),
+        "--fixture", "phase3",
+        "--node", str(library / "node/bin/node"),
+        "--build-script", str(library / "ui/scripts/build-project.mjs"),
+    ], cwd=root, env=env)
+    complete = (
+        '"changed":true' in phase3_browser.stdout
+        and '"target":"mapped-error"' in phase3_browser.stdout
+        and '"target":"title-input"' in phase3_browser.stdout
+    )
+    if not complete:
+        raise ValidationError(
+            "installed exact Phase 3 browser scenario evidence is incomplete"
+        )
+    return True
+
+
+def validate(
+    archive: Path,
+    checksums: Path,
+    forbid_path: Path | None,
+    runner_search_roots: Iterable[Path] = (),
+) -> dict[str, object]:
+    runner_roots = [path.resolve() for path in runner_search_roots]
+    checkout_findings = checkout_contamination_findings(runner_roots)
+    if checkout_findings:
+        raise ValidationError(
+            "sterile runner contains a Vellum source checkout: "
+            + ", ".join(checkout_findings)
+        )
     verification = json.loads(
         run([
-            sys.executable, str(REPO / "scripts/verify_sdk_artifact.py"),
+            sys.executable, str(SCRIPT_DIR / "verify_sdk_artifact.py"),
             "--archive", str(archive), "--checksums", str(checksums), "--json",
         ]).stdout
     )
@@ -65,17 +264,17 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
             no_external_node if verification["claims"].get("node_runtime") else os.environ
         )
         installed = run([
-            "sh", str(REPO / "scripts/install.sh"),
+            "sh", str(SCRIPT_DIR / "install.sh"),
             "--archive", str(archive), "--checksums", str(checksums),
             "--install-dir", str(prefix),
         ], cwd=root)
         reinstalled = run([
-            "sh", str(REPO / "scripts/install.sh"),
+            "sh", str(SCRIPT_DIR / "install.sh"),
             "--archive", str(archive), "--checksums", str(checksums),
             "--install-dir", str(prefix),
         ], cwd=root)
         verified_install = run([
-            "sh", str(REPO / "scripts/install.sh"),
+            "sh", str(SCRIPT_DIR / "install.sh"),
             "--verify-installed", "--install-dir", str(prefix),
         ], cwd=root)
         if (
@@ -121,7 +320,10 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
             )
 
         consumer_source = root / "consumer-source"
-        shutil.copytree(REPO / "apps/smoke-native/install-consumer", consumer_source)
+        shutil.copytree(
+            SUPPORT_ROOT / "apps/minimal-scene",
+            consumer_source,
+        )
         consumer_build = root / "consumer-build"
         sdk_prefix = prefix / "lib/vellum/sdk"
         run([
@@ -149,6 +351,7 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
         ui_present = (prefix / "lib/vellum/ui/package.json").is_file()
         native_present = (
             (prefix / "lib/vellum/vellum_native_backend.py").is_file() and
+            (prefix / "lib/vellum/vellum_scenario.py").is_file() and
             (prefix / "lib/vellum/bin/vellum-native-backend").is_file()
         )
         component_abi_present = (
@@ -163,19 +366,31 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
             raise ValidationError("GPU artifact is missing its installed GPU/authoring/UI payload")
         if native_claimed and not native_present:
             raise ValidationError("native command claims have no installed native backend")
+        installed_phase3_scenario = (
+            validate_installed_phase3(prefix, root, journey_env)
+            if native_claimed else True
+        )
         web_claimed = all(
             verification["claims"]["targets"]["web"]["commands"][command]
             for command in ("build", "run", "test", "package")
         )
         web_present = all((prefix / "lib/vellum" / path).is_file() for path in (
             "vellum_web_backend.py", "bin/vellum-web-backend",
+            "vellum_scenario.py",
             "web/manifest.json", "web/vellum_web_core.js", "web/vellum_web_core.wasm",
             "web/vellum_host.js",
+            "web/browser_component_adapter.cpp",
+            "web/text_semantics.js",
         )) and any((prefix / "lib/vellum" / path).is_file() for path in (
             "node/bin/node", "node/bin/node.exe",
         ))
         if web_claimed and not web_present:
             raise ValidationError("web command claims have no complete installed runtime/backend")
+        installed_phase3_browser_scenario = True
+        if web_claimed:
+            installed_phase3_browser_scenario = validate_installed_phase3_browser(
+                prefix, root, journey_env
+            )
         custom_claimed = verification["claims"].get("custom_components") is True
         if custom_claimed and not component_abi_present:
             raise ValidationError("custom component claim has no installed ABI target/header")
@@ -190,7 +405,7 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
         ], cwd=project, env=journey_env).stdout)
         imported = json.loads(run([
             str(prefix / "bin/vellum"), "import",
-            str(REPO / "fixtures/design-ir/revision-a.source.json"),
+            str(SUPPORT_ROOT / "fixtures/design-ir/revision-a.source.json"),
             "--source-type", "figma", "--as", "main", "--json",
         ], cwd=project, env=journey_env).stdout)
         authored_source = project / "src/App.tsx"
@@ -227,7 +442,7 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
         )
         reimported = json.loads(run([
             str(prefix / "bin/vellum"), "reimport",
-            "--source", str(REPO / "fixtures/design-ir/revision-b.source.json"),
+            "--source", str(SUPPORT_ROOT / "fixtures/design-ir/revision-b.source.json"),
             "--as", "main", "--json",
         ], cwd=project, env=journey_env).stdout)
         active_revision = json.loads(
@@ -280,7 +495,7 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
             str(prefix / "bin/vellum"), "create", "Sterile ZIP App",
             "--directory", str(zip_project),
             "--from", "figma",
-            str(REPO / "fixtures/design-ir/pulp-emitter-generic.pulp.zip"),
+            str(SUPPORT_ROOT / "fixtures/design-ir/pulp-emitter-generic.pulp.zip"),
             "--json",
         ], cwd=root, env=journey_env).stdout)
         zip_lock = json.loads(
@@ -294,7 +509,10 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
             zip_created.get("status") == "created"
             and zip_lock.get("sourceArtifactKind") == "pulp-zip"
             and zip_snapshot.read_bytes()
-            == (REPO / "fixtures/design-ir/pulp-emitter-generic.pulp.zip").read_bytes()
+            == (
+                SUPPORT_ROOT
+                / "fixtures/design-ir/pulp-emitter-generic.pulp.zip"
+            ).read_bytes()
         )
         if not zip_snapshot_verified:
             raise ValidationError("installed CLI create --from figma ZIP journey did not complete")
@@ -406,94 +624,22 @@ def validate(archive: Path, checksums: Path, forbid_path: Path | None) -> dict[s
             custom_project = root / "custom-component-application"
             custom_created = json.loads(run([
                 str(prefix / "bin/vellum"), "create", "Custom Component App",
-                "--directory", str(custom_project), "--no-verify", "--json",
+                "--directory", str(custom_project), "--template", "cpp-component",
+                "--no-verify", "--json",
             ], cwd=root, env=journey_env).stdout)
-            if custom_created.get("status") != "created":
+            if (
+                custom_created.get("status") != "created"
+                or custom_created.get("data", {}).get("template") != "cpp-component"
+            ):
                 raise ValidationError("installed CLI did not create the custom component app")
-            (custom_project / "src/App.tsx").write_text(
-                '''import { Button, CustomComponent, Stack, Text, useState, View } from "@vellum/ui";\n\n'''
-                '''export function App() {\n'''
-                '''  const [boost, setBoost] = useState(false);\n'''
-                '''  return (\n'''
-                '''    <Stack id="custom-root" style={{ width: 640, height: 400, padding: 32, gap: 18, backgroundColor: "#0f172a" }}>\n'''
-                '''      <Text id="custom-title" style={{ height: 36, fontSize: 24, color: "#f8fafc" }}>App-owned C++ bars</Text>\n'''
-                '''      <Button id="toggle-boost" onPress={() => setBoost((value) => !value)} style={{ width: 180, height: 42 }}>Toggle boost</Button>\n'''
-                '''      <CustomComponent id="level-meter" component="level-meter" properties={{ boost }} style={{ width: 560, height: 220 }}\n'''
-                '''        fallback={<View id="level-meter-fallback" style={{ width: 560, height: 240, backgroundColor: "#334155" }} />} />\n'''
-                '''    </Stack>\n'''
-                '''  );\n'''
-                '''}\n''',
-                encoding="utf-8",
-            )
-            (custom_project / "tests/scenarios/smoke.json").write_text(
-                json.dumps({
-                    "schema": "vellum.scenario.v1",
-                    "name": "custom-component-mutation",
-                    "viewport": {"width": 640, "height": 400},
-                    "steps": [
-                        {"action": "wait-for-idle"},
-                        {"action": "capture", "name": "before"},
-                        {"action": "press", "target": "toggle-boost"},
-                        {"action": "wait-for-idle"},
-                        {"action": "capture", "name": "after"},
-                    ],
-                }, indent=2, sort_keys=True) + "\n",
-                encoding="utf-8",
-            )
-            (custom_project / "native/components.toml").write_text(
-                '[manifest]\n'
-                'schema = "vellum.components.v1"\n'
-                'components = ["level-meter"]\n\n'
-                '[component.level-meter]\n'
-                'native_source = "native/level-meter.cpp"\n'
-                'web = "fallback"\n',
-                encoding="utf-8",
-            )
-            (custom_project / "native/level-meter.cpp").write_text(
-                r'''#include <vellum/components/abi.h>
-#include <cstdio>
-#include <cstring>
-
-static int render_meter(const vellum_component_render_context_v1* context) {
-    if (context == nullptr || context->abi_version != VELLUM_COMPONENT_ABI_VERSION ||
-        context->emit == nullptr || context->properties_json == nullptr) return 0;
-    const bool boost = std::strstr(context->properties_json, "\\\"boost\\\":true") != nullptr;
-    const float values[] = {0.18F, 0.42F, 0.76F, 0.54F, 0.91F, 0.63F,
-                            0.32F, 0.70F, 0.48F, 0.84F, 0.58F, 0.96F};
-    const float gap = 8.0F;
-    const float width = (context->bounds.width - gap * 11.0F) / 12.0F;
-    for (int index = 0; index < 12; ++index) {
-        char suffix[32];
-        std::snprintf(suffix, sizeof(suffix), "bar-%d", index);
-        const float height = context->bounds.height * values[index];
-        vellum_component_paint_command_v1 command{};
-        command.struct_size = sizeof(command);
-        command.kind = VELLUM_COMPONENT_PAINT_RECTANGLE_V1;
-        command.id_suffix = suffix;
-        command.bounds = {index * (width + gap), context->bounds.height - height, width, height};
-        command.fill = boost
-            ? vellum_component_color_v1{0.08F, 0.72F, 0.65F, 1.0F}
-            : vellum_component_color_v1{0.39F, 0.45F, 0.55F, 1.0F};
-        command.corner_radius = 6.0F;
-        if (context->emit(context->emit_user_data, &command) != 1) return 0;
-    }
-    return 1;
-}
-
-static const vellum_component_descriptor_v1 descriptor{
-    sizeof(vellum_component_descriptor_v1), VELLUM_COMPONENT_ABI_VERSION,
-    "level-meter", render_meter,
-};
-
-extern "C" VELLUM_COMPONENT_EXPORT const vellum_component_descriptor_v1*
-vellum_component_entry_v1(void) { return &descriptor; }
-''',
-                encoding="utf-8",
-            )
             custom_capture = custom_project / "artifacts/custom-component.png"
             custom_results = {
                 "build": json.loads(run([
                     str(prefix / "bin/vellum"), "build", "--json",
+                ], cwd=custom_project, env=journey_env).stdout),
+                "test": json.loads(run([
+                    str(prefix / "bin/vellum"), "test", "--scenario", "smoke",
+                    "--json",
                 ], cwd=custom_project, env=journey_env).stdout),
                 "capture": json.loads(run([
                     str(prefix / "bin/vellum"), "capture", "--scenario", "smoke",
@@ -523,11 +669,11 @@ vellum_component_entry_v1(void) { return &descriptor; }
         unrelated.parent.mkdir(parents=True)
         unrelated.write_text("not owned by Vellum\n", encoding="utf-8")
         uninstalled = run([
-            "sh", str(REPO / "scripts/install.sh"),
+            "sh", str(SCRIPT_DIR / "install.sh"),
             "--uninstall", "--install-dir", str(prefix),
         ], cwd=root)
         uninstalled_again = run([
-            "sh", str(REPO / "scripts/install.sh"),
+            "sh", str(SCRIPT_DIR / "install.sh"),
             "--uninstall", "--install-dir", str(prefix),
         ], cwd=root)
         uninstall_preserved_unrelated = (
@@ -544,6 +690,7 @@ vellum_component_entry_v1(void) { return &descriptor; }
 
     checks = {
         "checksum_and_payload_manifest": True,
+        "runner_has_no_framework_checkout": not checkout_findings,
         "artifact_contamination_scan": verification["contamination_free"],
         "clean_prefix_install": True,
         "transactional_exact_reinstall": True,
@@ -560,6 +707,9 @@ vellum_component_entry_v1(void) { return &descriptor; }
         "sterile_consumer_build": True,
         "sterile_consumer_test": True,
         "project_created_by_installed_cli": created.get("status") == "created",
+        "installed_blank_template_selected": (
+            created.get("data", {}).get("template") == "blank"
+        ),
         "project_lock_matches_sdk": True,
         "project_lock_pins_artifact_sha": lock["framework"].get("artifact") == expected_lock_identity,
         "installed_cli_doctor": doctor.get("status") == "ready",
@@ -571,6 +721,9 @@ vellum_component_entry_v1(void) { return &descriptor; }
             and resolved_bindings[0].get("resolvedNodeId") == "main/create-button-v2"
         ),
         "installed_cli_pulp_zip_create_from": zip_created.get("status") == "created",
+        "installed_imported_template_selected": (
+            zip_created.get("data", {}).get("template") == "imported-app"
+        ),
         "installed_pulp_zip_snapshot": zip_snapshot_verified,
         "native_capability_claim_consistent": all(
             verification["claims"]["targets"]["macos"]["commands"][name] is native_enabled
@@ -579,6 +732,7 @@ vellum_component_entry_v1(void) { return &descriptor; }
         "installed_native_build": not native_enabled or native_results["build"]["status"] == "built",
         "installed_native_finite_run": not native_enabled or native_results["run"]["status"] == "self_test_passed",
         "installed_native_scenario": not native_enabled or native_results["test"]["status"] == "tests_passed",
+        "installed_phase3_unchanged_scenario": installed_phase3_scenario,
         "installed_imported_design_bundle": not native_enabled or imported_bundle_contains_design,
         "installed_native_capture": not native_enabled or native_capture_produced,
         "installed_native_montage": not native_enabled or native_montage_produced,
@@ -593,7 +747,12 @@ vellum_component_entry_v1(void) { return &descriptor; }
         "installed_web_same_source_imported_behavior": (
             not web_claimed or web_same_source_imported_behavior
         ),
+        "installed_phase3_browser_scenario": installed_phase3_browser_scenario,
         "installed_custom_cpp_component": not custom_claimed or custom_component_produced,
+        "installed_cpp_component_template_selected": (
+            not custom_claimed
+            or custom_created.get("data", {}).get("template") == "cpp-component"
+        ),
     }
     if not all(checks.values()):
         failed = sorted(name for name, passed in checks.items() if not passed)
@@ -619,11 +778,23 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--archive", type=Path, required=True)
     parser.add_argument("--checksums", type=Path, required=True)
     parser.add_argument("--forbid-path", type=Path, default=REPO)
+    parser.add_argument(
+        "--runner-search-root",
+        action="append",
+        default=[],
+        type=Path,
+        help="bounded root that must not contain a Vellum source checkout",
+    )
     parser.add_argument("--output", type=Path)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
     try:
-        evidence = validate(args.archive.resolve(), args.checksums.resolve(), args.forbid_path)
+        evidence = validate(
+            args.archive.resolve(),
+            args.checksums.resolve(),
+            args.forbid_path,
+            args.runner_search_root,
+        )
     except (OSError, json.JSONDecodeError, ValidationError) as error:
         print(f"vellum-installed-sdk-validation: {error}", file=sys.stderr)
         return 1

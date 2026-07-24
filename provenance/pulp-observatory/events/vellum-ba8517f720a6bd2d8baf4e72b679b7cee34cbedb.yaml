@@ -1,0 +1,61 @@
+{
+  "class": "importer",
+  "contract_keys": [
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-07-23T18:49:37Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-ba8517f720a6bd2d8baf4e72b679b7cee34cbedb",
+  "include_dependency_deltas": [
+    "packages/vellum-ui/test/fixtures/pure-esm-project/packages/pure-esm-app/package.json",
+    "packages/vellum-ui/test/fixtures/pure-esm-project/packages/pure-esm-transitive/package.json"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "packages/vellum-ui/README.md",
+    "packages/vellum-ui/scripts/build-project.mjs",
+    "packages/vellum-ui/scripts/check-portability.mjs",
+    "packages/vellum-ui/test/fixtures/portability/app.toml",
+    "packages/vellum-ui/test/fixtures/portability/dom-global.js",
+    "packages/vellum-ui/test/fixtures/portability/dynamic-code.js",
+    "packages/vellum-ui/test/fixtures/portability/dynamic-import.js",
+    "packages/vellum-ui/test/fixtures/portability/node-builtin.js",
+    "packages/vellum-ui/test/fixtures/portability/platform-import.js",
+    "packages/vellum-ui/test/fixtures/portability/platforms/macos/value.js",
+    "packages/vellum-ui/test/fixtures/portability/portable.js",
+    "packages/vellum-ui/test/fixtures/portability/undeclared-capability.js",
+    "packages/vellum-ui/test/fixtures/pure-esm-project/app.toml",
+    "packages/vellum-ui/test/fixtures/pure-esm-project/main.js",
+    "packages/vellum-ui/test/fixtures/pure-esm-project/packages/pure-esm-app/index.js",
+    "packages/vellum-ui/test/fixtures/pure-esm-project/packages/pure-esm-app/package.json",
+    "packages/vellum-ui/test/fixtures/pure-esm-project/packages/pure-esm-transitive/index.js",
+    "packages/vellum-ui/test/fixtures/pure-esm-project/packages/pure-esm-transitive/package.json",
+    "packages/vellum-ui/test/portability.test.js"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "da954a8bb900d4ae0612aae48f276be52d718c07",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "ebf5d77acea3eb4b5777e03055367d54ae03b266",
+    "to_commit": "58ce9dee8d4fe052d5dfdc6817de332ec333beef"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "ba8517f720a6bd2d8baf4e72b679b7cee34cbedb",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}

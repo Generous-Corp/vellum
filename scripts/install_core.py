@@ -48,9 +48,11 @@ SAFE_ROOTS = {
     "ui",
     "vellum_backend.py",
     "vellum_cli.py",
+    "vellum_dev.py",
     "vellum_manifest.py",
     "vellum_native_backend.py",
     "vellum_png.py",
+    "vellum_scenario.py",
     "vellum_web_backend.py",
     "web",
 }
@@ -366,13 +368,27 @@ def validate_ui_payload(contents: dict[str, bytes]) -> bool:
         raise InstallError(
             f"@vellum/ui dependency metadata is malformed: {error}"
         ) from error
-    dependencies = package.get("devDependencies")
-    locked_dependencies = lock.get("packages", {}).get("", {}).get(
-        "devDependencies"
+    runtime_dependencies = package.get("dependencies")
+    development_dependencies = package.get("devDependencies")
+    locked_root = lock.get("packages", {}).get("", {})
+    locked_runtime_dependencies = locked_root.get("dependencies")
+    locked_development_dependencies = locked_root.get("devDependencies")
+    dependency_maps = (
+        runtime_dependencies,
+        development_dependencies,
+        locked_runtime_dependencies,
+        locked_development_dependencies,
+    )
+    dependencies = (
+        {**runtime_dependencies, **development_dependencies}
+        if all(isinstance(value, dict) for value in dependency_maps)
+        else {}
     )
     if (
-        not isinstance(dependencies, dict)
-        or dependencies != locked_dependencies
+        not all(isinstance(value, dict) for value in dependency_maps)
+        or runtime_dependencies != locked_runtime_dependencies
+        or development_dependencies != locked_development_dependencies
+        or set(runtime_dependencies) & set(development_dependencies)
         or set(dependencies) != {"esbuild", "typescript"}
         or any(
             not isinstance(version, str)
@@ -449,7 +465,7 @@ def derived_capabilities(
     payload_records: dict[str, dict[str, object]],
     target: str,
 ) -> dict[str, object]:
-    if not {"vellum_manifest.py", "vellum_png.py"}.issubset(contents):
+    if not {"vellum_dev.py", "vellum_manifest.py", "vellum_png.py"}.issubset(contents):
         raise InstallError(
             "SDK artifact lacks application manifest or capture support"
         )
@@ -461,6 +477,7 @@ def derived_capabilities(
     native_backend = {
         "vellum_native_backend.py",
         "vellum_png.py",
+        "vellum_scenario.py",
     }.issubset(contents)
     native_host = all(
         path in contents
@@ -488,8 +505,11 @@ def derived_capabilities(
         "web/index.html",
         "web/style.css",
         "web/vellum_host.js",
+        "web/browser_component_adapter.cpp",
+        "web/text_semantics.js",
         "web/check_wasm_no_engine.py",
         "vellum_web_backend.py",
+        "vellum_scenario.py",
     }
     web_runtime = web_required.issubset(contents)
     web_present = (
@@ -551,10 +571,10 @@ def derived_capabilities(
                 "retained_tree": ui_runtime,
                 "native_pointer_focus": native_ready,
                 "native_direct_text": native_ready,
-                "ime_composition": False,
-                "caret_and_selection": False,
+                "ime_composition": native_ready or web_ready,
+                "caret_and_selection": native_ready or web_ready,
                 "clipboard_editing": False,
-                "accessibility_text": False,
+                "accessibility_text": native_ready or web_ready,
                 "mobile": False,
             },
             "scenario_v1": {
@@ -1081,6 +1101,7 @@ def sdk_launcher() -> str:
         'bindir=$(CDPATH="" cd -- "$(dirname -- "$0")" && pwd)',
         'sdk_root=$(CDPATH="" cd -- "$bindir/.." && pwd)',
         'export VELLUM_SDK_ROOT="$sdk_root"',
+        "export PYTHONDONTWRITEBYTECODE=1",
         'exec python3 "$sdk_root/vellum_cli.py" "$@"',
         "",
     ])
@@ -1092,6 +1113,7 @@ def backend_launcher(module: str) -> str:
         "set -eu",
         MANAGED_LAUNCHER_MARKER,
         'bindir=$(CDPATH="" cd -- "$(dirname -- "$0")" && pwd)',
+        "export PYTHONDONTWRITEBYTECODE=1",
         f'exec python3 "$bindir/../{module}" "$@"',
         "",
     ])

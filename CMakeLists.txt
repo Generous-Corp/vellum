@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(Vellum
-    VERSION 0.1.1
+    VERSION 0.1.6
     DESCRIPTION "Experimental audio-free native application kernel"
     LANGUAGES CXX)
 
@@ -22,6 +22,8 @@ option(VELLUM_ENABLE_AUTHORING "Build the native JavaScript/TypeScript applicati
 option(VELLUM_ENABLE_WEB "Build the experimental browser/Wasm proof" OFF)
 set(VELLUM_AUTHORING_TEST_BUNDLE "" CACHE FILEPATH
     "Optional @vellum/ui classic-script bundle for the real JavaScriptCore integration test")
+set(VELLUM_PHASE3_TEST_BUNDLE "" CACHE FILEPATH
+    "Optional unchanged Phase 3 classic-script bundle for the cross-runtime fixture test")
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -111,6 +113,10 @@ if(VELLUM_BUILD_TESTS)
             authoring/tests/js_application_test.cpp)
         target_link_libraries(vellum-authoring-test PRIVATE Vellum::Authoring)
         add_test(NAME vellum.authoring COMMAND vellum-authoring-test)
+        add_executable(vellum-authoring-phase3-fixture-test
+            authoring/tests/phase3_fixture_test.cpp)
+        target_link_libraries(
+            vellum-authoring-phase3-fixture-test PRIVATE Vellum::Authoring)
         if(VELLUM_AUTHORING_TEST_BUNDLE)
             if(NOT EXISTS "${VELLUM_AUTHORING_TEST_BUNDLE}")
                 message(FATAL_ERROR
@@ -120,19 +126,39 @@ if(VELLUM_BUILD_TESTS)
             add_test(NAME vellum.authoring-ui-bundle
                 COMMAND vellum-authoring-test "${VELLUM_AUTHORING_TEST_BUNDLE}")
         endif()
+        if(VELLUM_PHASE3_TEST_BUNDLE)
+            if(NOT EXISTS "${VELLUM_PHASE3_TEST_BUNDLE}")
+                message(FATAL_ERROR
+                    "VELLUM_PHASE3_TEST_BUNDLE does not exist: "
+                    "${VELLUM_PHASE3_TEST_BUNDLE}")
+            endif()
+            add_test(NAME vellum.authoring-phase3-fixture
+                COMMAND vellum-authoring-phase3-fixture-test
+                    "${VELLUM_PHASE3_TEST_BUNDLE}")
+        endif()
     endif()
 
-    add_test(NAME vellum.install-consumer
-        COMMAND "${CMAKE_COMMAND}"
-            "-DVELLUM_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
-            "-DVELLUM_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
-            "-DVELLUM_INSTALL_CONSUMER_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/apps/smoke-native/install-consumer"
-            "-DVELLUM_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
-            "-DTEST_CONFIG=$<CONFIG>"
-            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunInstallConsumer.cmake")
+    # This consumer proves that the native CMake package is relocatable. A
+    # WebAssembly configure produces a target-architecture package, so driving
+    # its consumer with the host compiler would only report a false
+    # 32-bit/64-bit package-version mismatch.
+    if(NOT EMSCRIPTEN)
+        add_test(NAME vellum.install-consumer
+            COMMAND "${CMAKE_COMMAND}"
+                "-DVELLUM_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+                "-DVELLUM_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+                "-DVELLUM_INSTALL_CONSUMER_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/apps/minimal-scene"
+                "-DVELLUM_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
+                "-DTEST_CONFIG=$<CONFIG>"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunInstallConsumer.cmake")
+    endif()
     add_test(NAME vellum.sdk-artifact
         COMMAND "${Python3_EXECUTABLE}"
             -m unittest cli.tests.test_sdk_artifact
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.authoring-phase3-contracts
+        COMMAND "${Python3_EXECUTABLE}"
+            authoring/tests/test_phase3_contracts.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME vellum.provenance-unit
         COMMAND "${Python3_EXECUTABLE}"
@@ -141,6 +167,14 @@ if(VELLUM_BUILD_TESTS)
     add_test(NAME vellum.provenance-retirement
         COMMAND "${Python3_EXECUTABLE}"
             tools/provenance/verify_extraction.py
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.downstream-consumer-registry-unit
+        COMMAND "${Python3_EXECUTABLE}"
+            tools/provenance/test_verify_downstream_consumers.py
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.downstream-consumer-registry
+        COMMAND "${Python3_EXECUTABLE}"
+            tools/provenance/verify_downstream_consumers.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
 

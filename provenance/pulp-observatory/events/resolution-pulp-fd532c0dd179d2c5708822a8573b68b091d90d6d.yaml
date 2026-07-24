@@ -1,0 +1,20 @@
+{
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "created_at": "2026-07-23T17:46:22Z",
+  "disposition": "Pulp-only",
+  "effort_minutes": 0,
+  "event_id": "resolution-pulp-fd532c0dd179d2c5708822a8573b68b091d90d6d",
+  "kind": "resolution",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Pulp raw-Figma decoder, bridge, or materializer behavior outside Vellum's currently documented design subset. Retain as future fidelity evidence; do not copy the Pulp implementation into Vellum.",
+  "resolves": "pulp-fd532c0dd179d2c5708822a8573b68b091d90d6d",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

@@ -17,7 +17,7 @@
       "class": "platform",
       "deadline": "2026-07-28T02:42:26Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-00d451b8e6b2757ccadad1c0f091aa0411051f12",
       "mapped_contracts": [
         "capture-primitives",
@@ -30,7 +30,7 @@
       "class": "correctness",
       "deadline": "2026-07-28T02:42:26Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-17f97dc39c6f74d38fa94c6ab15ccb96e52797a4",
       "mapped_contracts": [
         "design-schema-compiler"
@@ -42,7 +42,7 @@
       "class": "platform",
       "deadline": "2026-07-28T02:42:26Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-3132342d1a9b3d39ebb3f752ff72d6ca8e5cc905",
       "mapped_contracts": [
         "capture-primitives",
@@ -55,7 +55,7 @@
       "class": "schema",
       "deadline": "2026-07-28T02:42:26Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-9ad31243ee3c732733635b9e8d7e35743a339e39",
       "mapped_contracts": [
         "design-schema-compiler",
@@ -68,7 +68,7 @@
       "class": "correctness",
       "deadline": "2026-07-28T02:42:26Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-c6a65fa75a4b7c8e8059c9c691fd5fc7a67d3c74",
       "mapped_contracts": [
         "capture-primitives"
@@ -80,7 +80,7 @@
       "class": "rendering",
       "deadline": "2026-07-28T02:42:26Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-de7b7a3c516ab8ee0567386023d4da5d48a56b78",
       "mapped_contracts": [
         "canvas-kernel",
@@ -93,7 +93,7 @@
       "class": "schema",
       "deadline": "2026-07-28T02:42:26Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-f1c7fdc39dee2f1c492d3bb4f0d03589370a308a",
       "mapped_contracts": [
         "design-schema-compiler"
@@ -105,7 +105,7 @@
       "class": "schema",
       "deadline": "2026-07-28T03:47:16Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-3e116e580568726dbd2d84c17388bcd1dd94431b",
       "mapped_contracts": [
         "canvas-kernel",
@@ -121,7 +121,7 @@
       "class": "correctness",
       "deadline": "2026-07-28T03:47:16Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-7e54127818cd04c79c717f3865e20f68634195be",
       "mapped_contracts": [
         "capture-primitives",
@@ -134,7 +134,7 @@
       "class": "schema",
       "deadline": "2026-07-28T03:47:16Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-8f64fb8eef1f08f82ee1cd692c4e4a565978837c",
       "mapped_contracts": [
         "design-schema-compiler",
@@ -147,7 +147,7 @@
       "class": "schema",
       "deadline": "2026-07-28T03:47:16Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-d779f96ca86d3fadbf0d0d48cd32635c698bf818",
       "mapped_contracts": [
         "capture-primitives",
@@ -161,7 +161,7 @@
       "class": "rendering",
       "deadline": "2026-07-28T05:10:37Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-f8d063aa6a87dbedab4db8f57152321d3349218b",
       "mapped_contracts": [
         "canvas-kernel",
@@ -174,7 +174,7 @@
       "class": "schema",
       "deadline": "2026-07-28T06:23:32Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-3bf1b0ce0b35f3ef90f44dfbda7252ee4faa2625",
       "mapped_contracts": [
         "capture-primitives",
@@ -183,14 +183,746 @@
       ],
       "source_commit": "3bf1b0ce0b35f3ef90f44dfbda7252ee4faa2625",
       "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "importer",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-00f6a82ef8ff23bbcd06152c3ff5977372330310",
+      "mapped_contracts": [
+        "pulp-design-import-tooling"
+      ],
+      "source_commit": "00f6a82ef8ff23bbcd06152c3ff5977372330310",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "importer",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-039086d4715b76792ae9c1da3437cd6a81144ef7",
+      "mapped_contracts": [
+        "design-schema-compiler",
+        "pulp-design-import-tooling",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "039086d4715b76792ae9c1da3437cd6a81144ef7",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "schema",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-20a1c8e406468a6e8c27f669e438fe4fbd7d7dcb",
+      "mapped_contracts": [
+        "canvas-kernel",
+        "design-schema-compiler",
+        "pulp-design-import-tooling",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "20a1c8e406468a6e8c27f669e438fe4fbd7d7dcb",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "importer",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "Pulp-only",
+      "event_id": "pulp-260f17eb6a62f2458a413df218b343dce523ad73",
+      "mapped_contracts": [
+        "pulp-design-import-tooling"
+      ],
+      "source_commit": "260f17eb6a62f2458a413df218b343dce523ad73",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "importer",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-290c9616e4e798b2f80a9eab8159a9d115ea096c",
+      "mapped_contracts": [
+        "design-schema-compiler",
+        "pulp-design-import-tooling",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "290c9616e4e798b2f80a9eab8159a9d115ea096c",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "importer",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "Pulp-only",
+      "event_id": "pulp-45f7a587a5644788ca73a93eb9dad658f3215593",
+      "mapped_contracts": [
+        "design-schema-compiler",
+        "pulp-design-import-tooling",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "45f7a587a5644788ca73a93eb9dad658f3215593",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "importer",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-584efeb2aeb06e26f17a5a83a5d838a84c3088d1",
+      "mapped_contracts": [
+        "canvas-kernel",
+        "pulp-design-import-tooling",
+        "pulp-screenshot-harness",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "584efeb2aeb06e26f17a5a83a5d838a84c3088d1",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "importer",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-5a00ea4b7323b60b6206c2f9e9de87bc95a51b51",
+      "mapped_contracts": [
+        "macos-shell",
+        "pulp-design-import-tooling",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "5a00ea4b7323b60b6206c2f9e9de87bc95a51b51",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "schema",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "Pulp-only",
+      "event_id": "pulp-6e06ae1ecefffb369e5cd8146939e85ea142260d",
+      "mapped_contracts": [
+        "canvas-kernel",
+        "design-schema-compiler",
+        "pulp-design-import-tooling",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "6e06ae1ecefffb369e5cd8146939e85ea142260d",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "schema",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "Pulp-only",
+      "event_id": "pulp-7139da1c70c85f406ba7479a364169e7349e677b",
+      "mapped_contracts": [
+        "design-schema-compiler",
+        "pulp-design-import-tooling",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "7139da1c70c85f406ba7479a364169e7349e677b",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "importer",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "Pulp-only",
+      "event_id": "pulp-755cc079659c8c2f38fbf3eb0e21c775dc3236ab",
+      "mapped_contracts": [
+        "pulp-design-import-tooling"
+      ],
+      "source_commit": "755cc079659c8c2f38fbf3eb0e21c775dc3236ab",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "platform",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "Pulp-only",
+      "event_id": "pulp-7d4455698f625a9b1d4f989cfffd9e0891cb7d08",
+      "mapped_contracts": [
+        "macos-shell",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "7d4455698f625a9b1d4f989cfffd9e0891cb7d08",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "importer",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-7e5d9eab6ed46853e745d1568c5dec0d4a7979a9",
+      "mapped_contracts": [
+        "pulp-design-import-tooling"
+      ],
+      "source_commit": "7e5d9eab6ed46853e745d1568c5dec0d4a7979a9",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "importer",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-84b1ee371cb995db7f5e8b1ded9eb63ee442ed3f",
+      "mapped_contracts": [
+        "canvas-kernel",
+        "pulp-design-import-tooling",
+        "pulp-screenshot-harness",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "84b1ee371cb995db7f5e8b1ded9eb63ee442ed3f",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "schema",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-8e6183bf32739d3ee7627dba1abf9f16b6d308ed",
+      "mapped_contracts": [
+        "design-schema-compiler",
+        "pulp-design-import-tooling",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "8e6183bf32739d3ee7627dba1abf9f16b6d308ed",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "rendering",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-9066bc1155e210a63b3d407313ef3971ff8d348a",
+      "mapped_contracts": [
+        "canvas-kernel"
+      ],
+      "source_commit": "9066bc1155e210a63b3d407313ef3971ff8d348a",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "importer",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-a34ec459c7f890bd52cf1c4eb3898e5c28fdd9a6",
+      "mapped_contracts": [
+        "canvas-kernel",
+        "pulp-design-import-tooling",
+        "pulp-screenshot-harness",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "a34ec459c7f890bd52cf1c4eb3898e5c28fdd9a6",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "importer",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-a8f416c3c9da700322ffda7ec46ba1f4736b54df",
+      "mapped_contracts": [
+        "pulp-design-import-tooling"
+      ],
+      "source_commit": "a8f416c3c9da700322ffda7ec46ba1f4736b54df",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "importer",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-b32b268fe2e1ab3c4c618a700cb2975963aaa26f",
+      "mapped_contracts": [
+        "macos-shell",
+        "pulp-design-import-tooling",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "b32b268fe2e1ab3c4c618a700cb2975963aaa26f",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "schema",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "Pulp-only",
+      "event_id": "pulp-bb4b403be422382455ce789f7c580bc84175a15f",
+      "mapped_contracts": [
+        "design-schema-compiler",
+        "pulp-design-import-tooling",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "bb4b403be422382455ce789f7c580bc84175a15f",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "schema",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-c2c48cc5d06d2b4ec7a6c01702c78c1988d0d70a",
+      "mapped_contracts": [
+        "design-schema-compiler",
+        "pulp-design-import-tooling",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "c2c48cc5d06d2b4ec7a6c01702c78c1988d0d70a",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "importer",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-c4fca0f7cd3611d49945734d1b1dc31f2b6eed74",
+      "mapped_contracts": [
+        "design-schema-compiler",
+        "pulp-design-import-tooling",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "c4fca0f7cd3611d49945734d1b1dc31f2b6eed74",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "rendering",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "Pulp-only",
+      "event_id": "pulp-cd3440e0b1e6b699a8dc2fe146ada9aafd47a79d",
+      "mapped_contracts": [
+        "canvas-kernel"
+      ],
+      "source_commit": "cd3440e0b1e6b699a8dc2fe146ada9aafd47a79d",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "rendering",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "Pulp-only",
+      "event_id": "pulp-d9dafe62d78a27d33b20d5f63ff33fd0311174b0",
+      "mapped_contracts": [
+        "canvas-kernel"
+      ],
+      "source_commit": "d9dafe62d78a27d33b20d5f63ff33fd0311174b0",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "schema",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-db94862ef6c377620b77b7b0157d61fe8e614e54",
+      "mapped_contracts": [
+        "design-schema-compiler",
+        "pulp-design-import-tooling",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "db94862ef6c377620b77b7b0157d61fe8e614e54",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "importer",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-dcae68b922c9228ec651ad0b6bc9ffa74c821654",
+      "mapped_contracts": [
+        "pulp-design-import-tooling"
+      ],
+      "source_commit": "dcae68b922c9228ec651ad0b6bc9ffa74c821654",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "importer",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-de1fb2b6ffaf1b4e96eef05efcf41d4e8f990b34",
+      "mapped_contracts": [
+        "design-schema-compiler",
+        "pulp-design-import-tooling",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "de1fb2b6ffaf1b4e96eef05efcf41d4e8f990b34",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "rendering",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-e5cbf0ec22ef627a8d169cc9ec30d0a8d549b8c6",
+      "mapped_contracts": [
+        "canvas-kernel"
+      ],
+      "source_commit": "e5cbf0ec22ef627a8d169cc9ec30d0a8d549b8c6",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "schema",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-e5e5d24232046abbc48f5122c1f94cd64a883beb",
+      "mapped_contracts": [
+        "canvas-kernel",
+        "design-schema-compiler",
+        "pulp-design-import-tooling",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "e5e5d24232046abbc48f5122c1f94cd64a883beb",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "schema",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-ea110bd5d511b9fa14f39d9f70dbd989bb6a125d",
+      "mapped_contracts": [
+        "canvas-kernel",
+        "design-schema-compiler",
+        "macos-shell",
+        "pulp-design-import-tooling",
+        "pulp-screenshot-harness",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "ea110bd5d511b9fa14f39d9f70dbd989bb6a125d",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "importer",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-ecbd69b92244d586943b2c5ca72d09c009163ba6",
+      "mapped_contracts": [
+        "design-schema-compiler",
+        "pulp-design-import-tooling",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "ecbd69b92244d586943b2c5ca72d09c009163ba6",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "platform",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-efccd928ef3d5f27fec3f71902e5cecbd62daaaa",
+      "mapped_contracts": [
+        "macos-shell",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "efccd928ef3d5f27fec3f71902e5cecbd62daaaa",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "schema",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-f1bd0cc90ca10e921fddd16cdb5eedb24019fb14",
+      "mapped_contracts": [
+        "design-schema-compiler",
+        "pulp-design-import-tooling",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "f1bd0cc90ca10e921fddd16cdb5eedb24019fb14",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "importer",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-f2ac5cf24417692dba53e5995d9e82e798d18363",
+      "mapped_contracts": [
+        "canvas-kernel",
+        "pulp-design-import-tooling",
+        "pulp-screenshot-harness",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "f2ac5cf24417692dba53e5995d9e82e798d18363",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "importer",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "Pulp-only",
+      "event_id": "pulp-f5a55e5628662e017e58eace424e0bd2f9a770e6",
+      "mapped_contracts": [
+        "pulp-design-import-tooling"
+      ],
+      "source_commit": "f5a55e5628662e017e58eace424e0bd2f9a770e6",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "importer",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-f993187da4d95b61f335c5c1603c7825974f60cf",
+      "mapped_contracts": [
+        "pulp-design-import-tooling"
+      ],
+      "source_commit": "f993187da4d95b61f335c5c1603c7825974f60cf",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "importer",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "Pulp-only",
+      "event_id": "pulp-fd532c0dd179d2c5708822a8573b68b091d90d6d",
+      "mapped_contracts": [
+        "design-schema-compiler",
+        "pulp-design-import-tooling",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "fd532c0dd179d2c5708822a8573b68b091d90d6d",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "schema",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-fd60b4830073cae4d89b897cbbddb65095ec713d",
+      "mapped_contracts": [
+        "canvas-kernel",
+        "design-schema-compiler",
+        "pulp-design-import-tooling",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "fd60b4830073cae4d89b897cbbddb65095ec713d",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "rendering",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-fe0a04c5d096f4614b80b533bea4bf641e09c352",
+      "mapped_contracts": [
+        "canvas-kernel"
+      ],
+      "source_commit": "fe0a04c5d096f4614b80b533bea4bf641e09c352",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "importer",
+      "deadline": "2026-07-28T17:39:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-febc4780b70f979dcd3df99701801f4091630582",
+      "mapped_contracts": [
+        "design-schema-compiler",
+        "pulp-design-import-tooling",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "febc4780b70f979dcd3df99701801f4091630582",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "schema",
+      "deadline": "2026-07-28T18:49:37Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-014aa0527c0ca82fdf3ceebe4603c9d58cc401fa",
+      "mapped_contracts": [
+        "retained-ui-kernel"
+      ],
+      "source_commit": "014aa0527c0ca82fdf3ceebe4603c9d58cc401fa",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "schema",
+      "deadline": "2026-07-28T18:49:37Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-299f53280d40411cd97682cdfc91382de9ba1707",
+      "mapped_contracts": [
+        "capture-primitives",
+        "macos-shell",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "299f53280d40411cd97682cdfc91382de9ba1707",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "importer",
+      "deadline": "2026-07-28T18:49:37Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-ba8517f720a6bd2d8baf4e72b679b7cee34cbedb",
+      "mapped_contracts": [
+        "retained-ui-kernel"
+      ],
+      "source_commit": "ba8517f720a6bd2d8baf4e72b679b7cee34cbedb",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "schema",
+      "deadline": "2026-07-28T18:49:37Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-c9864460811381f5552652b8ba4f408c1b13e235",
+      "mapped_contracts": [
+        "retained-ui-kernel"
+      ],
+      "source_commit": "c9864460811381f5552652b8ba4f408c1b13e235",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "schema",
+      "deadline": "2026-07-28T19:42:35Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-043422b34690eb6d3a7ff8ba7516ed8af931a93a",
+      "mapped_contracts": [
+        "capture-primitives",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "043422b34690eb6d3a7ff8ba7516ed8af931a93a",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "correctness",
+      "deadline": "2026-07-28T19:42:35Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-304795e8b47f43ec0f4df6e7fbd89afca75f73eb",
+      "mapped_contracts": [
+        "retained-ui-kernel"
+      ],
+      "source_commit": "304795e8b47f43ec0f4df6e7fbd89afca75f73eb",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "schema",
+      "deadline": "2026-07-28T19:42:35Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-5f543cc56e5c2f81c1f669cbdd1e2b6228b96af5",
+      "mapped_contracts": [
+        "retained-ui-kernel"
+      ],
+      "source_commit": "5f543cc56e5c2f81c1f669cbdd1e2b6228b96af5",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "test",
+      "deadline": "2026-07-30T19:42:35Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-9915b08b03b983691f5fd78632ea93c79660386c",
+      "mapped_contracts": [
+        "capture-primitives",
+        "macos-shell",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "9915b08b03b983691f5fd78632ea93c79660386c",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "schema",
+      "deadline": "2026-07-28T19:42:35Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-a7cb861ade33dab5100299bcee5c333dbf92f720",
+      "mapped_contracts": [
+        "capture-primitives",
+        "macos-shell",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "a7cb861ade33dab5100299bcee5c333dbf92f720",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "test",
+      "deadline": "2026-07-30T20:56:36Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-41865e60147059cc5449187f8fa8dcbd90c36ee9",
+      "mapped_contracts": [
+        "retained-ui-kernel"
+      ],
+      "source_commit": "41865e60147059cc5449187f8fa8dcbd90c36ee9",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "schema",
+      "deadline": "2026-07-28T20:56:36Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-612366a1c1a906e0f57e4cc8e78c3a90fa8a3ea6",
+      "mapped_contracts": [
+        "design-schema-compiler"
+      ],
+      "source_commit": "612366a1c1a906e0f57e4cc8e78c3a90fa8a3ea6",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "test",
+      "deadline": "2026-07-30T20:56:36Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-8b7170d3862bea6b4a32b93dafa55536bacec1b4",
+      "mapped_contracts": [
+        "retained-ui-kernel"
+      ],
+      "source_commit": "8b7170d3862bea6b4a32b93dafa55536bacec1b4",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "platform",
+      "deadline": "2026-07-28T20:56:36Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-98ecbc1c71bc748920f76dc5130ee9b8fa142387",
+      "mapped_contracts": [
+        "capture-primitives"
+      ],
+      "source_commit": "98ecbc1c71bc748920f76dc5130ee9b8fa142387",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "platform",
+      "deadline": "2026-07-28T20:56:36Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-dd1ebad3a36e8d08aae2479dad8077a1c694bb54",
+      "mapped_contracts": [
+        "capture-primitives",
+        "macos-shell",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "dd1ebad3a36e8d08aae2479dad8077a1c694bb54",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "build",
+      "deadline": "2026-07-30T21:45:32Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-241b5a2b96207eff61b508221d8bb78076461b22",
+      "mapped_contracts": [
+        "retained-ui-kernel"
+      ],
+      "source_commit": "241b5a2b96207eff61b508221d8bb78076461b22",
+      "source_repository": "Generous-Corp/vellum"
     }
   ],
-  "generated_at": "2026-07-23T06:23:32Z",
+  "generated_at": "2026-07-23T23:11:00Z",
   "health": "pass",
-  "maximum_pending_age_days": 0.154,
+  "maximum_pending_age_days": 0.0,
   "observatory_effort_percent": 0.0,
   "overdue": 0,
-  "pending": 13,
+  "pending": 0,
   "release_blockers": [],
   "repeated_generic_fixes": {},
   "schema_version": 2,

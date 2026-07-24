@@ -1,0 +1,165 @@
+{
+  "schema": "vellum.authoring-phase3-gate.v1",
+  "purpose": "Track executable installed-artifact evidence for the unchanged dual-runtime Phase 3 acceptance fixture.",
+  "contractOnly": false,
+  "application": {
+    "entry": "src/App.tsx",
+    "sourceSha256": "4fc35d61062ea33646c1a9a7db3d1a433f6f6ce9b59f49db15cfde18e4c3db1f",
+    "mustRemainByteIdenticalAcrossRuntimes": true,
+    "runtimes": [
+      "native",
+      "browser"
+    ],
+    "scenario": "scenarios/phase3.json"
+  },
+  "gate": {
+    "status": "passed",
+    "achieved": "The byte-identical TSX and scenario execute from installed artifacts in JavaScriptCore on the Skia/Dawn/Metal host and in browser JavaScript against the shared C++ Wasm core. Both lanes prove the complete interaction, text, service, error, accessibility, and state contract.",
+    "blockedBy": [],
+    "mayBePromotedWhen": "Satisfied: every requirement is passed and the unchanged entry and scenario execute from installed artifacts on both runtimes."
+  },
+  "requirements": [
+    {
+      "id": "imported-design-button",
+      "status": "passed",
+      "contractEvidence": "src/imported-design.json",
+      "runtimeEvidence": [
+        "../../authoring/tests/phase3_fixture_test.cpp",
+        "../../packages/vellum-ui/test/phase3-installed.test.js"
+      ]
+    },
+    {
+      "id": "editable-text-selection",
+      "status": "passed",
+      "contractEvidence": "src/App.tsx",
+      "runtimeEvidence": [
+        "../../apps/app-host/text_semantics.mm",
+        "../../packages/vellum-ui/test/phase3-installed.test.js"
+      ]
+    },
+    {
+      "id": "list-and-scroll",
+      "status": "passed",
+      "contractEvidence": "src/App.tsx",
+      "runtimeEvidence": [
+        "../../authoring/tests/phase3_fixture_test.cpp",
+        "../../packages/vellum-ui/test/phase3-installed.test.js"
+      ]
+    },
+    {
+      "id": "state-update",
+      "status": "passed",
+      "contractEvidence": "src/App.tsx",
+      "runtimeEvidence": [
+        "../../authoring/tests/phase3_fixture_test.cpp",
+        "../../packages/vellum-ui/test/phase3-installed.test.js"
+      ]
+    },
+    {
+      "id": "timer-and-promise",
+      "status": "passed",
+      "contractEvidence": "src/App.tsx",
+      "runtimeEvidence": [
+        "../../authoring/tests/phase3_fixture_test.cpp",
+        "../../packages/vellum-ui/test/phase3-installed.test.js"
+      ]
+    },
+    {
+      "id": "source-mapped-error",
+      "status": "passed",
+      "contractEvidence": "golden/host-diagnostic.json",
+      "runtimeEvidence": [
+        "../../authoring/tests/phase3_fixture_test.cpp",
+        "../../packages/vellum-ui/test/source-map.test.js"
+      ]
+    },
+    {
+      "id": "keyboard-pointer-touch",
+      "status": "passed",
+      "contractEvidence": "scenarios/phase3.json",
+      "runtimeEvidence": [
+        "../../apps/app-host/test_phase3_scenario.py",
+        "../../web/tests/run_text_semantics_browser.py",
+        "../../scripts/validate_installed_sdk.py"
+      ]
+    },
+    {
+      "id": "ime-composition",
+      "status": "passed",
+      "contractEvidence": "golden/composition-event.json",
+      "runtimeEvidence": [
+        "../../apps/app-host/text_semantics.mm",
+        "../../web/consumer/vellum_host.js"
+      ]
+    },
+    {
+      "id": "accessibility-sync",
+      "status": "passed",
+      "contractEvidence": "scenarios/phase3.json",
+      "runtimeEvidence": [
+        "../../apps/app-host/macos_accessibility.mm",
+        "../../web/consumer/vellum_host.js"
+      ]
+    },
+    {
+      "id": "pure-esm-transitive-dependency",
+      "status": "passed",
+      "contractEvidence": "vendor/pure-esm-root/package.json",
+      "runtimeEvidence": [
+        "../../authoring/tests/phase3_fixture_test.cpp",
+        "../../packages/vellum-ui/test/phase3-installed.test.js"
+      ]
+    },
+    {
+      "id": "capability-checked-commands",
+      "status": "passed",
+      "contractEvidence": "src/App.tsx",
+      "runtimeEvidence": [
+        "../../apps/app-host/test_phase3_scenario.py",
+        "../../web/tests/run_text_semantics_browser.py",
+        "../../scripts/validate_installed_sdk.py"
+      ]
+    },
+    {
+      "id": "capability-checked-files",
+      "status": "passed",
+      "contractEvidence": "golden/service-denied.json",
+      "runtimeEvidence": [
+        "../../packages/vellum-ui/test/services.test.js",
+        "../../apps/app-host/test_phase3_scenario.py",
+        "../../web/tests/run_text_semantics_browser.py",
+        "../../scripts/validate_installed_sdk.py"
+      ]
+    },
+    {
+      "id": "capability-checked-clipboard",
+      "status": "passed",
+      "contractEvidence": "src/App.tsx",
+      "runtimeEvidence": [
+        "../../authoring/tests/phase3_fixture_test.cpp",
+        "../../packages/vellum-ui/test/phase3-installed.test.js",
+        "../../packages/vellum-ui/test/services.test.js"
+      ]
+    },
+    {
+      "id": "capability-checked-urls",
+      "status": "passed",
+      "contractEvidence": "src/App.tsx",
+      "runtimeEvidence": [
+        "../../authoring/tests/phase3_fixture_test.cpp",
+        "../../packages/vellum-ui/test/phase3-installed.test.js",
+        "../../packages/vellum-ui/test/services.test.js"
+      ]
+    },
+    {
+      "id": "hot-reload-state-continuity",
+      "status": "passed",
+      "contractEvidence": "src/App.tsx",
+      "runtimeEvidence": [
+        "../../authoring/tests/phase3_fixture_test.cpp",
+        "../../packages/vellum-ui/test/phase3-installed.test.js",
+        "../../cli/tests/test_dev.py"
+      ]
+    }
+  ]
+}

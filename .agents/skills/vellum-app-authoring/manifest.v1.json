@@ -36,10 +36,22 @@
       "flags": ["--json", "--source", "--as", "--project"]
     },
     {
+      "step": "design",
+      "kind": "cli",
+      "command": "design",
+      "flags": ["--json", "--as", "--project"]
+    },
+    {
       "step": "build",
       "kind": "cli",
       "command": "build",
       "flags": ["--json", "--target", "--project"]
+    },
+    {
+      "step": "dev",
+      "kind": "cli",
+      "command": "dev",
+      "flags": ["--json", "--target", "--project", "--transcript"]
     },
     {
       "step": "run",

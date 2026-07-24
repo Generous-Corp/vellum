@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """Build and verify the fail-closed Vellum/Pulp authority handshake.
 
-There are deliberately two Vellum identities:
+There are deliberately three independently bound identities:
 
 * the preserved filtered seed proves exact Pulp source lineage; and
+* a later prepared Pulp commit proves the exact activation-candidate source;
 * the immutable authority-start commit proves the evolved Vellum product tree.
 
-The seed must be an ancestor, not an editable copy at the authority start.  An
-active verification additionally requires exact landed Pulp freeze evidence and
-live GitHub proof of repository, branch-protection, and check-run producers.
+The candidate snapshot does not freeze Pulp. The seed must be an ancestor, not
+an editable copy at the authority start. Active verification additionally
+requires that the candidate source stayed unchanged through exact landed Pulp
+freeze evidence and live GitHub proof of repository, branch-protection, and
+check-run producers.
 """
 
 from __future__ import annotations
@@ -30,22 +33,26 @@ from typing import Any, Protocol
 
 
 ROOT = Path(__file__).resolve().parents[2]
-PLAN_PATH = Path("provenance/authority/transfer-plan.v1.json")
+PLAN_PATH = Path("provenance/authority/transfer-plan.v2.json")
 TRUST_PATH = Path("provenance/authority/trust-policy.v1.json")
 MANIFEST_PATH = Path("provenance/cut-manifest.json")
 OWNERSHIP_PATH = ".github/vellum-ownership.json"
 SHA_RE = re.compile(r"[0-9a-f]{40}")
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 REF_RE = re.compile(r"refs/heads/authority/[a-z0-9][a-z0-9._/-]{2,120}")
-ALLOWED_SOURCE_CLASSIFICATIONS = {"framework-core", "authoring-only", "platform-adapter", "test-only"}
+ALLOWED_HISTORICAL_CLASSIFICATIONS = {
+    "framework-core", "authoring-only", "platform-adapter", "test-only", "unresolved"
+}
 RECORD_FIELDS = {
     "schema_version", "state", "source_repository", "framework_repository",
-    "pulp_extraction_base", "historical_seed_commit", "authority_start_commit",
+    "pulp_extraction_base", "historical_seed_commit", "pulp_candidate_commit",
+    "pulp_ownership_projection_blob", "authority_start_commit",
     "authority_record_ref", "cut_manifest_sha256", "authority_groups",
     "pulp_activation", "approved_by", "approved_at",
 }
 GROUP_FIELDS = {
-    "id", "lineage_mode", "pulp_legacy_slices", "pulp_source_projection",
+    "id", "lineage_mode", "pulp_legacy_slices",
+    "pulp_historical_seed_projection", "pulp_activation_candidate_projection",
     "vellum_implementation_projection",
 }
 EVIDENCE_FIELDS = {
@@ -160,11 +167,11 @@ def git_blob(repo: Path, commit: str, path: str) -> str:
 
 
 def validate_plan(plan: object) -> dict[str, object]:
-    if not isinstance(plan, dict) or plan.get("schema_version") != 1 or plan.get("state") != "prepared":
-        raise ActivationError("transfer plan must be prepared schema v1")
+    if not isinstance(plan, dict) or plan.get("schema_version") != 2 or plan.get("state") != "prepared":
+        raise ActivationError("transfer plan must be prepared schema v2")
     required = {
         "schema_version", "state", "source_repository", "framework_repository",
-        "pulp_extraction_base", "historical_seed_commit", "source_manifest",
+        "pulp_extraction_base", "historical_seed_commit", "historical_seed_manifest",
         "authority_groups", "excluded_from_transfer", "invariants",
     }
     if set(plan) != required:
@@ -215,38 +222,67 @@ def ownership_slices(projection: dict[str, object]) -> dict[str, dict[str, objec
     return result
 
 
-def build_source_projection(
-    *, group: dict[str, object], ownership: dict[str, object], manifest: dict[str, object],
-    seed_tree: dict[str, dict[str, str]]
-) -> dict[str, dict[str, str]]:
+def selected_slice_paths(
+    *, group: dict[str, object], ownership: dict[str, object]
+) -> list[str]:
     by_slice = ownership_slices(ownership)
-    entries = manifest.get("entries")
-    if not isinstance(entries, list):
-        raise ActivationError("cut manifest lacks entries")
-    by_path = {entry.get("source_path"): entry for entry in entries if isinstance(entry, dict)}
-    projection: dict[str, dict[str, str]] = {}
+    selected: list[str] = []
     for slice_id in group["pulp_legacy_slices"]:
         item = by_slice.get(str(slice_id))
-        if item is None or item.get("state") not in {
-            "pulp-authoritative-untransferred", "framework-authoritative-transferred", "framework-reimplemented-no-transfer"
-        }:
-            raise ActivationError(f"Pulp slice is absent or cannot transfer: {slice_id}")
+        if item is None or item.get("state") != "pulp-authoritative-untransferred":
+            raise ActivationError(f"Pulp candidate slice is absent or not authoritative: {slice_id}")
         paths = item.get("paths")
         if not isinstance(paths, list) or not paths:
             raise ActivationError(f"Pulp slice lacks exact paths: {slice_id}")
         for path in paths:
             if not isinstance(path, str) or path.endswith("/") or any(char in path for char in "*?["):
                 raise ActivationError(f"Pulp slice path is not exact: {slice_id}:{path}")
-            entry = by_path.get(path)
-            if not isinstance(entry, dict):
-                raise ActivationError(f"Pulp source path is absent from manifest: {path}")
-            classification = entry.get("classification")
-            if classification not in ALLOWED_SOURCE_CLASSIFICATIONS:
-                raise ActivationError(f"Pulp source classification is not transferable: {path}:{classification}")
-            expected = {"blob": entry.get("git_blob_sha"), "mode": entry.get("git_mode")}
-            if seed_tree.get(path) != expected:
-                raise ActivationError(f"historical seed does not preserve exact source blob/mode: {path}")
-            projection[path] = {"blob": str(expected["blob"]), "mode": str(expected["mode"]), "classification": str(classification)}
+            selected.append(path)
+    if len(selected) != len(set(selected)):
+        raise ActivationError("Pulp candidate slices contain duplicate paths")
+    return sorted(selected)
+
+
+def build_historical_seed_projection(
+    *, paths: list[str], manifest: dict[str, object], seed_tree: dict[str, dict[str, str]]
+) -> dict[str, dict[str, str]]:
+    entries = manifest.get("entries")
+    if not isinstance(entries, list):
+        raise ActivationError("cut manifest lacks entries")
+    by_path = {entry.get("source_path"): entry for entry in entries if isinstance(entry, dict)}
+    projection: dict[str, dict[str, str]] = {}
+    for path in paths:
+        entry = by_path.get(path)
+        if not isinstance(entry, dict):
+            raise ActivationError(f"Pulp candidate path is absent from historical manifest: {path}")
+        classification = entry.get("classification")
+        if classification not in ALLOWED_HISTORICAL_CLASSIFICATIONS:
+            raise ActivationError(
+                f"Pulp historical classification cannot enter the candidate projection: "
+                f"{path}:{classification}"
+            )
+        expected = {"blob": entry.get("git_blob_sha"), "mode": entry.get("git_mode")}
+        if seed_tree.get(path) != expected:
+            raise ActivationError(f"historical seed does not preserve exact source blob/mode: {path}")
+        projection[path] = {
+            "blob": str(expected["blob"]),
+            "mode": str(expected["mode"]),
+            "classification": str(classification),
+        }
+    return dict(sorted(projection.items()))
+
+
+def build_activation_candidate_projection(
+    *, paths: list[str], candidate_tree: dict[str, dict[str, str]]
+) -> dict[str, dict[str, str]]:
+    projection: dict[str, dict[str, str]] = {}
+    for path in paths:
+        metadata = candidate_tree.get(path)
+        if metadata is None:
+            raise ActivationError(f"Pulp candidate path is absent at the candidate commit: {path}")
+        if metadata.get("mode") not in {"100644", "100755"}:
+            raise ActivationError(f"Pulp candidate path is not a regular file: {path}")
+        projection[path] = dict(metadata)
     return dict(sorted(projection.items()))
 
 
@@ -280,6 +316,7 @@ def build_record(
     ownership_commit = require_commit(pulp_repo, pulp_ownership_commit, "Pulp ownership commit")
     require_ancestor(pulp_repo, base, ownership_commit, "Pulp ownership lineage")
     ownership = json_at(pulp_repo, ownership_commit, OWNERSHIP_PATH)
+    ownership_blob = git_blob(pulp_repo, ownership_commit, OWNERSHIP_PATH)
     seed = require_commit(root, plan["historical_seed_commit"], "Vellum history seed")
     authority = require_commit(root, authority_start_commit, "Vellum authority-start commit")
     require_ancestor(root, seed, authority, "Vellum authority lineage")
@@ -290,6 +327,7 @@ def build_record(
         raise ActivationError("approved_at must be an ISO-8601 UTC timestamp")
     seed_tree = tree_blobs(root, seed)
     active_tree = tree_blobs(root, authority)
+    candidate_tree = tree_blobs(pulp_repo, ownership_commit)
     historical_ids = {
         str(entry["git_blob_sha"])
         for entry in manifest["entries"]
@@ -299,24 +337,30 @@ def build_record(
     groups = []
     for group in plan["authority_groups"]:
         assert isinstance(group, dict)
+        paths = selected_slice_paths(group=group, ownership=ownership)
         groups.append({
             "id": group["id"],
             "lineage_mode": group["lineage_mode"],
             "pulp_legacy_slices": group["pulp_legacy_slices"],
-            "pulp_source_projection": build_source_projection(
-                group=group, ownership=ownership, manifest=manifest, seed_tree=seed_tree
+            "pulp_historical_seed_projection": build_historical_seed_projection(
+                paths=paths, manifest=manifest, seed_tree=seed_tree
+            ),
+            "pulp_activation_candidate_projection": build_activation_candidate_projection(
+                paths=paths, candidate_tree=candidate_tree
             ),
             "vellum_implementation_projection": expand_implementation_projection(
                 group=group, active_tree=active_tree, historical_blob_ids=historical_ids
             ),
         })
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "state": "pending-pulp-activation",
         "source_repository": plan["source_repository"],
         "framework_repository": plan["framework_repository"],
         "pulp_extraction_base": plan["pulp_extraction_base"],
         "historical_seed_commit": seed,
+        "pulp_candidate_commit": ownership_commit,
+        "pulp_ownership_projection_blob": ownership_blob,
         "authority_start_commit": authority,
         "authority_record_ref": authority_record_ref,
         "cut_manifest_sha256": canonical_sha256(manifest),
@@ -330,12 +374,16 @@ def build_record(
 def validate_record_shape(record: object) -> dict[str, object]:
     if not isinstance(record, dict) or set(record) != RECORD_FIELDS:
         raise ActivationError("authority record fields differ")
-    if record.get("schema_version") != 1 or record.get("state") != "pending-pulp-activation":
-        raise ActivationError("authority record must be pending schema v1")
+    if record.get("schema_version") != 2 or record.get("state") != "pending-pulp-activation":
+        raise ActivationError("authority record must be pending schema v2")
     if record.get("source_repository") != "Generous-Corp/pulp" or record.get("framework_repository") != "Generous-Corp/vellum":
         raise ActivationError("authority record repository identity differs")
-    for field in ("pulp_extraction_base", "historical_seed_commit", "authority_start_commit"):
+    for field in (
+        "pulp_extraction_base", "historical_seed_commit", "pulp_candidate_commit",
+        "authority_start_commit",
+    ):
         require_sha(record.get(field), f"record.{field}")
+    require_sha(record.get("pulp_ownership_projection_blob"), "record.pulp_ownership_projection_blob")
     if not isinstance(record.get("cut_manifest_sha256"), str) or not SHA256_RE.fullmatch(str(record["cut_manifest_sha256"])):
         raise ActivationError("authority record cut manifest digest is invalid")
     reference = record.get("authority_record_ref")
@@ -356,10 +404,17 @@ def validate_record_shape(record: object) -> dict[str, object]:
             raise ActivationError("authority record group fields differ")
         if group.get("lineage_mode") != "history-seed-ancestor-active-reimplementation":
             raise ActivationError("authority record lineage mode is not enabled")
-        for field in ("pulp_source_projection", "vellum_implementation_projection"):
+        for field in (
+            "pulp_historical_seed_projection", "pulp_activation_candidate_projection",
+            "vellum_implementation_projection",
+        ):
             projection = group.get(field)
             if not isinstance(projection, dict) or not projection:
                 raise ActivationError(f"authority group {field} must be non-empty")
+        if set(group["pulp_historical_seed_projection"]) != set(
+            group["pulp_activation_candidate_projection"]
+        ):
+            raise ActivationError("historical and activation-candidate path sets differ")
     return record
 
 
@@ -581,6 +636,34 @@ def validate_evidence_shape(evidence: object) -> dict[str, object]:
     return evidence
 
 
+def verify_candidate_unchanged(
+    *, pulp_repo: Path, candidate_commit: str, activation_commit: str, paths: list[str]
+) -> None:
+    changed = git(
+        pulp_repo, "diff", "--name-only", candidate_commit, activation_commit, "--", *paths
+    )
+    if changed:
+        raise ActivationError(
+            "Pulp candidate source changed after the recorded candidate commit: "
+            + ", ".join(changed.splitlines())
+        )
+
+
+def verify_activated_path_set(
+    *, slices: dict[str, dict[str, object]], expected_slice_ids: set[str],
+    candidate_paths: list[str]
+) -> None:
+    active_paths: list[str] = []
+    for slice_id in expected_slice_ids:
+        item = slices.get(slice_id)
+        paths = item.get("paths") if isinstance(item, dict) else None
+        if not isinstance(paths, list) or any(not isinstance(path, str) for path in paths):
+            raise ActivationError(f"Pulp activated slice lacks exact paths: {slice_id}")
+        active_paths.extend(paths)
+    if len(active_paths) != len(set(active_paths)) or sorted(active_paths) != candidate_paths:
+        raise ActivationError("Pulp activated ownership path set differs from the recorded candidate")
+
+
 def verify_pulp_activation(
     *, root: Path, pulp_repo: Path, record_path: str, record: dict[str, object],
     authority_record_commit: str, evidence: dict[str, object], github: GitHub, pulp_token: str,
@@ -590,6 +673,16 @@ def verify_pulp_activation(
     verify_repository(github, pulp_token, pulp, app_jwt=pulp_app_jwt)
     activation_commit = require_commit(pulp_repo, evidence["pulp_activation_commit"], "Pulp activation commit")
     require_ancestor(pulp_repo, str(record["pulp_extraction_base"]), activation_commit, "Pulp activation lineage")
+    candidate_commit = require_commit(
+        pulp_repo, record["pulp_candidate_commit"], "Pulp candidate commit"
+    )
+    require_ancestor(
+        pulp_repo, str(record["pulp_extraction_base"]), candidate_commit,
+        "Pulp candidate lineage",
+    )
+    require_ancestor(pulp_repo, candidate_commit, activation_commit, "Pulp activation candidate lineage")
+    if git_blob(pulp_repo, candidate_commit, OWNERSHIP_PATH) != record["pulp_ownership_projection_blob"]:
+        raise ActivationError("recorded Pulp candidate ownership projection blob differs")
     if git_blob(pulp_repo, activation_commit, str(evidence["ownership_projection_path"])) != evidence["ownership_projection_blob"]:
         raise ActivationError("Pulp ownership projection blob evidence differs")
     if git_blob(pulp_repo, activation_commit, str(evidence["authority_event_path"])) != evidence["authority_event_blob"]:
@@ -633,12 +726,22 @@ def verify_pulp_activation(
         raise ActivationError("Pulp authority event does not reference the exact Vellum record")
     if event.get("slices") != sorted(expected_slice_ids):
         raise ActivationError("Pulp authority event slice set differs")
-    # The source projection is exact at the extraction base.  Activation cannot
-    # silently freeze a differently edited legacy copy under that evidence.
-    source_paths = sorted({path for group in record["authority_groups"] for path in group["pulp_source_projection"]})
-    changed = git(pulp_repo, "diff", "--name-only", str(record["pulp_extraction_base"]), activation_commit, "--", *source_paths)
-    if changed:
-        raise ActivationError("Pulp candidate source changed after the recorded extraction base: " + ", ".join(changed.splitlines()))
+    candidate_paths = sorted({
+        path
+        for group in record["authority_groups"]
+        for path in group["pulp_activation_candidate_projection"]
+    })
+    verify_activated_path_set(
+        slices=slices,
+        expected_slice_ids=expected_slice_ids,
+        candidate_paths=candidate_paths,
+    )
+    verify_candidate_unchanged(
+        pulp_repo=pulp_repo,
+        candidate_commit=candidate_commit,
+        activation_commit=activation_commit,
+        paths=candidate_paths,
+    )
     verify_checks(
         github=github, token=pulp_token, full_name="Generous-Corp/pulp", commit=activation_commit,
         expected_apps=pulp["required_check_app_ids"], supplied=evidence["checks"],

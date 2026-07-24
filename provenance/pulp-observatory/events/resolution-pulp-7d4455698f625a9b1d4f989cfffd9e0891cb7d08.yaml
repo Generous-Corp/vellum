@@ -1,0 +1,19 @@
+{
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native"
+  ],
+  "created_at": "2026-07-23T17:46:22Z",
+  "disposition": "Pulp-only",
+  "effort_minutes": 0,
+  "event_id": "resolution-pulp-7d4455698f625a9b1d4f989cfffd9e0891cb7d08",
+  "kind": "resolution",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Embedded plugin and DAW first-responder synchronization. Vellum's standalone NSWindow host owns first responder directly, so this Pulp host fix is not applicable.",
+  "resolves": "pulp-7d4455698f625a9b1d4f989cfffd9e0891cb7d08",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

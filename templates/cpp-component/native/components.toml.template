@@ -1,0 +1,7 @@
+[manifest]
+schema = "vellum.components.v1"
+components = ["level-meter"]
+
+[component.level-meter]
+native_source = "native/level-meter.cpp"
+web = "fallback"

@@ -15,13 +15,15 @@ import subprocess
 import sys
 from typing import Any, Iterable
 
+import vellum_dev
+
 from vellum_manifest import (
     APP_MANIFEST_NAME, LOCK_NAME, LOCK_SCHEMA, ManifestError,
     load_app_manifest, load_components_manifest,
 )
 
 
-FRAMEWORK_VERSION = "0.1.1"
+FRAMEWORK_VERSION = "0.1.6"
 CLI_VERSION = FRAMEWORK_VERSION
 UI_VERSION = "0.1.0-experimental.0"
 CLI_API_VERSION = 1
@@ -36,6 +38,35 @@ EXIT_UNAVAILABLE = 4
 EXIT_BACKEND = 5
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
+PUBLIC_TEMPLATES = ("blank", "imported-app", "cpp-component")
+TEMPLATE_LAYERS = {
+    "basic": ("basic",),  # Compatibility alias retained for existing projects.
+    "blank": ("basic", "blank"),
+    "imported-app": ("basic", "imported-app"),
+    "cpp-component": ("basic", "cpp-component"),
+}
+TEMPLATE_REQUIRED_FILES = {
+    "app.toml.template",
+    "framework.lock.template",
+    "package.json.template",
+    "package-lock.json.template",
+    "src/App.tsx.template",
+    "src/main.tsx.template",
+    "tests/scenarios/smoke.json.template",
+    "native/components.toml.template",
+}
+TEMPLATE_VARIANT_REQUIRED_FILES = {
+    "cpp-component": {
+        "native/level-meter.cpp.template",
+        "native/components.toml.template",
+    },
+}
+TEMPLATE_TOKENS = {
+    "PROJECT_NAME", "PROJECT_NAME_JSON", "PROJECT_SLUG", "PROJECT_ID",
+    "CLI_VERSION", "FRAMEWORK_VERSION", "UI_VERSION",
+    "ARTIFACT_IDENTITY_JSON", "TEMPLATE_NAME",
+}
+TEMPLATE_TOKEN_RE = re.compile(r"{{([A-Z][A-Z0-9_]*)}}")
 
 
 class CliFailure(RuntimeError):
@@ -116,6 +147,83 @@ def render_template(source: Path, destination: Path, replacements: dict[str, str
     destination.chmod(source.stat().st_mode & 0o777)
 
 
+def selected_template(requested: str | None, has_import: bool) -> str:
+    if requested == "basic":
+        return "basic"
+    if requested is None:
+        return "imported-app" if has_import else "blank"
+    if requested == "imported-app" and not has_import:
+        raise CliFailure(
+            "The imported-app template requires --from figma FILE or --from design-ir FILE.",
+            status="template_requires_source",
+            exit_code=EXIT_USAGE,
+        )
+    if requested != "imported-app" and has_import:
+        raise CliFailure(
+            "create --from selects the imported-app template; omit --template or use --template imported-app.",
+            status="template_source_mismatch",
+            exit_code=EXIT_USAGE,
+        )
+    return requested
+
+
+def template_files(root: Path, template_name: str) -> dict[str, Path]:
+    layers = TEMPLATE_LAYERS.get(template_name)
+    if layers is None:
+        raise CliFailure(
+            f"Unknown template: {template_name}",
+            status="unknown_template",
+            exit_code=EXIT_USAGE,
+        )
+    files: dict[str, Path] = {}
+    for layer in layers:
+        source = root / layer
+        if not source.is_dir():
+            raise CliFailure(
+                f"Template layer is not installed: {layer}",
+                status="templates_unavailable",
+                exit_code=EXIT_UNAVAILABLE,
+            )
+        for path in sorted(source.rglob("*")):
+            if path.is_symlink():
+                raise CliFailure(
+                    f"Template contains a symbolic link: {path.relative_to(root)}",
+                    status="invalid_template",
+                    exit_code=EXIT_PROJECT,
+                )
+            if not path.is_file():
+                continue
+            relative = path.relative_to(source).as_posix()
+            if not relative.endswith(".template"):
+                raise CliFailure(
+                    f"Template file lacks the .template suffix: {layer}/{relative}",
+                    status="invalid_template",
+                    exit_code=EXIT_PROJECT,
+                )
+            files[relative] = path
+    required = TEMPLATE_REQUIRED_FILES | TEMPLATE_VARIANT_REQUIRED_FILES.get(
+        template_name, set()
+    )
+    missing = sorted(required - set(files))
+    if missing:
+        raise CliFailure(
+            f"Template {template_name} is missing required files: {', '.join(missing)}",
+            status="invalid_template",
+            exit_code=EXIT_PROJECT,
+        )
+    for relative, path in files.items():
+        unknown = sorted(set(TEMPLATE_TOKEN_RE.findall(
+            path.read_text(encoding="utf-8")
+        )) - TEMPLATE_TOKENS)
+        if unknown:
+            raise CliFailure(
+                f"Template {template_name}/{relative} has unknown placeholders: {', '.join(unknown)}",
+                status="invalid_template",
+                exit_code=EXIT_PROJECT,
+            )
+    return files
+
+
 def unverified_artifact_identity() -> dict[str, Any]:
     return {
         "verified": False,
@@ -194,7 +302,7 @@ def _project_ui_payload(source: Path) -> dict[str, bytes]:
         )
     runtime_package = {
         key: package[key]
-        for key in ("name", "version", "description", "type", "license", "engines", "exports", "dependencies")
+        for key in ("name", "version", "description", "type", "license", "engines", "exports")
         if key in package
     }
     payload = {
@@ -309,9 +417,8 @@ def create_project(args: argparse.Namespace) -> dict[str, Any]:
             status="destination_not_empty",
             exit_code=EXIT_PROJECT,
         )
-    source = template_root() / args.template
-    if not source.is_dir():
-        raise CliFailure(f"Unknown template: {args.template}", status="unknown_template", exit_code=EXIT_USAGE)
+    template_name = selected_template(args.template, args.import_source is not None)
+    sources = template_files(template_root(), template_name)
     sdk = load_sdk_metadata()
     import_request: tuple[str, Path, str] | None = None
     if args.import_source:
@@ -360,11 +467,12 @@ def create_project(args: argparse.Namespace) -> dict[str, Any]:
         "ARTIFACT_IDENTITY_JSON": json.dumps(
             installed_identity, sort_keys=True, separators=(",", ":")
         ),
+        "TEMPLATE_NAME": template_name,
     }
     destination.mkdir(parents=True, exist_ok=True)
     created: list[str] = []
-    for template in sorted(path for path in source.rglob("*") if path.is_file()):
-        relative = template.relative_to(source)
+    for relative_name, template in sorted(sources.items()):
+        relative = Path(relative_name)
         output_relative = Path(str(relative).removesuffix(".template"))
         render_template(template, destination / output_relative, replacements)
         created.append(output_relative.as_posix())
@@ -476,7 +584,8 @@ def create_project(args: argparse.Namespace) -> dict[str, Any]:
         data={
             "project_root": str(destination),
             "project_id": project_id,
-            "template": args.template,
+            "template": template_name,
+            "template_requested": args.template,
             "artifact": installed_identity,
             "files": created,
             "validation": validation,
@@ -917,6 +1026,21 @@ def doctor(args: argparse.Namespace) -> dict[str, Any]:
     )
 
 
+def dev_project(args: argparse.Namespace) -> dict[str, Any]:
+    root, lock = load_project(args.project)
+    sdk = load_sdk_metadata()
+    validate_project_sdk(lock, sdk)
+    try:
+        return vellum_dev.run(
+            args, root, lock, sdk, invoke_backend, result,
+            unavailable_exit=EXIT_UNAVAILABLE,
+        )
+    except vellum_dev.DevError as error:
+        raise CliFailure(
+            str(error), status=error.status, exit_code=error.exit_code
+        ) from error
+
+
 def backend_command(args: argparse.Namespace, forwarded: list[str]) -> dict[str, Any]:
     root, lock = load_project(args.project)
     sdk = load_sdk_metadata()
@@ -940,6 +1064,38 @@ def backend_command(args: argparse.Namespace, forwarded: list[str]) -> dict[str,
         status=str(backend_payload.get("status", "backend_failed")),
         message=str(backend_payload.get("message", f"Backend completed '{args.command}'.")),
         data={"project_root": str(root), "project_id": lock["project"]["id"], "backend": backend_payload},
+        diagnostics=backend_payload.get("diagnostics", []),
+    )
+
+def design_command(args: argparse.Namespace) -> dict[str, Any]:
+    root, lock = load_project(args.project)
+    sdk = load_sdk_metadata()
+    validate_project_sdk(lock, sdk)
+    available = sdk[1]["capabilities"]["commands"].get("import") if sdk is not None else None
+    if sdk is not None and available is not True:
+        raise CliFailure(
+            "The installed SDK does not provide deterministic design inspection.",
+            status="capability_unavailable",
+            exit_code=EXIT_UNAVAILABLE,
+        )
+    backend_name = f"design-{args.design_command}"
+    backend_payload, return_code = invoke_backend(
+        backend_name,
+        root,
+        lock,
+        ["--as", args.source_key],
+    )
+    return result(
+        "design",
+        ok=return_code == 0 and bool(backend_payload.get("ok")),
+        status=str(backend_payload.get("status", "backend_failed")),
+        message=str(backend_payload.get("message", "Design inspection completed.")),
+        data={
+            "operation": args.design_command,
+            "project_root": str(root),
+            "project_id": lock["project"]["id"],
+            "backend": backend_payload,
+        },
         diagnostics=backend_payload.get("diagnostics", []),
     )
 
@@ -1003,7 +1159,14 @@ def parser() -> argparse.ArgumentParser:
     create = commands.add_parser("create", help="create a deterministic Vellum project")
     create.add_argument("name")
     create.add_argument("--directory", "-d")
-    create.add_argument("--template", default="basic")
+    create.add_argument(
+        "--template",
+        choices=(*PUBLIC_TEMPLATES, "basic"),
+        help=(
+            "project shape: blank (default), imported-app (requires --from), "
+            "or cpp-component; basic is a compatibility alias"
+        ),
+    )
     create.add_argument(
         "--from", dest="import_source", nargs=2, metavar=("SOURCE_TYPE", "SOURCE"),
         choices=None,
@@ -1020,6 +1183,44 @@ def parser() -> argparse.ArgumentParser:
         "--require-target", choices=["macos", "web"],
         help="fail unless the installed SDK provides the complete requested application lane",
     )
+
+    dev = commands.add_parser("dev", help="watch portable app sources and reload a native or web app")
+    dev.add_argument("--project")
+    dev.add_argument("--target", choices=["macos", "web"], default="macos")
+    dev.add_argument("--transcript", help="write the versioned JSONL dev-loop transcript here")
+    dev.add_argument("--poll-interval", type=float, default=0.2, help=argparse.SUPPRESS)
+    dev.add_argument("--debounce", type=float, default=0.1, help=argparse.SUPPRESS)
+    dev.add_argument("--port", type=int, default=0, help="web dev-server port; 0 chooses a free port")
+    dev.add_argument("--no-open", action="store_true", help="do not open the browser for a web session")
+    dev.add_argument(
+        "--test-mode", action="store_true",
+        help="verify each rebuild through the finite no-window runtime adapter",
+    )
+    dev.add_argument(
+        "--max-reloads", type=int,
+        help="stop after this many successful reloads (required in test mode)",
+    )
+    dev.add_argument(
+        "--timeout", type=float,
+        help="stop with an error after this many seconds (required in test mode)",
+    )
+
+    design = commands.add_parser(
+        "design",
+        help="inspect imported design output without modifying the project",
+    )
+    design_actions = design.add_subparsers(dest="design_command", required=True)
+    for name in ("check", "diff"):
+        action = design_actions.add_parser(
+            name,
+            help=(
+                "fail when generated design differs from deterministic regeneration"
+                if name == "check"
+                else "report deterministic generated-design differences"
+            ),
+        )
+        action.add_argument("--project")
+        action.add_argument("--as", dest="source_key", default="main")
 
     backend_specs = {
         "import": [
@@ -1082,6 +1283,35 @@ def main(argv: Iterable[str] | None = None) -> int:
             payload = create_project(args)
         elif args.command == "doctor":
             payload = doctor(args)
+        elif args.command == "dev":
+            if args.poll_interval <= 0 or args.debounce < 0:
+                raise CliFailure(
+                    "dev polling values must be positive.",
+                    status="invalid_arguments", exit_code=EXIT_USAGE,
+                )
+            if args.max_reloads is not None and args.max_reloads < 1:
+                raise CliFailure(
+                    "--max-reloads must be at least 1.",
+                    status="invalid_arguments", exit_code=EXIT_USAGE,
+                )
+            if args.timeout is not None and args.timeout <= 0:
+                raise CliFailure(
+                    "--timeout must be positive.",
+                    status="invalid_arguments", exit_code=EXIT_USAGE,
+                )
+            if not 0 <= args.port <= 65535:
+                raise CliFailure(
+                    "--port must be between 0 and 65535.",
+                    status="invalid_arguments", exit_code=EXIT_USAGE,
+                )
+            if args.test_mode and (args.max_reloads is None or args.timeout is None):
+                raise CliFailure(
+                    "--test-mode requires bounded --max-reloads and --timeout.",
+                    status="invalid_arguments", exit_code=EXIT_USAGE,
+                )
+            payload = dev_project(args)
+        elif args.command == "design":
+            payload = design_command(args)
         else:
             payload = backend_command(args, forwarded_arguments(args))
         emit(payload, json_output=args.json)

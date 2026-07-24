@@ -28,12 +28,16 @@ Use JSON mode for automation and preserve the exact artifact identity written
 to the project lock.
 
 ```sh
-vellum --json create "My App" --directory "$app" --template basic
-vellum --json create "Imported App" --directory "$app" --template basic --from figma "$figma_export" --as main
+vellum --json create "My App" --directory "$app" --template blank
+vellum --json create "Imported App" --directory "$app" --template imported-app --from figma "$figma_export" --as main
+vellum --json create "Visualization App" --directory "$app" --template cpp-component
 vellum --json doctor --fix --require-target macos --project "$app"
 vellum --json import "$figma_export" --source-type figma --as main --project "$app"
 vellum --json reimport --source "$updated_export" --as main --project "$app"
+vellum --json design check --as main --project "$app"
+vellum --json design diff --as main --project "$app"
 vellum --json build --target macos --project "$app"
+vellum --json dev --target macos --project "$app" --transcript "$app/.vellum/state/dev-transcript.jsonl"
 vellum --json run --target macos --project "$app"
 vellum --json test --scenario smoke --target macos --project "$app"
 vellum --json capture --scenario smoke --output artifacts/smoke.png --target macos --project "$app"
@@ -54,14 +58,21 @@ snapshots and binds revision identity to the archive SHA-256. Consult conversion
 diagnostics after every import or reimport. Do not invent another route or
 silently discard unsupported properties.
 
+Use the public template whose ownership boundary matches the application.
+`blank` is the normal TypeScript starting point, `imported-app` requires and
+retains an initial design source, and `cpp-component` adds the bounded app-owned
+C++ ABI example. Do not copy files between templates or invent another shape;
+extend the generated project through its documented developer-owned paths.
+
 For editable native UI, use controlled `TextInput` v1 from `@vellum/ui` with a
 stable ID, string `value`, and `onChange`. Scenarios may use bounded `input` and
-named `key` actions; they are retained-tree actions, not DOM or arbitrary
+named `key` actions; the v2 scenario contract additionally covers focus,
+selection, IME composition, and accessibility label/value/state assertions.
+These are retained-tree actions and semantic adapters, not DOM or arbitrary
 keyboard automation. To persist the versioned whole-app snapshot on macOS,
 explicitly set `persistence = "state-v1"` in `[capabilities]` and keep
-`createApp({id,stateVersion,...})` stable. Do not claim IME, selection/caret,
-clipboard editing, migration, database, sync, accessibility text, or mobile
-support from this lane.
+`createApp({id,stateVersion,...})` stable. Do not claim clipboard editing,
+migration, database, sync, or mobile support from this lane.
 
 ## Ownership and maintenance
 
@@ -75,6 +86,11 @@ support from this lane.
   files. Preserve stable imported identities and review orphan/conflict reports.
 - After reimport, inspect the diff, run interaction scenarios, capture affected
   screens, and package only after tests pass.
+- Run `vellum --json design check --as main --project "$app"` before testing or
+  packaging. It regenerates the active imported source and authored overlay in
+  memory and fails if tool-owned output has drifted. Use
+  `vellum --json design diff --as main --project "$app"` for the stable
+  path/hash/size report; neither command rewrites the project.
 - After editing `design/overlays/`, reimport the current source even when its
   bytes did not change. `reimport_rematerialized` means generated UI, binding,
   or resolved-token receipts were rematerialized; `reimport_unchanged` means

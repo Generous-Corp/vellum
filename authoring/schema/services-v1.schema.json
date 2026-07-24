@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vellum.dev/schema/services-v1.schema.json",
+  "title": "Vellum capability service protocol v1",
+  "oneOf": [
+    { "$ref": "#/$defs/request" },
+    { "$ref": "#/$defs/successResponse" },
+    { "$ref": "#/$defs/errorResponse" }
+  ],
+  "$defs": {
+    "request": {
+      "type": "object",
+      "required": ["protocol", "kind", "id", "service", "operation", "arguments"],
+      "properties": {
+        "protocol": { "const": "vellum.services.v1" },
+        "kind": { "const": "request" },
+        "id": { "type": "string", "pattern": "^request-[A-Za-z0-9._-]+$" },
+        "service": {
+          "enum": ["commands", "files", "clipboard", "urls"]
+        },
+        "operation": { "type": "string", "minLength": 1 },
+        "arguments": { "type": "object" }
+      },
+      "additionalProperties": false
+    },
+    "successResponse": {
+      "type": "object",
+      "required": ["protocol", "kind", "id", "ok", "value"],
+      "properties": {
+        "protocol": { "const": "vellum.services.v1" },
+        "kind": { "const": "response" },
+        "id": { "type": "string", "pattern": "^request-[A-Za-z0-9._-]+$" },
+        "ok": { "const": true },
+        "value": {}
+      },
+      "additionalProperties": false
+    },
+    "errorResponse": {
+      "type": "object",
+      "required": ["protocol", "kind", "id", "ok", "error"],
+      "properties": {
+        "protocol": { "const": "vellum.services.v1" },
+        "kind": { "const": "response" },
+        "id": { "type": "string", "pattern": "^request-[A-Za-z0-9._-]+$" },
+        "ok": { "const": false },
+        "error": { "$ref": "#/$defs/error" }
+      },
+      "additionalProperties": false
+    },
+    "error": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": {
+          "enum": [
+            "capability-denied",
+            "cancelled",
+            "invalid-request",
+            "unsupported",
+            "service-failed"
+          ]
+        },
+        "message": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -64,6 +64,17 @@ try {
         } finally {
             await releaseImportOperationLock(project, lease, assertSafeOutputPath);
         }
+    } else if (command === 'design-check' || command === 'design-diff') {
+        const lease = await acquireImportOperationLock(project, assertSafeOutputPath);
+        try {
+            payload = await inspectGeneratedDesign(
+                project,
+                args,
+                { failOnDrift: command === 'design-check' },
+            );
+        } finally {
+            await releaseImportOperationLock(project, lease, assertSafeOutputPath);
+        }
     } else {
         if (['build', 'run', 'test', 'capture', 'package'].includes(command)) {
             fail(
@@ -87,6 +98,190 @@ try {
         status,
     }, { space: 0 }));
     process.exitCode = Number.isInteger(error.exitCode) ? error.exitCode : 1;
+}
+
+async function inspectGeneratedDesign(project, args, { failOnDrift }) {
+    const sourceKey = requestedSourceKey(args);
+    const pendingPaths = projectPaths(project, sourceKey, 'pending');
+    const importLock = await readRequiredJson(pendingPaths.importLock, 'design import lock');
+    if (importLock.schema !== IMPORT_LOCK_SCHEMA) {
+        fail('invalid_import_lock', `Unsupported import lock schema '${importLock.schema ?? ''}'`);
+    }
+    const lockedSource = importLock.sources?.[sourceKey];
+    if (!lockedSource) fail('source_not_imported', `Source '${sourceKey}' has not been imported`);
+
+    const paths = projectPaths(project, sourceKey, lockedSource.activeRevision);
+    const importGraph = await readRequiredJson(paths.importGraph, 'design import graph');
+    validateImportGraph(importGraph, sourceKey, lockedSource);
+    const overlay = parseAuthoredOverlay(await readFile(paths.overlay, 'utf8'));
+    const provenance = await readRequiredJson(paths.snapshotProvenance, 'source snapshot provenance');
+    validateSnapshotProvenance(provenance, sourceKey, lockedSource);
+
+    const archive = provenance.sourceArtifact?.kind === 'pulp-zip'
+        ? {
+            member: provenance.sourceArtifact.member,
+            name: provenance.sourceArtifact.name,
+            path: paths.snapshotArchive,
+            sha256: provenance.sourceArtifact.sha256,
+        }
+        : null;
+    const loaded = await loadSource(paths.snapshotSource, {
+        sourceArchive: archive,
+        sourceKey,
+        sourceType: lockedSource.adapter,
+    });
+    validateRegeneratedSource(loaded, lockedSource, provenance);
+    const assets = await planAssets(paths.snapshotSource, loaded.document, paths);
+    const applied = applyAuthoredOverlay(loaded.document, overlay);
+    if (applied.conflicts.length > 0) {
+        fail('authored_overlay_conflict', 'The authored overlay no longer resolves against the active design', {
+            diagnostics: conflictsAsDiagnostics(applied.conflicts),
+        });
+    }
+
+    const expected = generatedFiles({
+        applied,
+        assets,
+        document: loaded.document,
+        overlayCreated: false,
+        overlayValue: overlay,
+        paths,
+        project,
+        sourceHash: loaded.sourceHash,
+        sourceKey,
+        sourceArtifact: provenance.sourceArtifact,
+        sourceName: provenance.sourceName,
+        sourceType: lockedSource.adapter,
+    });
+    // Import/reimport reports are historical evidence, not active materialized
+    // output. The authored overlay and developer-extended import mount graph
+    // are intentionally excluded as well; both are validated above.
+    expected.delete(paths.importReport);
+    expected.delete(paths.overlay);
+    expected.delete(paths.importGraph);
+    for (const asset of assets.copies) expected.set(asset.generatedPath, asset.bytes);
+
+    const changes = await compareGeneratedFiles(project, expected);
+    const expectedAssets = new Set(assets.copies.map((asset) => resolve(asset.generatedPath)));
+    for (const path of await staleGeneratedAssets(paths.generatedAssets, assets.copies)) {
+        if (!expectedAssets.has(resolve(path))) {
+            changes.push(await generatedChange(project, path, null, 'unexpected'));
+        }
+    }
+    changes.sort((left, right) => left.path.localeCompare(right.path));
+
+    const data = {
+        activeRevision: lockedSource.activeRevision,
+        changes,
+        checkedFiles: expected.size,
+        sourceKey,
+        summary: summarizeDesignIR(loaded.document),
+    };
+    if (changes.length === 0) {
+        return success(
+            'design_clean',
+            `Generated design for '${sourceKey}' matches deterministic regeneration`,
+            data,
+            [...loaded.backendDiagnostics, ...assets.diagnostics],
+        );
+    }
+    const diagnostics = changes.map((change) => ({
+        code: `generated-${change.kind}`,
+        level: failOnDrift ? 'error' : 'info',
+        message: `Generated design file is ${change.kind}: ${change.path}`,
+        path: change.path,
+    }));
+    if (failOnDrift) {
+        return failure(
+            'design_drift',
+            `Generated design for '${sourceKey}' differs from deterministic regeneration`,
+            data,
+            diagnostics,
+            2,
+        );
+    }
+    return success(
+        'design_diff',
+        `Generated design for '${sourceKey}' has ${changes.length} deterministic difference(s)`,
+        data,
+        diagnostics,
+    );
+}
+
+function validateSnapshotProvenance(provenance, sourceKey, lockedSource) {
+    if (
+        provenance?.schema !== 'vellum.source-snapshot.v1' ||
+        provenance.sourceKey !== sourceKey ||
+        provenance.revision !== lockedSource.activeRevision ||
+        provenance.sourceHash !== lockedSource.snapshotHash ||
+        provenance.sourceType !== lockedSource.adapter ||
+        !provenance.sourceArtifact ||
+        provenance.sourceArtifact.kind !== (lockedSource.sourceArtifactKind ?? 'json')
+    ) {
+        fail(
+            'invalid_snapshot_provenance',
+            `Active snapshot provenance no longer matches source '${sourceKey}'`,
+        );
+    }
+}
+
+function validateRegeneratedSource(loaded, lockedSource, provenance) {
+    const document = loaded.document;
+    if (
+        loaded.revision !== lockedSource.activeRevision ||
+        loaded.sourceHash !== lockedSource.snapshotHash ||
+        document.source.adapterVersion !== lockedSource.adapterVersion ||
+        document.source.formatVersion !== lockedSource.formatVersion ||
+        document.source.namespace !== lockedSource.namespace ||
+        loaded.sourceArtifact.kind !== provenance.sourceArtifact.kind ||
+        loaded.sourceArtifact.sha256 !== provenance.sourceArtifact.sha256
+    ) {
+        fail(
+            'snapshot_identity_mismatch',
+            'Regenerated source identity differs from the active import lock',
+        );
+    }
+}
+
+async function compareGeneratedFiles(project, expected) {
+    const changes = [];
+    for (const [path, expectedBytes] of [...expected.entries()].sort(([left], [right]) =>
+        left.localeCompare(right))) {
+        await assertSafeOutputPath(project, path);
+        const metadata = await lstat(path).catch((error) => {
+            if (error.code === 'ENOENT') return null;
+            throw error;
+        });
+        if (metadata === null) {
+            changes.push(await generatedChange(project, path, expectedBytes, 'missing'));
+            continue;
+        }
+        if (metadata.isSymbolicLink() || !metadata.isFile()) {
+            fail('unsafe_generated_output', `Generated output is not a regular file: ${path}`);
+        }
+        const actual = await readFile(path);
+        if (!actual.equals(expectedBytes)) {
+            changes.push(await generatedChange(project, path, expectedBytes, 'modified', actual));
+        }
+    }
+    return changes;
+}
+
+async function generatedChange(project, path, expected, kind, actualValue = undefined) {
+    const actual = actualValue === undefined
+        ? await readFile(path).catch((error) => {
+            if (error.code === 'ENOENT') return null;
+            throw error;
+        })
+        : actualValue;
+    return {
+        actualBytes: actual?.length ?? null,
+        actualSha256: actual === null ? null : `sha256:${sha256(actual)}`,
+        expectedBytes: expected?.length ?? null,
+        expectedSha256: expected === null ? null : `sha256:${sha256(expected)}`,
+        kind,
+        path: relative(project, path),
+    };
 }
 
 async function importDesign(project, args) {

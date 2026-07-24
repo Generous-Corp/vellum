@@ -29,7 +29,7 @@ from typing import Iterable
 
 
 REPO = Path(__file__).resolve().parents[1]
-FRAMEWORK_VERSION = "0.1.1"
+FRAMEWORK_VERSION = "0.1.6"
 CLI_VERSION = FRAMEWORK_VERSION
 CLI_API = 1
 METADATA_SCHEMA = "vellum.sdk-artifact.v1"
@@ -101,8 +101,18 @@ def prepare_ui_payload(repo: Path, payload: Path) -> None:
             shutil.copy2(item, destination / entry)
 
     package = json.loads((destination / "package.json").read_text(encoding="utf-8"))
-    dependencies = package.get("devDependencies")
-    if not isinstance(dependencies, dict) or not dependencies:
+    runtime_dependencies = package.get("dependencies")
+    development_dependencies = package.get("devDependencies")
+    if (
+        not isinstance(runtime_dependencies, dict)
+        or not isinstance(development_dependencies, dict)
+        or set(runtime_dependencies) & set(development_dependencies)
+    ):
+        raise ArtifactError(
+            "@vellum/ui authoring dependencies must be disjoint exact runtime and development maps"
+        )
+    dependencies = {**runtime_dependencies, **development_dependencies}
+    if set(dependencies) != {"esbuild", "typescript"}:
         raise ArtifactError("@vellum/ui has no pinned authoring dependencies")
     if any(not isinstance(version, str) or version[:1] in {"^", "~", ">", "<", "*"}
            for version in dependencies.values()):
@@ -138,7 +148,7 @@ def derive_capabilities(payload: Path, install_tree: Path) -> dict[str, object]:
         "ui/node_modules/typescript/package.json",
     ))
     native_backend = all((payload / name).is_file() for name in (
-        "vellum_native_backend.py", "vellum_png.py",
+        "vellum_native_backend.py", "vellum_png.py", "vellum_scenario.py",
     ))
     native_host = all((install_tree / path).is_file() for path in (
         "bin/vellum-app-host",
@@ -154,10 +164,14 @@ def derive_capabilities(payload: Path, install_tree: Path) -> dict[str, object]:
         gpu_renderer and authoring_runtime and ui_runtime and native_backend and
         native_host and node_runtime
     )
-    web_backend = (payload / "vellum_web_backend.py").is_file()
+    web_backend = all((payload / name).is_file() for name in (
+        "vellum_web_backend.py", "vellum_scenario.py",
+    ))
     web_runtime = all((payload / "web" / name).is_file() for name in (
         "manifest.json", "vellum_web_core.js", "vellum_web_core.wasm",
-        "index.html", "style.css", "vellum_host.js", "check_wasm_no_engine.py",
+        "index.html", "style.css", "vellum_host.js",
+        "browser_component_adapter.cpp", "text_semantics.js",
+        "check_wasm_no_engine.py",
     ))
     web_ready = ui_runtime and node_runtime and web_backend and web_runtime
     custom_components = (
@@ -183,10 +197,10 @@ def derive_capabilities(payload: Path, install_tree: Path) -> dict[str, object]:
                 "retained_tree": ui_runtime,
                 "native_pointer_focus": native_ready,
                 "native_direct_text": native_ready,
-                "ime_composition": False,
-                "caret_and_selection": False,
+                "ime_composition": native_ready or web_ready,
+                "caret_and_selection": native_ready or web_ready,
                 "clipboard_editing": False,
-                "accessibility_text": False,
+                "accessibility_text": native_ready or web_ready,
                 "mobile": False,
             },
             "scenario_v1": {
@@ -484,9 +498,11 @@ def copy_payload(
     node_provenance: dict[str, str] | None = None,
 ) -> dict[str, object]:
     shutil.copy2(repo / "cli/vellum_cli.py", payload / "vellum_cli.py")
+    shutil.copy2(repo / "cli/vellum_dev.py", payload / "vellum_dev.py")
     shutil.copy2(repo / "cli/vellum_backend.py", payload / "vellum_backend.py")
     shutil.copy2(repo / "cli/vellum_manifest.py", payload / "vellum_manifest.py")
     shutil.copy2(repo / "cli/vellum_png.py", payload / "vellum_png.py")
+    shutil.copy2(repo / "cli/vellum_scenario.py", payload / "vellum_scenario.py")
     shutil.copytree(repo / ".agents", payload / ".agents")
     shutil.copytree(repo / "templates", payload / "templates")
     shutil.copytree(install_tree, payload / "sdk")

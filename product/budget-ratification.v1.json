@@ -1,0 +1,16 @@
+{
+  "schema": "vellum.budget-ratification.v1",
+  "status": "unratified",
+  "budgetSource": "product/budgets.yaml",
+  "requiredEvidence": [
+    "clean macOS arm64 release installation",
+    "README clean-release transcript and environment",
+    "measured cold install and warm developer-journey timings"
+  ],
+  "ratification": {
+    "evidenceCommit": null,
+    "environment": null,
+    "timings": null,
+    "ratifiedValues": null
+  }
+}

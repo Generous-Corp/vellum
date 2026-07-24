@@ -1,0 +1,88 @@
+{
+  "schema": "vellum.downstream-consumer-validation.v1",
+  "framework": {
+    "repository": "Generous-Corp/vellum",
+    "version": "v0.1.6",
+    "sourceCommit": "9595737b1903819bc497ee41f870b0f36e667c42",
+    "artifact": {
+      "target": "darwin-arm64",
+      "sha256": "cb2a6372f266a8baeb6f7b52c273cb453daa798846b6abf7c59e45dab38e652b"
+    }
+  },
+  "consumers": [
+    {
+      "id": "vellum-palette-board",
+      "repository": "Generous-Corp/vellum-palette-board",
+      "commit": "7137e045b6a135595704b06b009fdc3c19691410",
+      "validationRecord": "docs/validation.json",
+      "evidenceDigest": {
+        "kind": "montage-sha256",
+        "sha256": "b2072e7c1e05e1015091bb4a2cdb4c2f7fca6eebf0b49b3334dc3d3c15780423"
+      },
+      "evidenceLadder": [
+        {
+          "id": "immutable-framework-install",
+          "expectation": "verified immutable release and exact SDK artifact",
+          "status": "passed"
+        },
+        {
+          "id": "deterministic-import-reimport",
+          "expectation": "two design revisions with authored files preserved",
+          "status": "passed"
+        },
+        {
+          "id": "developer-authored-behavior",
+          "expectation": "TypeScript and JSX behavior remains developer-owned",
+          "status": "passed"
+        },
+        {
+          "id": "native-gpu-runtime",
+          "expectation": "Skia Graphite through Dawn and Metal without fallback",
+          "status": "passed"
+        },
+        {
+          "id": "custom-native-component",
+          "expectation": "application-owned C++ component loads through the public ABI",
+          "status": "passed"
+        },
+        {
+          "id": "interaction-and-visual-testing",
+          "expectation": "pointer, keyboard, state, scenarios, capture, and montage evidence",
+          "status": "passed"
+        },
+        {
+          "id": "browser-wasm",
+          "expectation": "browser JavaScript calls the shared C++ core compiled to Wasm",
+          "status": "passed"
+        },
+        {
+          "id": "packaging",
+          "expectation": "native and web packages produced from the pinned framework",
+          "status": "passed"
+        }
+      ],
+      "frameworkFirstFixProtocol": {
+        "mode": "framework-first",
+        "frameworkRepository": "Generous-Corp/vellum",
+        "consumerRepository": "Generous-Corp/vellum-palette-board",
+        "requiredSequence": [
+          "reproduce-in-consumer",
+          "classify-framework-vs-application",
+          "fix-and-test-framework",
+          "release-immutable-framework-version",
+          "update-consumer-pin",
+          "rerun-evidence-ladder"
+        ],
+        "consumerWorkaroundPolicy": "prohibited-without-explicit-exception",
+        "exceptionRequiredFields": [
+          "owner",
+          "reason",
+          "upstreamIssue",
+          "expiry",
+          "removalCondition"
+        ],
+        "exceptions": []
+      }
+    }
+  ]
+}

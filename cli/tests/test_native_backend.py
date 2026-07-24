@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -29,6 +30,7 @@ build_component_modules = BACKEND_MODULE["build_component_modules"]
 component_sdk_root = BACKEND_MODULE["component_sdk_root"]
 build_app = BACKEND_MODULE["build_app"]
 BackendFailure = BACKEND_MODULE["BackendFailure"]
+command_result = BACKEND_MODULE["command_result"]
 
 
 def run(arguments: list[str], *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -76,8 +78,11 @@ def fake_build_sdk(root: Path) -> Path:
     bundler = sdk / "ui/scripts/build-project.mjs"
     bundler.parent.mkdir(parents=True)
     bundler.write_text(
-        "import { copyFileSync } from 'node:fs';\n"
-        "copyFileSync(process.argv[2], process.argv[3]);\n",
+        "import { copyFileSync, writeFileSync } from 'node:fs';\n"
+        "copyFileSync(process.argv[2], process.argv[3]);\n"
+        "writeFileSync(process.argv[3] + '.map', "
+        "\"{\\\"version\\\":3,\\\"sources\\\":[\\\"vellum://app/src/main.tsx\\\"],"
+        "\\\"sourcesContent\\\":[\\\"\\\"],\\\"names\\\":[],\\\"mappings\\\":\\\"\\\"}\\n\");\n",
         encoding="utf-8",
     )
     return sdk
@@ -106,6 +111,36 @@ class NativeBackendTests(unittest.TestCase):
             self.assertEqual(payload["schema"], "vellum.backend.result.v1")
             self.assertEqual(payload["status"], "unsupported_target")
             self.assertFalse(payload["ok"])
+
+    def test_dev_reload_gracefully_quits_then_relaunches_with_honest_continuity(self) -> None:
+        app = {"app": Path("/tmp/reload-proof.app")}
+        context = {
+            "application_id": "dev.vellum.reload-proof",
+            "capabilities": {"persistence": "state-v1"},
+        }
+        args = SimpleNamespace(
+            target="macos", no_build=True, self_test=False,
+            no_window=False, dev_reload=True,
+        )
+        completed = subprocess.CompletedProcess(["osascript"], 0, "", "")
+        with (
+            mock.patch.dict(
+                command_result.__globals__,
+                {"ensure_app": mock.Mock(return_value=app)},
+            ),
+            mock.patch.object(
+                command_result.__globals__["subprocess"], "run",
+                return_value=completed,
+            ) as stop,
+            mock.patch.dict(
+                command_result.__globals__,
+                {"run_checked": mock.Mock(return_value=completed)},
+            ),
+        ):
+            payload = command_result("run", args, context, Path("/tmp/sdk"))
+        self.assertEqual(payload["status"], "reloaded")
+        self.assertEqual(payload["data"]["continuity"], "persisted-state-v1")
+        self.assertIn('application id "dev.vellum.reload-proof"', stop.call_args.args[0][2])
 
     def test_entry_cannot_escape_project(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -182,6 +217,74 @@ class NativeBackendTests(unittest.TestCase):
                     scenario_arguments({"root": project}, "editor")
                 self.assertEqual(caught.exception.status, "invalid_scenario")
 
+    def test_v2_text_composition_and_accessibility_steps_map_to_native_host(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = self.create_project(Path(temporary))
+            scenario_path = project / "tests/scenarios/text-v2.json"
+            scenario_path.write_text(json.dumps({
+                "schema": "vellum.scenario.v2",
+                "name": "text semantics",
+                "steps": [
+                    {"action": "focus", "target": "title-input"},
+                    {"action": "input", "target": "title-input", "value": "GPU Notes"},
+                    {"action": "key", "target": "title-input", "value": "ArrowLeft"},
+                    {"action": "compose", "target": "title-input", "value": "日本語"},
+                    {
+                        "action": "assert-accessibility",
+                        "target": "title-input",
+                        "expect": {
+                            "label": "Board title",
+                            "role": "text-field",
+                            "value": "GPU Notes日本語",
+                        },
+                    },
+                ],
+            }), encoding="utf-8")
+            arguments, name = scenario_arguments({"root": project}, "text-v2")
+            self.assertEqual(name, "text semantics")
+            self.assertEqual(arguments, [
+                "--focus", "title-input",
+                "--input", "title-input", "GPU Notes",
+                "--key", "title-input", "ArrowLeft",
+                "--compose", "title-input", "日本語",
+                "--assert-accessibility", "title-input",
+                '{"label":"Board title","role":"text-field","value":"GPU Notes日本語"}',
+            ])
+
+    def test_phase3_v2_actions_lower_to_ordered_native_host_contract(self) -> None:
+        scenario = REPO / "fixtures/authoring-phase3/scenarios/phase3.json"
+        capabilities = {
+            "commands": "v1",
+            "files": "denied",
+            "clipboard": "text-v1",
+            "open_url": "external-v1",
+            "network": False,
+            "persistence": "state-v1",
+        }
+        arguments, name = scenario_arguments(
+            {"root": REPO / "fixtures/authoring-phase3",
+             "capabilities": capabilities},
+            str(scenario.relative_to(REPO / "fixtures/authoring-phase3")),
+        )
+        self.assertEqual(name, "unchanged authoring fixture on native and browser")
+        self.assertEqual(arguments[:2], [
+            "--service-capabilities",
+            json.dumps(capabilities, sort_keys=True, separators=(",", ":")),
+        ])
+        self.assertIn("--assert-text", arguments)
+        self.assertIn("--touch", arguments)
+        self.assertIn("--command", arguments)
+        self.assertEqual(arguments.count("--service-result"), 3)
+        self.assertIn("--expected-throw", arguments)
+        self.assertLess(arguments.index("--assert-text"), arguments.index("--touch"))
+        self.assertLess(arguments.index("--touch"), arguments.index("--command"))
+        self.assertLess(arguments.index("--command"), arguments.index("--service-result"))
+        self.assertLess(
+            max(index for index, value in enumerate(arguments)
+                if value == "--service-result"),
+            arguments.index("--expected-throw"),
+        )
+
     def test_state_v1_persistence_is_explicit_and_other_values_fail_closed(self) -> None:
         if not shutil.which("node"):
             self.skipTest("node is unavailable")
@@ -191,7 +294,7 @@ class NativeBackendTests(unittest.TestCase):
             manifest_path = project / "app.toml"
             original = manifest_path.read_text(encoding="utf-8")
             manifest_path.write_text(
-                original.replace('persistence = "none"', 'persistence = "state-v1"'),
+                original.replace('persistence = "denied"', 'persistence = "state-v1"'),
                 encoding="utf-8",
             )
             sdk = fake_build_sdk(root)
@@ -206,7 +309,7 @@ class NativeBackendTests(unittest.TestCase):
                 self.assertEqual(plistlib.load(handle)["VellumPersistence"], "state-v1")
 
             manifest_path.write_text(
-                original.replace('persistence = "none"', 'persistence = "arbitrary"'),
+                original.replace('persistence = "denied"', 'persistence = "arbitrary"'),
                 encoding="utf-8",
             )
             rejected = run([
@@ -340,6 +443,11 @@ class NativeBackendTests(unittest.TestCase):
                 arguments: list[str], *, cwd: Path | None = None,
             ) -> subprocess.CompletedProcess[str]:
                 commands.append(arguments)
+                bundle = Path(arguments[3])
+                bundle.write_text("void 0;\n", encoding="utf-8")
+                bundle.with_suffix(f"{bundle.suffix}.map").write_text(
+                    '{"version":3}\n', encoding="utf-8",
+                )
                 return subprocess.CompletedProcess(arguments, 0, "", "")
 
             with mock.patch.dict(build_app.__globals__, {"run_checked": record_command}):

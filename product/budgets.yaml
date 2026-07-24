@@ -21,3 +21,4 @@ observatory:
 notes:
   - These are private experimental targets, not public performance claims.
   - Actual clean-machine evidence must ratify or revise every provisional value.
+  - Ratification state is recorded in product/budget-ratification.v1.json.

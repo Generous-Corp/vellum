@@ -1,0 +1,10 @@
+{
+  "name": "@vellum/fixture-pure-esm-root",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./index.js",
+  "dependencies": {
+    "@vellum/fixture-pure-esm-leaf": "file:../pure-esm-leaf"
+  }
+}

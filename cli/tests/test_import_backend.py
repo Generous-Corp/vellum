@@ -142,6 +142,47 @@ class ImportBackendTests(unittest.TestCase):
             self.assertEqual(graph_path.read_bytes(), graph_before)
             self.assertEqual(authored_source.read_bytes(), authored_before)
 
+            checked = invoke("design", "check", "--as", "main", cwd=app)
+            self.assertEqual(checked.returncode, 0, checked.stdout)
+            checked_payload = json.loads(checked.stdout)
+            self.assertEqual(checked_payload["schema"], "vellum.cli.result.v1")
+            self.assertEqual(checked_payload["status"], "design_clean")
+            self.assertEqual(
+                checked_payload["data"]["backend"]["data"]["changes"],
+                [],
+            )
+
+            materialized_path = app / "ui/generated/main.materialized.json"
+            materialized_path.write_text('{"tampered":true}\n', encoding="utf-8")
+            diffed = invoke("design", "diff", "--as", "main", cwd=app)
+            self.assertEqual(diffed.returncode, 0, diffed.stdout)
+            diff_payload = json.loads(diffed.stdout)
+            self.assertEqual(diff_payload["status"], "design_diff")
+            self.assertEqual(
+                [
+                    (item["kind"], item["path"])
+                    for item in diff_payload["data"]["backend"]["data"]["changes"]
+                ],
+                [("modified", "ui/generated/main.materialized.json")],
+            )
+            rejected = invoke("design", "check", "--as", "main", cwd=app)
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertEqual(json.loads(rejected.stdout)["status"], "design_drift")
+
+            repaired = invoke(
+                "reimport",
+                "--source",
+                str(FIXTURES / "revision-b.source.json"),
+                "--as",
+                "main",
+                cwd=app,
+            )
+            self.assertEqual(repaired.returncode, 0, repaired.stdout)
+            self.assertEqual(json.loads(repaired.stdout)["status"], "reimport_rematerialized")
+            clean_again = invoke("design", "check", "--as", "main", cwd=app)
+            self.assertEqual(clean_again.returncode, 0, clean_again.stdout)
+            self.assertEqual(json.loads(clean_again.stdout)["status"], "design_clean")
+
     def test_public_source_key_and_unchanged_source_rematerialize_authored_overlay(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -1,0 +1,29 @@
+{
+  "schema": "vellum.authoring-phase3-golden-envelopes.v1",
+  "cases": [
+    {
+      "file": "host-ready.json",
+      "schema": "../../../authoring/schema/authoring-host-v2.schema.json"
+    },
+    {
+      "file": "host-diagnostic.json",
+      "schema": "../../../authoring/schema/authoring-host-v2.schema.json"
+    },
+    {
+      "file": "composition-event.json",
+      "schema": "../../../authoring/schema/events-v2.schema.json"
+    },
+    {
+      "file": "service-request.json",
+      "schema": "../../../authoring/schema/services-v1.schema.json"
+    },
+    {
+      "file": "service-denied.json",
+      "schema": "../../../authoring/schema/services-v1.schema.json"
+    },
+    {
+      "file": "../scenarios/phase3.json",
+      "schema": "../../../authoring/schema/scenario-v2.schema.json"
+    }
+  ]
+}

@@ -13,6 +13,7 @@ import struct
 import sys
 import tarfile
 import tempfile
+from types import SimpleNamespace
 import unittest
 
 
@@ -21,11 +22,76 @@ BUILDER = REPO / "scripts/build_sdk_artifact.py"
 VERIFIER = REPO / "scripts/verify_sdk_artifact.py"
 VALIDATOR = REPO / "scripts/validate_installed_sdk.py"
 INSTALLER = REPO / "scripts/install.sh"
-CONSUMER = REPO / "apps/smoke-native/install-consumer"
+CONSUMER = REPO / "apps/minimal-scene"
 
 
 @unittest.skipUnless(shutil.which("cmake") and (shutil.which("shasum") or shutil.which("sha256sum")), "CMake/checksum tools unavailable")
 class SdkArtifactTests(unittest.TestCase):
+    def test_installed_backend_inspection_does_not_write_bytecode(self) -> None:
+        module = runpy.run_path(str(VALIDATOR))
+        load_backend = module["load_installed_native_backend"]
+        with tempfile.TemporaryDirectory() as temporary:
+            library = Path(temporary)
+            (library / "vellum_bytecode_probe.py").write_text(
+                "VALUE = 'loaded without mutation'\n",
+                encoding="utf-8",
+            )
+            (library / "vellum_native_backend.py").write_text(
+                "from vellum_bytecode_probe import VALUE\n",
+                encoding="utf-8",
+            )
+            try:
+                backend = load_backend(library)
+                self.assertEqual(backend.VALUE, "loaded without mutation")
+                self.assertEqual(list(library.rglob("__pycache__")), [])
+            finally:
+                sys.modules.pop("vellum_bytecode_probe", None)
+
+    def test_installed_browser_scenario_resolves_payload_from_prefix(self) -> None:
+        module = runpy.run_path(str(VALIDATOR))
+        validate_browser = module["validate_installed_phase3_browser"]
+        validation_error = module["ValidationError"]
+        calls: list[tuple[list[str], Path | None]] = []
+
+        def fake_run(arguments: list[str], *, cwd: Path | None = None,
+                     env: dict[str, str] | None = None) -> SimpleNamespace:
+            calls.append((arguments, cwd))
+            return SimpleNamespace(
+                stdout=(
+                    '{"changed":true,"target":"mapped-error"}\n'
+                    '{"target":"title-input"}\n'
+                )
+            )
+
+        original_run = validate_browser.__globals__["run"]
+        validate_browser.__globals__["run"] = fake_run
+        try:
+            prefix = Path("/installed/vellum")
+            root = Path("/sterile/work")
+            self.assertTrue(validate_browser(prefix, root, {"PATH": "/usr/bin"}))
+            arguments, cwd = calls.pop()
+            self.assertEqual(cwd, root)
+            self.assertIn(
+                "/installed/vellum/lib/vellum/web",
+                arguments,
+            )
+            self.assertIn(
+                "/installed/vellum/lib/vellum/node/bin/node",
+                arguments,
+            )
+            self.assertIn(
+                "/installed/vellum/lib/vellum/ui/scripts/build-project.mjs",
+                arguments,
+            )
+
+            validate_browser.__globals__["run"] = lambda *args, **kwargs: SimpleNamespace(
+                stdout='{"changed":true,"target":"title-input"}\n'
+            )
+            with self.assertRaisesRegex(validation_error, "evidence is incomplete"):
+                validate_browser(prefix, root, {"PATH": "/usr/bin"})
+        finally:
+            validate_browser.__globals__["run"] = original_run
+
     def test_artifact_builder_rejects_cli_release_identity_drift(self) -> None:
         module = runpy.run_path(str(BUILDER))
         verify_cli_identity = module["verify_cli_identity"]
@@ -59,7 +125,9 @@ class SdkArtifactTests(unittest.TestCase):
             source.mkdir()
             names = (
                 "vellum_web_core.js", "vellum_web_core.wasm", "index.html",
-                "style.css", "vellum_host.js", "check_wasm_no_engine.py",
+                "style.css", "vellum_host.js", "browser_component_adapter.cpp",
+                "text_semantics.js",
+                "check_wasm_no_engine.py",
             )
             records = {}
             for name in names:
@@ -228,6 +296,7 @@ class SdkArtifactTests(unittest.TestCase):
                 for command in ("build", "run", "test", "capture", "package")
             ))
             (payload / "vellum_png.py").write_text("# fixture\n", encoding="utf-8")
+            (payload / "vellum_scenario.py").write_text("# fixture\n", encoding="utf-8")
             with_backend = derive_capabilities(payload, install_tree)
             self.assertTrue(all(
                 with_backend["commands"][command]
@@ -237,8 +306,10 @@ class SdkArtifactTests(unittest.TestCase):
             self.assertTrue(authoring["text_input_v1"]["native_direct_text"])
             self.assertTrue(authoring["scenario_v1"]["input"])
             self.assertTrue(authoring["persistence"]["state_v1"])
-            self.assertFalse(authoring["text_input_v1"]["ime_composition"])
-            self.assertFalse(authoring["text_input_v1"]["accessibility_text"])
+            self.assertTrue(authoring["text_input_v1"]["ime_composition"])
+            self.assertTrue(authoring["text_input_v1"]["caret_and_selection"])
+            self.assertTrue(authoring["text_input_v1"]["accessibility_text"])
+            self.assertFalse(authoring["text_input_v1"]["clipboard_editing"])
             self.assertFalse(authoring["persistence"]["migration_api"])
 
     def test_reproducible_archive_installs_into_sterile_consumer(self) -> None:
@@ -280,8 +351,8 @@ class SdkArtifactTests(unittest.TestCase):
             ])
             verification = json.loads(verified.stdout)
             self.assertTrue(verification["ok"])
-            self.assertEqual(verification["framework_version"], "0.1.1")
-            self.assertEqual(verification["cli_version"], "0.1.1")
+            self.assertEqual(verification["framework_version"], "0.1.6")
+            self.assertEqual(verification["cli_version"], "0.1.6")
             self.assertTrue(verification["contamination_free"])
             self.assertEqual(verification["contamination_findings"], [])
             self.assertEqual(verification["claims"]["gpu_renderer"], False)
@@ -355,7 +426,7 @@ class SdkArtifactTests(unittest.TestCase):
             ])
             validation = json.loads(validated.stdout)
             self.assertTrue(validation["ok"])
-            self.assertEqual(validation["cli_version"], "0.1.1")
+            self.assertEqual(validation["cli_version"], "0.1.6")
             self.assertTrue(all(validation["checks"].values()))
 
             prefix = root / "prefix"
@@ -371,7 +442,7 @@ class SdkArtifactTests(unittest.TestCase):
             self.assertEqual(install_manifest["source_commit"], current_head)
             self.assertTrue(install_manifest["verified"])
             if shutil.which("curl"):
-                release_dir = root / "release/v0.1.1"
+                release_dir = root / "release/v0.1.6"
                 release_dir.mkdir(parents=True)
                 shutil.copy2(first_archive, release_dir / first_archive.name)
                 shutil.copy2(INSTALLER, release_dir / "install.sh")
@@ -395,7 +466,7 @@ class SdkArtifactTests(unittest.TestCase):
                 release_temporary = root / "release-temporary"
                 release_temporary.mkdir()
                 release_install = self.run_checked([
-                    "sh", str(INSTALLER), "--version", "0.1.1",
+                    "sh", str(INSTALLER), "--version", "0.1.6",
                     "--target", "test-host",
                     "--release-base-url", (root / "release").as_uri(),
                     "--install-dir", str(release_prefix),
@@ -426,7 +497,7 @@ class SdkArtifactTests(unittest.TestCase):
             ], cwd=root)
             self.assertEqual(json.loads(created.stdout)["status"], "created")
             lock = json.loads((project / "framework.lock").read_text(encoding="utf-8"))
-            self.assertEqual(lock["framework"]["version"], "0.1.1")
+            self.assertEqual(lock["framework"]["version"], "0.1.6")
             self.assertEqual(lock["framework"]["artifact"], {
                 "verified": True,
                 "sha256": verification["sha256"],

@@ -14,7 +14,7 @@
 #endif
 
 int main() {
-    vellum::runtime::Kernel kernel({.application_id = "dev.vellum.install-consumer"});
+    vellum::runtime::Kernel kernel({.application_id = "dev.vellum.minimal-scene"});
     if (!kernel.start()) return 1;
 
 #if defined(VELLUM_CONSUMER_HAS_GRAPHICS) || defined(VELLUM_CONSUMER_HAS_GPU)
