@@ -80,7 +80,9 @@
 | `vellum-241b5a2b96207eff61b508221d8bb78076461b22` | framework-to-Pulp | build | framework-only | 2026-07-30T21:45:32Z |
 | `vellum-668b696600683c9ebd7d0d4b95350577009124e9` | framework-to-Pulp | schema | framework-only | 2026-07-29T07:16:13Z |
 | `vellum-f85f4e1c01cc0e9aed1b5a1986a845a89c9538ad` | framework-to-Pulp | schema | framework-only | 2026-07-29T17:30:49Z |
-| `vellum-fcbeb19917241fce3c6f777925851ca64bb6cc88` | framework-to-Pulp | rendering | port-required | 2026-07-29T20:20:00Z |
+| `vellum-fcbeb19917241fce3c6f777925851ca64bb6cc88` | framework-to-Pulp | rendering | not-applicable | 2026-07-29T20:20:00Z |
+| `pulp-827efab06672013f00743878cc139db90b4d3860` | Pulp-to-framework | schema | superseded | 2026-07-29T20:20:02Z |
+| `vellum-61dff1b4ab7753662191ef11b009acea1deecf10` | framework-to-Pulp | schema | framework-only | 2026-07-29T20:20:02Z |
 
 ## Activation blockers
 

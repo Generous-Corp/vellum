@@ -1,0 +1,24 @@
+{
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-07-24T20:20:03Z",
+  "disposition": "superseded",
+  "effort_minutes": 10,
+  "event_id": "resolution-pulp-827efab06672013f00743878cc139db90b4d3860",
+  "kind": "resolution",
+  "linked_commits": [
+    "827efab06672013f00743878cc139db90b4d3860"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "This is a branch synchronization merge whose aggregate diff repeats Pulp changes already observed and classified through their constituent commits. It has no distinct patch identity or standalone contract change to ingest into Vellum, so creating a second implementation from the merge envelope would duplicate source-owned work.",
+  "resolves": "pulp-827efab06672013f00743878cc139db90b4d3860",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

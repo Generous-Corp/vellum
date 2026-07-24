@@ -1,0 +1,22 @@
+{
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "created_at": "2026-07-24T20:20:03Z",
+  "disposition": "framework-only",
+  "effort_minutes": 15,
+  "event_id": "resolution-vellum-61dff1b4ab7753662191ef11b009acea1deecf10",
+  "kind": "resolution",
+  "linked_commits": [
+    "61dff1b4ab7753662191ef11b009acea1deecf10"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "The backend and observatory module extractions, canonical Vellum UI materializer, native-browser layout contract, and Vellum authoring skill metadata are framework-owned maintenance. They preserve Pulp-facing DesignIR and retained-tree contracts through executable compatibility tests; no synchronized Pulp source copy or second implementation is required.",
+  "resolves": "vellum-61dff1b4ab7753662191ef11b009acea1deecf10",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}
