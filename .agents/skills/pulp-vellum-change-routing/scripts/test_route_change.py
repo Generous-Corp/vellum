@@ -532,6 +532,59 @@ class RoutingScenariosTest(unittest.TestCase):
             )
             self.assertIn("valid @account", invalid_owner["reasons"][0])
 
+    def test_emergency_rejects_pulp_owned_paths_and_rewritten_events(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            vellum, pulp = make_fixture(Path(temporary))
+            authority = ROUTER.load_authority(vellum, pulp)
+            pulp_owned = ROUTER.route(
+                authority,
+                source_repo="pulp",
+                paths=["core/audio/src/processor.cpp"],
+                intent="emergency",
+                emergency_event=EMERGENCY_EVENT,
+                emergency_owner="@owner",
+                emergency_created="2026-07-24",
+                emergency_expiry="2026-08-01",
+                emergency_follow_up="https://github.com/Generous-Corp/vellum/issues/1",
+                now=dt.date(2026, 7, 24),
+            )
+            self.assertEqual(pulp_owned["status"], "decision_required")
+            self.assertIn(
+                "exactly transferred",
+                pulp_owned["reasons"][0],
+            )
+
+            original = pulp / EMERGENCY_EVENT
+            renamed_relative = (
+                ".github/vellum-change-events/20260724-renamed-emergency.json"
+            )
+            renamed = pulp / renamed_relative
+            event = json.loads(original.read_text(encoding="utf-8"))
+            event["event_id"] = "20260724-renamed-emergency"
+            original.unlink()
+            write_json(renamed, event)
+            subprocess.run(["git", "-C", str(pulp), "add", "-A"], check=True)
+            subprocess.run(
+                ["git", "-C", str(pulp), "commit", "-qm", "rewrite event"],
+                check=True,
+            )
+            rewritten = ROUTER.route(
+                ROUTER.load_authority(vellum, pulp),
+                source_repo="pulp",
+                paths=["core/canvas/src/text_layout.cpp"],
+                intent="emergency",
+                emergency_event=renamed_relative,
+                emergency_owner="@owner",
+                emergency_created="2026-07-24",
+                emergency_expiry="2026-08-01",
+                emergency_follow_up="https://github.com/Generous-Corp/vellum/issues/1",
+                now=dt.date(2026, 7, 24),
+            )
+            self.assertEqual(rewritten["status"], "decision_required")
+            self.assertTrue(
+                any("append-only" in reason for reason in rewritten["reasons"])
+            )
+
     def test_transferred_slice_authority_must_match_activation(self) -> None:
         bad_authority = {
             "event_id": EVENT_ID,

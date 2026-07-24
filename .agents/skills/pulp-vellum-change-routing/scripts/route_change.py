@@ -527,15 +527,26 @@ def _validate_emergency(
         or any(not isinstance(value, str) or not value for value in event.get("tests", []))
     ):
         problems.append("emergency Pulp event tests must be a string array")
-    history = _git_text(
+    event_history = _git_text(
         authority.pulp,
         "log",
-        "--format=%H",
+        "--format=",
+        "--name-status",
+        "--no-renames",
+        f"{authority.coordinates['pulp_activation_commit']}..{authority.pulp_head}",
         "--",
-        event_path,
+        ".github/vellum-change-events",
     ).splitlines()
-    if len(history) != 1:
-        problems.append("emergency Pulp event must be append-only and committed exactly once")
+    event_changes = [line for line in event_history if line.strip()]
+    if any(not line.startswith("A\t") for line in event_changes):
+        problems.append(
+            "Pulp change-event history after authority activation must be append-only"
+        )
+    event_additions = [
+        line for line in event_changes if line == f"A\t{event_path}"
+    ]
+    if len(event_additions) != 1:
+        problems.append("emergency Pulp event must be committed exactly once")
     if not owner or not OWNER_RE.fullmatch(owner):
         problems.append("emergency owner must be a valid @account or @organization/team")
     elif event.get("owner") != owner:
@@ -920,6 +931,14 @@ def route(
 
     transferred = states == {"transferred"}
     if intent == "emergency":
+        if not transferred:
+            return _result(
+                "decision_required",
+                matched_slices=sorted(slices),
+                reasons=[
+                    "emergency exceptions apply only to exactly transferred Pulp paths"
+                ],
+            )
         problems = _validate_emergency(
             authority,
             emergency_event,
