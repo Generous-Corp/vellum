@@ -588,6 +588,15 @@ def route(
                 required_tests=contract_tests,
                 reasons=["SDK adoption must consume a generic Vellum release through a verified Pulp adoption contract"],
             )
+        if not contracts or counterpart_result != "affected":
+            return _result(
+                "decision_required",
+                counterpart_contracts=contracts,
+                required_tests=contract_tests,
+                reasons=[
+                    "SDK adoption requires an applicable Pulp counterpart that was independently reproduced as affected"
+                ],
+            )
         if not adoption_contract:
             return _result(
                 "decision_required",
@@ -768,6 +777,7 @@ def route(
         )
 
     if transferred and intent == "generic":
+        completed_backport = operation == "framework-backport"
         return _result(
             "routed",
             primary_repository="vellum",
@@ -775,10 +785,18 @@ def route(
             matched_slices=sorted(slices),
             counterpart_contracts=contracts,
             pulp_event_disposition="framework-backport",
-            observatory_disposition="port-required",
+            observatory_disposition=(
+                "ported" if completed_backport else "port-required"
+            ),
             required_tests=contract_tests,
             transitive_paths=transitive_paths,
-            reasons=["generic fixes to transferred Pulp slices originate in Vellum"],
+            reasons=[
+                (
+                    "validated framework backport links the Pulp adaptation to an existing immutable Vellum fix"
+                    if completed_backport
+                    else "generic fixes to transferred Pulp slices originate in Vellum"
+                )
+            ],
         )
     if transferred and intent == "pulp-specific":
         return _result(

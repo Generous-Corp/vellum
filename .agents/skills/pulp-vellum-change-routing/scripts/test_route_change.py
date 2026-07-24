@@ -312,6 +312,7 @@ class RoutingScenariosTest(unittest.TestCase):
             )
             self.assertEqual(result["status"], "routed")
             self.assertEqual(result["pulp_event_disposition"], "framework-backport")
+            self.assertEqual(result["observatory_disposition"], "ported")
 
     def test_paths_and_framework_backport_mode_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -398,6 +399,35 @@ class RoutingScenariosTest(unittest.TestCase):
             )
             self.assertEqual(missing_adoption["status"], "decision_required")
 
+            unmapped_adoption = ROUTER.route(
+                authority,
+                source_repo="vellum",
+                paths=["scripts/install_core.py"],
+                intent="generic",
+                counterpart_result="affected",
+                operation="sdk-adoption",
+                adoption_contract="docs/contracts/vellum-sdk-adoption.json",
+            )
+            self.assertEqual(unmapped_adoption["status"], "decision_required")
+            self.assertIn(
+                "applicable Pulp counterpart",
+                unmapped_adoption["reasons"][0],
+            )
+
+            unchecked_adoption = ROUTER.route(
+                authority,
+                source_repo="vellum",
+                paths=["graphics/src/skia_dawn_surface.mm"],
+                intent="generic",
+                operation="sdk-adoption",
+                adoption_contract="docs/contracts/vellum-sdk-adoption.json",
+            )
+            self.assertEqual(unchecked_adoption["status"], "decision_required")
+            self.assertIn(
+                "independently reproduced as affected",
+                unchecked_adoption["reasons"][0],
+            )
+
             adoption_path = pulp / "docs/contracts/vellum-sdk-adoption.json"
             ignored_adoption = pulp / "build/contract.json"
             ignored_adoption.parent.mkdir()
@@ -407,6 +437,7 @@ class RoutingScenariosTest(unittest.TestCase):
                 source_repo="vellum",
                 paths=["graphics/src/skia_dawn_surface.mm"],
                 intent="generic",
+                counterpart_result="affected",
                 operation="sdk-adoption",
                 adoption_contract="build/contract.json",
             )
@@ -426,6 +457,7 @@ class RoutingScenariosTest(unittest.TestCase):
                 source_repo="vellum",
                 paths=["graphics/src/skia_dawn_surface.mm"],
                 intent="generic",
+                counterpart_result="affected",
                 operation="sdk-adoption",
                 adoption_contract="docs/contracts/vellum-sdk-adoption.json",
             )

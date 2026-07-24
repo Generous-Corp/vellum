@@ -55,14 +55,16 @@ broadly mapped shared area is not silently transferred; it requires a decision.
   `port-required`, implement the equivalent fix in Vellum, then resolve it
   `ported` with linked immutable commits and contract tests.
 - **Future Pulp SDK adoption:** verify a current adoption contract/lock first.
-  Then fix and release Vellum and update Pulp's pin plus integration tests,
-  rather than duplicating source. Route with
+  Independently reproduce an applicable Pulp counterpart as affected. Then fix
+  and release Vellum and update Pulp's pin plus integration tests, rather than
+  duplicating source. Route with
   `--operation sdk-adoption --adoption-contract <Pulp-relative-json-path>`.
   The contract must use `pulp.vellum.sdk-adoption.v1`, match the active
   authority coordinates, name an accountable recorder and timestamp, and pin
   an exact SDK version, locally resolvable Vellum source commit, and artifact
   SHA-256. Until Pulp lands that reviewed contract, SDK adoption remains
-  `decision_required`.
+  `decision_required`. Vellum-only paths without an applicable Pulp counterpart
+  are not SDK-adoption work.
 
 Pulp change-event `pulp-only` and observatory `Pulp-only` are different,
 case-sensitive vocabularies. Observatory discovery starts as `pending`; it is
