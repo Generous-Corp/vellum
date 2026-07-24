@@ -5,12 +5,37 @@ on:
   pull_request:
   push:
     branches: [main]
-    tags: ['v[0-9]*']
+    tags: ['v[0-9]*', 'authority/**']
 
 permissions:
   contents: read
 
 jobs:
+  forbidden-deps:
+    name: forbidden-deps
+    runs-on: ${{ fromJSON(vars.VELLUM_LINUX_RUNS_ON_JSON || '"ubuntu-latest"') }}
+    steps:
+      - name: Check out the exact source tree
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify active-source quarantine and forbidden dependencies
+        run: |
+          python3 tools/provenance/test_verify_extraction.py
+          python3 tools/provenance/verify_extraction.py \
+            --output "$RUNNER_TEMP/forbidden-deps-report.json"
+
+      - name: Retain forbidden-dependency evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: vellum-forbidden-deps
+          path: ${{ runner.temp }}/forbidden-deps-report.json
+          if-no-files-found: error
+          retention-days: 90
+
   provenance-verify:
     name: provenance-verify
     runs-on: ${{ fromJSON(vars.VELLUM_LINUX_RUNS_ON_JSON || '"ubuntu-latest"') }}
@@ -41,11 +66,154 @@ jobs:
           python3 tools/agent_instructions/verify.py --json \
             > "$RUNNER_TEMP/agent-instructions-report.json"
 
-      - name: Verify prepared authority protocol and negative controls
+      - name: Test authority protocol and negative controls
         run: |
           python3 tools/provenance/test_verify_authority_activation.py
-          python3 tools/provenance/verify_authority_activation.py verify-prepared \
-            > "$RUNNER_TEMP/authority-prepared-report.json"
+          python3 tools/provenance/test_finalize_authority_reconciliation.py
+
+      - name: Resolve the exact authority lifecycle phase
+        id: authority-phase
+        env:
+          AUTHORITY_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          lock = json.loads(
+              Path(
+                  "provenance/pulp-observatory/provenance.lock"
+              ).read_text(encoding="utf-8")
+          )
+          state = lock.get("state")
+          records = sorted(
+              Path("provenance/authority/records").glob("*.json")
+          )
+          tagged = os.environ["AUTHORITY_REF"].startswith(
+              "refs/tags/authority/"
+          )
+          if tagged and state == "prepared" and len(records) == 1:
+              phase = "tagged-pending"
+          elif not tagged and state == "prepared" and not records:
+              phase = "ready"
+          elif not tagged and state == "active" and len(records) == 1:
+              phase = "active"
+          else:
+              raise SystemExit(
+                  "authority lifecycle state/ref/record count is incoherent: "
+                  f"state={state!r} tagged={tagged} records={len(records)}"
+              )
+          with Path(os.environ["GITHUB_OUTPUT"]).open(
+              "a", encoding="utf-8"
+          ) as output:
+              output.write(f"phase={phase}\n")
+          PY
+
+      - name: Verify authority-start control plane
+        if: steps.authority-phase.outputs.phase == 'ready'
+        run: |
+          python3 tools/provenance/verify_authority_activation.py verify-ready \
+            > "$RUNNER_TEMP/authority-ready-report.json"
+
+      - name: Resolve the pending authority record
+        if: steps.authority-phase.outputs.phase == 'tagged-pending'
+        id: authority-record
+        env:
+          EXPECTED_AUTHORITY_REF: ${{ github.ref }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          records = sorted(
+              Path("provenance/authority/records").glob("*.json")
+          )
+          if len(records) != 1:
+              raise SystemExit(
+                  "authority ref must contain exactly one direct pending record"
+              )
+          record = json.loads(records[0].read_text(encoding="utf-8"))
+          if record.get("authority_record_ref") != os.environ[
+              "EXPECTED_AUTHORITY_REF"
+          ]:
+              raise SystemExit(
+                  "pending record does not name the checked-out authority ref"
+              )
+          authority_start = record.get("authority_start_commit")
+          if (
+              not isinstance(authority_start, str)
+              or re.fullmatch(r"[0-9a-f]{40}", authority_start) is None
+          ):
+              raise SystemExit(
+                  "pending record authority-start commit is not a full SHA"
+              )
+          with Path(os.environ["GITHUB_OUTPUT"]).open(
+              "a", encoding="utf-8"
+          ) as output:
+              output.write(f"path={records[0].as_posix()}\n")
+              output.write(
+                  f"pulp-candidate={record['pulp_candidate_commit']}\n"
+              )
+              output.write(f"authority-start={authority_start}\n")
+          PY
+
+      - name: Verify the pinned owner signature on the authority tag
+        if: steps.authority-phase.outputs.phase == 'tagged-pending'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          remote_row="$(
+            gh api \
+              "repos/$GITHUB_REPOSITORY/git/ref/tags/$GITHUB_REF_NAME" \
+              --jq '[.object.type, .object.sha] | @tsv'
+          )"
+          read -r remote_type tag_object_sha <<EOF
+          $remote_row
+          EOF
+          test "$remote_type" = tag
+          if ! git cat-file -e "$tag_object_sha^{tag}" 2>/dev/null; then
+            git fetch --no-tags origin "refs/tags/$GITHUB_REF_NAME"
+          fi
+          python3 scripts/verify_release_tag.py \
+            --repo "$GITHUB_WORKSPACE" \
+            --repository "$GITHUB_REPOSITORY" \
+            --tag-name "$GITHUB_REF_NAME" \
+            --tag-object-sha "$tag_object_sha" \
+            --source-commit "$GITHUB_SHA" \
+            --allowed-signers \
+              "$GITHUB_WORKSPACE/provenance/release-signers.allowed_signers" \
+            --expected-principal daniel.raffel@gmail.com \
+            --expected-fingerprint \
+              SHA256:eMlEuZcnW6NJDrKQBuN5EX1q69bOlIRPl6XmutVTgcs \
+            --output "$RUNNER_TEMP/authority-tag-trust.json"
+
+      - name: Check out the exact Pulp activation candidate
+        if: steps.authority-phase.outputs.phase == 'tagged-pending'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: Generous-Corp/pulp
+          ref: ${{ steps.authority-record.outputs.pulp-candidate }}
+          path: .authority-pulp
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify the committed pending authority record
+        if: steps.authority-phase.outputs.phase == 'tagged-pending'
+        run: |
+          python3 tools/provenance/verify_authority_activation.py \
+            verify-pending \
+            --pulp-repo .authority-pulp \
+            --pulp-ownership-commit \
+              '${{ steps.authority-record.outputs.pulp-candidate }}' \
+            --record-path '${{ steps.authority-record.outputs.path }}' \
+            --authority-record-commit "$GITHUB_SHA" \
+            --expected-authority-ref "$GITHUB_REF" \
+            --output "$RUNNER_TEMP/authority-pending-report.json"
 
       - name: Resolve the committed Pulp observatory cursor
         id: observatory-cursor
@@ -80,13 +248,21 @@ jobs:
           persist-credentials: false
 
       - name: Verify two-way observatory health and negative controls
+        env:
+          AUTHORITY_START_SHA: ${{ steps.authority-record.outputs.authority-start }}
         run: |
+          set -euo pipefail
+          observatory_vellum_target="$VELLUM_TARGET_SHA"
+          if [[ "$GITHUB_REF" == refs/tags/authority/* ]]; then
+            test "$AUTHORITY_START_SHA" != ""
+            observatory_vellum_target="$AUTHORITY_START_SHA"
+          fi
           python3 tools/provenance/test_observatory.py
           python3 tools/provenance/observatory.py verify \
             --pulp-repo .observatory-pulp \
             --vellum-repo . \
             --pulp-target "${{ steps.observatory-cursor.outputs.pulp-sha }}" \
-            --vellum-target "$VELLUM_TARGET_SHA" \
+            --vellum-target "$observatory_vellum_target" \
             --output "$RUNNER_TEMP/observatory-health-report.json"
 
       - name: Upload verification evidence
@@ -98,7 +274,9 @@ jobs:
             ${{ runner.temp }}/provenance-report.json
             ${{ runner.temp }}/pulp-tooling-disposition-report.json
             ${{ runner.temp }}/agent-instructions-report.json
-            ${{ runner.temp }}/authority-prepared-report.json
+            ${{ runner.temp }}/authority-ready-report.json
+            ${{ runner.temp }}/authority-pending-report.json
+            ${{ runner.temp }}/authority-tag-trust.json
             ${{ runner.temp }}/observatory-health-report.json
           if-no-files-found: error
           retention-days: 90

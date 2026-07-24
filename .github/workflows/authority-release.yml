@@ -1,0 +1,221 @@
+name: Finalize immutable authority release
+
+on:
+  workflow_dispatch:
+    inputs:
+      authority_tag:
+        description: Signed authority tag, without refs/tags/
+        required: true
+        default: authority/native-design-kernel-v1
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: authority-release-${{ inputs.authority_tag }}
+  cancel-in-progress: false
+
+jobs:
+  finalize-authority-release:
+    name: finalize-authority-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out trusted finalizer controls
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Mint one-repository release finalizer token
+        id: finalizer-token
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3
+        with:
+          app-id: ${{ secrets.SHIPYARD_APP_ID }}
+          private-key: ${{ secrets.SHIPYARD_APP_PRIVATE_KEY }}
+          owner: Generous-Corp
+          repositories: vellum
+          permission-administration: read
+          permission-checks: read
+          permission-contents: write
+
+      - name: Resolve and verify the pinned owner-signed tag
+        id: authority
+        env:
+          AUTHORITY_TAG: ${{ inputs.authority_tag }}
+          GH_TOKEN: ${{ steps.finalizer-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          if [[ ! "$AUTHORITY_TAG" =~ ^authority/[a-z0-9][a-z0-9._/-]{2,120}$ ]] ||
+              [[ "$AUTHORITY_TAG" == *..* ]]; then
+            echo "::error::Authority tag is outside normalized authority/*"
+            exit 1
+          fi
+          remote_row="$(
+            gh api \
+              "repos/$GITHUB_REPOSITORY/git/ref/tags/$AUTHORITY_TAG" \
+              --jq '[.object.type, .object.sha] | @tsv'
+          )"
+          read -r remote_type tag_object_sha <<EOF
+          $remote_row
+          EOF
+          test "$remote_type" = tag
+          git fetch --no-tags origin "refs/tags/$AUTHORITY_TAG"
+          record_commit="$(git rev-parse "$tag_object_sha^{commit}")"
+          python3 scripts/verify_release_tag.py \
+            --repo "$GITHUB_WORKSPACE" \
+            --repository "$GITHUB_REPOSITORY" \
+            --tag-name "$AUTHORITY_TAG" \
+            --tag-object-sha "$tag_object_sha" \
+            --source-commit "$record_commit" \
+            --allowed-signers \
+              "$GITHUB_WORKSPACE/provenance/release-signers.allowed_signers" \
+            --expected-principal daniel.raffel@gmail.com \
+            --expected-fingerprint \
+              SHA256:eMlEuZcnW6NJDrKQBuN5EX1q69bOlIRPl6XmutVTgcs \
+            --output "$RUNNER_TEMP/authority-tag-trust.json"
+          {
+            printf 'tag=%s\n' "$AUTHORITY_TAG"
+            printf 'tag-object=%s\n' "$tag_object_sha"
+            printf 'commit=%s\n' "$record_commit"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Require all exact record-commit checks
+        env:
+          GH_TOKEN: ${{ steps.finalizer-token.outputs.token }}
+          RECORD_COMMIT: ${{ steps.authority.outputs.commit }}
+        run: |
+          gh api \
+            "repos/$GITHUB_REPOSITORY/commits/$RECORD_COMMIT/check-runs?per_page=100" \
+            > "$RUNNER_TEMP/authority-check-runs.json"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          required = {
+              "forbidden-deps": 15368,
+              "provenance-verify": 15368,
+              "sterile-consumer": 15368,
+          }
+          commit = os.environ["RECORD_COMMIT"]
+          rows = json.loads(
+              Path(os.environ["RUNNER_TEMP"])
+              .joinpath("authority-check-runs.json")
+              .read_text(encoding="utf-8")
+          )["check_runs"]
+          for name, app_id in required.items():
+              matches = [
+                  row
+                  for row in rows
+                  if row.get("name") == name
+                  and row.get("head_sha") == commit
+                  and row.get("conclusion") == "success"
+                  and (row.get("app") or {}).get("id") == app_id
+              ]
+              if not matches:
+                  raise SystemExit(
+                      f"missing exact successful App-bound check: {name}"
+                  )
+          PY
+
+      - name: Require live immutable-release policy
+        env:
+          AUTHORITY_TAG: ${{ steps.authority.outputs.tag }}
+          GH_TOKEN: ${{ steps.finalizer-token.outputs.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/immutable-releases" \
+            > "$RUNNER_TEMP/immutable-policy.json"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          value = json.loads(
+              Path(os.environ["RUNNER_TEMP"])
+              .joinpath("immutable-policy.json")
+              .read_text(encoding="utf-8")
+          )
+          if value.get("enabled") is not True:
+              raise SystemExit("immutable releases are not enabled")
+          PY
+
+      - name: Publish or verify the immutable authority release
+        env:
+          AUTHORITY_TAG: ${{ steps.authority.outputs.tag }}
+          RECORD_COMMIT: ${{ steps.authority.outputs.commit }}
+          TAG_OBJECT: ${{ steps.authority.outputs.tag-object }}
+          GH_TOKEN: ${{ steps.finalizer-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          title="Vellum authority: native-design-kernel-v1"
+          notes="$RUNNER_TEMP/authority-release-notes.md"
+          cat > "$notes" <<EOF
+          Immutable source-authority record for native-design-kernel-v1.
+
+          Record commit: $RECORD_COMMIT
+          Signed annotated tag object: $TAG_OBJECT
+
+          This release transfers source authority only after the separately
+          verified Pulp activation handshake. It is not an SDK release.
+          EOF
+          if gh api \
+              "repos/$GITHUB_REPOSITORY/releases/tags/$AUTHORITY_TAG" \
+              > "$RUNNER_TEMP/authority-release.json" 2>/dev/null; then
+            :
+          else
+            if ! gh release create "$AUTHORITY_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --title "$title" \
+              --notes-file "$notes"; then
+              echo "Release create raced or failed; checking exact live state"
+            fi
+            gh api \
+              "repos/$GITHUB_REPOSITORY/releases/tags/$AUTHORITY_TAG" \
+              > "$RUNNER_TEMP/authority-release.json"
+          fi
+          export EXPECTED_RELEASE_TITLE="$title"
+          export EXPECTED_RELEASE_NOTES="$notes"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          release = json.loads(
+              Path(os.environ["RUNNER_TEMP"])
+              .joinpath("authority-release.json")
+              .read_text(encoding="utf-8")
+          )
+          expected = os.environ["AUTHORITY_TAG"]
+          expected_body = Path(
+              os.environ["EXPECTED_RELEASE_NOTES"]
+          ).read_text(encoding="utf-8")
+          if (
+              release.get("tag_name") != expected
+              or release.get("name") != os.environ["EXPECTED_RELEASE_TITLE"]
+              or release.get("body") != expected_body
+              or release.get("draft") is not False
+              or release.get("prerelease") is not False
+              or release.get("immutable") is not True
+              or not isinstance(release.get("published_at"), str)
+          ):
+              raise SystemExit(
+                  "authority release is not published and immutable"
+              )
+          PY
+
+      - name: Retain immutable-authority evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: vellum-immutable-authority-release
+          path: |
+            ${{ runner.temp }}/authority-tag-trust.json
+            ${{ runner.temp }}/authority-check-runs.json
+            ${{ runner.temp }}/immutable-policy.json
+            ${{ runner.temp }}/authority-release.json
+          if-no-files-found: error
+          retention-days: 365

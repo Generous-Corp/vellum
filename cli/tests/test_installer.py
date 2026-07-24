@@ -813,6 +813,68 @@ class InstallerTests(unittest.TestCase):
             verified = _run_installer(prefix, "--verify-installed")
             self.assertEqual(verified.returncode, 0, verified.stderr)
 
+    def test_failure_before_activation_resumes_without_losing_old_sdk(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            first_archive, first_sums, first_digest = _build_verified_fixture(
+                root,
+                fixture_name="first",
+                source_commit="a" * 40,
+            )
+            second_archive, second_sums, second_digest = _build_verified_fixture(
+                root,
+                fixture_name="second",
+                source_commit="b" * 40,
+            )
+            prefix = root / "prefix"
+            first = _run_installer(
+                prefix,
+                "--archive", str(first_archive),
+                "--checksums", str(first_sums),
+            )
+            self.assertEqual(first.returncode, 0, first.stderr)
+            active_before = (prefix / "lib/vellum").resolve()
+            self.assertEqual(active_before.name, f"0.1.6-test-{first_digest}")
+
+            interrupted = _run_installer(
+                prefix,
+                "--archive", str(second_archive),
+                "--checksums", str(second_sums),
+                env={**os.environ, "VELLUM_INSTALL_FAIL_BEFORE_ACTIVATE": "1"},
+            )
+            self.assertNotEqual(interrupted.returncode, 0)
+            self.assertIn(
+                "injected failure before activation", interrupted.stderr
+            )
+            self.assertEqual((prefix / "lib/vellum").resolve(), active_before)
+            staged_install = (
+                prefix
+                / "lib/vellum-installs"
+                / f"0.1.6-test-{second_digest}"
+            )
+            self.assertTrue(staged_install.is_dir())
+            self.assertFalse(
+                any(
+                    path.name.startswith(".staging-")
+                    for path in staged_install.parent.iterdir()
+                )
+            )
+
+            resumed = _run_installer(
+                prefix,
+                "--archive", str(second_archive),
+                "--checksums", str(second_sums),
+            )
+            self.assertEqual(resumed.returncode, 0, resumed.stderr)
+            self.assertIn(
+                "Vellum installer: already_installed", resumed.stdout
+            )
+            self.assertEqual(
+                (prefix / "lib/vellum").resolve(), staged_install.resolve()
+            )
+            verified = _run_installer(prefix, "--verify-installed")
+            self.assertEqual(verified.returncode, 0, verified.stderr)
+
     def test_installed_file_tampering_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

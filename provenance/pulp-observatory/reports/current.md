@@ -78,17 +78,13 @@
 | `vellum-98ecbc1c71bc748920f76dc5130ee9b8fa142387` | framework-to-Pulp | platform | framework-only | 2026-07-28T20:56:36Z |
 | `vellum-dd1ebad3a36e8d08aae2479dad8077a1c694bb54` | framework-to-Pulp | platform | framework-only | 2026-07-28T20:56:36Z |
 | `vellum-241b5a2b96207eff61b508221d8bb78076461b22` | framework-to-Pulp | build | framework-only | 2026-07-30T21:45:32Z |
+| `vellum-668b696600683c9ebd7d0d4b95350577009124e9` | framework-to-Pulp | schema | framework-only | 2026-07-29T07:16:13Z |
 
 ## Activation blockers
 
 - `authority-not-transferred`
-- `dedicated-app-trust-policy-not-enabled`
+- `immutable-vellum-authority-record-not-recorded`
 - `immutable-vellum-authority-start-not-recorded`
 - `landed-pulp-freeze-evidence-not-recorded`
-- `pulp-repository-or-reader-app-id-unpinned`
-- `pulp-required-check-producers-unpinned`
-- `vellum-dispatcher-app-id-unpinned`
-- `vellum-repository-or-reader-app-id-unpinned`
-- `vellum-required-check-producers-unpinned`
 
 This report is generated. The observatory never applies source patches.

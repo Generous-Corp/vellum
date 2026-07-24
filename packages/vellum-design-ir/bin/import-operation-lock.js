@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import {
     lstat,
     mkdir,
+    open,
     readFile,
     readdir,
     rename,
@@ -84,7 +85,47 @@ async function inspect(project, paths, assertSafePath) {
             `Import lock owner is not a bounded regular file: ${paths.owner}`,
         );
     }
-    const ownerBytes = ownerMetadata === null ? null : await readFile(paths.owner);
+    let ownerBytes = null;
+    if (ownerMetadata !== null) {
+        let ownerHandle = null;
+        try {
+            ownerHandle = await open(paths.owner, 'r');
+        } catch (error) {
+            if (error.code === 'ENOENT') return { exists: false };
+            throw error;
+        }
+        try {
+            const openedOwnerMetadata = await ownerHandle.stat();
+            if (
+                !sameIdentity(ownerMetadata, openedOwnerMetadata) ||
+                openedOwnerMetadata.isSymbolicLink() ||
+                !openedOwnerMetadata.isFile() ||
+                openedOwnerMetadata.size > 16 * 1024
+            ) {
+                return { exists: false };
+            }
+            ownerBytes = await ownerHandle.readFile();
+        } finally {
+            await ownerHandle.close();
+        }
+
+        const [currentLockMetadata, currentOwnerMetadata] = await Promise.all([
+            lstat(paths.lock).catch((error) => {
+                if (error.code === 'ENOENT') return null;
+                throw error;
+            }),
+            lstat(paths.owner).catch((error) => {
+                if (error.code === 'ENOENT') return null;
+                throw error;
+            }),
+        ]);
+        if (
+            !sameIdentity(lockMetadata, currentLockMetadata) ||
+            !sameIdentity(ownerMetadata, currentOwnerMetadata)
+        ) {
+            return { exists: false };
+        }
+    }
     let ownerValue = null;
     if (ownerBytes !== null) {
         try {

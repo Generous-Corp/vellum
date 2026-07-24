@@ -1,0 +1,262 @@
+name: Activate Vellum source authority
+
+on:
+  repository_dispatch:
+    types: [pulp-change-landed]
+  workflow_dispatch:
+    inputs:
+      pulp_activation_commit:
+        description: Exact landed Pulp activation commit
+        required: true
+        type: string
+      authority_event_path:
+        description: Direct Pulp authority-transition event path
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vellum-authority-activation
+  cancel-in-progress: false
+
+jobs:
+  authority-active:
+    name: authority-active
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out trusted Vellum controls
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve immutable Pulp coordinates
+        id: coordinates
+        env:
+          DISPATCH_PAYLOAD: ${{ toJSON(github.event.client_payload) }}
+          INPUT_PULP_COMMIT: ${{ inputs.pulp_activation_commit }}
+          INPUT_EVENT_PATH: ${{ inputs.authority_event_path }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path, PurePosixPath
+          import re
+
+          if os.environ["GITHUB_REF"] != "refs/heads/main":
+              raise SystemExit(
+                  "authority activation must execute trusted main controls"
+              )
+          if os.environ["GITHUB_EVENT_NAME"] == "repository_dispatch":
+              payload = json.loads(os.environ["DISPATCH_PAYLOAD"])
+              commit = payload.get("source_commit")
+              refs = payload.get("event_refs")
+              if (
+                  not isinstance(refs, list)
+                  or len(refs) != 1
+                  or not isinstance(refs[0], dict)
+              ):
+                  raise SystemExit(
+                      "initial authority dispatch needs one durable event ref"
+                  )
+              event_path = refs[0].get("path")
+          else:
+              commit = os.environ["INPUT_PULP_COMMIT"]
+              event_path = os.environ["INPUT_EVENT_PATH"]
+          if not isinstance(commit, str) or re.fullmatch(
+              r"[0-9a-f]{40}", commit
+          ) is None:
+              raise SystemExit("Pulp activation commit must be a full SHA")
+          if not isinstance(event_path, str) or re.fullmatch(
+              r"\.github/vellum-change-events/"
+              r"[A-Za-z0-9][A-Za-z0-9._-]{1,160}\.json",
+              event_path,
+          ) is None:
+              raise SystemExit("authority event path is not direct and safe")
+          with Path(os.environ["GITHUB_OUTPUT"]).open(
+              "a", encoding="utf-8"
+          ) as output:
+              output.write(f"pulp-commit={commit}\n")
+              output.write(f"event-path={event_path}\n")
+          PY
+
+      - name: Mint one-repository Vellum reader token
+        id: vellum-reader
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3
+        with:
+          app-id: ${{ secrets.SHIPYARD_APP_ID }}
+          private-key: ${{ secrets.SHIPYARD_APP_PRIVATE_KEY }}
+          owner: Generous-Corp
+          repositories: vellum
+          permission-checks: read
+          permission-contents: read
+
+      - name: Mint one-repository Pulp reader token
+        id: pulp-reader
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3
+        with:
+          app-id: ${{ secrets.SHIPYARD_APP_ID }}
+          private-key: ${{ secrets.SHIPYARD_APP_PRIVATE_KEY }}
+          owner: Generous-Corp
+          repositories: pulp
+          permission-actions: read
+          permission-administration: read
+          permission-checks: read
+          permission-contents: read
+
+      - name: Mint short-lived pinned App identity JWT
+        env:
+          AUTHORITY_APP_ID: ${{ secrets.SHIPYARD_APP_ID }}
+          AUTHORITY_APP_PRIVATE_KEY: ${{ secrets.SHIPYARD_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          key="$RUNNER_TEMP/authority-app.pem"
+          printf '%s' "$AUTHORITY_APP_PRIVATE_KEY" > "$key"
+          test "$(stat -c '%a' "$key")" = 600
+          jwt="$(
+            python3 tools/provenance/mint_github_app_jwt.py \
+              --app-id "$AUTHORITY_APP_ID" \
+              --private-key "$key"
+          )"
+          echo "::add-mask::$jwt"
+          {
+            printf 'AUTHORITY_APP_JWT=%s\n' "$jwt"
+            printf 'VELLUM_AUTHORITY_APP_JWT=%s\n' "$jwt"
+            printf 'PULP_AUTHORITY_APP_JWT=%s\n' "$jwt"
+          } >> "$GITHUB_ENV"
+
+      - name: Check out the exact landed Pulp activation commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: Generous-Corp/pulp
+          token: ${{ steps.pulp-reader.outputs.token }}
+          ref: ${{ steps.coordinates.outputs.pulp-commit }}
+          path: .activation-pulp
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check out current Pulp main for landed-lineage proof
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: Generous-Corp/pulp
+          token: ${{ steps.pulp-reader.outputs.token }}
+          ref: main
+          path: .pulp-main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Import current Pulp main history without retaining credentials
+        run: |
+          git -C .activation-pulp fetch --no-tags ../.pulp-main main
+
+      - name: Resolve the authority record from landed Pulp truth
+        id: authority-record
+        env:
+          EVENT_PATH: ${{ steps.coordinates.outputs.event-path }}
+          PULP_COMMIT: ${{ steps.coordinates.outputs.pulp-commit }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+
+          pulp = Path(".activation-pulp")
+          head = subprocess.run(
+              ["git", "rev-parse", "HEAD"],
+              cwd=pulp,
+              check=True,
+              capture_output=True,
+              text=True,
+          ).stdout.strip()
+          if head != os.environ["PULP_COMMIT"]:
+              raise SystemExit("Pulp checkout differs from dispatch commit")
+          event = json.loads(
+              (pulp / os.environ["EVENT_PATH"]).read_text(encoding="utf-8")
+          )
+          if (
+              event.get("kind") != "authority-transition"
+              or event.get("transition") != "activate"
+          ):
+              raise SystemExit("durable event is not authority activation")
+          commit = event.get("vellum_authority_commit")
+          record_path = event.get("counterpart")
+          if not isinstance(commit, str) or re.fullmatch(
+              r"[0-9a-f]{40}", commit
+          ) is None:
+              raise SystemExit("event lacks exact Vellum record commit")
+          if not isinstance(record_path, str) or re.fullmatch(
+              r"provenance/authority/records/"
+              r"[a-z0-9][a-z0-9._-]{2,120}\.json",
+              record_path,
+          ) is None:
+              raise SystemExit(
+                  "event authority-record path is not direct and safe"
+              )
+          with Path(os.environ["GITHUB_OUTPUT"]).open(
+              "a", encoding="utf-8"
+          ) as output:
+              output.write(f"commit={commit}\n")
+              output.write(f"path={record_path}\n")
+          PY
+
+      - name: Check out the exact Vellum authority record commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          token: ${{ steps.vellum-reader.outputs.token }}
+          ref: ${{ steps.authority-record.outputs.commit }}
+          path: .authority-record
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Regenerate exact live Pulp activation evidence
+        env:
+          PULP_AUTHORITY_READER_TOKEN: ${{ steps.pulp-reader.outputs.token }}
+          PULP_ACTIVATION_COMMIT: ${{ steps.coordinates.outputs.pulp-commit }}
+          AUTHORITY_EVENT_PATH: ${{ steps.coordinates.outputs.event-path }}
+        run: |
+          python3 .authority-record/tools/provenance/verify_authority_activation.py \
+            --root .authority-record \
+            build-pulp-evidence \
+            --pulp-repo .activation-pulp \
+            --pulp-activation-commit "$PULP_ACTIVATION_COMMIT" \
+            --authority-event-path "$AUTHORITY_EVENT_PATH" \
+            --output "$RUNNER_TEMP/pulp-activation-evidence.json"
+
+      - name: Verify the complete live two-repository handshake
+        env:
+          VELLUM_AUTHORITY_READER_TOKEN: ${{ steps.vellum-reader.outputs.token }}
+          PULP_AUTHORITY_READER_TOKEN: ${{ steps.pulp-reader.outputs.token }}
+          AUTHORITY_RECORD_PATH: ${{ steps.authority-record.outputs.path }}
+          AUTHORITY_RECORD_COMMIT: ${{ steps.authority-record.outputs.commit }}
+        run: |
+          PULP_CANDIDATE_COMMIT="$(
+            jq -r .pulp_candidate_commit \
+              ".authority-record/$AUTHORITY_RECORD_PATH"
+          )"
+          python3 .authority-record/tools/provenance/verify_authority_activation.py \
+            --root .authority-record \
+            verify-active \
+            --pulp-repo .activation-pulp \
+            --pulp-ownership-commit "$PULP_CANDIDATE_COMMIT" \
+            --record ".authority-record/$AUTHORITY_RECORD_PATH" \
+            --record-path "$AUTHORITY_RECORD_PATH" \
+            --authority-record-commit "$AUTHORITY_RECORD_COMMIT" \
+            --pulp-evidence "$RUNNER_TEMP/pulp-activation-evidence.json" \
+            --output "$RUNNER_TEMP/authority-active.json"
+
+      - name: Retain activation proof
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: vellum-authority-activation
+          path: |
+            ${{ runner.temp }}/pulp-activation-evidence.json
+            ${{ runner.temp }}/authority-active.json
+          if-no-files-found: error
+          retention-days: 365

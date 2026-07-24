@@ -87,6 +87,8 @@ FORBIDDEN_ACTIVE_PATTERNS = {
 POLICY_IMPLEMENTATION_PATHS = {
     "scripts/verify_sdk_artifact.py",
 }
+SHA_RE = re.compile(r"[0-9a-f]{40}")
+UTC_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
 
 
 def sha256(path: Path) -> str:
@@ -202,6 +204,59 @@ def copied_seed_findings(
     return findings
 
 
+def verify_authority_phase(
+    extraction: dict[str, object], lock: dict[str, object]
+) -> tuple[bool, list[str]]:
+    errors: list[str] = []
+    authority = extraction.get("authority")
+    if not isinstance(authority, dict):
+        return False, ["pulp-extraction.json authority record is malformed"]
+    state = authority.get("state")
+    if extraction.get("status") == "prepared" and state == "prepared":
+        for field in (
+            "ownership_start_commit",
+            "authority_record_commit",
+            "pulp_activation_commit",
+            "accepted_by",
+            "accepted_at",
+        ):
+            if authority.get(field) is not None:
+                errors.append(f"prepared extraction authority carries {field}")
+        if lock.get("state") != "prepared":
+            errors.append("prepared extraction authority differs from observatory lock")
+        return False, errors
+    if extraction.get("status") != "active" or state != "active":
+        return False, ["extraction status and authority state must be prepared or active"]
+    coordinates = {
+        "ownership_start_commit": lock.get("vellum_authority_start_commit"),
+        "authority_record_commit": lock.get("vellum_authority_record_commit"),
+        "pulp_activation_commit": lock.get("pulp_activation_commit"),
+    }
+    if lock.get("state") != "active":
+        errors.append("active extraction authority differs from observatory lock")
+    for field, expected in coordinates.items():
+        actual = authority.get(field)
+        if (
+            not isinstance(actual, str)
+            or not SHA_RE.fullmatch(actual)
+            or actual != expected
+        ):
+            errors.append(f"active extraction authority has invalid {field}")
+    for field in (
+        "authority_record_path",
+        "authority_ref",
+        "pulp_authority_event_path",
+        "pulp_authority_event_id",
+        "accepted_by",
+    ):
+        if not isinstance(authority.get(field), str) or not authority[field]:
+            errors.append(f"active extraction authority lacks {field}")
+    accepted_at = authority.get("accepted_at")
+    if not isinstance(accepted_at, str) or not UTC_RE.fullmatch(accepted_at):
+        errors.append("active extraction authority has invalid accepted_at")
+    return not errors, errors
+
+
 def verify(root: Path) -> dict[str, object]:
     provenance = root / "provenance"
     errors: list[str] = []
@@ -214,6 +269,13 @@ def verify(root: Path) -> dict[str, object]:
             errors.append(f"{name}: expected sha256 {expected}, got {actual}")
 
     extraction = json.loads((provenance / "pulp-extraction.json").read_text())
+    lock = json.loads(
+        (provenance / "pulp-observatory/provenance.lock").read_text()
+    )
+    authority_transferred, authority_errors = verify_authority_phase(
+        extraction, lock
+    )
+    errors.extend(authority_errors)
     if extraction["source"]["commit"] != EXPECTED_SOURCE:
         errors.append("pulp-extraction.json source commit drifted")
     declared_hashes = {
@@ -317,7 +379,7 @@ def verify(root: Path) -> dict[str, object]:
     return {
         "schema_version": 2,
         "status": "pass" if not errors else "fail",
-        "authority_transferred": False,
+        "authority_transferred": authority_transferred,
         "raw_seed_present_at_active_tip": bool(retired_findings or copied_findings),
         "checks": checks,
         "errors": errors,

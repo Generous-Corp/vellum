@@ -8,7 +8,7 @@
   "pulp_candidate_commit": "<40-hex-prepared-pulp-candidate>",
   "pulp_ownership_projection_blob": "<40-hex-git-blob>",
   "authority_start_commit": "<40-hex-vellum-product-commit>",
-  "authority_record_ref": "refs/heads/authority/<immutable-name>",
+  "authority_record_ref": "refs/tags/authority/<immutable-name>",
   "cut_manifest_sha256": "<64-hex-canonical-json-sha256>",
   "authority_groups": [
     {

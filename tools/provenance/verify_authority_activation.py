@@ -39,7 +39,7 @@ MANIFEST_PATH = Path("provenance/cut-manifest.json")
 OWNERSHIP_PATH = ".github/vellum-ownership.json"
 SHA_RE = re.compile(r"[0-9a-f]{40}")
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
-REF_RE = re.compile(r"refs/heads/authority/[a-z0-9][a-z0-9._/-]{2,120}")
+REF_RE = re.compile(r"refs/tags/authority/[a-z0-9][a-z0-9._/-]{2,120}")
 ALLOWED_HISTORICAL_CLASSIFICATIONS = {
     "framework-core", "authoring-only", "platform-adapter", "test-only", "unresolved"
 }
@@ -164,6 +164,20 @@ def git_blob(repo: Path, commit: str, path: str) -> str:
     if actual_path != path or object_type != "blob" or mode not in {"100644", "100755"}:
         raise ActivationError(f"expected a regular blob for {commit}:{path}")
     return blob
+
+
+def git_path_exists(repo: Path, commit: str, path: str) -> bool:
+    completed = subprocess.run(
+        ["git", "cat-file", "-e", f"{commit}:{path}"],
+        cwd=repo,
+        capture_output=True,
+    )
+    if completed.returncode not in (0, 128):
+        detail = completed.stderr.decode("utf-8", errors="replace").strip()
+        raise ActivationError(
+            f"cannot inspect {path} at {commit}: {detail}"
+        )
+    return completed.returncode == 0
 
 
 def validate_plan(plan: object) -> dict[str, object]:
@@ -321,7 +335,10 @@ def build_record(
     authority = require_commit(root, authority_start_commit, "Vellum authority-start commit")
     require_ancestor(root, seed, authority, "Vellum authority lineage")
     if not REF_RE.fullmatch(authority_record_ref) or ".." in PurePosixPath(authority_record_ref).parts:
-        raise ActivationError("authority record ref must be a normalized refs/heads/authority/* ref")
+        raise ActivationError(
+            "authority record ref must be a normalized refs/tags/authority/* "
+            "ref"
+        )
     approved = dt.datetime.fromisoformat(approved_at.removesuffix("Z") + "+00:00") if approved_at.endswith("Z") else None
     if approved is None or approved.utcoffset() != dt.timedelta(0):
         raise ActivationError("approved_at must be an ISO-8601 UTC timestamp")
@@ -434,6 +451,102 @@ def verify_structural_record(
     return record
 
 
+def verify_record_commit_layout(
+    *,
+    root: Path,
+    record: dict[str, object],
+    record_path: str,
+    authority_record_commit: str,
+    expected_authority_ref: str | None = None,
+    require_head: bool = False,
+) -> dict[str, object]:
+    if (
+        not record_path.startswith("provenance/authority/records/")
+        or not record_path.endswith(".json")
+        or ".." in PurePosixPath(record_path).parts
+        or PurePosixPath(record_path).parent
+        != PurePosixPath("provenance/authority/records")
+    ):
+        raise ActivationError(
+            "authority record must be a direct JSON artifact under "
+            "provenance/authority/records"
+        )
+    if (
+        expected_authority_ref is not None
+        and record["authority_record_ref"] != expected_authority_ref
+    ):
+        raise ActivationError(
+            "authority record ref differs from the expected checkout ref"
+        )
+    record_commit = require_commit(
+        root, authority_record_commit, "authority record commit"
+    )
+    if require_head and git(root, "rev-parse", "HEAD") != record_commit:
+        raise ActivationError(
+            "authority record verification must run at the exact record commit"
+        )
+    authority_start = require_commit(
+        root, record["authority_start_commit"], "authority-start commit"
+    )
+    parents = git(root, "show", "-s", "--format=%P", record_commit).split()
+    if parents != [authority_start]:
+        raise ActivationError(
+            "authority record must be one non-merge commit directly after "
+            "the authority-start commit"
+        )
+    committed = json_at(root, record_commit, record_path)
+    if committed != record:
+        raise ActivationError(
+            "authority record bytes/content differ at the exact record commit"
+        )
+    changed = git(
+        root,
+        "diff",
+        "--name-status",
+        authority_start,
+        record_commit,
+    ).splitlines()
+    if changed != [f"A\t{record_path}"]:
+        raise ActivationError(
+            "authority record commit must add only the pending authority record"
+        )
+    return {
+        "status": "pending-pulp-activation",
+        "authority_start_commit": authority_start,
+        "authority_record_commit": record_commit,
+        "authority_record_ref": record["authority_record_ref"],
+        "pulp_candidate_commit": record["pulp_candidate_commit"],
+        "record_path": record_path,
+    }
+
+
+def verify_pending_record(
+    *,
+    root: Path,
+    pulp_repo: Path,
+    pulp_ownership_commit: str,
+    record_path: str,
+    authority_record_commit: str,
+    expected_authority_ref: str | None = None,
+    require_head: bool = False,
+) -> dict[str, object]:
+    record = validate_record_shape(load_json(root / record_path))
+    verify_structural_record(
+        root=root,
+        pulp_repo=pulp_repo,
+        pulp_ownership_commit=pulp_ownership_commit,
+        record=record,
+    )
+    return verify_record_commit_layout(
+        root=root,
+        record=record,
+        record_path=record_path,
+        authority_record_commit=authority_record_commit,
+        expected_authority_ref=expected_authority_ref,
+        require_head=require_head,
+    )
+
+
 def validate_trust_policy(policy: object) -> dict[str, object]:
     if not isinstance(policy, dict) or policy.get("schema_version") != 1:
         raise ActivationError("trust policy must be schema v1")
@@ -470,7 +583,20 @@ def validate_trust_policy(policy: object) -> dict[str, object]:
     return policy
 
 
-def verify_installation_scope(github: GitHub, token: str, expected_repository_id: int) -> None:
+def verify_installation_scope(
+    github: GitHub,
+    token: str,
+    expected_repository_id: int,
+    expected_app_id: int,
+) -> None:
+    identity = github.get("/installation", token)
+    if (
+        not isinstance(identity, dict)
+        or identity.get("app_id") != expected_app_id
+    ):
+        raise ActivationError(
+            "reader token installation differs from the pinned App ID"
+        )
     installation = github.get("/installation/repositories?per_page=100", token)
     if not isinstance(installation, dict) or installation.get("total_count") != 1:
         raise ActivationError("reader token must be a one-repository installation token")
@@ -495,7 +621,12 @@ def verify_repository(
         raise ActivationError(f"repository ID mismatch: {expected['full_name']}")
     if repository.get("private") != expected["private"] or repository.get("archived") is True:
         raise ActivationError(f"repository visibility/lifecycle differs: {expected['full_name']}")
-    verify_installation_scope(github, token, int(expected["repository_id"]))
+    verify_installation_scope(
+        github,
+        token,
+        int(expected["repository_id"]),
+        int(expected["reader_app_id"]),
+    )
 
 
 def live_check_runs(github: GitHub, token: str, full_name: str, commit: str) -> list[dict[str, object]]:
@@ -506,27 +637,64 @@ def live_check_runs(github: GitHub, token: str, full_name: str, commit: str) -> 
     return [run for run in runs if isinstance(run, dict)]
 
 
-def verify_checks(
-    *, github: GitHub, token: str, full_name: str, commit: str,
-    expected_apps: dict[str, int], supplied: list[dict[str, object]] | None = None
-) -> None:
+def normalized_check_evidence(
+    *,
+    github: GitHub,
+    token: str,
+    full_name: str,
+    commit: str,
+    expected_apps: dict[str, int],
+) -> list[dict[str, object]]:
     runs = live_check_runs(github, token, full_name, commit)
-    normalized: dict[str, dict[str, object]] = {}
+    candidates: dict[str, list[dict[str, object]]] = {
+        name: [] for name in expected_apps
+    }
     for run in runs:
         app = run.get("app")
-        if run.get("name") in expected_apps and isinstance(app, dict):
-            normalized[str(run["name"])] = {
-                "name": run.get("name"),
+        name = run.get("name")
+        if name in expected_apps and isinstance(app, dict):
+            candidate = {
+                "name": name,
                 "head_sha": run.get("head_sha"),
                 "conclusion": run.get("conclusion"),
                 "app_id": app.get("id"),
                 "check_run_id": str(run.get("id")),
                 "details_url": run.get("details_url"),
             }
+            candidates[str(name)].append(candidate)
+    normalized: dict[str, dict[str, object]] = {}
     for name, app_id in expected_apps.items():
-        run = normalized.get(name)
-        if run is None or run["head_sha"] != commit or run["conclusion"] != "success" or run["app_id"] != app_id:
-            raise ActivationError(f"required check is absent, unsuccessful, or from the wrong producer: {name}")
+        valid = [
+            run
+            for run in candidates[name]
+            if run["head_sha"] == commit
+            and run["conclusion"] == "success"
+            and run["app_id"] == app_id
+            and str(run["check_run_id"]).isdigit()
+        ]
+        if not valid:
+            raise ActivationError(
+                "required check is absent, unsuccessful, or from the wrong "
+                f"producer: {name}"
+            )
+        normalized[name] = max(
+            valid, key=lambda run: int(str(run["check_run_id"]))
+        )
+    return [normalized[name] for name in sorted(expected_apps)]
+
+
+def verify_checks(
+    *, github: GitHub, token: str, full_name: str, commit: str,
+    expected_apps: dict[str, int], supplied: list[dict[str, object]] | None = None
+) -> None:
+    normalized_rows = normalized_check_evidence(
+        github=github,
+        token=token,
+        full_name=full_name,
+        commit=commit,
+        expected_apps=expected_apps,
+    )
+    normalized = {str(row["name"]): row for row in normalized_rows}
     if supplied is not None:
         if not isinstance(supplied, list) or any(not isinstance(item, dict) for item in supplied):
             raise ActivationError("supplied check evidence must be an array")
@@ -536,37 +704,243 @@ def verify_checks(
             raise ActivationError("supplied check evidence does not match live exact-SHA check runs")
 
 
+def build_pulp_activation_evidence(
+    *,
+    root: Path,
+    pulp_repo: Path,
+    activation_commit: str,
+    authority_event_path: str,
+    github: GitHub,
+    pulp_token: str,
+    pulp_app_jwt: str,
+) -> dict[str, object]:
+    policy = validate_trust_policy(load_json(root / TRUST_PATH))
+    pulp = policy["repositories"]["pulp"]
+    verify_repository(github, pulp_token, pulp, app_jwt=pulp_app_jwt)
+    commit = require_commit(
+        pulp_repo, activation_commit, "Pulp activation commit"
+    )
+    verify_exact_pulp_activation_transition(
+        pulp_repo=pulp_repo,
+        activation_commit=commit,
+        authority_event_path=authority_event_path,
+    )
+    verify_landed_on_pulp_main(
+        github=github,
+        token=pulp_token,
+        pulp_repo=pulp_repo,
+        activation_commit=commit,
+    )
+    if (
+        not authority_event_path.startswith(".github/vellum-change-events/")
+        or not authority_event_path.endswith(".json")
+        or ".." in PurePosixPath(authority_event_path).parts
+        or PurePosixPath(authority_event_path).parent
+        != PurePosixPath(".github/vellum-change-events")
+    ):
+        raise ActivationError(
+            "Pulp authority event must be a direct JSON outbox artifact"
+        )
+    checks = normalized_check_evidence(
+        github=github,
+        token=pulp_token,
+        full_name="Generous-Corp/pulp",
+        commit=commit,
+        expected_apps=pulp["required_check_app_ids"],
+    )
+    protection = github.get(
+        "/repos/Generous-Corp/pulp/branches/main/protection", pulp_token
+    )
+    required = (
+        protection.get("required_status_checks")
+        if isinstance(protection, dict)
+        else None
+    )
+    if not isinstance(required, dict) or required.get("strict") is not True:
+        raise ActivationError("live Pulp main protection is not strict")
+    observed = {
+        str(item["context"]): item.get("app_id")
+        for item in required.get("checks", [])
+        if isinstance(item, dict) and isinstance(item.get("context"), str)
+    }
+    for name, app_id in pulp["required_check_app_ids"].items():
+        if observed.get(name) != app_id:
+            raise ActivationError(
+                f"live Pulp main protection does not bind {name} to App {app_id}"
+            )
+    return {
+        "schema_version": 1,
+        "state": "landed-pulp-activation-evidence",
+        "pulp_activation_commit": commit,
+        "ownership_projection_path": OWNERSHIP_PATH,
+        "ownership_projection_blob": git_blob(
+            pulp_repo, commit, OWNERSHIP_PATH
+        ),
+        "authority_event_path": authority_event_path,
+        "authority_event_blob": git_blob(
+            pulp_repo, commit, authority_event_path
+        ),
+        "checks": checks,
+        "branch_protection": {
+            "strict": True,
+            "required_contexts": sorted(pulp["required_check_app_ids"]),
+        },
+        "retrieved_at": dt.datetime.now(dt.timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z"),
+    }
+
+
+def verify_landed_on_pulp_main(
+    *,
+    github: GitHub,
+    token: str,
+    pulp_repo: Path,
+    activation_commit: str,
+) -> str:
+    reference = github.get(
+        "/repos/Generous-Corp/pulp/git/ref/heads/main", token
+    )
+    obj = reference.get("object") if isinstance(reference, dict) else None
+    if (
+        not isinstance(obj, dict)
+        or obj.get("type") != "commit"
+        or not isinstance(obj.get("sha"), str)
+    ):
+        raise ActivationError("live Pulp main ref is invalid")
+    main_commit = require_commit(
+        pulp_repo, obj["sha"], "live Pulp main commit"
+    )
+    require_ancestor(
+        pulp_repo,
+        activation_commit,
+        main_commit,
+        "landed Pulp activation",
+    )
+    return main_commit
+
+
+def verify_exact_pulp_activation_transition(
+    *,
+    pulp_repo: Path,
+    activation_commit: str,
+    authority_event_path: str,
+) -> str:
+    """Prove activation occurred at this commit, not a later descendant."""
+    commit = require_commit(
+        pulp_repo, activation_commit, "Pulp activation commit"
+    )
+    parents = git(pulp_repo, "show", "-s", "--format=%P", commit).split()
+    if not parents:
+        raise ActivationError("Pulp activation commit must have a parent")
+    prior_main = require_commit(
+        pulp_repo, parents[0], "Pulp activation first parent"
+    )
+    if git_path_exists(pulp_repo, prior_main, authority_event_path):
+        raise ActivationError(
+            "Pulp authority event already existed before the claimed "
+            "activation commit"
+        )
+    changed = {
+        tuple(line.split("\t", 1))
+        for line in git(
+            pulp_repo,
+            "diff",
+            "--name-status",
+            prior_main,
+            commit,
+            "--",
+            OWNERSHIP_PATH,
+            authority_event_path,
+        ).splitlines()
+        if line
+    }
+    if changed != {
+        ("M", OWNERSHIP_PATH),
+        ("A", authority_event_path),
+    }:
+        raise ActivationError(
+            "claimed Pulp activation commit must modify ownership and add "
+            "the exact authority event against its first parent"
+        )
+    before = json_at(pulp_repo, prior_main, OWNERSHIP_PATH)
+    after = json_at(pulp_repo, commit, OWNERSHIP_PATH)
+    before_activation = before.get("activation")
+    after_activation = after.get("activation")
+    if (
+        before.get("schema_version") != 2
+        or not isinstance(before_activation, dict)
+        or before_activation.get("state") != "prepared"
+        or after.get("schema_version") != 2
+        or not isinstance(after_activation, dict)
+        or after_activation.get("state") != "active"
+    ):
+        raise ActivationError(
+            "Pulp ownership must transition schema-v2 prepared to active at "
+            "the exact activation commit"
+        )
+    event = json_at(pulp_repo, commit, authority_event_path)
+    if (
+        event.get("kind") != "authority-transition"
+        or event.get("transition") != "activate"
+        or not isinstance(event.get("slices"), list)
+        or not event["slices"]
+    ):
+        raise ActivationError(
+            "exact Pulp activation event is not a non-empty activate event"
+        )
+    return prior_main
+
+
 def verify_protected_ref(
     *, github: GitHub, token: str, full_name: str, ref: str, commit: str,
     expected_apps: dict[str, int]
 ) -> None:
-    branch = ref.removeprefix("refs/heads/")
+    if not ref.startswith("refs/tags/"):
+        raise ActivationError("schema-v2 authority ref must be a tag")
+    tag_name = ref.removeprefix("refs/tags/")
     reference = github.get(
-        f"/repos/{full_name}/git/ref/heads/{urllib.parse.quote(branch, safe='/')}", token
+        f"/repos/{full_name}/git/ref/tags/"
+        f"{urllib.parse.quote(tag_name, safe='/')}",
+        token,
     )
     obj = reference.get("object") if isinstance(reference, dict) else None
-    if not isinstance(obj, dict) or obj.get("sha") != commit:
-        raise ActivationError("authority ref does not resolve to the exact record commit")
-    protection = github.get(
-        f"/repos/{full_name}/branches/{urllib.parse.quote(branch, safe='')}/protection", token
+    if (
+        not isinstance(obj, dict)
+        or obj.get("type") != "tag"
+        or not isinstance(obj.get("sha"), str)
+    ):
+        raise ActivationError("authority tag must be an annotated tag object")
+    tag = github.get(f"/repos/{full_name}/git/tags/{obj['sha']}", token)
+    target = tag.get("object") if isinstance(tag, dict) else None
+    verification = tag.get("verification") if isinstance(tag, dict) else None
+    if (
+        not isinstance(target, dict)
+        or target.get("type") != "commit"
+        or target.get("sha") != commit
+        or not isinstance(verification, dict)
+        or verification.get("verified") is not True
+        or verification.get("reason") != "valid"
+    ):
+        raise ActivationError(
+            "authority tag is unsigned or does not target the exact record commit"
+        )
+    release = github.get(
+        f"/repos/{full_name}/releases/tags/"
+        f"{urllib.parse.quote(tag_name, safe='')}",
+        token,
     )
-    required = protection.get("required_status_checks") if isinstance(protection, dict) else None
-    if not isinstance(required, dict) or required.get("strict") is not True:
-        raise ActivationError("authority branch does not require strict status checks")
-    checks = required.get("checks")
-    observed: dict[str, int | None] = {}
-    if isinstance(checks, list):
-        for item in checks:
-            if isinstance(item, dict) and isinstance(item.get("context"), str):
-                observed[str(item["context"])] = item.get("app_id") if isinstance(item.get("app_id"), int) else None
-    contexts = required.get("contexts")
-    if isinstance(contexts, list):
-        for context in contexts:
-            if isinstance(context, str):
-                observed.setdefault(context, None)
-    for name, app_id in expected_apps.items():
-        if observed.get(name) != app_id:
-            raise ActivationError(f"branch protection does not bind {name} to App {app_id}")
+    if (
+        not isinstance(release, dict)
+        or release.get("tag_name") != tag_name
+        or release.get("draft") is not False
+        or release.get("immutable") is not True
+        or not isinstance(release.get("published_at"), str)
+    ):
+        raise ActivationError(
+            "authority tag is not bound to a published immutable release"
+        )
 
 
 def verify_pending_live(
@@ -587,16 +961,12 @@ def verify_pending_live(
         raise ActivationError("Pulp trust-policy checks differ from the transfer plan")
     vellum = policy["repositories"]["vellum"]
     verify_repository(github, vellum_token, vellum, app_jwt=vellum_app_jwt)
-    require_commit(root, authority_record_commit, "authority record commit")
-    require_ancestor(root, str(record["authority_start_commit"]), authority_record_commit, "authority record lineage")
-    if not record_path.startswith("provenance/authority/records/") or not record_path.endswith(".json") or ".." in PurePosixPath(record_path).parts:
-        raise ActivationError("authority record must be a direct JSON artifact under provenance/authority/records")
-    committed = json_at(root, authority_record_commit, record_path)
-    if committed != record:
-        raise ActivationError("authority record bytes/content differ at the exact record commit")
-    changed = git(root, "diff", "--name-only", str(record["authority_start_commit"]), authority_record_commit).splitlines()
-    if changed != [record_path]:
-        raise ActivationError("authority record commit must add only the pending authority record")
+    verify_record_commit_layout(
+        root=root,
+        record=record,
+        record_path=record_path,
+        authority_record_commit=authority_record_commit,
+    )
     verify_protected_ref(
         github=github, token=vellum_token, full_name="Generous-Corp/vellum",
         ref=str(record["authority_record_ref"]), commit=authority_record_commit,
@@ -672,6 +1042,12 @@ def verify_pulp_activation(
     pulp = policy["repositories"]["pulp"]
     verify_repository(github, pulp_token, pulp, app_jwt=pulp_app_jwt)
     activation_commit = require_commit(pulp_repo, evidence["pulp_activation_commit"], "Pulp activation commit")
+    verify_landed_on_pulp_main(
+        github=github,
+        token=pulp_token,
+        pulp_repo=pulp_repo,
+        activation_commit=activation_commit,
+    )
     require_ancestor(pulp_repo, str(record["pulp_extraction_base"]), activation_commit, "Pulp activation lineage")
     candidate_commit = require_commit(
         pulp_repo, record["pulp_candidate_commit"], "Pulp candidate commit"
@@ -687,6 +1063,11 @@ def verify_pulp_activation(
         raise ActivationError("Pulp ownership projection blob evidence differs")
     if git_blob(pulp_repo, activation_commit, str(evidence["authority_event_path"])) != evidence["authority_event_blob"]:
         raise ActivationError("Pulp authority event blob evidence differs")
+    verify_exact_pulp_activation_transition(
+        pulp_repo=pulp_repo,
+        activation_commit=activation_commit,
+        authority_event_path=str(evidence["authority_event_path"]),
+    )
     ownership = json_at(pulp_repo, activation_commit, str(evidence["ownership_projection_path"]))
     slices = ownership_slices(ownership)
     expected_slice_ids = {str(slice_id) for group in record["authority_groups"] for slice_id in group["pulp_legacy_slices"]}
@@ -777,11 +1158,60 @@ def verify_prepared(root: Path) -> dict[str, object]:
     }
 
 
+def verify_ready(root: Path) -> dict[str, object]:
+    plan = validate_plan(load_json(root / PLAN_PATH))
+    policy = validate_trust_policy(load_json(root / TRUST_PATH))
+    if (root / "provenance/authority/records").exists() and any(
+        (root / "provenance/authority/records").glob("*.json")
+    ):
+        raise ActivationError(
+            "authority-start repository must not contain a pending record"
+        )
+    expected_vellum_checks = sorted(
+        {
+            str(name)
+            for group in plan["authority_groups"]
+            for name in group["required_vellum_checks"]
+        }
+    )
+    expected_pulp_checks = sorted(
+        {
+            str(name)
+            for group in plan["authority_groups"]
+            for name in group["required_pulp_checks"]
+        }
+    )
+    if (
+        sorted(policy["repositories"]["vellum"]["required_check_app_ids"])
+        != expected_vellum_checks
+    ):
+        raise ActivationError(
+            "ready Vellum trust-policy checks differ from the transfer plan"
+        )
+    if (
+        sorted(policy["repositories"]["pulp"]["required_check_app_ids"])
+        != expected_pulp_checks
+    ):
+        raise ActivationError(
+            "ready Pulp trust-policy checks differ from the transfer plan"
+        )
+    return {
+        "status": "ready-for-pending-record",
+        "historical_seed_commit": plan["historical_seed_commit"],
+        "authority_groups": [group["id"] for group in plan["authority_groups"]],
+        "pulp_repository_id": policy["repositories"]["pulp"]["repository_id"],
+        "vellum_repository_id": policy["repositories"]["vellum"][
+            "repository_id"
+        ],
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=ROOT)
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("verify-prepared")
+    subparsers.add_parser("verify-ready")
     build = subparsers.add_parser("build-record")
     build.add_argument("--pulp-repo", type=Path, required=True)
     build.add_argument("--pulp-ownership-commit", required=True)
@@ -789,6 +1219,18 @@ def main(argv: list[str] | None = None) -> int:
     build.add_argument("--authority-record-ref", required=True)
     build.add_argument("--approved-at", required=True)
     build.add_argument("--output", type=Path, required=True)
+    verify_pending = subparsers.add_parser("verify-pending")
+    verify_pending.add_argument("--pulp-repo", type=Path, required=True)
+    verify_pending.add_argument("--pulp-ownership-commit", required=True)
+    verify_pending.add_argument("--record-path", required=True)
+    verify_pending.add_argument("--authority-record-commit", required=True)
+    verify_pending.add_argument("--expected-authority-ref", required=True)
+    verify_pending.add_argument("--output", type=Path)
+    build_evidence = subparsers.add_parser("build-pulp-evidence")
+    build_evidence.add_argument("--pulp-repo", type=Path, required=True)
+    build_evidence.add_argument("--pulp-activation-commit", required=True)
+    build_evidence.add_argument("--authority-event-path", required=True)
+    build_evidence.add_argument("--output", type=Path, required=True)
     verify_active = subparsers.add_parser("verify-active")
     verify_active.add_argument("--pulp-repo", type=Path, required=True)
     verify_active.add_argument("--pulp-ownership-commit", required=True)
@@ -802,6 +1244,8 @@ def main(argv: list[str] | None = None) -> int:
         root = args.root.resolve()
         if args.command == "verify-prepared":
             result = verify_prepared(root)
+        elif args.command == "verify-ready":
+            result = verify_ready(root)
         elif args.command == "build-record":
             result = build_record(
                 root=root, pulp_repo=args.pulp_repo.resolve(),
@@ -812,12 +1256,57 @@ def main(argv: list[str] | None = None) -> int:
             )
             args.output.parent.mkdir(parents=True, exist_ok=True)
             args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        elif args.command == "verify-pending":
+            result = verify_pending_record(
+                root=root,
+                pulp_repo=args.pulp_repo.resolve(),
+                pulp_ownership_commit=args.pulp_ownership_commit,
+                record_path=args.record_path,
+                authority_record_commit=args.authority_record_commit,
+                expected_authority_ref=args.expected_authority_ref,
+                require_head=True,
+            )
+            if args.output:
+                args.output.parent.mkdir(parents=True, exist_ok=True)
+                args.output.write_text(
+                    json.dumps(result, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+        elif args.command == "build-pulp-evidence":
+            pulp_token = os.environ.get("PULP_AUTHORITY_READER_TOKEN")
+            pulp_app_jwt = os.environ.get("PULP_AUTHORITY_APP_JWT")
+            if not pulp_token or not pulp_app_jwt:
+                raise ActivationError(
+                    "Pulp authority reader token and matching App JWT are "
+                    "required to build live evidence"
+                )
+            result = build_pulp_activation_evidence(
+                root=root,
+                pulp_repo=args.pulp_repo.resolve(),
+                activation_commit=args.pulp_activation_commit,
+                authority_event_path=args.authority_event_path,
+                github=LiveGitHub(),
+                pulp_token=pulp_token,
+                pulp_app_jwt=pulp_app_jwt,
+            )
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(
+                json.dumps(result, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
         else:
             record = validate_record_shape(load_json(args.record))
-            verify_structural_record(
-                root=root, pulp_repo=args.pulp_repo.resolve(),
-                pulp_ownership_commit=args.pulp_ownership_commit, record=record,
+            verify_pending_record(
+                root=root,
+                pulp_repo=args.pulp_repo.resolve(),
+                pulp_ownership_commit=args.pulp_ownership_commit,
+                record_path=args.record_path,
+                authority_record_commit=args.authority_record_commit,
             )
+            if record != validate_record_shape(load_json(root / args.record_path)):
+                raise ActivationError(
+                    "supplied authority record differs from the committed record path"
+                )
             vellum_token = os.environ.get("VELLUM_AUTHORITY_READER_TOKEN")
             pulp_token = os.environ.get("PULP_AUTHORITY_READER_TOKEN")
             vellum_app_jwt = os.environ.get("VELLUM_AUTHORITY_APP_JWT")

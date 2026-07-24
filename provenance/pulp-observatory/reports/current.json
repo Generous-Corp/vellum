@@ -1,14 +1,9 @@
 {
   "activation_blockers": [
     "authority-not-transferred",
-    "dedicated-app-trust-policy-not-enabled",
+    "immutable-vellum-authority-record-not-recorded",
     "immutable-vellum-authority-start-not-recorded",
-    "landed-pulp-freeze-evidence-not-recorded",
-    "pulp-repository-or-reader-app-id-unpinned",
-    "pulp-required-check-producers-unpinned",
-    "vellum-dispatcher-app-id-unpinned",
-    "vellum-repository-or-reader-app-id-unpinned",
-    "vellum-required-check-producers-unpinned"
+    "landed-pulp-freeze-evidence-not-recorded"
   ],
   "budget_violations": [],
   "coverage_gaps": [],
@@ -915,9 +910,21 @@
       ],
       "source_commit": "241b5a2b96207eff61b508221d8bb78076461b22",
       "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "schema",
+      "deadline": "2026-07-29T07:16:13Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-668b696600683c9ebd7d0d4b95350577009124e9",
+      "mapped_contracts": [
+        "design-schema-compiler"
+      ],
+      "source_commit": "668b696600683c9ebd7d0d4b95350577009124e9",
+      "source_repository": "Generous-Corp/vellum"
     }
   ],
-  "generated_at": "2026-07-23T23:11:00Z",
+  "generated_at": "2026-07-24T07:16:13Z",
   "health": "pass",
   "maximum_pending_age_days": 0.0,
   "observatory_effort_percent": 0.0,
