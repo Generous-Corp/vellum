@@ -1,0 +1,18 @@
+{
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "created_at": "2026-07-24T22:25:39Z",
+  "disposition": "framework-only",
+  "effort_minutes": 0,
+  "event_id": "resolution-vellum-f7a5db239efcfdc34c3a9075a293e0b5adc8bde1",
+  "kind": "resolution",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "The defect was confined to Vellum's installed web SDK bundler and relocatability guard. The clean-checkout router found no Pulp destination, and Pulp does not contain or consume this build path; any future Pulp adoption must use a pinned Vellum SDK rather than duplicate the fix.",
+  "resolves": "vellum-f7a5db239efcfdc34c3a9075a293e0b5adc8bde1",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

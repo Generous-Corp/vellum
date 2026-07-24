@@ -83,6 +83,7 @@
 | `vellum-fcbeb19917241fce3c6f777925851ca64bb6cc88` | framework-to-Pulp | rendering | not-applicable | 2026-07-29T20:20:00Z |
 | `pulp-827efab06672013f00743878cc139db90b4d3860` | Pulp-to-framework | schema | superseded | 2026-07-29T20:20:02Z |
 | `vellum-61dff1b4ab7753662191ef11b009acea1deecf10` | framework-to-Pulp | schema | framework-only | 2026-07-29T20:20:02Z |
+| `vellum-f7a5db239efcfdc34c3a9075a293e0b5adc8bde1` | framework-to-Pulp | test | framework-only | 2026-07-31T22:25:39Z |
 
 ## Activation blockers
 
