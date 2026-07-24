@@ -16,7 +16,7 @@ jobs:
     runs-on: ${{ fromJSON(vars.VELLUM_LINUX_RUNS_ON_JSON || '["self-hosted","Linux","ARM64","vellum-build-linux"]') }}
     steps:
       - name: Check out the exact source tree
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -29,7 +29,7 @@ jobs:
 
       - name: Retain forbidden-dependency evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: vellum-forbidden-deps
           path: ${{ runner.temp }}/forbidden-deps-report.json
@@ -44,7 +44,7 @@ jobs:
       VELLUM_GIT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
     steps:
       - name: Check out full preserved history
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -201,7 +201,7 @@ jobs:
 
       - name: Check out the exact Pulp activation candidate
         if: steps.authority-phase.outputs.phase == 'tagged-pending'
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: Generous-Corp/pulp
           ref: ${{ steps.authority-record.outputs.pulp-candidate }}
@@ -246,7 +246,7 @@ jobs:
           PY
 
       - name: Check out exact observed Pulp cursor
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: Generous-Corp/pulp
           ref: ${{ steps.observatory-cursor.outputs.pulp-sha }}
@@ -284,7 +284,7 @@ jobs:
 
       - name: Upload verification evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: provenance-report
           path: |

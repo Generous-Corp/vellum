@@ -27,7 +27,7 @@ jobs:
     runs-on: ${{ fromJSON(vars.VELLUM_AUTHORITY_RUNS_ON_JSON || '["self-hosted","Linux","ARM64","vellum-authority-linux"]') }}
     steps:
       - name: Check out trusted Vellum controls
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: main
           fetch-depth: 0
@@ -130,7 +130,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Check out the exact landed Pulp activation commit
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: Generous-Corp/pulp
           token: ${{ steps.pulp-reader.outputs.token }}
@@ -140,7 +140,7 @@ jobs:
           persist-credentials: false
 
       - name: Check out current Pulp main for landed-lineage proof
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: Generous-Corp/pulp
           token: ${{ steps.pulp-reader.outputs.token }}
@@ -206,7 +206,7 @@ jobs:
           PY
 
       - name: Check out the exact Vellum authority record commit
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           token: ${{ steps.vellum-reader.outputs.token }}
           ref: ${{ steps.authority-record.outputs.commit }}
@@ -252,7 +252,7 @@ jobs:
 
       - name: Retain activation proof
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: vellum-authority-activation
           path: |

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import re
 import unittest
 from pathlib import Path
 
@@ -45,6 +46,15 @@ HOSTED_LABELS = (
     "macos-26",
 )
 
+NODE24_ACTION_PINS = {
+    "actions/checkout": "3d3c42e5aac5ba805825da76410c181273ba90b1",  # v7.0.1
+    "actions/create-github-app-token": "1b10c78c7865c340bc4f6099eb2f838309f1e8c3",
+    "actions/download-artifact": "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",  # v8.0.1
+    "actions/setup-node": "820762786026740c76f36085b0efc47a31fe5020",  # v7.0.0
+    "actions/upload-artifact": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",  # v7.0.1
+}
+ACTION_USE = re.compile(r"^\s*-?\s*uses:\s+(actions/[^@\s]+)@([0-9a-f]{40})\s*$")
+
 
 class RunnerPolicyTests(unittest.TestCase):
     def test_every_workflow_uses_an_explicit_self_hosted_fallback(self) -> None:
@@ -71,6 +81,30 @@ class RunnerPolicyTests(unittest.TestCase):
                     self.assertIn("self-hosted", line)
                     for hosted_label in HOSTED_LABELS:
                         self.assertNotIn(hosted_label, line)
+
+    def test_official_actions_are_pinned_to_reviewed_node24_releases(self) -> None:
+        for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]):
+            for line_number, line in enumerate(
+                path.read_text(encoding="utf-8").splitlines(), start=1
+            ):
+                if "uses: actions/" not in line:
+                    continue
+                match = ACTION_USE.match(line)
+                self.assertIsNotNone(
+                    match,
+                    f"{path.name}:{line_number}: official action must use a full commit SHA",
+                )
+                action, pin = match.groups()
+                self.assertIn(
+                    action,
+                    NODE24_ACTION_PINS,
+                    f"{path.name}:{line_number}: review the action runtime before allowing it",
+                )
+                self.assertEqual(
+                    pin,
+                    NODE24_ACTION_PINS[action],
+                    f"{path.name}:{line_number}: action pin is not the reviewed Node.js 24 release",
+                )
 
 
 if __name__ == "__main__":
