@@ -296,7 +296,10 @@ if [ -n "$local_root" ]; then
   cp "$local_root/cli/vellum_backend.py" "$temporary/vellum_backend.py"
   cp "$local_root/cli/vellum_manifest.py" "$temporary/vellum_manifest.py"
   cp "$local_root/cli/vellum_png.py" "$temporary/vellum_png.py"
-  cp -R "$local_root/.agents" "$temporary/.agents"
+  mkdir -p "$temporary/.agents/skills"
+  cp -R \
+    "$local_root/.agents/skills/vellum-app-authoring" \
+    "$temporary/.agents/skills/vellum-app-authoring"
   cp -R "$local_root/templates" "$temporary/templates"
   cat > "$temporary/metadata.json" <<'JSON'
 {

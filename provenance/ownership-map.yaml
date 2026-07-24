@@ -15,8 +15,8 @@ activation:
   accepted_at: "2026-07-24T12:03:00Z"
 
 # The historical projection remains byte-locked in cut-manifest.json and Git
-# history. It is not present as editable source at the active tip and no source
-# authority is active in Vellum. The rows below remain historical lineage only.
+# history. It is not present as editable source at the active tip. Authority for
+# the selected legacy slices is active in Vellum's independent implementation.
 historical_slices:
   - id: canvas-kernel
     state: historical-seed-retired-not-active

@@ -41,6 +41,7 @@ jobs:
     runs-on: ${{ fromJSON(vars.VELLUM_LINUX_RUNS_ON_JSON || '"ubuntu-latest"') }}
     env:
       VELLUM_TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      VELLUM_GIT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
     steps:
       - name: Check out full preserved history
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -70,6 +71,9 @@ jobs:
         run: |
           python3 tools/provenance/test_verify_authority_activation.py
           python3 tools/provenance/test_finalize_authority_reconciliation.py
+          python3 tools/provenance/test_verify_current_state_docs.py
+          python3 tools/provenance/verify_current_state_docs.py
+          python3 .agents/skills/pulp-vellum-change-routing/scripts/test_route_change.py
 
       - name: Resolve the exact authority lifecycle phase
         id: authority-phase
@@ -257,10 +261,20 @@ jobs:
             test "$AUTHORITY_START_SHA" != ""
             observatory_vellum_target="$AUTHORITY_START_SHA"
           fi
+          observatory_git_base="$VELLUM_GIT_BASE"
+          if [[ ! "$observatory_git_base" =~ ^[0-9a-f]{40}$ ]] ||
+             [[ "$observatory_git_base" == 0000000000000000000000000000000000000000 ]] ||
+             ! git cat-file -e "$observatory_git_base^{commit}" 2>/dev/null; then
+            observatory_git_base="$(git rev-parse HEAD^)"
+          fi
+          observatory_git_base="$(
+            git merge-base "$observatory_git_base" HEAD
+          )"
           python3 tools/provenance/test_observatory.py
           python3 tools/provenance/observatory.py verify \
             --pulp-repo .observatory-pulp \
             --vellum-repo . \
+            --git-base "$observatory_git_base" \
             --pulp-target "${{ steps.observatory-cursor.outputs.pulp-sha }}" \
             --vellum-target "$observatory_vellum_target" \
             --output "$RUNNER_TEMP/observatory-health-report.json"

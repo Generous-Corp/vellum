@@ -9,9 +9,12 @@ The machine-readable current boundary is
 [`provenance/ownership-map.yaml`](../provenance/ownership-map.yaml), and the
 source scan policy is
 [`provenance/active-source-boundary.json`](../provenance/active-source-boundary.json).
-Vellum-owned code is explicitly classified
-`framework-reimplemented-no-transfer`. Matching Pulp code has not transferred,
-is not frozen, and is not maintained as a synchronized copy here.
+Source authority for the selected mapped framework slices is active in
+Vellum's independently implemented boundary. The historical Pulp source was
+not restored or copied into the active Vellum tree. Pulp's matching transferred
+paths remain in Pulp under its freeze and change-event contract. Vellum-only
+surfaces with no transferred counterpart, including the CLI, remain explicitly
+classified `framework-reimplemented-no-transfer`.
 
 ## What was retired
 
@@ -29,12 +32,18 @@ verifier checks both facts: historical blobs still match the manifest at the
 seed commit, while no retired path or exact historical source blob is present
 in the active framework surface.
 
-## Independent ownership
+## Active ownership and change routing
 
-During independent validation, changes to Vellum-owned modules originate in
-Vellum. Pulp continues to own and evolve its implementation independently. The
-observatory cursor can record later Pulp changes for evaluation, but it is not
-a synchronization mechanism and does not create shared ownership.
+Generic changes to transferred framework slices originate in Vellum. Changes
+to matching Pulp paths require a declared Pulp disposition: `pulp-only`,
+`framework-backport` of a named immutable Vellum commit, or a time-bounded
+`emergency-exception`. Pulp continues to own its audio, plug-in, host, legacy
+integration, and other explicitly Pulp-only surfaces.
+
+The observatory records later changes in both repositories for evaluation and
+can identify a candidate fix that should move from Pulp to Vellum or from
+Vellum to Pulp. It is not a synchronization mechanism, never applies patches,
+and does not create shared ownership.
 
 Validated independent applications remain separate consumers. The
 [downstream-consumer registry](../provenance/downstream-consumers.v1.json)
@@ -44,13 +53,14 @@ fixed and released in Vellum before the consumer updates its pin and reruns the
 evidence ladder; an application-side workaround requires an explicit,
 time-bounded exception record.
 
-If Vellum fails product validation, no transfer or reversal is necessary: the
-active implementations were never shared. If Vellum succeeds, Pulp adoption is
-a separate consumer migration. It should replace selected Pulp implementation
+If Vellum is abandoned, authority does not silently return to Pulp. A reviewed
+ownership-reversal change must update both repositories and define the
+resulting ownership and support boundary. Pulp dependency adoption remains a
+separate consumer migration. It should replace selected Pulp implementation
 with a versioned Vellum dependency and explicit Pulp-only adapters, not merge
 two long-lived editable copies.
 
-## Later Pulp adoption gate
+## Pulp dependency-adoption gate
 
 Before Pulp can consume Vellum:
 
@@ -65,8 +75,10 @@ Before Pulp can consume Vellum:
 4. Pulp must migrate in a bounded change to an immutable Vellum version.
 5. Both repositories must record the dependency and ownership transition.
 
-No authority-transfer handshake is active at this checkpoint. The prepared,
-fail-closed protocol is documented in
+Source authority was activated on 2026-07-24 by Vellum record
+`a106a02816a0cde53daac83f36a6630d664f6637` and landed Pulp commit
+`28d74338ff57e91bb5690308ec9502ebf2fcf09d`. The completed fail-closed
+protocol and its recovery procedure are documented in
 [`provenance/authority/README.md`](../provenance/authority/README.md), and the
 two-way, non-synchronizing change ledger is documented in
 [`provenance/pulp-observatory/README.md`](../provenance/pulp-observatory/README.md).

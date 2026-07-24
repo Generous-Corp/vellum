@@ -1,5 +1,6 @@
 add_library(vellum-authoring SHARED
     src/js_application.mm
+    src/rendered_tree_materializer.mm
     src/service_bridge.cpp)
 add_library(Vellum::Authoring ALIAS vellum-authoring)
 
@@ -25,4 +26,14 @@ if(VELLUM_BUILD_TESTS)
         tests/service_bridge_test.cpp)
     target_link_libraries(vellum-service-bridge-test PRIVATE Vellum::Authoring)
     add_test(NAME vellum.service-bridge COMMAND vellum-service-bridge-test)
+
+    add_executable(vellum-rendered-tree-materializer-test
+        tests/rendered_tree_materializer_test.cpp)
+    target_include_directories(vellum-rendered-tree-materializer-test
+        PRIVATE src)
+    target_link_libraries(
+        vellum-rendered-tree-materializer-test PRIVATE Vellum::Authoring)
+    add_test(
+        NAME vellum.rendered-tree-materializer
+        COMMAND vellum-rendered-tree-materializer-test)
 endif()

@@ -23,7 +23,6 @@
           "enum": [
             "wait-for-idle",
             "press",
-            "pointer",
             "touch",
             "focus",
             "input",
@@ -32,7 +31,6 @@
             "command",
             "service-result",
             "assert-text",
-            "assert-state",
             "assert-accessibility",
             "capture",
             "throw"

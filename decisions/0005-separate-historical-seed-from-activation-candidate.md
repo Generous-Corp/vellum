@@ -1,7 +1,7 @@
 # Decision 0005: separate historical seed from activation candidate
 
 - Date: 2026-07-23
-- Status: prepared; not activated
+- Status: accepted; activated 2026-07-24
 
 The initial cut manifest is an immutable record of what was known at the
 historical extraction base. Its `unresolved` classifications remain historical
@@ -31,3 +31,9 @@ required.
 
 The v1 transfer plan and template remain historical design artifacts. New
 records use the v2 plan and template.
+
+The v2 identities were later bound by Vellum record
+`a106a02816a0cde53daac83f36a6630d664f6637`, landed Pulp activation
+`28d74338ff57e91bb5690308ec9502ebf2fcf09d`, and the durable Vellum
+reconciliation. The historical seed and prepared candidate remain immutable
+evidence; neither is rewritten to represent the active implementation.

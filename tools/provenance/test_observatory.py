@@ -214,6 +214,10 @@ class ObservatoryTests(unittest.TestCase):
             workflow,
         )
         self.assertIn(
+            "VELLUM_GIT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}",
+            workflow,
+        )
+        self.assertIn(
             'observatory_vellum_target="$VELLUM_TARGET_SHA"', workflow
         )
         self.assertIn(
@@ -222,6 +226,68 @@ class ObservatoryTests(unittest.TestCase):
         self.assertIn(
             '--vellum-target "$observatory_vellum_target"', workflow
         )
+        self.assertIn(
+            'git merge-base "$observatory_git_base" HEAD',
+            workflow,
+        )
+        self.assertIn('--git-base "$observatory_git_base"', workflow)
+
+    def test_existing_event_mutations_are_rejected_against_git_base(self) -> None:
+        for operation in ("modify", "delete", "rename", "copy"):
+            with self.subTest(operation=operation), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                run(root, "git", "init", "-b", "main")
+                run(root, "git", "config", "user.email", "observatory@example.invalid")
+                run(root, "git", "config", "user.name", "Observatory Test")
+                event = root / observatory.EVENTS_PATH / "event.yaml"
+                write(event, '{"event_id":"event","disposition":"pending"}\n')
+                run(root, "git", "add", ".")
+                run(root, "git", "commit", "-m", "base event")
+                base = run(root, "git", "rev-parse", "HEAD")
+                if operation == "modify":
+                    write(event, '{"event_id":"event","disposition":"ported"}\n')
+                elif operation == "delete":
+                    event.unlink()
+                elif operation == "rename":
+                    event.rename(event.with_name("renamed.yaml"))
+                else:
+                    write(event.with_name("copied.yaml"), event.read_text(encoding="utf-8"))
+                run(root, "git", "add", "-A")
+                run(root, "git", "commit", "-m", f"{operation} event")
+                with self.assertRaisesRegex(
+                    observatory.ObservatoryError, "append-only"
+                ):
+                    observatory.verify_append_only(root, base)
+
+    def test_pulp_cursor_cannot_move_backward_against_git_base(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            top = Path(temporary)
+            pulp = top / "pulp"
+            pulp_base, pulp_head = init_repo(pulp, "unmapped/pulp.cpp")
+            root = top / "vellum"
+            root.mkdir()
+            run(root, "git", "init", "-b", "main")
+            run(root, "git", "config", "user.email", "observatory@example.invalid")
+            run(root, "git", "config", "user.name", "Observatory Test")
+            cursor = {
+                "pulp": {"last_scanned_commit": pulp_head},
+                "vellum": {"last_scanned_commit": "a" * 40},
+            }
+            write_json(root / observatory.CURSOR_PATH, cursor)
+            base = commit_all(root, "forward cursor")
+            cursor["pulp"]["last_scanned_commit"] = pulp_base
+            write_json(root / observatory.CURSOR_PATH, cursor)
+            commit_all(root, "rewind Pulp cursor")
+
+            with self.assertRaisesRegex(
+                observatory.ObservatoryError,
+                "cursor.pulp cannot move backward",
+            ):
+                observatory.verify_append_only(
+                    root,
+                    base,
+                    pulp_repo=pulp,
+                )
 
     def test_authority_record_is_rejected_as_an_ordinary_tail_but_start_passes(
         self,

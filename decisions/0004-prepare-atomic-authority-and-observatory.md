@@ -1,7 +1,7 @@
 # Decision 0004: prepare a two-identity authority handoff and observatory
 
 - Date: 2026-07-22
-- Status: prepared; not activated
+- Status: accepted; activated 2026-07-24
 
 The preserved filtered seed and the active Vellum implementation are different
 identities and must remain different. The seed commit proves exact Pulp
@@ -27,3 +27,9 @@ The observatory records changes in both directions and never applies patches.
 Observations and later resolutions are append-only. A cursor advances only when
 every mapped commit is represented by an event. The workflow is intentionally
 not a mirror, subtree, source synchronizer, or second editable framework copy.
+
+The required facts were later satisfied by Vellum record
+`a106a02816a0cde53daac83f36a6630d664f6637`, landed Pulp activation
+`28d74338ff57e91bb5690308ec9502ebf2fcf09d`, and the durable Vellum
+reconciliation. The conditional preparation rules above remain historical
+constraints on that completed activation and any future authority transition.

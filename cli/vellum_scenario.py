@@ -6,6 +6,11 @@ from typing import Any
 
 
 SCENARIO_SCHEMAS = {"vellum.scenario.v1", "vellum.scenario.v2"}
+SCENARIO_V2_ACTIONS = frozenset({
+    "wait-for-idle", "press", "touch", "focus", "input", "key", "compose",
+    "command", "service-result", "assert-text", "assert-accessibility",
+    "capture", "throw",
+})
 MAX_SCENARIO_STEPS = 1000
 MAX_SCENARIO_TARGET_BYTES = 1024
 MAX_SCENARIO_INPUT_BYTES = 64 * 1024
@@ -59,6 +64,11 @@ def validate_scenario_document(scenario: dict[str, Any]) -> None:
         if not isinstance(step, dict) or not isinstance(step.get("action"), str):
             raise ScenarioValidationError(f"Scenario step {index} is invalid")
         action = step["action"]
+        if (
+            scenario["schema"] == "vellum.scenario.v2"
+            and action not in SCENARIO_V2_ACTIONS
+        ):
+            raise ScenarioValidationError(f"Unsupported scenario action: {action}")
         valid = False
         if action == "wait-for-idle":
             valid = set(step) == {"action"}
@@ -106,14 +116,24 @@ def validate_scenario_document(scenario: dict[str, Any]) -> None:
                 and not set(expected) - {"label", "role", "value"}
                 and all(isinstance(value, str) for value in expected.values())
             )
-        elif action in {"command", "assert-text", "assert-state", "throw"}:
+        elif action == "command":
             valid = (
                 scenario["schema"] == "vellum.scenario.v2"
-                and set(step).issubset({"action", "target", "value", "expect"})
-                and {"action", "target"}.issubset(step)
+                and set(step) == {"action", "target"}
                 and _bounded(step.get("target"), MAX_SCENARIO_TARGET_BYTES)
             )
-        elif action in {"pointer", "touch"}:
+        elif action in {"assert-text", "throw"}:
+            valid = (
+                scenario["schema"] == "vellum.scenario.v2"
+                and set(step) == {"action", "target", "expect"}
+                and _bounded(step.get("target"), MAX_SCENARIO_TARGET_BYTES)
+                and _bounded(
+                    step.get("expect"),
+                    MAX_SCENARIO_INPUT_BYTES,
+                    allow_empty=True,
+                )
+            )
+        elif action == "touch":
             valid = (
                 scenario["schema"] == "vellum.scenario.v2"
                 and set(step) == {"action", "target", "event"}

@@ -11,7 +11,7 @@ one product question: can a developer import a design, add TypeScript or
 JavaScript behavior, and ship a GPU-rendered application without Chromium or an
 OS WebView as the primary UI runtime?
 
-This repository is being built toward the independent-validation milestone.
+This repository has reached its first independent-validation milestone.
 The project CLI and repository shape are usable. An audio-free native C++
 kernel, deterministic DesignIR import/reimport, hardened JS/TS/JSX retained-tree
 runtime, JavaScriptCore host, installable CMake SDK, and a retained scene
@@ -42,9 +42,8 @@ Its authorship and exact blobs remain auditable in Git history and immutable
 
 ## Quick start
 
-The following is the exact `v0.1.6` tagged-release flow; it does not claim that
-the private release has already been published. Because both the repository and
-release are private, install and authenticate
+The following is the exact published, immutable `v0.1.6` tagged-release flow.
+Because both the repository and release are private, install and authenticate
 [GitHub CLI 2.75.0 or newer](https://cli.github.com/) first (`gh auth login`,
 or set `GH_TOKEN` or `GITHUB_TOKEN` for an unattended agent). This minimum
 provides the immutable-release verification commands used by the installer.
@@ -181,8 +180,10 @@ generic testkit/capture primitives, and application CLI.
 Pulp continues to own audio, MIDI, DSP, plug-in formats, plug-in hosting, audio
 widgets, audio DesignIR extensions, DAW integration, and Pulp product tooling.
 The exact machine-readable authority state is
-[`provenance/ownership-map.yaml`](provenance/ownership-map.yaml). The current
-authority handoff is prepared, not activated; Pulp does not consume Vellum.
+[`provenance/ownership-map.yaml`](provenance/ownership-map.yaml). Source
+authority for the selected mapped framework slices is active in Vellum. Pulp
+does not yet consume the Vellum SDK as a dependency; source authority and
+dependency adoption are separate transitions.
 
 ## Anatomy of a generated application
 
@@ -467,7 +468,7 @@ private release.
 ## Ownership, provenance, and attribution
 
 - No Pulp audio, plug-in, host, or product adapters belong in Vellum.
-- Pulp does not consume this repository during independent validation.
+- Pulp does not currently consume this repository as an SDK dependency.
 - macOS and browser/Wasm are the first proof targets; the browser proof and its
   exact non-claims are documented in
   [Browser/Wasm proof](docs/web/browser-wasm-proof.md). Other platforms should

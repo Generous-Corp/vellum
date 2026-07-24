@@ -15,6 +15,7 @@ from typing import Any
 
 SCHEMA = "vellum.templates-smoke.v1"
 VARIANTS = ("blank", "imported-app", "cpp-component")
+TARGETS = ("macos", "web")
 
 
 class Error(RuntimeError):
@@ -103,17 +104,18 @@ def smoke(install_prefix: Path, output: Path | None = None) -> dict[str, Any]:
                     [str(cli), "--json", "doctor", "--fix", "--project", str(project)],
                     cwd=root, env=env,
                 ),
-                "build": run_json(
-                    [str(cli), "--json", "build", "--target", "macos",
+            }
+            for target in TARGETS:
+                results[f"build-{target}"] = run_json(
+                    [str(cli), "--json", "build", "--target", target,
                      "--project", str(project)],
                     cwd=root, env=env,
-                ),
-                "test": run_json(
-                    [str(cli), "--json", "test", "--target", "macos",
+                )
+                results[f"test-{target}"] = run_json(
+                    [str(cli), "--json", "test", "--target", target,
                      "--scenario", "smoke", "--project", str(project)],
                     cwd=root, env=env,
-                ),
-            }
+                )
             evidence.append({
                 "template": variant,
                 "selectedTemplate": results["create"]["data"]["template"],

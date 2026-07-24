@@ -61,13 +61,21 @@ class Tests(unittest.TestCase):
             calls = [
                 json.loads(line) for line in log.read_text().splitlines()
             ]
-            self.assertEqual(len(calls), 12)
+            self.assertEqual(len(calls), 18)
             self.assertEqual(
                 [next(value for value in call if value in {"create", "doctor", "build", "test"})
                  for call in calls],
-                ["create", "doctor", "build", "test"] * 3,
+                ["create", "doctor", "build", "test", "build", "test"] * 3,
             )
-            imported = calls[4]
+            for offset in range(0, len(calls), 6):
+                self.assertEqual(
+                    [
+                        call[call.index("--target") + 1]
+                        for call in calls[offset + 2:offset + 6]
+                    ],
+                    ["macos", "macos", "web", "web"],
+                )
+            imported = calls[6]
             self.assertIn("--from", imported)
             self.assertEqual(imported[imported.index("--template") + 1], "imported-app")
 

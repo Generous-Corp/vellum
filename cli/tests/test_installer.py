@@ -71,7 +71,10 @@ def _build_verified_fixture(
     shutil.copy2(REPO / "cli/vellum_backend.py", payload / "vellum_backend.py")
     shutil.copy2(REPO / "cli/vellum_manifest.py", payload / "vellum_manifest.py")
     shutil.copy2(REPO / "cli/vellum_png.py", payload / "vellum_png.py")
-    shutil.copytree(REPO / ".agents", payload / ".agents")
+    shutil.copytree(
+        REPO / ".agents/skills/vellum-app-authoring",
+        payload / ".agents/skills/vellum-app-authoring",
+    )
     shutil.copytree(REPO / "templates", payload / "templates")
     shutil.copytree(REPO / "packages/vellum-design-ir", payload / "design-ir")
     (payload / "sdk/include").mkdir(parents=True)

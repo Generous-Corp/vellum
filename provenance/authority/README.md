@@ -1,6 +1,15 @@
-# Prepared source-authority handoff
+# Source-authority handoff
 
-Nothing in this directory activates authority by itself.
+Source authority is active. The accepted coordinates are Vellum record commit
+`a106a02816a0cde53daac83f36a6630d664f6637`, signed tag
+`refs/tags/authority/native-design-kernel-v1-attempt-2`, and landed Pulp commit
+`28d74338ff57e91bb5690308ec9502ebf2fcf09d`, accepted by `@danielraffel` at
+`2026-07-24T12:03:00Z`. The current machine state is recorded in
+`../pulp-extraction.json`, `../ownership-map.yaml`, and the observatory lock.
+
+No file in this directory activated authority merely by existing. Activation
+required the complete two-repository handshake and durable reconciliation
+described below.
 `transfer-plan.v2.json` names candidate Pulp legacy slices and their active
 Vellum implementation boundary. `trust-policy.v1.json` pins the exact
 repository, repository-scoped reader/dispatcher App, and check-producer
@@ -25,19 +34,21 @@ projection, the later activation-candidate projection, and the exact active
 implementation projection under the explicit lineage mode
 `history-seed-ancestor-active-reimplementation`.
 
-## Prepare a record
+## Prepare a new record
 
-After Pulp lands its v2 prepared ownership projection and Vellum has a reviewed
-product commit, build the record from exact commits:
+The completed activation used this procedure. For a genuinely new attempt,
+choose a new record path and authority ref. After Pulp lands its v2 prepared
+ownership projection and Vellum has a reviewed product commit, build the record
+from exact commits:
 
 ```sh
 python3 tools/provenance/verify_authority_activation.py build-record \
   --pulp-repo /path/to/pulp \
   --pulp-ownership-commit <exact-prepared-pulp-sha> \
   --authority-start-commit <exact-vellum-ready-product-sha> \
-  --authority-record-ref refs/tags/authority/native-design-kernel-v1 \
+  --authority-record-ref refs/tags/authority/<unique-authority-ref> \
   --approved-at <owner-approved-utc-timestamp> \
-  --output provenance/authority/records/native-design-kernel-v1.json
+  --output provenance/authority/records/<unique-record>.json
 ```
 
 The authority-start commit must pass `verify-ready`: trust identities and
@@ -59,9 +70,9 @@ Pulp candidate and runs:
 python3 tools/provenance/verify_authority_activation.py verify-pending \
   --pulp-repo /path/to/exact-pulp-candidate \
   --pulp-ownership-commit <exact-prepared-pulp-sha> \
-  --record-path provenance/authority/records/native-design-kernel-v1.json \
+  --record-path provenance/authority/records/<unique-record>.json \
   --authority-record-commit <exact-record-commit> \
-  --expected-authority-ref refs/tags/authority/native-design-kernel-v1
+  --expected-authority-ref refs/tags/authority/<unique-authority-ref>
 ```
 
 That offline gate proves the record is structurally reproducible, is the only
@@ -71,7 +82,7 @@ independent `forbidden-deps`, `provenance-verify`, and `sterile-consumer`
 checks. Live protected-ref, check-producer, and installation-scope validation
 remains part of `verify-active`; `verify-pending` cannot self-attest it.
 
-## Activate
+## Activate a new record
 
 `verify-active` needs all of the following at once:
 
@@ -107,7 +118,7 @@ record commit, materialize the durable active state:
 python3 tools/provenance/finalize_authority_reconciliation.py \
   --pulp-repo /path/to/exact-pulp-history \
   --vellum-repo . \
-  --record-path provenance/authority/records/native-design-kernel-v1.json \
+  --record-path provenance/authority/records/<unique-record>.json \
   --authority-record-commit <exact-record-commit> \
   --pulp-evidence /path/to/pulp-activation-evidence.json \
   --active-proof /path/to/authority-active.json \

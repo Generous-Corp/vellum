@@ -1,0 +1,4 @@
+interface:
+  display_name: "Pulp/Vellum Change Routing"
+  short_description: "Route fixes to the authoritative repository"
+  default_prompt: "Use $pulp-vellum-change-routing to classify this change and route its implementation and porting work."

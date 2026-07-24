@@ -109,11 +109,15 @@ def build_ownership_map(
     result = replace_once(
         result, prepared_activation, active_activation
     )
-    result = replace_once(
-        result,
-        "authority has transferred. The rows below describe historical lineage only.",
-        "authority is active in Vellum. The rows below remain historical lineage only.",
-    )
+    prepared_lineage_note = """# The historical projection remains byte-locked in cut-manifest.json and Git
+# history. It is not present as editable source at the active tip and no source
+# authority has transferred. The rows below describe historical lineage only.
+"""
+    active_lineage_note = """# The historical projection remains byte-locked in cut-manifest.json and Git
+# history. It is not present as editable source at the active tip. Authority for
+# the selected legacy slices is active in Vellum's independent implementation.
+"""
+    result = replace_once(result, prepared_lineage_note, active_lineage_note)
     lines = result.splitlines(keepends=True)
     current_slice: str | None = None
     activated: set[str] = set()

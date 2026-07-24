@@ -60,7 +60,7 @@ Successful create JSON reports both the effective `template` and nullable
   "command": "build",
   "ok": false,
   "status": "capability_unavailable",
-  "message": "'build' needs the Vellum SDK backend, which is not installed in this extraction milestone.",
+  "message": "The installed SDK does not provide 'build' for target 'macos'.",
   "data": {},
   "diagnostics": []
 }
@@ -105,19 +105,21 @@ stable outer schema.
 | `dev --target macos|web` | yes (supervisor) | watches, builds, and drives a target reload adapter; see [Development loop](dev.md) |
 | `import` / `reimport` | no | implemented by the installed `@vellum/design-ir` backend |
 | `design check` / `design diff` | no | deterministically regenerate the active source and authored overlay without writing; `check` fails on generated drift and `diff` reports it |
-| `build` / `run` | no | macOS 15.0+ arm64 GPU artifact builds/launches a real `.app`; finite `run --self-test` is available |
-| `test` / `capture` | no | macOS 15.0+ arm64 GPU artifact executes bounded scenarios, captures PNGs, and composes bounded capture matrices/montages |
-| `package` | no | macOS 15.0+ arm64 GPU artifact creates an ad-hoc-signed `.app` |
+| `build` / `run` | no | macOS builds/launches a real `.app`; web builds a static app and reports its local serve command; finite headless runs are available |
+| `test` | no | macOS executes bounded native scenarios; web executes the shared scenario contract in Chrome |
+| `capture` | no | macOS captures PNGs and composes bounded capture matrices/montages; the web backend does not claim capture |
+| `package` | no | macOS creates an ad-hoc-signed `.app`; web creates a reproducible static `.tar.gz` |
 
 Installed SDK metadata carries a boolean capability for every backend command.
 The CLI rejects a false capability before dispatch, so the existence of the
 import backend never implies that native build, run, capture, or packaging is
 available.
 
-The native backend response uses the exact `vellum.backend.result.v1` schema.
-It reads only the installed host, libraries, UI bundler, and the application
-project. At this milestone it accepts exactly the `macos` target; unsupported
-targets and missing payloads are errors, never successful no-ops.
+Each target backend response uses the exact `vellum.backend.result.v1` schema.
+The macOS backend reads only the installed host, libraries, UI bundler, and
+application project. The web backend reads only the installed web payload,
+runtime, UI bundler, and application project. Unsupported targets, commands,
+and missing payloads are errors, never successful no-ops.
 
 `[capabilities].persistence` accepts only `"none"` or the explicit
 `"state-v1"` whole-runtime snapshot lane. The macOS package records that exact

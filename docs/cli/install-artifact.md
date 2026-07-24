@@ -2,8 +2,8 @@
 
 The repository builds a reproducible local artifact, and the installer supports
 local development, verified local archive, and an exact-version private release
-mode. The commands below describe the exact `v0.1.6` tagged-release contract;
-they do not claim the tag or release has already been published.
+mode. The commands below install the published, immutable `v0.1.6` tagged
+release.
 
 ## Private tagged-release installation
 

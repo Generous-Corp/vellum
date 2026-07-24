@@ -56,6 +56,8 @@ repeated generic fixes, cursor gaps, and excessive observatory effort fail
 health. A release is blocked only by an overdue security event or an event
 explicitly marked as a shared-contract release blocker.
 
-The prepared cursor's `pulp.last_scanned_commit` is the exact observed Pulp
-main boundary. Verification rejects a mapped commit beyond that cursor.
-Authority is not active; the report lists the remaining activation gates.
+The active cursor's `pulp.last_scanned_commit` begins at the exact landed Pulp
+activation boundary and advances through later reviewed reconciliation.
+Verification rejects a mapped commit beyond the checked-in cursor. Authority
+is active; the generated report records change-ledger health and currently has
+no activation blockers.

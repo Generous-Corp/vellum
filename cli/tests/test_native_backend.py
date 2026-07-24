@@ -217,6 +217,15 @@ class NativeBackendTests(unittest.TestCase):
                     scenario_arguments({"root": project}, "editor")
                 self.assertEqual(caught.exception.status, "invalid_scenario")
 
+            for action in ("pointer", "assert-state"):
+                value = json.loads(scenario_path.read_text(encoding="utf-8"))
+                value["schema"] = "vellum.scenario.v2"
+                value["steps"] = [{"action": action, "target": "title-input"}]
+                scenario_path.write_text(json.dumps(value), encoding="utf-8")
+                with self.subTest(action=action), self.assertRaises(BackendFailure) as caught:
+                    scenario_arguments({"root": project}, "editor")
+                self.assertEqual(caught.exception.status, "unsupported_scenario_action")
+
     def test_v2_text_composition_and_accessibility_steps_map_to_native_host(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             project = self.create_project(Path(temporary))

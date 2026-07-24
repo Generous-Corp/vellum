@@ -3,8 +3,9 @@
 This package is Vellum's dependency-free JavaScript/TypeScript/JSX authoring
 surface. It produces a deterministic, serializable retained tree rather than a
 DOM. A pinned build proof produces a classic-script bundle for Vellum's native
-JavaScriptCore host. Browser JavaScript driving the shared Wasm core remains a
-planned validation lane, not a shipped claim.
+JavaScriptCore host. The installed web lane runs the same dependency-free
+authoring source in browser JavaScript and drives the shared C++ runtime,
+retained scene, and paint-command traversal compiled to Wasm.
 
 ```tsx
 import { Button, Stack, Text, mount, useState } from "@vellum/ui";
@@ -41,11 +42,12 @@ const [title, setTitle] = useState("Draft");
 ```
 
 `TextInput` requires a stable ID, a string `value`, and `onChange`; it rejects
-children and unsupported primitive versions. The macOS host currently provides
-pointer focus, direct keyboard text insertion, a final-grapheme Backspace, and
-bounded semantic key/submit dispatch. It does not yet provide a caret or
-selection model, IME composition, clipboard editing shortcuts, password input,
-accessibility text semantics, spellcheck, or mobile platform integration.
+children and unsupported primitive versions. The macOS host provides pointer
+focus, direct keyboard text insertion, caret and UTF-16 selection state,
+navigation and deletion, IME composition, synchronized accessibility text
+semantics, and bounded semantic input/key/composition scenarios. It does not
+yet provide clipboard editing shortcuts, password input, spellcheck, or mobile
+platform integration.
 
 `CustomComponent` is the explicit bridge to an app-owned C/C++ paint module.
 Its `component` name must be declared in `native/components.toml`, its

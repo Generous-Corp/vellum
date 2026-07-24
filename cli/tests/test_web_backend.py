@@ -141,6 +141,15 @@ class WebScenarioEvidenceTests(unittest.TestCase):
                 validate_scenario_document({
                     "schema": "vellum.scenario.v2", "name": "invalid", "steps": [step],
                 })
+        for action in ("pointer", "assert-state"):
+            with self.subTest(action=action), self.assertRaisesRegex(
+                BackendFailure, "Unsupported scenario action"
+            ):
+                validate_scenario_document({
+                    "schema": "vellum.scenario.v2",
+                    "name": "unsupported",
+                    "steps": [{"action": action, "target": "title-input"}],
+                })
 
     def test_component_source_rejects_private_framework_headers(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

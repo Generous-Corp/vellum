@@ -16,6 +16,7 @@ VERIFIER = REPO / "scripts/verify_sdk_artifact.py"
 INSTALLER = REPO / "scripts/install.sh"
 SKILL_RELATIVE = Path(".agents/skills/vellum-app-authoring/SKILL.md")
 MANIFEST_RELATIVE = Path(".agents/skills/vellum-app-authoring/manifest.v1.json")
+ROUTING_SKILL_RELATIVE = Path(".agents/skills/pulp-vellum-change-routing/SKILL.md")
 
 
 @unittest.skipUnless(
@@ -46,6 +47,7 @@ class AgentInstructionArtifactTests(unittest.TestCase):
             )
             for relative in (SKILL_RELATIVE, MANIFEST_RELATIVE):
                 self.assertEqual((payload / relative).read_bytes(), (REPO / relative).read_bytes())
+            self.assertFalse((payload / ROUTING_SKILL_RELATIVE).exists())
 
             archive = root / "vellum-sdk-0.1.6-test-host.tar.gz"
             builder["write_archive"](payload, archive)

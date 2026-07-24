@@ -22,7 +22,16 @@ export function App() {
         component="level-meter"
         properties={{ boost }}
         style={{ width: 560, height: 220 }}
-        fallback={<View id="level-meter-fallback" style={{ width: 560, height: 220, backgroundColor: "#334155" }} />}
+        fallback={
+          <View
+            id="level-meter-fallback"
+            style={{
+              width: 560,
+              height: 220,
+              backgroundColor: boost ? "#22c55e" : "#334155",
+            }}
+          />
+        }
       />
     </Stack>
   );

@@ -2,9 +2,10 @@
 
 The first Vellum GPU slice is an independent Vellum implementation. It does
 not transfer or compile the preserved `core/canvas`, `core/render`, or
-`core/view` Pulp projections. Those historical paths remain non-authoritative
-until they are either removed from the active tree or transferred through the
-recorded two-repository authority protocol.
+`core/view` Pulp projections. Those historical paths were removed from
+Vellum's active tree. Source authority for the selected mapped legacy slices
+later transferred to the independently implemented Vellum boundary through the
+recorded two-repository protocol; no historical Pulp source was restored.
 
 The public slice consists of:
 
@@ -21,10 +22,11 @@ not allowed to fall back to CoreGraphics or an offscreen surface. The test also
 contains a blank-frame negative control so a broken capture detector cannot
 turn an empty renderer into a passing proof.
 
-The renderer is intentionally not yet connected to imported DesignIR or the
-CLI backend. That integration must use the public scene API and must be proven
-from a sterile installed SDK; reaching into Vellum source from an application
-is forbidden.
+The installed CLI materializes imported DesignIR into the authoring runtime and
+builds the application host against the public `Vellum::Gpu` target. Native
+scenario, capture, and packaging evidence exercises that path from a sterile
+installed SDK. Applications may use only the public installed targets and
+headers; reaching into Vellum source or renderer internals is forbidden.
 
 Release builds pass the archive itself through `VELLUM_SKIA_ARCHIVE`; CMake
 verifies its SHA-256, extracts it into the build tree, verifies the exact Skia

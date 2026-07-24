@@ -145,7 +145,12 @@ if ($LocalRoot) {
         Copy-Item (Join-Path $LocalRoot "cli\vellum_backend.py") (Join-Path $temporary "vellum_backend.py")
         Copy-Item (Join-Path $LocalRoot "cli\vellum_manifest.py") (Join-Path $temporary "vellum_manifest.py")
         Copy-Item (Join-Path $LocalRoot "cli\vellum_png.py") (Join-Path $temporary "vellum_png.py")
-        Copy-Item (Join-Path $LocalRoot ".agents") (Join-Path $temporary ".agents") -Recurse
+        $temporaryAgentSkills = Join-Path $temporary ".agents\skills"
+        New-Item -ItemType Directory -Force -Path $temporaryAgentSkills | Out-Null
+        Copy-Item `
+            (Join-Path $LocalRoot ".agents\skills\vellum-app-authoring") `
+            (Join-Path $temporaryAgentSkills "vellum-app-authoring") `
+            -Recurse
         Copy-Item (Join-Path $LocalRoot "templates") (Join-Path $temporary "templates") -Recurse
         $localMetadata = @'
 {

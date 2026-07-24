@@ -307,6 +307,13 @@ class ReconciliationTests(unittest.TestCase):
         self.assertEqual(
             ownership.count("    state: framework-reimplemented-no-transfer\n"), 1
         )
+        self.assertIn(
+            "Authority for\n# the selected legacy slices is active in Vellum's "
+            "independent implementation.",
+            ownership,
+        )
+        self.assertNotIn("no source authority is active", ownership)
+        self.assertNotIn("no source authority has transferred", ownership)
         transferred = {
             item["id"]
             for item in legacy["mappings"]

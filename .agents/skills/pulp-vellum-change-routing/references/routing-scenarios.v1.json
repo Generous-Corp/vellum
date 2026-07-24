@@ -1,0 +1,295 @@
+{
+  "schema_version": 1,
+  "scenarios": [
+    {
+      "id": "vellum-cpp-template-web-fallback",
+      "input": {
+        "source_repo": "vellum",
+        "intent": "generic",
+        "paths": ["templates/cpp-component/src/App.tsx.template"]
+      },
+      "expected": {
+        "status": "routed",
+        "primary_repository": "vellum",
+        "observatory_disposition": "framework-only"
+      }
+    },
+    {
+      "id": "vellum-installer-only",
+      "input": {
+        "source_repo": "vellum",
+        "intent": "generic",
+        "paths": ["scripts/install_core.py"]
+      },
+      "expected": {
+        "status": "routed",
+        "primary_repository": "vellum",
+        "observatory_disposition": "framework-only"
+      }
+    },
+    {
+      "id": "pulp-audio-product",
+      "input": {
+        "source_repo": "pulp",
+        "intent": "pulp-specific",
+        "paths": ["core/audio/src/processor.cpp"]
+      },
+      "expected": {
+        "status": "routed",
+        "primary_repository": "pulp",
+        "matched_slices": ["pulp-audio-plugin-product"],
+        "observatory_disposition": "not-applicable"
+      }
+    },
+    {
+      "id": "pulp-legacy-figma-exporter-schema",
+      "input": {
+        "source_repo": "pulp",
+        "intent": "pulp-specific",
+        "paths": ["tools/figma-plugin/schema/figma-plugin-export-v1.json"]
+      },
+      "expected": {
+        "status": "routed",
+        "primary_repository": "pulp",
+        "matched_slices": ["legacy-figma-schema"],
+        "observatory_disposition": "Pulp-only"
+      }
+    },
+    {
+      "id": "generic-transferred-canvas-fix",
+      "input": {
+        "source_repo": "pulp",
+        "intent": "generic",
+        "paths": ["core/canvas/src/text_layout.cpp"]
+      },
+      "expected": {
+        "status": "routed",
+        "primary_repository": "vellum",
+        "secondary_repository": "pulp",
+        "matched_slices": ["canvas-kernel"],
+        "pulp_event_disposition": "framework-backport",
+        "observatory_disposition": "port-required"
+      }
+    },
+    {
+      "id": "pulp-specific-change-in-transferred-path",
+      "input": {
+        "source_repo": "pulp",
+        "intent": "pulp-specific",
+        "paths": ["core/view/platform/mac/accessibility_mac.mm"]
+      },
+      "expected": {
+        "status": "routed",
+        "primary_repository": "pulp",
+        "matched_slices": ["macos-shell"],
+        "pulp_event_disposition": "pulp-only",
+        "observatory_disposition": "Pulp-only"
+      }
+    },
+    {
+      "id": "excluded-deferred-view-implementation",
+      "input": {
+        "source_repo": "pulp",
+        "intent": "generic",
+        "paths": ["core/view/src/view.cpp"],
+        "counterpart_result": "not-affected"
+      },
+      "expected": {
+        "status": "routed",
+        "primary_repository": "pulp",
+        "matched_slices": ["retained-ui-kernel-deferred"],
+        "observatory_disposition": "Pulp-only"
+      }
+    },
+    {
+      "id": "untransferred-runtime-asset",
+      "input": {
+        "source_repo": "pulp",
+        "intent": "generic",
+        "paths": ["external/fonts/Inter-Regular.ttf"]
+      },
+      "expected": {
+        "status": "routed",
+        "primary_repository": "pulp",
+        "matched_slices": ["runtime-assets"],
+        "observatory_disposition": "not-applicable"
+      }
+    },
+    {
+      "id": "generic-transferred-importer-schema",
+      "input": {
+        "source_repo": "pulp",
+        "intent": "generic",
+        "paths": ["packages/pulp-import-ir/src/anchors.ts"]
+      },
+      "expected": {
+        "status": "routed",
+        "primary_repository": "vellum",
+        "matched_slices": ["design-schema-compiler"],
+        "pulp_event_disposition": "framework-backport",
+        "observatory_disposition": "port-required"
+      }
+    },
+    {
+      "id": "vellum-renderer-counterpart-affected",
+      "input": {
+        "source_repo": "vellum",
+        "intent": "generic",
+        "paths": ["graphics/src/skia_dawn_surface.mm"],
+        "counterpart_result": "affected"
+      },
+      "expected": {
+        "status": "routed",
+        "primary_repository": "vellum",
+        "secondary_repository": "pulp",
+        "counterpart_contracts": ["canvas-kernel", "render-skia-dawn"],
+        "observatory_disposition": "port-required"
+      }
+    },
+    {
+      "id": "urgent-security-fix-in-transferred-path",
+      "input": {
+        "source_repo": "pulp",
+        "intent": "emergency",
+        "paths": ["core/canvas/src/text_layout.cpp"],
+        "emergency_owner": "@owner",
+        "emergency_expiry": "2026-08-01",
+        "emergency_follow_up": "https://github.com/Generous-Corp/vellum/issues/123",
+        "now": "2026-07-24"
+      },
+      "expected": {
+        "status": "routed",
+        "primary_repository": "pulp",
+        "secondary_repository": "vellum",
+        "pulp_event_disposition": "emergency-exception",
+        "observatory_disposition": "port-required"
+      }
+    },
+    {
+      "id": "nonurgent-security-fix-in-transferred-path",
+      "input": {
+        "source_repo": "pulp",
+        "intent": "generic",
+        "paths": ["core/canvas/src/text_layout.cpp"]
+      },
+      "expected": {
+        "status": "routed",
+        "primary_repository": "vellum",
+        "pulp_event_disposition": "framework-backport"
+      }
+    },
+    {
+      "id": "new-unmapped-pulp-file-under-shared-prefix",
+      "input": {
+        "source_repo": "pulp",
+        "intent": "generic",
+        "paths": ["core/canvas/src/new_filter.cpp"]
+      },
+      "expected": {
+        "status": "decision_required",
+        "unmapped_paths": ["core/canvas/src/new_filter.cpp"]
+      }
+    },
+    {
+      "id": "active-coordinate-disagreement",
+      "fixture": {
+        "pulp_activation_state": "prepared"
+      },
+      "input": {
+        "source_repo": "pulp",
+        "intent": "generic",
+        "paths": ["core/canvas/src/text_layout.cpp"]
+      },
+      "expected": {
+        "status": "invalid_authority"
+      }
+    },
+    {
+      "id": "generic-pulp-fix-needs-reverse-port",
+      "input": {
+        "source_repo": "pulp",
+        "intent": "generic",
+        "paths": ["core/canvas/src/text_layout.cpp"],
+        "counterpart_result": "affected"
+      },
+      "expected": {
+        "status": "routed",
+        "primary_repository": "vellum",
+        "observatory_disposition": "port-required"
+      }
+    },
+    {
+      "id": "framework-backport-rejects-nonimmutable-ref",
+      "input": {
+        "source_repo": "pulp",
+        "intent": "generic",
+        "paths": ["core/canvas/src/text_layout.cpp"],
+        "operation": "framework-backport",
+        "framework_commit": "main"
+      },
+      "expected": {
+        "status": "decision_required"
+      }
+    },
+    {
+      "id": "mixed-transferred-and-pulp-owned-change",
+      "input": {
+        "source_repo": "pulp",
+        "intent": "generic",
+        "paths": [
+          "core/canvas/src/text_layout.cpp",
+          "core/audio/src/processor.cpp"
+        ]
+      },
+      "expected": {
+        "status": "decision_required",
+        "conflicts": ["pulp", "transferred"]
+      }
+    },
+    {
+      "id": "future-pulp-sdk-adoption",
+      "input": {
+        "source_repo": "vellum",
+        "intent": "generic",
+        "paths": ["graphics/src/skia_dawn_surface.mm"],
+        "counterpart_result": "affected",
+        "operation": "sdk-adoption",
+        "adoption_contract": "docs/contracts/vellum-sdk-adoption.json"
+      },
+      "expected": {
+        "status": "routed",
+        "primary_repository": "vellum",
+        "secondary_repository": "pulp",
+        "pulp_event_disposition": null,
+        "observatory_disposition": "port-required"
+      }
+    },
+    {
+      "id": "pulp-only-tool-exposes-shared-defect",
+      "input": {
+        "source_repo": "pulp",
+        "intent": "generic",
+        "paths": ["tools/import-design/parser.py"],
+        "counterpart_result": "affected"
+      },
+      "expected": {
+        "status": "routed",
+        "primary_repository": "split",
+        "secondary_repository": "vellum",
+        "observatory_disposition": "port-required"
+      }
+    },
+    {
+      "id": "automatic-source-copy-refused",
+      "input": {
+        "source_repo": "pulp",
+        "intent": "generic",
+        "paths": ["core/canvas/src/text_layout.cpp"],
+        "operation": "auto-copy"
+      },
+      "expected": {
+        "status": "decision_required"
+      }
+    }
+  ]
+}

@@ -503,7 +503,10 @@ def copy_payload(
     shutil.copy2(repo / "cli/vellum_manifest.py", payload / "vellum_manifest.py")
     shutil.copy2(repo / "cli/vellum_png.py", payload / "vellum_png.py")
     shutil.copy2(repo / "cli/vellum_scenario.py", payload / "vellum_scenario.py")
-    shutil.copytree(repo / ".agents", payload / ".agents")
+    shutil.copytree(
+        repo / ".agents/skills/vellum-app-authoring",
+        payload / ".agents/skills/vellum-app-authoring",
+    )
     shutil.copytree(repo / "templates", payload / "templates")
     shutil.copytree(install_tree, payload / "sdk")
     design_ir_source = repo / "packages/vellum-design-ir"

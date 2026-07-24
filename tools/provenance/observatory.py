@@ -1087,13 +1087,22 @@ def verify_vellum_observatory_tail(repo: Path, cursor: str, target: str) -> None
         previous = commit
 
 
-def verify_append_only(root: Path, git_base: str | None) -> None:
+def verify_append_only(
+    root: Path,
+    git_base: str | None,
+    *,
+    pulp_repo: Path | None = None,
+    vellum_repo: Path | None = None,
+) -> None:
     if git_base is None:
         return
     require_commit(root, git_base, "git base")
     head = git(root, "rev-parse", "HEAD")
     require_ancestor(root, git_base, head, "append-only comparison")
-    output = git(root, "diff", "--name-status", "-M", f"{git_base}..{head}", "--", EVENTS_PATH.as_posix())
+    output = git(
+        root, "diff", "--name-status", "-M", "-C", "--find-copies-harder",
+        f"{git_base}..{head}", "--", EVENTS_PATH.as_posix(),
+    )
     bad = [line for line in output.splitlines() if line and not line.startswith("A\t")]
     if bad:
         raise ObservatoryError("observatory events are append-only; modified/deleted/renamed events: " + "; ".join(bad))
@@ -1105,9 +1114,14 @@ def verify_append_only(root: Path, git_base: str | None) -> None:
     for source in ("pulp", "vellum"):
         before = previous[source]["last_scanned_commit"]
         after = current[source]["last_scanned_commit"]
-        repo = root if source == "vellum" else None
-        if repo is not None:
-            require_ancestor(repo, before, after, f"cursor.{source} cannot move backward")
+        if before == after:
+            continue
+        repo = pulp_repo if source == "pulp" else (vellum_repo or root)
+        if repo is None:
+            raise ObservatoryError(
+                f"cannot verify cursor.{source} monotonicity without its source repository"
+            )
+        require_ancestor(repo, before, after, f"cursor.{source} cannot move backward")
 
 
 def verify(
@@ -1118,7 +1132,12 @@ def verify(
     lock, mapping, cursor, budgets = validate_lock_map_cursor(root)
     verify_active_cursor_ancestry(lock, cursor, pulp_repo, vellum_repo)
     events = load_events(root)
-    verify_append_only(root, git_base)
+    verify_append_only(
+        root,
+        git_base,
+        pulp_repo=pulp_repo,
+        vellum_repo=vellum_repo,
+    )
     gaps = coverage_gaps(
         root=root, mapping=mapping, cursor=cursor, events=events,
         pulp_repo=pulp_repo, vellum_repo=vellum_repo,
