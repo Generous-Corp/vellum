@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -24,6 +25,28 @@ REQUIRED_WORKFLOWS = (
 
 class MergeError(RuntimeError):
     pass
+
+
+class _SameHostRedirect(urllib.request.HTTPRedirectHandler):
+    """Drop the credential when a redirect leaves the API host.
+
+    urllib replays every header on a redirect, so a redirect off
+    api.github.com would hand this job's write-scoped installation token to
+    another host.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        following = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if following is None:
+            return None
+        if urllib.parse.urlsplit(newurl).netloc != urllib.parse.urlsplit(
+            req.full_url
+        ).netloc:
+            following.remove_header("Authorization")
+        return following
+
+
+_OPENER = urllib.request.build_opener(_SameHostRedirect())
 
 
 def _api(path: str, *, method: str = "GET", body: dict[str, Any] | None = None) -> Any:
@@ -44,7 +67,7 @@ def _api(path: str, *, method: str = "GET", body: dict[str, Any] | None = None) 
     if encoded is not None:
         request.add_header("Content-Type", "application/json")
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with _OPENER.open(request, timeout=30) as response:
             payload = response.read().decode("utf-8")
     except urllib.error.HTTPError as error:
         detail = error.read().decode("utf-8", errors="replace").strip()
