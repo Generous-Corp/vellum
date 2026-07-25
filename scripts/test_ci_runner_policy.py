@@ -73,11 +73,18 @@ JOB_HEADER = re.compile(r"^  ([A-Za-z0-9_-]+):\s*$")
 
 
 def workflow_jobs(text: str) -> dict[str, str]:
+    """Split the `jobs:` mapping into per-job bodies.
+
+    Raises on any two-space entry it cannot recognize as a job header. Silently
+    folding an unrecognized header into the previous job would attribute that
+    job's steps to its neighbour, which would let a provisioning assertion pass
+    for a job that does not provision anything.
+    """
     lines = text.splitlines()
     jobs: dict[str, list[str]] = {}
     current: str | None = None
     inside = False
-    for line in lines:
+    for number, line in enumerate(lines, start=1):
         if line.rstrip() == "jobs:":
             inside = True
             continue
@@ -90,8 +97,17 @@ def workflow_jobs(text: str) -> dict[str, str]:
             current = header.group(1)
             jobs[current] = []
             continue
+        # A two-space entry that is not a recognized header would corrupt the
+        # split. Job bodies are indented four or more spaces.
+        if re.match(r"^  [^\s]", line):
+            raise AssertionError(
+                f"line {number}: unrecognized two-space entry in jobs mapping: "
+                f"{line.strip()!r}"
+            )
         if current is not None:
             jobs[current].append(line)
+    if not jobs:
+        raise AssertionError("no jobs parsed; the jobs mapping shape changed")
     return {name: "\n".join(body) for name, body in jobs.items()}
 
 
