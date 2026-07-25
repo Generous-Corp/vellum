@@ -1,0 +1,21 @@
+{
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "created_at": "2026-07-25T06:31:53Z",
+  "disposition": "framework-only",
+  "effort_minutes": 0,
+  "event_id": "resolution-vellum-cbb073a3b27ea9d6d9b7f7df0f75a42777f0fdd7",
+  "kind": "resolution",
+  "linked_commits": [
+    "1255e5a043ff49d146d0fd099385683b9d5bbde6",
+    "f7a5db239efcfdc34c3a9075a293e0b5adc8bde1"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "This completes the relocatability repair in vellum-1255e5a043ff49d146d0fd099385683b9d5bbde6, which cleaned only the esm format and left the default iife bundle embedding the install path. It stays inside the same boundary: Vellum's installed web SDK bundler and its source-map footer. The clean-checkout router named Vellum as primary with no Pulp destination, and Pulp neither contains nor consumes this build path.",
+  "resolves": "vellum-cbb073a3b27ea9d6d9b7f7df0f75a42777f0fdd7",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

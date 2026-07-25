@@ -75,6 +75,13 @@ class WebScenarioEvidenceTests(unittest.TestCase):
         self.assertTrue(contains_sdk_install_path(
             b"source: ../vellum-installs/version/ui/src/runtime.js", prefix,
         ))
+        self.assertTrue(contains_sdk_install_path(
+            b'{"sources":["vellum://external/..%2Fvellum-installs%2F0.1.0%2Fir.js"]}',
+            prefix,
+        ))
+        self.assertTrue(contains_sdk_install_path(
+            b"source: ..%2fvellum-installs%2f0.1.0%2fir.js", prefix,
+        ))
         self.assertFalse(contains_sdk_install_path(
             b"source: vellum://sdk/ui/src/runtime.js", prefix,
         ))

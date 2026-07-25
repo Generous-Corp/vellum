@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {
+    cpSync,
     mkdirSync,
     mkdtempSync,
     readFileSync,
@@ -231,3 +232,57 @@ test('finalizing a bundle blanks SDK install-path comments in the written output
         'var app = runtime;',
     ]);
 });
+
+test('blanking covers indented labels and every line separator', () => {
+    // iife wraps the bundle, so esbuild indents its file labels.
+    const indented = '  // ../lib/vellum-installs/0.1.0-test-abc/ui/src/runtime.js';
+    const bundle = [indented, '  var runtime = 1;', ''].join('\n');
+    const blanked = blankSdkInstallPathComments(bundle);
+    assert.equal(blanked, ['  ', '  var runtime = 1;', ''].join('\n'));
+    assert.equal(blanked.split('\n').length, bundle.split('\n').length);
+
+    // A greedy run past U+2028 would swallow the code after it.
+    for (const separator of [' ', ' ']) {
+        const exotic = [
+            'var a = 1;',
+            '// /x/vellum-installs/y/z.js',
+            'var b = 2;',
+        ].join(separator);
+        const result = blankSdkInstallPathComments(exotic);
+        assert.ok(result.includes('var b = 2;'), `lost code after ${escape(separator)}`);
+        assert.equal(result.includes('vellum-installs'), false);
+    }
+});
+
+for (const format of ['iife', 'esm']) {
+    test(`a real ${format} bundle built from an install prefix names no install path`, () => {
+        const prefix = mkdtempSync(join(tmpdir(), 'vellum-installed-sdk-'));
+        const installed = join(prefix, 'lib/vellum-installs/0.1.0-test-abc/ui');
+        mkdirSync(dirname(installed), { recursive: true });
+        cpSync(packageRoot, installed, { recursive: true });
+
+        const fixture = prepareFixture();
+        const extension = format === 'esm' ? 'mjs' : 'js';
+        const output = join(fixture, `build/installed.${extension}`);
+        const built = spawnSync(
+            process.execPath,
+            [join(installed, 'scripts/build-project.mjs'),
+                join(fixture, 'src/App.tsx'), output],
+            {
+                cwd: fixture,
+                encoding: 'utf8',
+                env: { ...process.env, VELLUM_BUILD_FORMAT: format },
+            },
+        );
+        assert.equal(built.status, 0, built.stderr);
+
+        for (const artifact of [output, `${output}.map`]) {
+            const text = readFileSync(artifact, 'utf8');
+            assert.equal(
+                text.includes('vellum-installs'), false,
+                `${artifact} leaked the SDK install path`,
+            );
+            assert.equal(text.includes(prefix), false, `${artifact} leaked ${prefix}`);
+        }
+    });
+}

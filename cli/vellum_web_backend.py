@@ -297,6 +297,11 @@ def contains_sdk_install_path(payload: bytes, install_prefix: Path) -> bool:
         str(install_prefix.resolve()).encode(),
         b"/vellum-installs/",
         b"\\vellum-installs\\",
+        # Source maps percent-encode a source that resolves outside both the
+        # project and the SDK package, so the separators disappear and the
+        # plain markers above cannot see the path.
+        b"%2Fvellum-installs%2F",
+        b"%2fvellum-installs%2f",
     }
     return any(marker in payload for marker in markers)
 

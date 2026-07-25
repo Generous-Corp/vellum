@@ -133,10 +133,19 @@ export function normalizeSourceMap(raw, {
 // text in place and keep its newline: the runtime footer resolves stack frames
 // through generated line and column numbers, so removing the line itself would
 // shift every mapping below it out of alignment.
-const SDK_INSTALL_PATH_COMMENT = /^\/\/ [^\r\n]*[\\/]vellum-installs[\\/][^\r\n]*(?=\r?$)/gm;
+// The `iife` format wraps the bundle, so esbuild indents these labels; the
+// `esm` format leaves them at column zero. Match either, and keep the
+// indentation so no column shifts. The character class excludes every
+// separator a multiline `$` can match, otherwise a greedy run past a U+2028
+// would swallow the code that follows it.
+const LINE_BODY = '[^\\r\\n\\u2028\\u2029]*';
+const SDK_INSTALL_PATH_COMMENT = new RegExp(
+    `^([ \\t]*)//[ ]${LINE_BODY}[\\\\/]vellum-installs[\\\\/]${LINE_BODY}(?=\\r?$)`,
+    'gm',
+);
 
 export function blankSdkInstallPathComments(bundle) {
-    return bundle.replace(SDK_INSTALL_PATH_COMMENT, '');
+    return bundle.replace(SDK_INSTALL_PATH_COMMENT, '$1');
 }
 
 export function runtimeFooter(map) {

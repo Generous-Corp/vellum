@@ -8,6 +8,7 @@ from pathlib import Path
 import tempfile
 import unittest
 import urllib.error
+import urllib.request
 from unittest import mock
 
 import merge_on_green as steward
@@ -203,7 +204,7 @@ class ApiTransportTests(unittest.TestCase):
 
     def test_get_sends_a_bearer_token_and_parses_json(self) -> None:
         with mock.patch.dict("os.environ", {"GH_TOKEN": "t0ken"}), mock.patch.object(
-            steward.urllib.request, "urlopen",
+            steward._OPENER, "open",
             return_value=self._response(b'{"merged": true}'),
         ) as urlopen:
             self.assertEqual(steward._api("repos/o/r/pulls/1"), {"merged": True})
@@ -216,7 +217,7 @@ class ApiTransportTests(unittest.TestCase):
 
     def test_put_sends_a_json_body(self) -> None:
         with mock.patch.dict("os.environ", {"GH_TOKEN": "t0ken"}), mock.patch.object(
-            steward.urllib.request, "urlopen",
+            steward._OPENER, "open",
             return_value=self._response(b'{"merged": true}'),
         ) as urlopen:
             steward._api(
@@ -234,7 +235,7 @@ class ApiTransportTests(unittest.TestCase):
 
     def test_empty_body_returns_an_empty_mapping(self) -> None:
         with mock.patch.dict("os.environ", {"GH_TOKEN": "t0ken"}), mock.patch.object(
-            steward.urllib.request, "urlopen", return_value=self._response(b"")
+            steward._OPENER, "open", return_value=self._response(b"")
         ):
             self.assertEqual(steward._api("repos/o/r"), {})
 
@@ -261,10 +262,45 @@ class ApiTransportTests(unittest.TestCase):
                 with mock.patch.dict(
                     "os.environ", {"GH_TOKEN": "t0ken"}
                 ), mock.patch.object(
-                    steward.urllib.request, "urlopen", side_effect=failure
+                    steward._OPENER, "open", side_effect=failure
                 ):
                     with self.assertRaises(steward.MergeError):
                         steward._api("repos/o/r")
+
+
+class RedirectCredentialTests(unittest.TestCase):
+    """A redirect off the API host must not carry the installation token."""
+
+    @staticmethod
+    def _request(url: str) -> urllib.request.Request:
+        request = urllib.request.Request(url, method="GET")
+        request.add_header("Authorization", "Bearer secret")
+        return request
+
+    def test_authorization_is_dropped_when_the_host_changes(self) -> None:
+        handler = steward._SameHostRedirect()
+        following = handler.redirect_request(
+            self._request("https://api.github.com/repos/o/r"),
+            io.BytesIO(b""), 302, "Found", {}, "https://evil.example/steal",
+        )
+        self.assertIsNotNone(following)
+        self.assertIsNone(following.get_header("Authorization"))
+
+    def test_authorization_survives_a_same_host_redirect(self) -> None:
+        handler = steward._SameHostRedirect()
+        following = handler.redirect_request(
+            self._request("https://api.github.com/repos/o/r"),
+            io.BytesIO(b""), 302, "Found", {},
+            "https://api.github.com/repositories/1",
+        )
+        self.assertEqual(following.get_header("Authorization"), "Bearer secret")
+
+    def test_api_uses_the_guarded_opener(self) -> None:
+        source = (
+            Path(steward.__file__).resolve().parent / "merge_on_green.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("_OPENER.open(request", source)
+        self.assertNotIn("urllib.request.urlopen(request", source)
 
 
 class MergeMethodPolicyTests(unittest.TestCase):
