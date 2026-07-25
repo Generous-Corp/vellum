@@ -60,8 +60,60 @@ NODE24_ACTION_PINS = {
 }
 ACTION_USE = re.compile(r"^\s*-?\s*uses:\s+([^./\s][^@\s]+)@([0-9a-f]{40})\s*$")
 
+CHROME_ACTION = "browser-actions/setup-chrome"
+
+# Jobs that drive a browser fixture. Job environments do not inherit, so each
+# one must provision the pinned browser itself rather than rely on a browser
+# happening to exist on the runner.
+BROWSER_JOBS = {
+    "gpu-macos.yml": ("gpu-macos-arm64", "sterile-consumer"),
+}
+
+JOB_HEADER = re.compile(r"^  ([A-Za-z0-9_-]+):\s*$")
+
+
+def workflow_jobs(text: str) -> dict[str, str]:
+    lines = text.splitlines()
+    jobs: dict[str, list[str]] = {}
+    current: str | None = None
+    inside = False
+    for line in lines:
+        if line.rstrip() == "jobs:":
+            inside = True
+            continue
+        if not inside:
+            continue
+        if line.strip() and not line.startswith(" "):
+            break
+        header = JOB_HEADER.match(line)
+        if header:
+            current = header.group(1)
+            jobs[current] = []
+            continue
+        if current is not None:
+            jobs[current].append(line)
+    return {name: "\n".join(body) for name, body in jobs.items()}
+
 
 class RunnerPolicyTests(unittest.TestCase):
+    def test_browser_driving_jobs_provision_the_pinned_browser(self) -> None:
+        for filename, job_names in BROWSER_JOBS.items():
+            jobs = workflow_jobs((WORKFLOWS / filename).read_text(encoding="utf-8"))
+            for job_name in job_names:
+                with self.subTest(workflow=filename, job=job_name):
+                    body = jobs.get(job_name)
+                    self.assertIsNotNone(body, f"{filename}: {job_name} is missing")
+                    self.assertIn(
+                        f"{CHROME_ACTION}@{NODE24_ACTION_PINS[CHROME_ACTION]}",
+                        body,
+                        f"{filename}: {job_name} must install the pinned browser",
+                    )
+                    self.assertIn(
+                        "VELLUM_CHROME_PATH=",
+                        body,
+                        f"{filename}: {job_name} must export the pinned browser path",
+                    )
+
     def test_every_workflow_uses_an_explicit_self_hosted_fallback(self) -> None:
         workflow_paths = sorted(
             [*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]

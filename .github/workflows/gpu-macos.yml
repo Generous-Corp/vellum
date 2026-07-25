@@ -563,6 +563,24 @@ jobs:
     needs: gpu-macos-arm64
     runs-on: ${{ fromJSON(vars.VELLUM_MACOS_RUNS_ON_JSON || '["self-hosted","macOS","ARM64","vellum-build-macos"]') }}
     steps:
+      # The sterile journey drives a browser fixture, and job environments do
+      # not inherit. Provision the same pinned browser the proof job uses, so
+      # this lane never depends on one happening to exist on the runner.
+      - name: Install the pinned Chrome browser
+        id: setup-chrome
+        uses: browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd
+        with:
+          chrome-version: 151.0.7922.47
+
+      - name: Export the pinned Chrome browser path
+        shell: bash
+        env:
+          CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
+        run: |
+          set -euo pipefail
+          test -x "$CHROME_PATH"
+          printf 'VELLUM_CHROME_PATH=%s\n' "$CHROME_PATH" >> "$GITHUB_ENV"
+
       - name: Download only the release-shaped inputs
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
