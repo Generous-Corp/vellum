@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import io
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
+import urllib.error
 from unittest import mock
 
 import merge_on_green as steward
@@ -186,7 +189,93 @@ class MergeOnGreenTests(unittest.TestCase):
                     )
 
 
+class ApiTransportTests(unittest.TestCase):
+    """Cover _api itself. Every other test mocks it, which is exactly how a
+    missing `gh` binary reached production and failed every merge attempt."""
+
+    @staticmethod
+    def _response(payload: bytes):
+        response = mock.MagicMock()
+        response.read.return_value = payload
+        response.__enter__ = lambda self: self
+        response.__exit__ = lambda self, *exc: False
+        return response
+
+    def test_get_sends_a_bearer_token_and_parses_json(self) -> None:
+        with mock.patch.dict("os.environ", {"GH_TOKEN": "t0ken"}), mock.patch.object(
+            steward.urllib.request, "urlopen",
+            return_value=self._response(b'{"merged": true}'),
+        ) as urlopen:
+            self.assertEqual(steward._api("repos/o/r/pulls/1"), {"merged": True})
+        request = urlopen.call_args[0][0]
+        self.assertEqual(request.full_url, "https://api.github.com/repos/o/r/pulls/1")
+        self.assertEqual(request.get_method(), "GET")
+        self.assertEqual(request.get_header("Authorization"), "Bearer t0ken")
+        self.assertEqual(request.get_header("Accept"), "application/vnd.github+json")
+        self.assertIsNone(request.data)
+
+    def test_put_sends_a_json_body(self) -> None:
+        with mock.patch.dict("os.environ", {"GH_TOKEN": "t0ken"}), mock.patch.object(
+            steward.urllib.request, "urlopen",
+            return_value=self._response(b'{"merged": true}'),
+        ) as urlopen:
+            steward._api(
+                "repos/o/r/pulls/1/merge",
+                method="PUT",
+                body={"sha": HEAD, "merge_method": "merge"},
+            )
+        request = urlopen.call_args[0][0]
+        self.assertEqual(request.get_method(), "PUT")
+        self.assertEqual(request.get_header("Content-type"), "application/json")
+        self.assertEqual(
+            json.loads(request.data.decode("utf-8")),
+            {"sha": HEAD, "merge_method": "merge"},
+        )
+
+    def test_empty_body_returns_an_empty_mapping(self) -> None:
+        with mock.patch.dict("os.environ", {"GH_TOKEN": "t0ken"}), mock.patch.object(
+            steward.urllib.request, "urlopen", return_value=self._response(b"")
+        ):
+            self.assertEqual(steward._api("repos/o/r"), {})
+
+    def test_missing_token_fails_closed(self) -> None:
+        environment = {
+            key: value
+            for key, value in os.environ.items()
+            if key not in {"GH_TOKEN", "GITHUB_TOKEN"}
+        }
+        with mock.patch.dict("os.environ", environment, clear=True):
+            with self.assertRaisesRegex(steward.MergeError, "GH_TOKEN"):
+                steward._api("repos/o/r")
+
+    def test_http_and_network_errors_become_merge_errors(self) -> None:
+        failures = [
+            urllib.error.HTTPError(
+                "https://api.github.com/repos/o/r", 422, "Unprocessable",
+                {}, io.BytesIO(b'{"message":"head sha is stale"}'),
+            ),
+            urllib.error.URLError("connection refused"),
+        ]
+        for failure in failures:
+            with self.subTest(failure=type(failure).__name__):
+                with mock.patch.dict(
+                    "os.environ", {"GH_TOKEN": "t0ken"}
+                ), mock.patch.object(
+                    steward.urllib.request, "urlopen", side_effect=failure
+                ):
+                    with self.assertRaises(steward.MergeError):
+                        steward._api("repos/o/r")
+
+
 class MergeMethodPolicyTests(unittest.TestCase):
+    def test_steward_does_not_shell_out_to_a_cli(self) -> None:
+        source = (
+            Path(steward.__file__).resolve().parent / "merge_on_green.py"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("import subprocess", source)
+        self.assertNotIn('"gh"', source)
+
+
     def test_steward_never_squashes(self) -> None:
         # A squash rewrites the feature commits into one, so every observation
         # event keyed to a source commit is orphaned and the observatory's

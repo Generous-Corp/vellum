@@ -6,8 +6,12 @@ import json
 import os
 from pathlib import Path
 import re
-import subprocess
+import urllib.error
+import urllib.request
 from typing import Any
+
+
+API_ROOT = "https://api.github.com"
 
 
 REQUIRED_WORKFLOWS = (
@@ -23,25 +27,35 @@ class MergeError(RuntimeError):
 
 
 def _api(path: str, *, method: str = "GET", body: dict[str, Any] | None = None) -> Any:
-    command = ["gh", "api", "-X", method, path]
-    encoded = None
-    if body is not None:
-        command.extend(["--input", "-"])
-        encoded = json.dumps(body)
-    completed = subprocess.run(
-        command,
-        input=encoded,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
+    # Talk to the API directly rather than through a CLI: the runner images this
+    # steward is scheduled on do not all ship `gh`, and a missing binary would
+    # fail every merge attempt. The workflow already mints a scoped token.
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if not token:
+        raise MergeError("GH_TOKEN is required to reach the GitHub API")
+    encoded = json.dumps(body).encode("utf-8") if body is not None else None
+    request = urllib.request.Request(
+        f"{API_ROOT}/{path.lstrip('/')}", data=encoded, method=method
     )
-    if completed.returncode != 0:
-        detail = completed.stderr.strip() or completed.stdout.strip()
-        raise MergeError(f"GitHub API {method} {path} failed: {detail}")
-    if not completed.stdout.strip():
+    request.add_header("Authorization", f"Bearer {token}")
+    request.add_header("Accept", "application/vnd.github+json")
+    request.add_header("X-GitHub-Api-Version", "2022-11-28")
+    request.add_header("User-Agent", "vellum-merge-steward")
+    if encoded is not None:
+        request.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = response.read().decode("utf-8")
+    except urllib.error.HTTPError as error:
+        detail = error.read().decode("utf-8", errors="replace").strip()
+        raise MergeError(
+            f"GitHub API {method} {path} failed: {error.code} {detail}"
+        ) from error
+    except urllib.error.URLError as error:
+        raise MergeError(f"GitHub API {method} {path} failed: {error.reason}") from error
+    if not payload.strip():
         return {}
-    return json.loads(completed.stdout)
+    return json.loads(payload)
 
 
 def _associated_run(
