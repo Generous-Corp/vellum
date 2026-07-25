@@ -356,6 +356,18 @@ class AuthorityActivationTests(unittest.TestCase):
         self.assertIn(
             "group: authority-release-${{ inputs.authority_tag }}", release
         )
+        self.assertIn(
+            'printf \'id=%s\\n\' "${AUTHORITY_TAG#authority/}"', release
+        )
+        self.assertIn(
+            'title="Vellum authority: $AUTHORITY_ID"', release
+        )
+        self.assertIn(
+            "Immutable source-authority record for $AUTHORITY_ID.", release
+        )
+        self.assertNotIn(
+            'title="Vellum authority: native-design-kernel-v1"', release
+        )
         self.assertIn("cancel-in-progress: false", release)
         self.assertIn("ref: main", release)
         authority_runs_on = (
