@@ -150,7 +150,7 @@ class MergeOnGreenTests(unittest.TestCase):
                     workflow = path.split("/actions/workflows/", 1)[1].split("/", 1)[0]
                     return {"workflow_runs": green_matrix()[workflow]}
                 if path.endswith(f"/pulls/{PR}/merge"):
-                    self.assertEqual(body, {"sha": HEAD, "merge_method": "squash"})
+                    self.assertEqual(body, {"sha": HEAD, "merge_method": "merge"})
                     return {"merged": True}
                 raise AssertionError(path)
 
@@ -184,6 +184,20 @@ class MergeOnGreenTests(unittest.TestCase):
                     api.assert_called_once_with(
                         f"repos/Generous-Corp/vellum/pulls/{PR}"
                     )
+
+
+class MergeMethodPolicyTests(unittest.TestCase):
+    def test_steward_never_squashes(self) -> None:
+        # A squash rewrites the feature commits into one, so every observation
+        # event keyed to a source commit is orphaned and the observatory's
+        # cursor-coverage invariant fails on main. Decision 0001 rejects squash
+        # copies for the same path/commit-correspondence reason.
+        source = (
+            Path(steward.__file__).resolve().parent / "merge_on_green.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn('"merge_method": "merge"', source)
+        self.assertNotIn('"merge_method": "squash"', source)
+        self.assertNotIn('"merge_method": "rebase"', source)
 
 
 if __name__ == "__main__":

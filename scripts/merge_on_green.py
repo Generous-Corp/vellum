@@ -155,7 +155,11 @@ def run(event_path: Path, repository: str) -> int:
     result = _api(
         f"repos/{repository}/pulls/{pull_number}/merge",
         method="PUT",
-        body={"sha": current_head_sha, "merge_method": "squash"},
+        # Decision 0001 rejects squashing because it loses path/commit
+        # correspondence, and the observatory depends on that: every
+        # observation event is keyed to its source commit, so a squash orphans
+        # those commits and the cursor-coverage invariant fails on main.
+        body={"sha": current_head_sha, "merge_method": "merge"},
     )
     if result.get("merged") is not True:
         raise MergeError(f"GitHub declined the exact-head merge: {result}")
