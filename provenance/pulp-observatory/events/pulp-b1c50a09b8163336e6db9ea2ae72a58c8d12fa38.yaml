@@ -1,0 +1,55 @@
+{
+  "class": "build",
+  "contract_keys": [
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-09T10:04:06Z",
+  "disposition": "not-applicable",
+  "effort_minutes": 0,
+  "event_id": "pulp-b1c50a09b8163336e6db9ea2ae72a58c8d12fa38",
+  "include_dependency_deltas": [
+    "core/midi/CMakeLists.txt",
+    "core/signal/CMakeLists.txt",
+    "core/view/include/pulp/view/script_inspector_bridge.hpp",
+    "core/view/include/pulp/view/scripted_ui.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [
+    "b1c50a09b8163336e6db9ea2ae72a58c8d12fa38"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/pulp/pull/7240"
+  ],
+  "mapped_contracts": [
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "core/view/include/pulp/view/script_inspector_bridge.hpp",
+    "core/view/include/pulp/view/scripted_ui.hpp",
+    "core/view/src/script_inspector_bridge.cpp",
+    "core/view/src/scripted_ui.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": null,
+  "rationale": "Corrected first-parent audit found no changed path in the active transferred boundary. Other merge-parent history and broad contract mapping are discovery context only; no Vellum source port applies.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "c131a2a448f591bcb6f99cf23fb914dd2dd45e6f",
+    "to_commit": "fd3525a5e0f646d04d3e3655996908356dfde851"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "b1c50a09b8163336e6db9ea2ae72a58c8d12fa38",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": [
+    "core/midi/CMakeLists.txt",
+    "core/signal/CMakeLists.txt"
+  ]
+}

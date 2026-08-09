@@ -1,0 +1,50 @@
+{
+  "class": "rendering",
+  "contract_keys": [
+    "render-skia-dawn",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-09T10:04:06Z",
+  "disposition": "Pulp-only",
+  "effort_minutes": 0,
+  "event_id": "pulp-ec852ed955d117b1fc43167ba75c9047dedb0720",
+  "include_dependency_deltas": [],
+  "kind": "observation",
+  "linked_commits": [
+    "74d7d15e6d93aad50177007f6ebd992f3e5794a6",
+    "ec852ed955d117b1fc43167ba75c9047dedb0720"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/pulp/pull/6563"
+  ],
+  "mapped_contracts": [
+    "render-skia-dawn",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "core/render/src/gpu_surface_dawn.cpp",
+    "core/view/platform/win/plugin_view_host_win.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": null,
+  "rationale": "Frozen Pulp target fd3525a5e0f646d04d3e3655996908356dfde851 supplies immutable Pulp-only evidence for this first-parent observation. Pulp change event 20260725-windows-plugin-editor-present-mode at commit 74d7d15e6d93aad50177007f6ebd992f3e5794a6 (.github/vellum-change-events/20260725-windows-plugin-editor-present-mode.json) contains the authoritative checked-in rationale.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "c131a2a448f591bcb6f99cf23fb914dd2dd45e6f",
+    "to_commit": "fd3525a5e0f646d04d3e3655996908356dfde851"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "ec852ed955d117b1fc43167ba75c9047dedb0720",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": []
+}

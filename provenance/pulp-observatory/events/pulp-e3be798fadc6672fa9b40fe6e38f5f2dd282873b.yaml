@@ -1,0 +1,89 @@
+{
+  "class": "schema",
+  "contract_keys": [
+    "design-schema-compiler",
+    "macos-shell",
+    "pulp-design-import-tooling",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-09T10:04:06Z",
+  "disposition": "Pulp-only",
+  "effort_minutes": 0,
+  "event_id": "pulp-e3be798fadc6672fa9b40fe6e38f5f2dd282873b",
+  "include_dependency_deltas": [
+    "core/timeline/PulpTimelineSources.cmake",
+    "core/view/include/pulp/view/buttons.hpp",
+    "core/view/include/pulp/view/gesture.hpp",
+    "core/view/include/pulp/view/view.hpp",
+    "test/CMakeLists.txt",
+    "test/cmake/core_runtime_canvas_signal_tests.cmake",
+    "test/cmake/dsp_rt_contract_tests.cmake",
+    "test/cmake/dsp_series_modules.cmake",
+    "test/cmake/forge_modulation_catalog_tests.cmake",
+    "test/cmake/late_core_tests.cmake",
+    "test/cmake/timeline_tests.cmake"
+  ],
+  "kind": "observation",
+  "linked_commits": [
+    "613f8e42fd42c102f43328ff304030e2277eb337",
+    "e3be798fadc6672fa9b40fe6e38f5f2dd282873b"
+  ],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "design-schema-compiler",
+    "macos-shell",
+    "pulp-design-import-tooling",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "core/view/include/pulp/view/buttons.hpp",
+    "core/view/include/pulp/view/gesture.hpp",
+    "core/view/include/pulp/view/view.hpp",
+    "core/view/platform/mac/plugin_view_host_mac.mm",
+    "core/view/src/design_codegen.cpp",
+    "core/view/src/design_cpp_codegen.cpp",
+    "core/view/src/design_import_native_common.cpp",
+    "core/view/src/gesture.cpp",
+    "core/view/src/text_editor_paint.cpp",
+    "core/view/src/view.cpp",
+    "core/view/src/widget_bridge/event_api.cpp",
+    "test/test_design_import_codegen.cpp",
+    "test/test_design_import_native_materializer.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "1d03defbc6aa27e0232587adb473b7ecaff292b9",
+  "rationale": "Frozen Pulp target fd3525a5e0f646d04d3e3655996908356dfde851 supplies immutable Pulp-only evidence for this first-parent observation. Pulp change event 20260725-gesture-claim-vs-candidacy at commit 613f8e42fd42c102f43328ff304030e2277eb337 (.github/vellum-change-events/20260725-gesture-claim-vs-candidacy.json) contains the authoritative checked-in rationale.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "c131a2a448f591bcb6f99cf23fb914dd2dd45e6f",
+    "to_commit": "fd3525a5e0f646d04d3e3655996908356dfde851"
+  },
+  "schema_api_deltas": [
+    "core/timeline/schema/timeline_types.d.ts",
+    "test/cmake/dsp_rt_contract_tests.cmake"
+  ],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "e3be798fadc6672fa9b40fe6e38f5f2dd282873b",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": [
+    "core/timeline/PulpTimelineSources.cmake",
+    "core/timeline/schema/timeline_types.d.ts",
+    "test/CMakeLists.txt",
+    "test/cmake/core_runtime_canvas_signal_tests.cmake",
+    "test/cmake/dsp_rt_contract_tests.cmake",
+    "test/cmake/dsp_series_modules.cmake",
+    "test/cmake/forge_modulation_catalog_tests.cmake",
+    "test/cmake/late_core_tests.cmake",
+    "test/cmake/timeline_tests.cmake"
+  ]
+}

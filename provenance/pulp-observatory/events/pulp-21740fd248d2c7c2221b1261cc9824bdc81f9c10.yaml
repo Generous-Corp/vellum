@@ -1,0 +1,60 @@
+{
+  "class": "schema",
+  "contract_keys": [
+    "design-schema-compiler",
+    "pulp-design-import-tooling",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-09T10:04:06Z",
+  "disposition": "not-applicable",
+  "effort_minutes": 0,
+  "event_id": "pulp-21740fd248d2c7c2221b1261cc9824bdc81f9c10",
+  "include_dependency_deltas": [
+    "core/view/src/design_import_native_common.hpp",
+    "core/view/src/design_ir_helpers.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [
+    "21740fd248d2c7c2221b1261cc9824bdc81f9c10"
+  ],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "design-schema-compiler",
+    "pulp-design-import-tooling",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "core/view/src/design_import_native_common.cpp",
+    "core/view/src/design_import_native_common.hpp",
+    "core/view/src/design_ir_helpers.hpp",
+    "test/test_design_import_native_capture.cpp",
+    "test/test_design_import_native_common.cpp",
+    "test/test_design_import_native_materializer.cpp",
+    "tools/import-design/design_ir_observe.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "a8bcfa15381532b7652203a1317ebb03141246eb",
+  "rationale": "Corrected first-parent audit found no changed path in the active transferred boundary. Other merge-parent history and broad contract mapping are discovery context only; no Vellum source port applies.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "c131a2a448f591bcb6f99cf23fb914dd2dd45e6f",
+    "to_commit": "fd3525a5e0f646d04d3e3655996908356dfde851"
+  },
+  "schema_api_deltas": [
+    "core/view/src/design_ir_helpers.hpp",
+    "tools/import-design/design_ir_observe.cpp"
+  ],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "21740fd248d2c7c2221b1261cc9824bdc81f9c10",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": []
+}

@@ -1,0 +1,50 @@
+{
+  "class": "correctness",
+  "contract_keys": [
+    "design-schema-compiler",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-09T10:04:06Z",
+  "disposition": "Pulp-only",
+  "effort_minutes": 0,
+  "event_id": "pulp-15ac8fd6c8e1666649a5c8bb0d958f8fdc081d04",
+  "include_dependency_deltas": [],
+  "kind": "observation",
+  "linked_commits": [
+    "15ac8fd6c8e1666649a5c8bb0d958f8fdc081d04",
+    "2ee68b74b700e20e90b40ae21dc2066e2987f396",
+    "8cbf62ed00564bfd2b060d2aaa56f6c9caeeaf35"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/pulp/pull/6821"
+  ],
+  "mapped_contracts": [
+    "design-schema-compiler",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "core/view/src/design_tokens.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "52b84589e3188696b48fb5274eb8f81e4a0768cc",
+  "rationale": "Frozen Pulp target fd3525a5e0f646d04d3e3655996908356dfde851 supplies immutable Pulp-only evidence for this first-parent observation. Pulp change event 20260729-backdrop-filter-crop at commit 2ee68b74b700e20e90b40ae21dc2066e2987f396 (.github/vellum-change-events/20260729-backdrop-filter-crop.json) contains the authoritative checked-in rationale. Pulp change event 20260729-design-accent-widget-tokens at commit 8cbf62ed00564bfd2b060d2aaa56f6c9caeeaf35 (.github/vellum-change-events/20260729-design-accent-widget-tokens.json) contains the authoritative checked-in rationale.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "c131a2a448f591bcb6f99cf23fb914dd2dd45e6f",
+    "to_commit": "fd3525a5e0f646d04d3e3655996908356dfde851"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "15ac8fd6c8e1666649a5c8bb0d958f8fdc081d04",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": []
+}

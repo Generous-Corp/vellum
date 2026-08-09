@@ -179,6 +179,7 @@ def render_markdown(report: dict[str, object]) -> str:
         f"- Health: `{report['health']}`",
         f"- Pending events: {report['pending']}",
         f"- Overdue events: {report['overdue']}",
+        f"- Release blockers: {len(report['release_blockers'])}",
         (
             f"- Observatory effort: {report['observatory_effort_percent']}% "
             "of framework effort"
@@ -203,6 +204,11 @@ def render_markdown(report: dict[str, object]) -> str:
             )
     else:
         lines.append("No mapped change events have been recorded.")
+    lines.extend(["", "## Release blockers", ""])
+    release_blockers = report["release_blockers"]
+    lines.extend(f"- `{blocker}`" for blocker in release_blockers)
+    if not release_blockers:
+        lines.append("None.")
     lines.extend(["", "## Activation blockers", ""])
     blockers = report["activation_blockers"]
     lines.extend(f"- `{blocker}`" for blocker in blockers)

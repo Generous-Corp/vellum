@@ -1,0 +1,64 @@
+{
+  "class": "rendering",
+  "contract_keys": [
+    "canvas-kernel",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-09T10:04:06Z",
+  "disposition": "Pulp-only",
+  "effort_minutes": 0,
+  "event_id": "pulp-024d44c6c9e5ad561a65033f71d4c3687bb2fde4",
+  "include_dependency_deltas": [
+    "core/canvas/include/pulp/canvas/canvas.hpp",
+    "core/canvas/include/pulp/canvas/cg_canvas.hpp",
+    "core/canvas/include/pulp/canvas/skia_canvas.hpp",
+    "core/canvas/src/skia_gradient_compat.hpp",
+    "core/view/include/pulp/view/view.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [
+    "024d44c6c9e5ad561a65033f71d4c3687bb2fde4",
+    "6cb7db7580e1ffda7a424006fefadd17ca00b589"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/pulp/pull/7005"
+  ],
+  "mapped_contracts": [
+    "canvas-kernel",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "core/canvas/include/pulp/canvas/canvas.hpp",
+    "core/canvas/include/pulp/canvas/cg_canvas.hpp",
+    "core/canvas/include/pulp/canvas/skia_canvas.hpp",
+    "core/canvas/platform/mac/cg_canvas.mm",
+    "core/canvas/platform/mac/cg_canvas_gradients.mm",
+    "core/canvas/src/skia_canvas_gradients.cpp",
+    "core/canvas/src/skia_gradient_compat.hpp",
+    "core/view/include/pulp/view/view.hpp",
+    "core/view/src/css_gradient.cpp",
+    "core/view/src/view_paint.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": null,
+  "rationale": "Frozen Pulp target fd3525a5e0f646d04d3e3655996908356dfde851 supplies immutable Pulp-only evidence for this first-parent observation. Pulp change event 20260801-native-design-render-styles at commit 6cb7db7580e1ffda7a424006fefadd17ca00b589 (.github/vellum-change-events/20260801-native-design-render-styles.json) contains the authoritative checked-in rationale.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "c131a2a448f591bcb6f99cf23fb914dd2dd45e6f",
+    "to_commit": "fd3525a5e0f646d04d3e3655996908356dfde851"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "024d44c6c9e5ad561a65033f71d4c3687bb2fde4",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": []
+}

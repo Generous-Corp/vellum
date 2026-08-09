@@ -4,6 +4,12 @@ Status: decision report for Phase 1. This report records a disposable
 merge-aware reconciliation and the dependency/export boundary. It does not
 apply source patches or authorize Pulp consumption.
 
+Correction (Phase 3): the initial path helper combined `-m` with
+`--first-parent`; Git emitted one diff per merge parent despite the latter
+option. Recomputing every observation as the exact `parent[0]..commit` diff
+removes merge-parent propagation from the active-path and event-lineage counts
+below. The selected eight non-merge convergence inputs are unchanged.
+
 ## Frozen inputs
 
 | Input | Coordinate |
@@ -31,7 +37,7 @@ Classification used exact paths from Pulp's
 `.github/vellum-ownership.json`, first-parent diffs for merge commits, stable
 Git patch IDs for non-merges, commit/PR lineage, and the presence and rationale
 of `.github/vellum-change-events/` files. The complete corrected 23-commit
-unresolved classification and the 33-commit PR/event correction are listed
+unresolved classification and the 32-commit PR/event correction are listed
 below, so every result can be checked from the frozen repositories without
 relying on the disposable path.
 
@@ -47,10 +53,10 @@ following are observation counts, not port counts:
 
 | Classification | Observations | Interpretation |
 | --- | ---: | --- |
-| Any exact active transferred path | 190 | Upper-bound surface intersection; merge and mixed commits are included |
-| Exact active path covered by an existing Pulp change-event file | 167 | 134 observations carry the event in the same commit; 33 more share the event's PR/merge lineage. Existing Pulp rationale must be retained; no automatic backport |
+| Any exact active transferred path | 165 | Corrected first-parent surface intersection; merge-parent propagation is excluded |
+| Exact active path covered by an existing Pulp change-event file | 142 | 110 observations carry the event in the same first-parent diff; 32 more share the event's PR/merge lineage. Existing Pulp rationale must be retained; no automatic backport |
 | Exact active path without a Pulp change-event in its PR/merge lineage | 23 | Unresolved candidate pool; requires reproduction and ownership review |
-| No exact active transferred path | 265 | Broad-map related tooling, tests, docs, integration, or unrelated work |
+| No exact active transferred path | 290 | Broad-map related tooling, tests, docs, merge-parent propagation, integration, or unrelated work |
 | Observations with an upstream PR reference in the commit subject | 80 | Lineage clues only; PR content still needs source inspection |
 
 The largest classes are importer 130, correctness 96, schema 63, platform 50,
@@ -65,7 +71,7 @@ The first pass associated a change event only when its file was added in the
 same individual commit as an observation. That is not the freeze contract's
 unit: the gate compares the PR's proposed merge and permits the source changes
 and their immutable event to be separate commits in that PR. Joining both
-sides through GitHub's commit-to-PR lineage removes 33 false candidates,
+sides through GitHub's commit-to-PR lineage removes 32 false candidates,
 including `f606dcd5`, `309ef9a0`, `7620cd1e`, and `99adf702`, whose PRs contain
 the matching `pulp-only` event records.
 
@@ -84,7 +90,7 @@ the matching `pulp-only` event records.
 | `#6811` | `20260729-yoga-non-finite-measurement` | `7dd61fec` |
 | `#6821` | `20260729-backdrop-filter-crop`, `20260729-design-accent-widget-tokens` | `15ac8fd6`, `309ef9a0` |
 | `#6825` | `20260729-browser-solved-html-source` | `8d825d50` |
-| `#7005` | `20260801-native-design-render-styles` | `024d44c6`, `5048a9e7`, `659577a3`, `708b8e5a`, `90b6833c`, `929941df`, `a6b2dfc0`, `bd125a55`, `ca8ed254`, `e8996848` |
+| `#7005` | `20260801-native-design-render-styles` | `024d44c6`, `659577a3`, `708b8e5a`, `90b6833c`, `929941df`, `a6b2dfc0`, `bd125a55`, `ca8ed254`, `e8996848` |
 
 The corrected 23 exact-path/no-event observations reduce to four
 behavior-review groups, 11 retained Pulp integrations, and two merge envelopes.
@@ -99,7 +105,7 @@ there is no patch-identical change to apply automatically.
 | DesignIR attributed/mixed typography review group | 2 | `26176987`, `66095906` |
 | Capture review group | 1 | `083ae5ac` |
 | Retained Pulp product/platform/tooling integration | 11 | `0c5d5cdd`, `1e214139`, `2cf5e7ae`, `5256c64e`, `86491a90`, `b137291d`, `b30444fb`, `b443f225`, `c623ce67`, `c8f638d9`, `d563ec70` |
-| Merge envelopes, resolved through constituent commits | 2 | `59c0917a`, `94c8311d` |
+| Merge envelopes, resolved through constituent commits | 2 | `59c0917a`, `ca414993` |
 
 The ten observations in the four behavior-review groups are review inputs, not
 a shared or selected set. The behavior-level comparison below resolves two to
@@ -119,11 +125,11 @@ Windows compatibility, musical typing, and Pulp-only docs. Those do not become
 Vellum work merely because a mixed commit touched a transferred path.
 
 Existing `.github/vellum-change-events/` records are PR-level disposition and
-rationale evidence for the 167 event-covered observations; they do not transfer
+rationale evidence for the 142 event-covered observations; they do not transfer
 the active slices' source authority back from Vellum. Their `pulp-only` claims
 exclude automatic backport, but ledger catch-up must retain and validate each
 claim through counterpart reproduction. Only an immutable authority-transition
-record can change ownership. The broad-map 265 are reported separately because
+record can change ownership. The broad-map 290 are reported separately because
 shared contract labels alone do not establish source ownership.
 
 ### Two-repository reproduction

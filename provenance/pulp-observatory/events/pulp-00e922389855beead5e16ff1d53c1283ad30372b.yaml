@@ -1,0 +1,65 @@
+{
+  "class": "schema",
+  "contract_keys": [
+    "legacy-figma-schema",
+    "pulp-figma-exporter"
+  ],
+  "contract_tests": [
+    "vellum-design-ir"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-09T10:04:06Z",
+  "disposition": "not-applicable",
+  "effort_minutes": 0,
+  "event_id": "pulp-00e922389855beead5e16ff1d53c1283ad30372b",
+  "include_dependency_deltas": [
+    "tools/figma-plugin/src/ui.html"
+  ],
+  "kind": "observation",
+  "linked_commits": [
+    "00e922389855beead5e16ff1d53c1283ad30372b"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/pulp/pull/6526"
+  ],
+  "mapped_contracts": [
+    "legacy-figma-schema",
+    "pulp-figma-exporter"
+  ],
+  "mapped_paths": [
+    "tools/figma-plugin/README.md",
+    "tools/figma-plugin/schema/figma-plugin-export-v1.json",
+    "tools/figma-plugin/src/code.ts",
+    "tools/figma-plugin/src/extract-model.ts",
+    "tools/figma-plugin/src/extract-pure.ts",
+    "tools/figma-plugin/src/extract.ts",
+    "tools/figma-plugin/src/forge-roundtrip.ts",
+    "tools/figma-plugin/src/serialize.ts",
+    "tools/figma-plugin/src/types.generated.ts",
+    "tools/figma-plugin/src/types.ts",
+    "tools/figma-plugin/src/ui.html",
+    "tools/figma-plugin/src/ui.ts",
+    "tools/figma-plugin/src/user-fonts.ts",
+    "tools/figma-plugin/test/faithful-vector.test.ts",
+    "tools/figma-plugin/test/forge-roundtrip.test.ts",
+    "tools/figma-plugin/test/serialize.test.ts",
+    "tools/figma-plugin/test/text-runs.test.ts"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": null,
+  "rationale": "Corrected first-parent audit found no changed path in the active transferred boundary. Other merge-parent history and broad contract mapping are discovery context only; no Vellum source port applies.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "c131a2a448f591bcb6f99cf23fb914dd2dd45e6f",
+    "to_commit": "fd3525a5e0f646d04d3e3655996908356dfde851"
+  },
+  "schema_api_deltas": [
+    "tools/figma-plugin/schema/figma-plugin-export-v1.json"
+  ],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "00e922389855beead5e16ff1d53c1283ad30372b",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": []
+}

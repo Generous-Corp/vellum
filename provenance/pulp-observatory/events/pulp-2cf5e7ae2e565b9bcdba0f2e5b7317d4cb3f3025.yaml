@@ -1,0 +1,62 @@
+{
+  "class": "schema",
+  "contract_keys": [
+    "canvas-kernel",
+    "design-schema-compiler",
+    "pulp-design-import-tooling",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-09T10:04:06Z",
+  "disposition": "Pulp-only",
+  "effort_minutes": 0,
+  "event_id": "pulp-2cf5e7ae2e565b9bcdba0f2e5b7317d4cb3f3025",
+  "include_dependency_deltas": [
+    "core/canvas/include/pulp/canvas/text_shaper.hpp",
+    "core/view/include/pulp/view/widgets.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [
+    "2cf5e7ae2e565b9bcdba0f2e5b7317d4cb3f3025"
+  ],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel",
+    "design-schema-compiler",
+    "pulp-design-import-tooling",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "core/canvas/include/pulp/canvas/text_shaper.hpp",
+    "core/view/include/pulp/view/widgets.hpp",
+    "core/view/src/design_import_native_common.cpp",
+    "core/view/src/widgets/label.cpp",
+    "tools/import-design/browser_capture_tree.cpp",
+    "tools/import-design/design_ir_observe.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "a388e0b1a41c0c5e54e2c74618adbc7262f850f7",
+  "rationale": "Retained Pulp integration behavior: Pulp browser-capture line-wrap oracle. No Vellum source port applies.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "c131a2a448f591bcb6f99cf23fb914dd2dd45e6f",
+    "to_commit": "fd3525a5e0f646d04d3e3655996908356dfde851"
+  },
+  "schema_api_deltas": [
+    "tools/import-design/design_ir_observe.cpp"
+  ],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "2cf5e7ae2e565b9bcdba0f2e5b7317d4cb3f3025",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": []
+}

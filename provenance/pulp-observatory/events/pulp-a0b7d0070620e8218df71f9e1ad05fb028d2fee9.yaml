@@ -1,0 +1,61 @@
+{
+  "class": "platform",
+  "contract_keys": [
+    "macos-shell",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-09T10:04:06Z",
+  "disposition": "Pulp-only",
+  "effort_minutes": 0,
+  "event_id": "pulp-a0b7d0070620e8218df71f9e1ad05fb028d2fee9",
+  "include_dependency_deltas": [
+    "CMakeLists.txt",
+    "core/view/include/pulp/view/hot_reload.hpp",
+    "core/view/include/pulp/view/scripted_ui.hpp",
+    "core/view/include/pulp/view/window_host.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [
+    "a0b7d0070620e8218df71f9e1ad05fb028d2fee9",
+    "a2f11c3e7abe026178fd1e34ea0716365c691986"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/pulp/pull/7083"
+  ],
+  "mapped_contracts": [
+    "macos-shell",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "core/view/include/pulp/view/hot_reload.hpp",
+    "core/view/include/pulp/view/scripted_ui.hpp",
+    "core/view/include/pulp/view/window_host.hpp",
+    "core/view/platform/mac/window_host_mac.mm",
+    "core/view/platform/web/window_host_web.cpp",
+    "core/view/src/hot_reload.cpp",
+    "core/view/src/scripted_ui.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": null,
+  "rationale": "Frozen Pulp target fd3525a5e0f646d04d3e3655996908356dfde851 supplies immutable Pulp-only evidence for this first-parent observation. Pulp change event 20260802-inspector-window-host-lifecycle at commit a2f11c3e7abe026178fd1e34ea0716365c691986 (.github/vellum-change-events/20260802-inspector-window-host-lifecycle.json) contains the authoritative checked-in rationale.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "c131a2a448f591bcb6f99cf23fb914dd2dd45e6f",
+    "to_commit": "fd3525a5e0f646d04d3e3655996908356dfde851"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "a0b7d0070620e8218df71f9e1ad05fb028d2fee9",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": [
+    "CMakeLists.txt"
+  ]
+}

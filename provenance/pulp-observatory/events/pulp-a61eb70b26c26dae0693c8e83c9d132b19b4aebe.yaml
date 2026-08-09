@@ -1,0 +1,51 @@
+{
+  "class": "platform",
+  "contract_keys": [
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-09T10:04:06Z",
+  "disposition": "Pulp-only",
+  "effort_minutes": 0,
+  "event_id": "pulp-a61eb70b26c26dae0693c8e83c9d132b19b4aebe",
+  "include_dependency_deltas": [
+    "core/view/include/pulp/view/platform/win_pointer_input.hpp",
+    "core/view/include/pulp/view/pointer_dispatch.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [
+    "a61eb70b26c26dae0693c8e83c9d132b19b4aebe",
+    "c68e8010f1c0e23d4c5984d5a5fb4972ae10de4b"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/pulp/pull/6637"
+  ],
+  "mapped_contracts": [
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "core/view/include/pulp/view/platform/win_pointer_input.hpp",
+    "core/view/include/pulp/view/pointer_dispatch.hpp",
+    "core/view/platform/win/plugin_view_host_win.cpp",
+    "core/view/src/pointer_dispatch.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "17517acb104686b1e7c8ef40c86e07727564362d",
+  "rationale": "Frozen Pulp target fd3525a5e0f646d04d3e3655996908356dfde851 supplies immutable Pulp-only evidence for this first-parent observation. Pulp change event 20260726-windows-editor-input-dispatch at commit c68e8010f1c0e23d4c5984d5a5fb4972ae10de4b (.github/vellum-change-events/20260726-windows-editor-input-dispatch.json) contains the authoritative checked-in rationale.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "c131a2a448f591bcb6f99cf23fb914dd2dd45e6f",
+    "to_commit": "fd3525a5e0f646d04d3e3655996908356dfde851"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "a61eb70b26c26dae0693c8e83c9d132b19b4aebe",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": []
+}

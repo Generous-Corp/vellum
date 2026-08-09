@@ -1,0 +1,54 @@
+{
+  "class": "platform",
+  "contract_keys": [
+    "macos-shell",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-09T10:04:06Z",
+  "disposition": "superseded",
+  "effort_minutes": 0,
+  "event_id": "pulp-59c0917ab21df9750f00decac2976b321be57dc0",
+  "include_dependency_deltas": [
+    "core/view/include/pulp/view/ui_components.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [
+    "59c0917ab21df9750f00decac2976b321be57dc0"
+  ],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "macos-shell",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "core/view/include/pulp/view/ui_components.hpp",
+    "core/view/platform/mac/plugin_view_host_mac.mm",
+    "core/view/platform/mac/window_host_mac.mm",
+    "core/view/src/pointer_dispatch.cpp",
+    "core/view/src/ui_components.cpp",
+    "core/view/src/virtual_grid.cpp",
+    "core/view/src/virtual_list.cpp",
+    "core/view/src/widget_bridge.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": null,
+  "rationale": "First-parent merge envelope with no independent transferred contract; substantive constituent observations carry the durable classifications.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "c131a2a448f591bcb6f99cf23fb914dd2dd45e6f",
+    "to_commit": "fd3525a5e0f646d04d3e3655996908356dfde851"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "59c0917ab21df9750f00decac2976b321be57dc0",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": []
+}

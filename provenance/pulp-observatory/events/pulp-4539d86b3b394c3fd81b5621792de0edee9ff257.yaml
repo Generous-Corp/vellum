@@ -1,0 +1,57 @@
+{
+  "class": "rendering",
+  "contract_keys": [
+    "canvas-kernel",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-09T10:04:06Z",
+  "disposition": "superseded",
+  "effort_minutes": 0,
+  "event_id": "pulp-4539d86b3b394c3fd81b5621792de0edee9ff257",
+  "include_dependency_deltas": [
+    "core/canvas/include/pulp/canvas/canvas.hpp",
+    "core/canvas/include/pulp/canvas/skia_canvas.hpp",
+    "core/canvas/src/skia_gradient_compat.hpp",
+    "core/view/include/pulp/view/view.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [
+    "4539d86b3b394c3fd81b5621792de0edee9ff257"
+  ],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "core/canvas/include/pulp/canvas/canvas.hpp",
+    "core/canvas/include/pulp/canvas/skia_canvas.hpp",
+    "core/canvas/src/skia_canvas_gradients.cpp",
+    "core/canvas/src/skia_gradient_compat.hpp",
+    "core/view/include/pulp/view/view.hpp",
+    "core/view/src/css_gradient.cpp",
+    "core/view/src/view_paint.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "76cf0226eaad9f9db77a6703d7b59b28015382c2",
+  "rationale": "Consolidated under pulp-401f39b321920896f73c591e62ff577f290fb4ae; this observation remains a named acceptance input for Repeating linear-gradient rendering. It is not evidence of source parity.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "c131a2a448f591bcb6f99cf23fb914dd2dd45e6f",
+    "to_commit": "fd3525a5e0f646d04d3e3655996908356dfde851"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "4539d86b3b394c3fd81b5621792de0edee9ff257",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": []
+}

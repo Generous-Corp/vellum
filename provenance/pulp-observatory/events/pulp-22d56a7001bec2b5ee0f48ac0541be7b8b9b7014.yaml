@@ -1,0 +1,69 @@
+{
+  "class": "schema",
+  "contract_keys": [
+    "macos-shell",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-09T10:04:06Z",
+  "disposition": "Pulp-only",
+  "effort_minutes": 0,
+  "event_id": "pulp-22d56a7001bec2b5ee0f48ac0541be7b8b9b7014",
+  "include_dependency_deltas": [
+    "CMakeLists.txt",
+    "core/format/CMakeLists.txt",
+    "core/timeline/PulpTimelineSources.cmake",
+    "core/view/CMakeLists.txt",
+    "core/view/include/pulp/view/musical_typing_keyboard.hpp",
+    "core/view/include/pulp/view/window_host.hpp",
+    "core/view/platform/mac/app_menu_mac.hpp",
+    "core/view/platform/mac/pulp_mac_objc_names.h"
+  ],
+  "kind": "observation",
+  "linked_commits": [
+    "22d56a7001bec2b5ee0f48ac0541be7b8b9b7014",
+    "6fd945dafd60e583679f369cfb638ea974626c23"
+  ],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "macos-shell",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "core/view/CMakeLists.txt",
+    "core/view/include/pulp/view/musical_typing_keyboard.hpp",
+    "core/view/include/pulp/view/window_host.hpp",
+    "core/view/platform/mac/app_menu_mac.hpp",
+    "core/view/platform/mac/app_menu_mac.mm",
+    "core/view/platform/mac/pulp_mac_objc_names.h",
+    "core/view/platform/mac/window_host_mac.mm",
+    "core/view/src/musical_typing_keyboard.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": null,
+  "rationale": "Frozen Pulp target fd3525a5e0f646d04d3e3655996908356dfde851 supplies immutable Pulp-only evidence for this first-parent observation. Pulp change event 20260727-standalone-musical-typing at commit 6fd945dafd60e583679f369cfb638ea974626c23 (.github/vellum-change-events/20260727-standalone-musical-typing.json) contains the authoritative checked-in rationale.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "c131a2a448f591bcb6f99cf23fb914dd2dd45e6f",
+    "to_commit": "fd3525a5e0f646d04d3e3655996908356dfde851"
+  },
+  "schema_api_deltas": [
+    "core/timeline/schema/timeline_types.d.ts"
+  ],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "22d56a7001bec2b5ee0f48ac0541be7b8b9b7014",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": [
+    "CMakeLists.txt",
+    "core/format/CMakeLists.txt",
+    "core/timeline/PulpTimelineSources.cmake",
+    "core/timeline/schema/timeline_types.d.ts"
+  ]
+}

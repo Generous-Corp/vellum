@@ -1,0 +1,54 @@
+{
+  "class": "importer",
+  "contract_keys": [
+    "design-schema-compiler",
+    "pulp-design-import-tooling",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-09T10:04:06Z",
+  "disposition": "not-applicable",
+  "effort_minutes": 0,
+  "event_id": "pulp-22ea2623680c402dc141d09c7a6dfe43c0a37fd1",
+  "include_dependency_deltas": [
+    "tools/import-design/browser_capture_tree.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [
+    "22ea2623680c402dc141d09c7a6dfe43c0a37fd1"
+  ],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "design-schema-compiler",
+    "pulp-design-import-tooling",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "core/view/src/design_codegen.cpp",
+    "test/test_design_import_codegen.cpp",
+    "tools/import-design/browser_capture_ir.cpp",
+    "tools/import-design/browser_capture_tree.cpp",
+    "tools/import-design/browser_capture_tree.hpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "6ce061e3430f7e6bc9eb9e15e4ab55c5b8ab3f89",
+  "rationale": "Corrected first-parent audit found no changed path in the active transferred boundary. Other merge-parent history and broad contract mapping are discovery context only; no Vellum source port applies.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "c131a2a448f591bcb6f99cf23fb914dd2dd45e6f",
+    "to_commit": "fd3525a5e0f646d04d3e3655996908356dfde851"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "22ea2623680c402dc141d09c7a6dfe43c0a37fd1",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": []
+}

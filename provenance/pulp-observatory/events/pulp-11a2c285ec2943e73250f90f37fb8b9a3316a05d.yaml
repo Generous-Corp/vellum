@@ -1,0 +1,43 @@
+{
+  "class": "importer",
+  "contract_keys": [
+    "pulp-design-import-tooling"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-09T10:04:06Z",
+  "disposition": "not-applicable",
+  "effort_minutes": 0,
+  "event_id": "pulp-11a2c285ec2943e73250f90f37fb8b9a3316a05d",
+  "include_dependency_deltas": [],
+  "kind": "observation",
+  "linked_commits": [
+    "11a2c285ec2943e73250f90f37fb8b9a3316a05d"
+  ],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "pulp-design-import-tooling"
+  ],
+  "mapped_paths": [
+    "test/test_import_design_tool.cpp",
+    "tools/import-design/envelope_merge.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "73f5fa548cc3f3eb4ce20890f2590080eb317a02",
+  "rationale": "Corrected first-parent audit found no changed path in the active transferred boundary. Other merge-parent history and broad contract mapping are discovery context only; no Vellum source port applies.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "c131a2a448f591bcb6f99cf23fb914dd2dd45e6f",
+    "to_commit": "fd3525a5e0f646d04d3e3655996908356dfde851"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "11a2c285ec2943e73250f90f37fb8b9a3316a05d",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": []
+}

@@ -1,0 +1,42 @@
+{
+  "class": "rendering",
+  "contract_keys": [
+    "canvas-kernel"
+  ],
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-09T10:04:06Z",
+  "disposition": "superseded",
+  "effort_minutes": 0,
+  "event_id": "pulp-9b6fd0ab718aedb726b0f7ddc0880012ed406346",
+  "include_dependency_deltas": [],
+  "kind": "observation",
+  "linked_commits": [
+    "9b6fd0ab718aedb726b0f7ddc0880012ed406346"
+  ],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel"
+  ],
+  "mapped_paths": [
+    "core/canvas/src/skia_canvas_box_shadow.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "87d1ad24eef6660045969eff535a23c5455ea658",
+  "rationale": "Consolidated under pulp-401f39b321920896f73c591e62ff577f290fb4ae; this observation remains a named acceptance input for Outset-shadow corner-radius geometry. It is not evidence of source parity.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "c131a2a448f591bcb6f99cf23fb914dd2dd45e6f",
+    "to_commit": "fd3525a5e0f646d04d3e3655996908356dfde851"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "9b6fd0ab718aedb726b0f7ddc0880012ed406346",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": []
+}

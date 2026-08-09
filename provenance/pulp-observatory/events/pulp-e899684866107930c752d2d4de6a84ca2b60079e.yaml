@@ -1,0 +1,56 @@
+{
+  "class": "importer",
+  "contract_keys": [
+    "design-schema-compiler",
+    "pulp-design-import-tooling",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-09T10:04:06Z",
+  "disposition": "Pulp-only",
+  "effort_minutes": 0,
+  "event_id": "pulp-e899684866107930c752d2d4de6a84ca2b60079e",
+  "include_dependency_deltas": [
+    "core/view/include/pulp/view/design_tokens.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [
+    "6cb7db7580e1ffda7a424006fefadd17ca00b589",
+    "e899684866107930c752d2d4de6a84ca2b60079e"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/pulp/pull/7005"
+  ],
+  "mapped_contracts": [
+    "design-schema-compiler",
+    "pulp-design-import-tooling",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "core/view/include/pulp/view/design_tokens.hpp",
+    "core/view/src/design_import_native_common.cpp",
+    "core/view/src/design_tokens.cpp",
+    "test/test_design_import_native_common.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "c46501925698aa193e40d28715507c4a8b827eb5",
+  "rationale": "Frozen Pulp target fd3525a5e0f646d04d3e3655996908356dfde851 supplies immutable Pulp-only evidence for this first-parent observation. Pulp change event 20260801-native-design-render-styles at commit 6cb7db7580e1ffda7a424006fefadd17ca00b589 (.github/vellum-change-events/20260801-native-design-render-styles.json) contains the authoritative checked-in rationale.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "c131a2a448f591bcb6f99cf23fb914dd2dd45e6f",
+    "to_commit": "fd3525a5e0f646d04d3e3655996908356dfde851"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "e899684866107930c752d2d4de6a84ca2b60079e",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": []
+}

@@ -1,0 +1,50 @@
+{
+  "class": "importer",
+  "contract_keys": [
+    "pulp-figma-exporter"
+  ],
+  "contract_tests": [
+    "vellum-design-ir"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-09T10:04:06Z",
+  "disposition": "not-applicable",
+  "effort_minutes": 0,
+  "event_id": "pulp-12bb2bc0a7655fa72e43f4d3bac6e54de3acc636",
+  "include_dependency_deltas": [
+    "tools/figma-plugin/src/ui.html"
+  ],
+  "kind": "observation",
+  "linked_commits": [
+    "12bb2bc0a7655fa72e43f4d3bac6e54de3acc636"
+  ],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "pulp-figma-exporter"
+  ],
+  "mapped_paths": [
+    "tools/figma-plugin/README.md",
+    "tools/figma-plugin/src/code.ts",
+    "tools/figma-plugin/src/extract.ts",
+    "tools/figma-plugin/src/forge-roundtrip.ts",
+    "tools/figma-plugin/src/types.ts",
+    "tools/figma-plugin/src/ui.html",
+    "tools/figma-plugin/src/ui.ts",
+    "tools/figma-plugin/test/forge-roundtrip.test.ts"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "3686859ca6e8b7b79b69a18f1822323ff46a983f",
+  "rationale": "Corrected first-parent audit found no changed path in the active transferred boundary. Other merge-parent history and broad contract mapping are discovery context only; no Vellum source port applies.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "c131a2a448f591bcb6f99cf23fb914dd2dd45e6f",
+    "to_commit": "fd3525a5e0f646d04d3e3655996908356dfde851"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "12bb2bc0a7655fa72e43f4d3bac6e54de3acc636",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": []
+}
