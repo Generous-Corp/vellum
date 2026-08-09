@@ -15,7 +15,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Execute authenticated README quick start
+      - name: Validate the README release contract without credentials
+        if: github.event_name == 'pull_request'
+        run: |
+          python3 scripts/test_readme_exec.py
+          python3 scripts/readme_exec.py --lint
+      - name: Refuse authenticated execution outside trusted main
+        if: github.event_name != 'pull_request' && github.ref != 'refs/heads/main'
+        run: exit 1
+      - name: Execute authenticated README quick start from trusted main
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.VELLUM_CANONICAL_READ_TOKEN || github.token }}
         run: |
@@ -23,7 +32,7 @@ jobs:
             --execute-profile clean-release \
             --evidence-dir "$RUNNER_TEMP/readme-clean-release"
       - name: Retain transcript, environment, and timings
-        if: always()
+        if: always() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: readme-clean-release-${{ github.run_id }}
