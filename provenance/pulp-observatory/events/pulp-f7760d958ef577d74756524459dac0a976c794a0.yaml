@@ -1,0 +1,48 @@
+{
+  "class": "correctness",
+  "contract_keys": [
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-09T20:49:14Z",
+  "disposition": "superseded",
+  "effort_minutes": 0,
+  "event_id": "pulp-f7760d958ef577d74756524459dac0a976c794a0",
+  "include_dependency_deltas": [
+    "core/view/include/pulp/view/editor_bridge.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [
+    "1f8638c25281b0be2a968c61504fa21df6210c4d",
+    "f7760d958ef577d74756524459dac0a976c794a0"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/pulp/pull/7329"
+  ],
+  "mapped_contracts": [
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "core/view/include/pulp/view/editor_bridge.hpp",
+    "core/view/src/editor_bridge.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": null,
+  "rationale": "The PR #7329 merge envelope is represented by its Pulp-only source observation pulp-1f8638c25281b0be2a968c61504fa21df6210c4d. It adds no independent Vellum requirement.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "fd3525a5e0f646d04d3e3655996908356dfde851",
+    "to_commit": "277dd5743dc7d50f0661477715b7e14418a75176"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "f7760d958ef577d74756524459dac0a976c794a0",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": []
+}

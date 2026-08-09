@@ -1,0 +1,49 @@
+{
+  "class": "build",
+  "contract_keys": [
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-09T20:49:14Z",
+  "disposition": "Pulp-only",
+  "effort_minutes": 0,
+  "event_id": "pulp-7bf57b542de11aa16f1d54d053d793530cc56f1c",
+  "include_dependency_deltas": [
+    "core/view/cmake/PulpViewJsEngines.cmake",
+    "core/view/include/pulp/view/js_engine.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [
+    "7bf57b542de11aa16f1d54d053d793530cc56f1c",
+    "a74fbbcd21e7313d4d25267fe53f93a2bf623367"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/pulp/pull/7305"
+  ],
+  "mapped_contracts": [
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "core/view/cmake/PulpViewJsEngines.cmake",
+    "core/view/include/pulp/view/js_engine.hpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "2188e2dc20a7925d7e8993df09d80fc51481e7de",
+  "rationale": "The PR #7305 V8 milestone pin is Pulp runtime-backend configuration. Vellum's portable runtime and source-free browser contract do not embed or select Pulp's V8 backend; Skia/Dawn asset convergence is tracked separately by the canonical merge observation.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "fd3525a5e0f646d04d3e3655996908356dfde851",
+    "to_commit": "277dd5743dc7d50f0661477715b7e14418a75176"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "7bf57b542de11aa16f1d54d053d793530cc56f1c",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": []
+}
