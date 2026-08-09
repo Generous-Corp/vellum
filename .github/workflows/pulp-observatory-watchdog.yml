@@ -1,0 +1,117 @@
+name: Pulp observatory watchdog
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+  pull-requests: read
+
+jobs:
+  watchdog:
+    name: watchdog
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      vars.VELLUM_RECEIVER_WATCHDOG_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out trusted Vellum main controls
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check out freshly fetched Pulp main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: Generous-Corp/pulp
+          token: ${{ secrets.VELLUM_PULP_READER_TOKEN }}
+          ref: main
+          path: .watchdog-pulp
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Build independent watchdog state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          import sys
+
+          sys.path.insert(0, "tools/provenance")
+          import receiver
+
+          root = Path(".")
+          pulp = Path(".watchdog-pulp")
+          cursor = receiver.load_cursor(root)
+          main = receiver.git(pulp, "rev-parse", "HEAD")
+          latest, oldest_event = receiver.durable_event_range(pulp, cursor, main)
+          covered = receiver.is_ancestor(pulp, latest, cursor)
+          latest_created_at = receiver.git(
+              pulp, "show", "-s", "--format=%cI", oldest_event
+          )
+          report = json.loads(
+              Path("provenance/pulp-observatory/reports/current.json").read_text()
+          )
+          pending = report.get("pending")
+          if not isinstance(pending, int) or isinstance(pending, bool) or pending < 0:
+              raise SystemExit("committed observatory pending count is invalid")
+          import os
+          base_path = Path(os.environ["RUNNER_TEMP"]) / "watchdog-base.json"
+          base_path.write_text(json.dumps({
+              "cursor_covers_latest": covered,
+              "latest_event_created_at": latest_created_at,
+              "latest_target": latest,
+              "pending_count": pending,
+          }))
+          PY
+          gh api \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/pulp-observatory-receiver.yml/runs?per_page=10" \
+            --jq '[.workflow_runs[] | {status, conclusion, created_at}]' \
+            > "$RUNNER_TEMP/receiver-runs.json"
+          evidence_pr_count="$(
+            gh pr list --state open \
+              --head automation/pulp-observatory-coalesced \
+              --json number --jq length
+          )"
+          jq -s --argjson evidence_pr_open "$((evidence_pr_count > 0))" \
+            '.[0] + {runs: .[1], evidence_pr_open: ($evidence_pr_open == 1)}' \
+            "$RUNNER_TEMP/watchdog-base.json" \
+            "$RUNNER_TEMP/receiver-runs.json" \
+            > "$RUNNER_TEMP/watchdog-state.json"
+
+      - name: Evaluate cursor, runner, delivery, and pending-budget health
+        id: evaluate
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          python3 tools/provenance/receiver_watchdog.py \
+            --policy provenance/pulp-observatory/receiver-policy.json \
+            --state "$RUNNER_TEMP/watchdog-state.json" \
+            --now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --output "$RUNNER_TEMP/watchdog-result.json" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Retry lag only when no receiver run is active
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if test "$(jq -r .retry_required "$RUNNER_TEMP/watchdog-result.json")" = true; then
+            target="$(jq -r .latest_target "$RUNNER_TEMP/watchdog-state.json")"
+            gh api --method POST \
+              "repos/$GITHUB_REPOSITORY/actions/workflows/pulp-observatory-receiver.yml/dispatches" \
+              --input <(jq -n --arg commit "$target" '{
+                ref: "main",
+                inputs: {pulp_commit: $commit, operation: "replay"}
+              }')
+          fi
+
+      - name: Fail observably after any retry request
+        run: test "$(jq -r .status "$RUNNER_TEMP/watchdog-result.json")" = pass

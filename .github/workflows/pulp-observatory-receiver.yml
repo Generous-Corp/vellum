@@ -1,0 +1,230 @@
+name: Pulp observatory receiver
+
+on:
+  repository_dispatch:
+    types: [pulp-change-landed]
+  workflow_dispatch:
+    inputs:
+      pulp_commit:
+        description: Exact landed Pulp commit used as a required lower bound
+        required: true
+        type: string
+      operation:
+        description: Reconcile only, or enable live delivery after a proved no-op
+        required: true
+        default: replay
+        type: choice
+        options: [replay, enable]
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: vellum-pulp-observatory-cursor
+  cancel-in-progress: false
+
+jobs:
+  receiver:
+    name: receiver
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'repository_dispatch' &&
+       vars.VELLUM_RECEIVER_LIVE == 'true')
+    runs-on: ${{ fromJSON(vars.VELLUM_LINUX_RUNS_ON_JSON || '["self-hosted","Linux","ARM64","vellum-build-linux"]') }}
+    steps:
+      - name: Check out trusted Vellum main controls
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          token: ${{ secrets.VELLUM_RECEIVER_ADMIN_TOKEN || github.token }}
+          ref: main
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Check out freshly fetched Pulp main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: Generous-Corp/pulp
+          token: ${{ secrets.VELLUM_PULP_READER_TOKEN }}
+          ref: main
+          path: .receiver-pulp
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Materialize trusted delivery coordinates
+        id: coordinates
+        env:
+          DISPATCH_PAYLOAD: ${{ toJSON(github.event.client_payload) }}
+          INPUT_PULP_COMMIT: ${{ inputs.pulp_commit }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import re
+
+          main = os.popen("git -C .receiver-pulp rev-parse HEAD").read().strip()
+          if os.environ["GITHUB_EVENT_NAME"] == "repository_dispatch":
+              payload = json.loads(os.environ["DISPATCH_PAYLOAD"])
+              lower = payload.get("source_commit")
+              payload_path = Path(os.environ["RUNNER_TEMP"]) / "receiver-payload.json"
+              payload_path.write_text(
+                  json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8"
+              )
+              payload_argument = str(payload_path)
+          else:
+              lower = os.environ["INPUT_PULP_COMMIT"]
+              payload_argument = ""
+          if not isinstance(lower, str) or re.fullmatch(r"[0-9a-f]{40}", lower) is None:
+              raise SystemExit("delivery lower bound must be a full lowercase SHA")
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write(f"main={main}\n")
+              output.write(f"lower={lower}\n")
+              output.write(f"payload={payload_argument}\n")
+          PY
+
+      - name: Prove delivery and plan latest-head coalescing
+        id: plan
+        env:
+          PULP_MAIN: ${{ steps.coordinates.outputs.main }}
+          LOWER_BOUND: ${{ steps.coordinates.outputs.lower }}
+          PAYLOAD_PATH: ${{ steps.coordinates.outputs.payload }}
+        run: |
+          set -euo pipefail
+          payload_args=()
+          if test -n "$PAYLOAD_PATH"; then
+            payload_args=(--payload "$PAYLOAD_PATH")
+          fi
+          python3 tools/provenance/receiver.py \
+            --root . \
+            --pulp-repo .receiver-pulp \
+            --pulp-main "$PULP_MAIN" \
+            --lower-bound "$LOWER_BOUND" \
+            "${payload_args[@]}" \
+            --output "$RUNNER_TEMP/receiver-plan.json"
+          jq -r '"status=" + .status, "target=" + .reconcile_target' \
+            "$RUNNER_TEMP/receiver-plan.json" >> "$GITHUB_OUTPUT"
+
+      - name: Reconcile through the latest verified durable event head
+        if: steps.plan.outputs.status == 'reconcile'
+        env:
+          RECONCILE_TARGET: ${{ steps.plan.outputs.target }}
+        run: |
+          set -euo pipefail
+          now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          python3 tools/provenance/observatory.py reconcile \
+            --pulp-repo .receiver-pulp \
+            --vellum-repo . \
+            --pulp-target "$RECONCILE_TARGET" \
+            --vellum-target "$(git rev-parse HEAD)" \
+            --now "$now" \
+            --write \
+            --output "$RUNNER_TEMP/receiver-reconcile.json"
+          python3 tools/provenance/observatory.py verify \
+            --pulp-repo .receiver-pulp \
+            --vellum-repo . \
+            --git-base "$(git rev-parse HEAD)" \
+            --pulp-target "$RECONCILE_TARGET"
+
+      - name: Prepare the reviewed evidence-only coalescing PR
+        if: steps.plan.outputs.status == 'reconcile'
+        env:
+          GH_TOKEN: ${{ secrets.VELLUM_RECEIVER_ADMIN_TOKEN || github.token }}
+          EVIDENCE_BRANCH: automation/pulp-observatory-coalesced
+        run: |
+          set -euo pipefail
+          vellum_main="$(git rev-parse HEAD)"
+          unexpected="$({
+            git status --short --untracked-files=all -- \
+              . ':(exclude).receiver-pulp/**' | \
+              awk '{print $2}' | while read -r path; do
+              case "$path" in
+                provenance/pulp-observatory/cursor.json|\
+                provenance/pulp-observatory/reports/current.json|\
+                provenance/pulp-observatory/reports/current.md|\
+                provenance/pulp-observatory/events/*.yaml) ;;
+                *) printf '%s\n' "$path" ;;
+              esac
+            done
+          } || true)"
+          test -z "$unexpected" || {
+            echo "receiver generated non-evidence paths: $unexpected" >&2
+            exit 1
+          }
+          git config user.name vellum-observatory-receiver
+          git config user.email vellum-observatory-receiver@users.noreply.github.com
+          git switch -C "$EVIDENCE_BRANCH"
+          git add provenance/pulp-observatory
+          git commit -m "chore(provenance): coalesce Pulp observatory evidence"
+          git fetch --no-tags origin main
+          test "$(git rev-parse origin/main)" = "$vellum_main" || {
+            echo "Vellum main advanced while evidence was prepared; retry required" >&2
+            exit 1
+          }
+          remote_sha="$(
+            git ls-remote origin "refs/heads/$EVIDENCE_BRANCH" | awk '{print $1}'
+          )"
+          if test -n "$remote_sha"; then
+            git push \
+              --atomic \
+              --force-with-lease="refs/heads/$EVIDENCE_BRANCH:$remote_sha" \
+              origin \
+              "$vellum_main:refs/heads/main" \
+              "HEAD:refs/heads/$EVIDENCE_BRANCH"
+          else
+            git push --atomic origin \
+              "$vellum_main:refs/heads/main" \
+              "HEAD:refs/heads/$EVIDENCE_BRANCH"
+          fi
+          open_prs="$(
+            gh pr list --state open --head "$EVIDENCE_BRANCH" \
+              --json number --jq length
+          )"
+          if test "$open_prs" = 0; then
+            gh pr create \
+              --base main \
+              --head "$EVIDENCE_BRANCH" \
+              --title "chore(provenance): coalesce Pulp observatory evidence" \
+              --body "Automated evidence-only reconciliation. Review and merge with a merge commit; never squash or rebase."
+          fi
+
+      - name: Enable live delivery only across a proved current barrier
+        if: inputs.operation == 'enable'
+        env:
+          GH_TOKEN: ${{ secrets.VELLUM_RECEIVER_ADMIN_TOKEN || github.token }}
+          RECONCILE_STATUS: ${{ steps.plan.outputs.status }}
+          LATEST_TARGET: ${{ steps.plan.outputs.target }}
+        run: |
+          set -euo pipefail
+          test "$RECONCILE_STATUS" = noop || {
+            echo "enable barrier requires a fully covered committed cursor" >&2
+            exit 1
+          }
+          gh api --method PATCH \
+            "repos/$GITHUB_REPOSITORY/actions/variables/VELLUM_RECEIVER_LIVE" \
+            -f value=true
+          gh api --method POST \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/pulp-observatory-receiver.yml/dispatches" \
+            --input <(jq -n --arg commit "$LATEST_TARGET" '{
+              ref: "main",
+              inputs: {pulp_commit: $commit, operation: "replay"}
+            }')
+
+      - name: Summarize receiver outcome
+        if: always()
+        env:
+          SUMMARY_LOWER_BOUND: ${{ steps.coordinates.outputs.lower }}
+          SUMMARY_TARGET: ${{ steps.plan.outputs.target }}
+          SUMMARY_STATUS: ${{ steps.plan.outputs.status }}
+          SUMMARY_LIVE: ${{ vars.VELLUM_RECEIVER_LIVE }}
+        run: |
+          {
+            echo '### Pulp observatory receiver'
+            echo
+            echo "- outcome: ${SUMMARY_STATUS:-failed-closed}"
+            echo "- supplied lower bound: ${SUMMARY_LOWER_BOUND:-unresolved}"
+            echo "- coalesced target: ${SUMMARY_TARGET:-unresolved}"
+            echo "- live control: ${SUMMARY_LIVE:-false}"
+          } >> "$GITHUB_STEP_SUMMARY"

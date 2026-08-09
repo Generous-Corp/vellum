@@ -1,0 +1,9 @@
+{
+  "cursor_lag_sla_minutes": 30,
+  "named_response_owner": "@danielraffel",
+  "pending_limit": 20,
+  "pending_warning": 15,
+  "runner_acquisition_sla_minutes": 10,
+  "schema_version": 1,
+  "successful_receiver_max_age_minutes": 1440
+}

@@ -1,8 +1,6 @@
 name: Activate Vellum source authority
 
 on:
-  repository_dispatch:
-    types: [pulp-change-landed]
   workflow_dispatch:
     inputs:
       pulp_activation_commit:

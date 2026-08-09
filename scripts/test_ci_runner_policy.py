@@ -34,6 +34,11 @@ EXPECTED_RUNNERS = {
         "VELLUM_LINUX_RUNS_ON_JSON",
         '["self-hosted","Linux","ARM64","vellum-build-linux"]',
     ),
+    "pulp-observatory-receiver.yml": (
+        "VELLUM_LINUX_RUNS_ON_JSON",
+        '["self-hosted","Linux","ARM64","vellum-build-linux"]',
+    ),
+    "pulp-observatory-watchdog.yml": ("__hosted__", "ubuntu-latest"),
     "readme-quick-start.yml": (
         "VELLUM_MACOS_RUNS_ON_JSON",
         '["self-hosted","macOS","ARM64","vellum-build-macos"]',
@@ -130,7 +135,7 @@ class RunnerPolicyTests(unittest.TestCase):
                         f"{filename}: {job_name} must export the pinned browser path",
                     )
 
-    def test_every_workflow_uses_an_explicit_self_hosted_fallback(self) -> None:
+    def test_workflows_use_their_reviewed_runner_class(self) -> None:
         workflow_paths = sorted(
             [*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]
         )
@@ -149,6 +154,9 @@ class RunnerPolicyTests(unittest.TestCase):
             self.assertTrue(runs_on_lines, path.name)
             for line in runs_on_lines:
                 with self.subTest(workflow=path.name, selector=line):
+                    if variable == "__hosted__":
+                        self.assertEqual(line, f"runs-on: {fallback}")
+                        continue
                     self.assertIn(f"vars.{variable}", line)
                     self.assertIn(fallback, line)
                     self.assertIn("self-hosted", line)
