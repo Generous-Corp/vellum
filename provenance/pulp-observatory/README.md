@@ -32,6 +32,13 @@ before committing it, or add a separate append-only resolution event later.
 The only supported dispositions are `pending`, `not-applicable`,
 `port-required`, `ported`, `superseded`, `Pulp-only`, and `framework-only`.
 
+An observation may have a chain of append-only resolution events when its
+reviewed state changes again. Resolution timestamps must be unique for that
+observation; effective state is projected in `created_at`, then event-ID order,
+so the latest resolution wins independently of filename order. Add a later
+resolution to expand or close an obligation—never edit or delete an earlier
+observation or resolution.
+
 ## Verify
 
 ```sh

@@ -173,7 +173,7 @@ def load_events(root: Path) -> list[tuple[Path, dict[str, object]]]:
         for _, event in events
         if event["kind"] == "observation"
     }
-    resolutions: set[str] = set()
+    resolutions: dict[str, list[dict[str, object]]] = {}
     for _, event in events:
         if event["kind"] != "resolution":
             continue
@@ -181,10 +181,6 @@ def load_events(root: Path) -> list[tuple[Path, dict[str, object]]]:
         if target not in observations:
             raise ObservatoryError(
                 f"resolution references absent observation: {event['event_id']}"
-            )
-        if target in resolutions:
-            raise ObservatoryError(
-                f"observation has more than one resolution: {target}"
             )
         if parse_utc(
             event["created_at"], "resolution.created_at"
@@ -194,7 +190,16 @@ def load_events(root: Path) -> list[tuple[Path, dict[str, object]]]:
             raise ObservatoryError(
                 f"resolution predates observation: {event['event_id']}"
             )
-        resolutions.add(target)
+        resolutions.setdefault(target, []).append(event)
+    for target, chain in resolutions.items():
+        timestamps = [
+            parse_utc(event["created_at"], "resolution.created_at")
+            for event in chain
+        ]
+        if len(timestamps) != len(set(timestamps)):
+            raise ObservatoryError(
+                f"resolution timestamps must be unique for observation: {target}"
+            )
     return events
 
 
@@ -206,9 +211,18 @@ def effective_observations(
         for _, event in events
         if event["kind"] == "observation"
     }
-    for _, resolution in events:
-        if resolution["kind"] != "resolution":
-            continue
+    resolutions = sorted(
+        (
+            resolution
+            for _, resolution in events
+            if resolution["kind"] == "resolution"
+        ),
+        key=lambda resolution: (
+            parse_utc(resolution["created_at"], "resolution.created_at"),
+            str(resolution["event_id"]),
+        ),
+    )
+    for resolution in resolutions:
         target = observations[str(resolution["resolves"])]
         for field in (
             "disposition",
