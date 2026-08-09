@@ -1,0 +1,54 @@
+{
+  "class": "rendering",
+  "contract_keys": [
+    "canvas-kernel",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-09T10:04:06Z",
+  "disposition": "port-required",
+  "effort_minutes": 0,
+  "event_id": "pulp-401f39b321920896f73c591e62ff577f290fb4ae",
+  "include_dependency_deltas": [
+    "core/canvas/include/pulp/canvas/text_shaper.hpp",
+    "core/view/include/pulp/view/widgets.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [
+    "401f39b321920896f73c591e62ff577f290fb4ae"
+  ],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "core/canvas/include/pulp/canvas/text_shaper.hpp",
+    "core/canvas/src/skia_canvas_text.cpp",
+    "core/canvas/src/text_run_planner.cpp",
+    "core/canvas/src/text_shaper.cpp",
+    "core/view/include/pulp/view/widgets.hpp",
+    "core/view/src/widgets/label.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "7350574a86be9a2608901d02d1ef5e5d5a994a4d",
+  "rationale": "Consolidated rendering convergence blocker for text fallback, weight and packaged-face completeness, paint-relative and repeating gradients, and outset-shadow radius geometry. Acceptance remains Vellum-native GPU, UI, authoring, and installed-consumer proof; related observations name this event.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "c131a2a448f591bcb6f99cf23fb914dd2dd45e6f",
+    "to_commit": "fd3525a5e0f646d04d3e3655996908356dfde851"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": true,
+  "source_commit": "401f39b321920896f73c591e62ff577f290fb4ae",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": []
+}

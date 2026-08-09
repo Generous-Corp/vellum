@@ -1,0 +1,76 @@
+{
+  "class": "rendering",
+  "contract_keys": [
+    "macos-shell",
+    "render-skia-dawn",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-09T10:04:06Z",
+  "disposition": "Pulp-only",
+  "effort_minutes": 0,
+  "event_id": "pulp-99adf70238af5644b36048c34ae4fc278716a74a",
+  "include_dependency_deltas": [
+    "core/render/include/pulp/render/skia_surface.hpp",
+    "core/view/CMakeLists.txt",
+    "core/view/include/pulp/view/pending_damage.hpp",
+    "core/view/include/pulp/view/plugin_frame_renderer.hpp",
+    "core/view/include/pulp/view/plugin_view_host.hpp",
+    "core/view/include/pulp/view/window_host.hpp",
+    "core/view/platform/mac/window_host_mac_internal.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [
+    "00a9620af2529b29ed46a2694d3793963f8dbbc9",
+    "99adf70238af5644b36048c34ae4fc278716a74a"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/pulp/pull/6682"
+  ],
+  "mapped_contracts": [
+    "macos-shell",
+    "render-skia-dawn",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "core/render/include/pulp/render/skia_surface.hpp",
+    "core/render/src/skia_surface.cpp",
+    "core/render/src/skia_surface_ganesh.cpp",
+    "core/view/CMakeLists.txt",
+    "core/view/include/pulp/view/pending_damage.hpp",
+    "core/view/include/pulp/view/plugin_frame_renderer.hpp",
+    "core/view/include/pulp/view/plugin_view_host.hpp",
+    "core/view/include/pulp/view/window_host.hpp",
+    "core/view/platform/ios/plugin_view_host_ios.mm",
+    "core/view/platform/linux/plugin_view_host_linux.cpp",
+    "core/view/platform/mac/plugin_view_host_mac.mm",
+    "core/view/platform/mac/window_host_mac.mm",
+    "core/view/platform/mac/window_host_mac_internal.hpp",
+    "core/view/platform/win/plugin_view_host_win.cpp",
+    "core/view/src/gpu_surface_observer.cpp",
+    "core/view/src/native_view_host.cpp",
+    "core/view/src/plugin_frame_renderer.cpp",
+    "core/view/src/window_host_stub.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "92a8759e14f36202d9852b3d2e7a5fb7d667c470",
+  "rationale": "Frozen Pulp target fd3525a5e0f646d04d3e3655996908356dfde851 supplies immutable Pulp-only evidence for this first-parent observation. Pulp change event 20260728-visible-frame-outcome-and-damage at commit 00a9620af2529b29ed46a2694d3793963f8dbbc9 (.github/vellum-change-events/20260728-visible-frame-outcome-and-damage.json) contains the authoritative checked-in rationale.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "c131a2a448f591bcb6f99cf23fb914dd2dd45e6f",
+    "to_commit": "fd3525a5e0f646d04d3e3655996908356dfde851"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "99adf70238af5644b36048c34ae4fc278716a74a",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": []
+}

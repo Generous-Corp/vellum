@@ -1,0 +1,76 @@
+{
+  "class": "importer",
+  "contract_keys": [
+    "macos-shell",
+    "pulp-design-import-tooling",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-09T10:04:06Z",
+  "disposition": "Pulp-only",
+  "effort_minutes": 0,
+  "event_id": "pulp-0c7f9b1611e4ceb8e95ae53b3410de0ffcc5c3ed",
+  "include_dependency_deltas": [
+    "core/view/include/pulp/view/ui_components.hpp",
+    "test/cmake/design_system_tests.cmake",
+    "test/cmake/test_au_v2_type_selection.cmake",
+    "test/cmake/view_host_tests.cmake",
+    "tools/cmake/PulpAuv3.cmake",
+    "tools/cmake/PulpPluginFormats.cmake",
+    "tools/cmake/PulpPluginMetadata.cmake"
+  ],
+  "kind": "observation",
+  "linked_commits": [
+    "0c7f9b1611e4ceb8e95ae53b3410de0ffcc5c3ed",
+    "ef1c2a7d79458bc64bd88d4c29bc39c76b7ef448"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/pulp/pull/7044"
+  ],
+  "mapped_contracts": [
+    "macos-shell",
+    "pulp-design-import-tooling",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "core/view/include/pulp/view/ui_components.hpp",
+    "core/view/platform/mac/plugin_view_host_mac.mm",
+    "core/view/platform/mac/window_host_mac.mm",
+    "core/view/src/pointer_dispatch.cpp",
+    "core/view/src/ui_components.cpp",
+    "core/view/src/virtual_grid.cpp",
+    "core/view/src/virtual_list.cpp",
+    "core/view/src/widgets/visualizers.cpp",
+    "test/test_design_import_native_common.cpp",
+    "test/test_design_import_native_materializer.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": null,
+  "rationale": "Frozen Pulp target fd3525a5e0f646d04d3e3655996908356dfde851 supplies immutable Pulp-only evidence for this first-parent observation. Pulp change event 20260801-per-root-popup-routing at commit ef1c2a7d79458bc64bd88d4c29bc39c76b7ef448 (.github/vellum-change-events/20260801-per-root-popup-routing.json) contains the authoritative checked-in rationale.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "c131a2a448f591bcb6f99cf23fb914dd2dd45e6f",
+    "to_commit": "fd3525a5e0f646d04d3e3655996908356dfde851"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "0c7f9b1611e4ceb8e95ae53b3410de0ffcc5c3ed",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": [
+    "test/cmake/design_system_tests.cmake",
+    "test/cmake/test_au_v2_type_selection.cmake",
+    "test/cmake/view_host_tests.cmake",
+    "tools/cmake/PulpAuv3.cmake",
+    "tools/cmake/PulpPluginFormats.cmake",
+    "tools/cmake/PulpPluginMetadata.cmake"
+  ]
+}

@@ -1,0 +1,63 @@
+{
+  "class": "platform",
+  "contract_keys": [
+    "macos-shell",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-09T10:04:06Z",
+  "disposition": "Pulp-only",
+  "effort_minutes": 0,
+  "event_id": "pulp-78751b4fa715a2cb9d62fe1522fd3d20f1887753",
+  "include_dependency_deltas": [
+    "CMakeLists.txt",
+    "core/dawproject/CMakeLists.txt",
+    "core/view/include/pulp/view/binding_diagnostics.hpp",
+    "core/view/include/pulp/view/hot_reload.hpp",
+    "core/view/include/pulp/view/widget_bridge.hpp",
+    "core/view/include/pulp/view/window_host.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [
+    "78751b4fa715a2cb9d62fe1522fd3d20f1887753",
+    "a457b5a06f4123b29de14ef01bf4b6a7f2802960"
+  ],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "macos-shell",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "core/view/include/pulp/view/binding_diagnostics.hpp",
+    "core/view/include/pulp/view/hot_reload.hpp",
+    "core/view/include/pulp/view/widget_bridge.hpp",
+    "core/view/include/pulp/view/window_host.hpp",
+    "core/view/platform/mac/app_menu_mac.mm",
+    "core/view/src/scripted_ui.cpp",
+    "core/view/src/text_editor_paint.cpp",
+    "core/view/src/widget_bridge/state_binding_api.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": null,
+  "rationale": "Frozen Pulp target fd3525a5e0f646d04d3e3655996908356dfde851 supplies immutable Pulp-only evidence for this first-parent observation. Pulp change event 20260727-menu-command-application-menu at commit a457b5a06f4123b29de14ef01bf4b6a7f2802960 (.github/vellum-change-events/20260727-menu-command-application-menu.json) contains the authoritative checked-in rationale.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "c131a2a448f591bcb6f99cf23fb914dd2dd45e6f",
+    "to_commit": "fd3525a5e0f646d04d3e3655996908356dfde851"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "78751b4fa715a2cb9d62fe1522fd3d20f1887753",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": [
+    "CMakeLists.txt",
+    "core/dawproject/CMakeLists.txt"
+  ]
+}

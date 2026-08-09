@@ -1,0 +1,80 @@
+{
+  "class": "importer",
+  "contract_keys": [
+    "canvas-kernel",
+    "design-schema-compiler",
+    "macos-shell",
+    "pulp-design-import-tooling",
+    "render-skia-dawn",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-09T10:04:06Z",
+  "disposition": "Pulp-only",
+  "effort_minutes": 0,
+  "event_id": "pulp-3e533f7ddc388352505c608e182655606caccc29",
+  "include_dependency_deltas": [
+    "CMakeLists.txt",
+    "core/view/CMakeLists.txt",
+    "core/view/include/pulp/view/css_effect_parse.hpp",
+    "test/cmake/design_import_view_widget_tests.cmake",
+    "tools/design-ab/CMakeLists.txt"
+  ],
+  "kind": "observation",
+  "linked_commits": [
+    "2ee68b74b700e20e90b40ae21dc2066e2987f396",
+    "3e533f7ddc388352505c608e182655606caccc29",
+    "8cbf62ed00564bfd2b060d2aaa56f6c9caeeaf35"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/pulp/pull/6821"
+  ],
+  "mapped_contracts": [
+    "canvas-kernel",
+    "design-schema-compiler",
+    "macos-shell",
+    "pulp-design-import-tooling",
+    "render-skia-dawn",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "core/canvas/src/skia_canvas_opacity.cpp",
+    "core/render/src/gpu_compute.cpp",
+    "core/view/CMakeLists.txt",
+    "core/view/include/pulp/view/css_effect_parse.hpp",
+    "core/view/platform/mac/plugin_view_host_mac.mm",
+    "core/view/src/css_effect_parse.cpp",
+    "core/view/src/design_import_native_common.cpp",
+    "core/view/src/design_tokens.cpp",
+    "core/view/src/view_paint.cpp",
+    "core/view/src/widgets.cpp",
+    "test/test_design_import_parity.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": null,
+  "rationale": "Frozen Pulp target fd3525a5e0f646d04d3e3655996908356dfde851 supplies immutable Pulp-only evidence for this first-parent observation. Pulp change event 20260729-backdrop-filter-crop at commit 2ee68b74b700e20e90b40ae21dc2066e2987f396 (.github/vellum-change-events/20260729-backdrop-filter-crop.json) contains the authoritative checked-in rationale. Pulp change event 20260729-design-accent-widget-tokens at commit 8cbf62ed00564bfd2b060d2aaa56f6c9caeeaf35 (.github/vellum-change-events/20260729-design-accent-widget-tokens.json) contains the authoritative checked-in rationale.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "c131a2a448f591bcb6f99cf23fb914dd2dd45e6f",
+    "to_commit": "fd3525a5e0f646d04d3e3655996908356dfde851"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "3e533f7ddc388352505c608e182655606caccc29",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": [
+    "CMakeLists.txt",
+    "test/cmake/design_import_view_widget_tests.cmake",
+    "tools/design-ab/CMakeLists.txt"
+  ]
+}

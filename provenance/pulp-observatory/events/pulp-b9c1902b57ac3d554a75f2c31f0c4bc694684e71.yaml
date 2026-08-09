@@ -1,0 +1,58 @@
+{
+  "class": "importer",
+  "contract_keys": [
+    "pulp-design-import-tooling"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-09T10:04:06Z",
+  "disposition": "not-applicable",
+  "effort_minutes": 0,
+  "event_id": "pulp-b9c1902b57ac3d554a75f2c31f0c4bc694684e71",
+  "include_dependency_deltas": [
+    "test/cmake/design_import_tool_cli_tests.cmake",
+    "tools/import-design/CMakeLists.txt",
+    "tools/import-design/browser_knob_sprites.hpp",
+    "tools/import-design/import_png_codec.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [
+    "b9c1902b57ac3d554a75f2c31f0c4bc694684e71"
+  ],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "pulp-design-import-tooling"
+  ],
+  "mapped_paths": [
+    "tools/import-design/CMakeLists.txt",
+    "tools/import-design/browser_capture/semantics.mjs",
+    "tools/import-design/browser_capture/semantics.test.mjs",
+    "tools/import-design/browser_capture_ir.cpp",
+    "tools/import-design/browser_html_import.cpp",
+    "tools/import-design/browser_knob_sprites.cpp",
+    "tools/import-design/browser_knob_sprites.hpp",
+    "tools/import-design/import_png_codec.cpp",
+    "tools/import-design/import_png_codec.hpp",
+    "tools/import-design/sprite_skins.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "dbaebe9185643ebf198313a7a960289346441ff6",
+  "rationale": "Corrected first-parent audit found no changed path in the active transferred boundary. Other merge-parent history and broad contract mapping are discovery context only; no Vellum source port applies.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "c131a2a448f591bcb6f99cf23fb914dd2dd45e6f",
+    "to_commit": "fd3525a5e0f646d04d3e3655996908356dfde851"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "b9c1902b57ac3d554a75f2c31f0c4bc694684e71",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": [
+    "test/cmake/design_import_tool_cli_tests.cmake"
+  ]
+}

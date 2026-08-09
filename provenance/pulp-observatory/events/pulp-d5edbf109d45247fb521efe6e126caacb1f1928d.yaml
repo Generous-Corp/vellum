@@ -1,0 +1,61 @@
+{
+  "class": "build",
+  "contract_keys": [
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-09T10:04:06Z",
+  "disposition": "not-applicable",
+  "effort_minutes": 0,
+  "event_id": "pulp-d5edbf109d45247fb521efe6e126caacb1f1928d",
+  "include_dependency_deltas": [
+    "CMakeLists.txt",
+    "core/view/include/pulp/view/widget_bridge.hpp",
+    "core/view/src/widget_bridge/bridge_dispatch.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [
+    "d5edbf109d45247fb521efe6e126caacb1f1928d"
+  ],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "core/view/include/pulp/view/widget_bridge.hpp",
+    "core/view/src/widget_bridge.cpp",
+    "core/view/src/widget_bridge/bridge_dispatch.cpp",
+    "core/view/src/widget_bridge/bridge_dispatch.hpp",
+    "core/view/src/widget_bridge/dom_api.cpp",
+    "core/view/src/widget_bridge/event_api.cpp",
+    "core/view/src/widget_bridge/factory_api.cpp",
+    "core/view/src/widget_bridge/metadata_api.cpp",
+    "core/view/src/widget_bridge/query_service_api.cpp",
+    "core/view/src/widget_bridge/realm_lifecycle.cpp",
+    "core/view/src/widget_bridge/state_binding_api.cpp",
+    "core/view/src/widget_bridge/style_state_api.cpp",
+    "core/view/src/widget_bridge/subtree_cleanup.cpp",
+    "core/view/src/widget_bridge/widget_callbacks.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": null,
+  "rationale": "Corrected first-parent audit found no changed path in the active transferred boundary. Other merge-parent history and broad contract mapping are discovery context only; no Vellum source port applies.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "c131a2a448f591bcb6f99cf23fb914dd2dd45e6f",
+    "to_commit": "fd3525a5e0f646d04d3e3655996908356dfde851"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "d5edbf109d45247fb521efe6e126caacb1f1928d",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": [
+    "CMakeLists.txt"
+  ]
+}

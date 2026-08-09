@@ -1,0 +1,99 @@
+{
+  "class": "schema",
+  "contract_keys": [
+    "canvas-kernel",
+    "design-schema-compiler",
+    "macos-shell",
+    "pulp-design-import-tooling",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-09T10:04:06Z",
+  "disposition": "Pulp-only",
+  "effort_minutes": 0,
+  "event_id": "pulp-731f5b515453aa7d17e76ac4851c2af29669d1d0",
+  "include_dependency_deltas": [
+    "CMakeLists.txt",
+    "core/canvas/include/pulp/canvas/canvas.hpp",
+    "core/canvas/include/pulp/canvas/skia_canvas.hpp",
+    "core/canvas/src/skia_gradient_compat.hpp",
+    "core/view/include/pulp/view/css_gradient.hpp",
+    "core/view/include/pulp/view/design_ir.hpp",
+    "core/view/include/pulp/view/hot_reload.hpp",
+    "core/view/include/pulp/view/scripted_ui.hpp",
+    "core/view/include/pulp/view/view.hpp",
+    "core/view/include/pulp/view/window_host.hpp",
+    "test/cmake/app_audio_host_tests.cmake",
+    "test/cmake/core_runtime_canvas_signal_tests.cmake",
+    "test/cmake/script_canvas_render_tests.cmake",
+    "test/cmake/view_widget_bridge_tests.cmake"
+  ],
+  "kind": "observation",
+  "linked_commits": [
+    "731f5b515453aa7d17e76ac4851c2af29669d1d0",
+    "a2f11c3e7abe026178fd1e34ea0716365c691986",
+    "aa032d8b57b6b99d285f83cab383aef3b4048309"
+  ],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel",
+    "design-schema-compiler",
+    "macos-shell",
+    "pulp-design-import-tooling",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "core/canvas/include/pulp/canvas/canvas.hpp",
+    "core/canvas/include/pulp/canvas/skia_canvas.hpp",
+    "core/canvas/src/skia_canvas_gradients.cpp",
+    "core/canvas/src/skia_gradient_compat.hpp",
+    "core/view/include/pulp/view/css_gradient.hpp",
+    "core/view/include/pulp/view/design_ir.hpp",
+    "core/view/include/pulp/view/hot_reload.hpp",
+    "core/view/include/pulp/view/scripted_ui.hpp",
+    "core/view/include/pulp/view/view.hpp",
+    "core/view/include/pulp/view/window_host.hpp",
+    "core/view/platform/mac/window_host_mac.mm",
+    "core/view/platform/web/window_host_web.cpp",
+    "core/view/src/css_gradient.cpp",
+    "core/view/src/design_import_native_common.cpp",
+    "core/view/src/design_ir_json.cpp",
+    "core/view/src/hot_reload.cpp",
+    "core/view/src/scripted_ui.cpp",
+    "core/view/src/view_paint.cpp",
+    "test/test_design_import_native_materializer.cpp",
+    "tools/import-design/browser_capture_tree.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": null,
+  "rationale": "Frozen Pulp target fd3525a5e0f646d04d3e3655996908356dfde851 supplies immutable Pulp-only evidence for this first-parent observation. Pulp change event 20260802-gradient-geometry-at-paint at commit aa032d8b57b6b99d285f83cab383aef3b4048309 (.github/vellum-change-events/20260802-gradient-geometry-at-paint.json) contains the authoritative checked-in rationale. Pulp change event 20260802-inspector-window-host-lifecycle at commit a2f11c3e7abe026178fd1e34ea0716365c691986 (.github/vellum-change-events/20260802-inspector-window-host-lifecycle.json) contains the authoritative checked-in rationale.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "c131a2a448f591bcb6f99cf23fb914dd2dd45e6f",
+    "to_commit": "fd3525a5e0f646d04d3e3655996908356dfde851"
+  },
+  "schema_api_deltas": [
+    "core/view/include/pulp/view/design_ir.hpp",
+    "core/view/src/design_ir_json.cpp"
+  ],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "731f5b515453aa7d17e76ac4851c2af29669d1d0",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": [
+    "CMakeLists.txt",
+    "test/cmake/app_audio_host_tests.cmake",
+    "test/cmake/core_runtime_canvas_signal_tests.cmake",
+    "test/cmake/script_canvas_render_tests.cmake",
+    "test/cmake/view_widget_bridge_tests.cmake"
+  ]
+}

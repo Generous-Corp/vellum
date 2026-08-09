@@ -1,0 +1,83 @@
+{
+  "class": "schema",
+  "contract_keys": [
+    "design-schema-compiler",
+    "pulp-design-import-tooling",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-09T10:04:06Z",
+  "disposition": "not-applicable",
+  "effort_minutes": 0,
+  "event_id": "pulp-742df62c7e2607f6a23fb2b2633c597e3da989f3",
+  "include_dependency_deltas": [
+    "CMakeLists.txt",
+    "core/view/include/pulp/view/reload_autocaps.hpp",
+    "test/cmake/cmake_smoke_tests.cmake",
+    "test/cmake/design_import_tool_cli_tests.cmake",
+    "test/cmake/test_inspector_sdk_consumer.cmake",
+    "test/cmake/view_widget_bridge_tests.cmake",
+    "tools/cmake/PulpInstallRules.cmake",
+    "tools/import-design/CMakeLists.txt",
+    "tools/import-design/browser_knob_sprites.hpp",
+    "tools/import-design/import_png_codec.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [
+    "742df62c7e2607f6a23fb2b2633c597e3da989f3"
+  ],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "design-schema-compiler",
+    "pulp-design-import-tooling",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "core/view/include/pulp/view/reload_autocaps.hpp",
+    "core/view/src/design_codegen.cpp",
+    "core/view/src/widget_bridge/widget_assets_api.cpp",
+    "core/view/src/widget_bridge_api_manifest.tsv",
+    "tools/import-design/CMakeLists.txt",
+    "tools/import-design/browser_capture/capture.integration.test.mjs",
+    "tools/import-design/browser_capture/semantics.mjs",
+    "tools/import-design/browser_capture/semantics.test.mjs",
+    "tools/import-design/browser_capture_ir.cpp",
+    "tools/import-design/browser_html_import.cpp",
+    "tools/import-design/browser_knob_sprites.cpp",
+    "tools/import-design/browser_knob_sprites.hpp",
+    "tools/import-design/import_png_codec.cpp",
+    "tools/import-design/import_png_codec.hpp",
+    "tools/import-design/sprite_skins.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": null,
+  "rationale": "Corrected first-parent audit found no changed path in the active transferred boundary. Other merge-parent history and broad contract mapping are discovery context only; no Vellum source port applies.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "c131a2a448f591bcb6f99cf23fb914dd2dd45e6f",
+    "to_commit": "fd3525a5e0f646d04d3e3655996908356dfde851"
+  },
+  "schema_api_deltas": [
+    "packages/pulp-react/src/bridge-globals.generated.d.ts"
+  ],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "742df62c7e2607f6a23fb2b2633c597e3da989f3",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": [
+    "CMakeLists.txt",
+    "packages/pulp-react/src/bridge-globals.generated.d.ts",
+    "test/cmake/cmake_smoke_tests.cmake",
+    "test/cmake/design_import_tool_cli_tests.cmake",
+    "test/cmake/test_inspector_sdk_consumer.cmake",
+    "test/cmake/view_widget_bridge_tests.cmake",
+    "tools/cmake/PulpInstallRules.cmake"
+  ]
+}

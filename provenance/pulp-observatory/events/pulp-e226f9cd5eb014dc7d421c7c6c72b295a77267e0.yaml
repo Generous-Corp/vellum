@@ -1,0 +1,77 @@
+{
+  "class": "rendering",
+  "contract_keys": [
+    "capture-primitives",
+    "macos-shell",
+    "pulp-screenshot-harness",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.capture-stats",
+    "vellum.gpu-native"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-09T10:04:06Z",
+  "disposition": "Pulp-only",
+  "effort_minutes": 0,
+  "event_id": "pulp-e226f9cd5eb014dc7d421c7c6c72b295a77267e0",
+  "include_dependency_deltas": [
+    "CMakeLists.txt",
+    "core/view/CMakeLists.txt",
+    "core/view/cmake/PulpViewSources.cmake",
+    "core/view/include/pulp/view/screenshot.hpp",
+    "core/view/include/pulp/view/screenshot_compare.hpp",
+    "core/view/include/pulp/view/window_host.hpp",
+    "test/cmake/core_runtime_canvas_signal_tests.cmake",
+    "tools/cli/CMakeLists.txt"
+  ],
+  "kind": "observation",
+  "linked_commits": [
+    "8c05c326b35fb3f09e1a28f5cbce2070167fdce5",
+    "e226f9cd5eb014dc7d421c7c6c72b295a77267e0"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/pulp/pull/7124"
+  ],
+  "mapped_contracts": [
+    "capture-primitives",
+    "macos-shell",
+    "pulp-screenshot-harness",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "core/view/CMakeLists.txt",
+    "core/view/cmake/PulpViewSources.cmake",
+    "core/view/include/pulp/view/screenshot.hpp",
+    "core/view/include/pulp/view/screenshot_compare.hpp",
+    "core/view/include/pulp/view/window_host.hpp",
+    "core/view/platform/mac/window_host_mac.mm",
+    "core/view/platform/web/window_host_web.cpp",
+    "core/view/src/screenshot_compare.cpp",
+    "core/view/src/screenshot_gpu.cpp",
+    "core/view/src/screenshot_png_validation.cpp",
+    "test/test_screenshot_compare.cpp",
+    "test/test_screenshot_gpu.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": null,
+  "rationale": "Frozen Pulp target fd3525a5e0f646d04d3e3655996908356dfde851 supplies immutable Pulp-only evidence for this first-parent observation. Pulp change event 20260803-inspector-back-buffer-capture at commit 8c05c326b35fb3f09e1a28f5cbce2070167fdce5 (.github/vellum-change-events/20260803-inspector-back-buffer-capture.json) contains the authoritative checked-in rationale.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "c131a2a448f591bcb6f99cf23fb914dd2dd45e6f",
+    "to_commit": "fd3525a5e0f646d04d3e3655996908356dfde851"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "e226f9cd5eb014dc7d421c7c6c72b295a77267e0",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": [
+    "CMakeLists.txt",
+    "test/cmake/core_runtime_canvas_signal_tests.cmake",
+    "tools/cli/CMakeLists.txt"
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "class": "rendering",
+  "contract_keys": [
+    "canvas-kernel"
+  ],
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-09T10:04:06Z",
+  "disposition": "superseded",
+  "effort_minutes": 0,
+  "event_id": "pulp-ed3c1d0337ba20d62cfbfd04a7d9e1b4a3cce0b7",
+  "include_dependency_deltas": [
+    "core/canvas/CMakeLists.txt"
+  ],
+  "kind": "observation",
+  "linked_commits": [
+    "ed3c1d0337ba20d62cfbfd04a7d9e1b4a3cce0b7"
+  ],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel"
+  ],
+  "mapped_paths": [
+    "core/canvas/CMakeLists.txt",
+    "core/canvas/src/bundled_fonts.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "67b29f26fb994bd494728a780ec6c33db162dd7b",
+  "rationale": "Consolidated under pulp-401f39b321920896f73c591e62ff577f290fb4ae; this observation remains a named acceptance input for Installed font-family weight completeness. It is not evidence of source parity.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "c131a2a448f591bcb6f99cf23fb914dd2dd45e6f",
+    "to_commit": "fd3525a5e0f646d04d3e3655996908356dfde851"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "ed3c1d0337ba20d62cfbfd04a7d9e1b4a3cce0b7",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": []
+}

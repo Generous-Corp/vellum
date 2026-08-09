@@ -1,0 +1,60 @@
+{
+  "class": "importer",
+  "contract_keys": [
+    "capture-primitives",
+    "macos-shell",
+    "pulp-design-import-tooling",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.capture-stats",
+    "vellum.gpu-native"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-09T10:04:06Z",
+  "disposition": "Pulp-only",
+  "effort_minutes": 0,
+  "event_id": "pulp-beb0a9f223653a06174f580d55bd1fc1a88c5224",
+  "include_dependency_deltas": [
+    "test/cmake/design_import_runtime_bridge_tests.cmake"
+  ],
+  "kind": "observation",
+  "linked_commits": [
+    "beb0a9f223653a06174f580d55bd1fc1a88c5224",
+    "e9d6d1c7a0dadb359e43cf2635d3a9cd8e046862"
+  ],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "capture-primitives",
+    "macos-shell",
+    "pulp-design-import-tooling",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "core/view/platform/mac/screenshot_mac.mm",
+    "core/view/src/screenshot_gpu.cpp",
+    "core/view/src/screenshot_skia.cpp",
+    "test/test_import_design_tool.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": null,
+  "rationale": "Frozen Pulp target fd3525a5e0f646d04d3e3655996908356dfde851 supplies immutable Pulp-only evidence for this first-parent observation. Pulp change event 20260725-offscreen-capture-no-alloc-scope at commit e9d6d1c7a0dadb359e43cf2635d3a9cd8e046862 (.github/vellum-change-events/20260725-offscreen-capture-no-alloc-scope.json) contains the authoritative checked-in rationale.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "c131a2a448f591bcb6f99cf23fb914dd2dd45e6f",
+    "to_commit": "fd3525a5e0f646d04d3e3655996908356dfde851"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "beb0a9f223653a06174f580d55bd1fc1a88c5224",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": [
+    "test/cmake/design_import_runtime_bridge_tests.cmake"
+  ]
+}

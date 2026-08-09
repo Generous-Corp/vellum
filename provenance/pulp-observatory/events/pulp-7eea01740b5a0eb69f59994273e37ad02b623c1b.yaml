@@ -1,0 +1,58 @@
+{
+  "class": "importer",
+  "contract_keys": [
+    "design-schema-compiler",
+    "pulp-design-import-tooling",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-09T10:04:06Z",
+  "disposition": "not-applicable",
+  "effort_minutes": 0,
+  "event_id": "pulp-7eea01740b5a0eb69f59994273e37ad02b623c1b",
+  "include_dependency_deltas": [
+    "core/view/include/pulp/view/css_effect_parse.hpp",
+    "tools/import-design/browser_capture_tree.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [
+    "7eea01740b5a0eb69f59994273e37ad02b623c1b"
+  ],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "design-schema-compiler",
+    "pulp-design-import-tooling",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "core/view/include/pulp/view/css_effect_parse.hpp",
+    "core/view/src/css_effect_parse.cpp",
+    "core/view/src/design_codegen.cpp",
+    "core/view/src/design_import_native_common.cpp",
+    "tools/import-design/browser_capture_ir.cpp",
+    "tools/import-design/browser_capture_styles.cpp",
+    "tools/import-design/browser_capture_tree.cpp",
+    "tools/import-design/browser_capture_tree.hpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "285409fdd7cb243cf4742d73c5f85c321a5ee93d",
+  "rationale": "Corrected first-parent audit found no changed path in the active transferred boundary. Other merge-parent history and broad contract mapping are discovery context only; no Vellum source port applies.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "c131a2a448f591bcb6f99cf23fb914dd2dd45e6f",
+    "to_commit": "fd3525a5e0f646d04d3e3655996908356dfde851"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "7eea01740b5a0eb69f59994273e37ad02b623c1b",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": []
+}

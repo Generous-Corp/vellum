@@ -1,0 +1,44 @@
+{
+  "class": "platform",
+  "contract_keys": [
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-09T10:04:06Z",
+  "disposition": "Pulp-only",
+  "effort_minutes": 0,
+  "event_id": "pulp-86491a9019c3012fbec0053b83efeda777f543e0",
+  "include_dependency_deltas": [
+    "core/view/include/pulp/view/window_host.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [
+    "86491a9019c3012fbec0053b83efeda777f543e0"
+  ],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "core/view/include/pulp/view/window_host.hpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "52be8e50ce1332c1725cdffc5819efeaacce0a4e",
+  "rationale": "Retained Pulp integration behavior: Pulp WindowHost binary-compatibility ABI. No Vellum source port applies.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "c131a2a448f591bcb6f99cf23fb914dd2dd45e6f",
+    "to_commit": "fd3525a5e0f646d04d3e3655996908356dfde851"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "86491a9019c3012fbec0053b83efeda777f543e0",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": []
+}

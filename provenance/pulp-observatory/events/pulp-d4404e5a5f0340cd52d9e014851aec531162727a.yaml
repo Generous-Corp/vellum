@@ -1,0 +1,78 @@
+{
+  "class": "schema",
+  "contract_keys": [
+    "design-schema-compiler",
+    "legacy-figma-schema",
+    "pulp-design-import-tooling",
+    "pulp-figma-exporter",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-09T10:04:06Z",
+  "disposition": "not-applicable",
+  "effort_minutes": 0,
+  "event_id": "pulp-d4404e5a5f0340cd52d9e014851aec531162727a",
+  "include_dependency_deltas": [
+    "core/view/src/design_import_internal.hpp",
+    "test/cmake/cmake_smoke_tests.cmake",
+    "test/cmake/test_pulp_install_layout.cmake",
+    "tools/cmake/PulpMinOs.cmake"
+  ],
+  "kind": "observation",
+  "linked_commits": [
+    "d4404e5a5f0340cd52d9e014851aec531162727a"
+  ],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "design-schema-compiler",
+    "legacy-figma-schema",
+    "pulp-design-import-tooling",
+    "pulp-figma-exporter",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "core/view/src/design_import.cpp",
+    "core/view/src/design_import_internal.hpp",
+    "core/view/src/design_ir_json.cpp",
+    "test/test_design_import_ir.cpp",
+    "tools/figma-plugin/schema/figma-plugin-export-v1.json",
+    "tools/figma-plugin/scripts/gen-types.mjs",
+    "tools/figma-plugin/src/code.tsconfig.json",
+    "tools/figma-plugin/src/serialize.ts",
+    "tools/figma-plugin/src/tokens.ts",
+    "tools/figma-plugin/src/types-contract.ts",
+    "tools/figma-plugin/src/types.generated.ts",
+    "tools/figma-plugin/test/bound-variables.test.ts",
+    "tools/figma-plugin/test/tokens.test.ts",
+    "tools/import-design/figma_rasterize_vector_frames.py"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": null,
+  "rationale": "Corrected first-parent audit found no changed path in the active transferred boundary. Other merge-parent history and broad contract mapping are discovery context only; no Vellum source port applies.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "c131a2a448f591bcb6f99cf23fb914dd2dd45e6f",
+    "to_commit": "fd3525a5e0f646d04d3e3655996908356dfde851"
+  },
+  "schema_api_deltas": [
+    "core/view/src/design_ir_json.cpp",
+    "tools/figma-plugin/schema/figma-plugin-export-v1.json",
+    "tools/figma-plugin/src/types-contract.ts"
+  ],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "d4404e5a5f0340cd52d9e014851aec531162727a",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": [
+    "test/cmake/cmake_smoke_tests.cmake",
+    "test/cmake/test_pulp_install_layout.cmake",
+    "tools/cmake/PulpMinOs.cmake"
+  ]
+}

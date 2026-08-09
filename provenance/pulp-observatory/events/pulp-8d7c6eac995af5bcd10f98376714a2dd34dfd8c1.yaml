@@ -1,0 +1,47 @@
+{
+  "class": "correctness",
+  "contract_keys": [
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-09T10:04:06Z",
+  "disposition": "Pulp-only",
+  "effort_minutes": 0,
+  "event_id": "pulp-8d7c6eac995af5bcd10f98376714a2dd34dfd8c1",
+  "include_dependency_deltas": [
+    "core/view/include/pulp/view/buttons.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [
+    "613f8e42fd42c102f43328ff304030e2277eb337",
+    "8d7c6eac995af5bcd10f98376714a2dd34dfd8c1"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/pulp/pull/6557"
+  ],
+  "mapped_contracts": [
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "core/view/include/pulp/view/buttons.hpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "cc012105cf92591ef010beffa266c695749cf49c",
+  "rationale": "Frozen Pulp target fd3525a5e0f646d04d3e3655996908356dfde851 supplies immutable Pulp-only evidence for this first-parent observation. Pulp change event 20260725-gesture-claim-vs-candidacy at commit 613f8e42fd42c102f43328ff304030e2277eb337 (.github/vellum-change-events/20260725-gesture-claim-vs-candidacy.json) contains the authoritative checked-in rationale.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "c131a2a448f591bcb6f99cf23fb914dd2dd45e6f",
+    "to_commit": "fd3525a5e0f646d04d3e3655996908356dfde851"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "8d7c6eac995af5bcd10f98376714a2dd34dfd8c1",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": []
+}

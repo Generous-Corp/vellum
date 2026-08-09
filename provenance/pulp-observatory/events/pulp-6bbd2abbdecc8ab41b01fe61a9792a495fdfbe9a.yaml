@@ -1,0 +1,53 @@
+{
+  "class": "platform",
+  "contract_keys": [
+    "macos-shell",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-09T10:04:06Z",
+  "disposition": "Pulp-only",
+  "effort_minutes": 0,
+  "event_id": "pulp-6bbd2abbdecc8ab41b01fe61a9792a495fdfbe9a",
+  "include_dependency_deltas": [
+    "core/view/include/pulp/view/pointer_dispatch.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [
+    "6bbd2abbdecc8ab41b01fe61a9792a495fdfbe9a",
+    "a06a6d45223f9dcf362a59e7d3b81b42d86f8e73"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/pulp/pull/6583"
+  ],
+  "mapped_contracts": [
+    "macos-shell",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "core/view/include/pulp/view/pointer_dispatch.hpp",
+    "core/view/platform/mac/plugin_view_host_mac.mm",
+    "core/view/platform/mac/window_host_mac.mm",
+    "core/view/src/pointer_dispatch.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "d05430847aed6f0c504c4f7bbca8045381dffc99",
+  "rationale": "Frozen Pulp target fd3525a5e0f646d04d3e3655996908356dfde851 supplies immutable Pulp-only evidence for this first-parent observation. Pulp change event 20260726-mac-gesture-claim-host-parity at commit a06a6d45223f9dcf362a59e7d3b81b42d86f8e73 (.github/vellum-change-events/20260726-mac-gesture-claim-host-parity.json) contains the authoritative checked-in rationale.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "c131a2a448f591bcb6f99cf23fb914dd2dd45e6f",
+    "to_commit": "fd3525a5e0f646d04d3e3655996908356dfde851"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "6bbd2abbdecc8ab41b01fe61a9792a495fdfbe9a",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": []
+}

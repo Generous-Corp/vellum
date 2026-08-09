@@ -1,0 +1,53 @@
+{
+  "class": "rendering",
+  "contract_keys": [
+    "capture-primitives",
+    "macos-shell",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.capture-stats",
+    "vellum.gpu-native"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-09T10:04:06Z",
+  "disposition": "superseded",
+  "effort_minutes": 0,
+  "event_id": "pulp-083ae5ac6faae6f89f35c92861b831bb6a31c4e4",
+  "include_dependency_deltas": [
+    "core/view/include/pulp/view/screenshot.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [
+    "083ae5ac6faae6f89f35c92861b831bb6a31c4e4"
+  ],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "capture-primitives",
+    "macos-shell",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "core/view/include/pulp/view/screenshot.hpp",
+    "core/view/platform/mac/screenshot_mac.mm",
+    "core/view/src/screenshot_skia.cpp",
+    "core/view/src/screenshot_stub.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "365943fde8cac334e222a1072fbed4d989fe75fe",
+  "rationale": "Superseded by Vellum's existing fail-closed capture capability guard and contract tests; no source port is required.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "c131a2a448f591bcb6f99cf23fb914dd2dd45e6f",
+    "to_commit": "fd3525a5e0f646d04d3e3655996908356dfde851"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "083ae5ac6faae6f89f35c92861b831bb6a31c4e4",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": []
+}
