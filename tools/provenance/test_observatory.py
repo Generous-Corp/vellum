@@ -731,7 +731,7 @@ class ObservatoryTests(unittest.TestCase):
             self.assertIn("overdue-event-count-exceeded", negative["budget_violations"])
             self.assertEqual(negative["release_blockers"], [event["event_id"]])
 
-    def test_event_resolution_is_append_only_effective_state(self) -> None:
+    def test_event_resolution_chain_is_append_only_effective_state(self) -> None:
         observation = {
             "schema_version": 1, "event_id": "pulp-" + "a" * 40, "kind": "observation",
             "source_repository": "Generous-Corp/pulp", "source_commit": "a" * 40,
@@ -747,13 +747,55 @@ class ObservatoryTests(unittest.TestCase):
         resolution = {
             "schema_version": 1, "event_id": "resolution-render-a", "kind": "resolution",
             "created_at": "2026-07-21T00:00:00Z", "resolves": observation["event_id"],
-            "disposition": "ported", "rationale": "Ported with contract proof.", "owner": "@danielraffel",
+            "disposition": "port-required", "rationale": "Expanded acceptance remains open.", "owner": "@danielraffel",
             "linked_commits": ["d" * 40], "linked_pull_requests": [], "contract_tests": ["render-contract"],
-            "shared_contract_release_blocker": False, "effort_minutes": 15,
+            "shared_contract_release_blocker": True, "effort_minutes": 15,
         }
-        effective = observatory.effective_observations([(Path("a"), observation), (Path("b"), resolution)])
+        closure = {
+            **resolution,
+            "event_id": "resolution-render-b",
+            "created_at": "2026-07-22T00:00:00Z",
+            "disposition": "ported",
+            "rationale": "Later proof closes the blocker.",
+            "linked_commits": ["e" * 40],
+            "shared_contract_release_blocker": False,
+            "effort_minutes": 20,
+        }
+        effective = observatory.effective_observations(
+            [
+                (Path("c"), closure),
+                (Path("a"), observation),
+                (Path("b"), resolution),
+            ]
+        )
         self.assertEqual(effective[0]["disposition"], "ported")
-        self.assertEqual(effective[0]["resolution_event"], "resolution-render-a")
+        self.assertEqual(effective[0]["resolution_event"], "resolution-render-b")
+        self.assertEqual(effective[0]["resolved_at"], "2026-07-22T00:00:00Z")
+        self.assertEqual(effective[0]["linked_commits"], ["e" * 40])
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            directory = root / observatory.EVENTS_PATH
+            write_json(directory / f"{observation['event_id']}.yaml", observation)
+            write_json(directory / f"{resolution['event_id']}.yaml", resolution)
+            write_json(directory / f"{closure['event_id']}.yaml", closure)
+            loaded = observatory.load_events(root)
+            self.assertEqual(len(loaded), 3)
+
+            duplicate_timestamp = {
+                **closure,
+                "event_id": "resolution-render-c",
+                "linked_commits": ["f" * 40],
+            }
+            write_json(
+                directory / f"{duplicate_timestamp['event_id']}.yaml",
+                duplicate_timestamp,
+            )
+            with self.assertRaisesRegex(
+                observatory.ObservatoryError,
+                "resolution timestamps must be unique",
+            ):
+                observatory.load_events(root)
 
 
 if __name__ == "__main__":
