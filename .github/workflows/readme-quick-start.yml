@@ -17,7 +17,7 @@ jobs:
           persist-credentials: false
       - name: Execute authenticated README quick start
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.VELLUM_CANONICAL_READ_TOKEN || github.token }}
         run: |
           python3 scripts/readme_exec.py \
             --execute-profile clean-release \

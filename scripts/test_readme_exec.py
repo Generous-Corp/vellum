@@ -16,6 +16,10 @@ class Tests(unittest.TestCase):
         workflow=(r.ROOT/".github/workflows/readme-quick-start.yml").read_text()
         self.assertIn("  attestations: read\n",workflow)
         self.assertIn("  contents: read\n",workflow)
+        self.assertIn(
+            "secrets.VELLUM_CANONICAL_READ_TOKEN || github.token",
+            workflow,
+        )
     def test_unclassified_fails_closed(self):
         with self.assertRaisesRegex(r.Error,"every sh"):
             r.parse(self.temp("```sh\ntrue\n```\n"))
