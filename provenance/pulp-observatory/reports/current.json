@@ -7220,9 +7220,34 @@
       ],
       "source_commit": "fbdf57823839987e1ec5476a7b74a38b8167e364",
       "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "correctness",
+      "deadline": "2026-08-12T21:57:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-0c701f5cdc927677f36e83356340718e4a56abd4",
+      "mapped_contracts": [
+        "retained-ui-kernel"
+      ],
+      "source_commit": "0c701f5cdc927677f36e83356340718e4a56abd4",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "platform",
+      "deadline": "2026-08-12T21:57:34Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-da94a9a5598d47e73148a5a8e5da90e6cee845c7",
+      "mapped_contracts": [
+        "macos-shell",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "da94a9a5598d47e73148a5a8e5da90e6cee845c7",
+      "source_repository": "Generous-Corp/pulp"
     }
   ],
-  "generated_at": "2026-08-09T20:49:14Z",
+  "generated_at": "2026-08-09T21:57:34Z",
   "health": "pass",
   "maximum_pending_age_days": 0.0,
   "observatory_effort_percent": 0.0,

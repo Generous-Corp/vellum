@@ -558,6 +558,8 @@
 | `pulp-f7760d958ef577d74756524459dac0a976c794a0` | Pulp-to-framework | correctness | superseded | 2026-08-12T20:49:14Z |
 | `pulp-fa6e7d308c58d417e3fa10123abe1158904866e9` | Pulp-to-framework | rendering | superseded | 2026-08-12T20:49:14Z |
 | `pulp-fbdf57823839987e1ec5476a7b74a38b8167e364` | Pulp-to-framework | correctness | Pulp-only | 2026-08-12T20:49:14Z |
+| `pulp-0c701f5cdc927677f36e83356340718e4a56abd4` | Pulp-to-framework | correctness | superseded | 2026-08-12T21:57:34Z |
+| `pulp-da94a9a5598d47e73148a5a8e5da90e6cee845c7` | Pulp-to-framework | platform | superseded | 2026-08-12T21:57:34Z |
 
 ## Release blockers
 
