@@ -542,6 +542,24 @@
 | `pulp-ff2f4f23ad5f851da415cdaa28502455426e927a` | Pulp-to-framework | correctness | not-applicable | 2026-08-12T10:04:06Z |
 | `pulp-ff37e4b0013a0a0c53685d68ac379f67fad203d3` | Pulp-to-framework | importer | not-applicable | 2026-08-12T10:04:06Z |
 | `pulp-ffd81b5e95b9d285383178982ee7e749e46cb3ac` | Pulp-to-framework | importer | not-applicable | 2026-08-12T10:04:06Z |
+| `pulp-16db97773fa673b77d1696211ea87cfc7d77260b` | Pulp-to-framework | rendering | superseded | 2026-08-12T20:49:14Z |
+| `pulp-181b2334199fb54dc0e5213c5ad9d15e1a47867b` | Pulp-to-framework | rendering | superseded | 2026-08-12T20:49:14Z |
+| `pulp-1f8638c25281b0be2a968c61504fa21df6210c4d` | Pulp-to-framework | correctness | Pulp-only | 2026-08-12T20:49:14Z |
+| `pulp-393877eeb0c73ef02c518450323cf006b955cda5` | Pulp-to-framework | correctness | Pulp-only | 2026-08-12T20:49:14Z |
+| `pulp-41619408204f313ea795fbd6cbf655102f112351` | Pulp-to-framework | rendering | superseded | 2026-08-12T20:49:14Z |
+| `pulp-4370c01c4f2a3efb7da7b259dde2db4dc9aefeb8` | Pulp-to-framework | rendering | superseded | 2026-08-12T20:49:14Z |
+| `pulp-71ce3c3fd8baed22713fd5a5385e7752b659c8b1` | Pulp-to-framework | platform | superseded | 2026-08-12T20:49:14Z |
+| `pulp-7bf57b542de11aa16f1d54d053d793530cc56f1c` | Pulp-to-framework | build | Pulp-only | 2026-08-16T20:49:14Z |
+| `pulp-927a8f2947d36cf0713431be8cfe60c1edfee905` | Pulp-to-framework | rendering | superseded | 2026-08-12T20:49:14Z |
+| `pulp-98779a83b5186a178b3aa9a506a2eb61868c72e8` | Pulp-to-framework | rendering | superseded | 2026-08-12T20:49:14Z |
+| `pulp-a74fbbcd21e7313d4d25267fe53f93a2bf623367` | Pulp-to-framework | rendering | Pulp-only | 2026-08-12T20:49:14Z |
+| `pulp-ab585f0e09546ebb429639464099f85f7b429856` | Pulp-to-framework | platform | Pulp-only | 2026-08-12T20:49:14Z |
+| `pulp-f464bfdc94534246ed22d626930e957182577431` | Pulp-to-framework | build | superseded | 2026-08-16T20:49:14Z |
+| `pulp-f7760d958ef577d74756524459dac0a976c794a0` | Pulp-to-framework | correctness | superseded | 2026-08-12T20:49:14Z |
+| `pulp-fa6e7d308c58d417e3fa10123abe1158904866e9` | Pulp-to-framework | rendering | superseded | 2026-08-12T20:49:14Z |
+| `pulp-fbdf57823839987e1ec5476a7b74a38b8167e364` | Pulp-to-framework | correctness | Pulp-only | 2026-08-12T20:49:14Z |
+| `pulp-0c701f5cdc927677f36e83356340718e4a56abd4` | Pulp-to-framework | correctness | superseded | 2026-08-12T21:57:34Z |
+| `pulp-da94a9a5598d47e73148a5a8e5da90e6cee845c7` | Pulp-to-framework | platform | superseded | 2026-08-12T21:57:34Z |
 
 ## Release blockers
 

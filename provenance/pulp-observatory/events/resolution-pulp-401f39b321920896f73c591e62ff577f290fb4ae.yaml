@@ -1,0 +1,28 @@
+{
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer",
+    "vellum.install-consumer-text-shaping-concurrency",
+    "vellum.text-shaping-concurrency"
+  ],
+  "created_at": "2026-08-09T12:13:35Z",
+  "disposition": "port-required",
+  "effort_minutes": 0,
+  "event_id": "resolution-pulp-401f39b321920896f73c591e62ff577f290fb4ae",
+  "kind": "resolution",
+  "linked_commits": [
+    "401f39b321920896f73c591e62ff577f290fb4ae",
+    "927a8f2947d36cf0713431be8cfe60c1edfee905",
+    "98779a83b5186a178b3aa9a506a2eb61868c72e8"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/pulp/pull/7313"
+  ],
+  "owner": "@danielraffel",
+  "rationale": "The canonical rendering convergence blocker is expanded append-only to include PR #7313's distinct parallel text-shaping lifetime and shared FontCollection safety requirement. Acceptance now requires a Vellum-native concurrent-shaping fixture that exercises shared font collection lifetime under parallel work and the same concurrency proof through an installed consumer, in addition to the existing GPU, UI, authoring, fallback, font, gradient, and shadow geometry obligations.",
+  "resolves": "pulp-401f39b321920896f73c591e62ff577f290fb4ae",
+  "schema_version": 1,
+  "shared_contract_release_blocker": true
+}

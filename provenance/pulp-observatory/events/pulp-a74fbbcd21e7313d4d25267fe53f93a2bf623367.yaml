@@ -1,0 +1,55 @@
+{
+  "class": "rendering",
+  "contract_keys": [
+    "canvas-kernel",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-09T20:49:14Z",
+  "disposition": "Pulp-only",
+  "effort_minutes": 0,
+  "event_id": "pulp-a74fbbcd21e7313d4d25267fe53f93a2bf623367",
+  "include_dependency_deltas": [
+    "core/view/cmake/PulpViewJsEngines.cmake",
+    "core/view/include/pulp/view/js_engine.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [
+    "16db97773fa673b77d1696211ea87cfc7d77260b",
+    "7bf57b542de11aa16f1d54d053d793530cc56f1c",
+    "a74fbbcd21e7313d4d25267fe53f93a2bf623367"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/pulp/pull/7305"
+  ],
+  "mapped_contracts": [
+    "canvas-kernel",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "core/canvas/src/skia_chromium_raw_ptr_compat.cpp",
+    "core/view/cmake/PulpViewJsEngines.cmake",
+    "core/view/include/pulp/view/js_engine.hpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": null,
+  "rationale": "PR #7305 is Pulp-owned dependency alignment for its Skia/Dawn M152 archive, raw_ptr compatibility shim, and V8 backend. Vellum independently pins and byte-verifies its own chrome/m150 macOS arm64 runtime asset and does not contain Pulp's shim or V8 selector; this is not a source-parity requirement for the bounded independent release.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "fd3525a5e0f646d04d3e3655996908356dfde851",
+    "to_commit": "277dd5743dc7d50f0661477715b7e14418a75176"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "a74fbbcd21e7313d4d25267fe53f93a2bf623367",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": []
+}
