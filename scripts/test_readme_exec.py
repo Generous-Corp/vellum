@@ -16,6 +16,27 @@ class Tests(unittest.TestCase):
         workflow=(r.ROOT/".github/workflows/readme-quick-start.yml").read_text()
         self.assertIn("  attestations: read\n",workflow)
         self.assertIn("  contents: read\n",workflow)
+        self.assertIn(
+            "if: github.event_name == 'pull_request'\n"
+            "        run: |\n"
+            "          python3 scripts/test_readme_exec.py\n"
+            "          python3 scripts/readme_exec.py --lint",
+            workflow,
+        )
+        trusted_expression = (
+            "github.event_name != 'pull_request' && "
+            "github.ref == 'refs/heads/main'"
+        )
+        self.assertEqual(workflow.count(trusted_expression), 2)
+        secret_position = workflow.index(
+            "secrets.VELLUM_CANONICAL_READ_TOKEN || github.token"
+        )
+        self.assertLess(workflow.index(trusted_expression), secret_position)
+        pull_request_step = workflow[
+            workflow.index("Validate the README release contract without credentials"):
+            workflow.index("Refuse authenticated execution outside trusted main")
+        ]
+        self.assertNotIn("VELLUM_CANONICAL_READ_TOKEN", pull_request_step)
     def test_unclassified_fails_closed(self):
         with self.assertRaisesRegex(r.Error,"every sh"):
             r.parse(self.temp("```sh\ntrue\n```\n"))
