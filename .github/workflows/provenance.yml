@@ -274,6 +274,9 @@ jobs:
             git merge-base "$observatory_git_base" HEAD
           )"
           python3 tools/provenance/test_observatory.py
+          python3 tools/provenance/test_receiver.py
+          python3 tools/provenance/test_receiver_watchdog.py
+          python3 tools/provenance/test_receiver_workflows.py
           python3 tools/provenance/observatory.py verify \
             --pulp-repo .observatory-pulp \
             --vellum-repo . \

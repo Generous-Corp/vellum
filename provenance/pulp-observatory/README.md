@@ -61,3 +61,39 @@ activation boundary and advances through later reviewed reconciliation.
 Verification rejects a mapped commit beyond the checked-in cursor. Authority
 is active; the generated report records change-ledger health and currently has
 no activation blockers.
+
+## Automated receiver and watchdog
+
+`.github/workflows/pulp-observatory-receiver.yml` is the only live mutation
+path for ordinary `pulp-change-landed` delivery, trusted replay, and cutover.
+All three operations share the `vellum-pulp-observatory-cursor` non-cancelling
+concurrency group. That group is mutual exclusion, not a queue: every surviving
+run fetches Pulp `main`, verifies the append-only durable event range, and
+coalesces through the newest covered head. The completed one-time authority
+activation remains independently protected; it must not enter the receiver's
+lossy pending slot because activation cannot be coalesced or replaced.
+
+Live dispatch is off unless the reviewed repository variable
+`VELLUM_RECEIVER_LIVE` is exactly `true`. Replay accepts an exact Pulp commit,
+requires it to descend from the committed cursor and be landed on freshly
+fetched Pulp `main`, and fails closed on missing event coverage. The `enable`
+operation succeeds only when the committed cursor already covers both the
+requested lower bound and current durable head. Keep both live delivery and
+the watchdog disabled until the fixed-head catch-up has merged.
+
+Generated evidence is pushed only to
+`automation/pulp-observatory-coalesced`. The workflow opens or refreshes one
+reviewed PR and never pushes main. Merge that PR with a merge commit; never
+squash or rebase it. A repository-scoped token in
+`VELLUM_PULP_READER_TOKEN` needs only Contents read for
+`Generous-Corp/pulp`. A separate `VELLUM_RECEIVER_ADMIN_TOKEN`, scoped only to
+the Vellum repository, needs Contents and Pull requests write for evidence PRs
+plus Actions and Variables write for the trusted enable barrier and replay.
+Keeping the credentials separate avoids a cross-owner broad token.
+
+`.github/workflows/pulp-observatory-watchdog.yml` runs on GitHub-hosted Linux,
+independent of the receiver fleet. Once
+`VELLUM_RECEIVER_WATCHDOG_ENABLED=true`, it checks cursor lag, receiver run and
+runner-acquisition health, missing delivery, and pending-budget pressure using
+the owner and thresholds in `receiver-policy.json`. A failed watchdog run is
+the alert and names the response owner in its result and job summary.
