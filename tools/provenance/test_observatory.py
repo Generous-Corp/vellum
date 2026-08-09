@@ -166,6 +166,23 @@ observatory:
 
 
 class ObservatoryTests(unittest.TestCase):
+    def test_markdown_surfaces_release_blockers(self) -> None:
+        report = {
+            "state": "active",
+            "health": "pass",
+            "pending": 0,
+            "overdue": 0,
+            "observatory_effort_percent": 0.0,
+            "events": [],
+            "release_blockers": ["pulp-a", "pulp-b"],
+            "activation_blockers": [],
+        }
+
+        markdown = observatory.render_markdown(report)
+
+        self.assertIn("- Release blockers: 2", markdown)
+        self.assertIn("## Release blockers\n\n- `pulp-a`\n- `pulp-b`", markdown)
+
     def test_public_api_delegates_to_focused_observatory_modules(self) -> None:
         ownership = {
             observatory.load_json: "observatory_common",
