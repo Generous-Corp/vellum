@@ -22,6 +22,7 @@ POLICY = {
     "named_response_owner": "@danielraffel",
     "cursor_lag_sla_minutes": 30,
     "runner_acquisition_sla_minutes": 10,
+    "receiver_execution_sla_minutes": 70,
     "successful_receiver_max_age_minutes": 1440,
     "pending_warning": 15,
     "pending_limit": 20,
@@ -87,8 +88,26 @@ class WatchdogTests(unittest.TestCase):
         }])
         self.assertIn("receiver-run-failed", result["violations"])
 
+    def test_in_progress_receiver_is_healthy_and_not_replaced(self) -> None:
+        result = run(runs=[{
+            "status": "in_progress", "conclusion": None,
+            "created_at": "2026-08-09T11:55:00Z",
+        }])
+        self.assertEqual(result["status"], "pass")
+        self.assertFalse(result["dispatch_required"])
+
+    def test_stuck_in_progress_receiver_fails_after_execution_sla(self) -> None:
+        result = run(runs=[{
+            "status": "in_progress", "conclusion": None,
+            "created_at": "2026-08-09T10:40:00Z",
+        }])
+        self.assertIn("receiver-run-stuck", result["violations"])
+        self.assertFalse(result["dispatch_required"])
+
     def test_missing_dispatch_fails(self) -> None:
-        self.assertIn("missing-dispatch", run(runs=[])["violations"])
+        result = run(runs=[])
+        self.assertIn("missing-dispatch", result["violations"])
+        self.assertTrue(result["heartbeat_required"])
 
     def test_near_budget_fails_before_limit(self) -> None:
         result = run(pending=15)
@@ -100,6 +119,16 @@ class WatchdogTests(unittest.TestCase):
             "created_at": "2026-08-08T11:00:00Z",
         }])
         self.assertIn("receiver-proof-stale", result["violations"])
+        self.assertTrue(result["heartbeat_required"])
+
+    def test_aging_success_refreshes_before_it_becomes_stale(self) -> None:
+        result = run(runs=[{
+            "status": "completed", "conclusion": "success",
+            "created_at": "2026-08-08T14:00:00Z",
+        }])
+        self.assertEqual(result["status"], "pass")
+        self.assertTrue(result["heartbeat_required"])
+        self.assertTrue(result["dispatch_required"])
 
     def test_successful_retry_supersedes_failed_run(self) -> None:
         result = run(runs=[
@@ -114,6 +143,7 @@ class WatchdogTests(unittest.TestCase):
             "created_at": "2026-08-09T11:55:00Z",
         }])
         self.assertTrue(result["retry_required"])
+        self.assertTrue(result["dispatch_required"])
 
     def test_open_evidence_pr_suppresses_replay_churn(self) -> None:
         result = run(covered=False, evidence_pr_open=True)

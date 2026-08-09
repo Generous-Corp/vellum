@@ -36,6 +36,7 @@ def load_policy(path: Path) -> dict[str, object]:
         "named_response_owner",
         "cursor_lag_sla_minutes",
         "runner_acquisition_sla_minutes",
+        "receiver_execution_sla_minutes",
         "successful_receiver_max_age_minutes",
         "pending_warning",
         "pending_limit",
@@ -73,8 +74,10 @@ def evaluate(
             violations.append("cursor-lag-sla-breached")
     latest = runs[0] if runs else None
     receiver_active = False
+    proof_recovery_required = False
     if latest is None:
         violations.append("missing-dispatch")
+        proof_recovery_required = True
     elif not isinstance(latest, dict):
         raise WatchdogError("receiver run entry must be an object")
     else:
@@ -86,12 +89,30 @@ def evaluate(
         if status in {"queued", "waiting", "pending"}:
             if age_minutes > int(policy["runner_acquisition_sla_minutes"]):
                 violations.append("runner-not-acquired")
+        elif status == "in_progress":
+            if age_minutes > int(policy["receiver_execution_sla_minutes"]):
+                violations.append("receiver-run-stuck")
         elif status != "completed":
             violations.append("receiver-run-incoherent")
         elif conclusion != "success":
             violations.append("receiver-run-failed")
+            proof_recovery_required = True
         elif age_minutes > int(policy["successful_receiver_max_age_minutes"]):
             violations.append("receiver-proof-stale")
+            proof_recovery_required = True
+        elif age_minutes >= int(policy["successful_receiver_max_age_minutes"]) * 0.9:
+            proof_recovery_required = True
+    retry_required = (
+        not cursor_covers_latest
+        and not receiver_active
+        and not evidence_pr_open
+    )
+    heartbeat_required = (
+        cursor_covers_latest
+        and proof_recovery_required
+        and not receiver_active
+        and not evidence_pr_open
+    )
     return {
         "schema_version": 1,
         "status": "pass" if not violations else "fail",
@@ -99,11 +120,9 @@ def evaluate(
         "cursor_covers_latest": cursor_covers_latest,
         "pending_count": pending_count,
         "evidence_pr_open": evidence_pr_open,
-        "retry_required": (
-            not cursor_covers_latest
-            and not receiver_active
-            and not evidence_pr_open
-        ),
+        "retry_required": retry_required,
+        "heartbeat_required": heartbeat_required,
+        "dispatch_required": retry_required or heartbeat_required,
         "violations": violations,
     }
 

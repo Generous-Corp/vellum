@@ -28,6 +28,7 @@ concurrency:
 jobs:
   receiver:
     name: receiver
+    timeout-minutes: 60
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'repository_dispatch' &&
@@ -179,8 +180,12 @@ jobs:
               "HEAD:refs/heads/$EVIDENCE_BRANCH"
           fi
           open_prs="$(
-            gh pr list --state open --head "$EVIDENCE_BRANCH" \
-              --json number --jq length
+            gh api --method GET --paginate --slurp \
+              "repos/$GITHUB_REPOSITORY/pulls" \
+              -f state=open \
+              -f head="$GITHUB_REPOSITORY_OWNER:$EVIDENCE_BRANCH" \
+              -f per_page=100 \
+              --jq 'map(length) | add // 0'
           )"
           if test "$open_prs" = 0; then
             gh pr create \

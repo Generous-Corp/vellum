@@ -44,7 +44,9 @@ class ReceiverWorkflowTests(unittest.TestCase):
         self.assertIn("persist-credentials: true", text)
         self.assertIn("VELLUM_RECEIVER_ADMIN_TOKEN", text)
         self.assertIn("VELLUM_PULP_READER_TOKEN", text)
-        self.assertIn("gh pr list --state open", text)
+        self.assertIn("--paginate --slurp", text)
+        self.assertIn("$GITHUB_REPOSITORY_OWNER:$EVIDENCE_BRANCH", text)
+        self.assertIn("timeout-minutes: 60", text)
         self.assertIn("Vellum main advanced while evidence was prepared", text)
         self.assertIn("gh pr create", text)
         self.assertNotIn("HEAD:refs/heads/main", text)
@@ -56,8 +58,11 @@ class ReceiverWorkflowTests(unittest.TestCase):
         self.assertIn("runs-on: ubuntu-latest", text)
         self.assertIn("pull-requests: read", text)
         self.assertIn("VELLUM_RECEIVER_WATCHDOG_ENABLED == 'true'", text)
+        self.assertIn("group: vellum-pulp-observatory-watchdog", text)
+        self.assertIn("--paginate --slurp", text)
         self.assertIn("receiver_watchdog.py", text)
-        self.assertIn("Retry lag only when no receiver run is active", text)
+        self.assertIn("Retry lag or refresh an aging receiver heartbeat", text)
+        self.assertIn("dispatch_required", text)
 
 
 if __name__ == "__main__":

@@ -10,6 +10,10 @@ permissions:
   contents: read
   pull-requests: read
 
+concurrency:
+  group: vellum-pulp-observatory-watchdog
+  cancel-in-progress: false
+
 jobs:
   watchdog:
     name: watchdog
@@ -77,9 +81,12 @@ jobs:
             --jq '[.workflow_runs[] | {status, conclusion, created_at}]' \
             > "$RUNNER_TEMP/receiver-runs.json"
           evidence_pr_count="$(
-            gh pr list --state open \
-              --head automation/pulp-observatory-coalesced \
-              --json number --jq length
+            gh api --method GET --paginate --slurp \
+              "repos/$GITHUB_REPOSITORY/pulls" \
+              -f state=open \
+              -f head="$GITHUB_REPOSITORY_OWNER:automation/pulp-observatory-coalesced" \
+              -f per_page=100 \
+              --jq 'map(length) | add // 0'
           )"
           jq -s --argjson evidence_pr_open "$((evidence_pr_count > 0))" \
             '.[0] + {runs: .[1], evidence_pr_open: ($evidence_pr_open == 1)}' \
@@ -98,12 +105,12 @@ jobs:
             --now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --output "$RUNNER_TEMP/watchdog-result.json" | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - name: Retry lag only when no receiver run is active
+      - name: Retry lag or refresh an aging receiver heartbeat
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if test "$(jq -r .retry_required "$RUNNER_TEMP/watchdog-result.json")" = true; then
+          if test "$(jq -r .dispatch_required "$RUNNER_TEMP/watchdog-result.json")" = true; then
             target="$(jq -r .latest_target "$RUNNER_TEMP/watchdog-state.json")"
             gh api --method POST \
               "repos/$GITHUB_REPOSITORY/actions/workflows/pulp-observatory-receiver.yml/dispatches" \
