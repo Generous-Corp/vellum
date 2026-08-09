@@ -81,12 +81,13 @@ jobs:
             --jq '[.workflow_runs[] | {status, conclusion, created_at}]' \
             > "$RUNNER_TEMP/receiver-runs.json"
           evidence_pr_count="$(
-            gh api --method GET --paginate --slurp \
+            gh api --method GET --paginate \
               "repos/$GITHUB_REPOSITORY/pulls" \
               -f state=open \
               -f head="$GITHUB_REPOSITORY_OWNER:automation/pulp-observatory-coalesced" \
               -f per_page=100 \
-              --jq 'map(length) | add // 0'
+              --jq 'length' | \
+              awk '{ total += $1 } END { print total + 0 }'
           )"
           jq -s --argjson evidence_pr_open "$((evidence_pr_count > 0))" \
             '.[0] + {runs: .[1], evidence_pr_open: ($evidence_pr_open == 1)}' \

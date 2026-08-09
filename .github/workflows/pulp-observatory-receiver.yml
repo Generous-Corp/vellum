@@ -180,12 +180,13 @@ jobs:
               "HEAD:refs/heads/$EVIDENCE_BRANCH"
           fi
           open_prs="$(
-            gh api --method GET --paginate --slurp \
+            gh api --method GET --paginate \
               "repos/$GITHUB_REPOSITORY/pulls" \
               -f state=open \
               -f head="$GITHUB_REPOSITORY_OWNER:$EVIDENCE_BRANCH" \
               -f per_page=100 \
-              --jq 'map(length) | add // 0'
+              --jq 'length' | \
+              awk '{ total += $1 } END { print total + 0 }'
           )"
           if test "$open_prs" = 0; then
             gh pr create \
