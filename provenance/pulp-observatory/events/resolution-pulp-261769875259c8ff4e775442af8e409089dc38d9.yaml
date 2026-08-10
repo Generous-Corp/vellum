@@ -1,0 +1,26 @@
+{
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu.attributed_text_runs_materialization",
+    "vellum.install-consumer",
+    "vellum.install-consumer-nested-libdir"
+  ],
+  "created_at": "2026-08-10T13:20:00Z",
+  "disposition": "ported",
+  "effort_minutes": 0,
+  "event_id": "resolution-pulp-261769875259c8ff4e775442af8e409089dc38d9",
+  "kind": "resolution",
+  "linked_commits": [
+    "261769875259c8ff4e775442af8e409089dc38d9",
+    "ce443317ff7edfb256f7fcb4e5cecc6796d98400"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Vellum source commit ce443317 ports the generic attributed-run schema, runtime validation, materialization, mixed-size layout, shaping-context, and decoration behavior. The exact full local matrix passed DesignIR sterile consumption, 60 UI tests plus types, native authoring and GPU fixtures, and both default and nested-layout installed consumers.",
+  "resolves": "pulp-261769875259c8ff4e775442af8e409089dc38d9",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

@@ -1,0 +1,31 @@
+{
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu.attributed_text_runs_materialization",
+    "vellum.gpu.outset_shadow_spread_diagonal",
+    "vellum.gpu.packaged_text_fallback_weights",
+    "vellum.gpu.repeating_linear_gradient_non_square",
+    "vellum.install-consumer",
+    "vellum.install-consumer-nested-libdir"
+  ],
+  "created_at": "2026-08-10T13:20:01Z",
+  "disposition": "ported",
+  "effort_minutes": 0,
+  "event_id": "resolution-pulp-401f39b321920896f73c591e62ff577f290fb4ae-ported-ce443317",
+  "kind": "resolution",
+  "linked_commits": [
+    "401f39b321920896f73c591e62ff577f290fb4ae",
+    "927a8f2947d36cf0713431be8cfe60c1edfee905",
+    "98779a83b5186a178b3aa9a506a2eb61868c72e8",
+    "ce443317ff7edfb256f7fcb4e5cecc6796d98400"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/pulp/pull/7313"
+  ],
+  "owner": "@danielraffel",
+  "rationale": "Vellum source commit ce443317 ports deterministic packaged fallback and weights, shared attributed shaping, parallel FontCollection lifetime, shader-based repeating gradients, and outset shadow spread geometry. Parallel measurement passes in the native GPU fixture and again through the installed minimal-scene consumer; the exact full local matrix and nested install layout are green.",
+  "resolves": "pulp-401f39b321920896f73c591e62ff577f290fb4ae",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

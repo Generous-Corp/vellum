@@ -2,9 +2,9 @@
 
 - State: `active`
 - Health: `pass`
-- Pending events: 0
+- Pending events: 1
 - Overdue events: 0
-- Release blockers: 2
+- Release blockers: 0
 - Observatory effort: 0.0% of framework effort
 
 ## Events
@@ -156,7 +156,7 @@
 | `pulp-234f22e46b4cb419d0b10b56cfcbaf2f990a9533` | Pulp-to-framework | importer | not-applicable | 2026-08-12T10:04:06Z |
 | `pulp-23b7dbd24287b79df1ff79b1758814d140509a01` | Pulp-to-framework | schema | Pulp-only | 2026-08-12T10:04:06Z |
 | `pulp-25de8535f20d07387a5ca31c7cf4f0081c5d6b9c` | Pulp-to-framework | schema | Pulp-only | 2026-08-12T10:04:06Z |
-| `pulp-261769875259c8ff4e775442af8e409089dc38d9` | Pulp-to-framework | schema | port-required | 2026-08-12T10:04:06Z |
+| `pulp-261769875259c8ff4e775442af8e409089dc38d9` | Pulp-to-framework | schema | ported | 2026-08-12T10:04:06Z |
 | `pulp-2788782af806b7ef4b0eb4a8a7fb55077ecc005b` | Pulp-to-framework | security | Pulp-only | 2026-08-10T10:04:06Z |
 | `pulp-27bd82dcfdfd6a6b65104b7b6883ea524180a34d` | Pulp-to-framework | security | not-applicable | 2026-08-10T10:04:06Z |
 | `pulp-27f882e1f99cc529fb2c3d8600c5e73597676534` | Pulp-to-framework | importer | not-applicable | 2026-08-12T10:04:06Z |
@@ -201,7 +201,7 @@
 | `pulp-3f15a896e7292c22c5532bc92e5ac40ecc7ac322` | Pulp-to-framework | importer | not-applicable | 2026-08-12T10:04:06Z |
 | `pulp-3f406eac14e7e335209f1335f2e0394b53694b02` | Pulp-to-framework | schema | not-applicable | 2026-08-12T10:04:06Z |
 | `pulp-3fdf5b79ccd986d0d02fa3fb27d1273fd604534a` | Pulp-to-framework | importer | not-applicable | 2026-08-12T10:04:06Z |
-| `pulp-401f39b321920896f73c591e62ff577f290fb4ae` | Pulp-to-framework | rendering | port-required | 2026-08-12T10:04:06Z |
+| `pulp-401f39b321920896f73c591e62ff577f290fb4ae` | Pulp-to-framework | rendering | ported | 2026-08-12T10:04:06Z |
 | `pulp-40f87d56c56bbdc081732c07fac9bba60bb376bb` | Pulp-to-framework | correctness | not-applicable | 2026-08-12T10:04:06Z |
 | `pulp-413cc2ab2ed4b85e4a2b0562c9e5cfadce1d4efb` | Pulp-to-framework | rendering | Pulp-only | 2026-08-12T10:04:06Z |
 | `pulp-41ee04522d48ce49e40fbc4e2338afb8d0f97e0d` | Pulp-to-framework | importer | not-applicable | 2026-08-12T10:04:06Z |
@@ -566,11 +566,11 @@
 | `pulp-4d4d73bbe2e44707ccdb1f8dc584b519c0a858e7` | Pulp-to-framework | build | superseded | 2026-08-17T08:55:05Z |
 | `pulp-51afeb296ab1b8db331f4bd8207d8b71552ace66` | Pulp-to-framework | schema | superseded | 2026-08-13T08:55:05Z |
 | `pulp-a6a28a3cdb45687482817c520327c0decca6e146` | Pulp-to-framework | correctness | superseded | 2026-08-13T08:55:05Z |
+| `vellum-ce443317ff7edfb256f7fcb4e5cecc6796d98400` | framework-to-Pulp | schema | pending | 2026-08-13T13:14:55Z |
 
 ## Release blockers
 
-- `pulp-261769875259c8ff4e775442af8e409089dc38d9`
-- `pulp-401f39b321920896f73c591e62ff577f290fb4ae`
+None.
 
 ## Activation blockers
 
