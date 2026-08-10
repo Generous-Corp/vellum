@@ -1,15 +1,15 @@
 {
   "administrator_check": {
-    "checked_at": "2026-07-23T21:34:42Z",
+    "checked_at": "2026-08-10T14:44:23Z",
     "enabled": true,
-    "endpoint": "GET /repos/Generous-Corp/vellum/immutable-releases",
+    "endpoint": "GET /repos/danielraffel/vellum/immutable-releases",
     "enforced_by_owner": false,
     "required_permission": "Administration: read"
   },
   "documentation": "https://docs.github.com/en/rest/repos/repos#check-if-immutable-releases-are-enabled-for-a-repository",
   "integrity_model": "covered-by-exact-signed-annotated-release-tag",
   "maximum_age_seconds": 21600,
-  "release_tag": "v0.1.6",
-  "repository": "Generous-Corp/vellum",
+  "release_tag": "v0.1.7",
+  "repository": "danielraffel/vellum",
   "schema": "vellum.immutable-release-preflight.v1"
 }

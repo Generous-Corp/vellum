@@ -3,7 +3,7 @@ param(
     [string]$Archive,
     [string]$Checksums,
     [string]$Version,
-    [string]$ReleaseBaseUrl = $(if ($env:VELLUM_RELEASE_BASE_URL) { $env:VELLUM_RELEASE_BASE_URL } else { "https://github.com/Generous-Corp/vellum/releases/download" }),
+    [string]$ReleaseBaseUrl = $(if ($env:VELLUM_RELEASE_BASE_URL) { $env:VELLUM_RELEASE_BASE_URL } else { "https://github.com/danielraffel/vellum/releases/download" }),
     [string]$Target,
     [string]$InstallDir = $(if ($env:VELLUM_INSTALL_DIR) { $env:VELLUM_INSTALL_DIR } else { Join-Path $HOME ".local" })
 )
@@ -155,8 +155,8 @@ if ($LocalRoot) {
         $localMetadata = @'
 {
   "schema": "vellum.sdk-artifact.v1",
-  "framework_version": "0.1.6",
-  "cli_version": "0.1.6",
+  "framework_version": "0.1.7",
+  "cli_version": "0.1.7",
   "cli_api": 1,
   "source_commit": null,
   "target": "local-development",
@@ -185,7 +185,7 @@ if ($LocalRoot) {
   "verified": false,
   "artifact": null,
   "artifact_sha256": null,
-  "framework_version": "0.1.6",
+  "framework_version": "0.1.7",
   "target": "local-development",
   "source_commit": null
 }
@@ -200,7 +200,7 @@ if ($LocalRoot) {
 
 throw @"
 Verified archive and release installation are unavailable in PowerShell for
-Vellum v0.1.6. The application SDK currently supports macOS 15.0+ arm64; use
+Vellum v0.1.7. The application SDK currently supports macOS 15.0+ arm64; use
 scripts/install.sh there. That installer delegates archive verification,
 extraction, immutable storage, and activation to the canonical install_core.py.
 PowerShell currently supports only -LocalRoot development installs.

@@ -2,8 +2,10 @@
 
 The repository builds a reproducible local artifact, and the installer supports
 local development, verified local archive, and an exact-version private release
-mode. The commands below install the published, immutable `v0.1.6` tagged
-release.
+mode. The commands below install the published, immutable `v0.1.7` tagged
+release. This incubation release is temporarily hosted in the private
+`danielraffel/vellum` repository while its permanent repository home is being
+decided; the trial location does not change source-authority records.
 
 ## Private tagged-release installation
 
@@ -22,13 +24,13 @@ prevents PowerShell from becoming a second artifact-verification authority.
 
 ```sh
 bootstrap_dir="$(mktemp -d)"
-gh release download v0.1.6 \
-  --repo Generous-Corp/vellum \
+gh release download v0.1.7 \
+  --repo danielraffel/vellum \
   --pattern install.sh \
   --dir "$bootstrap_dir"
-gh release verify-asset v0.1.6 "$bootstrap_dir/install.sh" \
-  --repo Generous-Corp/vellum
-sh "$bootstrap_dir/install.sh" --version 0.1.6
+gh release verify-asset v0.1.7 "$bootstrap_dir/install.sh" \
+  --repo danielraffel/vellum
+sh "$bootstrap_dir/install.sh" --version 0.1.7
 export PATH="$HOME/.local/bin:$PATH"
 
 app_dir="$(mktemp -d)/vellum-hello"
@@ -49,16 +51,16 @@ bootstrap file, and verify them before execution:
 
 ```sh
 bootstrap_dir="$(mktemp -d)"
-gh release download v0.1.6 \
-  --repo Generous-Corp/vellum \
+gh release download v0.1.7 \
+  --repo danielraffel/vellum \
   --pattern SHA256SUMS \
   --pattern install.sh \
   --pattern install_core.py \
   --dir "$bootstrap_dir"
 for asset in install.sh install_core.py SHA256SUMS
 do
-  gh release verify-asset v0.1.6 "$bootstrap_dir/$asset" \
-    --repo Generous-Corp/vellum
+  gh release verify-asset v0.1.7 "$bootstrap_dir/$asset" \
+    --repo danielraffel/vellum
 done
 (
   cd "$bootstrap_dir"
@@ -71,7 +73,7 @@ done
   cat install.sh.sha256 install_core.py.sha256 > bootstrap.sha256
   shasum -a 256 -c bootstrap.sha256
 )
-sh "$bootstrap_dir/install.sh" --version 0.1.6
+sh "$bootstrap_dir/install.sh" --version 0.1.7
 ```
 
 Do not replace either flow with `curl | sh`: anonymous `curl` does not provide
@@ -228,10 +230,10 @@ Build and validate the artifact:
 ```sh
 python3 scripts/build_sdk_artifact.py --output-dir dist --json
 python3 scripts/verify_sdk_artifact.py \
-  --archive dist/vellum-sdk-0.1.6-darwin-arm64.tar.gz \
+  --archive dist/vellum-sdk-0.1.7-darwin-arm64.tar.gz \
   --checksums dist/SHA256SUMS --json
 python3 scripts/validate_installed_sdk.py \
-  --archive dist/vellum-sdk-0.1.6-darwin-arm64.tar.gz \
+  --archive dist/vellum-sdk-0.1.7-darwin-arm64.tar.gz \
   --checksums dist/SHA256SUMS \
   --output dist/installed-validation.json --json
 ```
@@ -275,9 +277,9 @@ After authenticated download, independently inspect GitHub's release
 verification and asset digest:
 
 ```sh
-gh release verify v0.1.6 --repo Generous-Corp/vellum
-gh release verify-asset v0.1.6 ./vellum-sdk-0.1.6-darwin-arm64.tar.gz \
-  --repo Generous-Corp/vellum
+gh release verify v0.1.7 --repo danielraffel/vellum
+gh release verify-asset v0.1.7 ./vellum-sdk-0.1.7-darwin-arm64.tar.gz \
+  --repo danielraffel/vellum
 ```
 
 `release-trust.json` records the exact tag and source commit, the trusted-key
@@ -289,7 +291,7 @@ release attestation is required and verified. See
 [Immutable releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases)
 and [GitHub security features](https://docs.github.com/en/code-security/getting-started/github-security-features#artifact-attestations).
 
-These are release gates, not claims that `v0.1.6` exists before the tag workflow
+These are release gates, not claims that `v0.1.7` exists before the tag workflow
 has completed. The local artifact flow exercises the same archive verification
 and transactional installation logic but cannot claim hosted release
 immutability or GitHub asset digests.

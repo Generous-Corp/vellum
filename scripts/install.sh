@@ -8,7 +8,7 @@ local_root=
 archive=
 checksums=
 version=
-official_release_base=https://github.com/Generous-Corp/vellum/releases/download
+official_release_base=https://github.com/danielraffel/vellum/releases/download
 release_base=${VELLUM_RELEASE_BASE_URL:-$official_release_base}
 release_target=
 uninstall=false
@@ -304,8 +304,8 @@ if [ -n "$local_root" ]; then
   cat > "$temporary/metadata.json" <<'JSON'
 {
   "schema": "vellum.sdk-artifact.v1",
-  "framework_version": "0.1.6",
-  "cli_version": "0.1.6",
+  "framework_version": "0.1.7",
+  "cli_version": "0.1.7",
   "cli_api": 1,
   "source_commit": null,
   "target": "local-development",
@@ -333,7 +333,7 @@ JSON
   "verified": false,
   "artifact": null,
   "artifact_sha256": null,
-  "framework_version": "0.1.6",
+  "framework_version": "0.1.7",
   "target": "local-development",
   "source_commit": null
 }
@@ -400,7 +400,7 @@ raise SystemExit(0 if match and int(match.group(1)) >= 15 else 1)' \
   if [ "$release_base" = "$official_release_base" ]; then
     require_github_cli_release_verification
     gh release download "v$version" \
-      --repo Generous-Corp/vellum \
+      --repo danielraffel/vellum \
       --pattern SHA256SUMS \
       --pattern install_core.py \
       --pattern "$archive_name" \
@@ -412,7 +412,7 @@ raise SystemExit(0 if match and int(match.group(1)) >= 15 else 1)' \
     for release_asset in "$checksums" "$release_core" "$archive"
     do
       gh release verify-asset "v$version" "$release_asset" \
-        --repo Generous-Corp/vellum >/dev/null || {
+        --repo danielraffel/vellum >/dev/null || {
         printf 'GitHub release digest verification failed for %s.\n' \
           "$(basename "$release_asset")" >&2
         exit 1
