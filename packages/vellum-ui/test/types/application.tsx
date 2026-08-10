@@ -4,6 +4,7 @@ import {
     Fragment,
     Stack,
     Text,
+    TextRun,
     TextInput,
     createApp,
     createServices,
@@ -80,6 +81,31 @@ const custom = (
     />
 );
 void custom;
+
+const styledText = (
+    <Text
+        id="styled"
+        style={{
+            x: 12,
+            y: 8,
+            backgroundLinearGradient: {
+                angle: 90,
+                repeating: true,
+                repeatLength: 32,
+                stops: [
+                    { position: 0, color: '#000000' },
+                    { position: 1, color: '#ffffff' },
+                ],
+            },
+            boxShadow: { blurRadius: 8, spreadRadius: 2, color: '#00000066' },
+        }}
+    >
+        <TextRun style={{ fontWeight: 600, letterSpacing: 1 }}>Styled</TextRun>
+        {/* @ts-expect-error TextRun has no independent interaction semantics. */}
+        <TextRun id="link" onPress={() => {}}>Link</TextRun>
+    </Text>
+);
+void styledText;
 
 const imported = materializeDesign({
     root: {

@@ -200,6 +200,39 @@ def copy_frameworks(sdk: Path, destination: Path) -> list[str]:
     return names
 
 
+PACKAGED_FONT_NAMES = (
+    "Inter-Regular.ttf",
+    "Jost-Regular.ttf",
+    "Jost-Medium.ttf",
+    "Jost-SemiBold.ttf",
+    "Jost-Bold.ttf",
+    "NotoSansJP[wght].ttf",
+    "NotoSansArabic[wdth,wght].ttf",
+)
+LEGAL_DOCUMENT_NAMES = ("LICENSE.md", "NOTICE.md", "DEPENDENCIES.md")
+
+
+def copy_runtime_assets(sdk: Path, resources: Path) -> None:
+    source = sdk / "sdk/share/vellum/fonts"
+    destination = resources / "vellum/fonts"
+    for name in PACKAGED_FONT_NAMES:
+        candidate = source / name
+        if not candidate.is_file():
+            raise BackendFailure(f"Installed SDK is missing {candidate}", status="invalid_sdk")
+    destination.mkdir(parents=True)
+    for name in PACKAGED_FONT_NAMES:
+        shutil.copy2(source / name, destination / name)
+    legal_source = sdk / "sdk/share/doc/Vellum"
+    legal_destination = resources / "vellum/legal"
+    for name in LEGAL_DOCUMENT_NAMES:
+        candidate = legal_source / name
+        if not candidate.is_file():
+            raise BackendFailure(f"Installed SDK is missing {candidate}", status="invalid_sdk")
+    legal_destination.mkdir(parents=True)
+    for name in LEGAL_DOCUMENT_NAMES:
+        shutil.copy2(legal_source / name, legal_destination / name)
+
+
 def validate_component_source(path: Path) -> None:
     try:
         content = path.read_text(encoding="utf-8")
@@ -336,6 +369,7 @@ def build_app(context: dict[str, Any], sdk: Path) -> dict[str, Any]:
     shutil.copy2(host, executable)
     executable.chmod(0o755)
     framework_names = copy_frameworks(sdk, frameworks)
+    copy_runtime_assets(sdk, resources)
     component_modules = build_component_modules(context, sdk, component_directory)
     info = {
         "CFBundleDevelopmentRegion": "en",

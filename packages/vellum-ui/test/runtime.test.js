@@ -7,6 +7,7 @@ import {
     Design,
     Stack,
     Text,
+    TextRun,
     TextInput,
     View,
     createApp,
@@ -139,6 +140,67 @@ test('renders one deterministic serializable retained tree', () => {
     assert.equal(envelope.tree.children[0].children[0].text, 'Hello ');
     assert.equal(envelope.tree.children[0].children[1].text, '7');
     assert.equal(JSON.stringify(envelope).includes('function'), false);
+});
+
+test('serializes bounded gradient, shadow, and attributed-run styles', () => {
+    const tree = JSON.parse(mount(() => jsx(View, {
+        id: 'styled-card',
+        style: {
+            width: 240,
+            height: 120,
+            backgroundLinearGradient: {
+                angle: 135,
+                repeating: true,
+                repeatLength: 48,
+                stops: [
+                    { position: 0, color: '#0f172a' },
+                    { position: 1, color: '#14b8a6' },
+                ],
+            },
+            boxShadow: {
+                offsetX: 4,
+                offsetY: 6,
+                blurRadius: 12,
+                spreadRadius: 3,
+                color: '#00000066',
+            },
+        },
+        children: jsx(Text, {
+            id: 'styled-text',
+            style: { fontFamily: 'Jost', fontWeight: 600 },
+            children: jsx(TextRun, {
+                style: { color: '#ffffff', letterSpacing: 1.5,
+                    textDecoration: 'underline line-through' },
+                children: ['Acc', 'ent'],
+            }),
+        }),
+    })).renderJSON()).tree;
+    assert.equal(tree.style.backgroundLinearGradient.angle, 135);
+    assert.equal(tree.style.backgroundLinearGradient.repeatLength, 48);
+    assert.equal(tree.style.boxShadow.spreadRadius, 3);
+    assert.equal(tree.children[0].children[0].style.letterSpacing, 1.5);
+    assert.equal(tree.children[0].children[0].text, 'Accent');
+    assert.deepEqual(tree.children[0].children[0].children, []);
+    assert.throws(() => mount(() => jsx(Text, {
+        text: 'Parent', children: jsx(TextRun, { children: 'Child' }),
+    })).renderJSON(), /Text accepts text or children, not both/);
+    assert.throws(() => mount(() => jsx(Text, {
+        children: jsx(TextRun, { id: 'link', onPress: () => {}, children: 'Link' }),
+    })).renderJSON(), /TextRun does not support prop id/);
+    assert.throws(() => mount(() => jsx(View, {
+        style: { boxShadow: { color: () => '#000000' } },
+    })).renderJSON(), /hex color/);
+    assert.throws(() => mount(() => jsx(View, {
+        style: { backgroundLinearGradient: true },
+    })).renderJSON(), /must be a plain object/);
+    assert.throws(() => mount(() => jsx(View, {
+        style: { backgroundLinearGradient: {
+            angle: 0,
+            stops: Array.from({ length: 65 }, (_, index) => ({
+                position: index / 64, color: '#000000',
+            })),
+        } },
+    })).renderJSON(), /between 2 and 64 stops/);
 });
 
 test('retains declared scroll containers for native and browser hosts', () => {

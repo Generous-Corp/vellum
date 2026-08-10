@@ -9,6 +9,14 @@ set(_vellum_expected_skia_sha256
     "7820bb79b92ef3262a036b94f33f16c1e023cb9c5c29728ac71b1e59f86799e6")
 set(_vellum_expected_dawn_sha256
     "8fad85ccedc8a7a9baf781a6e639be522baa9ba5805848a6ede1c6523619d3fe")
+set(_vellum_expected_skshaper_sha256
+    "6970686ed4c22e93d26148a745a8bf83e25e0194d86fdf334558baed237537a1")
+set(_vellum_expected_skparagraph_sha256
+    "c42749062e926f051efb69fd652d6afe3acc516a94095a81c6dc9f842a9456c6")
+set(_vellum_expected_skunicode_core_sha256
+    "b25d297c885ed831f58300255cc896a45a7464eeeadbbdc139341598b20bd058")
+set(_vellum_expected_skunicode_icu_sha256
+    "4d575f963f282fe7bfe1f101e1d49c9c72f6628b4cc9eff23a31f97fd1f9ea01")
 
 if(VELLUM_SKIA_ARCHIVE)
     if(NOT EXISTS "${VELLUM_SKIA_ARCHIVE}")
@@ -79,10 +87,18 @@ foreach(_vellum_candidate IN ITEMS
 endforeach()
 set(_vellum_skia_core "${_vellum_skia_libdir}/libskia.a")
 set(_vellum_dawn_core "${_vellum_skia_libdir}/libdawn_combined.a")
+set(_vellum_skshaper "${_vellum_skia_libdir}/libskshaper.a")
+set(_vellum_skparagraph "${_vellum_skia_libdir}/libskparagraph.a")
+set(_vellum_skunicode_core "${_vellum_skia_libdir}/libskunicode_core.a")
+set(_vellum_skunicode_icu "${_vellum_skia_libdir}/libskunicode_icu.a")
 
 if(NOT _vellum_skia_libdir OR
    NOT EXISTS "${_vellum_skia_core}" OR
    NOT EXISTS "${_vellum_dawn_core}" OR
+   NOT EXISTS "${_vellum_skshaper}" OR
+   NOT EXISTS "${_vellum_skparagraph}" OR
+   NOT EXISTS "${_vellum_skunicode_core}" OR
+   NOT EXISTS "${_vellum_skunicode_icu}" OR
    NOT EXISTS "${_vellum_skia_include}/include/core/SkCanvas.h" OR
    NOT EXISTS "${_vellum_skia_include}/third_party/externals/dawn/include/dawn/native/DawnNative.h")
     if(VELLUM_REQUIRE_GPU)
@@ -99,8 +115,16 @@ endif()
 
 file(SHA256 "${_vellum_skia_core}" _vellum_skia_sha256)
 file(SHA256 "${_vellum_dawn_core}" _vellum_dawn_sha256)
+file(SHA256 "${_vellum_skshaper}" _vellum_skshaper_sha256)
+file(SHA256 "${_vellum_skparagraph}" _vellum_skparagraph_sha256)
+file(SHA256 "${_vellum_skunicode_core}" _vellum_skunicode_core_sha256)
+file(SHA256 "${_vellum_skunicode_icu}" _vellum_skunicode_icu_sha256)
 if(NOT _vellum_skia_sha256 STREQUAL _vellum_expected_skia_sha256 OR
-   NOT _vellum_dawn_sha256 STREQUAL _vellum_expected_dawn_sha256)
+   NOT _vellum_dawn_sha256 STREQUAL _vellum_expected_dawn_sha256 OR
+   NOT _vellum_skshaper_sha256 STREQUAL _vellum_expected_skshaper_sha256 OR
+   NOT _vellum_skparagraph_sha256 STREQUAL _vellum_expected_skparagraph_sha256 OR
+   NOT _vellum_skunicode_core_sha256 STREQUAL _vellum_expected_skunicode_core_sha256 OR
+   NOT _vellum_skunicode_icu_sha256 STREQUAL _vellum_expected_skunicode_icu_sha256)
     message(FATAL_ERROR
         "Vellum: extracted Skia/Dawn libraries do not match the locked "
         "chrome/m150 macOS arm64 tuple")
@@ -112,6 +136,10 @@ target_include_directories(VellumSkiaDawn INTERFACE
     "${_vellum_skia_include}/third_party/externals/dawn/include")
 target_compile_definitions(VellumSkiaDawn INTERFACE SK_GRAPHITE=1 SK_DAWN=1)
 target_link_libraries(VellumSkiaDawn INTERFACE
+    "${_vellum_skparagraph}"
+    "${_vellum_skshaper}"
+    "${_vellum_skunicode_icu}"
+    "${_vellum_skunicode_core}"
     "${_vellum_skia_core}"
     "${_vellum_dawn_core}"
     "-framework Cocoa"

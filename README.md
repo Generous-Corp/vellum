@@ -20,7 +20,10 @@ macOS 15.0+ arm64 SDK artifact built with the pinned renderer also provides the
 first installed native backend: it bundles authored TS/JS/JSX and optional imported
 DesignIR, builds and runs a real `.app`, executes finite scenarios, captures a
 GPU PNG, and emits an ad-hoc-signed application package using installed bytes
-only. An experimental browser proof now runs browser JavaScript against the
+only. Its retained paint contract includes non-square and repeating linear
+gradients, outset box shadows with spread and blur, attributed text runs, and
+installed Inter/Jost faces with Unicode fallback. An experimental browser proof
+now runs browser JavaScript against the
 shared C++ runtime, retained scene, and paint-command traversal compiled to
 Wasm, with Canvas2D as an explicitly identified presentation shell. It is not
 yet a GPU-backend or arbitrary compatibility claim. Exact-pinned SDK artifacts
@@ -388,6 +391,15 @@ That artifact includes the installed `Vellum::Gpu` and `Vellum::Authoring`
 targets and an offline-ready `@vellum/ui` toolchain. Native CLI commands remain
 unavailable unless a real `cli/vellum_native_backend.py` exists; artifact
 metadata is derived from the payload and cannot claim a missing backend.
+
+The installed `Vellum::Gpu` target exposes the renderer-neutral `Scene`,
+`LinearGradient`, `BoxShadow`, `TextStyle`, and `TextRun` types. The matching
+`@vellum/ui` surface serializes `backgroundLinearGradient`, `boxShadow`, and
+per-run font, color, tracking, underline, and line-through styles. Packaged
+fonts resolve from `share/vellum/fonts` relative to the installed GPU library,
+so moving the install prefix does not reconnect the SDK to its source tree.
+`SkiaDawnSurface::measure_text` provides the same shaping path to installed C++
+consumers without creating a surface.
 
 Verified installs are immutable and content-addressed under
 `PREFIX/lib/vellum-installs/<version>-<target>-<archive-sha256>`.

@@ -1,8 +1,9 @@
 # Minimal installed-SDK scene
 
 This is Vellum's single source-free CMake consumer. It uses only the installed
-package, renders a non-blank GPU scene when `Vellum::Gpu` is present, and keeps
-a runtime-only fallback so package relocation can be checked in smaller builds.
+package, renders gradients, shadows, and attributed packaged-font text when
+`Vellum::Gpu` is present, exercises parallel text measurement, and keeps a
+runtime-only fallback so package relocation can be checked in smaller builds.
 
 ```sh
 cmake -S apps/minimal-scene -B build/minimal-scene \

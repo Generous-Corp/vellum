@@ -9,6 +9,8 @@
 #include <vellum/graphics/skia_dawn_surface.hpp>
 
 #include <cstdint>
+#include <cmath>
+#include <future>
 #include <string>
 #include <vector>
 #endif
@@ -25,6 +27,31 @@ int main() {
 #if defined(VELLUM_CONSUMER_HAS_GPU)
     using namespace vellum::graphics;
     std::string error;
+    const std::vector<TextRun> runs{{
+        .text = "Installed Jost ",
+        .style = {.font_family = "Jost", .font_weight = 400, .font_size = 18.0F},
+    }, {
+        .text = "Semibold 日本語",
+        .style = {.font_family = "Jost", .font_weight = 600, .font_size = 18.0F},
+    }};
+    std::vector<std::future<TextMetrics>> measurements;
+    for (int index = 0; index < 4; ++index) {
+        measurements.push_back(std::async(std::launch::async, [runs] {
+            TextMetrics metrics;
+            std::string shape_error;
+            if (!SkiaDawnSurface::measure_text(runs, metrics, {}, &shape_error)) {
+                return TextMetrics{};
+            }
+            return metrics;
+        }));
+    }
+    const auto expected_metrics = measurements.front().get();
+    if (expected_metrics.width <= 0.0F || expected_metrics.ascent <= 0.0F) return 1;
+    for (std::size_t index = 1; index < measurements.size(); ++index) {
+        const auto metrics = measurements[index].get();
+        if (std::abs(metrics.width - expected_metrics.width) > 0.01F ||
+            std::abs(metrics.ascent - expected_metrics.ascent) > 0.01F) return 1;
+    }
     auto surface = SkiaDawnSurface::create(
         {.width = 240, .height = 160, .scale = 1.0F}, &error);
     if (!surface || !surface->evidence().available ||
@@ -44,7 +71,38 @@ int main() {
                 .kind = SceneNode::Kind::rectangle,
                 .bounds = {24.0F, 24.0F, 192.0F, 112.0F},
                 .fill = Color::hex(0x14B8A6),
+                .fill_gradients = {{
+                    .angle_degrees = 135.0F,
+                    .repeating = true,
+                    .repeat_length = 48.0F,
+                    .stops = {
+                        {.position = 0.0F, .color = Color::hex(0x0F766E)},
+                        {.position = 1.0F, .color = Color::hex(0x14B8A6)},
+                    },
+                }},
+                .box_shadows = {{
+                    .offset_x = 3.0F,
+                    .offset_y = 5.0F,
+                    .blur_radius = 8.0F,
+                    .spread_radius = 2.0F,
+                    .color = Color::hex(0x000000, 0.35F),
+                }},
                 .corner_radius = 18.0F,
+                .children = {{
+                    .id = "consumer/label",
+                    .kind = SceneNode::Kind::text,
+                    .bounds = {18.0F, 32.0F, 156.0F, 40.0F},
+                    .text_runs = {{
+                        .text = "Vellum ",
+                        .style = {.font_family = "Jost", .font_weight = 400,
+                                  .font_size = 22.0F, .color = Color::hex(0xFFFFFF)},
+                    }, {
+                        .text = "SDK",
+                        .style = {.font_family = "Jost", .font_weight = 600,
+                                  .font_size = 22.0F, .letter_spacing = 1.0F,
+                                  .color = Color::hex(0xCCFBF1), .underline = true},
+                    }},
+                }},
             }},
         },
     };

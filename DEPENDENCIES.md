@@ -70,10 +70,33 @@ full DEPS file; each row has matching object members in the locked archive.
 | Abseil | `d16e32215c3ab90ba57c2e904a5344d85c7353e4` | Apache-2.0 | `absl::` symbols and implementation members including `raw_hash_set.cc.o` and `crc32c.cc.o` |
 | PartitionAlloc | `76c74af3a92809278b20d6816865a296d4704ca6` | BSD-3-Clause | `partition_alloc::` symbols and allocator implementation members including `low_level_alloc.cc.o` |
 
-HarfBuzz and ICU are present in separate static archives in the toolchain
-asset, but they were not found inside `libskia.a` or `libdawn_combined.a`.
-Archive membership also does not prove that every packaged member survives the
-static linker's dead-code selection in a particular `vellum-gpu` binary.
+Vellum also links the byte-locked `libskparagraph.a`, `libskshaper.a`,
+`libskunicode_core.a`, and `libskunicode_icu.a` archives into `vellum-gpu` to
+provide paragraph-level attributed text, shaping, bidi, and Unicode fallback.
+The CMake integration checks each archive against the digest already recorded
+in the lock before linking it. HarfBuzz and ICU implementation objects are
+packaged in these separate archives rather than `libskia.a` or
+`libdawn_combined.a`; archive membership does not prove that every member
+survives the static linker's dead-code selection in a particular binary.
+
+The linked `libskshaper.a` contains HarfBuzz objects from commit
+`9cb1fee51069b206effb4736e443b038d230789d`. The linked
+`libskunicode_icu.a` contains ICU objects from commit
+`364118a1d9da24bb5b770ac3d762ac144d6da5a4`. Both identities come from the
+exact locked Skia revision's primary-source `DEPS`; archive member names provide
+the binary evidence. Their complete upstream license texts are reproduced in
+`NOTICE.md` and therefore travel with the installed SDK.
+
+## Packaged font assets
+
+The installed GPU SDK carries byte-locked Inter Regular; Jost Regular, Medium,
+SemiBold, and Bold; variable-weight Noto Sans JP; and variable-width/weight Noto
+Sans Arabic under `share/vellum/fonts`. They are active runtime assets used for
+deterministic measurement, paint, Japanese fallback, and Arabic shaping, not
+historical extraction material.
+Exact versions, hashes, sources, and selection behavior are recorded in
+[`assets/fonts/README.md`](assets/fonts/README.md); all seven files use the SIL
+Open Font License 1.1.
 
 This observed list is **not an exhaustive legal/SBOM claim**. The sealed asset
 does not include a build graph, source-to-object map, SBOM, or license

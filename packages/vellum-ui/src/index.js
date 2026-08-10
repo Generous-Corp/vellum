@@ -6,6 +6,7 @@ export {
     Image,
     Stack,
     Text,
+    TextRun,
     TextInput,
     View,
     createApp,
