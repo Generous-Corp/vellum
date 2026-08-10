@@ -15,7 +15,7 @@ SHA = re.compile(r"[0-9a-f]{40}\Z")
 ACTIVE_REQUIRED = {
     "README.md": (
         "Source authority for the selected mapped framework slices is active",
-        "published, immutable `v0.1.6`",
+        "published, immutable `v0.1.7`",
     ),
     "docs/ownership.md": (
         "Source authority for the selected mapped framework slices is active",
@@ -34,7 +34,7 @@ ACTIVE_REQUIRED = {
         "IME composition",
     ),
     "docs/cli/install-artifact.md": (
-        "published, immutable `v0.1.6`",
+        "published, immutable `v0.1.7`",
         "Private tagged-release installation",
     ),
 }

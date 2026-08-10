@@ -16,10 +16,10 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  VELLUM_RELEASE_VERSION: 0.1.6
-  VELLUM_RELEASE_TAG: v0.1.6
-  VELLUM_RELEASE_ARCHIVE: vellum-sdk-0.1.6-darwin-arm64.tar.gz
-  VELLUM_RELEASE_NAME: Vellum 0.1.6 experimental SDK
+  VELLUM_RELEASE_VERSION: 0.1.7
+  VELLUM_RELEASE_TAG: v0.1.7
+  VELLUM_RELEASE_ARCHIVE: vellum-sdk-0.1.7-darwin-arm64.tar.gz
+  VELLUM_RELEASE_NAME: Vellum 0.1.7 experimental SDK
 
 jobs:
   gpu-macos-arm64:
@@ -376,7 +376,7 @@ jobs:
           gh release verify-asset --help >/dev/null
           notes="$RUNNER_TEMP/release-notes.md"
           cat > "$notes" <<'EOF'
-          Private experimental Vellum SDK for the first independent-application validation.
+          Private experimental Vellum SDK with converged native rendering and attributed text.
 
           This release is intentionally limited to the documented macOS 15.0+ arm64
           native and browser-Wasm proof lanes. It is not a Pulp dependency or a
@@ -654,7 +654,7 @@ jobs:
           input="$RUNNER_TEMP/vellum-input"
           notes="$RUNNER_TEMP/release-notes.md"
           cat > "$notes" <<'EOF'
-          Private experimental Vellum SDK for the first independent-application validation.
+          Private experimental Vellum SDK with converged native rendering and attributed text.
 
           This release is intentionally limited to the documented macOS 15.0+ arm64
           native and browser-Wasm proof lanes. It is not a Pulp dependency or a
