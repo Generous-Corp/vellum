@@ -7250,7 +7250,7 @@
       "class": "correctness",
       "deadline": "2026-08-13T08:55:05Z",
       "direction": "Pulp-to-framework",
-      "disposition": "pending",
+      "disposition": "Pulp-only",
       "event_id": "pulp-114a635e3ef9425aa24e875a2e4b34482f826137",
       "mapped_contracts": [
         "retained-ui-kernel"
@@ -7262,7 +7262,7 @@
       "class": "schema",
       "deadline": "2026-08-13T08:55:05Z",
       "direction": "Pulp-to-framework",
-      "disposition": "pending",
+      "disposition": "superseded",
       "event_id": "pulp-21995d6a247bd5f54e4d12b53cfc842c6732c059",
       "mapped_contracts": [
         "design-schema-compiler",
@@ -7276,7 +7276,7 @@
       "class": "schema",
       "deadline": "2026-08-13T08:55:05Z",
       "direction": "Pulp-to-framework",
-      "disposition": "pending",
+      "disposition": "Pulp-only",
       "event_id": "pulp-38ac78f0a805b49ca36349ce21bcfe281c1b77ce",
       "mapped_contracts": [
         "design-schema-compiler",
@@ -7290,7 +7290,7 @@
       "class": "build",
       "deadline": "2026-08-17T08:55:05Z",
       "direction": "Pulp-to-framework",
-      "disposition": "pending",
+      "disposition": "superseded",
       "event_id": "pulp-4d4d73bbe2e44707ccdb1f8dc584b519c0a858e7",
       "mapped_contracts": [
         "retained-ui-kernel"
@@ -7302,7 +7302,7 @@
       "class": "schema",
       "deadline": "2026-08-13T08:55:05Z",
       "direction": "Pulp-to-framework",
-      "disposition": "pending",
+      "disposition": "superseded",
       "event_id": "pulp-51afeb296ab1b8db331f4bd8207d8b71552ace66",
       "mapped_contracts": [
         "design-schema-compiler",
@@ -7316,7 +7316,7 @@
       "class": "correctness",
       "deadline": "2026-08-13T08:55:05Z",
       "direction": "Pulp-to-framework",
-      "disposition": "pending",
+      "disposition": "superseded",
       "event_id": "pulp-a6a28a3cdb45687482817c520327c0decca6e146",
       "mapped_contracts": [
         "retained-ui-kernel"
@@ -7325,12 +7325,12 @@
       "source_repository": "Generous-Corp/pulp"
     }
   ],
-  "generated_at": "2026-08-10T08:55:05Z",
+  "generated_at": "2026-08-10T08:59:51Z",
   "health": "pass",
   "maximum_pending_age_days": 0.0,
   "observatory_effort_percent": 0.0,
   "overdue": 0,
-  "pending": 6,
+  "pending": 0,
   "release_blockers": [
     "pulp-261769875259c8ff4e775442af8e409089dc38d9",
     "pulp-401f39b321920896f73c591e62ff577f290fb4ae"

@@ -1,0 +1,23 @@
+{
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native"
+  ],
+  "created_at": "2026-08-10T08:58:44Z",
+  "disposition": "Pulp-only",
+  "effort_minutes": 0,
+  "event_id": "resolution-pulp-38ac78f0a805b49ca36349ce21bcfe281c1b77ce",
+  "kind": "resolution",
+  "linked_commits": [],
+  "linked_pull_requests": [
+    "Generous-Corp/pulp#7217"
+  ],
+  "owner": "@danielraffel",
+  "rationale": "Forge modular projection and continuous-frame plug-in integration explicitly recorded by Pulp event 20260806-forge-continuous-frame-dispatch as Pulp-specific. It transfers no Vellum source authority.",
+  "resolves": "pulp-38ac78f0a805b49ca36349ce21bcfe281c1b77ce",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

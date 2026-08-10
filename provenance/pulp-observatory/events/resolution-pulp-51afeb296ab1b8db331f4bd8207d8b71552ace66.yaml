@@ -1,0 +1,23 @@
+{
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native"
+  ],
+  "created_at": "2026-08-10T08:58:44Z",
+  "disposition": "superseded",
+  "effort_minutes": 0,
+  "event_id": "resolution-pulp-51afeb296ab1b8db331f4bd8207d8b71552ace66",
+  "kind": "resolution",
+  "linked_commits": [],
+  "linked_pull_requests": [
+    "Generous-Corp/pulp#7217"
+  ],
+  "owner": "@danielraffel",
+  "rationale": "Merge publication of the Forge modular projection already classified at its substantive source commit. This commit is duplicate integration propagation with no independent framework contract.",
+  "resolves": "pulp-51afeb296ab1b8db331f4bd8207d8b71552ace66",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

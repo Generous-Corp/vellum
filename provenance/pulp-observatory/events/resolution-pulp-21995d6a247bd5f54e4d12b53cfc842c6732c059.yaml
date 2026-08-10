@@ -1,0 +1,23 @@
+{
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native"
+  ],
+  "created_at": "2026-08-10T08:58:44Z",
+  "disposition": "superseded",
+  "effort_minutes": 0,
+  "event_id": "resolution-pulp-21995d6a247bd5f54e4d12b53cfc842c6732c059",
+  "kind": "resolution",
+  "linked_commits": [],
+  "linked_pull_requests": [
+    "Generous-Corp/pulp#7347"
+  ],
+  "owner": "@danielraffel",
+  "rationale": "Protected-base synchronization merge on the ordinary-event branch. Its mapped tree is duplicate propagation from already observed substantive commits and carries no independent framework contract.",
+  "resolves": "pulp-21995d6a247bd5f54e4d12b53cfc842c6732c059",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

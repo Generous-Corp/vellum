@@ -1,0 +1,18 @@
+{
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "created_at": "2026-08-10T08:58:44Z",
+  "disposition": "superseded",
+  "effort_minutes": 0,
+  "event_id": "resolution-pulp-4d4d73bbe2e44707ccdb1f8dc584b519c0a858e7",
+  "kind": "resolution",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Mainline synchronization merge on the M5 waveguide feature branch. Its editor-bridge and build-path deltas propagate already observed parent work and add no independent Vellum contract.",
+  "resolves": "pulp-4d4d73bbe2e44707ccdb1f8dc584b519c0a858e7",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}
