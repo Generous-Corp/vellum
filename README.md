@@ -402,7 +402,12 @@ per-run font, color, tracking, underline, and line-through styles. Packaged
 fonts resolve from `share/vellum/fonts` relative to the installed GPU library,
 so moving the install prefix does not reconnect the SDK to its source tree.
 `SkiaDawnSurface::measure_text` provides the same shaping path to installed C++
-consumers without creating a surface.
+consumers without creating a surface. Concurrent callers are supported when
+they retain their own input values; Vellum serializes `ParagraphBuilder`
+creation and layout while SkParagraph uses the shared packaged-font collection. The
+locked macOS proof runs the deterministic randomized concurrency fixture for
+100 Release rounds and 20 AddressSanitizer rounds before accepting the GPU
+slice.
 
 Verified installs are immutable and content-addressed under
 `PREFIX/lib/vellum-installs/<version>-<target>-<archive-sha256>`.

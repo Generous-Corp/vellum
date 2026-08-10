@@ -14,6 +14,9 @@ The public slice consists of:
   recorder, and either a native `CAMetalLayer` or an offscreen texture;
 - explicit renderer evidence and asynchronous Graphite readback;
 - content-floor analysis shared by native capture and installed consumers;
+- one serialized SkParagraph builder/layout boundary around the shared
+  packaged-font collection, with stable caller-owned run values and randomized
+  Release plus AddressSanitizer concurrency coverage;
 - an installed shared `Vellum::Gpu` target that hides Skia/Dawn static-link
   details from application builds.
 
