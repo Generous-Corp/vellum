@@ -25,6 +25,10 @@ ACTIVE_REQUIRED = {
         "Source authority is active.",
         "complete two-repository handshake",
     ),
+    "provenance/authority/expansions/README.md": (
+        "This proposal is deliberately not a source-change authorization mechanism.",
+        "exact-path handshake",
+    ),
     "provenance/pulp-observatory/README.md": (
         "The active cursor's",
         "Authority is active",

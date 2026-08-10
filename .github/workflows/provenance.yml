@@ -72,6 +72,9 @@ jobs:
           python3 tools/provenance/test_verify_authority_activation.py
           python3 tools/provenance/test_finalize_authority_reconciliation.py
           python3 tools/provenance/test_verify_current_state_docs.py
+          python3 tools/provenance/test_verify_authority_expansion.py
+          python3 tools/provenance/verify_authority_expansion.py \
+            --output "$RUNNER_TEMP/authority-expansion-report.json"
           python3 .agents/skills/pulp-vellum-change-routing/scripts/test_route_change.py
 
       - name: Resolve the exact authority lifecycle phase
@@ -296,6 +299,7 @@ jobs:
             ${{ runner.temp }}/agent-instructions-report.json
             ${{ runner.temp }}/authority-ready-report.json
             ${{ runner.temp }}/authority-pending-report.json
+            ${{ runner.temp }}/authority-expansion-report.json
             ${{ runner.temp }}/authority-tag-trust.json
             ${{ runner.temp }}/observatory-health-report.json
           if-no-files-found: error
