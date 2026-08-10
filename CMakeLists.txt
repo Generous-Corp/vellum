@@ -79,6 +79,7 @@ if(APPLE AND TARGET vellum-gpu)
     if(TARGET vellum-authoring)
         add_subdirectory(apps/app-host)
     endif()
+
     add_subdirectory(apps/gpu-native)
 endif()
 
@@ -138,6 +139,20 @@ if(VELLUM_BUILD_TESTS)
         endif()
     endif()
 
+    if(TARGET vellum-gpu)
+        add_executable(vellum-gpu-style-test
+            graphics/tests/gpu_style_test.cpp)
+        target_link_libraries(vellum-gpu-style-test PRIVATE Vellum::Gpu)
+        foreach(_vellum_fixture IN ITEMS
+                packaged_text_fallback_weights
+                repeating_linear_gradient_non_square
+                outset_shadow_spread_diagonal
+                attributed_text_runs_materialization)
+            add_test(NAME "vellum.gpu.${_vellum_fixture}"
+                COMMAND vellum-gpu-style-test "${_vellum_fixture}")
+        endforeach()
+    endif()
+
     # This consumer proves that the native CMake package is relocatable. A
     # WebAssembly configure produces a target-architecture package, so driving
     # its consumer with the host compiler would only report a false
@@ -151,6 +166,15 @@ if(VELLUM_BUILD_TESTS)
                 "-DVELLUM_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
                 "-DTEST_CONFIG=$<CONFIG>"
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunInstallConsumer.cmake")
+        if(TARGET vellum-gpu)
+            add_test(NAME vellum.install-consumer-nested-libdir
+                COMMAND "${CMAKE_COMMAND}"
+                    "-DVELLUM_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+                    "-DVELLUM_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+                    "-DVELLUM_SKIA_DIR=${VELLUM_SKIA_DIR}"
+                    "-DTEST_CONFIG=$<CONFIG>"
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunNestedInstallConsumer.cmake")
+        endif()
     endif()
     add_test(NAME vellum.sdk-artifact
         COMMAND "${Python3_EXECUTABLE}"
@@ -207,6 +231,8 @@ install(FILES "${VELLUM_GENERATED_VERSION_HEADER}"
 install(DIRECTORY runtime/include/ DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
 if(VELLUM_ENABLE_GRAPHICS)
     install(DIRECTORY graphics/include/ DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+    install(DIRECTORY assets/fonts/
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/vellum/fonts")
 endif()
 if(TARGET vellum-authoring)
     install(DIRECTORY authoring/include/ DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")

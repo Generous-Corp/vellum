@@ -31,6 +31,8 @@ component_sdk_root = BACKEND_MODULE["component_sdk_root"]
 build_app = BACKEND_MODULE["build_app"]
 BackendFailure = BACKEND_MODULE["BackendFailure"]
 command_result = BACKEND_MODULE["command_result"]
+PACKAGED_FONT_NAMES = BACKEND_MODULE["PACKAGED_FONT_NAMES"]
+LEGAL_DOCUMENT_NAMES = BACKEND_MODULE["LEGAL_DOCUMENT_NAMES"]
 
 
 def run(arguments: list[str], *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -75,6 +77,14 @@ def fake_build_sdk(root: Path) -> Path:
     libraries.mkdir(parents=True)
     for name in ("libvellum-authoring.dylib", "libvellum-gpu.dylib"):
         (libraries / name).write_bytes(b"test")
+    fonts = sdk / "sdk/share/vellum/fonts"
+    fonts.mkdir(parents=True)
+    for name in PACKAGED_FONT_NAMES:
+        (fonts / name).write_bytes(f"test font: {name}\n".encode())
+    legal = sdk / "sdk/share/doc/Vellum"
+    legal.mkdir(parents=True)
+    for name in LEGAL_DOCUMENT_NAMES:
+        (legal / name).write_text(f"test legal document: {name}\n", encoding="utf-8")
     bundler = sdk / "ui/scripts/build-project.mjs"
     bundler.parent.mkdir(parents=True)
     bundler.write_text(
@@ -325,6 +335,36 @@ class NativeBackendTests(unittest.TestCase):
                 sys.executable, str(BACKEND), "build", "--project", str(project), "--json",
             ], env={"VELLUM_SDK_ROOT": str(sdk)})
             self.assertEqual(json.loads(rejected.stdout)["status"], "invalid_app_manifest")
+
+    def test_build_bundles_all_packaged_fonts_and_rejects_incomplete_sdk(self) -> None:
+        if not shutil.which("node"):
+            self.skipTest("node is unavailable")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = self.create_project(root)
+            sdk = fake_build_sdk(root)
+            built = run([
+                sys.executable, str(BACKEND), "build", "--project", str(project), "--json",
+            ], env={"VELLUM_SDK_ROOT": str(sdk)})
+            self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
+            app = Path(json.loads(built.stdout)["data"]["app"])
+            bundled_fonts = app / "Contents/Resources/vellum/fonts"
+            self.assertEqual(
+                sorted(path.name for path in bundled_fonts.iterdir()),
+                sorted(PACKAGED_FONT_NAMES),
+            )
+            bundled_legal = app / "Contents/Resources/vellum/legal"
+            self.assertEqual(
+                sorted(path.name for path in bundled_legal.iterdir()),
+                sorted(LEGAL_DOCUMENT_NAMES),
+            )
+
+            (sdk / "sdk/share/vellum/fonts/Inter-Regular.ttf").unlink()
+            rejected = run([
+                sys.executable, str(BACKEND), "build", "--project", str(project), "--json",
+            ], env={"VELLUM_SDK_ROOT": str(sdk)})
+            self.assertEqual(rejected.returncode, 1)
+            self.assertEqual(json.loads(rejected.stdout)["status"], "invalid_sdk")
 
     def test_component_manifest_is_declared_and_private_framework_headers_fail(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

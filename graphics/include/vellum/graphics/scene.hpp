@@ -15,6 +15,43 @@ struct Rect final {
     float height = 0.0F;
 };
 
+struct GradientStop final {
+    float position = 0.0F;
+    Color color{};
+};
+
+struct LinearGradient final {
+    float angle_degrees = 180.0F;
+    bool repeating = false;
+    /// Length in logical pixels of one repeating cycle. Zero uses the full
+    /// resolved paint-box line.
+    float repeat_length = 0.0F;
+    std::vector<GradientStop> stops;
+};
+
+struct BoxShadow final {
+    float offset_x = 0.0F;
+    float offset_y = 0.0F;
+    float blur_radius = 0.0F;
+    float spread_radius = 0.0F;
+    Color color = Color::rgba(0.0F, 0.0F, 0.0F, 0.0F);
+};
+
+struct TextStyle final {
+    std::string font_family = "Inter";
+    int font_weight = 400;
+    float font_size = 14.0F;
+    float letter_spacing = 0.0F;
+    Color color = Color::hex(0x111827);
+    bool underline = false;
+    bool strikethrough = false;
+};
+
+struct TextRun final {
+    std::string text;
+    TextStyle style;
+};
+
 /// A deliberately small retained scene used by the first extraction proof.
 ///
 /// Nodes carry stable semantic identities so import, interaction, and capture
@@ -32,9 +69,17 @@ struct SceneNode final {
     Kind kind = Kind::group;
     Rect bounds{};
     Color fill = Color::rgba(0.0F, 0.0F, 0.0F, 0.0F);
+    std::vector<LinearGradient> fill_gradients;
+    std::vector<BoxShadow> box_shadows;
     float corner_radius = 0.0F;
     std::string text;
     float font_size = 14.0F;
+    std::string font_family = "Inter";
+    int font_weight = 400;
+    float letter_spacing = 0.0F;
+    bool underline = false;
+    bool strikethrough = false;
+    std::vector<TextRun> text_runs;
     std::string custom_component;
     std::string custom_properties_json;
     std::vector<SceneNode> children;

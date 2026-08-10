@@ -24,6 +24,11 @@ if(APPLE)
 endif()
 
 if(VELLUM_HAS_SKIA_DAWN)
+    file(RELATIVE_PATH _vellum_datadir_from_libdir
+        "${CMAKE_INSTALL_FULL_LIBDIR}" "${CMAKE_INSTALL_FULL_DATADIR}")
+    file(RELATIVE_PATH _vellum_build_datadir_from_gpu_dir
+        "${CMAKE_CURRENT_BINARY_DIR}"
+        "${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_DATADIR}")
     add_library(vellum-gpu SHARED
         src/skia_dawn_surface.mm)
     add_library(Vellum::Gpu ALIAS vellum-gpu)
@@ -41,7 +46,17 @@ if(VELLUM_HAS_SKIA_DAWN)
             $<INSTALL_INTERFACE:include>)
     target_compile_features(vellum-gpu PUBLIC cxx_std_20)
     target_compile_definitions(vellum-gpu PUBLIC VELLUM_HAS_SKIA_DAWN=1)
+    target_compile_definitions(vellum-gpu PRIVATE
+        VELLUM_DATADIR_FROM_LIBDIR="${_vellum_datadir_from_libdir}"
+        VELLUM_BUILD_DATADIR_FROM_GPU_DIR="${_vellum_build_datadir_from_gpu_dir}")
     target_link_libraries(vellum-gpu
         PUBLIC Vellum::Graphics
         PRIVATE VellumSkiaDawn)
+    add_custom_command(TARGET vellum-gpu POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E make_directory
+            "${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_DATADIR}/vellum/fonts"
+        COMMAND "${CMAKE_COMMAND}" -E copy_directory
+            "${PROJECT_SOURCE_DIR}/assets/fonts"
+            "${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_DATADIR}/vellum/fonts"
+        VERBATIM)
 endif()

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace vellum::graphics {
@@ -17,6 +18,13 @@ struct GpuEvidence final {
     std::string backend;
     std::string adapter;
     std::string texture_format;
+};
+
+struct TextMetrics final {
+    float width = 0.0F;
+    float ascent = 0.0F;
+    float descent = 0.0F;
+    float baseline = 0.0F;
 };
 
 /// Skia Graphite rendering on a Dawn device.
@@ -32,10 +40,19 @@ public:
         float scale = 1.0F;
         void* native_surface_handle = nullptr;
         bool vsync = true;
+        /// Optional override for packaged font assets. An empty value resolves
+        /// the configured install data directory relative to the GPU library,
+        /// or the native app's bundle-local `Resources/vellum/fonts` directory.
+        std::string font_directory;
     };
 
     static std::unique_ptr<SkiaDawnSurface> create(
         const Config& config, std::string* error = nullptr);
+    [[nodiscard]] static bool measure_text(
+        const std::vector<TextRun>& runs,
+        TextMetrics& metrics,
+        std::string_view font_directory = {},
+        std::string* error = nullptr);
 
     ~SkiaDawnSurface();
     SkiaDawnSurface(SkiaDawnSurface&&) noexcept;

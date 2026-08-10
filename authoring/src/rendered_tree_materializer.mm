@@ -16,6 +16,7 @@ namespace {
 constexpr std::size_t kMaximumJsonBytes = 16U * 1024U * 1024U;
 constexpr std::size_t kMaximumNodes = 100000U;
 constexpr std::size_t kMaximumDepth = 256U;
+constexpr NSUInteger kMaximumGradientStops = 64U;
 constexpr NSUInteger kMaximumTextInputBytes = 64U * 1024U;
 constexpr NSUInteger kMaximumPlaceholderBytes = 4U * 1024U;
 // Retained-tree consumers share these defaults across native and web. Controls
@@ -41,7 +42,10 @@ std::string cpp_string(NSString* value) {
 }
 
 bool finite_number(id value, float& output) {
-    if (![value isKindOfClass:NSNumber.class]) return false;
+    if (![value isKindOfClass:NSNumber.class] ||
+        CFGetTypeID((__bridge CFTypeRef)value) == CFBooleanGetTypeID()) {
+        return false;
+    }
     const double number = [static_cast<NSNumber*>(value) doubleValue];
     if (!std::isfinite(number) ||
         number < -static_cast<double>(std::numeric_limits<float>::max()) ||
@@ -55,6 +59,21 @@ bool finite_number(id value, float& output) {
 float number_or(NSDictionary* style, NSString* key, float fallback) {
     float value = 0.0F;
     return finite_number(style[key], value) ? value : fallback;
+}
+
+bool number_field(
+    NSDictionary* source, NSString* key, float fallback, float& output,
+    std::string_view path, std::string* error) {
+    id raw = source[key];
+    if (raw == nil) {
+        output = fallback;
+        return true;
+    }
+    if (!finite_number(raw, output)) {
+        set_error(error, std::string(path) + " must be a finite number");
+        return false;
+    }
+    return true;
 }
 
 std::optional<vellum::graphics::Color> parse_color(id value) {
@@ -72,6 +91,125 @@ std::optional<vellum::graphics::Color> parse_color(id value) {
     return vellum::graphics::Color::hex(
         static_cast<std::uint32_t>(encoded >> 8U),
         static_cast<float>(encoded & 0xFFU) / 255.0F);
+}
+
+NSDictionary* dictionary_or_empty(id value);
+NSArray* array_or_empty(id value);
+
+vellum::graphics::TextStyle text_style(
+    NSDictionary* style, vellum::graphics::TextStyle fallback = {}) {
+    if ([style[@"fontFamily"] isKindOfClass:NSString.class]) {
+        fallback.font_family = cpp_string(style[@"fontFamily"]);
+    }
+    fallback.font_size = std::max(
+        1.0F, number_or(style, @"fontSize", fallback.font_size));
+    fallback.letter_spacing = number_or(
+        style, @"letterSpacing", fallback.letter_spacing);
+    float weight = 0.0F;
+    if (finite_number(style[@"fontWeight"], weight)) {
+        fallback.font_weight = std::clamp(static_cast<int>(std::lround(weight)), 100, 900);
+    }
+    if (const auto color = parse_color(style[@"color"])) fallback.color = *color;
+    if ([style[@"textDecoration"] isKindOfClass:NSString.class]) {
+        NSString* decoration = style[@"textDecoration"];
+        fallback.underline = [decoration containsString:@"underline"];
+        fallback.strikethrough = [decoration containsString:@"line-through"];
+    }
+    return fallback;
+}
+
+bool parse_linear_gradient(
+    NSDictionary* style,
+    std::vector<vellum::graphics::LinearGradient>& output,
+    std::string* error) {
+    id raw = style[@"backgroundLinearGradient"];
+    if (raw == nil) return true;
+    if (![raw isKindOfClass:NSDictionary.class]) {
+        set_error(error, "backgroundLinearGradient must be an object");
+        return false;
+    }
+    NSDictionary* source = raw;
+    vellum::graphics::LinearGradient gradient;
+    if (!number_field(source, @"angle", 180.0F, gradient.angle_degrees,
+            "backgroundLinearGradient.angle", error) ||
+        !number_field(source, @"repeatLength", 0.0F, gradient.repeat_length,
+            "backgroundLinearGradient.repeatLength", error)) {
+        return false;
+    }
+    if (gradient.repeat_length < 0.0F) {
+        set_error(error, "backgroundLinearGradient.repeatLength must be non-negative");
+        return false;
+    }
+    if (source[@"repeating"] != nil &&
+        CFGetTypeID((__bridge CFTypeRef)source[@"repeating"]) != CFBooleanGetTypeID()) {
+        set_error(error, "backgroundLinearGradient.repeating must be boolean");
+        return false;
+    }
+    gradient.repeating = [source[@"repeating"] boolValue];
+    NSArray* stops = array_or_empty(source[@"stops"]);
+    if (stops.count < 2U) {
+        set_error(error, "backgroundLinearGradient requires at least two stops");
+        return false;
+    }
+    if (stops.count > kMaximumGradientStops) {
+        set_error(error, "backgroundLinearGradient exceeds the 64-stop limit");
+        return false;
+    }
+    float previous = -1.0F;
+    for (id value in stops) {
+        if (![value isKindOfClass:NSDictionary.class]) {
+            set_error(error, "backgroundLinearGradient stops must be objects");
+            return false;
+        }
+        NSDictionary* stop = value;
+        float position = 0.0F;
+        const auto color = parse_color(stop[@"color"]);
+        if (!finite_number(stop[@"position"], position) || position < 0.0F ||
+            position > 1.0F || position <= previous || !color) {
+            set_error(error,
+                "backgroundLinearGradient stops require increasing positions and colors");
+            return false;
+        }
+        gradient.stops.push_back({.position = position, .color = *color});
+        previous = position;
+    }
+    output.push_back(std::move(gradient));
+    return true;
+}
+
+bool parse_box_shadow(
+    NSDictionary* style,
+    std::vector<vellum::graphics::BoxShadow>& output,
+    std::string* error) {
+    id raw = style[@"boxShadow"];
+    if (raw == nil) return true;
+    if (![raw isKindOfClass:NSDictionary.class]) {
+        set_error(error, "boxShadow must be an object");
+        return false;
+    }
+    NSDictionary* source = raw;
+    const auto color = parse_color(source[@"color"]);
+    if (!color) {
+        set_error(error, "boxShadow requires a color");
+        return false;
+    }
+    vellum::graphics::BoxShadow shadow{.color = *color};
+    if (!number_field(source, @"offsetX", 0.0F, shadow.offset_x,
+            "boxShadow.offsetX", error) ||
+        !number_field(source, @"offsetY", 0.0F, shadow.offset_y,
+            "boxShadow.offsetY", error) ||
+        !number_field(source, @"blurRadius", 0.0F, shadow.blur_radius,
+            "boxShadow.blurRadius", error) ||
+        !number_field(source, @"spreadRadius", 0.0F, shadow.spread_radius,
+            "boxShadow.spreadRadius", error)) {
+        return false;
+    }
+    if (shadow.blur_radius < 0.0F || shadow.spread_radius < 0.0F) {
+        set_error(error, "boxShadow blurRadius and spreadRadius must be non-negative");
+        return false;
+    }
+    output.push_back(shadow);
+    return true;
 }
 
 NSDictionary* dictionary_or_empty(id value) {
@@ -105,9 +243,18 @@ std::string inferred_accessibility_role(NSString* type, NSDictionary* source) {
     return "group";
 }
 
-float default_height(NSString* type, NSDictionary* style) {
+float default_height(NSString* type, NSDictionary* style, NSDictionary* source) {
     if ([type isEqualToString:@"text"] || [type isEqualToString:@"text-run"]) {
-        return number_or(style, @"fontSize", 14.0F) * kTextLineHeightMultiplier;
+        float font_size = number_or(style, @"fontSize", 14.0F);
+        for (id child_value in array_or_empty(source[@"children"])) {
+            if (![child_value isKindOfClass:NSDictionary.class]) continue;
+            NSDictionary* child = static_cast<NSDictionary*>(child_value);
+            if (![child[@"type"] isEqual:@"text-run"]) continue;
+            font_size = std::max(
+                font_size,
+                number_or(dictionary_or_empty(child[@"style"]), @"fontSize", font_size));
+        }
+        return font_size * kTextLineHeightMultiplier;
     }
     if ([type isEqualToString:@"button"]) return kDefaultButtonHeight;
     if ([type isEqualToString:@"text-input"]) return kDefaultTextInputHeight;
@@ -230,6 +377,10 @@ bool materialize_node(
     output.corner_radius = std::max(0.0F, number_or(style, @"borderRadius", 0.0F));
     output.fill = parse_color(style[@"backgroundColor"])
         .value_or(vellum::graphics::Color::rgba(0.0F, 0.0F, 0.0F, 0.0F));
+    if (!parse_linear_gradient(style, output.fill_gradients, error) ||
+        !parse_box_shadow(style, output.box_shadows, error)) {
+        return false;
+    }
 
     if ([type isEqualToString:@"custom"]) {
         if (![source[@"component"] isKindOfClass:NSString.class]) {
@@ -245,18 +396,44 @@ bool materialize_node(
         output.custom_component = cpp_string(source[@"component"]);
         output.custom_properties_json = *properties;
     } else if ([type isEqualToString:@"text"] || [type isEqualToString:@"text-run"]) {
+        if ([type isEqualToString:@"text"] &&
+            [source[@"text"] isKindOfClass:NSString.class] &&
+            array_or_empty(source[@"children"]).count > 0U) {
+            set_error(error, "text authoring nodes accept text or attributed children, not both");
+            return false;
+        }
         output.kind = vellum::graphics::SceneNode::Kind::text;
         output.text = direct_text(source);
-        output.font_size = std::max(1.0F, number_or(style, @"fontSize", 14.0F));
-        output.fill = parse_color(style[@"color"])
-            .value_or(vellum::graphics::Color::hex(0x111827));
+        const auto base_style = text_style(style);
+        output.font_family = base_style.font_family;
+        output.font_weight = base_style.font_weight;
+        output.font_size = base_style.font_size;
+        output.letter_spacing = base_style.letter_spacing;
+        output.fill = base_style.color;
+        output.underline = base_style.underline;
+        output.strikethrough = base_style.strikethrough;
+        if ([type isEqualToString:@"text"]) {
+            for (id child_value in array_or_empty(source[@"children"])) {
+                if (![child_value isKindOfClass:NSDictionary.class]) continue;
+                NSDictionary* child = child_value;
+                if (![child[@"type"] isEqual:@"text-run"] ||
+                    ![child[@"text"] isKindOfClass:NSString.class]) {
+                    continue;
+                }
+                output.text_runs.push_back({
+                    .text = cpp_string(child[@"text"]),
+                    .style = text_style(dictionary_or_empty(child[@"style"]), base_style),
+                });
+            }
+        }
     } else if (is_text_input) {
         output.kind = vellum::graphics::SceneNode::Kind::rectangle;
         output.fill = parse_color(style[@"backgroundColor"])
             .value_or(vellum::graphics::Color::hex(0xFFFFFF));
         output.corner_radius = std::max(output.corner_radius, 6.0F);
     } else if ([type isEqualToString:@"button"] ||
-               parse_color(style[@"backgroundColor"]).has_value()) {
+               parse_color(style[@"backgroundColor"]).has_value() ||
+               !output.fill_gradients.empty() || !output.box_shadows.empty()) {
         output.kind = vellum::graphics::SceneNode::Kind::rectangle;
         if ([type isEqualToString:@"button"] &&
             !parse_color(style[@"backgroundColor"]).has_value()) {
@@ -452,7 +629,8 @@ bool materialize_node(
         float width = number_or(
             child_style, @"width",
             horizontal ? 0.0F : std::max(0.0F, proposed.width - padding * 2.0F));
-        float height = number_or(child_style, @"height", default_height(child_type, child_style));
+        float height = number_or(
+            child_style, @"height", default_height(child_type, child_style, child));
         float x = number_or(child_style, @"x", is_stack && horizontal ? cursor : padding);
         float y = number_or(child_style, @"y", is_stack && !horizontal ? cursor : padding);
         if (width <= 0.0F && horizontal) width = std::max(0.0F, proposed.width - cursor - padding);

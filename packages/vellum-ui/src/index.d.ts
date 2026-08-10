@@ -82,8 +82,38 @@ export declare const services: Readonly<{
     }>;
 }>;
 
+export interface LinearGradientStyle {
+    angle: number;
+    repeating?: boolean;
+    repeatLength?: number;
+    stops: Array<{ position: number; color: string }>;
+}
+export interface BoxShadowStyle {
+    offsetX?: number;
+    offsetY?: number;
+    blurRadius?: number;
+    spreadRadius?: number;
+    color: string;
+}
 export interface Style {
-    [property: string]: VellumScalar;
+    [property: string]: VellumScalar | LinearGradientStyle | BoxShadowStyle | undefined;
+    x?: number;
+    y?: number;
+    width?: number;
+    height?: number;
+    padding?: number;
+    gap?: number;
+    borderRadius?: number;
+    backgroundColor?: string;
+    color?: string;
+    direction?: 'horizontal' | 'vertical';
+    fontFamily?: string;
+    fontWeight?: number;
+    fontSize?: number;
+    letterSpacing?: number;
+    textDecoration?: string;
+    backgroundLinearGradient?: LinearGradientStyle;
+    boxShadow?: BoxShadowStyle;
 }
 
 export type EventPayload = JsonValue;
@@ -152,6 +182,13 @@ export declare const jsxs: typeof jsx;
 export declare const View: Component;
 export declare const Stack: Component;
 export declare const Text: Component;
+export interface TextRunProps {
+    style?: Style;
+    text?: string;
+    children?: string | number | readonly (string | number)[];
+    key?: string | number;
+}
+export declare const TextRun: Component<TextRunProps>;
 export declare const TextInput: Component<TextInputProps>;
 export declare const Button: Component;
 export declare const Image: Component;

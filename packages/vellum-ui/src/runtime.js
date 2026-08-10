@@ -14,7 +14,7 @@ const TEXT_INPUT_PRIMITIVE_VERSION = 1;
 const MAXIMUM_TEXT_INPUT_LENGTH = 65536;
 const MAXIMUM_TEXT_INPUT_PLACEHOLDER_LENGTH = 1024;
 const INTRINSIC_TYPES = new Set([
-    'view', 'stack', 'text', 'text-input', 'button', 'image', 'canvas', 'custom',
+    'view', 'stack', 'text', 'text-run', 'text-input', 'button', 'image', 'canvas', 'custom',
 ]);
 
 let renderingRuntime = null;
@@ -148,6 +148,7 @@ function primitive(type) {
 export const View = primitive('view');
 export const Stack = primitive('stack');
 export const Text = primitive('text');
+export const TextRun = primitive('text-run');
 export const Button = primitive('button');
 export const Image = primitive('image');
 export const Canvas = primitive('canvas');
@@ -230,6 +231,81 @@ export function useEffect(effect, dependencies) {
     registerEffect(frame, frameId, index, effect, dependencies);
 }
 
+function paintStyleObject(value, path, allowed) {
+    if (value === null || typeof value !== 'object' || Array.isArray(value) ||
+        (Object.getPrototypeOf(value) !== Object.prototype &&
+         Object.getPrototypeOf(value) !== null)) {
+        throw new TypeError(`${path} must be a plain object`);
+    }
+    if (Object.getOwnPropertySymbols(value).length > 0) {
+        throw new TypeError(`${path} contains symbol properties`);
+    }
+    const names = Object.getOwnPropertyNames(value);
+    for (const name of names) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, name);
+        if (!descriptor?.enumerable || descriptor.get || descriptor.set) {
+            throw new TypeError(`${path}.${name} has unsupported property semantics`);
+        }
+    }
+    if (names.some((name) => !allowed.includes(name))) {
+        throw new TypeError(`${path} contains unsupported properties`);
+    }
+    return value;
+}
+
+function finitePaintNumber(value, path, { optional = false, nonNegative = false } = {}) {
+    if (value === undefined && optional) return;
+    if (typeof value !== 'number' || !Number.isFinite(value) ||
+        (nonNegative && value < 0)) {
+        throw new TypeError(`${path} must be a ${nonNegative ? 'non-negative ' : ''}finite number`);
+    }
+}
+
+function validateLinearGradient(value, path) {
+    const gradient = paintStyleObject(
+        value, path, ['angle', 'repeating', 'repeatLength', 'stops']);
+    finitePaintNumber(gradient.angle, `${path}.angle`);
+    if (gradient.repeating !== undefined && typeof gradient.repeating !== 'boolean') {
+        throw new TypeError(`${path}.repeating must be boolean`);
+    }
+    finitePaintNumber(
+        gradient.repeatLength, `${path}.repeatLength`, { optional: true, nonNegative: true });
+    if (!Array.isArray(gradient.stops) ||
+        gradient.stops.length < 2 || gradient.stops.length > 64) {
+        throw new TypeError(`${path}.stops must contain between 2 and 64 stops`);
+    }
+    let previous = -1;
+    for (let index = 0; index < gradient.stops.length; index += 1) {
+        const stopPath = `${path}.stops[${index}]`;
+        const stop = paintStyleObject(gradient.stops[index], stopPath, ['position', 'color']);
+        finitePaintNumber(stop.position, `${stopPath}.position`);
+        if (stop.position < 0 || stop.position > 1 || stop.position <= previous ||
+            typeof stop.color !== 'string' ||
+            !/^#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?$/.test(stop.color)) {
+            throw new TypeError(`${stopPath} requires an increasing position and hex color`);
+        }
+        previous = stop.position;
+    }
+    return cloneJson(gradient, path);
+}
+
+function validateBoxShadow(value, path) {
+    const shadow = paintStyleObject(
+        value, path, ['offsetX', 'offsetY', 'blurRadius', 'spreadRadius', 'color']);
+    for (const name of ['offsetX', 'offsetY']) {
+        finitePaintNumber(shadow[name], `${path}.${name}`, { optional: true });
+    }
+    for (const name of ['blurRadius', 'spreadRadius']) {
+        finitePaintNumber(
+            shadow[name], `${path}.${name}`, { optional: true, nonNegative: true });
+    }
+    if (typeof shadow.color !== 'string' ||
+        !/^#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?$/.test(shadow.color)) {
+        throw new TypeError(`${path}.color must be a hex color`);
+    }
+    return cloneJson(shadow, path);
+}
+
 function validateStyle(style, path) {
     if (style === undefined) return undefined;
     if (style === null || typeof style !== 'object' || Array.isArray(style)) {
@@ -249,6 +325,14 @@ function validateStyle(style, path) {
             throw new TypeError(`${path}.style.${name} has unsupported property semantics`);
         }
         const value = descriptor.value;
+        if (name === 'backgroundLinearGradient') {
+            result[name] = validateLinearGradient(value, `${path}.style.${name}`);
+            continue;
+        }
+        if (name === 'boxShadow') {
+            result[name] = validateBoxShadow(value, `${path}.style.${name}`);
+            continue;
+        }
         if (!['string', 'number', 'boolean'].includes(typeof value)) {
             throw new TypeError(`${path}.style.${name} is not serializable`);
         }
@@ -297,6 +381,14 @@ function materialize(value, runtime, path) {
     }
 
     const childValues = flattenChildren(value.props.children);
+    if (value.type === 'text') {
+        if (value.props.text !== undefined && typeof value.props.text !== 'string') {
+            throw new TypeError(`${path}.Text text must be a string`);
+        }
+        if (value.props.text !== undefined && childValues.length > 0) {
+            throw new TypeError(`${path}.Text accepts text or children, not both`);
+        }
+    }
     if (value.type === 'text-input') {
         if (value.props.primitiveVersion !== TEXT_INPUT_PRIMITIVE_VERSION) {
             throw new Error(`${path} uses an unsupported TextInput primitive version`);
@@ -326,7 +418,27 @@ function materialize(value, runtime, path) {
             throw new Error(`${path}.TextInput does not accept children`);
         }
     }
-    const children = childValues.flatMap((child, index) =>
+    let textRunText;
+    if (value.type === 'text-run') {
+        const unsupported = Object.keys(value.props).filter(
+            (name) => !['style', 'text', 'children', 'key'].includes(name));
+        if (unsupported.length > 0) {
+            throw new TypeError(
+                `${path}.TextRun does not support prop ${unsupported.sort()[0]}`,
+            );
+        }
+        if (value.props.text !== undefined && typeof value.props.text !== 'string') {
+            throw new TypeError(`${path}.TextRun text must be a string`);
+        }
+        if (value.props.text !== undefined && childValues.length > 0) {
+            throw new TypeError(`${path}.TextRun accepts text or children, not both`);
+        }
+        if (childValues.some((child) => !['string', 'number'].includes(typeof child))) {
+            throw new TypeError(`${path}.TextRun children must be text or numbers`);
+        }
+        textRunText = value.props.text ?? childValues.map(String).join('');
+    }
+    const children = value.type === 'text-run' ? [] : childValues.flatMap((child, index) =>
         materialize(child, runtime, elementPath(path, child, index)));
     const id = typeof value.props.id === 'string' && value.props.id.length > 0
         ? value.props.id : `${path}/${value.type}`;
@@ -367,7 +479,8 @@ function materialize(value, runtime, path) {
     };
     const style = validateStyle(value.props.style, path);
     if (style !== undefined) node.style = style;
-    if (typeof value.props.text === 'string') node.text = value.props.text;
+    if (value.type === 'text-run') node.text = textRunText;
+    else if (typeof value.props.text === 'string') node.text = value.props.text;
     if (typeof value.props.source === 'string') node.source = value.props.source;
     if (value.type === 'custom') {
         if (typeof value.props.component !== 'string' ||

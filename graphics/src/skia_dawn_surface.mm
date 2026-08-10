@@ -6,10 +6,11 @@
 #include "dawn/dawn_proc.h"
 #include "dawn/native/DawnNative.h"
 #include "include/core/SkCanvas.h"
+#include "include/core/SkBlurTypes.h"
 #include "include/core/SkColorSpace.h"
 #include "include/core/SkData.h"
-#include "include/core/SkFont.h"
 #include "include/core/SkFontMgr.h"
+#include "include/core/SkMaskFilter.h"
 #include "include/core/SkTypeface.h"
 #include "include/core/SkImageInfo.h"
 #include "include/core/SkImage.h"
@@ -19,6 +20,7 @@
 #include "include/core/SkStream.h"
 #include "include/core/SkSurface.h"
 #include "include/encode/SkPngEncoder.h"
+#include "include/effects/SkGradient.h"
 #include "include/gpu/graphite/BackendTexture.h"
 #include "include/gpu/graphite/Context.h"
 #include "include/gpu/graphite/ContextOptions.h"
@@ -28,15 +30,30 @@
 #include "include/gpu/graphite/dawn/DawnBackendContext.h"
 #include "include/gpu/graphite/dawn/DawnGraphiteTypes.h"
 #include "include/ports/SkFontMgr_mac_ct.h"
+#include "modules/skparagraph/include/FontCollection.h"
+#include "modules/skparagraph/include/Paragraph.h"
+#include "modules/skparagraph/include/ParagraphBuilder.h"
+#include "modules/skparagraph/include/ParagraphStyle.h"
+#include "modules/skparagraph/include/TextStyle.h"
+#include "modules/skparagraph/include/TypefaceFontProvider.h"
+#include "modules/skunicode/include/SkUnicode_icu.h"
 #include "webgpu/webgpu_cpp.h"
 
+#include <dlfcn.h>
+
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
+#include <limits>
+#include <mutex>
 #include <optional>
+#include <string>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 
 namespace vellum::graphics {
@@ -72,32 +89,358 @@ SkColor4f sk_color(Color color) {
     return {color.red, color.green, color.blue, color.alpha};
 }
 
-void paint_command(SkCanvas& canvas, const PaintCommand& command) {
+std::filesystem::path font_directory(std::string_view requested) {
+    if (!requested.empty()) return std::filesystem::path(requested);
+    Dl_info info{};
+    if (dladdr(reinterpret_cast<const void*>(&font_directory), &info) != 0 &&
+        info.dli_fname != nullptr) {
+        const auto library_directory = std::filesystem::path(info.dli_fname).parent_path();
+        const auto bundled = library_directory.parent_path() /
+            "Resources" / "vellum" / "fonts";
+        if (std::filesystem::is_directory(bundled)) return bundled;
+        const auto installed = library_directory /
+            VELLUM_DATADIR_FROM_LIBDIR / "vellum" / "fonts";
+        if (std::filesystem::is_directory(installed)) return installed;
+        const auto build_tree = library_directory /
+            VELLUM_BUILD_DATADIR_FROM_GPU_DIR / "vellum" / "fonts";
+        if (std::filesystem::is_directory(build_tree)) return build_tree;
+    }
+    return {};
+}
+
+SkFontStyle font_style(const TextStyle& style) {
+    return {std::clamp(style.font_weight, 100, 900),
+            SkFontStyle::kNormal_Width, SkFontStyle::kUpright_Slant};
+}
+
+struct PackagedFontSet {
+    sk_sp<skia::textlayout::FontCollection> collection;
+    std::vector<sk_sp<SkTypeface>> typefaces;
+};
+
+struct DecodedUtf8 {
+    std::uint32_t code_point = 0xFFFDU;
+    std::size_t end = 0U;
+    bool valid = false;
+};
+
+DecodedUtf8 decode_utf8(std::string_view text, std::size_t start) {
+    const auto lead = static_cast<unsigned char>(text[start]);
+    if (lead < 0x80U) return {lead, start + 1U, true};
+    int length = 0;
+    std::uint32_t value = 0U;
+    std::uint32_t minimum = 0U;
+    if ((lead & 0xE0U) == 0xC0U) {
+        length = 2; value = lead & 0x1FU; minimum = 0x80U;
+    } else if ((lead & 0xF0U) == 0xE0U) {
+        length = 3; value = lead & 0x0FU; minimum = 0x800U;
+    } else if ((lead & 0xF8U) == 0xF0U) {
+        length = 4; value = lead & 0x07U; minimum = 0x10000U;
+    } else {
+        return {0xFFFDU, start + 1U, false};
+    }
+    if (start + static_cast<std::size_t>(length) > text.size()) {
+        return {0xFFFDU, start + 1U, false};
+    }
+    for (int index = 1; index < length; ++index) {
+        const auto byte = static_cast<unsigned char>(text[start + static_cast<std::size_t>(index)]);
+        if ((byte & 0xC0U) != 0x80U) return {0xFFFDU, start + 1U, false};
+        value = (value << 6U) | (byte & 0x3FU);
+    }
+    if (value < minimum || value > 0x10FFFFU ||
+        (value >= 0xD800U && value <= 0xDFFFU)) {
+        return {0xFFFDU, start + 1U, false};
+    }
+    return {value, start + static_cast<std::size_t>(length), true};
+}
+
+bool is_nonrendering_code_point(std::uint32_t code_point) {
+    return code_point <= 0x1FU || (code_point >= 0x7FU && code_point <= 0x9FU) ||
+        (code_point >= 0x200BU && code_point <= 0x200FU) || code_point == 0x2060U ||
+        (code_point >= 0x202AU && code_point <= 0x202EU) ||
+        (code_point >= 0x2066U && code_point <= 0x2069U) ||
+        (code_point >= 0xFE00U && code_point <= 0xFE0FU) ||
+        (code_point >= 0xE0100U && code_point <= 0xE01EFU);
+}
+
+bool has_packaged_glyph(
+    std::uint32_t code_point,
+    const std::vector<sk_sp<SkTypeface>>& typefaces) {
+    if (is_nonrendering_code_point(code_point)) return true;
+    return std::any_of(typefaces.begin(), typefaces.end(), [code_point](const auto& face) {
+        return face->unicharToGlyph(static_cast<SkUnichar>(code_point)) != 0U;
+    });
+}
+
+std::string replace_unsupported_text(
+    std::string_view text,
+    const std::vector<sk_sp<SkTypeface>>& typefaces) {
+    constexpr std::string_view replacement = "?";
+    std::string result;
+    result.reserve(text.size());
+    for (std::size_t offset = 0U; offset < text.size();) {
+        const auto decoded = decode_utf8(text, offset);
+        if (decoded.valid && has_packaged_glyph(decoded.code_point, typefaces)) {
+            result.append(text.substr(offset, decoded.end - offset));
+        } else {
+            result.append(replacement);
+        }
+        offset = decoded.end;
+    }
+    return result;
+}
+
+bool draw_linear_gradient(
+    SkCanvas& canvas, const PaintCommand& command,
+    const ResolvedLinearGradient& gradient, std::string* error) {
+    if (command.bounds.width <= 0.0F || command.bounds.height <= 0.0F) return true;
+    if (gradient.stops.size() < 2U) {
+        set_error(error, "Vellum linear gradient needs at least two stops");
+        return false;
+    }
+    const float vector_x = gradient.end_x - gradient.start_x;
+    const float vector_y = gradient.end_y - gradient.start_y;
+    const float length = std::hypot(vector_x, vector_y);
+    if (length <= 0.0F) {
+        set_error(error, "Vellum linear gradient has a zero-length paint box");
+        return false;
+    }
+    const float direction_x = vector_x / length;
+    const float direction_y = vector_y / length;
+    const float cycle = gradient.repeating && gradient.repeat_length > 0.0F
+        ? gradient.repeat_length : length;
+    const SkPoint points[]{
+        {gradient.start_x, gradient.start_y},
+        {gradient.start_x + direction_x * cycle,
+         gradient.start_y + direction_y * cycle},
+    };
+    std::vector<SkColor4f> colors;
+    std::vector<float> positions;
+    colors.reserve(gradient.stops.size());
+    positions.reserve(gradient.stops.size());
+    for (const auto& stop : gradient.stops) {
+        colors.push_back(sk_color(stop.color));
+        positions.push_back(stop.position);
+    }
+    const SkGradient shader_gradient{
+        SkGradient::Colors(
+            colors, positions,
+            gradient.repeating ? SkTileMode::kRepeat : SkTileMode::kClamp),
+        {},
+    };
+    auto shader = SkShaders::LinearGradient(points, shader_gradient);
+    if (!shader) {
+        set_error(error, "Vellum could not create the linear-gradient shader");
+        return false;
+    }
+
+    canvas.save();
+    const auto rect = SkRect::MakeXYWH(
+        command.bounds.x, command.bounds.y,
+        command.bounds.width, command.bounds.height);
+    if (command.corner_radius > 0.0F) {
+        canvas.clipRRect(
+            SkRRect::MakeRectXY(rect, command.corner_radius, command.corner_radius),
+            true);
+    } else {
+        canvas.clipRect(rect, true);
+    }
+    SkPaint paint;
+    paint.setAntiAlias(true);
+    paint.setShader(std::move(shader));
+    canvas.drawRect(rect, paint);
+    canvas.restore();
+    return true;
+}
+
+bool build_text_paragraph(
+    const std::vector<TextRun>& requested_runs,
+    std::string_view requested_directory,
+    std::unique_ptr<skia::textlayout::Paragraph>& paragraph,
+    TextMetrics& metrics,
+    std::string* error) {
+    static std::mutex paragraph_mutex;
+    const std::scoped_lock lock(paragraph_mutex);
+    static const sk_sp<SkFontMgr> manager = SkFontMgr_New_CoreText(nullptr);
+    static const sk_sp<SkUnicode> unicode = SkUnicodes::ICU::Make();
+    static std::unordered_map<std::string, PackagedFontSet> font_cache;
+    const auto directory = font_directory(requested_directory);
+    if (!manager || !unicode || directory.empty() ||
+        !std::filesystem::is_directory(directory)) {
+        set_error(error, "Vellum packaged font directory is unavailable: " + directory.string());
+        return false;
+    }
+
+    const auto cache_key = directory.lexically_normal().string();
+    auto cached = font_cache.find(cache_key);
+    if (cached == font_cache.end()) {
+        PackagedFontSet loaded;
+        auto provider = sk_make_sp<skia::textlayout::TypefaceFontProvider>();
+        constexpr std::array<std::string_view, 7> packaged_fonts{
+            "Inter-Regular.ttf", "Jost-Regular.ttf", "Jost-Medium.ttf",
+            "Jost-SemiBold.ttf", "Jost-Bold.ttf", "NotoSansJP[wght].ttf",
+            "NotoSansArabic[wdth,wght].ttf",
+        };
+        for (const auto filename : packaged_fonts) {
+            const auto path = directory / filename;
+            auto typeface = manager->makeFromFile(path.c_str());
+            if (!typeface) {
+                set_error(error, "Vellum packaged font is unavailable: " + path.string());
+                return false;
+            }
+            loaded.typefaces.push_back(typeface);
+            provider->registerTypeface(std::move(typeface));
+        }
+        if (!has_packaged_glyph(static_cast<std::uint32_t>('?'), loaded.typefaces)) {
+            set_error(error, "Vellum packaged fonts have no unsupported-text placeholder");
+            return false;
+        }
+        loaded.collection = sk_make_sp<skia::textlayout::FontCollection>();
+        loaded.collection->setAssetFontManager(provider);
+        loaded.collection->setDefaultFontManager(provider, std::vector<SkString>{
+            SkString("Inter"), SkString("Noto Sans JP"), SkString("Noto Sans Arabic")});
+        loaded.collection->disableFontFallback();
+        cached = font_cache.emplace(cache_key, std::move(loaded)).first;
+    }
+
+    skia::textlayout::ParagraphStyle paragraph_style;
+    paragraph_style.setMaxLines(1U);
+    paragraph_style.setTextAlign(skia::textlayout::TextAlign::kLeft);
+    auto builder = skia::textlayout::ParagraphBuilder::make(
+        paragraph_style, cached->second.collection, unicode);
+    if (!builder) {
+        set_error(error, "Vellum could not create the attributed-text paragraph builder");
+        return false;
+    }
+
+    for (const auto& requested : requested_runs) {
+        if (requested.text.empty()) continue;
+        skia::textlayout::TextStyle style;
+        style.setFontFamilies({
+            SkString(requested.style.font_family.empty()
+                ? "Inter" : requested.style.font_family.c_str()),
+            SkString("Noto Sans Arabic"),
+            SkString("Noto Sans JP"),
+            SkString("Inter"),
+        });
+        style.setFontStyle(font_style(requested.style));
+        style.setFontSize(std::max(1.0F, requested.style.font_size));
+        style.setLetterSpacing(requested.style.letter_spacing);
+        style.setFontEdging(SkFont::Edging::kAntiAlias);
+        SkPaint foreground;
+        foreground.setAntiAlias(true);
+        foreground.setColor4f(sk_color(requested.style.color));
+        style.setForegroundPaint(foreground);
+        int decoration = skia::textlayout::kNoDecoration;
+        if (requested.style.underline) decoration |= skia::textlayout::kUnderline;
+        if (requested.style.strikethrough) decoration |= skia::textlayout::kLineThrough;
+        style.setDecoration(static_cast<skia::textlayout::TextDecoration>(decoration));
+        style.setDecorationColor(foreground.getColor());
+        builder->pushStyle(style);
+        const auto text = replace_unsupported_text(
+            requested.text, cached->second.typefaces);
+        builder->addText(text.data(), text.size());
+        builder->pop();
+    }
+
+    paragraph = builder->Build();
+    if (!paragraph) {
+        set_error(error, "Vellum could not build the attributed-text paragraph");
+        return false;
+    }
+    paragraph->layout(1000000000.0F);
+    metrics = {
+        .width = paragraph->getMaxIntrinsicWidth(),
+        .ascent = paragraph->getAlphabeticBaseline(),
+        .descent = std::max(
+            0.0F, paragraph->getHeight() - paragraph->getAlphabeticBaseline()),
+        .baseline = paragraph->getAlphabeticBaseline(),
+    };
+    return true;
+}
+
+bool draw_rectangle(SkCanvas& canvas, const PaintCommand& command, std::string* error) {
+    const auto rect = SkRect::MakeXYWH(
+        command.bounds.x, command.bounds.y,
+        command.bounds.width, command.bounds.height);
+    for (const auto& shadow : command.box_shadows) {
+        SkPaint shadow_paint;
+        shadow_paint.setAntiAlias(true);
+        shadow_paint.setColor4f(sk_color(shadow.color));
+        if (shadow.blur_radius > 0.0F) {
+            shadow_paint.setMaskFilter(SkMaskFilter::MakeBlur(
+                kNormal_SkBlurStyle, shadow.blur_radius * 0.5F, true));
+        }
+        const auto shadow_rect = SkRect::MakeXYWH(
+            command.bounds.x + shadow.offset_x - shadow.spread_radius,
+            command.bounds.y + shadow.offset_y - shadow.spread_radius,
+            command.bounds.width + shadow.spread_radius * 2.0F,
+            command.bounds.height + shadow.spread_radius * 2.0F);
+        const float radius = std::max(0.0F, command.corner_radius + shadow.spread_radius);
+        canvas.save();
+        if (command.corner_radius > 0.0F) {
+            canvas.clipRRect(
+                SkRRect::MakeRectXY(
+                    rect, command.corner_radius, command.corner_radius),
+                SkClipOp::kDifference, true);
+        } else {
+            canvas.clipRect(rect, SkClipOp::kDifference, true);
+        }
+        canvas.drawRoundRect(shadow_rect, radius, radius, shadow_paint);
+        canvas.restore();
+    }
+
     SkPaint paint;
     paint.setAntiAlias(true);
     paint.setColor4f(sk_color(command.fill));
-
-    if (command.kind == PaintCommand::Kind::rectangle) {
-        const auto rect = SkRect::MakeXYWH(
-            command.bounds.x, command.bounds.y,
-            command.bounds.width, command.bounds.height);
-        if (command.corner_radius > 0.0F) {
-            canvas.drawRoundRect(
-                rect, command.corner_radius, command.corner_radius, paint);
-        } else {
-            canvas.drawRect(rect, paint);
-        }
-    } else if (command.kind == PaintCommand::Kind::text && !command.text.empty()) {
-        static const sk_sp<SkFontMgr> font_manager = SkFontMgr_New_CoreText(nullptr);
-        const auto typeface = font_manager
-            ? font_manager->matchFamilyStyle("Helvetica Neue", SkFontStyle::Normal())
-            : nullptr;
-        SkFont font(typeface, command.font_size);
-        font.setEdging(SkFont::Edging::kAntiAlias);
-        canvas.drawString(
-            command.text.c_str(), command.bounds.x,
-            command.bounds.y + command.font_size, font, paint);
+    if (command.corner_radius > 0.0F) {
+        canvas.drawRoundRect(rect, command.corner_radius, command.corner_radius, paint);
+    } else {
+        canvas.drawRect(rect, paint);
     }
+    for (const auto& declared : command.fill_gradients) {
+        const auto gradient = resolve_linear_gradient(command.bounds, declared);
+        if (!draw_linear_gradient(canvas, command, gradient, error)) return false;
+    }
+    return true;
+}
+
+bool draw_text(SkCanvas& canvas, const PaintCommand& command,
+               std::string_view directory, std::string* error) {
+    std::vector<TextRun> runs = command.text_runs;
+    if (runs.empty() && !command.text.empty()) {
+        runs.push_back({
+            .text = command.text,
+            .style = {
+                .font_family = command.font_family,
+                .font_weight = command.font_weight,
+                .font_size = command.font_size,
+                .letter_spacing = command.letter_spacing,
+                .color = command.fill,
+                .underline = command.underline,
+                .strikethrough = command.strikethrough,
+            },
+        });
+    }
+    std::unique_ptr<skia::textlayout::Paragraph> paragraph;
+    TextMetrics metrics;
+    if (!build_text_paragraph(runs, directory, paragraph, metrics, error)) {
+        return false;
+    }
+    paragraph->paint(&canvas, command.bounds.x, command.bounds.y);
+    return true;
+}
+
+bool paint_command(SkCanvas& canvas, const PaintCommand& command,
+                   std::string_view directory, std::string* error) {
+    if (command.kind == PaintCommand::Kind::rectangle) {
+        return draw_rectangle(canvas, command, error);
+    }
+    if (command.kind == PaintCommand::Kind::text &&
+        (!command.text.empty() || !command.text_runs.empty())) {
+        return draw_text(canvas, command, directory, error);
+    }
+    return true;
 }
 
 }  // namespace
@@ -428,7 +771,11 @@ private:
         canvas->clear(sk_color(scene.background));
         canvas->scale(config_.scale, config_.scale);
         for (const auto& command : make_paint_commands(scene)) {
-            paint_command(*canvas, command);
+            if (!paint_command(*canvas, command, config_.font_directory, error)) {
+                canvas->restore();
+                current_texture_ = nullptr;
+                return false;
+            }
         }
         canvas->restore();
 
@@ -563,6 +910,16 @@ std::unique_ptr<SkiaDawnSurface> SkiaDawnSurface::create(
     }
     return std::unique_ptr<SkiaDawnSurface>(
         new SkiaDawnSurface(std::move(implementation)));
+}
+
+bool SkiaDawnSurface::measure_text(
+    const std::vector<TextRun>& runs,
+    TextMetrics& metrics,
+    std::string_view requested_font_directory,
+    std::string* error) {
+    std::unique_ptr<skia::textlayout::Paragraph> paragraph;
+    return build_text_paragraph(
+        runs, requested_font_directory, paragraph, metrics, error);
 }
 
 bool SkiaDawnSurface::render(const Scene& scene, std::string* error) {

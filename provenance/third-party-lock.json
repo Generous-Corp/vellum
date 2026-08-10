@@ -10,6 +10,69 @@
       "surface": "byte-locked build input statically linked into the optional installed vellum-gpu shared library; source association and exhaustive legal inventory remain release-blocked"
     },
     {
+      "name": "Inter Regular",
+      "version": "4.001;git-9221beed3",
+      "license": "SIL-OFL-1.1",
+      "source": "https://github.com/rsms/inter",
+      "path": "assets/fonts/Inter-Regular.ttf",
+      "sha256": "40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82",
+      "surface": "installed deterministic native text face"
+    },
+    {
+      "name": "Jost Regular",
+      "version": "3.710",
+      "license": "SIL-OFL-1.1",
+      "source": "https://github.com/indestructible-type/Jost",
+      "path": "assets/fonts/Jost-Regular.ttf",
+      "sha256": "c3143e923ed1ca7bdf27f96c351fbafaebcbd3cf3f4c2d30d03e6c7f98e73d7a",
+      "surface": "installed deterministic native text face"
+    },
+    {
+      "name": "Jost Medium",
+      "version": "3.710",
+      "license": "SIL-OFL-1.1",
+      "source": "https://github.com/indestructible-type/Jost",
+      "path": "assets/fonts/Jost-Medium.ttf",
+      "sha256": "d6ff7726ec21576cf2fdac55080b2d43832780fa981f03f0b66d2723a7c1ea09",
+      "surface": "installed deterministic native text face"
+    },
+    {
+      "name": "Jost SemiBold",
+      "version": "3.710",
+      "license": "SIL-OFL-1.1",
+      "source": "https://github.com/indestructible-type/Jost",
+      "path": "assets/fonts/Jost-SemiBold.ttf",
+      "sha256": "a63c8d75600a2d42e0e152e4c4810474a90a0b93206f47530a741dbb78a9e571",
+      "surface": "installed deterministic native text face"
+    },
+    {
+      "name": "Jost Bold",
+      "version": "3.710",
+      "license": "SIL-OFL-1.1",
+      "source": "https://github.com/indestructible-type/Jost",
+      "path": "assets/fonts/Jost-Bold.ttf",
+      "sha256": "3e49280c154002dcbab4344a77ad291d5587d4157b24b5a02341f68cccd24615",
+      "surface": "installed deterministic native text face"
+    },
+    {
+      "name": "Noto Sans Arabic variable font",
+      "version": "google/fonts@038b637da7b3fd956a4ed93ffc607c3d5e4ce172; upstream notofonts/arabic@6c8320740db19efbb3127c3697b0ee5d0fa62319",
+      "license": "SIL-OFL-1.1",
+      "source": "https://github.com/google/fonts/tree/038b637da7b3fd956a4ed93ffc607c3d5e4ce172/ofl/notosansarabic",
+      "path": "assets/fonts/NotoSansArabic[wdth,wght].ttf",
+      "sha256": "63111b5b2e074dd48cc67692e0a2726d86ee94c1c37fe8598257b7b4e87e869e",
+      "surface": "installed deterministic Arabic shaping and missing-glyph fallback face"
+    },
+    {
+      "name": "Noto Sans JP variable font",
+      "version": "google/fonts@038b637da7b3fd956a4ed93ffc607c3d5e4ce172; upstream noto-cjk@523d033d6cb47f4a80c58a35753646f5c3608a78",
+      "license": "SIL-OFL-1.1",
+      "source": "https://github.com/google/fonts/tree/038b637da7b3fd956a4ed93ffc607c3d5e4ce172/ofl/notosansjp",
+      "path": "assets/fonts/NotoSansJP[wght].ttf",
+      "sha256": "c2f3b4d463500a2ddcd3849cded1fceeb9fd6d1c32e6cbecd568453ba50fc68f",
+      "surface": "installed deterministic Japanese and missing-glyph fallback face"
+    },
+    {
       "name": "esbuild and @esbuild/darwin-arm64",
       "version": "0.28.1",
       "license": "MIT",
@@ -157,6 +220,22 @@
         "evidence_limit": "These values are observed LC_BUILD_VERSION data from representative object members, not a proof that every member has the same tuple."
       },
       "bundled_components": [
+        {
+          "name": "HarfBuzz",
+          "parent_archive": "libskshaper.a",
+          "commit": "9cb1fee51069b206effb4736e443b038d230789d",
+          "license": "Old MIT",
+          "primary_source": "https://chromium.googlesource.com/external/github.com/harfbuzz/harfbuzz",
+          "binary_evidence": "libharfbuzz.* members in libskshaper.a"
+        },
+        {
+          "name": "ICU",
+          "parent_archive": "libskunicode_icu.a",
+          "commit": "364118a1d9da24bb5b770ac3d762ac144d6da5a4",
+          "license": "Unicode-3.0 and bundled third-party notices; see NOTICE.md",
+          "primary_source": "https://chromium.googlesource.com/chromium/deps/icu",
+          "binary_evidence": "libicu.* members in libskunicode_icu.a"
+        },
         {
           "name": "Expat",
           "parent_archive": "libskia.a",
