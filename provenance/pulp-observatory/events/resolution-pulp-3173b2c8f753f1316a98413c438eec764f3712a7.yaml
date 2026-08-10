@@ -1,0 +1,15 @@
+{
+  "contract_tests": ["vellum.gpu-native", "vellum.gpu.text-shaping-concurrency", "vellum.install-consumer"],
+  "created_at": "2026-08-10T17:20:56Z",
+  "disposition": "superseded",
+  "effort_minutes": 0,
+  "event_id": "resolution-pulp-3173b2c8f753f1316a98413c438eec764f3712a7",
+  "kind": "resolution",
+  "linked_commits": ["44cd53713337dd8e6bf2f1d0ada4d67d3d199b1f", "927a8f2947d36cf0713431be8cfe60c1edfee905", "98779a83b5186a178b3aa9a506a2eb61868c72e8", "ce443317ff7edfb256f7fcb4e5cecc6796d98400"],
+  "linked_pull_requests": ["https://github.com/Generous-Corp/pulp/pull/7313"],
+  "owner": "@danielraffel",
+  "rationale": "Branch synchronization duplicated PR #7313's emergency repair, already consolidated under canonical blocker pulp-401f39b3 and ported by Vellum ce443317. Vellum 44cd537 adds the required barrier-synchronized deterministic 100-round Release and 20-round AddressSanitizer stress proof; this merge envelope has no separate obligation.",
+  "resolves": "pulp-3173b2c8f753f1316a98413c438eec764f3712a7",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

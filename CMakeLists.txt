@@ -20,6 +20,8 @@ option(VELLUM_ENABLE_GPU "Build the pinned Skia Graphite + Dawn GPU backend when
 option(VELLUM_REQUIRE_GPU "Fail configure unless the requested Skia/Dawn GPU backend is available" OFF)
 option(VELLUM_ENABLE_AUTHORING "Build the native JavaScript/TypeScript application host" ON)
 option(VELLUM_ENABLE_WEB "Build the experimental browser/Wasm proof" OFF)
+option(VELLUM_ENABLE_ADDRESS_SANITIZER
+    "Instrument Vellum targets with AddressSanitizer" OFF)
 set(VELLUM_AUTHORING_TEST_BUNDLE "" CACHE FILEPATH
     "Optional @vellum/ui classic-script bundle for the real JavaScriptCore integration test")
 set(VELLUM_PHASE3_TEST_BUNDLE "" CACHE FILEPATH
@@ -29,6 +31,15 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+if(VELLUM_ENABLE_ADDRESS_SANITIZER)
+    if(NOT CMAKE_CXX_COMPILER_ID MATCHES "^(AppleClang|Clang)$")
+        message(FATAL_ERROR
+            "VELLUM_ENABLE_ADDRESS_SANITIZER requires AppleClang or Clang")
+    endif()
+    add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address)
+endif()
 
 # The first locked Dawn archive contains macOS 15.0 objects. Set the deployment
 # target before creating any Vellum target so static objects later linked into
@@ -143,6 +154,14 @@ if(VELLUM_BUILD_TESTS)
         add_executable(vellum-gpu-style-test
             graphics/tests/gpu_style_test.cpp)
         target_link_libraries(vellum-gpu-style-test PRIVATE Vellum::Gpu)
+
+        add_executable(vellum-text-shaping-concurrency-test
+            graphics/tests/text_shaping_concurrency_test.cpp)
+        target_link_libraries(
+            vellum-text-shaping-concurrency-test PRIVATE Vellum::Gpu)
+        add_test(NAME vellum.gpu.text-shaping-concurrency
+            COMMAND vellum-text-shaping-concurrency-test)
+
         foreach(_vellum_fixture IN ITEMS
                 packaged_text_fallback_weights
                 repeating_linear_gradient_non_square

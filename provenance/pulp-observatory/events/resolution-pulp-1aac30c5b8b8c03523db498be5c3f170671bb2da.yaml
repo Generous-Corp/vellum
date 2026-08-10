@@ -1,0 +1,15 @@
+{
+  "contract_tests": ["vellum-ui", "vellum.authoring"],
+  "created_at": "2026-08-10T17:20:56Z",
+  "disposition": "Pulp-only",
+  "effort_minutes": 0,
+  "event_id": "resolution-pulp-1aac30c5b8b8c03523db498be5c3f170671bb2da",
+  "kind": "resolution",
+  "linked_commits": ["1aac30c5b8b8c03523db498be5c3f170671bb2da"],
+  "linked_pull_requests": ["https://github.com/Generous-Corp/pulp/pull/7368"],
+  "owner": "@danielraffel",
+  "rationale": "Removal of Pulp's legacy standalone Inspector authority changes Pulp control and scripted-UI integration only. Vellum has no Inspector service or corresponding source obligation.",
+  "resolves": "pulp-1aac30c5b8b8c03523db498be5c3f170671bb2da",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

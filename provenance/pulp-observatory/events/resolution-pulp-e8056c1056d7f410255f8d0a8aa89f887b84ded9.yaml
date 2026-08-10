@@ -1,0 +1,15 @@
+{
+  "contract_tests": ["vellum-ui", "vellum.authoring", "vellum.gpu-native"],
+  "created_at": "2026-08-10T17:20:56Z",
+  "disposition": "superseded",
+  "effort_minutes": 0,
+  "event_id": "resolution-pulp-e8056c1056d7f410255f8d0a8aa89f887b84ded9",
+  "kind": "resolution",
+  "linked_commits": ["38ac78f0a805b49ca36349ce21bcfe281c1b77ce", "e8056c1056d7f410255f8d0a8aa89f887b84ded9"],
+  "linked_pull_requests": ["https://github.com/Generous-Corp/pulp/pull/7368"],
+  "owner": "@danielraffel",
+  "rationale": "Branch synchronization duplicated already observed Pulp main history. The explicit continuous-frame event is Pulp/Forge integration, and the merge adds no independent Vellum source obligation.",
+  "resolves": "pulp-e8056c1056d7f410255f8d0a8aa89f887b84ded9",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

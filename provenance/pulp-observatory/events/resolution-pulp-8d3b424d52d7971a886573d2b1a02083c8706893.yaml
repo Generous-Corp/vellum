@@ -1,0 +1,15 @@
+{
+  "contract_tests": ["vellum-ui", "vellum.authoring", "vellum.gpu-native", "vellum.install-consumer"],
+  "created_at": "2026-08-10T17:20:56Z",
+  "disposition": "superseded",
+  "effort_minutes": 0,
+  "event_id": "resolution-pulp-8d3b424d52d7971a886573d2b1a02083c8706893",
+  "kind": "resolution",
+  "linked_commits": ["1c0e2473e2dd17502183a0b98c8fcf9e77db2891", "8d3b424d52d7971a886573d2b1a02083c8706893"],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Branch synchronization duplicated already observed Pulp main history. Its two explicit panel-UX events are Pulp-only product integrations, while the generic attributed-text behavior was independently converged and resolved by Vellum ce443317.",
+  "resolves": "pulp-8d3b424d52d7971a886573d2b1a02083c8706893",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

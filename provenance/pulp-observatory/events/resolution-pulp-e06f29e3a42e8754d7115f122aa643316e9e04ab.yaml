@@ -1,0 +1,15 @@
+{
+  "contract_tests": ["vellum.gpu-native", "vellum.install-consumer"],
+  "created_at": "2026-08-10T17:20:56Z",
+  "disposition": "superseded",
+  "effort_minutes": 0,
+  "event_id": "resolution-pulp-e06f29e3a42e8754d7115f122aa643316e9e04ab",
+  "kind": "resolution",
+  "linked_commits": ["d973272fdc562ec33052a8e44c6f2bbfd6ed7578", "e06f29e3a42e8754d7115f122aa643316e9e04ab"],
+  "linked_pull_requests": ["https://github.com/Generous-Corp/pulp/pull/7368"],
+  "owner": "@danielraffel",
+  "rationale": "Branch synchronization duplicated an already landed Pulp macOS window-host harness change. It has no independent Vellum platform contract.",
+  "resolves": "pulp-e06f29e3a42e8754d7115f122aa643316e9e04ab",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

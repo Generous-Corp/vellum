@@ -122,6 +122,29 @@ jobs:
             -DVELLUM_SKIA_ARCHIVE="$VELLUM_SKIA_ARCHIVE"
           cmake --build build-gpu --parallel
 
+      - name: Stress parallel text shaping in Release
+        run: |
+          VELLUM_TEXT_STRESS_ROUNDS=100 \
+            ./build-gpu/vellum-text-shaping-concurrency-test
+
+      - name: Stress parallel text shaping with AddressSanitizer
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-gpu-asan \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DVELLUM_BUILD_TESTS=ON \
+            -DVELLUM_BUILD_SMOKE_NATIVE=OFF \
+            -DVELLUM_ENABLE_AUTHORING=OFF \
+            -DVELLUM_ENABLE_ADDRESS_SANITIZER=ON \
+            -DVELLUM_REQUIRE_GPU=ON \
+            -DVELLUM_SKIA_ARCHIVE="$VELLUM_SKIA_ARCHIVE"
+          cmake --build build-gpu-asan \
+            --target vellum-text-shaping-concurrency-test --parallel
+          ASAN_OPTIONS=abort_on_error=1:detect_leaks=0:halt_on_error=1 \
+          VELLUM_TEXT_STRESS_ROUNDS=20 \
+            ./build-gpu-asan/vellum-text-shaping-concurrency-test
+
       - name: Install the pinned Emscripten SDK
         shell: bash
         run: |

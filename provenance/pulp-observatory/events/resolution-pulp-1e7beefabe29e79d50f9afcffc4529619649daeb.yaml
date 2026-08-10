@@ -1,0 +1,15 @@
+{
+  "contract_tests": ["vellum-ui", "vellum.authoring"],
+  "created_at": "2026-08-10T17:20:56Z",
+  "disposition": "superseded",
+  "effort_minutes": 0,
+  "event_id": "resolution-pulp-1e7beefabe29e79d50f9afcffc4529619649daeb",
+  "kind": "resolution",
+  "linked_commits": ["1aac30c5b8b8c03523db498be5c3f170671bb2da", "1e7beefabe29e79d50f9afcffc4529619649daeb"],
+  "linked_pull_requests": ["https://github.com/Generous-Corp/pulp/pull/7368"],
+  "owner": "@danielraffel",
+  "rationale": "PR #7368 is the Pulp capability-control integration merge. Its mapped scripted-UI delta is the already classified Pulp-only Inspector removal and carries no independent Vellum contract.",
+  "resolves": "pulp-1e7beefabe29e79d50f9afcffc4529619649daeb",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

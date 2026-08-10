@@ -1,0 +1,15 @@
+{
+  "contract_tests": ["vellum-ui", "vellum.authoring"],
+  "created_at": "2026-08-10T17:20:56Z",
+  "disposition": "superseded",
+  "effort_minutes": 0,
+  "event_id": "resolution-pulp-931cbd94a17a58495b10533a1b43a246572d333a",
+  "kind": "resolution",
+  "linked_commits": ["1aac30c5b8b8c03523db498be5c3f170671bb2da", "931cbd94a17a58495b10533a1b43a246572d333a"],
+  "linked_pull_requests": ["https://github.com/Generous-Corp/pulp/pull/7368"],
+  "owner": "@danielraffel",
+  "rationale": "Integration propagation of the same Pulp-only legacy Inspector removal classified at 1aac30c5; no separate Vellum contract is present.",
+  "resolves": "pulp-931cbd94a17a58495b10533a1b43a246572d333a",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}
