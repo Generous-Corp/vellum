@@ -6,11 +6,11 @@
   },
   "pulp": {
     "last_dispatch_event": "20260724-authority-activation-attempt-2",
-    "last_scanned_commit": "6ee37e02ac0f44a999ed01e5408c37d7b92718a6",
+    "last_scanned_commit": "190c463a0b320f28420c9af177244af04ef84233",
     "repository": "Generous-Corp/pulp",
     "scan_base_commit": "2ccff748f0d59da34b01ce1fbceabcf19f452731"
   },
-  "reconciled_at": "2026-08-10T17:34:02Z",
+  "reconciled_at": "2026-08-10T18:53:00Z",
   "schema_version": 2,
   "state": "active",
   "vellum": {
