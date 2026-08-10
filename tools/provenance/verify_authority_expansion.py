@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import re
 import sys
@@ -20,6 +21,7 @@ EXPECTED_FILES = {
     "README.md",
     "full-design-import-render-v1/proposal.json",
 }
+EXPECTED_README_SHA256 = "6935071cee4c735f401356e625108150251921b8a0dd6f20648d7370fd388894"
 EXPECTED_PROPOSED_AT = "2026-08-10T21:55:54Z"
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
 OWNER = re.compile(r"^@[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
@@ -390,17 +392,25 @@ def verify(root: Path) -> dict[str, Any]:
             f"missing={sorted(EXPECTED_FILES - actual_files)} "
             f"unexpected={sorted(actual_files - EXPECTED_FILES)}"
         )
+    readme = root / EXPANSIONS_ROOT / "README.md"
+    try:
+        readme_sha256 = hashlib.sha256(readme.read_bytes()).hexdigest()
+        if readme_sha256 != EXPECTED_README_SHA256:
+            closure_errors.append("expansion README differs from pinned SHA-256")
+    except OSError as exc:
+        closure_errors.append(f"cannot read expansion README: {exc}")
     try:
         data = load_json(root / PROPOSAL_PATH)
         errors = closure_errors + validate(data)
     except ValueError as exc:
         data, errors = None, closure_errors + [str(exc)]
+    passed = not errors
     return {
         "schema_version": 1,
-        "status": "pass" if not errors else "fail",
+        "status": "pass" if passed else "fail",
         "proposal": PROPOSAL_PATH.as_posix(),
-        "proposal_id": data.get("proposal_id") if isinstance(data, dict) else None,
-        "authority_effect": data.get("authority_effect") if isinstance(data, dict) else None,
+        "proposal_id": data.get("proposal_id") if passed and isinstance(data, dict) else None,
+        "authority_effect": data.get("authority_effect") if passed and isinstance(data, dict) else None,
         "errors": errors,
     }
 

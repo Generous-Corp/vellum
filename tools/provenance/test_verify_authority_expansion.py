@@ -56,6 +56,8 @@ class Tests(unittest.TestCase):
     def test_authority_claim_fails(self) -> None:
         report = self.mutate(lambda d: d.update(authority_effect="transferred"))
         self.assertEqual(report["status"], "fail")
+        self.assertIsNone(report["authority_effect"])
+        self.assertIsNone(report["proposal_id"])
 
     def test_coordinate_drift_fails(self) -> None:
         report = self.mutate(
@@ -175,6 +177,15 @@ class Tests(unittest.TestCase):
         report = verifier.verify(root)
         self.assertEqual(report["status"], "fail")
         self.assertTrue(any("artifact set differs" in e for e in report["errors"]))
+
+    def test_expansion_readme_drift_fails_closed(self) -> None:
+        temporary, root, _ = self.copy()
+        self.addCleanup(temporary.cleanup)
+        readme = root / verifier.EXPANSIONS_ROOT / "README.md"
+        readme.write_text(readme.read_text() + "\nWatch acceptance authorizes source.\n")
+        report = verifier.verify(root)
+        self.assertEqual(report["status"], "fail")
+        self.assertTrue(any("README differs" in e for e in report["errors"]))
 
     def test_cli_failure_writes_report_and_exits_nonzero(self) -> None:
         temporary, root, target = self.copy()
