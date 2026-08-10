@@ -1,0 +1,15 @@
+{
+  "contract_tests": ["vellum-ui", "vellum.authoring"],
+  "created_at": "2026-08-10T17:20:56Z",
+  "disposition": "superseded",
+  "effort_minutes": 0,
+  "event_id": "resolution-pulp-2af516382e2997302ac57752017f3c61d2f48c43",
+  "kind": "resolution",
+  "linked_commits": ["114a635e3ef9425aa24e875a2e4b34482f826137", "2af516382e2997302ac57752017f3c61d2f48c43"],
+  "linked_pull_requests": ["https://github.com/Generous-Corp/pulp/pull/7347"],
+  "owner": "@danielraffel",
+  "rationale": "Branch synchronization reintroduced the value-frame telemetry change already classified Pulp-only at substantive source commit 114a635e. The merge carries no additional framework contract.",
+  "resolves": "pulp-2af516382e2997302ac57752017f3c61d2f48c43",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

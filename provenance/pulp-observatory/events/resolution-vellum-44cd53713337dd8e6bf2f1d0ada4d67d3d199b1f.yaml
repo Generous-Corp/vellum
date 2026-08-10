@@ -1,0 +1,15 @@
+{
+  "contract_tests": ["vellum.gpu-native", "vellum.gpu.text-shaping-concurrency", "vellum.install-consumer"],
+  "created_at": "2026-08-10T17:34:02Z",
+  "disposition": "framework-only",
+  "effort_minutes": 0,
+  "event_id": "resolution-vellum-44cd53713337dd8e6bf2f1d0ada4d67d3d199b1f",
+  "kind": "resolution",
+  "linked_commits": ["44cd53713337dd8e6bf2f1d0ada4d67d3d199b1f", "927a8f2947d36cf0713431be8cfe60c1edfee905", "ce443317ff7edfb256f7fcb4e5cecc6796d98400"],
+  "linked_pull_requests": ["https://github.com/Generous-Corp/pulp/pull/7313"],
+  "owner": "@danielraffel",
+  "rationale": "Vellum-owned barrier-synchronized regression and CI coverage for the already ported parallel text-shaping repair. Pulp already retains its own emergency regression suite; no source backport or consumer adoption is required for this test-only framework commit.",
+  "resolves": "vellum-44cd53713337dd8e6bf2f1d0ada4d67d3d199b1f",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

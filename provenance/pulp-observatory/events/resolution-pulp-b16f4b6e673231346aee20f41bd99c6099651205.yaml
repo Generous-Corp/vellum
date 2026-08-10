@@ -1,0 +1,15 @@
+{
+  "contract_tests": ["vellum-ui", "vellum.authoring"],
+  "created_at": "2026-08-10T17:20:56Z",
+  "disposition": "superseded",
+  "effort_minutes": 0,
+  "event_id": "resolution-pulp-b16f4b6e673231346aee20f41bd99c6099651205",
+  "kind": "resolution",
+  "linked_commits": ["b16f4b6e673231346aee20f41bd99c6099651205", "b1c50a09b8163336e6db9ea2ae72a58c8d12fa38"],
+  "linked_pull_requests": ["https://github.com/Generous-Corp/pulp/pull/7368"],
+  "owner": "@danielraffel",
+  "rationale": "Branch synchronization propagated Pulp control and script-Inspector integration from main. Those product services have no Vellum counterpart and the merge carries no independent framework obligation.",
+  "resolves": "pulp-b16f4b6e673231346aee20f41bd99c6099651205",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}
