@@ -1,0 +1,20 @@
+{
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "created_at": "2026-08-10T08:58:44Z",
+  "disposition": "Pulp-only",
+  "effort_minutes": 0,
+  "event_id": "resolution-pulp-114a635e3ef9425aa24e875a2e4b34482f826137",
+  "kind": "resolution",
+  "linked_commits": [],
+  "linked_pull_requests": [
+    "Generous-Corp/pulp#7347"
+  ],
+  "owner": "@danielraffel",
+  "rationale": "Pulp plug-in telemetry hardening that pins the existing trivially-copyable MeterFrame and VectorFrame publication contract. It adds no Vellum API or framework behavior to port.",
+  "resolves": "pulp-114a635e3ef9425aa24e875a2e4b34482f826137",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}
