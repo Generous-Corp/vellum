@@ -2,7 +2,7 @@
 
 - State: `active`
 - Health: `pass`
-- Pending events: 0
+- Pending events: 6
 - Overdue events: 0
 - Release blockers: 2
 - Observatory effort: 0.0% of framework effort
@@ -560,6 +560,12 @@
 | `pulp-fbdf57823839987e1ec5476a7b74a38b8167e364` | Pulp-to-framework | correctness | Pulp-only | 2026-08-12T20:49:14Z |
 | `pulp-0c701f5cdc927677f36e83356340718e4a56abd4` | Pulp-to-framework | correctness | superseded | 2026-08-12T21:57:34Z |
 | `pulp-da94a9a5598d47e73148a5a8e5da90e6cee845c7` | Pulp-to-framework | platform | superseded | 2026-08-12T21:57:34Z |
+| `pulp-114a635e3ef9425aa24e875a2e4b34482f826137` | Pulp-to-framework | correctness | pending | 2026-08-13T08:55:05Z |
+| `pulp-21995d6a247bd5f54e4d12b53cfc842c6732c059` | Pulp-to-framework | schema | pending | 2026-08-13T08:55:05Z |
+| `pulp-38ac78f0a805b49ca36349ce21bcfe281c1b77ce` | Pulp-to-framework | schema | pending | 2026-08-13T08:55:05Z |
+| `pulp-4d4d73bbe2e44707ccdb1f8dc584b519c0a858e7` | Pulp-to-framework | build | pending | 2026-08-17T08:55:05Z |
+| `pulp-51afeb296ab1b8db331f4bd8207d8b71552ace66` | Pulp-to-framework | schema | pending | 2026-08-13T08:55:05Z |
+| `pulp-a6a28a3cdb45687482817c520327c0decca6e146` | Pulp-to-framework | correctness | pending | 2026-08-13T08:55:05Z |
 
 ## Release blockers
 
