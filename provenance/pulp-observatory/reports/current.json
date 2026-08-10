@@ -7338,14 +7338,181 @@
       ],
       "source_commit": "ce443317ff7edfb256f7fcb4e5cecc6796d98400",
       "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "build",
+      "deadline": "2026-08-17T15:46:29Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "pending",
+      "event_id": "pulp-1aac30c5b8b8c03523db498be5c3f170671bb2da",
+      "mapped_contracts": [
+        "retained-ui-kernel"
+      ],
+      "source_commit": "1aac30c5b8b8c03523db498be5c3f170671bb2da",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "build",
+      "deadline": "2026-08-17T15:46:29Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "pending",
+      "event_id": "pulp-1e7beefabe29e79d50f9afcffc4529619649daeb",
+      "mapped_contracts": [
+        "retained-ui-kernel"
+      ],
+      "source_commit": "1e7beefabe29e79d50f9afcffc4529619649daeb",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "build",
+      "deadline": "2026-08-17T15:46:29Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "pending",
+      "event_id": "pulp-2af516382e2997302ac57752017f3c61d2f48c43",
+      "mapped_contracts": [
+        "retained-ui-kernel"
+      ],
+      "source_commit": "2af516382e2997302ac57752017f3c61d2f48c43",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "rendering",
+      "deadline": "2026-08-13T15:46:29Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "pending",
+      "event_id": "pulp-3173b2c8f753f1316a98413c438eec764f3712a7",
+      "mapped_contracts": [
+        "canvas-kernel"
+      ],
+      "source_commit": "3173b2c8f753f1316a98413c438eec764f3712a7",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "platform",
+      "deadline": "2026-08-13T15:46:29Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "pending",
+      "event_id": "pulp-546ad70664e40a5a46a659887c5c832a4c0e9ab7",
+      "mapped_contracts": [
+        "macos-shell",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "546ad70664e40a5a46a659887c5c832a4c0e9ab7",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "schema",
+      "deadline": "2026-08-13T15:46:29Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "pending",
+      "event_id": "pulp-8d3b424d52d7971a886573d2b1a02083c8706893",
+      "mapped_contracts": [
+        "canvas-kernel",
+        "design-schema-compiler",
+        "legacy-figma-schema",
+        "pulp-design-import-tooling",
+        "pulp-figma-exporter",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "8d3b424d52d7971a886573d2b1a02083c8706893",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "build",
+      "deadline": "2026-08-17T15:46:29Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "pending",
+      "event_id": "pulp-928de3190a3637bdb88e6439b94778f243551041",
+      "mapped_contracts": [
+        "design-schema-compiler",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "928de3190a3637bdb88e6439b94778f243551041",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "build",
+      "deadline": "2026-08-17T15:46:29Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "pending",
+      "event_id": "pulp-931cbd94a17a58495b10533a1b43a246572d333a",
+      "mapped_contracts": [
+        "retained-ui-kernel"
+      ],
+      "source_commit": "931cbd94a17a58495b10533a1b43a246572d333a",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "rendering",
+      "deadline": "2026-08-13T15:46:29Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "pending",
+      "event_id": "pulp-9c1a24908b81fee4632941fea04b41175c4ddddd",
+      "mapped_contracts": [
+        "canvas-kernel",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "9c1a24908b81fee4632941fea04b41175c4ddddd",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "build",
+      "deadline": "2026-08-17T15:46:29Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "pending",
+      "event_id": "pulp-b16f4b6e673231346aee20f41bd99c6099651205",
+      "mapped_contracts": [
+        "retained-ui-kernel"
+      ],
+      "source_commit": "b16f4b6e673231346aee20f41bd99c6099651205",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "platform",
+      "deadline": "2026-08-13T15:46:29Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "pending",
+      "event_id": "pulp-e06f29e3a42e8754d7115f122aa643316e9e04ab",
+      "mapped_contracts": [
+        "macos-shell",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "e06f29e3a42e8754d7115f122aa643316e9e04ab",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "correctness",
+      "deadline": "2026-08-13T15:46:29Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "pending",
+      "event_id": "pulp-e0a18cd4f9a599c79477de2e5993385d3655669e",
+      "mapped_contracts": [
+        "retained-ui-kernel"
+      ],
+      "source_commit": "e0a18cd4f9a599c79477de2e5993385d3655669e",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "schema",
+      "deadline": "2026-08-13T15:46:29Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "pending",
+      "event_id": "pulp-e8056c1056d7f410255f8d0a8aa89f887b84ded9",
+      "mapped_contracts": [
+        "design-schema-compiler",
+        "macos-shell",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "e8056c1056d7f410255f8d0a8aa89f887b84ded9",
+      "source_repository": "Generous-Corp/pulp"
     }
   ],
-  "generated_at": "2026-08-10T14:54:55Z",
+  "generated_at": "2026-08-10T15:46:29Z",
   "health": "pass",
-  "maximum_pending_age_days": 0.069,
+  "maximum_pending_age_days": 0.105,
   "observatory_effort_percent": 0.0,
   "overdue": 0,
-  "pending": 1,
+  "pending": 14,
   "release_blockers": [],
   "repeated_generic_fixes": {
     "canvas-kernel": 2,
