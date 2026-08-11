@@ -29,7 +29,7 @@ EXPECTED_FILES = {
 }
 EXPECTED_README_SHA256 = "6935071cee4c735f401356e625108150251921b8a0dd6f20648d7370fd388894"
 EXPECTED_PROPOSAL_SHA256 = "7c2db05e110e7d9834806e08469f6d7cc70f6528b2242d1f6c0255dcdbc0a4c9"
-EXPECTED_ADDENDUM_SHA256 = "b93c58ceb808d607a9e554b7bdf577fc32447a38a31d336f6fe3dab6f4edbb51"
+EXPECTED_ADDENDUM_SHA256 = "b9255c3c9969d8e58b8c9a0981adaacffd3e9997d7ce297407980d591102c2c7"
 EXPECTED_PROPOSED_AT = "2026-08-10T21:55:54Z"
 EXPECTED_ADDENDUM_PROPOSED_AT = "2026-08-11T02:52:16Z"
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
@@ -134,7 +134,7 @@ EXPECTED_FAMILY_TITLES = {
 }
 EXPECTED_ADDED_SELECTORS = {
     "design-source-ingest": [
-        "tools/figma-plugin/**", "tools/figma-import/**",
+        "compat/imports.json", "tools/figma-plugin/**", "tools/figma-import/**",
         "tools/cli/cmd_design*", "tools/cli/cmd_import*",
         "tools/cli/design_binding*", "tools/cli/import_*",
         "tools/cli/importer_*", "examples/design-tool/**",
@@ -194,9 +194,9 @@ EXPECTED_ADDED_SELECTORS = {
 }
 EXPECTED_ADDENDUM_RATIONALES = {
     "design-source-ingest": (
-        "Close the provider, facade-helper, fixture, example, and documentation "
-        "surfaces used by Figma file, REST, plugin, Stitch, v0, Pencil, React "
-        "Native, JSX, DESIGN.md, and Claude Design import routes."
+        "Close the compatibility catalog, provider, facade-helper, fixture, example, "
+        "and documentation surfaces used by Figma file, REST, plugin, Stitch, v0, "
+        "Pencil, React Native, JSX, DESIGN.md, and Claude Design import routes."
     ),
     "chromium-authoring-frontend": (
         "Close the agent-HTML corpus, CDP evidence fixtures, native differential "
@@ -585,9 +585,10 @@ def validate_addendum(data: Any) -> list[str]:
             "Chromium-introduction history, and adversarial negative controls"
         ),
         "finding": (
-            "The original proposal omitted capability-bearing import validation, "
-            "generic visual harness, Figma plugin, Chromium evidence, CLI helper, "
-            "fixture, packaging, and non-design-named rendering paths."
+            "The original proposal omitted capability-bearing import compatibility, "
+            "import validation, generic visual harness, Figma plugin, Chromium "
+            "evidence, CLI helper, fixture, packaging, and non-design-named "
+            "rendering paths."
         ),
         "coverage_policy": (
             "Selectors are deliberately conservative during the temporary watch-only "

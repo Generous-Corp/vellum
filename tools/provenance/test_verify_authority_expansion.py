@@ -84,6 +84,7 @@ class Tests(unittest.TestCase):
             "added_capability_family_selectors"
         ]
         scopes = {row["id"]: row["pulp_selectors"] for row in rows}
+        self.assertIn("compat/imports.json", scopes["design-source-ingest"])
         self.assertIn("tools/figma-plugin/**", scopes["design-source-ingest"])
         self.assertIn(
             "test/fixtures/browser-capture-*/**",
@@ -115,6 +116,14 @@ class Tests(unittest.TestCase):
             lambda d: d["added_capability_family_selectors"][4][
                 "pulp_selectors"
             ].remove("tools/import-validation/**")
+        )
+        self.assertEqual(report["status"], "fail")
+
+    def test_addendum_cannot_omit_import_compatibility_catalog(self) -> None:
+        report = self.mutate_addendum(
+            lambda d: d["added_capability_family_selectors"][0][
+                "pulp_selectors"
+            ].remove("compat/imports.json")
         )
         self.assertEqual(report["status"], "fail")
 
