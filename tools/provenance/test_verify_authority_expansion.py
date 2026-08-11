@@ -85,6 +85,11 @@ class Tests(unittest.TestCase):
         ]
         scopes = {row["id"]: row["pulp_selectors"] for row in rows}
         self.assertIn("compat/imports.json", scopes["design-source-ingest"])
+        self.assertIn("compat/rn.json", scopes["design-source-ingest"])
+        self.assertIn(
+            "docs/reference/compat/rn.md",
+            scopes["design-source-ingest"],
+        )
         self.assertIn(
             "experimental/pulp-rs/src/cmd/design.rs",
             scopes["design-source-ingest"],

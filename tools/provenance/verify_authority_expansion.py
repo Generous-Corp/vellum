@@ -29,7 +29,7 @@ EXPECTED_FILES = {
 }
 EXPECTED_README_SHA256 = "6935071cee4c735f401356e625108150251921b8a0dd6f20648d7370fd388894"
 EXPECTED_PROPOSAL_SHA256 = "7c2db05e110e7d9834806e08469f6d7cc70f6528b2242d1f6c0255dcdbc0a4c9"
-EXPECTED_ADDENDUM_SHA256 = "100c584bc544bf521840d6e735bc95125e12fb5c8aaed6ae2c5e81720e826ef8"
+EXPECTED_ADDENDUM_SHA256 = "91bb269ce5a872037fd67e4735125772bcac50d82cf454edfd8c356b11f5a122"
 EXPECTED_PROPOSED_AT = "2026-08-10T21:55:54Z"
 EXPECTED_ADDENDUM_PROPOSED_AT = "2026-08-11T02:52:16Z"
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
@@ -135,7 +135,7 @@ EXPECTED_FAMILY_TITLES = {
 EXPECTED_ADDED_SELECTORS = {
     "design-source-ingest": [
         ".claude/commands/design.md", ".claude/commands/import-design.md",
-        "compat/imports.json", "design/**",
+        "compat/imports.json", "compat/rn.json", "design/**",
         "experimental/pulp-rs/src/cmd/design.rs",
         "experimental/pulp-rs/src/cmd/mod.rs", "experimental/pulp-rs/src/main.rs",
         "tools/figma-plugin/**", "tools/figma-import/**",
@@ -152,6 +152,7 @@ EXPECTED_ADDED_SELECTORS = {
         "test/test_import*",
         "docs/guides/design-*", "docs/guides/figma-plugin.md",
         "docs/guides/importing-designs.md", "docs/reference/compat/imports.md",
+        "docs/reference/compat/rn.md",
         "docs/reference/design-*", "docs/reference/design-import*",
         "docs/reference/design-ir*",
         "docs/reference/imports/**",
