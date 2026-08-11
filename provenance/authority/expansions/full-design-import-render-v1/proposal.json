@@ -63,8 +63,10 @@
       "title": "Canonical DesignIR, assets, interactions, diagnostics, and normalization",
       "pulp_selectors": [
         "core/view/include/pulp/view/design_*.hpp",
+        "core/view/include/pulp/view/anchor_strategy.hpp",
         "core/view/src/design_*.cpp",
         "core/view/src/design_*.hpp",
+        "core/view/src/anchor_strategy.cpp",
         "packages/pulp-import-ir/**"
       ],
       "vellum_target_roots": [
@@ -81,6 +83,7 @@
       "title": "Image and vector assets, paint primitives, Skia Graphite/Dawn, and fallbacks",
       "pulp_selectors": [
         "core/canvas/**",
+        "core/render/**",
         "core/view/**/*render*",
         "core/view/**/*skia*",
         "core/view/**/*dawn*"

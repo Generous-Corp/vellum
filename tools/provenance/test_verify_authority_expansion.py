@@ -46,12 +46,16 @@ class Tests(unittest.TestCase):
         return temporary, root, target
 
     def mutate(self, callback) -> dict:
-        temporary, root, target = self.copy()
-        self.addCleanup(temporary.cleanup)
-        data = json.loads(target.read_text())
+        data = json.loads((ROOT / verifier.PROPOSAL_PATH).read_text())
         callback(data)
-        target.write_text(json.dumps(data, indent=2) + "\n")
-        return verifier.verify(root)
+        errors = verifier.validate(data)
+        passed = not errors
+        return {
+            "status": "pass" if passed else "fail",
+            "proposal_id": data.get("proposal_id") if passed else None,
+            "authority_effect": data.get("authority_effect") if passed else None,
+            "errors": errors,
+        }
 
     def test_committed_proposal_passes_without_authority(self) -> None:
         report = verifier.verify(ROOT)
@@ -62,7 +66,9 @@ class Tests(unittest.TestCase):
         temporary, root, target = self.copy()
         self.addCleanup(temporary.cleanup)
         target.write_text('{"schema_version":1,"schema_version":1}\n')
-        self.assertEqual(verifier.verify(root)["status"], "fail")
+        report = verifier.verify(root)
+        self.assertEqual(report["status"], "fail")
+        self.assertTrue(any("duplicate JSON key" in e for e in report["errors"]))
 
     def test_authority_claim_fails(self) -> None:
         report = self.mutate(lambda d: d.update(authority_effect="transferred"))
@@ -202,6 +208,18 @@ class Tests(unittest.TestCase):
         report = verifier.verify(root)
         self.assertEqual(report["status"], "fail")
         self.assertTrue(any("untracked-acceptance.json" in e for e in report["errors"]))
+
+    def test_git_closure_ignores_incidental_untracked_file(self) -> None:
+        temporary, root, _ = self.copy()
+        self.addCleanup(temporary.cleanup)
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        subprocess.run(
+            ["git", "-C", str(root), "add", verifier.EXPANSIONS_ROOT.as_posix()],
+            check=True,
+        )
+        (root / verifier.EXPANSIONS_ROOT / ".DS_Store").write_bytes(b"incidental")
+        report = verifier.verify(root)
+        self.assertEqual(report["status"], "pass", report["errors"])
 
     def test_dangling_symlink_artifact_fails_closed(self) -> None:
         temporary, root, _ = self.copy()

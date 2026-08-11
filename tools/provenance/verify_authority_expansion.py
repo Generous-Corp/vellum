@@ -8,6 +8,7 @@ import datetime as dt
 import hashlib
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -22,7 +23,7 @@ EXPECTED_FILES = {
     "full-design-import-render-v1/proposal.json",
 }
 EXPECTED_README_SHA256 = "6935071cee4c735f401356e625108150251921b8a0dd6f20648d7370fd388894"
-EXPECTED_PROPOSAL_SHA256 = "cef124afae6c3fbf27eb9e4caf88d96aa601fd05061c4d2ec4f33b14d90eca21"
+EXPECTED_PROPOSAL_SHA256 = "7c2db05e110e7d9834806e08469f6d7cc70f6528b2242d1f6c0255dcdbc0a4c9"
 EXPECTED_PROPOSED_AT = "2026-08-10T21:55:54Z"
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
 OWNER = re.compile(r"^@[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
@@ -57,8 +58,10 @@ EXPECTED_FAMILY_SCOPES = {
     },
     "design-ir-contract": {
         "pulp_selectors": [
-            "core/view/include/pulp/view/design_*.hpp", "core/view/src/design_*.cpp",
-            "core/view/src/design_*.hpp", "packages/pulp-import-ir/**",
+            "core/view/include/pulp/view/design_*.hpp",
+            "core/view/include/pulp/view/anchor_strategy.hpp",
+            "core/view/src/design_*.cpp", "core/view/src/design_*.hpp",
+            "core/view/src/anchor_strategy.cpp", "packages/pulp-import-ir/**",
         ],
         "vellum_target_roots": [
             "foundation/", "components/", "fixtures/", "packages/vellum-design-ir/",
@@ -68,8 +71,8 @@ EXPECTED_FAMILY_SCOPES = {
     },
     "render-assets-and-backends": {
         "pulp_selectors": [
-            "core/canvas/**", "core/view/**/*render*", "core/view/**/*skia*",
-            "core/view/**/*dawn*",
+            "core/canvas/**", "core/render/**", "core/view/**/*render*",
+            "core/view/**/*skia*", "core/view/**/*dawn*",
         ],
         "vellum_target_roots": [
             "components/", "foundation/", "graphics/", "runtime/", "web/",
@@ -237,16 +240,40 @@ def exact_scalar(value: Any, expected: Any) -> bool:
 
 
 def expansion_files(root: Path) -> tuple[set[str], set[str]]:
-    files: set[str] = set()
-    symlinks: set[str] = set()
     base = root / EXPANSIONS_ROOT
+    symlinks: set[str] = set()
+    filesystem_files: set[str] = set()
     for path in base.rglob("*"):
         relative = path.relative_to(base).as_posix()
         if path.is_symlink():
-            files.add(relative)
+            filesystem_files.add(relative)
             symlinks.add(relative)
         elif path.is_file():
-            files.add(relative)
+            filesystem_files.add(relative)
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "-z", "--", EXPANSIONS_ROOT.as_posix()],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError:
+        return filesystem_files, symlinks
+    if completed.returncode != 0:
+        return filesystem_files, symlinks
+    prefix = EXPANSIONS_ROOT.as_posix() + "/"
+    files = {
+        item.decode("utf-8", errors="surrogateescape").removeprefix(prefix)
+        for item in completed.stdout.split(b"\0")
+        if item
+    }
+    authority_suffixes = {".json", ".md", ".toml", ".yaml", ".yml"}
+    files.update(
+        relative
+        for relative in filesystem_files - files
+        if Path(relative).suffix.lower() in authority_suffixes
+    )
+    files.update(symlinks)
     return files, symlinks
 
 
