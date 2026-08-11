@@ -22,6 +22,7 @@ EXPECTED_FILES = {
     "full-design-import-render-v1/proposal.json",
 }
 EXPECTED_README_SHA256 = "6935071cee4c735f401356e625108150251921b8a0dd6f20648d7370fd388894"
+EXPECTED_PROPOSAL_SHA256 = "cef124afae6c3fbf27eb9e4caf88d96aa601fd05061c4d2ec4f33b14d90eca21"
 EXPECTED_PROPOSED_AT = "2026-08-10T21:55:54Z"
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
 OWNER = re.compile(r"^@[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
@@ -235,12 +236,18 @@ def exact_scalar(value: Any, expected: Any) -> bool:
     return type(value) is type(expected) and value == expected
 
 
-def expansion_files(root: Path) -> set[str]:
-    return {
-        path.relative_to(root / EXPANSIONS_ROOT).as_posix()
-        for path in (root / EXPANSIONS_ROOT).rglob("*")
-        if path.is_file()
-    }
+def expansion_files(root: Path) -> tuple[set[str], set[str]]:
+    files: set[str] = set()
+    symlinks: set[str] = set()
+    base = root / EXPANSIONS_ROOT
+    for path in base.rglob("*"):
+        relative = path.relative_to(base).as_posix()
+        if path.is_symlink():
+            files.add(relative)
+            symlinks.add(relative)
+        elif path.is_file():
+            files.add(relative)
+    return files, symlinks
 
 
 def validate(data: Any) -> list[str]:
@@ -390,12 +397,16 @@ def validate(data: Any) -> list[str]:
 def verify(root: Path) -> dict[str, Any]:
     closure_errors = []
     try:
-        actual_files = expansion_files(root)
+        actual_files, symlinks = expansion_files(root)
         if actual_files != EXPECTED_FILES:
             closure_errors.append(
                 "expansion artifact set differs; "
                 f"missing={sorted(EXPECTED_FILES - actual_files)} "
                 f"unexpected={sorted(actual_files - EXPECTED_FILES)}"
+            )
+        if symlinks:
+            closure_errors.append(
+                f"expansion artifacts must not be symlinks: {sorted(symlinks)}"
             )
     except OSError as exc:
         closure_errors.append(f"cannot enumerate expansion artifacts: {exc}")
@@ -406,8 +417,15 @@ def verify(root: Path) -> dict[str, Any]:
             closure_errors.append("expansion README differs from pinned SHA-256")
     except OSError as exc:
         closure_errors.append(f"cannot read expansion README: {exc}")
+    proposal = root / PROPOSAL_PATH
     try:
-        data = load_json(root / PROPOSAL_PATH)
+        proposal_sha256 = hashlib.sha256(proposal.read_bytes()).hexdigest()
+        if proposal_sha256 != EXPECTED_PROPOSAL_SHA256:
+            closure_errors.append("expansion proposal differs from pinned SHA-256")
+    except OSError as exc:
+        closure_errors.append(f"cannot read expansion proposal: {exc}")
+    try:
+        data = load_json(proposal)
         errors = closure_errors + validate(data)
     except ValueError as exc:
         data, errors = None, closure_errors + [str(exc)]

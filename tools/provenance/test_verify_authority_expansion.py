@@ -189,7 +189,7 @@ class Tests(unittest.TestCase):
         self.assertEqual(report["status"], "fail")
         self.assertTrue(any("artifact set differs" in e for e in report["errors"]))
 
-    def test_unknown_untracked_artifact_in_git_checkout_fails_closed(self) -> None:
+    def test_filesystem_closure_rejects_untracked_artifact_in_git_checkout(self) -> None:
         temporary, root, _ = self.copy()
         self.addCleanup(temporary.cleanup)
         subprocess.run(["git", "init", "-q", str(root)], check=True)
@@ -202,6 +202,34 @@ class Tests(unittest.TestCase):
         report = verifier.verify(root)
         self.assertEqual(report["status"], "fail")
         self.assertTrue(any("untracked-acceptance.json" in e for e in report["errors"]))
+
+    def test_dangling_symlink_artifact_fails_closed(self) -> None:
+        temporary, root, _ = self.copy()
+        self.addCleanup(temporary.cleanup)
+        unknown = root / verifier.EXPANSIONS_ROOT / "pulp-watch-acceptance.json"
+        unknown.symlink_to(root / "missing-acceptance.json")
+        report = verifier.verify(root)
+        self.assertEqual(report["status"], "fail")
+        self.assertTrue(any("must not be symlinks" in e for e in report["errors"]))
+
+    def test_symlinked_directory_artifact_fails_closed(self) -> None:
+        temporary, root, _ = self.copy()
+        self.addCleanup(temporary.cleanup)
+        external = root / "external-acceptance"
+        external.mkdir()
+        unknown = root / verifier.EXPANSIONS_ROOT / "acceptance"
+        unknown.symlink_to(external, target_is_directory=True)
+        report = verifier.verify(root)
+        self.assertEqual(report["status"], "fail")
+        self.assertTrue(any("must not be symlinks" in e for e in report["errors"]))
+
+    def test_formatting_only_proposal_drift_fails_closed(self) -> None:
+        temporary, root, target = self.copy()
+        self.addCleanup(temporary.cleanup)
+        target.write_text(target.read_text() + "\n")
+        report = verifier.verify(root)
+        self.assertEqual(report["status"], "fail")
+        self.assertTrue(any("proposal differs" in e for e in report["errors"]))
 
     def test_expansion_readme_drift_fails_closed(self) -> None:
         temporary, root, _ = self.copy()
