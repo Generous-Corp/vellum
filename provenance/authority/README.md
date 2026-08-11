@@ -34,6 +34,11 @@ projection, the later activation-candidate projection, and the exact active
 implementation projection under the explicit lineage mode
 `history-seed-ancestor-active-reimplementation`.
 
+Later authority expansions do not mutate this completed activation. Their
+append-only watch and exact-boundary handshakes are specified in
+[`expansions/README.md`](expansions/README.md). A watch proposal or acceptance
+has no authority effect and cannot authorize implementation.
+
 ## Prepare a new record
 
 The completed activation used this procedure. For a genuinely new attempt,

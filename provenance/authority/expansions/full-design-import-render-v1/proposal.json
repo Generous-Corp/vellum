@@ -1,0 +1,228 @@
+{
+  "schema_version": 1,
+  "kind": "authority-expansion-proposal",
+  "proposal_id": "full-design-import-render-v1",
+  "state": "proposed",
+  "proposed_at": "2026-08-10T21:55:54Z",
+  "proposed_by": "@danielraffel",
+  "coordinates": {
+    "pulp_repository": "Generous-Corp/pulp",
+    "pulp_baseline_commit": "190c463a0b320f28420c9af177244af04ef84233",
+    "vellum_authority_repository": "Generous-Corp/vellum",
+    "vellum_work_repository": "danielraffel/vellum",
+    "vellum_work_repository_is_temporary": true,
+    "vellum_baseline_commit": "e8c07675332b047c9b3a4f357aebb077cc52a8b6",
+    "planning_repository": "danielraffel/pulp-planning",
+    "planning_commit": "987b3e6c3aeac826480419b14746e4367846b03e"
+  },
+  "scope_mode": "watch-only-capability-families",
+  "authority_effect": "none",
+  "implementation_authority": "forbidden-until-exact-boundary-acknowledged",
+  "capability_families": [
+    {
+      "id": "design-source-ingest",
+      "title": "Source detection, import, reimport, provider adapters, and staged inputs",
+      "pulp_selectors": [
+        "tools/import-design/**",
+        "tools/cli/**/import_design*",
+        "tools/cli/**/*design_import*",
+        "tools/mcp/**/*design*",
+        ".agents/skills/import-design/**"
+      ],
+      "vellum_target_roots": [
+        "authoring/",
+        "cli/",
+        "packages/vellum-design-ir/"
+      ],
+      "approved_retained_overlaps": [
+        "pulp-public-cli-and-control-broker"
+      ]
+    },
+    {
+      "id": "chromium-authoring-frontend",
+      "title": "Managed Chromium, CDP capture, containment, and browser evidence",
+      "pulp_selectors": [
+        "tools/import-design/**/*chrom*",
+        "tools/import-design/**/*browser*",
+        "tools/cli/**/*chrome*",
+        "tools/cli/**/*browser*",
+        "tools/scripts/**/*chrome*",
+        "tools/scripts/**/*browser*"
+      ],
+      "vellum_target_roots": [
+        "authoring/",
+        "cli/",
+        "scripts/"
+      ],
+      "approved_retained_overlaps": [
+        "pulp-public-cli-and-control-broker"
+      ]
+    },
+    {
+      "id": "design-ir-contract",
+      "title": "Canonical DesignIR, assets, interactions, diagnostics, and normalization",
+      "pulp_selectors": [
+        "core/view/include/pulp/view/design_*.hpp",
+        "core/view/include/pulp/view/anchor_strategy.hpp",
+        "core/view/src/design_*.cpp",
+        "core/view/src/design_*.hpp",
+        "core/view/src/anchor_strategy.cpp",
+        "packages/pulp-import-ir/**"
+      ],
+      "vellum_target_roots": [
+        "foundation/",
+        "components/",
+        "fixtures/",
+        "packages/vellum-design-ir/",
+        "packages/vellum-ui/"
+      ],
+      "approved_retained_overlaps": []
+    },
+    {
+      "id": "render-assets-and-backends",
+      "title": "Image and vector assets, paint primitives, Skia Graphite/Dawn, and fallbacks",
+      "pulp_selectors": [
+        "core/canvas/**",
+        "core/render/**",
+        "core/view/**/*render*",
+        "core/view/**/*skia*",
+        "core/view/**/*dawn*"
+      ],
+      "vellum_target_roots": [
+        "components/",
+        "foundation/",
+        "graphics/",
+        "runtime/",
+        "web/"
+      ],
+      "approved_retained_overlaps": []
+    },
+    {
+      "id": "visual-proof-harness",
+      "title": "Generic capture, input scenarios, pixel comparison, audits, and goldens",
+      "pulp_selectors": [
+        "core/view/include/pulp/view/screenshot*.hpp",
+        "core/view/src/screenshot*.cpp",
+        "core/view/platform/**/*capture*",
+        "core/view/platform/**/*screenshot*",
+        "tools/**/*screenshot*",
+        "tools/**/*visual*",
+        "tools/**/*golden*"
+      ],
+      "vellum_target_roots": [
+        "apps/",
+        "fixtures/",
+        "foundation/",
+        "graphics/",
+        "runtime/",
+        "tools/",
+        "web/"
+      ],
+      "approved_retained_overlaps": [
+        "pulp-public-cli-and-control-broker"
+      ]
+    },
+    {
+      "id": "design-output-and-packaging",
+      "title": "Live and baked outputs, validation, schemas, runtime assets, CLI, and packages",
+      "pulp_selectors": [
+        "tools/import-design/**",
+        "tools/cli/**/import_design*",
+        "tools/mcp/**/*design*",
+        "templates/**/*design*",
+        "docs/**/*design-import*"
+      ],
+      "vellum_target_roots": [
+        "cli/",
+        "cmake/",
+        "packages/",
+        "runtime/",
+        "scripts/",
+        "templates/",
+        "tools/",
+        "web/"
+      ],
+      "approved_retained_overlaps": [
+        "pulp-public-cli-and-control-broker"
+      ]
+    }
+  ],
+  "retained_boundaries": [
+    {
+      "id": "pulp-audio-and-dsp-harness",
+      "pulp_selectors": [
+        "core/audio/**",
+        "core/format/**",
+        "core/gpu_audio/**",
+        "core/graph/**",
+        "core/host/**",
+        "core/midi/**",
+        "core/playback/**",
+        "core/signal/**"
+      ],
+      "rationale": "Audio measurement, offline audio rendering, telemetry, and plug-in or host acceptance remain Pulp product responsibilities."
+    },
+    {
+      "id": "pulp-public-cli-and-control-broker",
+      "pulp_selectors": [
+        "tools/cli/**",
+        "tools/mcp/**",
+        ".agents/skills/**",
+        ".claude/**",
+        ".claude-plugin/**"
+      ],
+      "rationale": "Pulp remains the user-facing facade and owns grants, consent, live-instance routing, artifact ACLs, and product operations; later adapters may delegate generic visual work to Vellum."
+    },
+    {
+      "id": "pulp-product-integration",
+      "pulp_selectors": [
+        "core/format/**",
+        "core/host/**",
+        "forge/**"
+      ],
+      "rationale": "Plug-in, host, Forge, parameter-binding, and consumer adaptation stay outside the framework authority boundary."
+    },
+    {
+      "id": "pulp-runtime-engine-selection",
+      "pulp_selectors": [
+        "core/js/**",
+        "core/runtime/**"
+      ],
+      "rationale": "Vellum APIs remain engine-neutral while Pulp retains product and platform selection of QuickJS, JavaScriptCore, or V8 adapters."
+    }
+  ],
+  "interim_maintenance": [
+    {
+      "id": "capture-primitives-unimplemented-in-vellum",
+      "pulp_paths": [
+        "core/view/include/pulp/view/screenshot.hpp",
+        "core/view/include/pulp/view/screenshot_compare.hpp",
+        "core/view/platform/mac/screenshot_mac.mm",
+        "core/view/src/screenshot_compare.cpp",
+        "core/view/src/screenshot_gpu.cpp",
+        "core/view/src/screenshot_skia.cpp",
+        "core/view/src/screenshot_stub.cpp"
+      ],
+      "expires_at_gate": "5A-P.3-independent-pixel-and-semantic-proof",
+      "rationale": "These paths are marked transferred in Pulp but the audited Vellum baseline lacks the complete capture and pixel-comparison implementation. The exception is proposed only; it has no effect until counterpart acceptance and acknowledgement."
+    }
+  ],
+  "required_transitions": [
+    "vellum-proposal-merged",
+    "pulp-watch-acceptance-merged",
+    "vellum-watch-acknowledgement-merged",
+    "compatibility-matrix-frozen",
+    "exact-boundary-amendment-proposed",
+    "exact-boundary-amendment-accepted",
+    "exact-boundary-amendment-acknowledged"
+  ],
+  "gates": {
+    "proposal_may_transfer_authority": false,
+    "watch_acceptance_may_transfer_authority": false,
+    "watch_acknowledgement_may_transfer_authority": false,
+    "source_work_before_exact_boundary_acknowledgement": false,
+    "exact_paths_required_for_authority": true,
+    "counterpart_commit_and_digest_required": true,
+    "pulp_consumption_authorized": false
+  }
+}
