@@ -8,6 +8,7 @@ import datetime as dt
 import hashlib
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -235,6 +236,27 @@ def exact_scalar(value: Any, expected: Any) -> bool:
     return type(value) is type(expected) and value == expected
 
 
+def expansion_files(root: Path) -> set[str]:
+    completed = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "-z", "--", EXPANSIONS_ROOT.as_posix()],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    if completed.returncode == 0:
+        prefix = EXPANSIONS_ROOT.as_posix() + "/"
+        return {
+            item.decode("utf-8", errors="surrogateescape").removeprefix(prefix)
+            for item in completed.stdout.split(b"\0")
+            if item
+        }
+    return {
+        path.relative_to(root / EXPANSIONS_ROOT).as_posix()
+        for path in (root / EXPANSIONS_ROOT).rglob("*")
+        if path.is_file()
+    }
+
+
 def validate(data: Any) -> list[str]:
     errors: list[str] = []
     top = {
@@ -380,11 +402,7 @@ def validate(data: Any) -> list[str]:
 
 
 def verify(root: Path) -> dict[str, Any]:
-    actual_files = {
-        path.relative_to(root / EXPANSIONS_ROOT).as_posix()
-        for path in (root / EXPANSIONS_ROOT).rglob("*")
-        if path.is_file()
-    }
+    actual_files = expansion_files(root)
     closure_errors = []
     if actual_files != EXPECTED_FILES:
         closure_errors.append(

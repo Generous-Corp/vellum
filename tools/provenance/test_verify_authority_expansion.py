@@ -22,6 +22,17 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class Tests(unittest.TestCase):
+    def test_workflow_runs_and_retains_expansion_gate(self) -> None:
+        workflow = (ROOT / ".github/workflows/provenance.yml").read_text()
+        self.assertIn(
+            "python3 tools/provenance/test_verify_authority_expansion.py",
+            workflow,
+        )
+        self.assertIn(
+            "python3 tools/provenance/verify_authority_expansion.py", workflow
+        )
+        self.assertGreaterEqual(workflow.count("authority-expansion-report.json"), 2)
+
     def copy(self) -> tuple[tempfile.TemporaryDirectory[str], Path, Path]:
         temporary = tempfile.TemporaryDirectory()
         root = Path(temporary.name)
