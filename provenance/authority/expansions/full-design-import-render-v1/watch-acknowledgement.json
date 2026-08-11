@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "kind": "authority-expansion-watch-acknowledgement",
+  "acknowledgement_id": "full-design-import-render-v1-watch-acknowledgement",
+  "proposal_id": "full-design-import-render-v1",
+  "state": "acknowledged",
+  "acknowledged_at": "2026-08-11T20:54:33Z",
+  "acknowledged_by": "@danielraffel",
+  "coordinates": {
+    "pulp_repository": "Generous-Corp/pulp",
+    "pulp_acceptance_merge_commit": "a494429f4cf29a2d45c45fce12debfa0417ced21",
+    "pulp_acceptance_path": ".github/vellum-expansion-watch/full-design-import-render-v1/acceptance.json",
+    "pulp_acceptance_sha256": "1535d76e34dfc80eda55247c1b0d47b9f47b3e58a08b6f1ab4b749692e6056fd",
+    "vellum_work_repository": "danielraffel/vellum",
+    "vellum_proposal_merge_commit": "bf0559eca2547f9242405cc388888890e80bbd87",
+    "proposal_path": "provenance/authority/expansions/full-design-import-render-v1/proposal.json",
+    "proposal_sha256": "7c2db05e110e7d9834806e08469f6d7cc70f6528b2242d1f6c0255dcdbc0a4c9",
+    "vellum_scope_addendum_merge_commit": "8608fac0922577f9f6e87f51b3e6b9eed395d243",
+    "scope_addendum_path": "provenance/authority/expansions/full-design-import-render-v1/scope-addendum-1.json",
+    "scope_addendum_sha256": "91bb269ce5a872037fd67e4735125772bcac50d82cf454edfd8c356b11f5a122"
+  },
+  "scope_mode": "watch-only-capability-families",
+  "authority_effect": "none",
+  "implementation_authority": "forbidden-until-exact-boundary-acknowledged",
+  "gates": {
+    "watch_acknowledgement_may_transfer_authority": false,
+    "source_work_before_exact_boundary_acknowledgement": false,
+    "exact_paths_required_for_authority": true,
+    "pulp_consumption_authorized": false
+  }
+}

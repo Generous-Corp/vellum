@@ -46,6 +46,9 @@ class Tests(unittest.TestCase):
         addendum = root / verifier.ADDENDUM_PATH
         addendum.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / verifier.ADDENDUM_PATH, addendum)
+        acknowledgement = root / verifier.ACKNOWLEDGEMENT_PATH
+        acknowledgement.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / verifier.ACKNOWLEDGEMENT_PATH, acknowledgement)
         return temporary, root, target
 
     def mutate(self, callback) -> dict:
@@ -70,6 +73,16 @@ class Tests(unittest.TestCase):
             "errors": errors,
         }
 
+    def mutate_acknowledgement(self, callback) -> dict:
+        data = json.loads((ROOT / verifier.ACKNOWLEDGEMENT_PATH).read_text())
+        callback(data)
+        errors = verifier.validate_acknowledgement(data)
+        return {
+            "status": "pass" if not errors else "fail",
+            "authority_effect": data.get("authority_effect") if not errors else None,
+            "errors": errors,
+        }
+
     def test_committed_proposal_passes_without_authority(self) -> None:
         report = verifier.verify(ROOT)
         self.assertEqual(report["status"], "pass", report["errors"])
@@ -77,6 +90,70 @@ class Tests(unittest.TestCase):
         self.assertEqual(
             report["scope_addendum_id"],
             "full-design-import-render-v1-scope-addendum-1",
+        )
+        self.assertEqual(
+            report["watch_acknowledgement_id"],
+            "full-design-import-render-v1-watch-acknowledgement",
+        )
+
+    def test_acknowledgement_binds_exact_acceptance_without_authority(self) -> None:
+        data = json.loads((ROOT / verifier.ACKNOWLEDGEMENT_PATH).read_text())
+        self.assertEqual(data["authority_effect"], "none")
+        self.assertEqual(
+            data["coordinates"]["pulp_acceptance_merge_commit"],
+            "a494429f4cf29a2d45c45fce12debfa0417ced21",
+        )
+        self.assertEqual(
+            data["coordinates"]["pulp_acceptance_sha256"],
+            "1535d76e34dfc80eda55247c1b0d47b9f47b3e58a08b6f1ab4b749692e6056fd",
+        )
+
+    def test_acknowledgement_authority_claim_fails(self) -> None:
+        report = self.mutate_acknowledgement(
+            lambda d: d.update(authority_effect="transferred")
+        )
+        self.assertEqual(report["status"], "fail")
+        self.assertIsNone(report["authority_effect"])
+
+    def test_acknowledgement_acceptance_coordinate_drift_fails(self) -> None:
+        report = self.mutate_acknowledgement(
+            lambda d: d["coordinates"].update(pulp_acceptance_merge_commit="0" * 40)
+        )
+        self.assertEqual(report["status"], "fail")
+        report = self.mutate_acknowledgement(
+            lambda d: d["coordinates"].update(pulp_acceptance_sha256="0" * 64)
+        )
+        self.assertEqual(report["status"], "fail")
+
+    def test_acknowledgement_gate_relaxation_fails(self) -> None:
+        report = self.mutate_acknowledgement(
+            lambda d: d["gates"].update(
+                source_work_before_exact_boundary_acknowledgement=True
+            )
+        )
+        self.assertEqual(report["status"], "fail")
+        report = self.mutate_acknowledgement(
+            lambda d: d["gates"].update(pulp_consumption_authorized=True)
+        )
+        self.assertEqual(report["status"], "fail")
+
+    def test_acknowledgement_timestamp_and_state_drift_fail(self) -> None:
+        report = self.mutate_acknowledgement(
+            lambda d: d.update(acknowledged_at="2026-08-11T20:54:34Z")
+        )
+        self.assertEqual(report["status"], "fail")
+        report = self.mutate_acknowledgement(lambda d: d.update(state="accepted"))
+        self.assertEqual(report["status"], "fail")
+
+    def test_acknowledgement_byte_drift_fails(self) -> None:
+        temporary, root, _ = self.copy()
+        self.addCleanup(temporary.cleanup)
+        acknowledgement = root / verifier.ACKNOWLEDGEMENT_PATH
+        acknowledgement.write_bytes(acknowledgement.read_bytes() + b"\n")
+        report = verifier.verify(root)
+        self.assertEqual(report["status"], "fail")
+        self.assertTrue(
+            any("acknowledgement differs" in error for error in report["errors"])
         )
 
     def test_addendum_closes_audited_blind_spots_without_authority(self) -> None:

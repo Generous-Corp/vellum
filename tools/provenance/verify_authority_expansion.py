@@ -21,17 +21,24 @@ ADDENDUM_PATH = Path(
     "provenance/authority/expansions/"
     "full-design-import-render-v1/scope-addendum-1.json"
 )
+ACKNOWLEDGEMENT_PATH = Path(
+    "provenance/authority/expansions/"
+    "full-design-import-render-v1/watch-acknowledgement.json"
+)
 EXPANSIONS_ROOT = Path("provenance/authority/expansions")
 EXPECTED_FILES = {
     "README.md",
     "full-design-import-render-v1/proposal.json",
     "full-design-import-render-v1/scope-addendum-1.json",
+    "full-design-import-render-v1/watch-acknowledgement.json",
 }
 EXPECTED_README_SHA256 = "6935071cee4c735f401356e625108150251921b8a0dd6f20648d7370fd388894"
 EXPECTED_PROPOSAL_SHA256 = "7c2db05e110e7d9834806e08469f6d7cc70f6528b2242d1f6c0255dcdbc0a4c9"
 EXPECTED_ADDENDUM_SHA256 = "91bb269ce5a872037fd67e4735125772bcac50d82cf454edfd8c356b11f5a122"
+EXPECTED_ACKNOWLEDGEMENT_SHA256 = "877ac4a410e7ac8d5019aa8f2e09d9133a111acaab59eb2abef65c30527b78c8"
 EXPECTED_PROPOSED_AT = "2026-08-10T21:55:54Z"
 EXPECTED_ADDENDUM_PROPOSED_AT = "2026-08-11T02:52:16Z"
+EXPECTED_ACKNOWLEDGED_AT = "2026-08-11T20:54:33Z"
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
 OWNER = re.compile(r"^@[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
 EXPECTED_COORDINATES = {
@@ -681,6 +688,101 @@ def validate_addendum(data: Any) -> list[str]:
     return errors
 
 
+def validate_acknowledgement(data: Any) -> list[str]:
+    errors: list[str] = []
+    top = {
+        "schema_version", "kind", "acknowledgement_id", "proposal_id", "state",
+        "acknowledged_at", "acknowledged_by", "coordinates", "scope_mode",
+        "authority_effect", "implementation_authority", "gates",
+    }
+    if not exact_keys(data, top, "acknowledgement", errors):
+        return errors
+    scalars = {
+        "schema_version": 1,
+        "kind": "authority-expansion-watch-acknowledgement",
+        "acknowledgement_id": "full-design-import-render-v1-watch-acknowledgement",
+        "proposal_id": "full-design-import-render-v1",
+        "state": "acknowledged",
+        "acknowledged_by": "@danielraffel",
+        "scope_mode": "watch-only-capability-families",
+        "authority_effect": "none",
+        "implementation_authority": "forbidden-until-exact-boundary-acknowledged",
+    }
+    for key, expected in scalars.items():
+        if not exact_scalar(data[key], expected):
+            errors.append(f"acknowledgement.{key}: expected {expected!r}")
+    if not OWNER.fullmatch(str(data["acknowledged_by"])):
+        errors.append("acknowledgement.acknowledged_by: expected individual GitHub handle")
+    try:
+        stamp = data["acknowledged_at"]
+        parsed = dt.datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        if not stamp.endswith("Z") or parsed.utcoffset() != dt.timedelta(0):
+            raise ValueError
+    except (AttributeError, TypeError, ValueError):
+        errors.append("acknowledgement.acknowledged_at: expected UTC timestamp ending in Z")
+    if data["acknowledged_at"] != EXPECTED_ACKNOWLEDGED_AT:
+        errors.append(
+            "acknowledgement.acknowledged_at: differs from pinned acknowledgement timestamp"
+        )
+
+    expected_coordinates = {
+        "pulp_repository": "Generous-Corp/pulp",
+        "pulp_acceptance_merge_commit": "a494429f4cf29a2d45c45fce12debfa0417ced21",
+        "pulp_acceptance_path": (
+            ".github/vellum-expansion-watch/full-design-import-render-v1/acceptance.json"
+        ),
+        "pulp_acceptance_sha256": (
+            "1535d76e34dfc80eda55247c1b0d47b9f47b3e58a08b6f1ab4b749692e6056fd"
+        ),
+        "vellum_work_repository": "danielraffel/vellum",
+        "vellum_proposal_merge_commit": "bf0559eca2547f9242405cc388888890e80bbd87",
+        "proposal_path": PROPOSAL_PATH.as_posix(),
+        "proposal_sha256": EXPECTED_PROPOSAL_SHA256,
+        "vellum_scope_addendum_merge_commit": (
+            "8608fac0922577f9f6e87f51b3e6b9eed395d243"
+        ),
+        "scope_addendum_path": ADDENDUM_PATH.as_posix(),
+        "scope_addendum_sha256": EXPECTED_ADDENDUM_SHA256,
+    }
+    coordinates = data["coordinates"]
+    if (
+        not isinstance(coordinates, dict)
+        or set(coordinates) != set(expected_coordinates)
+        or any(
+            not exact_scalar(coordinates[key], expected)
+            for key, expected in expected_coordinates.items()
+        )
+    ):
+        errors.append("acknowledgement.coordinates: differs from pinned handshake coordinates")
+    elif not all(
+        SHA40.fullmatch(coordinates[key])
+        for key in (
+            "pulp_acceptance_merge_commit",
+            "vellum_proposal_merge_commit",
+            "vellum_scope_addendum_merge_commit",
+        )
+    ):
+        errors.append("acknowledgement.coordinates: expected full commit SHAs")
+
+    expected_gates = {
+        "watch_acknowledgement_may_transfer_authority": False,
+        "source_work_before_exact_boundary_acknowledgement": False,
+        "exact_paths_required_for_authority": True,
+        "pulp_consumption_authorized": False,
+    }
+    gates = data["gates"]
+    if (
+        not isinstance(gates, dict)
+        or set(gates) != set(expected_gates)
+        or any(
+            not exact_scalar(gates[key], expected)
+            for key, expected in expected_gates.items()
+        )
+    ):
+        errors.append("acknowledgement.gates: differs from fail-closed pinned gates")
+    return errors
+
+
 def verify(root: Path) -> dict[str, Any]:
     closure_errors = []
     try:
@@ -718,12 +820,26 @@ def verify(root: Path) -> dict[str, Any]:
             closure_errors.append("expansion scope addendum differs from pinned SHA-256")
     except OSError as exc:
         closure_errors.append(f"cannot read expansion scope addendum: {exc}")
+    acknowledgement = root / ACKNOWLEDGEMENT_PATH
+    try:
+        acknowledgement_sha256 = hashlib.sha256(acknowledgement.read_bytes()).hexdigest()
+        if acknowledgement_sha256 != EXPECTED_ACKNOWLEDGEMENT_SHA256:
+            closure_errors.append("expansion watch acknowledgement differs from pinned SHA-256")
+    except OSError as exc:
+        closure_errors.append(f"cannot read expansion watch acknowledgement: {exc}")
     try:
         data = load_json(proposal)
         addendum_data = load_json(addendum)
-        errors = closure_errors + validate(data) + validate_addendum(addendum_data)
+        acknowledgement_data = load_json(acknowledgement)
+        errors = (
+            closure_errors
+            + validate(data)
+            + validate_addendum(addendum_data)
+            + validate_acknowledgement(acknowledgement_data)
+        )
     except ValueError as exc:
-        data, addendum_data, errors = None, None, closure_errors + [str(exc)]
+        data, addendum_data, acknowledgement_data = None, None, None
+        errors = closure_errors + [str(exc)]
     passed = not errors
     return {
         "schema_version": 1,
@@ -736,7 +852,17 @@ def verify(root: Path) -> dict[str, Any]:
             if passed and isinstance(addendum_data, dict)
             else None
         ),
-        "authority_effect": data.get("authority_effect") if passed and isinstance(data, dict) else None,
+        "watch_acknowledgement": ACKNOWLEDGEMENT_PATH.as_posix(),
+        "watch_acknowledgement_id": (
+            acknowledgement_data.get("acknowledgement_id")
+            if passed and isinstance(acknowledgement_data, dict)
+            else None
+        ),
+        "authority_effect": (
+            acknowledgement_data.get("authority_effect")
+            if passed and isinstance(acknowledgement_data, dict)
+            else None
+        ),
         "errors": errors,
     }
 
