@@ -85,6 +85,14 @@ class Tests(unittest.TestCase):
         ]
         scopes = {row["id"]: row["pulp_selectors"] for row in rows}
         self.assertIn("compat/imports.json", scopes["design-source-ingest"])
+        self.assertIn(
+            "experimental/pulp-rs/src/cmd/design.rs",
+            scopes["design-source-ingest"],
+        )
+        self.assertIn(
+            "experimental/pulp-rs/src/main.rs",
+            scopes["design-source-ingest"],
+        )
         self.assertIn("tools/figma-plugin/**", scopes["design-source-ingest"])
         self.assertIn(
             "test/fixtures/browser-capture-*/**",
@@ -124,6 +132,14 @@ class Tests(unittest.TestCase):
             lambda d: d["added_capability_family_selectors"][0][
                 "pulp_selectors"
             ].remove("compat/imports.json")
+        )
+        self.assertEqual(report["status"], "fail")
+
+    def test_addendum_cannot_omit_rust_design_command(self) -> None:
+        report = self.mutate_addendum(
+            lambda d: d["added_capability_family_selectors"][0][
+                "pulp_selectors"
+            ].remove("experimental/pulp-rs/src/cmd/design.rs")
         )
         self.assertEqual(report["status"], "fail")
 

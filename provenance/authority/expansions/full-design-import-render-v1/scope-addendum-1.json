@@ -19,7 +19,7 @@
   "implementation_authority": "forbidden-until-exact-boundary-acknowledged",
   "audit": {
     "method": "tracked-file inventory, build-manifest tracing, tool-registry closure, Chromium-introduction history, and adversarial negative controls",
-    "finding": "The original proposal omitted capability-bearing import compatibility, import validation, generic visual harness, Figma plugin, Chromium evidence, CLI helper, fixture, packaging, and non-design-named rendering paths.",
+    "finding": "The original proposal omitted capability-bearing import compatibility, import validation, generic visual harness, Figma plugin, Chromium evidence, C++ and Rust CLI helpers, fixture, packaging, and non-design-named rendering paths.",
     "coverage_policy": "Selectors are deliberately conservative during the temporary watch-only phase; overlap records change evidence and does not assign implementation ownership.",
     "retained_boundaries_unchanged": true
   },
@@ -28,6 +28,9 @@
       "id": "design-source-ingest",
       "pulp_selectors": [
         "compat/imports.json",
+        "experimental/pulp-rs/src/cmd/design.rs",
+        "experimental/pulp-rs/src/cmd/mod.rs",
+        "experimental/pulp-rs/src/main.rs",
         "tools/figma-plugin/**",
         "tools/figma-import/**",
         "tools/cli/cmd_design*",
@@ -52,7 +55,7 @@
         "docs/reference/design-ir*",
         "docs/reference/imports/**"
       ],
-      "rationale": "Close the compatibility catalog, provider, facade-helper, fixture, example, and documentation surfaces used by Figma file, REST, plugin, Stitch, v0, Pencil, React Native, JSX, DESIGN.md, and Claude Design import routes."
+      "rationale": "Close the compatibility catalog, C++ and Rust command entry points, provider, facade-helper, fixture, example, and documentation surfaces used by Figma file, REST, plugin, Stitch, v0, Pencil, React Native, JSX, DESIGN.md, and Claude Design import routes."
     },
     {
       "id": "chromium-authoring-frontend",
