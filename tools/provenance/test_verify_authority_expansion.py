@@ -189,6 +189,20 @@ class Tests(unittest.TestCase):
         self.assertEqual(report["status"], "fail")
         self.assertTrue(any("artifact set differs" in e for e in report["errors"]))
 
+    def test_unknown_untracked_artifact_in_git_checkout_fails_closed(self) -> None:
+        temporary, root, _ = self.copy()
+        self.addCleanup(temporary.cleanup)
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        subprocess.run(
+            ["git", "-C", str(root), "add", verifier.EXPANSIONS_ROOT.as_posix()],
+            check=True,
+        )
+        unknown = root / verifier.EXPANSIONS_ROOT / "untracked-acceptance.json"
+        unknown.write_text('{"authority_effect":"transferred"}\n')
+        report = verifier.verify(root)
+        self.assertEqual(report["status"], "fail")
+        self.assertTrue(any("untracked-acceptance.json" in e for e in report["errors"]))
+
     def test_expansion_readme_drift_fails_closed(self) -> None:
         temporary, root, _ = self.copy()
         self.addCleanup(temporary.cleanup)

@@ -8,7 +8,6 @@ import datetime as dt
 import hashlib
 import json
 import re
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -237,19 +236,6 @@ def exact_scalar(value: Any, expected: Any) -> bool:
 
 
 def expansion_files(root: Path) -> set[str]:
-    completed = subprocess.run(
-        ["git", "-C", str(root), "ls-files", "-z", "--", EXPANSIONS_ROOT.as_posix()],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-    )
-    if completed.returncode == 0:
-        prefix = EXPANSIONS_ROOT.as_posix() + "/"
-        return {
-            item.decode("utf-8", errors="surrogateescape").removeprefix(prefix)
-            for item in completed.stdout.split(b"\0")
-            if item
-        }
     return {
         path.relative_to(root / EXPANSIONS_ROOT).as_posix()
         for path in (root / EXPANSIONS_ROOT).rglob("*")
@@ -402,14 +388,17 @@ def validate(data: Any) -> list[str]:
 
 
 def verify(root: Path) -> dict[str, Any]:
-    actual_files = expansion_files(root)
     closure_errors = []
-    if actual_files != EXPECTED_FILES:
-        closure_errors.append(
-            "expansion artifact set differs; "
-            f"missing={sorted(EXPECTED_FILES - actual_files)} "
-            f"unexpected={sorted(actual_files - EXPECTED_FILES)}"
-        )
+    try:
+        actual_files = expansion_files(root)
+        if actual_files != EXPECTED_FILES:
+            closure_errors.append(
+                "expansion artifact set differs; "
+                f"missing={sorted(EXPECTED_FILES - actual_files)} "
+                f"unexpected={sorted(actual_files - EXPECTED_FILES)}"
+            )
+    except OSError as exc:
+        closure_errors.append(f"cannot enumerate expansion artifacts: {exc}")
     readme = root / EXPANSIONS_ROOT / "README.md"
     try:
         readme_sha256 = hashlib.sha256(readme.read_bytes()).hexdigest()
