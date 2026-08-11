@@ -29,7 +29,7 @@ EXPECTED_FILES = {
 }
 EXPECTED_README_SHA256 = "6935071cee4c735f401356e625108150251921b8a0dd6f20648d7370fd388894"
 EXPECTED_PROPOSAL_SHA256 = "7c2db05e110e7d9834806e08469f6d7cc70f6528b2242d1f6c0255dcdbc0a4c9"
-EXPECTED_ADDENDUM_SHA256 = "aa2d146a192b9931a7f20d1ca9b6212cdeb1872f978ae272e6dd57c807333a63"
+EXPECTED_ADDENDUM_SHA256 = "100c584bc544bf521840d6e735bc95125e12fb5c8aaed6ae2c5e81720e826ef8"
 EXPECTED_PROPOSED_AT = "2026-08-10T21:55:54Z"
 EXPECTED_ADDENDUM_PROPOSED_AT = "2026-08-11T02:52:16Z"
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
@@ -176,6 +176,9 @@ EXPECTED_ADDED_SELECTORS = {
         "core/view/src/recognition_resolver.cpp", "core/view/src/token_lock.cpp",
         "core/view/src/widget_bridge/runtime_import_api*",
         "test/fixtures/design_import_*", "test/test_design_ir*",
+        "test/test_jsx_lock.cpp", "test/test_lock_to_source.cpp",
+        "test/test_recognition_resolver.cpp", "test/test_token_lock.cpp",
+        "test/test_widget_bridge_runtime_import.cpp",
     ],
     "render-assets-and-backends": [
         ".agents/skills/skia-gpu-build/**",

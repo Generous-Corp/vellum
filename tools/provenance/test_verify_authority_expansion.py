@@ -102,6 +102,11 @@ class Tests(unittest.TestCase):
             "test/fixtures/browser-capture-*/**",
             scopes["chromium-authoring-frontend"],
         )
+        self.assertIn("test/test_jsx_lock.cpp", scopes["design-ir-contract"])
+        self.assertIn(
+            "test/test_widget_bridge_runtime_import.cpp",
+            scopes["design-ir-contract"],
+        )
         self.assertIn("core/view/**", scopes["render-assets-and-backends"])
         self.assertIn("assets/design-system/**", scopes["render-assets-and-backends"])
         self.assertIn("tools/scripts/*skia*", scopes["render-assets-and-backends"])
@@ -161,6 +166,14 @@ class Tests(unittest.TestCase):
             lambda d: d["added_capability_family_selectors"][0][
                 "pulp_selectors"
             ].remove("test/test_import*")
+        )
+        self.assertEqual(report["status"], "fail")
+
+    def test_addendum_cannot_omit_non_design_named_ir_evidence(self) -> None:
+        report = self.mutate_addendum(
+            lambda d: d["added_capability_family_selectors"][2][
+                "pulp_selectors"
+            ].remove("test/test_jsx_lock.cpp")
         )
         self.assertEqual(report["status"], "fail")
 

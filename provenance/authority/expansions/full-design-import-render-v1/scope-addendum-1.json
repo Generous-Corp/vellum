@@ -103,7 +103,12 @@
         "core/view/src/token_lock.cpp",
         "core/view/src/widget_bridge/runtime_import_api*",
         "test/fixtures/design_import_*",
-        "test/test_design_ir*"
+        "test/test_design_ir*",
+        "test/test_jsx_lock.cpp",
+        "test/test_lock_to_source.cpp",
+        "test/test_recognition_resolver.cpp",
+        "test/test_token_lock.cpp",
+        "test/test_widget_bridge_runtime_import.cpp"
       ],
       "rationale": "Close non-design-named lock, recognition, Claude bundle, runtime import, and direct DesignIR evidence paths that participate in normalization and generated output contracts."
     },
