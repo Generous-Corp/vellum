@@ -1,0 +1,43 @@
+{
+  "class": "correctness",
+  "contract_keys": [
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-11T03:33:06Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "pulp-e36377027863ecc04b7b7a35579e8b4f8879755d",
+  "include_dependency_deltas": [
+    "core/view/include/pulp/view/midi_keyboard.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "core/view/include/pulp/view/midi_keyboard.hpp",
+    "core/view/src/midi_keyboard.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": null,
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "190c463a0b320f28420c9af177244af04ef84233",
+    "to_commit": "9aebe4f508add6aa5d4740df629dcdfdb76deb86"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "e36377027863ecc04b7b7a35579e8b4f8879755d",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": []
+}
