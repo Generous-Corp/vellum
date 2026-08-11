@@ -43,6 +43,9 @@ class Tests(unittest.TestCase):
             ROOT / verifier.EXPANSIONS_ROOT / "README.md",
             root / verifier.EXPANSIONS_ROOT / "README.md",
         )
+        addendum = root / verifier.ADDENDUM_PATH
+        addendum.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / verifier.ADDENDUM_PATH, addendum)
         return temporary, root, target
 
     def mutate(self, callback) -> dict:
@@ -57,10 +60,86 @@ class Tests(unittest.TestCase):
             "errors": errors,
         }
 
+    def mutate_addendum(self, callback) -> dict:
+        data = json.loads((ROOT / verifier.ADDENDUM_PATH).read_text())
+        callback(data)
+        errors = verifier.validate_addendum(data)
+        return {
+            "status": "pass" if not errors else "fail",
+            "authority_effect": data.get("authority_effect") if not errors else None,
+            "errors": errors,
+        }
+
     def test_committed_proposal_passes_without_authority(self) -> None:
         report = verifier.verify(ROOT)
         self.assertEqual(report["status"], "pass", report["errors"])
         self.assertEqual(report["authority_effect"], "none")
+        self.assertEqual(
+            report["scope_addendum_id"],
+            "full-design-import-render-v1-scope-addendum-1",
+        )
+
+    def test_addendum_closes_audited_blind_spots_without_authority(self) -> None:
+        rows = json.loads((ROOT / verifier.ADDENDUM_PATH).read_text())[
+            "added_capability_family_selectors"
+        ]
+        scopes = {row["id"]: row["pulp_selectors"] for row in rows}
+        self.assertIn("tools/figma-plugin/**", scopes["design-source-ingest"])
+        self.assertIn(
+            "test/fixtures/browser-capture-*/**",
+            scopes["chromium-authoring-frontend"],
+        )
+        self.assertIn("core/view/**", scopes["render-assets-and-backends"])
+        self.assertIn("tools/import-validation/**", scopes["visual-proof-harness"])
+        self.assertIn("tools/harness/**", scopes["visual-proof-harness"])
+        self.assertIn(
+            "tools/scripts/package_cli.py",
+            scopes["design-output-and-packaging"],
+        )
+
+    def test_addendum_authority_claim_fails(self) -> None:
+        report = self.mutate_addendum(
+            lambda d: d.update(authority_effect="transferred")
+        )
+        self.assertEqual(report["status"], "fail")
+        self.assertIsNone(report["authority_effect"])
+
+    def test_addendum_cannot_relax_retained_boundaries(self) -> None:
+        report = self.mutate_addendum(
+            lambda d: d["audit"].update(retained_boundaries_unchanged=False)
+        )
+        self.assertEqual(report["status"], "fail")
+
+    def test_addendum_cannot_omit_import_validation(self) -> None:
+        report = self.mutate_addendum(
+            lambda d: d["added_capability_family_selectors"][4][
+                "pulp_selectors"
+            ].remove("tools/import-validation/**")
+        )
+        self.assertEqual(report["status"], "fail")
+
+    def test_duplicate_addendum_family_fails(self) -> None:
+        report = self.mutate_addendum(
+            lambda d: d["added_capability_family_selectors"].append(
+                dict(d["added_capability_family_selectors"][0])
+            )
+        )
+        self.assertEqual(report["status"], "fail")
+
+    def test_addendum_gate_relaxation_fails(self) -> None:
+        report = self.mutate_addendum(
+            lambda d: d["gates"].update(pulp_consumption_authorized=True)
+        )
+        self.assertEqual(report["status"], "fail")
+
+    def test_addendum_byte_drift_fails(self) -> None:
+        temporary, root, _ = self.copy()
+        self.addCleanup(temporary.cleanup)
+        addendum = root / verifier.ADDENDUM_PATH
+        addendum.write_bytes(addendum.read_bytes() + b"\n")
+        report = verifier.verify(root)
+        self.assertEqual(report["status"], "fail")
+        self.assertTrue(any("addendum differs" in error for error in report["errors"]))
 
     def test_duplicate_key_fails(self) -> None:
         temporary, root, target = self.copy()

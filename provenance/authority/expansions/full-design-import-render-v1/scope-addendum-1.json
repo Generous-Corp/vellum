@@ -1,0 +1,152 @@
+{
+  "schema_version": 1,
+  "kind": "authority-expansion-watch-scope-addendum",
+  "addendum_id": "full-design-import-render-v1-scope-addendum-1",
+  "proposal_id": "full-design-import-render-v1",
+  "state": "proposed",
+  "proposed_at": "2026-08-11T02:52:16Z",
+  "proposed_by": "@danielraffel",
+  "coordinates": {
+    "pulp_repository": "Generous-Corp/pulp",
+    "pulp_audit_commit": "190c463a0b320f28420c9af177244af04ef84233",
+    "vellum_work_repository": "danielraffel/vellum",
+    "vellum_proposal_merge_commit": "bf0559eca2547f9242405cc388888890e80bbd87",
+    "proposal_path": "provenance/authority/expansions/full-design-import-render-v1/proposal.json",
+    "proposal_sha256": "7c2db05e110e7d9834806e08469f6d7cc70f6528b2242d1f6c0255dcdbc0a4c9"
+  },
+  "scope_mode": "additive-watch-only-capability-family-selectors",
+  "authority_effect": "none",
+  "implementation_authority": "forbidden-until-exact-boundary-acknowledged",
+  "audit": {
+    "method": "tracked-file inventory, build-manifest tracing, tool-registry closure, Chromium-introduction history, and adversarial negative controls",
+    "finding": "The original proposal omitted capability-bearing import validation, generic visual harness, Figma plugin, Chromium evidence, CLI helper, fixture, packaging, and non-design-named rendering paths.",
+    "coverage_policy": "Selectors are deliberately conservative during the temporary watch-only phase; overlap records change evidence and does not assign implementation ownership.",
+    "retained_boundaries_unchanged": true
+  },
+  "added_capability_family_selectors": [
+    {
+      "id": "design-source-ingest",
+      "pulp_selectors": [
+        "tools/figma-plugin/**",
+        "tools/figma-import/**",
+        "tools/cli/cmd_design*",
+        "tools/cli/cmd_import*",
+        "tools/cli/design_binding*",
+        "tools/cli/import_*",
+        "tools/cli/importer_*",
+        "examples/design-tool/**",
+        "test/cmake/design_import*.cmake",
+        "test/fixtures/imports/**",
+        "test/fixtures/figma/**",
+        "test/fixtures/pencil/**",
+        "test/fixtures/rn/**",
+        "test/fixtures/stitch/**",
+        "test/fixtures/v0-dev/**",
+        "test/test_cli_import*",
+        "test/test_design_import*",
+        "test/test_figma_*",
+        "docs/guides/figma-plugin.md",
+        "docs/guides/importing-designs.md",
+        "docs/reference/design-import*",
+        "docs/reference/design-ir*",
+        "docs/reference/imports/**"
+      ],
+      "rationale": "Close the provider, facade-helper, fixture, example, and documentation surfaces used by Figma file, REST, plugin, Stitch, v0, Pencil, React Native, JSX, DESIGN.md, and Claude Design import routes."
+    },
+    {
+      "id": "chromium-authoring-frontend",
+      "pulp_selectors": [
+        "test/fixtures/agent-panels/**",
+        "test/fixtures/browser-capture-*/**",
+        "test/fixtures/browser_capture_*",
+        "test/fixtures/import-differential/**",
+        "test/test_browser_capture*",
+        "test/test_browser_import*",
+        "test/test_design_browser_capture.cpp",
+        "test/test_html_intake.cpp",
+        "test/test_html_project_stager.cpp",
+        "experimental/pulp-rs/src/cmd/chrome_for_testing.rs",
+        "experimental/pulp-rs/src/install_import_design.rs",
+        "experimental/pulp-rs/tests/chrome_for_testing_tool_test.rs",
+        "tools/packages/chrome-for-testing-verification.md"
+      ],
+      "rationale": "Close the agent-HTML corpus, CDP evidence fixtures, native differential corpus, managed-browser installation, and HTML intake tests that prove the Chromium to DesignIR path."
+    },
+    {
+      "id": "design-ir-contract",
+      "pulp_selectors": [
+        "core/view/include/pulp/view/jsx_lock.hpp",
+        "core/view/include/pulp/view/lock_to_source.hpp",
+        "core/view/include/pulp/view/recognition_resolver.hpp",
+        "core/view/include/pulp/view/token_lock.hpp",
+        "core/view/src/claude_bundle*",
+        "core/view/src/jsx_lock.cpp",
+        "core/view/src/lock_to_source.cpp",
+        "core/view/src/recognition_resolver.cpp",
+        "core/view/src/token_lock.cpp",
+        "core/view/src/widget_bridge/runtime_import_api*",
+        "test/fixtures/design_import_*",
+        "test/test_design_ir*"
+      ],
+      "rationale": "Close non-design-named lock, recognition, Claude bundle, runtime import, and direct DesignIR evidence paths that participate in normalization and generated output contracts."
+    },
+    {
+      "id": "render-assets-and-backends",
+      "pulp_selectors": [
+        "core/view/**",
+        "packages/pulp-react/**"
+      ],
+      "rationale": "Observe the full generic view and React compatibility surface until Phase 5A-P.1 freezes exact rendering ownership; the broad selector is temporary, watch-only, and does not absorb retained Pulp product integration."
+    },
+    {
+      "id": "visual-proof-harness",
+      "pulp_selectors": [
+        "tools/import-validation/**",
+        "tools/harness/**",
+        "tools/scripts/figma_import_diff.py",
+        "tools/scripts/render-figma-import.sh",
+        "test/harness/**",
+        "test/visual/**",
+        "test/fixtures/import-fidelity/**",
+        "test/cmake/view_widget_bridge_tests.cmake",
+        "examples/ui-preview/**",
+        ".github/workflows/visual-harness.yml",
+        "ci/visual-harness.Dockerfile",
+        "compat.json",
+        "external/fonts/**",
+        "external/skia-build/VERSION.md",
+        "docs/examples/screenshots.md",
+        "docs/reports/harness-coverage.md"
+      ],
+      "rationale": "Close generic screenshot, click and interaction, semantic snapshot, pixel diff, corpus, deterministic font and Skia pin, workflow, and coverage-report evidence."
+    },
+    {
+      "id": "design-output-and-packaging",
+      "pulp_selectors": [
+        "tools/import-validation/**",
+        "tools/templates/from-figma/**",
+        "tools/templates/from-v0/**",
+        "tools/scripts/check_import_provenance.py",
+        "tools/scripts/design_import_benchmark.py",
+        "tools/scripts/test_design_import_benchmark.py",
+        "tools/scripts/package_cli.py",
+        "tools/scripts/test_package_cli.py",
+        "experimental/pulp-rs/src/install_import_design.rs",
+        ".github/workflows/release-cli.yml",
+        ".github/workflows/release-dry-run.yml",
+        "test/cmake/test_installed_sdk_runtime_staging.cmake",
+        "docs/status/cli-commands.yaml",
+        "docs/status/tools.yaml",
+        "docs/tools/importer-differential-lab.md"
+      ],
+      "rationale": "Close validation schemas and tools, generated project templates, installed browser runtime staging, CLI archive packaging, benchmark, registry, and release proof surfaces."
+    }
+  ],
+  "gates": {
+    "addendum_may_transfer_authority": false,
+    "source_work_before_exact_boundary_acknowledgement": false,
+    "pulp_acceptance_must_bind_proposal_and_addendum": true,
+    "exact_paths_required_for_authority": true,
+    "pulp_consumption_authorized": false
+  }
+}
