@@ -17,14 +17,21 @@ from typing import Any
 PROPOSAL_PATH = Path(
     "provenance/authority/expansions/full-design-import-render-v1/proposal.json"
 )
+ADDENDUM_PATH = Path(
+    "provenance/authority/expansions/"
+    "full-design-import-render-v1/scope-addendum-1.json"
+)
 EXPANSIONS_ROOT = Path("provenance/authority/expansions")
 EXPECTED_FILES = {
     "README.md",
     "full-design-import-render-v1/proposal.json",
+    "full-design-import-render-v1/scope-addendum-1.json",
 }
 EXPECTED_README_SHA256 = "6935071cee4c735f401356e625108150251921b8a0dd6f20648d7370fd388894"
 EXPECTED_PROPOSAL_SHA256 = "7c2db05e110e7d9834806e08469f6d7cc70f6528b2242d1f6c0255dcdbc0a4c9"
+EXPECTED_ADDENDUM_SHA256 = "91bb269ce5a872037fd67e4735125772bcac50d82cf454edfd8c356b11f5a122"
 EXPECTED_PROPOSED_AT = "2026-08-10T21:55:54Z"
+EXPECTED_ADDENDUM_PROPOSED_AT = "2026-08-11T02:52:16Z"
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
 OWNER = re.compile(r"^@[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
 EXPECTED_COORDINATES = {
@@ -123,6 +130,124 @@ EXPECTED_FAMILY_TITLES = {
     ),
     "design-output-and-packaging": (
         "Live and baked outputs, validation, schemas, runtime assets, CLI, and packages"
+    ),
+}
+EXPECTED_ADDED_SELECTORS = {
+    "design-source-ingest": [
+        ".claude/commands/design.md", ".claude/commands/import-design.md",
+        "compat/imports.json", "compat/rn.json", "design/**",
+        "experimental/pulp-rs/src/cmd/design.rs",
+        "experimental/pulp-rs/src/cmd/mod.rs", "experimental/pulp-rs/src/main.rs",
+        "tools/figma-plugin/**", "tools/figma-import/**",
+        "tools/cli/cmd_design*", "tools/cli/cmd_import*",
+        "tools/cli/design_binding*", "tools/cli/import_*",
+        "tools/cli/importer_*", "tools/design/**", "tools/design-ab/**",
+        "examples/design-tool/**", "examples/design*/**",
+        "test/cmake/cli_import_tool_tests.cmake",
+        "test/cmake/design_import*.cmake", "test/fixtures/imports/**",
+        "test/fixtures/figma/**", "test/fixtures/pencil/**",
+        "test/fixtures/rn/**", "test/fixtures/stitch/**",
+        "test/fixtures/v0-dev/**", "test/test_cli_import*", "test/test_cli_design*",
+        "test/test_design_*", "test/test_design_import*", "test/test_figma_*",
+        "test/test_import*",
+        "docs/guides/design-*", "docs/guides/figma-plugin.md",
+        "docs/guides/importing-designs.md", "docs/reference/compat/imports.md",
+        "docs/reference/compat/rn.md",
+        "docs/reference/design-*", "docs/reference/design-import*",
+        "docs/reference/design-ir*",
+        "docs/reference/imports/**",
+    ],
+    "chromium-authoring-frontend": [
+        "test/fixtures/agent-panels/**", "test/fixtures/browser-capture-*/**",
+        "test/fixtures/browser_capture_*", "test/fixtures/import-differential/**",
+        "test/test_browser_capture*", "test/test_browser_import*",
+        "test/test_design_browser_capture.cpp", "test/test_html_intake.cpp",
+        "test/test_html_project_stager.cpp",
+        "experimental/pulp-rs/src/cmd/chrome_for_testing.rs",
+        "experimental/pulp-rs/src/install_import_design.rs",
+        "experimental/pulp-rs/tests/chrome_for_testing_tool_test.rs",
+        "tools/packages/chrome-for-testing-verification.md",
+    ],
+    "design-ir-contract": [
+        "core/view/include/pulp/view/jsx_lock.hpp",
+        "core/view/include/pulp/view/lock_to_source.hpp",
+        "core/view/include/pulp/view/recognition_resolver.hpp",
+        "core/view/include/pulp/view/token_lock.hpp", "core/view/src/claude_bundle*",
+        "core/view/src/jsx_lock.cpp", "core/view/src/lock_to_source.cpp",
+        "core/view/src/recognition_resolver.cpp", "core/view/src/token_lock.cpp",
+        "core/view/src/widget_bridge/runtime_import_api*",
+        "test/fixtures/design_import_*", "test/test_design_ir*",
+        "test/test_jsx_lock.cpp", "test/test_lock_to_source.cpp",
+        "test/test_recognition_resolver.cpp", "test/test_token_lock.cpp",
+        "test/test_widget_bridge_runtime_import.cpp",
+    ],
+    "render-assets-and-backends": [
+        ".agents/skills/skia-gpu-build/**",
+        ".github/workflows/non-skia-build-guard.yml", "assets/design-system/**",
+        "core/view/**", "packages/pulp-react/**", "test/cmake/*skia*",
+        "test/test_skia*", "tools/build-skia*", "tools/cmake/FindSkia.cmake",
+        "tools/scripts/*skia*",
+    ],
+    "visual-proof-harness": [
+        "tools/import-validation/**", "tools/harness/**",
+        "tools/scripts/figma_import_diff.py",
+        "tools/scripts/render-figma-import.sh", "tools/local-ci/*capture*",
+        "tools/local-ci/*design*", "test/harness/**",
+        "test/visual/**", "test/fixtures/import-fidelity/**",
+        "test/cmake/view_widget_bridge_tests.cmake",
+        "test/fixtures/fake_screenshot_tool.cpp", "test/test_*screenshot*",
+        "test/test_screenshot*", "test/web-compat/test_screenshot*",
+        "examples/ui-preview/**",
+        ".github/workflows/visual-harness.yml", "ci/visual-harness.Dockerfile",
+        "compat.json", "external/fonts/**", "external/skia-build/**",
+        "docs/examples/screenshots.md", "docs/reports/harness-coverage.md",
+    ],
+    "design-output-and-packaging": [
+        "tools/import-validation/**", "tools/templates/from-figma/**",
+        "tools/templates/from-v0/**", "templates/swiftui-design-host/**",
+        "tools/scripts/check_import_provenance.py",
+        "tools/scripts/design_import_benchmark.py",
+        "tools/scripts/test_design_import_benchmark.py",
+        "tools/scripts/package_cli.py", "tools/scripts/test_package_cli.py",
+        "tools/packages/test_design_controls.py", "tools/rack/export_design_data.py",
+        "experimental/pulp-rs/src/install_import_design.rs",
+        ".github/workflows/release-cli.yml", ".github/workflows/release-dry-run.yml",
+        "test/cmake/test_installed_sdk_runtime_staging.cmake",
+        "docs/status/cli-commands.yaml", "docs/status/tools.yaml",
+        "docs/tools/importer-differential-lab.md",
+    ],
+}
+EXPECTED_ADDENDUM_RATIONALES = {
+    "design-source-ingest": (
+        "Close the compatibility catalog, C++ and Rust command entry points, "
+        "command facades, prototypes, providers, facade helpers, fixtures, examples, "
+        "tests, and documentation used by Figma file, REST, plugin, Stitch, v0, "
+        "Pencil, React Native, JSX, DESIGN.md, and Claude Design import routes."
+    ),
+    "chromium-authoring-frontend": (
+        "Close the agent-HTML corpus, CDP evidence fixtures, native differential "
+        "corpus, managed-browser installation, and HTML intake tests that prove "
+        "the Chromium to DesignIR path."
+    ),
+    "design-ir-contract": (
+        "Close non-design-named lock, recognition, Claude bundle, runtime import, "
+        "and direct DesignIR evidence paths that participate in normalization and "
+        "generated output contracts."
+    ),
+    "render-assets-and-backends": (
+        "Observe the full generic view and React compatibility surface until Phase "
+        "5A-P.1 freezes exact rendering ownership; the broad selector is temporary, "
+        "watch-only, and does not absorb retained Pulp product integration."
+    ),
+    "visual-proof-harness": (
+        "Close generic screenshot, click and interaction, semantic snapshot, pixel "
+        "diff, corpus, deterministic font and Skia pin, workflow, and coverage-report "
+        "evidence."
+    ),
+    "design-output-and-packaging": (
+        "Close validation schemas and tools, generated project templates, installed "
+        "browser runtime staging, CLI archive packaging, benchmark, registry, and "
+        "release proof surfaces."
     ),
 }
 EXPECTED_RETAINED_SCOPES = {
@@ -424,6 +549,138 @@ def validate(data: Any) -> list[str]:
     return errors
 
 
+def validate_addendum(data: Any) -> list[str]:
+    errors: list[str] = []
+    top = {
+        "schema_version", "kind", "addendum_id", "proposal_id", "state",
+        "proposed_at", "proposed_by", "coordinates", "scope_mode",
+        "authority_effect", "implementation_authority", "audit",
+        "added_capability_family_selectors", "gates",
+    }
+    if not exact_keys(data, top, "addendum", errors):
+        return errors
+    scalars = {
+        "schema_version": 1,
+        "kind": "authority-expansion-watch-scope-addendum",
+        "addendum_id": "full-design-import-render-v1-scope-addendum-1",
+        "proposal_id": "full-design-import-render-v1",
+        "state": "proposed",
+        "proposed_at": EXPECTED_ADDENDUM_PROPOSED_AT,
+        "proposed_by": "@danielraffel",
+        "scope_mode": "additive-watch-only-capability-family-selectors",
+        "authority_effect": "none",
+        "implementation_authority": "forbidden-until-exact-boundary-acknowledged",
+    }
+    for key, expected in scalars.items():
+        if not exact_scalar(data[key], expected):
+            errors.append(f"addendum.{key}: expected {expected!r}")
+    try:
+        stamp = data["proposed_at"]
+        parsed = dt.datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        if not stamp.endswith("Z") or parsed.utcoffset() != dt.timedelta(0):
+            raise ValueError
+    except (AttributeError, TypeError, ValueError):
+        errors.append("addendum.proposed_at: expected pinned UTC timestamp ending in Z")
+
+    expected_coordinates = {
+        "pulp_repository": "Generous-Corp/pulp",
+        "pulp_audit_commit": "190c463a0b320f28420c9af177244af04ef84233",
+        "vellum_work_repository": "danielraffel/vellum",
+        "vellum_proposal_merge_commit": "bf0559eca2547f9242405cc388888890e80bbd87",
+        "proposal_path": PROPOSAL_PATH.as_posix(),
+        "proposal_sha256": EXPECTED_PROPOSAL_SHA256,
+    }
+    coordinates = data["coordinates"]
+    if (
+        not isinstance(coordinates, dict)
+        or set(coordinates) != set(expected_coordinates)
+        or any(
+            not exact_scalar(coordinates[key], expected)
+            for key, expected in expected_coordinates.items()
+        )
+    ):
+        errors.append("addendum.coordinates: differs from pinned proposal and audit coordinates")
+    elif not SHA40.fullmatch(coordinates["pulp_audit_commit"]) or not SHA40.fullmatch(
+        coordinates["vellum_proposal_merge_commit"]
+    ):
+        errors.append("addendum.coordinates: expected full commit SHAs")
+
+    expected_audit = {
+        "method": (
+            "tracked-file inventory, build-manifest tracing, tool-registry closure, "
+            "Chromium-introduction history, and adversarial negative controls"
+        ),
+        "finding": (
+            "The original proposal omitted capability-bearing import compatibility, "
+            "import validation, generic visual harness, Figma plugin, Chromium "
+            "evidence, C++ and Rust CLI helpers, fixture, packaging, and "
+            "non-design-named rendering paths."
+        ),
+        "coverage_policy": (
+            "Selectors are deliberately conservative during the temporary watch-only "
+            "phase; overlap records change evidence and does not assign implementation "
+            "ownership."
+        ),
+        "retained_boundaries_unchanged": True,
+    }
+    audit = data["audit"]
+    if (
+        not isinstance(audit, dict)
+        or set(audit) != set(expected_audit)
+        or any(
+            not exact_scalar(audit[key], expected)
+            for key, expected in expected_audit.items()
+        )
+    ):
+        errors.append("addendum.audit: differs from pinned omission audit")
+
+    rows = data["added_capability_family_selectors"]
+    seen: set[str] = set()
+    if not isinstance(rows, list):
+        errors.append("addendum.added_capability_family_selectors: expected array")
+    else:
+        for index, row in enumerate(rows):
+            where = f"addendum.added_capability_family_selectors[{index}]"
+            if not exact_keys(row, {"id", "pulp_selectors", "rationale"}, where, errors):
+                continue
+            family = row["id"]
+            if not isinstance(family, str) or family in seen:
+                errors.append(f"{where}.id: missing or duplicate")
+                continue
+            seen.add(family)
+            if row["pulp_selectors"] != EXPECTED_ADDED_SELECTORS.get(family):
+                errors.append(f"{where}.pulp_selectors: differs from pinned addendum")
+            if row["rationale"] != EXPECTED_ADDENDUM_RATIONALES.get(family):
+                errors.append(f"{where}.rationale: differs from pinned rationale")
+            selectors = row["pulp_selectors"]
+            if strings(selectors, f"{where}.pulp_selectors", errors):
+                for selector in selectors:
+                    safe_path(selector, f"{where}.pulp_selectors", errors)
+        if seen != set(EXPECTED_ADDED_SELECTORS):
+            errors.append(
+                "addendum.added_capability_family_selectors: IDs differ from proposal families"
+            )
+
+    expected_gates = {
+        "addendum_may_transfer_authority": False,
+        "source_work_before_exact_boundary_acknowledgement": False,
+        "pulp_acceptance_must_bind_proposal_and_addendum": True,
+        "exact_paths_required_for_authority": True,
+        "pulp_consumption_authorized": False,
+    }
+    gates = data["gates"]
+    if (
+        not isinstance(gates, dict)
+        or set(gates) != set(expected_gates)
+        or any(
+            not exact_scalar(gates[key], expected)
+            for key, expected in expected_gates.items()
+        )
+    ):
+        errors.append("addendum.gates: differs from fail-closed pinned gates")
+    return errors
+
+
 def verify(root: Path) -> dict[str, Any]:
     closure_errors = []
     try:
@@ -454,17 +711,31 @@ def verify(root: Path) -> dict[str, Any]:
             closure_errors.append("expansion proposal differs from pinned SHA-256")
     except OSError as exc:
         closure_errors.append(f"cannot read expansion proposal: {exc}")
+    addendum = root / ADDENDUM_PATH
+    try:
+        addendum_sha256 = hashlib.sha256(addendum.read_bytes()).hexdigest()
+        if addendum_sha256 != EXPECTED_ADDENDUM_SHA256:
+            closure_errors.append("expansion scope addendum differs from pinned SHA-256")
+    except OSError as exc:
+        closure_errors.append(f"cannot read expansion scope addendum: {exc}")
     try:
         data = load_json(proposal)
-        errors = closure_errors + validate(data)
+        addendum_data = load_json(addendum)
+        errors = closure_errors + validate(data) + validate_addendum(addendum_data)
     except ValueError as exc:
-        data, errors = None, closure_errors + [str(exc)]
+        data, addendum_data, errors = None, None, closure_errors + [str(exc)]
     passed = not errors
     return {
         "schema_version": 1,
         "status": "pass" if passed else "fail",
         "proposal": PROPOSAL_PATH.as_posix(),
         "proposal_id": data.get("proposal_id") if passed and isinstance(data, dict) else None,
+        "scope_addendum": ADDENDUM_PATH.as_posix(),
+        "scope_addendum_id": (
+            addendum_data.get("addendum_id")
+            if passed and isinstance(addendum_data, dict)
+            else None
+        ),
         "authority_effect": data.get("authority_effect") if passed and isinstance(data, dict) else None,
         "errors": errors,
     }

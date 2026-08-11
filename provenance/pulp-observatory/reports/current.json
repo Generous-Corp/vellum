@@ -7578,9 +7578,9 @@
       "source_repository": "Generous-Corp/pulp"
     }
   ],
-  "generated_at": "2026-08-11T03:33:06Z",
+  "generated_at": "2026-08-11T05:00:00Z",
   "health": "pass",
-  "maximum_pending_age_days": 0.596,
+  "maximum_pending_age_days": 0.656,
   "observatory_effort_percent": 0.0,
   "overdue": 0,
   "pending": 5,
