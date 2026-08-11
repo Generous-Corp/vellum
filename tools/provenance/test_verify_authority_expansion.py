@@ -221,6 +221,34 @@ class Tests(unittest.TestCase):
         report = verifier.verify(root)
         self.assertEqual(report["status"], "pass", report["errors"])
 
+    def test_git_closure_rejects_non_json_untracked_artifact(self) -> None:
+        temporary, root, _ = self.copy()
+        self.addCleanup(temporary.cleanup)
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        subprocess.run(
+            ["git", "-C", str(root), "add", verifier.EXPANSIONS_ROOT.as_posix()],
+            check=True,
+        )
+        unknown = root / verifier.EXPANSIONS_ROOT / "acceptance.txt"
+        unknown.write_text("authority_effect=transferred\n")
+        report = verifier.verify(root)
+        self.assertEqual(report["status"], "fail")
+        self.assertTrue(any("acceptance.txt" in e for e in report["errors"]))
+
+    def test_git_closure_rejects_extensionless_untracked_artifact(self) -> None:
+        temporary, root, _ = self.copy()
+        self.addCleanup(temporary.cleanup)
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        subprocess.run(
+            ["git", "-C", str(root), "add", verifier.EXPANSIONS_ROOT.as_posix()],
+            check=True,
+        )
+        unknown = root / verifier.EXPANSIONS_ROOT / "ACCEPTANCE"
+        unknown.write_text("authority transferred\n")
+        report = verifier.verify(root)
+        self.assertEqual(report["status"], "fail")
+        self.assertTrue(any("ACCEPTANCE" in e for e in report["errors"]))
+
     def test_dangling_symlink_artifact_fails_closed(self) -> None:
         temporary, root, _ = self.copy()
         self.addCleanup(temporary.cleanup)

@@ -267,11 +267,14 @@ def expansion_files(root: Path) -> tuple[set[str], set[str]]:
         for item in completed.stdout.split(b"\0")
         if item
     }
-    authority_suffixes = {".json", ".md", ".toml", ".yaml", ".yml"}
+    incidental_names = {".DS_Store", ".gitkeep", "Thumbs.db"}
+    incidental_suffixes = {".swp", ".swo"}
     files.update(
         relative
         for relative in filesystem_files - files
-        if Path(relative).suffix.lower() in authority_suffixes
+        if Path(relative).name not in incidental_names
+        and Path(relative).suffix.lower() not in incidental_suffixes
+        and not Path(relative).name.endswith("~")
     )
     files.update(symlinks)
     return files, symlinks
