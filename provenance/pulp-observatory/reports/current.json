@@ -7517,14 +7517,73 @@
       ],
       "source_commit": "44cd53713337dd8e6bf2f1d0ada4d67d3d199b1f",
       "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "security",
+      "deadline": "2026-08-12T03:33:06Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "pending",
+      "event_id": "pulp-17c7b4fff373d759f5fab6da873a68303d36b9f3",
+      "mapped_contracts": [
+        "canvas-kernel",
+        "capture-primitives",
+        "design-schema-compiler",
+        "macos-shell",
+        "pulp-design-import-tooling",
+        "pulp-screenshot-harness",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "17c7b4fff373d759f5fab6da873a68303d36b9f3",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "security",
+      "deadline": "2026-08-12T03:33:06Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "pending",
+      "event_id": "pulp-2d8764281273751f116d91b38421ad797cf1db35",
+      "mapped_contracts": [
+        "canvas-kernel",
+        "design-schema-compiler",
+        "pulp-design-import-tooling",
+        "pulp-screenshot-harness",
+        "render-skia-dawn",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "2d8764281273751f116d91b38421ad797cf1db35",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "correctness",
+      "deadline": "2026-08-14T03:33:06Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "pending",
+      "event_id": "pulp-affb77b1ca581d59a7b1328dd711c264f5c0dd1d",
+      "mapped_contracts": [
+        "retained-ui-kernel"
+      ],
+      "source_commit": "affb77b1ca581d59a7b1328dd711c264f5c0dd1d",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "correctness",
+      "deadline": "2026-08-14T03:33:06Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "pending",
+      "event_id": "pulp-e36377027863ecc04b7b7a35579e8b4f8879755d",
+      "mapped_contracts": [
+        "retained-ui-kernel"
+      ],
+      "source_commit": "e36377027863ecc04b7b7a35579e8b4f8879755d",
+      "source_repository": "Generous-Corp/pulp"
     }
   ],
-  "generated_at": "2026-08-11T01:14:10Z",
+  "generated_at": "2026-08-11T03:33:06Z",
   "health": "pass",
-  "maximum_pending_age_days": 0.499,
+  "maximum_pending_age_days": 0.596,
   "observatory_effort_percent": 0.0,
   "overdue": 0,
-  "pending": 1,
+  "pending": 5,
   "release_blockers": [],
   "repeated_generic_fixes": {
     "canvas-kernel": 2,
