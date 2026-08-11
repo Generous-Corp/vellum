@@ -93,16 +93,29 @@ class Tests(unittest.TestCase):
             "experimental/pulp-rs/src/main.rs",
             scopes["design-source-ingest"],
         )
+        self.assertIn("test/test_import*", scopes["design-source-ingest"])
+        self.assertIn("design/**", scopes["design-source-ingest"])
+        self.assertIn("examples/design*/**", scopes["design-source-ingest"])
+        self.assertIn("test/test_design_*", scopes["design-source-ingest"])
         self.assertIn("tools/figma-plugin/**", scopes["design-source-ingest"])
         self.assertIn(
             "test/fixtures/browser-capture-*/**",
             scopes["chromium-authoring-frontend"],
         )
         self.assertIn("core/view/**", scopes["render-assets-and-backends"])
+        self.assertIn("assets/design-system/**", scopes["render-assets-and-backends"])
+        self.assertIn("tools/scripts/*skia*", scopes["render-assets-and-backends"])
         self.assertIn("tools/import-validation/**", scopes["visual-proof-harness"])
         self.assertIn("tools/harness/**", scopes["visual-proof-harness"])
+        self.assertIn("test/test_screenshot*", scopes["visual-proof-harness"])
+        self.assertIn("test/test_*screenshot*", scopes["visual-proof-harness"])
+        self.assertIn("external/skia-build/**", scopes["visual-proof-harness"])
         self.assertIn(
             "tools/scripts/package_cli.py",
+            scopes["design-output-and-packaging"],
+        )
+        self.assertIn(
+            "templates/swiftui-design-host/**",
             scopes["design-output-and-packaging"],
         )
 
@@ -140,6 +153,14 @@ class Tests(unittest.TestCase):
             lambda d: d["added_capability_family_selectors"][0][
                 "pulp_selectors"
             ].remove("experimental/pulp-rs/src/cmd/design.rs")
+        )
+        self.assertEqual(report["status"], "fail")
+
+    def test_addendum_cannot_omit_import_test_family(self) -> None:
+        report = self.mutate_addendum(
+            lambda d: d["added_capability_family_selectors"][0][
+                "pulp_selectors"
+            ].remove("test/test_import*")
         )
         self.assertEqual(report["status"], "fail")
 

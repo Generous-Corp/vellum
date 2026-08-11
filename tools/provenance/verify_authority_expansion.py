@@ -29,7 +29,7 @@ EXPECTED_FILES = {
 }
 EXPECTED_README_SHA256 = "6935071cee4c735f401356e625108150251921b8a0dd6f20648d7370fd388894"
 EXPECTED_PROPOSAL_SHA256 = "7c2db05e110e7d9834806e08469f6d7cc70f6528b2242d1f6c0255dcdbc0a4c9"
-EXPECTED_ADDENDUM_SHA256 = "76bf5e843423f2671e6306dfbc601d0fc0ab6757229af5ffc20f1596532bf914"
+EXPECTED_ADDENDUM_SHA256 = "aa2d146a192b9931a7f20d1ca9b6212cdeb1872f978ae272e6dd57c807333a63"
 EXPECTED_PROPOSED_AT = "2026-08-10T21:55:54Z"
 EXPECTED_ADDENDUM_PROPOSED_AT = "2026-08-11T02:52:16Z"
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
@@ -134,19 +134,26 @@ EXPECTED_FAMILY_TITLES = {
 }
 EXPECTED_ADDED_SELECTORS = {
     "design-source-ingest": [
-        "compat/imports.json", "experimental/pulp-rs/src/cmd/design.rs",
+        ".claude/commands/design.md", ".claude/commands/import-design.md",
+        "compat/imports.json", "design/**",
+        "experimental/pulp-rs/src/cmd/design.rs",
         "experimental/pulp-rs/src/cmd/mod.rs", "experimental/pulp-rs/src/main.rs",
         "tools/figma-plugin/**", "tools/figma-import/**",
         "tools/cli/cmd_design*", "tools/cli/cmd_import*",
         "tools/cli/design_binding*", "tools/cli/import_*",
-        "tools/cli/importer_*", "examples/design-tool/**",
+        "tools/cli/importer_*", "tools/design/**", "tools/design-ab/**",
+        "examples/design-tool/**", "examples/design*/**",
+        "test/cmake/cli_import_tool_tests.cmake",
         "test/cmake/design_import*.cmake", "test/fixtures/imports/**",
         "test/fixtures/figma/**", "test/fixtures/pencil/**",
         "test/fixtures/rn/**", "test/fixtures/stitch/**",
-        "test/fixtures/v0-dev/**", "test/test_cli_import*",
-        "test/test_design_import*", "test/test_figma_*",
-        "docs/guides/figma-plugin.md", "docs/guides/importing-designs.md",
-        "docs/reference/design-import*", "docs/reference/design-ir*",
+        "test/fixtures/v0-dev/**", "test/test_cli_import*", "test/test_cli_design*",
+        "test/test_design_*", "test/test_design_import*", "test/test_figma_*",
+        "test/test_import*",
+        "docs/guides/design-*", "docs/guides/figma-plugin.md",
+        "docs/guides/importing-designs.md", "docs/reference/compat/imports.md",
+        "docs/reference/design-*", "docs/reference/design-import*",
+        "docs/reference/design-ir*",
         "docs/reference/imports/**",
     ],
     "chromium-authoring-frontend": [
@@ -170,23 +177,35 @@ EXPECTED_ADDED_SELECTORS = {
         "core/view/src/widget_bridge/runtime_import_api*",
         "test/fixtures/design_import_*", "test/test_design_ir*",
     ],
-    "render-assets-and-backends": ["core/view/**", "packages/pulp-react/**"],
+    "render-assets-and-backends": [
+        ".agents/skills/skia-gpu-build/**",
+        ".github/workflows/non-skia-build-guard.yml", "assets/design-system/**",
+        "core/view/**", "packages/pulp-react/**", "test/cmake/*skia*",
+        "test/test_skia*", "tools/build-skia*", "tools/cmake/FindSkia.cmake",
+        "tools/scripts/*skia*",
+    ],
     "visual-proof-harness": [
         "tools/import-validation/**", "tools/harness/**",
         "tools/scripts/figma_import_diff.py",
-        "tools/scripts/render-figma-import.sh", "test/harness/**",
+        "tools/scripts/render-figma-import.sh", "tools/local-ci/*capture*",
+        "tools/local-ci/*design*", "test/harness/**",
         "test/visual/**", "test/fixtures/import-fidelity/**",
-        "test/cmake/view_widget_bridge_tests.cmake", "examples/ui-preview/**",
+        "test/cmake/view_widget_bridge_tests.cmake",
+        "test/fixtures/fake_screenshot_tool.cpp", "test/test_*screenshot*",
+        "test/test_screenshot*", "test/web-compat/test_screenshot*",
+        "examples/ui-preview/**",
         ".github/workflows/visual-harness.yml", "ci/visual-harness.Dockerfile",
-        "compat.json", "external/fonts/**", "external/skia-build/VERSION.md",
+        "compat.json", "external/fonts/**", "external/skia-build/**",
         "docs/examples/screenshots.md", "docs/reports/harness-coverage.md",
     ],
     "design-output-and-packaging": [
         "tools/import-validation/**", "tools/templates/from-figma/**",
-        "tools/templates/from-v0/**", "tools/scripts/check_import_provenance.py",
+        "tools/templates/from-v0/**", "templates/swiftui-design-host/**",
+        "tools/scripts/check_import_provenance.py",
         "tools/scripts/design_import_benchmark.py",
         "tools/scripts/test_design_import_benchmark.py",
         "tools/scripts/package_cli.py", "tools/scripts/test_package_cli.py",
+        "tools/packages/test_design_controls.py", "tools/rack/export_design_data.py",
         "experimental/pulp-rs/src/install_import_design.rs",
         ".github/workflows/release-cli.yml", ".github/workflows/release-dry-run.yml",
         "test/cmake/test_installed_sdk_runtime_staging.cmake",
@@ -197,9 +216,9 @@ EXPECTED_ADDED_SELECTORS = {
 EXPECTED_ADDENDUM_RATIONALES = {
     "design-source-ingest": (
         "Close the compatibility catalog, C++ and Rust command entry points, "
-        "provider, facade-helper, fixture, example, and documentation surfaces used "
-        "by Figma file, REST, plugin, Stitch, v0, Pencil, React Native, JSX, "
-        "DESIGN.md, and Claude Design import routes."
+        "command facades, prototypes, providers, facade helpers, fixtures, examples, "
+        "tests, and documentation used by Figma file, REST, plugin, Stitch, v0, "
+        "Pencil, React Native, JSX, DESIGN.md, and Claude Design import routes."
     ),
     "chromium-authoring-frontend": (
         "Close the agent-HTML corpus, CDP evidence fixtures, native differential "
