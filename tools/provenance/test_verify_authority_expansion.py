@@ -177,6 +177,29 @@ class Tests(unittest.TestCase):
         self.assertIn("promotion-release-tag-trust.json", workflow)
         self.assertGreaterEqual(workflow.count("authority-expansion-report.json"), 2)
 
+    def test_gpu_release_mutations_require_exact_authority_provenance(self) -> None:
+        workflow = (ROOT / ".github/workflows/gpu-macos.yml").read_text()
+        gate = workflow.index(
+            "- name: Gate every release mutation on exact provenance readiness"
+        )
+        draft = workflow.index("- name: Prepare the verified private draft release")
+        publish = workflow.index("- name: Publish only after the source-free journey passes")
+        self.assertLess(gate, draft)
+        self.assertLess(gate, publish)
+        self.assertIn("actions: read", workflow)
+        self.assertIn(
+            'test "$GITHUB_REPOSITORY" = "Generous-Corp/vellum"', workflow
+        )
+        self.assertIn("scripts/select_exact_provenance_run.py", workflow)
+        provenance = (ROOT / ".github/workflows/provenance.yml").read_text()
+        self.assertIn("python3 scripts/test_select_exact_provenance_run.py", provenance)
+        self.assertEqual(
+            workflow.count("python3 scripts/test_select_exact_provenance_run.py"), 1
+        )
+        self.assertIn('-f branch="$GITHUB_REF_NAME"', workflow)
+        self.assertIn('--head-sha "$GITHUB_SHA"', workflow)
+        self.assertIn("if [ \"$conclusion\" != success ]", workflow)
+
     def copy(self) -> tuple[tempfile.TemporaryDirectory[str], Path, Path]:
         temporary = tempfile.TemporaryDirectory()
         root = Path(temporary.name)

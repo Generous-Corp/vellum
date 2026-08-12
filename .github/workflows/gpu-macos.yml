@@ -8,6 +8,7 @@ on:
     tags: ['v[0-9]*', 'authority/**']
 
 permissions:
+  actions: read
   attestations: read
   contents: write
 
@@ -65,6 +66,7 @@ jobs:
           python3 scripts/template_guard.py
           python3 scripts/test_templates_smoke.py
           python3 scripts/test_sterile_acceptance_bundle.py
+          python3 scripts/test_select_exact_provenance_run.py
           python3 scripts/test_verify_budget_ratification.py
           python3 scripts/verify_budget_ratification.py
           python3 tools/provenance/test_verify_downstream_consumers.py
@@ -351,6 +353,54 @@ jobs:
             --output "$RUNNER_TEMP/immutable-release-preflight.json"
           printf 'VELLUM_TAG_OBJECT_SHA=%s\n' \
             "$VELLUM_TAG_OBJECT_SHA" >> "$GITHUB_ENV"
+
+      - name: Gate every release mutation on exact provenance readiness
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Generous-Corp/vellum"
+          runs="$RUNNER_TEMP/exact-provenance-runs.json"
+          for attempt in {1..120}; do
+            gh api --method GET \
+              "repos/$GITHUB_REPOSITORY/actions/workflows/provenance.yml/runs" \
+              -f branch="$GITHUB_REF_NAME" \
+              -f event=push \
+              -F per_page=20 > "$runs"
+            if row="$(
+              python3 scripts/select_exact_provenance_run.py \
+                --runs-json "$runs" \
+                --head-sha "$GITHUB_SHA" \
+                --head-branch "$GITHUB_REF_NAME"
+            )"; then
+              :
+            else
+              selection_status=$?
+              if [ "$selection_status" -ne 4 ]; then
+                exit "$selection_status"
+              fi
+              row=""
+            fi
+            if [ -n "$row" ]; then
+              IFS=$'\t' read -r provenance_run status conclusion <<< "$row"
+              if [ "$status" = completed ]; then
+                if [ "$conclusion" != success ]; then
+                  echo "::error::Exact provenance run $provenance_run concluded $conclusion"
+                  exit 1
+                fi
+                printf 'Verified exact provenance run %s for %s at %s\n' \
+                  "$provenance_run" "$GITHUB_REF_NAME" "$GITHUB_SHA"
+                exit 0
+              fi
+            fi
+            if [ "$attempt" -lt 120 ]; then
+              sleep 10
+            fi
+          done
+          echo "::error::Exact successful provenance run was not available within 20 minutes"
+          exit 1
 
       - name: Prepare the verified private draft release
         if: startsWith(github.ref, 'refs/tags/v')

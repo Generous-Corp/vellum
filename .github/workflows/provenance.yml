@@ -194,6 +194,7 @@ jobs:
           python3 tools/provenance/test_finalize_authority_reconciliation.py
           python3 tools/provenance/test_verify_current_state_docs.py
           python3 tools/provenance/test_verify_authority_expansion.py
+          python3 scripts/test_select_exact_provenance_run.py
           release_readiness=()
           repository_evidence=(--repository "$GITHUB_REPOSITORY")
           if [[ -n "$PULP_ACCEPTANCE_SHA" ]]; then
