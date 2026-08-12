@@ -170,6 +170,31 @@ class Tests(unittest.TestCase):
             },
         }
 
+    @staticmethod
+    def open_pr_snapshot(*pulls: dict) -> dict:
+        grouped = {
+            "Generous-Corp/pulp": [],
+            "Generous-Corp/vellum": [],
+            "danielraffel/vellum": [],
+        }
+        for pull in pulls:
+            grouped[pull["repository"]].append({
+                "number": pull["number"],
+                "base_commit": pull.get("base_commit", "f" * 40),
+                "merge_base_commit": pull.get("merge_base_commit", "e" * 40),
+                "head_commit": pull["head_commit"],
+                "paths": sorted(pull["paths"]),
+                "diff_path_count": pull.get("diff_path_count", len(pull["paths"])),
+            })
+        return {
+            "schema_version": 2,
+            "kind": "github-open-pull-request-snapshot",
+            "repositories": [
+                {"repository": repository, "pulls": sorted(rows, key=lambda row: row["number"])}
+                for repository, rows in sorted(grouped.items())
+            ],
+        }
+
     def pulp_ownership_projection(self) -> dict:
         matrix = json.loads((ROOT / verifier.MATRIX_PATH).read_text())
         amendment = json.loads((ROOT / verifier.BOUNDARY_AMENDMENT_PATH).read_text())
@@ -309,18 +334,19 @@ class Tests(unittest.TestCase):
         self.assertIn("promotion-release-tag-trust.json", workflow)
         self.assertGreaterEqual(workflow.count("authority-expansion-report.json"), 2)
 
-    def test_gpu_release_mutations_require_exact_authority_provenance(self) -> None:
-        workflow = (ROOT / ".github/workflows/gpu-macos.yml").read_text()
-        gate = workflow.index(
-            "- name: Gate every release mutation on exact provenance readiness"
+    def test_sdk_release_mutations_require_exact_authority_provenance(self) -> None:
+        gpu = (ROOT / ".github/workflows/gpu-macos.yml").read_text()
+        workflow = (ROOT / ".github/workflows/sdk-release.yml").read_text()
+        gate = workflow.index("- name: Require exact provenance readiness")
+        publish = workflow.index(
+            "- name: Publish only through live no-bypass controls"
         )
-        draft = workflow.index("- name: Prepare the verified private draft release")
-        publish = workflow.index("- name: Publish only after the source-free journey passes")
-        self.assertLess(gate, draft)
         self.assertLess(gate, publish)
-        self.assertIn("actions: read", workflow)
+        self.assertIn("contents: read", gpu)
+        self.assertNotIn("gh release create", gpu)
+        self.assertIn("permission-actions: read", workflow)
         self.assertIn(
-            'test "$GITHUB_REPOSITORY" = "Generous-Corp/vellum"', workflow
+            'test "$GITHUB_REPOSITORY" = Generous-Corp/vellum', workflow
         )
         preflight = json.loads(
             (ROOT / "provenance/immutable-release-preflight.json").read_text()
@@ -333,16 +359,16 @@ class Tests(unittest.TestCase):
         self.assertIn("scripts/select_exact_provenance_run.py", workflow)
         self.assertIn("scripts/verify_exact_provenance_artifact.py", workflow)
         self.assertIn("promotion-release-tag-trust.json", workflow)
-        self.assertIn('--tag-object-sha "$VELLUM_TAG_OBJECT_SHA"', workflow)
+        self.assertIn('--tag-object-sha "$TAG_OBJECT_SHA"', workflow)
         provenance = (ROOT / ".github/workflows/provenance.yml").read_text()
         self.assertIn("python3 scripts/test_select_exact_provenance_run.py", provenance)
         self.assertIn("python3 scripts/test_verify_exact_provenance_artifact.py", provenance)
         self.assertEqual(
-            workflow.count("python3 scripts/test_select_exact_provenance_run.py"), 1
+            gpu.count("python3 scripts/test_select_exact_provenance_run.py"), 1
         )
-        self.assertIn('-f branch="$GITHUB_REF_NAME"', workflow)
-        self.assertIn('--head-sha "$GITHUB_SHA"', workflow)
-        self.assertIn("if [ \"$conclusion\" != success ]", workflow)
+        self.assertIn('-f branch="$RELEASE_TAG"', workflow)
+        self.assertIn('--head-sha "$SOURCE_COMMIT"', workflow)
+        self.assertIn('test "$conclusion" = success', workflow)
 
     def copy(self) -> tuple[tempfile.TemporaryDirectory[str], Path, Path]:
         temporary = tempfile.TemporaryDirectory()
@@ -921,7 +947,8 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
             os.environ, {"GH_TOKEN": "must-not-cross-isolation-boundary"}
         ):
             errors = verifier.validate_exact_boundary_repository_evidence(
-                ROOT, pulp_root, acknowledgement, amendment
+                ROOT, pulp_root, acknowledgement, amendment,
+                open_pr_snapshot=self.open_pr_snapshot(),
             )
         self.assertEqual(errors, [])
         self.assertFalse(hasattr(builtins, "VELLUM_EXTERNAL_ROUTER_MUTATION"))
@@ -1106,8 +1133,9 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
         acceptance = self.pulp_exact_boundary_acceptance(acknowledgement)
         acceptance["refresh"]["open_pr_rows"] = [
             {
-                "repository": "danielraffel/vellum",
+                "repository": "Generous-Corp/vellum",
                 "pull_request": 99,
+                "merge_base_commit": "7" * 40,
                 "head_commit": "8" * 40,
                 "paths": ["authoring/import_html.py"],
                 "disposition": "conflict-awaiting-owner",
@@ -1124,6 +1152,107 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
             acceptance, acknowledgement, amendment
         )
         self.assertTrue(any("timestamps must match" in error for error in errors))
+
+    def test_open_pr_snapshot_independently_binds_every_live_overlap(self) -> None:
+        acknowledgement = self.exact_boundary_acknowledgement()
+        acceptance = self.pulp_exact_boundary_acceptance(acknowledgement)
+        matrix = json.loads((ROOT / verifier.MATRIX_PATH).read_text())
+        amendment = json.loads((ROOT / verifier.BOUNDARY_AMENDMENT_PATH).read_text())
+        route = next(
+            row for row in verifier.exact_route_rows(matrix, amendment)
+            if row["repository"] == "Generous-Corp/pulp"
+        )
+        snapshot = self.open_pr_snapshot({
+            "repository": "Generous-Corp/pulp",
+            "number": 42,
+            "head_commit": "8" * 40,
+            "paths": [route["path"], "docs/unrelated.md"],
+        })
+        errors = verifier.validate_open_pr_snapshot(
+            snapshot, acceptance, matrix, amendment
+        )
+        self.assertTrue(any("live overlap Generous-Corp/pulp#42 is absent" in error for error in errors))
+        acceptance["refresh"]["open_pr_rows"] = [{
+            "repository": "Generous-Corp/pulp",
+            "pull_request": 42,
+            "merge_base_commit": "e" * 40,
+            "head_commit": "8" * 40,
+            "paths": [route["path"]],
+            "disposition": "audited exact-route overlap",
+            "resolution": "pulp-retained",
+        }]
+        self.assertEqual(
+            verifier.validate_open_pr_snapshot(snapshot, acceptance, matrix, amendment),
+            [],
+        )
+        snapshot["repositories"][0]["pulls"][0]["head_commit"] = "9" * 40
+        errors = verifier.validate_open_pr_snapshot(
+            snapshot, acceptance, matrix, amendment
+        )
+        self.assertTrue(any("head differs" in error for error in errors))
+        snapshot = self.open_pr_snapshot({
+            "repository": "Generous-Corp/pulp", "number": 42,
+            "merge_base_commit": "6" * 40, "head_commit": "8" * 40,
+            "paths": [route["path"]],
+        })
+        errors = verifier.validate_open_pr_snapshot(snapshot, acceptance, matrix, amendment)
+        self.assertTrue(any("merge base differs" in error for error in errors))
+        snapshot = self.open_pr_snapshot()
+        errors = verifier.validate_open_pr_snapshot(
+            snapshot, acceptance, matrix, amendment
+        )
+        self.assertTrue(any("is not currently open" in error for error in errors))
+        mismatched_count = self.open_pr_snapshot({
+            "repository": "Generous-Corp/pulp",
+            "number": 43,
+            "head_commit": "a" * 40,
+            "paths": [route["path"]],
+            "diff_path_count": 2,
+        })
+        errors = verifier.validate_open_pr_snapshot(
+            mismatched_count, self.pulp_exact_boundary_acceptance(acknowledgement),
+            matrix, amendment,
+        )
+        self.assertTrue(any("tree diff path count differs" in error for error in errors))
+        vellum_route = next(
+            row for row in verifier.exact_route_rows(matrix, amendment)
+            if row["repository"] == "Generous-Corp/vellum"
+        )
+        delivery_snapshot = self.open_pr_snapshot({
+            "repository": "danielraffel/vellum",
+            "number": 44,
+            "head_commit": "b" * 40,
+            "paths": [vellum_route["path"]],
+        })
+        errors = verifier.validate_open_pr_snapshot(
+            delivery_snapshot,
+            self.pulp_exact_boundary_acceptance(acknowledgement), matrix, amendment,
+        )
+        self.assertTrue(any("live overlap danielraffel/vellum#44 is absent" in error for error in errors))
+
+    def test_provenance_workflow_collects_live_open_prs_and_changed_files(self) -> None:
+        workflow = (ROOT / ".github/workflows/provenance.yml").read_text()
+        self.assertIn(
+            'for repository in Generous-Corp/pulp Generous-Corp/vellum danielraffel/vellum', workflow
+        )
+        self.assertIn('pulls?state=open&per_page=100', workflow)
+        self.assertIn("github.event_name != 'pull_request' && secrets.VELLUM_DELIVERY_READER_TOKEN", workflow)
+        self.assertIn('export GH_TOKEN="$DELIVERY_READER_TOKEN"', workflow)
+        self.assertIn('repository_evidence+=(--defer-live-open-pr-audit)', workflow)
+        self.assertIn('repos/$repository/pulls/$pull_number"', workflow)
+        self.assertIn('compare/$base_commit...$head_commit', workflow)
+        self.assertIn('git/commits/$merge_base_commit', workflow)
+        self.assertIn('git/commits/$head_commit', workflow)
+        self.assertIn('git/trees/$merge_base_tree?recursive=1', workflow)
+        self.assertIn('git/trees/$head_tree?recursive=1', workflow)
+        self.assertIn('get("truncated") is not False', workflow)
+        self.assertIn('--open-pr-snapshot-json "$RUNNER_TEMP/open-pr-snapshot.json"', workflow)
+        self.assertIn('${{ runner.temp }}/open-pr-snapshot.json', workflow)
+        self.assertIn('write_live_open_pr_cursor "$RUNNER_TEMP/open-pr-cursor-before.json"', workflow)
+        self.assertIn('write_live_open_pr_cursor "$RUNNER_TEMP/open-pr-cursor-after.json"', workflow)
+        self.assertEqual(
+            workflow.count('cmp "$RUNNER_TEMP/open-pr-cursor.json"'), 2
+        )
 
     def test_pulp_router_contract_requires_exact_authority_ci(self) -> None:
         commit = "a" * 40

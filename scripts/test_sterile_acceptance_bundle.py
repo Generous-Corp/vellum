@@ -41,6 +41,12 @@ class SterileAcceptanceBundleTest(unittest.TestCase):
                 "vellum-sterile-acceptance/validate_installed_sdk.py", names
             )
             self.assertIn(
+                "vellum-sterile-acceptance/verify_release_tag_ruleset.py", names
+            )
+            self.assertIn(
+                "vellum-sterile-acceptance/collect_release_tag_rulesets.py", names
+            )
+            self.assertIn(
                 "vellum-sterile-acceptance/sterile-support/"
                 "fixtures/authoring-phase3/scenarios/phase3.json",
                 names,

@@ -981,10 +981,12 @@ def validate_pulp_exact_boundary_acceptance(
         rows = []
     unresolved_rows = 0
     row_keys = {
-        "repository", "pull_request", "head_commit", "paths", "disposition",
+        "repository", "pull_request", "merge_base_commit", "head_commit", "paths", "disposition",
         "resolution",
     }
-    allowed_repositories = {"Generous-Corp/pulp", "danielraffel/vellum"}
+    allowed_repositories = {
+        "Generous-Corp/pulp", "Generous-Corp/vellum", "danielraffel/vellum"
+    }
     allowed_resolutions = {
         "pulp-retained", "pulp-counterpart", "vellum-routed-coordinated", "unresolved"
     }
@@ -1000,10 +1002,9 @@ def validate_pulp_exact_boundary_acceptance(
             or row["pull_request"] <= 0
         ):
             errors.append(f"{where}.pull_request: expected positive integer")
-        if not isinstance(row["head_commit"], str) or not SHA40.fullmatch(
-            row["head_commit"]
-        ):
-            errors.append(f"{where}.head_commit: expected SHA")
+        for field in ("merge_base_commit", "head_commit"):
+            if not isinstance(row[field], str) or not SHA40.fullmatch(row[field]):
+                errors.append(f"{where}.{field}: expected SHA")
         if strings(row["paths"], f"{where}.paths", errors):
             for path_index, path in enumerate(row["paths"]):
                 exact_route_path(path, f"{where}.paths[{path_index}]", errors)
@@ -1188,9 +1189,167 @@ def validate_pulp_router_check_evidence(
     return errors
 
 
+def validate_open_pr_snapshot(
+    snapshot: Any, acceptance: Any, matrix: Any, amendment: Any
+) -> list[str]:
+    """Compare the accepted overlap audit with a fresh GitHub API snapshot."""
+    errors: list[str] = []
+    if not isinstance(snapshot, dict) or set(snapshot) != {
+        "schema_version", "kind", "repositories"
+    }:
+        return ["open PR snapshot: expected strict snapshot object"]
+    if not exact_scalar(snapshot.get("schema_version"), 2) or not exact_scalar(
+        snapshot.get("kind"), "github-open-pull-request-snapshot"
+    ):
+        errors.append("open PR snapshot: schema or kind differs")
+    repositories = snapshot.get("repositories")
+    if not isinstance(repositories, list):
+        return errors + ["open PR snapshot.repositories: expected array"]
+    expected_repositories = {
+        "Generous-Corp/pulp", "Generous-Corp/vellum", "danielraffel/vellum"
+    }
+    seen_repositories: set[str] = set()
+    live_overlaps: dict[tuple[str, int], tuple[str, str, list[str]]] = {}
+    try:
+        exact_routes = exact_route_rows(matrix, amendment)
+    except ValueError as exc:
+        return errors + [f"open PR snapshot: cannot resolve exact routes: {exc}"]
+    routed_paths = {
+        "Generous-Corp/pulp": {
+            row["path"] for row in exact_routes
+            if row["repository"] == "Generous-Corp/pulp"
+        },
+        "Generous-Corp/vellum": {
+            row["path"] for row in exact_routes
+            if row["repository"] == "Generous-Corp/vellum"
+        },
+        "danielraffel/vellum": {
+            row["path"] for row in exact_routes
+            if row["repository"] == "Generous-Corp/vellum"
+        },
+    }
+    for repository_index, repository_row in enumerate(repositories):
+        where = f"open PR snapshot.repositories[{repository_index}]"
+        if not isinstance(repository_row, dict) or set(repository_row) != {
+            "repository", "pulls"
+        }:
+            errors.append(f"{where}: expected strict repository object")
+            continue
+        repository = repository_row.get("repository")
+        if repository not in expected_repositories or repository in seen_repositories:
+            errors.append(f"{where}.repository: unexpected or duplicate repository")
+            continue
+        seen_repositories.add(repository)
+        pulls = repository_row.get("pulls")
+        if not isinstance(pulls, list):
+            errors.append(f"{where}.pulls: expected array")
+            continue
+        seen_numbers: set[int] = set()
+        previous_number = 0
+        for pull_index, pull in enumerate(pulls):
+            pull_where = f"{where}.pulls[{pull_index}]"
+            if not isinstance(pull, dict) or set(pull) != {
+                "number", "base_commit", "merge_base_commit", "head_commit", "paths",
+                "diff_path_count",
+            }:
+                errors.append(f"{pull_where}: expected strict pull request object")
+                continue
+            number = pull.get("number")
+            if (
+                not isinstance(number, int) or isinstance(number, bool) or number <= 0
+                or number in seen_numbers or number <= previous_number
+            ):
+                errors.append(f"{pull_where}.number: expected unique ascending positive integer")
+                continue
+            seen_numbers.add(number)
+            previous_number = number
+            base_commit = pull.get("base_commit")
+            merge_base_commit = pull.get("merge_base_commit")
+            head_commit = pull.get("head_commit")
+            if (
+                not isinstance(base_commit, str)
+                or SHA40.fullmatch(base_commit) is None
+                or not isinstance(merge_base_commit, str)
+                or SHA40.fullmatch(merge_base_commit) is None
+                or not isinstance(head_commit, str)
+                or SHA40.fullmatch(head_commit) is None
+            ):
+                errors.append(f"{pull_where}: expected full base, merge-base, and head SHAs")
+                continue
+            diff_path_count = pull.get("diff_path_count")
+            if (
+                not isinstance(diff_path_count, int)
+                or isinstance(diff_path_count, bool)
+                or diff_path_count < 0
+            ):
+                errors.append(f"{pull_where}.diff_path_count: expected nonnegative integer")
+                continue
+            paths = pull.get("paths")
+            if (
+                not isinstance(paths, list)
+                or not all(isinstance(path, str) for path in paths)
+                or paths != sorted(set(paths))
+            ):
+                errors.append(f"{pull_where}.paths: expected sorted unique array")
+                continue
+            if diff_path_count != len(paths):
+                errors.append(f"{pull_where}: tree diff path count differs")
+                continue
+            invalid_path = False
+            for path_index, path in enumerate(paths):
+                before = len(errors)
+                exact_route_path(path, f"{pull_where}.paths[{path_index}]", errors)
+                invalid_path = invalid_path or len(errors) != before
+            if invalid_path:
+                continue
+            overlap_paths = sorted(set(paths) & routed_paths[repository])
+            if overlap_paths:
+                live_overlaps[(repository, number)] = (
+                    merge_base_commit, head_commit, overlap_paths
+                )
+    if seen_repositories != expected_repositories:
+        errors.append(
+            "open PR snapshot: repository coverage differs; "
+            f"missing={sorted(expected_repositories - seen_repositories)}"
+        )
+    refresh = acceptance.get("refresh", {}) if isinstance(acceptance, dict) else {}
+    accepted_rows = refresh.get("open_pr_rows") if isinstance(refresh, dict) else None
+    if not isinstance(accepted_rows, list):
+        return errors + ["open PR snapshot: accepted open PR rows unavailable"]
+    accepted_by_key: dict[tuple[str, int], dict[str, Any]] = {}
+    for index, row in enumerate(accepted_rows):
+        if not isinstance(row, dict):
+            continue
+        key = (row.get("repository"), row.get("pull_request"))
+        if key in accepted_by_key:
+            errors.append(
+                f"open PR snapshot: duplicate accepted row for {key[0]}#{key[1]}"
+            )
+        else:
+            accepted_by_key[key] = row
+    for key, (merge_base_commit, head_commit, paths) in live_overlaps.items():
+        row = accepted_by_key.get(key)
+        label = f"{key[0]}#{key[1]}"
+        if row is None:
+            errors.append(f"open PR snapshot: live overlap {label} is absent from acceptance")
+            continue
+        if row.get("merge_base_commit") != merge_base_commit:
+            errors.append(f"open PR snapshot: live overlap {label} merge base differs")
+        if row.get("head_commit") != head_commit:
+            errors.append(f"open PR snapshot: live overlap {label} head differs")
+        if row.get("paths") != paths:
+            errors.append(f"open PR snapshot: live overlap {label} paths differ")
+    for key in accepted_by_key.keys() - live_overlaps.keys():
+        errors.append(
+            f"open PR snapshot: accepted overlap {key[0]}#{key[1]} is not currently open"
+        )
+    return errors
+
+
 def validate_exact_boundary_repository_evidence(
     root: Path, pulp_root: Path | None, data: Any, amendment: Any,
-    check_runs: Any = None,
+    check_runs: Any = None, open_pr_snapshot: Any = None,
+    defer_live_open_pr_audit: bool = False,
 ) -> list[str]:
     errors: list[str] = []
     if not isinstance(data, dict) or not isinstance(data.get("coordinates"), dict):
@@ -1267,6 +1426,12 @@ def validate_exact_boundary_repository_evidence(
     errors.extend(acceptance_errors)
     if acceptance_errors:
         return errors
+    if not defer_live_open_pr_audit:
+        errors.extend(
+            validate_open_pr_snapshot(
+                open_pr_snapshot, acceptance, load_json(root / MATRIX_PATH), amendment
+            )
+        )
     if check_runs is not None:
         errors.extend(
             validate_pulp_router_check_evidence(check_runs, pulp_commit, acceptance)
@@ -2704,6 +2869,8 @@ def verify(
     repository: str | None = None,
     release_source_commit: str | None = None,
     check_runs: Any = None,
+    open_pr_snapshot: Any = None,
+    defer_live_open_pr_audit: bool = False,
 ) -> dict[str, Any]:
     closure_errors = []
     try:
@@ -2789,6 +2956,8 @@ def verify(
                 exact_acknowledgement_data,
                 boundary_amendment_data,
                 check_runs,
+                open_pr_snapshot,
+                defer_live_open_pr_audit,
             )
         parity_completion_path = root / PARITY_COMPLETION_PATH
         if parity_completion_path.is_file():
@@ -2824,6 +2993,10 @@ def verify(
                 else []
             )
         )
+        if release_readiness and defer_live_open_pr_audit:
+            errors.append(
+                "release readiness: live open-PR audit cannot be deferred"
+            )
     except ValueError as exc:
         data = addendum_data = acknowledgement_data = matrix_data = None
         boundary_amendment_data = None
@@ -2879,6 +3052,8 @@ def main() -> int:
         "--release-source-commit", default=os.environ.get("GITHUB_SHA")
     )
     parser.add_argument("--check-runs-json", type=Path)
+    parser.add_argument("--open-pr-snapshot-json", type=Path)
+    parser.add_argument("--defer-live-open-pr-audit", action="store_true")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--release-readiness", action="store_true")
     args = parser.parse_args()
@@ -2893,6 +3068,11 @@ def main() -> int:
         repository=args.repository,
         release_source_commit=args.release_source_commit,
         check_runs=(load_json(args.check_runs_json.resolve()) if args.check_runs_json else None),
+        open_pr_snapshot=(
+            load_json(args.open_pr_snapshot_json.resolve())
+            if args.open_pr_snapshot_json else None
+        ),
+        defer_live_open_pr_audit=args.defer_live_open_pr_audit,
     )
     rendered = json.dumps(report, indent=2, sort_keys=True) + "\n"
     if args.output:

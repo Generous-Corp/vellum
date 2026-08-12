@@ -67,6 +67,18 @@ release is the protected-ref mechanism for a private repository on the current
 GitHub plan; a mutable tag or lightweight tag is rejected. Required checks
 must still be successful and bound to pinned GitHub App producers.
 
+Semver SDK releases have a separate publication protocol. Tag-selected build
+code is read-only and receives no publication credential. The trusted
+default-branch SDK finalizer mints one short-lived, one-repository GitHub App
+token with Administration and Contents permissions. Before every SDK release
+mutation it requires one active exact-tag ruleset for that semver ref, no
+bypass actors, and `update`, `deletion`, and `non_fast_forward` rules, then
+rechecks the exact annotated tag object. The same short-lived finalizer token
+reads complete ruleset details and performs release mutations; no long-lived
+ruleset-auditor secret is used. A repository plan that cannot expose the
+required private-repository ruleset fails closed and cannot publish a semver
+SDK release.
+
 The `authority/**` workflow lane verifies the pending record without creating
 a circular dependency on its own check runs. It checks out the record's exact
 Pulp candidate and runs:
