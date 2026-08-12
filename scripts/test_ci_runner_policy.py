@@ -43,6 +43,7 @@ EXPECTED_RUNNERS = {
         "VELLUM_MACOS_RUNS_ON_JSON",
         '["self-hosted","macOS","ARM64","vellum-build-macos"]',
     ),
+    "sdk-release.yml": ("__mixed__", ""),
 }
 
 HOSTED_LABELS = (
@@ -72,6 +73,7 @@ CHROME_ACTION = "browser-actions/setup-chrome"
 # happening to exist on the runner.
 BROWSER_JOBS = {
     "gpu-macos.yml": ("gpu-macos-arm64", "sterile-consumer"),
+    "sdk-release.yml": ("validate-sdk-artifacts",),
 }
 
 JOB_HEADER = re.compile(r"^  ([A-Za-z0-9_-]+):\s*$")
@@ -117,6 +119,65 @@ def workflow_jobs(text: str) -> dict[str, str]:
 
 
 class RunnerPolicyTests(unittest.TestCase):
+    def test_only_trusted_default_branch_code_can_publish_sdk_releases(self) -> None:
+        gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
+        self.assertIn("permissions:\n  actions: read\n  attestations: read\n  contents: read", gpu)
+        for forbidden in (
+            "VELLUM_RULESET_AUDITOR_TOKEN",
+            "gh release create",
+            "gh release upload",
+            "--method DELETE",
+            "--method PATCH",
+        ):
+            self.assertNotIn(forbidden, gpu)
+
+        finalizer = (WORKFLOWS / "sdk-release.yml").read_text(encoding="utf-8")
+        self.assertIn("workflow_run:", finalizer)
+        self.assertNotIn("workflow_dispatch:", finalizer)
+        self.assertEqual(
+            finalizer.count("startsWith(github.event.workflow_run.head_branch, 'v')"),
+            2,
+        )
+        self.assertIn("permissions:\n  actions: read\n  contents: read", finalizer)
+        self.assertIn("ref: main", finalizer)
+        self.assertIn("persist-credentials: false", finalizer)
+        self.assertIn("permission-administration: write", finalizer)
+        self.assertIn("permission-contents: write", finalizer)
+        self.assertIn("needs: validate-sdk-artifacts", finalizer)
+        self.assertIn("trusted-sdk-verification.json", finalizer)
+        self.assertIn("trusted-sdk-installed-validation.json", finalizer)
+        self.assertIn('git show "$SOURCE_COMMIT:scripts/install.sh"', finalizer)
+        self.assertIn('git show "$SOURCE_COMMIT:scripts/install_core.py"', finalizer)
+        self.assertIn('> "$RUNNER_TEMP/trusted/SHA256SUMS"', finalizer)
+        self.assertIn("immutable-release-attestation.json", finalizer)
+        self.assertIn('{"sha1": os.environ["TAG_OBJECT_SHA"]}', finalizer)
+        self.assertIn("release-final-prepublish.json", finalizer)
+        self.assertIn("release-assets-final-prepublish-verification.json", finalizer)
+        self.assertIn("scripts/verify_sdk_artifact.py", finalizer)
+        self.assertIn("scripts/build_sterile_acceptance_bundle.py", finalizer)
+        self.assertGreaterEqual(finalizer.count("scripts/verify_release_tag.py"), 2)
+        self.assertIn('test "$(gh api "repos/$GITHUB_REPOSITORY/immutable-releases" --jq \'.enabled\')" = true', finalizer)
+        self.assertIn('for row in page["jobs"]', finalizer)
+        self.assertIn('"path": ".github/workflows/gpu-macos.yml"', finalizer)
+        self.assertIn('"conclusion": "success"', finalizer)
+        self.assertIn("collect_release_tag_rulesets.py", finalizer)
+        self.assertIn("verify_release_tag_ruleset.py", finalizer)
+        self.assertNotIn("--clobber", finalizer)
+        self.assertGreaterEqual(finalizer.count("verify_release_guard"), 5)
+        for mutation in (
+            "gh release create",
+            "--method DELETE",
+            "gh release upload",
+            "--method PATCH",
+        ):
+            position = finalizer.find(mutation)
+            self.assertGreater(position, 0)
+            self.assertGreater(
+                finalizer.rfind("verify_release_guard", 0, position),
+                0,
+                f"{mutation} must follow a live release guard",
+            )
+
     def test_browser_driving_jobs_provision_the_pinned_browser(self) -> None:
         for filename, job_names in BROWSER_JOBS.items():
             jobs = workflow_jobs((WORKFLOWS / filename).read_text(encoding="utf-8"))
@@ -135,6 +196,15 @@ class RunnerPolicyTests(unittest.TestCase):
                         f"{filename}: {job_name} must export the pinned browser path",
                     )
 
+    def test_locked_gpu_archive_download_is_resumable_and_hash_gated(self) -> None:
+        gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
+        self.assertIn("--retry 5 --retry-delay 2 --retry-all-errors", gpu)
+        self.assertIn("--continue-at -", gpu)
+        self.assertIn(
+            "13b0e9818c3b05db661af85cb1e2bf2ef10e30d468b81351dd90295237d17734",
+            gpu,
+        )
+
     def test_workflows_use_their_reviewed_runner_class(self) -> None:
         workflow_paths = sorted(
             [*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]
@@ -152,6 +222,17 @@ class RunnerPolicyTests(unittest.TestCase):
                 if line.strip().startswith("runs-on:")
             ]
             self.assertTrue(runs_on_lines, path.name)
+            if variable == "__mixed__":
+                self.assertEqual(
+                    set(runs_on_lines),
+                    {
+                        "runs-on: ${{ fromJSON(vars.VELLUM_MACOS_RUNS_ON_JSON || "
+                        "'[\"self-hosted\",\"macOS\",\"ARM64\",\"vellum-build-macos\"]') }}",
+                        "runs-on: ${{ fromJSON(vars.VELLUM_AUTHORITY_RUNS_ON_JSON || "
+                        "'[\"self-hosted\",\"Linux\",\"ARM64\",\"vellum-authority-linux\"]') }}",
+                    },
+                )
+                continue
             for line in runs_on_lines:
                 with self.subTest(workflow=path.name, selector=line):
                     if variable == "__hosted__":

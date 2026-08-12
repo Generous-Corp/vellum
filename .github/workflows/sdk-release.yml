@@ -1,0 +1,549 @@
+name: Finalize immutable SDK release
+
+on:
+  workflow_run:
+    workflows: [Locked macOS GPU proof]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: sdk-release-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  validate-sdk-artifacts:
+    name: validate-sdk-artifacts
+    if: >-
+      github.event.workflow_run.event == 'push' &&
+      startsWith(github.event.workflow_run.head_branch, 'v') &&
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ${{ fromJSON(vars.VELLUM_MACOS_RUNS_ON_JSON || '["self-hosted","macOS","ARM64","vellum-build-macos"]') }}
+    env:
+      SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+      RELEASE_TAG: ${{ github.event.workflow_run.head_branch }}
+      SOURCE_COMMIT: ${{ github.event.workflow_run.head_sha }}
+      RELEASE_ARCHIVE: vellum-sdk-0.1.7-darwin-arm64.tar.gz
+    steps:
+      - name: Check out trusted artifact validators
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install the pinned Chrome browser
+        id: setup-chrome
+        uses: browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd
+        with:
+          chrome-version: 151.0.7922.47
+
+      - name: Export the pinned Chrome browser path
+        env:
+          CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
+        run: |
+          set -euo pipefail
+          test -x "$CHROME_PATH"
+          printf 'VELLUM_CHROME_PATH=%s\n' "$CHROME_PATH" >> "$GITHUB_ENV"
+
+      - name: Bind the artifact run to an owner-signed tag before execution
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = Generous-Corp/vellum
+          [[ "$SOURCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID" \
+            > "$RUNNER_TEMP/validation-source-run.json"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          run = json.loads(Path(os.environ["RUNNER_TEMP"]).joinpath(
+              "validation-source-run.json").read_text())
+          expected = {
+              "id": int(os.environ["SOURCE_RUN_ID"]),
+              "name": "Locked macOS GPU proof",
+              "path": ".github/workflows/gpu-macos.yml",
+              "event": "push",
+              "head_branch": os.environ["RELEASE_TAG"],
+              "head_sha": os.environ["SOURCE_COMMIT"],
+              "status": "completed",
+              "conclusion": "success",
+          }
+          for key, value in expected.items():
+              if run.get(key) != value:
+                  raise SystemExit(f"validation source run {key} differs")
+          PY
+          remote_row="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq '[.object.type, .object.sha] | @tsv')"
+          read -r remote_type tag_object_sha <<EOF
+          $remote_row
+          EOF
+          test "$remote_type" = tag
+          git fetch --no-tags origin "refs/tags/$RELEASE_TAG"
+          test "$(git rev-parse "$tag_object_sha^{commit}")" = "$SOURCE_COMMIT"
+          python3 scripts/verify_release_tag.py \
+            --repo "$GITHUB_WORKSPACE" --repository "$GITHUB_REPOSITORY" \
+            --tag-name "$RELEASE_TAG" --tag-object-sha "$tag_object_sha" \
+            --source-commit "$SOURCE_COMMIT" \
+            --allowed-signers provenance/release-signers.allowed_signers \
+            --expected-principal daniel.raffel@gmail.com \
+            --expected-fingerprint \
+              SHA256:eMlEuZcnW6NJDrKQBuN5EX1q69bOlIRPl6XmutVTgcs \
+            --output "$RUNNER_TEMP/validation-release-trust.json"
+
+      - name: Download the exact source-run GPU artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: vellum-gpu-macos-arm64-evidence
+          path: ${{ runner.temp }}/gpu
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ github.token }}
+
+      - name: Rebuild trusted controls and run the complete installed journey
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test -x "$VELLUM_CHROME_PATH"
+          input="$RUNNER_TEMP/gpu"
+          python3 scripts/verify_sdk_artifact.py \
+            --archive "$input/$RELEASE_ARCHIVE" \
+            --checksums "$input/SHA256SUMS" --json \
+            > "$RUNNER_TEMP/trusted-sdk-verification.json"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          value = json.loads(Path(os.environ["RUNNER_TEMP"]).joinpath(
+              "trusted-sdk-verification.json").read_text())
+          expected = {
+              "schema": "vellum.sdk-artifact-verification.v1",
+              "ok": True,
+              "artifact": os.environ["RELEASE_ARCHIVE"],
+              "framework_version": os.environ["RELEASE_TAG"].removeprefix("v"),
+              "cli_version": os.environ["RELEASE_TAG"].removeprefix("v"),
+              "source_commit": os.environ["SOURCE_COMMIT"],
+              "source_tree_clean": True,
+              "target": "darwin-arm64",
+              "contamination_free": True,
+          }
+          for key, expected_value in expected.items():
+              if value.get(key) != expected_value:
+                  raise SystemExit(f"trusted SDK {key} differs: {value.get(key)!r}")
+          PY
+          python3 scripts/build_sterile_acceptance_bundle.py \
+            --output "$RUNNER_TEMP/trusted-sterile-acceptance.tar.gz" --json \
+            > "$RUNNER_TEMP/trusted-sterile-bundle.json"
+          cmp "$RUNNER_TEMP/trusted-sterile-acceptance.tar.gz" \
+            "$input/vellum-sterile-acceptance.tar.gz"
+          mkdir "$RUNNER_TEMP/trusted-sterile"
+          tar -xzf "$RUNNER_TEMP/trusted-sterile-acceptance.tar.gz" \
+            -C "$RUNNER_TEMP/trusted-sterile"
+          validator="$RUNNER_TEMP/trusted-sterile/vellum-sterile-acceptance/validate_installed_sdk.py"
+          python3 "$validator" \
+            --archive "$input/$RELEASE_ARCHIVE" \
+            --checksums "$input/SHA256SUMS" \
+            --forbid-path "$GITHUB_WORKSPACE" \
+            --runner-search-root "$RUNNER_TEMP/trusted-sterile" \
+            --output "$RUNNER_TEMP/trusted-sdk-installed-validation.json" \
+            --json > "$RUNNER_TEMP/trusted-sdk-installed-validation.stdout.json"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"])
+          value = json.loads((root / "trusted-sdk-installed-validation.json").read_text())
+          artifact = json.loads((root / "trusted-sdk-verification.json").read_text())
+          expected = {
+              "schema": "vellum.installed-sdk-validation.v1",
+              "ok": True,
+              "artifact": artifact["artifact"],
+              "artifact_sha256": artifact["sha256"],
+              "framework_version": artifact["framework_version"],
+              "cli_version": artifact["cli_version"],
+              "source_commit": artifact["source_commit"],
+              "source_tree_clean": True,
+              "target": artifact["target"],
+          }
+          for key, expected_value in expected.items():
+              if value.get(key) != expected_value:
+                  raise SystemExit(f"trusted installed SDK {key} differs")
+          if not value.get("checks") or not all(value["checks"].values()):
+              raise SystemExit("trusted installed SDK checks are incomplete")
+          PY
+
+      - name: Retain trusted SDK validation
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: vellum-trusted-sdk-validation
+          path: |
+            ${{ runner.temp }}/trusted-sdk-verification.json
+            ${{ runner.temp }}/trusted-sdk-installed-validation.json
+            ${{ runner.temp }}/trusted-sdk-installed-validation.stdout.json
+            ${{ runner.temp }}/trusted-sterile-bundle.json
+          if-no-files-found: error
+          retention-days: 90
+
+  finalize-sdk-release:
+    name: finalize-sdk-release
+    needs: validate-sdk-artifacts
+    if: >-
+      github.event.workflow_run.event == 'push' &&
+      startsWith(github.event.workflow_run.head_branch, 'v') &&
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ${{ fromJSON(vars.VELLUM_AUTHORITY_RUNS_ON_JSON || '["self-hosted","Linux","ARM64","vellum-authority-linux"]') }}
+    env:
+      SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+      RELEASE_TAG: ${{ github.event.workflow_run.head_branch }}
+      SOURCE_COMMIT: ${{ github.event.workflow_run.head_sha }}
+      RELEASE_NAME: Vellum 0.1.7 experimental SDK
+      RELEASE_ARCHIVE: vellum-sdk-0.1.7-darwin-arm64.tar.gz
+    steps:
+      - name: Check out trusted finalizer controls
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Mint one-repository finalizer token
+        id: finalizer-token
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3
+        with:
+          app-id: ${{ secrets.SHIPYARD_APP_ID }}
+          private-key: ${{ secrets.SHIPYARD_APP_PRIVATE_KEY }}
+          owner: Generous-Corp
+          repositories: vellum
+          permission-actions: read
+          permission-administration: write
+          permission-checks: read
+          permission-contents: write
+
+      - name: Bind the exact successful build run and signed tag
+        id: source
+        env:
+          GH_TOKEN: ${{ steps.finalizer-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = Generous-Corp/vellum
+          [[ "$SOURCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID" \
+            > "$RUNNER_TEMP/source-run.json"
+          gh api --paginate --slurp \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/jobs?per_page=100" \
+            > "$RUNNER_TEMP/source-run-jobs.json"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"])
+          run = json.loads((root / "source-run.json").read_text())
+          expected = {
+              "id": int(os.environ["SOURCE_RUN_ID"]),
+              "name": "Locked macOS GPU proof",
+              "path": ".github/workflows/gpu-macos.yml",
+              "event": "push",
+              "head_branch": os.environ["RELEASE_TAG"],
+              "head_sha": os.environ["SOURCE_COMMIT"],
+              "status": "completed",
+              "conclusion": "success",
+          }
+          for key, value in expected.items():
+              if run.get(key) != value:
+                  raise SystemExit(f"source run {key} differs: {run.get(key)!r}")
+          pages = json.loads((root / "source-run-jobs.json").read_text())
+          if not isinstance(pages, list) or not all(
+              isinstance(page, dict) and isinstance(page.get("jobs"), list)
+              for page in pages
+          ):
+              raise SystemExit("source-run jobs response is malformed")
+          jobs = [row for page in pages for row in page["jobs"]]
+          if not all(isinstance(row, dict) for row in jobs):
+              raise SystemExit("source-run job row is malformed")
+          for name in ("gpu-macos-arm64", "sterile-consumer"):
+              matches = [row for row in jobs if row.get("name") == name]
+              if len(matches) != 1 or matches[0].get("conclusion") != "success" or matches[0].get("head_sha") != expected["head_sha"]:
+                  raise SystemExit(f"missing exact successful source job: {name}")
+          PY
+          remote_row="$(
+            gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" \
+              --jq '[.object.type, .object.sha] | @tsv'
+          )"
+          read -r remote_type tag_object_sha <<EOF
+          $remote_row
+          EOF
+          test "$remote_type" = tag
+          git fetch --no-tags origin "refs/tags/$RELEASE_TAG"
+          test "$(git rev-parse "$tag_object_sha^{commit}")" = "$SOURCE_COMMIT"
+          python3 scripts/verify_release_tag.py \
+            --repo "$GITHUB_WORKSPACE" \
+            --repository "$GITHUB_REPOSITORY" \
+            --tag-name "$RELEASE_TAG" \
+            --tag-object-sha "$tag_object_sha" \
+            --source-commit "$SOURCE_COMMIT" \
+            --allowed-signers provenance/release-signers.allowed_signers \
+            --expected-principal daniel.raffel@gmail.com \
+            --expected-fingerprint \
+              SHA256:eMlEuZcnW6NJDrKQBuN5EX1q69bOlIRPl6XmutVTgcs \
+            --output "$RUNNER_TEMP/release-trust.json"
+          printf 'tag-object=%s\n' "$tag_object_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Download exact release-shaped artifacts
+        env:
+          GH_TOKEN: ${{ steps.finalizer-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/gpu" "$RUNNER_TEMP/trusted"
+          gh run download "$SOURCE_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name vellum-gpu-macos-arm64-evidence --dir "$RUNNER_TEMP/gpu"
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name vellum-trusted-sdk-validation --dir "$RUNNER_TEMP/trusted"
+          test -f "$RUNNER_TEMP/gpu/$RELEASE_ARCHIVE"
+          test -f "$RUNNER_TEMP/trusted/trusted-sdk-verification.json"
+          test -f "$RUNNER_TEMP/trusted/trusted-sdk-installed-validation.json"
+          git show "$SOURCE_COMMIT:scripts/install.sh" \
+            > "$RUNNER_TEMP/trusted/install.sh"
+          git show "$SOURCE_COMMIT:scripts/install_core.py" \
+            > "$RUNNER_TEMP/trusted/install_core.py"
+          cmp "$RUNNER_TEMP/trusted/install.sh" "$RUNNER_TEMP/gpu/install.sh"
+          cmp "$RUNNER_TEMP/trusted/install_core.py" \
+            "$RUNNER_TEMP/gpu/install_core.py"
+          archive_sha="$(shasum -a 256 "$RUNNER_TEMP/gpu/$RELEASE_ARCHIVE" | awk '{print $1}')"
+          printf '%s  %s\n' "$archive_sha" "$RELEASE_ARCHIVE" \
+            > "$RUNNER_TEMP/trusted/SHA256SUMS"
+          cmp "$RUNNER_TEMP/trusted/SHA256SUMS" "$RUNNER_TEMP/gpu/SHA256SUMS"
+          python3 - <<'PY'
+          import json, os, tarfile
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"])
+          evidence = json.loads((root / "gpu/web-payload.json").read_text())
+          if set(evidence) != {"schema", "source_commit", "compiler", "backend", "files", "output"}:
+              raise SystemExit("web payload evidence fields differ")
+          if evidence.get("source_commit") != os.environ["SOURCE_COMMIT"] or not isinstance(evidence.get("output"), str):
+              raise SystemExit("web payload evidence source differs")
+          archive = root / "gpu" / os.environ["RELEASE_ARCHIVE"]
+          with tarfile.open(archive, "r:gz") as handle:
+              matches = [member for member in handle.getmembers() if member.name.endswith("/web/manifest.json")]
+              if len(matches) != 1:
+                  raise SystemExit("SDK archive web manifest coverage differs")
+              stream = handle.extractfile(matches[0])
+              if stream is None:
+                  raise SystemExit("SDK archive web manifest is unreadable")
+              manifest = json.load(stream)
+          if {key: evidence[key] for key in evidence if key != "output"} != manifest:
+              raise SystemExit("published web payload evidence differs from SDK archive")
+          (root / "trusted/web-payload.json").write_text(
+              json.dumps(evidence, sort_keys=True, separators=(",", ":")) + "\n"
+          )
+          PY
+          python3 scripts/verify_immutable_release_preflight.py \
+            --input provenance/immutable-release-preflight.json \
+            --repository "$GITHUB_REPOSITORY" \
+            --release-tag "$RELEASE_TAG" \
+            --output "$RUNNER_TEMP/immutable-release-preflight.json"
+
+      - name: Require exact provenance readiness
+        env:
+          GH_TOKEN: ${{ steps.finalizer-token.outputs.token }}
+          TAG_OBJECT_SHA: ${{ steps.source.outputs.tag-object }}
+        run: |
+          set -euo pipefail
+          runs="$RUNNER_TEMP/provenance-runs.json"
+          gh api --method GET \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/provenance.yml/runs" \
+            -f branch="$RELEASE_TAG" -f event=push -F per_page=100 > "$runs"
+          row="$(python3 scripts/select_exact_provenance_run.py \
+            --runs-json "$runs" --head-sha "$SOURCE_COMMIT" \
+            --head-branch "$RELEASE_TAG")"
+          IFS=$'\t' read -r provenance_run status conclusion <<< "$row"
+          test "$status" = completed
+          test "$conclusion" = success
+          mkdir "$RUNNER_TEMP/provenance"
+          gh run download "$provenance_run" --repo "$GITHUB_REPOSITORY" \
+            --name provenance-report --dir "$RUNNER_TEMP/provenance"
+          python3 scripts/verify_exact_provenance_artifact.py \
+            --trust-json "$RUNNER_TEMP/provenance/promotion-release-tag-trust.json" \
+            --readiness-json "$RUNNER_TEMP/provenance/authority-expansion-report.json" \
+            --repository "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG" \
+            --source-commit "$SOURCE_COMMIT" --tag-object-sha "$TAG_OBJECT_SHA"
+
+      - name: Publish only through live no-bypass controls
+        env:
+          GH_TOKEN: ${{ steps.finalizer-token.outputs.token }}
+          TAG_OBJECT_SHA: ${{ steps.source.outputs.tag-object }}
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/release-notes.md"
+          cat > "$notes" <<'EOF'
+          Private experimental Vellum SDK with converged native rendering and attributed text.
+
+          This release is intentionally limited to the documented macOS 15.0+ arm64
+          native and browser-Wasm proof lanes. It is not a Pulp dependency or a
+          broad platform support claim.
+          EOF
+          verify_release_guard() {
+            local index details ids rulesets protection remote_row remote_type remote_sha
+            index="$(mktemp "$RUNNER_TEMP/ruleset-index.XXXXXX.json")"
+            details="$(mktemp -d "$RUNNER_TEMP/ruleset-details.XXXXXX")"
+            ids="$(mktemp "$RUNNER_TEMP/ruleset-ids.XXXXXX.txt")"
+            rulesets="$(mktemp "$RUNNER_TEMP/rulesets.XXXXXX.json")"
+            protection="$(mktemp "$RUNNER_TEMP/protection.XXXXXX.json")"
+            test "$(gh api "repos/$GITHUB_REPOSITORY/immutable-releases" --jq '.enabled')" = true
+            gh api --method GET --paginate --slurp \
+              "repos/$GITHUB_REPOSITORY/rulesets?includes_parents=true&per_page=100" \
+              > "$index"
+            RULESET_INDEX="$index" python3 - <<'PY' > "$ids"
+          import json, os
+          for page in json.load(open(os.environ["RULESET_INDEX"])):
+              for row in page:
+                  print(row["id"])
+          PY
+            while read -r ruleset_id; do
+              gh api "repos/$GITHUB_REPOSITORY/rulesets/$ruleset_id" \
+                > "$details/$ruleset_id.json"
+            done < "$ids"
+            python3 scripts/collect_release_tag_rulesets.py \
+              --index "$index" --details-dir "$details" --output "$rulesets"
+            python3 scripts/verify_release_tag_ruleset.py \
+              --input "$rulesets" --repository "$GITHUB_REPOSITORY" \
+              --tag "$RELEASE_TAG" --output "$protection"
+            remote_row="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq '[.object.type, .object.sha] | @tsv')"
+            read -r remote_type remote_sha <<EOF
+          $remote_row
+          EOF
+            test "$remote_type" = tag
+            test "$remote_sha" = "$TAG_OBJECT_SHA"
+            cp "$protection" "$RUNNER_TEMP/release-tag-protection.json"
+          }
+          allowed=(
+            "$RELEASE_ARCHIVE=$RUNNER_TEMP/gpu/$RELEASE_ARCHIVE"
+            "install.sh=$RUNNER_TEMP/trusted/install.sh"
+            "install_core.py=$RUNNER_TEMP/trusted/install_core.py"
+            "SHA256SUMS=$RUNNER_TEMP/trusted/SHA256SUMS"
+            "sdk-verification.json=$RUNNER_TEMP/trusted/trusted-sdk-verification.json"
+            "sdk-installed-validation.json=$RUNNER_TEMP/trusted/trusted-sdk-installed-validation.json"
+            "web-payload.json=$RUNNER_TEMP/trusted/web-payload.json"
+            "release-trust.json=$RUNNER_TEMP/release-trust.json"
+            "immutable-release-preflight.json=$RUNNER_TEMP/immutable-release-preflight.json"
+            "release-tag-protection.json=$RUNNER_TEMP/release-tag-protection.json"
+          )
+          verify_release_guard
+          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+              > "$RUNNER_TEMP/release.json" 2>/dev/null; then
+            :
+          else
+            verify_release_guard
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --verify-tag --draft --title "$RELEASE_NAME" --notes-file "$notes"
+            gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+              > "$RUNNER_TEMP/release.json"
+          fi
+          gh api --paginate --slurp \
+            "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            > "$RUNNER_TEMP/releases.json"
+          select_args=()
+          for asset in "${allowed[@]}"; do
+            select_args+=(--allowed-asset "${asset%%=*}")
+          done
+          select_args+=(--allowed-asset release-assets-verification.json)
+          python3 scripts/select_release.py \
+            --releases-json "$RUNNER_TEMP/releases.json" \
+            --tag "$RELEASE_TAG" --expected-name "$RELEASE_NAME" \
+            --expected-body-file "$notes" "${select_args[@]}" \
+            --output "$RUNNER_TEMP/release.json"
+          release_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "$RUNNER_TEMP/release.json")"
+          replace_asset() {
+            local name="$1" path="$2" existing_id
+            gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > "$RUNNER_TEMP/release.json"
+            existing_id="$(ASSET_NAME="$name" python3 -c 'import json,os,sys; rows=[str(x["id"]) for x in json.load(open(sys.argv[1]))["assets"] if x["name"]==os.environ["ASSET_NAME"]]; assert len(rows)<=1; print(rows[0] if rows else "")' "$RUNNER_TEMP/release.json")"
+            if [ -n "$existing_id" ]; then
+              verify_release_guard
+              gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$existing_id"
+            fi
+            verify_release_guard
+            gh release upload "$RELEASE_TAG" "$path" --repo "$GITHUB_REPOSITORY"
+          }
+          draft="$(python3 -c 'import json,sys; print(str(json.load(open(sys.argv[1]))["draft"]).lower())' "$RUNNER_TEMP/release.json")"
+          if [ "$draft" = true ]; then
+            for asset in "${allowed[@]}"; do replace_asset "${asset%%=*}" "${asset#*=}"; done
+            gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > "$RUNNER_TEMP/release.json"
+            args=(); for asset in "${allowed[@]}"; do args+=(--asset "$asset"); done
+            python3 scripts/verify_release_assets.py --release-json "$RUNNER_TEMP/release.json" \
+              --tag "$RELEASE_TAG" "${args[@]}" --output "$RUNNER_TEMP/release-assets-verification.json"
+            replace_asset release-assets-verification.json "$RUNNER_TEMP/release-assets-verification.json"
+            gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > "$RUNNER_TEMP/release.json"
+            python3 scripts/verify_release_assets.py --release-json "$RUNNER_TEMP/release.json" \
+              --tag "$RELEASE_TAG" "${args[@]}" \
+              --asset "release-assets-verification.json=$RUNNER_TEMP/release-assets-verification.json" \
+              --output "$RUNNER_TEMP/release-assets-draft-verification.json"
+            verify_release_guard
+            gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+              > "$RUNNER_TEMP/release-final-prepublish.json"
+            python3 scripts/verify_release_assets.py \
+              --release-json "$RUNNER_TEMP/release-final-prepublish.json" \
+              --tag "$RELEASE_TAG" "${args[@]}" \
+              --asset "release-assets-verification.json=$RUNNER_TEMP/release-assets-verification.json" \
+              --output "$RUNNER_TEMP/release-assets-final-prepublish-verification.json"
+            # GitHub exposes no revision/ETag precondition on draft publication.
+            # Repository contents writers are therefore part of the release trust
+            # boundary. This exact-ID verification is the final API operation
+            # before publication; the immutable attestation is checked afterward.
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+              -F draft=false -f make_latest=false > "$RUNNER_TEMP/release-published.json"
+          fi
+          gh release verify "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY"
+          gh release verify-asset "$RELEASE_TAG" "$RUNNER_TEMP/gpu/$RELEASE_ARCHIVE" \
+            --repo "$GITHUB_REPOSITORY"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+            > "$RUNNER_TEMP/release-published.json"
+          if [ ! -f "$RUNNER_TEMP/release-assets-verification.json" ]; then
+            gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --pattern release-assets-verification.json --dir "$RUNNER_TEMP"
+          fi
+          verify_release_guard
+          gh release verify "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --format json > "$RUNNER_TEMP/immutable-release-attestation.json"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          value = json.loads(Path(os.environ["RUNNER_TEMP"]).joinpath(
+              "immutable-release-attestation.json").read_text())
+          statement = value.get("verificationResult", {}).get("statement", {})
+          predicate = statement.get("predicate", {})
+          if predicate.get("repository") != os.environ["GITHUB_REPOSITORY"] or predicate.get("tag") != os.environ["RELEASE_TAG"]:
+              raise SystemExit("immutable release attestation coordinates differ")
+          expected_uri = f"pkg:github/{os.environ['GITHUB_REPOSITORY']}@{os.environ['RELEASE_TAG']}"
+          matches = [row for row in statement.get("subject", []) if isinstance(row, dict) and row.get("uri") == expected_uri]
+          if len(matches) != 1 or matches[0].get("digest") != {"sha1": os.environ["TAG_OBJECT_SHA"]}:
+              raise SystemExit("immutable release attestation tag object differs")
+          PY
+          args=(); for asset in "${allowed[@]}"; do args+=(--asset "$asset"); done
+          python3 scripts/verify_release_assets.py \
+            --release-json "$RUNNER_TEMP/release-published.json" --tag "$RELEASE_TAG" \
+            "${args[@]}" --asset "release-assets-verification.json=$RUNNER_TEMP/release-assets-verification.json" \
+            --require-published --require-immutable \
+            --output "$RUNNER_TEMP/release-assets-published-verification.json"
+
+      - name: Retain immutable SDK release evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: vellum-immutable-sdk-release
+          path: |
+            ${{ runner.temp }}/source-run.json
+            ${{ runner.temp }}/source-run-jobs.json
+            ${{ runner.temp }}/release-trust.json
+            ${{ runner.temp }}/immutable-release-preflight.json
+            ${{ runner.temp }}/release-tag-protection.json
+            ${{ runner.temp }}/release-assets-verification.json
+            ${{ runner.temp }}/release-assets-draft-verification.json
+            ${{ runner.temp }}/release-assets-final-prepublish-verification.json
+            ${{ runner.temp }}/release-assets-published-verification.json
+            ${{ runner.temp }}/release-published.json
+            ${{ runner.temp }}/immutable-release-attestation.json
+          if-no-files-found: error
+          retention-days: 90

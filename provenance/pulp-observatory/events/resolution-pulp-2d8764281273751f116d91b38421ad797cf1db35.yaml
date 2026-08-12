@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "kind": "resolution",
+  "event_id": "resolution-pulp-2d8764281273751f116d91b38421ad797cf1db35",
+  "resolves": "pulp-2d8764281273751f116d91b38421ad797cf1db35",
+  "created_at": "2026-08-12T03:58:00Z",
+  "owner": "@danielraffel",
+  "disposition": "superseded",
+  "rationale": "Branch-synchronization merge into the sequencer feature branch whose aggregate first-parent diff repeats Pulp changes already observed and classified through their constituent commits. PR #7021 later integrated the branch at 18eff12cf8d20497ea5845aab1e4cfd0c4b31270; this merge envelope has no independent security patch or Vellum contract to implement.",
+  "linked_commits": [
+    "18eff12cf8d20497ea5845aab1e4cfd0c4b31270",
+    "2d8764281273751f116d91b38421ad797cf1db35"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/pulp/pull/7021"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.capture-stats",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "effort_minutes": 5,
+  "shared_contract_release_blocker": false
+}

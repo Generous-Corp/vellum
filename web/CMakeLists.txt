@@ -54,6 +54,9 @@ if(VELLUM_BUILD_TESTS)
     add_test(NAME vellum.web.layout-contract
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_layout_contract.py")
+    add_test(NAME vellum.web.browser-process-cleanup
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_browser_process_cleanup.py")
     add_test(NAME vellum.web.no-engine
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_wasm_no_engine.py"

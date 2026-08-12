@@ -15,11 +15,13 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_FILES = (
+    "collect_release_tag_rulesets.py",
     "install.sh",
     "install_core.py",
     "select_release.py",
     "validate_installed_sdk.py",
     "verify_release_assets.py",
+    "verify_release_tag_ruleset.py",
     "verify_sdk_artifact.py",
 )
 SUPPORT_FILES = (

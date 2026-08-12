@@ -8,8 +8,9 @@ on:
     tags: ['v[0-9]*', 'authority/**']
 
 permissions:
+  actions: read
   attestations: read
-  contents: write
+  contents: read
 
 concurrency:
   group: vellum-gpu-${{ github.ref }}
@@ -38,6 +39,8 @@ jobs:
           set -euo pipefail
           archive="$RUNNER_TEMP/skia-build-mac-arm64-gpu-release.zip"
           curl --fail --location --silent --show-error \
+            --retry 5 --retry-delay 2 --retry-all-errors \
+            --continue-at - \
             https://github.com/danielraffel/skia-builder/releases/download/chrome/m150/skia-build-mac-arm64-gpu-release.zip \
             --output "$archive"
           printf '%s  %s\n' \
@@ -65,6 +68,9 @@ jobs:
           python3 scripts/template_guard.py
           python3 scripts/test_templates_smoke.py
           python3 scripts/test_sterile_acceptance_bundle.py
+          python3 scripts/test_select_exact_provenance_run.py
+          python3 scripts/test_verify_exact_provenance_artifact.py
+          python3 scripts/test_run_parity_proofs.py
           python3 scripts/test_verify_budget_ratification.py
           python3 scripts/verify_budget_ratification.py
           python3 tools/provenance/test_verify_downstream_consumers.py
@@ -205,6 +211,22 @@ jobs:
           file "$RUNNER_TEMP/vellum-gpu-proof.png"
           shasum -a 256 "$RUNNER_TEMP/vellum-gpu-proof.png" \
             > "$RUNNER_TEMP/vellum-gpu-proof.sha256"
+
+      - name: Execute every declared parity proof
+        if: hashFiles('provenance/authority/expansions/full-design-import-render-v1/parity-completion-1.json') != ''
+        run: |
+          python3 scripts/run_parity_proofs.py \
+            --completion provenance/authority/expansions/full-design-import-render-v1/parity-completion-1.json \
+            --output "$RUNNER_TEMP/vellum-parity-proof-execution.json"
+
+      - name: Upload parity proof execution receipt
+        if: hashFiles('provenance/authority/expansions/full-design-import-render-v1/parity-completion-1.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: vellum-parity-proof-execution
+          path: ${{ runner.temp }}/vellum-parity-proof-execution.json
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Prove the installed SDK artifact is reproducible
         shell: bash
@@ -352,201 +374,70 @@ jobs:
           printf 'VELLUM_TAG_OBJECT_SHA=%s\n' \
             "$VELLUM_TAG_OBJECT_SHA" >> "$GITHUB_ENV"
 
-      - name: Prepare the verified private draft release
+      - name: Gate every release mutation on exact provenance readiness
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tag="$GITHUB_REF_NAME"
-          test "$VELLUM_RELEASE_TAG" = "v$VELLUM_RELEASE_VERSION"
-          test "$tag" = "$VELLUM_RELEASE_TAG"
-          test "$VELLUM_RELEASE_ARCHIVE" = \
-            "vellum-sdk-$VELLUM_RELEASE_VERSION-darwin-arm64.tar.gz"
-          test "$VELLUM_RELEASE_NAME" = \
-            "Vellum $VELLUM_RELEASE_VERSION experimental SDK"
-          verify_remote_tag_ref() {
-            local remote_type
-            local remote_tag_object_sha
-            local remote_row
-            if ! remote_row="$(
-              gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" \
-                --jq '[.object.type, .object.sha] | @tsv'
+          test "$GITHUB_REPOSITORY" = "Generous-Corp/vellum"
+          runs="$RUNNER_TEMP/exact-provenance-runs.json"
+          verified_provenance_run=""
+          for attempt in {1..120}; do
+            gh api --method GET \
+              "repos/$GITHUB_REPOSITORY/actions/workflows/provenance.yml/runs" \
+              -f branch="$GITHUB_REF_NAME" \
+              -f event=push \
+              -F per_page=20 > "$runs"
+            if row="$(
+              python3 scripts/select_exact_provenance_run.py \
+                --runs-json "$runs" \
+                --head-sha "$GITHUB_SHA" \
+                --head-branch "$GITHUB_REF_NAME"
             )"; then
-              echo "::error::Could not resolve remote release tag ref refs/tags/$tag"
-              exit 1
-            fi
-            read -r remote_type remote_tag_object_sha <<EOF
-          $remote_row
-          EOF
-            if [ "$remote_type" != tag ] ||
-                [ "$remote_tag_object_sha" != "$VELLUM_TAG_OBJECT_SHA" ]; then
-              echo "::error::Remote release ref refs/tags/$tag changed: expected tag $VELLUM_TAG_OBJECT_SHA, got $remote_type $remote_tag_object_sha"
-              exit 1
-            fi
-          }
-          verify_remote_tag_ref
-          version="$VELLUM_RELEASE_VERSION"
-          test "$(python3 cli/vellum_cli.py --version)" = "vellum $version"
-          python3 -c '
-          import json, sys
-          identity = json.load(open(sys.argv[1], encoding="utf-8"))
-          expected = sys.argv[2]
-          if identity.get("framework_version") != expected or identity.get("cli_version") != expected:
-              raise SystemExit("release artifact identity does not match its immutable tag")
-          ' "$RUNNER_TEMP/sdk-verification.json" "$version"
-          gh release verify-asset --help >/dev/null
-          notes="$RUNNER_TEMP/release-notes.md"
-          cat > "$notes" <<'EOF'
-          Private experimental Vellum SDK with converged native rendering and attributed text.
-
-          This release is intentionally limited to the documented macOS 15.0+ arm64
-          native and browser-Wasm proof lanes. It is not a Pulp dependency or a
-          broad platform support claim.
-          EOF
-          base_assets=(
-            "$VELLUM_RELEASE_ARCHIVE=$RUNNER_TEMP/$VELLUM_RELEASE_ARCHIVE"
-            "install.sh=$RUNNER_TEMP/install.sh"
-            "install_core.py=$RUNNER_TEMP/install_core.py"
-            "SHA256SUMS=$RUNNER_TEMP/SHA256SUMS"
-            "sdk-verification.json=$RUNNER_TEMP/sdk-verification.json"
-            "web-payload.json=$RUNNER_TEMP/web-payload.json"
-            "release-trust.json=$RUNNER_TEMP/release-trust.json"
-            "immutable-release-preflight.json=$RUNNER_TEMP/immutable-release-preflight.json"
-          )
-          resumable_asset_args=(
-            --allowed-asset "release-assets-verification.json"
-          )
-          for asset in "${base_assets[@]}"; do
-            resumable_asset_args+=(--allowed-asset "${asset%%=*}")
-          done
-          release_json="$RUNNER_TEMP/release.json"
-          releases_json="$RUNNER_TEMP/releases.json"
-          load_release_by_tag() {
-            gh api --paginate --slurp \
-              "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
-              > "$releases_json"
-            python3 scripts/select_release.py \
-              --releases-json "$releases_json" \
-              --tag "$tag" \
-              --expected-name "$VELLUM_RELEASE_NAME" \
-              --expected-body-file "$notes" \
-              --expected-author "github-actions[bot]" \
-              "${resumable_asset_args[@]}" \
-              --output "$release_json"
-          }
-          wait_for_created_release() {
-            local attempt
-            local selection_status
-            for attempt in {1..10}; do
-              if load_release_by_tag; then
-                return 0
-              else
-                selection_status=$?
-              fi
+              :
+            else
+              selection_status=$?
               if [ "$selection_status" -ne 4 ]; then
-                return "$selection_status"
+                exit "$selection_status"
               fi
-              if [ "$attempt" -lt 10 ]; then
-                sleep 2
-              fi
-            done
-            echo "::error::Created release did not become list-visible within 18 seconds"
-            return 4
-          }
-          if load_release_by_tag; then
-            release_state="$(
-              python3 -c 'import json,sys; print("draft" if json.load(open(sys.argv[1]))["draft"] else "published")' \
-                "$release_json"
-            )"
-          else
-            selection_status=$?
-            if [ "$selection_status" -ne 4 ]; then
-              exit "$selection_status"
+              row=""
             fi
-            verify_remote_tag_ref
-            gh release create "$tag" \
-              --repo "$GITHUB_REPOSITORY" \
-              --draft \
-              --verify-tag \
-              --title "$VELLUM_RELEASE_NAME" \
-              --notes-file "$notes"
-            wait_for_created_release
-            release_state=draft
-          fi
-          release_id="$(
-            python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' \
-              "$release_json"
-          )"
-
-          verifier_args=()
-          upload_args=()
-          for asset in "${base_assets[@]}"; do
-            verifier_args+=(--asset "$asset")
-            upload_args+=("${asset#*=}")
+            if [ -n "$row" ]; then
+              IFS=$'\t' read -r provenance_run status conclusion <<< "$row"
+              if [ "$status" = completed ]; then
+                if [ "$conclusion" != success ]; then
+                  echo "::error::Exact provenance run $provenance_run concluded $conclusion"
+                  exit 1
+                fi
+                printf 'Verified exact provenance run %s for %s at %s\n' \
+                  "$provenance_run" "$GITHUB_REF_NAME" "$GITHUB_SHA"
+                verified_provenance_run="$provenance_run"
+                break
+              fi
+            fi
+            if [ "$attempt" -lt 120 ]; then
+              sleep 10
+            fi
           done
-
-          if [ "$release_state" = draft ]; then
-            gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" \
-              > "$release_json"
-            previous_verification_id="$(
-              python3 -c '
-          import json, sys
-          assets = json.load(open(sys.argv[1]))["assets"]
-          matches = [str(row["id"]) for row in assets if row["name"] == "release-assets-verification.json"]
-          if len(matches) > 1:
-              raise SystemExit("duplicate release-assets-verification.json assets")
-          print(matches[0] if matches else "")
-          ' "$release_json"
-            )"
-            if [ -n "$previous_verification_id" ]; then
-              verify_remote_tag_ref
-              gh api --method DELETE \
-                "repos/$GITHUB_REPOSITORY/releases/assets/$previous_verification_id"
-            fi
-            verify_remote_tag_ref
-            gh release upload "$tag" "${upload_args[@]}" \
-              --repo "$GITHUB_REPOSITORY" --clobber
-            gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" \
-              > "$release_json"
-            python3 scripts/verify_release_assets.py \
-              --release-json "$release_json" --tag "$tag" \
-              "${verifier_args[@]}" \
-              --output "$RUNNER_TEMP/release-assets-verification.json"
-            verify_remote_tag_ref
-            gh release upload "$tag" \
-              "$RUNNER_TEMP/release-assets-verification.json" \
-              --repo "$GITHUB_REPOSITORY" --clobber
-            gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" \
-              > "$release_json"
-            python3 scripts/verify_release_assets.py \
-              --release-json "$release_json" --tag "$tag" \
-              "${verifier_args[@]}" \
-              --asset "release-assets-verification.json=$RUNNER_TEMP/release-assets-verification.json" \
-              --output "$RUNNER_TEMP/release-assets-draft-verification.json"
-            echo "Verified draft prepared; the source-free sterile job owns publication."
-          else
-            gh release download "$tag" \
-              --repo "$GITHUB_REPOSITORY" \
-              --pattern release-assets-verification.json \
-              --dir "$RUNNER_TEMP"
+          if [ -z "$verified_provenance_run" ]; then
+            echo "::error::Exact successful provenance run was not available within 20 minutes"
+            exit 1
           fi
-
-          if [ "$release_state" = published ]; then
-            gh release verify "$tag" --repo "$GITHUB_REPOSITORY"
-            gh release verify-asset "$tag" \
-              "$RUNNER_TEMP/$VELLUM_RELEASE_ARCHIVE" \
-              --repo "$GITHUB_REPOSITORY"
-            gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" \
-              > "$RUNNER_TEMP/release-published.json"
-            python3 scripts/verify_release_assets.py \
-              --release-json "$RUNNER_TEMP/release-published.json" \
-              --tag "$tag" "${verifier_args[@]}" \
-              --asset "release-assets-verification.json=$RUNNER_TEMP/release-assets-verification.json" \
-              --require-published --require-immutable \
-              --output "$RUNNER_TEMP/release-assets-published-verification.json"
-          fi
+          sibling="$RUNNER_TEMP/exact-provenance-artifact"
+          mkdir "$sibling"
+          gh run download "$verified_provenance_run" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name provenance-report \
+            --dir "$sibling"
+          python3 scripts/verify_exact_provenance_artifact.py \
+            --trust-json "$sibling/promotion-release-tag-trust.json" \
+            --readiness-json "$sibling/authority-expansion-report.json" \
+            --repository "$GITHUB_REPOSITORY" \
+            --tag "$GITHUB_REF_NAME" \
+            --source-commit "$GITHUB_SHA" \
+            --tag-object-sha "$VELLUM_TAG_OBJECT_SHA"
 
       - name: Upload retained GPU evidence
         if: always()
@@ -575,12 +466,8 @@ jobs:
             ${{ runner.temp }}/phase3-browser-evidence.json
             ${{ runner.temp }}/release-trust.json
             ${{ runner.temp }}/immutable-release-preflight.json
-            ${{ runner.temp }}/release-assets-verification.json
-            ${{ runner.temp }}/release-assets-draft-verification.json
-            ${{ runner.temp }}/release-assets-published-verification.json
           if-no-files-found: error
           retention-days: 90
-
   sterile-consumer:
     name: sterile-consumer
     needs: gpu-macos-arm64
@@ -666,113 +553,6 @@ jobs:
             --output "$RUNNER_TEMP/sdk-installed-validation.json" \
             --json > "$RUNNER_TEMP/sdk-installed-validation.stdout.json"
 
-      - name: Publish only after the source-free journey passes
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          tag="$GITHUB_REF_NAME"
-          input="$RUNNER_TEMP/vellum-input"
-          notes="$RUNNER_TEMP/release-notes.md"
-          cat > "$notes" <<'EOF'
-          Private experimental Vellum SDK with converged native rendering and attributed text.
-
-          This release is intentionally limited to the documented macOS 15.0+ arm64
-          native and browser-Wasm proof lanes. It is not a Pulp dependency or a
-          broad platform support claim.
-          EOF
-          releases_json="$RUNNER_TEMP/releases.json"
-          release_json="$RUNNER_TEMP/release.json"
-          gh api --paginate --slurp \
-            "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
-            > "$releases_json"
-          python3 "$VELLUM_STERILE_ROOT/select_release.py" \
-            --releases-json "$releases_json" \
-            --tag "$tag" \
-            --expected-name "$VELLUM_RELEASE_NAME" \
-            --expected-body-file "$notes" \
-            --expected-author "github-actions[bot]" \
-            --allowed-asset "$VELLUM_RELEASE_ARCHIVE" \
-            --allowed-asset install.sh \
-            --allowed-asset install_core.py \
-            --allowed-asset SHA256SUMS \
-            --allowed-asset sdk-verification.json \
-            --allowed-asset web-payload.json \
-            --allowed-asset release-trust.json \
-            --allowed-asset immutable-release-preflight.json \
-            --allowed-asset release-assets-verification.json \
-            --output "$release_json"
-          release_id="$(
-            python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["draft"]; print(value["id"])' \
-              "$release_json"
-          )"
-          old_verification_id="$(
-            python3 -c '
-          import json,sys
-          rows=[str(row["id"]) for row in json.load(open(sys.argv[1]))["assets"]
-                if row["name"] == "release-assets-verification.json"]
-          assert len(rows) <= 1
-          print(rows[0] if rows else "")
-          ' "$release_json"
-          )"
-          if [ -n "$old_verification_id" ]; then
-            gh api --method DELETE \
-              "repos/$GITHUB_REPOSITORY/releases/assets/$old_verification_id"
-          fi
-          gh release upload "$tag" \
-            "$RUNNER_TEMP/sdk-installed-validation.json" \
-            --repo "$GITHUB_REPOSITORY" --clobber
-          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" \
-            > "$release_json"
-          assets=(
-            "$VELLUM_RELEASE_ARCHIVE=$input/$VELLUM_RELEASE_ARCHIVE"
-            "install.sh=$input/install.sh"
-            "install_core.py=$input/install_core.py"
-            "SHA256SUMS=$input/SHA256SUMS"
-            "sdk-verification.json=$input/sdk-verification.json"
-            "sdk-installed-validation.json=$RUNNER_TEMP/sdk-installed-validation.json"
-            "web-payload.json=$input/web-payload.json"
-            "release-trust.json=$input/release-trust.json"
-            "immutable-release-preflight.json=$input/immutable-release-preflight.json"
-          )
-          verifier_args=()
-          for asset in "${assets[@]}"; do
-            verifier_args+=(--asset "$asset")
-          done
-          python3 "$VELLUM_STERILE_ROOT/verify_release_assets.py" \
-            --release-json "$release_json" --tag "$tag" \
-            "${verifier_args[@]}" \
-            --output "$RUNNER_TEMP/release-assets-verification.json"
-          gh release upload "$tag" \
-            "$RUNNER_TEMP/release-assets-verification.json" \
-            --repo "$GITHUB_REPOSITORY" --clobber
-          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" \
-            > "$release_json"
-          python3 "$VELLUM_STERILE_ROOT/verify_release_assets.py" \
-            --release-json "$release_json" --tag "$tag" \
-            "${verifier_args[@]}" \
-            --asset "release-assets-verification.json=$RUNNER_TEMP/release-assets-verification.json" \
-            --output "$RUNNER_TEMP/release-assets-draft-verification.json"
-          gh api --method PATCH \
-            "repos/$GITHUB_REPOSITORY/releases/$release_id" \
-            -F draft=false \
-            -f make_latest=false \
-            > "$RUNNER_TEMP/release-published.json"
-          gh release verify "$tag" --repo "$GITHUB_REPOSITORY"
-          gh release verify-asset "$tag" \
-            "$input/$VELLUM_RELEASE_ARCHIVE" \
-            --repo "$GITHUB_REPOSITORY"
-          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" \
-            > "$RUNNER_TEMP/release-published.json"
-          python3 "$VELLUM_STERILE_ROOT/verify_release_assets.py" \
-            --release-json "$RUNNER_TEMP/release-published.json" \
-            --tag "$tag" "${verifier_args[@]}" \
-            --asset "release-assets-verification.json=$RUNNER_TEMP/release-assets-verification.json" \
-            --require-published --require-immutable \
-            --output "$RUNNER_TEMP/release-assets-published-verification.json"
-
       - name: Retain the source-free journey evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -781,9 +561,5 @@ jobs:
           path: |
             ${{ runner.temp }}/sdk-installed-validation.json
             ${{ runner.temp }}/sdk-installed-validation.stdout.json
-            ${{ runner.temp }}/release-assets-verification.json
-            ${{ runner.temp }}/release-assets-draft-verification.json
-            ${{ runner.temp }}/release-assets-published-verification.json
-            ${{ runner.temp }}/release-published.json
           if-no-files-found: error
           retention-days: 90
