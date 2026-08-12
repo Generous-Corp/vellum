@@ -14,6 +14,18 @@ import tempfile
 import threading
 
 
+def stop_browser(process: subprocess.Popen[bytes], timeout: int = 5) -> None:
+    """Stop Chrome, escalating when its normal shutdown does not complete."""
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--core-root", required=True, type=Path)
@@ -124,11 +136,11 @@ def main() -> int:
                     f"http://127.0.0.1:{server.server_port}/index.html"
                     "?vellum-scenario=/scenario.json",
                 ])
-                if not received.wait(20):
-                    process.terminate()
-                    raise SystemExit("browser text proof timed out")
-                process.terminate()
-                process.wait(5)
+                try:
+                    if not received.wait(20):
+                        raise SystemExit("browser text proof timed out")
+                finally:
+                    stop_browser(process)
         finally:
             server.shutdown()
             thread.join(5)
