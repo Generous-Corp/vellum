@@ -190,6 +190,14 @@ class Tests(unittest.TestCase):
         self.assertIn(
             'test "$GITHUB_REPOSITORY" = "Generous-Corp/vellum"', workflow
         )
+        preflight = json.loads(
+            (ROOT / "provenance/immutable-release-preflight.json").read_text()
+        )
+        self.assertEqual(preflight["repository"], "Generous-Corp/vellum")
+        self.assertEqual(
+            preflight["administrator_check"]["endpoint"],
+            "GET /repos/Generous-Corp/vellum/immutable-releases",
+        )
         self.assertIn("scripts/select_exact_provenance_run.py", workflow)
         provenance = (ROOT / ".github/workflows/provenance.yml").read_text()
         self.assertIn("python3 scripts/test_select_exact_provenance_run.py", provenance)

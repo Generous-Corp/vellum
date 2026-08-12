@@ -1,8 +1,8 @@
 {
   "administrator_check": {
-    "checked_at": "2026-08-10T14:44:23Z",
+    "checked_at": "2026-08-12T04:18:15Z",
     "enabled": true,
-    "endpoint": "GET /repos/danielraffel/vellum/immutable-releases",
+    "endpoint": "GET /repos/Generous-Corp/vellum/immutable-releases",
     "enforced_by_owner": false,
     "required_permission": "Administration: read"
   },
@@ -10,6 +10,6 @@
   "integrity_model": "covered-by-exact-signed-annotated-release-tag",
   "maximum_age_seconds": 21600,
   "release_tag": "v0.1.7",
-  "repository": "danielraffel/vellum",
+  "repository": "Generous-Corp/vellum",
   "schema": "vellum.immutable-release-preflight.v1"
 }
