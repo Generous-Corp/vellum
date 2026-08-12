@@ -7522,7 +7522,7 @@
       "class": "security",
       "deadline": "2026-08-12T03:33:06Z",
       "direction": "Pulp-to-framework",
-      "disposition": "pending",
+      "disposition": "superseded",
       "event_id": "pulp-17c7b4fff373d759f5fab6da873a68303d36b9f3",
       "mapped_contracts": [
         "canvas-kernel",
@@ -7540,7 +7540,7 @@
       "class": "security",
       "deadline": "2026-08-12T03:33:06Z",
       "direction": "Pulp-to-framework",
-      "disposition": "pending",
+      "disposition": "superseded",
       "event_id": "pulp-2d8764281273751f116d91b38421ad797cf1db35",
       "mapped_contracts": [
         "canvas-kernel",
@@ -7590,12 +7590,12 @@
       "source_repository": "Generous-Corp/vellum"
     }
   ],
-  "generated_at": "2026-08-12T03:21:00Z",
+  "generated_at": "2026-08-12T04:00:00Z",
   "health": "pass",
-  "maximum_pending_age_days": 1.588,
+  "maximum_pending_age_days": 1.615,
   "observatory_effort_percent": 0.0,
   "overdue": 0,
-  "pending": 6,
+  "pending": 4,
   "release_blockers": [],
   "repeated_generic_fixes": {
     "canvas-kernel": 2,
