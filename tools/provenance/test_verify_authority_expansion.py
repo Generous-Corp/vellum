@@ -160,6 +160,18 @@ class Tests(unittest.TestCase):
         )
         self.assertEqual(report["status"], "fail")
 
+    def test_matrix_closed_vocabulary_fields_reject_non_string_values(self) -> None:
+        for field in ("family", "status", "target_status"):
+            for value in ({}, []):
+                with self.subTest(field=field, value_type=type(value).__name__):
+                    report = self.mutate_matrix(
+                        lambda data, field=field, value=value: data["cells"][0].update(
+                            {field: value}
+                        )
+                    )
+                    self.assertEqual(report["status"], "fail")
+                    self.assertTrue(report["errors"])
+
     def test_matrix_cannot_drop_chromium_or_weaken_required_target(self) -> None:
         report = self.mutate_matrix(
             lambda d: d["cells"].__setitem__(

@@ -955,21 +955,33 @@ def validate_matrix(data: Any) -> list[str]:
                 errors.append(f"{where}.id: missing or duplicate")
             else:
                 seen.add(cell_id)
-            if cell["family"] not in families:
+            family = cell["family"]
+            status = cell["status"]
+            target_status = cell["target_status"]
+            if not isinstance(family, str) or family not in families:
                 errors.append(f"{where}.family: unknown capability family")
-            if cell["status"] not in statuses or cell["target_status"] not in statuses:
+            status_valid = isinstance(status, str) and status in statuses
+            target_status_valid = (
+                isinstance(target_status, str) and target_status in statuses
+            )
+            if not status_valid or not target_status_valid:
                 errors.append(f"{where}: status outside closed vocabulary")
-            if cell["status"] == "partial" and cell["target_status"] != "supported":
-                errors.append(f"{where}: partial required capability must target supported")
-            if cell["status"] in {"rejected-by-contract", "not-applicable"} and (
-                cell["target_status"] != cell["status"]
-            ):
-                errors.append(f"{where}: retained boundary target must preserve disposition")
+            if status_valid and target_status_valid:
+                if status == "partial" and target_status != "supported":
+                    errors.append(
+                        f"{where}: partial required capability must target supported"
+                    )
+                if status in {"rejected-by-contract", "not-applicable"} and (
+                    target_status != status
+                ):
+                    errors.append(
+                        f"{where}: retained boundary target must preserve disposition"
+                    )
             for key in ("pulp_implementation", "pulp_proof"):
                 if strings(cell[key], f"{where}.{key}", errors):
                     for path in cell[key]:
                         safe_path(path, f"{where}.{key}", errors)
-            allow_empty = cell["status"] == "rejected-by-contract"
+            allow_empty = status == "rejected-by-contract"
             for key in ("vellum_future_implementation", "vellum_future_proof"):
                 if strings(cell[key], f"{where}.{key}", errors, empty=allow_empty):
                     for path in cell[key]:
