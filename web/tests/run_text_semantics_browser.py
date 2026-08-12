@@ -9,20 +9,42 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import tempfile
 import threading
 
 
-def stop_browser(process: subprocess.Popen[bytes], timeout: int = 5) -> None:
-    """Stop Chrome, escalating when its normal shutdown does not complete."""
-    if process.poll() is not None:
+def stop_browser(
+    process: subprocess.Popen[bytes], timeout: int = 5, *,
+    process_group: int | None = None,
+) -> None:
+    """Stop Chrome and every helper that could retain inherited descriptors."""
+    if process_group is None:
+        if process.poll() is not None:
+            return
+        process.terminate()
+        try:
+            process.wait(timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout)
         return
-    process.terminate()
+
     try:
-        process.wait(timeout)
-    except subprocess.TimeoutExpired:
-        process.kill()
+        os.killpg(process_group, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    if process.poll() is None:
+        try:
+            process.wait(timeout)
+        except subprocess.TimeoutExpired:
+            pass
+    try:
+        os.killpg(process_group, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+    if process.poll() is None:
         process.wait(timeout)
 
 
@@ -135,12 +157,16 @@ def main() -> int:
                     "--disable-background-networking", f"--user-data-dir={profile}",
                     f"http://127.0.0.1:{server.server_port}/index.html"
                     "?vellum-scenario=/scenario.json",
-                ])
+                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    start_new_session=os.name == "posix")
                 try:
                     if not received.wait(20):
                         raise SystemExit("browser text proof timed out")
                 finally:
-                    stop_browser(process)
+                    stop_browser(
+                        process,
+                        process_group=process.pid if os.name == "posix" else None,
+                    )
         finally:
             server.shutdown()
             thread.join(5)
