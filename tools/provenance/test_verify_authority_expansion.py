@@ -3,15 +3,18 @@
 
 from __future__ import annotations
 
+import builtins
 import importlib.util
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 SCRIPT = Path(__file__).with_name("verify_authority_expansion.py")
@@ -69,7 +72,7 @@ class Tests(unittest.TestCase):
 
     def promotion_attestation(
         self, acknowledgement_sha256: str, *, commit: str = "1" * 40,
-        tree: str = "2" * 40,
+        tree: str = "2" * 40, completion_sha256: str = "4" * 64,
     ) -> dict:
         return {
             "schema_version": 1,
@@ -89,11 +92,17 @@ class Tests(unittest.TestCase):
             "exact_boundary_amendment_sha256": verifier.EXPECTED_BOUNDARY_AMENDMENT_SHA256,
             "exact_boundary_acknowledgement_id": "full-design-import-render-v1-exact-boundary-acknowledgement-1",
             "exact_boundary_acknowledgement_sha256": acknowledgement_sha256,
+            "parity_completion_id": "full-design-import-render-v1-parity-completion-1",
+            "parity_completion_sha256": completion_sha256,
             "parity_release_source_commit": commit,
         }
 
     def pulp_exact_boundary_acceptance(
-        self, acknowledgement: dict, *, pulp_main_commit: str = "7" * 40
+        self, acknowledgement: dict, *, pulp_main_commit: str = "7" * 40,
+        projection_sha256: str = "9" * 64,
+        router_sha256: str = "a" * 64,
+        router_test_sha256: str = "b" * 64,
+        router_dependency_sha256: str = "c" * 64,
     ) -> dict:
         coordinates = acknowledgement["coordinates"]
         return {
@@ -121,6 +130,33 @@ class Tests(unittest.TestCase):
                 "open_pr_rows": [],
                 "open_vellum_overlap_count": 0,
             },
+            "routing_projection": {
+                "path": verifier.PULP_OWNERSHIP_PATH,
+                "sha256": projection_sha256,
+                "schema_version": 3,
+                "expansion_id": "full-design-import-render-v1",
+                "route_set_sha256": verifier.canonical_sha256(
+                    verifier.exact_route_rows(
+                        json.loads((ROOT / verifier.MATRIX_PATH).read_text()),
+                        json.loads((ROOT / verifier.BOUNDARY_AMENDMENT_PATH).read_text()),
+                    )
+                ),
+                "router_path": ".agents/skills/pulp-vellum-change-routing/scripts/route_change.py",
+                "router_sha256": router_sha256,
+                "router_contract_test_path": ".agents/skills/pulp-vellum-change-routing/scripts/test_route_change.py",
+                "router_contract_test_sha256": router_test_sha256,
+                "router_dependency_path": ".agents/skills/pulp-vellum-change-routing/scripts/routing_evidence.py",
+                "router_dependency_sha256": router_dependency_sha256,
+                "router_contract_check": {
+                    "name": "vellum-routing-contract",
+                    "app_id": 15368,
+                    "workflow_path": ".github/workflows/vellum-routing-contract.yml",
+                    "event": "push",
+                    "branch": "main",
+                    "contract_scope": "full-bound-router-contract-suite",
+                    "required_case_ids": verifier.REQUIRED_PULP_ROUTER_CASES,
+                },
+            },
             "authority_effect": "none",
             "implementation_authority": (
                 "forbidden-until-vellum-exact-boundary-acknowledged"
@@ -132,6 +168,95 @@ class Tests(unittest.TestCase):
                 "source_work_authorized": False,
                 "pulp_consumption_authorized": False,
             },
+        }
+
+    def pulp_ownership_projection(self) -> dict:
+        matrix = json.loads((ROOT / verifier.MATRIX_PATH).read_text())
+        amendment = json.loads((ROOT / verifier.BOUNDARY_AMENDMENT_PATH).read_text())
+        routes = verifier.exact_route_rows(matrix, amendment)
+        return {
+            "schema_version": 3,
+            "framework_repository": "Generous-Corp/vellum",
+            "slices": [],
+            "expansions": [{
+                "id": "full-design-import-render-v1",
+                "state": "accepted-pending-vellum-acknowledgement",
+                "accepted_at": "2026-11-29T00:00:00Z",
+                "accepted_by": "@danielraffel",
+                "amendment_id": "full-design-import-render-v1-exact-boundary-amendment-1",
+                "matrix_id": "full-design-import-render-v1-compatibility-matrix",
+                "matrix_sha256": verifier.EXPECTED_MATRIX_SHA256,
+                "route_set_sha256": verifier.canonical_sha256(routes),
+                "routes": routes,
+            }],
+        }
+
+    def parity_completion(self, root: Path) -> dict:
+        matrix = json.loads((ROOT / verifier.MATRIX_PATH).read_text())
+        amendment = json.loads((ROOT / verifier.BOUNDARY_AMENDMENT_PATH).read_text())
+        routes = verifier.exact_route_rows(matrix, amendment)
+        rows = []
+        for cell in matrix["cells"]:
+            if cell["status"] == cell["target_status"]:
+                continue
+            cell_id = cell["id"]
+            paths = {}
+            for role, key in (
+                ("vellum_future_implementation", "implementation_paths"),
+                ("vellum_future_proof", "proof_paths"),
+            ):
+                paths[key] = sorted(
+                    row["path"] for row in routes
+                    if row["repository"] == "Generous-Corp/vellum"
+                    and {"cell_id": cell_id, "role": role} in row["cell_roles"]
+                )
+                for path in paths[key]:
+                    target = root / path
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text("completion fixture\n")
+            rows.append({
+                "cell_id": cell_id,
+                "achieved_status": cell["target_status"],
+                **paths,
+                "required_checks": [
+                    item["name"] for item in verifier.REQUIRED_PARITY_CHECKS
+                ],
+                "proof_executions": [
+                    {
+                        "path": path,
+                        "sha256": hashlib.sha256((root / path).read_bytes()).hexdigest(),
+                        "check": "gpu-macos-arm64",
+                        "test_id": (
+                            verifier.CPP_PROOF_TEST_IDS.get(path)
+                            or verifier.ARGUMENT_DRIVEN_PROOF_TEST_IDS.get(path)
+                            or verifier.FIXTURE_PROOF_CONSUMERS.get(path)
+                            or path
+                        ),
+                        "runner": (
+                            "ctest-case"
+                            if path in verifier.ARGUMENT_DRIVEN_PROOF_TEST_IDS
+                            else {
+                            ".py": "python-file", ".js": "node-test-file",
+                            ".mjs": "node-test-file", ".cpp": "ctest-case",
+                            ".zip": "fixture-consumer",
+                            }[Path(path).suffix]
+                        ),
+                    }
+                    for path in paths["proof_paths"]
+                ],
+            })
+        return {
+            "schema_version": 1,
+            "kind": "full-design-import-render-parity-completion",
+            "completion_id": "full-design-import-render-v1-parity-completion-1",
+            "state": "complete",
+            "completed_at": "2026-12-01T00:00:00Z",
+            "completed_by": "@danielraffel",
+            "matrix_id": "full-design-import-render-v1-compatibility-matrix",
+            "matrix_merge_commit": "bbe187d581f3f021a25b3ebd01332f89bbde142e",
+            "matrix_sha256": verifier.EXPECTED_MATRIX_SHA256,
+            "required_check_runs": verifier.REQUIRED_PARITY_CHECKS,
+            "cells": rows,
         }
 
     def init_git_repo(self, root: Path, *, remote: str) -> tuple[str, str]:
@@ -170,6 +295,13 @@ class Tests(unittest.TestCase):
         self.assertIn("--pulp-root .exact-boundary-pulp", workflow)
         self.assertIn("--delivery-root .promotion-delivery", workflow)
         self.assertIn("--promotion-attestation", workflow)
+        self.assertIn("--check-runs-json", workflow)
+        self.assertIn("actions: read", workflow)
+        self.assertIn("checks: read", workflow)
+        self.assertIn("gh api --method GET --paginate --slurp", workflow)
+        self.assertIn("-f filter=all -F per_page=100", workflow)
+        clean_workflow = (ROOT / ".github/workflows/readme-quick-start.yml").read_text()
+        self.assertIn("push:\n    branches: [main]", clean_workflow)
         self.assertIn("secrets.VELLUM_DELIVERY_READER_TOKEN", workflow)
         self.assertIn("Require private delivery repository read access", workflow)
         self.assertIn("release tag lacks an SSH-signed JSON message", workflow)
@@ -199,8 +331,12 @@ class Tests(unittest.TestCase):
             "GET /repos/Generous-Corp/vellum/immutable-releases",
         )
         self.assertIn("scripts/select_exact_provenance_run.py", workflow)
+        self.assertIn("scripts/verify_exact_provenance_artifact.py", workflow)
+        self.assertIn("promotion-release-tag-trust.json", workflow)
+        self.assertIn('--tag-object-sha "$VELLUM_TAG_OBJECT_SHA"', workflow)
         provenance = (ROOT / ".github/workflows/provenance.yml").read_text()
         self.assertIn("python3 scripts/test_select_exact_provenance_run.py", provenance)
+        self.assertIn("python3 scripts/test_verify_exact_provenance_artifact.py", provenance)
         self.assertEqual(
             workflow.count("python3 scripts/test_select_exact_provenance_run.py"), 1
         )
@@ -492,11 +628,12 @@ class Tests(unittest.TestCase):
         data = json.loads((ROOT / verifier.MATRIX_PATH).read_text())
         amendment = json.loads((ROOT / verifier.BOUNDARY_AMENDMENT_PATH).read_text())
         errors = verifier.validate_release_readiness(ROOT, data, amendment)
-        self.assertTrue(any("source.agent-html-chromium" in error for error in errors))
+        self.assertTrue(any("versioned parity completion" in error for error in errors))
+        self.assertTrue(any("workflow-run evidence" in error for error in errors))
         for cell in data["cells"]:
             cell["status"] = cell["target_status"]
         errors = verifier.validate_release_readiness(ROOT, data, amendment)
-        self.assertFalse(any("have not reached target" in error for error in errors))
+        self.assertTrue(any("versioned parity completion" in error for error in errors))
         self.assertTrue(any("promotion attestation" in error for error in errors))
 
     def test_release_readiness_accepts_valid_promotion_evidence(self) -> None:
@@ -509,6 +646,10 @@ class Tests(unittest.TestCase):
             json.dumps(self.exact_boundary_acknowledgement()) + "\n"
         )
         digest = hashlib.sha256(acknowledgement.read_bytes()).hexdigest()
+        completion = root / verifier.PARITY_COMPLETION_PATH
+        completion_data = self.parity_completion(root)
+        completion.write_text(json.dumps(completion_data) + "\n")
+        completion_digest = hashlib.sha256(completion.read_bytes()).hexdigest()
         authority_commit, authority_tree = self.init_git_repo(
             root, remote="https://github.com/Generous-Corp/vellum.git"
         )
@@ -522,15 +663,62 @@ class Tests(unittest.TestCase):
         promotion.write_text(
             json.dumps(
                 self.promotion_attestation(
-                    digest, commit=authority_commit, tree=authority_tree
+                    digest, commit=authority_commit, tree=authority_tree,
+                    completion_sha256=completion_digest,
                 )
             )
             + "\n"
         )
         matrix = json.loads((ROOT / verifier.MATRIX_PATH).read_text())
-        for cell in matrix["cells"]:
-            cell["status"] = cell["target_status"]
         amendment = json.loads((ROOT / verifier.BOUNDARY_AMENDMENT_PATH).read_text())
+        check_runs = {
+            "check_runs": [
+                {
+                    "name": item["name"],
+                    "head_sha": authority_commit,
+                    "conclusion": "success",
+                    "app": {"id": item["app_id"]},
+                    "details_url": (
+                        "https://github.com/Generous-Corp/vellum/actions/runs/"
+                        f"{1000 + index}/job/{2000 + index}"
+                    ),
+                }
+                for index, item in enumerate(verifier.REQUIRED_PARITY_CHECKS)
+            ],
+            "workflow_runs": [
+                {
+                    "id": 1000 + index,
+                    "path": item["workflow_path"],
+                    "event": "push",
+                    "head_branch": "main",
+                    "head_sha": authority_commit,
+                    "status": "completed",
+                    "conclusion": "success",
+                }
+                for index, item in enumerate(verifier.REQUIRED_PARITY_CHECKS)
+            ],
+            "parity_proof_execution_receipts": [{
+                "schema_version": 1,
+                "kind": "vellum-parity-proof-execution",
+                "repository": "Generous-Corp/vellum",
+                "head_sha": authority_commit,
+                "run_id": 1002,
+                "check_name": "gpu-macos-arm64",
+                "workflow_path": ".github/workflows/gpu-macos.yml",
+                "status": "pass",
+                "proofs": [
+                    {
+                        "path": execution["path"],
+                        "sha256": execution["sha256"],
+                        "test_id": execution["test_id"],
+                        "runner": execution["runner"],
+                        "status": "pass",
+                    }
+                    for row in completion_data["cells"]
+                    for execution in row["proof_executions"]
+                ],
+            }],
+        }
         self.assertEqual(
             verifier.validate_release_readiness(
                 root,
@@ -540,9 +728,99 @@ class Tests(unittest.TestCase):
                 delivery_root=delivery_root,
                 repository="Generous-Corp/vellum",
                 release_source_commit=authority_commit,
+                check_runs=check_runs,
             ),
             [],
         )
+        completion.write_text('{"forged":"worktree-only"}\n')
+        self.assertEqual(
+            verifier.validate_release_readiness(
+                root,
+                matrix,
+                amendment,
+                promotion_attestation=promotion,
+                delivery_root=delivery_root,
+                repository="Generous-Corp/vellum",
+                release_source_commit=authority_commit,
+                check_runs=check_runs,
+            ),
+            [],
+        )
+
+    def test_parity_completion_is_a_versioned_successor_to_frozen_matrix(self) -> None:
+        temporary, root, _ = self.copy()
+        self.addCleanup(temporary.cleanup)
+        matrix = json.loads((ROOT / verifier.MATRIX_PATH).read_text())
+        amendment = json.loads((ROOT / verifier.BOUNDARY_AMENDMENT_PATH).read_text())
+        completion = self.parity_completion(root)
+        self.assertEqual(
+            verifier.validate_parity_completion(root, completion, matrix, amendment), []
+        )
+        completion["cells"].pop()
+        errors = verifier.validate_parity_completion(root, completion, matrix, amendment)
+        self.assertTrue(any("required cell IDs differ" in error for error in errors))
+        self.assertEqual(
+            hashlib.sha256((ROOT / verifier.MATRIX_PATH).read_bytes()).hexdigest(),
+            verifier.EXPECTED_MATRIX_SHA256,
+        )
+
+    def test_parity_completion_rejects_untracked_paths_and_missing_exact_checks(self) -> None:
+        temporary, root, _ = self.copy()
+        self.addCleanup(temporary.cleanup)
+        matrix = json.loads((ROOT / verifier.MATRIX_PATH).read_text())
+        amendment = json.loads((ROOT / verifier.BOUNDARY_AMENDMENT_PATH).read_text())
+        completion = self.parity_completion(root)
+        victim = Path(completion["cells"][0]["implementation_paths"][0])
+        (root / victim).unlink()
+        commit, _ = self.init_git_repo(
+            root, remote="https://github.com/Generous-Corp/vellum.git"
+        )
+        (root / victim).write_text("untracked placeholder\n")
+        check_runs = {
+            "check_runs": [
+                {
+                    "name": item["name"], "head_sha": commit,
+                    "conclusion": "success", "app": {"id": item["app_id"]},
+                    "details_url": (
+                        "https://github.com/Generous-Corp/vellum/actions/runs/"
+                        f"{1000 + index}/job/{2000 + index}"
+                    ),
+                }
+                for index, item in enumerate(verifier.REQUIRED_PARITY_CHECKS[:-1])
+            ],
+            "workflow_runs": [
+                {
+                    "id": 1000 + index, "path": item["workflow_path"],
+                    "event": "push", "head_branch": "main", "head_sha": commit,
+                    "status": "completed", "conclusion": "success",
+                }
+                for index, item in enumerate(verifier.REQUIRED_PARITY_CHECKS[:-1])
+            ],
+        }
+        errors = verifier.validate_parity_completion(
+            root, completion, matrix, amendment,
+            release_source_commit=commit, check_runs=check_runs,
+        )
+        self.assertTrue(any("tagged release commit lacks regular blob" in e for e in errors))
+        self.assertTrue(any("sterile-consumer" in e for e in errors))
+
+    def test_pulp_projection_must_equal_frozen_exact_routes(self) -> None:
+        acknowledgement = self.exact_boundary_acknowledgement()
+        acceptance = self.pulp_exact_boundary_acceptance(acknowledgement)
+        matrix = json.loads((ROOT / verifier.MATRIX_PATH).read_text())
+        amendment = json.loads((ROOT / verifier.BOUNDARY_AMENDMENT_PATH).read_text())
+        projection = self.pulp_ownership_projection()
+        self.assertEqual(
+            verifier.validate_pulp_ownership_projection(
+                projection, acceptance, matrix, amendment
+            ),
+            [],
+        )
+        projection["expansions"][0]["routes"].pop()
+        errors = verifier.validate_pulp_ownership_projection(
+            projection, acceptance, matrix, amendment
+        )
+        self.assertTrue(any("differs from exact routes" in error for error in errors))
 
     def test_exact_acknowledgement_resolves_pulp_acceptance_and_vellum_artifacts(self) -> None:
         amendment_commit = subprocess.check_output(
@@ -562,12 +840,67 @@ class Tests(unittest.TestCase):
         pulp_main_commit, _ = self.init_git_repo(
             pulp_root, remote="https://github.com/Generous-Corp/pulp.git"
         )
+        projection_path = pulp_root / verifier.PULP_OWNERSHIP_PATH
+        projection_path.parent.mkdir(parents=True, exist_ok=True)
+        projection_path.write_text(json.dumps(self.pulp_ownership_projection()) + "\n")
+        projection_digest = hashlib.sha256(projection_path.read_bytes()).hexdigest()
+        router_root = (
+            pulp_root / ".agents/skills/pulp-vellum-change-routing/scripts"
+        )
+        router_root.mkdir(parents=True, exist_ok=True)
+        router_path = router_root / "route_change.py"
+        router_path.write_text(
+            """import builtins
+import os
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+if os.environ.get('GH_TOKEN'):
+    raise RuntimeError('parent credential crossed isolation boundary')
+builtins.VELLUM_EXTERNAL_ROUTER_MUTATION = True
+class AuthorityError(RuntimeError): pass
+@dataclass(frozen=True)
+class Authority:
+    vellum: Path
+    pulp: Path
+    vellum_head: str
+    pulp_head: str
+    pulp_projection: dict[str, Any]
+    counterpart_map: dict[str, Any]
+    coordinates: dict[str, str]
+def exact_slices(authority, path):
+    matches = [row for row in authority.pulp_projection.get('slices', []) if path in row.get('paths', [])]
+    for expansion in authority.pulp_projection.get('expansions', []):
+        routes = [row for row in expansion.get('routes', []) if row.get('repository') == 'Generous-Corp/pulp' and row.get('path') == path]
+        if routes:
+            matches.append({'id': expansion['id'], 'state': 'pulp-authoritative-untransferred', 'paths': [path], 'authority': None})
+    if len(matches) > 1: raise AuthorityError('multiple exact owners')
+    return matches
+def route(authority, *, source_repo, paths, intent, **kwargs):
+    if source_repo == 'vellum':
+        return {'status': 'routed', 'primary_repository': 'vellum', 'matched_slices': []}
+    matches = exact_slices(authority, paths[0])
+    return {'status': 'routed', 'primary_repository': 'pulp', 'matched_slices': [row['id'] for row in matches]}
+"""
+        )
+        router_test_path = router_root / "test_route_change.py"
+        router_test_path.write_text("# expansion routing negative controls\n")
+        router_dependency_path = router_root / "routing_evidence.py"
+        router_dependency_path.write_text("# no dependencies in fixture router\n")
         acceptance_path = pulp_root / acknowledgement["coordinates"]["pulp_acceptance_path"]
         acceptance_path.parent.mkdir(parents=True)
         acceptance_path.write_text(
             json.dumps(
                 self.pulp_exact_boundary_acceptance(
-                    acknowledgement, pulp_main_commit=pulp_main_commit
+                    acknowledgement, pulp_main_commit=pulp_main_commit,
+                    projection_sha256=projection_digest,
+                    router_sha256=hashlib.sha256(router_path.read_bytes()).hexdigest(),
+                    router_test_sha256=hashlib.sha256(
+                        router_test_path.read_bytes()
+                    ).hexdigest(),
+                    router_dependency_sha256=hashlib.sha256(
+                        router_dependency_path.read_bytes()
+                    ).hexdigest(),
                 )
             )
             + "\n"
@@ -584,10 +917,26 @@ class Tests(unittest.TestCase):
         acknowledgement["coordinates"]["pulp_acceptance_merge_commit"] = pulp_commit
         acknowledgement["coordinates"]["pulp_acceptance_sha256"] = digest
         amendment = json.loads((ROOT / verifier.BOUNDARY_AMENDMENT_PATH).read_text())
+        with mock.patch.dict(
+            os.environ, {"GH_TOKEN": "must-not-cross-isolation-boundary"}
+        ):
+            errors = verifier.validate_exact_boundary_repository_evidence(
+                ROOT, pulp_root, acknowledgement, amendment
+            )
+        self.assertEqual(errors, [])
+        self.assertFalse(hasattr(builtins, "VELLUM_EXTERNAL_ROUTER_MUTATION"))
+        (pulp_root / verifier.PULP_OWNERSHIP_PATH).write_text('{"schema_version":3}\n')
+        subprocess.run(["git", "-C", str(pulp_root), "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", str(pulp_root), "commit", "-qm", "drift current routing"],
+            check=True,
+        )
         errors = verifier.validate_exact_boundary_repository_evidence(
             ROOT, pulp_root, acknowledgement, amendment
         )
-        self.assertEqual(errors, [])
+        self.assertTrue(
+            any("authoritative Pulp main" in error for error in errors)
+        )
         subprocess.run(
             ["git", "-C", str(pulp_root), "checkout", "-q", pulp_main_commit], check=True
         )
@@ -776,6 +1125,68 @@ class Tests(unittest.TestCase):
         )
         self.assertTrue(any("timestamps must match" in error for error in errors))
 
+    def test_pulp_router_contract_requires_exact_authority_ci(self) -> None:
+        commit = "a" * 40
+        acceptance = self.pulp_exact_boundary_acceptance(
+            self.exact_boundary_acknowledgement()
+        )
+        projection = acceptance["routing_projection"]
+        evidence = {
+            "check_runs": [{
+                "name": "vellum-routing-contract",
+                "head_sha": commit,
+                "conclusion": "success",
+                "app": {"id": 15368},
+                "details_url": (
+                    "https://github.com/Generous-Corp/pulp/actions/runs/42/job/43"
+                ),
+            }],
+            "workflow_runs": [{
+                "id": 42,
+                "path": ".github/workflows/vellum-routing-contract.yml",
+                "event": "push",
+                "head_branch": "main",
+                "head_sha": commit,
+                "status": "completed",
+                "conclusion": "success",
+                "repository": {"full_name": "Generous-Corp/pulp"},
+            }],
+            "pulp_router_contract_receipts": [{
+                "schema_version": 1,
+                "kind": "pulp-vellum-routing-contract-execution",
+                "repository": "Generous-Corp/pulp",
+                "head_sha": commit,
+                "run_id": 42,
+                "workflow_path": ".github/workflows/vellum-routing-contract.yml",
+                "status": "pass",
+                "route_set_sha256": projection["route_set_sha256"],
+                "router_sha256": projection["router_sha256"],
+                "router_contract_test_sha256": projection[
+                    "router_contract_test_sha256"
+                ],
+                "router_dependency_sha256": projection[
+                    "router_dependency_sha256"
+                ],
+                "case_results": [
+                    {"case_id": case_id, "status": "pass"}
+                    for case_id in verifier.REQUIRED_PULP_ROUTER_CASES
+                ],
+            }],
+        }
+        self.assertEqual(
+            verifier.validate_pulp_router_check_evidence(
+                evidence, commit, acceptance
+            ),
+            [],
+        )
+        evidence["workflow_runs"][0]["repository"]["full_name"] = (
+            "danielraffel/pulp"
+        )
+        errors = verifier.validate_pulp_router_check_evidence(
+            evidence, commit, acceptance
+        )
+        self.assertTrue(any("missing exact workflow-bound" in error for error in errors))
+
     def test_external_evidence_strict_json_rejects_duplicate_keys(self) -> None:
         with self.assertRaisesRegex(ValueError, "duplicate JSON key: state"):
             verifier.load_json_bytes(
@@ -793,7 +1204,7 @@ class Tests(unittest.TestCase):
         self.assertNotEqual(completed.returncode, 0)
         report = json.loads(completed.stdout)
         self.assertTrue(report["release_readiness_requested"])
-        self.assertTrue(any("have not reached target" in error for error in report["errors"]))
+        self.assertTrue(any("versioned parity completion" in error for error in report["errors"]))
         report = self.mutate_matrix(
             lambda d: next(
                 cell for cell in d["cells"] if cell["id"] == "source.figma-rest"

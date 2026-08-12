@@ -67,6 +67,8 @@ jobs:
           python3 scripts/test_templates_smoke.py
           python3 scripts/test_sterile_acceptance_bundle.py
           python3 scripts/test_select_exact_provenance_run.py
+          python3 scripts/test_verify_exact_provenance_artifact.py
+          python3 scripts/test_run_parity_proofs.py
           python3 scripts/test_verify_budget_ratification.py
           python3 scripts/verify_budget_ratification.py
           python3 tools/provenance/test_verify_downstream_consumers.py
@@ -207,6 +209,22 @@ jobs:
           file "$RUNNER_TEMP/vellum-gpu-proof.png"
           shasum -a 256 "$RUNNER_TEMP/vellum-gpu-proof.png" \
             > "$RUNNER_TEMP/vellum-gpu-proof.sha256"
+
+      - name: Execute every declared parity proof
+        if: hashFiles('provenance/authority/expansions/full-design-import-render-v1/parity-completion-1.json') != ''
+        run: |
+          python3 scripts/run_parity_proofs.py \
+            --completion provenance/authority/expansions/full-design-import-render-v1/parity-completion-1.json \
+            --output "$RUNNER_TEMP/vellum-parity-proof-execution.json"
+
+      - name: Upload parity proof execution receipt
+        if: hashFiles('provenance/authority/expansions/full-design-import-render-v1/parity-completion-1.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: vellum-parity-proof-execution
+          path: ${{ runner.temp }}/vellum-parity-proof-execution.json
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Prove the installed SDK artifact is reproducible
         shell: bash
@@ -363,6 +381,7 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REPOSITORY" = "Generous-Corp/vellum"
           runs="$RUNNER_TEMP/exact-provenance-runs.json"
+          verified_provenance_run=""
           for attempt in {1..120}; do
             gh api --method GET \
               "repos/$GITHUB_REPOSITORY/actions/workflows/provenance.yml/runs" \
@@ -392,15 +411,31 @@ jobs:
                 fi
                 printf 'Verified exact provenance run %s for %s at %s\n' \
                   "$provenance_run" "$GITHUB_REF_NAME" "$GITHUB_SHA"
-                exit 0
+                verified_provenance_run="$provenance_run"
+                break
               fi
             fi
             if [ "$attempt" -lt 120 ]; then
               sleep 10
             fi
           done
-          echo "::error::Exact successful provenance run was not available within 20 minutes"
-          exit 1
+          if [ -z "$verified_provenance_run" ]; then
+            echo "::error::Exact successful provenance run was not available within 20 minutes"
+            exit 1
+          fi
+          sibling="$RUNNER_TEMP/exact-provenance-artifact"
+          mkdir "$sibling"
+          gh run download "$verified_provenance_run" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name provenance-report \
+            --dir "$sibling"
+          python3 scripts/verify_exact_provenance_artifact.py \
+            --trust-json "$sibling/promotion-release-tag-trust.json" \
+            --readiness-json "$sibling/authority-expansion-report.json" \
+            --repository "$GITHUB_REPOSITORY" \
+            --tag "$GITHUB_REF_NAME" \
+            --source-commit "$GITHUB_SHA" \
+            --tag-object-sha "$VELLUM_TAG_OBJECT_SHA"
 
       - name: Prepare the verified private draft release
         if: startsWith(github.ref, 'refs/tags/v')

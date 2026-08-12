@@ -8,6 +8,8 @@ on:
     tags: ['v[0-9]*', 'authority/**']
 
 permissions:
+  actions: read
+  checks: read
   contents: read
 
 jobs:
@@ -188,6 +190,7 @@ jobs:
           PULP_ACCEPTANCE_SHA: ${{ steps.expansion-evidence.outputs.pulp-sha }}
           DELIVERY_PROMOTION_SHA: ${{ steps.expansion-evidence.outputs.delivery-sha }}
           PROMOTION_ATTESTATION_PATH: ${{ steps.expansion-evidence.outputs.promotion-path }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           python3 tools/provenance/test_verify_authority_activation.py
@@ -195,6 +198,7 @@ jobs:
           python3 tools/provenance/test_verify_current_state_docs.py
           python3 tools/provenance/test_verify_authority_expansion.py
           python3 scripts/test_select_exact_provenance_run.py
+          python3 scripts/test_verify_exact_provenance_artifact.py
           release_readiness=()
           repository_evidence=(--repository "$GITHUB_REPOSITORY")
           if [[ -n "$PULP_ACCEPTANCE_SHA" ]]; then
@@ -204,15 +208,146 @@ jobs:
             release_readiness+=(--release-readiness)
             test -n "$DELIVERY_PROMOTION_SHA"
             test -n "$PROMOTION_ATTESTATION_PATH"
+            test -n "$PULP_ACCEPTANCE_SHA"
+            gh api --method GET --paginate --slurp \
+              "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?per_page=100" \
+              -f filter=all -F per_page=100 \
+              > "$RUNNER_TEMP/parity-check-run-pages.json"
+            gh api --method GET --paginate --slurp \
+              "repos/Generous-Corp/pulp/commits/$PULP_ACCEPTANCE_SHA/check-runs?per_page=100" \
+              -f filter=all -F per_page=100 \
+              > "$RUNNER_TEMP/pulp-router-check-run-pages.json"
+            python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          temporary = Path(os.environ["RUNNER_TEMP"])
+          pages = json.loads(
+              temporary.joinpath("parity-check-run-pages.json").read_text(encoding="utf-8")
+          )
+          pulp_pages = json.loads(
+              temporary.joinpath("pulp-router-check-run-pages.json").read_text(
+                  encoding="utf-8"
+              )
+          )
+          checks = [row for page in pages + pulp_pages for row in page.get("check_runs", [])]
+          temporary.joinpath("parity-check-runs-raw.json").write_text(
+              json.dumps({"check_runs": checks}, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+            python3 - <<'PY' > "$RUNNER_TEMP/parity-run-ids.txt"
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          rows = json.loads(
+              Path(os.environ["RUNNER_TEMP"])
+              .joinpath("parity-check-runs-raw.json")
+              .read_text(encoding="utf-8")
+          )["check_runs"]
+          ids = set()
+          required_vellum = {
+              "clean-release", "forbidden-deps", "gpu-macos-arm64",
+              "product-quality", "sterile-consumer",
+          }
+          for row in rows:
+              match = re.fullmatch(
+                  r"https://github\.com/(Generous-Corp/(?:vellum|pulp))/actions/runs/([0-9]+)/job/[0-9]+",
+                  row.get("details_url", ""),
+              )
+              if match:
+                  repository = match.group(1)
+                  name = row.get("name")
+                  if (
+                      (
+                          repository == "Generous-Corp/pulp"
+                          and name == "vellum-routing-contract"
+                          and row.get("status") == "completed"
+                          and row.get("conclusion") == "success"
+                      )
+                      or (repository == "Generous-Corp/vellum" and name in required_vellum)
+                  ):
+                      ids.add((repository, int(match.group(2)), name))
+          for repository, run_id, name in sorted(ids):
+              print(repository, run_id, name)
+          PY
+            mkdir "$RUNNER_TEMP/parity-workflow-runs"
+            while read -r repository run_id check_name; do
+              output_name="${repository//\//__}-$run_id-$check_name.json"
+              gh api "repos/$repository/actions/runs/$run_id" \
+                > "$RUNNER_TEMP/parity-workflow-runs/$output_name"
+            done < "$RUNNER_TEMP/parity-run-ids.txt"
+            mkdir "$RUNNER_TEMP/execution-attestations"
+            while read -r repository run_id check_name; do
+              destination="$RUNNER_TEMP/execution-attestations/${repository//\//__}-$run_id-$check_name"
+              mkdir "$destination"
+              if [[ "$repository" == "Generous-Corp/pulp" ]]; then
+                gh run download "$run_id" --repo "$repository" \
+                  --name pulp-vellum-routing-contract-execution \
+                  --dir "$destination" 2>/dev/null || true
+              else
+                gh run download "$run_id" --repo "$repository" \
+                  --name vellum-parity-proof-execution \
+                  --dir "$destination" 2>/dev/null || true
+              fi
+            done < "$RUNNER_TEMP/parity-run-ids.txt"
+            python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          temporary = Path(os.environ["RUNNER_TEMP"])
+          checks = json.loads(
+              temporary.joinpath("parity-check-runs-raw.json").read_text(encoding="utf-8")
+          )["check_runs"]
+          runs = [
+              json.loads(path.read_text(encoding="utf-8"))
+              for path in sorted(temporary.joinpath("parity-workflow-runs").glob("*.json"))
+          ]
+          receipts = [
+              json.loads(path.read_text(encoding="utf-8"))
+              for path in sorted(
+                  temporary.joinpath("execution-attestations").rglob("*.json")
+              )
+          ]
+          temporary.joinpath("parity-check-runs.json").write_text(
+              json.dumps({
+                  "check_runs": checks,
+                  "workflow_runs": runs,
+                  "parity_proof_execution_receipts": [
+                      row for row in receipts
+                      if row.get("kind") == "vellum-parity-proof-execution"
+                  ],
+                  "pulp_router_contract_receipts": [
+                      row for row in receipts
+                      if row.get("kind") == "pulp-vellum-routing-contract-execution"
+                  ],
+              }, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
             repository_evidence+=(
               --delivery-root .promotion-delivery
               --promotion-attestation "$PROMOTION_ATTESTATION_PATH"
+              --check-runs-json "$RUNNER_TEMP/parity-check-runs.json"
             )
+          fi
+          if [[ -n "$PULP_ACCEPTANCE_SHA" ]]; then
+            local_pulp_main="$(git -C .exact-boundary-pulp rev-parse HEAD)"
+            live_pulp_main="$(gh api repos/Generous-Corp/pulp/git/ref/heads/main --jq .object.sha)"
+            test "$local_pulp_main" = "$live_pulp_main"
           fi
           python3 tools/provenance/verify_authority_expansion.py \
             "${release_readiness[@]}" \
             "${repository_evidence[@]}" \
             --output "$RUNNER_TEMP/authority-expansion-report.json"
+          if [[ -n "$PULP_ACCEPTANCE_SHA" ]]; then
+            test "$live_pulp_main" = \
+              "$(gh api repos/Generous-Corp/pulp/git/ref/heads/main --jq .object.sha)"
+          fi
           python3 .agents/skills/pulp-vellum-change-routing/scripts/test_route_change.py
 
       - name: Resolve the exact authority lifecycle phase

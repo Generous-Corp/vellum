@@ -45,6 +45,49 @@ EXPECTED_FILES = {
 }
 OPTIONAL_FUTURE_FILES = {
     "full-design-import-render-v1/exact-boundary-acknowledgement-1.json",
+    "full-design-import-render-v1/parity-completion-1.json",
+}
+PARITY_COMPLETION_PATH = EXPANSIONS_ROOT / (
+    "full-design-import-render-v1/parity-completion-1.json"
+)
+PULP_OWNERSHIP_PATH = ".github/vellum-ownership.json"
+REQUIRED_PARITY_CHECKS = [
+    {"name": "clean-release", "app_id": 15368,
+     "workflow_path": ".github/workflows/readme-quick-start.yml"},
+    {"name": "forbidden-deps", "app_id": 15368,
+     "workflow_path": ".github/workflows/provenance.yml"},
+    {"name": "gpu-macos-arm64", "app_id": 15368,
+     "workflow_path": ".github/workflows/gpu-macos.yml"},
+    {"name": "product-quality", "app_id": 15368,
+     "workflow_path": ".github/workflows/product-quality.yml"},
+    {"name": "sterile-consumer", "app_id": 15368,
+     "workflow_path": ".github/workflows/gpu-macos.yml"},
+]
+REQUIRED_PULP_ROUTER_CASES = [
+    "authority-load",
+    "cli-contract",
+    "conflicting-owner-fail-closed",
+    "exact-projection-expansion",
+    "generic-pulp-route",
+    "mixed-multi-path-route",
+    "pulp-specific-route",
+    "vellum-generic-route",
+]
+CPP_PROOF_TEST_IDS = {
+    "graphics/tests/design_ir_renderer_test.cpp": "vellum.gpu.design-ir-renderer",
+    "graphics/tests/gpu_style_test.cpp": "vellum.gpu.style-fixtures",
+    "graphics/tests/skia_raster_surface_test.cpp": "vellum.gpu.skia-raster-surface",
+    "graphics/tests/text_shaping_concurrency_test.cpp": (
+        "vellum.gpu.text-shaping-concurrency"
+    ),
+}
+ARGUMENT_DRIVEN_PROOF_TEST_IDS = {
+    "apps/app-host/test_phase3_scenario.py": "vellum.app-host-phase3-scenario",
+    "apps/app-host/test_text_semantics.py": "vellum.app-host-text-ime-accessibility",
+    "web/tests/run_text_semantics_browser.py": "vellum.web.text-semantics-proofs",
+}
+FIXTURE_PROOF_CONSUMERS = {
+    "fixtures/design-ir/pulp-emitter-generic.pulp.zip": "cli/tests/test_pulp_zip.py",
 }
 EXPECTED_README_SHA256 = "6935071cee4c735f401356e625108150251921b8a0dd6f20648d7370fd388894"
 EXPECTED_PROPOSAL_SHA256 = "7c2db05e110e7d9834806e08469f6d7cc70f6528b2242d1f6c0255dcdbc0a4c9"
@@ -401,6 +444,61 @@ def exact_route_path(value: Any, where: str, errors: list[str]) -> None:
         errors.append(f"{where}: expected exact path without prefix or glob semantics")
 
 
+def canonical_sha256(value: Any) -> str:
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def exact_route_rows(matrix: Any, amendment: Any) -> list[dict[str, Any]]:
+    if not isinstance(matrix, dict) or not isinstance(matrix.get("cells"), list):
+        raise ValueError("exact routes: compatibility matrix cells are unavailable")
+    expansions = (
+        amendment.get("exact_path_expansions")
+        if isinstance(amendment, dict)
+        else None
+    )
+    if not isinstance(expansions, list):
+        raise ValueError("exact routes: exact path expansions are unavailable")
+    expanded: dict[tuple[str, str, str], list[str]] = {}
+    for row in expansions:
+        if not isinstance(row, dict) or not isinstance(row.get("exact_paths"), list):
+            raise ValueError("exact routes: malformed exact path expansion")
+        expanded[(str(row.get("cell_id")), str(row.get("role")), str(row.get("matrix_path")))] = row["exact_paths"]
+    owners = {
+        "vellum_future_implementation": "Generous-Corp/vellum",
+        "vellum_future_proof": "Generous-Corp/vellum",
+        "pulp_implementation": "Generous-Corp/pulp",
+        "pulp_proof": "Generous-Corp/pulp",
+    }
+    routes: dict[tuple[str, str], set[tuple[str, str]]] = {}
+    for cell in matrix["cells"]:
+        if not isinstance(cell, dict) or cell.get("family") == "retained-boundary":
+            continue
+        cell_id = str(cell.get("id"))
+        for role, repository in owners.items():
+            paths = cell.get(role)
+            if not isinstance(paths, list):
+                raise ValueError(f"exact routes: {cell_id}.{role} is unavailable")
+            for matrix_path in paths:
+                if not isinstance(matrix_path, str):
+                    raise ValueError(f"exact routes: {cell_id}.{role} has a non-string path")
+                resolved = expanded.get((cell_id, role, matrix_path), [matrix_path])
+                for path in resolved:
+                    routes.setdefault((repository, path), set()).add((cell_id, role))
+    return [
+        {
+            "repository": repository,
+            "path": path,
+            "owner": repository,
+            "cell_roles": [
+                {"cell_id": cell_id, "role": role}
+                for cell_id, role in sorted(cell_roles)
+            ],
+        }
+        for (repository, path), cell_roles in sorted(routes.items())
+    ]
+
+
 def git_output(root: Path, *args: str) -> bytes | None:
     completed = subprocess.run(
         ["git", "-C", str(root), *args],
@@ -434,6 +532,14 @@ def git_blob(root: Path, commit: str, path: str) -> bytes | None:
     return git_output(root, "show", f"{commit}:{path}")
 
 
+def git_regular_blob(root: Path, commit: str, path: str) -> bool:
+    row = git_output(root, "ls-tree", commit, "--", path)
+    if row is None:
+        return False
+    fields = row.decode(errors="replace").split(None, 3)
+    return len(fields) == 4 and fields[0] in {"100644", "100755"} and fields[1] == "blob"
+
+
 def require_git_ancestor(
     root: Path, ancestor: str, descendant: str, where: str, errors: list[str]
 ) -> None:
@@ -455,6 +561,7 @@ def validate_authority_promotion_attestation(data: Any, amendment: Any) -> list[
         "authority_commit", "delivery_commit", "authority_tree", "delivery_tree",
         "exact_boundary_amendment_id", "exact_boundary_amendment_sha256",
         "exact_boundary_acknowledgement_id", "exact_boundary_acknowledgement_sha256",
+        "parity_completion_id", "parity_completion_sha256",
         "parity_release_source_commit",
     }
     if not exact_keys(data, top, "authority_promotion", errors):
@@ -473,6 +580,7 @@ def validate_authority_promotion_attestation(data: Any, amendment: Any) -> list[
         "exact_boundary_acknowledgement_id": (
             "full-design-import-render-v1-exact-boundary-acknowledgement-1"
         ),
+        "parity_completion_id": "full-design-import-render-v1-parity-completion-1",
     }
     for key, expected in scalars.items():
         if not exact_scalar(data[key], expected):
@@ -498,11 +606,12 @@ def validate_authority_promotion_attestation(data: Any, amendment: Any) -> list[
         value = data[key]
         if not isinstance(value, str) or not SHA40.fullmatch(value):
             errors.append(f"authority_promotion.{key}: expected full commit or tree SHA")
-    digest = data["exact_boundary_acknowledgement_sha256"]
-    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
-        errors.append(
-            "authority_promotion.exact_boundary_acknowledgement_sha256: expected SHA-256"
-        )
+    for key in (
+        "exact_boundary_acknowledgement_sha256", "parity_completion_sha256"
+    ):
+        digest = data[key]
+        if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            errors.append(f"authority_promotion.{key}: expected SHA-256")
     if data["authority_commit"] != data["delivery_commit"]:
         errors.append("authority_promotion: authority and delivery commits must match exactly")
     if data["authority_tree"] != data["delivery_tree"]:
@@ -547,6 +656,32 @@ def validate_promotion_acknowledgement_digest(
         return ["authority_promotion: acknowledgement ID does not match artifact"]
     if data.get("exact_boundary_acknowledgement_sha256") != actual:
         return ["authority_promotion: acknowledgement digest does not match artifact"]
+    return []
+
+
+def validate_promotion_completion_digest(
+    root: Path, data: Any, release_source_commit: str | None
+) -> list[str]:
+    if not isinstance(data, dict):
+        return ["authority_promotion: expected attestation object"]
+    if release_source_commit is None or not git_regular_blob(
+        root, release_source_commit, PARITY_COMPLETION_PATH.as_posix()
+    ):
+        return ["authority_promotion: parity completion artifact is missing"]
+    completion = git_blob(
+        root, release_source_commit, PARITY_COMPLETION_PATH.as_posix()
+    )
+    if completion is None:
+        return ["authority_promotion: parity completion artifact is missing"]
+    try:
+        completion_data = load_json_bytes(completion, "tagged parity completion")
+        actual = hashlib.sha256(completion).hexdigest()
+    except ValueError as exc:
+        return [f"authority_promotion: cannot read parity completion: {exc}"]
+    if data.get("parity_completion_id") != completion_data.get("completion_id"):
+        return ["authority_promotion: parity completion ID does not match artifact"]
+    if data.get("parity_completion_sha256") != actual:
+        return ["authority_promotion: parity completion digest does not match artifact"]
     return []
 
 
@@ -704,7 +839,7 @@ def validate_pulp_exact_boundary_acceptance(
     top = {
         "schema_version", "kind", "acceptance_id", "state", "accepted_at",
         "accepted_by", "pulp_repository", "counterpart", "refresh",
-        "authority_effect", "implementation_authority", "gates",
+        "routing_projection", "authority_effect", "implementation_authority", "gates",
     }
     if not exact_keys(data, top, "pulp_exact_boundary_acceptance", errors):
         return errors
@@ -757,6 +892,65 @@ def validate_pulp_exact_boundary_acceptance(
     for key, expected in expected_counterpart.items():
         if not exact_scalar(counterpart.get(key), expected):
             errors.append(f"pulp_exact_boundary_acceptance.counterpart.{key}: drift")
+    projection = data["routing_projection"]
+    projection_keys = {
+        "path", "sha256", "schema_version", "expansion_id", "route_set_sha256",
+        "router_path", "router_sha256", "router_contract_test_path",
+        "router_contract_test_sha256", "router_dependency_path",
+        "router_dependency_sha256", "router_contract_check",
+    }
+    if not exact_keys(
+        projection, projection_keys, "pulp_exact_boundary_acceptance.routing_projection", errors
+    ):
+        projection = {}
+    expected_projection = {
+        "path": PULP_OWNERSHIP_PATH,
+        "schema_version": 3,
+        "expansion_id": "full-design-import-render-v1",
+        "router_path": (
+            ".agents/skills/pulp-vellum-change-routing/scripts/route_change.py"
+        ),
+        "router_contract_test_path": (
+            ".agents/skills/pulp-vellum-change-routing/scripts/test_route_change.py"
+        ),
+        "router_dependency_path": (
+            ".agents/skills/pulp-vellum-change-routing/scripts/routing_evidence.py"
+        ),
+    }
+    for key, expected in expected_projection.items():
+        if not exact_scalar(projection.get(key), expected):
+            errors.append(f"pulp_exact_boundary_acceptance.routing_projection.{key}: drift")
+    for key in (
+        "sha256", "route_set_sha256", "router_sha256",
+        "router_contract_test_sha256", "router_dependency_sha256",
+    ):
+        if not isinstance(projection.get(key), str) or not re.fullmatch(
+            r"[0-9a-f]{64}", projection[key]
+        ):
+            errors.append(
+                f"pulp_exact_boundary_acceptance.routing_projection.{key}: expected SHA-256"
+            )
+    contract_check = projection.get("router_contract_check")
+    expected_contract_check = {
+        "name": "vellum-routing-contract",
+        "app_id": 15368,
+        "workflow_path": ".github/workflows/vellum-routing-contract.yml",
+        "event": "push",
+        "branch": "main",
+        "contract_scope": "full-bound-router-contract-suite",
+        "required_case_ids": REQUIRED_PULP_ROUTER_CASES,
+    }
+    if (
+        not isinstance(contract_check, dict)
+        or set(contract_check) != set(expected_contract_check)
+        or any(
+            not exact_scalar(contract_check.get(key), expected)
+            for key, expected in expected_contract_check.items()
+        )
+    ):
+        errors.append(
+            "pulp_exact_boundary_acceptance.routing_projection.router_contract_check: drift"
+        )
     refresh = data["refresh"]
     refresh_keys = {
         "audited_at", "pulp_main_commit", "open_pr_audit_complete",
@@ -849,8 +1043,154 @@ def validate_pulp_exact_boundary_acceptance(
     return errors
 
 
+def validate_pulp_ownership_projection(
+    projection: Any, acceptance: Any, matrix: Any, amendment: Any
+) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(projection, dict):
+        return ["Pulp ownership projection: expected object"]
+    if projection.get("schema_version") != 3:
+        errors.append("Pulp ownership projection: schema_version must be 3")
+    if projection.get("framework_repository") != "Generous-Corp/vellum":
+        errors.append("Pulp ownership projection: framework repository drifted")
+    expansions = projection.get("expansions")
+    if not isinstance(expansions, list):
+        return errors + ["Pulp ownership projection: expansions must be an array"]
+    matches = [
+        row for row in expansions
+        if isinstance(row, dict) and row.get("id") == "full-design-import-render-v1"
+    ]
+    if len(matches) != 1:
+        return errors + ["Pulp ownership projection: expected exactly one accepted expansion"]
+    expansion = matches[0]
+    expected_keys = {
+        "id", "state", "accepted_at", "accepted_by", "amendment_id",
+        "matrix_id", "matrix_sha256", "route_set_sha256", "routes",
+    }
+    if not exact_keys(expansion, expected_keys, "Pulp ownership projection expansion", errors):
+        return errors
+    expected_routes = exact_route_rows(matrix, amendment)
+    expected_route_digest = canonical_sha256(expected_routes)
+    expected_scalars = {
+        "id": "full-design-import-render-v1",
+        "state": "accepted-pending-vellum-acknowledgement",
+        "accepted_at": acceptance.get("accepted_at") if isinstance(acceptance, dict) else None,
+        "accepted_by": "@danielraffel",
+        "amendment_id": "full-design-import-render-v1-exact-boundary-amendment-1",
+        "matrix_id": "full-design-import-render-v1-compatibility-matrix",
+        "matrix_sha256": EXPECTED_MATRIX_SHA256,
+        "route_set_sha256": expected_route_digest,
+    }
+    for key, expected in expected_scalars.items():
+        if not exact_scalar(expansion.get(key), expected):
+            errors.append(f"Pulp ownership projection expansion.{key}: drift")
+    if expansion.get("routes") != expected_routes:
+        errors.append("Pulp ownership projection expansion.routes: differs from exact routes")
+    bound = (
+        acceptance.get("routing_projection", {})
+        if isinstance(acceptance, dict)
+        else {}
+    )
+    if bound.get("route_set_sha256") != expected_route_digest:
+        errors.append("Pulp ownership projection: acceptance route-set digest differs")
+    return errors
+
+
+def validate_pulp_router_check_evidence(
+    check_runs: Any, pulp_commit: str, acceptance: Any
+) -> list[str]:
+    """Bind Pulp's full router contract to its own exact CI run.
+
+    Vellum treats all Pulp-owned source as evidence and never executes it.
+    """
+    errors: list[str] = []
+    if (
+        not isinstance(check_runs, dict)
+        or not isinstance(check_runs.get("check_runs"), list)
+        or not isinstance(check_runs.get("workflow_runs"), list)
+    ):
+        return ["Pulp router contract evidence: check evidence unavailable"]
+    matches = [
+        row for row in check_runs["check_runs"]
+        if isinstance(row, dict)
+        and row.get("name") == "vellum-routing-contract"
+        and row.get("head_sha") == pulp_commit
+        and row.get("conclusion") == "success"
+        and isinstance(row.get("app"), dict)
+        and row["app"].get("id") == 15368
+    ]
+    for match in matches:
+        details_url = match.get("details_url")
+        run_match = (
+            re.fullmatch(
+                r"https://github\.com/Generous-Corp/pulp/actions/runs/([0-9]+)/job/[0-9]+",
+                details_url,
+            )
+            if isinstance(details_url, str)
+            else None
+        )
+        if run_match is None:
+            continue
+        run_id = int(run_match.group(1))
+        if any(
+            isinstance(run, dict)
+            and run.get("id") == run_id
+            and run.get("path") == ".github/workflows/vellum-routing-contract.yml"
+            and run.get("event") == "push"
+            and run.get("head_branch") == "main"
+            and run.get("head_sha") == pulp_commit
+            and run.get("status") == "completed"
+            and run.get("conclusion") == "success"
+            and isinstance(run.get("repository"), dict)
+            and run["repository"].get("full_name") == "Generous-Corp/pulp"
+            for run in check_runs["workflow_runs"]
+        ):
+            receipts = check_runs.get("pulp_router_contract_receipts")
+            if not isinstance(receipts, list):
+                break
+            projection = (
+                acceptance.get("routing_projection", {})
+                if isinstance(acceptance, dict)
+                else {}
+            )
+            expected = {
+                "schema_version": 1,
+                "kind": "pulp-vellum-routing-contract-execution",
+                "repository": "Generous-Corp/pulp",
+                "head_sha": pulp_commit,
+                "run_id": run_id,
+                "workflow_path": ".github/workflows/vellum-routing-contract.yml",
+                "status": "pass",
+                "route_set_sha256": projection.get("route_set_sha256"),
+                "router_sha256": projection.get("router_sha256"),
+                "router_contract_test_sha256": projection.get(
+                    "router_contract_test_sha256"
+                ),
+                "router_dependency_sha256": projection.get(
+                    "router_dependency_sha256"
+                ),
+            }
+            for receipt in receipts:
+                if (
+                    isinstance(receipt, dict)
+                    and set(receipt) == set(expected) | {"case_results"}
+                    and all(exact_scalar(receipt.get(key), value) for key, value in expected.items())
+                    and receipt.get("case_results") == [
+                        {"case_id": case_id, "status": "pass"}
+                        for case_id in REQUIRED_PULP_ROUTER_CASES
+                    ]
+                ):
+                    return []
+    errors.append(
+        "Pulp router contract evidence: missing exact workflow-bound push-main "
+        "vellum-routing-contract check and digest-bound execution receipt"
+    )
+    return errors
+
+
 def validate_exact_boundary_repository_evidence(
-    root: Path, pulp_root: Path | None, data: Any, amendment: Any
+    root: Path, pulp_root: Path | None, data: Any, amendment: Any,
+    check_runs: Any = None,
 ) -> list[str]:
     errors: list[str] = []
     if not isinstance(data, dict) or not isinstance(data.get("coordinates"), dict):
@@ -921,7 +1261,70 @@ def validate_exact_boundary_repository_evidence(
     except ValueError as exc:
         errors.append(f"Pulp acceptance merge: invalid acceptance JSON: {exc}")
         return errors
-    errors.extend(validate_pulp_exact_boundary_acceptance(acceptance, data, amendment))
+    acceptance_errors = validate_pulp_exact_boundary_acceptance(
+        acceptance, data, amendment
+    )
+    errors.extend(acceptance_errors)
+    if acceptance_errors:
+        return errors
+    if check_runs is not None:
+        errors.extend(
+            validate_pulp_router_check_evidence(check_runs, pulp_commit, acceptance)
+        )
+    projection_coordinates = (
+        acceptance.get("routing_projection", {})
+        if isinstance(acceptance, dict)
+        else {}
+    )
+    projection_path = projection_coordinates.get("path")
+    if not isinstance(projection_path, str):
+        errors.append("Pulp acceptance merge: routing projection path unavailable")
+    else:
+        projection_blob = git_blob(pulp_root, pulp_commit, projection_path)
+        if projection_blob is None:
+            errors.append("Pulp acceptance merge: routing projection is unavailable")
+        elif hashlib.sha256(projection_blob).hexdigest() != projection_coordinates.get(
+            "sha256"
+        ):
+            errors.append("Pulp acceptance merge: routing projection digest differs")
+        else:
+            try:
+                projection_data = load_json_bytes(
+                    projection_blob, "Pulp acceptance routing projection"
+                )
+                matrix_data = load_json(root / MATRIX_PATH)
+                projection_errors = validate_pulp_ownership_projection(
+                    projection_data, acceptance, matrix_data, amendment
+                )
+                errors.extend(projection_errors)
+                for label in ("router", "router_contract_test", "router_dependency"):
+                    bound_path = projection_coordinates.get(f"{label}_path")
+                    bound_digest = projection_coordinates.get(f"{label}_sha256")
+                    blob = (
+                        git_blob(pulp_root, pulp_commit, bound_path)
+                        if isinstance(bound_path, str)
+                        else None
+                    )
+                    if blob is None:
+                        errors.append(f"Pulp acceptance merge: {label} blob is unavailable")
+                    elif hashlib.sha256(blob).hexdigest() != bound_digest:
+                        errors.append(f"Pulp acceptance merge: {label} digest differs")
+                    if isinstance(bound_path, str) and main_head is not None:
+                        current_blob = git_blob(pulp_root, main_head, bound_path)
+                        if current_blob != blob:
+                            errors.append(
+                                f"authoritative Pulp main: {label} differs from accepted blob"
+                            )
+                if main_head is not None:
+                    current_projection = git_blob(
+                        pulp_root, main_head, projection_path
+                    )
+                    if current_projection != projection_blob:
+                        errors.append(
+                            "authoritative Pulp main: routing projection differs from accepted blob"
+                        )
+            except ValueError as exc:
+                errors.append(f"Pulp acceptance merge: invalid routing projection: {exc}")
     refresh_commit = (
         acceptance.get("refresh", {}).get("pulp_main_commit")
         if isinstance(acceptance, dict)
@@ -1922,6 +2325,284 @@ def validate_matrix_repository_paths(root: Path, data: Any) -> list[str]:
     return errors
 
 
+def validate_parity_completion(
+    root: Path, data: Any, matrix: Any, amendment: Any,
+    *, release_source_commit: str | None = None, check_runs: Any = None,
+) -> list[str]:
+    errors: list[str] = []
+    top = {
+        "schema_version", "kind", "completion_id", "state", "completed_at",
+        "completed_by", "matrix_id", "matrix_merge_commit", "matrix_sha256",
+        "required_check_runs", "cells",
+    }
+    if not exact_keys(data, top, "parity_completion", errors):
+        return errors
+    expected = {
+        "schema_version": 1,
+        "kind": "full-design-import-render-parity-completion",
+        "completion_id": "full-design-import-render-v1-parity-completion-1",
+        "state": "complete",
+        "completed_by": "@danielraffel",
+        "matrix_id": "full-design-import-render-v1-compatibility-matrix",
+        "matrix_merge_commit": "bbe187d581f3f021a25b3ebd01332f89bbde142e",
+        "matrix_sha256": EXPECTED_MATRIX_SHA256,
+    }
+    for key, value in expected.items():
+        if not exact_scalar(data.get(key), value):
+            errors.append(f"parity_completion.{key}: drift")
+    if data.get("required_check_runs") != REQUIRED_PARITY_CHECKS:
+        errors.append("parity_completion.required_check_runs: differs from closed check set")
+    try:
+        stamp = data["completed_at"]
+        parsed = dt.datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        if not stamp.endswith("Z") or parsed.utcoffset() != dt.timedelta(0):
+            raise ValueError
+    except (AttributeError, TypeError, ValueError):
+        errors.append("parity_completion.completed_at: expected UTC timestamp")
+    matrix_cells = matrix.get("cells") if isinstance(matrix, dict) else None
+    if not isinstance(matrix_cells, list):
+        return errors + ["parity_completion: matrix cells unavailable"]
+    required = {
+        str(cell["id"]): cell
+        for cell in matrix_cells
+        if isinstance(cell, dict) and cell.get("status") != cell.get("target_status")
+    }
+    rows = data.get("cells")
+    if not isinstance(rows, list):
+        return errors + ["parity_completion.cells: expected array"]
+    route_rows = exact_route_rows(matrix, amendment)
+    expected_paths: dict[tuple[str, str], list[str]] = {}
+    for cell_id in required:
+        for role, output_key in (
+            ("vellum_future_implementation", "implementation_paths"),
+            ("vellum_future_proof", "proof_paths"),
+        ):
+            expected_paths[(cell_id, output_key)] = sorted(
+                route["path"]
+                for route in route_rows
+                if route["repository"] == "Generous-Corp/vellum"
+                and any(
+                    item == {"cell_id": cell_id, "role": role}
+                    for item in route["cell_roles"]
+                )
+            )
+    seen: set[str] = set()
+    row_keys = {
+        "cell_id", "achieved_status", "implementation_paths", "proof_paths",
+        "required_checks", "proof_executions",
+    }
+    for index, row in enumerate(rows):
+        where = f"parity_completion.cells[{index}]"
+        if not exact_keys(row, row_keys, where, errors):
+            continue
+        cell_id = row["cell_id"]
+        if not isinstance(cell_id, str) or cell_id not in required or cell_id in seen:
+            errors.append(f"{where}.cell_id: unexpected or duplicate")
+            continue
+        seen.add(cell_id)
+        if row["achieved_status"] != required[cell_id].get("target_status"):
+            errors.append(f"{where}.achieved_status: target not reached")
+        for key in ("implementation_paths", "proof_paths"):
+            if row[key] != expected_paths[(cell_id, key)]:
+                errors.append(f"{where}.{key}: differs from frozen exact routes")
+            for path in row[key] if isinstance(row[key], list) else []:
+                if release_source_commit is not None and not git_regular_blob(
+                    root, release_source_commit, path
+                ):
+                    errors.append(
+                        f"{where}.{key}: tagged release commit lacks regular blob {path}"
+                    )
+        expected_check_names = [item["name"] for item in REQUIRED_PARITY_CHECKS]
+        if row["required_checks"] != expected_check_names:
+            errors.append(f"{where}.required_checks: differs from closed check set")
+        executions = row.get("proof_executions")
+        if not isinstance(executions, list):
+            errors.append(f"{where}.proof_executions: expected array")
+        else:
+            execution_paths: set[str] = set()
+            for execution_index, execution in enumerate(executions):
+                execution_where = f"{where}.proof_executions[{execution_index}]"
+                execution_keys = {"path", "sha256", "check", "test_id", "runner"}
+                if not exact_keys(execution, execution_keys, execution_where, errors):
+                    continue
+                path = execution.get("path")
+                if path not in row.get("proof_paths", []) or path in execution_paths:
+                    errors.append(f"{execution_where}.path: unexpected or duplicate")
+                elif isinstance(path, str):
+                    execution_paths.add(path)
+                    blob = (
+                        git_blob(root, release_source_commit, path)
+                        if release_source_commit is not None
+                        else (root / path).read_bytes() if (root / path).is_file() else None
+                    )
+                    if blob is None or hashlib.sha256(blob).hexdigest() != execution.get(
+                        "sha256"
+                    ):
+                        errors.append(f"{execution_where}.sha256: proof digest differs")
+                if execution.get("check") != "gpu-macos-arm64":
+                    errors.append(f"{execution_where}.check: must use proof-execution lane")
+                if not isinstance(execution.get("test_id"), str) or not execution[
+                    "test_id"
+                ]:
+                    errors.append(f"{execution_where}.test_id: expected non-empty string")
+                suffix = Path(path).suffix if isinstance(path, str) else ""
+                expected_runner = {
+                    ".py": "python-file",
+                    ".js": "node-test-file",
+                    ".mjs": "node-test-file",
+                    ".cpp": "ctest-case",
+                    ".zip": "fixture-consumer",
+                }.get(suffix)
+                if path in ARGUMENT_DRIVEN_PROOF_TEST_IDS:
+                    expected_runner = "ctest-case"
+                if execution.get("runner") != expected_runner:
+                    errors.append(f"{execution_where}.runner: differs from proof type")
+                if suffix == ".cpp" and execution.get("test_id") != CPP_PROOF_TEST_IDS.get(path):
+                    errors.append(f"{execution_where}.test_id: differs from closed CTest mapping")
+                if path in ARGUMENT_DRIVEN_PROOF_TEST_IDS and execution.get(
+                    "test_id"
+                ) != ARGUMENT_DRIVEN_PROOF_TEST_IDS[path]:
+                    errors.append(
+                        f"{execution_where}.test_id: differs from argument-driven CTest mapping"
+                    )
+                if suffix == ".zip" and execution.get("test_id") != FIXTURE_PROOF_CONSUMERS.get(path):
+                    errors.append(f"{execution_where}.test_id: differs from closed fixture consumer")
+            if execution_paths != set(row.get("proof_paths", [])):
+                errors.append(f"{where}.proof_executions: must cover every proof path once")
+    if seen != set(required):
+        errors.append(
+            "parity_completion.cells: required cell IDs differ; "
+            f"missing={sorted(set(required) - seen)} unexpected={sorted(seen - set(required))}"
+        )
+    if check_runs is not None:
+        if (
+            not isinstance(check_runs, dict)
+            or not isinstance(check_runs.get("check_runs"), list)
+            or not isinstance(check_runs.get("workflow_runs"), list)
+        ):
+            errors.append(
+                "parity_completion check evidence: expected check_runs and workflow_runs arrays"
+            )
+        elif release_source_commit is None:
+            errors.append("parity_completion check evidence: release source commit unavailable")
+        else:
+            bound_runs: dict[str, set[int]] = {}
+            for required_check in REQUIRED_PARITY_CHECKS:
+                matches = [
+                    row for row in check_runs["check_runs"]
+                    if isinstance(row, dict)
+                    and row.get("name") == required_check["name"]
+                    and row.get("head_sha") == release_source_commit
+                    and row.get("conclusion") == "success"
+                    and isinstance(row.get("app"), dict)
+                    and row["app"].get("id") == required_check["app_id"]
+                ]
+                bound = False
+                for match in matches:
+                    details_url = match.get("details_url")
+                    run_match = (
+                        re.fullmatch(
+                            r"https://github\.com/Generous-Corp/vellum/actions/runs/([0-9]+)/job/[0-9]+",
+                            details_url,
+                        )
+                        if isinstance(details_url, str)
+                        else None
+                    )
+                    if run_match is None:
+                        continue
+                    run_id = int(run_match.group(1))
+                    if any(
+                        isinstance(run, dict)
+                        and run.get("id") == run_id
+                        and run.get("path") == required_check["workflow_path"]
+                        and run.get("event") == "push"
+                        and run.get("head_branch") == "main"
+                        and run.get("head_sha") == release_source_commit
+                        and run.get("status") == "completed"
+                        and run.get("conclusion") == "success"
+                        for run in check_runs["workflow_runs"]
+                    ):
+                        bound = True
+                        bound_runs.setdefault(required_check["name"], set()).add(run_id)
+                if not bound:
+                    errors.append(
+                        "parity_completion check evidence: missing exact workflow-bound push-main "
+                        + required_check["name"]
+                    )
+            receipts = check_runs.get("parity_proof_execution_receipts")
+            if not isinstance(receipts, list):
+                errors.append("parity_completion proof evidence: receipts unavailable")
+            else:
+                receipt_proofs: set[tuple[str, str, str, str, str]] = set()
+                for receipt in receipts:
+                    if not isinstance(receipt, dict):
+                        continue
+                    check_name = receipt.get("check_name")
+                    required = next(
+                        (item for item in REQUIRED_PARITY_CHECKS if item["name"] == check_name),
+                        None,
+                    )
+                    expected_receipt = {
+                        "schema_version": 1,
+                        "kind": "vellum-parity-proof-execution",
+                        "repository": "Generous-Corp/vellum",
+                        "head_sha": release_source_commit,
+                        "check_name": check_name,
+                        "workflow_path": required.get("workflow_path") if required else None,
+                        "status": "pass",
+                    }
+                    if (
+                        required is None
+                        or set(receipt) != set(expected_receipt) | {"proofs"}
+                        | {"run_id"}
+                        or receipt.get("run_id") not in bound_runs.get(check_name, set())
+                        or any(
+                            not exact_scalar(receipt.get(key), value)
+                            for key, value in expected_receipt.items()
+                        )
+                        or not isinstance(receipt.get("proofs"), list)
+                    ):
+                        continue
+                    for proof in receipt["proofs"]:
+                        if (
+                            isinstance(proof, dict)
+                            and set(proof) == {
+                                "path", "sha256", "test_id", "runner", "status"
+                            }
+                            and proof.get("status") == "pass"
+                            and all(
+                                isinstance(proof.get(key), str)
+                                for key in ("path", "sha256", "test_id", "runner")
+                            )
+                        ):
+                            receipt_proofs.add(
+                                (
+                                    check_name, proof.get("path"), proof.get("sha256"),
+                                    proof.get("test_id"), proof.get("runner"),
+                                )
+                            )
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    for execution in row.get("proof_executions", []):
+                        if not isinstance(execution, dict) or not all(
+                            isinstance(execution.get(key), str)
+                            for key in ("check", "path", "sha256", "test_id", "runner")
+                        ):
+                            continue
+                        key = (
+                            execution.get("check"), execution.get("path"),
+                            execution.get("sha256"), execution.get("test_id"),
+                            execution.get("runner"),
+                        )
+                        if key not in receipt_proofs:
+                            errors.append(
+                                "parity_completion proof evidence: missing executed proof "
+                                + str(execution.get("path"))
+                            )
+    return errors
+
+
 def validate_release_readiness(
     root: Path,
     data: Any,
@@ -1931,20 +2612,36 @@ def validate_release_readiness(
     delivery_root: Path | None = None,
     repository: str | None = None,
     release_source_commit: str | None = None,
+    check_runs: Any = None,
 ) -> list[str]:
     errors: list[str] = []
     if not isinstance(data, dict) or not isinstance(data.get("cells"), list):
         return ["release readiness: compatibility matrix cells are unavailable"]
-    incomplete = [
-        cell.get("id", f"cell-{index}")
-        for index, cell in enumerate(data["cells"])
-        if isinstance(cell, dict) and cell.get("status") != cell.get("target_status")
-    ]
-    if incomplete:
-        errors.append(
-            "release readiness: required compatibility cells have not reached target: "
-            + ", ".join(str(cell_id) for cell_id in incomplete)
-        )
+    if check_runs is None:
+        errors.append("release readiness: missing exact workflow-run evidence")
+    completion_blob = (
+        git_blob(root, release_source_commit, PARITY_COMPLETION_PATH.as_posix())
+        if release_source_commit is not None
+        and git_regular_blob(root, release_source_commit, PARITY_COMPLETION_PATH.as_posix())
+        else None
+    )
+    if completion_blob is None:
+        errors.append("release readiness: missing versioned parity completion evidence")
+    else:
+        try:
+            completion_data = load_json_bytes(
+                completion_blob, "tagged parity completion"
+            )
+            errors.extend(
+                "release readiness: " + error
+                for error in validate_parity_completion(
+                    root, completion_data, data, amendment,
+                    release_source_commit=release_source_commit,
+                    check_runs=check_runs,
+                )
+            )
+        except ValueError as exc:
+            errors.append(f"release readiness: invalid parity completion evidence: {exc}")
     promotion_required = (
         isinstance(amendment, dict)
         and isinstance(amendment.get("gates"), dict)
@@ -1977,6 +2674,12 @@ def validate_release_readiness(
             )
             errors.extend(
                 "release readiness: " + error
+                for error in validate_promotion_completion_digest(
+                    root, promotion_data, release_source_commit
+                )
+            )
+            errors.extend(
+                "release readiness: " + error
                 for error in validate_promotion_repository_evidence(
                     root,
                     delivery_root,
@@ -2000,6 +2703,7 @@ def verify(
     delivery_root: Path | None = None,
     repository: str | None = None,
     release_source_commit: str | None = None,
+    check_runs: Any = None,
 ) -> dict[str, Any]:
     closure_errors = []
     try:
@@ -2084,6 +2788,13 @@ def verify(
                 pulp_root,
                 exact_acknowledgement_data,
                 boundary_amendment_data,
+                check_runs,
+            )
+        parity_completion_path = root / PARITY_COMPLETION_PATH
+        if parity_completion_path.is_file():
+            parity_completion_data = load_json(parity_completion_path)
+            promotion_errors += validate_parity_completion(
+                root, parity_completion_data, matrix_data, boundary_amendment_data
             )
         errors = (
             closure_errors
@@ -2107,6 +2818,7 @@ def verify(
                     delivery_root=delivery_root,
                     repository=repository,
                     release_source_commit=release_source_commit,
+                    check_runs=check_runs,
                 )
                 if release_readiness
                 else []
@@ -2166,6 +2878,7 @@ def main() -> int:
     parser.add_argument(
         "--release-source-commit", default=os.environ.get("GITHUB_SHA")
     )
+    parser.add_argument("--check-runs-json", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--release-readiness", action="store_true")
     args = parser.parse_args()
@@ -2179,6 +2892,7 @@ def main() -> int:
         delivery_root=args.delivery_root.resolve() if args.delivery_root else None,
         repository=args.repository,
         release_source_commit=args.release_source_commit,
+        check_runs=(load_json(args.check_runs_json.resolve()) if args.check_runs_json else None),
     )
     rendered = json.dumps(report, indent=2, sort_keys=True) + "\n"
     if args.output:
