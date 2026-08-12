@@ -6,6 +6,7 @@ import {
     mkdirSync,
     readFileSync,
     rmSync,
+    statSync,
     writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -43,6 +44,22 @@ test('packed SDK builds and executes the unchanged Phase 3 fixture in both forma
             ['pack', packageRoot, '--pack-destination', packages, '--json'],
         ));
         const archive = join(packages, packed[0].filename);
+        if (process.platform !== 'win32') {
+            const bundledBinary = statSync(
+                join(packageRoot, 'node_modules', 'esbuild', 'bin', 'esbuild'),
+            );
+            const platformBinary = statSync(join(
+                packageRoot,
+                'node_modules',
+                '@esbuild',
+                `${process.platform}-${process.arch}`,
+                'bin',
+                'esbuild',
+            ));
+            if (bundledBinary.ino !== 0 && platformBinary.ino !== 0) {
+                assert.notEqual(bundledBinary.ino, platformBinary.ino);
+            }
+        }
         const manifestPath = join(app, 'package.json');
         const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
         manifest.dependencies['@vellum/ui'] = `file:${archive}`;
