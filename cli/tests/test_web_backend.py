@@ -5,6 +5,7 @@ import json
 import os
 import runpy
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -22,6 +23,7 @@ finally:
 
 validate_scenario_evidence = BACKEND_MODULE["validate_scenario_evidence"]
 run_chrome_scenario = BACKEND_MODULE["run_chrome_scenario"]
+stop_browser = BACKEND_MODULE["stop_browser"]
 validate_scenario_document = BACKEND_MODULE["validate_scenario_document"]
 validate_component_source = BACKEND_MODULE["validate_component_source"]
 build_component_modules = BACKEND_MODULE["build_component_modules"]
@@ -486,6 +488,22 @@ console.log('linked-browser-component-pass');
         self.assertEqual(
             events,
             ["profile-enter", "timeout", "terminate", "wait", "profile-exit"],
+        )
+
+    @unittest.skipUnless(os.name == "posix", "process groups require POSIX")
+    def test_exited_chrome_launcher_still_cleans_its_process_group(self) -> None:
+        class Process:
+            pid = 619
+
+            def poll(self) -> int:
+                return 0
+
+        with mock.patch("os.killpg") as killpg:
+            stop_browser(Process(), process_group=619)
+
+        self.assertEqual(
+            killpg.call_args_list,
+            [mock.call(619, signal.SIGTERM), mock.call(619, signal.SIGKILL)],
         )
 
 

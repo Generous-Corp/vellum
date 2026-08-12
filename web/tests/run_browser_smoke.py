@@ -13,6 +13,8 @@ import subprocess
 import tempfile
 import threading
 
+from run_text_semantics_browser import stop_browser
+
 
 def main() -> int:
     parser = argparse.ArgumentParser()
@@ -56,24 +58,16 @@ def main() -> int:
                 [chrome, "--headless=new", "--disable-gpu-sandbox", "--no-first-run",
                  "--disable-background-networking", f"--user-data-dir={profile}",
                  f"http://127.0.0.1:{server.server_port}/index.html"],
-                text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                text=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                start_new_session=os.name == "posix")
             try:
                 if not received.wait(timeout=20):
-                    process.terminate()
-                    try:
-                        process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait(timeout=5)
                     raise SystemExit("browser proof handshake timed out")
             finally:
-                if process.poll() is None:
-                    process.terminate()
-                    try:
-                        process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait(timeout=5)
+                stop_browser(
+                    process,
+                    process_group=process.pid if os.name == "posix" else None,
+                )
         if result.get("backend") != "wasm-shared-cpp-core+canvas2d-shell":
             raise SystemExit(f"unexpected backend evidence: {result}")
         initial = result.get("initial")

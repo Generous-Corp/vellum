@@ -4,7 +4,11 @@
 from __future__ import annotations
 
 import subprocess
+import os
+import signal
+import sys
 import unittest
+from unittest import mock
 
 from run_text_semantics_browser import stop_browser
 
@@ -62,6 +66,48 @@ class BrowserProcessCleanupTests(unittest.TestCase):
         self.assertTrue(process.terminated)
         self.assertTrue(process.killed)
         self.assertEqual(process.waits, [3, 3])
+
+    @unittest.skipUnless(os.name == "posix", "process groups require POSIX")
+    def test_exited_launcher_still_terminates_its_process_group(self) -> None:
+        process = FakeProcess(running=False)
+
+        with mock.patch("run_text_semantics_browser.os.killpg") as killpg:
+            stop_browser(process, process_group=417)  # type: ignore[arg-type]
+
+        self.assertEqual(
+            killpg.call_args_list,
+            [mock.call(417, signal.SIGTERM), mock.call(417, signal.SIGKILL)],
+        )
+
+    @unittest.skipUnless(os.name == "posix", "process groups require POSIX")
+    def test_descendant_cannot_retain_captured_output_pipe(self) -> None:
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import subprocess,sys; "
+                    "subprocess.Popen([sys.executable,'-c',"
+                    "'import os,time; print(os.getpid(),os.getpgrp(),flush=True); time.sleep(30)'])"
+                ),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+        try:
+            assert process.stdout is not None
+            descendant = process.stdout.readline().strip().split()
+            self.assertEqual(len(descendant), 2)
+            self.assertEqual(int(descendant[1]), process.pid)
+            process.wait(timeout=5)
+            stop_browser(process, process_group=process.pid)
+            process.communicate(timeout=5)
+        finally:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except OSError:
+                pass
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
@@ -507,7 +508,13 @@ def run_chrome_scenario(
             chrome or chrome_path(), "--headless=new", "--disable-gpu-sandbox",
             "--no-first-run", "--disable-background-networking",
             f"--user-data-dir={profile}", url,
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True)
+        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True,
+            start_new_session=os.name == "posix")
+        process_group = (
+            process.pid
+            if os.name == "posix" and isinstance(getattr(process, "pid", None), int)
+            else None
+        )
         try:
             if not received.wait(20):
                 raise BackendFailure(
@@ -515,13 +522,40 @@ def run_chrome_scenario(
                     status="test_failed",
                 )
         finally:
-            if process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(5)
+            stop_browser(process, process_group=process_group)
+
+
+def stop_browser(
+    process: subprocess.Popen[str], *, process_group: int | None = None,
+    timeout: int = 5,
+) -> None:
+    """Stop the browser launcher and any helper retaining inherited resources."""
+    if process_group is None:
+        if process.poll() is not None:
+            return
+        process.terminate()
+        try:
+            process.wait(timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout)
+        return
+
+    try:
+        os.killpg(process_group, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    if process.poll() is None:
+        try:
+            process.wait(timeout)
+        except subprocess.TimeoutExpired:
+            pass
+    try:
+        os.killpg(process_group, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+    if process.poll() is None:
+        process.wait(timeout)
 
 
 def run_scenario(
