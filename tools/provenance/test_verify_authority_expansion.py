@@ -22,6 +22,68 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class Tests(unittest.TestCase):
+    def exact_boundary_acknowledgement(self) -> dict:
+        return {
+            "schema_version": 1,
+            "kind": "full-design-import-render-exact-boundary-acknowledgement",
+            "acknowledgement_id": "full-design-import-render-v1-exact-boundary-acknowledgement-1",
+            "amendment_id": "full-design-import-render-v1-exact-boundary-amendment-1",
+            "state": "acknowledged",
+            "acknowledged_at": "2026-11-30T00:00:00Z",
+            "acknowledged_by": "@danielraffel",
+            "authority_effect": "exact-path-implementation-authority-activated",
+            "implementation_authority": "authorized-for-matrix-exact-routes",
+            "coordinates": {
+                "pulp_repository": "Generous-Corp/pulp",
+                "pulp_acceptance_merge_commit": "4" * 40,
+                "pulp_acceptance_path": ".github/vellum-expansion-watch/full-design-import-render-v1/exact-boundary-acceptance-1.json",
+                "pulp_acceptance_sha256": "5" * 64,
+                "vellum_delivery_repository": "danielraffel/vellum",
+                "vellum_amendment_merge_commit": "6" * 40,
+                "amendment_path": verifier.BOUNDARY_AMENDMENT_PATH.as_posix(),
+                "amendment_sha256": verifier.EXPECTED_BOUNDARY_AMENDMENT_SHA256,
+                "matrix_merge_commit": "bbe187d581f3f021a25b3ebd01332f89bbde142e",
+                "matrix_path": verifier.MATRIX_PATH.as_posix(),
+                "matrix_sha256": verifier.EXPECTED_MATRIX_SHA256,
+            },
+            "repository_roles": {
+                "authority_repository": "Generous-Corp/vellum",
+                "temporary_private_delivery_repository": "danielraffel/vellum",
+                "delivery_repository_is_authority": False,
+            },
+            "gates": {
+                "only_matrix_exact_routes_authorized": True,
+                "unlisted_pulp_paths_remain_pulp_owned": True,
+                "retained_boundary_cells_remain_pulp_owned": True,
+                "promotion_attestation_required_before_parity_release": True,
+                "pulp_consumption_authorized": False,
+            },
+        }
+
+    def promotion_attestation(self, acknowledgement_sha256: str) -> dict:
+        commit = "1" * 40
+        tree = "2" * 40
+        return {
+            "schema_version": 1,
+            "kind": "vellum-authority-promotion-attestation",
+            "attestation_id": "full-design-import-render-v1-authority-promotion-1",
+            "state": "attested",
+            "attested_at": "2026-12-01T00:00:00Z",
+            "attested_by": "@danielraffel",
+            "authority_repository": "Generous-Corp/vellum",
+            "delivery_repository": "danielraffel/vellum",
+            "promotion_mode": "exact-mirror",
+            "authority_commit": commit,
+            "delivery_commit": commit,
+            "authority_tree": tree,
+            "delivery_tree": tree,
+            "exact_boundary_amendment_id": "full-design-import-render-v1-exact-boundary-amendment-1",
+            "exact_boundary_amendment_sha256": verifier.EXPECTED_BOUNDARY_AMENDMENT_SHA256,
+            "exact_boundary_acknowledgement_id": "full-design-import-render-v1-exact-boundary-acknowledgement-1",
+            "exact_boundary_acknowledgement_sha256": acknowledgement_sha256,
+            "parity_release_source_commit": commit,
+        }
+
     def test_workflow_runs_and_retains_expansion_gate(self) -> None:
         workflow = (ROOT / ".github/workflows/provenance.yml").read_text()
         self.assertIn(
@@ -54,6 +116,9 @@ class Tests(unittest.TestCase):
         matrix = root / verifier.MATRIX_PATH
         matrix.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / verifier.MATRIX_PATH, matrix)
+        boundary_amendment = root / verifier.BOUNDARY_AMENDMENT_PATH
+        boundary_amendment.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / verifier.BOUNDARY_AMENDMENT_PATH, boundary_amendment)
         return temporary, root, target
 
     def mutate(self, callback) -> dict:
@@ -98,6 +163,17 @@ class Tests(unittest.TestCase):
             "errors": errors,
         }
 
+    def mutate_boundary_amendment(self, callback) -> dict:
+        matrix = json.loads((ROOT / verifier.MATRIX_PATH).read_text())
+        data = json.loads((ROOT / verifier.BOUNDARY_AMENDMENT_PATH).read_text())
+        callback(data)
+        errors = verifier.validate_boundary_amendment(data, matrix)
+        return {
+            "status": "pass" if not errors else "fail",
+            "authority_effect": data.get("authority_effect") if not errors else None,
+            "errors": errors,
+        }
+
     def test_committed_proposal_passes_without_authority(self) -> None:
         report = verifier.verify(ROOT)
         self.assertEqual(report["status"], "pass", report["errors"])
@@ -113,6 +189,126 @@ class Tests(unittest.TestCase):
         self.assertEqual(
             report["compatibility_matrix_id"],
             "full-design-import-render-v1-compatibility-matrix",
+        )
+        self.assertEqual(
+            report["exact_boundary_amendment_id"],
+            "full-design-import-render-v1-exact-boundary-amendment-1",
+        )
+
+    def test_boundary_amendment_is_inert_and_preserves_repository_roles(self) -> None:
+        data = json.loads((ROOT / verifier.BOUNDARY_AMENDMENT_PATH).read_text())
+        self.assertEqual(data["authority_effect"], "none")
+        self.assertEqual(
+            data["implementation_authority"],
+            "forbidden-until-exact-boundary-acknowledged",
+        )
+        self.assertEqual(
+            data["repository_roles"]["authority_repository"],
+            "Generous-Corp/vellum",
+        )
+        self.assertFalse(
+            data["repository_roles"]["delivery_repository_is_authority"]
+        )
+        self.assertFalse(
+            data["repository_roles"]["delivery_work_authorized_by_this_amendment"]
+        )
+        self.assertEqual(
+            data["repository_roles"]["required_exact_boundary_acknowledgement_id"],
+            "full-design-import-render-v1-exact-boundary-acknowledgement-1",
+        )
+        self.assertTrue(
+            data["repository_roles"][
+                "transfer_or_exact_mirror_required_before_parity_release"
+            ]
+        )
+
+    def test_boundary_amendment_authority_and_route_drift_fail(self) -> None:
+        report = self.mutate_boundary_amendment(
+            lambda data: data.update(authority_effect="transferred")
+        )
+        self.assertEqual(report["status"], "fail")
+        report = self.mutate_boundary_amendment(
+            lambda data: data["repository_roles"].update(
+                delivery_repository_is_authority=True
+            )
+        )
+        self.assertEqual(report["status"], "fail")
+        report = self.mutate_boundary_amendment(
+            lambda data: data["exact_path_routes"].update(
+                unlisted_pulp_path_owner="Generous-Corp/vellum"
+            )
+        )
+        self.assertEqual(report["status"], "fail")
+        report = self.mutate_boundary_amendment(
+            lambda data: data["exact_path_routes"].update(
+                routed_cell_filter="all-cells"
+            )
+        )
+        self.assertEqual(report["status"], "fail")
+        report = self.mutate_boundary_amendment(
+            lambda data: data["open_overlap_audit"].update(
+                pulp_acceptance_must_refresh_open_prs=False
+            )
+        )
+        self.assertEqual(report["status"], "fail")
+
+    def test_boundary_amendment_cannot_drop_retained_cell_or_release_gate(self) -> None:
+        report = self.mutate_boundary_amendment(
+            lambda data: data["exact_path_routes"]["retained_boundary_cells"].pop()
+        )
+        self.assertEqual(report["status"], "fail")
+        report = self.mutate_boundary_amendment(
+            lambda data: data["gates"].update(pulp_consumption_authorized=True)
+        )
+        self.assertEqual(report["status"], "fail")
+        report = self.mutate_boundary_amendment(
+            lambda data: data["gates"].update(
+                authority_promotion_attestation_required_for_release=False
+            )
+        )
+        self.assertEqual(report["status"], "fail")
+
+    def test_boundary_routes_reject_prefix_or_glob_paths(self) -> None:
+        matrix = json.loads((ROOT / verifier.MATRIX_PATH).read_text())
+        amendment = json.loads((ROOT / verifier.BOUNDARY_AMENDMENT_PATH).read_text())
+        matrix["cells"][0]["vellum_future_implementation"][0] = "authoring/**"
+        errors = verifier.validate_boundary_amendment(amendment, matrix)
+        self.assertTrue(any("exact path" in error for error in errors))
+        matrix = json.loads((ROOT / verifier.MATRIX_PATH).read_text())
+        next(
+            cell
+            for cell in matrix["cells"]
+            if cell["id"] == "render.text-runs-fonts-fallback"
+        )["vellum_future_implementation"][0] = "runtime/assets/unlisted-fonts"
+        errors = verifier.validate_boundary_amendment(amendment, matrix)
+        self.assertTrue(any("directory-shaped path" in error for error in errors))
+        for malformed in ({}, []):
+            matrix = json.loads((ROOT / verifier.MATRIX_PATH).read_text())
+            matrix["cells"][0]["vellum_future_implementation"][0] = malformed
+            errors = verifier.validate_boundary_amendment(amendment, matrix)
+            self.assertTrue(errors)
+
+    def test_boundary_maintenance_allowance_is_prospective_only(self) -> None:
+        data = json.loads((ROOT / verifier.BOUNDARY_AMENDMENT_PATH).read_text())
+        row = data["interim_maintenance"][0]
+        self.assertFalse(row["authorized_by_this_amendment"])
+        self.assertIn("after-exact-boundary-acknowledgement", row["disposition"])
+        report = self.mutate_boundary_amendment(
+            lambda value: value["interim_maintenance"][0].update(
+                authorized_by_this_amendment=True
+            )
+        )
+        self.assertEqual(report["status"], "fail")
+
+    def test_boundary_amendment_byte_drift_fails(self) -> None:
+        temporary, root, _ = self.copy()
+        self.addCleanup(temporary.cleanup)
+        amendment = root / verifier.BOUNDARY_AMENDMENT_PATH
+        amendment.write_bytes(amendment.read_bytes() + b"\n")
+        report = verifier.verify(root, repository_checks=False)
+        self.assertEqual(report["status"], "fail")
+        self.assertTrue(
+            any("exact-boundary amendment differs" in error for error in report["errors"])
         )
 
     def test_matrix_freezes_required_routes_without_authority(self) -> None:
@@ -183,11 +379,56 @@ class Tests(unittest.TestCase):
 
     def test_release_readiness_rejects_partial_cells(self) -> None:
         data = json.loads((ROOT / verifier.MATRIX_PATH).read_text())
-        errors = verifier.validate_release_readiness(data)
+        amendment = json.loads((ROOT / verifier.BOUNDARY_AMENDMENT_PATH).read_text())
+        errors = verifier.validate_release_readiness(ROOT, data, amendment)
         self.assertTrue(any("source.agent-html-chromium" in error for error in errors))
         for cell in data["cells"]:
             cell["status"] = cell["target_status"]
-        self.assertEqual(verifier.validate_release_readiness(data), [])
+        errors = verifier.validate_release_readiness(ROOT, data, amendment)
+        self.assertFalse(any("have not reached target" in error for error in errors))
+        self.assertTrue(any("promotion attestation" in error for error in errors))
+
+    def test_release_readiness_accepts_valid_promotion_evidence(self) -> None:
+        temporary, root, _ = self.copy()
+        self.addCleanup(temporary.cleanup)
+        acknowledgement = root / verifier.EXPANSIONS_ROOT / (
+            "full-design-import-render-v1/exact-boundary-acknowledgement-1.json"
+        )
+        acknowledgement.write_text(
+            json.dumps(self.exact_boundary_acknowledgement()) + "\n"
+        )
+        import hashlib
+        digest = hashlib.sha256(acknowledgement.read_bytes()).hexdigest()
+        promotion = root / verifier.EXPANSIONS_ROOT / (
+            "full-design-import-render-v1/authority-promotion-attestation-1.json"
+        )
+        promotion.write_text(json.dumps(self.promotion_attestation(digest)) + "\n")
+        matrix = json.loads((ROOT / verifier.MATRIX_PATH).read_text())
+        for cell in matrix["cells"]:
+            cell["status"] = cell["target_status"]
+        amendment = json.loads((ROOT / verifier.BOUNDARY_AMENDMENT_PATH).read_text())
+        self.assertEqual(verifier.validate_release_readiness(root, matrix, amendment), [])
+
+    def test_promotion_attestation_rejects_mismatch_and_bad_digest(self) -> None:
+        amendment = json.loads((ROOT / verifier.BOUNDARY_AMENDMENT_PATH).read_text())
+        data = self.promotion_attestation("3" * 64)
+        data["authority_commit"] = "4" * 40
+        errors = verifier.validate_authority_promotion_attestation(data, amendment)
+        self.assertTrue(any("commits must match" in error for error in errors))
+        data = self.promotion_attestation("not-a-digest")
+        errors = verifier.validate_authority_promotion_attestation(data, amendment)
+        self.assertTrue(any("expected SHA-256" in error for error in errors))
+        data = self.promotion_attestation("3" * 64)
+        data["promotion_mode"] = {}
+        errors = verifier.validate_authority_promotion_attestation(data, amendment)
+        self.assertTrue(any("closed promotion mode" in error for error in errors))
+
+    def test_exact_boundary_acknowledgement_requires_full_binding(self) -> None:
+        data = self.exact_boundary_acknowledgement()
+        self.assertEqual(verifier.validate_exact_boundary_acknowledgement(data), [])
+        data["coordinates"]["pulp_acceptance_sha256"] = "bad"
+        errors = verifier.validate_exact_boundary_acknowledgement(data)
+        self.assertTrue(any("pulp_acceptance_sha256" in error for error in errors))
 
     def test_cli_release_readiness_fails_before_parity_completion(self) -> None:
         completed = subprocess.run(

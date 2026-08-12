@@ -29,22 +29,35 @@ MATRIX_PATH = Path(
     "provenance/authority/expansions/"
     "full-design-import-render-v1/compatibility-matrix.json"
 )
+BOUNDARY_AMENDMENT_PATH = Path(
+    "provenance/authority/expansions/"
+    "full-design-import-render-v1/exact-boundary-amendment-1.json"
+)
 EXPANSIONS_ROOT = Path("provenance/authority/expansions")
 EXPECTED_FILES = {
     "README.md",
     "full-design-import-render-v1/compatibility-matrix.json",
+    "full-design-import-render-v1/exact-boundary-amendment-1.json",
     "full-design-import-render-v1/proposal.json",
     "full-design-import-render-v1/scope-addendum-1.json",
     "full-design-import-render-v1/watch-acknowledgement.json",
+}
+OPTIONAL_FUTURE_FILES = {
+    "full-design-import-render-v1/exact-boundary-acknowledgement-1.json",
+    "full-design-import-render-v1/authority-promotion-attestation-1.json",
 }
 EXPECTED_README_SHA256 = "6935071cee4c735f401356e625108150251921b8a0dd6f20648d7370fd388894"
 EXPECTED_PROPOSAL_SHA256 = "7c2db05e110e7d9834806e08469f6d7cc70f6528b2242d1f6c0255dcdbc0a4c9"
 EXPECTED_ADDENDUM_SHA256 = "91bb269ce5a872037fd67e4735125772bcac50d82cf454edfd8c356b11f5a122"
 EXPECTED_ACKNOWLEDGEMENT_SHA256 = "877ac4a410e7ac8d5019aa8f2e09d9133a111acaab59eb2abef65c30527b78c8"
 EXPECTED_MATRIX_SHA256 = "1792666eb1dd7d3f46dc607f4ee3dccbbc1232a6c2e6ab2331507c4b87122e1c"
+EXPECTED_BOUNDARY_AMENDMENT_SHA256 = (
+    "cf9b07233e9c66763e1f68391d2df4252dca01bbc7de5acac10dca006fbf5287"
+)
 EXPECTED_PROPOSED_AT = "2026-08-10T21:55:54Z"
 EXPECTED_ADDENDUM_PROPOSED_AT = "2026-08-11T02:52:16Z"
 EXPECTED_ACKNOWLEDGED_AT = "2026-08-11T20:54:33Z"
+EXPECTED_BOUNDARY_PROPOSED_AT = "2026-08-12T02:08:00Z"
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
 OWNER = re.compile(r"^@[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
 EXPECTED_COORDINATES = {
@@ -371,6 +384,219 @@ def safe_path(value: Any, where: str, errors: list[str]) -> None:
     parts = value.split("/")
     if value.startswith("/") or "\\" in value or any(p in {"", ".", ".."} for p in parts):
         errors.append(f"{where}: path is not safely repository-relative")
+
+
+def exact_route_path(value: Any, where: str, errors: list[str]) -> None:
+    safe_path(value, where, errors)
+    if isinstance(value, str) and (
+        value.endswith("/") or any(marker in value for marker in ("*", "?", "[", "]"))
+    ):
+        errors.append(f"{where}: expected exact path without prefix or glob semantics")
+
+
+def validate_authority_promotion_attestation(data: Any, amendment: Any) -> list[str]:
+    errors: list[str] = []
+    top = {
+        "schema_version", "kind", "attestation_id", "state", "attested_at",
+        "attested_by", "authority_repository", "delivery_repository", "promotion_mode",
+        "authority_commit", "delivery_commit", "authority_tree", "delivery_tree",
+        "exact_boundary_amendment_id", "exact_boundary_amendment_sha256",
+        "exact_boundary_acknowledgement_id", "exact_boundary_acknowledgement_sha256",
+        "parity_release_source_commit",
+    }
+    if not exact_keys(data, top, "authority_promotion", errors):
+        return errors
+    scalars = {
+        "schema_version": 1,
+        "kind": "vellum-authority-promotion-attestation",
+        "attestation_id": "full-design-import-render-v1-authority-promotion-1",
+        "state": "attested",
+        "authority_repository": "Generous-Corp/vellum",
+        "delivery_repository": "danielraffel/vellum",
+        "exact_boundary_amendment_id": (
+            "full-design-import-render-v1-exact-boundary-amendment-1"
+        ),
+        "exact_boundary_amendment_sha256": EXPECTED_BOUNDARY_AMENDMENT_SHA256,
+        "exact_boundary_acknowledgement_id": (
+            "full-design-import-render-v1-exact-boundary-acknowledgement-1"
+        ),
+    }
+    for key, expected in scalars.items():
+        if not exact_scalar(data[key], expected):
+            errors.append(f"authority_promotion.{key}: expected {expected!r}")
+    if not isinstance(data["promotion_mode"], str) or data["promotion_mode"] not in {
+        "repository-transfer", "exact-mirror"
+    }:
+        errors.append("authority_promotion.promotion_mode: expected closed promotion mode")
+    if not OWNER.fullmatch(str(data["attested_by"])):
+        errors.append("authority_promotion.attested_by: expected individual GitHub handle")
+    try:
+        stamp = data["attested_at"]
+        parsed = dt.datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        if not stamp.endswith("Z") or parsed.utcoffset() != dt.timedelta(0):
+            raise ValueError
+    except (AttributeError, TypeError, ValueError):
+        errors.append("authority_promotion.attested_at: expected UTC timestamp ending in Z")
+    sha_fields = (
+        "authority_commit", "delivery_commit", "authority_tree", "delivery_tree",
+        "parity_release_source_commit",
+    )
+    for key in sha_fields:
+        value = data[key]
+        if not isinstance(value, str) or not SHA40.fullmatch(value):
+            errors.append(f"authority_promotion.{key}: expected full commit or tree SHA")
+    digest = data["exact_boundary_acknowledgement_sha256"]
+    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        errors.append(
+            "authority_promotion.exact_boundary_acknowledgement_sha256: expected SHA-256"
+        )
+    if data["authority_commit"] != data["delivery_commit"]:
+        errors.append("authority_promotion: authority and delivery commits must match exactly")
+    if data["authority_tree"] != data["delivery_tree"]:
+        errors.append("authority_promotion: authority and delivery trees must match exactly")
+    if data["parity_release_source_commit"] != data["authority_commit"]:
+        errors.append("authority_promotion: release source must be the promoted authority commit")
+    required_ack = (
+        amendment.get("repository_roles", {}).get(
+            "required_exact_boundary_acknowledgement_id"
+        )
+        if isinstance(amendment, dict)
+        else None
+    )
+    if data["exact_boundary_acknowledgement_id"] != required_ack:
+        errors.append("authority_promotion: acknowledgement differs from amendment requirement")
+    return errors
+
+
+def validate_promotion_acknowledgement_digest(
+    root: Path, data: Any
+) -> list[str]:
+    if not isinstance(data, dict):
+        return ["authority_promotion: expected attestation object"]
+    acknowledgement = (
+        root
+        / EXPANSIONS_ROOT
+        / "full-design-import-render-v1/exact-boundary-acknowledgement-1.json"
+    )
+    if not acknowledgement.is_file():
+        return ["authority_promotion: exact-boundary acknowledgement artifact is missing"]
+    try:
+        acknowledgement_data = load_json(acknowledgement)
+        errors = validate_exact_boundary_acknowledgement(acknowledgement_data)
+        actual = hashlib.sha256(acknowledgement.read_bytes()).hexdigest()
+    except (OSError, ValueError) as exc:
+        return [f"authority_promotion: cannot read exact-boundary acknowledgement: {exc}"]
+    if errors:
+        return ["authority_promotion: " + error for error in errors]
+    if data.get("exact_boundary_acknowledgement_id") != acknowledgement_data.get(
+        "acknowledgement_id"
+    ):
+        return ["authority_promotion: acknowledgement ID does not match artifact"]
+    if data.get("exact_boundary_acknowledgement_sha256") != actual:
+        return ["authority_promotion: acknowledgement digest does not match artifact"]
+    return []
+
+
+def validate_exact_boundary_acknowledgement(data: Any) -> list[str]:
+    errors: list[str] = []
+    top = {
+        "schema_version", "kind", "acknowledgement_id", "amendment_id", "state",
+        "acknowledged_at", "acknowledged_by", "authority_effect",
+        "implementation_authority", "coordinates", "repository_roles", "gates",
+    }
+    if not exact_keys(data, top, "exact_boundary_acknowledgement", errors):
+        return errors
+    scalars = {
+        "schema_version": 1,
+        "kind": "full-design-import-render-exact-boundary-acknowledgement",
+        "acknowledgement_id": (
+            "full-design-import-render-v1-exact-boundary-acknowledgement-1"
+        ),
+        "amendment_id": "full-design-import-render-v1-exact-boundary-amendment-1",
+        "state": "acknowledged",
+        "acknowledged_by": "@danielraffel",
+        "authority_effect": "exact-path-implementation-authority-activated",
+        "implementation_authority": "authorized-for-matrix-exact-routes",
+    }
+    for key, expected in scalars.items():
+        if not exact_scalar(data[key], expected):
+            errors.append(f"exact_boundary_acknowledgement.{key}: expected {expected!r}")
+    if not OWNER.fullmatch(str(data["acknowledged_by"])):
+        errors.append(
+            "exact_boundary_acknowledgement.acknowledged_by: expected individual handle"
+        )
+    try:
+        stamp = data["acknowledged_at"]
+        parsed = dt.datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        if not stamp.endswith("Z") or parsed.utcoffset() != dt.timedelta(0):
+            raise ValueError
+    except (AttributeError, TypeError, ValueError):
+        errors.append(
+            "exact_boundary_acknowledgement.acknowledged_at: expected UTC timestamp"
+        )
+    coordinates = data["coordinates"]
+    coordinate_keys = {
+        "pulp_repository", "pulp_acceptance_merge_commit", "pulp_acceptance_path",
+        "pulp_acceptance_sha256", "vellum_delivery_repository",
+        "vellum_amendment_merge_commit", "amendment_path", "amendment_sha256",
+        "matrix_merge_commit", "matrix_path", "matrix_sha256",
+    }
+    if not exact_keys(
+        coordinates, coordinate_keys, "exact_boundary_acknowledgement.coordinates", errors
+    ):
+        coordinates = {}
+    expected_coordinate_scalars = {
+        "pulp_repository": "Generous-Corp/pulp",
+        "pulp_acceptance_path": (
+            ".github/vellum-expansion-watch/full-design-import-render-v1/"
+            "exact-boundary-acceptance-1.json"
+        ),
+        "vellum_delivery_repository": "danielraffel/vellum",
+        "amendment_path": BOUNDARY_AMENDMENT_PATH.as_posix(),
+        "amendment_sha256": EXPECTED_BOUNDARY_AMENDMENT_SHA256,
+        "matrix_merge_commit": "bbe187d581f3f021a25b3ebd01332f89bbde142e",
+        "matrix_path": MATRIX_PATH.as_posix(),
+        "matrix_sha256": EXPECTED_MATRIX_SHA256,
+    }
+    for key, expected in expected_coordinate_scalars.items():
+        if not exact_scalar(coordinates.get(key), expected):
+            errors.append(f"exact_boundary_acknowledgement.coordinates.{key}: drift")
+    for key in ("pulp_acceptance_merge_commit", "vellum_amendment_merge_commit"):
+        value = coordinates.get(key)
+        if not isinstance(value, str) or not SHA40.fullmatch(value):
+            errors.append(f"exact_boundary_acknowledgement.coordinates.{key}: expected SHA")
+    digest = coordinates.get("pulp_acceptance_sha256")
+    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        errors.append(
+            "exact_boundary_acknowledgement.coordinates.pulp_acceptance_sha256: expected SHA-256"
+        )
+    expected_roles = {
+        "authority_repository": "Generous-Corp/vellum",
+        "temporary_private_delivery_repository": "danielraffel/vellum",
+        "delivery_repository_is_authority": False,
+    }
+    roles = data["repository_roles"]
+    if (
+        not isinstance(roles, dict)
+        or set(roles) != set(expected_roles)
+        or any(not exact_scalar(roles[key], expected) for key, expected in expected_roles.items())
+    ):
+        errors.append("exact_boundary_acknowledgement.repository_roles: drift")
+    expected_gates = {
+        "only_matrix_exact_routes_authorized": True,
+        "unlisted_pulp_paths_remain_pulp_owned": True,
+        "retained_boundary_cells_remain_pulp_owned": True,
+        "promotion_attestation_required_before_parity_release": True,
+        "pulp_consumption_authorized": False,
+    }
+    gates = data["gates"]
+    if (
+        not isinstance(gates, dict)
+        or set(gates) != set(expected_gates)
+        or any(not exact_scalar(gates[key], expected) for key, expected in expected_gates.items())
+    ):
+        errors.append("exact_boundary_acknowledgement.gates: drift")
+    return errors
 
 
 def exact_scalar(value: Any, expected: Any) -> bool:
@@ -1014,6 +1240,288 @@ def validate_matrix(data: Any) -> list[str]:
     return errors
 
 
+def validate_boundary_amendment(data: Any, matrix: Any) -> list[str]:
+    errors: list[str] = []
+    top = {
+        "schema_version", "kind", "amendment_id", "proposal_id", "state",
+        "proposed_at", "proposed_by", "authority_effect",
+        "implementation_authority", "coordinates", "repository_roles",
+        "exact_path_routes", "exact_path_expansions", "interim_maintenance",
+        "open_overlap_audit", "gates",
+    }
+    if not exact_keys(data, top, "boundary_amendment", errors):
+        return errors
+    scalars = {
+        "schema_version": 1,
+        "kind": "full-design-import-render-exact-boundary-amendment",
+        "amendment_id": "full-design-import-render-v1-exact-boundary-amendment-1",
+        "proposal_id": "full-design-import-render-v1",
+        "state": "proposed",
+        "proposed_at": EXPECTED_BOUNDARY_PROPOSED_AT,
+        "proposed_by": "@danielraffel",
+        "authority_effect": "none",
+        "implementation_authority": "forbidden-until-exact-boundary-acknowledged",
+    }
+    for key, expected in scalars.items():
+        if not exact_scalar(data[key], expected):
+            errors.append(f"boundary_amendment.{key}: expected {expected!r}")
+    if not OWNER.fullmatch(str(data["proposed_by"])):
+        errors.append("boundary_amendment.proposed_by: expected individual GitHub handle")
+
+    expected_coordinates = {
+        "pulp_repository": "Generous-Corp/pulp",
+        "pulp_audit_commit": "34f879e1a71aec8a34cea13f62600586d0eb79a7",
+        "vellum_authority_repository": "Generous-Corp/vellum",
+        "vellum_delivery_repository": "danielraffel/vellum",
+        "vellum_matrix_merge_commit": "bbe187d581f3f021a25b3ebd01332f89bbde142e",
+        "matrix_path": MATRIX_PATH.as_posix(),
+        "matrix_sha256": EXPECTED_MATRIX_SHA256,
+        "planning_repository": "danielraffel/pulp-planning",
+        "planning_commit": "0455a500c3ca6645c69cf6cad3f600b4313594bf",
+    }
+    coordinates = data["coordinates"]
+    if (
+        not isinstance(coordinates, dict)
+        or set(coordinates) != set(expected_coordinates)
+        or any(
+            not exact_scalar(coordinates[key], expected)
+            for key, expected in expected_coordinates.items()
+        )
+    ):
+        errors.append("boundary_amendment.coordinates: differs from pinned matrix")
+    elif not all(
+        SHA40.fullmatch(coordinates[key])
+        for key in (
+            "pulp_audit_commit", "vellum_matrix_merge_commit", "planning_commit"
+        )
+    ):
+        errors.append("boundary_amendment.coordinates: expected full commit SHAs")
+
+    expected_roles = {
+        "authority_repository": "Generous-Corp/vellum",
+        "temporary_private_delivery_repository": "danielraffel/vellum",
+        "delivery_repository_is_authority": False,
+        "delivery_work_authorized_by_this_amendment": False,
+        "required_exact_boundary_acknowledgement_id": (
+            "full-design-import-render-v1-exact-boundary-acknowledgement-1"
+        ),
+        "transfer_or_exact_mirror_required_before_parity_release": True,
+        "release_may_be_published_from_delivery_repository": False,
+    }
+    roles = data["repository_roles"]
+    if (
+        not isinstance(roles, dict)
+        or set(roles) != set(expected_roles)
+        or any(not exact_scalar(roles[key], expected) for key, expected in expected_roles.items())
+    ):
+        errors.append("boundary_amendment.repository_roles: differs from pinned roles")
+
+    retained_ids = [
+        "boundary.runtime-engine-selection",
+        "boundary.non-macos-arm64-platform-adoption",
+        "boundary.audio-dsp-harness",
+        "boundary.pulp-cli-control-product-integration",
+        "boundary.pulp-forge-product-integration",
+    ]
+    expected_routes = {
+        "source": "compatibility-matrix-cells",
+        "routed_cell_filter": "family-not-retained-boundary",
+        "route_key": "repository-and-exact-path",
+        "path_match": "exact-only-no-prefix-routing",
+        "same_owner_duplicate_paths": "coalesced-with-all-cell-roles",
+        "retained_boundary_path_fields": "semantic-evidence-not-path-routes",
+        "framework_implementation_field": "vellum_future_implementation",
+        "framework_proof_field": "vellum_future_proof",
+        "pulp_counterpart_implementation_field": "pulp_implementation",
+        "pulp_counterpart_proof_field": "pulp_proof",
+        "framework_owner": "Generous-Corp/vellum",
+        "pulp_counterpart_owner": "Generous-Corp/pulp",
+        "pulp_counterpart_disposition": (
+            "rollback-and-product-integration-until-authorized-consumption"
+        ),
+        "generic_change_origin": "Generous-Corp/vellum",
+        "temporary_delivery_origin": "danielraffel/vellum",
+        "unlisted_pulp_path_owner": "Generous-Corp/pulp",
+        "duplicate_generic_implementation_in_pulp": "event-and-disposition-required",
+        "retained_boundary_cells": retained_ids,
+    }
+    routes = data["exact_path_routes"]
+    if (
+        not isinstance(routes, dict)
+        or set(routes) != set(expected_routes)
+        or any(not exact_scalar(routes[key], expected) for key, expected in expected_routes.items())
+    ):
+        errors.append("boundary_amendment.exact_path_routes: differs from frozen routes")
+
+    expected_expansions = [{
+        "cell_id": "render.text-runs-fonts-fallback",
+        "matrix_path": "runtime/assets/fonts",
+        "repository": "Generous-Corp/vellum",
+        "role": "vellum_future_implementation",
+        "exact_paths": [
+            "runtime/assets/fonts/Inter-Regular.ttf",
+            "runtime/assets/fonts/Jost-Bold.ttf",
+            "runtime/assets/fonts/Jost-Medium.ttf",
+            "runtime/assets/fonts/Jost-Regular.ttf",
+            "runtime/assets/fonts/Jost-SemiBold.ttf",
+            "runtime/assets/fonts/NotoSansArabic-Variable.ttf",
+            "runtime/assets/fonts/NotoSansJP-Variable.ttf",
+            "runtime/assets/fonts/README.md",
+        ],
+    }]
+    if data["exact_path_expansions"] != expected_expansions:
+        errors.append("boundary_amendment.exact_path_expansions: differs from pinned files")
+    expansion_keys = {
+        (row["cell_id"], row["role"], row["matrix_path"]): row["exact_paths"]
+        for row in expected_expansions
+    }
+    for index, path in enumerate(expected_expansions[0]["exact_paths"]):
+        exact_route_path(path, f"boundary_amendment.exact_path_expansions[0].exact_paths[{index}]", errors)
+
+    matrix_cells = matrix.get("cells") if isinstance(matrix, dict) else None
+    if not isinstance(matrix_cells, list):
+        errors.append("boundary_amendment: compatibility matrix cells unavailable")
+    else:
+        actual_retained = [
+            cell.get("id") for cell in matrix_cells
+            if isinstance(cell, dict) and cell.get("family") == "retained-boundary"
+        ]
+        if actual_retained != retained_ids:
+            errors.append("boundary_amendment: retained routes differ from matrix")
+        route_index: dict[tuple[str, str], set[tuple[str, str]]] = {}
+        for index, cell in enumerate(matrix_cells):
+            if not isinstance(cell, dict):
+                continue
+            if cell.get("family") == "retained-boundary":
+                continue
+            field_owners = {
+                "vellum_future_implementation": "Generous-Corp/vellum",
+                "vellum_future_proof": "Generous-Corp/vellum",
+                "pulp_implementation": "Generous-Corp/pulp",
+                "pulp_proof": "Generous-Corp/pulp",
+            }
+            for field, repository in field_owners.items():
+                paths = cell.get(field)
+                if not isinstance(paths, list):
+                    errors.append(f"boundary_amendment.matrix.cells[{index}].{field}: unavailable")
+                    continue
+                for path in paths:
+                    if not isinstance(path, str):
+                        exact_route_path(
+                            path,
+                            f"boundary_amendment.matrix.cells[{index}].{field}",
+                            errors,
+                        )
+                        continue
+                    expansion = expansion_keys.get(
+                        (str(cell.get("id")), field, path)
+                    )
+                    if expansion is not None:
+                        for expanded_path in expansion:
+                            route_index.setdefault(
+                                (repository, expanded_path), set()
+                            ).add((str(cell.get("id")), field))
+                        continue
+                    exact_route_path(
+                        path,
+                        f"boundary_amendment.matrix.cells[{index}].{field}",
+                        errors,
+                    )
+                    if (
+                        isinstance(path, str)
+                        and "." not in path.rsplit("/", 1)[-1]
+                        and path != "cli/vellum"
+                    ):
+                        errors.append(
+                            f"boundary_amendment.matrix.cells[{index}].{field}: "
+                            "directory-shaped path requires exact expansion"
+                        )
+                    if isinstance(path, str):
+                        route_index.setdefault((repository, path), set()).add(
+                            (str(cell.get("id")), field)
+                        )
+
+    expected_maintenance = [{
+        "id": "capture-primitives-unimplemented-in-vellum",
+        "pulp_paths": EXPECTED_MAINTENANCE_PATHS,
+        "disposition": (
+            "prospective-ordinary-pulp-maintenance-after-exact-boundary-acknowledgement"
+        ),
+        "authorized_by_this_amendment": False,
+        "expires_at_gate": "5A-P.3-independent-pixel-and-semantic-proof",
+    }]
+    if data["interim_maintenance"] != expected_maintenance:
+        errors.append("boundary_amendment.interim_maintenance: differs from pinned exception")
+
+    expected_overlap = {
+        "audited_at": EXPECTED_BOUNDARY_PROPOSED_AT,
+        "evidence_mode": "proposal-snapshot-requires-counterpart-refresh",
+        "pulp_acceptance_must_refresh_open_prs": True,
+        "vellum_acknowledgement_must_bind_refreshed_acceptance": True,
+        "pulp_main_commit": "34f879e1a71aec8a34cea13f62600586d0eb79a7",
+        "vellum_main_commit": "bbe187d581f3f021a25b3ebd01332f89bbde142e",
+        "rows": [
+            {
+                "repository": "Generous-Corp/pulp", "pull_request": 7398,
+                "head_commit": "c4219fa137c206d9d221723f078bc2b3d741794a",
+                "paths": ["tools/import-design/browser_capture/settle.test.mjs"],
+                "disposition": "pulp-counterpart-test-do-not-duplicate",
+            },
+            {
+                "repository": "Generous-Corp/pulp", "pull_request": 7399,
+                "head_commit": "408d028d6fc88ef6fa6f5702edf1a49473ce0939",
+                "paths": [
+                    "core/view/include/pulp/view/visualization_bridge.hpp",
+                    "core/view/src/visualization_bridge.cpp",
+                    "test/test_visualization.cpp",
+                ],
+                "disposition": "pulp-product-runtime-retained",
+            },
+            {
+                "repository": "Generous-Corp/pulp", "pull_request": 7386,
+                "head_commit": "8ddb714f191f32d21e91795ac0e0a0e09efa36b1",
+                "paths": [
+                    "core/view/include/pulp/view/motion.hpp",
+                    "core/view/src/motion.cpp", "core/view/src/view.cpp",
+                ],
+                "disposition": "pulp-product-runtime-retained",
+            },
+            {
+                "repository": "Generous-Corp/pulp", "pull_request": 7219,
+                "head_commit": "e9a2b604aec11a3b45edaaef56e2e40f03218329",
+                "paths": [
+                    "core/view/include/pulp/view/script_inspector_bridge.hpp",
+                    "core/view/include/pulp/view/scripted_ui.hpp",
+                    "core/view/src/script_inspector_bridge.cpp",
+                    "core/view/src/scripted_ui.cpp",
+                ],
+                "disposition": "pulp-engine-and-inspector-integration-retained",
+            },
+        ],
+        "open_vellum_overlap_count": 0,
+    }
+    if data["open_overlap_audit"] != expected_overlap:
+        errors.append("boundary_amendment.open_overlap_audit: differs from pinned audit")
+
+    expected_gates = {
+        "amendment_may_transfer_authority": False,
+        "source_work_before_exact_boundary_acknowledgement": False,
+        "personal_delivery_repository_may_become_authority_implicitly": False,
+        "transfer_or_exact_mirror_before_parity_release": True,
+        "authority_promotion_attestation_required_for_release": True,
+        "matrix_release_readiness_still_required": True,
+        "pulp_consumption_authorized": False,
+    }
+    gates = data["gates"]
+    if (
+        not isinstance(gates, dict)
+        or set(gates) != set(expected_gates)
+        or any(not exact_scalar(gates[key], expected) for key, expected in expected_gates.items())
+    ):
+        errors.append("boundary_amendment.gates: differs from fail-closed pinned gates")
+    return errors
+
+
 def validate_matrix_repository_paths(root: Path, data: Any) -> list[str]:
     """Resolve supported Vellum evidence at the matrix's pinned audit commit.
 
@@ -1072,7 +1580,8 @@ def validate_matrix_repository_paths(root: Path, data: Any) -> list[str]:
     return errors
 
 
-def validate_release_readiness(data: Any) -> list[str]:
+def validate_release_readiness(root: Path, data: Any, amendment: Any) -> list[str]:
+    errors: list[str] = []
     if not isinstance(data, dict) or not isinstance(data.get("cells"), list):
         return ["release readiness: compatibility matrix cells are unavailable"]
     incomplete = [
@@ -1081,11 +1590,48 @@ def validate_release_readiness(data: Any) -> list[str]:
         if isinstance(cell, dict) and cell.get("status") != cell.get("target_status")
     ]
     if incomplete:
-        return [
+        errors.append(
             "release readiness: required compatibility cells have not reached target: "
             + ", ".join(str(cell_id) for cell_id in incomplete)
-        ]
-    return []
+        )
+    promotion_required = (
+        isinstance(amendment, dict)
+        and isinstance(amendment.get("gates"), dict)
+        and amendment["gates"].get(
+            "authority_promotion_attestation_required_for_release"
+        ) is True
+    )
+    if not promotion_required:
+        errors.append(
+            "release readiness: exact-boundary amendment does not require authority promotion"
+        )
+    promotion = (
+        root
+        / EXPANSIONS_ROOT
+        / "full-design-import-render-v1/authority-promotion-attestation-1.json"
+    )
+    if not promotion.is_file():
+        errors.append(
+            "release readiness: missing commit/digest-bound authority promotion attestation"
+        )
+    else:
+        try:
+            promotion_data = load_json(promotion)
+            errors.extend(
+                "release readiness: " + error
+                for error in validate_authority_promotion_attestation(
+                    promotion_data, amendment
+                )
+            )
+            errors.extend(
+                "release readiness: " + error
+                for error in validate_promotion_acknowledgement_digest(
+                    root, promotion_data
+                )
+            )
+        except ValueError as exc:
+            errors.append(f"release readiness: invalid authority promotion attestation: {exc}")
+    return errors
 
 
 def verify(
@@ -1094,11 +1640,13 @@ def verify(
     closure_errors = []
     try:
         actual_files, symlinks = expansion_files(root)
-        if actual_files != EXPECTED_FILES:
+        if not EXPECTED_FILES.issubset(actual_files) or not actual_files.issubset(
+            EXPECTED_FILES | OPTIONAL_FUTURE_FILES
+        ):
             closure_errors.append(
                 "expansion artifact set differs; "
                 f"missing={sorted(EXPECTED_FILES - actual_files)} "
-                f"unexpected={sorted(actual_files - EXPECTED_FILES)}"
+                f"unexpected={sorted(actual_files - EXPECTED_FILES - OPTIONAL_FUTURE_FILES)}"
             )
         if symlinks:
             closure_errors.append(
@@ -1141,26 +1689,66 @@ def verify(
             closure_errors.append("expansion compatibility matrix differs from pinned SHA-256")
     except OSError as exc:
         closure_errors.append(f"cannot read expansion compatibility matrix: {exc}")
+    boundary_amendment = root / BOUNDARY_AMENDMENT_PATH
+    try:
+        boundary_amendment_sha256 = hashlib.sha256(
+            boundary_amendment.read_bytes()
+        ).hexdigest()
+        if boundary_amendment_sha256 != EXPECTED_BOUNDARY_AMENDMENT_SHA256:
+            closure_errors.append("expansion exact-boundary amendment differs from pinned SHA-256")
+    except OSError as exc:
+        closure_errors.append(f"cannot read expansion exact-boundary amendment: {exc}")
     try:
         data = load_json(proposal)
         addendum_data = load_json(addendum)
         acknowledgement_data = load_json(acknowledgement)
         matrix_data = load_json(matrix)
+        boundary_amendment_data = load_json(boundary_amendment)
+        promotion_path = (
+            root
+            / EXPANSIONS_ROOT
+            / "full-design-import-render-v1/authority-promotion-attestation-1.json"
+        )
+        promotion_errors = []
+        exact_acknowledgement_path = (
+            root
+            / EXPANSIONS_ROOT
+            / "full-design-import-render-v1/exact-boundary-acknowledgement-1.json"
+        )
+        if exact_acknowledgement_path.is_file():
+            promotion_errors += validate_exact_boundary_acknowledgement(
+                load_json(exact_acknowledgement_path)
+            )
+        if promotion_path.is_file():
+            promotion_data = load_json(promotion_path)
+            promotion_errors = validate_authority_promotion_attestation(
+                promotion_data, boundary_amendment_data
+            )
+            promotion_errors += validate_promotion_acknowledgement_digest(
+                root, promotion_data
+            )
         errors = (
             closure_errors
             + validate(data)
             + validate_addendum(addendum_data)
             + validate_acknowledgement(acknowledgement_data)
             + validate_matrix(matrix_data)
+            + validate_boundary_amendment(boundary_amendment_data, matrix_data)
+            + promotion_errors
             + (
                 validate_matrix_repository_paths(root, matrix_data)
                 if repository_checks
                 else []
             )
-            + (validate_release_readiness(matrix_data) if release_readiness else [])
+            + (
+                validate_release_readiness(root, matrix_data, boundary_amendment_data)
+                if release_readiness
+                else []
+            )
         )
     except ValueError as exc:
-        data, addendum_data, acknowledgement_data, matrix_data = None, None, None, None
+        data = addendum_data = acknowledgement_data = matrix_data = None
+        boundary_amendment_data = None
         errors = closure_errors + [str(exc)]
     passed = not errors
     return {
@@ -1185,6 +1773,12 @@ def verify(
         "compatibility_matrix_id": (
             matrix_data.get("matrix_id")
             if passed and isinstance(matrix_data, dict)
+            else None
+        ),
+        "exact_boundary_amendment": BOUNDARY_AMENDMENT_PATH.as_posix(),
+        "exact_boundary_amendment_id": (
+            boundary_amendment_data.get("amendment_id")
+            if passed and isinstance(boundary_amendment_data, dict)
             else None
         ),
         "authority_effect": (
