@@ -7,6 +7,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -44,7 +45,6 @@ EXPECTED_FILES = {
 }
 OPTIONAL_FUTURE_FILES = {
     "full-design-import-render-v1/exact-boundary-acknowledgement-1.json",
-    "full-design-import-render-v1/authority-promotion-attestation-1.json",
 }
 EXPECTED_README_SHA256 = "6935071cee4c735f401356e625108150251921b8a0dd6f20648d7370fd388894"
 EXPECTED_PROPOSAL_SHA256 = "7c2db05e110e7d9834806e08469f6d7cc70f6528b2242d1f6c0255dcdbc0a4c9"
@@ -345,9 +345,16 @@ def pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
 
 def load_json(path: Path) -> Any:
     try:
-        return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=pairs)
+        return load_json_bytes(path.read_bytes(), str(path))
     except (OSError, UnicodeError, json.JSONDecodeError, DuplicateKeyError) as exc:
         raise ValueError(f"{path}: cannot load strict JSON: {exc}") from exc
+
+
+def load_json_bytes(content: bytes, where: str) -> Any:
+    try:
+        return json.loads(content.decode("utf-8"), object_pairs_hook=pairs)
+    except (UnicodeError, json.JSONDecodeError, DuplicateKeyError) as exc:
+        raise ValueError(f"{where}: cannot load strict JSON: {exc}") from exc
 
 
 def exact_keys(value: Any, expected: set[str], where: str, errors: list[str]) -> bool:
@@ -392,6 +399,52 @@ def exact_route_path(value: Any, where: str, errors: list[str]) -> None:
         value.endswith("/") or any(marker in value for marker in ("*", "?", "[", "]"))
     ):
         errors.append(f"{where}: expected exact path without prefix or glob semantics")
+
+
+def git_output(root: Path, *args: str) -> bytes | None:
+    completed = subprocess.run(
+        ["git", "-C", str(root), *args],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    return completed.stdout if completed.returncode == 0 else None
+
+
+def git_commit_tree(
+    root: Path, commit: Any, where: str, errors: list[str]
+) -> str | None:
+    if not isinstance(commit, str) or not SHA40.fullmatch(commit):
+        errors.append(f"{where}: expected full commit SHA")
+        return None
+    resolved = git_output(root, "rev-parse", "--verify", f"{commit}^{{commit}}")
+    if resolved is None or resolved.decode().strip() != commit:
+        errors.append(f"{where}: commit is unavailable in the checked-out repository")
+        return None
+    tree = git_output(root, "show", "-s", "--format=%T", commit)
+    if tree is None:
+        errors.append(f"{where}: cannot resolve commit tree")
+        return None
+    return tree.decode().strip()
+
+
+def git_blob(root: Path, commit: str, path: str) -> bytes | None:
+    if not SHA40.fullmatch(commit):
+        return None
+    return git_output(root, "show", f"{commit}:{path}")
+
+
+def require_git_ancestor(
+    root: Path, ancestor: str, descendant: str, where: str, errors: list[str]
+) -> None:
+    completed = subprocess.run(
+        ["git", "-C", str(root), "merge-base", "--is-ancestor", ancestor, descendant],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    if completed.returncode != 0:
+        errors.append(f"{where}: commit is not on the authoritative history")
 
 
 def validate_authority_promotion_attestation(data: Any, amendment: Any) -> list[str]:
@@ -497,6 +550,51 @@ def validate_promotion_acknowledgement_digest(
     return []
 
 
+def validate_promotion_repository_evidence(
+    authority_root: Path,
+    delivery_root: Path | None,
+    data: Any,
+    *,
+    repository: str | None,
+    release_source_commit: str | None,
+) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(data, dict):
+        return ["authority_promotion evidence: expected attestation object"]
+    if repository != "Generous-Corp/vellum":
+        errors.append(
+            "authority_promotion evidence: parity release must run in Generous-Corp/vellum"
+        )
+    authority_commit = data.get("authority_commit")
+    authority_tree = git_commit_tree(
+        authority_root, authority_commit, "authority_promotion authority_commit", errors
+    )
+    if authority_tree is not None and authority_tree != data.get("authority_tree"):
+        errors.append("authority_promotion evidence: authority tree differs from Git")
+    authority_head = git_output(authority_root, "rev-parse", "HEAD")
+    authority_head_sha = authority_head.decode().strip() if authority_head is not None else None
+    expected_release = release_source_commit or authority_head_sha
+    if expected_release != data.get("parity_release_source_commit"):
+        errors.append("authority_promotion evidence: checked release source differs from attestation")
+    if authority_head_sha != expected_release:
+        errors.append("authority_promotion evidence: authority checkout HEAD differs from release source")
+    if delivery_root is None:
+        errors.append(
+            "authority_promotion evidence: --delivery-root is required for exact promotion proof"
+        )
+        return errors
+    delivery_commit = data.get("delivery_commit")
+    delivery_tree = git_commit_tree(
+        delivery_root, delivery_commit, "authority_promotion delivery_commit", errors
+    )
+    if delivery_tree is not None and delivery_tree != data.get("delivery_tree"):
+        errors.append("authority_promotion evidence: delivery tree differs from Git")
+    delivery_head = git_output(delivery_root, "rev-parse", "HEAD")
+    if delivery_head is None or delivery_head.decode().strip() != delivery_commit:
+        errors.append("authority_promotion evidence: delivery checkout HEAD differs from attestation")
+    return errors
+
+
 def validate_exact_boundary_acknowledgement(data: Any) -> list[str]:
     errors: list[str] = []
     top = {
@@ -596,6 +694,250 @@ def validate_exact_boundary_acknowledgement(data: Any) -> list[str]:
         or any(not exact_scalar(gates[key], expected) for key, expected in expected_gates.items())
     ):
         errors.append("exact_boundary_acknowledgement.gates: drift")
+    return errors
+
+
+def validate_pulp_exact_boundary_acceptance(
+    data: Any, acknowledgement: Any, amendment: Any
+) -> list[str]:
+    errors: list[str] = []
+    top = {
+        "schema_version", "kind", "acceptance_id", "state", "accepted_at",
+        "accepted_by", "pulp_repository", "counterpart", "refresh",
+        "authority_effect", "implementation_authority", "gates",
+    }
+    if not exact_keys(data, top, "pulp_exact_boundary_acceptance", errors):
+        return errors
+    scalars = {
+        "schema_version": 1,
+        "kind": "full-design-import-render-exact-boundary-acceptance",
+        "acceptance_id": "full-design-import-render-v1-exact-boundary-acceptance-1",
+        "state": "accepted",
+        "accepted_by": "@danielraffel",
+        "pulp_repository": "Generous-Corp/pulp",
+        "authority_effect": "none",
+        "implementation_authority": (
+            "forbidden-until-vellum-exact-boundary-acknowledged"
+        ),
+    }
+    for key, expected in scalars.items():
+        if not exact_scalar(data[key], expected):
+            errors.append(f"pulp_exact_boundary_acceptance.{key}: expected {expected!r}")
+    try:
+        stamp = data["accepted_at"]
+        parsed = dt.datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        if not stamp.endswith("Z") or parsed.utcoffset() != dt.timedelta(0):
+            raise ValueError
+    except (AttributeError, TypeError, ValueError):
+        errors.append("pulp_exact_boundary_acceptance.accepted_at: expected UTC timestamp")
+    counterpart = data["counterpart"]
+    counterpart_keys = {
+        "repository", "amendment_id", "amendment_merge_commit", "amendment_path",
+        "amendment_sha256", "matrix_merge_commit", "matrix_path", "matrix_sha256",
+    }
+    if not exact_keys(
+        counterpart, counterpart_keys, "pulp_exact_boundary_acceptance.counterpart", errors
+    ):
+        counterpart = {}
+    coordinates = (
+        acknowledgement.get("coordinates", {})
+        if isinstance(acknowledgement, dict)
+        else {}
+    )
+    expected_counterpart = {
+        "repository": "danielraffel/vellum",
+        "amendment_id": "full-design-import-render-v1-exact-boundary-amendment-1",
+        "amendment_merge_commit": coordinates.get("vellum_amendment_merge_commit"),
+        "amendment_path": BOUNDARY_AMENDMENT_PATH.as_posix(),
+        "amendment_sha256": EXPECTED_BOUNDARY_AMENDMENT_SHA256,
+        "matrix_merge_commit": "bbe187d581f3f021a25b3ebd01332f89bbde142e",
+        "matrix_path": MATRIX_PATH.as_posix(),
+        "matrix_sha256": EXPECTED_MATRIX_SHA256,
+    }
+    for key, expected in expected_counterpart.items():
+        if not exact_scalar(counterpart.get(key), expected):
+            errors.append(f"pulp_exact_boundary_acceptance.counterpart.{key}: drift")
+    refresh = data["refresh"]
+    refresh_keys = {
+        "audited_at", "pulp_main_commit", "open_pr_audit_complete",
+        "open_pr_rows", "open_vellum_overlap_count",
+    }
+    if not exact_keys(refresh, refresh_keys, "pulp_exact_boundary_acceptance.refresh", errors):
+        refresh = {}
+    try:
+        stamp = refresh.get("audited_at")
+        parsed = dt.datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        if not stamp.endswith("Z") or parsed.utcoffset() != dt.timedelta(0):
+            raise ValueError
+    except (AttributeError, TypeError, ValueError):
+        errors.append("pulp_exact_boundary_acceptance.refresh.audited_at: expected UTC timestamp")
+    if data.get("accepted_at") != refresh.get("audited_at"):
+        errors.append(
+            "pulp_exact_boundary_acceptance: audit and acceptance timestamps must match"
+        )
+    if not isinstance(refresh.get("pulp_main_commit"), str) or not SHA40.fullmatch(
+        refresh["pulp_main_commit"]
+    ):
+        errors.append("pulp_exact_boundary_acceptance.refresh.pulp_main_commit: expected SHA")
+    if refresh.get("open_pr_audit_complete") is not True:
+        errors.append("pulp_exact_boundary_acceptance.refresh: open PR audit must be complete")
+    rows = refresh.get("open_pr_rows")
+    if not isinstance(rows, list):
+        errors.append("pulp_exact_boundary_acceptance.refresh.open_pr_rows: expected array")
+        rows = []
+    unresolved_rows = 0
+    row_keys = {
+        "repository", "pull_request", "head_commit", "paths", "disposition",
+        "resolution",
+    }
+    allowed_repositories = {"Generous-Corp/pulp", "danielraffel/vellum"}
+    allowed_resolutions = {
+        "pulp-retained", "pulp-counterpart", "vellum-routed-coordinated", "unresolved"
+    }
+    for index, row in enumerate(rows):
+        where = f"pulp_exact_boundary_acceptance.refresh.open_pr_rows[{index}]"
+        if not exact_keys(row, row_keys, where, errors):
+            continue
+        if not isinstance(row["repository"], str) or row["repository"] not in allowed_repositories:
+            errors.append(f"{where}.repository: unexpected repository")
+        if (
+            not isinstance(row["pull_request"], int)
+            or isinstance(row["pull_request"], bool)
+            or row["pull_request"] <= 0
+        ):
+            errors.append(f"{where}.pull_request: expected positive integer")
+        if not isinstance(row["head_commit"], str) or not SHA40.fullmatch(
+            row["head_commit"]
+        ):
+            errors.append(f"{where}.head_commit: expected SHA")
+        if strings(row["paths"], f"{where}.paths", errors):
+            for path_index, path in enumerate(row["paths"]):
+                exact_route_path(path, f"{where}.paths[{path_index}]", errors)
+        if not isinstance(row["disposition"], str) or not row["disposition"]:
+            errors.append(f"{where}.disposition: expected non-empty string")
+        if not isinstance(row["resolution"], str) or row["resolution"] not in allowed_resolutions:
+            errors.append(f"{where}.resolution: unexpected resolution")
+        elif row["resolution"] == "unresolved":
+            unresolved_rows += 1
+    claimed_unresolved = refresh.get("open_vellum_overlap_count")
+    if exact_scalar(claimed_unresolved, 0) and unresolved_rows != claimed_unresolved:
+        errors.append(
+            "pulp_exact_boundary_acceptance.refresh: unresolved overlap count "
+            "contradicts open PR rows"
+        )
+    if not exact_scalar(claimed_unresolved, 0):
+        errors.append(
+            "pulp_exact_boundary_acceptance.refresh.open_vellum_overlap_count: "
+            "expected zero unresolved overlaps"
+        )
+    expected_gates = {
+        "exact_matrix_routes_accepted": True,
+        "refreshed_open_pr_audit_complete": True,
+        "vellum_acknowledgement_required": True,
+        "source_work_authorized": False,
+        "pulp_consumption_authorized": False,
+    }
+    gates = data["gates"]
+    if (
+        not isinstance(gates, dict)
+        or set(gates) != set(expected_gates)
+        or any(not exact_scalar(gates[key], expected) for key, expected in expected_gates.items())
+    ):
+        errors.append("pulp_exact_boundary_acceptance.gates: drift")
+    if not isinstance(amendment, dict) or amendment.get("authority_effect") != "none":
+        errors.append("pulp_exact_boundary_acceptance: amendment is not inert")
+    return errors
+
+
+def validate_exact_boundary_repository_evidence(
+    root: Path, pulp_root: Path | None, data: Any, amendment: Any
+) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(data, dict) or not isinstance(data.get("coordinates"), dict):
+        return ["exact_boundary_acknowledgement evidence: coordinates unavailable"]
+    coordinates = data["coordinates"]
+    amendment_commit = coordinates.get("vellum_amendment_merge_commit")
+    amendment_path = coordinates.get("amendment_path")
+    if isinstance(amendment_commit, str) and isinstance(amendment_path, str):
+        if git_commit_tree(root, amendment_commit, "exact boundary amendment merge", errors):
+            require_git_ancestor(
+                root,
+                amendment_commit,
+                "HEAD",
+                "exact boundary amendment merge",
+                errors,
+            )
+            content = git_blob(root, amendment_commit, amendment_path)
+            if content is None:
+                errors.append("exact boundary amendment merge: artifact is unavailable")
+            elif hashlib.sha256(content).hexdigest() != coordinates.get("amendment_sha256"):
+                errors.append("exact boundary amendment merge: artifact digest differs")
+    matrix_commit = coordinates.get("matrix_merge_commit")
+    matrix_path = coordinates.get("matrix_path")
+    if isinstance(matrix_commit, str) and isinstance(matrix_path, str):
+        if git_commit_tree(root, matrix_commit, "compatibility matrix merge", errors):
+            require_git_ancestor(
+                root,
+                matrix_commit,
+                "HEAD",
+                "compatibility matrix merge",
+                errors,
+            )
+            content = git_blob(root, matrix_commit, matrix_path)
+            if content is None:
+                errors.append("compatibility matrix merge: artifact is unavailable")
+            elif hashlib.sha256(content).hexdigest() != coordinates.get("matrix_sha256"):
+                errors.append("compatibility matrix merge: artifact digest differs")
+    if pulp_root is None:
+        errors.append(
+            "exact boundary acknowledgement: --pulp-root is required to verify acceptance"
+        )
+        return errors
+    pulp_commit = coordinates.get("pulp_acceptance_merge_commit")
+    pulp_path = coordinates.get("pulp_acceptance_path")
+    if not isinstance(pulp_commit, str) or not isinstance(pulp_path, str):
+        errors.append("exact boundary acknowledgement: Pulp acceptance coordinates unavailable")
+        return errors
+    if git_commit_tree(pulp_root, pulp_commit, "Pulp acceptance merge", errors) is None:
+        return errors
+    head = git_output(pulp_root, "rev-parse", "HEAD")
+    main_head = head.decode().strip() if head is not None else None
+    on_main = subprocess.run(
+        ["git", "-C", str(pulp_root), "merge-base", "--is-ancestor", pulp_commit, "HEAD"],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    if main_head is None or on_main.returncode != 0:
+        errors.append("Pulp acceptance merge: commit is not on authoritative Pulp main")
+    content = git_blob(pulp_root, pulp_commit, pulp_path)
+    if content is None:
+        errors.append("Pulp acceptance merge: acceptance artifact is unavailable")
+        return errors
+    if hashlib.sha256(content).hexdigest() != coordinates.get("pulp_acceptance_sha256"):
+        errors.append("Pulp acceptance merge: acceptance artifact digest differs")
+    try:
+        acceptance = load_json_bytes(content, "Pulp acceptance merge artifact")
+    except ValueError as exc:
+        errors.append(f"Pulp acceptance merge: invalid acceptance JSON: {exc}")
+        return errors
+    errors.extend(validate_pulp_exact_boundary_acceptance(acceptance, data, amendment))
+    refresh_commit = (
+        acceptance.get("refresh", {}).get("pulp_main_commit")
+        if isinstance(acceptance, dict)
+        and isinstance(acceptance.get("refresh"), dict)
+        else None
+    )
+    if git_commit_tree(
+        pulp_root, refresh_commit, "Pulp refreshed overlap audit commit", errors
+    ) is not None:
+        parents = git_output(pulp_root, "rev-list", "--parents", "-n", "1", pulp_commit)
+        parent_fields = parents.decode().split() if parents is not None else []
+        first_parent = parent_fields[1] if len(parent_fields) >= 2 else None
+        if refresh_commit != first_parent:
+            errors.append(
+                "Pulp refreshed overlap audit commit: must be the acceptance merge first parent"
+            )
     return errors
 
 
@@ -1580,7 +1922,16 @@ def validate_matrix_repository_paths(root: Path, data: Any) -> list[str]:
     return errors
 
 
-def validate_release_readiness(root: Path, data: Any, amendment: Any) -> list[str]:
+def validate_release_readiness(
+    root: Path,
+    data: Any,
+    amendment: Any,
+    *,
+    promotion_attestation: Path | None = None,
+    delivery_root: Path | None = None,
+    repository: str | None = None,
+    release_source_commit: str | None = None,
+) -> list[str]:
     errors: list[str] = []
     if not isinstance(data, dict) or not isinstance(data.get("cells"), list):
         return ["release readiness: compatibility matrix cells are unavailable"]
@@ -1605,18 +1956,13 @@ def validate_release_readiness(root: Path, data: Any, amendment: Any) -> list[st
         errors.append(
             "release readiness: exact-boundary amendment does not require authority promotion"
         )
-    promotion = (
-        root
-        / EXPANSIONS_ROOT
-        / "full-design-import-render-v1/authority-promotion-attestation-1.json"
-    )
-    if not promotion.is_file():
+    if promotion_attestation is None or not promotion_attestation.is_file():
         errors.append(
-            "release readiness: missing commit/digest-bound authority promotion attestation"
+            "release readiness: missing signed-tag authority promotion attestation"
         )
     else:
         try:
-            promotion_data = load_json(promotion)
+            promotion_data = load_json(promotion_attestation)
             errors.extend(
                 "release readiness: " + error
                 for error in validate_authority_promotion_attestation(
@@ -1629,13 +1975,31 @@ def validate_release_readiness(root: Path, data: Any, amendment: Any) -> list[st
                     root, promotion_data
                 )
             )
+            errors.extend(
+                "release readiness: " + error
+                for error in validate_promotion_repository_evidence(
+                    root,
+                    delivery_root,
+                    promotion_data,
+                    repository=repository,
+                    release_source_commit=release_source_commit,
+                )
+            )
         except ValueError as exc:
             errors.append(f"release readiness: invalid authority promotion attestation: {exc}")
     return errors
 
 
 def verify(
-    root: Path, *, repository_checks: bool = True, release_readiness: bool = False
+    root: Path,
+    *,
+    repository_checks: bool = True,
+    release_readiness: bool = False,
+    pulp_root: Path | None = None,
+    promotion_attestation: Path | None = None,
+    delivery_root: Path | None = None,
+    repository: str | None = None,
+    release_source_commit: str | None = None,
 ) -> dict[str, Any]:
     closure_errors = []
     try:
@@ -1704,11 +2068,6 @@ def verify(
         acknowledgement_data = load_json(acknowledgement)
         matrix_data = load_json(matrix)
         boundary_amendment_data = load_json(boundary_amendment)
-        promotion_path = (
-            root
-            / EXPANSIONS_ROOT
-            / "full-design-import-render-v1/authority-promotion-attestation-1.json"
-        )
         promotion_errors = []
         exact_acknowledgement_path = (
             root
@@ -1716,16 +2075,15 @@ def verify(
             / "full-design-import-render-v1/exact-boundary-acknowledgement-1.json"
         )
         if exact_acknowledgement_path.is_file():
+            exact_acknowledgement_data = load_json(exact_acknowledgement_path)
             promotion_errors += validate_exact_boundary_acknowledgement(
-                load_json(exact_acknowledgement_path)
+                exact_acknowledgement_data
             )
-        if promotion_path.is_file():
-            promotion_data = load_json(promotion_path)
-            promotion_errors = validate_authority_promotion_attestation(
-                promotion_data, boundary_amendment_data
-            )
-            promotion_errors += validate_promotion_acknowledgement_digest(
-                root, promotion_data
+            promotion_errors += validate_exact_boundary_repository_evidence(
+                root,
+                pulp_root,
+                exact_acknowledgement_data,
+                boundary_amendment_data,
             )
         errors = (
             closure_errors
@@ -1741,7 +2099,15 @@ def verify(
                 else []
             )
             + (
-                validate_release_readiness(root, matrix_data, boundary_amendment_data)
+                validate_release_readiness(
+                    root,
+                    matrix_data,
+                    boundary_amendment_data,
+                    promotion_attestation=promotion_attestation,
+                    delivery_root=delivery_root,
+                    repository=repository,
+                    release_source_commit=release_source_commit,
+                )
                 if release_readiness
                 else []
             )
@@ -1793,10 +2159,27 @@ def verify(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2])
+    parser.add_argument("--pulp-root", type=Path)
+    parser.add_argument("--promotion-attestation", type=Path)
+    parser.add_argument("--delivery-root", type=Path)
+    parser.add_argument("--repository", default=os.environ.get("GITHUB_REPOSITORY"))
+    parser.add_argument(
+        "--release-source-commit", default=os.environ.get("GITHUB_SHA")
+    )
     parser.add_argument("--output", type=Path)
     parser.add_argument("--release-readiness", action="store_true")
     args = parser.parse_args()
-    report = verify(args.root.resolve(), release_readiness=args.release_readiness)
+    report = verify(
+        args.root.resolve(),
+        release_readiness=args.release_readiness,
+        pulp_root=args.pulp_root.resolve() if args.pulp_root else None,
+        promotion_attestation=(
+            args.promotion_attestation.resolve() if args.promotion_attestation else None
+        ),
+        delivery_root=args.delivery_root.resolve() if args.delivery_root else None,
+        repository=args.repository,
+        release_source_commit=args.release_source_commit,
+    )
     rendered = json.dumps(report, indent=2, sort_keys=True) + "\n"
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)

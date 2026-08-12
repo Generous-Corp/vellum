@@ -67,18 +67,150 @@ jobs:
           python3 tools/agent_instructions/verify.py --json \
             > "$RUNNER_TEMP/agent-instructions-report.json"
 
-      - name: Test authority protocol and negative controls
+      - name: Resolve exact-boundary and signed-tag promotion evidence
+        id: expansion-evidence
+        shell: bash
         run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+
+          def strict_object(items):
+              result = {}
+              for key, value in items:
+                  if key in result:
+                      raise ValueError(f"duplicate JSON key: {key}")
+                  result[key] = value
+              return result
+
+          base = Path(
+              "provenance/authority/expansions/full-design-import-render-v1"
+          )
+          acknowledgement = base / "exact-boundary-acknowledgement-1.json"
+          values = {"pulp-sha": "", "delivery-sha": "", "promotion-path": ""}
+          if acknowledgement.is_file():
+              data = json.loads(
+                  acknowledgement.read_text(encoding="utf-8"),
+                  object_pairs_hook=strict_object,
+              )
+              values["pulp-sha"] = data.get("coordinates", {}).get(
+                  "pulp_acceptance_merge_commit", ""
+              )
+          ref = os.environ["GITHUB_REF"]
+          if re.fullmatch(r"refs/tags/v[0-9].*", ref):
+              raw = subprocess.run(
+                  ["git", "cat-file", "tag", ref], check=True,
+                  stdout=subprocess.PIPE,
+              ).stdout
+              headers, separator, message = raw.partition(b"\n\n")
+              if not separator:
+                  raise SystemExit("release tag object has no message")
+              target = next(
+                  (line[7:].decode() for line in headers.splitlines()
+                   if line.startswith(b"object ")),
+                  "",
+              )
+              if target != os.environ["GITHUB_SHA"]:
+                  raise SystemExit("release tag target differs from GITHUB_SHA")
+              marker = b"\n-----BEGIN SSH SIGNATURE-----"
+              payload, found, _signature = message.partition(marker)
+              if not found:
+                  raise SystemExit("release tag lacks an SSH-signed JSON message")
+              data = json.loads(payload.strip(), object_pairs_hook=strict_object)
+              promotion = Path(os.environ["RUNNER_TEMP"]) / (
+                  "authority-promotion-attestation.json"
+              )
+              promotion.write_text(
+                  json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+              )
+              values["delivery-sha"] = data.get("delivery_commit", "")
+              values["promotion-path"] = promotion.as_posix()
+          for name, value in values.items():
+              if name.endswith("sha") and value and re.fullmatch(r"[0-9a-f]{40}", value) is None:
+                  raise SystemExit(f"{name} is not a full SHA")
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              for name, value in values.items():
+                  output.write(f"{name}={value}\n")
+          PY
+
+      - name: Verify the signed promotion release tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_object_sha="$(git rev-parse "$GITHUB_REF^{tag}")"
+          python3 scripts/verify_release_tag.py \
+            --repo "$GITHUB_WORKSPACE" \
+            --repository "$GITHUB_REPOSITORY" \
+            --tag-name "$GITHUB_REF_NAME" \
+            --tag-object-sha "$tag_object_sha" \
+            --source-commit "$GITHUB_SHA" \
+            --allowed-signers \
+              "$GITHUB_WORKSPACE/provenance/release-signers.allowed_signers" \
+            --expected-principal daniel.raffel@gmail.com \
+            --expected-fingerprint \
+              SHA256:eMlEuZcnW6NJDrKQBuN5EX1q69bOlIRPl6XmutVTgcs \
+            --output "$RUNNER_TEMP/promotion-release-tag-trust.json"
+
+      - name: Check out authoritative Pulp main with full history
+        if: steps.expansion-evidence.outputs.pulp-sha != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: Generous-Corp/pulp
+          ref: main
+          path: .exact-boundary-pulp
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require private delivery repository read access
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          DELIVERY_READER_TOKEN: ${{ secrets.VELLUM_DELIVERY_READER_TOKEN }}
+        run: test -n "$DELIVERY_READER_TOKEN"
+
+      - name: Check out the attested delivery repository commit
+        if: startsWith(github.ref, 'refs/tags/v') && steps.expansion-evidence.outputs.delivery-sha != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: danielraffel/vellum
+          ref: ${{ steps.expansion-evidence.outputs.delivery-sha }}
+          path: .promotion-delivery
+          fetch-depth: 0
+          persist-credentials: false
+          token: ${{ secrets.VELLUM_DELIVERY_READER_TOKEN }}
+
+      - name: Test authority protocol and negative controls
+        env:
+          PULP_ACCEPTANCE_SHA: ${{ steps.expansion-evidence.outputs.pulp-sha }}
+          DELIVERY_PROMOTION_SHA: ${{ steps.expansion-evidence.outputs.delivery-sha }}
+          PROMOTION_ATTESTATION_PATH: ${{ steps.expansion-evidence.outputs.promotion-path }}
+        run: |
+          set -euo pipefail
           python3 tools/provenance/test_verify_authority_activation.py
           python3 tools/provenance/test_finalize_authority_reconciliation.py
           python3 tools/provenance/test_verify_current_state_docs.py
           python3 tools/provenance/test_verify_authority_expansion.py
           release_readiness=()
+          repository_evidence=(--repository "$GITHUB_REPOSITORY")
+          if [[ -n "$PULP_ACCEPTANCE_SHA" ]]; then
+            repository_evidence+=(--pulp-root .exact-boundary-pulp)
+          fi
           if [[ "$GITHUB_REF" == refs/tags/v[0-9]* ]]; then
             release_readiness+=(--release-readiness)
+            test -n "$DELIVERY_PROMOTION_SHA"
+            test -n "$PROMOTION_ATTESTATION_PATH"
+            repository_evidence+=(
+              --delivery-root .promotion-delivery
+              --promotion-attestation "$PROMOTION_ATTESTATION_PATH"
+            )
           fi
           python3 tools/provenance/verify_authority_expansion.py \
             "${release_readiness[@]}" \
+            "${repository_evidence[@]}" \
             --output "$RUNNER_TEMP/authority-expansion-report.json"
           python3 .agents/skills/pulp-vellum-change-routing/scripts/test_route_change.py
 
@@ -305,6 +437,7 @@ jobs:
             ${{ runner.temp }}/authority-ready-report.json
             ${{ runner.temp }}/authority-pending-report.json
             ${{ runner.temp }}/authority-expansion-report.json
+            ${{ runner.temp }}/promotion-release-tag-trust.json
             ${{ runner.temp }}/authority-tag-trust.json
             ${{ runner.temp }}/observatory-health-report.json
           if-no-files-found: error

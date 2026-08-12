@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import shutil
 import subprocess
@@ -22,7 +23,13 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class Tests(unittest.TestCase):
-    def exact_boundary_acknowledgement(self) -> dict:
+    def exact_boundary_acknowledgement(
+        self,
+        *,
+        pulp_commit: str = "4" * 40,
+        pulp_digest: str = "5" * 64,
+        amendment_commit: str = "6" * 40,
+    ) -> dict:
         return {
             "schema_version": 1,
             "kind": "full-design-import-render-exact-boundary-acknowledgement",
@@ -35,11 +42,11 @@ class Tests(unittest.TestCase):
             "implementation_authority": "authorized-for-matrix-exact-routes",
             "coordinates": {
                 "pulp_repository": "Generous-Corp/pulp",
-                "pulp_acceptance_merge_commit": "4" * 40,
+                "pulp_acceptance_merge_commit": pulp_commit,
                 "pulp_acceptance_path": ".github/vellum-expansion-watch/full-design-import-render-v1/exact-boundary-acceptance-1.json",
-                "pulp_acceptance_sha256": "5" * 64,
+                "pulp_acceptance_sha256": pulp_digest,
                 "vellum_delivery_repository": "danielraffel/vellum",
-                "vellum_amendment_merge_commit": "6" * 40,
+                "vellum_amendment_merge_commit": amendment_commit,
                 "amendment_path": verifier.BOUNDARY_AMENDMENT_PATH.as_posix(),
                 "amendment_sha256": verifier.EXPECTED_BOUNDARY_AMENDMENT_SHA256,
                 "matrix_merge_commit": "bbe187d581f3f021a25b3ebd01332f89bbde142e",
@@ -60,9 +67,10 @@ class Tests(unittest.TestCase):
             },
         }
 
-    def promotion_attestation(self, acknowledgement_sha256: str) -> dict:
-        commit = "1" * 40
-        tree = "2" * 40
+    def promotion_attestation(
+        self, acknowledgement_sha256: str, *, commit: str = "1" * 40,
+        tree: str = "2" * 40,
+    ) -> dict:
         return {
             "schema_version": 1,
             "kind": "vellum-authority-promotion-attestation",
@@ -84,6 +92,66 @@ class Tests(unittest.TestCase):
             "parity_release_source_commit": commit,
         }
 
+    def pulp_exact_boundary_acceptance(
+        self, acknowledgement: dict, *, pulp_main_commit: str = "7" * 40
+    ) -> dict:
+        coordinates = acknowledgement["coordinates"]
+        return {
+            "schema_version": 1,
+            "kind": "full-design-import-render-exact-boundary-acceptance",
+            "acceptance_id": "full-design-import-render-v1-exact-boundary-acceptance-1",
+            "state": "accepted",
+            "accepted_at": "2026-11-29T00:00:00Z",
+            "accepted_by": "@danielraffel",
+            "pulp_repository": "Generous-Corp/pulp",
+            "counterpart": {
+                "repository": "danielraffel/vellum",
+                "amendment_id": "full-design-import-render-v1-exact-boundary-amendment-1",
+                "amendment_merge_commit": coordinates["vellum_amendment_merge_commit"],
+                "amendment_path": verifier.BOUNDARY_AMENDMENT_PATH.as_posix(),
+                "amendment_sha256": verifier.EXPECTED_BOUNDARY_AMENDMENT_SHA256,
+                "matrix_merge_commit": "bbe187d581f3f021a25b3ebd01332f89bbde142e",
+                "matrix_path": verifier.MATRIX_PATH.as_posix(),
+                "matrix_sha256": verifier.EXPECTED_MATRIX_SHA256,
+            },
+            "refresh": {
+                "audited_at": "2026-11-29T00:00:00Z",
+                "pulp_main_commit": pulp_main_commit,
+                "open_pr_audit_complete": True,
+                "open_pr_rows": [],
+                "open_vellum_overlap_count": 0,
+            },
+            "authority_effect": "none",
+            "implementation_authority": (
+                "forbidden-until-vellum-exact-boundary-acknowledged"
+            ),
+            "gates": {
+                "exact_matrix_routes_accepted": True,
+                "refreshed_open_pr_audit_complete": True,
+                "vellum_acknowledgement_required": True,
+                "source_work_authorized": False,
+                "pulp_consumption_authorized": False,
+            },
+        }
+
+    def init_git_repo(self, root: Path, *, remote: str) -> tuple[str, str]:
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        subprocess.run(["git", "-C", str(root), "config", "user.name", "Test"], check=True)
+        subprocess.run(
+            ["git", "-C", str(root), "config", "user.email", "test@example.com"],
+            check=True,
+        )
+        subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(root), "commit", "-qm", "fixture"], check=True)
+        subprocess.run(["git", "-C", str(root), "remote", "add", "origin", remote], check=True)
+        commit = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        tree = subprocess.check_output(
+            ["git", "-C", str(root), "show", "-s", "--format=%T", "HEAD"], text=True
+        ).strip()
+        return commit, tree
+
     def test_workflow_runs_and_retains_expansion_gate(self) -> None:
         workflow = (ROOT / ".github/workflows/provenance.yml").read_text()
         self.assertIn(
@@ -95,6 +163,18 @@ class Tests(unittest.TestCase):
         )
         self.assertIn("refs/tags/v[0-9]*", workflow)
         self.assertIn("--release-readiness", workflow)
+        self.assertIn("repository: Generous-Corp/pulp", workflow)
+        self.assertIn("Check out authoritative Pulp main with full history", workflow)
+        self.assertIn("ref: main", workflow)
+        self.assertIn("repository: danielraffel/vellum", workflow)
+        self.assertIn("--pulp-root .exact-boundary-pulp", workflow)
+        self.assertIn("--delivery-root .promotion-delivery", workflow)
+        self.assertIn("--promotion-attestation", workflow)
+        self.assertIn("secrets.VELLUM_DELIVERY_READER_TOKEN", workflow)
+        self.assertIn("Require private delivery repository read access", workflow)
+        self.assertIn("release tag lacks an SSH-signed JSON message", workflow)
+        self.assertIn("object_pairs_hook=strict_object", workflow)
+        self.assertIn("promotion-release-tag-trust.json", workflow)
         self.assertGreaterEqual(workflow.count("authority-expansion-report.json"), 2)
 
     def copy(self) -> tuple[tempfile.TemporaryDirectory[str], Path, Path]:
@@ -397,17 +477,168 @@ class Tests(unittest.TestCase):
         acknowledgement.write_text(
             json.dumps(self.exact_boundary_acknowledgement()) + "\n"
         )
-        import hashlib
         digest = hashlib.sha256(acknowledgement.read_bytes()).hexdigest()
-        promotion = root / verifier.EXPANSIONS_ROOT / (
-            "full-design-import-render-v1/authority-promotion-attestation-1.json"
+        authority_commit, authority_tree = self.init_git_repo(
+            root, remote="https://github.com/Generous-Corp/vellum.git"
         )
-        promotion.write_text(json.dumps(self.promotion_attestation(digest)) + "\n")
+        delivery_temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(delivery_temporary.cleanup)
+        delivery_root = Path(delivery_temporary.name) / "vellum"
+        subprocess.run(
+            ["git", "clone", "-q", str(root), str(delivery_root)], check=True
+        )
+        promotion = Path(temporary.name) / "signed-tag-promotion.json"
+        promotion.write_text(
+            json.dumps(
+                self.promotion_attestation(
+                    digest, commit=authority_commit, tree=authority_tree
+                )
+            )
+            + "\n"
+        )
         matrix = json.loads((ROOT / verifier.MATRIX_PATH).read_text())
         for cell in matrix["cells"]:
             cell["status"] = cell["target_status"]
         amendment = json.loads((ROOT / verifier.BOUNDARY_AMENDMENT_PATH).read_text())
-        self.assertEqual(verifier.validate_release_readiness(root, matrix, amendment), [])
+        self.assertEqual(
+            verifier.validate_release_readiness(
+                root,
+                matrix,
+                amendment,
+                promotion_attestation=promotion,
+                delivery_root=delivery_root,
+                repository="Generous-Corp/vellum",
+                release_source_commit=authority_commit,
+            ),
+            [],
+        )
+
+    def test_exact_acknowledgement_resolves_pulp_acceptance_and_vellum_artifacts(self) -> None:
+        amendment_commit = subprocess.check_output(
+            [
+                "git", "-C", str(ROOT), "log", "--diff-filter=A", "--format=%H",
+                "--", verifier.BOUNDARY_AMENDMENT_PATH.as_posix(),
+            ],
+            text=True,
+        ).splitlines()[-1]
+        acknowledgement = self.exact_boundary_acknowledgement(
+            amendment_commit=amendment_commit
+        )
+        pulp_temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(pulp_temporary.cleanup)
+        pulp_root = Path(pulp_temporary.name)
+        (pulp_root / "README.md").write_text("Pulp fixture\n")
+        pulp_main_commit, _ = self.init_git_repo(
+            pulp_root, remote="https://github.com/Generous-Corp/pulp.git"
+        )
+        acceptance_path = pulp_root / acknowledgement["coordinates"]["pulp_acceptance_path"]
+        acceptance_path.parent.mkdir(parents=True)
+        acceptance_path.write_text(
+            json.dumps(
+                self.pulp_exact_boundary_acceptance(
+                    acknowledgement, pulp_main_commit=pulp_main_commit
+                )
+            )
+            + "\n"
+        )
+        subprocess.run(["git", "-C", str(pulp_root), "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", str(pulp_root), "commit", "-qm", "accept boundary"],
+            check=True,
+        )
+        pulp_commit = subprocess.check_output(
+            ["git", "-C", str(pulp_root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        digest = hashlib.sha256(acceptance_path.read_bytes()).hexdigest()
+        acknowledgement["coordinates"]["pulp_acceptance_merge_commit"] = pulp_commit
+        acknowledgement["coordinates"]["pulp_acceptance_sha256"] = digest
+        amendment = json.loads((ROOT / verifier.BOUNDARY_AMENDMENT_PATH).read_text())
+        errors = verifier.validate_exact_boundary_repository_evidence(
+            ROOT, pulp_root, acknowledgement, amendment
+        )
+        self.assertEqual(errors, [])
+        subprocess.run(
+            ["git", "-C", str(pulp_root), "checkout", "-q", pulp_main_commit], check=True
+        )
+        errors = verifier.validate_exact_boundary_repository_evidence(
+            ROOT, pulp_root, acknowledgement, amendment
+        )
+        self.assertTrue(any("not on authoritative Pulp main" in error for error in errors))
+        subprocess.run(
+            ["git", "-C", str(pulp_root), "checkout", "-q", pulp_commit], check=True
+        )
+        acknowledgement["coordinates"]["pulp_acceptance_sha256"] = "0" * 64
+        errors = verifier.validate_exact_boundary_repository_evidence(
+            ROOT, pulp_root, acknowledgement, amendment
+        )
+        self.assertTrue(any("acceptance artifact digest differs" in error for error in errors))
+
+        acknowledgement["coordinates"]["pulp_acceptance_sha256"] = digest
+        acceptance = json.loads(acceptance_path.read_text())
+        acceptance["refresh"]["pulp_main_commit"] = "7" * 40
+        acceptance_path.write_text(json.dumps(acceptance) + "\n")
+        subprocess.run(["git", "-C", str(pulp_root), "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", str(pulp_root), "commit", "--amend", "-qm", "accept boundary"],
+            check=True,
+        )
+        fabricated_commit = subprocess.check_output(
+            ["git", "-C", str(pulp_root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        acknowledgement["coordinates"]["pulp_acceptance_merge_commit"] = fabricated_commit
+        acknowledgement["coordinates"]["pulp_acceptance_sha256"] = hashlib.sha256(
+            acceptance_path.read_bytes()
+        ).hexdigest()
+        errors = verifier.validate_exact_boundary_repository_evidence(
+            ROOT, pulp_root, acknowledgement, amendment
+        )
+        self.assertTrue(any("refreshed overlap audit commit" in error for error in errors))
+
+    def test_exact_acknowledgement_rejects_unmerged_vellum_amendment(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        vellum_root = Path(temporary.name) / "vellum"
+        subprocess.run(["git", "clone", "-q", str(ROOT), str(vellum_root)], check=True)
+        subprocess.run(
+            ["git", "-C", str(vellum_root), "config", "user.name", "Test"], check=True
+        )
+        subprocess.run(
+            ["git", "-C", str(vellum_root), "config", "user.email", "test@example.com"],
+            check=True,
+        )
+        authoritative_head = subprocess.check_output(
+            ["git", "-C", str(vellum_root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        subprocess.run(
+            [
+                "git", "-C", str(vellum_root), "checkout", "-q", "-b", "unmerged",
+                "bbe187d581f3f021a25b3ebd01332f89bbde142e",
+            ],
+            check=True,
+        )
+        amendment_path = vellum_root / verifier.BOUNDARY_AMENDMENT_PATH
+        amendment_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / verifier.BOUNDARY_AMENDMENT_PATH, amendment_path)
+        subprocess.run(["git", "-C", str(vellum_root), "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", str(vellum_root), "commit", "-qm", "unmerged amendment"],
+            check=True,
+        )
+        unmerged = subprocess.check_output(
+            ["git", "-C", str(vellum_root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        subprocess.run(
+            ["git", "-C", str(vellum_root), "checkout", "-q", authoritative_head],
+            check=True,
+        )
+        acknowledgement = self.exact_boundary_acknowledgement(
+            amendment_commit=unmerged
+        )
+        amendment = json.loads((ROOT / verifier.BOUNDARY_AMENDMENT_PATH).read_text())
+        errors = verifier.validate_exact_boundary_repository_evidence(
+            vellum_root, None, acknowledgement, amendment
+        )
+        self.assertTrue(any("not on the authoritative history" in error for error in errors))
 
     def test_promotion_attestation_rejects_mismatch_and_bad_digest(self) -> None:
         amendment = json.loads((ROOT / verifier.BOUNDARY_AMENDMENT_PATH).read_text())
@@ -423,12 +654,102 @@ class Tests(unittest.TestCase):
         errors = verifier.validate_authority_promotion_attestation(data, amendment)
         self.assertTrue(any("closed promotion mode" in error for error in errors))
 
+    def test_promotion_repository_evidence_rejects_fabricated_git_and_delivery_release(self) -> None:
+        temporary, root, _ = self.copy()
+        self.addCleanup(temporary.cleanup)
+        commit, tree = self.init_git_repo(
+            root, remote="https://github.com/Generous-Corp/vellum.git"
+        )
+        data = self.promotion_attestation("3" * 64, commit=commit, tree=tree)
+        errors = verifier.validate_promotion_repository_evidence(
+            root,
+            None,
+            data,
+            repository="danielraffel/vellum",
+            release_source_commit=commit,
+        )
+        self.assertTrue(any("must run in Generous-Corp/vellum" in error for error in errors))
+        self.assertTrue(any("--delivery-root" in error for error in errors))
+        data["authority_tree"] = "f" * 40
+        errors = verifier.validate_promotion_repository_evidence(
+            root,
+            root,
+            data,
+            repository="Generous-Corp/vellum",
+            release_source_commit=commit,
+        )
+        self.assertTrue(any("authority tree differs from Git" in error for error in errors))
+        data = self.promotion_attestation("3" * 64, commit="e" * 40, tree="f" * 40)
+        errors = verifier.validate_promotion_repository_evidence(
+            root,
+            root,
+            data,
+            repository="Generous-Corp/vellum",
+            release_source_commit=commit,
+        )
+        self.assertTrue(any("commit is unavailable" in error for error in errors))
+
     def test_exact_boundary_acknowledgement_requires_full_binding(self) -> None:
         data = self.exact_boundary_acknowledgement()
         self.assertEqual(verifier.validate_exact_boundary_acknowledgement(data), [])
         data["coordinates"]["pulp_acceptance_sha256"] = "bad"
         errors = verifier.validate_exact_boundary_acknowledgement(data)
         self.assertTrue(any("pulp_acceptance_sha256" in error for error in errors))
+
+    def test_pulp_acceptance_must_bind_the_acknowledged_amendment(self) -> None:
+        acknowledgement = self.exact_boundary_acknowledgement()
+        amendment = json.loads((ROOT / verifier.BOUNDARY_AMENDMENT_PATH).read_text())
+        acceptance = self.pulp_exact_boundary_acceptance(acknowledgement)
+        self.assertEqual(
+            verifier.validate_pulp_exact_boundary_acceptance(
+                acceptance, acknowledgement, amendment
+            ),
+            [],
+        )
+        acceptance["counterpart"]["amendment_sha256"] = "0" * 64
+        errors = verifier.validate_pulp_exact_boundary_acceptance(
+            acceptance, acknowledgement, amendment
+        )
+        self.assertTrue(any("amendment_sha256" in error for error in errors))
+        acceptance = self.pulp_exact_boundary_acceptance(acknowledgement)
+        acceptance["refresh"]["open_vellum_overlap_count"] = 1
+        errors = verifier.validate_pulp_exact_boundary_acceptance(
+            acceptance, acknowledgement, amendment
+        )
+        self.assertTrue(any("zero unresolved overlaps" in error for error in errors))
+        acceptance = self.pulp_exact_boundary_acceptance(acknowledgement)
+        acceptance["refresh"]["open_pr_rows"] = ["not-a-row"]
+        errors = verifier.validate_pulp_exact_boundary_acceptance(
+            acceptance, acknowledgement, amendment
+        )
+        self.assertTrue(any("expected object" in error for error in errors))
+        acceptance = self.pulp_exact_boundary_acceptance(acknowledgement)
+        acceptance["refresh"]["open_pr_rows"] = [
+            {
+                "repository": "danielraffel/vellum",
+                "pull_request": 99,
+                "head_commit": "8" * 40,
+                "paths": ["authoring/import_html.py"],
+                "disposition": "conflict-awaiting-owner",
+                "resolution": "unresolved",
+            }
+        ]
+        errors = verifier.validate_pulp_exact_boundary_acceptance(
+            acceptance, acknowledgement, amendment
+        )
+        self.assertTrue(any("contradicts open PR rows" in error for error in errors))
+        acceptance = self.pulp_exact_boundary_acceptance(acknowledgement)
+        acceptance["refresh"]["audited_at"] = "2026-11-28T23:59:59Z"
+        errors = verifier.validate_pulp_exact_boundary_acceptance(
+            acceptance, acknowledgement, amendment
+        )
+        self.assertTrue(any("timestamps must match" in error for error in errors))
+
+    def test_external_evidence_strict_json_rejects_duplicate_keys(self) -> None:
+        with self.assertRaisesRegex(ValueError, "duplicate JSON key: state"):
+            verifier.load_json_bytes(
+                b'{"state":"accepted","state":"rejected"}', "external evidence"
+            )
 
     def test_cli_release_readiness_fails_before_parity_completion(self) -> None:
         completed = subprocess.run(
