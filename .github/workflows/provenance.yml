@@ -73,7 +73,12 @@ jobs:
           python3 tools/provenance/test_finalize_authority_reconciliation.py
           python3 tools/provenance/test_verify_current_state_docs.py
           python3 tools/provenance/test_verify_authority_expansion.py
+          release_readiness=()
+          if [[ "$GITHUB_REF" == refs/tags/v[0-9]* ]]; then
+            release_readiness+=(--release-readiness)
+          fi
           python3 tools/provenance/verify_authority_expansion.py \
+            "${release_readiness[@]}" \
             --output "$RUNNER_TEMP/authority-expansion-report.json"
           python3 .agents/skills/pulp-vellum-change-routing/scripts/test_route_change.py
 

@@ -25,9 +25,14 @@ ACKNOWLEDGEMENT_PATH = Path(
     "provenance/authority/expansions/"
     "full-design-import-render-v1/watch-acknowledgement.json"
 )
+MATRIX_PATH = Path(
+    "provenance/authority/expansions/"
+    "full-design-import-render-v1/compatibility-matrix.json"
+)
 EXPANSIONS_ROOT = Path("provenance/authority/expansions")
 EXPECTED_FILES = {
     "README.md",
+    "full-design-import-render-v1/compatibility-matrix.json",
     "full-design-import-render-v1/proposal.json",
     "full-design-import-render-v1/scope-addendum-1.json",
     "full-design-import-render-v1/watch-acknowledgement.json",
@@ -36,6 +41,7 @@ EXPECTED_README_SHA256 = "6935071cee4c735f401356e625108150251921b8a0dd6f20648d73
 EXPECTED_PROPOSAL_SHA256 = "7c2db05e110e7d9834806e08469f6d7cc70f6528b2242d1f6c0255dcdbc0a4c9"
 EXPECTED_ADDENDUM_SHA256 = "91bb269ce5a872037fd67e4735125772bcac50d82cf454edfd8c356b11f5a122"
 EXPECTED_ACKNOWLEDGEMENT_SHA256 = "877ac4a410e7ac8d5019aa8f2e09d9133a111acaab59eb2abef65c30527b78c8"
+EXPECTED_MATRIX_SHA256 = "1792666eb1dd7d3f46dc607f4ee3dccbbc1232a6c2e6ab2331507c4b87122e1c"
 EXPECTED_PROPOSED_AT = "2026-08-10T21:55:54Z"
 EXPECTED_ADDENDUM_PROPOSED_AT = "2026-08-11T02:52:16Z"
 EXPECTED_ACKNOWLEDGED_AT = "2026-08-11T20:54:33Z"
@@ -783,7 +789,296 @@ def validate_acknowledgement(data: Any) -> list[str]:
     return errors
 
 
-def verify(root: Path) -> dict[str, Any]:
+def validate_matrix(data: Any) -> list[str]:
+    errors: list[str] = []
+    top = {
+        "schema_version", "kind", "matrix_id", "proposal_id", "state",
+        "frozen_at", "frozen_by", "authority_effect", "implementation_authority",
+        "coordinates", "status_values", "status_semantics",
+        "path_semantics", "design_ir_relationship", "cells", "gates",
+    }
+    if not exact_keys(data, top, "matrix", errors):
+        return errors
+    scalars = {
+        "schema_version": 1,
+        "kind": "full-design-import-render-compatibility-matrix",
+        "matrix_id": "full-design-import-render-v1-compatibility-matrix",
+        "proposal_id": "full-design-import-render-v1",
+        "state": "frozen",
+        "frozen_at": "2026-08-11T23:59:00Z",
+        "frozen_by": "@danielraffel",
+        "authority_effect": "none",
+        "implementation_authority": "forbidden-until-exact-boundary-acknowledged",
+    }
+    for key, expected in scalars.items():
+        if not exact_scalar(data[key], expected):
+            errors.append(f"matrix.{key}: expected {expected!r}")
+    if not OWNER.fullmatch(str(data["frozen_by"])):
+        errors.append("matrix.frozen_by: expected individual GitHub handle")
+
+    expected_coordinates = {
+        "pulp_repository": "Generous-Corp/pulp",
+        "pulp_audit_commit": "34f879e1a71aec8a34cea13f62600586d0eb79a7",
+        "vellum_authority_repository": "Generous-Corp/vellum",
+        "vellum_work_repository": "danielraffel/vellum",
+        "vellum_audit_commit": "da76a684e450b56b10ca26eb4057d58290fea1c2",
+        "planning_repository": "danielraffel/pulp-planning",
+        "planning_commit": "0aae3f40add2f5f7705eed8909e32d1134fd432c",
+    }
+    coordinates = data["coordinates"]
+    if (
+        not isinstance(coordinates, dict)
+        or set(coordinates) != set(expected_coordinates)
+        or any(
+            not exact_scalar(coordinates[key], expected)
+            for key, expected in expected_coordinates.items()
+        )
+    ):
+        errors.append("matrix.coordinates: differs from pinned audit coordinates")
+    elif not all(
+        SHA40.fullmatch(coordinates[key])
+        for key in ("pulp_audit_commit", "vellum_audit_commit", "planning_commit")
+    ):
+        errors.append("matrix.coordinates: expected full commit SHAs")
+
+    statuses = ["supported", "partial", "rejected-by-contract", "not-applicable"]
+    if data["status_values"] != statuses:
+        errors.append("matrix.status_values: differs from closed status vocabulary")
+    expected_semantics = {
+        "supported": (
+            "The pinned Vellum baseline independently satisfies the pinned Pulp "
+            "behavior named by the row."
+        ),
+        "partial": (
+            "A shared sink or bounded subset exists, but the pinned Vellum baseline "
+            "does not independently satisfy the pinned Pulp behavior named by the row."
+        ),
+        "rejected-by-contract": (
+            "The capability is intentionally outside Vellum and must remain owned by "
+            "the named retained boundary."
+        ),
+        "not-applicable": (
+            "The capability is a consumer integration choice, not a Vellum framework "
+            "implementation obligation."
+        ),
+    }
+    if data["status_semantics"] != expected_semantics:
+        errors.append("matrix.status_semantics: differs from pinned semantics")
+    expected_path_semantics = {
+        "pulp_implementation_and_proof": (
+            "Exact evidence paths at the pinned Pulp audit commit; the Pulp "
+            "exact-boundary acceptance must verify every path against that commit."
+        ),
+        "vellum_future_implementation_and_proof": (
+            "Exact future ownership destinations. They may be absent for partial rows; "
+            "every path in a supported row must exist at the pinned Vellum audit commit."
+        ),
+    }
+    if data["path_semantics"] != expected_path_semantics:
+        errors.append("matrix.path_semantics: differs from pinned evidence roles")
+
+    expected_relationship = {
+        "canonical_owner": "Generous-Corp/vellum",
+        "canonical_schema": "https://vellum.dev/schemas/design-ir/v1",
+        "canonical_schema_version": 1,
+        "pulp_input_contract": (
+            "Pulp DesignIR integer version 1 at "
+            "34f879e1a71aec8a34cea13f62600586d0eb79a7"
+        ),
+        "relationship": "versioned-compatibility-adapter-not-schema-identity",
+        "adapter_direction": (
+            "Pulp source adapters and legacy Pulp DesignIR to canonical Vellum DesignIR v1"
+        ),
+        "compatibility_rule": (
+            "Vellum owns the canonical schema. Pulp wire fields are accepted through an "
+            "explicit, version-pinned compatibility adapter; unknown or lossy fields produce "
+            "deterministic diagnostics and may not be silently discarded."
+        ),
+        "versioning_rule": (
+            "A change to either schema or semantic mapping requires a new adapter version, "
+            "fixtures for old and new inputs, and reimport stability proof. Pulp may not "
+            "redefine the canonical Vellum schema through its facade."
+        ),
+        "runtime_rule": (
+            "Canonical DesignIR and packaged render assets must execute without Chromium; "
+            "Chromium is an authoring-only frontend."
+        ),
+    }
+    if data["design_ir_relationship"] != expected_relationship:
+        errors.append("matrix.design_ir_relationship: differs from pinned version relationship")
+
+    required_ids = {
+        "source.canonical-design-ir", "source.pulp-design-ir-v1-compat",
+        "source.detection-and-routing",
+        "source.figma-plugin-json", "source.figma-plugin-zip",
+        "source.figma-local-fig", "source.figma-rest", "source.figma-mcp-context",
+        "source.stitch", "source.v0", "source.pencil", "source.claude-design",
+        "source.agent-html-chromium", "source.html-project-staging-containment",
+        "source.managed-chromium-install-discovery", "source.design-md", "source.jsx-react",
+        "source.react-native", "ir.deterministic-normalize-diagnostics",
+        "ir.reimport-overlays-stable-identity", "render.layout-and-node-dispatch",
+        "ir.lock-to-source-generated-and-jsx", "ir.token-lock-to-design-md",
+        "ir.recognition-resolver", "ir.runtime-import-api",
+        "render.paint-effects-and-clipping", "render.raster-images-and-assets",
+        "render.vector-svg-paths", "render.text-runs-fonts-fallback",
+        "render.skia-cpu", "render.skia-graphite-dawn-macos15-arm64",
+        "render.interactions-semantics-accessibility", "harness.capture-native-and-web",
+        "harness.input-scenarios", "harness.semantic-snapshots-assertions",
+        "harness.pixel-diff-goldens-montage", "harness.source-vs-skia-fidelity",
+        "output.live-js", "output.canonical-design-ir", "output.baked-cpp",
+        "output.baked-swiftui", "output.cli-and-immutable-runtime-assets",
+        "boundary.runtime-engine-selection", "boundary.non-macos-arm64-platform-adoption",
+        "boundary.audio-dsp-harness",
+        "boundary.pulp-cli-control-product-integration",
+        "boundary.pulp-forge-product-integration",
+    }
+    families = {
+        "design-source-ingest", "chromium-authoring-frontend", "design-ir-contract",
+        "render-assets-and-backends", "visual-proof-harness",
+        "design-output-and-packaging", "retained-boundary",
+    }
+    cells = data["cells"]
+    seen: set[str] = set()
+    if not isinstance(cells, list):
+        errors.append("matrix.cells: expected array")
+    else:
+        for index, cell in enumerate(cells):
+            where = f"matrix.cells[{index}]"
+            cell_keys = {
+                "id", "family", "status", "target_status", "pulp_implementation",
+                "pulp_proof", "vellum_future_implementation", "vellum_future_proof", "gap",
+            }
+            if not exact_keys(cell, cell_keys, where, errors):
+                continue
+            cell_id = cell["id"]
+            if not isinstance(cell_id, str) or not cell_id or cell_id in seen:
+                errors.append(f"{where}.id: missing or duplicate")
+            else:
+                seen.add(cell_id)
+            if cell["family"] not in families:
+                errors.append(f"{where}.family: unknown capability family")
+            if cell["status"] not in statuses or cell["target_status"] not in statuses:
+                errors.append(f"{where}: status outside closed vocabulary")
+            if cell["status"] == "partial" and cell["target_status"] != "supported":
+                errors.append(f"{where}: partial required capability must target supported")
+            if cell["status"] in {"rejected-by-contract", "not-applicable"} and (
+                cell["target_status"] != cell["status"]
+            ):
+                errors.append(f"{where}: retained boundary target must preserve disposition")
+            for key in ("pulp_implementation", "pulp_proof"):
+                if strings(cell[key], f"{where}.{key}", errors):
+                    for path in cell[key]:
+                        safe_path(path, f"{where}.{key}", errors)
+            allow_empty = cell["status"] == "rejected-by-contract"
+            for key in ("vellum_future_implementation", "vellum_future_proof"):
+                if strings(cell[key], f"{where}.{key}", errors, empty=allow_empty):
+                    for path in cell[key]:
+                        safe_path(path, f"{where}.{key}", errors)
+            if not isinstance(cell["gap"], str) or not cell["gap"]:
+                errors.append(f"{where}.gap: expected non-empty string")
+        if seen != required_ids:
+            errors.append(
+                "matrix.cells: IDs differ from frozen compatibility surface; "
+                f"missing={sorted(required_ids - seen)} unexpected={sorted(seen - required_ids)}"
+            )
+
+    expected_gates = {
+        "matrix_may_transfer_authority": False,
+        "all_required_cells_must_reach_target_before_release": True,
+        "source_work_before_exact_boundary_acknowledgement": False,
+        "chromium_may_be_required_at_runtime": False,
+        "pulp_consumption_authorized": False,
+    }
+    gates = data["gates"]
+    if (
+        not isinstance(gates, dict)
+        or set(gates) != set(expected_gates)
+        or any(
+            not exact_scalar(gates[key], expected)
+            for key, expected in expected_gates.items()
+        )
+    ):
+        errors.append("matrix.gates: differs from fail-closed pinned gates")
+    return errors
+
+
+def validate_matrix_repository_paths(root: Path, data: Any) -> list[str]:
+    """Resolve supported Vellum evidence at the matrix's pinned audit commit.
+
+    Production verification requires a Git HEAD, the pinned commit, and every
+    supported owner/proof path. Unit fixtures opt out explicitly through verify().
+    """
+    try:
+        head = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--verify", "HEAD^{commit}"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError as exc:
+        return [f"matrix repository evidence: cannot invoke git: {exc}"]
+    if head.returncode != 0:
+        return ["matrix repository evidence: Git HEAD is required for pinned path checks"]
+    if not isinstance(data, dict) or not isinstance(data.get("coordinates"), dict):
+        return []
+    commit = data["coordinates"].get("vellum_audit_commit")
+    if not isinstance(commit, str) or not SHA40.fullmatch(commit):
+        return []
+    pinned = subprocess.run(
+        ["git", "-C", str(root), "cat-file", "-e", f"{commit}^{{commit}}"],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    if pinned.returncode != 0:
+        return [f"matrix repository evidence: pinned Vellum commit {commit} is unavailable"]
+    errors: list[str] = []
+    cells = data.get("cells")
+    if not isinstance(cells, list):
+        return errors
+    for index, cell in enumerate(cells):
+        if not isinstance(cell, dict) or cell.get("status") != "supported":
+            continue
+        for key in ("vellum_future_implementation", "vellum_future_proof"):
+            paths = cell.get(key)
+            if not isinstance(paths, list):
+                continue
+            for path in paths:
+                if not isinstance(path, str):
+                    continue
+                resolved = subprocess.run(
+                    ["git", "-C", str(root), "cat-file", "-e", f"{commit}:{path}"],
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                if resolved.returncode != 0:
+                    errors.append(
+                        f"matrix.cells[{index}].{key}: supported path does not exist "
+                        f"at pinned Vellum commit: {path}"
+                    )
+    return errors
+
+
+def validate_release_readiness(data: Any) -> list[str]:
+    if not isinstance(data, dict) or not isinstance(data.get("cells"), list):
+        return ["release readiness: compatibility matrix cells are unavailable"]
+    incomplete = [
+        cell.get("id", f"cell-{index}")
+        for index, cell in enumerate(data["cells"])
+        if isinstance(cell, dict) and cell.get("status") != cell.get("target_status")
+    ]
+    if incomplete:
+        return [
+            "release readiness: required compatibility cells have not reached target: "
+            + ", ".join(str(cell_id) for cell_id in incomplete)
+        ]
+    return []
+
+
+def verify(
+    root: Path, *, repository_checks: bool = True, release_readiness: bool = False
+) -> dict[str, Any]:
     closure_errors = []
     try:
         actual_files, symlinks = expansion_files(root)
@@ -827,22 +1122,38 @@ def verify(root: Path) -> dict[str, Any]:
             closure_errors.append("expansion watch acknowledgement differs from pinned SHA-256")
     except OSError as exc:
         closure_errors.append(f"cannot read expansion watch acknowledgement: {exc}")
+    matrix = root / MATRIX_PATH
+    try:
+        matrix_sha256 = hashlib.sha256(matrix.read_bytes()).hexdigest()
+        if matrix_sha256 != EXPECTED_MATRIX_SHA256:
+            closure_errors.append("expansion compatibility matrix differs from pinned SHA-256")
+    except OSError as exc:
+        closure_errors.append(f"cannot read expansion compatibility matrix: {exc}")
     try:
         data = load_json(proposal)
         addendum_data = load_json(addendum)
         acknowledgement_data = load_json(acknowledgement)
+        matrix_data = load_json(matrix)
         errors = (
             closure_errors
             + validate(data)
             + validate_addendum(addendum_data)
             + validate_acknowledgement(acknowledgement_data)
+            + validate_matrix(matrix_data)
+            + (
+                validate_matrix_repository_paths(root, matrix_data)
+                if repository_checks
+                else []
+            )
+            + (validate_release_readiness(matrix_data) if release_readiness else [])
         )
     except ValueError as exc:
-        data, addendum_data, acknowledgement_data = None, None, None
+        data, addendum_data, acknowledgement_data, matrix_data = None, None, None, None
         errors = closure_errors + [str(exc)]
     passed = not errors
     return {
         "schema_version": 1,
+        "release_readiness_requested": release_readiness,
         "status": "pass" if passed else "fail",
         "proposal": PROPOSAL_PATH.as_posix(),
         "proposal_id": data.get("proposal_id") if passed and isinstance(data, dict) else None,
@@ -858,6 +1169,12 @@ def verify(root: Path) -> dict[str, Any]:
             if passed and isinstance(acknowledgement_data, dict)
             else None
         ),
+        "compatibility_matrix": MATRIX_PATH.as_posix(),
+        "compatibility_matrix_id": (
+            matrix_data.get("matrix_id")
+            if passed and isinstance(matrix_data, dict)
+            else None
+        ),
         "authority_effect": (
             acknowledgement_data.get("authority_effect")
             if passed and isinstance(acknowledgement_data, dict)
@@ -871,8 +1188,9 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--release-readiness", action="store_true")
     args = parser.parse_args()
-    report = verify(args.root.resolve())
+    report = verify(args.root.resolve(), release_readiness=args.release_readiness)
     rendered = json.dumps(report, indent=2, sort_keys=True) + "\n"
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
