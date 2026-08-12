@@ -196,6 +196,15 @@ class RunnerPolicyTests(unittest.TestCase):
                         f"{filename}: {job_name} must export the pinned browser path",
                     )
 
+    def test_locked_gpu_archive_download_is_resumable_and_hash_gated(self) -> None:
+        gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
+        self.assertIn("--retry 5 --retry-delay 2 --retry-all-errors", gpu)
+        self.assertIn("--continue-at -", gpu)
+        self.assertIn(
+            "13b0e9818c3b05db661af85cb1e2bf2ef10e30d468b81351dd90295237d17734",
+            gpu,
+        )
+
     def test_workflows_use_their_reviewed_runner_class(self) -> None:
         workflow_paths = sorted(
             [*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]

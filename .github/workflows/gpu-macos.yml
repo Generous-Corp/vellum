@@ -39,6 +39,8 @@ jobs:
           set -euo pipefail
           archive="$RUNNER_TEMP/skia-build-mac-arm64-gpu-release.zip"
           curl --fail --location --silent --show-error \
+            --retry 5 --retry-delay 2 --retry-all-errors \
+            --continue-at - \
             https://github.com/danielraffel/skia-builder/releases/download/chrome/m150/skia-build-mac-arm64-gpu-release.zip \
             --output "$archive"
           printf '%s  %s\n' \
