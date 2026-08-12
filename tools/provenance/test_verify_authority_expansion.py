@@ -31,6 +31,8 @@ class Tests(unittest.TestCase):
         self.assertIn(
             "python3 tools/provenance/verify_authority_expansion.py", workflow
         )
+        self.assertIn("refs/tags/v[0-9]*", workflow)
+        self.assertIn("--release-readiness", workflow)
         self.assertGreaterEqual(workflow.count("authority-expansion-report.json"), 2)
 
     def copy(self) -> tuple[tempfile.TemporaryDirectory[str], Path, Path]:
@@ -49,6 +51,9 @@ class Tests(unittest.TestCase):
         acknowledgement = root / verifier.ACKNOWLEDGEMENT_PATH
         acknowledgement.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / verifier.ACKNOWLEDGEMENT_PATH, acknowledgement)
+        matrix = root / verifier.MATRIX_PATH
+        matrix.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / verifier.MATRIX_PATH, matrix)
         return temporary, root, target
 
     def mutate(self, callback) -> dict:
@@ -83,6 +88,16 @@ class Tests(unittest.TestCase):
             "errors": errors,
         }
 
+    def mutate_matrix(self, callback) -> dict:
+        data = json.loads((ROOT / verifier.MATRIX_PATH).read_text())
+        callback(data)
+        errors = verifier.validate_matrix(data)
+        return {
+            "status": "pass" if not errors else "fail",
+            "authority_effect": data.get("authority_effect") if not errors else None,
+            "errors": errors,
+        }
+
     def test_committed_proposal_passes_without_authority(self) -> None:
         report = verifier.verify(ROOT)
         self.assertEqual(report["status"], "pass", report["errors"])
@@ -95,6 +110,120 @@ class Tests(unittest.TestCase):
             report["watch_acknowledgement_id"],
             "full-design-import-render-v1-watch-acknowledgement",
         )
+        self.assertEqual(
+            report["compatibility_matrix_id"],
+            "full-design-import-render-v1-compatibility-matrix",
+        )
+
+    def test_matrix_freezes_required_routes_without_authority(self) -> None:
+        data = json.loads((ROOT / verifier.MATRIX_PATH).read_text())
+        cells = {cell["id"]: cell for cell in data["cells"]}
+        self.assertEqual(data["authority_effect"], "none")
+        self.assertEqual(cells["source.agent-html-chromium"]["status"], "partial")
+        self.assertEqual(cells["source.agent-html-chromium"]["target_status"], "supported")
+        self.assertEqual(cells["source.figma-local-fig"]["target_status"], "supported")
+        self.assertEqual(cells["source.figma-rest"]["target_status"], "supported")
+        self.assertEqual(cells["source.figma-mcp-context"]["target_status"], "supported")
+        self.assertEqual(cells["harness.capture-native-and-web"]["status"], "partial")
+        self.assertEqual(
+            cells["render.skia-graphite-dawn-macos15-arm64"]["status"],
+            "supported",
+        )
+        self.assertEqual(
+            cells["boundary.non-macos-arm64-platform-adoption"]["status"],
+            "not-applicable",
+        )
+        self.assertEqual(cells["boundary.audio-dsp-harness"]["status"], "rejected-by-contract")
+
+    def test_supported_vellum_paths_resolve_at_pinned_commit(self) -> None:
+        data = json.loads((ROOT / verifier.MATRIX_PATH).read_text())
+        self.assertEqual(verifier.validate_matrix_repository_paths(ROOT, data), [])
+        cell = next(
+            row for row in data["cells"] if row["id"] == "source.canonical-design-ir"
+        )
+        cell["vellum_future_implementation"] = ["missing/supported-owner.cpp"]
+        errors = verifier.validate_matrix_repository_paths(ROOT, data)
+        self.assertTrue(any("supported path does not exist" in error for error in errors))
+
+    def test_production_verify_requires_git_head_for_path_resolution(self) -> None:
+        temporary, root, _ = self.copy()
+        self.addCleanup(temporary.cleanup)
+        report = verifier.verify(root)
+        self.assertEqual(report["status"], "fail")
+        self.assertTrue(any("Git HEAD is required" in error for error in report["errors"]))
+
+    def test_matrix_authority_and_consumption_claims_fail(self) -> None:
+        report = self.mutate_matrix(lambda d: d.update(authority_effect="transferred"))
+        self.assertEqual(report["status"], "fail")
+        report = self.mutate_matrix(
+            lambda d: d["gates"].update(pulp_consumption_authorized=True)
+        )
+        self.assertEqual(report["status"], "fail")
+
+    def test_matrix_closed_vocabulary_fields_reject_non_string_values(self) -> None:
+        for field in ("family", "status", "target_status"):
+            for value in ({}, []):
+                with self.subTest(field=field, value_type=type(value).__name__):
+                    report = self.mutate_matrix(
+                        lambda data, field=field, value=value: data["cells"][0].update(
+                            {field: value}
+                        )
+                    )
+                    self.assertEqual(report["status"], "fail")
+                    self.assertTrue(report["errors"])
+
+    def test_matrix_cannot_drop_chromium_or_weaken_required_target(self) -> None:
+        report = self.mutate_matrix(
+            lambda d: d["cells"].__setitem__(
+                slice(None),
+                [cell for cell in d["cells"] if cell["id"] != "source.agent-html-chromium"],
+            )
+        )
+        self.assertEqual(report["status"], "fail")
+
+    def test_release_readiness_rejects_partial_cells(self) -> None:
+        data = json.loads((ROOT / verifier.MATRIX_PATH).read_text())
+        errors = verifier.validate_release_readiness(data)
+        self.assertTrue(any("source.agent-html-chromium" in error for error in errors))
+        for cell in data["cells"]:
+            cell["status"] = cell["target_status"]
+        self.assertEqual(verifier.validate_release_readiness(data), [])
+
+    def test_cli_release_readiness_fails_before_parity_completion(self) -> None:
+        completed = subprocess.run(
+            [sys.executable, str(SCRIPT), "--root", str(ROOT), "--release-readiness"],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        report = json.loads(completed.stdout)
+        self.assertTrue(report["release_readiness_requested"])
+        self.assertTrue(any("have not reached target" in error for error in report["errors"]))
+        report = self.mutate_matrix(
+            lambda d: next(
+                cell for cell in d["cells"] if cell["id"] == "source.figma-rest"
+            ).update(target_status="partial")
+        )
+        self.assertEqual(report["status"], "fail")
+
+    def test_matrix_design_ir_relationship_drift_fails(self) -> None:
+        report = self.mutate_matrix(
+            lambda d: d["design_ir_relationship"].update(
+                relationship="schemas-are-identical"
+            )
+        )
+        self.assertEqual(report["status"], "fail")
+
+    def test_matrix_byte_drift_fails(self) -> None:
+        temporary, root, _ = self.copy()
+        self.addCleanup(temporary.cleanup)
+        matrix = root / verifier.MATRIX_PATH
+        matrix.write_bytes(matrix.read_bytes() + b"\n")
+        report = verifier.verify(root, repository_checks=False)
+        self.assertEqual(report["status"], "fail")
+        self.assertTrue(any("matrix differs" in error for error in report["errors"]))
 
     def test_acknowledgement_binds_exact_acceptance_without_authority(self) -> None:
         data = json.loads((ROOT / verifier.ACKNOWLEDGEMENT_PATH).read_text())
@@ -150,7 +279,7 @@ class Tests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         acknowledgement = root / verifier.ACKNOWLEDGEMENT_PATH
         acknowledgement.write_bytes(acknowledgement.read_bytes() + b"\n")
-        report = verifier.verify(root)
+        report = verifier.verify(root, repository_checks=False)
         self.assertEqual(report["status"], "fail")
         self.assertTrue(
             any("acknowledgement differs" in error for error in report["errors"])
@@ -278,7 +407,7 @@ class Tests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         addendum = root / verifier.ADDENDUM_PATH
         addendum.write_bytes(addendum.read_bytes() + b"\n")
-        report = verifier.verify(root)
+        report = verifier.verify(root, repository_checks=False)
         self.assertEqual(report["status"], "fail")
         self.assertTrue(any("addendum differs" in error for error in report["errors"]))
 
@@ -286,7 +415,7 @@ class Tests(unittest.TestCase):
         temporary, root, target = self.copy()
         self.addCleanup(temporary.cleanup)
         target.write_text('{"schema_version":1,"schema_version":1}\n')
-        report = verifier.verify(root)
+        report = verifier.verify(root, repository_checks=False)
         self.assertEqual(report["status"], "fail")
         self.assertTrue(any("duplicate JSON key" in e for e in report["errors"]))
 
@@ -411,7 +540,7 @@ class Tests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         unknown = root / verifier.EXPANSIONS_ROOT / "unreviewed-acceptance.json"
         unknown.write_text('{"authority_effect":"transferred"}\n')
-        report = verifier.verify(root)
+        report = verifier.verify(root, repository_checks=False)
         self.assertEqual(report["status"], "fail")
         self.assertTrue(any("artifact set differs" in e for e in report["errors"]))
 
@@ -425,7 +554,7 @@ class Tests(unittest.TestCase):
         )
         unknown = root / verifier.EXPANSIONS_ROOT / "untracked-acceptance.json"
         unknown.write_text('{"authority_effect":"transferred"}\n')
-        report = verifier.verify(root)
+        report = verifier.verify(root, repository_checks=False)
         self.assertEqual(report["status"], "fail")
         self.assertTrue(any("untracked-acceptance.json" in e for e in report["errors"]))
 
@@ -438,7 +567,7 @@ class Tests(unittest.TestCase):
             check=True,
         )
         (root / verifier.EXPANSIONS_ROOT / ".DS_Store").write_bytes(b"incidental")
-        report = verifier.verify(root)
+        report = verifier.verify(root, repository_checks=False)
         self.assertEqual(report["status"], "pass", report["errors"])
 
     def test_git_closure_rejects_non_json_untracked_artifact(self) -> None:
@@ -451,7 +580,7 @@ class Tests(unittest.TestCase):
         )
         unknown = root / verifier.EXPANSIONS_ROOT / "acceptance.txt"
         unknown.write_text("authority_effect=transferred\n")
-        report = verifier.verify(root)
+        report = verifier.verify(root, repository_checks=False)
         self.assertEqual(report["status"], "fail")
         self.assertTrue(any("acceptance.txt" in e for e in report["errors"]))
 
@@ -465,7 +594,7 @@ class Tests(unittest.TestCase):
         )
         unknown = root / verifier.EXPANSIONS_ROOT / "ACCEPTANCE"
         unknown.write_text("authority transferred\n")
-        report = verifier.verify(root)
+        report = verifier.verify(root, repository_checks=False)
         self.assertEqual(report["status"], "fail")
         self.assertTrue(any("ACCEPTANCE" in e for e in report["errors"]))
 
@@ -474,7 +603,7 @@ class Tests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         unknown = root / verifier.EXPANSIONS_ROOT / "pulp-watch-acceptance.json"
         unknown.symlink_to(root / "missing-acceptance.json")
-        report = verifier.verify(root)
+        report = verifier.verify(root, repository_checks=False)
         self.assertEqual(report["status"], "fail")
         self.assertTrue(any("must not be symlinks" in e for e in report["errors"]))
 
@@ -485,7 +614,7 @@ class Tests(unittest.TestCase):
         external.mkdir()
         unknown = root / verifier.EXPANSIONS_ROOT / "acceptance"
         unknown.symlink_to(external, target_is_directory=True)
-        report = verifier.verify(root)
+        report = verifier.verify(root, repository_checks=False)
         self.assertEqual(report["status"], "fail")
         self.assertTrue(any("must not be symlinks" in e for e in report["errors"]))
 
@@ -493,7 +622,7 @@ class Tests(unittest.TestCase):
         temporary, root, target = self.copy()
         self.addCleanup(temporary.cleanup)
         target.write_text(target.read_text() + "\n")
-        report = verifier.verify(root)
+        report = verifier.verify(root, repository_checks=False)
         self.assertEqual(report["status"], "fail")
         self.assertTrue(any("proposal differs" in e for e in report["errors"]))
 
@@ -502,7 +631,7 @@ class Tests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         readme = root / verifier.EXPANSIONS_ROOT / "README.md"
         readme.write_text(readme.read_text() + "\nWatch acceptance authorizes source.\n")
-        report = verifier.verify(root)
+        report = verifier.verify(root, repository_checks=False)
         self.assertEqual(report["status"], "fail")
         self.assertTrue(any("README differs" in e for e in report["errors"]))
 

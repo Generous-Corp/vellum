@@ -2,7 +2,7 @@
 
 - State: `active`
 - Health: `pass`
-- Pending events: 5
+- Pending events: 6
 - Overdue events: 0
 - Release blockers: 0
 - Observatory effort: 0.0% of framework effort
@@ -585,6 +585,7 @@
 | `pulp-2d8764281273751f116d91b38421ad797cf1db35` | Pulp-to-framework | security | pending | 2026-08-12T03:33:06Z |
 | `pulp-affb77b1ca581d59a7b1328dd711c264f5c0dd1d` | Pulp-to-framework | correctness | pending | 2026-08-14T03:33:06Z |
 | `pulp-e36377027863ecc04b7b7a35579e8b4f8879755d` | Pulp-to-framework | correctness | pending | 2026-08-14T03:33:06Z |
+| `vellum-c41e065e791b2735b94606b06af86816b53a9641` | framework-to-Pulp | test | pending | 2026-08-19T00:54:59Z |
 
 ## Release blockers
 
