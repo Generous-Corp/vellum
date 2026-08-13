@@ -71,6 +71,7 @@ def _build_verified_fixture(
     shutil.copy2(REPO / "cli/vellum_backend.py", payload / "vellum_backend.py")
     shutil.copy2(REPO / "cli/vellum_manifest.py", payload / "vellum_manifest.py")
     shutil.copy2(REPO / "cli/vellum_png.py", payload / "vellum_png.py")
+    shutil.copy2(REPO / "cli/vellum_image_compare.py", payload / "vellum_image_compare.py")
     shutil.copytree(
         REPO / ".agents/skills/vellum-app-authoring",
         payload / ".agents/skills/vellum-app-authoring",
