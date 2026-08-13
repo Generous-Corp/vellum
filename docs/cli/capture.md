@@ -44,6 +44,20 @@ counts, compression boundaries, scanline filters, and accepted RGB/RGBA color
 formats before copying pixels. This makes montage generation available in a
 sterile consumer without Pillow, ImageMagick, a browser, or a visible window.
 
+Compare two captures without Pillow or ImageMagick:
+
+```sh
+vellum compare reference.png actual.png --diff artifacts/diff.png --json
+```
+
+The `vellum.pixel-comparison.v1` result records exact dimensions, crop,
+compared and differing pixel counts, mean absolute error, maximum channel
+error, threshold, similarity, and pass/fail. A comparison passes only when no
+pixel exceeds the explicit threshold (zero by default). The optional diff PNG
+is deterministic: unchanged pixels are opaque black and changed pixels carry
+the per-channel absolute error. Crops must be explicit and in bounds; a
+dimension mismatch or malformed PNG fails closed.
+
 An editable flow remains inspectable JSON and preserves action order:
 
 ```json
