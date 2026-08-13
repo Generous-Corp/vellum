@@ -1,0 +1,15 @@
+{
+  "contract_tests": ["vellum-ui", "vellum.authoring", "vellum.gpu-native", "vellum.install-consumer"],
+  "created_at": "2026-08-13T21:15:00Z",
+  "disposition": "Pulp-only",
+  "effort_minutes": 15,
+  "event_id": "resolution-pulp-243375d294d5d5ab4ee8ede443fec2260fde8a11",
+  "kind": "resolution",
+  "linked_commits": ["243375d294d5d5ab4ee8ede443fec2260fde8a11"],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Playback-free plugin-view wiring is a Pulp host/integration boundary. Vellum owns the independent retained renderer and package proofs; this Pulp lifecycle adaptation remains a Pulp-side consumer concern.",
+  "resolves": "pulp-243375d294d5d5ab4ee8ede443fec2260fde8a11",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

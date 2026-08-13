@@ -4,18 +4,19 @@
     "observatory_effort_minutes": 0,
     "started_at": null
   },
+  "mapping_sha256": "21c9e3c62a175bae8ab3871bb6a3188284d60fe8465439ceb33dc2d134b73576",
   "pulp": {
     "last_dispatch_event": "20260724-authority-activation-attempt-2",
-    "last_scanned_commit": "34f879e1a71aec8a34cea13f62600586d0eb79a7",
+    "last_scanned_commit": "89e23939f040d06da30c5ae094052af4d2ce236c",
     "repository": "Generous-Corp/pulp",
     "scan_base_commit": "2ccff748f0d59da34b01ce1fbceabcf19f452731"
   },
-  "reconciled_at": "2026-08-12T15:13:00Z",
+  "reconciled_at": "2026-08-13T22:30:00Z",
   "schema_version": 2,
   "state": "active",
   "vellum": {
     "last_dispatch_event": null,
-    "last_scanned_commit": "e4e4c3346a411b97e466f93288458bd844b5f0b6",
+    "last_scanned_commit": "152f6584f1581a97ace2f1e6bf3a43c2bd61785e",
     "repository": "Generous-Corp/vellum",
     "scan_base_commit": "5e413a793879478173318918514d7252a4670266"
   }

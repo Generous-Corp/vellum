@@ -1,0 +1,15 @@
+{
+  "contract_tests": ["vellum-ui", "vellum.authoring", "vellum.gpu-native"],
+  "created_at": "2026-08-13T21:15:00Z",
+  "disposition": "superseded",
+  "effort_minutes": 5,
+  "event_id": "resolution-pulp-8f3e959682efe4931ecc4cfe63d3b9a9320f14e4",
+  "kind": "resolution",
+  "linked_commits": ["8f3e959682efe4931ecc4cfe63d3b9a9320f14e4", "c4219fa137c206d9d221723f078bc2b3d741794a"],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "This browser-fix branch synchronization merge repeats the provider/capture changes already observed and classified; it has no distinct framework transfer.",
+  "resolves": "pulp-8f3e959682efe4931ecc4cfe63d3b9a9320f14e4",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

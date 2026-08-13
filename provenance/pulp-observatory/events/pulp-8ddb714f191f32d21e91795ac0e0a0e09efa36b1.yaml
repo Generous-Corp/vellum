@@ -1,0 +1,44 @@
+{
+  "class": "correctness",
+  "contract_keys": [
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-13T21:00:00Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "pulp-8ddb714f191f32d21e91795ac0e0a0e09efa36b1",
+  "include_dependency_deltas": [
+    "core/view/include/pulp/view/motion.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "core/view/include/pulp/view/motion.hpp",
+    "core/view/src/motion.cpp",
+    "core/view/src/view.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "a9f99ff492d4e9c60a91ce4160791267e9f21707",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "34f879e1a71aec8a34cea13f62600586d0eb79a7",
+    "to_commit": "89e23939f040d06da30c5ae094052af4d2ce236c"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "8ddb714f191f32d21e91795ac0e0a0e09efa36b1",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": []
+}

@@ -1,0 +1,15 @@
+{
+  "contract_tests": ["vellum-ui", "vellum.authoring", "vellum.gpu-native"],
+  "created_at": "2026-08-13T21:15:00Z",
+  "disposition": "superseded",
+  "effort_minutes": 5,
+  "event_id": "resolution-pulp-3b2af538891c9c6e6aa31a234f08406e51ecb6f3",
+  "kind": "resolution",
+  "linked_commits": ["243375d294d5d5ab4ee8ede443fec2260fde8a11", "3b2af538891c9c6e6aa31a234f08406e51ecb6f3", "6721227de2ec6971f08b04a1a6e63d5b138f4f74"],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "This exact-boundary acceptance branch merge repeats current-main and previously classified Pulp integration changes; no independent Vellum source change follows from the merge envelope.",
+  "resolves": "pulp-3b2af538891c9c6e6aa31a234f08406e51ecb6f3",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

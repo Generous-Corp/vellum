@@ -1,0 +1,15 @@
+{
+  "contract_tests": ["vellum-design-ir", "vellum.gpu-native", "vellum.install-consumer"],
+  "created_at": "2026-08-13T21:15:00Z",
+  "disposition": "Pulp-only",
+  "effort_minutes": 10,
+  "event_id": "resolution-pulp-c4219fa137c206d9d221723f078bc2b3d741794a",
+  "kind": "resolution",
+  "linked_commits": ["c4219fa137c206d9d221723f078bc2b3d741794a"],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Browser settle timing is Pulp's provider/capture harness behavior. Vellum's browser proof is independently packaged and does not replace this Pulp capture service.",
+  "resolves": "pulp-c4219fa137c206d9d221723f078bc2b3d741794a",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

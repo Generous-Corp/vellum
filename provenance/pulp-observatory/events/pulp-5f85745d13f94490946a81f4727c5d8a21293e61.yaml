@@ -1,0 +1,63 @@
+{
+  "class": "schema",
+  "contract_keys": [
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-13T21:00:00Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "pulp-5f85745d13f94490946a81f4727c5d8a21293e61",
+  "include_dependency_deltas": [
+    "core/host/CMakeLists.txt",
+    "core/midi/CMakeLists.txt",
+    "core/timeline_view/CMakeLists.txt",
+    "core/view/CMakeLists.txt",
+    "core/view/include/pulp/view/plugin_manager_panel.hpp",
+    "core/view/include/pulp/view/widgets/graph_editor_view.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "core/view/CMakeLists.txt",
+    "core/view/include/pulp/view/plugin_manager_panel.hpp",
+    "core/view/include/pulp/view/widgets/graph_editor_view.hpp",
+    "core/view/src/graph_editor_view.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": null,
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [
+    {
+      "new_path": "core/host/src/graph_editor_view.cpp",
+      "old_path": "core/view/src/graph_editor_view.cpp",
+      "similarity_percent": 100
+    }
+  ],
+  "scan_cursor": {
+    "from_commit": "34f879e1a71aec8a34cea13f62600586d0eb79a7",
+    "to_commit": "89e23939f040d06da30c5ae094052af4d2ce236c"
+  },
+  "schema_api_deltas": [
+    "core/timeline/schema/timeline_types.d.ts"
+  ],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "5f85745d13f94490946a81f4727c5d8a21293e61",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": [
+    "core/host/CMakeLists.txt",
+    "core/midi/CMakeLists.txt",
+    "core/timeline/schema/timeline_types.d.ts",
+    "core/timeline_view/CMakeLists.txt"
+  ]
+}

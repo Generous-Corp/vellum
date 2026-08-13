@@ -1,0 +1,15 @@
+{
+  "contract_tests": ["vellum-ui", "vellum.authoring", "vellum.gpu-native"],
+  "created_at": "2026-08-13T21:15:00Z",
+  "disposition": "Pulp-only",
+  "effort_minutes": 10,
+  "event_id": "resolution-pulp-affb77b1ca581d59a7b1328dd711c264f5c0dd1d",
+  "kind": "resolution",
+  "linked_commits": ["affb77b1ca581d59a7b1328dd711c264f5c0dd1d"],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Chromatic keyboard-row behavior is a Pulp view/widget implementation and test. It does not establish a Vellum rendering or DesignIR contract, so retain it in Pulp without parity consumption.",
+  "resolves": "pulp-affb77b1ca581d59a7b1328dd711c264f5c0dd1d",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

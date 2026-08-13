@@ -1,0 +1,15 @@
+{
+  "contract_tests": ["vellum-design-ir", "vellum.gpu-native", "vellum.install-consumer"],
+  "created_at": "2026-08-13T21:15:00Z",
+  "disposition": "Pulp-only",
+  "effort_minutes": 10,
+  "event_id": "resolution-pulp-c09badad084d07f1e3a102ac587b0ea4e43ac73b",
+  "kind": "resolution",
+  "linked_commits": ["c09badad084d07f1e3a102ac587b0ea4e43ac73b"],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "The browser-settle-load fix changes Pulp's browser capture harness and remains a provider-side service. It does not require a Vellum source transfer.",
+  "resolves": "pulp-c09badad084d07f1e3a102ac587b0ea4e43ac73b",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}
