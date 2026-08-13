@@ -615,6 +615,48 @@ class ObservatoryTests(unittest.TestCase):
             self.assertEqual(report["pending"], 2)
             self.assertEqual(report["coverage_gaps"], [])
 
+    def test_incremental_reconcile_preserves_full_verify_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            top = Path(temporary)
+            pulp = top / "pulp"
+            vellum = top / "vellum-source"
+            root = top / "state"
+            pulp_base, pulp_head = init_repo(pulp, "core/render/render.cpp")
+            vellum_base, vellum_head = init_repo(vellum, "unmapped/file.cpp")
+            make_state(root, pulp_base, vellum_base)
+
+            observatory.reconcile(
+                root=root,
+                pulp_repo=pulp,
+                vellum_repo=vellum,
+                pulp_target=pulp_head,
+                vellum_target=vellum_head,
+                now_text="2026-07-22T20:00:00Z",
+                write=True,
+            )
+            write(pulp / "core/render/render.cpp", "int value = 3;\n")
+            second_head = commit_all(pulp, "second mapped change")
+
+            result = observatory.reconcile(
+                root=root,
+                pulp_repo=pulp,
+                vellum_repo=vellum,
+                pulp_target=second_head,
+                vellum_target=vellum_head,
+                now_text="2026-07-22T20:01:00Z",
+                write=True,
+            )
+
+            self.assertEqual(len(result["new_events"]), 1)
+            report = observatory.verify(
+                root=root,
+                pulp_repo=pulp,
+                vellum_repo=vellum,
+                git_base=None,
+            )
+            self.assertEqual(report["health"], "pass")
+            self.assertEqual(report["coverage_gaps"], [])
+
     def test_derived_event_tamper_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             top = Path(temporary)

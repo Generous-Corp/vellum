@@ -293,7 +293,8 @@ def verify_event_against_git(event: dict[str, object], source: str, repo: Path, 
 def coverage_gaps(
     *, root: Path, mapping: dict[str, object], cursor: dict[str, object], events: list[tuple[Path, dict[str, object]]],
     pulp_repo: Path | None, vellum_repo: Path | None,
-    pulp_target: str | None = None, vellum_target: str | None = None
+    pulp_target: str | None = None, vellum_target: str | None = None,
+    incremental_from: dict[str, str] | None = None,
 ) -> list[dict[str, str]]:
     observations = {
         (str(event["source_repository"]), str(event["source_commit"])): event
@@ -311,7 +312,16 @@ def coverage_gaps(
             continue
         source_cursor = cursor[source]
         repository = str(source_cursor["repository"])
-        start = str(source_cursor["scan_base_commit"])
+        # ``verify`` intentionally replays the complete extraction history.
+        # Reconciliation has already verified the committed ledger and only
+        # needs to prove the newly scanned range.  Keeping that distinction
+        # avoids turning every append-only catch-up into an O(history) replay
+        # while retaining the full audit command for release/CI gates.
+        start = str(
+            incremental_from[source]
+            if incremental_from is not None and source in incremental_from
+            else source_cursor["scan_base_commit"]
+        )
         target = str(source_cursor["last_scanned_commit"])
         require_commit(repo, start, f"cursor.{source}.scan_base_commit")
         require_commit(repo, target, f"cursor.{source}.last_scanned_commit")
@@ -335,6 +345,8 @@ def coverage_gaps(
             if event_repository != repository:
                 continue
             if event_commit not in scanned_commits:
+                if incremental_from is not None and source in incremental_from:
+                    continue
                 gaps.append({
                     "source": source,
                     "commit": event_commit,
@@ -637,6 +649,10 @@ def reconcile(
     rules = mapping.get("transitive_path_rules", [])
     assert isinstance(mappings, list) and isinstance(rules, list)
     existing = load_events(root)
+    previous_cursor = {
+        source: str(cursor[source]["last_scanned_commit"])
+        for source in ("pulp", "vellum")
+    }
     observations = {
         (str(event["source_repository"]), str(event["source_commit"])): event
         for _, event in existing if event["kind"] == "observation"
@@ -658,7 +674,15 @@ def reconcile(
         source_cursor["last_scanned_commit"] = target
     cursor["reconciled_at"] = now_text
     combined = existing + [(root / EVENTS_PATH / f"{event['event_id']}.yaml", event) for event in new_events]
-    gaps = coverage_gaps(root=root, mapping=mapping, cursor=cursor, events=combined, pulp_repo=pulp_repo, vellum_repo=vellum_repo)
+    gaps = coverage_gaps(
+        root=root,
+        mapping=mapping,
+        cursor=cursor,
+        events=combined,
+        pulp_repo=pulp_repo,
+        vellum_repo=vellum_repo,
+        incremental_from=previous_cursor,
+    )
     report = build_report(root=root, lock=lock, cursor=cursor, events=combined, budgets=budgets, now=now, coverage_gaps=gaps)
     if write:
         for event in new_events:

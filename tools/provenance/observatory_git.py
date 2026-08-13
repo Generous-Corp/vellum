@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fnmatch
+from functools import lru_cache
 from pathlib import Path, PurePosixPath
 import subprocess
 from typing import Iterable
@@ -73,6 +74,7 @@ def transitive_match(path: str, rules: Iterable[str]) -> bool:
     )
 
 
+@lru_cache(maxsize=16384)
 def parse_diff_entries(repo: Path, commit: str) -> list[dict[str, object]]:
     parents = git(repo, "rev-list", "--parents", "-n", "1", commit).split()
     arguments = ["diff-tree", "--no-commit-id", "--name-status", "-r", "-M"]
@@ -101,6 +103,7 @@ def parse_diff_entries(repo: Path, commit: str) -> list[dict[str, object]]:
     return entries
 
 
+@lru_cache(maxsize=16384)
 def patch_id(repo: Path, commit: str) -> str | None:
     patch = subprocess.run(
         ["git", "show", "--pretty=format:", "--no-ext-diff", "--binary", commit],
