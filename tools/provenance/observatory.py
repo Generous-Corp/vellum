@@ -228,6 +228,12 @@ def validate_lock_map_cursor(root: Path) -> tuple[dict[str, object], dict[str, o
     return lock, mapping, cursor, budgets
 
 
+def mapping_fingerprint(mapping: dict[str, object]) -> str:
+    """Return the stable identity of the mapping used for reconciliation."""
+
+    return canonical_sha256(mapping)
+
+
 def verify_active_cursor_ancestry(
     lock: dict[str, object],
     cursor: dict[str, object],
@@ -648,6 +654,8 @@ def reconcile(
     mappings = mapping["mappings"]
     rules = mapping.get("transitive_path_rules", [])
     assert isinstance(mappings, list) and isinstance(rules, list)
+    current_mapping_fingerprint = mapping_fingerprint(mapping)
+    mapping_changed = cursor.get("mapping_sha256") != current_mapping_fingerprint
     existing = load_events(root)
     previous_cursor = {
         source: str(cursor[source]["last_scanned_commit"])
@@ -660,7 +668,11 @@ def reconcile(
     new_events: list[dict[str, object]] = []
     for source, repo, target in (("pulp", pulp_repo, pulp_target), ("vellum", vellum_repo, vellum_target)):
         source_cursor = cursor[source]
-        start = str(source_cursor["last_scanned_commit"])
+        start = str(
+            source_cursor["scan_base_commit"]
+            if mapping_changed
+            else source_cursor["last_scanned_commit"]
+        )
         repository = str(source_cursor["repository"])
         for event in expected_observations(
             source=source, repo=repo, repository=repository, start=start, target=target,
@@ -673,6 +685,7 @@ def reconcile(
                 new_events.append(event)
         source_cursor["last_scanned_commit"] = target
     cursor["reconciled_at"] = now_text
+    cursor["mapping_sha256"] = current_mapping_fingerprint
     combined = existing + [(root / EVENTS_PATH / f"{event['event_id']}.yaml", event) for event in new_events]
     gaps = coverage_gaps(
         root=root,
@@ -681,7 +694,7 @@ def reconcile(
         events=combined,
         pulp_repo=pulp_repo,
         vellum_repo=vellum_repo,
-        incremental_from=previous_cursor,
+        incremental_from=None if mapping_changed else previous_cursor,
     )
     report = build_report(root=root, lock=lock, cursor=cursor, events=combined, budgets=budgets, now=now, coverage_gaps=gaps)
     if write:
