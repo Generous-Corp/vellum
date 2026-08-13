@@ -1,0 +1,15 @@
+{
+  "contract_tests": ["vellum-ui", "vellum.authoring", "vellum.gpu-native", "vellum.install-consumer"],
+  "created_at": "2026-08-13T21:15:00Z",
+  "disposition": "framework-only",
+  "effort_minutes": 20,
+  "event_id": "resolution-vellum-ce443317ff7edfb256f7fcb4e5cecc6796d98400",
+  "kind": "resolution",
+  "linked_commits": ["ce443317ff7edfb256f7fcb4e5cecc6796d98400"],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "This is Vellum's independently implemented native rendering/text convergence slice. It is covered by the Vellum parity and installed-consumer proofs, but it does not authorize Pulp consumption or copy a Pulp implementation.",
+  "resolves": "vellum-ce443317ff7edfb256f7fcb4e5cecc6796d98400",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

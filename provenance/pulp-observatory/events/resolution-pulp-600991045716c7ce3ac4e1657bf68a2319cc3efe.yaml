@@ -1,0 +1,15 @@
+{
+  "contract_tests": ["vellum-ui", "vellum.authoring", "vellum.gpu-native"],
+  "created_at": "2026-08-13T21:15:00Z",
+  "disposition": "superseded",
+  "effort_minutes": 5,
+  "event_id": "resolution-pulp-600991045716c7ce3ac4e1657bf68a2319cc3efe",
+  "kind": "resolution",
+  "linked_commits": ["600991045716c7ce3ac4e1657bf68a2319cc3efe"],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "This branch-sync merge repeats already observed Pulp history and contributes no independent framework contract.",
+  "resolves": "pulp-600991045716c7ce3ac4e1657bf68a2319cc3efe",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

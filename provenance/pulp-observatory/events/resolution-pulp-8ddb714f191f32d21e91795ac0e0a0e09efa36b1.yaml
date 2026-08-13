@@ -1,0 +1,15 @@
+{
+  "contract_tests": ["vellum-ui", "vellum.authoring", "vellum.gpu-native"],
+  "created_at": "2026-08-13T21:15:00Z",
+  "disposition": "Pulp-only",
+  "effort_minutes": 10,
+  "event_id": "resolution-pulp-8ddb714f191f32d21e91795ac0e0a0e09efa36b1",
+  "kind": "resolution",
+  "linked_commits": ["8ddb714f191f32d21e91795ac0e0a0e09efa36b1"],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Pointer identity in Pulp motion input fixtures is a Pulp event-replay and view-test detail. It does not alter the independent Vellum rendering contract.",
+  "resolves": "pulp-8ddb714f191f32d21e91795ac0e0a0e09efa36b1",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

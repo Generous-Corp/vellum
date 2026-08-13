@@ -2,7 +2,7 @@
 
 - State: `active`
 - Health: `pass`
-- Pending events: 4
+- Pending events: 0
 - Overdue events: 0
 - Release blockers: 0
 - Observatory effort: 0.0% of framework effort
@@ -566,7 +566,7 @@
 | `pulp-4d4d73bbe2e44707ccdb1f8dc584b519c0a858e7` | Pulp-to-framework | build | superseded | 2026-08-17T08:55:05Z |
 | `pulp-51afeb296ab1b8db331f4bd8207d8b71552ace66` | Pulp-to-framework | schema | superseded | 2026-08-13T08:55:05Z |
 | `pulp-a6a28a3cdb45687482817c520327c0decca6e146` | Pulp-to-framework | correctness | superseded | 2026-08-13T08:55:05Z |
-| `vellum-ce443317ff7edfb256f7fcb4e5cecc6796d98400` | framework-to-Pulp | schema | pending | 2026-08-13T13:14:55Z |
+| `vellum-ce443317ff7edfb256f7fcb4e5cecc6796d98400` | framework-to-Pulp | schema | framework-only | 2026-08-13T13:14:55Z |
 | `pulp-1aac30c5b8b8c03523db498be5c3f170671bb2da` | Pulp-to-framework | build | Pulp-only | 2026-08-17T15:46:29Z |
 | `pulp-1e7beefabe29e79d50f9afcffc4529619649daeb` | Pulp-to-framework | build | superseded | 2026-08-17T15:46:29Z |
 | `pulp-2af516382e2997302ac57752017f3c61d2f48c43` | Pulp-to-framework | build | superseded | 2026-08-17T15:46:29Z |
@@ -583,9 +583,25 @@
 | `vellum-44cd53713337dd8e6bf2f1d0ada4d67d3d199b1f` | framework-to-Pulp | rendering | framework-only | 2026-08-13T17:34:02Z |
 | `pulp-17c7b4fff373d759f5fab6da873a68303d36b9f3` | Pulp-to-framework | security | superseded | 2026-08-12T03:33:06Z |
 | `pulp-2d8764281273751f116d91b38421ad797cf1db35` | Pulp-to-framework | security | superseded | 2026-08-12T03:33:06Z |
-| `pulp-affb77b1ca581d59a7b1328dd711c264f5c0dd1d` | Pulp-to-framework | correctness | pending | 2026-08-14T03:33:06Z |
-| `pulp-e36377027863ecc04b7b7a35579e8b4f8879755d` | Pulp-to-framework | correctness | pending | 2026-08-14T03:33:06Z |
-| `vellum-c41e065e791b2735b94606b06af86816b53a9641` | framework-to-Pulp | test | pending | 2026-08-19T00:54:59Z |
+| `pulp-affb77b1ca581d59a7b1328dd711c264f5c0dd1d` | Pulp-to-framework | correctness | Pulp-only | 2026-08-14T03:33:06Z |
+| `pulp-e36377027863ecc04b7b7a35579e8b4f8879755d` | Pulp-to-framework | correctness | Pulp-only | 2026-08-14T03:33:06Z |
+| `vellum-c41e065e791b2735b94606b06af86816b53a9641` | framework-to-Pulp | test | framework-only | 2026-08-19T00:54:59Z |
+| `pulp-11fed23325508eb7ea64358394bae73c7dd3b76e` | Pulp-to-framework | build | superseded | 2026-08-20T21:00:00Z |
+| `pulp-243375d294d5d5ab4ee8ede443fec2260fde8a11` | Pulp-to-framework | build | Pulp-only | 2026-08-20T21:00:00Z |
+| `pulp-2db594a1c0f2f9ed92cc3ca1d9c3989438902765` | Pulp-to-framework | build | superseded | 2026-08-20T21:00:00Z |
+| `pulp-3b2af538891c9c6e6aa31a234f08406e51ecb6f3` | Pulp-to-framework | build | superseded | 2026-08-20T21:00:00Z |
+| `pulp-5c42a27e51b15309648eb5dccf9ab5226faf0bd7` | Pulp-to-framework | build | superseded | 2026-08-20T21:00:00Z |
+| `pulp-5f85745d13f94490946a81f4727c5d8a21293e61` | Pulp-to-framework | schema | superseded | 2026-08-18T21:00:00Z |
+| `pulp-600991045716c7ce3ac4e1657bf68a2319cc3efe` | Pulp-to-framework | build | superseded | 2026-08-20T21:00:00Z |
+| `pulp-6190f6ad3e01cdad7dc70cfb2ffb1bdb4b0cb7dd` | Pulp-to-framework | correctness | Pulp-only | 2026-08-18T21:00:00Z |
+| `pulp-6721227de2ec6971f08b04a1a6e63d5b138f4f74` | Pulp-to-framework | correctness | Pulp-only | 2026-08-18T21:00:00Z |
+| `pulp-77fdafb0dabda689c38358afed384607287bcff0` | Pulp-to-framework | correctness | superseded | 2026-08-18T21:00:00Z |
+| `pulp-80c328cc800baec1e1a5e1fd0e318f6bf77a8b03` | Pulp-to-framework | schema | superseded | 2026-08-18T21:00:00Z |
+| `pulp-8ddb714f191f32d21e91795ac0e0a0e09efa36b1` | Pulp-to-framework | correctness | Pulp-only | 2026-08-18T21:00:00Z |
+| `pulp-8f3e959682efe4931ecc4cfe63d3b9a9320f14e4` | Pulp-to-framework | build | superseded | 2026-08-20T21:00:00Z |
+| `pulp-c09badad084d07f1e3a102ac587b0ea4e43ac73b` | Pulp-to-framework | importer | Pulp-only | 2026-08-18T21:00:00Z |
+| `pulp-c4219fa137c206d9d221723f078bc2b3d741794a` | Pulp-to-framework | importer | Pulp-only | 2026-08-18T21:00:00Z |
+| `pulp-d9b558f3510c82e10d2239e72e5a2705e56ed27f` | Pulp-to-framework | build | superseded | 2026-08-20T21:00:00Z |
 
 ## Release blockers
 

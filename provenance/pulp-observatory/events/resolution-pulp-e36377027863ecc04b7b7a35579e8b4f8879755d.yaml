@@ -1,0 +1,15 @@
+{
+  "contract_tests": ["vellum-ui", "vellum.authoring", "vellum.gpu-native"],
+  "created_at": "2026-08-13T21:15:00Z",
+  "disposition": "Pulp-only",
+  "effort_minutes": 10,
+  "event_id": "resolution-pulp-e36377027863ecc04b7b7a35579e8b4f8879755d",
+  "kind": "resolution",
+  "linked_commits": ["e36377027863ecc04b7b7a35579e8b4f8879755d"],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "The sequencer-editor batch is Pulp's editor interaction surface and tests. The exact change does not require a Vellum source or renderer transfer.",
+  "resolves": "pulp-e36377027863ecc04b7b7a35579e8b4f8879755d",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

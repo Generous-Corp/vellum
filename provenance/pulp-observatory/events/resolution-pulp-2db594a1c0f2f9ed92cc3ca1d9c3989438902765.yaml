@@ -1,0 +1,15 @@
+{
+  "contract_tests": ["vellum-ui", "vellum.authoring", "vellum.gpu-native"],
+  "created_at": "2026-08-13T21:15:00Z",
+  "disposition": "superseded",
+  "effort_minutes": 5,
+  "event_id": "resolution-pulp-2db594a1c0f2f9ed92cc3ca1d9c3989438902765",
+  "kind": "resolution",
+  "linked_commits": ["2db594a1c0f2f9ed92cc3ca1d9c3989438902765"],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "This merge imports current main into a feature branch. Its aggregate diff repeats constituent Pulp changes already observed; it has no distinct Vellum contract or patch to port.",
+  "resolves": "pulp-2db594a1c0f2f9ed92cc3ca1d9c3989438902765",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

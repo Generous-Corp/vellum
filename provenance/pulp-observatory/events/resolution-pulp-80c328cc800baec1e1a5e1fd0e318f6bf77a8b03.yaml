@@ -1,0 +1,15 @@
+{
+  "contract_tests": ["vellum-ui", "vellum.authoring", "vellum.gpu-native"],
+  "created_at": "2026-08-13T21:15:00Z",
+  "disposition": "superseded",
+  "effort_minutes": 5,
+  "event_id": "resolution-pulp-80c328cc800baec1e1a5e1fd0e318f6bf77a8b03",
+  "kind": "resolution",
+  "linked_commits": ["80c328cc800baec1e1a5e1fd0e318f6bf77a8b03"],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "This branch synchronization merge repeats current Pulp history and governance metadata; it does not add a Vellum implementation or contract.",
+  "resolves": "pulp-80c328cc800baec1e1a5e1fd0e318f6bf77a8b03",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

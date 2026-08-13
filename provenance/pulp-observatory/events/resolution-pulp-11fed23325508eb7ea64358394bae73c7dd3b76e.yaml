@@ -1,0 +1,15 @@
+{
+  "contract_tests": ["vellum-ui", "vellum.authoring", "vellum.gpu-native", "vellum.install-consumer"],
+  "created_at": "2026-08-13T21:15:00Z",
+  "disposition": "superseded",
+  "effort_minutes": 5,
+  "event_id": "resolution-pulp-11fed23325508eb7ea64358394bae73c7dd3b76e",
+  "kind": "resolution",
+  "linked_commits": ["11fed23325508eb7ea64358394bae73c7dd3b76e", "243375d294d5d5ab4ee8ede443fec2260fde8a11", "6721227de2ec6971f08b04a1a6e63d5b138f4f74"],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "The PR merge envelope repeats the playback-free-view and host-link changes already classified separately. It does not create an additional Vellum contract.",
+  "resolves": "pulp-11fed23325508eb7ea64358394bae73c7dd3b76e",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

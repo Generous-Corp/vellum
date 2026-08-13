@@ -1,0 +1,15 @@
+{
+  "contract_tests": ["vellum-ui", "vellum.authoring", "vellum.gpu-native"],
+  "created_at": "2026-08-13T21:15:00Z",
+  "disposition": "superseded",
+  "effort_minutes": 5,
+  "event_id": "resolution-pulp-d9b558f3510c82e10d2239e72e5a2705e56ed27f",
+  "kind": "resolution",
+  "linked_commits": ["d9b558f3510c82e10d2239e72e5a2705e56ed27f"],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "This feature-branch synchronization merge repeats constituent Pulp changes; the durable Vellum acceptance metadata is governed separately and no port follows from the merge envelope.",
+  "resolves": "pulp-d9b558f3510c82e10d2239e72e5a2705e56ed27f",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

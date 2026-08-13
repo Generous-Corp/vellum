@@ -1,0 +1,15 @@
+{
+  "contract_tests": ["vellum-ui", "vellum.authoring", "vellum.gpu-native", "vellum.install-consumer"],
+  "created_at": "2026-08-13T21:15:00Z",
+  "disposition": "Pulp-only",
+  "effort_minutes": 10,
+  "event_id": "resolution-pulp-6721227de2ec6971f08b04a1a6e63d5b138f4f74",
+  "kind": "resolution",
+  "linked_commits": ["6721227de2ec6971f08b04a1a6e63d5b138f4f74"],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Host-backed view link enforcement is a Pulp host contract and regression suite. It does not represent a missing Vellum renderer or DesignIR export.",
+  "resolves": "pulp-6721227de2ec6971f08b04a1a6e63d5b138f4f74",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

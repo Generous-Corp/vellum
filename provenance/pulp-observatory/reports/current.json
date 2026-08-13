@@ -7328,7 +7328,7 @@
       "class": "schema",
       "deadline": "2026-08-13T13:14:55Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-ce443317ff7edfb256f7fcb4e5cecc6796d98400",
       "mapped_contracts": [
         "canvas-kernel",
@@ -7557,7 +7557,7 @@
       "class": "correctness",
       "deadline": "2026-08-14T03:33:06Z",
       "direction": "Pulp-to-framework",
-      "disposition": "pending",
+      "disposition": "Pulp-only",
       "event_id": "pulp-affb77b1ca581d59a7b1328dd711c264f5c0dd1d",
       "mapped_contracts": [
         "retained-ui-kernel"
@@ -7569,7 +7569,7 @@
       "class": "correctness",
       "deadline": "2026-08-14T03:33:06Z",
       "direction": "Pulp-to-framework",
-      "disposition": "pending",
+      "disposition": "Pulp-only",
       "event_id": "pulp-e36377027863ecc04b7b7a35579e8b4f8879755d",
       "mapped_contracts": [
         "retained-ui-kernel"
@@ -7581,21 +7581,213 @@
       "class": "test",
       "deadline": "2026-08-19T00:54:59Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-c41e065e791b2735b94606b06af86816b53a9641",
       "mapped_contracts": [
         "retained-ui-kernel"
       ],
       "source_commit": "c41e065e791b2735b94606b06af86816b53a9641",
       "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "build",
+      "deadline": "2026-08-20T21:00:00Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-11fed23325508eb7ea64358394bae73c7dd3b76e",
+      "mapped_contracts": [
+        "retained-ui-kernel"
+      ],
+      "source_commit": "11fed23325508eb7ea64358394bae73c7dd3b76e",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "build",
+      "deadline": "2026-08-20T21:00:00Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "Pulp-only",
+      "event_id": "pulp-243375d294d5d5ab4ee8ede443fec2260fde8a11",
+      "mapped_contracts": [
+        "retained-ui-kernel"
+      ],
+      "source_commit": "243375d294d5d5ab4ee8ede443fec2260fde8a11",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "build",
+      "deadline": "2026-08-20T21:00:00Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-2db594a1c0f2f9ed92cc3ca1d9c3989438902765",
+      "mapped_contracts": [
+        "retained-ui-kernel"
+      ],
+      "source_commit": "2db594a1c0f2f9ed92cc3ca1d9c3989438902765",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "build",
+      "deadline": "2026-08-20T21:00:00Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-3b2af538891c9c6e6aa31a234f08406e51ecb6f3",
+      "mapped_contracts": [
+        "retained-ui-kernel"
+      ],
+      "source_commit": "3b2af538891c9c6e6aa31a234f08406e51ecb6f3",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "build",
+      "deadline": "2026-08-20T21:00:00Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-5c42a27e51b15309648eb5dccf9ab5226faf0bd7",
+      "mapped_contracts": [
+        "retained-ui-kernel"
+      ],
+      "source_commit": "5c42a27e51b15309648eb5dccf9ab5226faf0bd7",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "schema",
+      "deadline": "2026-08-18T21:00:00Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-5f85745d13f94490946a81f4727c5d8a21293e61",
+      "mapped_contracts": [
+        "retained-ui-kernel"
+      ],
+      "source_commit": "5f85745d13f94490946a81f4727c5d8a21293e61",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "build",
+      "deadline": "2026-08-20T21:00:00Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-600991045716c7ce3ac4e1657bf68a2319cc3efe",
+      "mapped_contracts": [
+        "retained-ui-kernel"
+      ],
+      "source_commit": "600991045716c7ce3ac4e1657bf68a2319cc3efe",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "correctness",
+      "deadline": "2026-08-18T21:00:00Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "Pulp-only",
+      "event_id": "pulp-6190f6ad3e01cdad7dc70cfb2ffb1bdb4b0cb7dd",
+      "mapped_contracts": [
+        "retained-ui-kernel"
+      ],
+      "source_commit": "6190f6ad3e01cdad7dc70cfb2ffb1bdb4b0cb7dd",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "correctness",
+      "deadline": "2026-08-18T21:00:00Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "Pulp-only",
+      "event_id": "pulp-6721227de2ec6971f08b04a1a6e63d5b138f4f74",
+      "mapped_contracts": [
+        "retained-ui-kernel"
+      ],
+      "source_commit": "6721227de2ec6971f08b04a1a6e63d5b138f4f74",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "correctness",
+      "deadline": "2026-08-18T21:00:00Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-77fdafb0dabda689c38358afed384607287bcff0",
+      "mapped_contracts": [
+        "retained-ui-kernel"
+      ],
+      "source_commit": "77fdafb0dabda689c38358afed384607287bcff0",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "schema",
+      "deadline": "2026-08-18T21:00:00Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-80c328cc800baec1e1a5e1fd0e318f6bf77a8b03",
+      "mapped_contracts": [
+        "retained-ui-kernel"
+      ],
+      "source_commit": "80c328cc800baec1e1a5e1fd0e318f6bf77a8b03",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "correctness",
+      "deadline": "2026-08-18T21:00:00Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "Pulp-only",
+      "event_id": "pulp-8ddb714f191f32d21e91795ac0e0a0e09efa36b1",
+      "mapped_contracts": [
+        "retained-ui-kernel"
+      ],
+      "source_commit": "8ddb714f191f32d21e91795ac0e0a0e09efa36b1",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "build",
+      "deadline": "2026-08-20T21:00:00Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-8f3e959682efe4931ecc4cfe63d3b9a9320f14e4",
+      "mapped_contracts": [
+        "retained-ui-kernel"
+      ],
+      "source_commit": "8f3e959682efe4931ecc4cfe63d3b9a9320f14e4",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "importer",
+      "deadline": "2026-08-18T21:00:00Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "Pulp-only",
+      "event_id": "pulp-c09badad084d07f1e3a102ac587b0ea4e43ac73b",
+      "mapped_contracts": [
+        "pulp-design-import-tooling"
+      ],
+      "source_commit": "c09badad084d07f1e3a102ac587b0ea4e43ac73b",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "importer",
+      "deadline": "2026-08-18T21:00:00Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "Pulp-only",
+      "event_id": "pulp-c4219fa137c206d9d221723f078bc2b3d741794a",
+      "mapped_contracts": [
+        "pulp-design-import-tooling"
+      ],
+      "source_commit": "c4219fa137c206d9d221723f078bc2b3d741794a",
+      "source_repository": "Generous-Corp/pulp"
+    },
+    {
+      "class": "build",
+      "deadline": "2026-08-20T21:00:00Z",
+      "direction": "Pulp-to-framework",
+      "disposition": "superseded",
+      "event_id": "pulp-d9b558f3510c82e10d2239e72e5a2705e56ed27f",
+      "mapped_contracts": [
+        "retained-ui-kernel"
+      ],
+      "source_commit": "d9b558f3510c82e10d2239e72e5a2705e56ed27f",
+      "source_repository": "Generous-Corp/pulp"
     }
   ],
-  "generated_at": "2026-08-12T15:13:00Z",
+  "generated_at": "2026-08-13T22:00:00Z",
   "health": "pass",
-  "maximum_pending_age_days": 2.082,
+  "maximum_pending_age_days": 0.0,
   "observatory_effort_percent": 0.0,
   "overdue": 0,
-  "pending": 4,
+  "pending": 0,
   "release_blockers": [],
   "repeated_generic_fixes": {
     "canvas-kernel": 2,

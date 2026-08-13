@@ -1,0 +1,40 @@
+{
+  "class": "importer",
+  "contract_keys": [
+    "pulp-design-import-tooling"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer"
+  ],
+  "direction": "Pulp-to-framework",
+  "discovered_at": "2026-08-13T21:00:00Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "pulp-c4219fa137c206d9d221723f078bc2b3d741794a",
+  "include_dependency_deltas": [],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "pulp-design-import-tooling"
+  ],
+  "mapped_paths": [
+    "tools/import-design/browser_capture/settle.test.mjs"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "7053b5b843737943fcca74b05a5a3866672f1eff",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "34f879e1a71aec8a34cea13f62600586d0eb79a7",
+    "to_commit": "89e23939f040d06da30c5ae094052af4d2ce236c"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "c4219fa137c206d9d221723f078bc2b3d741794a",
+  "source_repository": "Generous-Corp/pulp",
+  "transitive_paths": []
+}
