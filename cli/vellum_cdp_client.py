@@ -20,6 +20,7 @@ from vellum_interaction import InteractionPlanError, validate_interaction_plan
 
 MAX_DISCOVERY_BYTES = 64 * 1024
 MAX_MESSAGE_BYTES = 8 * 1024 * 1024
+MAX_SCREENSHOT_BYTES = 16 * 1024 * 1024
 MAX_COMPUTED_STYLES = 128
 DEFAULT_TIMEOUT = 15.0
 ALLOWED_COMMANDS = {
@@ -35,6 +36,8 @@ ALLOWED_COMMANDS = {
     "Page.getLayoutMetrics",
     "Page.navigate",
     "DOMSnapshot.captureSnapshot",
+    "Emulation.setVirtualTimePolicy",
+    "Page.captureScreenshot",
 }
 
 
@@ -190,6 +193,59 @@ class CdpClient:
         if not all(isinstance(name, str) and 0 < len(name) <= 128 and "\0" not in name for name in computed_styles):
             raise CdpClientError("computed style names are malformed")
         return self.command("DOMSnapshot.captureSnapshot", {"computedStyles": computed_styles})
+
+    def settle_idle(
+        self, *, budget_ms: int = 1000, quiet_period: float = 0.25,
+        timeout: float = 20.0,
+    ) -> dict[str, Any]:
+        """Advance bounded virtual time and wait for a stable DOM snapshot."""
+        if not isinstance(budget_ms, int) or isinstance(budget_ms, bool) or not 1 <= budget_ms <= 10000:
+            raise CdpClientError("virtual-time budget is outside the bounded range")
+        if quiet_period <= 0 or quiet_period > 5 or timeout <= 0 or timeout > 120:
+            raise CdpClientError("idle settling bounds are invalid")
+        self.command("Page.enable")
+        self.command("Emulation.setVirtualTimePolicy", {
+            "policy": "pauseIfNetworkFetchesPending",
+            "budget": budget_ms,
+            "maxVirtualTimeTaskStarvationCount": 1000,
+            "waitForNavigation": True,
+        })
+        deadline = time.monotonic() + timeout
+        previous_digest: str | None = None
+        stable_since: float | None = None
+        snapshot: dict[str, Any] = {}
+        while time.monotonic() < deadline:
+            snapshot = self.capture_dom_snapshot(["display", "visibility", "color", "font-size"])
+            digest = hashlib.sha256(
+                json.dumps(snapshot, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
+            now = time.monotonic()
+            if digest == previous_digest:
+                if stable_since is None:
+                    stable_since = now
+                elif now - stable_since >= quiet_period:
+                    return snapshot
+            else:
+                previous_digest = digest
+                stable_since = now
+            time.sleep(0.05)
+        raise CdpClientError("browser DOM did not settle before the bounded timeout")
+
+    def capture_screenshot(self) -> dict[str, Any]:
+        """Capture one bounded PNG from the current browser surface."""
+        result = self.command("Page.captureScreenshot", {
+            "format": "png", "fromSurface": True, "captureBeyondViewport": False,
+        })
+        encoded = result.get("data")
+        if not isinstance(encoded, str) or not encoded:
+            raise CdpClientError("CDP screenshot response omitted PNG data")
+        try:
+            data = base64.b64decode(encoded, validate=True)
+        except (ValueError, base64.binascii.Error) as error:
+            raise CdpClientError("CDP screenshot data is not valid base64") from error
+        if len(data) > MAX_SCREENSHOT_BYTES or not data.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise CdpClientError("CDP screenshot is oversized or not a PNG")
+        return {"mimeType": "image/png", "data": encoded, "byteLength": len(data)}
 
     def wait_for_dom(self, timeout: float = 20.0) -> None:
         """Wait until the isolated page has a non-empty document tree."""

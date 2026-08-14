@@ -157,6 +157,28 @@ class CdpClientTests(unittest.TestCase):
         }  # type: ignore[method-assign]
         self.assertEqual(client.viewport(), {"width": 1280, "height": 720})
 
+    def test_screenshot_rejects_non_png_data(self) -> None:
+        client = object.__new__(CdpClient)
+        client.command = lambda method, params=None: {"data": "bm90LXB u".replace(" ", "")}  # type: ignore[method-assign]
+        with self.assertRaisesRegex(CdpClientError, "not a PNG"):
+            client.capture_screenshot()
+
+    def test_settle_idle_uses_virtual_time_and_returns_stable_snapshot(self) -> None:
+        client = object.__new__(CdpClient)
+        calls: list[str] = []
+
+        def command(method: str, params: dict[str, object] | None = None) -> dict[str, object]:
+            del params
+            calls.append(method)
+            if method == "DOMSnapshot.captureSnapshot":
+                return {"documents": [{"nodes": {"nodeName": ["HTML"]}}]}
+            return {}
+
+        client.command = command  # type: ignore[method-assign]
+        snapshot = client.settle_idle(quiet_period=0.05, timeout=1)
+        self.assertIn("documents", snapshot)
+        self.assertIn("Emulation.setVirtualTimePolicy", calls)
+
     def test_client_rejects_public_navigation_and_unbounded_styles(self) -> None:
         with CdpAdmission(str(self.socket_path)) as admission:
             client = CdpClient(admission.endpoint)

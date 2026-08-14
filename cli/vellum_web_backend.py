@@ -603,6 +603,8 @@ def run_chrome_interaction_capture(
                     )
                     client.wait_for_dom()
                     evidence = client.execute_interaction_plan(plan)
+                    settled_snapshot = client.settle_idle()
+                    screenshot = client.capture_screenshot()
                     viewport = client.viewport()
                     browser = discovery.get("Browser")
                     if not isinstance(browser, str) or not browser:
@@ -613,6 +615,8 @@ def run_chrome_interaction_capture(
                         "browserVersion": exact_browser_version,
                         "viewport": viewport,
                         "evidence": evidence,
+                        "settledSnapshot": settled_snapshot,
+                        "screenshot": screenshot,
                     }, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:32]
                     return {
                         "schema": "vellum.browser-capture-envelope.v1",
@@ -626,7 +630,11 @@ def run_chrome_interaction_capture(
                         "viewport": viewport,
                         "root": {
                             "kind": "view", "semanticId": "document", "name": "Browser document",
-                            "properties": {"captureEvidence": evidence}, "children": [],
+                            "properties": {
+                                "captureEvidence": evidence,
+                                "settledSnapshot": settled_snapshot,
+                                "screenshot": screenshot,
+                            }, "children": [],
                         },
                         "assets": [], "diagnostics": [],
                     }
