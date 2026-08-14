@@ -71,6 +71,8 @@ sources:
     channel: unavailable
   claude-design:
     channel: unavailable
+    preflight_contract: vellum.html-source-preflight.v1
+    note: "Claude producer fingerprinting is covered by HTML preflight; browser import and Claude sidecar lowering remain incomplete."
   react-project:
     channel: unavailable
   html:

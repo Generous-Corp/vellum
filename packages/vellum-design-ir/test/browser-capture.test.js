@@ -45,6 +45,25 @@ test('browser capture envelope rejects unknown fields and unbounded metadata', (
     }), /bounded arrays/);
 });
 
+test('browser capture envelope retains bounded HTML producer provenance', () => {
+    const base = envelope();
+    const document = lowerBrowserCaptureToDesignIR({
+        ...base,
+        source: {
+            ...base.source,
+            producer: 'claude-design',
+            fingerprint: 'claude-design-v1',
+            preflightSchema: 'vellum.html-source-preflight.v1',
+            dependencies: [{
+                path: 'app.js', kind: 'script', bytes: 12,
+                sha256: `sha256:${'b'.repeat(64)}`,
+            }],
+        },
+    });
+    assert.equal(document.source.provenance.producer, 'claude-design');
+    assert.equal(document.source.provenance.dependencies[0].path, 'app.js');
+});
+
 test('browser capture lowering retains localized asset metadata and evidence', () => {
     const document = lowerBrowserCaptureToDesignIR(envelope({
         assets: [{

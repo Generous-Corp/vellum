@@ -4,6 +4,8 @@ export const BROWSER_CAPTURE_ENVELOPE_SCHEMA = 'vellum.browser-capture-envelope.
 const MAX_CAPTURE_ID = 128;
 const MAX_URL = 4096;
 const MAX_DIAGNOSTICS = 256;
+const MAX_DEPENDENCIES = 2048;
+const SHA256_RE = /^sha256:[0-9a-f]{64}$/;
 
 function text(value, field, maximum) {
     if (typeof value !== 'string' || value.length === 0 || value.length > maximum || value.includes('\0')) {
@@ -21,6 +23,23 @@ function viewport(value) {
     return { width: value.width, height: value.height };
 }
 
+function dependencies(value) {
+    if (value === undefined) return undefined;
+    if (!Array.isArray(value) || value.length > MAX_DEPENDENCIES) {
+        throw new TypeError('capture.source.dependencies must be bounded');
+    }
+    return value.map((item, index) => {
+        if (!item || typeof item !== 'object' || Array.isArray(item) ||
+            typeof item.path !== 'string' || item.path.length === 0 || item.path.length > 1024 ||
+            typeof item.kind !== 'string' || item.kind.length === 0 || item.kind.length > 64 ||
+            !Number.isInteger(item.bytes) || item.bytes < 0 || item.bytes > 128 * 1024 * 1024 ||
+            typeof item.sha256 !== 'string' || !SHA256_RE.test(item.sha256)) {
+            throw new TypeError(`capture.source.dependencies[${index}] is malformed`);
+        }
+        return { path: item.path, kind: item.kind, bytes: item.bytes, sha256: item.sha256 };
+    });
+}
+
 /** Validate a browser capture envelope without reading files or using a clock. */
 export function validateBrowserCaptureEnvelope(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value) ||
@@ -31,7 +50,10 @@ export function validateBrowserCaptureEnvelope(value) {
     if (Object.keys(value).some((key) => !allowed.has(key))) throw new TypeError('capture envelope contains unknown fields');
     const source = value.source;
     if (!source || typeof source !== 'object' || Array.isArray(source) ||
-        Object.keys(source).some((key) => !new Set(['url', 'browser', 'browserVersion', 'plan']).has(key))) {
+        Object.keys(source).some((key) => !new Set([
+            'url', 'browser', 'browserVersion', 'plan', 'producer', 'fingerprint',
+            'preflightSchema', 'dependencies',
+        ]).has(key))) {
         throw new TypeError('capture.source is malformed');
     }
     const normalized = {
@@ -55,6 +77,11 @@ export function validateBrowserCaptureEnvelope(value) {
         throw new TypeError('capture assets and diagnostics must be bounded arrays');
     }
     if (source.plan !== undefined) normalized.source.plan = text(source.plan, 'capture.source.plan', 256);
+    for (const field of ['producer', 'fingerprint', 'preflightSchema']) {
+        if (source[field] !== undefined) normalized.source[field] = text(source[field], `capture.source.${field}`, 256);
+    }
+    const receipts = dependencies(source.dependencies);
+    if (receipts !== undefined) normalized.source.dependencies = receipts;
     return normalized;
 }
 
@@ -75,6 +102,10 @@ export function lowerBrowserCaptureToDesignIR(value) {
                 browserVersion: envelope.source.browserVersion,
                 viewport: envelope.viewport,
                 plan: envelope.source.plan ?? null,
+                producer: envelope.source.producer ?? null,
+                fingerprint: envelope.source.fingerprint ?? null,
+                preflightSchema: envelope.source.preflightSchema ?? null,
+                dependencies: envelope.source.dependencies ?? [],
             },
         },
         root: envelope.root,
