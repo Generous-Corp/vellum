@@ -1,0 +1,46 @@
+{
+  "class": "schema",
+  "contract_keys": [
+    "design-schema-compiler"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-08-14T02:56:55Z",
+  "disposition": "framework-only",
+  "effort_minutes": 0,
+  "event_id": "vellum-6b0cd5f3882cd6d715532eb5d3cec3d83f0e411e",
+  "include_dependency_deltas": [],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "design-schema-compiler"
+  ],
+  "mapped_paths": [
+    "packages/vellum-design-ir/src/browser-capture.js",
+    "packages/vellum-design-ir/src/index.js",
+    "packages/vellum-design-ir/test/browser-capture.test.js"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "618f86f16d1b26f01b4e8e04334e3b264fc23658",
+  "rationale": "Vellum-owned browser capture envelope and DesignIR lowering; no Pulp port or downstream consumption is authorized by this slice.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "71419280001d9a51f310874b42b64e2c2d06274e",
+    "to_commit": "6b0cd5f3882cd6d715532eb5d3cec3d83f0e411e"
+  },
+  "schema_api_deltas": [
+    "packages/vellum-design-ir/src/browser-capture.js",
+    "packages/vellum-design-ir/src/index.js",
+    "packages/vellum-design-ir/test/browser-capture.test.js"
+  ],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "6b0cd5f3882cd6d715532eb5d3cec3d83f0e411e",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}
