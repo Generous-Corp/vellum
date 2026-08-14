@@ -60,6 +60,31 @@ class ChromeDiscoveryTests(unittest.TestCase):
                     self.assertEqual(raised.exception.status, "prerequisite_missing")
                     self.assertIn("VELLUM_CHROME_PATH", str(raised.exception))
 
+    def test_strict_pinned_browser_requires_matching_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            browser = root / "Google Chrome for Testing"
+            browser.write_text("#!/bin/sh\nprintf 'Google Chrome 151.0.7922.47\\n'\n", encoding="utf-8")
+            browser.chmod(0o755)
+            record = root / "browser-provenance.json"
+            completed = subprocess.run([
+                sys.executable, str(REPO / "scripts/create_browser_provenance.py"),
+                "--browser", str(browser), "--requested-version", "151.0.7922.47",
+                "--source-action", "browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd",
+                "--output", str(record),
+            ], text=True, capture_output=True, check=False)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            with mock.patch.dict("os.environ", {
+                "VELLUM_CHROME_PATH": str(browser),
+                "VELLUM_CHROME_PROVENANCE": str(record),
+                "VELLUM_REQUIRE_CHROME_PROVENANCE": "1",
+            }, clear=False):
+                self.assertEqual(chrome_path(), str(browser))
+                browser.write_text("#!/bin/sh\nprintf 'Google Chrome 151.0.7922.48\\n'\n", encoding="utf-8")
+                browser.chmod(0o755)
+                with self.assertRaisesRegex(BackendFailure, "provenance"):
+                    chrome_path()
+
     def test_discovery_falls_back_when_no_browser_is_pinned(self) -> None:
         environment = {key: value for key, value in os.environ.items()
                        if key != "VELLUM_CHROME_PATH"}

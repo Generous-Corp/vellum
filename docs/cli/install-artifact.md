@@ -145,6 +145,26 @@ version or bytes do not match this record. Verification independently requires
 the executable, license, and record as one indivisible payload and recomputes
 the executable and license hashes.
 
+Web capture uses the same explicit provenance boundary. A pinned browser is
+not trusted merely because its path exists: the proof lane records its
+four-part version and executable SHA-256 in
+`vellum.browser-runtime-provenance.v1`, names the immutable
+`browser-actions/setup-chrome` action ref, and exports
+`VELLUM_CHROME_PROVENANCE`. When `VELLUM_REQUIRE_CHROME_PROVENANCE=1` is set,
+the web backend fails closed if the browser version or bytes differ from that
+record. Local development may use an unpinned system browser, but
+`vellum doctor --require-target web` reports that browser as unverified.
+
+Create a record after provisioning the exact browser:
+
+```sh
+python3 scripts/create_browser_provenance.py \
+  --browser /path/to/chrome \
+  --requested-version 151.0.7922.47 \
+  --source-action browser-actions/setup-chrome@<40-hex-ref> \
+  --output /tmp/browser-provenance.json
+```
+
 Create the record from a verified Node distribution before composing the SDK:
 
 ```sh

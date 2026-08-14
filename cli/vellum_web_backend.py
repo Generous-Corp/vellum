@@ -29,6 +29,7 @@ from vellum_scenario import (
     validate_scenario_document as validate_shared_scenario_document,
 )
 from vellum_cdp import CdpAdmission
+from vellum_browser import configured_provenance
 
 
 RESULT_SCHEMA = "vellum.backend.result.v1"
@@ -412,6 +413,13 @@ def chrome_path() -> str:
                 f"VELLUM_CHROME_PATH does not name an executable browser: {override}",
                 status="prerequisite_missing", exit_code=4,
             )
+        if os.environ.get("VELLUM_REQUIRE_CHROME_PROVENANCE") == "1":
+            valid, detail = configured_provenance(candidate)
+            if not valid:
+                raise BackendFailure(
+                    f"Pinned Chrome lacks valid provenance: {detail}",
+                    status="prerequisite_missing", exit_code=4,
+                )
         return str(candidate)
     chrome = shutil.which("google-chrome")
     application = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
@@ -419,6 +427,13 @@ def chrome_path() -> str:
         chrome = str(application)
     if not chrome:
         raise BackendFailure("Google Chrome is required for web scenarios", status="prerequisite_missing", exit_code=4)
+    if os.environ.get("VELLUM_REQUIRE_CHROME_PROVENANCE") == "1":
+        valid, detail = configured_provenance(Path(chrome))
+        if not valid:
+            raise BackendFailure(
+                f"Chrome lacks valid provenance: {detail}",
+                status="prerequisite_missing", exit_code=4,
+            )
     return chrome
 
 
