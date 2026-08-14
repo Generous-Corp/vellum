@@ -355,13 +355,23 @@ jobs:
           prefix="$RUNNER_TEMP/templates-smoke-sdk"
           project="$RUNNER_TEMP/html-import-proof"
           source="$GITHUB_WORKSPACE/fixtures/html-import/index.html"
-          "$prefix/bin/vellum" --json create "HTML Import Proof" \
-            --directory "$project" --no-verify \
-            > "$RUNNER_TEMP/html-import-create.json"
-          "$prefix/bin/vellum" --json import \
-            --project "$project" \
-            --source-type html "$source" --as main \
-            > "$RUNNER_TEMP/html-import.json"
+          run_json() {
+            local output="$1"
+            shift
+            if ! "$@" > "$output"; then
+              echo "installed SDK command failed: $*" >&2
+              echo "--- $output ---" >&2
+              cat "$output" >&2 || true
+              return 1
+            fi
+          }
+          run_json "$RUNNER_TEMP/html-import-create.json" \
+            "$prefix/bin/vellum" --json create "HTML Import Proof" \
+              --directory "$project" --no-verify
+          run_json "$RUNNER_TEMP/html-import.json" \
+            "$prefix/bin/vellum" --json import \
+              --project "$project" \
+              --source-type html "$source" --as main
           python3 - "$RUNNER_TEMP/html-import.json" "$project" <<'PY'
           import json
           import pathlib
@@ -381,13 +391,13 @@ jobs:
           if lock["sources"]["main"]["sourceArtifactKind"] != "html":
               raise SystemExit("HTML import lock lost html artifact identity")
           PY
-          "$prefix/bin/vellum" --json design check --project "$project" --as main \
-            > "$RUNNER_TEMP/html-import-design-check.json"
-          "$prefix/bin/vellum" --json build --project "$project" --target macos \
-            > "$RUNNER_TEMP/html-import-build.json"
-          "$prefix/bin/vellum" --json capture --project "$project" --target macos \
-            --scenario smoke --output "$RUNNER_TEMP/html-import-proof.png" \
-            > "$RUNNER_TEMP/html-import-capture.json"
+          run_json "$RUNNER_TEMP/html-import-design-check.json" \
+            "$prefix/bin/vellum" --json design check --project "$project" --as main
+          run_json "$RUNNER_TEMP/html-import-build.json" \
+            "$prefix/bin/vellum" --json build --project "$project" --target macos
+          run_json "$RUNNER_TEMP/html-import-capture.json" \
+            "$prefix/bin/vellum" --json capture --project "$project" --target macos \
+              --scenario smoke --output "$RUNNER_TEMP/html-import-proof.png"
           file "$RUNNER_TEMP/html-import-proof.png"
           shasum -a 256 "$RUNNER_TEMP/html-import-proof.png" \
             > "$RUNNER_TEMP/html-import-proof.png.sha256"
