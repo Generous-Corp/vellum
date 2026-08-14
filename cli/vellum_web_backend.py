@@ -28,6 +28,7 @@ from vellum_scenario import (
     ScenarioValidationError,
     validate_scenario_document as validate_shared_scenario_document,
 )
+from vellum_cdp import CdpAdmission
 
 
 RESULT_SCHEMA = "vellum.backend.result.v1"
@@ -504,25 +505,29 @@ def run_chrome_scenario(
     process_factory: Any = subprocess.Popen,
 ) -> None:
     with profile_factory(prefix="vellum-web-chrome-") as profile:
-        process = process_factory([
-            chrome or chrome_path(), "--headless=new", "--disable-gpu-sandbox",
-            "--no-first-run", "--disable-background-networking",
-            f"--user-data-dir={profile}", url,
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True,
-            start_new_session=os.name == "posix")
-        process_group = (
-            process.pid
-            if os.name == "posix" and isinstance(getattr(process, "pid", None), int)
-            else None
-        )
-        try:
-            if not received.wait(20):
-                raise BackendFailure(
-                    "Browser scenario proof timed out",
-                    status="test_failed",
-                )
-        finally:
-            stop_browser(process, process_group=process_group)
+        if Path(profile).is_dir():
+            os.chmod(profile, 0o700)
+        with CdpAdmission(str(Path(profile) / "vellum-cdp.sock")) as cdp:
+            process = process_factory([
+                chrome or chrome_path(), "--headless=new", "--disable-gpu-sandbox",
+                "--no-first-run", "--disable-background-networking",
+                *cdp.chrome_arguments(),
+                f"--user-data-dir={profile}", url,
+            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True,
+                start_new_session=os.name == "posix")
+            process_group = (
+                process.pid
+                if os.name == "posix" and isinstance(getattr(process, "pid", None), int)
+                else None
+            )
+            try:
+                if not received.wait(20):
+                    raise BackendFailure(
+                        "Browser scenario proof timed out",
+                        status="test_failed",
+                    )
+            finally:
+                stop_browser(process, process_group=process_group)
 
 
 def stop_browser(
