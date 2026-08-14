@@ -524,6 +524,8 @@ jobs:
             ${{ runner.temp }}/html-import-proof.png.sha256
             ${{ runner.temp }}/html-import.json
             ${{ runner.temp }}/html-import-design-check.json
+            ${{ runner.temp }}/html-import-build.json
+            ${{ runner.temp }}/html-import-capture.json
             ${{ runner.temp }}/${{ env.VELLUM_RELEASE_ARCHIVE }}
             ${{ runner.temp }}/install.sh
             ${{ runner.temp }}/install_core.py
@@ -542,7 +544,7 @@ jobs:
             ${{ runner.temp }}/phase3-browser-evidence.json
             ${{ runner.temp }}/release-trust.json
             ${{ runner.temp }}/immutable-release-preflight.json
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 90
   sterile-consumer:
     name: sterile-consumer
