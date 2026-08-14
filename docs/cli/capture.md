@@ -95,3 +95,9 @@ The launcher also disables the proxy and rejects non-loopback browser access.
 This is an admission boundary, not a claim that the current semantic scenario
 API exposes arbitrary CDP operations. Navigation, DOMSnapshot, computed-style,
 asset extraction, and bounded CDP interaction remain subsequent P4 work.
+
+The installed web lane also contains the bounded CDP client. It authenticates
+discovery and the WebSocket upgrade through the admission proxy, permits only
+navigation to numeric loopback HTTP(S) URLs and the snapshot command, and
+limits computed-style names and protocol messages. It intentionally does not
+expose arbitrary JavaScript evaluation or arbitrary CDP commands.
