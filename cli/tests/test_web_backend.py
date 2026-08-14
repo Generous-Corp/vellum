@@ -96,6 +96,21 @@ class ChromeDiscoveryTests(unittest.TestCase):
 
 
 class BrowserCaptureLoweringTests(unittest.TestCase):
+    def test_dom_snapshot_treats_absent_node_value_as_empty(self) -> None:
+        snapshot = {
+            "strings": ["#document", "HTML"],
+            "documents": [{
+                "nodes": {
+                    "nodeType": [9, 1], "nodeName": [0, 1], "nodeValue": [-1, -1],
+                    "parentIndex": [-1, 0], "attributes": [[], []],
+                },
+            }],
+        }
+        root, _assets, _evidence = lower_dom_snapshot(
+            snapshot, settled_snapshot=snapshot, screenshot={},
+        )
+        self.assertEqual(root["name"], "#document")
+
     def test_dom_snapshot_lowers_nodes_and_localizes_data_url_assets(self) -> None:
         payload = b"capture-asset"
         encoded = base64.b64encode(payload).decode("ascii")

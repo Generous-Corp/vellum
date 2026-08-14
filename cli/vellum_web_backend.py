@@ -639,6 +639,10 @@ def _snapshot_node_value(snapshot: dict[str, Any], nodes: dict[str, Any], key: s
     if not isinstance(values, list) or index >= len(values):
         return ""
     value = values[index]
+    # Chrome uses -1 as the compact DOMSnapshot sentinel for an absent
+    # nodeName/nodeValue string. It is not a string-table index.
+    if value == -1:
+        return ""
     return _snapshot_string(snapshot, value, f"{key}[{index}]") if value is not None else ""
 
 
@@ -831,23 +835,24 @@ def run_chrome_interaction_capture(
         with profile_factory(prefix="vellum-web-capture-") as profile:
             if Path(profile).is_dir():
                 os.chmod(profile, 0o700)
-            with CdpAdmission(str(Path(profile) / "vellum-cdp.sock")) as admission:
-                process = process_factory([
-                    browser_executable, "--headless=new", "--disable-gpu-sandbox",
-                    "--no-first-run", "--disable-background-networking",
-                    *admission.chrome_arguments(),
-                    "--window-size=1280,720",
-                    f"--user-data-dir={profile}",
-                    f"http://127.0.0.1:{server.server_port}/{quote(entry_name, safe='/')}",
-                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True,
-                    start_new_session=os.name == "posix")
-                process_group = (
-                    process.pid if os.name == "posix" and isinstance(getattr(process, "pid", None), int)
-                    else None
-                )
-                client: CdpClient | None = None
-                discovery: dict[str, Any] = {}
-                try:
+            process = process_factory([
+                browser_executable, "--headless=new", "--disable-gpu-sandbox",
+                "--no-first-run", "--disable-background-networking",
+                *CdpAdmission.chrome_launch_arguments(),
+                "--window-size=1280,720",
+                f"--user-data-dir={profile}",
+                f"http://127.0.0.1:{server.server_port}/{quote(entry_name, safe='/')}",
+            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True,
+                start_new_session=os.name == "posix")
+            process_group = (
+                process.pid if os.name == "posix" and isinstance(getattr(process, "pid", None), int)
+                else None
+            )
+            client: CdpClient | None = None
+            discovery: dict[str, Any] = {}
+            try:
+                port = CdpAdmission.wait_for_desktop_port(profile)
+                with CdpAdmission(("127.0.0.1", port)) as admission:
                     deadline = time.monotonic() + 20.0
                     last_error: Exception | None = None
                     while time.monotonic() < deadline:
@@ -909,10 +914,10 @@ def run_chrome_interaction_capture(
                         "root": root,
                         "assets": assets, "diagnostics": [],
                     }
-                finally:
-                    if client is not None:
-                        client.close()
-                    stop_browser(process, process_group=process_group)
+            finally:
+                if client is not None:
+                    client.close()
+                stop_browser(process, process_group=process_group)
     finally:
         server.shutdown()
         thread.join(5)

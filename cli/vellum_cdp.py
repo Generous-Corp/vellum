@@ -19,6 +19,7 @@ import select
 import socket
 import socketserver
 import threading
+import time
 from urllib.parse import urlsplit
 
 
@@ -90,26 +91,36 @@ class _ThreadingServer(socketserver.ThreadingTCPServer):
 
 
 class CdpAdmission:
-    """A short-lived authenticated proxy in front of a private CDP socket."""
+    """A short-lived authenticated proxy in front of a loopback CDP endpoint."""
 
     _server: _ThreadingServer | None
     _thread: threading.Thread | None
 
     def __init__(
         self,
-        upstream_socket: str | os.PathLike[str],
+        upstream: str | os.PathLike[str] | tuple[str, int],
         *,
         token: str | None = None,
         idle_timeout: float = DEFAULT_IDLE_TIMEOUT,
     ) -> None:
-        self.upstream_socket = Path(upstream_socket).expanduser()
-        if not self.upstream_socket.is_absolute():
-            raise CdpAdmissionError("CDP upstream socket must be an absolute Unix path")
-        if len(str(self.upstream_socket).encode()) >= 104:
-            raise CdpAdmissionError("CDP upstream socket path is too long")
-        parent = self.upstream_socket.parent
-        if parent.exists() and os.stat(parent).st_mode & 0o077:
-            raise CdpAdmissionError("CDP upstream socket parent must not be group/world accessible")
+        self.upstream_socket: Path | None = None
+        self.upstream_address: tuple[str, int] | None = None
+        if isinstance(upstream, tuple):
+            host, port = upstream
+            if host != "127.0.0.1":
+                raise CdpAdmissionError("CDP TCP upstream must be loopback-only")
+            if isinstance(port, bool) or not isinstance(port, int) or not 0 < port <= 65535:
+                raise CdpAdmissionError("CDP TCP upstream port is outside the valid range")
+            self.upstream_address = (host, port)
+        else:
+            self.upstream_socket = Path(upstream).expanduser()
+            if not self.upstream_socket.is_absolute():
+                raise CdpAdmissionError("CDP upstream socket must be an absolute Unix path")
+            if len(str(self.upstream_socket).encode()) >= 104:
+                raise CdpAdmissionError("CDP upstream socket path is too long")
+            parent = self.upstream_socket.parent
+            if parent.exists() and os.stat(parent).st_mode & 0o077:
+                raise CdpAdmissionError("CDP upstream socket parent must not be group/world accessible")
         if idle_timeout <= 0 or idle_timeout > 300:
             raise CdpAdmissionError("CDP idle timeout is outside the bounded range")
         if token is not None and (len(token) < 32 or any(c.isspace() for c in token)):
@@ -127,12 +138,52 @@ class CdpAdmission:
         return CdpEndpoint(SCHEMA, host, port, self._token)
 
     def chrome_arguments(self) -> list[str]:
-        """Arguments that keep Chromium CDP behind a private Unix socket."""
+        """Arguments for a Chromium build that supports Unix CDP sockets."""
+        if self.upstream_socket is None:
+            raise CdpAdmissionError("TCP-backed admission has no Unix socket argument")
         return [
             f"--remote-debugging-socket-name={self.upstream_socket}",
             "--no-proxy-server",
             "--host-resolver-rules=MAP * ~NOTFOUND,EXCLUDE localhost,EXCLUDE 127.0.0.1",
         ]
+
+    @staticmethod
+    def chrome_launch_arguments() -> list[str]:
+        """Launch arguments for desktop Chromium's loopback DevTools server.
+
+        Chromium implements ``remote-debugging-socket-name`` only in its
+        Android path. Desktop macOS/Linux builds use TCP, so request an
+        ephemeral loopback port and put the authenticated admission proxy in
+        front of it once Chromium publishes ``DevToolsActivePort``.
+        """
+        return [
+            "--remote-debugging-port=0",
+            "--remote-debugging-address=127.0.0.1",
+            "--no-proxy-server",
+            "--host-resolver-rules=MAP * ~NOTFOUND,EXCLUDE localhost,EXCLUDE 127.0.0.1",
+        ]
+
+    @staticmethod
+    def wait_for_desktop_port(profile: str | os.PathLike[str], *, timeout: float = 20.0) -> int:
+        """Read Chromium's bounded ephemeral loopback port publication."""
+        if timeout <= 0 or timeout > 120:
+            raise CdpAdmissionError("CDP startup timeout is outside the bounded range")
+        marker = Path(profile) / "DevToolsActivePort"
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                lines = marker.read_text(encoding="utf-8").splitlines()
+            except (FileNotFoundError, PermissionError, OSError):
+                lines = []
+            if lines:
+                try:
+                    port = int(lines[0])
+                except ValueError:
+                    port = 0
+                if 0 < port <= 65535:
+                    return port
+            time.sleep(0.05)
+        raise CdpAdmissionError("Chromium did not publish a bounded loopback CDP port")
 
     def __enter__(self) -> "CdpAdmission":
         if self._server is not None:
@@ -182,9 +233,13 @@ class CdpAdmission:
                 return
             # Forward the original request verbatim; CDP WebSocket upgrades
             # rely on the Upgrade/Connection headers surviving unchanged.
-            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as upstream:
+            if self.upstream_address is not None:
+                upstream = socket.create_connection(self.upstream_address, timeout=self.idle_timeout)
+            else:
+                upstream = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
                 upstream.settimeout(self.idle_timeout)
                 upstream.connect(str(self.upstream_socket))
+            with upstream:
                 upstream.settimeout(self.idle_timeout)
                 upstream.sendall(bytes(request))
                 self._relay(client, upstream)
