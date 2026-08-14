@@ -174,3 +174,20 @@ unchanged-reimport path), and exercises the rejected-conflict path.
 `cli/tests/test_pulp_zip.py` executes the installed dispatcher journey and the
 archive security matrix, including mutation and immutable-snapshot negative
 controls.
+
+### Agent HTML and Claude preflight
+
+Phase 5A-P.5 now owns a dependency-free admission boundary for future HTML and
+Claude Design imports. `cli/vellum_html_source.py` fingerprints a local `.html`
+or `.htm` entrypoint as either `generic-html-v1` or `claude-design-v1`, records
+producer markers, and discovers only local relative script, stylesheet, image,
+font, and resource references. Remote, `data:`, and `blob:` URLs are never
+copied. Traversal, backslash, missing-file, symlink, size, count, and total-tree
+violations fail closed. `stage_html_source` copies the entrypoint and the
+discovered files into a fresh contained directory and returns content-addressed
+dependency receipts.
+
+This is intentionally a preflight contract, not a claim that the public import
+route is complete: the `html` and `claude-design` rows remain unavailable until
+the staged tree is executed by isolated Chromium and lowered through the same
+capture envelope, DesignIR/assets, and Skia/Dawn proof.
