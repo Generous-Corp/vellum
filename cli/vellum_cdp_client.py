@@ -9,6 +9,7 @@ import json
 import secrets
 import socket
 import struct
+import time
 from typing import Any
 from urllib.parse import urlsplit
 from urllib.request import Request, build_opener, ProxyHandler, urlopen
@@ -163,6 +164,20 @@ class CdpClient:
             raise CdpClientError("computed style names are malformed")
         return self.command("DOMSnapshot.captureSnapshot", {"computedStyles": computed_styles})
 
+    def wait_for_dom(self, timeout: float = 20.0) -> None:
+        """Wait until the isolated page has a non-empty document tree."""
+        if timeout <= 0 or timeout > 120:
+            raise CdpClientError("DOM readiness timeout is outside the bounded range")
+        deadline = time.monotonic() + timeout
+        self.command("DOM.enable")
+        while time.monotonic() < deadline:
+            document = self.command("DOM.getDocument", {"depth": 0, "pierce": False})
+            root = document.get("root")
+            if isinstance(root, dict) and root.get("childNodeCount", 0) > 0:
+                return
+            time.sleep(0.05)
+        raise CdpClientError("browser DOM did not become ready before the bounded timeout")
+
     @staticmethod
     def _node_id(value: object, label: str = "DOM node") -> int:
         if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
@@ -211,6 +226,7 @@ class CdpClient:
             action = step["action"]
             if action == "navigate":
                 value = self.navigate(step["url"])
+                self.wait_for_dom()
             elif action == "click":
                 value = self.click_target(step["target"]); value = {"target": step["target"]}
             elif action == "focus":

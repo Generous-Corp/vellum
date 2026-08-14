@@ -120,6 +120,27 @@ class CdpClientTests(unittest.TestCase):
             finally:
                 client.close()
 
+    def test_wait_for_dom_is_bounded_and_retries_until_document_is_ready(self) -> None:
+        client = object.__new__(CdpClient)
+        responses = iter(({}, {"root": {"childNodeCount": 1}}))
+        calls: list[str] = []
+
+        def command(method: str, params: dict[str, object] | None = None) -> dict[str, object]:
+            del params
+            calls.append(method)
+            if method == "DOM.getDocument":
+                return next(responses)
+            return {}
+
+        client.command = command  # type: ignore[method-assign]
+        client.wait_for_dom(timeout=1)
+        self.assertEqual(calls, ["DOM.enable", "DOM.getDocument", "DOM.getDocument"])
+
+    def test_wait_for_dom_rejects_unbounded_timeout(self) -> None:
+        client = object.__new__(CdpClient)
+        with self.assertRaises(CdpClientError):
+            client.wait_for_dom(timeout=121)
+
     def test_client_rejects_public_navigation_and_unbounded_styles(self) -> None:
         with CdpAdmission(str(self.socket_path)) as admission:
             client = CdpClient(admission.endpoint)
