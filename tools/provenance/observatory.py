@@ -602,6 +602,25 @@ def verify_append_only(
                     raise ObservatoryError(
                         f"cannot verify cursor.{source} monotonicity without its source repository"
                     )
+                if len(parents) == 2:
+                    # A merge may retain the cursor from either parent. Source
+                    # histories can diverge while the repository tree merges;
+                    # require the selected cursor to descend from at least one
+                    # parent rather than incorrectly requiring both branches.
+                    parent_cursors: list[str] = []
+                    for merge_parent in parents:
+                        try:
+                            value = json.loads(
+                                git(root, "show", f"{merge_parent}:{CURSOR_PATH.as_posix()}")
+                            )
+                            parent_cursors.append(str(value[source]["last_scanned_commit"]))
+                        except (ObservatoryError, KeyError, TypeError, json.JSONDecodeError):
+                            parent_cursors = []
+                            break
+                    if parent_cursors:
+                        require_commit(repo, after, f"cursor.{source}.last_scanned_commit")
+                        if any(is_ancestor(repo, candidate, after) for candidate in parent_cursors):
+                            continue
                 require_ancestor(
                     repo,
                     before,

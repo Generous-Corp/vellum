@@ -388,6 +388,54 @@ class ObservatoryTests(unittest.TestCase):
                     pulp_repo=pulp,
                 )
 
+    def test_merge_cursor_may_follow_either_reconciled_parent(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            top = Path(temporary)
+            source = top / "source"
+            _, source_initial = init_repo(source, "unmapped/source.cpp")
+            run(source, "git", "checkout", "-b", "source-feature")
+            write(source / "unmapped/source.cpp", "int value = 3;\n")
+            source_feature = commit_all(source, "feature source scan")
+            run(source, "git", "checkout", "main")
+            write(source / "unmapped/source.cpp", "int value = 4;\n")
+            source_main = commit_all(source, "main source scan")
+
+            root = top / "observatory"
+            root.mkdir()
+            run(root, "git", "init", "-b", "main")
+            run(root, "git", "config", "user.email", "observatory@example.invalid")
+            run(root, "git", "config", "user.name", "Observatory Test")
+            cursor = {
+                "pulp": {"last_scanned_commit": source_initial},
+                "vellum": {"last_scanned_commit": source_initial},
+            }
+            write_json(root / observatory.CURSOR_PATH, cursor)
+            base = commit_all(root, "base cursor")
+
+            run(root, "git", "checkout", "-b", "feature")
+            cursor["vellum"]["last_scanned_commit"] = source_feature
+            write_json(root / observatory.CURSOR_PATH, cursor)
+            commit_all(root, "feature cursor")
+
+            run(root, "git", "checkout", "main")
+            cursor["vellum"]["last_scanned_commit"] = source_main
+            write_json(root / observatory.CURSOR_PATH, cursor)
+            commit_all(root, "main cursor")
+
+            subprocess.run(
+                ["git", "merge", "--no-ff", "feature", "-m", "merge reconciled branches"],
+                cwd=root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            cursor["vellum"]["last_scanned_commit"] = source_feature
+            write_json(root / observatory.CURSOR_PATH, cursor)
+            run(root, "git", "add", ".")
+            run(root, "git", "commit", "-m", "resolve merge cursor from feature parent")
+
+            observatory.verify_append_only(root, base, vellum_repo=source)
+
     def test_authority_record_is_rejected_as_an_ordinary_tail_but_start_passes(
         self,
     ) -> None:
