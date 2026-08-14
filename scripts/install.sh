@@ -151,6 +151,7 @@ copy_payload() {
   cp "$payload/vellum_cdp.py" "$library/vellum_cdp.py"
   cp "$payload/vellum_cdp_client.py" "$library/vellum_cdp_client.py"
   cp "$payload/vellum_browser.py" "$library/vellum_browser.py"
+  cp "$payload/vellum_interaction.py" "$library/vellum_interaction.py"
   cp "$payload/metadata.json" "$library/metadata.json"
   cp "$payload/install-manifest.json" "$library/install-manifest.json"
   rm -rf "$library/.agents"
@@ -279,6 +280,7 @@ if [ -n "$local_root" ]; then
     [ -f "$local_root/cli/vellum_cdp.py" ] && \
     [ -f "$local_root/cli/vellum_cdp_client.py" ] && \
     [ -f "$local_root/cli/vellum_browser.py" ] && \
+    [ -f "$local_root/cli/vellum_interaction.py" ] && \
     [ -f "$local_root/.agents/skills/vellum-app-authoring/SKILL.md" ] && \
     [ -f "$local_root/.agents/skills/vellum-app-authoring/manifest.v1.json" ] && \
     [ -d "$local_root/templates/basic" ] && [ -d "$local_root/packages/vellum-design-ir" ] || {
@@ -308,6 +310,7 @@ if [ -n "$local_root" ]; then
   cp "$local_root/cli/vellum_cdp.py" "$temporary/vellum_cdp.py"
   cp "$local_root/cli/vellum_cdp_client.py" "$temporary/vellum_cdp_client.py"
   cp "$local_root/cli/vellum_browser.py" "$temporary/vellum_browser.py"
+  cp "$local_root/cli/vellum_interaction.py" "$temporary/vellum_interaction.py"
   mkdir -p "$temporary/.agents/skills"
   cp -R \
     "$local_root/.agents/skills/vellum-app-authoring" \
