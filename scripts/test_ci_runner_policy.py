@@ -36,17 +36,17 @@ EXPECTED_RUNNERS = {
         "privileged",
     ),
     "product-quality.yml": (
-        "ubuntu-latest",
+        "${{ fromJSON(vars.VELLUM_PR_SAFE_LINUX_RUNS_ON_JSON || '[\"ubuntu-latest\"]') }}",
         ("product-quality",),
         "local-eligible",
     ),
     "provenance.yml": (
-        "ubuntu-latest",
+        "${{ fromJSON(vars.VELLUM_PR_SAFE_LINUX_RUNS_ON_JSON || '[\"ubuntu-latest\"]') }}",
         ("forbidden-deps", "provenance-verify"),
         "local-eligible",
     ),
     "readme-quick-start.yml": (
-        "macos-15",
+        "${{ fromJSON(vars.VELLUM_PR_MACOS_RUNS_ON_JSON || '[\"macos-15\"]') }}",
         ("clean-release",),
         "local-eligible",
     ),
@@ -176,8 +176,18 @@ class RunnerPolicyTests(unittest.TestCase):
                 with self.subTest(workflow=path.name, job=job_name):
                     self.assertEqual(runs_on_lines, [f"runs-on: {runner}"])
                     self.assertNotIn("self-hosted", runs_on_lines[0])
-                    self.assertNotIn("fromJSON", runs_on_lines[0])
-                    self.assertNotIn("vars.VELLUM_", runs_on_lines[0])
+                    if classification == "local-eligible":
+                        self.assertIn("fromJSON", runs_on_lines[0])
+                        self.assertIn("vars.VELLUM_", runs_on_lines[0])
+                        fallback = (
+                            "ubuntu-latest\"]"
+                            if path.name != "readme-quick-start.yml"
+                            else "macos-15\"]"
+                        )
+                        self.assertIn(fallback, runs_on_lines[0])
+                    else:
+                        self.assertNotIn("fromJSON", runs_on_lines[0])
+                        self.assertNotIn("vars.VELLUM_", runs_on_lines[0])
                     names = re.findall(r"^    name:\s*(.+?)\s*$", body, re.MULTILINE)
                     self.assertLessEqual(len(names), 1)
                     effective_name = names[0] if names else job_name

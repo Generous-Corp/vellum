@@ -13,9 +13,7 @@ permissions:
 jobs:
   forbidden-deps:
     name: forbidden-deps
-    # Hosted is the fail-safe until the protected local admission contract is
-    # proven against the Vellum-only runner group.
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.VELLUM_PR_SAFE_LINUX_RUNS_ON_JSON || '["ubuntu-latest"]') }}
     steps:
       - name: Check out the exact source tree
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -36,13 +34,11 @@ jobs:
           name: vellum-forbidden-deps
           path: ${{ runner.temp }}/forbidden-deps-report.json
           if-no-files-found: error
-          retention-days: 90
+          retention-days: 7
 
   provenance-verify:
     name: provenance-verify
-    # Hosted is the fail-safe until the protected local admission contract is
-    # proven against the Vellum-only runner group.
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.VELLUM_PR_SAFE_LINUX_RUNS_ON_JSON || '["ubuntu-latest"]') }}
     env:
       VELLUM_TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       VELLUM_GIT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
@@ -300,4 +296,4 @@ jobs:
             ${{ runner.temp }}/authority-tag-trust.json
             ${{ runner.temp }}/observatory-health-report.json
           if-no-files-found: error
-          retention-days: 90
+          retention-days: 7

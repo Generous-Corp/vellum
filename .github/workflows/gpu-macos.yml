@@ -558,7 +558,7 @@ jobs:
             ${{ runner.temp }}/release-assets-draft-verification.json
             ${{ runner.temp }}/release-assets-published-verification.json
           if-no-files-found: error
-          retention-days: 90
+          retention-days: 14
 
   sterile-consumer:
     name: sterile-consumer
@@ -767,4 +767,4 @@ jobs:
             ${{ runner.temp }}/release-assets-published-verification.json
             ${{ runner.temp }}/release-published.json
           if-no-files-found: error
-          retention-days: 90
+          retention-days: 14
