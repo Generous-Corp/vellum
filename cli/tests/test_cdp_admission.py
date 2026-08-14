@@ -4,6 +4,7 @@ import http.client
 from pathlib import Path
 import socket
 import socketserver
+import tempfile
 import sys
 import threading
 import unittest
@@ -38,7 +39,10 @@ class _Handler(socketserver.StreamRequestHandler):
 
 class CdpAdmissionTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.upstream = _Upstream(("127.0.0.1", 0), _Handler)
+        self.temporary = tempfile.TemporaryDirectory()
+        self.socket_path = Path(self.temporary.name) / "upstream.sock"
+        self.upstream = socketserver.UnixStreamServer(str(self.socket_path), _Handler)
+        self.upstream.daemon_threads = True
         self.thread = threading.Thread(target=self.upstream.serve_forever, daemon=True)
         self.thread.start()
 
@@ -46,6 +50,8 @@ class CdpAdmissionTests(unittest.TestCase):
         self.upstream.shutdown()
         self.upstream.server_close()
         self.thread.join(2)
+        self.socket_path.unlink(missing_ok=True)
+        self.temporary.cleanup()
 
     def request(self, admission: CdpAdmission, *, token: str | None, path: str) -> tuple[int, bytes]:
         endpoint = admission.endpoint
@@ -58,7 +64,7 @@ class CdpAdmissionTests(unittest.TestCase):
         return response.status, body
 
     def test_loopback_proxy_requires_token_and_forwards_discovery(self) -> None:
-        with CdpAdmission(self.upstream.server_address[1]) as admission:
+        with CdpAdmission(str(self.socket_path)) as admission:
             endpoint = admission.endpoint
             self.assertEqual(endpoint.schema, "vellum.cdp-admission.v1")
             self.assertNotIn(endpoint.token, str(endpoint.public_metadata()))
@@ -69,7 +75,7 @@ class CdpAdmissionTests(unittest.TestCase):
             self.assertEqual((status, body), (200, b'{"Browser":"Chrome/151"}'))
 
     def test_proxy_rejects_non_cdp_paths_before_upstream(self) -> None:
-        with CdpAdmission(self.upstream.server_address[1]) as admission:
+        with CdpAdmission(str(self.socket_path)) as admission:
             status, _body = self.request(
                 admission, token=admission.endpoint.token, path="/../secret"
             )
@@ -77,17 +83,17 @@ class CdpAdmissionTests(unittest.TestCase):
 
     def test_upstream_and_timeout_inputs_are_bounded(self) -> None:
         with self.assertRaises(CdpAdmissionError):
-            CdpAdmission(9222, upstream_host="0.0.0.0")
+            CdpAdmission("relative.sock")
         with self.assertRaises(CdpAdmissionError):
-            CdpAdmission(9222, idle_timeout=301)
+            CdpAdmission(str(self.socket_path), idle_timeout=301)
         with self.assertRaises(CdpAdmissionError):
-            CdpAdmission(9222, token="short")
+            CdpAdmission(str(self.socket_path), token="short")
 
     def test_chrome_arguments_pin_network_and_cdp_to_loopback(self) -> None:
-        admission = CdpAdmission(9222)
+        admission = CdpAdmission(str(self.socket_path))
         arguments = admission.chrome_arguments()
-        self.assertIn("--remote-debugging-address=127.0.0.1", arguments)
-        self.assertIn("--remote-debugging-port=9222", arguments)
+        self.assertIn(f"--remote-debugging-socket-name={self.socket_path}", arguments)
+        self.assertFalse(any("remote-debugging-port" in argument for argument in arguments))
         self.assertIn("--no-proxy-server", arguments)
         self.assertTrue(any(argument.startswith("--host-resolver-rules=MAP * ~NOTFOUND")
                             for argument in arguments))

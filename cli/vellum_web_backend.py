@@ -13,7 +13,6 @@ from pathlib import Path
 import re
 import shutil
 import signal
-import socket
 import subprocess
 import sys
 import tarfile
@@ -506,10 +505,9 @@ def run_chrome_scenario(
     process_factory: Any = subprocess.Popen,
 ) -> None:
     with profile_factory(prefix="vellum-web-chrome-") as profile:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
-            reservation.bind(("127.0.0.1", 0))
-            cdp_port = reservation.getsockname()[1]
-        with CdpAdmission(cdp_port) as cdp:
+        if Path(profile).is_dir():
+            os.chmod(profile, 0o700)
+        with CdpAdmission(str(Path(profile) / "vellum-cdp.sock")) as cdp:
             process = process_factory([
                 chrome or chrome_path(), "--headless=new", "--disable-gpu-sandbox",
                 "--no-first-run", "--disable-background-networking",

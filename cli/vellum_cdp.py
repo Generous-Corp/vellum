@@ -12,7 +12,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hmac
-import ipaddress
+import os
+from pathlib import Path
 import secrets
 import select
 import socket
@@ -29,13 +30,6 @@ ALLOWED_DISCOVERY_PATHS = {"/json", "/json/version", "/json/list"}
 
 class CdpAdmissionError(ValueError):
     """Raised when a CDP admission request violates the capture contract."""
-
-
-def _loopback(host: str) -> bool:
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
 
 
 def _split_request(raw: bytes) -> tuple[str, str, dict[str, str], bytes]:
@@ -103,22 +97,23 @@ class CdpAdmission:
 
     def __init__(
         self,
-        upstream_port: int,
+        upstream_socket: str | os.PathLike[str],
         *,
-        upstream_host: str = "127.0.0.1",
         token: str | None = None,
         idle_timeout: float = DEFAULT_IDLE_TIMEOUT,
     ) -> None:
-        if not _loopback(upstream_host):
-            raise CdpAdmissionError("CDP upstream must be loopback")
-        if not 1 <= upstream_port <= 65535:
-            raise CdpAdmissionError("CDP upstream port is invalid")
+        self.upstream_socket = Path(upstream_socket).expanduser()
+        if not self.upstream_socket.is_absolute():
+            raise CdpAdmissionError("CDP upstream socket must be an absolute Unix path")
+        if len(str(self.upstream_socket).encode()) >= 104:
+            raise CdpAdmissionError("CDP upstream socket path is too long")
+        parent = self.upstream_socket.parent
+        if parent.exists() and os.stat(parent).st_mode & 0o077:
+            raise CdpAdmissionError("CDP upstream socket parent must not be group/world accessible")
         if idle_timeout <= 0 or idle_timeout > 300:
             raise CdpAdmissionError("CDP idle timeout is outside the bounded range")
         if token is not None and (len(token) < 32 or any(c.isspace() for c in token)):
             raise CdpAdmissionError("CDP token must be a non-whitespace value of at least 32 bytes")
-        self.upstream_host = upstream_host
-        self.upstream_port = upstream_port
         self._token = token or secrets.token_urlsafe(32)
         self.idle_timeout = idle_timeout
         self._server = None
@@ -132,10 +127,9 @@ class CdpAdmission:
         return CdpEndpoint(SCHEMA, host, port, self._token)
 
     def chrome_arguments(self) -> list[str]:
-        """Arguments that keep Chromium CDP and network access on loopback."""
+        """Arguments that keep Chromium CDP behind a private Unix socket."""
         return [
-            "--remote-debugging-address=127.0.0.1",
-            f"--remote-debugging-port={self.upstream_port}",
+            f"--remote-debugging-socket-name={self.upstream_socket}",
             "--no-proxy-server",
             "--host-resolver-rules=MAP * ~NOTFOUND,EXCLUDE localhost,EXCLUDE 127.0.0.1",
         ]
@@ -188,9 +182,9 @@ class CdpAdmission:
                 return
             # Forward the original request verbatim; CDP WebSocket upgrades
             # rely on the Upgrade/Connection headers surviving unchanged.
-            with socket.create_connection(
-                (self.upstream_host, self.upstream_port), timeout=self.idle_timeout
-            ) as upstream:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as upstream:
+                upstream.settimeout(self.idle_timeout)
+                upstream.connect(str(self.upstream_socket))
                 upstream.settimeout(self.idle_timeout)
                 upstream.sendall(bytes(request))
                 self._relay(client, upstream)
