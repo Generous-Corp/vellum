@@ -35,6 +35,20 @@ test('browser capture envelope lowers deterministically to canonical DesignIR', 
     assert.equal(first.root.children[0].text, 'Roadmap');
 });
 
+test('HTML capture lowering can retain the public source key and adapter', () => {
+    const document = lowerBrowserCaptureToDesignIR(envelope(), {
+        sourceKey: 'landing-page',
+        sourceType: 'html',
+        snapshotHash: `sha256:${'c'.repeat(64)}`,
+        sourceUri: 'file:index.html',
+    });
+    assert.equal(document.source.key, 'landing-page');
+    assert.equal(document.source.namespace, 'landing-page');
+    assert.equal(document.source.adapter, 'html');
+    assert.equal(document.source.snapshotHash, `sha256:${'c'.repeat(64)}`);
+    assert.equal(document.source.sourceUri, 'file:index.html');
+});
+
 test('browser capture envelope rejects unknown fields and unbounded metadata', () => {
     assert.throws(() => validateBrowserCaptureEnvelope({ ...envelope(), extra: true }), /unknown fields/);
     assert.throws(() => validateBrowserCaptureEnvelope({

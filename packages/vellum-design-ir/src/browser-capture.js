@@ -52,7 +52,7 @@ export function validateBrowserCaptureEnvelope(value) {
     if (!source || typeof source !== 'object' || Array.isArray(source) ||
         Object.keys(source).some((key) => !new Set([
             'url', 'browser', 'browserVersion', 'plan', 'producer', 'fingerprint',
-            'preflightSchema', 'dependencies',
+            'preflightSchema', 'dependencies', 'entry',
         ]).has(key))) {
         throw new TypeError('capture.source is malformed');
     }
@@ -77,7 +77,7 @@ export function validateBrowserCaptureEnvelope(value) {
         throw new TypeError('capture assets and diagnostics must be bounded arrays');
     }
     if (source.plan !== undefined) normalized.source.plan = text(source.plan, 'capture.source.plan', 256);
-    for (const field of ['producer', 'fingerprint', 'preflightSchema']) {
+    for (const field of ['producer', 'fingerprint', 'preflightSchema', 'entry']) {
         if (source[field] !== undefined) normalized.source[field] = text(source[field], `capture.source.${field}`, 256);
     }
     const receipts = dependencies(source.dependencies);
@@ -86,17 +86,30 @@ export function validateBrowserCaptureEnvelope(value) {
 }
 
 /** Lower a validated browser envelope through the canonical DesignIR path. */
-export function lowerBrowserCaptureToDesignIR(value) {
+export function lowerBrowserCaptureToDesignIR(value, options = {}) {
     const envelope = validateBrowserCaptureEnvelope(value);
+    const sourceKey = options.sourceKey ?? 'browser';
+    const sourceType = options.sourceType ?? 'vellum-browser-capture';
+    const snapshotHash = options.snapshotHash;
+    const sourceUri = options.sourceUri ?? envelope.source.url;
+    if (typeof sourceKey !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(sourceKey)) {
+        throw new TypeError('capture sourceKey must be lowercase kebab-case and at most 64 characters');
+    }
+    if (typeof sourceType !== 'string' || sourceType.length === 0 || sourceType.length > 128) {
+        throw new TypeError('capture sourceType must be a bounded non-empty string');
+    }
     return normalizeImport({
         source: {
-            key: 'browser',
-            namespace: 'browser',
-            adapter: 'vellum-browser-capture',
+            key: sourceKey,
+            namespace: sourceKey,
+            adapter: sourceType,
             adapterVersion: '1',
-            formatVersion: 'vellum.browser-capture-envelope.v1',
+            formatVersion: sourceType === 'vellum-browser-capture'
+                ? 'vellum.browser-capture-envelope.v1'
+                : `vellum.${sourceType}-browser-capture.v1`,
             revision: envelope.captureId,
-            sourceUri: envelope.source.url,
+            sourceUri,
+            ...(snapshotHash === undefined ? {} : { snapshotHash }),
             provenance: {
                 browser: envelope.source.browser,
                 browserVersion: envelope.source.browserVersion,

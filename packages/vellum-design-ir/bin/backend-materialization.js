@@ -14,6 +14,7 @@ export function generatedFiles(context) {
     const {
         applied,
         assets,
+        captureEnvelope,
         document,
         overlayCreated,
         overlayValue,
@@ -68,6 +69,9 @@ export function generatedFiles(context) {
                 project,
                 sourceArtifact.kind === 'pulp-zip' ? paths.snapshotArchive : paths.snapshotSource,
             ),
+            ...(captureEnvelope === undefined ? {} : {
+                captureEnvelope: relative(project, paths.snapshotCapture),
+            }),
             tokens: relative(project, paths.importedTokens),
             resolvedTokenLayers: relative(project, paths.resolvedTokenLayers),
         },
@@ -125,6 +129,7 @@ export function generatedFiles(context) {
         sourceName,
         sourceType,
     })));
+    if (captureEnvelope !== undefined) files.set(paths.snapshotCapture, captureEnvelope);
     if (overlayCreated) files.set(paths.overlay, jsonBytes(overlayValue));
     return files;
 }

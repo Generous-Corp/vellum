@@ -2,6 +2,7 @@ import { lstat, readFile } from 'node:fs/promises';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import {
     decodeFigmaPluginExport,
+    lowerBrowserCaptureToDesignIR,
     normalizeImport,
     normalizeSha256ContentHash,
     parseDesignIR,
@@ -20,8 +21,8 @@ const MAX_ASSET_COUNT = 10_000;
 const MAX_NODE_COUNT = 100_000;
 const MAX_TREE_DEPTH = 512;
 
-export async function loadSource(sourcePath, { sourceArchive, sourceKey, sourceType }) {
-    if (!['figma', 'design-ir'].includes(sourceType)) {
+export async function loadSource(sourcePath, { captureEnvelope, sourceArchive, sourceKey, sourceType }) {
+    if (!['figma', 'design-ir', 'html', 'claude-design'].includes(sourceType)) {
         fail('unsupported_source_type', `Unsupported source type '${sourceType}'`);
     }
     const file = resolve(sourcePath);
@@ -42,6 +43,60 @@ export async function loadSource(sourcePath, { sourceArchive, sourceKey, sourceT
         );
     }
     const archive = await loadStagedSourceArchive(sourceArchive, sourceType);
+    if (sourceType === 'html' || sourceType === 'claude-design') {
+        if (captureEnvelope === undefined) {
+            fail('capture_required', 'HTML imports require a browser capture envelope');
+        }
+        const envelopeFile = resolve(captureEnvelope);
+        const envelopeMetadata = await lstat(envelopeFile).catch(() => null);
+        if (!envelopeMetadata?.isFile() || envelopeMetadata.isSymbolicLink()) {
+            fail('invalid_capture', 'Browser capture envelope must be a regular file');
+        }
+        if (envelopeMetadata.size > MAX_SOURCE_BYTES) {
+            fail('capture_too_large', `Browser capture envelope exceeds ${MAX_SOURCE_BYTES} bytes`);
+        }
+        let envelope;
+        try {
+            envelope = JSON.parse((await readFile(envelopeFile)).toString('utf8'));
+        } catch (error) {
+            fail('invalid_capture', `Browser capture envelope is not valid JSON: ${error.message}`);
+        }
+        const sourceHash = `sha256:${sha256(sourceBytes)}`;
+        let document;
+        try {
+            document = lowerBrowserCaptureToDesignIR(envelope, {
+                sourceKey,
+                sourceType,
+                snapshotHash: sourceHash,
+                sourceUri: `file:${envelope.source?.entry ?? basename(file)}`,
+            });
+        } catch (error) {
+            fail('invalid_capture', `Browser capture envelope is invalid: ${error.message}`);
+        }
+        const revision = validateRevision(document.source.revision);
+        const captureSource = envelope.source ?? {};
+        const sourceArtifact = {
+            kind: sourceType === 'claude-design' ? 'claude-design-html' : 'html',
+            name: envelope.source?.entry ?? basename(file),
+            sha256: sourceHash,
+            captureId: envelope.captureId,
+            producer: captureSource.producer ?? null,
+            fingerprint: captureSource.fingerprint ?? null,
+            preflightSchema: captureSource.preflightSchema ?? null,
+            dependencies: captureSource.dependencies ?? [],
+        };
+        return {
+            archiveBytes: null,
+            backendDiagnostics: [],
+            captureBytes: await readFile(envelopeFile),
+            document,
+            revision,
+            sourceArtifact,
+            sourceBytes,
+            sourceHash,
+            sourceName: sourceArtifact.name,
+        };
+    }
     let input;
     try {
         input = JSON.parse(sourceBytes.toString('utf8'));

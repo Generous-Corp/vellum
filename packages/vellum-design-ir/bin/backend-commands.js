@@ -103,6 +103,9 @@ async function inspectGeneratedDesign(project, args, { failOnDrift }) {
         }
         : null;
     const loaded = await loadSource(paths.snapshotSource, {
+        captureEnvelope: lockedSource.sourceArtifactKind === 'html' || lockedSource.sourceArtifactKind === 'claude-design-html'
+            ? paths.snapshotCapture
+            : undefined,
         sourceArchive: archive,
         sourceKey,
         sourceType: lockedSource.adapter,
@@ -119,6 +122,7 @@ async function inspectGeneratedDesign(project, args, { failOnDrift }) {
     const expected = generatedFiles({
         applied,
         assets,
+        captureEnvelope: loaded.captureBytes,
         document: loaded.document,
         overlayCreated: false,
         overlayValue: overlay,
@@ -225,6 +229,7 @@ async function importDesign(project, args) {
     const sourceKey = requestedSourceKey(args);
     const sourceType = args['source-type'] ?? 'figma';
     const loaded = await loadSource(sourcePath, {
+        captureEnvelope: args['capture-envelope'],
         sourceArchive: sourceArchiveArguments(args),
         sourceKey,
         sourceType,
@@ -252,6 +257,7 @@ async function importDesign(project, args) {
     const files = generatedFiles({
         applied,
         assets,
+        captureEnvelope: loaded.captureBytes,
         document: loaded.document,
         overlayCreated: overlay.created,
         overlayValue: overlay.value,
@@ -265,6 +271,9 @@ async function importDesign(project, args) {
     });
     await assertImmutableSnapshot(paths.snapshotSource, loaded.sourceBytes);
     files.set(paths.snapshotSource, loaded.sourceBytes);
+    if (loaded.captureBytes !== undefined) {
+        await assertImmutableSnapshot(paths.snapshotCapture, loaded.captureBytes);
+    }
     if (loaded.archiveBytes) {
         await assertImmutableSnapshot(paths.snapshotArchive, loaded.archiveBytes);
         files.set(paths.snapshotArchive, loaded.archiveBytes);
@@ -297,6 +306,7 @@ async function reimportDesignFilesystem(project, args) {
     const lockedSource = importLock.sources?.[sourceKey];
     if (!lockedSource) fail('source_not_imported', `Source '${sourceKey}' has not been imported`);
     const loaded = await loadSource(sourcePath, {
+        captureEnvelope: args['capture-envelope'],
         sourceArchive: sourceArchiveArguments(args),
         sourceKey,
         sourceType: lockedSource.adapter,
@@ -323,6 +333,9 @@ async function reimportDesignFilesystem(project, args) {
     ) {
         const assets = await planAssets(sourcePath, loaded.document, paths);
         await assertImmutableSnapshot(paths.snapshotSource, loaded.sourceBytes);
+        if (loaded.captureBytes !== undefined) {
+            await assertImmutableSnapshot(paths.snapshotCapture, loaded.captureBytes);
+        }
         if (loaded.archiveBytes) {
             await assertImmutableSnapshot(paths.snapshotArchive, loaded.archiveBytes);
         }
@@ -343,6 +356,7 @@ async function reimportDesignFilesystem(project, args) {
         const generated = generatedFiles({
             applied,
             assets,
+            captureEnvelope: loaded.captureBytes,
             document: previous,
             overlayCreated: false,
             overlayValue: overlay,
@@ -405,6 +419,7 @@ async function reimportDesignFilesystem(project, args) {
         }))],
         [paths.reimportReport, jsonBytes(result.report)],
     ]);
+    if (loaded.captureBytes !== undefined) reviewFiles.set(paths.snapshotCapture, loaded.captureBytes);
     await assertImmutableSnapshot(
         paths.snapshotProvenance,
         reviewFiles.get(paths.snapshotProvenance),
@@ -444,6 +459,7 @@ async function reimportDesignFilesystem(project, args) {
             tokenLayers: result.tokenLayers,
         },
         assets,
+        captureEnvelope: loaded.captureBytes,
         document: loaded.document,
         overlayCreated: false,
         overlayValue: overlay,

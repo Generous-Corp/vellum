@@ -42,6 +42,7 @@ export function projectPaths(project, sourceKey, revision) {
         resolvedTokenLayers: join(project, 'tokens', 'generated', `${sourceKey}.layers.json`),
         snapshotAssets: snapshotRoot,
         snapshotArchive: join(snapshotRoot, 'source.pulp.zip'),
+        snapshotCapture: join(snapshotRoot, 'capture.json'),
         snapshotProvenance: join(snapshotRoot, 'provenance.json'),
         snapshotSource: join(snapshotRoot, 'source.json'),
         sourceIr: join(project, 'design', 'ir', 'sources', `${sourceKey}.designir.json`),

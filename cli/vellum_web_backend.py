@@ -816,7 +816,7 @@ def run_chrome_interaction_capture(
         if not isinstance(source_metadata, dict):
             raise BackendFailure("Capture source metadata must be an object", status="invalid_project")
         unknown_metadata = set(source_metadata) - {
-            "producer", "fingerprint", "preflightSchema", "dependencies",
+            "producer", "fingerprint", "preflightSchema", "dependencies", "entry",
         }
         if unknown_metadata:
             raise BackendFailure("Capture source metadata contains unknown fields", status="invalid_project")

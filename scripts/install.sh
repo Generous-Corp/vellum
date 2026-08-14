@@ -152,6 +152,11 @@ copy_payload() {
   cp "$payload/vellum_cdp_client.py" "$library/vellum_cdp_client.py"
   cp "$payload/vellum_browser.py" "$library/vellum_browser.py"
   cp "$payload/vellum_interaction.py" "$library/vellum_interaction.py"
+  if [ -f "$payload/vellum_html_source.py" ]; then
+    cp "$payload/vellum_html_source.py" "$library/vellum_html_source.py"
+  else
+    rm -f "$library/vellum_html_source.py"
+  fi
   cp "$payload/metadata.json" "$library/metadata.json"
   cp "$payload/install-manifest.json" "$library/install-manifest.json"
   rm -rf "$library/.agents"
@@ -310,7 +315,10 @@ if [ -n "$local_root" ]; then
   cp "$local_root/cli/vellum_cdp.py" "$temporary/vellum_cdp.py"
   cp "$local_root/cli/vellum_cdp_client.py" "$temporary/vellum_cdp_client.py"
   cp "$local_root/cli/vellum_browser.py" "$temporary/vellum_browser.py"
+  cp "$local_root/cli/vellum_scenario.py" "$temporary/vellum_scenario.py"
   cp "$local_root/cli/vellum_interaction.py" "$temporary/vellum_interaction.py"
+  cp "$local_root/cli/vellum_html_source.py" "$temporary/vellum_html_source.py"
+  cp "$local_root/cli/vellum_web_backend.py" "$temporary/vellum_web_backend.py"
   mkdir -p "$temporary/.agents/skills"
   cp -R \
     "$local_root/.agents/skills/vellum-app-authoring" \
