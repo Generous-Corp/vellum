@@ -9,6 +9,7 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "cli"))
 from vellum_html_source import (
     HTMLSourceError,
+    MAX_DEPENDENCY_BYTES,
     discover_dependencies,
     fingerprint_html,
     stage_html_source,
@@ -82,3 +83,47 @@ class HTMLSourceTests(unittest.TestCase):
                 self.skipTest("symbolic links unavailable")
             with self.assertRaises(HTMLSourceError):
                 discover_dependencies(safe_source, fingerprint_html(safe_source))
+
+    def test_css_relative_inline_and_srcset_dependencies_are_complete(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "css").mkdir()
+            (root / "assets").mkdir()
+            (root / "assets" / "css.svg").write_text("<svg css></svg>", encoding="utf-8")
+            (root / "assets" / "inline.svg").write_text("<svg inline></svg>", encoding="utf-8")
+            (root / "css" / "site.css").write_text(
+                "body { background: url('../assets/css.svg'); }", encoding="utf-8",
+            )
+            source = root / "index.html"
+            source.write_text(
+                '<link rel="stylesheet" href="css/site.css">'
+                '<style>.hero { background: url("assets/inline.svg"); }</style>'
+                '<img srcset="data:image/png;base64,AAAA 1x, assets/inline.svg 2x">',
+                encoding="utf-8",
+            )
+            paths = {item.path for item in discover_dependencies(source, fingerprint_html(source))}
+            self.assertEqual(paths, {"css/site.css", "assets/css.svg", "assets/inline.svg"})
+
+    def test_oversized_dependency_is_rejected_before_read(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            dependency = root / "huge.bin"
+            with dependency.open("wb") as handle:
+                handle.truncate(MAX_DEPENDENCY_BYTES + 1)
+            source = root / "index.html"
+            source.write_text('<img src="huge.bin">', encoding="utf-8")
+            with self.assertRaises(HTMLSourceError):
+                discover_dependencies(source, fingerprint_html(source))
+
+    def test_staging_rejects_a_symlink_entrypoint(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            real = root / "real.html"
+            real.write_text("<p>real</p>", encoding="utf-8")
+            link = root / "link.html"
+            try:
+                link.symlink_to(real)
+            except OSError:
+                self.skipTest("symbolic links unavailable")
+            with self.assertRaises(HTMLSourceError):
+                stage_html_source(link, root / "staged")
