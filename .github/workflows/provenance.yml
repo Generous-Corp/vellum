@@ -13,7 +13,9 @@ permissions:
 jobs:
   forbidden-deps:
     name: forbidden-deps
-    runs-on: ${{ fromJSON(vars.VELLUM_LINUX_RUNS_ON_JSON || '["self-hosted","Linux","ARM64","vellum-build-linux"]') }}
+    # Hosted is the fail-safe until the protected local admission contract is
+    # proven against the Vellum-only runner group.
+    runs-on: ubuntu-latest
     steps:
       - name: Check out the exact source tree
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -38,7 +40,9 @@ jobs:
 
   provenance-verify:
     name: provenance-verify
-    runs-on: ${{ fromJSON(vars.VELLUM_LINUX_RUNS_ON_JSON || '["self-hosted","Linux","ARM64","vellum-build-linux"]') }}
+    # Hosted is the fail-safe until the protected local admission contract is
+    # proven against the Vellum-only runner group.
+    runs-on: ubuntu-latest
     env:
       VELLUM_TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       VELLUM_GIT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
