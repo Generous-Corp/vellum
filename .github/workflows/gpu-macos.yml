@@ -370,8 +370,8 @@ jobs:
               --directory "$project" --no-verify
           run_json "$RUNNER_TEMP/html-import.json" \
             "$prefix/bin/vellum" --json import \
-              --project "$project" \
-              --source-type html "$source" --as main
+              "$source" --project "$project" \
+              --source-type html --as main
           python3 - "$RUNNER_TEMP/html-import.json" "$project" <<'PY'
           import json
           import pathlib
