@@ -8,6 +8,7 @@ import socket
 import socketserver
 import struct
 import sys
+import tempfile
 import threading
 import unittest
 
@@ -43,11 +44,6 @@ def _send_server_frame(connection: socket.socket, payload: bytes) -> None:
     connection.sendall(bytes([0x81, len(payload)]) + payload)
 
 
-class _FakeCdpServer(socketserver.ThreadingTCPServer):
-    allow_reuse_address = True
-    daemon_threads = True
-
-
 class _FakeCdpHandler(socketserver.BaseRequestHandler):
     def handle(self) -> None:
         headers = _read_headers(self.request)
@@ -57,8 +53,7 @@ class _FakeCdpHandler(socketserver.BaseRequestHandler):
             body = json.dumps({
                 "Browser": "Chrome/151",
                 "webSocketDebuggerUrl": (
-                    f"ws://127.0.0.1:{self.server.server_address[1]}"
-                    "/devtools/browser/test"
+                    "ws://127.0.0.1:0/devtools/browser/test"
                 ),
             }, separators=(",", ":")).encode()
             self.request.sendall(
@@ -98,7 +93,10 @@ class _FakeCdpHandler(socketserver.BaseRequestHandler):
 
 class CdpClientTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.server = _FakeCdpServer(("127.0.0.1", 0), _FakeCdpHandler)
+        self.temporary = tempfile.TemporaryDirectory()
+        self.socket_path = Path(self.temporary.name) / "upstream.sock"
+        self.server = socketserver.UnixStreamServer(str(self.socket_path), _FakeCdpHandler)
+        self.server.daemon_threads = True
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
 
@@ -106,18 +104,24 @@ class CdpClientTests(unittest.TestCase):
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(2)
+        self.socket_path.unlink(missing_ok=True)
+        self.temporary.cleanup()
 
     def test_authenticated_discovery_navigation_and_snapshot(self) -> None:
-        with CdpAdmission(self.server.server_address[1]) as admission:
-            with CdpClient(admission.endpoint) as client:
-                discovery = client.discover()
-                self.assertEqual(discovery["Browser"], "Chrome/151")
+        with CdpAdmission(str(self.socket_path)) as admission:
+            client = CdpClient(admission.endpoint)
+            discovery = client.discover()
+            self.assertEqual(discovery["Browser"], "Chrome/151")
+            client.connect()
+            try:
                 self.assertEqual(client.navigate("http://127.0.0.1:8000/"), {"frameId": "frame-1"})
                 snapshot = client.capture_dom_snapshot(["color"])
                 self.assertIn("documents", snapshot)
+            finally:
+                client.close()
 
     def test_client_rejects_public_navigation_and_unbounded_styles(self) -> None:
-        with CdpAdmission(self.server.server_address[1]) as admission:
+        with CdpAdmission(str(self.socket_path)) as admission:
             client = CdpClient(admission.endpoint)
             with self.assertRaises(CdpClientError):
                 client.navigate("https://example.com/")
@@ -127,7 +131,7 @@ class CdpClientTests(unittest.TestCase):
                 client.capture_dom_snapshot(["color"] * 129)
 
     def test_client_rejects_unapproved_commands_and_timeout(self) -> None:
-        with CdpAdmission(self.server.server_address[1]) as admission:
+        with CdpAdmission(str(self.socket_path)) as admission:
             client = CdpClient(admission.endpoint)
             with self.assertRaises(CdpClientError):
                 client.command("Runtime.evaluate")
