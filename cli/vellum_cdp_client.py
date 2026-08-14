@@ -84,6 +84,7 @@ class CdpClient:
         self.timeout = timeout
         self._socket: socket.socket | None = None
         self._next_id = 0
+        self._events: list[dict[str, Any]] = []
 
     def __enter__(self) -> "CdpClient":
         self.connect()
@@ -211,6 +212,7 @@ class CdpClient:
             "waitForNavigation": True,
         })
         deadline = time.monotonic() + timeout
+        self._wait_for_event("Emulation.virtualTimeBudgetExpired", deadline)
         previous_digest: str | None = None
         stable_since: float | None = None
         snapshot: dict[str, Any] = {}
@@ -230,6 +232,16 @@ class CdpClient:
                 stable_since = now
             time.sleep(0.05)
         raise CdpClientError("browser DOM did not settle before the bounded timeout")
+
+    def _wait_for_event(self, method: str, deadline: float) -> None:
+        while time.monotonic() < deadline:
+            for index, event in enumerate(self._events):
+                if event.get("method") == method:
+                    del self._events[index]
+                    return
+            self.command("Page.getLayoutMetrics")
+            time.sleep(0.05)
+        raise CdpClientError(f"CDP event {method} was not observed before the bounded timeout")
 
     def capture_screenshot(self) -> dict[str, Any]:
         """Capture one bounded PNG from the current browser surface."""
@@ -346,6 +358,11 @@ class CdpClient:
                 continue
             response = _bounded_json(data, label="command response", limit=MAX_MESSAGE_BYTES)
             if response.get("id") != command_id:
+                event_method = response.get("method")
+                if isinstance(event_method, str):
+                    if len(self._events) >= 128:
+                        del self._events[0]
+                    self._events.append(response)
                 continue
             if "error" in response:
                 raise CdpClientError(f"CDP command failed: {response['error']}")

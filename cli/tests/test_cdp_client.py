@@ -165,6 +165,7 @@ class CdpClientTests(unittest.TestCase):
 
     def test_settle_idle_uses_virtual_time_and_returns_stable_snapshot(self) -> None:
         client = object.__new__(CdpClient)
+        client._events = [{"method": "Emulation.virtualTimeBudgetExpired"}]
         calls: list[str] = []
 
         def command(method: str, params: dict[str, object] | None = None) -> dict[str, object]:
