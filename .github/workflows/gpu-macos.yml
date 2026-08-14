@@ -24,7 +24,9 @@ env:
 jobs:
   gpu-macos-arm64:
     name: gpu-macos-arm64
-    runs-on: ${{ fromJSON(vars.VELLUM_MACOS_RUNS_ON_JSON || '["self-hosted","macOS","ARM64","vellum-build-macos"]') }}
+    # This combined job can create or update a private release on tag events.
+    # Keep it hosted until build proof and release mutation are separate jobs.
+    runs-on: macos-15
     steps:
       - name: Check out full preserved Vellum history without credentials
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -561,7 +563,9 @@ jobs:
   sterile-consumer:
     name: sterile-consumer
     needs: gpu-macos-arm64
-    runs-on: ${{ fromJSON(vars.VELLUM_MACOS_RUNS_ON_JSON || '["self-hosted","macOS","ARM64","vellum-build-macos"]') }}
+    # This job publishes the verified draft on tag events, so it is not an
+    # unprivileged local-build candidate in its current combined shape.
+    runs-on: macos-15
     steps:
       # The sterile journey drives a browser fixture, and job environments do
       # not inherit. Provision the same pinned browser the proof job uses, so

@@ -9,7 +9,9 @@ permissions:
   contents: read
 jobs:
   clean-release:
-    runs-on: ${{ fromJSON(vars.VELLUM_MACOS_RUNS_ON_JSON || '["self-hosted","macOS","ARM64","vellum-build-macos"]') }}
+    # Hosted is the fail-safe until a Vellum-scoped disposable macOS runner has
+    # a live lease and a recorded assignment/teardown proof.
+    runs-on: macos-15
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1

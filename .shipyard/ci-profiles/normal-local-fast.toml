@@ -1,0 +1,277 @@
+# Vellum local-first routing contract.
+#
+# This profile is deliberately non-activating. Shipyard and TartCI currently
+# select the first entry in `targets` without evaluating `proven` or a health
+# lease, so the operative target list contains only the hosted rollback.
+# `activation_targets` records the reviewed local-first order for the guarded
+# repository resolver; it is not an active Shipyard selector. Every local
+# target remains `proven = false` until a Vellum-scoped disposable runner has
+# satisfied the group, label, health-lease, real-dispatch, and teardown proof.
+
+name = "normal-local-fast"
+description = "Prefer proven Vellum-only local workers; otherwise use hosted runners."
+
+[policy]
+required_gate = "local-first-with-hosted-fallback"
+debug = "local-first-with-hosted-fallback"
+release_build = "local-first-with-hosted-fallback"
+release_signing = "github-only"
+release_deploy = "github-only"
+coverage = "clean-ephemeral-only"
+scheduled_authoritative = "github-hosted"
+privileged = "github-only"
+fork = "github-only"
+untrusted = "github-only"
+secret_bearing = "github-only"
+unsupported_architecture = "github-only"
+
+[repo."Generous-Corp/vellum".pr.linux]
+strategy = "github-only"
+targets = ["github.linux-x64"]
+activation_strategy = "ordered-fallback"
+activation_targets = ["macpro.vellum-linux-x64-pr-safe", "github.linux-x64"]
+github_variable = "VELLUM_PR_SAFE_LINUX_RUNS_ON_JSON"
+health_lease_variable = "VELLUM_PR_SAFE_LINUX_LEASE_UNTIL"
+health_lease_ttl_seconds = 300
+health_lease_events = ["push", "workflow_dispatch", "workflow_run"]
+health_lease_runner_name_prefix = "vellum-pr-safe-ephemeral-"
+health_lease_min_idle = 1
+
+[repo."Generous-Corp/vellum".pr.macos]
+strategy = "github-only"
+targets = ["github.macos-arm64"]
+activation_strategy = "ordered-fallback"
+activation_targets = [
+  "m3.vellum-macos-arm64-vm",
+  "m5.vellum-macos-arm64-vm",
+  "m1.vellum-macos-arm64-vm",
+  "github.macos-arm64",
+]
+github_variable = "VELLUM_PR_MACOS_RUNS_ON_JSON"
+health_lease_variable = "VELLUM_PR_MACOS_LEASE_UNTIL"
+health_lease_ttl_seconds = 300
+health_lease_events = ["workflow_dispatch", "workflow_run", "schedule"]
+health_lease_runner_name_prefix = "vellum-macos-ephemeral-"
+health_lease_min_idle = 1
+
+[repo."Generous-Corp/vellum".pr.windows]
+strategy = "github-only"
+targets = ["github.windows-x64"]
+activation_strategy = "ordered-fallback"
+activation_targets = ["macpro.vellum-windows-x64-qemu", "github.windows-x64"]
+github_variable = "VELLUM_PR_WINDOWS_RUNS_ON_JSON"
+health_lease_variable = "VELLUM_PR_WINDOWS_LEASE_UNTIL"
+health_lease_ttl_seconds = 300
+health_lease_events = ["workflow_dispatch", "workflow_run"]
+health_lease_runner_name_prefix = "vellum-windows-ephemeral-"
+health_lease_min_idle = 1
+
+# Build-only release preparation may use a disposable local worker after proof.
+# The current combined GPU/release workflow is not split yet, so these entries
+# cannot activate a workflow by themselves.
+[repo."Generous-Corp/vellum".release.macos_build]
+strategy = "github-only"
+targets = ["github.macos-arm64"]
+activation_strategy = "ordered-fallback"
+activation_targets = [
+  "m3.vellum-macos-arm64-release-vm",
+  "m5.vellum-macos-arm64-release-vm",
+  "m1.vellum-macos-arm64-release-vm",
+  "github.macos-arm64",
+]
+github_variable = "VELLUM_RELEASE_BUILD_MACOS_RUNS_ON_JSON"
+health_lease_variable = "VELLUM_RELEASE_BUILD_MACOS_LEASE_UNTIL"
+health_lease_ttl_seconds = 300
+health_lease_events = ["workflow_dispatch"]
+health_lease_runner_name_prefix = "vellum-release-macos-ephemeral-"
+health_lease_min_idle = 1
+
+[repo."Generous-Corp/vellum".release.linux_build]
+strategy = "github-only"
+targets = ["github.linux-x64"]
+activation_strategy = "ordered-fallback"
+activation_targets = ["macpro.vellum-linux-x64-release", "github.linux-x64"]
+github_variable = "VELLUM_RELEASE_BUILD_LINUX_RUNS_ON_JSON"
+health_lease_variable = "VELLUM_RELEASE_BUILD_LINUX_LEASE_UNTIL"
+health_lease_ttl_seconds = 300
+health_lease_events = ["workflow_dispatch"]
+health_lease_runner_name_prefix = "vellum-release-linux-ephemeral-"
+health_lease_min_idle = 1
+
+[repo."Generous-Corp/vellum".release.signing]
+strategy = "github-only"
+targets = ["github.linux-x64"]
+github_variable = "VELLUM_RELEASE_SIGNING_RUNS_ON_JSON"
+
+[repo."Generous-Corp/vellum".release.deploy]
+strategy = "github-only"
+targets = ["github.linux-x64"]
+github_variable = "VELLUM_RELEASE_DEPLOY_RUNS_ON_JSON"
+
+[repo."Generous-Corp/vellum".scheduled.nightly_intel]
+enabled = true
+branch = "main"
+strategy = "github-only"
+targets = ["github.macos-intel"]
+activation_strategy = "ordered-fallback"
+activation_targets = ["macmini.vellum-macos-intel-native", "github.macos-intel"]
+issue_on_failure = true
+health_lease_variable = "VELLUM_NIGHTLY_INTEL_LEASE_UNTIL"
+health_lease_ttl_seconds = 300
+health_lease_events = ["schedule", "workflow_dispatch"]
+health_lease_runner_name_prefix = "vellum-intel-ephemeral-"
+health_lease_min_idle = 1
+
+[targets."macpro.vellum-linux-x64-pr-safe"]
+description = "Mac Pro disposable Vellum Linux x64 PR-safe pool."
+provider = "proxmox"
+host = "macpro"
+os = "linux"
+arch = "x64"
+ephemeral = true
+proven = false
+runner_group = "vellum-pr-safe-build"
+workflow_access = [
+  "Generous-Corp/vellum/.github/workflows/product-quality.yml@refs/heads/main",
+  "Generous-Corp/vellum/.github/workflows/provenance.yml@refs/heads/main",
+]
+runs_on_json = ["self-hosted", "Linux", "X64", "vellum-build-linux-x64", "vellum-host-macpro", "vellum-pr-safe-linux-x64"]
+
+[targets."macpro.vellum-linux-x64-release"]
+description = "Mac Pro disposable Vellum Linux x64 build-only release pool."
+provider = "proxmox"
+host = "macpro"
+os = "linux"
+arch = "x64"
+ephemeral = true
+proven = false
+runner_group = "vellum-release-build"
+workflow_access = []
+runs_on_json = ["self-hosted", "Linux", "X64", "vellum-build-linux-x64", "vellum-host-macpro", "vellum-release-linux-x64"]
+
+[targets."m3.vellum-macos-arm64-vm"]
+description = "M3 Tart Vellum macOS ARM64 disposable build VM."
+provider = "tartci"
+host = "macstudio"
+os = "macos"
+arch = "arm64"
+ephemeral = true
+proven = false
+runner_group = "vellum-macos-build"
+workflow_access = ["Generous-Corp/vellum/.github/workflows/readme-quick-start.yml@refs/heads/main"]
+runs_on_json = ["self-hosted", "macOS", "ARM64", "vellum-build-macos", "vellum-host-m3"]
+
+[targets."m5.vellum-macos-arm64-vm"]
+description = "M5 Tart Vellum macOS ARM64 disposable build VM."
+provider = "tartci"
+host = "m5"
+os = "macos"
+arch = "arm64"
+ephemeral = true
+proven = false
+runner_group = "vellum-macos-build"
+workflow_access = ["Generous-Corp/vellum/.github/workflows/readme-quick-start.yml@refs/heads/main"]
+runs_on_json = ["self-hosted", "macOS", "ARM64", "vellum-build-macos", "vellum-host-m5"]
+
+[targets."m1.vellum-macos-arm64-vm"]
+description = "M1 Tart Vellum macOS ARM64 disposable build VM."
+provider = "tartci"
+host = "m1"
+os = "macos"
+arch = "arm64"
+ephemeral = true
+proven = false
+runner_group = "vellum-macos-build"
+workflow_access = ["Generous-Corp/vellum/.github/workflows/readme-quick-start.yml@refs/heads/main"]
+runs_on_json = ["self-hosted", "macOS", "ARM64", "vellum-build-macos", "vellum-host-m1"]
+
+[targets."m3.vellum-macos-arm64-release-vm"]
+description = "M3 Tart Vellum macOS ARM64 build-only release VM."
+provider = "tartci"
+host = "macstudio"
+os = "macos"
+arch = "arm64"
+ephemeral = true
+proven = false
+runner_group = "vellum-release-build"
+workflow_access = []
+runs_on_json = ["self-hosted", "macOS", "ARM64", "vellum-release-macos", "vellum-host-m3"]
+
+[targets."m5.vellum-macos-arm64-release-vm"]
+description = "M5 Tart Vellum macOS ARM64 build-only release VM."
+provider = "tartci"
+host = "m5"
+os = "macos"
+arch = "arm64"
+ephemeral = true
+proven = false
+runner_group = "vellum-release-build"
+workflow_access = []
+runs_on_json = ["self-hosted", "macOS", "ARM64", "vellum-release-macos", "vellum-host-m5"]
+
+[targets."m1.vellum-macos-arm64-release-vm"]
+description = "M1 Tart Vellum macOS ARM64 build-only release VM."
+provider = "tartci"
+host = "m1"
+os = "macos"
+arch = "arm64"
+ephemeral = true
+proven = false
+runner_group = "vellum-release-build"
+workflow_access = []
+runs_on_json = ["self-hosted", "macOS", "ARM64", "vellum-release-macos", "vellum-host-m1"]
+
+[targets."macmini.vellum-macos-intel-native"]
+description = "Mac mini native Intel Vellum compatibility canary."
+provider = "shipyard"
+host = "macmini"
+os = "macos"
+arch = "x64"
+ephemeral = true
+proven = false
+runner_group = "vellum-macos-intel"
+workflow_access = []
+runs_on_json = ["self-hosted", "macOS", "X64", "vellum-build-macos-intel", "vellum-host-macmini"]
+
+[targets."macpro.vellum-windows-x64-qemu"]
+description = "Unproven Mac Pro Proxmox Windows x64 Vellum candidate."
+provider = "proxmox"
+host = "macpro"
+os = "windows"
+arch = "x64"
+ephemeral = true
+proven = false
+runner_group = "vellum-windows-build"
+workflow_access = []
+runs_on_json = ["self-hosted", "Windows", "X64", "vellum-build-windows-x64", "vellum-host-macpro"]
+
+[targets."github.macos-arm64"]
+description = "GitHub-hosted macOS ARM64 fallback."
+provider = "github"
+os = "macos"
+arch = "arm64"
+runs_on_json = "macos-15"
+
+[targets."github.macos-intel"]
+description = "GitHub-hosted Intel macOS compatibility fallback."
+provider = "github"
+os = "macos"
+arch = "x64"
+runs_on_json = "macos-15-intel"
+authoritative_for = ["macos-intel"]
+
+[targets."github.linux-x64"]
+description = "GitHub-hosted Linux x64 fallback."
+provider = "github"
+os = "linux"
+arch = "x64"
+runs_on_json = "ubuntu-latest"
+authoritative_for = ["linux-x64"]
+
+[targets."github.windows-x64"]
+description = "GitHub-hosted Windows x64 fallback."
+provider = "github"
+os = "windows"
+arch = "x64"
+runs_on_json = "windows-latest"
+authoritative_for = ["windows-x64"]

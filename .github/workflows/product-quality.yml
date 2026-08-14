@@ -13,7 +13,10 @@ permissions:
 jobs:
   product-quality:
     name: product-quality
-    runs-on: ${{ fromJSON(vars.VELLUM_LINUX_RUNS_ON_JSON || '["self-hosted","Linux","ARM64","vellum-build-linux"]') }}
+    # Hosted is the fail-safe until the PR-safe Vellum group, lease, and one-job
+    # teardown proof have all passed. The checked-in profile records the future
+    # local-first selector without activating it.
+    runs-on: ubuntu-latest
     steps:
       - name: Check out full preserved history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
