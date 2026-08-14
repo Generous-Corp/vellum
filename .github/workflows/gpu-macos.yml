@@ -397,7 +397,7 @@ jobs:
             "$prefix/bin/vellum" --json build --project "$project" --target macos
           run_json "$RUNNER_TEMP/html-import-capture.json" \
             "$prefix/bin/vellum" --json capture --project "$project" --target macos \
-              --scenario smoke --output "$project/artifacts/html-import-proof.png"
+              --scenario smoke --output "artifacts/html-import-proof.png"
           file "$project/artifacts/html-import-proof.png"
           shasum -a 256 "$project/artifacts/html-import-proof.png" \
             > "$project/artifacts/html-import-proof.png.sha256"
