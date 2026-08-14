@@ -602,6 +602,7 @@
 | `pulp-c09badad084d07f1e3a102ac587b0ea4e43ac73b` | Pulp-to-framework | importer | Pulp-only | 2026-08-18T21:00:00Z |
 | `pulp-c4219fa137c206d9d221723f078bc2b3d741794a` | Pulp-to-framework | importer | Pulp-only | 2026-08-18T21:00:00Z |
 | `pulp-d9b558f3510c82e10d2239e72e5a2705e56ed27f` | Pulp-to-framework | build | superseded | 2026-08-20T21:00:00Z |
+| `vellum-71419280001d9a51f310874b42b64e2c2d06274e` | framework-to-Pulp | schema | framework-only | 2026-08-19T02:41:10Z |
 
 ## Release blockers
 
