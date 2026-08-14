@@ -33,6 +33,13 @@ def invoke(*arguments: str, cwd: Path | None = None, env: dict[str, str] | None 
 
 
 class CliTests(unittest.TestCase):
+    def test_web_interaction_plan_is_exposed_by_installed_cli_parser(self) -> None:
+        args = cli_module.parser().parse_args([
+            "test", "--target", "web", "--interaction-plan", "plans/smoke.json",
+        ])
+        self.assertEqual(args.target, "web")
+        self.assertEqual(args.interaction_plan, "plans/smoke.json")
+
     def test_version_matches_the_immutable_framework_release(self) -> None:
         completed = invoke("--version")
         self.assertEqual(completed.returncode, 0, completed.stderr)

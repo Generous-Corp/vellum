@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import html
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -18,6 +19,7 @@ import sys
 import tarfile
 import tempfile
 import threading
+import time
 from typing import Any, Iterable
 
 from vellum_manifest import (
@@ -29,7 +31,9 @@ from vellum_scenario import (
     validate_scenario_document as validate_shared_scenario_document,
 )
 from vellum_cdp import CdpAdmission
-from vellum_browser import configured_provenance
+from vellum_cdp_client import CdpClient, CdpClientError
+from vellum_interaction import InteractionPlanError, validate_interaction_plan
+from vellum_browser import browser_version, configured_provenance
 
 
 RESULT_SCHEMA = "vellum.backend.result.v1"
@@ -545,6 +549,97 @@ def run_chrome_scenario(
                 stop_browser(process, process_group=process_group)
 
 
+def run_chrome_interaction_capture(
+    build: Path, plan: dict[str, Any], *, chrome: str | None = None,
+    profile_factory: Any = tempfile.TemporaryDirectory,
+    process_factory: Any = subprocess.Popen,
+) -> dict[str, Any]:
+    """Execute a bounded CDP plan and retain its live capture envelope."""
+    browser_executable = chrome or chrome_path()
+    exact_browser_version = browser_version(Path(browser_executable))
+    server = ThreadingHTTPServer(("127.0.0.1", 0),
+                                 lambda *args, **kwargs: SimpleHTTPRequestHandler(
+                                     *args, directory=str(build), **kwargs))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with profile_factory(prefix="vellum-web-capture-") as profile:
+            if Path(profile).is_dir():
+                os.chmod(profile, 0o700)
+            with CdpAdmission(str(Path(profile) / "vellum-cdp.sock")) as admission:
+                process = process_factory([
+                    browser_executable, "--headless=new", "--disable-gpu-sandbox",
+                    "--no-first-run", "--disable-background-networking",
+                    *admission.chrome_arguments(),
+                    "--window-size=1280,720",
+                    f"--user-data-dir={profile}",
+                    f"http://127.0.0.1:{server.server_port}/index.html",
+                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True,
+                    start_new_session=os.name == "posix")
+                process_group = (
+                    process.pid if os.name == "posix" and isinstance(getattr(process, "pid", None), int)
+                    else None
+                )
+                client: CdpClient | None = None
+                discovery: dict[str, Any] = {}
+                try:
+                    deadline = time.monotonic() + 20.0
+                    last_error: Exception | None = None
+                    while time.monotonic() < deadline:
+                        candidate = CdpClient(admission.endpoint, timeout=2.0)
+                        try:
+                            discovery = candidate.discover()
+                            candidate.connect()
+                            client = candidate
+                            break
+                        except (CdpClientError, OSError) as error:
+                            last_error = error
+                            candidate.close()
+                            time.sleep(0.05)
+                    if client is None:
+                        raise BackendFailure(
+                            f"Browser CDP did not become ready: {last_error}",
+                            status="test_failed",
+                    )
+                    client.wait_for_dom()
+                    evidence = client.execute_interaction_plan(plan)
+                    viewport = client.viewport()
+                    browser = discovery.get("Browser")
+                    if not isinstance(browser, str) or not browser:
+                        raise BackendFailure("Browser CDP discovery omitted exact browser identity", status="test_failed")
+                    capture_id = hashlib.sha256(json.dumps({
+                        "plan": plan,
+                        "browser": browser,
+                        "browserVersion": exact_browser_version,
+                        "viewport": viewport,
+                        "evidence": evidence,
+                    }, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:32]
+                    return {
+                        "schema": "vellum.browser-capture-envelope.v1",
+                        "captureId": capture_id,
+                        "source": {
+                            "url": f"http://127.0.0.1:{server.server_port}/index.html",
+                            "browser": browser,
+                            "browserVersion": exact_browser_version,
+                            "plan": plan["name"],
+                        },
+                        "viewport": viewport,
+                        "root": {
+                            "kind": "view", "semanticId": "document", "name": "Browser document",
+                            "properties": {"captureEvidence": evidence}, "children": [],
+                        },
+                        "assets": [], "diagnostics": [],
+                    }
+                finally:
+                    if client is not None:
+                        client.close()
+                    stop_browser(process, process_group=process_group)
+    finally:
+        server.shutdown()
+        thread.join(5)
+        server.server_close()
+
+
 def stop_browser(
     process: subprocess.Popen[str], *, process_group: int | None = None,
     timeout: int = 5,
@@ -647,6 +742,15 @@ def scenario_path(context: dict[str, Any], value: str | None) -> Path:
     return path
 
 
+def interaction_plan_path(context: dict[str, Any], value: str | None) -> dict[str, Any]:
+    path = safe_relative(context["root"], value, "interaction plan")
+    try:
+        plan = json.loads(path.read_text(encoding="utf-8"))
+        return validate_interaction_plan(plan)
+    except (OSError, json.JSONDecodeError, InteractionPlanError) as error:
+        raise BackendFailure(f"Cannot read interaction plan at {path}: {error}", status="invalid_interaction_plan") from error
+
+
 def write_reproducible_archive(source: Path, output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("wb") as raw:
@@ -668,6 +772,14 @@ def command_result(command: str, args: argparse.Namespace, context: dict[str, An
                       data={"target": "web", **{key: str(value) if isinstance(value, Path) else value for key, value in built.items()}})
     if command == "test" or (command == "run" and args.no_window):
         built = ensure_build(context, sdk, getattr(args, "no_build", False))
+        if getattr(args, "interaction_plan", None):
+            if args.scenario:
+                raise BackendFailure("--interaction-plan cannot be combined with --scenario", status="invalid_arguments", exit_code=2)
+            envelope = run_chrome_interaction_capture(
+                built["root"], interaction_plan_path(context, args.interaction_plan),
+            )
+            return result(command, ok=True, status="capture_passed", message="Browser interaction capture passed",
+                          data={"target": "web", "build": str(built["root"]), "capture": envelope})
         expected_wasm_ids = [
             item["id"] for item in built.get("components", [])
             if isinstance(item, dict) and item.get("web") == "wasm"
@@ -701,6 +813,7 @@ def parser(command: str) -> argparse.ArgumentParser:
     value.add_argument("--project", required=True); value.add_argument("--json", action="store_true", required=True)
     value.add_argument("--target", default="web")
     if command in {"run", "test"}: value.add_argument("--scenario")
+    if command == "test": value.add_argument("--interaction-plan")
     if command == "run":
         value.add_argument("--no-build", action="store_true"); value.add_argument("--no-window", action="store_true")
         value.add_argument("--self-test", action="store_true")

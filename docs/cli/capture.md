@@ -136,3 +136,18 @@ CDP method names. For example:
   ]
 }
 ```
+
+Run a plan against the built web application and retain its live browser
+evidence in a capture envelope:
+
+```sh
+vellum test --target web --interaction-plan tests/save-board-plan.json
+```
+
+The command starts a temporary loopback server, launches the configured
+Chromium with a private CDP admission socket, waits for the document after
+each navigation, executes the bounded plan, and tears down the browser,
+profile, socket, and server on success or failure. The result records the
+exact installed browser version and is suitable for validation with
+`lowerBrowserCaptureToDesignIR`. It does not expose public-network browsing or
+arbitrary JavaScript execution.

@@ -9,6 +9,7 @@ import json
 import secrets
 import socket
 import struct
+import time
 from typing import Any
 from urllib.parse import urlsplit
 from urllib.request import Request, build_opener, ProxyHandler, urlopen
@@ -31,6 +32,7 @@ ALLOWED_COMMANDS = {
     "Input.dispatchMouseEvent",
     "Input.insertText",
     "Page.enable",
+    "Page.getLayoutMetrics",
     "Page.navigate",
     "DOMSnapshot.captureSnapshot",
 }
@@ -154,7 +156,33 @@ class CdpClient:
     def navigate(self, url: str) -> dict[str, Any]:
         _loopback_url(url)
         self.command("Page.enable")
-        return self.command("Page.navigate", {"url": url})
+        result = self.command("Page.navigate", {"url": url})
+        error_text = result.get("errorText")
+        if isinstance(error_text, str) and error_text:
+            raise CdpClientError(f"browser navigation failed: {error_text}")
+        return result
+
+    def viewport(self) -> dict[str, int]:
+        metrics = self.command("Page.getLayoutMetrics")
+        visual = metrics.get("visualViewport")
+        layout = metrics.get("layoutViewport")
+        candidate = visual if isinstance(visual, dict) else layout
+        if not isinstance(candidate, dict):
+            raise CdpClientError("CDP response omitted viewport metrics")
+        width = candidate.get("clientWidth", candidate.get("width"))
+        height = candidate.get("clientHeight", candidate.get("height"))
+        def bounded_integer(value: object) -> int | None:
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return None
+            if isinstance(value, float) and not value.is_integer():
+                return None
+            integer = int(value)
+            return integer if 1 <= integer <= 16384 else None
+        width_int = bounded_integer(width)
+        height_int = bounded_integer(height)
+        if width_int is None or height_int is None:
+            raise CdpClientError("CDP viewport metrics are malformed or unbounded")
+        return {"width": width_int, "height": height_int}
 
     def capture_dom_snapshot(self, computed_styles: list[str]) -> dict[str, Any]:
         if not isinstance(computed_styles, list) or not computed_styles or len(computed_styles) > MAX_COMPUTED_STYLES:
@@ -162,6 +190,20 @@ class CdpClient:
         if not all(isinstance(name, str) and 0 < len(name) <= 128 and "\0" not in name for name in computed_styles):
             raise CdpClientError("computed style names are malformed")
         return self.command("DOMSnapshot.captureSnapshot", {"computedStyles": computed_styles})
+
+    def wait_for_dom(self, timeout: float = 20.0) -> None:
+        """Wait until the isolated page has a non-empty document tree."""
+        if timeout <= 0 or timeout > 120:
+            raise CdpClientError("DOM readiness timeout is outside the bounded range")
+        deadline = time.monotonic() + timeout
+        self.command("DOM.enable")
+        while time.monotonic() < deadline:
+            document = self.command("DOM.getDocument", {"depth": 0, "pierce": False})
+            root = document.get("root")
+            if isinstance(root, dict) and root.get("childNodeCount", 0) > 0:
+                return
+            time.sleep(0.05)
+        raise CdpClientError("browser DOM did not become ready before the bounded timeout")
 
     @staticmethod
     def _node_id(value: object, label: str = "DOM node") -> int:
@@ -211,6 +253,7 @@ class CdpClient:
             action = step["action"]
             if action == "navigate":
                 value = self.navigate(step["url"])
+                self.wait_for_dom()
             elif action == "click":
                 value = self.click_target(step["target"]); value = {"target": step["target"]}
             elif action == "focus":

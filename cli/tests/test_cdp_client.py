@@ -120,6 +120,43 @@ class CdpClientTests(unittest.TestCase):
             finally:
                 client.close()
 
+    def test_wait_for_dom_is_bounded_and_retries_until_document_is_ready(self) -> None:
+        client = object.__new__(CdpClient)
+        responses = iter(({}, {"root": {"childNodeCount": 1}}))
+        calls: list[str] = []
+
+        def command(method: str, params: dict[str, object] | None = None) -> dict[str, object]:
+            del params
+            calls.append(method)
+            if method == "DOM.getDocument":
+                return next(responses)
+            return {}
+
+        client.command = command  # type: ignore[method-assign]
+        client.wait_for_dom(timeout=1)
+        self.assertEqual(calls, ["DOM.enable", "DOM.getDocument", "DOM.getDocument"])
+
+    def test_wait_for_dom_rejects_unbounded_timeout(self) -> None:
+        client = object.__new__(CdpClient)
+        with self.assertRaises(CdpClientError):
+            client.wait_for_dom(timeout=121)
+
+    def test_navigation_rejects_browser_error_result(self) -> None:
+        client = object.__new__(CdpClient)
+        client.command = lambda method, params=None: (
+            {"errorText": "net::ERR_CONNECTION_REFUSED"}
+            if method == "Page.navigate" else {}
+        )  # type: ignore[method-assign]
+        with self.assertRaisesRegex(CdpClientError, "navigation failed"):
+            client.navigate("http://127.0.0.1:8000/")
+
+    def test_viewport_requires_bounded_integer_metrics(self) -> None:
+        client = object.__new__(CdpClient)
+        client.command = lambda method, params=None: {
+            "visualViewport": {"clientWidth": 1280, "clientHeight": 720},
+        }  # type: ignore[method-assign]
+        self.assertEqual(client.viewport(), {"width": 1280, "height": 720})
+
     def test_client_rejects_public_navigation_and_unbounded_styles(self) -> None:
         with CdpAdmission(str(self.socket_path)) as admission:
             client = CdpClient(admission.endpoint)
