@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import http.client
+from pathlib import Path
 import socket
 import socketserver
+import sys
 import threading
 import unittest
 
+REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO / "cli"))
 from vellum_cdp import CdpAdmission, CdpAdmissionError
+sys.path.pop(0)
 
 
 class _Upstream(socketserver.ThreadingTCPServer):
