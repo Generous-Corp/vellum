@@ -397,10 +397,10 @@ jobs:
             "$prefix/bin/vellum" --json build --project "$project" --target macos
           run_json "$RUNNER_TEMP/html-import-capture.json" \
             "$prefix/bin/vellum" --json capture --project "$project" --target macos \
-              --scenario smoke --output "$RUNNER_TEMP/html-import-proof.png"
-          file "$RUNNER_TEMP/html-import-proof.png"
-          shasum -a 256 "$RUNNER_TEMP/html-import-proof.png" \
-            > "$RUNNER_TEMP/html-import-proof.png.sha256"
+              --scenario smoke --output "$project/html-import-proof.png"
+          file "$project/html-import-proof.png"
+          shasum -a 256 "$project/html-import-proof.png" \
+            > "$project/html-import-proof.png.sha256"
 
       - name: Record private-release trust controls
         if: startsWith(github.ref, 'refs/tags/v')
@@ -520,8 +520,8 @@ jobs:
             ${{ runner.temp }}/vellum-gpu-proof.sha256
             ${{ runner.temp }}/vellum-gpu-dylib-load-commands.txt
             ${{ runner.temp }}/vellum-gpu-app-load-commands.txt
-            ${{ runner.temp }}/html-import-proof.png
-            ${{ runner.temp }}/html-import-proof.png.sha256
+            ${{ runner.temp }}/html-import-proof/html-import-proof.png
+            ${{ runner.temp }}/html-import-proof/html-import-proof.png.sha256
             ${{ runner.temp }}/html-import.json
             ${{ runner.temp }}/html-import-design-check.json
             ${{ runner.temp }}/html-import-build.json
