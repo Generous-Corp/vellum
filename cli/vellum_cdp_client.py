@@ -217,7 +217,10 @@ class CdpClient:
         stable_since: float | None = None
         snapshot: dict[str, Any] = {}
         while time.monotonic() < deadline:
-            snapshot = self.capture_dom_snapshot(["display", "visibility", "color", "font-size"])
+            snapshot = self.capture_dom_snapshot([
+                "display", "visibility", "color", "font-size",
+                "background-image", "list-style-image", "content",
+            ])
             digest = hashlib.sha256(
                 json.dumps(snapshot, sort_keys=True, separators=(",", ":")).encode("utf-8")
             ).hexdigest()

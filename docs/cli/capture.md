@@ -152,3 +152,12 @@ exact installed browser version, waits for bounded virtual-time/DOM stability,
 and retains one bounded PNG screenshot in the capture root evidence. The
 result is suitable for validation with `lowerBrowserCaptureToDesignIR`. It does
 not expose public-network browsing or arbitrary JavaScript execution.
+
+The live DOM snapshot is lowered into the envelope's semantic `root` tree. DOM
+attributes and bounded computed-style strings are scanned for `data:` assets;
+each asset is decoded, SHA-256 addressed as `assets/<digest>.<extension>`, and
+retained in the bounded `captureEvidence.localizedAssets` receipt alongside its
+metadata and base64 bytes. The top-level `assets` array is the canonical
+DesignIR asset manifest, while the evidence receipt makes the capture
+self-contained for a later materializer. Malformed URLs, unsafe or oversized
+payloads, excessive nodes/assets, and an unlowerable snapshot fail closed.

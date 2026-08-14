@@ -44,3 +44,34 @@ test('browser capture envelope rejects unknown fields and unbounded metadata', (
         ...envelope(), diagnostics: Array.from({ length: 257 }, () => ({})),
     }), /bounded arrays/);
 });
+
+test('browser capture lowering retains localized asset metadata and evidence', () => {
+    const document = lowerBrowserCaptureToDesignIR(envelope({
+        assets: [{
+            id: 'data-0123456789ab',
+            contentHash: `sha256:${'a'.repeat(64)}`,
+            uri: `assets/${'a'.repeat(64)}.png`,
+            mimeType: 'image/png',
+        }],
+        root: {
+            kind: 'view',
+            semanticId: 'root',
+            properties: {
+                captureEvidence: {
+                    schema: 'vellum.browser-capture-evidence.v1',
+                    localizedAssets: [{
+                        uri: `assets/${'a'.repeat(64)}.png`,
+                        data: 'iVBORw0KGgo=',
+                    }],
+                },
+            },
+            children: [],
+        },
+    }));
+    assert.equal(document.assets.length, 1);
+    assert.equal(document.assets[0].mimeType, 'image/png');
+    assert.equal(
+        document.root.properties.captureEvidence.localizedAssets[0].data,
+        'iVBORw0KGgo=',
+    );
+});
