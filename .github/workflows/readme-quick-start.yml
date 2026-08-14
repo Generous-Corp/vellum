@@ -9,6 +9,13 @@ on:
 permissions:
   attestations: read
   contents: read
+
+concurrency:
+  group: vellum-readme-${{ github.ref }}
+  # Keep scheduled, main, and authenticated release checks intact; only
+  # obsolete PR quick-start checks may be canceled.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   clean-release:
     runs-on: ${{ fromJSON(vars.VELLUM_MACOS_RUNS_ON_JSON || '["self-hosted","macOS","ARM64","vellum-build-macos"]') }}

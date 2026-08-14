@@ -14,7 +14,9 @@ permissions:
 
 concurrency:
   group: vellum-gpu-${{ github.ref }}
-  cancel-in-progress: false
+  # Preserve trusted main/tag and manually dispatched proofs; obsolete PR
+  # commits should not consume another full macOS GPU run.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   VELLUM_RELEASE_VERSION: 0.1.7

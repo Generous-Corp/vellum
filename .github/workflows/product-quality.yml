@@ -10,6 +10,12 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: vellum-product-${{ github.ref }}
+  # A newer PR commit supersedes the older product check. Main and release
+  # validation remain non-cancelable.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   product-quality:
     name: product-quality

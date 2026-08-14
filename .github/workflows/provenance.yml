@@ -13,6 +13,12 @@ permissions:
   contents: read
   pull-requests: read
 
+concurrency:
+  group: vellum-provenance-${{ github.ref }}
+  # Do not spend a full provenance reconciliation on an obsolete PR commit;
+  # trusted main/tag runs remain serialized and non-cancelable.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   forbidden-deps:
     name: forbidden-deps
