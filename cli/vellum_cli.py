@@ -16,6 +16,7 @@ import sys
 from typing import Any, Iterable
 
 import vellum_dev
+from vellum_image_compare import Crop, compare_paths
 
 from vellum_manifest import (
     APP_MANIFEST_NAME, LOCK_NAME, LOCK_SCHEMA, ManifestError,
@@ -1113,6 +1114,33 @@ def design_command(args: argparse.Namespace) -> dict[str, Any]:
     )
 
 
+def compare_command(args: argparse.Namespace) -> dict[str, Any]:
+    try:
+        crop = None
+        crop_values = (args.crop_x, args.crop_y, args.crop_width, args.crop_height)
+        if any(value is not None for value in crop_values):
+            if any(value is None for value in crop_values):
+                raise CliFailure(
+                    "--crop-x, --crop-y, --crop-width, and --crop-height must be supplied together.",
+                    status="invalid_arguments", exit_code=EXIT_USAGE,
+                )
+            crop = Crop(*crop_values)
+        report = compare_paths(
+            Path(args.reference).expanduser().resolve(),
+            Path(args.actual).expanduser().resolve(),
+            threshold=args.threshold, crop=crop,
+            diff_path=Path(args.diff).expanduser().resolve() if args.diff else None,
+        )
+    except (OSError, ValueError) as error:
+        raise CliFailure(str(error), status="comparison_failed", exit_code=EXIT_PROJECT) from error
+    return result(
+        "compare", ok=bool(report["passed"]),
+        status="match" if report["passed"] else "different",
+        message="Images match exactly." if report["passed"] else "Images differ.",
+        data=report,
+    )
+
+
 def invoke_backend(
     command: str, root: Path, lock: dict[str, Any], forwarded: list[str]
 ) -> tuple[dict[str, Any], int]:
@@ -1235,6 +1263,18 @@ def parser() -> argparse.ArgumentParser:
         action.add_argument("--project")
         action.add_argument("--as", dest="source_key", default="main")
 
+    compare = commands.add_parser(
+        "compare", help="compare two PNG captures with deterministic pixel metrics",
+    )
+    compare.add_argument("reference")
+    compare.add_argument("actual")
+    compare.add_argument("--diff", help="write a deterministic diff PNG")
+    compare.add_argument("--threshold", type=int, default=0)
+    compare.add_argument("--crop-x", type=int)
+    compare.add_argument("--crop-y", type=int)
+    compare.add_argument("--crop-width", type=int)
+    compare.add_argument("--crop-height", type=int)
+
     backend_specs = {
         "import": [
             ("source", {}),
@@ -1325,6 +1365,8 @@ def main(argv: Iterable[str] | None = None) -> int:
             payload = dev_project(args)
         elif args.command == "design":
             payload = design_command(args)
+        elif args.command == "compare":
+            payload = compare_command(args)
         else:
             payload = backend_command(args, forwarded_arguments(args))
         emit(payload, json_output=args.json)

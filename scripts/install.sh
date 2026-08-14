@@ -147,6 +147,7 @@ copy_payload() {
   cp "$payload/vellum_backend.py" "$library/vellum_backend.py"
   cp "$payload/vellum_manifest.py" "$library/vellum_manifest.py"
   cp "$payload/vellum_png.py" "$library/vellum_png.py"
+  cp "$payload/vellum_image_compare.py" "$library/vellum_image_compare.py"
   cp "$payload/metadata.json" "$library/metadata.json"
   cp "$payload/install-manifest.json" "$library/install-manifest.json"
   rm -rf "$library/.agents"
@@ -271,6 +272,7 @@ if [ -n "$local_root" ]; then
     [ -f "$local_root/cli/vellum_backend.py" ] && \
     [ -f "$local_root/cli/vellum_manifest.py" ] && \
     [ -f "$local_root/cli/vellum_png.py" ] && \
+    [ -f "$local_root/cli/vellum_image_compare.py" ] && \
     [ -f "$local_root/.agents/skills/vellum-app-authoring/SKILL.md" ] && \
     [ -f "$local_root/.agents/skills/vellum-app-authoring/manifest.v1.json" ] && \
     [ -d "$local_root/templates/basic" ] && [ -d "$local_root/packages/vellum-design-ir" ] || {
@@ -296,6 +298,7 @@ if [ -n "$local_root" ]; then
   cp "$local_root/cli/vellum_backend.py" "$temporary/vellum_backend.py"
   cp "$local_root/cli/vellum_manifest.py" "$temporary/vellum_manifest.py"
   cp "$local_root/cli/vellum_png.py" "$temporary/vellum_png.py"
+  cp "$local_root/cli/vellum_image_compare.py" "$temporary/vellum_image_compare.py"
   mkdir -p "$temporary/.agents/skills"
   cp -R \
     "$local_root/.agents/skills/vellum-app-authoring" \

@@ -296,6 +296,7 @@ class SdkArtifactTests(unittest.TestCase):
                 for command in ("build", "run", "test", "capture", "package")
             ))
             (payload / "vellum_png.py").write_text("# fixture\n", encoding="utf-8")
+            (payload / "vellum_image_compare.py").write_text("# fixture\n", encoding="utf-8")
             (payload / "vellum_scenario.py").write_text("# fixture\n", encoding="utf-8")
             with_backend = derive_capabilities(payload, install_tree)
             self.assertTrue(all(

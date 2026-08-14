@@ -32,6 +32,7 @@ function Install-Payload([string]$Payload) {
     Copy-Item (Join-Path $Payload "vellum_backend.py") (Join-Path $library "vellum_backend.py") -Force
     Copy-Item (Join-Path $Payload "vellum_manifest.py") (Join-Path $library "vellum_manifest.py") -Force
     Copy-Item (Join-Path $Payload "vellum_png.py") (Join-Path $library "vellum_png.py") -Force
+    Copy-Item (Join-Path $Payload "vellum_image_compare.py") (Join-Path $library "vellum_image_compare.py") -Force
     Copy-Item (Join-Path $Payload "metadata.json") (Join-Path $library "metadata.json") -Force
     Copy-Item (Join-Path $Payload "install-manifest.json") (Join-Path $library "install-manifest.json") -Force
     $agentDestination = Join-Path $library ".agents"
@@ -130,11 +131,12 @@ if ($LocalRoot) {
     $dispatcher = Join-Path $LocalRoot "cli\vellum_backend.py"
     $manifestReader = Join-Path $LocalRoot "cli\vellum_manifest.py"
     $pngTools = Join-Path $LocalRoot "cli\vellum_png.py"
+    $imageCompare = Join-Path $LocalRoot "cli\vellum_image_compare.py"
     $agentSkill = Join-Path $LocalRoot ".agents\skills\vellum-app-authoring\SKILL.md"
     $agentManifest = Join-Path $LocalRoot ".agents\skills\vellum-app-authoring\manifest.v1.json"
     $templates = Join-Path $LocalRoot "templates\basic"
     $designIrPackage = Join-Path $LocalRoot "packages\vellum-design-ir"
-    if (!(Test-Path $cli) -or !(Test-Path $dispatcher) -or !(Test-Path $manifestReader) -or !(Test-Path $pngTools) -or !(Test-Path $agentSkill) -or
+    if (!(Test-Path $cli) -or !(Test-Path $dispatcher) -or !(Test-Path $manifestReader) -or !(Test-Path $pngTools) -or !(Test-Path $imageCompare) -or !(Test-Path $agentSkill) -or
         !(Test-Path $agentManifest) -or !(Test-Path $templates) -or !(Test-Path $designIrPackage)) {
         throw "Local root lacks the CLI, dispatcher, agent instructions, templates, or DesignIR package."
     }
@@ -145,6 +147,7 @@ if ($LocalRoot) {
         Copy-Item (Join-Path $LocalRoot "cli\vellum_backend.py") (Join-Path $temporary "vellum_backend.py")
         Copy-Item (Join-Path $LocalRoot "cli\vellum_manifest.py") (Join-Path $temporary "vellum_manifest.py")
         Copy-Item (Join-Path $LocalRoot "cli\vellum_png.py") (Join-Path $temporary "vellum_png.py")
+        Copy-Item $imageCompare (Join-Path $temporary "vellum_image_compare.py")
         $temporaryAgentSkills = Join-Path $temporary ".agents\skills"
         New-Item -ItemType Directory -Force -Path $temporaryAgentSkills | Out-Null
         Copy-Item `

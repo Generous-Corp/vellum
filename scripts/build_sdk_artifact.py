@@ -502,6 +502,7 @@ def copy_payload(
     shutil.copy2(repo / "cli/vellum_backend.py", payload / "vellum_backend.py")
     shutil.copy2(repo / "cli/vellum_manifest.py", payload / "vellum_manifest.py")
     shutil.copy2(repo / "cli/vellum_png.py", payload / "vellum_png.py")
+    shutil.copy2(repo / "cli/vellum_image_compare.py", payload / "vellum_image_compare.py")
     shutil.copy2(repo / "cli/vellum_scenario.py", payload / "vellum_scenario.py")
     shutil.copytree(
         repo / ".agents/skills/vellum-app-authoring",
