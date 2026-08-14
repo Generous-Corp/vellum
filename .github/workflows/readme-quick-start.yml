@@ -9,9 +9,7 @@ permissions:
   contents: read
 jobs:
   clean-release:
-    # Hosted is the fail-safe until a Vellum-scoped disposable macOS runner has
-    # a live lease and a recorded assignment/teardown proof.
-    runs-on: macos-15
+    runs-on: ${{ fromJSON(vars.VELLUM_PR_MACOS_RUNS_ON_JSON || '["macos-15"]') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -31,4 +29,4 @@ jobs:
           name: readme-clean-release-${{ github.run_id }}
           path: ${{ runner.temp }}/readme-clean-release
           if-no-files-found: error
-          retention-days: 90
+          retention-days: 7

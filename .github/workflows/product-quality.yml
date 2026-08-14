@@ -13,10 +13,9 @@ permissions:
 jobs:
   product-quality:
     name: product-quality
-    # Hosted is the fail-safe until the PR-safe Vellum group, lease, and one-job
-    # teardown proof have all passed. The checked-in profile records the future
-    # local-first selector without activating it.
-    runs-on: ubuntu-latest
+    # The repository variable is set only by the guarded fleet resolver. Its
+    # value must end with the hosted fallback when local admission is absent.
+    runs-on: ${{ fromJSON(vars.VELLUM_PR_SAFE_LINUX_RUNS_ON_JSON || '["ubuntu-latest"]') }}
     steps:
       - name: Check out full preserved history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -67,4 +66,4 @@ jobs:
           name: vellum-product-contract
           path: ${{ runner.temp }}/provenance-report.json
           if-no-files-found: warn
-          retention-days: 90
+          retention-days: 7
