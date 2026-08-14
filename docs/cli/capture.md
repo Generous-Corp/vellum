@@ -148,6 +148,7 @@ The command starts a temporary loopback server, launches the configured
 Chromium with a private CDP admission socket, waits for the document after
 each navigation, executes the bounded plan, and tears down the browser,
 profile, socket, and server on success or failure. The result records the
-exact installed browser version and is suitable for validation with
-`lowerBrowserCaptureToDesignIR`. It does not expose public-network browsing or
-arbitrary JavaScript execution.
+exact installed browser version, waits for bounded virtual-time/DOM stability,
+and retains one bounded PNG screenshot in the capture root evidence. The
+result is suitable for validation with `lowerBrowserCaptureToDesignIR`. It does
+not expose public-network browsing or arbitrary JavaScript execution.
