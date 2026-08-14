@@ -180,6 +180,20 @@ jobs:
           test -x "$CHROME_PATH"
           printf 'VELLUM_CHROME_PATH=%s\n' "$CHROME_PATH" >> "$GITHUB_ENV"
 
+      - name: Record exact Chrome browser provenance
+        shell: bash
+        env:
+          CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
+        run: |
+          set -euo pipefail
+          python3 scripts/create_browser_provenance.py \
+            --browser "$CHROME_PATH" \
+            --requested-version 151.0.7922.47 \
+            --source-action browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd \
+            --output "$RUNNER_TEMP/browser-provenance.json"
+          printf 'VELLUM_CHROME_PROVENANCE=%s\n' "$RUNNER_TEMP/browser-provenance.json" >> "$GITHUB_ENV"
+          printf 'VELLUM_REQUIRE_CHROME_PROVENANCE=1\n' >> "$GITHUB_ENV"
+
       - name: Build the source-matched browser payload
         shell: bash
         run: |
@@ -490,6 +504,20 @@ jobs:
           set -euo pipefail
           test -x "$CHROME_PATH"
           printf 'VELLUM_CHROME_PATH=%s\n' "$CHROME_PATH" >> "$GITHUB_ENV"
+
+      - name: Record exact Chrome browser provenance
+        shell: bash
+        env:
+          CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
+        run: |
+          set -euo pipefail
+          python3 scripts/create_browser_provenance.py \
+            --browser "$CHROME_PATH" \
+            --requested-version 151.0.7922.47 \
+            --source-action browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd \
+            --output "$RUNNER_TEMP/browser-provenance.json"
+          printf 'VELLUM_CHROME_PROVENANCE=%s\n' "$RUNNER_TEMP/browser-provenance.json" >> "$GITHUB_ENV"
+          printf 'VELLUM_REQUIRE_CHROME_PROVENANCE=1\n' >> "$GITHUB_ENV"
 
       - name: Download only the release-shaped inputs
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c

@@ -16,6 +16,7 @@ import sys
 from typing import Any, Iterable
 
 import vellum_dev
+from vellum_browser import configured_provenance
 from vellum_image_compare import Crop, compare_paths
 
 from vellum_manifest import (
@@ -981,6 +982,10 @@ def doctor(args: argparse.Namespace) -> dict[str, Any]:
             shutil.which("google-chrome")
             or (str(chrome_application) if chrome_application.is_file() else "not found")
         )
+    chrome_provenance_available = False
+    chrome_provenance_detail = "browser unavailable"
+    if chrome_available:
+        chrome_provenance_available, chrome_provenance_detail = configured_provenance(Path(chrome_detail))
     checks = [
         check_item("python", required=True, available=sys.version_info >= (3, 9), detail=sys.version.split()[0]),
         check_item("project-lock", required=bool(args.project), available=lock_valid, detail=str(project_root) if project_root else "not in a Vellum project"),
@@ -989,6 +994,7 @@ def doctor(args: argparse.Namespace) -> dict[str, Any]:
         check_item("ninja", required=False, available=bool(shutil.which("ninja")), detail=shutil.which("ninja") or "not found", fix="Install Ninja for native builds."),
         check_item("node", required=import_required or web_required, available=node_available, detail=node_detail, fix="Install an SDK with its exact Node runtime or provide Node.js 20+."),
         check_item("chrome", required=web_required, available=chrome_available, detail=chrome_detail, fix="Install Chrome to execute web scenarios, or point VELLUM_CHROME_PATH at an exact browser build."),
+        check_item("chrome-provenance", required=web_required, available=chrome_provenance_available, detail=chrome_provenance_detail, fix="Create VELLUM_CHROME_PROVENANCE with scripts/create_browser_provenance.py for the exact browser executable."),
         check_item("sdk-artifact", required=sdk_configured, available=sdk is not None, detail=sdk_detail, fix="Install a checksummed SDK artifact for native CMake consumption."),
         check_item(
             f"target-{required_target}" if required_target else "target",

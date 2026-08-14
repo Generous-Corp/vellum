@@ -165,7 +165,7 @@ def derive_capabilities(payload: Path, install_tree: Path) -> dict[str, object]:
         native_host and node_runtime
     )
     web_backend = all((payload / name).is_file() for name in (
-        "vellum_web_backend.py", "vellum_scenario.py",
+        "vellum_web_backend.py", "vellum_scenario.py", "vellum_browser.py",
     ))
     web_runtime = all((payload / "web" / name).is_file() for name in (
         "manifest.json", "vellum_web_core.js", "vellum_web_core.wasm",
@@ -506,6 +506,7 @@ def copy_payload(
     shutil.copy2(repo / "cli/vellum_scenario.py", payload / "vellum_scenario.py")
     shutil.copy2(repo / "cli/vellum_cdp.py", payload / "vellum_cdp.py")
     shutil.copy2(repo / "cli/vellum_cdp_client.py", payload / "vellum_cdp_client.py")
+    shutil.copy2(repo / "cli/vellum_browser.py", payload / "vellum_browser.py")
     shutil.copytree(
         repo / ".agents/skills/vellum-app-authoring",
         payload / ".agents/skills/vellum-app-authoring",

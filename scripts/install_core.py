@@ -56,6 +56,7 @@ SAFE_ROOTS = {
     "vellum_scenario.py",
     "vellum_cdp.py",
     "vellum_cdp_client.py",
+    "vellum_browser.py",
     "vellum_web_backend.py",
     "web",
 }
@@ -515,6 +516,7 @@ def derived_capabilities(
         "vellum_scenario.py",
         "vellum_cdp.py",
         "vellum_cdp_client.py",
+        "vellum_browser.py",
     }
     web_runtime = web_required.issubset(contents)
     web_present = (
