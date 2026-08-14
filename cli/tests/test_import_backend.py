@@ -13,6 +13,8 @@ import time
 import unittest
 import uuid
 
+from cli.vellum_backend import source_argument
+
 
 REPO = Path(__file__).resolve().parents[2]
 CLI = REPO / "cli" / "vellum_cli.py"
@@ -45,6 +47,18 @@ def json_files(root: Path) -> dict[str, bytes]:
 
 
 class ImportBackendTests(unittest.TestCase):
+    def test_archive_staging_parser_ignores_backend_handshake_and_capture_options(self) -> None:
+        arguments = [
+            "--project", "/tmp/project", "--json",
+            "--framework-version", "0.1.7", "--cli-api", "1",
+            "--capture-envelope", "/tmp/capture.json",
+            "/tmp/index.html", "--source-type", "html", "--as", "main",
+        ]
+
+        result = source_argument(arguments, "import")
+
+        self.assertEqual(result, (9, Path("/tmp/index.html")))
+
     def create(self, parent: Path, directory: str = "app") -> Path:
         app = parent / directory
         completed = invoke("create", "Import App", "--directory", str(app), cwd=parent)
