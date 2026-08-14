@@ -71,10 +71,19 @@ sources:
     channel: unavailable
   claude-design:
     channel: unavailable
+    preflight_contract: vellum.html-source-preflight.v1
+    note: "Claude producer fingerprinting is covered by HTML preflight; browser import and Claude sidecar lowering remain incomplete."
   react-project:
     channel: unavailable
   html:
     channel: unavailable
+    preflight_contract: vellum.html-source-preflight.v1
+    note: "P5 admission and contained staging are implemented; browser import remains unavailable until the end-to-end capture path lands."
+    security_boundary:
+      - local-relative-dependencies-only
+      - no-network-fetch-during-preflight
+      - symlink-and-traversal-rejected
+      - bounded-source-tree
 invariants:
   - the normal CLI accepts only sources in the supported channel
   - experimental routes require an explicit experimental flag

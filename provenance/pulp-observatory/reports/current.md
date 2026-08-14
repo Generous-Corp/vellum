@@ -605,6 +605,7 @@
 | `vellum-71419280001d9a51f310874b42b64e2c2d06274e` | framework-to-Pulp | schema | framework-only | 2026-08-19T02:41:10Z |
 | `vellum-6b0cd5f3882cd6d715532eb5d3cec3d83f0e411e` | framework-to-Pulp | schema | framework-only | 2026-08-19T02:56:55Z |
 | `vellum-da764788537e13444793c668791fc73095e1d405` | framework-to-Pulp | schema | framework-only | 2026-08-19T05:05:00Z |
+| `vellum-b855f8c585606570e1d3eadb26f1fff0c2f2c0c0` | framework-to-Pulp | schema | framework-only | 2026-08-19T06:17:38Z |
 
 ## Release blockers
 

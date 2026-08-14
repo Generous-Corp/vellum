@@ -161,3 +161,11 @@ metadata and base64 bytes. The top-level `assets` array is the canonical
 DesignIR asset manifest, while the evidence receipt makes the capture
 self-contained for a later materializer. Malformed URLs, unsafe or oversized
 payloads, excessive nodes/assets, and an unlowerable snapshot fail closed.
+
+Raw HTML sources use the same isolated browser path through the internal
+`run_html_interaction_capture` seam. The source is fingerprinted and staged by
+`vellum_html_source.py`; the capture entrypoint is then served from that
+contained tree, and the envelope retains the producer fingerprint plus bounded
+content-addressed dependency receipts. The public HTML/Claude import commands
+remain unavailable until this seam is connected to source snapshot/materialized
+DesignIR writes and the same-run Skia/Dawn proof.

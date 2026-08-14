@@ -22,7 +22,7 @@ import tempfile
 import threading
 import time
 from typing import Any, Iterable
-from urllib.parse import unquote_to_bytes
+from urllib.parse import quote, unquote_to_bytes
 
 from vellum_manifest import (
     LOCK_NAME, LOCK_SCHEMA, ManifestError, imported_materialized_design,
@@ -804,9 +804,22 @@ def run_chrome_scenario(
 def run_chrome_interaction_capture(
     build: Path, plan: dict[str, Any], *, chrome: str | None = None,
     profile_factory: Any = tempfile.TemporaryDirectory,
-    process_factory: Any = subprocess.Popen,
+    process_factory: Any = subprocess.Popen, entry: str = "index.html",
+    source_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Execute a bounded CDP plan and retain its live capture envelope."""
+    entry_path = safe_relative(build, entry, "capture entry")
+    if not entry_path.is_file() or entry_path.is_symlink():
+        raise BackendFailure("Capture entry is missing or not a regular file", status="invalid_project")
+    entry_name = entry_path.relative_to(build.resolve()).as_posix()
+    if source_metadata is not None:
+        if not isinstance(source_metadata, dict):
+            raise BackendFailure("Capture source metadata must be an object", status="invalid_project")
+        unknown_metadata = set(source_metadata) - {
+            "producer", "fingerprint", "preflightSchema", "dependencies",
+        }
+        if unknown_metadata:
+            raise BackendFailure("Capture source metadata contains unknown fields", status="invalid_project")
     browser_executable = chrome or chrome_path()
     exact_browser_version = browser_version(Path(browser_executable))
     server = ThreadingHTTPServer(("127.0.0.1", 0),
@@ -825,7 +838,7 @@ def run_chrome_interaction_capture(
                     *admission.chrome_arguments(),
                     "--window-size=1280,720",
                     f"--user-data-dir={profile}",
-                    f"http://127.0.0.1:{server.server_port}/index.html",
+                    f"http://127.0.0.1:{server.server_port}/{quote(entry_name, safe='/')}",
                 ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True,
                     start_new_session=os.name == "posix")
                 process_group = (
@@ -877,17 +890,21 @@ def run_chrome_interaction_capture(
                         "screenshot": screenshot,
                         "root": root,
                         "assets": assets,
+                        "sourceMetadata": source_metadata or {},
                     }, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:32]
                     root["properties"]["captureEvidence"]["captureId"] = capture_id
+                    source = {
+                        "url": f"http://127.0.0.1:{server.server_port}/{quote(entry_name, safe='/')}",
+                        "browser": browser,
+                        "browserVersion": exact_browser_version,
+                        "plan": plan["name"],
+                    }
+                    if source_metadata:
+                        source.update(source_metadata)
                     return {
                         "schema": "vellum.browser-capture-envelope.v1",
                         "captureId": capture_id,
-                        "source": {
-                            "url": f"http://127.0.0.1:{server.server_port}/index.html",
-                            "browser": browser,
-                            "browserVersion": exact_browser_version,
-                            "plan": plan["name"],
-                        },
+                        "source": source,
                         "viewport": viewport,
                         "root": root,
                         "assets": assets, "diagnostics": [],
@@ -900,6 +917,30 @@ def run_chrome_interaction_capture(
         server.shutdown()
         thread.join(5)
         server.server_close()
+
+
+def run_html_interaction_capture(
+    source: Path, plan: dict[str, Any], *, chrome: str | None = None,
+    profile_factory: Any = tempfile.TemporaryDirectory,
+    process_factory: Any = subprocess.Popen,
+) -> dict[str, Any]:
+    """Stage and capture a raw HTML source through the isolated browser lane."""
+    from vellum_html_source import stage_html_source
+
+    with tempfile.TemporaryDirectory(prefix="vellum-html-source-") as temporary:
+        staging = Path(temporary) / "tree"
+        receipt = stage_html_source(source, staging)
+        metadata = {
+            "producer": receipt["producer"],
+            "fingerprint": receipt["fingerprint"],
+            "preflightSchema": receipt["schema"],
+            "dependencies": receipt["dependencies"],
+        }
+        return run_chrome_interaction_capture(
+            staging, plan, chrome=chrome, profile_factory=profile_factory,
+            process_factory=process_factory, entry=str(receipt["entry"]),
+            source_metadata=metadata,
+        )
 
 
 def stop_browser(
