@@ -1,5 +1,5 @@
 :root { color-scheme: light; }
 body { margin: 0; background: #f4f0e8; color: #222; font-family: sans-serif; }
 main { width: 640px; margin: 48px auto; padding: 32px; background: #fff; }
-.proof-panel { width: 180px; height: 80px; margin: 24px 0; background: #6b4eff; }
+.proof-panel { width: 180px; height: 80px; margin: 24px 0; }
 .mark { width: 32px; height: 32px; }
