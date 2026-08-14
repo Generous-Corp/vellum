@@ -78,6 +78,12 @@ function Install-Payload([string]$Payload) {
     if (Test-Path $cdpSource) {
         Copy-Item $cdpSource $cdpDestination -Force
     }
+    $cdpClientSource = Join-Path $Payload "vellum_cdp_client.py"
+    $cdpClientDestination = Join-Path $library "vellum_cdp_client.py"
+    Remove-Item $cdpClientDestination -Force -ErrorAction SilentlyContinue
+    if (Test-Path $cdpClientSource) {
+        Copy-Item $cdpClientSource $cdpClientDestination -Force
+    }
     Remove-Item (Join-Path $library "bin") -Recurse -Force -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path (Join-Path $library "bin") | Out-Null
     $designIr = Join-Path $Payload "design-ir"
@@ -139,11 +145,12 @@ if ($LocalRoot) {
     $pngTools = Join-Path $LocalRoot "cli\vellum_png.py"
     $imageCompare = Join-Path $LocalRoot "cli\vellum_image_compare.py"
     $cdpAdmission = Join-Path $LocalRoot "cli\vellum_cdp.py"
+    $cdpClient = Join-Path $LocalRoot "cli\vellum_cdp_client.py"
     $agentSkill = Join-Path $LocalRoot ".agents\skills\vellum-app-authoring\SKILL.md"
     $agentManifest = Join-Path $LocalRoot ".agents\skills\vellum-app-authoring\manifest.v1.json"
     $templates = Join-Path $LocalRoot "templates\basic"
     $designIrPackage = Join-Path $LocalRoot "packages\vellum-design-ir"
-    if (!(Test-Path $cli) -or !(Test-Path $dispatcher) -or !(Test-Path $manifestReader) -or !(Test-Path $pngTools) -or !(Test-Path $imageCompare) -or !(Test-Path $cdpAdmission) -or !(Test-Path $agentSkill) -or
+    if (!(Test-Path $cli) -or !(Test-Path $dispatcher) -or !(Test-Path $manifestReader) -or !(Test-Path $pngTools) -or !(Test-Path $imageCompare) -or !(Test-Path $cdpAdmission) -or !(Test-Path $cdpClient) -or !(Test-Path $agentSkill) -or
         !(Test-Path $agentManifest) -or !(Test-Path $templates) -or !(Test-Path $designIrPackage)) {
         throw "Local root lacks the CLI, dispatcher, agent instructions, templates, or DesignIR package."
     }
@@ -156,6 +163,7 @@ if ($LocalRoot) {
         Copy-Item (Join-Path $LocalRoot "cli\vellum_png.py") (Join-Path $temporary "vellum_png.py")
         Copy-Item $imageCompare (Join-Path $temporary "vellum_image_compare.py")
         Copy-Item $cdpAdmission (Join-Path $temporary "vellum_cdp.py")
+        Copy-Item $cdpClient (Join-Path $temporary "vellum_cdp_client.py")
         $temporaryAgentSkills = Join-Path $temporary ".agents\skills"
         New-Item -ItemType Directory -Force -Path $temporaryAgentSkills | Out-Null
         Copy-Item `
