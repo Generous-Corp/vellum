@@ -11,7 +11,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: vellum-product-${{ github.ref }}
+  # GitHub keeps only one pending run per concurrency group. Keep PRs keyed
+  # by ref so obsolete commits are canceled, but isolate every trusted or
+  # manually dispatched run by run ID.
+  group: ${{ github.event_name == 'pull_request' && format('vellum-product-pr-{0}', github.ref) || format('vellum-product-run-{0}', github.run_id) }}
   # A newer PR commit supersedes the older product check. Main and release
   # validation remain non-cancelable.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}

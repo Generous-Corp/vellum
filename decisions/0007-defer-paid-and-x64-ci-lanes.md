@@ -1,8 +1,13 @@
 # Decision 0007: defer paid and x64 CI lanes
 
 - Date: 2026-07-24
-- Status: ARM-only CI is the standing configuration; x64 coverage is an
-  accepted, tracked gap
+- Status: superseded by Decision 0009 for the billing-restored local-first
+  fallback posture; its ARM-only baseline and x64 validation warning remain
+  historical context
+
+Decision 0009 supersedes the prohibition on configuring a hosted fallback.
+It does not authorize hosted capacity as the preferred lane or waive the
+remaining x64 validation gap.
 
 Every Vellum workflow runs on the self-hosted ARM64 fleet, so continuous
 integration costs no GitHub compute minutes. No GitHub-hosted or otherwise

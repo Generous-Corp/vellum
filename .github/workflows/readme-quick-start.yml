@@ -11,7 +11,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: vellum-readme-${{ github.ref }}
+  # GitHub keeps only one pending run per concurrency group. Keep PRs keyed
+  # by ref so obsolete commits are canceled, but isolate scheduled, trusted,
+  # and manually dispatched runs by run ID.
+  group: ${{ github.event_name == 'pull_request' && format('vellum-readme-pr-{0}', github.ref) || format('vellum-readme-run-{0}', github.run_id) }}
   # Keep scheduled, main, and authenticated release checks intact; only
   # obsolete PR quick-start checks may be canceled.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}

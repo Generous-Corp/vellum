@@ -36,6 +36,9 @@ the hosted value rather than leaving jobs queued indefinitely.
 ## Actions-cost controls
 
 - PR workflows use per-ref concurrency and cancel obsolete PR commits.
+- Non-PR workflows use a unique run ID in their concurrency key, preventing
+  GitHub from silently replacing a pending main, tag, scheduled, or manual
+  validation even when cancellation is disabled.
 - Main, tag, manually dispatched, signing, and finalizer runs are never
   canceled by PR concurrency.
 - Required check names and merge-queue semantics remain unchanged.

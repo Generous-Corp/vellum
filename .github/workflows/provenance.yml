@@ -14,7 +14,10 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: vellum-provenance-${{ github.ref }}
+  # GitHub keeps only one pending run per concurrency group. Keep PRs keyed
+  # by ref so obsolete commits are canceled, but isolate every trusted or
+  # manually dispatched run by run ID so pending provenance cannot be lost.
+  group: ${{ github.event_name == 'pull_request' && format('vellum-provenance-pr-{0}', github.ref) || format('vellum-provenance-run-{0}', github.run_id) }}
   # Do not spend a full provenance reconciliation on an obsolete PR commit;
   # trusted main/tag runs remain serialized and non-cancelable.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
