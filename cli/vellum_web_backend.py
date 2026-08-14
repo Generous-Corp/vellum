@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import gzip
 import hashlib
 import html
@@ -21,6 +22,7 @@ import tempfile
 import threading
 import time
 from typing import Any, Iterable
+from urllib.parse import unquote_to_bytes
 
 from vellum_manifest import (
     LOCK_NAME, LOCK_SCHEMA, ManifestError, imported_materialized_design,
@@ -41,6 +43,24 @@ SUPPORTED_TARGET = "web"
 WEB_COMMANDS = {"build", "run", "test", "package"}
 PRIVATE_VELLUM_INCLUDE = re.compile(
     r'^\s*#\s*include\s*[<"](vellum/[^>"]+)[>"]', re.MULTILINE,
+)
+DATA_URL_RE = re.compile(r"data:[^)\s\"'<>]+,[^)\s\"'<>]+", re.IGNORECASE)
+DATA_URL_MIME_RE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*/"
+    r"[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$"
+)
+DATA_URL_EXTENSIONS = {
+    "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif",
+    "image/svg+xml": "svg", "image/webp": "webp", "font/ttf": "ttf",
+    "font/otf": "otf",
+}
+MAX_CAPTURE_NODES = 8192
+MAX_CAPTURE_ASSETS = 128
+MAX_CAPTURE_ASSET_BYTES = 8 * 1024 * 1024
+MAX_CAPTURE_ATTRIBUTE_BYTES = 64 * 1024
+CAPTURE_STYLE_NAMES = (
+    "display", "visibility", "color", "font-size", "background-image",
+    "list-style-image", "content",
 )
 
 
@@ -515,6 +535,238 @@ def validate_scenario_evidence(
         )
 
 
+def _snapshot_string(snapshot: dict[str, Any], value: object, label: str) -> str:
+    strings = snapshot.get("strings")
+    if not isinstance(strings, list):
+        raise BackendFailure("DOMSnapshot omitted its string table", status="test_failed")
+    if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value < len(strings):
+        raise BackendFailure(f"DOMSnapshot {label} has an invalid string index", status="test_failed")
+    text = strings[value]
+    if not isinstance(text, str) or "\0" in text or len(text.encode("utf-8")) > MAX_CAPTURE_ATTRIBUTE_BYTES:
+        raise BackendFailure(f"DOMSnapshot {label} contains an invalid bounded string", status="test_failed")
+    return text
+
+
+def _decode_capture_data_url(value: str) -> tuple[str, bytes]:
+    if not value.startswith("data:"):
+        raise ValueError("not a data URL")
+    header, payload = value[5:].split(",", 1)
+    parts = header.split(";")
+    mime = parts[0].lower()
+    if not DATA_URL_MIME_RE.fullmatch(mime):
+        raise ValueError("data URL has an invalid MIME type")
+    is_base64 = any(part.lower() == "base64" for part in parts[1:])
+    if is_base64:
+        try:
+            decoded = base64.b64decode(payload, validate=True)
+        except (ValueError, base64.binascii.Error) as error:
+            raise ValueError("data URL has malformed base64") from error
+    else:
+        try:
+            decoded = unquote_to_bytes(payload)
+        except (ValueError, UnicodeError) as error:
+            raise ValueError("data URL has malformed percent encoding") from error
+    if len(decoded) > MAX_CAPTURE_ASSET_BYTES:
+        raise ValueError("data URL payload is oversized")
+    return mime, decoded
+
+
+def _localize_snapshot_data_urls(snapshot: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], int]:
+    """Extract only bounded data URLs from the browser-owned string table."""
+    strings = snapshot.get("strings")
+    if not isinstance(strings, list) or len(strings) > MAX_CAPTURE_NODES * 16:
+        raise BackendFailure("DOMSnapshot string table is missing or oversized", status="test_failed")
+    records: dict[str, dict[str, Any]] = {}
+    total_bytes = 0
+    observed_urls = 0
+    for text in strings:
+        if not isinstance(text, str):
+            raise BackendFailure("DOMSnapshot string table contains a non-string", status="test_failed")
+        for match in DATA_URL_RE.finditer(text):
+            observed_urls += 1
+            if observed_urls > MAX_CAPTURE_ASSETS * 4:
+                raise BackendFailure("browser capture contains too many data URLs", status="test_failed")
+            raw = match.group(0)
+            try:
+                mime, payload = _decode_capture_data_url(raw)
+            except ValueError as error:
+                raise BackendFailure(str(error), status="test_failed") from error
+            digest = hashlib.sha256(payload).hexdigest()
+            content_hash = f"sha256:{digest}"
+            if content_hash in records:
+                continue
+            total_bytes += len(payload)
+            if total_bytes > MAX_CAPTURE_ASSET_BYTES:
+                raise BackendFailure("localized browser assets exceed the bounded capture budget", status="test_failed")
+            extension = DATA_URL_EXTENSIONS.get(mime, "bin")
+            uri = f"assets/{digest}.{extension}"
+            records[content_hash] = {
+                "asset": {
+                    "id": f"data-{digest[:12]}",
+                    "contentHash": content_hash,
+                    "uri": uri,
+                    "mimeType": mime,
+                    "byteLength": len(payload),
+                },
+                "bytes": base64.b64encode(payload).decode("ascii"),
+                "raw": raw,
+            }
+    return records, observed_urls
+
+
+def _replace_data_urls(value: str, records: dict[str, dict[str, Any]]) -> tuple[str, list[str]]:
+    references: list[str] = []
+
+    def replace(match: re.Match[str]) -> str:
+        raw = match.group(0)
+        try:
+            _, payload = _decode_capture_data_url(raw)
+        except ValueError as error:
+            raise BackendFailure(str(error), status="test_failed") from error
+        content_hash = f"sha256:{hashlib.sha256(payload).hexdigest()}"
+        record = records.get(content_hash)
+        if record is None:
+            raise BackendFailure("DOMSnapshot data URL was not localized", status="test_failed")
+        uri = record["asset"]["uri"]
+        references.append(uri)
+        return uri
+
+    return DATA_URL_RE.sub(replace, value), references
+
+
+def _snapshot_node_value(snapshot: dict[str, Any], nodes: dict[str, Any], key: str, index: int) -> str:
+    values = nodes.get(key)
+    if not isinstance(values, list) or index >= len(values):
+        return ""
+    value = values[index]
+    return _snapshot_string(snapshot, value, f"{key}[{index}]") if value is not None else ""
+
+
+def lower_dom_snapshot(
+    snapshot: dict[str, Any], *, settled_snapshot: dict[str, Any], screenshot: dict[str, Any],
+    interaction_evidence: list[dict[str, Any]] | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
+    """Lower Chrome's bounded DOMSnapshot into the browser capture source model."""
+    documents = snapshot.get("documents")
+    if not isinstance(documents, list) or len(documents) != 1 or not isinstance(documents[0], dict):
+        raise BackendFailure("DOMSnapshot must contain exactly one document", status="test_failed")
+    document = documents[0]
+    nodes = document.get("nodes")
+    if not isinstance(nodes, dict):
+        raise BackendFailure("DOMSnapshot document omitted nodes", status="test_failed")
+    node_types = nodes.get("nodeType")
+    parents = nodes.get("parentIndex")
+    if not isinstance(node_types, list) or not isinstance(parents, list) or len(node_types) != len(parents):
+        raise BackendFailure("DOMSnapshot node arrays are malformed", status="test_failed")
+    if not node_types or len(node_types) > MAX_CAPTURE_NODES:
+        raise BackendFailure("DOMSnapshot node count is outside the bounded range", status="test_failed")
+    records, observed_urls = _localize_snapshot_data_urls(snapshot)
+    source_nodes: list[dict[str, Any] | None] = [None] * len(node_types)
+    included: set[int] = set()
+    for index, node_type in enumerate(node_types):
+        if node_type not in {1, 3, 9, 11}:
+            continue
+        name = _snapshot_node_value(snapshot, nodes, "nodeName", index)
+        value = _snapshot_node_value(snapshot, nodes, "nodeValue", index)
+        properties: dict[str, Any] = {"domNodeIndex": index}
+        if node_type == 1:
+            properties["tagName"] = name.lower()
+            attributes = nodes.get("attributes")
+            attr_values = attributes[index] if isinstance(attributes, list) and index < len(attributes) else []
+            if not isinstance(attr_values, list) or len(attr_values) % 2:
+                raise BackendFailure("DOMSnapshot attributes are malformed", status="test_failed")
+            attr_map: dict[str, str] = {}
+            refs: list[str] = []
+            for pair in range(0, len(attr_values), 2):
+                key = _snapshot_string(snapshot, attr_values[pair], f"attribute name[{index}]")
+                attr = _snapshot_string(snapshot, attr_values[pair + 1], f"attribute value[{index}]")
+                replaced, found = _replace_data_urls(attr, records)
+                attr_map[key] = replaced
+                refs.extend(found)
+            properties["attributes"] = attr_map
+            if refs:
+                properties["assetRefs"] = sorted(set(refs))
+        elif node_type == 3 and value:
+            properties["domNodeIndex"] = index
+        raw: dict[str, Any] = {
+            "sourceId": f"dom-{index}",
+            "kind": "text" if node_type == 3 else "view",
+            "name": name.lower() if name else ("Document" if node_type == 9 else "node"),
+            "properties": properties,
+            "children": [],
+        }
+        if node_type == 3 and value:
+            raw["text"] = value[:MAX_CAPTURE_ATTRIBUTE_BYTES]
+        if node_type == 1:
+            role = properties["attributes"].get("role") or properties["attributes"].get("aria-role")
+            semantic_id = properties["attributes"].get("data-vellum-id")
+            if isinstance(role, str) and role:
+                raw["role"] = role[:256]
+            if isinstance(semantic_id, str) and semantic_id:
+                raw["semanticId"] = semantic_id[:256]
+                # An explicit application identity is more durable than the
+                # transient DOM index and therefore takes the canonical
+                # semantic-identity path.
+                raw.pop("sourceId", None)
+            else:
+                raw["sourceId"] = f"dom-{index}"
+        source_nodes[index] = raw
+        included.add(index)
+    layout = document.get("layout")
+    if isinstance(layout, dict):
+        layout_indices = layout.get("nodeIndex")
+        layout_styles = layout.get("styles")
+        if layout_indices is not None or layout_styles is not None:
+            if not isinstance(layout_indices, list) or not isinstance(layout_styles, list) or len(layout_indices) != len(layout_styles):
+                raise BackendFailure("DOMSnapshot layout arrays are malformed", status="test_failed")
+            for row_index, node_index in enumerate(layout_indices):
+                if not isinstance(node_index, int) or node_index not in included:
+                    raise BackendFailure("DOMSnapshot layout references an invalid node", status="test_failed")
+                row = layout_styles[row_index]
+                if not isinstance(row, list) or len(row) > len(CAPTURE_STYLE_NAMES):
+                    raise BackendFailure("DOMSnapshot computed styles are malformed", status="test_failed")
+                computed: dict[str, str] = {}
+                refs: list[str] = []
+                for style_index, string_index in enumerate(row):
+                    value = _snapshot_string(snapshot, string_index, f"computed style[{node_index}]")
+                    replaced, found = _replace_data_urls(value, records)
+                    computed[CAPTURE_STYLE_NAMES[style_index]] = replaced
+                    refs.extend(found)
+                source_nodes[node_index]["properties"]["computedStyles"] = computed  # type: ignore[index]
+                if refs:
+                    existing = source_nodes[node_index]["properties"].get("assetRefs", [])  # type: ignore[index]
+                    source_nodes[node_index]["properties"]["assetRefs"] = sorted(set(existing + refs))  # type: ignore[index]
+    if not included:
+        raise BackendFailure("DOMSnapshot contained no lowerable nodes", status="test_failed")
+    root_index = next((index for index in sorted(included) if node_types[index] == 9), min(included))
+    for index in sorted(included):
+        if index == root_index:
+            continue
+        parent = parents[index]
+        while isinstance(parent, int) and parent >= 0 and parent not in included:
+            parent = parents[parent] if parent < len(parents) else -1
+        if not isinstance(parent, int) or parent < 0 or parent == index:
+            parent = root_index
+        source_nodes[parent]["children"].append(source_nodes[index])  # type: ignore[index]
+    assets = [record["asset"] for record in records.values()]
+    assets.sort(key=lambda item: item["id"])
+    evidence = {
+        "schema": "vellum.browser-capture-evidence.v1",
+        "interactionEvidence": interaction_evidence or [],
+        "domNodeCount": len(included),
+        "observedDataUrls": observed_urls,
+        "localizedAssets": [
+            {**record["asset"], "data": record["bytes"]}
+            for record in sorted(records.values(), key=lambda item: item["asset"]["id"])
+        ],
+        "settledSnapshot": settled_snapshot,
+        "screenshot": screenshot,
+    }
+    root = source_nodes[root_index]
+    root["properties"]["captureEvidence"] = evidence  # type: ignore[index]
+    return root, assets, evidence
+
+
 def run_chrome_scenario(
     url: str,
     received: Any,
@@ -606,6 +858,12 @@ def run_chrome_interaction_capture(
                     settled_snapshot = client.settle_idle()
                     screenshot = client.capture_screenshot()
                     viewport = client.viewport()
+                    root, assets, capture_evidence = lower_dom_snapshot(
+                        settled_snapshot,
+                        settled_snapshot=settled_snapshot,
+                        screenshot=screenshot,
+                        interaction_evidence=evidence,
+                    )
                     browser = discovery.get("Browser")
                     if not isinstance(browser, str) or not browser:
                         raise BackendFailure("Browser CDP discovery omitted exact browser identity", status="test_failed")
@@ -617,7 +875,10 @@ def run_chrome_interaction_capture(
                         "evidence": evidence,
                         "settledSnapshot": settled_snapshot,
                         "screenshot": screenshot,
+                        "root": root,
+                        "assets": assets,
                     }, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:32]
+                    root["properties"]["captureEvidence"]["captureId"] = capture_id
                     return {
                         "schema": "vellum.browser-capture-envelope.v1",
                         "captureId": capture_id,
@@ -628,15 +889,8 @@ def run_chrome_interaction_capture(
                             "plan": plan["name"],
                         },
                         "viewport": viewport,
-                        "root": {
-                            "kind": "view", "semanticId": "document", "name": "Browser document",
-                            "properties": {
-                                "captureEvidence": evidence,
-                                "settledSnapshot": settled_snapshot,
-                                "screenshot": screenshot,
-                            }, "children": [],
-                        },
-                        "assets": [], "diagnostics": [],
+                        "root": root,
+                        "assets": assets, "diagnostics": [],
                     }
                 finally:
                     if client is not None:

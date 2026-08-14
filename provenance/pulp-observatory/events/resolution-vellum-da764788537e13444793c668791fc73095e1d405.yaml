@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-da764788537e13444793c668791fc73095e1d405",
+  "kind": "resolution",
+  "created_at": "2026-08-14T05:06:00Z",
+  "resolves": "vellum-da764788537e13444793c668791fc73095e1d405",
+  "disposition": "framework-only",
+  "rationale": "Vellum-owned live browser capture lowering and DesignIR asset evidence. The clean Pulp authority projection was reviewed; no Pulp source port is required. Any later Pulp adoption must consume the released Vellum behavior through an explicit adapter and contract tests, not synchronized source copies.",
+  "owner": "@danielraffel",
+  "linked_commits": ["da764788537e13444793c668791fc73095e1d405"],
+  "linked_pull_requests": [],
+  "contract_tests": ["vellum-design-ir", "vellum-design-ir-sterile-consumer"],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 0
+}

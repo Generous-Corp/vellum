@@ -1,0 +1,42 @@
+{
+  "class": "schema",
+  "contract_keys": [
+    "design-schema-compiler"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-08-14T05:05:00Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-da764788537e13444793c668791fc73095e1d405",
+  "include_dependency_deltas": [],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "design-schema-compiler"
+  ],
+  "mapped_paths": [
+    "packages/vellum-design-ir/test/browser-capture.test.js"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "a57bc0748f01a15e304568b57aea6eccc2cb304b",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "846ff309c7ace0211645d04188b2e6b3be228527",
+    "to_commit": "da764788537e13444793c668791fc73095e1d405"
+  },
+  "schema_api_deltas": [
+    "packages/vellum-design-ir/test/browser-capture.test.js"
+  ],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "da764788537e13444793c668791fc73095e1d405",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}

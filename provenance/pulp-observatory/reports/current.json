@@ -7804,9 +7804,21 @@
       ],
       "source_commit": "6b0cd5f3882cd6d715532eb5d3cec3d83f0e411e",
       "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "schema",
+      "deadline": "2026-08-19T05:05:00Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-da764788537e13444793c668791fc73095e1d405",
+      "mapped_contracts": [
+        "design-schema-compiler"
+      ],
+      "source_commit": "da764788537e13444793c668791fc73095e1d405",
+      "source_repository": "Generous-Corp/vellum"
     }
   ],
-  "generated_at": "2026-08-14T04:36:36Z",
+  "generated_at": "2026-08-14T05:45:00Z",
   "health": "pass",
   "maximum_pending_age_days": 0.0,
   "observatory_effort_percent": 0.0,

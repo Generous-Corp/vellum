@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import base64
 import json
 import os
 import runpy
@@ -28,6 +29,7 @@ validate_scenario_document = BACKEND_MODULE["validate_scenario_document"]
 validate_component_source = BACKEND_MODULE["validate_component_source"]
 build_component_modules = BACKEND_MODULE["build_component_modules"]
 contains_sdk_install_path = BACKEND_MODULE["contains_sdk_install_path"]
+lower_dom_snapshot = BACKEND_MODULE["lower_dom_snapshot"]
 chrome_path = BACKEND_MODULE["chrome_path"]
 BackendFailure = BACKEND_MODULE["BackendFailure"]
 
@@ -91,6 +93,57 @@ class ChromeDiscoveryTests(unittest.TestCase):
         with mock.patch.dict("os.environ", environment, clear=True), \
                 mock.patch.object(shutil, "which", return_value="/usr/bin/google-chrome"):
             self.assertEqual(chrome_path(), "/usr/bin/google-chrome")
+
+
+class BrowserCaptureLoweringTests(unittest.TestCase):
+    def test_dom_snapshot_lowers_nodes_and_localizes_data_url_assets(self) -> None:
+        payload = b"capture-asset"
+        encoded = base64.b64encode(payload).decode("ascii")
+        snapshot = {
+            "strings": [
+                "#document", "HTML", "IMG", "hello", "src", "data-vellum-id",
+                "logo", "data:image/png;base64," + encoded, "block", "visible",
+                "rgb(0, 0, 0)", "16px", "url(data:image/png;base64," + encoded + ")",
+                "none", "data:field",
+            ],
+            "documents": [{
+                "nodes": {
+                    "nodeType": [9, 1, 1, 3],
+                    "nodeName": [0, 1, 2, 3],
+                    "nodeValue": [None, None, None, 3],
+                    "parentIndex": [-1, 0, 1, 2],
+                    "attributes": [[], [], [4, 7, 5, 6], []],
+                },
+                "layout": {"nodeIndex": [2], "styles": [[8, 9, 10, 11, 12, 13, 14]]},
+            }],
+        }
+        root, assets, evidence = lower_dom_snapshot(
+            snapshot,
+            settled_snapshot=snapshot,
+            screenshot={"mimeType": "image/png", "data": "iVBORw0KGgo=", "byteLength": 8},
+            interaction_evidence=[{"action": "snapshot", "name": "saved"}],
+        )
+        self.assertEqual(root["sourceId"], "dom-0")
+        image = root["children"][0]["children"][0]
+        self.assertEqual(image["semanticId"], "logo")
+        self.assertEqual(len(assets), 1)
+        self.assertEqual(image["properties"]["assetRefs"], [assets[0]["uri"]])
+        self.assertIn(assets[0]["uri"], image["properties"]["computedStyles"]["background-image"])
+        self.assertEqual(evidence["interactionEvidence"], [{"action": "snapshot", "name": "saved"}])
+        self.assertEqual(evidence["localizedAssets"][0]["data"], encoded)
+
+    def test_dom_snapshot_rejects_oversized_asset_budget(self) -> None:
+        snapshot = {
+            "strings": ["#document", "data:text/plain," + ("x" * (8 * 1024 * 1024 + 1))],
+            "documents": [{
+                "nodes": {
+                    "nodeType": [9], "nodeName": [0], "nodeValue": [None],
+                    "parentIndex": [-1], "attributes": [[]],
+                },
+            }],
+        }
+        with self.assertRaises(BackendFailure):
+            lower_dom_snapshot(snapshot, settled_snapshot=snapshot, screenshot={})
 
 
 class WebScenarioEvidenceTests(unittest.TestCase):

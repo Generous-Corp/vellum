@@ -604,6 +604,7 @@
 | `pulp-d9b558f3510c82e10d2239e72e5a2705e56ed27f` | Pulp-to-framework | build | superseded | 2026-08-20T21:00:00Z |
 | `vellum-71419280001d9a51f310874b42b64e2c2d06274e` | framework-to-Pulp | schema | framework-only | 2026-08-19T02:41:10Z |
 | `vellum-6b0cd5f3882cd6d715532eb5d3cec3d83f0e411e` | framework-to-Pulp | schema | framework-only | 2026-08-19T02:56:55Z |
+| `vellum-da764788537e13444793c668791fc73095e1d405` | framework-to-Pulp | schema | framework-only | 2026-08-19T05:05:00Z |
 
 ## Release blockers
 
