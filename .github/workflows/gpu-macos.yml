@@ -13,8 +13,14 @@ permissions:
   contents: read
 
 concurrency:
-  group: vellum-gpu-${{ github.ref }}
-  cancel-in-progress: false
+  # GitHub keeps only one pending run per concurrency group. Keep PRs keyed
+  # by ref so obsolete commits are canceled, but isolate every trusted or
+  # manually dispatched run by run ID so it cannot replace another pending
+  # main, tag, schedule, or manual validation.
+  group: ${{ github.event_name == 'pull_request' && format('vellum-gpu-pr-{0}', github.ref) || format('vellum-gpu-run-{0}', github.run_id) }}
+  # Preserve trusted main/tag and manually dispatched proofs; obsolete PR
+  # commits should not consume another full macOS GPU run.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   VELLUM_RELEASE_VERSION: 0.1.7
