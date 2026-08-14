@@ -141,7 +141,7 @@ Run a plan against the built web application and retain its live browser
 evidence in a capture envelope:
 
 ```sh
-vellum web test --interaction-plan tests/save-board-plan.json
+vellum test --target web --interaction-plan tests/save-board-plan.json
 ```
 
 The command starts a temporary loopback server, launches the configured

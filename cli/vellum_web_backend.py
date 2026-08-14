@@ -555,9 +555,6 @@ def run_chrome_interaction_capture(
     process_factory: Any = subprocess.Popen,
 ) -> dict[str, Any]:
     """Execute a bounded CDP plan and retain its live capture envelope."""
-    capture_id = hashlib.sha256(
-        json.dumps(plan, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()[:32]
     browser_executable = chrome or chrome_path()
     exact_browser_version = browser_version(Path(browser_executable))
     server = ThreadingHTTPServer(("127.0.0.1", 0),
@@ -574,6 +571,7 @@ def run_chrome_interaction_capture(
                     browser_executable, "--headless=new", "--disable-gpu-sandbox",
                     "--no-first-run", "--disable-background-networking",
                     *admission.chrome_arguments(),
+                    "--window-size=1280,720",
                     f"--user-data-dir={profile}",
                     f"http://127.0.0.1:{server.server_port}/index.html",
                 ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True,
@@ -602,12 +600,20 @@ def run_chrome_interaction_capture(
                         raise BackendFailure(
                             f"Browser CDP did not become ready: {last_error}",
                             status="test_failed",
-                        )
+                    )
                     client.wait_for_dom()
                     evidence = client.execute_interaction_plan(plan)
+                    viewport = client.viewport()
                     browser = discovery.get("Browser")
                     if not isinstance(browser, str) or not browser:
                         raise BackendFailure("Browser CDP discovery omitted exact browser identity", status="test_failed")
+                    capture_id = hashlib.sha256(json.dumps({
+                        "plan": plan,
+                        "browser": browser,
+                        "browserVersion": exact_browser_version,
+                        "viewport": viewport,
+                        "evidence": evidence,
+                    }, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:32]
                     return {
                         "schema": "vellum.browser-capture-envelope.v1",
                         "captureId": capture_id,
@@ -617,7 +623,7 @@ def run_chrome_interaction_capture(
                             "browserVersion": exact_browser_version,
                             "plan": plan["name"],
                         },
-                        "viewport": {"width": 1280, "height": 720},
+                        "viewport": viewport,
                         "root": {
                             "kind": "view", "semanticId": "document", "name": "Browser document",
                             "properties": {"captureEvidence": evidence}, "children": [],

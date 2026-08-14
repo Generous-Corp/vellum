@@ -32,6 +32,7 @@ ALLOWED_COMMANDS = {
     "Input.dispatchMouseEvent",
     "Input.insertText",
     "Page.enable",
+    "Page.getLayoutMetrics",
     "Page.navigate",
     "DOMSnapshot.captureSnapshot",
 }
@@ -155,7 +156,33 @@ class CdpClient:
     def navigate(self, url: str) -> dict[str, Any]:
         _loopback_url(url)
         self.command("Page.enable")
-        return self.command("Page.navigate", {"url": url})
+        result = self.command("Page.navigate", {"url": url})
+        error_text = result.get("errorText")
+        if isinstance(error_text, str) and error_text:
+            raise CdpClientError(f"browser navigation failed: {error_text}")
+        return result
+
+    def viewport(self) -> dict[str, int]:
+        metrics = self.command("Page.getLayoutMetrics")
+        visual = metrics.get("visualViewport")
+        layout = metrics.get("layoutViewport")
+        candidate = visual if isinstance(visual, dict) else layout
+        if not isinstance(candidate, dict):
+            raise CdpClientError("CDP response omitted viewport metrics")
+        width = candidate.get("clientWidth", candidate.get("width"))
+        height = candidate.get("clientHeight", candidate.get("height"))
+        def bounded_integer(value: object) -> int | None:
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return None
+            if isinstance(value, float) and not value.is_integer():
+                return None
+            integer = int(value)
+            return integer if 1 <= integer <= 16384 else None
+        width_int = bounded_integer(width)
+        height_int = bounded_integer(height)
+        if width_int is None or height_int is None:
+            raise CdpClientError("CDP viewport metrics are malformed or unbounded")
+        return {"width": width_int, "height": height_int}
 
     def capture_dom_snapshot(self, computed_styles: list[str]) -> dict[str, Any]:
         if not isinstance(computed_styles, list) or not computed_styles or len(computed_styles) > MAX_COMPUTED_STYLES:

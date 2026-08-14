@@ -1298,7 +1298,10 @@ def parser() -> argparse.ArgumentParser:
             ("--self-test", {"action": "store_true"}),
             ("--no-window", {"action": "store_true"}),
         ],
-        "test": [("--scenario", {}), ("--target", {"default": "macos"})],
+        "test": [
+            ("--scenario", {}), ("--interaction-plan", {}),
+            ("--target", {"default": "macos"}),
+        ],
         "capture": [
             ("--scenario", {}), ("--matrix", {}), ("--montage", {"action": "store_true"}),
             ("--output", {}), ("--target", {"default": "macos"}),
