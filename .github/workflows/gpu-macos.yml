@@ -372,6 +372,8 @@ jobs:
             "$prefix/bin/vellum" --json import \
               "$source" --project "$project" \
               --source-type html --as main
+          cp "$GITHUB_WORKSPACE/fixtures/html-import/scenario.json" \
+            "$project/tests/scenarios/html-import.json"
           python3 - "$RUNNER_TEMP/html-import.json" "$project" <<'PY'
           import json
           import pathlib
@@ -397,7 +399,7 @@ jobs:
             "$prefix/bin/vellum" --json build --project "$project" --target macos
           run_json "$RUNNER_TEMP/html-import-capture.json" \
             "$prefix/bin/vellum" --json capture --project "$project" --target macos \
-              --scenario smoke --output "artifacts/html-import-proof.png"
+              --scenario html-import --output "artifacts/html-import-proof.png"
           file "$project/artifacts/html-import-proof.png"
           shasum -a 256 "$project/artifacts/html-import-proof.png" \
             > "$project/artifacts/html-import-proof.png.sha256"
