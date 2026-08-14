@@ -37,6 +37,16 @@ The versioned matrix is checked into the application:
 }
 ```
 
+The retained browser result may be represented as a
+`vellum.browser-capture-envelope.v1` document. It records the capture ID,
+numeric-loopback source URL, exact browser provenance, viewport, semantic root,
+localized asset records, and bounded diagnostics. The DesignIR package exports
+`lowerBrowserCaptureToDesignIR(envelope)`, which validates the envelope and
+lowers it through the same deterministic canonical normalizer used by other
+adapters. Unknown envelope fields, malformed viewport metadata, and oversized
+diagnostic lists fail closed; the browser is never linked into DesignIR or
+render libraries.
+
 Each source PNG remains beside the montage under
 `<montage-stem>-captures/`. The compositor is an installed, dependency-free,
 bounded PNG implementation. It validates CRCs, decoded dimensions, pixel

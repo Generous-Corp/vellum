@@ -27,6 +27,11 @@ export {
     FIGMA_PLUGIN_PARSER_VERSION,
 } from './figma-plugin.js';
 export { decodeAssetDataUrl, localizeAssetDataUrl, normalizeSha256ContentHash } from './assets.js';
+export {
+    BROWSER_CAPTURE_ENVELOPE_SCHEMA,
+    lowerBrowserCaptureToDesignIR,
+    validateBrowserCaptureEnvelope,
+} from './browser-capture.js';
 export { applyAuthoredOverlay, emptyAuthoredOverlay, resolveReference } from './overlay.js';
 export { reimportDesign } from './reimport.js';
 export { canonicalize, deepClone, fnv1a32, jsonEqual, stableStringify } from './stable-json.js';
