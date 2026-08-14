@@ -348,6 +348,50 @@ jobs:
             --output "$RUNNER_TEMP/templates-smoke.json" \
             --json > "$RUNNER_TEMP/templates-smoke.stdout.json"
 
+      - name: Prove installed HTML import through DesignIR and GPU capture
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix="$RUNNER_TEMP/templates-smoke-sdk"
+          project="$RUNNER_TEMP/html-import-proof"
+          source="$GITHUB_WORKSPACE/fixtures/html-import/index.html"
+          "$prefix/bin/vellum" --json create "HTML Import Proof" \
+            --directory "$project" --no-verify \
+            > "$RUNNER_TEMP/html-import-create.json"
+          "$prefix/bin/vellum" --json import \
+            --project "$project" \
+            --source-type html "$source" --as main \
+            > "$RUNNER_TEMP/html-import.json"
+          python3 - "$RUNNER_TEMP/html-import.json" "$project" <<'PY'
+          import json
+          import pathlib
+          import sys
+          payload = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          if payload.get("status") != "imported":
+              raise SystemExit(f"HTML import failed: {payload}")
+          project = pathlib.Path(sys.argv[2])
+          snapshot = next((project / "sources/imported/main").glob("*/source.json"))
+          capture = next((project / "sources/imported/main").glob("*/capture.json"))
+          provenance = json.loads(next((project / "sources/imported/main").glob("*/provenance.json")).read_text())
+          lock = json.loads((project / "design/import.lock.json").read_text())
+          if not snapshot.is_file() or not capture.is_file():
+              raise SystemExit("HTML import did not retain source and capture snapshots")
+          if provenance["sourceArtifact"]["kind"] != "html":
+              raise SystemExit("HTML import did not retain html source artifact provenance")
+          if lock["sources"]["main"]["sourceArtifactKind"] != "html":
+              raise SystemExit("HTML import lock lost html artifact identity")
+          PY
+          "$prefix/bin/vellum" --json design check --project "$project" --as main \
+            > "$RUNNER_TEMP/html-import-design-check.json"
+          "$prefix/bin/vellum" --json build --project "$project" --target macos \
+            > "$RUNNER_TEMP/html-import-build.json"
+          "$prefix/bin/vellum" --json capture --project "$project" --target macos \
+            --scenario smoke --output "$RUNNER_TEMP/html-import-proof.png" \
+            > "$RUNNER_TEMP/html-import-capture.json"
+          file "$RUNNER_TEMP/html-import-proof.png"
+          shasum -a 256 "$RUNNER_TEMP/html-import-proof.png" \
+            > "$RUNNER_TEMP/html-import-proof.png.sha256"
+
       - name: Record private-release trust controls
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
@@ -466,6 +510,10 @@ jobs:
             ${{ runner.temp }}/vellum-gpu-proof.sha256
             ${{ runner.temp }}/vellum-gpu-dylib-load-commands.txt
             ${{ runner.temp }}/vellum-gpu-app-load-commands.txt
+            ${{ runner.temp }}/html-import-proof.png
+            ${{ runner.temp }}/html-import-proof.png.sha256
+            ${{ runner.temp }}/html-import.json
+            ${{ runner.temp }}/html-import-design-check.json
             ${{ runner.temp }}/${{ env.VELLUM_RELEASE_ARCHIVE }}
             ${{ runner.temp }}/install.sh
             ${{ runner.temp }}/install_core.py

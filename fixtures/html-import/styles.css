@@ -1,0 +1,4 @@
+:root { color-scheme: light; }
+body { margin: 0; background: #f4f0e8; color: #222; font-family: sans-serif; }
+main { width: 640px; margin: 48px auto; padding: 32px; background: #fff; }
+.mark { width: 32px; height: 32px; }
