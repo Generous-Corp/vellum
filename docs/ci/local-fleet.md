@@ -38,6 +38,13 @@ runner name in a workflow.
 | M1/M3/M5 Tart macOS | `self-hosted`, `macOS`, `ARM64`, `vellum-build-macos` plus a host capability label | Vellum arm64 macOS build/test jobs |
 | Mac mini native macOS | `self-hosted`, `macOS`, `X64`, `vellum-build-macos-intel`, `vellum-host-macmini` | Explicit Intel/macOS canary jobs only |
 
+The corresponding repository-scoped runner groups are `vellum-pr-safe-build`
+for unprivileged PR Linux, `vellum-macos-build` for PR macOS,
+`vellum-release-build` for build-only release preparation,
+`vellum-macos-intel` for the Mac mini canary, and `vellum-windows-build` for
+the Mac Pro Windows candidate. These groups are selected for Vellum only; they
+must never be shared with Pulp or another repository.
+
 The Mac mini is bare-metal Intel and does not run TartCI. M1, M3, and M5 are
 Apple-silicon TartCI hosts. The Mac Pro is an x86_64 Proxmox/Linux host and is
 not an Apple-silicon Tart lane. A host label is for capacity selection and
@@ -136,12 +143,13 @@ disposable jobs finish or tear down.
 
 ## Current status
 
-As of 2026-08-14, Vellum PR #35 is still using hosted selectors while the
-local lanes are being separately generalized and proved. The Mac Pro provider
-is currently Pulp-scoped, and its available capacity must not be assumed to be
-Vellum capacity until a Vellum-specific registration, label, teardown, and
-workflow proof has passed. The Tart macOS hosts likewise need a Vellum-scoped
-runner registration and golden-image proof before Vellum variables are changed.
+As of 2026-08-14, the Vellum-specific repository groups have been created, but
+PR #35 is still using hosted selectors while the local lanes are separately
+generalized and proved. The Mac Pro provider is currently Pulp-scoped, and its
+available capacity must not be assumed to be Vellum capacity until a
+Vellum-specific registration, label, teardown, and workflow proof has passed.
+The Tart macOS hosts likewise need a Vellum-scoped runner registration and
+golden-image proof before Vellum variables are changed.
 
 This note is therefore an onboarding contract and target architecture, not a
 claim that all local lanes are already enabled.
