@@ -86,3 +86,12 @@ ignored.
 This is semantic retained-tree automation, not browser automation. Pointer
 coordinates, accessibility queries, arbitrary key chords, arbitrary IME input,
 and richer synchronization are not supported.
+
+The web proof launcher places Chromium's DevTools Protocol on a private
+loopback port and exposes it only through the short-lived
+`vellum.cdp-admission.v1` proxy. CDP discovery and WebSocket paths require a
+fresh bearer token; the token is never included in endpoint metadata or logs.
+The launcher also disables the proxy and rejects non-loopback browser access.
+This is an admission boundary, not a claim that the current semantic scenario
+API exposes arbitrary CDP operations. Navigation, DOMSnapshot, computed-style,
+asset extraction, and bounded CDP interaction remain subsequent P4 work.
