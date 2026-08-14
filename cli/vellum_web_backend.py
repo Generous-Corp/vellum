@@ -44,7 +44,7 @@ WEB_COMMANDS = {"build", "run", "test", "package"}
 PRIVATE_VELLUM_INCLUDE = re.compile(
     r'^\s*#\s*include\s*[<"](vellum/[^>"]+)[>"]', re.MULTILINE,
 )
-DATA_URL_RE = re.compile(r"data:[^)\s\"'<>]+", re.IGNORECASE)
+DATA_URL_RE = re.compile(r"data:[^)\s\"'<>]+,[^)\s\"'<>]+", re.IGNORECASE)
 DATA_URL_MIME_RE = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*/"
     r"[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$"
@@ -58,6 +58,10 @@ MAX_CAPTURE_NODES = 8192
 MAX_CAPTURE_ASSETS = 128
 MAX_CAPTURE_ASSET_BYTES = 8 * 1024 * 1024
 MAX_CAPTURE_ATTRIBUTE_BYTES = 64 * 1024
+CAPTURE_STYLE_NAMES = (
+    "display", "visibility", "color", "font-size", "background-image",
+    "list-style-image", "content",
+)
 
 
 class BackendFailure(RuntimeError):
@@ -640,6 +644,7 @@ def _snapshot_node_value(snapshot: dict[str, Any], nodes: dict[str, Any], key: s
 
 def lower_dom_snapshot(
     snapshot: dict[str, Any], *, settled_snapshot: dict[str, Any], screenshot: dict[str, Any],
+    interaction_evidence: list[dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
     """Lower Chrome's bounded DOMSnapshot into the browser capture source model."""
     documents = snapshot.get("documents")
@@ -707,6 +712,30 @@ def lower_dom_snapshot(
                 raw["sourceId"] = f"dom-{index}"
         source_nodes[index] = raw
         included.add(index)
+    layout = document.get("layout")
+    if isinstance(layout, dict):
+        layout_indices = layout.get("nodeIndex")
+        layout_styles = layout.get("styles")
+        if layout_indices is not None or layout_styles is not None:
+            if not isinstance(layout_indices, list) or not isinstance(layout_styles, list) or len(layout_indices) != len(layout_styles):
+                raise BackendFailure("DOMSnapshot layout arrays are malformed", status="test_failed")
+            for row_index, node_index in enumerate(layout_indices):
+                if not isinstance(node_index, int) or node_index not in included:
+                    raise BackendFailure("DOMSnapshot layout references an invalid node", status="test_failed")
+                row = layout_styles[row_index]
+                if not isinstance(row, list) or len(row) > len(CAPTURE_STYLE_NAMES):
+                    raise BackendFailure("DOMSnapshot computed styles are malformed", status="test_failed")
+                computed: dict[str, str] = {}
+                refs: list[str] = []
+                for style_index, string_index in enumerate(row):
+                    value = _snapshot_string(snapshot, string_index, f"computed style[{node_index}]")
+                    replaced, found = _replace_data_urls(value, records)
+                    computed[CAPTURE_STYLE_NAMES[style_index]] = replaced
+                    refs.extend(found)
+                source_nodes[node_index]["properties"]["computedStyles"] = computed  # type: ignore[index]
+                if refs:
+                    existing = source_nodes[node_index]["properties"].get("assetRefs", [])  # type: ignore[index]
+                    source_nodes[node_index]["properties"]["assetRefs"] = sorted(set(existing + refs))  # type: ignore[index]
     if not included:
         raise BackendFailure("DOMSnapshot contained no lowerable nodes", status="test_failed")
     root_index = next((index for index in sorted(included) if node_types[index] == 9), min(included))
@@ -723,6 +752,7 @@ def lower_dom_snapshot(
     assets.sort(key=lambda item: item["id"])
     evidence = {
         "schema": "vellum.browser-capture-evidence.v1",
+        "interactionEvidence": interaction_evidence or [],
         "domNodeCount": len(included),
         "observedDataUrls": observed_urls,
         "localizedAssets": [
@@ -832,6 +862,7 @@ def run_chrome_interaction_capture(
                         settled_snapshot,
                         settled_snapshot=settled_snapshot,
                         screenshot=screenshot,
+                        interaction_evidence=evidence,
                     )
                     browser = discovery.get("Browser")
                     if not isinstance(browser, str) or not browser:

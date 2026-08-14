@@ -102,7 +102,9 @@ class BrowserCaptureLoweringTests(unittest.TestCase):
         snapshot = {
             "strings": [
                 "#document", "HTML", "IMG", "hello", "src", "data-vellum-id",
-                "logo", "data:image/png;base64," + encoded,
+                "logo", "data:image/png;base64," + encoded, "block", "visible",
+                "rgb(0, 0, 0)", "16px", "url(data:image/png;base64," + encoded + ")",
+                "none", "data:field",
             ],
             "documents": [{
                 "nodes": {
@@ -112,18 +114,22 @@ class BrowserCaptureLoweringTests(unittest.TestCase):
                     "parentIndex": [-1, 0, 1, 2],
                     "attributes": [[], [], [4, 7, 5, 6], []],
                 },
+                "layout": {"nodeIndex": [2], "styles": [[8, 9, 10, 11, 12, 13, 14]]},
             }],
         }
         root, assets, evidence = lower_dom_snapshot(
             snapshot,
             settled_snapshot=snapshot,
             screenshot={"mimeType": "image/png", "data": "iVBORw0KGgo=", "byteLength": 8},
+            interaction_evidence=[{"action": "snapshot", "name": "saved"}],
         )
         self.assertEqual(root["sourceId"], "dom-0")
         image = root["children"][0]["children"][0]
         self.assertEqual(image["semanticId"], "logo")
         self.assertEqual(len(assets), 1)
         self.assertEqual(image["properties"]["assetRefs"], [assets[0]["uri"]])
+        self.assertIn(assets[0]["uri"], image["properties"]["computedStyles"]["background-image"])
+        self.assertEqual(evidence["interactionEvidence"], [{"action": "snapshot", "name": "saved"}])
         self.assertEqual(evidence["localizedAssets"][0]["data"], encoded)
 
     def test_dom_snapshot_rejects_oversized_asset_budget(self) -> None:
