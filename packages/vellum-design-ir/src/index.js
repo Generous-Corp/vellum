@@ -26,7 +26,7 @@ export {
     FIGMA_PLUGIN_FORMAT,
     FIGMA_PLUGIN_PARSER_VERSION,
 } from './figma-plugin.js';
-export { normalizeSha256ContentHash } from './assets.js';
+export { decodeAssetDataUrl, localizeAssetDataUrl, normalizeSha256ContentHash } from './assets.js';
 export { applyAuthoredOverlay, emptyAuthoredOverlay, resolveReference } from './overlay.js';
 export { reimportDesign } from './reimport.js';
 export { canonicalize, deepClone, fnv1a32, jsonEqual, stableStringify } from './stable-json.js';
