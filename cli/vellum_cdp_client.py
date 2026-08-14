@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 from urllib.request import Request, build_opener, ProxyHandler, urlopen
 
 from vellum_cdp import CdpEndpoint
+from vellum_interaction import InteractionPlanError, validate_interaction_plan
 
 
 MAX_DISCOVERY_BYTES = 64 * 1024
@@ -21,6 +22,14 @@ MAX_MESSAGE_BYTES = 8 * 1024 * 1024
 MAX_COMPUTED_STYLES = 128
 DEFAULT_TIMEOUT = 15.0
 ALLOWED_COMMANDS = {
+    "DOM.enable",
+    "DOM.focus",
+    "DOM.getBoxModel",
+    "DOM.getDocument",
+    "DOM.querySelector",
+    "Input.dispatchKeyEvent",
+    "Input.dispatchMouseEvent",
+    "Input.insertText",
     "Page.enable",
     "Page.navigate",
     "DOMSnapshot.captureSnapshot",
@@ -38,6 +47,9 @@ def _loopback_url(value: str) -> None:
     if parsed.hostname is None:
         raise CdpClientError("CDP navigation URL has no host")
     try:
+        port = parsed.port
+        if port is not None and not 0 < port <= 65535:
+            raise CdpClientError("CDP navigation port is outside the valid range")
         import ipaddress
         if not ipaddress.ip_address(parsed.hostname).is_loopback:
             raise CdpClientError("CDP navigation is loopback-only")
@@ -150,6 +162,67 @@ class CdpClient:
         if not all(isinstance(name, str) and 0 < len(name) <= 128 and "\0" not in name for name in computed_styles):
             raise CdpClientError("computed style names are malformed")
         return self.command("DOMSnapshot.captureSnapshot", {"computedStyles": computed_styles})
+
+    @staticmethod
+    def _node_id(value: object, label: str = "DOM node") -> int:
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            raise CdpClientError(f"CDP response did not provide a valid {label} id")
+        return value
+
+    def _query_node(self, target: str) -> int:
+        self.command("DOM.enable")
+        document = self.command("DOM.getDocument", {"depth": 0, "pierce": False})
+        root = self._node_id(document.get("root", {}).get("nodeId"))
+        response = self.command("DOM.querySelector", {"nodeId": root, "selector": target})
+        return self._node_id(response.get("nodeId"), "matching DOM node")
+
+    def focus_target(self, target: str) -> None:
+        self.command("DOM.focus", {"nodeId": self._query_node(target)})
+
+    def click_target(self, target: str) -> None:
+        node = self._query_node(target)
+        box = self.command("DOM.getBoxModel", {"nodeId": node}).get("model", {})
+        content = box.get("content")
+        if not isinstance(content, list) or len(content) != 8 or not all(isinstance(value, (int, float)) for value in content):
+            raise CdpClientError("CDP response did not provide a bounded element box")
+        x = (content[0] + content[2] + content[4] + content[6]) / 4
+        y = (content[1] + content[3] + content[5] + content[7]) / 4
+        if not (0 <= x <= 16384 and 0 <= y <= 16384):
+            raise CdpClientError("CDP element box is outside the bounded viewport")
+        self.command("Input.dispatchMouseEvent", {"type": "mousePressed", "x": x, "y": y, "button": "left", "clickCount": 1})
+        self.command("Input.dispatchMouseEvent", {"type": "mouseReleased", "x": x, "y": y, "button": "left", "clickCount": 1})
+
+    def input_target(self, target: str, value: str) -> None:
+        self.focus_target(target)
+        self.command("Input.insertText", {"text": value})
+
+    def key_target(self, target: str, key: str) -> None:
+        self.focus_target(target)
+        self.command("Input.dispatchKeyEvent", {"type": "keyDown", "key": key})
+        self.command("Input.dispatchKeyEvent", {"type": "keyUp", "key": key})
+
+    def execute_interaction_plan(self, plan: object) -> dict[str, Any]:
+        try:
+            normalized = validate_interaction_plan(plan)
+        except InteractionPlanError as error:
+            raise CdpClientError(str(error)) from error
+        evidence: list[dict[str, Any]] = []
+        for step in normalized["steps"]:
+            action = step["action"]
+            if action == "navigate":
+                value = self.navigate(step["url"])
+            elif action == "click":
+                value = self.click_target(step["target"]); value = {"target": step["target"]}
+            elif action == "focus":
+                value = self.focus_target(step["target"]); value = {"target": step["target"]}
+            elif action == "input":
+                value = self.input_target(step["target"], step["value"]); value = {"target": step["target"], "valueBytes": len(step["value"].encode("utf-8"))}
+            elif action == "key":
+                value = self.key_target(step["target"], step["key"]); value = {"target": step["target"], "key": step["key"]}
+            else:
+                value = self.capture_dom_snapshot(step["computedStyles"])
+            evidence.append({"action": action, "name": step.get("name"), "result": value})
+        return {"schema": "vellum.browser-interaction-evidence.v1", "plan": normalized["name"], "steps": evidence}
 
     def command(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         if method not in ALLOWED_COMMANDS:

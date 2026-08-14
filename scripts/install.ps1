@@ -34,6 +34,7 @@ function Install-Payload([string]$Payload) {
     Copy-Item (Join-Path $Payload "vellum_png.py") (Join-Path $library "vellum_png.py") -Force
     Copy-Item (Join-Path $Payload "vellum_image_compare.py") (Join-Path $library "vellum_image_compare.py") -Force
     Copy-Item (Join-Path $Payload "vellum_browser.py") (Join-Path $library "vellum_browser.py") -Force
+    Copy-Item (Join-Path $Payload "vellum_interaction.py") (Join-Path $library "vellum_interaction.py") -Force
     Copy-Item (Join-Path $Payload "metadata.json") (Join-Path $library "metadata.json") -Force
     Copy-Item (Join-Path $Payload "install-manifest.json") (Join-Path $library "install-manifest.json") -Force
     $agentDestination = Join-Path $library ".agents"
@@ -148,11 +149,12 @@ if ($LocalRoot) {
     $cdpAdmission = Join-Path $LocalRoot "cli\vellum_cdp.py"
     $cdpClient = Join-Path $LocalRoot "cli\vellum_cdp_client.py"
     $browserModule = Join-Path $LocalRoot "cli\vellum_browser.py"
+    $interactionModule = Join-Path $LocalRoot "cli\vellum_interaction.py"
     $agentSkill = Join-Path $LocalRoot ".agents\skills\vellum-app-authoring\SKILL.md"
     $agentManifest = Join-Path $LocalRoot ".agents\skills\vellum-app-authoring\manifest.v1.json"
     $templates = Join-Path $LocalRoot "templates\basic"
     $designIrPackage = Join-Path $LocalRoot "packages\vellum-design-ir"
-    if (!(Test-Path $cli) -or !(Test-Path $dispatcher) -or !(Test-Path $manifestReader) -or !(Test-Path $pngTools) -or !(Test-Path $imageCompare) -or !(Test-Path $cdpAdmission) -or !(Test-Path $cdpClient) -or !(Test-Path $browserModule) -or !(Test-Path $agentSkill) -or
+    if (!(Test-Path $cli) -or !(Test-Path $dispatcher) -or !(Test-Path $manifestReader) -or !(Test-Path $pngTools) -or !(Test-Path $imageCompare) -or !(Test-Path $cdpAdmission) -or !(Test-Path $cdpClient) -or !(Test-Path $browserModule) -or !(Test-Path $interactionModule) -or !(Test-Path $agentSkill) -or
         !(Test-Path $agentManifest) -or !(Test-Path $templates) -or !(Test-Path $designIrPackage)) {
         throw "Local root lacks the CLI, dispatcher, agent instructions, templates, or DesignIR package."
     }
@@ -167,6 +169,7 @@ if ($LocalRoot) {
         Copy-Item $cdpAdmission (Join-Path $temporary "vellum_cdp.py")
         Copy-Item $cdpClient (Join-Path $temporary "vellum_cdp_client.py")
         Copy-Item $browserModule (Join-Path $temporary "vellum_browser.py")
+        Copy-Item $interactionModule (Join-Path $temporary "vellum_interaction.py")
         $temporaryAgentSkills = Join-Path $temporary ".agents\skills"
         New-Item -ItemType Directory -Force -Path $temporaryAgentSkills | Out-Null
         Copy-Item `

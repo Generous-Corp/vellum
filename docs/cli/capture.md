@@ -98,6 +98,31 @@ asset extraction, and bounded CDP interaction remain subsequent P4 work.
 
 The installed web lane also contains the bounded CDP client. It authenticates
 discovery and the WebSocket upgrade through the admission proxy, permits only
-navigation to numeric loopback HTTP(S) URLs and the snapshot command, and
-limits computed-style names and protocol messages. It intentionally does not
-expose arbitrary JavaScript evaluation or arbitrary CDP commands.
+numeric-loopback navigation, fixed DOM/Input interaction methods, and the
+snapshot command, and limits computed-style names and protocol messages. It
+intentionally does not expose arbitrary JavaScript evaluation or arbitrary CDP
+commands.
+
+Browser interaction plans use the versioned
+`vellum.browser-interaction-plan.v1` contract. Targets are bounded CSS
+selectors resolved inside the isolated loopback page; supported actions are
+`navigate`, `focus`, `click`, `input`, `key`, and `snapshot`. A plan can only
+use numeric-loopback navigation, the allowlisted semantic keys, bounded input,
+and bounded computed-style names. The client lowers these actions to fixed
+DOM/Input CDP methods and records `vellum.browser-interaction-evidence.v1`.
+It never accepts JavaScript expressions, coordinates, public URLs, or arbitrary
+CDP method names. For example:
+
+```json
+{
+  "schema": "vellum.browser-interaction-plan.v1",
+  "name": "save-board",
+  "steps": [
+    { "action": "navigate", "url": "http://127.0.0.1:8000/" },
+    { "action": "input", "target": "[data-vellum-id='title']", "value": "Roadmap" },
+    { "action": "key", "target": "[data-vellum-id='title']", "key": "Enter" },
+    { "action": "click", "target": "[data-vellum-id='save']" },
+    { "action": "snapshot", "name": "saved" }
+  ]
+}
+```
