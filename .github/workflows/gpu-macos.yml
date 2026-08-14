@@ -191,6 +191,8 @@ jobs:
             --requested-version 151.0.7922.47 \
             --source-action browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd \
             --output "$RUNNER_TEMP/browser-provenance.json"
+          cp scripts/create_browser_provenance.py "$RUNNER_TEMP/create_browser_provenance.py"
+          cp cli/vellum_browser.py "$RUNNER_TEMP/vellum_browser.py"
           printf 'VELLUM_CHROME_PROVENANCE=%s\n' "$RUNNER_TEMP/browser-provenance.json" >> "$GITHUB_ENV"
           printf 'VELLUM_REQUIRE_CHROME_PROVENANCE=1\n' >> "$GITHUB_ENV"
 
@@ -476,6 +478,8 @@ jobs:
             ${{ runner.temp }}/templates-smoke.stdout.json
             ${{ runner.temp }}/vellum-sterile-acceptance.tar.gz
             ${{ runner.temp }}/sterile-acceptance-bundle.json
+            ${{ runner.temp }}/create_browser_provenance.py
+            ${{ runner.temp }}/vellum_browser.py
             ${{ runner.temp }}/web-payload.json
             ${{ runner.temp }}/phase3-browser-evidence.json
             ${{ runner.temp }}/release-trust.json
@@ -505,25 +509,25 @@ jobs:
           test -x "$CHROME_PATH"
           printf 'VELLUM_CHROME_PATH=%s\n' "$CHROME_PATH" >> "$GITHUB_ENV"
 
+      - name: Download only the release-shaped inputs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: vellum-gpu-macos-arm64-evidence
+          path: ${{ runner.temp }}/vellum-input
+
       - name: Record exact Chrome browser provenance
         shell: bash
         env:
           CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
         run: |
           set -euo pipefail
-          python3 scripts/create_browser_provenance.py \
+          python3 "$RUNNER_TEMP/vellum-input/create_browser_provenance.py" \
             --browser "$CHROME_PATH" \
             --requested-version 151.0.7922.47 \
             --source-action browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd \
             --output "$RUNNER_TEMP/browser-provenance.json"
           printf 'VELLUM_CHROME_PROVENANCE=%s\n' "$RUNNER_TEMP/browser-provenance.json" >> "$GITHUB_ENV"
           printf 'VELLUM_REQUIRE_CHROME_PROVENANCE=1\n' >> "$GITHUB_ENV"
-
-      - name: Download only the release-shaped inputs
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          name: vellum-gpu-macos-arm64-evidence
-          path: ${{ runner.temp }}/vellum-input
 
       - name: Verify and extract the source-free acceptance bundle
         shell: bash
