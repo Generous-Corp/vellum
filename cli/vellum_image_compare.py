@@ -56,7 +56,13 @@ def compare_images(reference: RgbaImage, actual: RgbaImage, *, threshold: int = 
             destination = (row * selected.width + column) * 4
             if peak > threshold:
                 differing += 1
-                diff[destination:destination + 4] = bytes((*errors[:3], 255))
+                # Keep alpha-only differences visible in the RGB diagnostic.
+                # A transparent/black pixel is indistinguishable from the
+                # unchanged marker in common PNG viewers.
+                rgb_error = errors[:3]
+                if not any(rgb_error) and errors[3]:
+                    rgb_error = [errors[3]] * 3
+                diff[destination:destination + 4] = bytes((*rgb_error, 255))
             else:
                 diff[destination:destination + 4] = b"\0\0\0\xff"
 

@@ -40,6 +40,14 @@ class ImageComparisonTests(unittest.TestCase):
         self.assertTrue(report["passed"])
         self.assertEqual(report["compared_pixels"], 1)
 
+    def test_alpha_only_difference_is_visible_in_diff(self) -> None:
+        reference = self.image(bytes((20, 30, 40, 255)), width=1)
+        actual = self.image(bytes((20, 30, 40, 200)), width=1)
+        report, diff = compare_images(reference, actual)
+        self.assertFalse(report["passed"])
+        self.assertEqual(report["differing_pixels"], 1)
+        self.assertEqual(diff.pixels, bytes((55, 55, 55, 255)))
+
     def test_crop_must_fit_both_images(self) -> None:
         image = self.image(bytes((0, 0, 0, 255)) * 2)
         with self.assertRaisesRegex(PngError, "exceeds image"):
