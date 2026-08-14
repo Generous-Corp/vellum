@@ -151,5 +151,13 @@ Vellum-specific registration, label, teardown, and workflow proof has passed.
 The Tart macOS hosts likewise need a Vellum-scoped runner registration and
 golden-image proof before Vellum variables are changed.
 
+Until those proofs exist, `Generous-Corp/vellum` explicitly uses the hosted
+fallback values `VELLUM_LINUX_RUNS_ON_JSON=ubuntu-latest` and
+`VELLUM_MACOS_RUNS_ON_JSON=macos-15`. This is intentional fail-open capacity
+behavior: an absent or unhealthy local lane must not leave a required check
+queued forever. Once a local lane is proven, Shipyard may select its exact
+Vellum group/label under a bounded health lease and retain these values as the
+rollback path.
+
 This note is therefore an onboarding contract and target architecture, not a
 claim that all local lanes are already enabled.
