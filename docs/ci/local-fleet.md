@@ -143,11 +143,12 @@ disposable jobs finish or tear down.
 
 ## Current status
 
-As of 2026-08-14, the Vellum-specific repository groups have been created, but
-PR #35 is still using hosted selectors while the local lanes are separately
-generalized and proved. The Mac Pro provider is currently Pulp-scoped, and its
-available capacity must not be assumed to be Vellum capacity until a
-Vellum-specific registration, label, teardown, and workflow proof has passed.
+As of 2026-08-15, the Vellum-specific repository groups have been created, but
+the Vellum workflows still use hosted selectors while the local lanes are
+separately generalized and unproved. The Mac Pro provider is currently
+Pulp-scoped, and its available capacity must not be assumed to be Vellum
+capacity until a Vellum-specific registration, label, teardown, and workflow
+proof has passed.
 The Tart macOS hosts likewise need a Vellum-scoped runner registration and
 golden-image proof before Vellum variables are changed.
 
