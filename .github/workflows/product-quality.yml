@@ -22,7 +22,7 @@ concurrency:
 jobs:
   product-quality:
     name: product-quality
-    runs-on: ${{ fromJSON(vars.VELLUM_LINUX_RUNS_ON_JSON || '["self-hosted","Linux","ARM64","vellum-build-linux"]') }}
+    runs-on: ${{ fromJSON(vars.VELLUM_LINUX_RUNS_ON_JSON || '["ubuntu-latest"]') }}
     steps:
       - name: Check out full preserved history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1

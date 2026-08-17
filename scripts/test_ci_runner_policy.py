@@ -10,38 +10,32 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 
 EXPECTED_RUNNERS = {
-    "authority-activation.yml": (
-        "VELLUM_AUTHORITY_RUNS_ON_JSON",
-        '["self-hosted","Linux","ARM64","vellum-authority-linux"]',
-    ),
-    "authority-release.yml": (
-        "VELLUM_AUTHORITY_RUNS_ON_JSON",
-        '["self-hosted","Linux","ARM64","vellum-authority-linux"]',
-    ),
+    "authority-activation.yml": ("__hosted__", "ubuntu-latest"),
+    "authority-release.yml": ("__hosted__", "ubuntu-latest"),
     "gpu-macos.yml": (
         "VELLUM_MACOS_RUNS_ON_JSON",
-        '["self-hosted","macOS","ARM64","vellum-build-macos"]',
+        '["macos-15"]',
     ),
     "merge-on-green.yml": (
         "VELLUM_LINUX_RUNS_ON_JSON",
-        '["self-hosted","Linux","ARM64","vellum-build-linux"]',
+        '["ubuntu-latest"]',
     ),
     "product-quality.yml": (
         "VELLUM_LINUX_RUNS_ON_JSON",
-        '["self-hosted","Linux","ARM64","vellum-build-linux"]',
+        '["ubuntu-latest"]',
     ),
     "provenance.yml": (
         "VELLUM_LINUX_RUNS_ON_JSON",
-        '["self-hosted","Linux","ARM64","vellum-build-linux"]',
+        '["ubuntu-latest"]',
     ),
     "pulp-observatory-receiver.yml": (
         "VELLUM_LINUX_RUNS_ON_JSON",
-        '["self-hosted","Linux","ARM64","vellum-build-linux"]',
+        '["ubuntu-latest"]',
     ),
     "pulp-observatory-watchdog.yml": ("__hosted__", "ubuntu-latest"),
     "readme-quick-start.yml": (
         "VELLUM_MACOS_RUNS_ON_JSON",
-        '["self-hosted","macOS","ARM64","vellum-build-macos"]',
+        '["macos-15"]',
     ),
     "sdk-release.yml": ("__mixed__", ""),
 }
@@ -227,9 +221,9 @@ class RunnerPolicyTests(unittest.TestCase):
                     set(runs_on_lines),
                     {
                         "runs-on: ${{ fromJSON(vars.VELLUM_MACOS_RUNS_ON_JSON || "
-                        "'[\"self-hosted\",\"macOS\",\"ARM64\",\"vellum-build-macos\"]') }}",
+                        "'[\"macos-15\"]') }}",
                         "runs-on: ${{ fromJSON(vars.VELLUM_AUTHORITY_RUNS_ON_JSON || "
-                        "'[\"self-hosted\",\"Linux\",\"ARM64\",\"vellum-authority-linux\"]') }}",
+                        "'[\"ubuntu-latest\"]') }}",
                     },
                 )
                 continue
@@ -240,9 +234,15 @@ class RunnerPolicyTests(unittest.TestCase):
                         continue
                     self.assertIn(f"vars.{variable}", line)
                     self.assertIn(fallback, line)
-                    self.assertIn("self-hosted", line)
-                    for hosted_label in HOSTED_LABELS:
-                        self.assertNotIn(hosted_label, line)
+                    # Public repository: Actions are free on GitHub-hosted
+                    # runners, so every fallback must be hosted. A self-hosted
+                    # fallback would route a public repo onto the private fleet
+                    # that another repository's required gate depends on.
+                    self.assertNotIn("self-hosted", line)
+                    self.assertTrue(
+                        any(label in fallback for label in HOSTED_LABELS),
+                        f"{path.name} fallback is not a hosted label: {fallback}",
+                    )
 
     def test_external_actions_are_pinned_to_reviewed_node24_releases(self) -> None:
         for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]):

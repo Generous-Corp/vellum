@@ -1,8 +1,10 @@
 # Vellum
 
-> **Status: private, experimental, 0.x.** APIs, schemas, CLI names, and the
-> working name itself change without notice. Exact-pin SDK compatibility only.
-> Not accepting external users.
+> **Status: work in progress. Under active development, experimental, 0.x.**
+> APIs, schemas, CLI names, and the working name itself change without notice.
+> Exact-pin SDK compatibility only. Not production software, and not accepting
+> external users or contributions yet. This repository is public for transparency
+> and CI, not as an invitation to depend on it.
 
 ## What this is
 

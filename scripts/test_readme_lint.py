@@ -23,7 +23,7 @@ class Tests(unittest.TestCase):
         readme_lint.validate(self.readme)
 
     def test_banner_negative_control(self) -> None:
-        changed = self.readme.replace("private, experimental", "experimental", 1)
+        changed = self.readme.replace("work in progress. Under active development", "stable", 1)
         with self.assertRaisesRegex(readme_lint.Error, "banner"):
             readme_lint.validate(changed)
 

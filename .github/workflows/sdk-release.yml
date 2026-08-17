@@ -20,7 +20,7 @@ jobs:
       github.event.workflow_run.event == 'push' &&
       startsWith(github.event.workflow_run.head_branch, 'v') &&
       github.event.workflow_run.conclusion == 'success'
-    runs-on: ${{ fromJSON(vars.VELLUM_MACOS_RUNS_ON_JSON || '["self-hosted","macOS","ARM64","vellum-build-macos"]') }}
+    runs-on: ${{ fromJSON(vars.VELLUM_MACOS_RUNS_ON_JSON || '["macos-15"]') }}
     env:
       SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
       RELEASE_TAG: ${{ github.event.workflow_run.head_branch }}
@@ -194,7 +194,7 @@ jobs:
       github.event.workflow_run.event == 'push' &&
       startsWith(github.event.workflow_run.head_branch, 'v') &&
       github.event.workflow_run.conclusion == 'success'
-    runs-on: ${{ fromJSON(vars.VELLUM_AUTHORITY_RUNS_ON_JSON || '["self-hosted","Linux","ARM64","vellum-authority-linux"]') }}
+    runs-on: ${{ fromJSON(vars.VELLUM_AUTHORITY_RUNS_ON_JSON || '["ubuntu-latest"]') }}
     env:
       SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
       RELEASE_TAG: ${{ github.event.workflow_run.head_branch }}

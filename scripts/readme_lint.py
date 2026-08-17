@@ -12,9 +12,11 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 README = ROOT / "README.md"
 EXPECTED_BANNER = (
-    "**Status: private, experimental, 0.x.** APIs, schemas, CLI names, and the "
-    "working name itself change without notice. Exact-pin SDK compatibility "
-    "only. Not accepting external users."
+    "**Status: work in progress. Under active development, experimental, 0.x.** "
+    "APIs, schemas, CLI names, and the working name itself change without notice. "
+    "Exact-pin SDK compatibility only. Not production software, and not accepting "
+    "external users or contributions yet. This repository is public for "
+    "transparency and CI, not as an invitation to depend on it."
 )
 HEADINGS = [
     "What this is",
@@ -71,7 +73,7 @@ def validate(text: str) -> None:
             break
         banner_lines.append(line.removeprefix(">").strip())
     if " ".join(banner_lines) != EXPECTED_BANNER:
-        raise Error("status banner differs from the required private 0.x text")
+        raise Error("status banner differs from the required work-in-progress 0.x text")
     actual = re.findall(r"^## (.+?)\s*$", text, flags=re.MULTILINE)
     if actual != HEADINGS:
         raise Error(f"level-two section order differs: expected={HEADINGS} actual={actual}")

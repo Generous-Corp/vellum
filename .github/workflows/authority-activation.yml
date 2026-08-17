@@ -22,7 +22,7 @@ concurrency:
 jobs:
   authority-active:
     name: authority-active
-    runs-on: ${{ fromJSON(vars.VELLUM_AUTHORITY_RUNS_ON_JSON || '["self-hosted","Linux","ARM64","vellum-authority-linux"]') }}
+    runs-on: ubuntu-latest
     steps:
       - name: Check out trusted Vellum controls
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
