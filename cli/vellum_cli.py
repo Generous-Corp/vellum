@@ -492,8 +492,20 @@ def invoke_import_backend(
         else:
             arguments = [str(source_path), "--source-type", source_type, "--as", source_key]
         return invoke(command, root, lock, arguments)
-    from vellum_html_source import HTMLSourceError, stage_html_source
-    from vellum_web_backend import BackendFailure, run_chrome_interaction_capture
+    try:
+        from vellum_html_source import HTMLSourceError, stage_html_source
+        from vellum_web_backend import BackendFailure, run_chrome_interaction_capture
+    except ImportError as error:
+        # An SDK built without the browser payload ships neither module, yet still
+        # advertises the import capability, so reaching here is a supported
+        # configuration rather than a broken install. Report it the way every
+        # other missing capability is reported: a structured result the --json
+        # caller can read, not an unhandled traceback on empty stdout.
+        raise CliFailure(
+            f"--source-type {source_type} requires an installed SDK built with the "
+            "browser capture payload; this SDK does not provide it.",
+            status="capability_unavailable", exit_code=EXIT_UNAVAILABLE,
+        ) from error
     plan = load_html_interaction_plan(interaction_plan_path)
     try:
         with tempfile.TemporaryDirectory(prefix="vellum-html-import-") as temporary:
