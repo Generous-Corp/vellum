@@ -30,6 +30,7 @@ validate_component_source = BACKEND_MODULE["validate_component_source"]
 build_component_modules = BACKEND_MODULE["build_component_modules"]
 contains_sdk_install_path = BACKEND_MODULE["contains_sdk_install_path"]
 lower_dom_snapshot = BACKEND_MODULE["lower_dom_snapshot"]
+CAPTURE_STYLE_NAMES = BACKEND_MODULE["CAPTURE_STYLE_NAMES"]
 chrome_path = BACKEND_MODULE["chrome_path"]
 BackendFailure = BACKEND_MODULE["BackendFailure"]
 
@@ -110,6 +111,71 @@ class BrowserCaptureLoweringTests(unittest.TestCase):
             snapshot, settled_snapshot=snapshot, screenshot={},
         )
         self.assertEqual(root["name"], "#document")
+
+    def test_dom_snapshot_treats_empty_attribute_value_as_empty(self) -> None:
+        """Chrome sends alt="" as the -1 sentinel, not an index to an empty string."""
+        snapshot = {
+            "strings": ["#document", "IMG", "alt", "src", "mark.svg"],
+            "documents": [{
+                "nodes": {
+                    "nodeType": [9, 1], "nodeName": [0, 1], "nodeValue": [-1, -1],
+                    "parentIndex": [-1, 0], "attributes": [[], [2, -1, 3, 4]],
+                },
+            }],
+        }
+        root, _assets, _evidence = lower_dom_snapshot(
+            snapshot, settled_snapshot=snapshot, screenshot={},
+        )
+        attributes = root["children"][0]["properties"]["attributes"]
+        self.assertEqual(attributes["alt"], "")
+        self.assertEqual(attributes["src"], "mark.svg")
+
+    def test_dom_snapshot_rejects_absent_attribute_name(self) -> None:
+        """An attribute with no name is malformed; the sentinel stays fatal there."""
+        snapshot = {
+            "strings": ["#document", "IMG", "alt"],
+            "documents": [{
+                "nodes": {
+                    "nodeType": [9, 1], "nodeName": [0, 1], "nodeValue": [-1, -1],
+                    "parentIndex": [-1, 0], "attributes": [[], [-1, 2]],
+                },
+            }],
+        }
+        with self.assertRaisesRegex(BackendFailure, "attribute name"):
+            lower_dom_snapshot(snapshot, settled_snapshot=snapshot, screenshot={})
+
+    def test_dom_snapshot_rejects_out_of_range_attribute_value(self) -> None:
+        """Only -1 is a sentinel; a genuinely out-of-range index stays fatal."""
+        snapshot = {
+            "strings": ["#document", "IMG", "alt"],
+            "documents": [{
+                "nodes": {
+                    "nodeType": [9, 1], "nodeName": [0, 1], "nodeValue": [-1, -1],
+                    "parentIndex": [-1, 0], "attributes": [[], [2, 99]],
+                },
+            }],
+        }
+        with self.assertRaisesRegex(BackendFailure, "attribute value"):
+            lower_dom_snapshot(snapshot, settled_snapshot=snapshot, screenshot={})
+
+    def test_dom_snapshot_treats_unresolved_computed_style_as_empty(self) -> None:
+        """A computed style Chrome could not resolve arrives as the same sentinel."""
+        snapshot = {
+            "strings": ["#document", "IMG", "block"],
+            "documents": [{
+                "nodes": {
+                    "nodeType": [9, 1], "nodeName": [0, 1], "nodeValue": [-1, -1],
+                    "parentIndex": [-1, 0], "attributes": [[], []],
+                },
+                "layout": {"nodeIndex": [1], "styles": [[2, -1]]},
+            }],
+        }
+        root, _assets, _evidence = lower_dom_snapshot(
+            snapshot, settled_snapshot=snapshot, screenshot={},
+        )
+        computed = root["children"][0]["properties"]["computedStyles"]
+        self.assertEqual(computed[CAPTURE_STYLE_NAMES[0]], "block")
+        self.assertEqual(computed[CAPTURE_STYLE_NAMES[1]], "")
 
     def test_dom_snapshot_lowers_nodes_and_localizes_data_url_assets(self) -> None:
         payload = b"capture-asset"
