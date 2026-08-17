@@ -41,6 +41,18 @@ emits an ad-hoc-signed package from installed bytes only.
 - Not a claim of smaller binaries, lower memory, or better performance than
   Electron, Tauri, Flutter, Qt, or React Native without equivalent benchmarks
 
+## Provenance and authority
+
+Vellum was extracted from [Pulp](https://github.com/Generous-Corp/pulp).
+Source authority for the selected mapped framework slices is active — those slices
+are maintained here rather than in Pulp, under an exact-path handshake recorded in
+`provenance/`.
+
+The current SDK artifact is the published, immutable `v0.1.7` release.
+
+Extracted-history attribution and third-party terms are documented in
+[NOTICE.md](NOTICE.md) and [DEPENDENCIES.md](DEPENDENCIES.md).
+
 ## Status and compatibility
 
 Projects pin one exact framework version, source commit, target tuple, SDK
