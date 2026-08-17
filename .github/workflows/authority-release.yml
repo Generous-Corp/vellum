@@ -19,7 +19,7 @@ concurrency:
 jobs:
   finalize-authority-release:
     name: finalize-authority-release
-    runs-on: ${{ fromJSON(vars.VELLUM_AUTHORITY_RUNS_ON_JSON || '["ubuntu-latest"]') }}
+    runs-on: ubuntu-latest
     steps:
       - name: Check out trusted finalizer controls
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
