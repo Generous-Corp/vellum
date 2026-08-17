@@ -20,7 +20,7 @@ jobs:
   merge:
     name: merge-exact-green-head
     if: github.event.workflow_run.event == 'pull_request'
-    runs-on: ${{ fromJSON(vars.VELLUM_LINUX_RUNS_ON_JSON || '["self-hosted","Linux","ARM64","vellum-build-linux"]') }}
+    runs-on: ${{ fromJSON(vars.VELLUM_LINUX_RUNS_ON_JSON || '["ubuntu-latest"]') }}
     timeout-minutes: 10
     steps:
       - name: Check out trusted merge policy from main
