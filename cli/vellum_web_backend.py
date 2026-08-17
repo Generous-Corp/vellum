@@ -535,10 +535,20 @@ def validate_scenario_evidence(
         )
 
 
-def _snapshot_string(snapshot: dict[str, Any], value: object, label: str) -> str:
+def _snapshot_string(
+    snapshot: dict[str, Any], value: object, label: str, *, allow_absent: bool = False
+) -> str:
     strings = snapshot.get("strings")
     if not isinstance(strings, list):
         raise BackendFailure("DOMSnapshot omitted its string table", status="test_failed")
+    # Chrome encodes an absent or empty string as the -1 sentinel rather than as
+    # an index into the string table, so an empty attribute (alt="") and an
+    # unresolved computed style both arrive as -1. Since -1 is never a valid
+    # index, accepting it only on fields that are legitimately optional costs no
+    # validation strength: out-of-range, non-integer, and boolean indices still
+    # fail, as does -1 on a required field such as an attribute name.
+    if allow_absent and isinstance(value, int) and not isinstance(value, bool) and value == -1:
+        return ""
     if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value < len(strings):
         raise BackendFailure(f"DOMSnapshot {label} has an invalid string index", status="test_failed")
     text = strings[value]
@@ -639,7 +649,9 @@ def _snapshot_node_value(snapshot: dict[str, Any], nodes: dict[str, Any], key: s
     if not isinstance(values, list) or index >= len(values):
         return ""
     value = values[index]
-    return _snapshot_string(snapshot, value, f"{key}[{index}]") if value is not None else ""
+    if value is None:
+        return ""
+    return _snapshot_string(snapshot, value, f"{key}[{index}]", allow_absent=True)
 
 
 def lower_dom_snapshot(
@@ -679,7 +691,9 @@ def lower_dom_snapshot(
             refs: list[str] = []
             for pair in range(0, len(attr_values), 2):
                 key = _snapshot_string(snapshot, attr_values[pair], f"attribute name[{index}]")
-                attr = _snapshot_string(snapshot, attr_values[pair + 1], f"attribute value[{index}]")
+                attr = _snapshot_string(
+                    snapshot, attr_values[pair + 1], f"attribute value[{index}]", allow_absent=True
+                )
                 replaced, found = _replace_data_urls(attr, records)
                 attr_map[key] = replaced
                 refs.extend(found)
@@ -728,7 +742,9 @@ def lower_dom_snapshot(
                 computed: dict[str, str] = {}
                 refs: list[str] = []
                 for style_index, string_index in enumerate(row):
-                    value = _snapshot_string(snapshot, string_index, f"computed style[{node_index}]")
+                    value = _snapshot_string(
+                        snapshot, string_index, f"computed style[{node_index}]", allow_absent=True
+                    )
                     replaced, found = _replace_data_urls(value, records)
                     computed[CAPTURE_STYLE_NAMES[style_index]] = replaced
                     refs.extend(found)
@@ -816,7 +832,7 @@ def run_chrome_interaction_capture(
         if not isinstance(source_metadata, dict):
             raise BackendFailure("Capture source metadata must be an object", status="invalid_project")
         unknown_metadata = set(source_metadata) - {
-            "producer", "fingerprint", "preflightSchema", "dependencies",
+            "producer", "fingerprint", "preflightSchema", "dependencies", "entry",
         }
         if unknown_metadata:
             raise BackendFailure("Capture source metadata contains unknown fields", status="invalid_project")
@@ -831,23 +847,24 @@ def run_chrome_interaction_capture(
         with profile_factory(prefix="vellum-web-capture-") as profile:
             if Path(profile).is_dir():
                 os.chmod(profile, 0o700)
-            with CdpAdmission(str(Path(profile) / "vellum-cdp.sock")) as admission:
-                process = process_factory([
-                    browser_executable, "--headless=new", "--disable-gpu-sandbox",
-                    "--no-first-run", "--disable-background-networking",
-                    *admission.chrome_arguments(),
-                    "--window-size=1280,720",
-                    f"--user-data-dir={profile}",
-                    f"http://127.0.0.1:{server.server_port}/{quote(entry_name, safe='/')}",
-                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True,
-                    start_new_session=os.name == "posix")
-                process_group = (
-                    process.pid if os.name == "posix" and isinstance(getattr(process, "pid", None), int)
-                    else None
-                )
-                client: CdpClient | None = None
-                discovery: dict[str, Any] = {}
-                try:
+            process = process_factory([
+                browser_executable, "--headless=new", "--disable-gpu-sandbox",
+                "--no-first-run", "--disable-background-networking",
+                *CdpAdmission.chrome_launch_arguments(),
+                "--window-size=1280,720",
+                f"--user-data-dir={profile}",
+                f"http://127.0.0.1:{server.server_port}/{quote(entry_name, safe='/')}",
+            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True,
+                start_new_session=os.name == "posix")
+            process_group = (
+                process.pid if os.name == "posix" and isinstance(getattr(process, "pid", None), int)
+                else None
+            )
+            client: CdpClient | None = None
+            discovery: dict[str, Any] = {}
+            try:
+                port = CdpAdmission.wait_for_desktop_port(profile)
+                with CdpAdmission(("127.0.0.1", port)) as admission:
                     deadline = time.monotonic() + 20.0
                     last_error: Exception | None = None
                     while time.monotonic() < deadline:
@@ -909,10 +926,10 @@ def run_chrome_interaction_capture(
                         "root": root,
                         "assets": assets, "diagnostics": [],
                     }
-                finally:
-                    if client is not None:
-                        client.close()
-                    stop_browser(process, process_group=process_group)
+            finally:
+                if client is not None:
+                    client.close()
+                stop_browser(process, process_group=process_group)
     finally:
         server.shutdown()
         thread.join(5)

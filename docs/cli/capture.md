@@ -162,10 +162,11 @@ DesignIR asset manifest, while the evidence receipt makes the capture
 self-contained for a later materializer. Malformed URLs, unsafe or oversized
 payloads, excessive nodes/assets, and an unlowerable snapshot fail closed.
 
-Raw HTML sources use the same isolated browser path through the internal
-`run_html_interaction_capture` seam. The source is fingerprinted and staged by
-`vellum_html_source.py`; the capture entrypoint is then served from that
-contained tree, and the envelope retains the producer fingerprint plus bounded
-content-addressed dependency receipts. The public HTML/Claude import commands
-remain unavailable until this seam is connected to source snapshot/materialized
-DesignIR writes and the same-run Skia/Dawn proof.
+Raw HTML sources use the same isolated browser path through
+`vellum import --source-type html FILE` (or `claude-design`). The source is
+fingerprinted and staged by `vellum_html_source.py`; the capture entrypoint is
+served from that contained tree, localized assets are written into the staged
+tree, and the envelope is consumed by the immutable DesignIR materializer.
+The resulting source snapshot retains the original HTML bytes and bounded
+producer/dependency receipts. The support matrix remains unavailable until a
+real browser run and same-run Skia/Dawn output proof have been recorded.

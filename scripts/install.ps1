@@ -34,7 +34,11 @@ function Install-Payload([string]$Payload) {
     Copy-Item (Join-Path $Payload "vellum_png.py") (Join-Path $library "vellum_png.py") -Force
     Copy-Item (Join-Path $Payload "vellum_image_compare.py") (Join-Path $library "vellum_image_compare.py") -Force
     Copy-Item (Join-Path $Payload "vellum_browser.py") (Join-Path $library "vellum_browser.py") -Force
+    Copy-Item (Join-Path $Payload "vellum_scenario.py") (Join-Path $library "vellum_scenario.py") -Force
     Copy-Item (Join-Path $Payload "vellum_interaction.py") (Join-Path $library "vellum_interaction.py") -Force
+    if (Test-Path (Join-Path $Payload "vellum_html_source.py")) {
+        Copy-Item (Join-Path $Payload "vellum_html_source.py") (Join-Path $library "vellum_html_source.py") -Force
+    }
     Copy-Item (Join-Path $Payload "metadata.json") (Join-Path $library "metadata.json") -Force
     Copy-Item (Join-Path $Payload "install-manifest.json") (Join-Path $library "install-manifest.json") -Force
     $agentDestination = Join-Path $library ".agents"
@@ -150,12 +154,13 @@ if ($LocalRoot) {
     $cdpClient = Join-Path $LocalRoot "cli\vellum_cdp_client.py"
     $browserModule = Join-Path $LocalRoot "cli\vellum_browser.py"
     $interactionModule = Join-Path $LocalRoot "cli\vellum_interaction.py"
+    $htmlSourceModule = Join-Path $LocalRoot "cli\vellum_html_source.py"
     $agentSkill = Join-Path $LocalRoot ".agents\skills\vellum-app-authoring\SKILL.md"
     $agentManifest = Join-Path $LocalRoot ".agents\skills\vellum-app-authoring\manifest.v1.json"
     $templates = Join-Path $LocalRoot "templates\basic"
     $designIrPackage = Join-Path $LocalRoot "packages\vellum-design-ir"
     if (!(Test-Path $cli) -or !(Test-Path $dispatcher) -or !(Test-Path $manifestReader) -or !(Test-Path $pngTools) -or !(Test-Path $imageCompare) -or !(Test-Path $cdpAdmission) -or !(Test-Path $cdpClient) -or !(Test-Path $browserModule) -or !(Test-Path $interactionModule) -or !(Test-Path $agentSkill) -or
-        !(Test-Path $agentManifest) -or !(Test-Path $templates) -or !(Test-Path $designIrPackage)) {
+        !(Test-Path $agentManifest) -or !(Test-Path $htmlSourceModule) -or !(Test-Path $templates) -or !(Test-Path $designIrPackage)) {
         throw "Local root lacks the CLI, dispatcher, agent instructions, templates, or DesignIR package."
     }
     $temporary = Join-Path ([IO.Path]::GetTempPath()) ("vellum-local-" + [guid]::NewGuid())
@@ -163,6 +168,9 @@ if ($LocalRoot) {
     try {
         Copy-Item $cli (Join-Path $temporary "vellum_cli.py")
         Copy-Item (Join-Path $LocalRoot "cli\vellum_backend.py") (Join-Path $temporary "vellum_backend.py")
+        Copy-Item (Join-Path $LocalRoot "cli\vellum_scenario.py") (Join-Path $temporary "vellum_scenario.py")
+        Copy-Item (Join-Path $LocalRoot "cli\vellum_web_backend.py") (Join-Path $temporary "vellum_web_backend.py")
+        Copy-Item $htmlSourceModule (Join-Path $temporary "vellum_html_source.py")
         Copy-Item (Join-Path $LocalRoot "cli\vellum_manifest.py") (Join-Path $temporary "vellum_manifest.py")
         Copy-Item (Join-Path $LocalRoot "cli\vellum_png.py") (Join-Path $temporary "vellum_png.py")
         Copy-Item $imageCompare (Join-Path $temporary "vellum_image_compare.py")

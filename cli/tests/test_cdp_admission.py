@@ -98,6 +98,12 @@ class CdpAdmissionTests(unittest.TestCase):
         self.assertTrue(any(argument.startswith("--host-resolver-rules=MAP * ~NOTFOUND")
                             for argument in arguments))
 
+    def test_desktop_chrome_uses_ephemeral_loopback_port(self) -> None:
+        arguments = CdpAdmission.chrome_launch_arguments()
+        self.assertIn("--remote-debugging-port=0", arguments)
+        self.assertIn("--remote-debugging-address=127.0.0.1", arguments)
+        self.assertNotIn("--remote-debugging-socket-name", " ".join(arguments))
+
 
 if __name__ == "__main__":
     unittest.main()

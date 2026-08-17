@@ -62,14 +62,14 @@ def _loopback_url(value: str) -> None:
         raise CdpClientError("CDP navigation requires a numeric loopback host") from error
 
 
-def _bounded_json(raw: bytes, *, label: str, limit: int) -> dict[str, Any]:
+def _bounded_json(raw: bytes, *, label: str, limit: int, object_required: bool = True) -> Any:
     if len(raw) > limit:
         raise CdpClientError(f"CDP {label} exceeds the bounded response size")
     try:
         value = json.loads(raw)
     except json.JSONDecodeError as error:
         raise CdpClientError(f"CDP {label} is not valid JSON") from error
-    if not isinstance(value, dict):
+    if object_required and not isinstance(value, dict):
         raise CdpClientError(f"CDP {label} must be an object")
     return value
 
@@ -94,14 +94,22 @@ class CdpClient:
         self.close()
 
     def discover(self) -> dict[str, Any]:
-        request = Request(
-            self.endpoint.url("/json/version"),
-            headers={"Authorization": self.endpoint.authorization()},
-        )
+        value = self._discover_path("/json/version")
+        if not isinstance(value, dict):
+            raise CdpClientError("CDP version discovery must be an object")
+        return value
+
+    def _discover_path(self, path: str) -> Any:
+        request = Request(self.endpoint.url(path), headers={
+            "Authorization": self.endpoint.authorization(),
+        })
         opener = build_opener(ProxyHandler({}))
         try:
             with opener.open(request, timeout=self.timeout) as response:
-                return _bounded_json(response.read(MAX_DISCOVERY_BYTES + 1), label="discovery", limit=MAX_DISCOVERY_BYTES)
+                return _bounded_json(
+                    response.read(MAX_DISCOVERY_BYTES + 1), label="discovery",
+                    limit=MAX_DISCOVERY_BYTES, object_required=path != "/json/list",
+                )
         except CdpClientError:
             raise
         except OSError as error:
@@ -110,8 +118,20 @@ class CdpClient:
     def connect(self) -> None:
         if self._socket is not None:
             raise CdpClientError("CDP client is already connected")
-        discovery = self.discover()
-        raw_ws_url = discovery.get("webSocketDebuggerUrl")
+        # /json/version identifies the browser, but its WebSocket is the
+        # browser-level target and does not accept page DOM/Input commands.
+        # Select the contained loopback page target from /json/list instead.
+        raw_targets = self._discover_path("/json/list")
+        if not isinstance(raw_targets, list):
+            raise CdpClientError("CDP target discovery did not return a target list")
+        candidates = [target for target in raw_targets if isinstance(target, dict)]
+        page_targets = [target for target in candidates if target.get("type") == "page"]
+        loopback_pages = [target for target in page_targets if isinstance(target.get("url"), str)
+                          and target["url"].startswith(("http://127.0.0.1:", "http://localhost:"))]
+        target = (loopback_pages or page_targets)[-1] if (loopback_pages or page_targets) else None
+        if target is None:
+            raise CdpClientError("CDP target discovery omitted a page target")
+        raw_ws_url = target.get("webSocketDebuggerUrl")
         if not isinstance(raw_ws_url, str):
             raise CdpClientError("CDP discovery omitted webSocketDebuggerUrl")
         parsed = urlsplit(raw_ws_url)

@@ -166,7 +166,7 @@ def derive_capabilities(payload: Path, install_tree: Path) -> dict[str, object]:
     )
     web_backend = all((payload / name).is_file() for name in (
         "vellum_web_backend.py", "vellum_scenario.py", "vellum_browser.py",
-        "vellum_interaction.py",
+        "vellum_interaction.py", "vellum_html_source.py",
     ))
     web_runtime = all((payload / "web" / name).is_file() for name in (
         "manifest.json", "vellum_web_core.js", "vellum_web_core.wasm",
@@ -533,6 +533,7 @@ def copy_payload(
     if web_payload is not None:
         copy_web_payload(web_payload, payload / "web", commit)
         shutil.copy2(repo / "cli/vellum_web_backend.py", payload / "vellum_web_backend.py")
+        shutil.copy2(repo / "cli/vellum_html_source.py", payload / "vellum_html_source.py")
     if node_binary is not None:
         if node_license is None or node_provenance is None:
             raise ArtifactError("Node payload is missing validated license or provenance")

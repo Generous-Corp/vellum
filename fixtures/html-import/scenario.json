@@ -1,0 +1,9 @@
+{
+  "schema": "vellum.scenario.v1",
+  "name": "html-import-static-render",
+  "viewport": { "width": 800, "height": 600 },
+  "steps": [
+    { "action": "wait-for-idle" },
+    { "action": "capture", "name": "imported-design" }
+  ]
+}

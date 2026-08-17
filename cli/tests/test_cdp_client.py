@@ -63,6 +63,21 @@ class _FakeCdpHandler(socketserver.BaseRequestHandler):
                 + body
             )
             return
+        if target == "/json/list":
+            body = json.dumps([{
+                "type": "page",
+                "url": "http://127.0.0.1:8000/index.html",
+                "webSocketDebuggerUrl": (
+                    "ws://127.0.0.1:0/devtools/page/test"
+                ),
+            }], separators=(",", ":")).encode()
+            self.request.sendall(
+                b"HTTP/1.1 200 OK\r\nContent-Length: "
+                + str(len(body)).encode()
+                + b"\r\nConnection: close\r\n\r\n"
+                + body
+            )
+            return
         key = next(
             line.split(b":", 1)[1].strip()
             for line in headers.split(b"\r\n")

@@ -62,9 +62,21 @@ node scripts/generate_pulp_figma_fixture.mjs \
 ```
 
 The machine-readable route contract is
-[`product/source-support.yaml`](../../product/source-support.yaml); unavailable
-Claude Design, React-project, HTML, REST, and `.fig` routes are not silently
-accepted by the normal CLI.
+[`product/source-support.yaml`](../../product/source-support.yaml). HTML and
+Claude Design have an implemented experimental dispatcher path, but remain
+marked unavailable there until the real-browser and same-run GPU proof gate is
+closed; they are never silently treated as a Figma or JSON source.
+
+With an installed web-capable SDK, the bounded route is:
+
+```sh
+vellum import --project . --source-type html ./design/index.html --as landing
+vellum reimport --project . --source ./design/index.html --as landing
+```
+
+Use `--interaction-plan FILE` when the source requires deterministic bounded
+click, focus, input, or key actions. Without a plan, the route records one
+initial-document snapshot.
 
 For the current deterministic Figma route:
 
@@ -187,7 +199,13 @@ violations fail closed. `stage_html_source` copies the entrypoint and the
 discovered files into a fresh contained directory and returns content-addressed
 dependency receipts.
 
-This is intentionally a preflight contract, not a claim that the public import
-route is complete: the `html` and `claude-design` rows remain unavailable until
-the staged tree is executed by isolated Chromium and lowered through the same
-capture envelope, DesignIR/assets, and Skia/Dawn proof.
+The public `vellum import --source-type html FILE` and
+`vellum import --source-type claude-design FILE` routes now stage the admitted
+tree, execute one bounded isolated-Chromium capture, localize captured assets,
+and send that single envelope through the existing immutable DesignIR import
+transaction. `--interaction-plan FILE` may provide a validated bounded plan;
+without it, import takes one deterministic initial-document snapshot. The
+source snapshot retains the original HTML bytes, producer fingerprint, and
+dependency receipts. The source-support rows remain unavailable until a real
+browser run and same-run Skia/Dawn output proof have been recorded; the route
+must fail closed when the exact browser or backend capability is absent.

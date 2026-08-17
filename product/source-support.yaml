@@ -72,20 +72,20 @@ sources:
   claude-design:
     channel: unavailable
     preflight_contract: vellum.html-source-preflight.v1
-    note: "Claude producer fingerprinting is covered by HTML preflight; browser import and Claude sidecar lowering remain incomplete."
+    note: "The public import path now performs contained Chromium capture and DesignIR materialization; the route remains unavailable until a real browser plus same-run Skia/Dawn proof is recorded."
   react-project:
     channel: unavailable
   html:
     channel: unavailable
     preflight_contract: vellum.html-source-preflight.v1
-    note: "P5 admission and contained staging are implemented; browser import remains unavailable until the end-to-end capture path lands."
+    note: "The public import path now performs contained Chromium capture and immutable HTML/asset snapshot materialization; the route remains unavailable until a real browser plus same-run Skia/Dawn proof is recorded."
     security_boundary:
       - local-relative-dependencies-only
       - no-network-fetch-during-preflight
       - symlink-and-traversal-rejected
       - bounded-source-tree
 invariants:
-  - the normal CLI accepts only sources in the supported channel
-  - experimental routes require an explicit experimental flag
+  - the normal CLI never silently aliases an unavailable source to another adapter
+  - experimental routes require an explicit source type and capability checks
   - unavailable routes are never advertised as working quick starts
   - every accepted source is normalized into versioned inspectable DesignIR

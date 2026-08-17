@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import math
@@ -13,6 +14,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from typing import Any, Iterable
 
 import vellum_dev
@@ -23,6 +25,7 @@ from vellum_manifest import (
     APP_MANIFEST_NAME, LOCK_NAME, LOCK_SCHEMA, ManifestError,
     load_app_manifest, load_components_manifest,
 )
+from vellum_interaction import InteractionPlanError, validate_interaction_plan
 
 
 FRAMEWORK_VERSION = "0.1.7"
@@ -156,7 +159,7 @@ def selected_template(requested: str | None, has_import: bool) -> str:
         return "imported-app" if has_import else "blank"
     if requested == "imported-app" and not has_import:
         raise CliFailure(
-            "The imported-app template requires --from figma FILE or --from design-ir FILE.",
+            "The imported-app template requires --from figma/design-ir/html/claude-design FILE.",
             status="template_requires_source",
             exit_code=EXIT_USAGE,
         )
@@ -408,6 +411,126 @@ def adapt_smoke_scenario_for_imported_design(root: Path) -> None:
     )
 
 
+def default_html_interaction_plan() -> dict[str, Any]:
+    return {
+        "schema": "vellum.browser-interaction-plan.v1",
+        "name": "html-import",
+        "steps": [{
+            "action": "snapshot",
+            "name": "initial-document",
+            "computedStyles": ["display", "visibility", "color", "font-size", "background-image"],
+        }],
+    }
+
+
+def load_html_interaction_plan(path: str | None) -> dict[str, Any]:
+    if path is None:
+        return default_html_interaction_plan()
+    try:
+        value = json.loads(Path(path).expanduser().resolve().read_text(encoding="utf-8"))
+        return validate_interaction_plan(value)
+    except (OSError, json.JSONDecodeError, InteractionPlanError) as error:
+        raise CliFailure(
+            f"Cannot read HTML interaction plan: {error}",
+            status="invalid_interaction_plan", exit_code=EXIT_USAGE,
+        ) from error
+
+
+def write_localized_capture_assets(staging: Path, envelope: dict[str, Any]) -> None:
+    evidence = envelope.get("root", {}).get("properties", {}).get("captureEvidence", {})
+    localized = evidence.get("localizedAssets", [])
+    if not isinstance(localized, list):
+        raise CliFailure(
+            "Browser capture localized-assets evidence is malformed.",
+            status="invalid_capture", exit_code=EXIT_PROJECT,
+        )
+    for item in localized:
+        if not isinstance(item, dict) or not isinstance(item.get("uri"), str) or not isinstance(item.get("data"), str):
+            raise CliFailure(
+                "Browser capture localized asset is malformed.",
+                status="invalid_capture", exit_code=EXIT_PROJECT,
+            )
+        relative = Path(item["uri"])
+        if relative.is_absolute() or not relative.parts or ".." in relative.parts or "" in relative.parts:
+            raise CliFailure(
+                "Browser capture localized asset escapes the staged source.",
+                status="invalid_capture", exit_code=EXIT_PROJECT,
+            )
+        try:
+            payload = base64.b64decode(item["data"], validate=True)
+        except (ValueError, base64.binascii.Error) as error:
+            raise CliFailure(
+                "Browser capture localized asset is not valid base64.",
+                status="invalid_capture", exit_code=EXIT_PROJECT,
+            ) from error
+        destination = (staging / relative).resolve()
+        try:
+            destination.relative_to(staging.resolve())
+        except ValueError as error:
+            raise CliFailure(
+                "Browser capture localized asset escapes the staged source.",
+                status="invalid_capture", exit_code=EXIT_PROJECT,
+            ) from error
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(payload)
+
+
+def invoke_import_backend(
+    root: Path,
+    lock: dict[str, Any],
+    source_type: str,
+    source_path: Path,
+    source_key: str,
+    interaction_plan_path: str | None,
+    invoke: Any,
+    command: str = "import",
+) -> tuple[dict[str, Any], int]:
+    """Capture HTML once, then hand the immutable staged source to the backend."""
+    if source_type not in {"html", "claude-design"}:
+        if command == "reimport":
+            arguments = ["--source", str(source_path), "--as", source_key]
+        else:
+            arguments = [str(source_path), "--source-type", source_type, "--as", source_key]
+        return invoke(command, root, lock, arguments)
+    from vellum_html_source import HTMLSourceError, stage_html_source
+    from vellum_web_backend import BackendFailure, run_chrome_interaction_capture
+    plan = load_html_interaction_plan(interaction_plan_path)
+    try:
+        with tempfile.TemporaryDirectory(prefix="vellum-html-import-") as temporary:
+            staging = Path(temporary) / "source"
+            receipt = stage_html_source(source_path, staging)
+            capture_type = "claude-design" if receipt["producer"] == "claude-design" else "html"
+            if source_type == "claude-design" and capture_type != "claude-design":
+                raise CliFailure(
+                    "The requested Claude Design source did not satisfy the Claude fingerprint contract.",
+                    status="source_fingerprint_mismatch", exit_code=EXIT_PROJECT,
+                )
+            envelope = run_chrome_interaction_capture(
+                staging, plan, entry=str(receipt["entry"]), source_metadata={
+                "producer": receipt["producer"],
+                "fingerprint": receipt["fingerprint"],
+                "preflightSchema": receipt["schema"],
+                "dependencies": receipt["dependencies"],
+                "entry": receipt["entry"],
+                },
+            )
+            write_localized_capture_assets(staging, envelope)
+            envelope_path = Path(temporary) / "capture-envelope.json"
+            envelope_path.write_text(
+                json.dumps(envelope, sort_keys=True, separators=(",", ":")) + "\n",
+                encoding="utf-8",
+            )
+            if command == "reimport":
+                arguments = ["--source", str(staging / str(receipt["entry"])),
+                             "--capture-envelope", str(envelope_path), "--as", source_key]
+            else:
+                arguments = [str(staging / str(receipt["entry"])), "--source-type", capture_type,
+                             "--capture-envelope", str(envelope_path), "--as", source_key]
+            return invoke(command, root, lock, arguments)
+    except (HTMLSourceError, BackendFailure, OSError, ValueError) as error:
+        raise CliFailure(str(error), status="invalid_html_source", exit_code=EXIT_PROJECT) from error
+
+
 def create_project(args: argparse.Namespace) -> dict[str, Any]:
     if args.run and args.no_verify:
         raise CliFailure("--run cannot be combined with --no-verify.", status="invalid_arguments", exit_code=EXIT_USAGE)
@@ -425,7 +548,7 @@ def create_project(args: argparse.Namespace) -> dict[str, Any]:
     import_request: tuple[str, Path, str] | None = None
     if args.import_source:
         source_type, source_value = args.import_source
-        if source_type not in {"figma", "design-ir"}:
+        if source_type not in {"figma", "design-ir", "html", "claude-design"}:
             raise CliFailure(
                 f"Unsupported create source type: {source_type}",
                 status="unsupported_source_type", exit_code=EXIT_USAGE,
@@ -508,9 +631,9 @@ def create_project(args: argparse.Namespace) -> dict[str, Any]:
         validate_project_sdk(lock, sdk)
     if import_request is not None:
         source_type, source_path, source_key = import_request
-        backend_payload, return_code = invoke_backend(
-            "import", destination, lock,
-            [str(source_path), "--source-type", source_type, "--as", source_key],
+        backend_payload, return_code = invoke_import_backend(
+            destination, lock, source_type, source_path, source_key,
+            args.interaction_plan, invoke_backend,
         )
         setup_commands.append({"command": "import", "status": backend_payload.get("status")})
         if return_code != 0 or not backend_payload.get("ok"):
@@ -1077,7 +1200,33 @@ def backend_command(args: argparse.Namespace, forwarded: list[str]) -> dict[str,
             status="capability_unavailable",
             exit_code=EXIT_UNAVAILABLE,
         )
-    backend_payload, return_code = invoke_backend(args.command, root, lock, forwarded)
+    if args.command == "import" and args.source_type in {"html", "claude-design"}:
+        source_path = Path(args.source).expanduser().resolve()
+        if not source_path.is_file():
+            raise CliFailure(
+                f"Import source does not exist: {source_path}",
+                status="source_not_found", exit_code=EXIT_PROJECT,
+            )
+        backend_payload, return_code = invoke_import_backend(
+            root, lock, args.source_type, source_path, args.source_key,
+            args.interaction_plan, invoke_backend,
+        )
+    elif args.command == "reimport":
+        source_path = Path(args.source).expanduser().resolve()
+        if not source_path.is_file():
+            raise CliFailure(
+                f"Reimport source does not exist: {source_path}",
+                status="source_not_found", exit_code=EXIT_PROJECT,
+            )
+        if source_path.suffix.casefold() in {".html", ".htm"}:
+            backend_payload, return_code = invoke_import_backend(
+                root, lock, "html", source_path, args.source_key,
+                args.interaction_plan, invoke_backend, command="reimport",
+            )
+        else:
+            backend_payload, return_code = invoke_backend(args.command, root, lock, forwarded)
+    else:
+        backend_payload, return_code = invoke_backend(args.command, root, lock, forwarded)
     return result(
         args.command,
         ok=return_code == 0 and bool(backend_payload.get("ok")),
@@ -1217,9 +1366,10 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument(
         "--from", dest="import_source", nargs=2, metavar=("SOURCE_TYPE", "SOURCE"),
         choices=None,
-        help="create from an initial source: --from figma FILE or --from design-ir FILE",
+        help="create from an initial source: --from figma/design-ir/html/claude-design FILE",
     )
     create.add_argument("--as", dest="source_key", default="main", help="permanent source key for --from")
+    create.add_argument("--interaction-plan", help="bounded browser interaction plan for an HTML import")
     create.add_argument("--no-verify", action="store_true", help="scaffold without installed native build/test proof")
     create.add_argument("--run", action="store_true", help="launch after the default build/test proof")
 
@@ -1284,12 +1434,14 @@ def parser() -> argparse.ArgumentParser:
     backend_specs = {
         "import": [
             ("source", {}),
-            ("--source-type", {"choices": ["figma", "design-ir"], "default": "figma"}),
+            ("--source-type", {"choices": ["figma", "design-ir", "html", "claude-design"], "default": "figma"}),
             ("--as", {"dest": "source_key", "default": "main"}),
+            ("--interaction-plan", {}),
         ],
         "reimport": [
             ("--source", {"required": True}),
             ("--as", {"dest": "source_key", "default": "main"}),
+            ("--interaction-plan", {}),
         ],
         "build": [("--target", {"default": "macos"})],
         "run": [
