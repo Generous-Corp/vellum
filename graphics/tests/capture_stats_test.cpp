@@ -1,11 +1,33 @@
 #include <vellum/graphics/capture_stats.hpp>
 
 #include <cstdint>
+#include <limits>
+#include <stdexcept>
 #include <vector>
 
 int main() {
     using vellum::graphics::analyze_capture_rgba;
+    using vellum::graphics::checked_image_byte_count;
     using vellum::graphics::passes_content_floor;
+
+    if (checked_image_byte_count(32U, 24U, 4U) != 3072U ||
+        checked_image_byte_count(0U, 24U, 4U).has_value() ||
+        checked_image_byte_count(
+            2U, 2U, std::numeric_limits<std::size_t>::max()).has_value()) {
+        return 1;
+    }
+
+    bool rejected_overflow = false;
+    try {
+        constexpr std::uint32_t overflowing_dimension = 1U << 31U;
+        (void)analyze_capture_rgba(
+            {}, overflowing_dimension, overflowing_dimension);
+    } catch (const std::invalid_argument&) {
+        rejected_overflow = true;
+    }
+    if (!rejected_overflow) {
+        return 1;
+    }
 
     constexpr std::uint32_t width = 32;
     constexpr std::uint32_t height = 24;
