@@ -16,7 +16,7 @@
   "state": "active",
   "vellum": {
     "last_dispatch_event": null,
-    "last_scanned_commit": "00d60ee20b58f45c6b4b4cb5780a2a4f6a0e34e0",
+    "last_scanned_commit": "3438787f8bd7556c28877a3a09828dcfbe79ad39",
     "repository": "Generous-Corp/vellum",
     "scan_base_commit": "5e413a793879478173318918514d7252a4670266"
   }
