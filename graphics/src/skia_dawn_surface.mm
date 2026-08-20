@@ -1,4 +1,5 @@
 #include <vellum/graphics/skia_dawn_surface.hpp>
+#include <vellum/graphics/capture_stats.hpp>
 #include <vellum/graphics/paint_command.hpp>
 
 #import <QuartzCore/CAMetalLayer.h>
@@ -807,21 +808,29 @@ private:
 
     bool read_target_rgba(
         SkSurface& target, std::vector<std::uint8_t>& rgba, std::string* error) {
+        const auto pixel_width = static_cast<std::uint32_t>(physical_width());
+        const auto pixel_height = static_cast<std::uint32_t>(physical_height());
+        const auto byte_count = checked_image_byte_count(
+            pixel_width, pixel_height, 4U);
+        if (!byte_count) {
+            set_error(error, "GPU readback dimensions exceed addressable storage");
+            return false;
+        }
         const auto image_info = SkImageInfo::Make(
             physical_width(), physical_height(), kRGBA_8888_SkColorType,
             kPremul_SkAlphaType, SkColorSpace::MakeSRGB());
-        const auto row_bytes = static_cast<std::size_t>(physical_width()) * 4U;
+        const auto row_bytes = static_cast<std::size_t>(pixel_width) * 4U;
 
         struct ReadbackState final {
             std::size_t row_bytes = 0;
-            std::uint32_t height = 0;
+            std::size_t byte_count = 0;
             std::vector<std::uint8_t> pixels;
             std::atomic_bool finished{false};
             bool ok = false;
         };
         auto state = std::make_shared<ReadbackState>();
         state->row_bytes = row_bytes;
-        state->height = static_cast<std::uint32_t>(physical_height());
+        state->byte_count = *byte_count;
 
         auto callback = [](SkImage::ReadPixelsContext context,
                            std::unique_ptr<const SkImage::AsyncReadResult> result) {
@@ -835,12 +844,12 @@ private:
                 return;
             }
             const auto* source = static_cast<const std::uint8_t*>(result->data(0));
-            state->pixels.resize(
-                static_cast<std::size_t>(state->height) * state->row_bytes);
-            for (std::uint32_t y = 0; y < state->height; ++y) {
+            state->pixels.resize(state->byte_count);
+            const auto height = state->byte_count / state->row_bytes;
+            for (std::size_t y = 0; y < height; ++y) {
                 std::memcpy(
-                    state->pixels.data() + static_cast<std::size_t>(y) * state->row_bytes,
-                    source + static_cast<std::size_t>(y) * result->rowBytes(0),
+                    state->pixels.data() + y * state->row_bytes,
+                    source + y * result->rowBytes(0),
                     state->row_bytes);
             }
             state->ok = true;

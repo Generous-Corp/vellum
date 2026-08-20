@@ -2,19 +2,42 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <unordered_map>
 
 namespace vellum::graphics {
 
+std::optional<std::size_t> checked_image_byte_count(
+    std::uint32_t width,
+    std::uint32_t height,
+    std::size_t bytes_per_pixel) noexcept {
+    if (width == 0 || height == 0 || bytes_per_pixel == 0) {
+        return std::nullopt;
+    }
+
+    constexpr auto maximum = std::numeric_limits<std::size_t>::max();
+    const auto wide_width = static_cast<std::size_t>(width);
+    const auto wide_height = static_cast<std::size_t>(height);
+    if (wide_height > maximum / wide_width) {
+        return std::nullopt;
+    }
+    const auto pixel_count = wide_width * wide_height;
+    if (bytes_per_pixel > maximum / pixel_count) {
+        return std::nullopt;
+    }
+    return pixel_count * bytes_per_pixel;
+}
+
 CaptureStats analyze_capture_rgba(
     std::span<const std::uint8_t> rgba,
     std::uint32_t width,
     std::uint32_t height) {
-    const auto pixel_count = static_cast<std::size_t>(width) * height;
-    if (width == 0 || height == 0 || rgba.size() != pixel_count * 4U) {
+    const auto byte_count = checked_image_byte_count(width, height, 4U);
+    if (!byte_count || rgba.size() != *byte_count) {
         throw std::invalid_argument("RGBA capture size does not match its dimensions");
     }
+    const auto pixel_count = *byte_count / 4U;
 
     CaptureStats stats{};
     stats.pixel_count = pixel_count;
