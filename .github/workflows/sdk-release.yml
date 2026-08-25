@@ -94,6 +94,20 @@ jobs:
             --expected-fingerprint \
               SHA256:eMlEuZcnW6NJDrKQBuN5EX1q69bOlIRPl6XmutVTgcs \
             --output "$RUNNER_TEMP/validation-release-trust.json"
+          TAG_OBJECT_SHA="$tag_object_sha" python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          value = {
+              "schema": "vellum.trusted-release-source.v1",
+              "source_run_id": int(os.environ["SOURCE_RUN_ID"]),
+              "release_tag": os.environ["RELEASE_TAG"],
+              "source_commit": os.environ["SOURCE_COMMIT"],
+              "tag_object_sha": os.environ["TAG_OBJECT_SHA"],
+          }
+          Path(os.environ["RUNNER_TEMP"]).joinpath(
+              "trusted-release-source.json"
+          ).write_text(json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n")
+          PY
 
       - name: Download the exact source-run GPU artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
@@ -184,6 +198,8 @@ jobs:
             ${{ runner.temp }}/trusted-sdk-installed-validation.json
             ${{ runner.temp }}/trusted-sdk-installed-validation.stdout.json
             ${{ runner.temp }}/trusted-sterile-bundle.json
+            ${{ runner.temp }}/validation-release-trust.json
+            ${{ runner.temp }}/trusted-release-source.json
           if-no-files-found: error
           retention-days: 90
 
@@ -196,9 +212,6 @@ jobs:
       github.event.workflow_run.conclusion == 'success'
     runs-on: ${{ fromJSON(vars.VELLUM_AUTHORITY_RUNS_ON_JSON || '["ubuntu-latest"]') }}
     env:
-      SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
-      RELEASE_TAG: ${{ github.event.workflow_run.head_branch }}
-      SOURCE_COMMIT: ${{ github.event.workflow_run.head_sha }}
       RELEASE_NAME: Vellum 0.1.7 experimental SDK
       RELEASE_ARCHIVE: vellum-sdk-0.1.7-darwin-arm64.tar.gz
     steps:
@@ -208,6 +221,54 @@ jobs:
           ref: main
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Download validated release coordinates
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: vellum-trusted-sdk-validation
+          path: ${{ runner.temp }}/trusted
+
+      - name: Load validated release coordinates
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, re
+          from pathlib import Path
+
+          source = Path(os.environ["RUNNER_TEMP"]).joinpath(
+              "trusted/trusted-release-source.json"
+          )
+          value = json.loads(source.read_text())
+          if set(value) != {
+              "schema", "source_run_id", "release_tag", "source_commit",
+              "tag_object_sha",
+          }:
+              raise SystemExit("trusted release source fields differ")
+          if value["schema"] != "vellum.trusted-release-source.v1":
+              raise SystemExit("trusted release source schema differs")
+          source_run_id = value["source_run_id"]
+          if not isinstance(source_run_id, int) or source_run_id <= 0:
+              raise SystemExit("trusted release source run id is invalid")
+          release_tag = value["release_tag"]
+          if not isinstance(release_tag, str) or not re.fullmatch(
+              r"v[0-9]+\.[0-9]+\.[0-9]+", release_tag
+          ):
+              raise SystemExit("trusted release tag is invalid")
+          coordinates = {
+              "SOURCE_RUN_ID": str(source_run_id),
+              "RELEASE_TAG": release_tag,
+              "SOURCE_COMMIT": value["source_commit"],
+              "VALIDATED_TAG_OBJECT_SHA": value["tag_object_sha"],
+          }
+          for name in ("SOURCE_COMMIT", "VALIDATED_TAG_OBJECT_SHA"):
+              if not isinstance(coordinates[name], str) or not re.fullmatch(
+                  r"[0-9a-f]{40}", coordinates[name]
+              ):
+                  raise SystemExit(f"trusted release {name.lower()} is invalid")
+          with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as output:
+              for name, coordinate in coordinates.items():
+                  output.write(f"{name}={coordinate}\n")
+          PY
 
       - name: Mint one-repository finalizer token
         id: finalizer-token
@@ -277,6 +338,7 @@ jobs:
           $remote_row
           EOF
           test "$remote_type" = tag
+          test "$tag_object_sha" = "$VALIDATED_TAG_OBJECT_SHA"
           git fetch --no-tags origin "refs/tags/$RELEASE_TAG"
           test "$(git rev-parse "$tag_object_sha^{commit}")" = "$SOURCE_COMMIT"
           python3 scripts/verify_release_tag.py \
@@ -297,11 +359,9 @@ jobs:
           GH_TOKEN: ${{ steps.finalizer-token.outputs.token }}
         run: |
           set -euo pipefail
-          mkdir "$RUNNER_TEMP/gpu" "$RUNNER_TEMP/trusted"
+          mkdir "$RUNNER_TEMP/gpu"
           gh run download "$SOURCE_RUN_ID" --repo "$GITHUB_REPOSITORY" \
             --name vellum-gpu-macos-arm64-evidence --dir "$RUNNER_TEMP/gpu"
-          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" \
-            --name vellum-trusted-sdk-validation --dir "$RUNNER_TEMP/trusted"
           test -f "$RUNNER_TEMP/gpu/$RELEASE_ARCHIVE"
           test -f "$RUNNER_TEMP/trusted/trusted-sdk-verification.json"
           test -f "$RUNNER_TEMP/trusted/trusted-sdk-installed-validation.json"
