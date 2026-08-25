@@ -112,6 +112,38 @@ def workflow_jobs(text: str) -> dict[str, str]:
     return {name: "\n".join(body) for name, body in jobs.items()}
 
 
+def assert_privileged_release_coordinate_isolation(text: str) -> None:
+    """Keep workflow_run coordinates out of the privileged finalizer steps."""
+    finalizer = workflow_jobs(text).get("finalize-sdk-release")
+    if finalizer is None:
+        raise AssertionError("sdk-release.yml: finalize-sdk-release is missing")
+    _, marker, steps = finalizer.partition("    steps:\n")
+    if not marker:
+        raise AssertionError("sdk-release.yml: finalizer steps are missing")
+    for coordinate in (
+        "github.event.workflow_run.id",
+        "github.event.workflow_run.head_branch",
+        "github.event.workflow_run.head_sha",
+    ):
+        if coordinate in steps:
+            raise AssertionError(
+                "privileged finalizer steps consume untrusted workflow_run "
+                f"coordinate: {coordinate}"
+            )
+    required_order = (
+        "Check out trusted finalizer controls",
+        "Download validated release coordinates",
+        "Load validated release coordinates",
+        "Mint one-repository finalizer token",
+    )
+    positions = [steps.find(name) for name in required_order]
+    if any(position < 0 for position in positions) or positions != sorted(positions):
+        raise AssertionError(
+            "validated release coordinates must be loaded before minting the "
+            "privileged finalizer token"
+        )
+
+
 class RunnerPolicyTests(unittest.TestCase):
     def test_only_trusted_default_branch_code_can_publish_sdk_releases(self) -> None:
         gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
@@ -158,6 +190,12 @@ class RunnerPolicyTests(unittest.TestCase):
         self.assertIn("verify_release_tag_ruleset.py", finalizer)
         self.assertNotIn("--clobber", finalizer)
         self.assertGreaterEqual(finalizer.count("verify_release_guard"), 5)
+        assert_privileged_release_coordinate_isolation(finalizer)
+        self.assertIn("vellum.trusted-release-source.v1", finalizer)
+        self.assertIn("trusted-release-source.json", finalizer)
+        self.assertIn(
+            'test "$tag_object_sha" = "$VALIDATED_TAG_OBJECT_SHA"', finalizer
+        )
         for mutation in (
             "gh release create",
             "--method DELETE",
@@ -171,6 +209,24 @@ class RunnerPolicyTests(unittest.TestCase):
                 0,
                 f"{mutation} must follow a live release guard",
             )
+
+    def test_privileged_release_coordinate_isolation_detects_direct_event_input(
+        self,
+    ) -> None:
+        finalizer = (WORKFLOWS / "sdk-release.yml").read_text(encoding="utf-8")
+        mutation = (
+            "      - name: Mint one-repository finalizer token\n"
+            "        env:\n"
+            "          RELEASE_TAG: ${{ github.event.workflow_run.head_branch }}\n"
+        )
+        mutated = finalizer.replace(
+            "      - name: Mint one-repository finalizer token\n", mutation, 1
+        )
+        self.assertNotEqual(mutated, finalizer)
+        with self.assertRaisesRegex(
+            AssertionError, "consume untrusted workflow_run coordinate"
+        ):
+            assert_privileged_release_coordinate_isolation(mutated)
 
     def test_browser_driving_jobs_provision_the_pinned_browser(self) -> None:
         for filename, job_names in BROWSER_JOBS.items():
