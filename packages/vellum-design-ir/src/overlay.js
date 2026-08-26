@@ -133,15 +133,26 @@ function setOwnedProperty(node, path, value) {
     let target = node;
     for (let index = 0; index < segments.length - 1; index += 1) {
         const segment = segments[index];
-        const current = target[segment];
+        const current = Object.hasOwn(target, segment)
+            ? Object.getOwnPropertyDescriptor(target, segment)?.value
+            : undefined;
         if (!current || typeof current !== 'object' || Array.isArray(current)) {
-            target[segment] = {};
+            defineOwnedProperty(target, segment, {});
         }
-        target = target[segment];
+        target = Object.getOwnPropertyDescriptor(target, segment).value;
     }
     const leaf = segments.at(-1);
-    if (value === null) delete target[leaf];
-    else target[leaf] = value;
+    if (value === null) Reflect.deleteProperty(target, leaf);
+    else defineOwnedProperty(target, leaf, value);
+}
+
+function defineOwnedProperty(target, key, value) {
+    Object.defineProperty(target, key, {
+        configurable: true,
+        enumerable: true,
+        value,
+        writable: true,
+    });
 }
 
 function referenceConflict(kind, index, nodeId, resolved) {

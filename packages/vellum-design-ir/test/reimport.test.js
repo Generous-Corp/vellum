@@ -148,3 +148,21 @@ test('authored overlays cannot escape their source namespace or properties bound
     );
     assert.equal(Object.prototype.polluted, undefined);
 });
+
+test('authored overrides replace inherited names with owned data properties', async () => {
+    const { previous, next } = await importPair();
+    const overlay = await fixture('authored.overlay.json');
+    overlay.overrides[0] = {
+        nodeId: 'main/card-a',
+        path: 'properties.toString.value',
+        value: 42,
+    };
+
+    const result = reimportDesign(previous, next, overlay);
+    const materializedCard = indexTree(result.materialized.root).index.get('main/card-a').node;
+
+    assert.equal(result.accepted, true);
+    assert.equal(Object.hasOwn(materializedCard.properties, 'toString'), true);
+    assert.deepEqual(materializedCard.properties.toString, { value: 42 });
+    assert.equal(Object.prototype.value, undefined);
+});
