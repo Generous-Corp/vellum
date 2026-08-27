@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
+    applyAuthoredOverlay,
     indexTree,
     normalizeImport,
     parseReimportReport,
@@ -147,4 +148,52 @@ test('authored overlays cannot escape their source namespace or properties bound
         ['namespace', 'ownership-boundary'],
     );
     assert.equal(Object.prototype.polluted, undefined);
+});
+
+test('authored overlay mutation rejects every prototype traversal segment', async () => {
+    const { next } = await importPair();
+
+    for (const unsafe of ['__proto__', 'constructor', 'prototype']) {
+        const overlay = await fixture('authored.overlay.json');
+        overlay.overrides[0].path = `properties.${unsafe}.polluted`;
+
+        const validation = validateAuthoredOverlay(overlay);
+        assert.equal(validation.valid, false, unsafe);
+        assert.equal(
+            validation.issues.some(({ code }) => code === 'ownership-boundary'),
+            true,
+            unsafe,
+        );
+        assert.throws(
+            () => applyAuthoredOverlay(next, overlay),
+            /Invalid authored overlay/,
+            unsafe,
+        );
+        assert.equal(Object.prototype.polluted, undefined, unsafe);
+    }
+});
+
+test('authored overlay mutation shadows inherited paths without modifying prototypes', async () => {
+    const { next } = await importPair();
+    const overlay = await fixture('authored.overlay.json');
+    const nodeId = overlay.overrides[0].nodeId;
+    overlay.overrides = [
+        {
+            nodeId,
+            path: 'properties.toString.local',
+            value: 'owned-value',
+        },
+        {
+            nodeId,
+            path: 'properties.valueOf',
+            value: null,
+        },
+    ];
+
+    const result = applyAuthoredOverlay(next, overlay);
+    const materialized = indexTree(result.materialized.root).index.get(nodeId).node;
+    assert.equal(Object.hasOwn(materialized.properties, 'toString'), true);
+    assert.deepEqual(materialized.properties.toString, { local: 'owned-value' });
+    assert.equal(Object.hasOwn(materialized.properties, 'valueOf'), false);
+    assert.equal(materialized.properties.valueOf, Object.prototype.valueOf);
 });
