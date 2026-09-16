@@ -25,7 +25,7 @@ void set_error(std::string* error, std::string message) {
 
 }  // namespace
 
-bool ensure_dawn_bootstrap(
+bool register_dawn_bootstrap(
     const DawnBootstrap& bootstrap, std::string_view expected_dawn_revision,
     std::string* error) {
     if (bootstrap.abi_version != kDawnBootstrapAbiVersion ||
@@ -69,6 +69,14 @@ bool ensure_dawn_bootstrap(
     state.phase = BootstrapState::Phase::ready;
     if (error != nullptr) error->clear();
     return true;
+}
+
+bool dawn_bootstrap_is_registered(std::string* error) {
+    auto& state = bootstrap_state();
+    std::lock_guard lock(state.mutex);
+    if (state.phase == BootstrapState::Phase::ready) return true;
+    set_error(error, "host must register a Dawn bootstrap before creating a GPU surface");
+    return false;
 }
 
 }  // namespace vellum::graphics

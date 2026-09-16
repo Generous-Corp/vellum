@@ -34,9 +34,9 @@ def main() -> int:
             "host unexpectedly defines dawn::native::GetProcs")
     require("GetProcs" in provider_symbols,
             "vellum-gpu does not own dawn::native::GetProcs")
-    require("ensure_dawn_bootstrap" not in host_symbols,
+    require("register_dawn_bootstrap" not in host_symbols,
             "host unexpectedly owns a second Dawn bootstrap coordinator")
-    require("ensure_dawn_bootstrap" in provider_symbols,
+    require("register_dawn_bootstrap" in provider_symbols,
             "vellum-gpu does not own the Dawn bootstrap coordinator")
     return 0
 

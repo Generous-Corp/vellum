@@ -36,12 +36,16 @@ struct DawnBootstrap final {
     void* context = nullptr;
 };
 
-/// Runs the host bootstrap once for one authenticated provider revision.
+/// Registers the host bootstrap once for one authenticated provider revision.
 ///
 /// A repeated request for the same revision is a no-op. A different revision
 /// is rejected before the callback can mutate Dawn's process-global state.
-[[nodiscard]] bool ensure_dawn_bootstrap(
+[[nodiscard]] bool register_dawn_bootstrap(
     const DawnBootstrap& bootstrap, std::string_view expected_dawn_revision,
     std::string* error = nullptr);
+
+/// Returns whether a versioned host bootstrap has completed in this process.
+/// `SkiaDawnSurface::create` fails closed until this returns true.
+[[nodiscard]] bool dawn_bootstrap_is_registered(std::string* error = nullptr);
 
 }  // namespace vellum::graphics

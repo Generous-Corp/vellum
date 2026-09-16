@@ -175,6 +175,18 @@ if(VELLUM_BUILD_TESTS)
                 "$<TARGET_FILE:vellum-dawn-provider-topology-test>"
                 "$<TARGET_FILE:vellum-gpu>")
 
+        add_executable(vellum-legacy-config-caller-test
+            graphics/tests/legacy_config_caller_test.cpp)
+        target_include_directories(vellum-legacy-config-caller-test BEFORE PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/graphics/tests/legacy_include")
+        target_link_libraries(vellum-legacy-config-caller-test PRIVATE Vellum::Gpu)
+        set_target_properties(vellum-legacy-config-caller-test PROPERTIES
+            OSX_ARCHITECTURES arm64
+            MACOSX_DEPLOYMENT_TARGET 13.0
+            BUILD_RPATH "$<TARGET_FILE_DIR:vellum-gpu>")
+        add_test(NAME vellum.legacy-config-caller
+            COMMAND vellum-legacy-config-caller-test)
+
         add_executable(vellum-gpu-style-test
             graphics/tests/gpu_style_test.cpp)
         target_link_libraries(vellum-gpu-style-test PRIVATE Vellum::Gpu Vellum::DawnHeaders)
@@ -215,8 +227,16 @@ if(VELLUM_BUILD_TESTS)
                     "-DVELLUM_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
                     "-DVELLUM_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
                     "-DVELLUM_SKIA_DIR=${VELLUM_SKIA_DIR}"
+                "-DTEST_CONFIG=$<CONFIG>"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunNestedInstallConsumer.cmake")
+            add_test(NAME vellum.install-legacy-config-consumer
+                COMMAND "${CMAKE_COMMAND}"
+                    "-DVELLUM_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+                    "-DVELLUM_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+                    "-DVELLUM_INSTALL_CONSUMER_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/graphics/tests/legacy_install_consumer"
+                    "-DVELLUM_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
                     "-DTEST_CONFIG=$<CONFIG>"
-                    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunNestedInstallConsumer.cmake")
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunInstallConsumer.cmake")
         endif()
     endif()
     add_test(NAME vellum.sdk-artifact

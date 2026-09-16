@@ -22,7 +22,7 @@ DawnBootstrapResult bootstrap(
     if (host.reenter) {
         host.reenter = false;
         std::string nested_error;
-        if (ensure_dawn_bootstrap(*host.bootstrap_contract,
+        if (register_dawn_bootstrap(*host.bootstrap_contract,
                                   request.expected_dawn_revision, &nested_error)) {
             if (error != nullptr) *error = "reentrant bootstrap unexpectedly succeeded";
             return DawnBootstrapResult::failed;
@@ -63,20 +63,20 @@ int main() {
     host.bootstrap_contract = &bootstrap_contract;
     host.reenter = true;
     std::string error;
-    if (!require(ensure_dawn_bootstrap(bootstrap_contract, "provider-a", &error),
+    if (!require(register_dawn_bootstrap(bootstrap_contract, "provider-a", &error),
                  "first authenticated bootstrap failed") ||
         !require(host.mutations == 1 && host.calls == 1,
                  "first bootstrap did not make exactly one mutation") ||
-        !require(ensure_dawn_bootstrap(bootstrap_contract, "provider-a", &error),
+        !require(register_dawn_bootstrap(bootstrap_contract, "provider-a", &error),
                  "same-provider bootstrap was not idempotent") ||
         !require(host.mutations == 1 && host.calls == 1,
                  "same-provider bootstrap reinvoked the host") ||
-        !require(!ensure_dawn_bootstrap(bootstrap_contract, "provider-b", &error),
+        !require(!register_dawn_bootstrap(bootstrap_contract, "provider-b", &error),
                  "mismatched provider was accepted") ||
         !require(host.mutations == 1 && host.calls == 1 &&
                      host.installed_revision == "provider-a",
                  "mismatch mutated the established provider") ||
-        !require(!ensure_dawn_bootstrap({}, "provider-a", &error),
+        !require(!register_dawn_bootstrap({}, "provider-a", &error),
                  "missing bootstrap was accepted")) {
         return 1;
     }

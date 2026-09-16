@@ -1,5 +1,6 @@
 #include <vellum/graphics/skia_dawn_surface.hpp>
 #include <vellum/graphics/capture_stats.hpp>
+#include <vellum/graphics/dawn_bootstrap.hpp>
 #include <vellum/graphics/paint_command.hpp>
 
 #import <QuartzCore/CAMetalLayer.h>
@@ -474,8 +475,7 @@ public:
             return false;
         }
 
-        if (!ensure_dawn_bootstrap(
-                config_.dawn_bootstrap, config_.expected_dawn_revision, error)) {
+        if (!dawn_bootstrap_is_registered(error)) {
             return false;
         }
 

@@ -57,12 +57,11 @@ int main() {
             std::abs(metrics.ascent - expected_metrics.ascent) > 0.01F) return 1;
     }
 #if defined(VELLUM_CONSUMER_HAS_GPU_NATIVE_BOOTSTRAP)
+    if (!vellum::app_host::register_native_dawn_bootstrap(&error)) return 1;
     auto surface = SkiaDawnSurface::create(
         {.width = 240,
          .height = 160,
-         .scale = 1.0F,
-         .dawn_bootstrap = vellum::app_host::native_dawn_bootstrap(),
-         .expected_dawn_revision = vellum::app_host::native_dawn_revision()},
+         .scale = 1.0F},
         &error);
     if (!surface || !surface->evidence().available ||
         surface->evidence().fallback || surface->evidence().backend != "Metal") {

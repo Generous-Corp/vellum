@@ -17,11 +17,13 @@ using namespace vellum::graphics;
 bool capture(const Scene& scene, std::vector<std::uint8_t>& rgba,
              std::uint32_t& width, std::uint32_t& height) {
     std::string error;
+    if (!vellum::app_host::register_native_dawn_bootstrap(&error)) {
+        std::cerr << error << '\n';
+        return false;
+    }
     auto surface = SkiaDawnSurface::create(
         {.width = static_cast<std::uint32_t>(scene.width),
-         .height = static_cast<std::uint32_t>(scene.height),
-         .dawn_bootstrap = vellum::app_host::native_dawn_bootstrap(),
-         .expected_dawn_revision = vellum::app_host::native_dawn_revision()}, &error);
+         .height = static_cast<std::uint32_t>(scene.height)}, &error);
     if (!surface || !surface->render(scene, &error) ||
         !surface->capture_rgba(rgba, width, height, &error)) {
         std::cerr << error << '\n';

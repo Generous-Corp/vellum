@@ -123,13 +123,15 @@ int self_test(std::string_view output, bool native_surface) {
         }
 
         std::string error;
+        if (!vellum::app_host::register_native_dawn_bootstrap(&error)) {
+            std::cerr << error << '\n';
+            return 1;
+        }
         auto surface = SkiaDawnSurface::create(
             {.width = width,
              .height = height,
              .scale = 1.0F,
-             .native_surface_handle = native_surface ? (__bridge void*)layer : nullptr,
-             .dawn_bootstrap = vellum::app_host::native_dawn_bootstrap(),
-             .expected_dawn_revision = vellum::app_host::native_dawn_revision()},
+             .native_surface_handle = native_surface ? (__bridge void*)layer : nullptr},
             &error);
         if (!surface || !validate_surface(*surface, native_surface, &error)) {
             std::cerr << error << '\n';
@@ -231,13 +233,15 @@ int self_test(std::string_view output, bool native_surface) {
     layer.drawableSize = CGSizeMake(self.bounds.size.width * scale,
                                     self.bounds.size.height * scale);
     std::string error;
+    if (!vellum::app_host::register_native_dawn_bootstrap(&error)) {
+        NSLog(@"Vellum Dawn bootstrap failed: %s", error.c_str());
+        return;
+    }
     _surface = SkiaDawnSurface::create(
         {.width = static_cast<std::uint32_t>(self.bounds.size.width),
          .height = static_cast<std::uint32_t>(self.bounds.size.height),
          .scale = scale,
-         .native_surface_handle = (__bridge void*)layer,
-         .dawn_bootstrap = vellum::app_host::native_dawn_bootstrap(),
-         .expected_dawn_revision = vellum::app_host::native_dawn_revision()},
+         .native_surface_handle = (__bridge void*)layer},
         &error);
     if (!_surface || !_surface->render(
             proof_scene(static_cast<float>(self.bounds.size.width),

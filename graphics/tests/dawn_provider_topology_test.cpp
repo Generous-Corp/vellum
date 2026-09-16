@@ -11,13 +11,13 @@ int main() {
         std::cerr << "native Dawn table was unexpectedly installed before the test\n";
         return 1;
     }
-    if (vellum::graphics::ensure_dawn_bootstrap(bootstrap, "not-the-provider", &error) ||
+    if (vellum::graphics::register_dawn_bootstrap(bootstrap, "not-the-provider", &error) ||
         vellum::app_host::native_dawn_bootstrap_installed()) {
         std::cerr << "mismatched native provider installed a Dawn table\n";
         return 1;
     }
     if (bootstrap.callback == nullptr ||
-        !vellum::graphics::ensure_dawn_bootstrap(bootstrap, revision, &error) ||
+        !vellum::graphics::register_dawn_bootstrap(bootstrap, revision, &error) ||
         !vellum::app_host::native_dawn_bootstrap_installed()) {
         std::cerr << "host bootstrap failed: " << error << '\n';
         return 1;
