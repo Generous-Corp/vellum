@@ -6,6 +6,8 @@
 #include <vellum/graphics/capture_stats.hpp>
 #include <vellum/graphics/skia_dawn_surface.hpp>
 
+#include "dawn_native_bootstrap.hpp"
+
 #include "component_registry.hpp"
 #include "macos_accessibility.hpp"
 #include "options.hpp"
@@ -319,7 +321,12 @@ int run_headless(const Options& options, std::string_view bundle) {
             return 1;
         }
         auto surface = SkiaDawnSurface::create(
-            {.width = width, .height = height, .scale = 1.0F}, &error);
+            {.width = width,
+             .height = height,
+             .scale = 1.0F,
+             .dawn_bootstrap = vellum::app_host::native_dawn_bootstrap(),
+             .expected_dawn_revision = vellum::app_host::native_dawn_revision()},
+            &error);
         if (!surface || !validate_gpu(*surface, false, &error) ||
             !surface->render(rendered.scene, &error)) {
             std::cerr << error << '\n';
@@ -542,7 +549,9 @@ std::vector<ComponentModuleSpec> interactive_component_specs;
         {.width = static_cast<std::uint32_t>(self.bounds.size.width),
          .height = static_cast<std::uint32_t>(self.bounds.size.height),
          .scale = scale,
-         .native_surface_handle = (__bridge void*)layer},
+         .native_surface_handle = (__bridge void*)layer,
+         .dawn_bootstrap = vellum::app_host::native_dawn_bootstrap(),
+         .expected_dawn_revision = vellum::app_host::native_dawn_revision()},
         &error);
     if (!_surface || !validate_gpu(*_surface, true, &error) ||
         !_surface->render(_rendered.scene, &error)) {

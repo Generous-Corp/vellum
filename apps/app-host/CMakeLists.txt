@@ -11,9 +11,11 @@ target_link_libraries(vellum-app-host PRIVATE
     Vellum::Authoring
     Vellum::ComponentAbi
     Vellum::Gpu
+    VellumSkiaDawn
     "-framework Cocoa"
     "-framework Metal"
     "-framework QuartzCore")
+target_include_directories(vellum-app-host PRIVATE "${PROJECT_SOURCE_DIR}/apps")
 
 set_target_properties(vellum-app-host PROPERTIES
     OSX_ARCHITECTURES arm64

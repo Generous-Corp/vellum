@@ -474,8 +474,10 @@ public:
             return false;
         }
 
-        const DawnProcTable& procedures = dawn::native::GetProcs();
-        dawnProcSetProcs(&procedures);
+        if (!ensure_dawn_bootstrap(
+                config_.dawn_bootstrap, config_.expected_dawn_revision, error)) {
+            return false;
+        }
 
         wgpu::InstanceDescriptor instance_descriptor{};
         const wgpu::InstanceFeatureName instance_features[] = {

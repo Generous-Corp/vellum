@@ -1,6 +1,8 @@
 #include <vellum/graphics/skia_dawn_surface.hpp>
 #include <vellum/graphics/paint_command.hpp>
 
+#include "dawn_native_bootstrap.hpp"
+
 #include <cmath>
 #include <cstdint>
 #include <future>
@@ -17,7 +19,9 @@ bool capture(const Scene& scene, std::vector<std::uint8_t>& rgba,
     std::string error;
     auto surface = SkiaDawnSurface::create(
         {.width = static_cast<std::uint32_t>(scene.width),
-         .height = static_cast<std::uint32_t>(scene.height)}, &error);
+         .height = static_cast<std::uint32_t>(scene.height),
+         .dawn_bootstrap = vellum::app_host::native_dawn_bootstrap(),
+         .expected_dawn_revision = vellum::app_host::native_dawn_revision()}, &error);
     if (!surface || !surface->render(scene, &error) ||
         !surface->capture_rgba(rgba, width, height, &error)) {
         std::cerr << error << '\n';

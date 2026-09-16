@@ -1,5 +1,6 @@
 add_library(vellum-graphics
     src/capture_stats.cpp
+    src/dawn_bootstrap.cpp
     src/paint_command.cpp)
 add_library(Vellum::Graphics ALIAS vellum-graphics)
 

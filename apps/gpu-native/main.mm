@@ -5,6 +5,8 @@
 #include <vellum/graphics/capture_stats.hpp>
 #include <vellum/graphics/skia_dawn_surface.hpp>
 
+#include "dawn_native_bootstrap.hpp"
+
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -125,7 +127,9 @@ int self_test(std::string_view output, bool native_surface) {
             {.width = width,
              .height = height,
              .scale = 1.0F,
-             .native_surface_handle = native_surface ? (__bridge void*)layer : nullptr},
+             .native_surface_handle = native_surface ? (__bridge void*)layer : nullptr,
+             .dawn_bootstrap = vellum::app_host::native_dawn_bootstrap(),
+             .expected_dawn_revision = vellum::app_host::native_dawn_revision()},
             &error);
         if (!surface || !validate_surface(*surface, native_surface, &error)) {
             std::cerr << error << '\n';
@@ -231,7 +235,9 @@ int self_test(std::string_view output, bool native_surface) {
         {.width = static_cast<std::uint32_t>(self.bounds.size.width),
          .height = static_cast<std::uint32_t>(self.bounds.size.height),
          .scale = scale,
-         .native_surface_handle = (__bridge void*)layer},
+         .native_surface_handle = (__bridge void*)layer,
+         .dawn_bootstrap = vellum::app_host::native_dawn_bootstrap(),
+         .expected_dawn_revision = vellum::app_host::native_dawn_revision()},
         &error);
     if (!_surface || !_surface->render(
             proof_scene(static_cast<float>(self.bounds.size.width),

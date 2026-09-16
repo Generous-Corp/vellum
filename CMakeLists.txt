@@ -109,6 +109,14 @@ if(VELLUM_BUILD_TESTS)
     add_test(NAME vellum.runtime COMMAND vellum-runtime-test)
 
     if(TARGET vellum-graphics)
+        add_executable(vellum-dawn-bootstrap-test
+            graphics/tests/dawn_bootstrap_test.cpp)
+        target_link_libraries(vellum-dawn-bootstrap-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.dawn-bootstrap COMMAND vellum-dawn-bootstrap-test)
+        add_test(NAME vellum.dawn-bootstrap-source-audit
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/graphics/tests/test_dawn_bootstrap_source.py")
+
         add_executable(vellum-capture-stats-test
             graphics/tests/capture_stats_test.cpp)
         target_link_libraries(vellum-capture-stats-test PRIVATE Vellum::Graphics)
@@ -153,7 +161,8 @@ if(VELLUM_BUILD_TESTS)
     if(TARGET vellum-gpu)
         add_executable(vellum-gpu-style-test
             graphics/tests/gpu_style_test.cpp)
-        target_link_libraries(vellum-gpu-style-test PRIVATE Vellum::Gpu)
+        target_link_libraries(vellum-gpu-style-test PRIVATE Vellum::Gpu VellumSkiaDawn)
+        target_include_directories(vellum-gpu-style-test PRIVATE "${PROJECT_SOURCE_DIR}/apps")
 
         add_executable(vellum-text-shaping-concurrency-test
             graphics/tests/text_shaping_concurrency_test.cpp)
