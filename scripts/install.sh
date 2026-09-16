@@ -392,13 +392,13 @@ if [ -n "$version" ]; then
   if [ "$release_base" = "$official_release_base" ]; then
     if [ "$(uname -s)" != "Darwin" ] || [ "$(uname -m)" != "arm64" ] || \
        [ "$release_target" != "darwin-arm64" ]; then
-      printf 'Vellum v%s application SDK releases currently support only macOS 13.0+ arm64; detected %s %s and target %s.\n' \
+      printf 'Vellum v%s application SDK releases currently support only macOS 15.0+ arm64; detected %s %s and target %s.\n' \
         "$version" "$(uname -s)" "$(uname -m)" "$release_target" >&2
       exit 1
     fi
     command -v sw_vers >/dev/null 2>&1 || {
       printf '%s\n' \
-        'Vellum application SDK releases require macOS 13.0 or newer, but sw_vers is unavailable.' >&2
+        'Vellum application SDK releases require macOS 15.0 or newer, but sw_vers is unavailable.' >&2
       exit 1
     }
     macos_version=$(sw_vers -productVersion 2>/dev/null || true)
@@ -408,7 +408,7 @@ value = sys.argv[1]
 match = re.fullmatch(r"([0-9]+)(?:\.[0-9]+){0,2}", value)
 raise SystemExit(0 if match and int(match.group(1)) >= 15 else 1)' \
       "$macos_version" || {
-      printf 'Vellum application SDK releases require macOS 13.0 or newer; found %s.\n' \
+      printf 'Vellum application SDK releases require macOS 15.0 or newer; found %s.\n' \
         "${macos_version:-unknown}" >&2
       exit 1
     }
