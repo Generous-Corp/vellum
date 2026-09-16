@@ -1,6 +1,7 @@
 #include <vellum/graphics/dawn_bootstrap.hpp>
 
 #include <iostream>
+#include <stdexcept>
 #include <string>
 
 namespace {
@@ -13,12 +14,17 @@ struct Host final {
     unsigned calls = 0;
     const DawnBootstrap* bootstrap_contract = nullptr;
     bool reenter = false;
+    bool throw_once = false;
 };
 
 DawnBootstrapResult bootstrap(
     const DawnBootstrapRequest& request, void* opaque, std::string* error) {
     auto& host = *static_cast<Host*>(opaque);
     ++host.calls;
+    if (host.throw_once) {
+        host.throw_once = false;
+        throw std::runtime_error("test callback failure");
+    }
     if (host.reenter) {
         host.reenter = false;
         std::string nested_error;
@@ -62,18 +68,23 @@ int main() {
     };
     host.bootstrap_contract = &bootstrap_contract;
     host.reenter = true;
+    host.throw_once = true;
     std::string error;
-    if (!require(register_dawn_bootstrap(bootstrap_contract, "provider-a", &error),
-                 "first authenticated bootstrap failed") ||
-        !require(host.mutations == 1 && host.calls == 1,
-                 "first bootstrap did not make exactly one mutation") ||
+    if (!require(!register_dawn_bootstrap(bootstrap_contract, "provider-a", &error),
+                 "throwing bootstrap was accepted") ||
+        !require(host.mutations == 0 && host.calls == 1,
+                 "throwing bootstrap mutated provider state") ||
+        !require(register_dawn_bootstrap(bootstrap_contract, "provider-a", &error),
+                 "retry after throwing bootstrap failed") ||
+        !require(host.mutations == 1 && host.calls == 2,
+                 "retry did not make exactly one mutation") ||
         !require(register_dawn_bootstrap(bootstrap_contract, "provider-a", &error),
                  "same-provider bootstrap was not idempotent") ||
-        !require(host.mutations == 1 && host.calls == 1,
+        !require(host.mutations == 1 && host.calls == 2,
                  "same-provider bootstrap reinvoked the host") ||
         !require(!register_dawn_bootstrap(bootstrap_contract, "provider-b", &error),
                  "mismatched provider was accepted") ||
-        !require(host.mutations == 1 && host.calls == 1 &&
+        !require(host.mutations == 1 && host.calls == 2 &&
                      host.installed_revision == "provider-a",
                  "mismatch mutated the established provider") ||
         !require(!register_dawn_bootstrap({}, "provider-a", &error),

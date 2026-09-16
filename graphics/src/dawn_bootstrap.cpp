@@ -1,6 +1,7 @@
 #include <vellum/graphics/dawn_bootstrap.hpp>
 
 #include <mutex>
+#include <exception>
 #include <string>
 #include <utility>
 
@@ -22,6 +23,19 @@ BootstrapState& bootstrap_state() {
 void set_error(std::string* error, std::string message) {
     if (error != nullptr) *error = std::move(message);
 }
+
+struct ResetInitializingOnFailure final {
+    explicit ResetInitializingOnFailure(BootstrapState& state) : state(state) {}
+    ~ResetInitializingOnFailure() {
+        if (!active) return;
+        std::lock_guard lock(state.mutex);
+        state.phase = BootstrapState::Phase::idle;
+        state.revision.clear();
+    }
+
+    BootstrapState& state;
+    bool active = true;
+};
 
 }  // namespace
 
@@ -50,14 +64,22 @@ bool register_dawn_bootstrap(
         state.phase = BootstrapState::Phase::initializing;
     }
 
+    ResetInitializingOnFailure reset_on_failure(state);
     const DawnBootstrapRequest request{
         .abi_version = kDawnBootstrapAbiVersion,
         .expected_dawn_revision = expected_dawn_revision,
     };
-    const auto result = bootstrap.callback(request, bootstrap.context, error);
-    std::lock_guard lock(state.mutex);
+    DawnBootstrapResult result;
+    try {
+        result = bootstrap.callback(request, bootstrap.context, error);
+    } catch (const std::exception& exception) {
+        set_error(error, std::string("host Dawn bootstrap threw: ") + exception.what());
+        return false;
+    } catch (...) {
+        set_error(error, "host Dawn bootstrap threw an unknown exception");
+        return false;
+    }
     if (result != DawnBootstrapResult::ready) {
-        state.phase = BootstrapState::Phase::idle;
         if (error != nullptr && error->empty()) {
             set_error(error, result == DawnBootstrapResult::identity_mismatch
                                  ? "Dawn provider identity mismatch"
@@ -65,8 +87,12 @@ bool register_dawn_bootstrap(
         }
         return false;
     }
-    state.revision.assign(expected_dawn_revision);
-    state.phase = BootstrapState::Phase::ready;
+    {
+        std::lock_guard lock(state.mutex);
+        state.revision.assign(expected_dawn_revision);
+        state.phase = BootstrapState::Phase::ready;
+    }
+    reset_on_failure.active = false;
     if (error != nullptr) error->clear();
     return true;
 }

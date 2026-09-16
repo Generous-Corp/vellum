@@ -34,11 +34,45 @@ inline NativeBootstrapState& native_bootstrap_state() {
     return state;
 }
 
+using NativeDawnVersion = const std::uint8_t* (*)();
+using NativeDawnProcs = const DawnProcTable& (*)();
+using NativeDawnSetter = void (*)(const DawnProcTable*);
+
+struct NativeDawnBindings final {
+    NativeDawnVersion header_version = nullptr;
+    NativeDawnVersion proc_version = nullptr;
+    NativeDawnProcs native_procs = nullptr;
+    NativeDawnSetter set_procs = nullptr;
+};
+
+inline const std::uint8_t* header_version() { return dawn::kDawnVersion.data(); }
+inline const std::uint8_t* proc_version() { return dawnProcGetVersion(); }
+inline const DawnProcTable& native_procs() { return dawn::native::GetProcs(); }
+inline void set_procs(const DawnProcTable* procedures) { dawnProcSetProcs(procedures); }
+
+inline NativeDawnBindings& native_dawn_bindings() {
+    static NativeDawnBindings bindings{
+        .header_version = &header_version,
+        .proc_version = &proc_version,
+        .native_procs = &native_procs,
+        .set_procs = &set_procs,
+    };
+    return bindings;
+}
+
 inline graphics::DawnBootstrapResult bootstrap_native_dawn(
-    const graphics::DawnBootstrapRequest& request, void*, std::string* error) {
-    const auto header = revision(dawn::kDawnVersion.data());
-    const auto proc = revision(dawnProcGetVersion());
-    const DawnProcTable& native = dawn::native::GetProcs();
+    const graphics::DawnBootstrapRequest& request, void* opaque, std::string* error) {
+    const auto& bindings = opaque == nullptr
+        ? native_dawn_bindings()
+        : *static_cast<const NativeDawnBindings*>(opaque);
+    if (bindings.header_version == nullptr || bindings.proc_version == nullptr ||
+        bindings.native_procs == nullptr || bindings.set_procs == nullptr) {
+        if (error != nullptr) *error = "host Dawn bindings are incomplete";
+        return graphics::DawnBootstrapResult::failed;
+    }
+    const auto header = revision(bindings.header_version());
+    const auto proc = revision(bindings.proc_version());
+    const DawnProcTable& native = bindings.native_procs();
     const auto native_revision = revision(native.version);
     if (header.empty() || header != proc || header != native_revision ||
         request.expected_dawn_revision != header) {
@@ -53,7 +87,7 @@ inline graphics::DawnBootstrapResult bootstrap_native_dawn(
         if (error != nullptr) *error = "host Dawn bootstrap revision changed";
         return graphics::DawnBootstrapResult::identity_mismatch;
     }
-    dawnProcSetProcs(&native);
+    bindings.set_procs(&native);
     state.revision = header;
     return graphics::DawnBootstrapResult::ready;
 }
@@ -68,7 +102,7 @@ inline graphics::DawnBootstrap native_dawn_bootstrap() {
     return {
         .abi_version = graphics::kDawnBootstrapAbiVersion,
         .callback = &detail::bootstrap_native_dawn,
-        .context = nullptr,
+        .context = &detail::native_dawn_bindings(),
     };
 }
 
