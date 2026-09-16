@@ -41,16 +41,16 @@ public:
         float scale = 1.0F;
         void* native_surface_handle = nullptr;
         bool vsync = true;
+        /// Optional override for packaged font assets. An empty value resolves
+        /// the configured install data directory relative to the GPU library,
+        /// or the native app's bundle-local `Resources/vellum/fonts` directory.
+        std::string font_directory;
         /// Required host-owned process bootstrap for the Dawn proc table.
         /// The host must keep the callback context valid through create().
         DawnBootstrap dawn_bootstrap;
         /// Exact revision the host callback must authenticate before installing
         /// the process-global Dawn proc table.
         std::string expected_dawn_revision;
-        /// Optional override for packaged font assets. An empty value resolves
-        /// the configured install data directory relative to the GPU library,
-        /// or the native app's bundle-local `Resources/vellum/fonts` directory.
-        std::string font_directory;
     };
 
     static std::unique_ptr<SkiaDawnSurface> create(

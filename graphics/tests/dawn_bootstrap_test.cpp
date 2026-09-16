@@ -11,12 +11,23 @@ struct Host final {
     std::string installed_revision;
     unsigned mutations = 0;
     unsigned calls = 0;
+    const DawnBootstrap* bootstrap_contract = nullptr;
+    bool reenter = false;
 };
 
 DawnBootstrapResult bootstrap(
     const DawnBootstrapRequest& request, void* opaque, std::string* error) {
     auto& host = *static_cast<Host*>(opaque);
     ++host.calls;
+    if (host.reenter) {
+        host.reenter = false;
+        std::string nested_error;
+        if (ensure_dawn_bootstrap(*host.bootstrap_contract,
+                                  request.expected_dawn_revision, &nested_error)) {
+            if (error != nullptr) *error = "reentrant bootstrap unexpectedly succeeded";
+            return DawnBootstrapResult::failed;
+        }
+    }
     if (request.abi_version != kDawnBootstrapAbiVersion ||
         request.expected_dawn_revision.empty()) {
         if (error != nullptr) *error = "unexpected bootstrap request";
@@ -49,6 +60,8 @@ int main() {
         .callback = &bootstrap,
         .context = &host,
     };
+    host.bootstrap_contract = &bootstrap_contract;
+    host.reenter = true;
     std::string error;
     if (!require(ensure_dawn_bootstrap(bootstrap_contract, "provider-a", &error),
                  "first authenticated bootstrap failed") ||

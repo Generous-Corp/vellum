@@ -1,7 +1,7 @@
 #include <vellum/graphics/skia_dawn_surface.hpp>
 #include <vellum/graphics/paint_command.hpp>
 
-#include "dawn_native_bootstrap.hpp"
+#include <vellum/graphics/dawn_native_bootstrap.hpp>
 
 #include <cmath>
 #include <cstdint>

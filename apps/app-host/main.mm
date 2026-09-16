@@ -6,7 +6,7 @@
 #include <vellum/graphics/capture_stats.hpp>
 #include <vellum/graphics/skia_dawn_surface.hpp>
 
-#include "dawn_native_bootstrap.hpp"
+#include <vellum/graphics/dawn_native_bootstrap.hpp>
 
 #include "component_registry.hpp"
 #include "macos_accessibility.hpp"

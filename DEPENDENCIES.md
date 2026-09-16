@@ -27,17 +27,17 @@ The macOS arm64 GPU proof uses one byte-locked prebuilt renderer artifact:
 
 | Artifact | Locked identity | Use |
 |---|---|---|
-| `skia-build-mac-arm64-gpu-release.zip` | `danielraffel/skia-builder` release `chrome/m150`; SHA-256 `13b0e9818c3b05db661af85cb1e2bf2ef10e30d468b81351dd90295237d17734` | Build-time Skia Graphite and Dawn/Metal static libraries and headers |
+| `skia-build-mac-universal-gpu-release.zip` | `danielraffel/skia-builder` release `chrome/m153`; SHA-256 `0ebfe03a209ceefe47edfeae70c3cc6c499583b74f35a26140ea55bad7f1e5a9` | Build-time Skia Graphite and Dawn/Metal static libraries and headers |
 
 The artifact was produced from builder commit
-`9b0215b1b2f4f3f06bac493c7e43fdeb0d35f9bc`. Its declared source tuple is
-Skia commit `587c5b0f5a7b0260826a0c19094c2d952195066e` and Dawn commit
-`63f25feec51e9351fb25222b6d5de1af791d7c4f`. The Dawn commit is embedded in
+`1f8c8d2c343f360a653bce92d11f8ded9a515208`. Its declared source tuple is
+Skia commit `8b8c3872fbc03f025855db96ce683f34ec98a815` and Dawn commit
+`f91da75afe31d4d6f47a6da307e1fbabd1b1691a`. The Dawn commit is embedded in
 `build/include/dawn/dawn_version.h`; the exact Skia and builder commits are not
 embedded in the artifact.
 
-The artifact SHA-256, all nine static-archive SHA-256 values, and a
-construction-specific digest over all 805 header files are locked in
+The artifact SHA-256, all eleven static-archive SHA-256 values, and a
+construction-specific digest over all 809 header files are locked in
 [`provenance/third-party-lock.json`](provenance/third-party-lock.json). Release
 construction must verify those bytes before configuring Vellum. An arbitrary
 local `VELLUM_SKIA_DIR` is a development convenience, not release provenance.
@@ -54,7 +54,7 @@ full DEPS file; each row has matching object members in the locked archive.
 
 | Name | Exact source identity | License | Binary evidence |
 |---|---|---|---|
-| Skia, including skcms | `587c5b0f5a7b0260826a0c19094c2d952195066e` | BSD-3-Clause | Skia/core/Graphite/skcms object members |
+| Skia, including skcms | `8b8c3872fbc03f025855db96ce683f34ec98a815` | BSD-3-Clause | Skia/core/Graphite/skcms object members |
 | Expat | `6154446fccefbf3ca644894f598969113b0c7bcd` | MIT | `libexpat.*` members |
 | libjpeg-turbo | `e14cbfaa85529d47f9f55b0f104a579c1061f9ad` (Chromium's 3.1.0 snapshot) | IJG and zlib for the packaged libjpeg API/SIMD code | `libjpeg.*`, `libjpeg12.*`, and `libjpeg16.*` members; no TurboJPEG API member was identified |
 | libpng | `d5515b5b8be3901aac04e5bd8bd5c89f287bcd33` (1.6.56) | Libpng-2.0 | `libpng.*` members |
@@ -66,9 +66,9 @@ full DEPS file; each row has matching object members in the locked archive.
 
 | Name | Exact source identity | License | Binary evidence |
 |---|---|---|---|
-| Dawn and Tint | `63f25feec51e9351fb25222b6d5de1af791d7c4f` | BSD-3-Clause | Dawn/Tint objects and symbol namespaces; exact revision embedded in `dawn_version.h` |
-| Abseil | `d16e32215c3ab90ba57c2e904a5344d85c7353e4` | Apache-2.0 | `absl::` symbols and implementation members including `raw_hash_set.cc.o` and `crc32c.cc.o` |
-| PartitionAlloc | `76c74af3a92809278b20d6816865a296d4704ca6` | BSD-3-Clause | `partition_alloc::` symbols and allocator implementation members including `low_level_alloc.cc.o` |
+| Dawn and Tint | `f91da75afe31d4d6f47a6da307e1fbabd1b1691a` | BSD-3-Clause | Dawn/Tint objects and symbol namespaces; exact revision embedded in `dawn_version.h` |
+| Abseil | `dd67f5ca84f65ebb88ac0ea0fe2c1d58663e519f` | Apache-2.0 | `absl::` symbols and implementation members including `raw_hash_set.cc.o` and `crc32c.cc.o` |
+| PartitionAlloc | `03cc513177b4340bee3dbfd46f6dd5fdded43b79` | BSD-3-Clause | `partition_alloc::` symbols and allocator implementation members including `low_level_alloc.cc.o` |
 
 Vellum also links the byte-locked `libskparagraph.a`, `libskshaper.a`,
 `libskunicode_core.a`, and `libskunicode_icu.a` archives into `vellum-gpu` to
@@ -82,7 +82,7 @@ survives the static linker's dead-code selection in a particular binary.
 The linked `libskshaper.a` contains HarfBuzz objects from commit
 `9cb1fee51069b206effb4736e443b038d230789d`. The linked
 `libskunicode_icu.a` contains ICU objects from commit
-`364118a1d9da24bb5b770ac3d762ac144d6da5a4`. Both identities come from the
+`d578f2e8b7bd5938e21cfb6bf15c079e0aa5b738`. Both identities come from the
 exact locked Skia revision's primary-source `DEPS`; archive member names provide
 the binary evidence. Their complete upstream license texts are reproduced in
 `NOTICE.md` and therefore travel with the installed SDK.
@@ -112,10 +112,10 @@ Representative Mach-O members report these `LC_BUILD_VERSION` tuples:
 
 | Input | Observed minimum macOS | Observed SDK |
 |---|---:|---:|
-| `libskia.a` | 11.0 | 15.5 |
-| `libdawn_combined.a` | 15.0 | 15.5 |
+| `libskia.a` | 13.0 | 15.5 |
+| `libdawn_combined.a` | 13.0 | 15.5 |
 
-The strictest observed minimum is therefore macOS 15.0. These are observations
+The strictest observed minimum is therefore macOS 13.0. These are observations
 from representative members, not proof over every object. The artifact does
 not record the exact compiler build, libc++ ABI, or linker identity. It also
 has no signed provenance or source-to-asset attestation and is not claimed to

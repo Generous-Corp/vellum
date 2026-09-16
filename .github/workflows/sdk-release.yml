@@ -441,7 +441,7 @@ jobs:
           cat > "$notes" <<'EOF'
           Private experimental Vellum SDK with converged native rendering and attributed text.
 
-          This release is intentionally limited to the documented macOS 15.0+ arm64
+          This release is intentionally limited to the documented macOS 13.0+ arm64
           native and browser-Wasm proof lanes. It is not a Pulp dependency or a
           broad platform support claim.
           EOF

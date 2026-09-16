@@ -72,4 +72,11 @@ inline graphics::DawnBootstrap native_dawn_bootstrap() {
     };
 }
 
+/// Testable host-local state: a failed identity check must leave this false.
+inline bool native_dawn_bootstrap_installed() {
+    auto& state = detail::native_bootstrap_state();
+    std::lock_guard lock(state.mutex);
+    return !state.revision.empty();
+}
+
 }  // namespace vellum::app_host

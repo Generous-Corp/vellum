@@ -4,7 +4,7 @@ add_executable(vellum-gpu-native MACOSX_BUNDLE
 target_compile_features(vellum-gpu-native PRIVATE cxx_std_20)
 target_link_libraries(vellum-gpu-native PRIVATE
     Vellum::Gpu
-    VellumSkiaDawn
+    Vellum::DawnHeaders
     "-framework Cocoa"
     "-framework Metal"
     "-framework QuartzCore")
@@ -16,7 +16,7 @@ set_target_properties(vellum-gpu-native PROPERTIES
     MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
     MACOSX_BUNDLE_BUNDLE_VERSION "1"
     OSX_ARCHITECTURES arm64
-    MACOSX_DEPLOYMENT_TARGET 15.0
+    MACOSX_DEPLOYMENT_TARGET 13.0
     BUILD_RPATH "$<TARGET_FILE_DIR:vellum-gpu>")
 
 if(VELLUM_BUILD_TESTS)

@@ -1,6 +1,5 @@
 add_library(vellum-graphics
     src/capture_stats.cpp
-    src/dawn_bootstrap.cpp
     src/paint_command.cpp)
 add_library(Vellum::Graphics ALIAS vellum-graphics)
 
@@ -31,6 +30,7 @@ if(VELLUM_HAS_SKIA_DAWN)
         "${CMAKE_CURRENT_BINARY_DIR}"
         "${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_DATADIR}")
     add_library(vellum-gpu SHARED
+        src/dawn_bootstrap.cpp
         src/skia_dawn_surface.mm)
     add_library(Vellum::Gpu ALIAS vellum-gpu)
 
@@ -39,7 +39,7 @@ if(VELLUM_HAS_SKIA_DAWN)
         MACOSX_RPATH ON
         INSTALL_RPATH "@loader_path"
         OSX_ARCHITECTURES arm64
-        MACOSX_DEPLOYMENT_TARGET 15.0)
+        MACOSX_DEPLOYMENT_TARGET 13.0)
 
     target_include_directories(vellum-gpu
         PUBLIC

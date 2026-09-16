@@ -8,7 +8,9 @@ namespace vellum::graphics {
 namespace {
 
 struct BootstrapState final {
+    enum class Phase { idle, initializing, ready };
     std::mutex mutex;
+    Phase phase = Phase::idle;
     std::string revision;
 };
 
@@ -34,11 +36,18 @@ bool ensure_dawn_bootstrap(
     }
 
     auto& state = bootstrap_state();
-    std::lock_guard lock(state.mutex);
-    if (!state.revision.empty()) {
-        if (state.revision == expected_dawn_revision) return true;
-        set_error(error, "Dawn provider identity does not match the process bootstrap");
-        return false;
+    {
+        std::lock_guard lock(state.mutex);
+        if (state.phase == BootstrapState::Phase::ready) {
+            if (state.revision == expected_dawn_revision) return true;
+            set_error(error, "Dawn provider identity does not match the process bootstrap");
+            return false;
+        }
+        if (state.phase == BootstrapState::Phase::initializing) {
+            set_error(error, "Dawn bootstrap is already in progress");
+            return false;
+        }
+        state.phase = BootstrapState::Phase::initializing;
     }
 
     const DawnBootstrapRequest request{
@@ -46,7 +55,9 @@ bool ensure_dawn_bootstrap(
         .expected_dawn_revision = expected_dawn_revision,
     };
     const auto result = bootstrap.callback(request, bootstrap.context, error);
+    std::lock_guard lock(state.mutex);
     if (result != DawnBootstrapResult::ready) {
+        state.phase = BootstrapState::Phase::idle;
         if (error != nullptr && error->empty()) {
             set_error(error, result == DawnBootstrapResult::identity_mismatch
                                  ? "Dawn provider identity mismatch"
@@ -55,6 +66,8 @@ bool ensure_dawn_bootstrap(
         return false;
     }
     state.revision.assign(expected_dawn_revision);
+    state.phase = BootstrapState::Phase::ready;
+    if (error != nullptr) error->clear();
     return true;
 }
 

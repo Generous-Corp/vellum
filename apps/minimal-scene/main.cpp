@@ -9,7 +9,7 @@
 #include <vellum/graphics/skia_dawn_surface.hpp>
 
 #if defined(VELLUM_CONSUMER_HAS_GPU_NATIVE_BOOTSTRAP)
-#include "dawn_native_bootstrap.hpp"
+#include <vellum/graphics/dawn_native_bootstrap.hpp>
 #endif
 
 #include <cstdint>

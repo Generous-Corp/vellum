@@ -13,9 +13,8 @@ if(TARGET Vellum::Gpu)
     # The source-tree consumer is itself a host and can supply the local native
     # bootstrap. An installed Vellum package deliberately does not smuggle a
     # Dawn provider into consumers; its host must supply an authenticated one.
-    if(TARGET VellumSkiaDawn)
-        target_link_libraries(vellum-minimal-scene PRIVATE VellumSkiaDawn)
-        target_include_directories(vellum-minimal-scene PRIVATE "${PROJECT_SOURCE_DIR}/apps")
+    if(TARGET Vellum::DawnHeaders)
+        target_link_libraries(vellum-minimal-scene PRIVATE Vellum::DawnHeaders)
         target_compile_definitions(vellum-minimal-scene PRIVATE
             VELLUM_CONSUMER_HAS_GPU_NATIVE_BOOTSTRAP=1)
     endif()

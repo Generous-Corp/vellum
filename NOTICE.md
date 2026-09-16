@@ -7,7 +7,7 @@ build tools are not redistributed.
 
 The observed renderer inventory was derived from the exact revisions in
 Skia's and Dawn's primary-source `DEPS` files and checked against the member
-and symbol tables of the byte-locked `chrome/m150` macOS arm64 artifact. The
+and symbol tables of the byte-locked `chrome/m153` macOS arm64 artifact. The
 artifact itself contains no license bundle, SBOM, build graph, or
 source-to-object map. Inspection positively identifies the components below
 but cannot prove the inventory exhaustive; GPU release eligibility remains
@@ -26,7 +26,7 @@ particular `vellum-gpu` binary.
 
 ### Dawn and Tint
 
-Revision: `63f25feec51e9351fb25222b6d5de1af791d7c4f`
+Revision: `f91da75afe31d4d6f47a6da307e1fbabd1b1691a`
 
 Copyright 2017-2023 The Dawn & Tint Authors
 
@@ -57,7 +57,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ### Skia and skcms
 
-Revision: `587c5b0f5a7b0260826a0c19094c2d952195066e`
+Revision: `8b8c3872fbc03f025855db96ce683f34ec98a815`
 
 Copyright (c) 2011 Google Inc. All rights reserved.
 
@@ -125,7 +125,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ### PartitionAlloc
 
-Revision: `76c74af3a92809278b20d6816865a296d4704ca6`
+Revision: `03cc513177b4340bee3dbfd46f6dd5fdded43b79`
 
 Copyright 2015 The Chromium Authors
 
@@ -259,7 +259,7 @@ subject to the following restrictions:
 
 Copyright 2017 The Abseil Authors.
 
-Revision: `d16e32215c3ab90ba57c2e904a5344d85c7353e4`
+Revision: `dd67f5ca84f65ebb88ac0ea0fe2c1d58663e519f`
 
 Licensed under the Apache License, Version 2.0, reproduced below.
 
@@ -668,7 +668,7 @@ PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
 
 ## ICU
 
-Revision: `364118a1d9da24bb5b770ac3d762ac144d6da5a4`
+Revision: `d578f2e8b7bd5938e21cfb6bf15c079e0aa5b738`
 
 UNICODE LICENSE V3
 

@@ -9,7 +9,7 @@ import sys
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-ALLOWED = {ROOT / "apps" / "dawn_native_bootstrap.hpp"}
+ALLOWED = {ROOT / "graphics" / "include" / "vellum" / "graphics" / "dawn_native_bootstrap.hpp"}
 
 
 def main() -> int:
@@ -17,7 +17,7 @@ def main() -> int:
     for path in ROOT.rglob("*"):
         if not path.is_file() or path.suffix not in {".cpp", ".cc", ".cxx", ".mm", ".hpp", ".h"}:
             continue
-        if ".git" in path.parts or "build" in path.parts:
+        if any(part == ".git" or part.startswith("build") for part in path.parts):
             continue
         contents = path.read_text(encoding="utf-8", errors="ignore")
         if re.search(r"\bdawnProcSetProcs\s*\(", contents) and path not in ALLOWED:

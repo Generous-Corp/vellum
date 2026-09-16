@@ -6,7 +6,7 @@
       "label": "macOS native application",
       "status": "experimental",
       "evidence": ["gpu-macos-arm64"],
-      "boundary": "macOS 15.0+ arm64; private exact-pin SDK; ad-hoc package"
+      "boundary": "macOS 13.0+ arm64; private exact-pin SDK; ad-hoc package"
     },
     {
       "id": "figma-import",

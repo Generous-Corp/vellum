@@ -18,7 +18,8 @@ The public slice consists of:
   packaged-font collection, with stable caller-owned run values and randomized
   Release plus AddressSanitizer concurrency coverage;
 - an installed shared `Vellum::Gpu` target that hides Skia/Dawn static-link
-  details from application builds.
+  details from application builds, plus a headers-only `Vellum::DawnHeaders`
+  target for an embedding host's authenticated bootstrap and compute code.
 
 Native self-test is deliberately fail-closed. A requested native surface is
 not allowed to fall back to CoreGraphics or an offscreen surface. The test also
@@ -31,9 +32,18 @@ scenario, capture, and packaging evidence exercises that path from a sterile
 installed SDK. Applications may use only the public installed targets and
 headers; reaching into Vellum source or renderer internals is forbidden.
 
+`SkiaDawnSurface::Config` requires a versioned `DawnBootstrap` callback and
+the expected Dawn revision. A host linked with `Vellum::Gpu` and
+`Vellum::DawnHeaders` may authenticate its Dawn header, exported proc table,
+and native provider before it calls `dawnProcSetProcs`. The GPU dylib owns the
+sole static Dawn definitions and the process bootstrap coordinator; the host
+contributes declarations and the callback only. Same-revision requests are
+idempotent, a different revision is rejected before callback execution, and a
+reentrant or simultaneous initialization fails without waiting on host code.
+
 Release builds pass the archive itself through `VELLUM_SKIA_ARCHIVE`; CMake
-verifies its SHA-256, extracts it into the build tree, verifies the exact Skia
-and Dawn library digests, and links only those two locked archives. Builds do
+verifies its SHA-256, extracts it into the build tree, verifies the locked
+renderer archive set, and links only the locked members it consumes. Builds do
 not discover a Pulp checkout or an ambient environment variable. Release
 builds use the pinned artifact in
 [`provenance/third-party-lock.json`](../../provenance/third-party-lock.json).

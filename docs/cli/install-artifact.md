@@ -10,7 +10,7 @@ decided; the trial location does not change source-authority records.
 ## Private tagged-release installation
 
 The Vellum repository and release are private. The application SDK requires
-macOS 15.0 or newer on arm64 plus Python 3.9 or newer. Install
+macOS 13.0 or newer on arm64 plus Python 3.9 or newer. Install
 [GitHub CLI 2.75.0 or newer](https://cli.github.com/) and authenticate with
 `gh auth login`, or provide `GH_TOKEN`/`GITHUB_TOKEN` for unattended use. The
 minimum version provides the immutable-release verification commands required
@@ -130,7 +130,7 @@ esbuild/TypeScript dependencies:
 
 ```sh
 python3 scripts/build_sdk_artifact.py \
-  --skia-archive /tmp/vellum-skia-m150.zip \
+  --skia-archive /tmp/vellum-skia-m153.zip \
   --node-binary "$(command -v node)" \
   --node-license /path/to/node-distribution/LICENSE \
   --node-provenance /path/to/node-provenance.json \
