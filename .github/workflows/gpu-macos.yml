@@ -43,14 +43,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          archive="$RUNNER_TEMP/skia-build-mac-arm64-gpu-release.zip"
+          archive="$RUNNER_TEMP/skia-build-mac-universal-gpu-release.zip"
           curl --fail --location --silent --show-error \
             --retry 5 --retry-delay 2 --retry-all-errors \
             --continue-at - \
-            https://github.com/danielraffel/skia-builder/releases/download/chrome/m150/skia-build-mac-arm64-gpu-release.zip \
+            https://github.com/danielraffel/skia-builder/releases/download/chrome/m153/skia-build-mac-universal-gpu-release.zip \
             --output "$archive"
           printf '%s  %s\n' \
-            13b0e9818c3b05db661af85cb1e2bf2ef10e30d468b81351dd90295237d17734 \
+            0ebfe03a209ceefe47edfeae70c3cc6c499583b74f35a26140ea55bad7f1e5a9 \
             "$archive" | shasum -a 256 -c -
           printf 'VELLUM_SKIA_ARCHIVE=%s\n' "$archive" >> "$GITHUB_ENV"
 
@@ -337,8 +337,8 @@ jobs:
           app=build-gpu/apps/gpu-native/vellum-gpu-native.app/Contents/MacOS/vellum-gpu-native
           otool -l "$dylib" > "$RUNNER_TEMP/vellum-gpu-dylib-load-commands.txt"
           otool -l "$app" > "$RUNNER_TEMP/vellum-gpu-app-load-commands.txt"
-          /usr/bin/grep -Eq 'minos 15\.0' "$RUNNER_TEMP/vellum-gpu-dylib-load-commands.txt"
-          /usr/bin/grep -Eq 'minos 15\.0' "$RUNNER_TEMP/vellum-gpu-app-load-commands.txt"
+          /usr/bin/grep -Eq 'minos 13\.0' "$RUNNER_TEMP/vellum-gpu-dylib-load-commands.txt"
+          /usr/bin/grep -Eq 'minos 13\.0' "$RUNNER_TEMP/vellum-gpu-app-load-commands.txt"
 
       - name: Smoke every public template through the installed SDK
         shell: bash

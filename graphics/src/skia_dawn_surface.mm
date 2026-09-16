@@ -1,5 +1,6 @@
 #include <vellum/graphics/skia_dawn_surface.hpp>
 #include <vellum/graphics/capture_stats.hpp>
+#include <vellum/graphics/dawn_bootstrap.hpp>
 #include <vellum/graphics/paint_command.hpp>
 
 #import <QuartzCore/CAMetalLayer.h>
@@ -474,8 +475,9 @@ public:
             return false;
         }
 
-        const DawnProcTable& procedures = dawn::native::GetProcs();
-        dawnProcSetProcs(&procedures);
+        if (!dawn_bootstrap_is_registered(error)) {
+            return false;
+        }
 
         wgpu::InstanceDescriptor instance_descriptor{};
         const wgpu::InstanceFeatureName instance_features[] = {

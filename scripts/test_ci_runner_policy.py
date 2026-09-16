@@ -251,7 +251,7 @@ class RunnerPolicyTests(unittest.TestCase):
         self.assertIn("--retry 5 --retry-delay 2 --retry-all-errors", gpu)
         self.assertIn("--continue-at -", gpu)
         self.assertIn(
-            "13b0e9818c3b05db661af85cb1e2bf2ef10e30d468b81351dd90295237d17734",
+            "0ebfe03a209ceefe47edfeae70c3cc6c499583b74f35a26140ea55bad7f1e5a9",
             gpu,
         )
 

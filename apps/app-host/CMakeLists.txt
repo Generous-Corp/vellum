@@ -11,13 +11,15 @@ target_link_libraries(vellum-app-host PRIVATE
     Vellum::Authoring
     Vellum::ComponentAbi
     Vellum::Gpu
+    Vellum::DawnHeaders
     "-framework Cocoa"
     "-framework Metal"
     "-framework QuartzCore")
 
+
 set_target_properties(vellum-app-host PROPERTIES
     OSX_ARCHITECTURES arm64
-    MACOSX_DEPLOYMENT_TARGET 15.0
+    MACOSX_DEPLOYMENT_TARGET 13.0
     BUILD_RPATH "$<TARGET_FILE_DIR:vellum-authoring>;$<TARGET_FILE_DIR:vellum-gpu>"
     INSTALL_RPATH "@executable_path/../lib;@executable_path/../Frameworks")
 

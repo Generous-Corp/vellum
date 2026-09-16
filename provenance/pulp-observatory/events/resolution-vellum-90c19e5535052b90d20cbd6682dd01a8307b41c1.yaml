@@ -1,0 +1,20 @@
+{
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer"
+  ],
+  "created_at": "2026-09-16T20:46:58Z",
+  "disposition": "framework-only",
+  "effort_minutes": 0,
+  "event_id": "resolution-vellum-90c19e5535052b90d20cbd6682dd01a8307b41c1",
+  "kind": "resolution",
+  "linked_commits": [
+    "90c19e5535052b90d20cbd6682dd01a8307b41c1"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "The clean-checkout Pulp/Vellum router classified this as Vellum-owned generic work with a framework-only observatory disposition and no affected Pulp counterpart. It is retained with its Vellum contract proofs; any future Pulp use must adopt a pinned Vellum SDK through an adapter rather than copy framework source.",
+  "resolves": "vellum-90c19e5535052b90d20cbd6682dd01a8307b41c1",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

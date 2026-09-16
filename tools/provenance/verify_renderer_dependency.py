@@ -148,12 +148,26 @@ def read_member(handle: zipfile.ZipFile, members: dict[str, zipfile.ZipInfo], na
 
 
 def verify_macho_observation(archive_bytes: bytes, observation: dict[str, object]) -> None:
-    require(shutil.which("ar") is not None and shutil.which("otool") is not None,
-            "ar and otool are required for Mach-O observation verification")
+    require(all(shutil.which(tool) is not None for tool in ("ar", "lipo", "otool")),
+            "ar, lipo, and otool are required for Mach-O observation verification")
     with tempfile.TemporaryDirectory(prefix="vellum-renderer-macho-") as temporary:
         root = Path(temporary)
         archive = root / str(observation["archive"])
         archive.write_bytes(archive_bytes)
+        architectures = subprocess.run(
+            ["lipo", "-archs", str(archive)], check=True, capture_output=True, text=True
+        ).stdout.split()
+        # m150 used a thin archive while m153 is universal. Thin the latter
+        # before ar reads a member, preserving the lock's macOS-arm64 contract.
+        if len(architectures) > 1:
+            require("arm64" in architectures,
+                    f"universal archive omits arm64: {archive.name}")
+            arm64_archive = root / f"arm64-{archive.name}"
+            subprocess.run(
+                ["lipo", "-thin", "arm64", str(archive), "-output", str(arm64_archive)],
+                check=True, capture_output=True, text=True
+            )
+            archive = arm64_archive
         member = str(observation["representative_member"])
         result = subprocess.run(["ar", "-p", str(archive), member], check=True,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)

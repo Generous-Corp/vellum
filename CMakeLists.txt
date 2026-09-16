@@ -41,13 +41,13 @@ if(VELLUM_ENABLE_ADDRESS_SANITIZER)
     add_link_options(-fsanitize=address)
 endif()
 
-# The first locked Dawn archive contains macOS 15.0 objects. Set the deployment
+# The locked Dawn archive contains macOS 13.0 objects. Set the deployment
 # target before creating any Vellum target so static objects later linked into
 # the GPU application cannot silently raise the finished binary's minimum OS.
 if(APPLE AND VELLUM_ENABLE_GPU AND
    (VELLUM_SKIA_ARCHIVE OR VELLUM_SKIA_DIR) AND
    NOT CMAKE_OSX_DEPLOYMENT_TARGET)
-    set(CMAKE_OSX_DEPLOYMENT_TARGET "15.0" CACHE STRING
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "13.0" CACHE STRING
         "Minimum macOS version for the locked Vellum GPU artifact" FORCE)
 endif()
 
@@ -108,6 +108,16 @@ if(VELLUM_BUILD_TESTS)
     target_link_libraries(vellum-runtime-test PRIVATE Vellum::Runtime)
     add_test(NAME vellum.runtime COMMAND vellum-runtime-test)
 
+    if(TARGET vellum-gpu)
+        add_executable(vellum-dawn-bootstrap-test
+            graphics/tests/dawn_bootstrap_test.cpp)
+        target_link_libraries(vellum-dawn-bootstrap-test PRIVATE Vellum::Gpu)
+        add_test(NAME vellum.dawn-bootstrap COMMAND vellum-dawn-bootstrap-test)
+        add_test(NAME vellum.dawn-bootstrap-source-audit
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/graphics/tests/test_dawn_bootstrap_source.py")
+    endif()
+
     if(TARGET vellum-graphics)
         add_executable(vellum-capture-stats-test
             graphics/tests/capture_stats_test.cpp)
@@ -151,9 +161,35 @@ if(VELLUM_BUILD_TESTS)
     endif()
 
     if(TARGET vellum-gpu)
+        add_executable(vellum-dawn-provider-topology-test
+            graphics/tests/dawn_provider_topology_test.cpp)
+        target_link_libraries(vellum-dawn-provider-topology-test PRIVATE
+            Vellum::Gpu Vellum::DawnHeaders)
+        set_target_properties(vellum-dawn-provider-topology-test PROPERTIES
+            OSX_ARCHITECTURES arm64
+            MACOSX_DEPLOYMENT_TARGET 13.0
+            BUILD_RPATH "$<TARGET_FILE_DIR:vellum-gpu>")
+        add_test(NAME vellum.dawn-provider-topology
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/graphics/tests/test_dawn_provider_topology.py"
+                "$<TARGET_FILE:vellum-dawn-provider-topology-test>"
+                "$<TARGET_FILE:vellum-gpu>")
+
+        add_executable(vellum-legacy-config-caller-test
+            graphics/tests/legacy_config_caller_test.cpp)
+        target_include_directories(vellum-legacy-config-caller-test BEFORE PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/graphics/tests/legacy_include")
+        target_link_libraries(vellum-legacy-config-caller-test PRIVATE Vellum::Gpu)
+        set_target_properties(vellum-legacy-config-caller-test PROPERTIES
+            OSX_ARCHITECTURES arm64
+            MACOSX_DEPLOYMENT_TARGET 13.0
+            BUILD_RPATH "$<TARGET_FILE_DIR:vellum-gpu>")
+        add_test(NAME vellum.legacy-config-caller
+            COMMAND vellum-legacy-config-caller-test)
+
         add_executable(vellum-gpu-style-test
             graphics/tests/gpu_style_test.cpp)
-        target_link_libraries(vellum-gpu-style-test PRIVATE Vellum::Gpu)
+        target_link_libraries(vellum-gpu-style-test PRIVATE Vellum::Gpu Vellum::DawnHeaders)
 
         add_executable(vellum-text-shaping-concurrency-test
             graphics/tests/text_shaping_concurrency_test.cpp)
@@ -191,8 +227,16 @@ if(VELLUM_BUILD_TESTS)
                     "-DVELLUM_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
                     "-DVELLUM_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
                     "-DVELLUM_SKIA_DIR=${VELLUM_SKIA_DIR}"
+                "-DTEST_CONFIG=$<CONFIG>"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunNestedInstallConsumer.cmake")
+            add_test(NAME vellum.install-legacy-config-consumer
+                COMMAND "${CMAKE_COMMAND}"
+                    "-DVELLUM_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+                    "-DVELLUM_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+                    "-DVELLUM_INSTALL_CONSUMER_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/graphics/tests/legacy_install_consumer"
+                    "-DVELLUM_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
                     "-DTEST_CONFIG=$<CONFIG>"
-                    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunNestedInstallConsumer.cmake")
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunInstallConsumer.cmake")
         endif()
     endif()
     add_test(NAME vellum.sdk-artifact
@@ -229,7 +273,7 @@ set(_vellum_install_targets vellum-foundation vellum-runtime vellum-component-ab
 if(VELLUM_ENABLE_GRAPHICS)
     list(APPEND _vellum_install_targets vellum-graphics)
     if(TARGET vellum-gpu)
-        list(APPEND _vellum_install_targets vellum-gpu)
+        list(APPEND _vellum_install_targets vellum-gpu vellum-dawn-headers)
     endif()
 endif()
 if(TARGET vellum-authoring)

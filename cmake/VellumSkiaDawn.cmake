@@ -1,22 +1,22 @@
 set(VELLUM_SKIA_ARCHIVE "" CACHE FILEPATH
-    "Path to the pinned macOS arm64 Skia/Dawn release archive")
+    "Path to the pinned macOS universal Skia/Dawn release archive")
 set(VELLUM_SKIA_DIR "" CACHE PATH
     "Development-only path to the extracted pinned Skia/Dawn archive")
 
 set(_vellum_expected_archive_sha256
-    "13b0e9818c3b05db661af85cb1e2bf2ef10e30d468b81351dd90295237d17734")
+    "0ebfe03a209ceefe47edfeae70c3cc6c499583b74f35a26140ea55bad7f1e5a9")
 set(_vellum_expected_skia_sha256
-    "7820bb79b92ef3262a036b94f33f16c1e023cb9c5c29728ac71b1e59f86799e6")
+    "39f9b1e1c8663ded30afdccce47375e578696e5504c31c6ba1474f1dcddffcd9")
 set(_vellum_expected_dawn_sha256
-    "8fad85ccedc8a7a9baf781a6e639be522baa9ba5805848a6ede1c6523619d3fe")
+    "73727ddf86ffc34eea6fb6392d8d688f44e317ff37b3bb421f8223c8b8815dc9")
 set(_vellum_expected_skshaper_sha256
-    "6970686ed4c22e93d26148a745a8bf83e25e0194d86fdf334558baed237537a1")
+    "c4120a6149cc63054766e040f020f379ff3e2172b3887d88e8c5f15eb29667c3")
 set(_vellum_expected_skparagraph_sha256
-    "c42749062e926f051efb69fd652d6afe3acc516a94095a81c6dc9f842a9456c6")
+    "0f295b4262d0dd26dbf29e69fbe6696a278aa6ae8fec9a935555ec1058665274")
 set(_vellum_expected_skunicode_core_sha256
-    "b25d297c885ed831f58300255cc896a45a7464eeeadbbdc139341598b20bd058")
+    "a79b68a3a5bb72b12de9b07b1f78b332eaa01c0de5eae0f8ff37c8c1fd57cbaa")
 set(_vellum_expected_skunicode_icu_sha256
-    "4d575f963f282fe7bfe1f101e1d49c9c72f6628b4cc9eff23a31f97fd1f9ea01")
+    "c4b68ea5b8a71740634c9d40b6f2fb4e91a5ac355ea2c5f7f19e5d2364b8f204")
 
 if(VELLUM_SKIA_ARCHIVE)
     if(NOT EXISTS "${VELLUM_SKIA_ARCHIVE}")
@@ -58,9 +58,9 @@ if(NOT CMAKE_OSX_ARCHITECTURES AND
         "Vellum: the locked first GPU artifact supports only macOS arm64")
 endif()
 if(CMAKE_OSX_DEPLOYMENT_TARGET AND
-   CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS "15.0")
+   CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS "13.0")
     message(FATAL_ERROR
-        "Vellum: the locked Dawn archive requires macOS 15.0 or newer")
+        "Vellum: the locked Dawn archive requires macOS 13.0 or newer")
 endif()
 
 if(NOT VELLUM_SKIA_DIR)
@@ -127,14 +127,36 @@ if(NOT _vellum_skia_sha256 STREQUAL _vellum_expected_skia_sha256 OR
    NOT _vellum_skunicode_icu_sha256 STREQUAL _vellum_expected_skunicode_icu_sha256)
     message(FATAL_ERROR
         "Vellum: extracted Skia/Dawn libraries do not match the locked "
-        "chrome/m150 macOS arm64 tuple")
+        "chrome/m153 macOS universal tuple")
 endif()
 
+# This public headers-only target lets an embedding host compile its Dawn
+# bootstrap and compute code. It intentionally supplies declarations only: the
+# sole archive definitions remain private to the Vellum GPU dylib.
+add_library(vellum-dawn-headers INTERFACE)
+add_library(Vellum::DawnHeaders ALIAS vellum-dawn-headers)
+set_target_properties(vellum-dawn-headers PROPERTIES EXPORT_NAME DawnHeaders)
+target_include_directories(vellum-dawn-headers INTERFACE
+    $<BUILD_INTERFACE:${_vellum_skia_include}>
+    $<BUILD_INTERFACE:${_vellum_skia_include}/third_party/externals/dawn/include>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/vellum/dawn>)
+target_compile_definitions(vellum-dawn-headers INTERFACE SK_GRAPHITE=1 SK_DAWN=1)
+install(DIRECTORY "${_vellum_skia_include}/third_party/externals/dawn/include/"
+    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/vellum/dawn")
+install(DIRECTORY "${_vellum_skia_include}/dawn/"
+    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/vellum/dawn/dawn")
+install(DIRECTORY "${_vellum_skia_include}/webgpu/"
+    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/vellum/dawn/webgpu")
+
+add_library(VellumSkiaDawnHeaders INTERFACE)
+target_link_libraries(VellumSkiaDawnHeaders INTERFACE Vellum::DawnHeaders)
+
+# Keep static archives private to vellum-gpu. Hosts need Dawn declarations to
+# supply the explicit bootstrap callback, but must resolve those calls through
+# the selected Vellum provider rather than link another Dawn copy.
 add_library(VellumSkiaDawn INTERFACE)
-target_include_directories(VellumSkiaDawn INTERFACE
-    "${_vellum_skia_include}"
-    "${_vellum_skia_include}/third_party/externals/dawn/include")
-target_compile_definitions(VellumSkiaDawn INTERFACE SK_GRAPHITE=1 SK_DAWN=1)
+target_include_directories(VellumSkiaDawn INTERFACE "${_vellum_skia_include}")
+target_link_libraries(VellumSkiaDawn INTERFACE VellumSkiaDawnHeaders)
 target_link_libraries(VellumSkiaDawn INTERFACE
     "${_vellum_skparagraph}"
     "${_vellum_skshaper}"
@@ -157,4 +179,4 @@ target_link_libraries(VellumSkiaDawn INTERFACE
 set(VELLUM_HAS_SKIA_DAWN ON)
 message(STATUS
     "Vellum: locked Skia Graphite + Dawn found at ${VELLUM_SKIA_DIR} "
-    "(macOS arm64 GPU host enabled; minimum macOS 15.0)")
+    "(macOS universal GPU host enabled; minimum macOS 13.0)")
