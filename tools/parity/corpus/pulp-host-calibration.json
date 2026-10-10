@@ -1,0 +1,237 @@
+{
+  "schema": "vellum.parity.host-corpus.v1",
+  "corpus_id": "pulp-gpu-editor-host-v1",
+  "description": "Two Pulp example plug-ins whose editors require the GPU host (SpectralLab, SuperConvolver), in every format this host can load without installing anything, alone and side by side in one process; pluginval over both VST3 bundles; both standalone apps.",
+  "cases": [
+    {
+      "case_id": "spectral-lab-clap",
+      "kind": "probe",
+      "plugins": [
+        "spectral-lab.clap"
+      ],
+      "lanes": [
+        "load",
+        "editor",
+        "audio"
+      ],
+      "expect": {
+        "editor": true,
+        "gpu": true
+      }
+    },
+    {
+      "case_id": "spectral-lab-vst3",
+      "kind": "probe",
+      "plugins": [
+        "spectral-lab.vst3"
+      ],
+      "lanes": [
+        "load",
+        "editor",
+        "audio"
+      ],
+      "expect": {
+        "editor": true,
+        "gpu": true
+      }
+    },
+    {
+      "case_id": "spectral-lab-au",
+      "kind": "probe",
+      "plugins": [
+        "spectral-lab.component"
+      ],
+      "lanes": [
+        "load",
+        "editor",
+        "audio"
+      ],
+      "expect": {
+        "editor": true,
+        "gpu": true
+      }
+    },
+    {
+      "case_id": "super-convolver-clap",
+      "kind": "probe",
+      "plugins": [
+        "super-convolver.clap"
+      ],
+      "lanes": [
+        "load",
+        "editor",
+        "audio"
+      ],
+      "expect": {
+        "editor": true,
+        "gpu": true,
+        "animated": [
+          0
+        ],
+        "readiness_dependent_initial": [
+          0
+        ]
+      }
+    },
+    {
+      "case_id": "super-convolver-vst3",
+      "kind": "probe",
+      "plugins": [
+        "super-convolver.vst3"
+      ],
+      "lanes": [
+        "load",
+        "editor",
+        "audio"
+      ],
+      "expect": {
+        "editor": true,
+        "gpu": true,
+        "animated": [
+          0
+        ],
+        "readiness_dependent_initial": [
+          0
+        ]
+      }
+    },
+    {
+      "case_id": "super-convolver-au",
+      "kind": "probe",
+      "plugins": [
+        "super-convolver.component"
+      ],
+      "lanes": [
+        "load",
+        "editor",
+        "audio"
+      ],
+      "expect": {
+        "editor": true,
+        "gpu": true,
+        "animated": [
+          0
+        ],
+        "readiness_dependent_initial": [
+          0
+        ]
+      }
+    },
+    {
+      "case_id": "two-gpu-plugins-clap",
+      "kind": "probe",
+      "plugins": [
+        "spectral-lab.clap",
+        "super-convolver.clap"
+      ],
+      "lanes": [
+        "load",
+        "editor",
+        "audio",
+        "coexist"
+      ],
+      "expect": {
+        "editor": true,
+        "gpu": true,
+        "animated": [
+          1
+        ],
+        "readiness_dependent_initial": [
+          1
+        ]
+      }
+    },
+    {
+      "case_id": "two-gpu-plugins-vst3-au",
+      "kind": "probe",
+      "plugins": [
+        "spectral-lab.vst3",
+        "super-convolver.component"
+      ],
+      "lanes": [
+        "load",
+        "editor",
+        "audio",
+        "coexist"
+      ],
+      "expect": {
+        "editor": true,
+        "gpu": true,
+        "animated": [
+          1
+        ],
+        "readiness_dependent_initial": [
+          1
+        ]
+      }
+    },
+    {
+      "case_id": "spectral-lab-vst3-pluginval",
+      "kind": "validator",
+      "validator": "pluginval",
+      "artifact": "spectral-lab.vst3",
+      "lanes": [
+        "validator"
+      ]
+    },
+    {
+      "case_id": "super-convolver-vst3-pluginval",
+      "kind": "validator",
+      "validator": "pluginval",
+      "artifact": "super-convolver.vst3",
+      "lanes": [
+        "validator"
+      ]
+    },
+    {
+      "case_id": "spectral-lab-standalone",
+      "kind": "standalone",
+      "artifact": "spectral-lab.app",
+      "lanes": [
+        "standalone"
+      ]
+    },
+    {
+      "case_id": "super-convolver-standalone",
+      "kind": "standalone",
+      "artifact": "super-convolver.app",
+      "lanes": [
+        "standalone"
+      ]
+    }
+  ],
+  "declared_gaps": [
+    {
+      "row": "auval (AU v2 validator)",
+      "reason": "auval only sees components registered in ~/Library/Audio/Plug-Ins/Components; this lane never installs into a system plug-in folder. AU load/editor/audio are covered in-process through AudioComponentRegister."
+    },
+    {
+      "row": "clap-validator",
+      "reason": "not installed on the measuring host (command -v clap-validator: absent; control: command -v auval resolves)."
+    },
+    {
+      "row": "LV2",
+      "reason": "no Pulp example builds an LV2 bundle (zero lv2_entry.cpp under examples/; only tools/templates carry one)."
+    },
+    {
+      "row": "REAPER daw-smoke",
+      "reason": "REAPER not installed on the measuring host; opt-in per Pulp daw-smoke policy."
+    },
+    {
+      "row": "editor_prewarm",
+      "reason": "no Pulp example overrides Processor::editor_prewarm(), so the request is a no-op in every bundle; the host cannot observe the static-initializer install from outside the plug-in image."
+    }
+  ],
+  "declared_exceptions": [
+    {
+      "plugin": "SuperConvolver",
+      "field": "expect.animated",
+      "reason": "its particle-field editor advances on wall-clock frames; frames after the first open differ between runs (measured 18451 of 459200 pixels in one calibration run), so its frames keep size, full-coverage and colour-floor checks but are not compared pixel for pixel."
+    },
+    {
+      "plugin": "SuperConvolver",
+      "field": "expect.readiness_dependent_initial",
+      "reason": "its first render after instantiation differed between two processes from sample 1536 onward by at most 2.98e-08 (35085 of 96256 samples), consistent with a background IR rebuild landing at a different block; renders after release + prepare were byte identical. The first render is recorded, not compared."
+    }
+  ]
+}

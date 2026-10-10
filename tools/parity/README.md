@@ -14,6 +14,7 @@ closure, then these differential lanes, with similarity scores advisory only.
 | `geometry` | laid-out tree: id, kind, rect, visibility, clipping, hit regions, text boxes (0.5 px) | at least one sized non-root node |
 | `semantic` | text/selection observation | non-empty record list |
 | `interaction` | replayed pointer/keyboard log plus post-interaction render | every planned step logged, at least one handled |
+| `host` (`host_lane.py`) | built plug-in bundles in a real host process: load, editor lifecycle, audio null, coexistence, validators, standalone | see "Host lane" below |
 
 Implementations are JSON descriptions of commands (`implementations/`); the
 harness never links or imports either implementation. Each side names its
@@ -146,3 +147,33 @@ ships with at least one control that must make it fail.
 The receipt (`<dir>/receipt.json`) records the corpus hash, both identities
 (repository, commit, content hash of every tool binary), every command with its
 exit status, the hash of every input and observation, and the verdict.
+
+## Host lane
+
+`host_lane.py` is the host-compatibility row, separate from screenshot parity.
+A host corpus (`corpus/pulp-host-calibration.json`) loads built CLAP, VST3 and
+AU v2 bundles into a host probe process (Pulp's `pulp-host-lane-probe`), runs
+validators, and launches standalone apps; a host implementation
+(`implementations/pulp-host-in-tree.json`) names the probe, validators and
+bundles. Lanes: `load`, `editor` (attach, full coverage of the window, GPU path
+when expected, resize, close, reopen, frames pixel-equal across sides unless
+the case declares the editor animated), `audio` (editor closed/open/closed
+byte-identical and audible, byte-identical across sides), `coexist` (two
+plug-ins in one process render and draw what each does alone; dyld census of
+runtime images equal across sides), `validator`, `standalone`. Rows this host
+cannot run are `declared_gaps` in the corpus and copied into every receipt.
+
+```sh
+cd <pulp checkout>        # implementation paths are relative to it
+python3 <vellum>/tools/parity/host_lane.py calibrate \
+  --corpus <vellum>/tools/parity/corpus/pulp-host-calibration.json \
+  --implementation <vellum>/tools/parity/implementations/pulp-host-in-tree.json \
+  --source-sha <pulp commit the bundles were built from> --out <dir>
+python3 <vellum>/tools/parity/test_host_lane.py   # fake probe; NOT CALIBRATED reachable
+```
+
+Receipts carry, per side, the tool hashes, every bundle's tree hash, its
+`pulp-build-info.json` source commit, dirty flag, build type and Skia pin, the
+GPU-runtime install names it links, and the host OS. A bundle built from a
+different commit than the identity claims, or from a dirty tree, is never
+accepting; `parity` mode refuses two sides that test the same bundle bytes.
