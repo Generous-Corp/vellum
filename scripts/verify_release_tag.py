@@ -13,6 +13,10 @@ from typing import Sequence
 
 
 FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
+RETIRED_RELEASE_TAGS = (
+    Path(__file__).resolve().parents[1] / "provenance/retired-release-tags.json"
+)
+RETIRED_SCHEMA = "vellum.retired-release-tags.v1"
 
 
 class ReleaseTagVerificationError(RuntimeError):
@@ -69,6 +73,42 @@ def tag_headers(raw: str) -> dict[str, str]:
     return headers
 
 
+def retired_release_tags(path: Path) -> set[str]:
+    """Return tag names that must never be verified again.
+
+    A retired name once identified published bytes that no longer exist. A new
+    tag of the same name would silently give that name different contents, so
+    the record fails closed when it is missing or malformed.
+    """
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ReleaseTagVerificationError(
+            f"retired release-tag record {path} is unreadable: {error}"
+        ) from error
+    if not isinstance(payload, dict) or payload.get("schema") != RETIRED_SCHEMA:
+        raise ReleaseTagVerificationError(
+            f"retired release-tag record {path} does not declare {RETIRED_SCHEMA}"
+        )
+    entries = payload.get("tags")
+    if not isinstance(entries, list) or not all(
+        isinstance(entry, dict) and isinstance(entry.get("tag"), str)
+        for entry in entries
+    ):
+        raise ReleaseTagVerificationError(
+            f"retired release-tag record {path} has malformed tag entries"
+        )
+    return {entry["tag"] for entry in entries}
+
+
+def require_unretired_tag(tag_name: str, retired_tags: Path) -> None:
+    if tag_name in retired_release_tags(retired_tags):
+        raise ReleaseTagVerificationError(
+            f"release tag {tag_name!r} is retired and must never be reused; "
+            "choose the next unused version"
+        )
+
+
 def allowed_signer_principals(path: Path) -> list[str]:
     principals: list[str] = []
     for raw_line in path.read_text(encoding="utf-8").splitlines():
@@ -94,7 +134,9 @@ def verify(
     allowed_signers: Path,
     expected_principal: str,
     expected_fingerprint: str,
+    retired_tags: Path = RETIRED_RELEASE_TAGS,
 ) -> dict[str, object]:
+    require_unretired_tag(tag_name, retired_tags)
     require_full_sha(tag_object_sha, "tag object")
     require_full_sha(source_commit, "source commit")
     if not allowed_signers.is_file():
@@ -223,6 +265,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expected-principal", required=True)
     parser.add_argument("--expected-fingerprint", required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--retired-tags", type=Path, default=RETIRED_RELEASE_TAGS
+    )
     return parser.parse_args()
 
 
@@ -238,6 +283,7 @@ def main() -> int:
             allowed_signers=args.allowed_signers.resolve(),
             expected_principal=args.expected_principal,
             expected_fingerprint=args.expected_fingerprint,
+            retired_tags=args.retired_tags.resolve(),
         )
     except (OSError, ReleaseTagVerificationError) as error:
         print(f"release tag verification failed: {error}", file=sys.stderr)
