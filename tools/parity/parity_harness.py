@@ -29,6 +29,7 @@ by the lane it targets. A harness whose controls do not fail proves nothing.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import copy
 import hashlib
 import importlib.util
@@ -70,6 +71,10 @@ TEXT_BOX_TOLERANCE_PX = 0.5
 # ceiling; anything looser hides real rendering differences.
 MAX_RASTER_THRESHOLD = 16
 DEFAULT_SCALE = 2.0
+# Floors that keep a stub from passing: a root plus two children, and a render
+# whose luminance actually varies (one stray pixel on a flat field does not).
+DEFAULT_MIN_STRUCTURE_NODES = 3
+MIN_LUMINANCE_STDDEV = 1.0
 # Volatile members the harness removes before comparing. A corpus may extend the
 # list only through `volatile_allowlist` entries that carry a justification, and
 # never with a pointer that would erase a whole observation.
@@ -229,6 +234,9 @@ def validate_case_knobs(case: dict[str, Any], allowed_volatile: set[str]) -> Non
         raise HarnessError(f"{case_id}: raster_threshold {threshold} exceeds the ceiling {MAX_RASTER_THRESHOLD}")
     if threshold and not str(case.get("raster_threshold_justification", "")).strip():
         raise HarnessError(f"{case_id}: a non-zero raster_threshold needs raster_threshold_justification")
+    nodes = case.get("min_structure_nodes", DEFAULT_MIN_STRUCTURE_NODES)
+    if isinstance(nodes, bool) or not isinstance(nodes, int) or nodes < DEFAULT_MIN_STRUCTURE_NODES:
+        raise HarnessError(f"{case_id}: min_structure_nodes must be an integer >= {DEFAULT_MIN_STRUCTURE_NODES}")
     floor = case.get("min_ink_pixels", 1)
     if isinstance(floor, bool) or not isinstance(floor, int) or floor < 1:
         raise HarnessError(f"{case_id}: min_ink_pixels must be an integer >= 1")
@@ -539,8 +547,9 @@ def compare_structure(ref: Path, cand: Path, case: dict[str, Any]) -> dict[str, 
         return lane_result("fail", reasons=[f"unreadable DesignIR: {error}"])
     counts = (node_count(a), node_count(b))
     reasons = []
-    if min(counts) < 2:
-        reasons.append(f"vacuous DesignIR: node counts {counts} (need a root and at least one child)")
+    floor = int(case.get("min_structure_nodes", DEFAULT_MIN_STRUCTURE_NODES))
+    if min(counts) < floor:
+        reasons.append(f"vacuous DesignIR: node counts {counts} below the floor of {floor}")
     diffs = json_differences(a, b)
     reasons += diffs
     return lane_result("fail" if reasons else "pass", reasons=reasons,
@@ -548,9 +557,23 @@ def compare_structure(ref: Path, cand: Path, case: dict[str, Any]) -> dict[str, 
 
 
 def ink_pixels(image: RgbaImage) -> int:
-    background = image.pixels[0:4]
-    return sum(1 for offset in range(0, len(image.pixels), 4)
-               if image.pixels[offset:offset + 4] != background)
+    """Pixels that differ from the most common colour. The most common colour,
+    not the top-left pixel, is the background: a stray corner pixel must not
+    turn a whole render into ink."""
+    counts = Counter(image.pixels[offset:offset + 4] for offset in range(0, len(image.pixels), 4))
+    if not counts:
+        return 0
+    return sum(counts.values()) - counts.most_common(1)[0][1]
+
+
+def luminance_stddev(image: RgbaImage) -> float:
+    total = len(image.pixels) // 4
+    if not total:
+        return 0.0
+    values = [0.2126 * image.pixels[o] + 0.7152 * image.pixels[o + 1] + 0.0722 * image.pixels[o + 2]
+              for o in range(0, len(image.pixels), 4)]
+    mean = sum(values) / total
+    return (sum((v - mean) ** 2 for v in values) / total) ** 0.5
 
 
 def compare_png_pair(ref_png: Path, cand_png: Path, threshold: int, min_ink: int) -> dict[str, Any]:
@@ -563,6 +586,9 @@ def compare_png_pair(ref_png: Path, cand_png: Path, threshold: int, min_ink: int
     ink = (ink_pixels(a), ink_pixels(b))
     if min(ink) < min_ink:
         reasons.append(f"ink coverage {ink} below floor {min_ink}: a blank or uniform render is not evidence")
+    spread = (round(luminance_stddev(a), 3), round(luminance_stddev(b), 3))
+    if min(spread) < MIN_LUMINANCE_STDDEV:
+        reasons.append(f"luminance spread {spread} below {MIN_LUMINANCE_STDDEV}: a near-uniform render is not evidence")
     if (a.width, a.height) != (b.width, b.height):
         reasons.append(f"dimensions {(a.width, a.height)} != {(b.width, b.height)}")
         return lane_result("fail", reasons=reasons, ink_pixels=list(ink))
@@ -571,6 +597,7 @@ def compare_png_pair(ref_png: Path, cand_png: Path, threshold: int, min_ink: int
         reasons.append(f"{report['differing_pixels']} pixels differ above threshold {threshold} "
                        f"(max channel error {report['max_channel_error']})")
     return lane_result("fail" if reasons else "pass", reasons=reasons, ink_pixels=list(ink),
+                       luminance_stddev=list(spread),
                        dimensions=[a.width, a.height], differing_pixels=report["differing_pixels"],
                        threshold=threshold)
 
@@ -904,6 +931,23 @@ def manifest_paths(manifest: dict[str, Any]) -> list[str]:
     return list(manifest.get("roots") or [])
 
 
+def merge_manifests(manifests: list[dict[str, Any]]) -> dict[str, Any]:
+    """One closure for a multi-unit export. A path claimed by two units is an
+    error: each file has exactly one owning unit."""
+    if len(manifests) == 1:
+        return manifests[0]
+    owner: dict[str, int] = {}
+    files: list[str] = []
+    for index, manifest in enumerate(manifests):
+        for path in manifest_paths(manifest):
+            if path in owner:
+                raise HarnessError(f"closure path {path} is claimed by manifests {owner[path]} and {index}")
+            owner[path] = index
+            files.append(path)
+    return {"schema": "vellum.parity.merged-closure.v1", "files": files,
+            "unit": [m.get("unit") or [t.get("name") for t in m.get("targets", [])] for m in manifests]}
+
+
 def git_exported_blobs(repo: Path, commit: str, prefix: str) -> dict[str, str]:
     """Every blob in an exported commit under prefix, keyed by origin path. The
     whole prefix is listed, not only the manifest's paths, so an extra file in
@@ -1039,6 +1083,11 @@ def flip_center_pixel(image: RgbaImage) -> RgbaImage:
     return RgbaImage(image.width, image.height, bytes(pixels))
 
 
+def stray_pixel_image(image: RgbaImage) -> RgbaImage:
+    """A flat field with one off-colour pixel: correctly sized, nominally inked."""
+    return flip_center_pixel(uniform_image(image))
+
+
 def uniform_image(image: RgbaImage) -> RgbaImage:
     return RgbaImage(image.width, image.height, image.pixels[0:4] * (image.width * image.height))
 
@@ -1108,6 +1157,14 @@ def one_byte_source(data: bytes) -> bytes:
     return data[:offset] + bytes([data[offset] ^ 0x01]) + data[offset + 1:]
 
 
+def stub_design_ir(path: Path) -> bool:
+    """Both sides emit a root with one empty child."""
+    document = load_json(path)
+    document["root"] = {"type": "frame", "children": [{"type": "frame", "children": []}]}
+    write_json(path, document)
+    return True
+
+
 def strip_layout_to_rects(path: Path) -> bool:
     """Both sides emit a thinner layout schema: bounds only."""
     layout = load_json(path)
@@ -1145,6 +1202,9 @@ ARTIFACT_CONTROLS: dict[str, dict[str, Any]] = {
         d / "design.ir.json", lambda k, v: k in ("name", "label", "text"))},
     "raster-one-pixel": {"lane": "raster", "candidate": lambda d: (mutate_png(d / "render.png", flip_center_pixel), True)[1]},
     "raster-blank-both": {"lane": "raster", "both": lambda d: (mutate_png(d / "render.png", uniform_image), True)[1]},
+    "raster-stray-pixel-both": {"lane": "raster", "both": lambda d: (mutate_png(d / "render.png", stray_pixel_image), True)[1],
+                                "bites": lambda r: any("luminance spread" in x for x in r.get("reasons", []))},
+    "structure-stub-both": {"lane": "structure", "both": lambda d: stub_design_ir(d / "design.ir.json")},
     "missing-render": {"lane": "raster", "expect": "blocked", "candidate": lambda d: ((d / "render.png").unlink(), True)[1]},
     "geometry-shift-node": {"lane": "geometry", "candidate": lambda d: shift_last_node(d / "layout.json")},
     "geometry-zero-nodes-both": {"lane": "geometry", "both": lambda d: empty_layout(d / "layout.json")},
@@ -1362,7 +1422,8 @@ def main(argv: list[str] | None = None) -> int:
     cal.add_argument("--out", required=True, type=Path)
 
     ident = sub.add_parser("identity", help="compare an exported tree against its origin closure")
-    ident.add_argument("--manifest", required=True, type=Path)
+    ident.add_argument("--manifest", required=True, type=Path, action="append",
+                       help="repeat for a multi-unit receipt (e.g. foundation + canvas)")
     ident.add_argument("--origin-repo", required=True, type=Path)
     ident.add_argument("--origin-commit", required=True)
     ident.add_argument("--exported-root", type=Path)
@@ -1418,7 +1479,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{control['control']:24} {control['outcome']}")
             print("CALIBRATED" if report["calibrated"] else "NOT CALIBRATED")
             return 0 if report["calibrated"] else 1
-        manifest = load_json(args.manifest)
+        manifest = merge_manifests([load_json(path) for path in args.manifest])
         paths = manifest_paths(manifest)
         origin = git_tree_blobs(args.origin_repo, args.origin_commit, paths) if paths else {}
         if args.exported_repo is not None:

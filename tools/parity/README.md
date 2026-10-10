@@ -9,8 +9,8 @@ closure, then these differential lanes, with similarity scores advisory only.
 | Lane | Compares | Vacuity guard |
 |---|---|---|
 | `identity` | exported tree vs origin closure, git blob by blob | empty manifest or empty origin fails |
-| `structure` | canonical DesignIR JSON (declared volatile members removed) | root plus at least one child |
-| `raster` | native render pixels, exact by default | ink coverage floor on both sides |
+| `structure` | canonical DesignIR JSON (declared volatile members removed) | at least 3 nodes (`min_structure_nodes`, never lower) |
+| `raster` | native render pixels, exact by default | ink (pixels off the most common colour) and luminance-spread floors on both sides |
 | `geometry` | laid-out tree: id, kind, rect, visibility, clipping, hit regions, text boxes (0.5 px) | at least one sized non-root node |
 | `semantic` | text/selection observation | non-empty record list |
 | `interaction` | replayed pointer/keyboard log plus post-interaction render | every planned step logged, at least one handled |
@@ -75,6 +75,7 @@ python3 tools/parity/parity_harness.py identity \
   --manifest <pulp.vellum.closure.v1 manifest> \
   --origin-repo <origin checkout> --origin-commit <origin commit> \
   --exported-repo <mirror repo> --exported-commit <mirror commit> --exported-prefix mirror/ \
+  [--manifest <second unit manifest> ...] \
   --out <report.json>
 ```
 

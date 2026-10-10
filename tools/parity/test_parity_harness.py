@@ -40,7 +40,8 @@ FAKE_TOOL = textwrap.dedent(
     if mode == "import":
         source = json.load(open(opt("--file")))
         if IGNORE_INPUT:
-            source = {{"nodes": [{{"name": "fixed", "x": 4, "y": 4, "w": 10, "h": 10}}]}}
+            source = {{"nodes": [{{"name": "fixed", "x": 4, "y": 4, "w": 10, "h": 10}},
+                                 {{"name": "also-fixed", "x": 20, "y": 4, "w": 6, "h": 20}}]}}
         children = [dict(type="frame", name=n["name"], x=n["x"], y=n["y"], w=n["w"], h=n["h"])
                     for n in source["nodes"]]
         json.dump({{"version": 1, "imported_at": "volatile-" + str(id(children)),
@@ -378,6 +379,7 @@ class CorpusValidationTests(unittest.TestCase):
             corpus([dict(good, raster_threshold=4)]),
             corpus([dict(good, min_ink_pixels=0)]),
             corpus([dict(good, scale=0)]),
+            corpus([dict(good, min_structure_nodes=2)]),
             corpus([dict(good, volatile={"structure": ["/root"]})]),
             corpus([dict(good, volatile={"semantic": ["/runs/0/text"]})]),
             dict(corpus(), volatile_allowlist=[{"pointer": "/runs"}]),
@@ -499,6 +501,18 @@ class LaneModuleLoadingTests(unittest.TestCase):
                 ph.LANE_MODULES.remove(module.resolve())
 
 
+class MultiUnitManifestTests(unittest.TestCase):
+    def test_union_of_units_and_duplicate_ownership(self) -> None:
+        foundation = {"schema": "pulp.vellum.closure.v1", "files": ["core/runtime/a.cpp"],
+                      "targets": [{"name": "pulp-runtime"}]}
+        canvas = {"schema": "pulp.vellum.closure.v1", "files": ["core/canvas/b.cpp"],
+                  "targets": [{"name": "pulp-canvas"}]}
+        merged = ph.merge_manifests([foundation, canvas])
+        self.assertEqual(ph.manifest_paths(merged), ["core/runtime/a.cpp", "core/canvas/b.cpp"])
+        with self.assertRaises(ph.HarnessError):
+            ph.merge_manifests([foundation, dict(canvas, files=["core/runtime/a.cpp"])])
+
+
 class ComparatorTests(unittest.TestCase):
     def test_geometry_requires_the_layout_schema_on_both_sides(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -510,6 +524,12 @@ class ComparatorTests(unittest.TestCase):
             result = ph.compare_geometry(a, b, {})
             self.assertEqual(result["status"], "fail")
             self.assertTrue(any("missing required keys" in r for r in result["reasons"]))
+
+    def test_stray_pixel_on_flat_field_fails_the_luminance_floor(self) -> None:
+        flat = ph.RgbaImage(64, 64, b"\x10\x10\x10\xff" * 4096)
+        stray = ph.stray_pixel_image(flat)
+        self.assertEqual(ph.ink_pixels(stray), 1)
+        self.assertLess(ph.luminance_stddev(stray), ph.MIN_LUMINANCE_STDDEV)
 
     def test_uniform_render_has_no_ink(self) -> None:
         image = ph.RgbaImage(4, 4, b"\x01\x02\x03\xff" * 16)

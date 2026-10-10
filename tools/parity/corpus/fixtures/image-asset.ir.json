@@ -64,6 +64,30 @@
         },
         "stable_anchor_id": "swatch-image",
         "children": []
+      },
+      {
+        "type": "frame",
+        "name": "Swatch frame",
+        "style": {
+          "width": 40,
+          "height": 40,
+          "backgroundColor": "#3a6ea5"
+        },
+        "layout": {
+          "direction": "column",
+          "gap": 0,
+          "paddingTop": 0,
+          "paddingRight": 0,
+          "paddingBottom": 0,
+          "paddingLeft": 0,
+          "justify": "flex-start",
+          "align": "flex-start",
+          "wrap": false,
+          "widthMode": "fixed",
+          "heightMode": "fixed"
+        },
+        "stable_anchor_id": "swatch-frame",
+        "children": []
       }
     ]
   }
