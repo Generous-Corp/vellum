@@ -209,3 +209,43 @@ editor, with a different resize, and (for cases that declare `timers`) with scri
 (`timer-clock-ignored`). A re-run control counts only when what a
 viewer would see differed at some frame, not when only the schedule's own
 timestamps or hash did.
+
+## GPU lanes (`lanes/gpu.py`)
+
+`gpu-raster`, `gpu-receipt` and `provider-census` compare a render through Skia
+Graphite on a Dawn device, not the Skia CPU raster the `raster` lane reads. Use
+them with `implementations/pulp-design-ir-observer-gpu.json` and
+`corpus/pulp-gpu-calibration.json`:
+
+```sh
+# The second-dawn-inserted control needs a real second Dawn; build it from the
+# archive the implementation links.
+python3 tools/parity/lanes/gpu.py build-second-dawn \
+  --dawn-archive <skia-build>/mac-gpu/lib/Release/libdawn_combined.a --out <dir>/libsecond_dawn.dylib
+export VELLUM_PARITY_SECOND_DAWN_DYLIB=<dir>/libsecond_dawn.dylib
+
+python3 tools/parity/parity_harness.py calibrate \
+  --lane-module tools/parity/lanes/gpu.py \
+  --corpus tools/parity/corpus/pulp-gpu-calibration.json \
+  --source-root <checkout> --root checkout=<checkout> --root build=<build> \
+  --implementation tools/parity/implementations/pulp-design-ir-observer-gpu.json \
+  --tool importer=<pulp-import-design> --tool observer=<pulp-design-ir-observe> --out <dir>
+```
+
+The render receipt is the renderer's own account, so it is never the only
+witness. `provider-census` reads the images the loader actually mapped
+(`DYLD_PRINT_LIBRARIES`, captured by the step wrapper) with `nm`: exactly one
+image may carry Dawn's implementation and exactly one Skia, a GPU driver must
+have been loaded, and a further WebGPU C API exporter fails unless the case
+names it with a justification. A renderer that falls back to the CPU and still
+reports `gpu` is caught by `gpu-raster` (Graphite and CPU raster anti-alias
+differently) and by the census (no GPU driver). The census is macOS-only;
+elsewhere the lane is blocked, not passed.
+
+Seeded controls: one-pixel, blank-both and missing GPU renders; a missing
+receipt, a changed Dawn revision and a changed adapter; a second Dawn image in
+the loader record, no GPU driver on both sides, a missing census; and reruns
+with the observer's `--gpu-fault` (destroyed device, undrawn frame, reported
+and unreported CPU fallback) and with a real second Dawn inserted into the
+process. Without `VELLUM_PARITY_SECOND_DAWN_DYLIB` that last control applies to
+no case, and calibration reports NOT CALIBRATED.

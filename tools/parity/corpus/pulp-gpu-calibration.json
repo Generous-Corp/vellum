@@ -48,23 +48,7 @@
         "insert_libraries": "",
         "allow_extra_webgpu_api": "libwgpu_native.dylib",
         "allow_extra_webgpu_api_justification": "Pulp's pulp-render links the wgpu-native webgpu target PUBLIC on macOS alongside Skia's static Dawn, so every Pulp GPU image also loads wgpu-native, a second (non-Dawn) WebGPU C API. Recorded, not endorsed: D4 has to rule on it. Any other extra exporter still fails."
-      },
-      "regions": [
-        {
-          "name": "cutoff-knob",
-          "x": 0,
-          "y": 0,
-          "w": 80,
-          "h": 80
-        },
-        {
-          "name": "level-fader",
-          "x": 80,
-          "y": 0,
-          "w": 40,
-          "h": 120
-        }
-      ]
+      }
     },
     {
       "case_id": "figma-plugin-scene",
