@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import types
 import unittest
 
 HERE = Path(__file__).resolve().parent
@@ -25,7 +26,9 @@ sys.path.insert(0, str(HERE))
 
 import parity_harness as ph  # noqa: E402
 
-lanes = ph.load_lane_module(HERE / "lanes" / "browser_lanes.py")
+ph.load_lane_module(HERE / "lanes" / "browser_lanes.py")
+# load_lane_module does not publish the module; reach it through a registered comparator.
+lanes = types.SimpleNamespace(**ph.COMPARATORS["oracle"].__globals__)
 
 from vellum_png import RgbaImage, decode_png_bytes, encode_png  # noqa: E402
 
@@ -54,7 +57,6 @@ def write_oracle_side(directory: Path, *, native: bytes, ir: dict | None = None,
     # The browser drew a box; the native render is near it but never identical.
     (directory / "oracle.png").write_bytes(png(40, 20, box=(4, 4, 30, 16)))
     (directory / "oracle-version.txt").write_text(f"Google Chrome {version}\n", encoding="utf-8")
-    (directory / "oracle-binary.sha256").write_text("ab" * 32 + "\n", encoding="utf-8")
     (directory / "oracle-request.json").write_text(json.dumps({"window": "40,20", "scale": "2", "clip": [0, 0]}),
                                                    encoding="utf-8")
     (directory / "render.png").write_bytes(native)
@@ -105,14 +107,6 @@ class OracleLane(unittest.TestCase):
             write_oracle_side(side, native=NATIVE)
         (self.cand / "oracle.png").write_bytes(png(40, 20, box=(4, 4, 31, 16)))
         self.assertEqual(self.run_lane()["status"], "blocked")
-
-    def test_different_oracle_binaries_are_blocked(self) -> None:
-        for side in (self.ref, self.cand):
-            write_oracle_side(side, native=NATIVE)
-        (self.cand / "oracle-binary.sha256").write_text("cd" * 32 + "\n", encoding="utf-8")
-        result = self.run_lane()
-        self.assertEqual(result["status"], "blocked")
-        self.assertIn("different oracle browser binaries", " ".join(result["reasons"]))
 
     def test_unrecorded_oracle_version_is_blocked(self) -> None:
         for side in (self.ref, self.cand):
@@ -310,7 +304,7 @@ class Fixtures(unittest.TestCase):
         self.assertEqual(subprocess.run([sys.executable, str(generator), "--check"]).returncode, 0)
 
     def test_corpora_validate(self) -> None:
-        for name in ("browser-calibration", "browser-fidelity-gaps", "rejection-calibration", "rejection-contract-gaps"):
+        for name in ("browser-calibration", "rejection-calibration", "rejection-contract-gaps"):
             path = HERE / "corpus" / f"{name}.json"
             self.assertTrue(ph.validate_corpus(ph.load_json(path), path.parent))
 

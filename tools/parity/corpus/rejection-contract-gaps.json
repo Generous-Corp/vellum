@@ -1,0 +1,274 @@
+{
+  "schema": "vellum.parity.corpus.v1",
+  "description": "Malformed-resource contract cases Pulp does NOT yet meet. Run with `run --mode calibration` (not calibrate): it must stay non-accepting until each gap is fixed, and every failing case names its gap. A corpus the reference cannot pass cannot calibrate controls.",
+  "diagnostic_codes": [
+    "archive-unsafe-entry",
+    "archive-invalid",
+    "archive-no-document",
+    "archive-duplicate-member",
+    "asset-unresolvable",
+    "asset-undecodable",
+    "asset-path-unsafe",
+    "node-type-unknown",
+    "identity-duplicate",
+    "document-unreadable",
+    "document-version-unsupported",
+    "source-unresolved",
+    "native-paint-unsupported",
+    "font-undecodable"
+  ],
+  "cases": [
+    {
+      "case_id": "zip-duplicate-member",
+      "source_kind": "figma-plugin-outcome",
+      "source": "fixtures/malformed/zip-duplicate-member/design.pulp.zip",
+      "width": 300,
+      "height": 260,
+      "lanes": [
+        "rejection"
+      ],
+      "expect": {
+        "outcome": "reject",
+        "code": "archive-duplicate-member"
+      },
+      "note": "two members share one name, so which document is imported is ambiguous",
+      "source_base": "corpus",
+      "wellformed": {
+        "source": "fixtures/malformed/zip-wellformed/design.pulp.zip",
+        "source_base": "corpus"
+      }
+    },
+    {
+      "case_id": "design-ir-truncated",
+      "source_kind": "design-ir-outcome",
+      "source": "fixtures/malformed/ir-truncated/source.ir.json",
+      "width": 160,
+      "height": 120,
+      "lanes": [
+        "rejection"
+      ],
+      "expect": {
+        "outcome": "reject",
+        "code": "document-unreadable"
+      },
+      "note": "a DesignIR cut off between members (unterminated object)",
+      "source_base": "corpus",
+      "stage": [
+        "fixtures/malformed/ir-truncated/assets"
+      ],
+      "wellformed": {
+        "source": "fixtures/malformed/ir-wellformed/source.ir.json",
+        "source_base": "corpus",
+        "stage": [
+          "fixtures/malformed/ir-wellformed/assets"
+        ]
+      }
+    },
+    {
+      "case_id": "design-ir-truncated-in-string",
+      "source_kind": "design-ir-outcome",
+      "source": "fixtures/malformed/ir-truncated-in-string/source.ir.json",
+      "width": 160,
+      "height": 120,
+      "lanes": [
+        "rejection"
+      ],
+      "expect": {
+        "outcome": "reject",
+        "code": "document-unreadable"
+      },
+      "note": "a DesignIR cut off inside a string literal (the parser's unterminated-string path)",
+      "source_base": "corpus",
+      "stage": [
+        "fixtures/malformed/ir-truncated-in-string/assets"
+      ],
+      "wellformed": {
+        "source": "fixtures/malformed/ir-wellformed/source.ir.json",
+        "source_base": "corpus",
+        "stage": [
+          "fixtures/malformed/ir-wellformed/assets"
+        ]
+      }
+    },
+    {
+      "case_id": "design-ir-corrupt-image",
+      "source_kind": "design-ir-outcome",
+      "source": "fixtures/malformed/ir-corrupt-image/source.ir.json",
+      "width": 160,
+      "height": 120,
+      "lanes": [
+        "rejection"
+      ],
+      "expect": {
+        "outcome": "warn",
+        "code": "asset-undecodable"
+      },
+      "note": "the asset is the first 60 bytes of a valid PNG",
+      "source_base": "corpus",
+      "stage": [
+        "fixtures/malformed/ir-corrupt-image/assets"
+      ],
+      "wellformed": {
+        "source": "fixtures/malformed/ir-wellformed/source.ir.json",
+        "source_base": "corpus",
+        "stage": [
+          "fixtures/malformed/ir-wellformed/assets"
+        ]
+      }
+    },
+    {
+      "case_id": "design-ir-not-an-image",
+      "source_kind": "design-ir-outcome",
+      "source": "fixtures/malformed/ir-not-an-image/source.ir.json",
+      "width": 160,
+      "height": 120,
+      "lanes": [
+        "rejection"
+      ],
+      "expect": {
+        "outcome": "warn",
+        "code": "asset-undecodable"
+      },
+      "note": "the asset file is text",
+      "source_base": "corpus",
+      "stage": [
+        "fixtures/malformed/ir-not-an-image/assets"
+      ],
+      "wellformed": {
+        "source": "fixtures/malformed/ir-wellformed/source.ir.json",
+        "source_base": "corpus",
+        "stage": [
+          "fixtures/malformed/ir-wellformed/assets"
+        ]
+      }
+    },
+    {
+      "case_id": "design-ir-unknown-node",
+      "source_kind": "design-ir-outcome",
+      "source": "fixtures/malformed/ir-unknown-node/source.ir.json",
+      "width": 160,
+      "height": 120,
+      "lanes": [
+        "rejection"
+      ],
+      "expect": {
+        "outcome": "warn",
+        "code": "node-type-unknown"
+      },
+      "note": "a node type the schema does not define",
+      "source_base": "corpus",
+      "stage": [
+        "fixtures/malformed/ir-unknown-node/assets"
+      ],
+      "wellformed": {
+        "source": "fixtures/malformed/ir-wellformed/source.ir.json",
+        "source_base": "corpus",
+        "stage": [
+          "fixtures/malformed/ir-wellformed/assets"
+        ]
+      }
+    },
+    {
+      "case_id": "design-ir-duplicate-identity",
+      "source_kind": "design-ir-outcome",
+      "source": "fixtures/malformed/ir-duplicate-identity/source.ir.json",
+      "width": 160,
+      "height": 120,
+      "lanes": [
+        "rejection"
+      ],
+      "expect": {
+        "outcome": "warn",
+        "code": "identity-duplicate"
+      },
+      "note": "two nodes share one stable identity",
+      "source_base": "corpus",
+      "stage": [
+        "fixtures/malformed/ir-duplicate-identity/assets"
+      ],
+      "wellformed": {
+        "source": "fixtures/malformed/ir-wellformed/source.ir.json",
+        "source_base": "corpus",
+        "stage": [
+          "fixtures/malformed/ir-wellformed/assets"
+        ]
+      }
+    },
+    {
+      "case_id": "design-ir-future-version",
+      "source_kind": "design-ir-outcome",
+      "source": "fixtures/malformed/ir-future-version/source.ir.json",
+      "width": 160,
+      "height": 120,
+      "lanes": [
+        "rejection"
+      ],
+      "expect": {
+        "outcome": "reject",
+        "code": "document-version-unsupported"
+      },
+      "note": "a document version this reader does not know",
+      "source_base": "corpus",
+      "stage": [
+        "fixtures/malformed/ir-future-version/assets"
+      ],
+      "wellformed": {
+        "source": "fixtures/malformed/ir-wellformed/source.ir.json",
+        "source_base": "corpus",
+        "stage": [
+          "fixtures/malformed/ir-wellformed/assets"
+        ]
+      }
+    },
+    {
+      "case_id": "design-ir-asset-path-escape",
+      "source_kind": "design-ir-outcome",
+      "source": "fixtures/malformed/ir-asset-path-escape/source.ir.json",
+      "width": 160,
+      "height": 120,
+      "lanes": [
+        "rejection"
+      ],
+      "expect": {
+        "outcome": "reject",
+        "code": "asset-path-unsafe"
+      },
+      "note": "an asset local_path that leaves the document directory",
+      "source_base": "corpus",
+      "stage": [
+        "fixtures/malformed/ir-asset-path-escape/assets"
+      ],
+      "wellformed": {
+        "source": "fixtures/malformed/ir-wellformed/source.ir.json",
+        "source_base": "corpus",
+        "stage": [
+          "fixtures/malformed/ir-wellformed/assets"
+        ]
+      }
+    },
+    {
+      "case_id": "html-corrupt-font",
+      "source_kind": "html-browser-outcome",
+      "source": "fixtures/malformed/html-corrupt-font/font.html",
+      "width": 362,
+      "height": 145,
+      "lanes": [
+        "rejection"
+      ],
+      "expect": {
+        "outcome": "warn",
+        "code": "font-undecodable"
+      },
+      "note": "a declared web font that does not decode; the capture silently falls back",
+      "source_base": "corpus",
+      "stage": [
+        "fixtures/malformed/html-corrupt-font/fonts"
+      ],
+      "wellformed": {
+        "source": "test/fixtures/import-differential/01-basic-card.html",
+        "source_base": "source-root",
+        "stage": []
+      }
+    }
+  ]
+}

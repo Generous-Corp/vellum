@@ -1,0 +1,258 @@
+{
+  "schema": "vellum.parity.corpus.v1",
+  "description": "Browser-backed corpus replacing the 3-node --offline HTML seed cases (lanes module: lanes/browser_lanes.py). Sources are Pulp's import-differential fixtures, evaluated in the pinned Chromium and lowered natively node by node (6-12 DesignIR nodes each). width/height are the authored surface Chromium solves (CSS px) and params.oracle_clip_* its offset in the 1280x800 viewport. args.revision is the sed edit the reimport lane applies.",
+  "cases": [
+    {
+      "case_id": "browser-basic-card",
+      "source": "test/fixtures/import-differential/01-basic-card.html",
+      "source_kind": "html-browser",
+      "width": 362,
+      "height": 97,
+      "scale": 2,
+      "lanes": [
+        "structure",
+        "raster",
+        "geometry",
+        "semantic",
+        "oracle",
+        "reimport"
+      ],
+      "volatile": {
+        "structure": [
+          "/imported_at"
+        ]
+      },
+      "params": {
+        "oracle_window": "1280,800",
+        "oracle_clip_x": 24,
+        "oracle_clip_y": 24
+      },
+      "args": {
+        "revision": [
+          "s/Signal Path/Signal Route/"
+        ]
+      },
+      "oracle": {
+        "channel_threshold": 8,
+        "max_mismatch_fraction": 0.055,
+        "justification": "Skia-vs-Blink glyph rasterization and 1-device-px box-edge rounding, measured with Pulp e41854a (--native-panel-lowering) against Chrome 155.0.8059.39 at channel error > 8; the ceiling is about 1.5x that measurement, so a dropped node, a wrong fill or a missing text run exceeds it."
+      }
+    },
+    {
+      "case_id": "browser-flex-controls",
+      "source": "test/fixtures/import-differential/02-flex-controls.html",
+      "source_kind": "html-browser",
+      "width": 1280,
+      "height": 109,
+      "scale": 2,
+      "lanes": [
+        "structure",
+        "raster",
+        "geometry",
+        "semantic",
+        "oracle",
+        "reimport"
+      ],
+      "volatile": {
+        "structure": [
+          "/imported_at"
+        ]
+      },
+      "params": {
+        "oracle_window": "1280,800",
+        "oracle_clip_x": 0,
+        "oracle_clip_y": 0
+      },
+      "args": {
+        "revision": [
+          "s/Transport/Playback/"
+        ]
+      },
+      "oracle": {
+        "channel_threshold": 8,
+        "max_mismatch_fraction": 0.008,
+        "justification": "Skia-vs-Blink glyph rasterization and 1-device-px box-edge rounding, measured with Pulp e41854a (--native-panel-lowering) against Chrome 155.0.8059.39 at channel error > 8; the ceiling is about 1.5x that measurement, so a dropped node, a wrong fill or a missing text run exceeds it."
+      }
+    },
+    {
+      "case_id": "browser-grid-meter",
+      "source": "test/fixtures/import-differential/03-grid-meter.html",
+      "source_kind": "html-browser",
+      "width": 1280,
+      "height": 168,
+      "scale": 2,
+      "lanes": [
+        "structure",
+        "raster",
+        "geometry",
+        "semantic",
+        "oracle",
+        "reimport"
+      ],
+      "volatile": {
+        "structure": [
+          "/imported_at"
+        ]
+      },
+      "params": {
+        "oracle_window": "1280,800",
+        "oracle_clip_x": 0,
+        "oracle_clip_y": 0
+      },
+      "args": {
+        "revision": [
+          "s/>Aux</>Send</"
+        ]
+      },
+      "oracle": {
+        "channel_threshold": 8,
+        "max_mismatch_fraction": 0.005,
+        "justification": "Skia-vs-Blink glyph rasterization and 1-device-px box-edge rounding, measured with Pulp e41854a (--native-panel-lowering) against Chrome 155.0.8059.39 at channel error > 8; the ceiling is about 1.5x that measurement, so a dropped node, a wrong fill or a missing text run exceeds it."
+      }
+    },
+    {
+      "case_id": "browser-absolute-overlay",
+      "source": "test/fixtures/import-differential/06-absolute-overlay.html",
+      "source_kind": "html-browser",
+      "width": 420,
+      "height": 220,
+      "scale": 2,
+      "lanes": [
+        "structure",
+        "raster",
+        "geometry",
+        "semantic",
+        "oracle",
+        "reimport"
+      ],
+      "volatile": {
+        "structure": [
+          "/imported_at"
+        ]
+      },
+      "params": {
+        "oracle_window": "1280,800",
+        "oracle_clip_x": 20,
+        "oracle_clip_y": 20
+      },
+      "args": {
+        "revision": [
+          "s/Spectrum/Analyzer/"
+        ]
+      },
+      "oracle": {
+        "channel_threshold": 8,
+        "max_mismatch_fraction": 0.005,
+        "justification": "Skia-vs-Blink glyph rasterization and 1-device-px box-edge rounding, measured with Pulp e41854a (--native-panel-lowering) against Chrome 155.0.8059.39 at channel error > 8; the ceiling is about 1.5x that measurement, so a dropped node, a wrong fill or a missing text run exceeds it."
+      }
+    },
+    {
+      "case_id": "browser-inline-svg",
+      "source": "test/fixtures/import-differential/07-inline-svg.html",
+      "source_kind": "html-browser",
+      "width": 212,
+      "height": 124,
+      "scale": 2,
+      "lanes": [
+        "structure",
+        "raster",
+        "geometry",
+        "semantic",
+        "oracle",
+        "reimport"
+      ],
+      "volatile": {
+        "structure": [
+          "/imported_at"
+        ]
+      },
+      "params": {
+        "oracle_window": "1280,800",
+        "oracle_clip_x": 24,
+        "oracle_clip_y": 24
+      },
+      "args": {
+        "revision": [
+          "s/Add module/Add effect/"
+        ]
+      },
+      "oracle": {
+        "channel_threshold": 8,
+        "max_mismatch_fraction": 0.017,
+        "justification": "Skia-vs-Blink glyph rasterization and 1-device-px box-edge rounding, measured with Pulp e41854a (--native-panel-lowering) against Chrome 155.0.8059.39 at channel error > 8; the ceiling is about 1.5x that measurement, so a dropped node, a wrong fill or a missing text run exceeds it."
+      }
+    },
+    {
+      "case_id": "browser-typography",
+      "source": "test/fixtures/import-differential/11-typography.html",
+      "source_kind": "html-browser",
+      "width": 490,
+      "height": 182,
+      "scale": 2,
+      "lanes": [
+        "structure",
+        "raster",
+        "geometry",
+        "semantic",
+        "oracle",
+        "reimport"
+      ],
+      "volatile": {
+        "structure": [
+          "/imported_at"
+        ]
+      },
+      "params": {
+        "oracle_window": "1280,800",
+        "oracle_clip_x": 0,
+        "oracle_clip_y": 0
+      },
+      "args": {
+        "revision": [
+          "s/Analog character/Tape character/"
+        ]
+      },
+      "oracle": {
+        "channel_threshold": 8,
+        "max_mismatch_fraction": 0.055,
+        "justification": "Skia-vs-Blink glyph rasterization and 1-device-px box-edge rounding, measured with Pulp e41854a (--native-panel-lowering) against Chrome 155.0.8059.39 at channel error > 8; the ceiling is about 1.5x that measurement, so a dropped node, a wrong fill or a missing text run exceeds it."
+      }
+    },
+    {
+      "case_id": "browser-responsive-panel",
+      "source": "test/fixtures/import-differential/12-responsive-panel.html",
+      "source_kind": "html-browser",
+      "width": 1280,
+      "height": 166,
+      "scale": 2,
+      "lanes": [
+        "structure",
+        "raster",
+        "geometry",
+        "semantic",
+        "oracle",
+        "reimport"
+      ],
+      "volatile": {
+        "structure": [
+          "/imported_at"
+        ]
+      },
+      "params": {
+        "oracle_window": "1280,800",
+        "oracle_clip_x": 0,
+        "oracle_clip_y": 0
+      },
+      "args": {
+        "revision": [
+          "s/>Filter</>Resonator</"
+        ]
+      },
+      "oracle": {
+        "channel_threshold": 8,
+        "max_mismatch_fraction": 0.005,
+        "justification": "Skia-vs-Blink glyph rasterization and 1-device-px box-edge rounding, measured with Pulp e41854a (--native-panel-lowering) against Chrome 155.0.8059.39 at channel error > 8; the ceiling is about 1.5x that measurement, so a dropped node, a wrong fill or a missing text run exceeds it."
+      }
+    }
+  ]
+}
