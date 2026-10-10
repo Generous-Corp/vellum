@@ -1,0 +1,28 @@
+{
+  "schema": "vellum.parity.host-implementation.v1",
+  "name": "pulp-in-tree-host",
+  "repository": "Generous-Corp/pulp",
+  "build_mode": "pulp-in-tree-source (pulp build --examples, Release, Pulp's own Skia/Dawn provider)",
+  "description": "Plug-in bundles built in a Pulp source checkout and hosted by pulp-host-lane-probe. Paths are relative to the Pulp checkout root; run from there or override with --tool/--artifact.",
+  "tools": {
+    "probe": "build/tools/editor-open/pulp-host-lane-probe",
+    "pluginval": "/Applications/pluginval.app/Contents/MacOS/pluginval"
+  },
+  "artifacts": {
+    "spectral-lab.clap": "build/CLAP/SpectralLab.clap",
+    "spectral-lab.vst3": "build/VST3/SpectralLab.vst3",
+    "spectral-lab.component": "build/AU/SpectralLab.component",
+    "super-convolver.clap": "build/CLAP/SuperConvolver.clap",
+    "super-convolver.vst3": "build/VST3/SuperConvolver.vst3",
+    "super-convolver.component": "build/AU/SuperConvolver.component",
+    "spectral-lab.app": "build/examples/spectral-lab/SpectralLab.app",
+    "super-convolver.app": "build/examples/super-convolver/SuperConvolver.app"
+  },
+  "probe_argv": ["{tool:probe}", "@plugins", "--out", "{out}", "--blocks", "94", "--block-size", "512",
+                 "--sample-rate", "48000", "--opens", "2", "--watch-ms", "1500", "--resize-by", "120x80"],
+  "validators": {
+    "pluginval": ["{tool:pluginval}", "--validate", "{artifact}", "--strictness-level", "5",
+                  "--timeout-ms", "60000", "--output-dir", "{out}"]
+  },
+  "validator_success": {"pluginval": "SUCCESS"}
+}
