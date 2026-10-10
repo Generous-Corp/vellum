@@ -264,6 +264,10 @@ if(VELLUM_BUILD_TESTS)
         COMMAND "${Python3_EXECUTABLE}"
             tools/parity/test_parity_harness.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.parity-frames-lane-unit
+        COMMAND "${Python3_EXECUTABLE}"
+            tools/parity/test_frames_lane.py
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME vellum.ci-runner-policy
         COMMAND "${Python3_EXECUTABLE}"
             scripts/test_ci_runner_policy.py
