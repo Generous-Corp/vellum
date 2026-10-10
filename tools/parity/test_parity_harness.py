@@ -470,6 +470,32 @@ class StepFeatureTests(unittest.TestCase):
             self.assertEqual(run["steps"][0]["env"], {"PARITY_PROBE": "w7"})
 
 
+class LaneModuleLoadingTests(unittest.TestCase):
+    def test_lane_module_with_a_dataclass_registers_a_lane(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = Path(tmp) / "demo_lane.py"
+            module.write_text(textwrap.dedent("""
+                from dataclasses import dataclass
+                import parity_harness as ph
+
+                @dataclass
+                class Verdict:
+                    status: str
+
+                ph.register_lane("demo-lane", ("demo.json",), lambda a, b, c: {"status": Verdict("pass").status})
+            """), encoding="utf-8")
+            try:
+                ph.load_lane_module(module)
+                self.assertIn("demo-lane", ph.LANES)
+                self.assertIn(module.resolve(), ph.LANE_MODULES)
+                self.assertIn(module.name, ph.harness_fingerprint()["files"])
+            finally:
+                ph.LANES.remove("demo-lane")
+                ph.LANE_ARTIFACTS.pop("demo-lane", None)
+                ph.COMPARATORS.pop("demo-lane", None)
+                ph.LANE_MODULES.remove(module.resolve())
+
+
 class ComparatorTests(unittest.TestCase):
     def test_geometry_requires_the_layout_schema_on_both_sides(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -711,7 +711,13 @@ def load_lane_module(path: Path) -> None:
         raise HarnessError(f"cannot load lane module {path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules.setdefault("parity_harness", sys.modules[__name__])
-    spec.loader.exec_module(module)
+    # Registered before execution: dataclasses and pickling look a module up by name.
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(spec.name, None)
+        raise
     LANE_MODULES.append(path)
 
 
