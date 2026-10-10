@@ -50,7 +50,7 @@ class ImportBackendTests(unittest.TestCase):
     def test_archive_staging_parser_ignores_backend_handshake_and_capture_options(self) -> None:
         arguments = [
             "--project", "/tmp/project", "--json",
-            "--framework-version", "0.1.7", "--cli-api", "1",
+            "--framework-version", "0.1.8", "--cli-api", "1",
             "--capture-envelope", "/tmp/capture.json",
             "/tmp/index.html", "--source-type", "html", "--as", "main",
         ]
