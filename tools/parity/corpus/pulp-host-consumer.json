@@ -1,0 +1,326 @@
+{
+  "schema": "vellum.parity.corpus.v1",
+  "corpus_id": "pulp-host-sdk-consumer-v1",
+  "description": "Host-compatibility corpus for sterile SDK consumers (G build-mode rows G3 installed find_package(Pulp), G4 released `pulp sdk install`). Loaded with --lane-module tools/parity/lanes/host.py. An out-of-tree consumer project builds PulpGain (no editor), SpectralLab and SpectralLab B (GPU-host editors, 820x560) against the SDK under test; bundles are hosted in one process (AU registered in-process only). The standalone swap control's `other.app` root is any other GPU-editor app (calibration used Pulp's in-tree SuperConvolver.app).",
+  "declared_gaps": [
+    {
+      "row": "auval (AU v2 validator)",
+      "reason": "auval only sees components registered in ~/Library/Audio/Plug-Ins/Components; this lane never installs into a system plug-in folder. AU load/editor/audio are covered in-process through AudioComponentRegister."
+    },
+    {
+      "row": "clap-validator",
+      "reason": "not installed on the measuring host (command -v clap-validator: absent; control: command -v auval resolves)."
+    },
+    {
+      "row": "LV2",
+      "reason": "no Pulp example builds an LV2 bundle (zero lv2_entry.cpp under examples/; only tools/templates carry one)."
+    },
+    {
+      "row": "REAPER daw-smoke",
+      "reason": "REAPER not installed on the measuring host; opt-in per Pulp daw-smoke policy."
+    },
+    {
+      "row": "editor_prewarm",
+      "reason": "no Pulp example overrides Processor::editor_prewarm(), so the request is a no-op in every bundle; the host cannot observe the static-initializer install from outside the plug-in image."
+    },
+    {
+      "row": "G column A (audio-only, format-core only)",
+      "reason": "pulp_add_plugin links the full pulp::format stack: an editor-less PulpGain image is 44 MB and carries Skia (14038 Sk symbols), Dawn wgpu (276) and the libwgpu_native load command, so the no-editor cases here are column B-without-editor, not column A. Column A needs a format-core-only consumer, which the SDK's pulp_add_plugin does not offer."
+    },
+    {
+      "row": "G columns C and D",
+      "reason": "no Vellum provider package exists yet (V-package), so there is no Vellum-provider build and no downgrade request to make."
+    },
+    {
+      "row": "editor-less standalone screenshot",
+      "reason": "PulpGain.app (no editor) ignores PULP_SCREENSHOT and runs as a console host until killed (measured: timeout 90 s, exit 124), so no standalone case for it; the standalone swap control uses the in-tree SuperConvolver.app as the 'other app' root (a control input only)."
+    }
+  ],
+  "declared_exceptions": [],
+  "cases": [
+    {
+      "source": "fixtures/host/stimulus.json",
+      "source_base": "corpus",
+      "width": 820,
+      "height": 560,
+      "case_id": "spectral-lab-clap",
+      "source_kind": "host-probe",
+      "lanes": [
+        "host-load",
+        "host-editor",
+        "host-audio"
+      ],
+      "args": {
+        "plugins": [
+          "--plugin",
+          "{root:spectral-lab.clap}"
+        ]
+      },
+      "controls": {
+        "swap": "spectral-lab-b.clap"
+      },
+      "expect": {
+        "editor": true,
+        "gpu": true
+      }
+    },
+    {
+      "source": "fixtures/host/stimulus.json",
+      "source_base": "corpus",
+      "width": 820,
+      "height": 560,
+      "case_id": "gain-no-editor-clap",
+      "source_kind": "host-probe",
+      "lanes": [
+        "host-load",
+        "host-audio"
+      ],
+      "args": {
+        "plugins": [
+          "--plugin",
+          "{root:gain.clap}"
+        ]
+      },
+      "controls": {
+        "swap": "spectral-lab.clap"
+      },
+      "expect": {
+        "editor": false
+      }
+    },
+    {
+      "source": "fixtures/host/stimulus.json",
+      "source_base": "corpus",
+      "width": 820,
+      "height": 560,
+      "case_id": "spectral-lab-vst3",
+      "source_kind": "host-probe",
+      "lanes": [
+        "host-load",
+        "host-editor",
+        "host-audio"
+      ],
+      "args": {
+        "plugins": [
+          "--plugin",
+          "{root:spectral-lab.vst3}"
+        ]
+      },
+      "controls": {
+        "swap": "spectral-lab-b.vst3"
+      },
+      "expect": {
+        "editor": true,
+        "gpu": true
+      }
+    },
+    {
+      "source": "fixtures/host/stimulus.json",
+      "source_base": "corpus",
+      "width": 820,
+      "height": 560,
+      "case_id": "gain-no-editor-vst3",
+      "source_kind": "host-probe",
+      "lanes": [
+        "host-load",
+        "host-audio"
+      ],
+      "args": {
+        "plugins": [
+          "--plugin",
+          "{root:gain.vst3}"
+        ]
+      },
+      "controls": {
+        "swap": "spectral-lab.vst3"
+      },
+      "expect": {
+        "editor": false
+      }
+    },
+    {
+      "source": "fixtures/host/stimulus.json",
+      "source_base": "corpus",
+      "width": 820,
+      "height": 560,
+      "case_id": "spectral-lab-au",
+      "source_kind": "host-probe",
+      "lanes": [
+        "host-load",
+        "host-editor",
+        "host-audio"
+      ],
+      "args": {
+        "plugins": [
+          "--plugin",
+          "{root:spectral-lab.component}"
+        ]
+      },
+      "controls": {
+        "swap": "spectral-lab-b.component"
+      },
+      "expect": {
+        "editor": true,
+        "gpu": true
+      }
+    },
+    {
+      "source": "fixtures/host/stimulus.json",
+      "source_base": "corpus",
+      "width": 820,
+      "height": 560,
+      "case_id": "gain-no-editor-au",
+      "source_kind": "host-probe",
+      "lanes": [
+        "host-load",
+        "host-audio"
+      ],
+      "args": {
+        "plugins": [
+          "--plugin",
+          "{root:gain.component}"
+        ]
+      },
+      "controls": {
+        "swap": "spectral-lab.component"
+      },
+      "expect": {
+        "editor": false
+      }
+    },
+    {
+      "source": "fixtures/host/stimulus.json",
+      "source_base": "corpus",
+      "width": 820,
+      "height": 560,
+      "case_id": "two-gpu-plugins-clap",
+      "source_kind": "host-pair",
+      "lanes": [
+        "host-load",
+        "host-editor",
+        "host-audio",
+        "host-coexist"
+      ],
+      "args": {
+        "plugins": [
+          "--plugin",
+          "{root:spectral-lab.clap}",
+          "--plugin",
+          "{root:spectral-lab-b.clap}"
+        ],
+        "solo0": [
+          "--plugin",
+          "{root:spectral-lab.clap}"
+        ],
+        "solo1": [
+          "--plugin",
+          "{root:spectral-lab-b.clap}"
+        ]
+      },
+      "controls": {
+        "skew_runtime_root": "skew-runtime"
+      },
+      "expect": {
+        "editor": true,
+        "gpu": true
+      }
+    },
+    {
+      "source": "fixtures/host/stimulus.json",
+      "source_base": "corpus",
+      "width": 820,
+      "height": 560,
+      "case_id": "two-gpu-plugins-vst3-au",
+      "source_kind": "host-pair",
+      "lanes": [
+        "host-load",
+        "host-editor",
+        "host-audio",
+        "host-coexist"
+      ],
+      "args": {
+        "plugins": [
+          "--plugin",
+          "{root:spectral-lab.vst3}",
+          "--plugin",
+          "{root:spectral-lab-b.component}"
+        ],
+        "solo0": [
+          "--plugin",
+          "{root:spectral-lab.vst3}"
+        ],
+        "solo1": [
+          "--plugin",
+          "{root:spectral-lab-b.component}"
+        ]
+      },
+      "controls": {
+        "skew_runtime_root": "skew-runtime"
+      },
+      "expect": {
+        "editor": true,
+        "gpu": true
+      }
+    },
+    {
+      "source": "fixtures/host/stimulus.json",
+      "source_base": "corpus",
+      "width": 820,
+      "height": 560,
+      "case_id": "spectral-lab-vst3-pluginval",
+      "source_kind": "host-validator",
+      "lanes": [
+        "host-validator"
+      ],
+      "args": {
+        "bundle": [
+          "--bundle",
+          "{root:spectral-lab.vst3}"
+        ]
+      },
+      "expect": {
+        "validator_success": "SUCCESS"
+      }
+    },
+    {
+      "source": "fixtures/host/stimulus.json",
+      "source_base": "corpus",
+      "width": 820,
+      "height": 560,
+      "case_id": "gain-vst3-pluginval",
+      "source_kind": "host-validator",
+      "lanes": [
+        "host-validator"
+      ],
+      "args": {
+        "bundle": [
+          "--bundle",
+          "{root:gain.vst3}"
+        ]
+      },
+      "expect": {
+        "validator_success": "SUCCESS"
+      }
+    },
+    {
+      "source": "fixtures/host/stimulus.json",
+      "source_base": "corpus",
+      "width": 820,
+      "height": 560,
+      "case_id": "spectral-lab-standalone",
+      "source_kind": "host-standalone",
+      "lanes": [
+        "host-standalone"
+      ],
+      "args": {
+        "app": [
+          "--app",
+          "{root:spectral-lab.app}"
+        ]
+      },
+      "controls": {
+        "swap": "other.app"
+      }
+    }
+  ]
+}

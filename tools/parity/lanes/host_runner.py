@@ -85,6 +85,7 @@ def build_record(bundle: Path) -> dict | None:
     product = info.get("product") or {}
     return {"source_git_sha": product.get("source_git_sha"), "source_git_dirty": product.get("source_git_dirty"),
             "build": info.get("build"), "sdk_version": (info.get("pulp_sdk") or {}).get("version"),
+            "sdk_provenance": {k: (info.get("pulp_sdk") or {}).get(k) for k in ("provenance_kind", "source_git_sha")},
             "skia": {k: (pins.get("skia") or {}).get(k) for k in ("release", "commit", "graphite_backend")}}
 
 
@@ -241,8 +242,16 @@ def cmd_standalone(a: argparse.Namespace) -> int:
         print(f"no executable in {app}", file=sys.stderr)
         return 2
     env = dict(os.environ, PULP_AUDIO_DEVICE="null", PULP_SCREENSHOT=str(Path(a.png).resolve()))
-    result = subprocess.run([str(exe)], env=env, capture_output=True, text=True, encoding="utf-8",
-                            errors="replace", timeout=a.timeout)
+    try:
+        result = subprocess.run([str(exe)], env=env, capture_output=True, text=True, encoding="utf-8",
+                                errors="replace", timeout=a.timeout)
+    except subprocess.TimeoutExpired:
+        # An app that never takes its screenshot (e.g. one without an editor)
+        # runs until killed; that is a failed step, not a hang of the harness.
+        Path("standalone.json").write_text(json.dumps({"exit": None, "error": "timeout", "app": app.name}),
+                                           encoding="utf-8")
+        print(f"{app.name} did not exit within {a.timeout} s", file=sys.stderr)
+        return 124
     sys.stderr.write(result.stderr[-4000:])
     Path("standalone.json").write_text(json.dumps({"exit": result.returncode, "app": app.name}, indent=2),
                                        encoding="utf-8")
