@@ -38,7 +38,7 @@ SCHEDULE_SCHEMA = "pulp-ui-frame-schedule-v1"
 CAPTURE_RE = re.compile(r"^frame-v\d+-f\d{4}\.png$")
 
 TOP_KEYS = ("schema", "environment", "inputs", "frames", "views")
-ENVIRONMENT_KEYS = ("platform", "arch", "backend", "scale", "width", "height")
+ENVIRONMENT_KEYS = ("platform", "arch", "backend", "scale", "width", "height", "timer_clock")
 INPUT_KEYS = ("mode", "input_sha256", "schedule_sha256")
 FRAME_KEYS = ("frame", "timestamp", "events", "views", "params")
 VIEW_KEYS = ("view", "dispatched", "clock_time", "readiness", "focused", "state",
@@ -392,6 +392,17 @@ def _rerun(mutate) -> dict[str, Any]:
             "bites": _observable_reason}
 
 
+def _timer_clock_ignored(case: dict[str, Any], source_root: Path, work: Path):
+    """The candidate keeps script timers on the wall clock while the schedule
+    advances host time: the timer case must then diverge frame by frame. Only
+    cases that declare timers apply, since a timer-free script cannot tell the
+    clocks apart."""
+    params = case.get("params") or {}
+    if LANE not in case["lanes"] or not params.get("timers") or params.get("timer_clock") != "schedule":
+        return None
+    return dict(case, params=dict(params, timer_clock="wall")), {}
+
+
 RERUN_CONTROLS = {
     "schedule-rate-120hz": _rerun(_retime(120.0)),
     "schedule-dropped-vsync": _rerun(_dropped_vsync),
@@ -400,6 +411,7 @@ RERUN_CONTROLS = {
     "param-write-changed": _rerun(_param_write_changed),
     "second-view-not-attached": _rerun(_no_second_view),
     "resize-changed": _rerun(_resize_changed),
+    "timer-clock-ignored": {"lane": LANE, "prepare": _timer_clock_ignored, "bites": _observable_reason},
 }
 
 
