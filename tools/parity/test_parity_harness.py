@@ -566,6 +566,37 @@ class MultiUnitManifestTests(unittest.TestCase):
             ph.merge_manifests([foundation, dict(canvas, files=["core/runtime/a.cpp"])])
 
 
+class HostRequestTests(HarnessFixture):
+    def test_content_roots_hash_whole_bundles_into_identity(self) -> None:
+        bundle = self.root / "Plug.bundle"
+        (bundle / "Contents/Resources").mkdir(parents=True)
+        (bundle / "Contents/Resources/skin.png").write_bytes(b"one")
+        before = ph.tree_sha256(bundle)
+        (bundle / "Contents/Resources/skin.png").write_bytes(b"two")
+        self.assertNotEqual(before, ph.tree_sha256(bundle))
+        impl = dict(implementation(self.tool), content_roots=["bundle"])
+        roots = {"checkout": self.root / "src", "bundle": bundle}
+        with_bundle = ph.implementation_identity(impl, {"fake": self.tool}, roots)
+        self.assertIn(with_bundle["content_roots"]["bundle"], ph.content_key(with_bundle))
+        missing = ph.implementation_identity(impl, {"fake": self.tool}, {"checkout": self.root / "src"})
+        self.assertTrue(any("content root bundle" in e for e in ph.identity_errors(missing, "x")))
+
+    def test_mutators_may_take_the_case(self) -> None:
+        seen = []
+        self.assertTrue(ph.call_mutator(lambda d, case: seen.append(case["case_id"]) or True,
+                                        self.root, {"case_id": "c1"}))
+        self.assertTrue(ph.call_mutator(lambda d: True, self.root, {"case_id": "c2"}))
+        self.assertEqual(seen, ["c1"])
+
+    def test_case_filter_record_is_refused_by_parity(self) -> None:
+        with self.assertRaises(ph.HarnessError):
+            ph.calibrate(self.corpus_path, self.root / "src", self.impl_path, self.root / "x", case_filter=["nope"])
+        subset = ph.calibrate(self.corpus_path, self.root / "src", self.impl_path, self.root / "sub",
+                              case_filter=["fake-controls"])
+        self.assertEqual(subset["case_filter"], ["fake-controls"])
+        self.assertTrue(any("--case subset" in e for e in ph.calibration_errors(subset, corpus())))
+
+
 class ComparatorTests(unittest.TestCase):
     def test_geometry_requires_the_layout_schema_on_both_sides(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

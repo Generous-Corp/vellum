@@ -33,6 +33,7 @@ from collections import Counter
 import copy
 import hashlib
 import importlib.util
+import inspect
 import json
 import os
 from pathlib import Path
@@ -296,6 +297,23 @@ def export_origin(roots: dict[str, Path]) -> dict[str, Any] | None:
             "receipt_sha256": sha256_file(Path(receipt_path))}
 
 
+def tree_sha256(root: Path) -> str | None:
+    """Content hash of a directory (a plug-in bundle, a runtime folder): every
+    regular file's relative path and bytes, plus symlink targets, in order."""
+    root = Path(root)
+    if not root.exists():
+        return None
+    digest = hashlib.sha256()
+    entries = [root] if root.is_file() else sorted(root.rglob("*"))
+    for path in entries:
+        relative = path.name if root.is_file() else path.relative_to(root).as_posix()
+        if path.is_symlink():
+            digest.update(f"L {relative} -> {os.readlink(path)}\n".encode())
+        elif path.is_file():
+            digest.update(f"F {relative} {sha256_file(path)}\n".encode())
+    return digest.hexdigest()
+
+
 def run_probes(impl: dict[str, Any], tools: dict[str, Path], roots: dict[str, Path]) -> dict[str, Any]:
     values = placeholder_values(tools, roots)
     probes = {}
@@ -336,6 +354,8 @@ def implementation_identity(impl: dict[str, Any], tools: dict[str, Path],
             for name, path in sorted(tools.items())
         },
         "probes": run_probes(impl, tools, roots),
+        "content_roots": {name: tree_sha256(roots[name]) if name in roots else None
+                          for name in impl.get("content_roots", [])},
     }
 
 
@@ -369,6 +389,9 @@ def identity_errors(identity: dict[str, Any], side: str) -> list[str]:
     for name, tool in tools.items():
         if not isinstance(tool.get("sha256"), str) or not SHA256_RE.match(tool["sha256"]):
             errors.append(f"{side}: tool {name} has no content hash (missing binary?)")
+    for name, digest in (identity.get("content_roots") or {}).items():
+        if not isinstance(digest, str) or not SHA256_RE.match(digest):
+            errors.append(f"{side}: content root {name} is missing (declared but not supplied or absent)")
     remote = identity.get("repository_remote")
     if remote and identity.get("repository") and remote.lower() != str(identity["repository"]).lower():
         errors.append(f"{side}: declared repository {identity['repository']} != checkout remote {remote}")
@@ -391,7 +414,8 @@ def identity_errors(identity: dict[str, Any], side: str) -> list[str]:
 def content_key(identity: dict[str, Any]) -> tuple:
     """The binaries actually run. Two sides with the same multiset of tool
     hashes are the same implementation, whatever their labels say."""
-    return tuple(sorted(t.get("sha256") or "" for t in (identity.get("tools") or {}).values()))
+    return tuple(sorted([t.get("sha256") or "" for t in (identity.get("tools") or {}).values()]
+                        + [h or "" for h in (identity.get("content_roots") or {}).values()]))
 
 
 def identity_key(identity: dict[str, Any]) -> tuple:
@@ -883,6 +907,8 @@ def calibration_errors(calibration: Any, corpus: dict[str, Any]) -> list[str]:
     errors = []
     if not calibration.get("calibrated"):
         errors.append("calibration record is not CALIBRATED")
+    if calibration.get("case_filter"):
+        errors.append("calibration record covers a --case subset (debug only), not the corpus")
     positive = calibration.get("positive") or {}
     if (positive.get("corpus") or {}).get("sha256") != corpus_sha256(corpus):
         errors.append("corpus differs from the calibrated corpus (re-run calibrate)")
@@ -1228,6 +1254,16 @@ def strip_layout_to_rects(path: Path) -> bool:
     return bool(layout["nodes"])
 
 
+def call_mutator(mutator: Callable[..., bool], directory: Path, case: dict[str, Any]) -> bool:
+    """Artifact-control mutators take (dir) or (dir, case)."""
+    try:
+        positional = [p for p in inspect.signature(mutator).parameters.values()
+                      if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
+    except (TypeError, ValueError):
+        positional = []
+    return mutator(directory, case) if len(positional) >= 2 else mutator(directory)
+
+
 def builtin_rerun_prepare(name: str) -> Callable[..., tuple[dict[str, Any], dict[str, Any]] | None]:
     def prepare(case: dict[str, Any], source_root: Path,
                 work_dir: Path | None = None) -> tuple[dict[str, Any], dict[str, Any]] | None:
@@ -1285,9 +1321,15 @@ RERUN_CONTROLS: dict[str, dict[str, Any]] = {
 def calibrate(corpus_path: Path, source_root: Path, impl_path: Path, out: Path,
               tool_overrides: dict[str, str] | None = None,
               source_sha: str | None = None,
-              roots: dict[str, Path] | None = None) -> dict[str, Any]:
+              roots: dict[str, Path] | None = None,
+              case_filter: list[str] | None = None) -> dict[str, Any]:
     corpus = load_json(corpus_path)
     cases = validate_corpus(corpus, corpus_path.resolve().parent)
+    if case_filter:
+        unknown = set(case_filter) - {case["case_id"] for case in cases}
+        if unknown:
+            raise HarnessError(f"--case names unknown cases: {sorted(unknown)}")
+        cases = [case for case in cases if case["case_id"] in case_filter]
     impl = validate_implementation(load_json(impl_path))
     if source_sha is not None:
         impl = dict(impl, source_sha=source_sha)
@@ -1373,8 +1415,8 @@ def calibrate(corpus_path: Path, source_root: Path, impl_path: Path, out: Path,
             shutil.copytree(ref_dir, mref)
             shutil.copytree(cand_dir, mcand)
             try:
-                changed = spec["candidate"](mcand) if "candidate" in spec else (
-                    spec["both"](mref) and spec["both"](mcand))
+                changed = call_mutator(spec["candidate"], mcand, case) if "candidate" in spec else (
+                    call_mutator(spec["both"], mref, case) and call_mutator(spec["both"], mcand, case))
             except (OSError, ValueError, KeyError, PngError) as error:
                 raise HarnessError(f"control {name} could not mutate {case['case_id']}: {error}") from error
             if not changed:
@@ -1432,6 +1474,7 @@ def calibrate(corpus_path: Path, source_root: Path, impl_path: Path, out: Path,
     return {
         "schema": CALIBRATION_SCHEMA,
         "calibrated": calibrated,
+        "case_filter": list(case_filter or []),
         "lanes_in_scope": lanes_in_scope,
         "positive": positive,
         "controls": controls,
@@ -1483,6 +1526,8 @@ def main(argv: list[str] | None = None) -> int:
     cal.add_argument("--root", action="append", default=[],
                      help="name=path; defaults to checkout=<source-root>")
     cal.add_argument("--lane-module", action="append", default=[], type=Path)
+    cal.add_argument("--case", action="append", default=[],
+                     help="debug: calibrate only these case ids; the record is refused by parity runs")
     cal.add_argument("--out", required=True, type=Path)
 
     ident = sub.add_parser("identity", help="compare an exported tree against its origin closure")
@@ -1525,7 +1570,7 @@ def main(argv: list[str] | None = None) -> int:
             roots = parse_tool_overrides(args.root) or {"checkout": str(args.source_root)}
             report = calibrate(args.corpus, args.source_root, args.implementation, args.out,
                                parse_tool_overrides(args.tool), args.source_sha,
-                               {k: Path(v) for k, v in roots.items()})
+                               {k: Path(v) for k, v in roots.items()}, args.case)
             write_json(args.out / "calibration.json", report)
             for control in report["controls"]:
                 print(f"{control['control']:36} {control['outcome']}")
