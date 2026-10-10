@@ -374,6 +374,11 @@ if [ -n "$version" ]; then
     latest|vlatest|'') printf '%s\n' 'Release installs require an exact version, not latest.' >&2; exit 2 ;;
     v*) version=${version#v} ;;
   esac
+  # A retired version once named published bytes that no longer exist; see
+  # provenance/retired-release-tags.json. Refuse it before any download.
+  case "$version" in
+    0.1.7) printf '%s\n' "Vellum v$version is a retired release and cannot be installed; choose a published version such as 0.1.6." >&2; exit 2 ;;
+  esac
   case "$version" in *[!0-9A-Za-z._-]*) printf '%s\n' 'Release version contains unsafe characters.' >&2; exit 2 ;; esac
   if [ -z "$release_target" ]; then
     case "$(uname -s)" in
