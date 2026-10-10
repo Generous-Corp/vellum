@@ -198,6 +198,28 @@ class CensusLaneTests(unittest.TestCase):
                               "allow_extra_webgpu_api_justification": "recorded for the test"}}
         self.assertEqual(self.lane(allowed)["status"], "pass")
 
+    def test_a_call_bound_to_the_extra_webgpu_fails_even_when_it_is_allowed(self) -> None:
+        source = self.built / "bound.cpp"
+        source.write_text('extern "C" void* wgpuCreateInstance(const void*);\n'
+                          'extern "C" void* bound() { return wgpuCreateInstance(nullptr); }\n')
+        subprocess.run(["clang++", "-dynamiclib", str(source), "-L", str(self.built), "-lfake_wgpu",
+                        "-o", str(self.built / "libbound.dylib")], check=True)
+        allowed = {"params": {"allow_extra_webgpu_api": "libfake_wgpu.dylib",
+                              "allow_extra_webgpu_api_justification": "load-only, for the test"}}
+        self.both("libfake_wgpu.dylib")
+        self.assertEqual(self.lane(allowed)["status"], "pass")
+        self.both("libfake_wgpu.dylib", "libbound.dylib")
+        result = self.lane(allowed)
+        self.assertEqual(result["status"], "fail")
+        self.assertIn("binds 1 WebGPU C symbol(s) to libfake_wgpu", " ".join(result["reasons"]))
+
+    def test_bound_to_extra_control_compiles_a_real_binding(self) -> None:
+        allowed = {"params": {"allow_extra_webgpu_api": "libfake_wgpu.dylib",
+                              "allow_extra_webgpu_api_justification": "load-only, for the test"}}
+        self.both("libfake_wgpu.dylib")
+        self.assertTrue(gpu.add_image_bound_to_extra_webgpu(self.cand))
+        self.assertIn("not to its Dawn", " ".join(self.lane(allowed)["reasons"]))
+
     def test_no_gpu_driver_fails_even_on_both_sides(self) -> None:
         self.both(driver=False)
         self.assertIn("no GPU driver was loaded", " ".join(self.lane()["reasons"]))
@@ -241,7 +263,7 @@ class RegistrationTests(unittest.TestCase):
                      "gpu-silent-raster-fallback", "gpu-silent-raster-fallback-census",
                      "second-dawn-inserted"):
             self.assertIn(name, ph.RERUN_CONTROLS)
-        for name in ("gpu-raster-one-pixel", "census-second-dawn-image", "census-no-gpu-driver-both",
+        for name in ("gpu-raster-one-pixel", "census-second-dawn-image", "census-call-bound-to-extra-webgpu", "census-no-gpu-driver-both",
                      "gpu-receipt-dawn-revision", "gpu-receipt-adapter-changed"):
             self.assertIn(name, ph.ARTIFACT_CONTROLS)
 

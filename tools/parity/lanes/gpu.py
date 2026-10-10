@@ -173,6 +173,30 @@ def defined_symbols(image: str) -> list[str] | None:
     return [line.rsplit(" ", 1)[-1] for line in result.stdout.splitlines() if line.strip()]
 
 
+FROM_LIBRARY = re.compile(r"\(from (?P<lib>[^)]+)\)")
+
+
+def foreign_webgpu_bindings(image: str) -> dict[str, int] | None:
+    """WebGPU C symbols this image leaves undefined, by the library the
+    two-level namespace binds each to. An image whose GPU calls bind to a
+    library other than its own Dawn uses that library's WebGPU."""
+    try:
+        result = subprocess.run(["nm", "-mu", image], capture_output=True, text=True,
+                                encoding="utf-8", errors="replace", timeout=300)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    bound: dict[str, int] = {}
+    for line in result.stdout.splitlines():
+        if not re.search(r"\b_wgpu[A-Z]", line):
+            continue
+        match = FROM_LIBRARY.search(line)
+        library = match.group("lib") if match else "<flat or dynamic lookup>"
+        bound[library] = bound.get(library, 0) + 1
+    return bound
+
+
 def census(listing: Path) -> dict[str, Any]:
     """Classify every non-system image the process loaded."""
     images = loaded_images(listing)
@@ -193,10 +217,16 @@ def census(listing: Path) -> dict[str, Any]:
             roles.append("skia")
         if WEBGPU_ENTRY in symbols:
             roles.append("webgpu-c-api")
+        bindings = foreign_webgpu_bindings(path)
+        if bindings is None:
+            record["unreadable"].append(path)
+            continue
+        label = "<main>" if index == 0 and path == main else Path(path).name
+        if bindings:
+            record.setdefault("webgpu_bindings", {})[label] = bindings
         if roles:
             record["providers"].append({
-                "image": "<main>" if index == 0 and path == main else Path(path).name,
-                "path": path, "sha256": ph.sha256_file(Path(path)), "roles": roles})
+                "image": label, "path": path, "sha256": ph.sha256_file(Path(path)), "roles": roles})
     return record
 
 
@@ -218,6 +248,15 @@ def census_errors(record: dict[str, Any], case: dict[str, Any]) -> list[str]:
     for image in extra:
         if image != allowed:
             errors.append(f"{image} also exports the WebGPU C API and is not allowed by the case")
+    # A tolerated extra exporter stays load-only: nothing may bind to it. A
+    # WebGPU call bound to any library other than a Dawn image means two
+    # implementations serve one process.
+    dawn_libraries = {Path(p["path"]).stem for p in record["providers"]
+                      if "dawn" in p["roles"] and p["image"] != "<main>"}
+    for image, bindings in sorted(record.get("webgpu_bindings", {}).items()):
+        for library, count in sorted(bindings.items()):
+            if library not in dawn_libraries:
+                errors.append(f"{image} binds {count} WebGPU C symbol(s) to {library}, not to its Dawn")
     if not record["gpu_drivers"]:
         errors.append("no GPU driver was loaded: nothing in this process rendered on a GPU")
     return errors
@@ -296,6 +335,32 @@ def add_second_dawn_image(side: Path) -> bool:
     return True
 
 
+def add_image_bound_to_extra_webgpu(side: Path) -> bool:
+    """List an image whose WebGPU call binds to the tolerated extra exporter
+    rather than to Dawn: a tiny library compiled here against the extra
+    exporter the process actually loaded."""
+    listing = side / "dyld-images.txt"
+    if not listing.is_file() or not shutil.which("clang++"):
+        return False
+    record = census(listing)
+    extra = [p for p in record["providers"] if p["roles"] == ["webgpu-c-api"]]
+    if not extra:
+        return False
+    library = Path(extra[0]["path"])
+    source = side / "bound-to-extra.cpp"
+    source.write_text('extern "C" void* wgpuCreateInstance(const void*);\n'
+                      'extern "C" void* bound_to_extra() { return wgpuCreateInstance(nullptr); }\n')
+    image = side / "libbound_to_extra.dylib"
+    built = subprocess.run(["clang++", "-dynamiclib", str(source), "-L", str(library.parent),
+                            f"-l{library.stem.removeprefix('lib')}", "-o", str(image)],
+                           capture_output=True, text=True)
+    if built.returncode != 0:
+        return False
+    with listing.open("a", encoding="utf-8") as stream:
+        stream.write(f"dyld[0]: <00000000-0000-0000-0000-000000000000> {image.resolve()}\n")
+    return True
+
+
 def drop_gpu_drivers(side: Path) -> bool:
     listing = side / "dyld-images.txt"
     if not listing.is_file():
@@ -359,6 +424,9 @@ ph.register_controls(
             d / "render-receipt.json", change_adapter)},
         "census-second-dawn-image": {"lane": "provider-census", "candidate": add_second_dawn_image,
                                      "bites": reason_contains("2 images carry Dawn")},
+        "census-call-bound-to-extra-webgpu": {"lane": "provider-census",
+                                             "candidate": add_image_bound_to_extra_webgpu,
+                                             "bites": reason_contains("not to its Dawn")},
         "census-no-gpu-driver-both": {"lane": "provider-census", "both": drop_gpu_drivers,
                                       "bites": reason_contains("no GPU driver was loaded")},
         "census-missing": {"lane": "provider-census", "expect": "blocked",
