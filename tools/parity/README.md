@@ -14,7 +14,7 @@ closure, then these differential lanes, with similarity scores advisory only.
 | `geometry` | laid-out tree: id, kind, rect, visibility, clipping, hit regions, text boxes (0.5 px) | at least one sized non-root node |
 | `semantic` | text/selection observation | non-empty record list |
 | `interaction` | replayed pointer/keyboard log plus post-interaction render | every planned step logged, at least one handled |
-| `host` (`host_lane.py`) | built plug-in bundles in a real host process: load, editor lifecycle, audio null, coexistence, validators, standalone | see "Host lane" below |
+| `host-*` (`lanes/host.py`) | built plug-in bundles in a real host process: load + provenance, editor lifecycle, audio null, coexistence + runtime binding, validators, standalone | see "Host lane" below |
 
 Implementations are JSON descriptions of commands (`implementations/`); the
 harness never links or imports either implementation. Each side names its
@@ -135,30 +135,30 @@ exit status, the hash of every input and observation, and the verdict.
 
 ## Host lane
 
-`host_lane.py` is the host-compatibility row, separate from screenshot parity.
-A host corpus (`corpus/pulp-host-calibration.json`) loads built CLAP, VST3 and
-AU v2 bundles into a host probe process (Pulp's `pulp-host-lane-probe`), runs
-validators, and launches standalone apps; a host implementation
-(`implementations/pulp-host-in-tree.json`) names the probe, validators and
-bundles. Lanes: `load`, `editor` (attach, full coverage of the window, GPU path
-when expected, resize, close, reopen, frames pixel-equal across sides unless
-the case declares the editor animated), `audio` (editor closed/open/closed
-byte-identical and audible, byte-identical across sides), `coexist` (two
-plug-ins in one process render and draw what each does alone; dyld census of
-runtime images equal across sides), `validator`, `standalone`. Rows this host
-cannot run are `declared_gaps` in the corpus and copied into every receipt.
+`lanes/host.py` is the host-compatibility row, separate from screenshot parity.
+It registers six lanes (`host-load`, `host-editor`, `host-audio`,
+`host-coexist`, `host-validator`, `host-standalone`) and their seeded controls
+with the core hook. Each side's implementation runs `lanes/host_runner.py`,
+which drives that side's host probe (Pulp's `pulp-host-lane-probe`), its
+validators and its standalone apps over built CLAP, VST3 and AU v2 bundles
+(AU is registered in the probe process only; nothing is installed). Bundles are
+roots named as in the corpus, and each bundle's main executable is also a tool,
+so two sides that test the same plug-in bytes cannot claim parity.
+`host-load` refuses a bundle whose build record names another commit than the
+side's checkout HEAD, or a dirty tree. `host-coexist` refuses a plug-in that is
+bound to another plug-in's copy of a shared runtime with different bytes (the
+`host-coexist-runtime-version-skew` control seeds that). Rows this host cannot
+run are `declared_gaps` in the corpus; per-plug-in exceptions (an animated
+editor, a readiness-dependent first render) are `declared_exceptions`.
 
 ```sh
-cd <pulp checkout>        # implementation paths are relative to it
-python3 <vellum>/tools/parity/host_lane.py calibrate \
+cd <pulp checkout>        # implementation tool paths are relative to it
+python3 <vellum>/tools/parity/parity_harness.py calibrate \
+  --lane-module <vellum>/tools/parity/lanes/host.py \
   --corpus <vellum>/tools/parity/corpus/pulp-host-calibration.json \
   --implementation <vellum>/tools/parity/implementations/pulp-host-in-tree.json \
-  --source-sha <pulp commit the bundles were built from> --out <dir>
-python3 <vellum>/tools/parity/test_host_lane.py   # fake probe; NOT CALIBRATED reachable
+  --source-root . --tool runner=<vellum>/tools/parity/lanes/host_runner.py \
+  --root checkout=. --root spectral-lab.clap=build/CLAP/SpectralLab.clap ... \
+  --root skew-runtime=<a libwgpu_native.dylib of a different build> --out <dir>
+python3 <vellum>/tools/parity/test_host_lane.py   # fake tools; NOT CALIBRATED reachable
 ```
-
-Receipts carry, per side, the tool hashes, every bundle's tree hash, its
-`pulp-build-info.json` source commit, dirty flag, build type and Skia pin, the
-GPU-runtime install names it links, and the host OS. A bundle built from a
-different commit than the identity claims, or from a dirty tree, is never
-accepting; `parity` mode refuses two sides that test the same bundle bytes.

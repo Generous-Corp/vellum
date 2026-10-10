@@ -1,28 +1,172 @@
 {
-  "schema": "vellum.parity.host-implementation.v1",
+  "schema": "vellum.parity.implementation.v1",
   "name": "pulp-in-tree-host",
   "repository": "Generous-Corp/pulp",
-  "build_mode": "pulp-in-tree-source (pulp build --examples, Release, Pulp's own Skia/Dawn provider)",
-  "description": "Plug-in bundles built in a Pulp source checkout and hosted by pulp-host-lane-probe. Paths are relative to the Pulp checkout root; run from there or override with --tool/--artifact.",
+  "source_sha": null,
+  "description": "Pulp plug-in bundles built in a Pulp source checkout (pulp build --examples, Release, Pulp's own Skia/Dawn provider), hosted by Pulp's pulp-host-lane-probe through tools/parity/lanes/host_runner.py. Roots: checkout = the Pulp checkout the bundles were built from; one root per bundle named as in the corpus; skew-runtime = a shared-runtime dylib of a different build (control only). Tools include each bundle's main executable so two sides testing the same plug-in bytes cannot claim parity.",
   "tools": {
+    "runner": "tools/parity/lanes/host_runner.py",
     "probe": "build/tools/editor-open/pulp-host-lane-probe",
-    "pluginval": "/Applications/pluginval.app/Contents/MacOS/pluginval"
+    "pluginval": "/Applications/pluginval.app/Contents/MacOS/pluginval",
+    "exe.spectral-lab.clap": "build/CLAP/SpectralLab.clap/Contents/MacOS/SpectralLab",
+    "exe.spectral-lab.vst3": "build/VST3/SpectralLab.vst3/Contents/MacOS/SpectralLab",
+    "exe.spectral-lab.component": "build/AU/SpectralLab.component/Contents/MacOS/SpectralLab",
+    "exe.super-convolver.clap": "build/CLAP/SuperConvolver.clap/Contents/MacOS/SuperConvolver",
+    "exe.super-convolver.vst3": "build/VST3/SuperConvolver.vst3/Contents/MacOS/SuperConvolver",
+    "exe.super-convolver.component": "build/AU/SuperConvolver.component/Contents/MacOS/SuperConvolver",
+    "exe.spectral-lab.app": "build/examples/spectral-lab/SpectralLab.app/Contents/MacOS/SpectralLab",
+    "exe.super-convolver.app": "build/examples/super-convolver/SuperConvolver.app/Contents/MacOS/SuperConvolver"
   },
-  "artifacts": {
-    "spectral-lab.clap": "build/CLAP/SpectralLab.clap",
-    "spectral-lab.vst3": "build/VST3/SpectralLab.vst3",
-    "spectral-lab.component": "build/AU/SpectralLab.component",
-    "super-convolver.clap": "build/CLAP/SuperConvolver.clap",
-    "super-convolver.vst3": "build/VST3/SuperConvolver.vst3",
-    "super-convolver.component": "build/AU/SuperConvolver.component",
-    "spectral-lab.app": "build/examples/spectral-lab/SpectralLab.app",
-    "super-convolver.app": "build/examples/super-convolver/SuperConvolver.app"
+  "probes": [
+    {
+      "name": "build",
+      "argv": [
+        "{tool:runner}",
+        "identity",
+        "build",
+        "{root:checkout}",
+        "{root:spectral-lab.clap}",
+        "{root:spectral-lab.vst3}",
+        "{root:spectral-lab.component}",
+        "{root:super-convolver.clap}",
+        "{root:super-convolver.vst3}",
+        "{root:super-convolver.component}",
+        "{root:spectral-lab.app}",
+        "{root:super-convolver.app}"
+      ]
+    },
+    {
+      "name": "provider",
+      "argv": [
+        "{tool:runner}",
+        "identity",
+        "provider",
+        "{root:spectral-lab.clap}",
+        "{root:spectral-lab.vst3}",
+        "{root:spectral-lab.component}",
+        "{root:super-convolver.clap}",
+        "{root:super-convolver.vst3}",
+        "{root:super-convolver.component}",
+        "{root:spectral-lab.app}",
+        "{root:super-convolver.app}"
+      ]
+    },
+    {
+      "name": "fonts",
+      "argv": [
+        "{tool:runner}",
+        "identity",
+        "fonts",
+        "{root:spectral-lab.clap}",
+        "{root:spectral-lab.vst3}",
+        "{root:spectral-lab.component}",
+        "{root:super-convolver.clap}",
+        "{root:super-convolver.vst3}",
+        "{root:super-convolver.component}",
+        "{root:spectral-lab.app}",
+        "{root:super-convolver.app}"
+      ]
+    }
+  ],
+  "source_kinds": {
+    "host-probe": [],
+    "host-pair": [],
+    "host-validator": [],
+    "host-standalone": []
   },
-  "probe_argv": ["{tool:probe}", "@plugins", "--out", "{out}", "--blocks", "94", "--block-size", "512",
-                 "--sample-rate", "48000", "--opens", "2", "--watch-ms", "1500", "--resize-by", "120x80"],
-  "validators": {
-    "pluginval": ["{tool:pluginval}", "--validate", "{artifact}", "--strictness-level", "5",
-                  "--timeout-ms", "60000", "--output-dir", "{out}"]
-  },
-  "validator_success": {"pluginval": "SUCCESS"}
+  "steps": [
+    {
+      "id": "observe",
+      "source_kinds": [
+        "host-probe",
+        "host-pair"
+      ],
+      "stderr_artifact": "probe.stderr",
+      "argv": [
+        "{tool:runner}",
+        "probe",
+        "--probe",
+        "{tool:probe}",
+        "--settings",
+        "{source}",
+        "--checkout",
+        "{root:checkout}",
+        "--out",
+        "together",
+        "@case_args:plugins",
+        "@case_args:animated",
+        "@case_args:fault"
+      ]
+    },
+    {
+      "id": "solo-0",
+      "source_kinds": [
+        "host-pair"
+      ],
+      "argv": [
+        "{tool:runner}",
+        "probe",
+        "--probe",
+        "{tool:probe}",
+        "--settings",
+        "{source}",
+        "--out",
+        "solo-0",
+        "@case_args:solo0"
+      ]
+    },
+    {
+      "id": "solo-1",
+      "source_kinds": [
+        "host-pair"
+      ],
+      "argv": [
+        "{tool:runner}",
+        "probe",
+        "--probe",
+        "{tool:probe}",
+        "--settings",
+        "{source}",
+        "--out",
+        "solo-1",
+        "@case_args:solo1"
+      ]
+    },
+    {
+      "id": "observe",
+      "source_kinds": [
+        "host-validator"
+      ],
+      "argv": [
+        "{tool:runner}",
+        "validator",
+        "--tool",
+        "{tool:pluginval}",
+        "@case_args:bundle",
+        "--out",
+        "validator.json",
+        "@case_args:fault",
+        "--",
+        "--validate",
+        "@@BUNDLE@@",
+        "--strictness-level",
+        "5",
+        "--timeout-ms",
+        "60000"
+      ]
+    },
+    {
+      "id": "observe",
+      "source_kinds": [
+        "host-standalone"
+      ],
+      "argv": [
+        "{tool:runner}",
+        "standalone",
+        "@case_args:app",
+        "--png",
+        "standalone.png"
+      ]
+    }
+  ]
 }
