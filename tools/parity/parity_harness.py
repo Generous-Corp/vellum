@@ -33,6 +33,7 @@ import copy
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import platform
 import re
@@ -460,6 +461,9 @@ def run_side(case: dict[str, Any], impl: dict[str, Any], tools: dict[str, Path],
                 argv += [expand(a, values) for a in kind_args]
             elif arg == "@interactions":
                 argv += encode_interactions(impl.get("interaction_encoding", ""), plan)
+            elif arg.startswith("@case_args:"):
+                # Per-case argument lists a lane declares (seeded faults, schedules).
+                argv += [expand(str(a), values) for a in case.get("args", {}).get(arg.split(":", 1)[1], [])]
             else:
                 argv.append(expand(arg, values))
         record: dict[str, Any] = {"id": step["id"], "argv": argv}
@@ -468,12 +472,19 @@ def run_side(case: dict[str, Any], impl: dict[str, Any], tools: dict[str, Path],
             # tool that cannot run here would. It must never read as a pass.
             argv = [sys.executable, "-c", f"import sys; sys.exit({SKIP_EXIT})"]
             record["planted_skip"] = True
+        env = None
+        if step.get("env"):
+            env = dict(os.environ, **{k: expand(str(v), values) for k, v in step["env"].items()})
+            record["env"] = {k: env[k] for k in step["env"]}
         started = time.monotonic()
         try:
             result = subprocess.run(argv, cwd=out, capture_output=True, text=True, encoding="utf-8",
-                                    errors="replace", timeout=timeout)
+                                    errors="replace", timeout=timeout, env=env)
             record["exit"] = result.returncode
             record["stderr_tail"] = result.stderr[-2000:]
+            if step.get("stderr_artifact"):
+                # Full stderr kept as an observation (e.g. a loader census).
+                (out / step["stderr_artifact"]).write_text(result.stderr, encoding="utf-8")
         except (OSError, subprocess.TimeoutExpired) as error:
             record["exit"] = None
             record["error"] = str(error)

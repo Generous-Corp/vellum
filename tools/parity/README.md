@@ -100,7 +100,10 @@ harness fingerprint, including any `--lane-module`, match this run.
 
 A lane lives in its own module, `tools/parity/lanes/<name>.py`. The module calls
 `register_lane(name, artifacts, comparator)` and `register_controls(...)`, and
-is loaded with `--lane-module` on both `calibrate` and `run`. Every new lane
+is loaded with `--lane-module` on both `calibrate` and `run`. Implementation
+steps can also set `env` (values expanded like argv), keep the full stderr as
+an observation with `stderr_artifact`, and take per-case argument lists with
+`@case_args:NAME` (from the case's `args`). Every new lane
 ships with at least one control that must make it fail.
 
 The receipt (`<dir>/receipt.json`) records the corpus hash, both identities

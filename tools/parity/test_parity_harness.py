@@ -431,6 +431,24 @@ class LaneRegistrationTests(unittest.TestCase):
             ph.register_controls(artifact={"raster-one-pixel": {"lane": "raster"}})
 
 
+class StepFeatureTests(unittest.TestCase):
+    def test_env_stderr_artifact_and_case_args(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "src").mkdir()
+            (root / "src/source.json").write_text("{}")
+            script = "import os,sys; sys.stderr.write(os.environ['PARITY_PROBE'] + ':' + ','.join(sys.argv[1:]))"
+            impl = {"name": "f", "repository": "r", "source_kinds": {"k": []},
+                    "steps": [{"id": "observe", "argv": [sys.executable, "-c", script, "@case_args:faults"],
+                               "env": {"PARITY_PROBE": "w{width}"}, "stderr_artifact": "probe.txt"}]}
+            case = {"case_id": "c", "source": "source.json", "source_kind": "k", "width": 7, "height": 3,
+                    "lanes": [], "args": {"faults": ["--lose-device", "{width}"]}}
+            run = ph.run_side(case, impl, {}, root / "src", root / "out")
+            self.assertEqual(run["steps"][0]["status"], "ok")
+            self.assertEqual((root / "out/probe.txt").read_text(), "w7:--lose-device,7")
+            self.assertEqual(run["steps"][0]["env"], {"PARITY_PROBE": "w7"})
+
+
 class ComparatorTests(unittest.TestCase):
     def test_geometry_requires_the_layout_schema_on_both_sides(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
