@@ -1,0 +1,351 @@
+{
+  "schema": "vellum.parity.implementation.v1",
+  "name": "pulp-browser-native",
+  "repository": "Generous-Corp/pulp",
+  "source_sha": null,
+  "description": "Pulp's registered pulp-import-design and pulp-design-ir-observe for the oracle, reimport and rejection lanes. html-browser evaluates the source in the pinned Chromium and lowers every painted node natively (--native-panel-lowering), so the render is drawn from nodes, not from the browser capture; html-browser-faithful is Pulp's default browser import, which paints the capture itself, and exists only for the oracle lane's conflation control. The oracle steps run Chromium directly (--headless --screenshot): no Pulp or Vellum code is between the browser and oracle.png, so a capture defect in an importer cannot also be the reference. The same source is imported again unchanged (second/) and after the corpus's revision edit (revision/); each import's capture provenance (capture.json) names the exact source bytes and browser it came from. Rejection kinds wrap the import and observe commands in the harness's outcome_recorder, which maps Pulp's messages to the corpus's neutral diagnostic codes.",
+  "tools": {
+    "importer": "build/tools/import-design/pulp-import-design",
+    "observer": "build/tools/import-design/pulp-design-ir-observe",
+    "browser": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "recorder": "tools/parity/lanes/outcome_recorder.py"
+  },
+  "source_kinds": {
+    "html-browser": [
+      "--from",
+      "html",
+      "--native-panel-lowering",
+      "--browser",
+      "{tool:browser}"
+    ],
+    "html-browser-faithful": [
+      "--from",
+      "html",
+      "--browser",
+      "{tool:browser}"
+    ],
+    "figma-plugin-outcome": [],
+    "design-ir-outcome": [],
+    "html-browser-outcome": []
+  },
+  "probes": [
+    {
+      "name": "build",
+      "argv": [
+        "/bin/sh",
+        "-c",
+        "grep -E '^(CMAKE_BUILD_TYPE|CMAKE_CXX_COMPILER|CMAKE_OSX_ARCHITECTURES|PULP_ENABLE_GPU|PULP_HAS_SKIA)[:=]' '{root:build}/CMakeCache.txt' && \"$(grep -E '^CMAKE_CXX_COMPILER:' '{root:build}/CMakeCache.txt' | cut -d= -f2)\" --version | head -1"
+      ]
+    },
+    {
+      "name": "provider",
+      "argv": [
+        "/bin/sh",
+        "-c",
+        "grep -E '^PULP_SKIA_ICUDTL_FILE' '{root:build}/CMakeCache.txt'; grep -m2 -E 'Release|Commit' '{root:checkout}/external/skia-build/VERSION.md'; echo 'renderer: pulp::view::render_to_file ScreenshotBackend::skia (CPU raster)'; otool -L '{tool:observer}' | tail -n +2 | sed 's/ (.*//'"
+      ]
+    },
+    {
+      "name": "fonts",
+      "argv": [
+        "/bin/sh",
+        "-c",
+        "cd '{root:checkout}/external/fonts' && shasum -a 256 *.ttf"
+      ]
+    },
+    {
+      "name": "browser",
+      "argv": [
+        "{tool:browser}",
+        "--version"
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "id": "import",
+      "source_kinds": [
+        "html-browser",
+        "html-browser-faithful"
+      ],
+      "argv": [
+        "{tool:importer}",
+        "@source_kind_args",
+        "--file",
+        "{source}",
+        "--emit",
+        "ir-json",
+        "--mode",
+        "baked",
+        "--output",
+        "design.ir.json",
+        "--no-tokens"
+      ]
+    },
+    {
+      "id": "bind",
+      "source_kinds": [
+        "html-browser",
+        "html-browser-faithful"
+      ],
+      "argv": [
+        "/bin/cp",
+        "design.ir-browser-capture/capture.json",
+        "capture.json"
+      ]
+    },
+    {
+      "id": "observe",
+      "source_kinds": [
+        "html-browser",
+        "html-browser-faithful"
+      ],
+      "argv": [
+        "{tool:observer}",
+        "--input",
+        "design.ir.json",
+        "--render",
+        "render.png",
+        "--layout",
+        "layout.json",
+        "--width",
+        "{width}",
+        "--height",
+        "{height}",
+        "--scale",
+        "{scale}",
+        "--text-diagnostics",
+        "text.json"
+      ]
+    },
+    {
+      "id": "oracle-version",
+      "source_kinds": [
+        "html-browser",
+        "html-browser-faithful"
+      ],
+      "argv": [
+        "/bin/sh",
+        "-c",
+        "\"$0\" --version > oracle-version.txt",
+        "{tool:browser}"
+      ]
+    },
+    {
+      "id": "oracle",
+      "source_kinds": [
+        "html-browser",
+        "html-browser-faithful"
+      ],
+      "argv": [
+        "/bin/sh",
+        "-c",
+        "rm -rf oracle-profile; \"$0\" --headless=new --disable-gpu --disable-gpu-compositing --force-color-profile=srgb --lang=en-US --hide-scrollbars --no-first-run --no-default-browser-check --disable-extensions --disable-background-networking --disable-component-update --disable-sync --mute-audio --disable-features=MacAppCodeSignClone,Translate,MediaRouter,OptimizationHints --user-data-dir=\"$PWD/oracle-profile\" --force-device-scale-factor=\"$1\" --window-size=\"$2\" --virtual-time-budget=3000 --screenshot=\"$PWD/oracle.png\" \"file://$PWD/$3\" >/dev/null 2>oracle-stderr.txt; rc=$?; rm -rf oracle-profile; printf '{\"window\": \"%s\", \"scale\": \"%s\", \"clip\": [%s, %s]}\\n' \"$2\" \"$1\" \"$4\" \"$5\" > oracle-request.json; exit $rc",
+        "{tool:browser}",
+        "{scale}",
+        "{param:oracle_window}",
+        "{source}",
+        "{param:oracle_clip_x}",
+        "{param:oracle_clip_y}"
+      ]
+    },
+    {
+      "id": "revise",
+      "source_kinds": [
+        "html-browser",
+        "html-browser-faithful"
+      ],
+      "argv": [
+        "/bin/sh",
+        "-c",
+        "mkdir -p second revision && sed -e \"$1\" \"$0\" > \"revision/$0\"",
+        "{source}",
+        "@case_args:revision"
+      ]
+    },
+    {
+      "id": "reimport",
+      "source_kinds": [
+        "html-browser",
+        "html-browser-faithful"
+      ],
+      "argv": [
+        "{tool:importer}",
+        "@source_kind_args",
+        "--file",
+        "{source}",
+        "--emit",
+        "ir-json",
+        "--mode",
+        "baked",
+        "--output",
+        "second/design.ir.json",
+        "--no-tokens"
+      ]
+    },
+    {
+      "id": "rebind",
+      "source_kinds": [
+        "html-browser",
+        "html-browser-faithful"
+      ],
+      "argv": [
+        "/bin/cp",
+        "second/design.ir-browser-capture/capture.json",
+        "second/capture.json"
+      ]
+    },
+    {
+      "id": "import-revision",
+      "source_kinds": [
+        "html-browser",
+        "html-browser-faithful"
+      ],
+      "argv": [
+        "{tool:importer}",
+        "@source_kind_args",
+        "--file",
+        "revision/{source}",
+        "--emit",
+        "ir-json",
+        "--mode",
+        "baked",
+        "--output",
+        "revision/design.ir.json",
+        "--no-tokens"
+      ]
+    },
+    {
+      "id": "bind-revision",
+      "source_kinds": [
+        "html-browser",
+        "html-browser-faithful"
+      ],
+      "argv": [
+        "/bin/cp",
+        "revision/design.ir-browser-capture/capture.json",
+        "revision/capture.json"
+      ]
+    },
+    {
+      "id": "observe",
+      "source_kinds": [
+        "figma-plugin-outcome"
+      ],
+      "argv": [
+        "/usr/bin/env",
+        "python3",
+        "{tool:recorder}",
+        "--out",
+        "outcome.json",
+        "--diagnostics",
+        "[{\"code\":\"archive-unsafe-entry\",\"pattern\":\"refusing unsafe zip entry\"},{\"code\":\"archive-invalid\",\"pattern\":\"not a valid ZIP archive\"},{\"code\":\"archive-no-document\",\"pattern\":\"contains no scene\\\\.pulp\\\\.json\"},{\"code\":\"archive-duplicate-member\",\"pattern\":\"duplicate (zip )?(entry|member)\"},{\"code\":\"asset-unresolvable\",\"pattern\":\"asset '[^']*' is unresolvable\"},{\"code\":\"asset-undecodable\",\"pattern\":\"(could not decode|undecodable|corrupt) (image|asset)\"},{\"code\":\"asset-path-unsafe\",\"pattern\":\"(unsafe asset path|outside the document)\"},{\"code\":\"node-type-unknown\",\"pattern\":\"unknown (node )?type\"},{\"code\":\"identity-duplicate\",\"pattern\":\"duplicate (stable )?(anchor|identit)\"},{\"code\":\"document-unreadable\",\"pattern\":\"(could not (read|parse) DesignIR|invalid DesignIR|JSON parse error)\"},{\"code\":\"document-version-unsupported\",\"pattern\":\"unsupported DesignIR version\"},{\"code\":\"source-unresolved\",\"pattern\":\"\\\\[capture-source-unresolved\\\\]\"},{\"code\":\"native-paint-unsupported\",\"pattern\":\"native panel validation refused\"},{\"code\":\"font-undecodable\",\"pattern\":\"font.*(decod|pars|reject|invalid)\"}]",
+        "--",
+        "{tool:importer}",
+        "--from",
+        "figma-plugin",
+        "--file",
+        "{source}",
+        "--emit",
+        "ir-json",
+        "--mode",
+        "baked",
+        "--output",
+        "design.ir.json",
+        "--no-tokens",
+        "--then",
+        "{tool:observer}",
+        "--input",
+        "design.ir.json",
+        "--render",
+        "render.png",
+        "--layout",
+        "layout.json",
+        "--width",
+        "{width}",
+        "--height",
+        "{height}",
+        "--scale",
+        "{scale}"
+      ]
+    },
+    {
+      "id": "observe",
+      "source_kinds": [
+        "design-ir-outcome"
+      ],
+      "argv": [
+        "/usr/bin/env",
+        "python3",
+        "{tool:recorder}",
+        "--out",
+        "outcome.json",
+        "--diagnostics",
+        "[{\"code\":\"archive-unsafe-entry\",\"pattern\":\"refusing unsafe zip entry\"},{\"code\":\"archive-invalid\",\"pattern\":\"not a valid ZIP archive\"},{\"code\":\"archive-no-document\",\"pattern\":\"contains no scene\\\\.pulp\\\\.json\"},{\"code\":\"archive-duplicate-member\",\"pattern\":\"duplicate (zip )?(entry|member)\"},{\"code\":\"asset-unresolvable\",\"pattern\":\"asset '[^']*' is unresolvable\"},{\"code\":\"asset-undecodable\",\"pattern\":\"(could not decode|undecodable|corrupt) (image|asset)\"},{\"code\":\"asset-path-unsafe\",\"pattern\":\"(unsafe asset path|outside the document)\"},{\"code\":\"node-type-unknown\",\"pattern\":\"unknown (node )?type\"},{\"code\":\"identity-duplicate\",\"pattern\":\"duplicate (stable )?(anchor|identit)\"},{\"code\":\"document-unreadable\",\"pattern\":\"(could not (read|parse) DesignIR|invalid DesignIR|JSON parse error)\"},{\"code\":\"document-version-unsupported\",\"pattern\":\"unsupported DesignIR version\"},{\"code\":\"source-unresolved\",\"pattern\":\"\\\\[capture-source-unresolved\\\\]\"},{\"code\":\"native-paint-unsupported\",\"pattern\":\"native panel validation refused\"},{\"code\":\"font-undecodable\",\"pattern\":\"font.*(decod|pars|reject|invalid)\"}]",
+        "--",
+        "/bin/cp",
+        "{source}",
+        "design.ir.json",
+        "--then",
+        "{tool:observer}",
+        "--input",
+        "design.ir.json",
+        "--render",
+        "render.png",
+        "--layout",
+        "layout.json",
+        "--width",
+        "{width}",
+        "--height",
+        "{height}",
+        "--scale",
+        "{scale}"
+      ]
+    },
+    {
+      "id": "observe",
+      "source_kinds": [
+        "html-browser-outcome"
+      ],
+      "argv": [
+        "/usr/bin/env",
+        "python3",
+        "{tool:recorder}",
+        "--out",
+        "outcome.json",
+        "--diagnostics",
+        "[{\"code\":\"archive-unsafe-entry\",\"pattern\":\"refusing unsafe zip entry\"},{\"code\":\"archive-invalid\",\"pattern\":\"not a valid ZIP archive\"},{\"code\":\"archive-no-document\",\"pattern\":\"contains no scene\\\\.pulp\\\\.json\"},{\"code\":\"archive-duplicate-member\",\"pattern\":\"duplicate (zip )?(entry|member)\"},{\"code\":\"asset-unresolvable\",\"pattern\":\"asset '[^']*' is unresolvable\"},{\"code\":\"asset-undecodable\",\"pattern\":\"(could not decode|undecodable|corrupt) (image|asset)\"},{\"code\":\"asset-path-unsafe\",\"pattern\":\"(unsafe asset path|outside the document)\"},{\"code\":\"node-type-unknown\",\"pattern\":\"unknown (node )?type\"},{\"code\":\"identity-duplicate\",\"pattern\":\"duplicate (stable )?(anchor|identit)\"},{\"code\":\"document-unreadable\",\"pattern\":\"(could not (read|parse) DesignIR|invalid DesignIR|JSON parse error)\"},{\"code\":\"document-version-unsupported\",\"pattern\":\"unsupported DesignIR version\"},{\"code\":\"source-unresolved\",\"pattern\":\"\\\\[capture-source-unresolved\\\\]\"},{\"code\":\"native-paint-unsupported\",\"pattern\":\"native panel validation refused\"},{\"code\":\"font-undecodable\",\"pattern\":\"font.*(decod|pars|reject|invalid)\"}]",
+        "--",
+        "{tool:importer}",
+        "--from",
+        "html",
+        "--native-panel-lowering",
+        "--browser",
+        "{tool:browser}",
+        "--file",
+        "{source}",
+        "--emit",
+        "ir-json",
+        "--mode",
+        "baked",
+        "--output",
+        "design.ir.json",
+        "--no-tokens",
+        "--then",
+        "{tool:observer}",
+        "--input",
+        "design.ir.json",
+        "--render",
+        "render.png",
+        "--layout",
+        "layout.json",
+        "--width",
+        "{width}",
+        "--height",
+        "{height}",
+        "--scale",
+        "{scale}"
+      ]
+    }
+  ]
+}
