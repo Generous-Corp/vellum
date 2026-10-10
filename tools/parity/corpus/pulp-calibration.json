@@ -1,0 +1,133 @@
+{
+  "schema": "vellum.parity.corpus.v1",
+  "description": "Calibration seed corpus. Sources are paths inside a Pulp checkout at the calibrated commit (--source-root), except source_base=corpus cases, which resolve beside this file. The bottom-right 2px corner of every case is bare root background; the pointer-moved control relies on it.",
+  "cases": [
+    {
+      "case_id": "controls-design-ir",
+      "source": "test/fixtures/design-ir-observe/controls.ir.json",
+      "source_kind": "design-ir",
+      "width": 240,
+      "height": 160,
+      "lanes": [
+        "structure",
+        "raster",
+        "geometry",
+        "interaction"
+      ],
+      "interactions": [
+        {
+          "key": "tab"
+        },
+        {
+          "drag": [
+            [
+              40,
+              60
+            ],
+            [
+              40,
+              10
+            ]
+          ]
+        },
+        {
+          "key": "tab"
+        },
+        {
+          "click": [
+            100,
+            60
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "figma-plugin-scene",
+      "source": "test/fixtures/import-fidelity/scene.pulp.json",
+      "source_kind": "figma-plugin",
+      "width": 300,
+      "height": 260,
+      "lanes": [
+        "structure",
+        "raster",
+        "geometry",
+        "interaction"
+      ],
+      "volatile": {
+        "structure": [
+          "/imported_at"
+        ]
+      },
+      "interactions": [
+        {
+          "drag": [
+            [
+              40,
+              60
+            ],
+            [
+              40,
+              10
+            ]
+          ]
+        },
+        {
+          "key": "tab"
+        }
+      ],
+      "note": "The scene's asset_ref images are reference art for audio widgets, not paint inputs: calibration showed a byte-identical render with and without them, so they are not staged. image-asset-design-ir is the case that consumes an asset."
+    },
+    {
+      "case_id": "image-asset-design-ir",
+      "source_base": "corpus",
+      "source": "fixtures/image-asset.ir.json",
+      "stage": [
+        "fixtures/assets"
+      ],
+      "source_kind": "design-ir",
+      "width": 160,
+      "height": 120,
+      "lanes": [
+        "structure",
+        "raster",
+        "geometry"
+      ]
+    },
+    {
+      "case_id": "html-basic-card",
+      "source": "test/fixtures/import-differential/01-basic-card.html",
+      "source_kind": "html-offline",
+      "width": 480,
+      "height": 320,
+      "lanes": [
+        "structure",
+        "raster",
+        "geometry",
+        "semantic"
+      ],
+      "volatile": {
+        "structure": [
+          "/imported_at"
+        ]
+      }
+    },
+    {
+      "case_id": "html-typography",
+      "source": "test/fixtures/import-differential/11-typography.html",
+      "source_kind": "html-offline",
+      "width": 480,
+      "height": 320,
+      "lanes": [
+        "structure",
+        "raster",
+        "geometry",
+        "semantic"
+      ],
+      "volatile": {
+        "structure": [
+          "/imported_at"
+        ]
+      }
+    }
+  ]
+}

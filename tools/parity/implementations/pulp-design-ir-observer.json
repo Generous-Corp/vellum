@@ -1,0 +1,43 @@
+{
+  "schema": "vellum.parity.implementation.v1",
+  "name": "pulp-design-ir-observer",
+  "repository": "Generous-Corp/pulp",
+  "source_sha": null,
+  "description": "Pulp's registered pulp-import-design (baked ir-json emit) and pulp-design-ir-observe (Skia render, laid-out tree, text diagnostics, pointer/keyboard replay). source_sha and both tool paths are supplied per run; the receipt records the content hash of each binary.",
+  "tools": {
+    "importer": "build/tools/import-design/pulp-import-design",
+    "observer": "build/tools/import-design/pulp-design-ir-observe"
+  },
+  "source_kinds": {
+    "figma-plugin": ["--from", "figma-plugin"],
+    "html-offline": ["--offline"],
+    "design-ir": []
+  },
+  "interaction_encoding": "argv-click-drag-key",
+  "steps": [
+    {
+      "id": "import",
+      "source_kinds": ["figma-plugin", "html-offline"],
+      "argv": ["{tool:importer}", "@source_kind_args", "--file", "{source}", "--emit", "ir-json",
+               "--mode", "baked", "--output", "design.ir.json", "--no-tokens"]
+    },
+    {
+      "id": "import",
+      "source_kinds": ["design-ir"],
+      "argv": ["/bin/cp", "{source}", "design.ir.json"]
+    },
+    {
+      "id": "observe",
+      "argv": ["{tool:observer}", "--input", "design.ir.json", "--render", "render.png",
+               "--layout", "layout.json", "--text-diagnostics", "text.json",
+               "--width", "{width}", "--height", "{height}"]
+    },
+    {
+      "id": "interact",
+      "when": "interactions",
+      "argv": ["{tool:observer}", "--input", "design.ir.json", "--render", "interaction.png",
+               "--layout", "interaction-layout.json", "--width", "{width}", "--height", "{height}",
+               "--interaction-log", "interaction.json", "@interactions"]
+    }
+  ]
+}

@@ -1,0 +1,323 @@
+#!/usr/bin/env python3
+"""Unit tests for the paired parity harness.
+
+The harness is exercised end to end against a small fake implementation, so the
+tests need no external toolchain. The fake is deliberately honest: every
+observation is a function of its input, so the seeded negative controls must
+fail against it. A second fake ignores its input; calibration must notice that
+the controls no longer bite and refuse to report the harness as calibrated.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import textwrap
+import unittest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import parity_harness as ph  # noqa: E402
+
+CLI_DIR = Path(__file__).resolve().parents[2] / "cli"
+
+FAKE_TOOL = textwrap.dedent(
+    """
+    import json, sys, zlib
+    sys.path.insert(0, {cli_dir!r})
+    from vellum_png import RgbaImage, encode_png
+
+    IGNORE_INPUT = {ignore_input!r}
+    args = sys.argv[1:]
+    mode = args.pop(0)
+
+    def opt(name, default=None):
+        return args[args.index(name) + 1] if name in args else default
+
+    if mode == "import":
+        source = json.load(open(opt("--file")))
+        if IGNORE_INPUT:
+            source = {{"nodes": [{{"name": "fixed", "x": 4, "y": 4, "w": 10, "h": 10}}]}}
+        children = [dict(type="frame", name=n["name"], x=n["x"], y=n["y"], w=n["w"], h=n["h"])
+                    for n in source["nodes"]]
+        json.dump({{"version": 1, "imported_at": "volatile-" + str(id(children)),
+                   "root": {{"type": "frame", "name": "root", "children": children}}}},
+                  open(opt("--output"), "w"))
+        sys.exit(0)
+
+    ir = json.load(open(opt("--input")))
+    width, height = int(opt("--width")), int(opt("--height"))
+    nodes = ir["root"]["children"]
+    values = {{n["name"]: 0.5 for n in nodes}}
+    focus = None
+    steps = []
+    plan = []
+    i = 0
+    while i < len(args):
+        if args[i] in ("--click", "--drag", "--key"):
+            plan.append((args[i], args[i + 1]))
+            i += 2
+        else:
+            i += 1
+
+    def hit(x, y):
+        for n in nodes:
+            if n["x"] <= x < n["x"] + n["w"] and n["y"] <= y < n["y"] + n["h"]:
+                return n["name"]
+        return ""
+
+    for kind, value in plan:
+        record = {{"kind": kind[2:]}}
+        if kind == "--key":
+            if value == "tab" and nodes:
+                names = [n["name"] for n in nodes]
+                focus = names[(names.index(focus) + 1) % len(names)] if focus in names else names[0]
+                target = focus
+            else:
+                target = ""
+            record.update(key=value, target=target, handled=bool(target))
+        else:
+            first = value.split(":")[0]
+            x, y = (float(v) for v in first.split(","))
+            target = hit(x, y)
+            if kind == "--drag" and target:
+                values[target] = min(1.0, values[target] + 0.25)
+            record.update(target=target, handled=bool(target))
+        record["focused"] = focus or ""
+        record["state"] = [{{"anchor": k, "value": v}} for k, v in sorted(values.items())]
+        steps.append(record)
+
+    import os
+    tint = open("assets/tint.txt").read() if os.path.exists("assets/tint.txt") else ""
+    pixels = bytearray(b"\\x10\\x10\\x10\\xff" * (width * height))
+    for n in nodes:
+        shade = 64 + int(values[n["name"]] * 128)
+        colour = bytes((zlib.crc32((n["name"] + tint).encode()) & 0xFF, shade, 200, 255))
+        for y in range(n["y"], min(height, n["y"] + n["h"])):
+            for x in range(n["x"], min(width, n["x"] + n["w"])):
+                o = (y * width + x) * 4
+                pixels[o:o + 4] = colour
+    open(opt("--render"), "wb").write(encode_png(RgbaImage(width, height, bytes(pixels))))
+    layout = [{{"id": "root", "kind": "View", "rect": {{"x": 0, "y": 0, "w": width, "h": height}}}}]
+    layout += [{{"id": n["name"], "kind": "View",
+                "rect": {{"x": n["x"], "y": n["y"], "w": n["w"], "h": n["h"]}}}} for n in nodes]
+    json.dump({{"nodes": layout}}, open(opt("--layout"), "w"))
+    if opt("--text-diagnostics"):
+        json.dump({{"runs": [{{"text": n["name"]}} for n in nodes]}}, open(opt("--text-diagnostics"), "w"))
+    if opt("--interaction-log"):
+        json.dump({{"steps": steps}}, open(opt("--interaction-log"), "w"))
+    """
+)
+
+
+def implementation(tool: Path) -> dict:
+    return {
+        "schema": ph.IMPLEMENTATION_SCHEMA,
+        "name": "fake",
+        "repository": "example/fake",
+        "source_sha": "a" * 40,
+        "tools": {"fake": str(tool)},
+        "source_kinds": {"fake-json": []},
+        "interaction_encoding": "argv-click-drag-key",
+        "steps": [
+            {"id": "import", "argv": [sys.executable, "{tool:fake}", "import", "--file", "{source}",
+                                      "--output", "design.ir.json"]},
+            {"id": "observe", "argv": [sys.executable, "{tool:fake}", "observe", "--input", "design.ir.json",
+                                       "--render", "render.png", "--layout", "layout.json",
+                                       "--text-diagnostics", "text.json",
+                                       "--width", "{width}", "--height", "{height}"]},
+            {"id": "interact", "when": "interactions",
+             "argv": [sys.executable, "{tool:fake}", "observe", "--input", "design.ir.json",
+                      "--render", "interaction.png", "--layout", "interaction-layout.json",
+                      "--width", "{width}", "--height", "{height}",
+                      "--interaction-log", "interaction.json", "@interactions"]},
+        ],
+    }
+
+
+SOURCE = {"nodes": [{"name": "knob", "x": 4, "y": 4, "w": 12, "h": 12},
+                    {"name": "fader", "x": 20, "y": 4, "w": 6, "h": 20}]}
+
+
+def corpus(cases: list[dict] | None = None) -> dict:
+    return {
+        "schema": ph.CORPUS_SCHEMA,
+        "cases": cases if cases is not None else [{
+            "case_id": "fake-controls",
+            "source": "source.json",
+            "source_kind": "fake-json",
+            "stage": ["assets"],
+            "width": 40,
+            "height": 32,
+            "lanes": ["structure", "raster", "geometry", "semantic", "interaction"],
+            "volatile": {"structure": ["/imported_at"]},
+            "interactions": [{"key": "tab"}, {"drag": [[8, 8], [8, 2]]}, {"click": [22, 10]}],
+        }],
+    }
+
+
+class HarnessFixture(unittest.TestCase):
+    ignore_input = False
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.tool = self.root / "fake_tool.py"
+        self.tool.write_text(FAKE_TOOL.format(cli_dir=str(CLI_DIR), ignore_input=self.ignore_input))
+        (self.root / "src").mkdir()
+        (self.root / "src/source.json").write_text(json.dumps(SOURCE))
+        (self.root / "src/assets").mkdir()
+        (self.root / "src/assets/tint.txt").write_text("warm")
+        self.impl_path = self.root / "impl.json"
+        ph.write_json(self.impl_path, implementation(self.tool))
+        self.corpus_path = self.root / "corpus.json"
+        ph.write_json(self.corpus_path, corpus())
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+
+class CalibrationTests(HarnessFixture):
+    def test_honest_implementation_calibrates_and_every_control_bites(self) -> None:
+        report = ph.calibrate(self.corpus_path, self.root / "src", self.impl_path, self.root / "out")
+        self.assertTrue(report["positive"]["verdict"]["accepting"], report["positive"]["verdict"])
+        failed = {c["control"]: c for c in report["controls"] if c["outcome"] != "REJECTED as required"}
+        self.assertEqual(failed, {})
+        self.assertTrue(report["calibrated"])
+        names = {c["control"] for c in report["controls"]}
+        for required in ("raster-blank-both", "geometry-zero-nodes-both", "planted-skip",
+                         "identity-same-in-parity-mode", "empty-corpus", "input-one-byte",
+                         "interaction-pointer-moved", "interaction-key-changed"):
+            self.assertIn(required, names)
+
+    def test_positive_receipt_is_scoped_as_calibration_not_parity(self) -> None:
+        report = ph.calibrate(self.corpus_path, self.root / "src", self.impl_path, self.root / "out")
+        self.assertEqual(report["positive"]["verdict"]["scope"], "harness-calibration")
+        self.assertEqual(report["positive"]["mode"], "calibration")
+
+    def test_volatile_field_must_be_declared(self) -> None:
+        undeclared = corpus()
+        undeclared["cases"][0].pop("volatile")
+        ph.write_json(self.corpus_path, undeclared)
+        receipt = ph.run_corpus(self.corpus_path, self.root / "src", self.impl_path, self.impl_path,
+                                self.root / "out", mode="calibration")
+        lane = receipt["cases"][0]["lanes"]["structure"]
+        self.assertEqual(lane["status"], "fail")
+        self.assertTrue(any("/imported_at" in r for r in lane["reasons"]))
+
+
+class InsensitiveImplementationTests(HarnessFixture):
+    ignore_input = True
+
+    def test_calibration_refuses_when_a_control_cannot_bite(self) -> None:
+        report = ph.calibrate(self.corpus_path, self.root / "src", self.impl_path, self.root / "out")
+        self.assertTrue(report["positive"]["verdict"]["accepting"])
+        self.assertIn("input-one-byte", report["control_failures"])
+        self.assertFalse(report["calibrated"])
+
+
+class AcceptanceTests(unittest.TestCase):
+    def identity(self, sha: str = "b" * 40, tool_hash: str = "c" * 64) -> dict:
+        return {"name": "x", "repository": "example/x", "source_sha": sha,
+                "tools": {"t": {"path": "/t", "sha256": tool_hash}}}
+
+    def passing_case(self) -> dict:
+        lanes = {lane: {"status": "not_selected"} for lane in ph.LANES}
+        lanes["raster"] = {"status": "pass"}
+        return {"case_id": "c", "inputs_identical": True, "lanes": lanes}
+
+    def test_parity_mode_refuses_self_comparison(self) -> None:
+        verdict = ph.acceptance("parity", [self.passing_case()], self.identity(), self.identity())
+        self.assertFalse(verdict["accepting"])
+
+    def test_parity_mode_accepts_distinct_identities(self) -> None:
+        verdict = ph.acceptance("parity", [self.passing_case()], self.identity(),
+                                self.identity(sha="d" * 40))
+        self.assertTrue(verdict["accepting"], verdict["reasons"])
+
+    def test_calibration_mode_refuses_distinct_identities(self) -> None:
+        verdict = ph.acceptance("calibration", [self.passing_case()], self.identity(),
+                                self.identity(tool_hash="e" * 64))
+        self.assertFalse(verdict["accepting"])
+
+    def test_missing_tool_hash_is_not_an_identity(self) -> None:
+        verdict = ph.acceptance("parity", [self.passing_case()], self.identity(),
+                                self.identity(sha="d" * 40, tool_hash=None))
+        self.assertFalse(verdict["accepting"])
+
+    def test_blocked_and_unselected_are_never_accepting(self) -> None:
+        blocked = self.passing_case()
+        blocked["lanes"]["raster"] = {"status": "blocked"}
+        unselected = self.passing_case()
+        unselected["lanes"]["raster"] = {"status": "not_selected"}
+        for case in (blocked, unselected):
+            verdict = ph.acceptance("parity", [case], self.identity(), self.identity(sha="d" * 40))
+            self.assertFalse(verdict["accepting"])
+
+    def test_empty_corpus_is_not_accepting(self) -> None:
+        self.assertFalse(ph.acceptance("parity", [], self.identity(), self.identity(sha="d" * 40))["accepting"])
+
+
+class IdentityTests(unittest.TestCase):
+    def test_identity_comparator(self) -> None:
+        origin = {"a/x.cpp": "1" * 40, "a/y.hpp": "2" * 40}
+        manifest = {"unit": "u", "roots": ["a"]}
+        self.assertEqual(ph.compare_identity(manifest, origin, dict(origin))["status"], "pass")
+        for exported in ({"a/x.cpp": "1" * 40},
+                         dict(origin, **{"a/z.cpp": "3" * 40}),
+                         dict(origin, **{"a/y.hpp": "4" * 40})):
+            self.assertEqual(ph.compare_identity(manifest, origin, exported)["status"], "fail")
+        self.assertEqual(ph.compare_identity({"roots": []}, {}, {})["status"], "fail")
+
+    def test_identity_calibration_against_a_real_git_repository(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            (repo / "unit/src").mkdir(parents=True)
+            (repo / "unit/src/a.cpp").write_text("int a() { return 1; }\n")
+            (repo / "unit/b.hpp").write_text("#pragma once\n")
+            (repo / "other.txt").write_text("outside the closure\n")
+            git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.invalid"]
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            subprocess.run(git + ["add", "."], check=True)
+            subprocess.run(git + ["commit", "-qm", "seed"], check=True)
+            commit = subprocess.check_output(git + ["rev-parse", "HEAD"], text=True).strip()
+            report = ph.calibrate_identity({"unit": "unit", "roots": ["unit"]}, repo, commit, Path(tmp) / "out")
+            self.assertEqual(report["positive"]["origin_files"], 2)
+            self.assertTrue(report["calibrated"], report)
+
+
+class CorpusValidationTests(unittest.TestCase):
+    def test_rejects_malformed_corpora(self) -> None:
+        good = corpus()["cases"][0]
+        for broken in (
+            {"schema": "wrong", "cases": []},
+            corpus([dict(good, lanes=["pixels"])]),
+            corpus([dict(good, width=0)]),
+            corpus([good, dict(good)]),
+            corpus([dict(good, interactions=[])]),
+            corpus([dict(good, case_id="../escape")]),
+        ):
+            with self.subTest(broken=broken):
+                with self.assertRaises(ph.HarnessError):
+                    ph.validate_corpus(broken)
+
+
+class ComparatorTests(unittest.TestCase):
+    def test_uniform_render_has_no_ink(self) -> None:
+        image = ph.RgbaImage(4, 4, b"\x01\x02\x03\xff" * 16)
+        self.assertEqual(ph.ink_pixels(image), 0)
+        self.assertEqual(ph.ink_pixels(ph.flip_center_pixel(image)), 1)
+
+    def test_volatile_pointer_removes_only_that_member(self) -> None:
+        doc = {"a": 1, "b": {"c": 2, "d": 3}}
+        self.assertEqual(ph.canonical(doc, ["/b/c"]), {"a": 1, "b": {"d": 3}})
+        self.assertEqual(doc["b"]["c"], 2)
+        with self.assertRaises(ph.HarnessError):
+            ph.canonical(doc, ["b/c"])
+
+
+if __name__ == "__main__":
+    unittest.main()
