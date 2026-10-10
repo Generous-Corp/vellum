@@ -390,6 +390,43 @@ class CorpusValidationTests(unittest.TestCase):
                     ph.validate_corpus(broken)
 
 
+class ScopeTests(unittest.TestCase):
+    def ident(self, repo: str, sha: str, origin: dict | None = None) -> dict:
+        return {"repository": repo, "source_sha": sha, "origin": origin}
+
+    def test_scope_classification(self) -> None:
+        pulp_a = self.ident("Generous-Corp/pulp", "a" * 40)
+        self.assertEqual(ph.comparison_scope("parity", pulp_a, dict(pulp_a)), "build-sensitivity")
+        self.assertEqual(ph.comparison_scope("parity", pulp_a, self.ident("generous-corp/PULP", "a" * 40)),
+                         "build-sensitivity")
+        self.assertEqual(ph.comparison_scope("parity", pulp_a, self.ident("Generous-Corp/pulp", "b" * 40)),
+                         "revision-difference")
+        mirror = self.ident("Generous-Corp/vellum", "c" * 40,
+                            {"repository": "Generous-Corp/pulp", "commit": "a" * 40})
+        self.assertEqual(ph.comparison_scope("parity", pulp_a, mirror), "parity")
+        self.assertEqual(ph.comparison_scope("calibration", pulp_a, pulp_a), "harness-calibration")
+
+    def test_repository_must_match_the_checkout_remote_and_origin_must_be_readable(self) -> None:
+        base = {"repository": "Generous-Corp/vellum", "repository_remote": "Generous-Corp/pulp",
+                "source_sha": "a" * 40, "source_sha_derived": True, "tools": {"t": {"sha256": "c" * 64}},
+                "probes": {n: {"exit": 0, "output": n} for n in ph.REQUIRED_PROBES}, "origin": None}
+        self.assertTrue(any("checkout remote" in e for e in ph.identity_errors(base, "x")))
+        broken_origin = dict(base, repository_remote="Generous-Corp/vellum", origin={"commit": "nope"})
+        self.assertTrue(any("export receipt origin" in e for e in ph.identity_errors(broken_origin, "x")))
+        good = dict(base, repository_remote="Generous-Corp/vellum",
+                    origin={"repository": "Generous-Corp/pulp", "commit": "b" * 40})
+        self.assertEqual(ph.identity_errors(good, "x"), [])
+
+    def test_export_origin_reads_the_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            receipt = Path(tmp) / "export-receipt.json"
+            ph.write_json(receipt, {"pulp_repository": "Generous-Corp/pulp", "pulp_commit": "d" * 40,
+                                    "mirror_commit": "e" * 40})
+            origin = ph.export_origin({"export_receipt": receipt})
+            self.assertEqual((origin["repository"], origin["commit"]), ("Generous-Corp/pulp", "d" * 40))
+            self.assertIsNone(ph.export_origin({}))
+
+
 class KnobBoundsTests(unittest.TestCase):
     def test_justified_threshold_and_allowlisted_volatile_are_accepted(self) -> None:
         good = corpus()["cases"][0]
@@ -414,7 +451,9 @@ class CalibrationGateTests(HarnessFixture):
     def test_parity_run_needs_a_matching_calibration(self) -> None:
         report = ph.calibrate(self.corpus_path, self.root / "src", self.impl_path, self.root / "cal")
         self.assertTrue(report["calibrated"])
-        self.assertTrue(self.run_parity(report)["verdict"]["accepting"])
+        same_source = self.run_parity(report)["verdict"]
+        self.assertTrue(same_source["accepting"])
+        self.assertEqual(same_source["scope"], "build-sensitivity")
         refused = self.run_parity(None)
         self.assertFalse(refused["verdict"]["accepting"])
         changed = json.loads(json.dumps(report))

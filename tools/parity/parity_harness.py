@@ -270,6 +270,32 @@ def git_head(repo: Path) -> str | None:
         return None
 
 
+def git_repository(repo: Path) -> str | None:
+    """OWNER/REPO of the checkout's origin remote, from the checkout itself."""
+    try:
+        url = subprocess.check_output(["git", "-C", str(repo), "remote", "get-url", "origin"], text=True,
+                                      encoding="utf-8", stderr=subprocess.DEVNULL).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    match = re.search(r"[:/]([^/:]+/[^/]+?)(?:\.git)?/?$", url)
+    return match.group(1) if match else None
+
+
+def export_origin(roots: dict[str, Path]) -> dict[str, Any] | None:
+    """For a mirrored implementation (D1), the export receipt names the origin
+    repository and commit the mirrored source came from."""
+    receipt_path = roots.get("export_receipt")
+    if receipt_path is None:
+        return None
+    try:
+        receipt = load_json(receipt_path)
+    except (OSError, json.JSONDecodeError):
+        return {"error": f"unreadable export receipt {receipt_path}"}
+    return {"repository": receipt.get("pulp_repository"), "commit": receipt.get("pulp_commit"),
+            "mirror_commit": receipt.get("mirror_commit"),
+            "receipt_sha256": sha256_file(Path(receipt_path))}
+
+
 def run_probes(impl: dict[str, Any], tools: dict[str, Path], roots: dict[str, Path]) -> dict[str, Any]:
     values = placeholder_values(tools, roots)
     probes = {}
@@ -295,9 +321,12 @@ def implementation_identity(impl: dict[str, Any], tools: dict[str, Path],
     roots = roots or {}
     derived = git_head(roots["checkout"]) if "checkout" in roots else None
     declared = impl.get("source_sha")
+    remote = git_repository(roots["checkout"]) if "checkout" in roots else None
     return {
         "name": impl.get("name"),
         "repository": impl.get("repository"),
+        "repository_remote": remote,
+        "origin": export_origin(roots),
         "source_sha": derived or declared,
         "source_sha_derived": derived is not None,
         "source_sha_declared": declared,
@@ -340,6 +369,12 @@ def identity_errors(identity: dict[str, Any], side: str) -> list[str]:
     for name, tool in tools.items():
         if not isinstance(tool.get("sha256"), str) or not SHA256_RE.match(tool["sha256"]):
             errors.append(f"{side}: tool {name} has no content hash (missing binary?)")
+    remote = identity.get("repository_remote")
+    if remote and identity.get("repository") and remote.lower() != str(identity["repository"]).lower():
+        errors.append(f"{side}: declared repository {identity['repository']} != checkout remote {remote}")
+    origin = identity.get("origin")
+    if origin is not None and (origin.get("error") or not SHA1_RE.match(str(origin.get("commit", "")))):
+        errors.append(f"{side}: export receipt origin is unreadable or has no 40-hex origin commit")
     if not identity.get("source_sha_derived"):
         errors.append(f"{side}: source_sha was not read from a checkout (operator-typed commits are not identity)")
     declared = identity.get("source_sha_declared")
@@ -777,6 +812,21 @@ def evaluate_case(case: dict[str, Any], ref_dir: Path, cand_dir: Path,
             "reference": ref_run, "candidate": cand_run, "lanes": lanes}
 
 
+def comparison_scope(mode: str, reference: dict[str, Any], candidate: dict[str, Any]) -> str:
+    """What a passing receipt may be cited as. Two builds of one repository at
+    one commit prove build insensitivity, not parity; parity needs different
+    repositories (a Vellum mirror of Pulp source is a different repository
+    whose origin commit is recorded)."""
+    if mode == "calibration":
+        return "harness-calibration"
+    same_repo = str(reference.get("repository") or "").lower() == str(candidate.get("repository") or "").lower()
+    if same_repo and reference.get("source_sha") == candidate.get("source_sha"):
+        return "build-sensitivity"
+    if same_repo:
+        return "revision-difference"
+    return "parity"
+
+
 def acceptance(mode: str, cases: list[dict[str, Any]], reference: dict[str, Any],
                candidate: dict[str, Any], *, require_identical_inputs: bool = True) -> dict[str, Any]:
     reasons = identity_errors(reference, "reference") + identity_errors(candidate, "candidate")
@@ -799,7 +849,8 @@ def acceptance(mode: str, cases: list[dict[str, Any]], reference: dict[str, Any]
                 reasons.append(f"{result['case_id']}/{lane}: {status}")
         if require_identical_inputs and not result["inputs_identical"]:
             reasons.append(f"{result['case_id']}: reference and candidate inputs differ")
-    return {"accepting": not reasons, "scope": "harness-calibration" if mode == "calibration" else "parity",
+    return {"accepting": not reasons, "scope": comparison_scope(mode, reference, candidate),
+            "origins": {"reference": reference.get("origin"), "candidate": candidate.get("origin")},
             "selected_lane_results": selected, "reasons": reasons}
 
 
