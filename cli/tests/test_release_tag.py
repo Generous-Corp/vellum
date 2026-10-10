@@ -114,6 +114,21 @@ class ReleaseTagTests(unittest.TestCase):
         evidence = self.verify()
         self.assertEqual(evidence["tag_object_sha"], self.tag_object)
         self.assertEqual(evidence["source_commit"], self.commit)
+        # The repository is public; build attestations are absent because the
+        # release workflow does not generate them, not because of visibility.
+        self.assertEqual(
+            evidence["github_actions_build_attestation"],
+            {
+                "status": "not-generated",
+                "reason_code": (
+                    "release-workflow-does-not-generate-build-attestations"
+                ),
+                "documentation": (
+                    "https://docs.github.com/en/code-security/getting-started/"
+                    "github-security-features#artifact-attestations"
+                ),
+            },
+        )
 
     def test_peeled_commit_cannot_substitute_for_annotated_tag(self) -> None:
         with self.assertRaisesRegex(

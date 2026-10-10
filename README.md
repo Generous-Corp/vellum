@@ -471,10 +471,11 @@ is published, the checkout installer installs it with:
 The release `SHA256SUMS` covers the SDK archive, `install.sh`, and
 `install_core.py`. The source-controlled `scripts/INSTALLER_SHA256SUMS` covers
 the two bootstrap scripts and is checked when preparing the tag. Release
-publication also retains `release-trust.json`. It distinguishes unavailable
-GitHub Actions build artifact attestations for the release from the automatic release attestation GitHub creates when an
-immutable release is published. After downloading the assets, verify that
-release attestation and an asset with:
+publication also retains `release-trust.json`. It records that the release
+workflow does not generate GitHub Actions build artifact attestations, as distinct
+from the automatic release attestation GitHub creates when an immutable release
+is published. After downloading the assets, verify that release attestation and
+an asset with:
 
 <!-- readme-exec: id=release-attestation-check manual=post-download-verification-example -->
 ```sh
