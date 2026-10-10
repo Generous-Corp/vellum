@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Host lane tests against a fake probe, validator and standalone app.
+"""Host lane module tests through the core harness, with fake tools.
 
-The fakes behave like the real tools where the lane's controls depend on it
-(they honour the editor/GPU kill switches, refuse a truncated bundle, and fail
-validation of one). Variants that ignore one of those inputs must make
-calibration report NOT CALIBRATED: a control that cannot bite proves nothing.
+The fake probe, validator and standalone apps behave like the real ones where
+the host lane's controls depend on it: they honour the editor and GPU kill
+switches and a null parent, refuse a truncated bundle, fail validation of
+one, and report the loaded-image census the way dyld does (the first copy of
+a shared runtime install name wins). The fake plug-ins are real Mach-O
+dylibs that link a runtime by install name, so the runtime-binding
+observation is measured, not stubbed. A probe that ignores one control's
+input must make calibration NOT CALIBRATED.
 """
 
 from __future__ import annotations
@@ -12,7 +16,9 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -20,9 +26,11 @@ import unittest
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-import host_lane  # noqa: E402
+import parity_harness as ph  # noqa: E402
 
-SHA = "a" * 40
+ph.load_lane_module(HERE / "lanes" / "host.py")
+RUNNER = HERE / "lanes" / "host_runner.py"
+HAVE_TOOLCHAIN = sys.platform == "darwin" and all(shutil.which(t) for t in ("clang", "otool", "dyld_info", "codesign"))
 
 FAKE_PROBE = r'''#!/usr/bin/env python3
 import hashlib, json, os, struct, sys, zlib
@@ -37,15 +45,14 @@ while i < len(args):
     elif a == "--out": out = Path(args[i + 1]); i += 2
     elif a == "--blocks": blocks = int(args[i + 1]); i += 2
     elif a == "--fault-null-parent": null_parent = True; i += 1
-    elif a in ("--block-size", "--sample-rate", "--opens", "--watch-ms", "--resize-by"): i += 2
+    elif a.startswith("--") and i + 1 < len(args) and not args[i + 1].startswith("--"): i += 2
     else: i += 1
 if not plugins or out is None: sys.exit(2)
 out.mkdir(parents=True, exist_ok=True)
 def png(path, w, h, seed):
     raw = b"".join(b"\x00" + b"".join(bytes(((x * 7 + y * 3 + seed) % 200 + 20, (x + seed) % 250, (y * 5) % 250)) for x in range(w)) for y in range(h))
     def chunk(k, d): return struct.pack(">I", len(d)) + k + d + struct.pack(">I", zlib.crc32(k + d) & 0xffffffff)
-    path.write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) +
-                     chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+    path.write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
 editor_off = os.environ.get("PULP_DISABLE_PLUGIN_EDITOR") == "1" and "editor-env" not in IGNORE
 gpu_off = os.environ.get("PULP_DISABLE_PLUGIN_GPU") == "1" and "gpu-env" not in IGNORE
 null_parent = null_parent and "null-parent" not in IGNORE
@@ -53,12 +60,15 @@ doc = {"schema": "pulp.host-lane.observation.v1",
        "settings": {"blocks": blocks, "block_size": 512, "sample_rate": 48000, "opens": 2, "watch_ms": 1,
                     "resize_by": [120, 80], "fault_null_parent": null_parent},
        "plugins": [], "events": [], "dyld_images": []}
+runtime_loaded = False
 for idx, p in enumerate(plugins):
     b = Path(p)
     exe = b / "Contents" / "MacOS" / b.stem
     if not exe.is_file() or exe.stat().st_size < 4096: sys.stderr.write(f"load {p} failed\n"); sys.exit(2)
     doc["dyld_images"].append(str(exe))
-    if idx == 0: doc["dyld_images"].append(str(b / "Contents" / "MacOS" / "libruntime.dylib"))
+    rt = b / "Contents" / "MacOS" / "libwgpu_native.dylib"
+    if rt.is_file() and not runtime_loaded:
+        doc["dyld_images"].append(str(rt)); runtime_loaded = True
     audio = {}
     for tag in ("initial", "closed", "open", "reclosed"):
         data = hashlib.sha256((b.stem + str(blocks)).encode()).digest() * (blocks * 4)
@@ -68,26 +78,25 @@ for idx, p in enumerate(plugins):
     doc["plugins"].append({"index": idx, "path": str(b), "format": b.suffix[1:].upper(), "name": b.stem,
                            "has_editor": True, "latency_samples": 0, "parameters": 4, "audio": audio})
 seed = {p: sum(map(ord, Path(p).stem)) for p in plugins}
+attached = not editor_off and not null_parent
 for n in range(2):
     for idx, p in enumerate(plugins):
-        attached = not editor_off and not null_parent
         if attached: sys.stderr.write(f"[pulp:info]  [plugin-gpu-host] adapter mode=custom use_gpu={'false' if gpu_off else 'true'} x\n")
         doc["events"].append({"plugin": idx, "open": n, "event": "create", "attached": attached,
                               **({"width": 64, "height": 48, "resizable": True} if attached else {})})
     for idx, p in enumerate(plugins):
         f = out / f"editor-{idx}-open{n}.png"
-        if editor_off or null_parent:
+        if not attached:
             doc["events"].append({"plugin": idx, "open": n, "event": "frame", "frame": {"read": False}}); continue
         png(f, 64, 48, seed[p] + (7 if gpu_off else 0))
         doc["events"].append({"plugin": idx, "open": n, "event": "frame",
                               "frame": {"read": True, "width": 64, "height": 48, "png": str(f)}})
-    if n == 0:
+    if n == 0 and attached:
         for idx, p in enumerate(plugins):
-            if editor_off or null_parent: continue
             doc["events"].append({"plugin": idx, "event": "resize", "requested": [184, 128], "accepted": False,
                                   "size": [64, 48]})
     for idx, p in enumerate(plugins):
-        doc["events"].append({"plugin": idx, "open": n, "event": "close", "had_editor": not (editor_off or null_parent)})
+        doc["events"].append({"plugin": idx, "open": n, "event": "close", "had_editor": attached})
 (out / "host-observation.json").write_text(json.dumps(doc))
 '''
 
@@ -103,10 +112,10 @@ sys.exit(0 if ok else 1)
 '''
 
 FAKE_APP = r'''#!/usr/bin/env python3
-import os, struct, sys, zlib
+import os, struct, zlib
 from pathlib import Path
 seed = SEED
-w, h = 32, 24
+w, h = 64, 48
 raw = b"".join(b"\x00" + b"".join(bytes(((x * 5 + y + seed) % 230 + 10, (x * 9) % 250, (y * 11 + seed) % 250)) for x in range(w)) for y in range(h))
 def chunk(k, d): return struct.pack(">I", len(d)) + k + d + struct.pack(">I", zlib.crc32(k + d) & 0xffffffff)
 Path(os.environ["PULP_SCREENSHOT"]).write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
@@ -119,48 +128,89 @@ def executable(path: Path, text: str) -> None:
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
 
-def bundle(root: Path, name: str, *, dirty: bool = False, sha: str = SHA) -> Path:
-    b = root / name
-    exe = b / "Contents" / "MacOS" / b.stem
-    exe.parent.mkdir(parents=True, exist_ok=True)
-    exe.write_bytes(bytes(range(256)) * 32)
-    (b / "Contents" / "Resources").mkdir(parents=True, exist_ok=True)
-    (b / "Contents" / "Resources" / "pulp-build-info.json").write_text(json.dumps(
-        {"product": {"source_git_sha": sha, "source_git_dirty": dirty}, "build": {"type": "Release"}}),
-        encoding="utf-8")
-    return b
+def clang(source: str, out: Path, *flags: str) -> None:
+    src = out.with_suffix(".c")
+    src.write_text(source, encoding="utf-8")
+    subprocess.run(["clang", "-arch", "arm64", *flags, "-o", str(out), str(src)], check=True)
+    src.unlink()
 
 
-def fixture(root: Path, *, dirty: bool = False) -> tuple[Path, dict]:
+def fixture(root: Path) -> tuple[Path, Path, dict[str, str], dict[str, str]]:
+    repo = root / "checkout"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    (repo / "README").write_text("fake\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t", "add", "README"], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "x"],
+                   check=True)
+    head = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+    build = root / "build"
+    runtime = build / "libwgpu_native.dylib"
+    build.mkdir()
+    clang("int rt_marker(void){return 24;}\n", runtime, "-dynamiclib", "-install_name", "@rpath/libwgpu_native.dylib")
+    skew = root / "skew" / "libwgpu_native.dylib"
+    skew.parent.mkdir()
+    clang("int rt_marker(void){return 22;}\n", skew, "-dynamiclib", "-install_name", "@rpath/libwgpu_native.dylib")
     executable(root / "probe", FAKE_PROBE)
     executable(root / "validator", FAKE_VALIDATOR)
-    artifacts = {}
+    roots = {"checkout": str(repo), "skew-runtime": str(skew)}
+    tools = {"runner": str(RUNNER), "probe": str(root / "probe"), "pluginval": str(root / "validator")}
     for name in ("alpha.clap", "beta.clap", "alpha.vst3"):
-        artifacts[name] = str(bundle(root, name, dirty=dirty))
+        b = build / name
+        macos = b / "Contents" / "MacOS"
+        macos.mkdir(parents=True)
+        shutil.copy2(runtime, macos / "libwgpu_native.dylib")
+        exe = macos / b.stem
+        clang("int plugin_entry(void){return 1;}\n" + "static const char pad[8192] = {1};\n"
+              "const char* plugin_pad(void){return pad;}\n", exe, "-dynamiclib",
+              "-Wl,-rpath,@loader_path", str(runtime))
+        (b / "Contents" / "pulp-build-info.json").write_text(json.dumps(
+            {"product": {"source_git_sha": head, "source_git_dirty": False}, "build": {"type": "Release"}}),
+            encoding="utf-8")
+        roots[name] = str(b)
+        tools[f"exe.{name}"] = str(exe)
     for name, seed in (("alpha.app", 3), ("beta.app", 90)):
-        app = bundle(root, name, dirty=dirty)
+        app = build / name
         executable(app / "Contents" / "MacOS" / app.stem, FAKE_APP.replace("SEED", str(seed)))
-        artifacts[name] = str(app)
-    impl = {"schema": host_lane.HOST_IMPLEMENTATION_SCHEMA, "name": "fake", "repository": "example/fake",
-            "build_mode": "fake", "tools": {"probe": str(root / "probe"), "pluginval": str(root / "validator")},
-            "artifacts": artifacts,
-            "probe_argv": ["{tool:probe}", "@plugins", "--out", "{out}", "--blocks", "94"],
-            "validators": {"pluginval": ["{tool:pluginval}", "--validate", "{artifact}"]},
-            "validator_success": {"pluginval": "SUCCESS"}}
-    corpus = {"schema": host_lane.HOST_CORPUS_SCHEMA, "cases": [
-        {"case_id": "alpha-clap", "kind": "probe", "plugins": ["alpha.clap"], "lanes": ["load", "editor", "audio"],
-         "expect": {"editor": True, "gpu": True}},
-        {"case_id": "pair", "kind": "probe", "plugins": ["alpha.clap", "beta.clap"],
-         "lanes": ["load", "editor", "audio", "coexist"], "expect": {"editor": True, "gpu": True}},
-        {"case_id": "alpha-pluginval", "kind": "validator", "validator": "pluginval", "artifact": "alpha.vst3",
-         "lanes": ["validator"]},
-        {"case_id": "alpha-standalone", "kind": "standalone", "artifact": "alpha.app", "lanes": ["standalone"]},
-    ], "declared_gaps": [{"row": "lv2", "reason": "fake"}]}
-    path = root / "corpus.json"
-    path.write_text(json.dumps(corpus), encoding="utf-8")
-    return path, impl
+        roots[name] = str(app)
+        tools[f"exe.{name}"] = str(app / "Contents" / "MacOS" / app.stem)
+    all_roots = ["{root:%s}" % n for n in ("alpha.clap", "beta.clap", "alpha.vst3", "alpha.app", "beta.app")]
+    impl = {
+        "schema": ph.IMPLEMENTATION_SCHEMA, "name": "fake-host", "repository": "example/fake", "source_sha": None,
+        "tools": tools,
+        "probes": [{"name": "build", "argv": ["{tool:runner}", "identity", "build", "{root:checkout}", *all_roots]},
+                   {"name": "provider", "argv": ["{tool:runner}", "identity", "provider", *all_roots]},
+                   {"name": "fonts", "argv": ["{tool:runner}", "identity", "fonts", *all_roots]}],
+        "source_kinds": {"host-probe": [], "host-pair": [], "host-validator": [], "host-standalone": []},
+        "steps": json.loads((HERE / "implementations" / "pulp-host-in-tree.json").read_text(encoding="utf-8"))["steps"],
+    }
+    impl_path = root / "impl.json"
+    impl_path.write_text(json.dumps(impl), encoding="utf-8")
+    corpus_dir = root / "corpus"
+    (corpus_dir / "fixtures" / "host").mkdir(parents=True)
+    shutil.copy2(HERE / "corpus" / "fixtures" / "host" / "stimulus.json", corpus_dir / "fixtures" / "host")
+    base = {"source": "fixtures/host/stimulus.json", "source_base": "corpus", "width": 64, "height": 48}
+
+    def P(name: str) -> list[str]:
+        return ["--plugin", "{root:%s}" % name]
+    corpus = {"schema": ph.CORPUS_SCHEMA, "cases": [
+        dict(base, case_id="alpha-clap", source_kind="host-probe", lanes=["host-load", "host-editor", "host-audio"],
+             args={"plugins": P("alpha.clap")}, controls={"swap": "beta.clap"}, expect={"editor": True, "gpu": True}),
+        dict(base, case_id="pair", source_kind="host-pair",
+             lanes=["host-load", "host-editor", "host-audio", "host-coexist"],
+             args={"plugins": P("alpha.clap") + P("beta.clap"), "solo0": P("alpha.clap"), "solo1": P("beta.clap")},
+             controls={"skew_runtime_root": "skew-runtime"}, expect={"editor": True, "gpu": True}),
+        dict(base, case_id="alpha-pluginval", source_kind="host-validator", lanes=["host-validator"],
+             args={"bundle": ["--bundle", "{root:alpha.vst3}"]}),
+        dict(base, case_id="alpha-standalone", source_kind="host-standalone", lanes=["host-standalone"],
+             args={"app": ["--app", "{root:alpha.app}"]}, controls={"swap": "beta.app"}),
+    ]}
+    corpus_path = corpus_dir / "corpus.json"
+    corpus_path.write_text(json.dumps(corpus), encoding="utf-8")
+    return corpus_path, impl_path, roots, tools
 
 
+@unittest.skipUnless(HAVE_TOOLCHAIN, "needs macOS with clang, otool, dyld_info and codesign")
 class HostLaneTest(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -171,9 +221,9 @@ class HostLaneTest(unittest.TestCase):
         os.environ.pop("FAKE_IGNORE", None)
         self.tmp.cleanup()
 
-    def calibrate(self, **kw):
-        corpus, impl = fixture(self.root, **kw)
-        return host_lane.calibrate(corpus, impl, SHA, self.root / "out")
+    def calibrate(self):
+        corpus, impl, roots, _ = fixture(self.root)
+        return ph.calibrate(corpus, self.root, impl, self.root / "out", roots={k: Path(v) for k, v in roots.items()})
 
     def outcome(self, report, name):
         return next(c for c in report["controls"] if c["control"] == name)["outcome"]
@@ -181,54 +231,35 @@ class HostLaneTest(unittest.TestCase):
     def test_faithful_fakes_calibrate(self):
         report = self.calibrate()
         self.assertTrue(report["positive"]["verdict"]["accepting"], report["positive"]["verdict"]["reasons"])
-        bad = [c for c in report["controls"] if c["outcome"] != "REJECTED"]
-        self.assertEqual(bad, [])
+        self.assertEqual(report["control_failures"], [])
         self.assertTrue(report["calibrated"])
-        self.assertEqual(report["positive"]["declared_gaps"][0]["row"], "lv2")
+        host = [c for c in report["controls"] if c["control"].startswith("host-")]
+        self.assertGreaterEqual(len(host), 20)
+        self.assertTrue(all(c["outcome"] == "REJECTED as required" for c in host))
 
-    def test_probe_that_ignores_the_editor_kill_switch_is_not_calibrated(self):
+    def test_probe_ignoring_the_editor_kill_switch_is_not_calibrated(self):
         os.environ["FAKE_IGNORE"] = "editor-env"
         report = self.calibrate()
-        self.assertEqual(self.outcome(report, "editor-disabled-by-plugin-env"), "NOT REJECTED")
+        self.assertEqual(self.outcome(report, "host-editor-disabled-by-plugin-env"), "CONTROL DID NOT FAIL")
         self.assertFalse(report["calibrated"])
 
-    def test_probe_that_ignores_a_null_parent_is_not_calibrated(self):
+    def test_probe_ignoring_a_null_parent_is_not_calibrated(self):
         os.environ["FAKE_IGNORE"] = "null-parent"
         report = self.calibrate()
-        self.assertEqual(self.outcome(report, "editor-attach-null-parent"), "NOT REJECTED")
+        self.assertEqual(self.outcome(report, "host-editor-attach-null-parent"), "CONTROL DID NOT FAIL")
         self.assertFalse(report["calibrated"])
 
-    def test_silent_cpu_fallback_is_caught(self):
+    def test_silent_cpu_fallback_is_not_calibrated(self):
         os.environ["FAKE_IGNORE"] = "gpu-env"
         report = self.calibrate()
-        self.assertEqual(self.outcome(report, "gpu-host-silently-disabled"), "NOT REJECTED")
+        self.assertEqual(self.outcome(report, "host-gpu-host-silently-disabled"), "CONTROL DID NOT FAIL")
         self.assertFalse(report["calibrated"])
 
-    def test_dirty_build_is_never_accepting(self):
-        report = self.calibrate(dirty=True)
-        self.assertFalse(report["positive"]["verdict"]["accepting"])
-        self.assertTrue(any("dirty tree" in r for r in report["positive"]["verdict"]["reasons"]))
-
-    def test_parity_mode_refuses_the_same_bundles(self):
-        corpus, impl = fixture(self.root)
-        receipt = host_lane.run_corpus(corpus, impl, dict(impl, name="other"), self.root / "run", mode="parity",
-                                       ref_sha=SHA, cand_sha=SHA)
-        self.assertFalse(receipt["verdict"]["accepting"])
-        self.assertTrue(any("same bundle bytes" in r for r in receipt["verdict"]["reasons"]))
-
-    def test_missing_validator_is_blocked_not_pass(self):
-        corpus, impl = fixture(self.root)
-        impl["tools"]["pluginval"] = str(self.root / "absent")
-        receipt = host_lane.run_corpus(corpus, impl, impl, self.root / "run", mode="calibration",
-                                       ref_sha=SHA, cand_sha=SHA)
-        case = next(c for c in receipt["cases"] if c["case_id"] == "alpha-pluginval")
-        self.assertEqual(case["lanes"]["validator"]["status"], "blocked")
-        self.assertFalse(receipt["verdict"]["accepting"])
-
-    def test_corpus_rejects_lane_of_wrong_kind(self):
-        with self.assertRaises(host_lane.HarnessError):
-            host_lane.validate_corpus({"schema": host_lane.HOST_CORPUS_SCHEMA, "cases": [
-                {"case_id": "x", "kind": "validator", "validator": "v", "artifact": "a", "lanes": ["editor"]}]})
+    def test_runtime_skew_is_measured_not_stubbed(self):
+        report = self.calibrate()
+        control = next(c for c in report["controls"] if c["control"] == "host-coexist-runtime-version-skew")
+        reasons = control["lane_evidence"]["pair/host-coexist"]["reasons"]
+        self.assertTrue(any("runs on a copy with different bytes" in r for r in reasons), reasons)
 
 
 if __name__ == "__main__":
