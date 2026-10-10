@@ -171,6 +171,7 @@ both sides, a truncated run, blank pixels on both sides, an event dropped on
 both sides, a capture pixel, and candidate re-runs at 120 Hz, with a dropped
 vsync, with an event one frame late, with an immediate instead of a view-first
 document load, with a different host parameter write, without the second
-editor, and with a different resize. A re-run control counts only when what a
+editor, with a different resize, and (for cases that declare `timers`) with script timers left on the wall clock
+(`timer-clock-ignored`). A re-run control counts only when what a
 viewer would see differed at some frame, not when only the schedule's own
 timestamps or hash did.
