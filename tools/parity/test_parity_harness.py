@@ -228,6 +228,18 @@ class CalibrationTests(HarnessFixture):
         self.assertTrue(any("/imported_at" in r for r in lane["reasons"]))
 
 
+class BlockedBaselineTests(HarnessFixture):
+    def test_blocked_positive_reports_not_calibrated_instead_of_crashing(self) -> None:
+        impl = implementation(self.tool)
+        impl["steps"][2]["argv"] = [sys.executable, "-c", "import sys; sys.exit(3)"]  # interact fails
+        ph.write_json(self.impl_path, impl)
+        report = ph.calibrate(self.corpus_path, self.root / "src", self.impl_path, self.root / "out")
+        self.assertFalse(report["calibrated"])
+        self.assertFalse(report["positive"]["verdict"]["accepting"])
+        outcomes = {c["control"]: c["outcome"] for c in report["controls"]}
+        self.assertEqual(outcomes["interaction-state"], "NOT APPLICABLE (no case exercises it)")
+
+
 class InsensitiveImplementationTests(HarnessFixture):
     ignore_input = True
 

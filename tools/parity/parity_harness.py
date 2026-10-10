@@ -1358,12 +1358,21 @@ def calibrate(corpus_path: Path, source_root: Path, impl_path: Path, out: Path,
             ref_dir, ref_run, cand_dir, cand_run = baseline[case["case_id"]]
             if spec["lane"] not in case["lanes"]:
                 continue
+            if any(not (d / name_).is_file() for d in (ref_dir, cand_dir)
+                   for name_ in LANE_ARTIFACTS.get(spec["lane"], ())):
+                # The baseline itself lacks the lane's observations (a blocked
+                # positive); there is nothing to mutate. The positive already
+                # fails calibration, and this control counts as not applied.
+                continue
             work = out / "controls" / name / case["case_id"]
             mref, mcand = work / "reference", work / "candidate"
             shutil.copytree(ref_dir, mref)
             shutil.copytree(cand_dir, mcand)
-            changed = spec["candidate"](mcand) if "candidate" in spec else (
-                spec["both"](mref) and spec["both"](mcand))
+            try:
+                changed = spec["candidate"](mcand) if "candidate" in spec else (
+                    spec["both"](mref) and spec["both"](mcand))
+            except (OSError, ValueError, KeyError, PngError) as error:
+                raise HarnessError(f"control {name} could not mutate {case['case_id']}: {error}") from error
             if not changed:
                 continue
             applied.append(case["case_id"])
