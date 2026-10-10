@@ -482,6 +482,9 @@ class LaneModuleLoadingTests(unittest.TestCase):
                 class Verdict:
                     status: str
 
+                import pickle
+                # Pickling resolves the class through sys.modules[__module__].
+                assert pickle.loads(pickle.dumps(Verdict("pass"))).status == "pass"
                 ph.register_lane("demo-lane", ("demo.json",), lambda a, b, c: {"status": Verdict("pass").status})
             """), encoding="utf-8")
             try:
