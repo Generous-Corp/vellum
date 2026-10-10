@@ -39,7 +39,8 @@
             60
           ]
         }
-      ]
+      ],
+      "scale": 2
     },
     {
       "case_id": "figma-plugin-scene",
@@ -75,7 +76,8 @@
           "key": "tab"
         }
       ],
-      "note": "The scene's asset_ref images are reference art for audio widgets, not paint inputs: calibration showed a byte-identical render with and without them, so they are not staged. image-asset-design-ir is the case that consumes an asset."
+      "note": "The scene's asset_ref images are reference art for audio widgets, not paint inputs: calibration showed a byte-identical render with and without them, so they are not staged. image-asset-design-ir is the case that consumes an asset.",
+      "scale": 2
     },
     {
       "case_id": "image-asset-design-ir",
@@ -91,7 +93,8 @@
         "structure",
         "raster",
         "geometry"
-      ]
+      ],
+      "scale": 2
     },
     {
       "case_id": "html-basic-card",
@@ -109,7 +112,8 @@
         "structure": [
           "/imported_at"
         ]
-      }
+      },
+      "scale": 2
     },
     {
       "case_id": "html-typography",
@@ -127,7 +131,8 @@
         "structure": [
           "/imported_at"
         ]
-      }
+      },
+      "scale": 2
     }
   ]
 }

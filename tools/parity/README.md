@@ -16,12 +16,26 @@ closure, then these differential lanes, with similarity scores advisory only.
 | `interaction` | replayed pointer/keyboard log plus post-interaction render | every planned step logged, at least one handled |
 
 Implementations are JSON descriptions of commands (`implementations/`); the
-harness never links or imports either implementation. A lane is `pass`,
+harness never links or imports either implementation. Each side names its
+`checkout` root; its commit is read from that checkout, never typed by the
+operator. Its binaries are content-hashed, and its required `build`,
+`provider` and `fonts` probes are recorded in the receipt beside the host
+platform and the harness's own fingerprint. A lane is `pass`,
 `fail`, `blocked` (a step failed or skipped, or an artifact is missing) or
 `not_selected`. Only `pass` counts, and an empty corpus, a case with no lane
 selected, or an absent implementation identity is never accepting. `parity`
-mode refuses identical reference/candidate identities; `calibration` mode
-requires them and reports `scope: harness-calibration`, never parity.
+mode refuses two sides that run byte-identical tools, whatever their labels;
+`calibration` mode requires identical identities and reports
+`scope: harness-calibration`, never parity.
+
+The corpus knobs that could turn a real difference into a pass are bounded at
+load time. `raster_threshold` is 0 unless it carries a
+`raster_threshold_justification`, and it can never exceed 16.
+`min_ink_pixels` is at least 1, and `scale` is explicit. `volatile` pointers
+must appear in an allowlist: the default is `/imported_at`, and extensions are
+justified corpus-level `volatile_allowlist` entries that can never erase a whole
+observation. Geometry and semantic observations must carry their full schema
+on both sides.
 
 ## Calibrate before trusting a comparison
 
@@ -31,7 +45,7 @@ python3 tools/parity/parity_harness.py calibrate \
   --source-root <origin checkout at the calibrated commit> \
   --implementation tools/parity/implementations/pulp-design-ir-observer.json \
   --tool importer=<pulp-import-design> --tool observer=<pulp-design-ir-observe> \
-  --source-sha <origin commit> --out <dir>
+  --root checkout=<origin checkout> --root build=<its build dir> --out <dir>
 
 python3 tools/parity/parity_harness.py identity-calibrate \
   --manifest tools/parity/corpus/canvas-identity-calibration.json \
@@ -75,8 +89,19 @@ python3 tools/parity/parity_harness.py run --mode parity \
   --corpus <corpus> --source-root <dir> \
   --reference <impl.json> --reference-sha <sha> --reference-tool name=path ... \
   --candidate <impl.json> --candidate-sha <sha> --candidate-tool name=path ... \
-  --out <dir>
+  --reference-root checkout=<dir> --candidate-root checkout=<dir> \
+  --calibration <calibration.json> --out <dir>
 ```
+
+Parity mode refuses to run without a calibration record whose corpus hash and
+harness fingerprint, including any `--lane-module`, match this run.
+
+## Adding a lane
+
+A lane lives in its own module, `tools/parity/lanes/<name>.py`. The module calls
+`register_lane(name, artifacts, comparator)` and `register_controls(...)`, and
+is loaded with `--lane-module` on both `calibrate` and `run`. Every new lane
+ships with at least one control that must make it fail.
 
 The receipt (`<dir>/receipt.json`) records the corpus hash, both identities
 (repository, commit, content hash of every tool binary), every command with its

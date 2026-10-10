@@ -49,7 +49,8 @@ FAKE_TOOL = textwrap.dedent(
         sys.exit(0)
 
     ir = json.load(open(opt("--input")))
-    width, height = int(opt("--width")), int(opt("--height"))
+    scale = float(opt("--scale", "1"))
+    width, height = int(int(opt("--width")) * scale), int(int(opt("--height")) * scale)
     nodes = ir["root"]["children"]
     values = {{n["name"]: 0.5 for n in nodes}}
     focus = None
@@ -101,9 +102,11 @@ FAKE_TOOL = textwrap.dedent(
                 o = (y * width + x) * 4
                 pixels[o:o + 4] = colour
     open(opt("--render"), "wb").write(encode_png(RgbaImage(width, height, bytes(pixels))))
-    layout = [{{"id": "root", "kind": "View", "rect": {{"x": 0, "y": 0, "w": width, "h": height}}}}]
-    layout += [{{"id": n["name"], "kind": "View",
-                "rect": {{"x": n["x"], "y": n["y"], "w": n["w"], "h": n["h"]}}}} for n in nodes]
+    common = {{"visible": True, "overflow": "visible", "z_order": {{"paint": 0}}, "clipping": {{}},
+              "hit_regions": [], "measured_text_boxes": []}}
+    layout = [dict(common, id="root", kind="View", rect={{"x": 0, "y": 0, "w": width, "h": height}})]
+    layout += [dict(common, id=n["name"], kind="View",
+                    rect={{"x": n["x"], "y": n["y"], "w": n["w"], "h": n["h"]}}) for n in nodes]
     json.dump({{"nodes": layout}}, open(opt("--layout"), "w"))
     if opt("--text-diagnostics"):
         json.dump({{"runs": [{{"text": n["name"]}} for n in nodes]}}, open(opt("--text-diagnostics"), "w"))
@@ -113,26 +116,39 @@ FAKE_TOOL = textwrap.dedent(
 )
 
 
+def git_commit(repo: Path) -> str:
+    """The harness reads each side's commit from its checkout, so test sources live in a repository."""
+    run = lambda *a: subprocess.check_output(["git", "-C", str(repo), "-c", "user.name=t",
+                                              "-c", "user.email=t@example.invalid", *a], text=True).strip()
+    if not (repo / ".git").exists():
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    run("add", "-A")
+    run("commit", "-qm", "fixture")
+    return run("rev-parse", "HEAD")
+
+
 def implementation(tool: Path) -> dict:
     return {
         "schema": ph.IMPLEMENTATION_SCHEMA,
         "name": "fake",
         "repository": "example/fake",
-        "source_sha": "a" * 40,
+        "source_sha": None,
         "tools": {"fake": str(tool)},
         "source_kinds": {"fake-json": []},
+        "probes": [{"name": name, "argv": [sys.executable, "-c", f"print('{name} of the fake')"]}
+                   for name in ("build", "provider", "fonts")],
         "interaction_encoding": "argv-click-drag-key",
         "steps": [
             {"id": "import", "argv": [sys.executable, "{tool:fake}", "import", "--file", "{source}",
                                       "--output", "design.ir.json"]},
             {"id": "observe", "argv": [sys.executable, "{tool:fake}", "observe", "--input", "design.ir.json",
                                        "--render", "render.png", "--layout", "layout.json",
-                                       "--text-diagnostics", "text.json",
+                                       "--text-diagnostics", "text.json", "--scale", "{scale}",
                                        "--width", "{width}", "--height", "{height}"]},
             {"id": "interact", "when": "interactions",
              "argv": [sys.executable, "{tool:fake}", "observe", "--input", "design.ir.json",
                       "--render", "interaction.png", "--layout", "interaction-layout.json",
-                      "--width", "{width}", "--height", "{height}",
+                      "--width", "{width}", "--height", "{height}", "--scale", "{scale}",
                       "--interaction-log", "interaction.json", "@interactions"]},
         ],
     }
@@ -152,6 +168,7 @@ def corpus(cases: list[dict] | None = None) -> dict:
             "stage": ["assets"],
             "width": 40,
             "height": 32,
+            "scale": 1,
             "lanes": ["structure", "raster", "geometry", "semantic", "interaction"],
             "volatile": {"structure": ["/imported_at"]},
             "interactions": [{"key": "tab"}, {"drag": [[8, 8], [8, 2]]}, {"click": [22, 10]}],
@@ -171,6 +188,7 @@ class HarnessFixture(unittest.TestCase):
         (self.root / "src/source.json").write_text(json.dumps(SOURCE))
         (self.root / "src/assets").mkdir()
         (self.root / "src/assets/tint.txt").write_text("warm")
+        git_commit(self.root / "src")
         self.impl_path = self.root / "impl.json"
         ph.write_json(self.impl_path, implementation(self.tool))
         self.corpus_path = self.root / "corpus.json"
@@ -220,9 +238,10 @@ class InsensitiveImplementationTests(HarnessFixture):
 
 
 class AcceptanceTests(unittest.TestCase):
-    def identity(self, sha: str = "b" * 40, tool_hash: str = "c" * 64) -> dict:
-        return {"name": "x", "repository": "example/x", "source_sha": sha,
-                "tools": {"t": {"path": "/t", "sha256": tool_hash}}}
+    def identity(self, sha: str = "b" * 40, tool_hash: str | None = "c" * 64) -> dict:
+        return {"name": "x", "repository": "example/x", "source_sha": sha, "source_sha_derived": True,
+                "tools": {"t": {"path": "/t", "sha256": tool_hash}},
+                "probes": {name: {"exit": 0, "output": name, "sha256": name} for name in ph.REQUIRED_PROBES}}
 
     def passing_case(self) -> dict:
         lanes = {lane: {"status": "not_selected"} for lane in ph.LANES}
@@ -233,10 +252,25 @@ class AcceptanceTests(unittest.TestCase):
         verdict = ph.acceptance("parity", [self.passing_case()], self.identity(), self.identity())
         self.assertFalse(verdict["accepting"])
 
-    def test_parity_mode_accepts_distinct_identities(self) -> None:
+    def test_parity_mode_refuses_relabelled_identical_binaries(self) -> None:
+        relabelled = dict(self.identity(sha="d" * 40), repository="example/other")
+        verdict = ph.acceptance("parity", [self.passing_case()], self.identity(), relabelled)
+        self.assertFalse(verdict["accepting"])
+        self.assertTrue(any("byte-identical tools" in r for r in verdict["reasons"]))
+
+    def test_parity_mode_accepts_distinct_binaries(self) -> None:
         verdict = ph.acceptance("parity", [self.passing_case()], self.identity(),
-                                self.identity(sha="d" * 40))
+                                self.identity(sha="d" * 40, tool_hash="e" * 64))
         self.assertTrue(verdict["accepting"], verdict["reasons"])
+
+    def test_operator_typed_commit_is_not_identity(self) -> None:
+        typed = dict(self.identity(tool_hash="e" * 64), source_sha_derived=False)
+        self.assertFalse(ph.acceptance("parity", [self.passing_case()], self.identity(), typed)["accepting"])
+
+    def test_missing_identity_probe_is_refused(self) -> None:
+        thin = self.identity(tool_hash="e" * 64)
+        del thin["probes"]["fonts"]
+        self.assertFalse(ph.acceptance("parity", [self.passing_case()], self.identity(), thin)["accepting"])
 
     def test_calibration_mode_refuses_distinct_identities(self) -> None:
         verdict = ph.acceptance("calibration", [self.passing_case()], self.identity(),
@@ -254,11 +288,13 @@ class AcceptanceTests(unittest.TestCase):
         unselected = self.passing_case()
         unselected["lanes"]["raster"] = {"status": "not_selected"}
         for case in (blocked, unselected):
-            verdict = ph.acceptance("parity", [case], self.identity(), self.identity(sha="d" * 40))
+            verdict = ph.acceptance("parity", [case], self.identity(),
+                                    self.identity(sha="d" * 40, tool_hash="e" * 64))
             self.assertFalse(verdict["accepting"])
 
     def test_empty_corpus_is_not_accepting(self) -> None:
-        self.assertFalse(ph.acceptance("parity", [], self.identity(), self.identity(sha="d" * 40))["accepting"])
+        self.assertFalse(ph.acceptance("parity", [], self.identity(),
+                                       self.identity(sha="d" * 40, tool_hash="e" * 64))["accepting"])
 
 
 class IdentityTests(unittest.TestCase):
@@ -338,13 +374,75 @@ class CorpusValidationTests(unittest.TestCase):
             corpus([good, dict(good)]),
             corpus([dict(good, interactions=[])]),
             corpus([dict(good, case_id="../escape")]),
+            corpus([dict(good, raster_threshold=255)]),
+            corpus([dict(good, raster_threshold=4)]),
+            corpus([dict(good, min_ink_pixels=0)]),
+            corpus([dict(good, scale=0)]),
+            corpus([dict(good, volatile={"structure": ["/root"]})]),
+            corpus([dict(good, volatile={"semantic": ["/runs/0/text"]})]),
+            dict(corpus(), volatile_allowlist=[{"pointer": "/runs"}]),
+            dict(corpus(), volatile_allowlist=[{"pointer": "/runs", "justification": "x"}]),
         ):
             with self.subTest(broken=broken):
                 with self.assertRaises(ph.HarnessError):
                     ph.validate_corpus(broken)
 
 
+class KnobBoundsTests(unittest.TestCase):
+    def test_justified_threshold_and_allowlisted_volatile_are_accepted(self) -> None:
+        good = corpus()["cases"][0]
+        allowed = dict(corpus([dict(good, raster_threshold=4, raster_threshold_justification="AA on a hairline",
+                                     volatile={"semantic": ["/input"]})]),
+                       volatile_allowlist=[{"pointer": "/input", "justification": "observer input path"}])
+        (case,) = ph.validate_corpus(allowed)
+        self.assertEqual(case["raster_threshold"], 4)
+
+
+class CalibrationGateTests(HarnessFixture):
+    def run_parity(self, calibration) -> dict:
+        other = self.root / "other_tool.py"
+        other.write_text(self.tool.read_text() + "\n# a different binary\n")
+        candidate = implementation(other)
+        cand_path = self.root / "cand.json"
+        ph.write_json(cand_path, candidate)
+        roots = {"reference": {"checkout": self.root / "src"}, "candidate": {"checkout": self.root / "src"}}
+        return ph.run_corpus(self.corpus_path, self.root / "src", self.impl_path, cand_path,
+                             self.root / "parity", mode="parity", roots=roots, calibration=calibration)
+
+    def test_parity_run_needs_a_matching_calibration(self) -> None:
+        report = ph.calibrate(self.corpus_path, self.root / "src", self.impl_path, self.root / "cal")
+        self.assertTrue(report["calibrated"])
+        self.assertTrue(self.run_parity(report)["verdict"]["accepting"])
+        refused = self.run_parity(None)
+        self.assertFalse(refused["verdict"]["accepting"])
+        changed = json.loads(json.dumps(report))
+        changed["positive"]["corpus"]["sha256"] = "0" * 64
+        self.assertIn("corpus differs from the calibrated corpus (re-run calibrate)",
+                      self.run_parity(changed)["verdict"]["reasons"])
+        uncalibrated = dict(report, calibrated=False)
+        self.assertFalse(self.run_parity(uncalibrated)["verdict"]["accepting"])
+
+
+class LaneRegistrationTests(unittest.TestCase):
+    def test_duplicate_lane_and_control_are_refused(self) -> None:
+        with self.assertRaises(ph.HarnessError):
+            ph.register_lane("raster", ("x.png",), lambda a, b, c: {"status": "pass"})
+        with self.assertRaises(ph.HarnessError):
+            ph.register_controls(artifact={"raster-one-pixel": {"lane": "raster"}})
+
+
 class ComparatorTests(unittest.TestCase):
+    def test_geometry_requires_the_layout_schema_on_both_sides(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            a, b = Path(tmp) / "a", Path(tmp) / "b"
+            for d in (a, b):
+                d.mkdir()
+                ph.write_json(d / "layout.json", {"nodes": [{"rect": {"x": 0, "y": 0, "w": 9, "h": 9}},
+                                                            {"rect": {"x": 1, "y": 1, "w": 2, "h": 2}}]})
+            result = ph.compare_geometry(a, b, {})
+            self.assertEqual(result["status"], "fail")
+            self.assertTrue(any("missing required keys" in r for r in result["reasons"]))
+
     def test_uniform_render_has_no_ink(self) -> None:
         image = ph.RgbaImage(4, 4, b"\x01\x02\x03\xff" * 16)
         self.assertEqual(ph.ink_pixels(image), 0)
