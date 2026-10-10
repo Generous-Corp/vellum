@@ -1,0 +1,155 @@
+{
+  "schema": "vellum.parity.implementation.v1",
+  "name": "pulp-design-ir-observer-gpu",
+  "repository": "Generous-Corp/pulp",
+  "source_sha": null,
+  "description": "pulp-design-ir-observer plus a GPU observation: pulp-design-ir-observe --backend gpu renders through Skia Graphite on a Dawn device and writes a render receipt, and the step keeps its full stderr, in which the loader lists every image it mapped (DYLD_PRINT_LIBRARIES), as dyld-images.txt for the provider census. Seeded controls set case args gpu_fault (observer --gpu-fault) and param insert_libraries (DYLD_INSERT_LIBRARIES). Requires an observer with --backend/--render-receipt/--gpu-fault.",
+  "tools": {
+    "importer": "build/tools/import-design/pulp-import-design",
+    "observer": "build/tools/import-design/pulp-design-ir-observe"
+  },
+  "source_kinds": {
+    "figma-plugin": [
+      "--from",
+      "figma-plugin"
+    ],
+    "html-offline": [
+      "--offline"
+    ],
+    "design-ir": []
+  },
+  "interaction_encoding": "argv-click-drag-key",
+  "steps": [
+    {
+      "id": "import",
+      "source_kinds": [
+        "figma-plugin",
+        "html-offline"
+      ],
+      "argv": [
+        "{tool:importer}",
+        "@source_kind_args",
+        "--file",
+        "{source}",
+        "--emit",
+        "ir-json",
+        "--mode",
+        "baked",
+        "--output",
+        "design.ir.json",
+        "--no-tokens"
+      ]
+    },
+    {
+      "id": "import",
+      "source_kinds": [
+        "design-ir"
+      ],
+      "argv": [
+        "/bin/cp",
+        "{source}",
+        "design.ir.json"
+      ]
+    },
+    {
+      "id": "observe",
+      "argv": [
+        "{tool:observer}",
+        "--input",
+        "design.ir.json",
+        "--render",
+        "render.png",
+        "--layout",
+        "layout.json",
+        "--text-diagnostics",
+        "text.json",
+        "--width",
+        "{width}",
+        "--height",
+        "{height}",
+        "--scale",
+        "{scale}"
+      ]
+    },
+    {
+      "id": "observe-gpu",
+      "env": {
+        "DYLD_PRINT_LIBRARIES": "1",
+        "DYLD_INSERT_LIBRARIES": "{param:insert_libraries}"
+      },
+      "stderr_artifact": "dyld-images.txt",
+      "argv": [
+        "{tool:observer}",
+        "--input",
+        "design.ir.json",
+        "--render",
+        "gpu-render.png",
+        "--layout",
+        "gpu-layout.json",
+        "--width",
+        "{width}",
+        "--height",
+        "{height}",
+        "--scale",
+        "{scale}",
+        "--backend",
+        "gpu",
+        "--render-receipt",
+        "render-receipt.json",
+        "@case_args:gpu_fault"
+      ]
+    },
+    {
+      "id": "interact",
+      "when": "interactions",
+      "argv": [
+        "{tool:observer}",
+        "--input",
+        "design.ir.json",
+        "--render",
+        "interaction.png",
+        "--layout",
+        "interaction-layout.json",
+        "--width",
+        "{width}",
+        "--height",
+        "{height}",
+        "--scale",
+        "{scale}",
+        "--interaction-log",
+        "interaction.json",
+        "@interactions"
+      ]
+    }
+  ],
+  "roots": {
+    "checkout": "git checkout the tools were built from",
+    "build": "CMake build directory of those tools"
+  },
+  "probes": [
+    {
+      "name": "build",
+      "argv": [
+        "/bin/sh",
+        "-c",
+        "grep -E '^(CMAKE_BUILD_TYPE|CMAKE_CXX_COMPILER|CMAKE_OSX_ARCHITECTURES|PULP_ENABLE_GPU|PULP_HAS_SKIA)[:=]' '{root:build}/CMakeCache.txt' && \"$(grep -E '^CMAKE_CXX_COMPILER:' '{root:build}/CMakeCache.txt' | cut -d= -f2)\" --version | head -1"
+      ]
+    },
+    {
+      "name": "provider",
+      "argv": [
+        "/bin/sh",
+        "-c",
+        "grep -E '^PULP_SKIA_ICUDTL_FILE' '{root:build}/CMakeCache.txt'; grep -m2 -E 'Release|Commit' '{root:checkout}/external/skia-build/VERSION.md'; grep -A1 'Dawn SHA1' '{root:checkout}/external/skia-build/VERSION.md' | tail -1; echo 'renderers: ScreenshotBackend::skia (CPU raster, render.png) and Skia Graphite on Dawn (gpu-render.png)'; otool -L '{tool:observer}' | tail -n +2 | sed 's/ (.*//'"
+      ]
+    },
+    {
+      "name": "fonts",
+      "argv": [
+        "/bin/sh",
+        "-c",
+        "cd '{root:checkout}/external/fonts' && shasum -a 256 *.ttf"
+      ]
+    }
+  ]
+}
