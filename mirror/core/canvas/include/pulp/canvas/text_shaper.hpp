@@ -1,0 +1,239 @@
+#pragma once
+
+// TextShaper — measure-once, reflow-forever text layout.
+// Inspired by Cheng Lou's PreText pattern: expensive text shaping runs once,
+// then line breaking uses just arithmetic over cached segment widths.
+//
+// Default ON when PULP_TEXT_SHAPING is enabled (requires Skia with SkParagraph).
+// Falls back to character-width estimation when disabled.
+
+#include <pulp/canvas/canvas.hpp>
+#include <pulp/canvas/attributed_string.hpp>
+#include <string>
+#include <string_view>
+#include <vector>
+#include <unordered_map>
+#include <memory>
+#include <cstdint>
+#include <mutex>
+
+namespace pulp::canvas {
+
+/// A measured text segment — cached after shaping
+struct ShapedSegment {
+    std::string text;
+    float width = 0;            // Measured width in pixels
+    float ascent = 0;           // Distance above baseline
+    float descent = 0;          // Distance below baseline
+    float leading = 0;          // Extra inter-line gap
+    bool is_whitespace = false;  // Can break here
+    bool is_newline = false;     // Hard line break
+    // This segment begins in the same logical word as its predecessor. Rich
+    // text style boundaries are not CSS line-break opportunities.
+    bool joins_previous_word = false;
+    int style_index = -1;        // AttributedString span; -1 for plain text
+};
+
+/// Prepared text — shaped once, can be reflowed at any width
+class PreparedText {
+public:
+    PreparedText() = default;
+
+    /// The segments (measured)
+    const std::vector<ShapedSegment>& segments() const { return segments_; }
+
+    /// Line height for this text
+    float line_height() const { return line_height_; }
+
+    /// SkFontMetrics-derived line box of the resolved typeface. `ascent`
+    /// is the positive distance ABOVE the baseline (Skia's fAscent is
+    /// negative, so we flip it here). `descent` is distance below baseline.
+    /// `leading` is the extra inter-line gap.
+    /// `line_height` equals ascent + descent + leading. `real` is true
+    /// when these came from a resolved typeface, false when the
+    /// fallback heuristic ran (no Skia, family unresolvable, etc.).
+    /// Callers that need to place a baseline (paint code, custom
+    /// canvases) should use `ascent` rather than the previous
+    /// `font_size * 0.85` rule-of-thumb.
+    float ascent()  const { return ascent_; }
+    float descent() const { return descent_; }
+    float leading() const { return leading_; }
+    bool metrics_are_real() const { return metrics_real_; }
+
+    /// The CSS numeric weight these segments were measured at.
+    ///
+    /// Part of the prepared text's identity, not decoration: a Bold face is a
+    /// different set of advances, not a Regular one drawn heavier, so a layout
+    /// computed from segments measured at 400 does not describe text painted
+    /// at 700.
+    int font_weight() const { return font_weight_; }
+
+    /// Total width if laid out on a single line
+    float total_width() const;
+
+    /// Whether this prepared text has content
+    bool empty() const { return segments_.empty(); }
+
+private:
+    friend class TextShaper;
+    std::vector<ShapedSegment> segments_;
+    float line_height_ = 0;
+    float ascent_ = 0;
+    float descent_ = 0;
+    float leading_ = 0;
+    bool metrics_real_ = false;
+    std::string font_family_;
+    float font_size_ = 0;
+    int font_weight_ = 400;
+};
+
+/// Result of laying out prepared text at a specific width
+struct ShapedLayout {
+    struct Line {
+        struct Fragment {
+            std::string text;
+            float width = 0;
+            int style_index = -1;
+        };
+
+        float width = 0;
+        float y = 0;
+        float ascent = 0;
+        float descent = 0;
+        float leading = 0;
+        float height = 0;
+        /// Horizontal offset from the block's own left edge. Zero for text a
+        /// shaper broke, because every such line starts at the edge. Non-zero
+        /// only for a captured layout whose run resumes a line an earlier
+        /// inline sibling began — the one case a block-relative origin cannot
+        /// express, and the reason this field exists.
+        float x_offset = 0;
+        int first_segment = 0;
+        int segment_count = 0;
+        std::string text;  // Materialized line text (optional)
+        // Exact styled pieces on this line. Populated by
+        // layout_with_lines(); empty for the allocation-free layout() path.
+        // Unlike first_segment/segment_count this also represents fragments
+        // created by break-word/anywhere inside one shaped segment.
+        std::vector<Fragment> fragments;
+    };
+
+    std::vector<Line> lines;
+    float total_width = 0;
+    float total_height = 0;
+    int line_count = 0;
+};
+
+/// CSS overflow-wrap / word-break break opportunity mode.
+/// Default is `normal` so existing callers keep word-boundary-only wrapping.
+///
+/// CSS Text Module Level 3 §6.1 maps to:
+///   normal      → break only at word boundaries (whitespace). A word
+///                 wider than max_width overflows the box.
+///   break_word  → CSS `overflow-wrap: break-word`. Same as normal, but
+///                 if a word is wider than max_width AND no whitespace
+///                 break is available on the current line, allow a
+///                 break inside the word at the codepoint that fits.
+///   anywhere    → CSS `overflow-wrap: anywhere` (and CSS
+///                 `word-break: break-all`). Treat every codepoint as
+///                 a break opportunity. Used for narrow CJK / mono
+///                 columns where word boundaries don't apply.
+///
+/// The implementation uses a proportional split inside a segment
+/// (`seg.width / utf8_codepoints(seg.text)` per codepoint) — CSS doesn't
+/// require pixel-perfect break positions for soft-wrap; the contract
+/// is "do not overflow when a break opportunity exists." Re-shaping
+/// individual fragments would be more accurate but the cost defeats
+/// PreText's measure-once-reflow-forever invariant.
+enum class BreakMode {
+    normal,
+    break_word,
+    anywhere,
+};
+
+/// Text shaper — the PreText-style measure-once-reflow-forever engine.
+///
+/// Usage:
+///   auto prepared = shaper.prepare("Hello world", "system", 14);
+///   auto layout = shaper.layout(prepared, 200.0f);  // Just arithmetic!
+///   // On resize:
+///   auto new_layout = shaper.layout(prepared, 300.0f);  // Still just arithmetic!
+///
+class TextShaper {
+public:
+    TextShaper();
+    ~TextShaper();
+
+    /// Prepare text for layout — this is the expensive call.
+    /// Runs text shaping (HarfBuzz via SkShaper when available) and caches segment widths.
+    /// Call once per (text, font) pair. Do NOT call on every resize.
+    ///
+    /// `font_weight` is the CSS numeric weight the text will be PAINTED at, and
+    /// it belongs here because it changes advances. Measuring a bold run
+    /// through the regular face reports a narrower line than the one that gets
+    /// drawn, which shows up as text breaking a word or two late and
+    /// overflowing its box — a wrap bug in appearance, a measurement bug in
+    /// fact. A caller that omits it is stating the text is Regular.
+    PreparedText prepare(
+        std::string_view text, std::string_view font_family, float font_size,
+        int font_weight = 400, int font_slant = 0,
+        float letter_spacing = 0.0f,
+        const std::vector<Canvas::FontFeature>& font_features = {});
+
+    /// Prepare an attributed string (mixed styles). Paragraph-wide OpenType
+    /// features still affect every span's advances, just as they do when the
+    /// attributed string is painted by Label.
+    PreparedText prepare(
+        const AttributedString& text,
+        const std::vector<Canvas::FontFeature>& font_features = {});
+
+    /// Layout prepared text at a specific width — this is the cheap call.
+    /// Pure arithmetic over cached segment widths. Call on every resize.
+    ///
+    /// When `max_lines > 0`, truncate the result to N lines.
+    /// `max_lines == 1` is the canonical CSS `white-space: nowrap`
+    /// path — it ignores wrapping at the right edge and emits a single
+    /// line whose width is the text's full intrinsic width (segments
+    /// past `max_width` still count toward the line width so consumers
+    /// that pair this with ellipsis truncation can see they overflow).
+    /// 0 = unlimited (default).
+    ShapedLayout layout(const PreparedText& prepared, float max_width,
+                        float line_height = 0, int max_lines = 0,
+                        BreakMode break_mode = BreakMode::normal) const;
+
+    /// Layout and materialize line text (slightly more expensive than layout())
+    ShapedLayout layout_with_lines(const PreparedText& prepared, float max_width,
+                                    float line_height = 0, int max_lines = 0,
+                                    BreakMode break_mode = BreakMode::normal) const;
+
+    /// Quick height calculation (fastest path — just returns height, no line details)
+    float measure_height(const PreparedText& prepared, float max_width,
+                         float line_height = 0) const;
+
+    /// Quick line count
+    int count_lines(const PreparedText& prepared, float max_width) const;
+
+    /// Clear the segment measurement cache
+    void clear_cache();
+
+    /// Whether this shaper uses real font shaping (SkParagraph) or estimation
+    bool uses_real_shaping() const;
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
+/// Global text shaper singleton (uses the best available backend)
+TextShaper& global_text_shaper();
+
+/// Monotonic count of TextShaper::prepare() invocations across all shapers.
+///
+/// Always compiled (a single relaxed atomic increment per prepare() — cheap
+/// enough for release). Exposed so widget-level layout caches (e.g. Label's
+/// shaped-layout cache) can be proven in headless tests: paint a cached widget
+/// twice and assert the counter advanced by exactly one. Not part of the
+/// rendering contract — purely an observability hook for tests/diagnostics.
+std::uint64_t text_shaper_prepare_call_count();
+
+}  // namespace pulp::canvas
