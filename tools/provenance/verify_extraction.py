@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import re
 import subprocess
@@ -138,6 +139,15 @@ SHA_RE = re.compile(r"[0-9a-f]{40}")
 # An empty file is identical everywhere and proves no copying.
 EMPTY_BLOB_SHA = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
 UTC_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
+
+
+def load_mirror_export_verifier():
+    path = Path(__file__).with_name("verify_mirror_export.py")
+    spec = importlib.util.spec_from_file_location("verify_mirror_export", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def sha256(path: Path) -> str:
@@ -548,6 +558,10 @@ def verify(root: Path, pulp_root: Path | None = None) -> dict[str, object]:
         pulp_errors = verify_origins_against_pulp(pulp_root, records)
         checks["mirror_origins_verified_against_pulp"] = not pulp_errors
         errors.extend(pulp_errors)
+    export_report = load_mirror_export_verifier().verify(root, pulp_root)
+    checks["mirror_export_receipts"] = export_report["receipts"]
+    checks["mirror_export_pulp_identity_checked"] = export_report["pulp_identity_checked"]
+    errors.extend(f"mirror export: {error}" for error in export_report["errors"])
     edge_findings = mirror_edge_findings(root)
     checks["mirror_edge_findings"] = edge_findings
     if edge_findings:

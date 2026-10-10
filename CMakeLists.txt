@@ -255,6 +255,10 @@ if(VELLUM_BUILD_TESTS)
         COMMAND "${Python3_EXECUTABLE}"
             tools/provenance/test_verify_extraction.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.mirror-export-unit
+        COMMAND "${Python3_EXECUTABLE}"
+            tools/provenance/test_verify_mirror_export.py
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME vellum.provenance-retirement
         COMMAND "${Python3_EXECUTABLE}"
             tools/provenance/verify_extraction.py

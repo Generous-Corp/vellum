@@ -39,6 +39,35 @@ jobs:
           python3 tools/provenance/verify_extraction.py \
             --output "$RUNNER_TEMP/forbidden-deps-report.json"
 
+      - name: Test mirror export receipt verification
+        run: python3 tools/provenance/test_verify_mirror_export.py
+
+      - name: Resolve landed mirror export receipts
+        id: mirror-receipts
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          index = json.load(open("provenance/mirror/receipts/index.json"))
+          print("present=" + ("true" if index["receipts"] else "false"))
+          PY
+
+      - name: Check out Pulp main with full history for mirror identity
+        if: steps.mirror-receipts.outputs.present == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: Generous-Corp/pulp
+          ref: main
+          path: .mirror-pulp
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Prove every mirrored blob against its Pulp origin
+        if: steps.mirror-receipts.outputs.present == 'true'
+        run: |
+          python3 tools/provenance/verify_mirror_export.py \
+            --pulp-root .mirror-pulp --require-pulp-identity \
+            --output "$RUNNER_TEMP/mirror-identity-report.json"
+
       - name: Retain forbidden-dependency evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
