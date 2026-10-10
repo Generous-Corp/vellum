@@ -655,10 +655,29 @@ def git_tree_blobs(repo: Path, commit: str, prefixes: list[str]) -> dict[str, st
     return blobs
 
 
+def manifest_paths(manifest: dict[str, Any]) -> list[str]:
+    """Closure paths: the exact `files` of a machine-generated closure manifest
+    (pulp.vellum.closure.v1), or the `roots` of a hand-declared calibration one."""
+    files = manifest.get("files")
+    if isinstance(files, list):
+        return [f if isinstance(f, str) else f.get("path", "") for f in files]
+    return list(manifest.get("roots") or [])
+
+
+def git_exported_blobs(repo: Path, commit: str, prefix: str) -> dict[str, str]:
+    """Every blob in an exported commit under prefix, keyed by origin path. The
+    whole prefix is listed, not only the manifest's paths, so an extra file in
+    the export is seen."""
+    blobs = git_tree_blobs(repo, commit, [prefix.rstrip("/")] if prefix else ["."])
+    if not prefix:
+        return blobs
+    return {path[len(prefix):]: sha for path, sha in blobs.items() if path.startswith(prefix)}
+
+
 def compare_identity(manifest: dict[str, Any], origin: dict[str, str], exported: dict[str, str]) -> dict[str, Any]:
     reasons = []
-    if not manifest.get("roots"):
-        reasons.append("empty closure manifest: no roots declared")
+    if not manifest_paths(manifest):
+        reasons.append("empty closure manifest: no roots or files declared")
     if not origin:
         reasons.append("origin closure is empty")
     only_origin = sorted(set(origin) - set(exported))
@@ -669,8 +688,9 @@ def compare_identity(manifest: dict[str, Any], origin: dict[str, str], exported:
     reasons += [f"blob differs: {p} {origin[p]} != {exported[p]}" for p in changed[:25]]
     return {
         "schema": IDENTITY_SCHEMA,
-        "unit": manifest.get("unit"),
-        "roots": manifest.get("roots", []),
+        "unit": manifest.get("unit") or [t.get("name") for t in manifest.get("targets", [])],
+        "manifest_schema": manifest.get("schema"),
+        "closure_paths": len(manifest_paths(manifest)),
         "origin_files": len(origin),
         "exported_files": len(exported),
         "origin_tree_sha256": sha256_bytes(json.dumps(origin, sort_keys=True).encode()),
@@ -1051,7 +1071,10 @@ def main(argv: list[str] | None = None) -> int:
     ident.add_argument("--manifest", required=True, type=Path)
     ident.add_argument("--origin-repo", required=True, type=Path)
     ident.add_argument("--origin-commit", required=True)
-    ident.add_argument("--exported-root", required=True, type=Path)
+    ident.add_argument("--exported-root", type=Path)
+    ident.add_argument("--exported-repo", type=Path)
+    ident.add_argument("--exported-commit")
+    ident.add_argument("--exported-prefix", default="")
     ident.add_argument("--out", required=True, type=Path)
 
     ical = sub.add_parser("identity-calibrate", help="identity lane positive plus negative controls")
@@ -1093,14 +1116,24 @@ def main(argv: list[str] | None = None) -> int:
             print("CALIBRATED" if report["calibrated"] else "NOT CALIBRATED")
             return 0 if report["calibrated"] else 1
         manifest = load_json(args.manifest)
-        roots = manifest.get("roots") or []
-        origin = git_tree_blobs(args.origin_repo, args.origin_commit, roots) if roots else {}
-        exported = tree_blobs(args.exported_root, roots)
+        paths = manifest_paths(manifest)
+        origin = git_tree_blobs(args.origin_repo, args.origin_commit, paths) if paths else {}
+        if args.exported_repo is not None:
+            if not args.exported_commit:
+                raise HarnessError("--exported-repo requires --exported-commit")
+            exported = git_exported_blobs(args.exported_repo, args.exported_commit, args.exported_prefix)
+            where = {"repo": str(args.exported_repo), "commit": args.exported_commit,
+                     "prefix": args.exported_prefix}
+        elif args.exported_root is not None:
+            exported = tree_blobs(args.exported_root, paths)
+            where = {"root": str(args.exported_root)}
+        else:
+            raise HarnessError("identity needs --exported-root or --exported-repo/--exported-commit")
         report = compare_identity(manifest, origin, exported)
         report["origin"] = {"repo": str(args.origin_repo), "commit": args.origin_commit}
-        report["exported_root"] = str(args.exported_root)
+        report["exported"] = where
         write_json(args.out, report)
-        print(json.dumps({k: report[k] for k in ("unit", "status", "origin_files", "exported_files")}))
+        print(json.dumps({k: report[k] for k in ("status", "closure_paths", "origin_files", "exported_files")}))
         for reason in report["reasons"][:10]:
             print(f"  {reason}")
         return 0 if report["status"] == "pass" else 1

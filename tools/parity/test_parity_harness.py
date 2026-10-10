@@ -289,6 +289,45 @@ class IdentityTests(unittest.TestCase):
             self.assertTrue(report["calibrated"], report)
 
 
+class ClosureManifestIdentityTests(unittest.TestCase):
+    """The identity lane against a machine-generated closure manifest (exact
+    files) and an export committed under a mirror prefix."""
+
+    def git(self, repo: Path, *args: str) -> str:
+        return subprocess.check_output(["git", "-C", str(repo), "-c", "user.name=t",
+                                        "-c", "user.email=t@example.invalid", *args], text=True).strip()
+
+    def commit(self, repo: Path, files: dict[str, str]) -> str:
+        for path, text in files.items():
+            (repo / path).parent.mkdir(parents=True, exist_ok=True)
+            (repo / path).write_text(text)
+        self.git(repo, "add", "-A")
+        self.git(repo, "commit", "-qm", "c")
+        return self.git(repo, "rev-parse", "HEAD")
+
+    def test_exact_files_and_mirror_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            origin, mirror = Path(tmp) / "origin", Path(tmp) / "mirror"
+            for repo in (origin, mirror):
+                subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            files = {"unit/a.cpp": "a\n", "unit/b.hpp": "b\n"}
+            origin_sha = self.commit(origin, dict(files, **{"unit/not_in_closure.cpp": "x\n"}))
+            manifest = {"schema": "pulp.vellum.closure.v1", "files": sorted(files)}
+            good = self.commit(mirror, {f"mirror/{p}": t for p, t in files.items()})
+            origin_blobs = ph.git_tree_blobs(origin, origin_sha, ph.manifest_paths(manifest))
+            self.assertEqual(sorted(origin_blobs), sorted(files))
+
+            def check(commit: str) -> dict:
+                return ph.compare_identity(manifest, origin_blobs,
+                                           ph.git_exported_blobs(mirror, commit, "mirror/"))
+
+            self.assertEqual(check(good)["status"], "pass")
+            mutated = self.commit(mirror, {"mirror/unit/a.cpp": "A\n"})
+            self.assertEqual(check(mutated)["status"], "fail")
+            extra = self.commit(mirror, {"mirror/unit/a.cpp": "a\n", "mirror/unit/extra.cpp": "e\n"})
+            self.assertIn("not in origin closure: unit/extra.cpp", check(extra)["reasons"])
+
+
 class CorpusValidationTests(unittest.TestCase):
     def test_rejects_malformed_corpora(self) -> None:
         good = corpus()["cases"][0]
