@@ -14,6 +14,7 @@ closure, then these differential lanes, with similarity scores advisory only.
 | `geometry` | laid-out tree: id, kind, rect, visibility, clipping, hit regions, text boxes (0.5 px) | at least one sized non-root node |
 | `semantic` | text/selection observation | non-empty record list |
 | `interaction` | replayed pointer/keyboard log plus post-interaction render | every planned step logged, at least one handled |
+| `frames` (module `lanes/frames.py`) | every frame under a fixed host clock: dispatch decision, dt, readiness, focus, control and animation state, menus, parameters, layout and pixel digests, captures | every scheduled frame present, full record schema, pixels on every frame, every event applied in its frame, the observation moved |
 
 Implementations are JSON descriptions of commands (`implementations/`); the
 harness never links or imports either implementation. Each side names its
@@ -143,3 +144,33 @@ ships with at least one control that must make it fail.
 The receipt (`<dir>/receipt.json`) records the corpus hash, both identities
 (repository, commit, content hash of every tool binary), every command with its
 exit status, the hash of every input and observation, and the verdict.
+
+## Frames lane
+
+```sh
+python3 tools/parity/parity_harness.py calibrate --lane-module tools/parity/lanes/frames.py \
+  --corpus tools/parity/corpus/pulp-frames-calibration.json \
+  --source-root <origin checkout> \
+  --implementation tools/parity/implementations/pulp-ui-frames-observer.json \
+  --tool frames=<pulp-ui-frames-observe> \
+  --root checkout=<origin checkout> --root build=<its build dir> --out <dir>
+```
+
+Both sides replay the case's staged schedule (`pulp-ui-frame-schedule-v1`:
+host timestamps, parameters, initial editor count, timed hover, click, drag,
+key, context-press, host parameter write, resize and editor attach/detach
+events, and the frames to capture). The comparison is exact and frame by frame;
+the lane result names the first divergent frame and whether the final frames
+agree, so a receipt shows when timing was the only difference. Each side must
+have read the schedule it was staged with, and the two environments (platform,
+architecture, backend, scale, size) must agree.
+
+Its controls: a change landing one frame late with the final frame untouched,
+a perturbed dt, a schema key dropped on both sides, a frozen observation on
+both sides, a truncated run, blank pixels on both sides, an event dropped on
+both sides, a capture pixel, and candidate re-runs at 120 Hz, with a dropped
+vsync, with an event one frame late, with an immediate instead of a view-first
+document load, with a different host parameter write, without the second
+editor, and with a different resize. A re-run control counts only when what a
+viewer would see differed at some frame, not when only the schedule's own
+timestamps or hash did.
