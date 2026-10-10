@@ -228,8 +228,8 @@ def verify(
             "verification": (signature.stderr or signature.stdout).strip(),
         },
         "github_actions_build_attestation": {
-            "status": "unavailable",
-            "reason_code": "private-repository-enterprise-cloud-required",
+            "status": "not-generated",
+            "reason_code": "release-workflow-does-not-generate-build-attestations",
             "documentation": (
                 "https://docs.github.com/en/code-security/getting-started/"
                 "github-security-features#artifact-attestations"

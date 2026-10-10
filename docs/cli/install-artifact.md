@@ -305,9 +305,8 @@ gh release verify-asset v0.1.6 ./vellum-sdk-0.1.6-darwin-arm64.tar.gz \
 
 `release-trust.json` records the exact tag and source commit, the trusted-key
 signed-tag/same-run-repeatability/digest/checksum/sterile-install controls, and
-the explicit attestation status. GitHub Actions build artifact attestations are
-unavailable for private repositories without GitHub Enterprise Cloud, so this
-incubation release does not claim one. The separately generated immutable
+the explicit attestation status. The release workflow does not generate GitHub
+Actions build artifact attestations, so a release does not claim one. The separately generated immutable
 release attestation is required and verified. See
 [Immutable releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases)
 and [GitHub security features](https://docs.github.com/en/code-security/getting-started/github-security-features#artifact-attestations).
