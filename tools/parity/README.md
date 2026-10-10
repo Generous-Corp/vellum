@@ -54,6 +54,20 @@ mutation, a removed file, an extra file and an empty manifest. Its export is a
 `git archive` of the declared roots, a stand-in until the mirror export and its
 machine-generated closure manifest exist.
 
+## Check a real export
+
+```sh
+python3 tools/parity/parity_harness.py identity \
+  --manifest <pulp.vellum.closure.v1 manifest> \
+  --origin-repo <origin checkout> --origin-commit <origin commit> \
+  --exported-repo <mirror repo> --exported-commit <mirror commit> --exported-prefix mirror/ \
+  --out <report.json>
+```
+
+The origin side reads exactly the manifest's `files`; the export side lists every
+blob under the prefix, so a missing, changed, or extra file fails. This check is
+independent of the exporter's own receipt verification.
+
 ## Run a comparison
 
 ```sh
