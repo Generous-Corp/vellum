@@ -246,7 +246,25 @@ def compare_provider_census(ref: Path, cand: Path, case: dict[str, Any]) -> dict
 # ── seeded controls ────────────────────────────────────────────────────────
 
 
+# Artifact controls apply only where the baseline produced the file: a blocked
+# baseline is the positive's failure to report, not something to crash on here.
+def unlink(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    path.unlink()
+    return True
+
+
+def mutate_png(path: Path, transform) -> bool:
+    if not path.is_file():
+        return False
+    ph.mutate_png(path, transform)
+    return True
+
+
 def edit_receipt(path: Path, edit) -> bool:
+    if not path.is_file():
+        return False
     receipt = ph.load_json(path)
     edit(receipt)
     ph.write_json(path, receipt)
@@ -265,6 +283,8 @@ def add_second_dawn_image(side: Path) -> bool:
     """List a second image carrying Dawn in the loader record: a copy of the
     image that already carries it, so the duplicate is real Dawn code."""
     listing = side / "dyld-images.txt"
+    if not listing.is_file():
+        return False
     record = census(listing)
     dawn = [p for p in record["providers"] if "dawn" in p["roles"]]
     if not dawn:
@@ -278,6 +298,8 @@ def add_second_dawn_image(side: Path) -> bool:
 
 def drop_gpu_drivers(side: Path) -> bool:
     listing = side / "dyld-images.txt"
+    if not listing.is_file():
+        return False
     lines = listing.read_text(encoding="utf-8").splitlines()
     kept = [line for line in lines
             if not ((m := DYLD_LINE.match(line.strip())) and GPU_DRIVER.match(m.group("path")))]
@@ -323,14 +345,14 @@ ph.register_lane("provider-census", GPU_ARTIFACTS["provider-census"], compare_pr
 
 ph.register_controls(
     artifact={
-        "gpu-raster-one-pixel": {"lane": "gpu-raster", "candidate": lambda d: (
-            ph.mutate_png(d / "gpu-render.png", ph.flip_center_pixel), True)[1]},
-        "gpu-raster-blank-both": {"lane": "gpu-raster", "both": lambda d: (
-            ph.mutate_png(d / "gpu-render.png", ph.uniform_image), True)[1]},
+        "gpu-raster-one-pixel": {"lane": "gpu-raster", "candidate": lambda d: mutate_png(
+            d / "gpu-render.png", ph.flip_center_pixel)},
+        "gpu-raster-blank-both": {"lane": "gpu-raster", "both": lambda d: mutate_png(
+            d / "gpu-render.png", ph.uniform_image)},
         "gpu-render-missing": {"lane": "gpu-raster", "expect": "blocked",
-                               "candidate": lambda d: ((d / "gpu-render.png").unlink(), True)[1]},
+                               "candidate": lambda d: unlink(d / "gpu-render.png")},
         "gpu-receipt-missing": {"lane": "gpu-receipt", "expect": "blocked",
-                                "candidate": lambda d: ((d / "render-receipt.json").unlink(), True)[1]},
+                                "candidate": lambda d: unlink(d / "render-receipt.json")},
         "gpu-receipt-dawn-revision": {"lane": "gpu-receipt", "candidate": lambda d: edit_receipt(
             d / "render-receipt.json", lambda r: r.update(dawn_version=flip_hex(r["dawn_version"])))},
         "gpu-receipt-adapter-changed": {"lane": "gpu-receipt", "candidate": lambda d: edit_receipt(
@@ -340,7 +362,7 @@ ph.register_controls(
         "census-no-gpu-driver-both": {"lane": "provider-census", "both": drop_gpu_drivers,
                                       "bites": reason_contains("no GPU driver was loaded")},
         "census-missing": {"lane": "provider-census", "expect": "blocked",
-                           "candidate": lambda d: ((d / "dyld-images.txt").unlink(), True)[1]},
+                           "candidate": lambda d: unlink(d / "dyld-images.txt")},
     },
     rerun={
         "gpu-device-lost": {"lane": "gpu-receipt", "expect": "blocked",
