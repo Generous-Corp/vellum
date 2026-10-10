@@ -1,0 +1,16 @@
+{
+  "schema": "vellum.retired-release-tags.v1",
+  "tags": [
+    {
+      "tag": "v0.1.7",
+      "status": "retired-host-deleted",
+      "original_repository": "danielraffel/vellum",
+      "original_release_id": 368068163,
+      "original_published_at": "2026-08-10T16:51:43Z",
+      "target_commit": "47ebf852b9d8d49d3a61fac88cd993f454790e4e",
+      "sdk_archive": "vellum-sdk-0.1.7-darwin-arm64.tar.gz",
+      "sdk_archive_sha256": "ccfb8d77e195b8efa742f5bb8204ad20670a5effcb912a469340d3f6c7ccc56d",
+      "reason": "Published only on the private incubation repository, which was deleted after the public consolidation onto Generous-Corp/vellum. The tag object, release, attestation, and assets no longer exist. Re-creating the name would give a second immutable v0.1.7 with different bytes, so the name is never reused. The target commit remains in this repository's history."
+    }
+  ]
+}

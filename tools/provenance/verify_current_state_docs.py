@@ -15,7 +15,8 @@ SHA = re.compile(r"[0-9a-f]{40}\Z")
 ACTIVE_REQUIRED = {
     "README.md": (
         "Source authority for the selected mapped framework slices is active",
-        "published, immutable `v0.1.7`",
+        "published, immutable `v0.1.6`",
+        "`v0.1.7` is retired",
     ),
     "docs/ownership.md": (
         "Source authority for the selected mapped framework slices is active",
@@ -38,8 +39,9 @@ ACTIVE_REQUIRED = {
         "IME composition",
     ),
     "docs/cli/install-artifact.md": (
-        "published, immutable `v0.1.7`",
-        "Private tagged-release installation",
+        "published, immutable `v0.1.6`",
+        "name `v0.1.7` is retired",
+        "Tagged-release installation",
     ),
 }
 ACTIVE_FORBIDDEN = (
@@ -50,6 +52,9 @@ ACTIVE_FORBIDDEN = (
     "Browser JavaScript driving the shared Wasm core remains a\nplanned validation lane",
     "The renderer is intentionally not yet connected",
     "not installed in this extraction milestone",
+    "published, immutable `v0.1.7`",
+    "temporarily hosted in the private",
+    "--repo danielraffel/vellum",
 )
 
 
