@@ -30,6 +30,8 @@
         "{height}",
         "--scale",
         "{scale}",
+        "--timer-clock",
+        "{param:timer_clock}",
         "--out-dir",
         "."
       ]
