@@ -47,14 +47,16 @@ Its authorship and exact blobs remain auditable in Git history and immutable
 
 ## Quick start
 
-The following is the exact published, immutable `v0.1.7` tagged-release flow.
-This incubation release is temporarily hosted in the private
-`danielraffel/vellum` repository while the permanent repository home is being
-decided; that trial location is not an authority-transfer decision.
-Because both the repository and release are private, install and authenticate
-[GitHub CLI 2.75.0 or newer](https://cli.github.com/) first (`gh auth login`,
-or set `GH_TOKEN` or `GITHUB_TOKEN` for an unattended agent). This minimum
-provides the immutable-release verification commands used by the installer.
+The following is the exact published, immutable `v0.1.6` tagged-release flow
+from `Generous-Corp/vellum`. `v0.1.6` is the current published release; the
+source tree on `main` identifies as `0.1.8` and is unreleased. The name
+`v0.1.7` is retired and is never reused: it was published only on a deleted
+incubation repository (see
+[`provenance/retired-release-tags.json`](provenance/retired-release-tags.json)).
+Install and authenticate [GitHub CLI 2.75.0 or newer](https://cli.github.com/)
+first (`gh auth login`, or set `GH_TOKEN` or `GITHUB_TOKEN` for an unattended
+agent). This minimum provides the immutable-release verification commands used
+by the installer.
 
 Verify the supported host and bootstrap prerequisites first:
 
@@ -81,13 +83,13 @@ it acquire and verify the matching installer core and macOS 13.0+ arm64 SDK:
 <!-- readme-exec: id=release-install-create-run profile=clean-release -->
 ```sh
 bootstrap_dir="$(mktemp -d)"
-gh release download v0.1.7 \
-  --repo danielraffel/vellum \
+gh release download v0.1.6 \
+  --repo Generous-Corp/vellum \
   --pattern install.sh \
   --dir "$bootstrap_dir"
-gh release verify-asset v0.1.7 "$bootstrap_dir/install.sh" \
-  --repo danielraffel/vellum
-sh "$bootstrap_dir/install.sh" --version 0.1.7
+gh release verify-asset v0.1.6 "$bootstrap_dir/install.sh" \
+  --repo Generous-Corp/vellum
+sh "$bootstrap_dir/install.sh" --version 0.1.6
 export PATH="$HOME/.local/bin:$PATH"
 vellum --json doctor --require-target macos
 
@@ -121,16 +123,16 @@ one row for each bootstrap file, and verify them before executing either script:
 <!-- readme-exec: id=cautious-bootstrap manual=alternative-to-quick-start -->
 ```sh
 bootstrap_dir="$(mktemp -d)"
-gh release download v0.1.7 \
-  --repo danielraffel/vellum \
+gh release download v0.1.6 \
+  --repo Generous-Corp/vellum \
   --pattern SHA256SUMS \
   --pattern install.sh \
   --pattern install_core.py \
   --dir "$bootstrap_dir"
 for asset in install.sh install_core.py SHA256SUMS
 do
-  gh release verify-asset v0.1.7 "$bootstrap_dir/$asset" \
-    --repo danielraffel/vellum
+  gh release verify-asset v0.1.6 "$bootstrap_dir/$asset" \
+    --repo Generous-Corp/vellum
 done
 (
   cd "$bootstrap_dir"
@@ -143,20 +145,19 @@ done
   cat install.sh.sha256 install_core.py.sha256 > bootstrap.sha256
   shasum -a 256 -c bootstrap.sha256
 )
-sh "$bootstrap_dir/install.sh" --version 0.1.7
+sh "$bootstrap_dir/install.sh" --version 0.1.6
 ```
 
 Both paths verify the initial bootstrap against GitHub's immutable-release
 attestation before executing it. The installer then verifies the matching
 installer core, archive release digests, and release `SHA256SUMS` before it
-extracts or activates SDK bytes. No private-release `curl | sh` path is
-advertised.
+extracts or activates SDK bytes. No `curl | sh` path is advertised.
 
 The checkout-only development path remains available for CLI and import work:
 
 <!-- readme-exec: id=checkout-development-install manual=unverified-development-path -->
 ```sh
-git clone git@github.com:danielraffel/vellum.git
+git clone https://github.com/Generous-Corp/vellum.git
 cd vellum
 ./scripts/install.sh --local "$PWD"
 export PATH="$HOME/.local/bin:$PATH"
@@ -168,9 +169,8 @@ installed native journey.
 
 ## Requirements
 
-The private release quick start supports macOS 13.0 or newer on Apple silicon.
-It requires Python 3.9 or newer and an authenticated GitHub CLI 2.75.0 or newer
-with access to the private repository. The SDK bundles its exact Node runtime,
+The release quick start supports macOS 13.0 or newer on Apple silicon.
+It requires Python 3.9 or newer and an authenticated GitHub CLI 2.75.0 or newer. The SDK bundles its exact Node runtime,
 application build tools, and pinned framework dependencies. Chrome is required
 only for browser scenarios. Source SDK development additionally requires the
 toolchain named in the detailed commands below.
@@ -217,7 +217,7 @@ commit.
 <!-- docs-sync: capabilities:start -->
 | Capability or target | Status | Evidence check | Honest boundary |
 | --- | --- | --- | --- |
-| macOS native application | experimental | `gpu-macos-arm64` | macOS 13.0+ arm64; private exact-pin SDK; ad-hoc package |
+| macOS native application | experimental | `gpu-macos-arm64` | macOS 13.0+ arm64; exact-pin SDK; ad-hoc package |
 | Figma plugin export import/reimport | experimental | `product-quality`, `gpu-macos-arm64` | bounded single-root Pulp plugin JSON or `.pulp.zip`; not `.fig` or live REST |
 | Browser JavaScript plus shared C++ Wasm core | partial | `gpu-macos-arm64` | Canvas2D presentation shell; no browser GPU-backend claim |
 | Windows native application | planned | none | local-development CLI bootstrap only; no native product evidence |
@@ -267,7 +267,7 @@ python3 scripts/build_sdk_artifact.py \
   --node-provenance /path/to/node-provenance.json \
   --output-dir dist --json
 ./scripts/install.sh \
-  --archive dist/vellum-sdk-0.1.7-darwin-arm64.tar.gz \
+  --archive dist/vellum-sdk-0.1.8-darwin-arm64.tar.gz \
   --checksums dist/SHA256SUMS
 
 app_dir="$(mktemp -d)/palette-board"
@@ -372,10 +372,10 @@ python3 scripts/build_sdk_artifact.py \
   --node-provenance /path/to/node-provenance.json \
   --output-dir dist --json
 python3 scripts/verify_sdk_artifact.py \
-  --archive dist/vellum-sdk-0.1.7-darwin-arm64.tar.gz \
+  --archive dist/vellum-sdk-0.1.8-darwin-arm64.tar.gz \
   --checksums dist/SHA256SUMS --json
 ./scripts/install.sh \
-  --archive dist/vellum-sdk-0.1.7-darwin-arm64.tar.gz \
+  --archive dist/vellum-sdk-0.1.8-darwin-arm64.tar.gz \
   --checksums dist/SHA256SUMS
 ```
 
@@ -460,30 +460,30 @@ proves the imported design is embedded in the application bundle, exercises
 build/run/test/capture/package, and builds/tests a sterile CMake consumer
 without a Vellum or Pulp checkout.
 
-The exact `v0.1.7` release is consumed without a moving `latest` pointer:
+An exact release is consumed without a moving `latest` pointer. Once `v0.1.8`
+is published, the checkout installer installs it with:
 
 <!-- readme-exec: id=version-install-only manual=subset-of-release-quick-start -->
 ```sh
-./scripts/install.sh --version 0.1.7
+./scripts/install.sh --version 0.1.8
 ```
 
 The release `SHA256SUMS` covers the SDK archive, `install.sh`, and
 `install_core.py`. The source-controlled `scripts/INSTALLER_SHA256SUMS` covers
 the two bootstrap scripts and is checked when preparing the tag. Release
 publication also retains `release-trust.json`. It distinguishes unavailable
-GitHub Actions build artifact attestations for this private non-Enterprise
-repository from the automatic release attestation GitHub creates when an
+GitHub Actions build artifact attestations for the release from the automatic release attestation GitHub creates when an
 immutable release is published. After downloading the assets, verify that
 release attestation and an asset with:
 
 <!-- readme-exec: id=release-attestation-check manual=post-download-verification-example -->
 ```sh
-gh release verify v0.1.7 --repo danielraffel/vellum
-gh release verify-asset v0.1.7 ./vellum-sdk-0.1.7-darwin-arm64.tar.gz \
-  --repo danielraffel/vellum
+gh release verify v0.1.6 --repo Generous-Corp/vellum
+gh release verify-asset v0.1.6 ./vellum-sdk-0.1.6-darwin-arm64.tar.gz \
+  --repo Generous-Corp/vellum
 ```
 
-The private incubation release relies on a trusted-key SSH-signed annotated Git
+Each release relies on a trusted-key SSH-signed annotated Git
 tag bound to the exact source commit, same-run byte repeatability, GitHub's
 immutable-release attestation and asset digests, `SHA256SUMS`, and sterile
 installed-SDK validation. It does not claim a GitHub Actions build artifact
@@ -493,8 +493,7 @@ and [GitHub security features](https://docs.github.com/en/code-security/getting-
 
 Checksum verification protects downloaded bytes but does not make an
 unreviewed network script intrinsically safe. Review the pinned bootstrap or
-use the cautious path above; no `curl | sh` command is advertised for the
-private release.
+use the cautious path above; no `curl | sh` command is advertised.
 
 ## Ownership, provenance, and attribution
 
@@ -534,7 +533,7 @@ attribution are recorded in [`docs/ownership.md`](docs/ownership.md),
 
 ## Versioning and support status
 
-Vellum is private experimental 0.x software. Projects pin one exact framework
+Vellum is experimental 0.x software. Projects pin one exact framework
 version, source commit, target tuple, SDK checksum, CLI API, and JS package
 identity in `framework.lock`. Exact-pin source/API compatibility is the current
 promise; there is no universal C++ ABI promise. Schemas and CLI names may change
