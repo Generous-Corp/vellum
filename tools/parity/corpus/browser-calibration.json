@@ -19,7 +19,8 @@
       ],
       "volatile": {
         "structure": [
-          "/imported_at"
+          "/imported_at",
+          "/settle_rounds"
         ]
       },
       "params": {
@@ -55,7 +56,8 @@
       ],
       "volatile": {
         "structure": [
-          "/imported_at"
+          "/imported_at",
+          "/settle_rounds"
         ]
       },
       "params": {
@@ -91,7 +93,8 @@
       ],
       "volatile": {
         "structure": [
-          "/imported_at"
+          "/imported_at",
+          "/settle_rounds"
         ]
       },
       "params": {
@@ -127,7 +130,8 @@
       ],
       "volatile": {
         "structure": [
-          "/imported_at"
+          "/imported_at",
+          "/settle_rounds"
         ]
       },
       "params": {
@@ -163,7 +167,8 @@
       ],
       "volatile": {
         "structure": [
-          "/imported_at"
+          "/imported_at",
+          "/settle_rounds"
         ]
       },
       "params": {
@@ -199,7 +204,8 @@
       ],
       "volatile": {
         "structure": [
-          "/imported_at"
+          "/imported_at",
+          "/settle_rounds"
         ]
       },
       "params": {
@@ -235,7 +241,8 @@
       ],
       "volatile": {
         "structure": [
-          "/imported_at"
+          "/imported_at",
+          "/settle_rounds"
         ]
       },
       "params": {
@@ -253,6 +260,30 @@
         "max_mismatch_fraction": 0.005,
         "justification": "Skia-vs-Blink glyph rasterization and 1-device-px box-edge rounding, measured with Pulp e41854a (--native-panel-lowering) against Chrome 155.0.8059.39 at channel error > 8; the ceiling is about 1.5x that measurement, so a dropped node, a wrong fill or a missing text run exceeds it."
       }
+    },
+    {
+      "case_id": "design-ir-image-asset",
+      "source_base": "corpus",
+      "source": "fixtures/image-asset.ir.json",
+      "stage": [
+        "fixtures/assets"
+      ],
+      "source_kind": "design-ir",
+      "width": 160,
+      "height": 120,
+      "scale": 2,
+      "lanes": [
+        "structure",
+        "raster",
+        "geometry"
+      ],
+      "note": "a native case that decodes a staged image asset, so the core asset-missing control has something to remove"
+    }
+  ],
+  "volatile_allowlist": [
+    {
+      "pointer": "/settle_rounds",
+      "justification": "Chromium settle-loop round counter recorded in DesignIR capture metadata; under host load it varies run to run (13/14/15 observed) while every render, layout and text observation stayed byte-identical. It counts how long the capture waited, not what was captured."
     }
   ]
 }
