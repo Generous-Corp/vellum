@@ -572,9 +572,12 @@ def acceptance(mode: str, cases: list[dict[str, Any]], reference: dict[str, Any]
 
 
 def resolve_tools(impl: dict[str, Any], overrides: dict[str, str]) -> dict[str, Path]:
+    """Tool paths resolve against the invoking directory, never against a
+    case's working directory, so a relative default cannot silently point at
+    a different binary per case."""
     tools = {name: Path(path) for name, path in (impl.get("tools") or {}).items()}
     tools.update({name: Path(path) for name, path in overrides.items()})
-    return tools
+    return {name: path.resolve() for name, path in tools.items()}
 
 
 def run_corpus(corpus_path: Path, source_root: Path, reference_path: Path, candidate_path: Path,
