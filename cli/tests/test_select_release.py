@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-import runpy
+import json
 from pathlib import Path
+import runpy
+import tempfile
 import unittest
 
 
@@ -151,6 +153,24 @@ class SelectReleaseTests(unittest.TestCase):
                 "v0.1.0",
                 allowed_assets={"install.sh"},
             )
+
+
+    def test_retired_tag_is_never_selected(self) -> None:
+        with self.assertRaisesRegex(ReleaseSelectionError, "retired"):
+            select_release([release("v0.1.7")], "v0.1.7")
+        # Control: the same row is selectable when the record does not list it.
+        with tempfile.TemporaryDirectory() as temporary:
+            record = Path(temporary) / "retired.json"
+            record.write_text(
+                json.dumps(
+                    {"schema": "vellum.retired-release-tags.v1", "tags": []}
+                ),
+                encoding="utf-8",
+            )
+            selected = select_release(
+                [release("v0.1.7")], "v0.1.7", retired_tags=record
+            )
+            self.assertEqual(selected["tag_name"], "v0.1.7")
 
 
 if __name__ == "__main__":

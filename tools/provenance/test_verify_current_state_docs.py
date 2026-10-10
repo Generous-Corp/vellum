@@ -59,6 +59,55 @@ class Tests(unittest.TestCase):
             ):
                 verifier.verify_documents(root)
 
+    def copy_document_set(self, root: Path) -> None:
+        required = {
+            *verifier.ACTIVE_REQUIRED,
+            "provenance/ownership-map.yaml",
+            "provenance/pulp-observatory/provenance.lock",
+            "provenance/pulp-extraction.json",
+            "docs/architecture/gpu-boundary.md",
+            "docs/cli/contract.md",
+        }
+        for relative in required:
+            destination = root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT / relative, destination)
+
+    def test_retired_release_claims_are_rejected(self) -> None:
+        for stale in (
+            "The following is the exact published, immutable `v0.1.7` release.",
+            "gh release download v0.1.6 --repo danielraffel/vellum",
+        ):
+            with self.subTest(stale=stale), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                self.copy_document_set(root)
+                verifier.verify_documents(root)
+                readme = root / "README.md"
+                readme.write_text(
+                    readme.read_text(encoding="utf-8") + "\n" + stale + "\n",
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(
+                    verifier.VerificationError, "stale claim"
+                ):
+                    verifier.verify_documents(root)
+
+    def test_missing_retirement_statement_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.copy_document_set(root)
+            guide = root / "docs/cli/install-artifact.md"
+            guide.write_text(
+                guide.read_text(encoding="utf-8").replace(
+                    "The name `v0.1.7` is retired", "The name is reserved", 1
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                verifier.VerificationError, "missing active-state claim"
+            ):
+                verifier.verify_documents(root)
+
     def test_coordinate_disagreement_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
