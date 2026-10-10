@@ -30,7 +30,22 @@ The normal Git deletion is recoverable, preserves authorship, and leaves the
 filtered seed commit and byte-locked cut manifest intact. The provenance
 verifier checks both facts: historical blobs still match the manifest at the
 seed commit, while no retired path or exact historical source blob is present
-in the active framework surface.
+in a Vellum-native root.
+
+## Mirrored Pulp framework source
+
+[Decision 0010](../decisions/0010-mirror-extracted-pulp-framework-source.md)
+admits a second, separately verified scope: the `mirror/` root, which receives
+validated audio-free Pulp framework closures by automation from an exact Pulp
+commit and lands by merge commit. Nothing is mirrored yet. Each mirrored file
+must equal a blob recorded in
+[`provenance/mirror/blob-origins.json`](../provenance/mirror/blob-origins.json)
+with its Pulp commit and path, so the root is read-only in Vellum. Pulp remains
+the editable source owner of a mirrored unit until a separately approved Pulp
+change consumes the exact Vellum package and freezes its copy; there is no
+synchronization in either direction. The `pulp::` namespace is permitted only
+under `mirror/`; audio, plug-in, host, and product edges are forbidden in both
+scopes, and native roots may not contain a copy of any Pulp-origin blob.
 
 ## Active ownership and change routing
 

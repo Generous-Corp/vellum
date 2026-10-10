@@ -135,4 +135,6 @@ The filtered seed once placed 232 projected source and vendored files in the
 working tree. Those paths are deleted from the active tip. Their exact
 historical identities remain in `provenance/cut-manifest.json` and Git history;
 they are not build inputs, installed files, or release payloads. The active
-source boundary is `provenance/active-source-boundary.json`.
+source boundary is `provenance/active-source-boundary.json`. Mirrored Pulp
+framework source admitted by Decision 0010 is recorded blob by blob in
+`provenance/mirror/blob-origins.json`; none is present yet.
