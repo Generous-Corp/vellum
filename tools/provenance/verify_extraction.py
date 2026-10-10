@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
-"""Verify immutable extraction history and the retired active-source boundary.
+"""Verify immutable extraction history and the active-source boundary.
 
 The historical cut manifest and filter maps describe the original projection.
 They are verified against the preserved seed commit, not against HEAD. HEAD is
-checked independently to prove that the projection is no longer an editable
-source copy and cannot leak into Vellum's build, SDK, or authoring surface.
+checked independently in two scopes (Decision 0010):
+
+- Vellum-native roots must contain no Pulp namespace, Pulp package or target
+  name, audio/plug-in SDK reference, or byte copy of any Pulp-origin blob.
+- The mirror root holds Pulp framework source exported by automation. Every
+  mirrored file must match an append-only blob-origin record, and no mirrored
+  file may carry an audio, plug-in, host, or product edge. The Pulp namespace
+  is permitted there because mirrored bytes stay identical to their origin.
 """
 
 from __future__ import annotations
@@ -41,6 +47,25 @@ EXPECTED_ACTIVE_ROOTS = (
     "scripts",
     "templates",
 )
+MIRROR_ROOT = "mirror/"
+MIRROR_ORIGIN_RECORDS = "provenance/mirror/blob-origins.json"
+MIRROR_ORIGIN_SCHEMA = "vellum.mirror-blob-origins.v1"
+MIRROR_DECISION = "decisions/0010-mirror-extracted-pulp-framework-source.md"
+MIRROR_RECORD_KEYS = {
+    "mirror_path",
+    "git_blob_sha",
+    "pulp_commit",
+    "pulp_path",
+    "export_receipt",
+}
+EXPECTED_RULES = {
+    "retired_paths_at_active_tip": 0,
+    "native_files_matching_pulp_origin_blobs": 0,
+    "mirror_files_without_matching_origin_record": 0,
+    "native_forbidden_namespace_or_product_references": 0,
+    "mirror_audio_plugin_host_or_product_edges": 0,
+    "open_extraction_debts": 0,
+}
 EXPECTED_RETIRED_PREFIXES = (
     "core/",
     "external/fonts/",
@@ -84,10 +109,34 @@ FORBIDDEN_ACTIVE_PATTERNS = {
         re.IGNORECASE,
     ),
 }
+# Pulp subsystems that stay Pulp-owned under Decision 0010: audio, DSP, MIDI,
+# music theory, plug-in formats, plug-in hosting, GPU audio, and product
+# content. A mirrored framework file may not reach any of them.
+_PULP_PRODUCT_SUBSYSTEMS = r"(?:audio|signal|midi|music|format|host|gpu_audio|content)"
+FORBIDDEN_MIRROR_EDGE_PATTERNS = {
+    "mirror-product-include": re.compile(
+        r"#\s*(?:include|import)\s*[<\"]"
+        r"(?:pulp/" + _PULP_PRODUCT_SUBSYSTEMS + r"/"
+        r"|pluginterfaces/|public\.sdk/|clap/|lv2/|AudioUnitSDK/|oboe/"
+        r"|AudioToolbox/|AudioUnit/|CoreAudio/|CoreAudioKit/|CoreMIDI/|AVFAudio/)",
+    ),
+    "mirror-product-symbol": re.compile(
+        r"\bpulp::" + _PULP_PRODUCT_SUBSYSTEMS + r"\b"
+        r"|\bpulp[-_](?:audio|signal|midi|music|format|host|gpu[-_]audio|content)\b",
+    ),
+    "mirror-audio-framework-link": re.compile(
+        r"\b(?:AudioToolbox|AudioUnit|CoreAudio|CoreAudioKit|CoreMIDI|AVFAudio)"
+        r"\.framework\b|-framework\s+"
+        r"(?:AudioToolbox|AudioUnit|CoreAudio|CoreAudioKit|CoreMIDI|AVFAudio)\b",
+    ),
+}
+MIRROR_EDGE_SUFFIXES = TEXT_SUFFIXES | {".inl", ".ipp", ".txt"}
 POLICY_IMPLEMENTATION_PATHS = {
     "scripts/verify_sdk_artifact.py",
 }
 SHA_RE = re.compile(r"[0-9a-f]{40}")
+# An empty file is identical everywhere and proves no copying.
+EMPTY_BLOB_SHA = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
 UTC_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
 
 
@@ -204,6 +253,124 @@ def copied_seed_findings(
     return findings
 
 
+def load_mirror_origin_records(path: Path) -> tuple[list[dict[str, str]], list[str]]:
+    """Load the append-only blob-origin records for the mirror root."""
+    if not path.is_file():
+        return [], [f"{MIRROR_ORIGIN_RECORDS} is missing"]
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return [], [f"{MIRROR_ORIGIN_RECORDS} is unreadable: {exc}"]
+    if not isinstance(data, dict) or set(data) != {"schema", "pulp_repository", "records"}:
+        return [], [f"{MIRROR_ORIGIN_RECORDS} has unexpected top-level keys"]
+    errors: list[str] = []
+    if data["schema"] != MIRROR_ORIGIN_SCHEMA:
+        errors.append(f"{MIRROR_ORIGIN_RECORDS} schema must be {MIRROR_ORIGIN_SCHEMA}")
+    if data["pulp_repository"] != "Generous-Corp/pulp":
+        errors.append(f"{MIRROR_ORIGIN_RECORDS} must name Generous-Corp/pulp")
+    records = data["records"]
+    if not isinstance(records, list):
+        return [], errors + [f"{MIRROR_ORIGIN_RECORDS} records must be a list"]
+    valid: list[dict[str, str]] = []
+    seen: set[tuple[str, ...]] = set()
+    for index, record in enumerate(records):
+        label = f"{MIRROR_ORIGIN_RECORDS} record {index}"
+        if not isinstance(record, dict) or set(record) != MIRROR_RECORD_KEYS:
+            errors.append(f"{label} has unexpected keys")
+            continue
+        if not all(isinstance(record[key], str) for key in MIRROR_RECORD_KEYS):
+            errors.append(f"{label} has a non-string field")
+            continue
+        if not SHA_RE.fullmatch(record["git_blob_sha"]):
+            errors.append(f"{label} git_blob_sha is not a full object ID")
+        if not SHA_RE.fullmatch(record["pulp_commit"]):
+            errors.append(f"{label} pulp_commit is not a full commit SHA")
+        mirror_path = record["mirror_path"]
+        if not mirror_path.startswith(MIRROR_ROOT) or ".." in mirror_path.split("/"):
+            errors.append(f"{label} mirror_path is outside {MIRROR_ROOT}")
+        pulp_path = record["pulp_path"]
+        if not pulp_path or pulp_path.startswith("/") or ".." in pulp_path.split("/"):
+            errors.append(f"{label} pulp_path is not a repository-relative path")
+        if not record["export_receipt"]:
+            errors.append(f"{label} names no export receipt")
+        identity = tuple(record[key] for key in sorted(MIRROR_RECORD_KEYS))
+        if identity in seen:
+            errors.append(f"{label} duplicates an earlier record")
+        seen.add(identity)
+        valid.append(record)
+    return valid, errors
+
+
+def mirror_files(root: Path) -> Iterable[Path]:
+    return active_files(root, (MIRROR_ROOT.rstrip("/"),))
+
+
+def mirror_origin_findings(
+    root: Path, records: Iterable[dict[str, str]]
+) -> list[dict[str, str]]:
+    """Every mirrored file must equal a recorded Pulp-origin blob at its path.
+
+    Records are append-only, so an earlier export's record may remain after a
+    later export replaced or removed the file; only the reverse is a failure.
+    """
+    recorded: dict[str, set[str]] = {}
+    for record in records:
+        recorded.setdefault(record["mirror_path"], set()).add(record["git_blob_sha"])
+    findings: list[dict[str, str]] = []
+    for path in mirror_files(root):
+        relative = path.relative_to(root).as_posix()
+        blob = git_blob_sha(path.read_bytes())
+        if relative not in recorded:
+            rule = "mirror-file-without-origin-record"
+        elif blob not in recorded[relative]:
+            rule = "mirror-blob-differs-from-origin-record"
+        else:
+            continue
+        findings.append({"rule": rule, "path": relative, "git_blob_sha": blob})
+    return findings
+
+
+def mirror_edge_findings(root: Path) -> list[dict[str, object]]:
+    findings: list[dict[str, object]] = []
+    for path in mirror_files(root):
+        if path.suffix.lower() not in MIRROR_EDGE_SUFFIXES:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        for name, pattern in FORBIDDEN_MIRROR_EDGE_PATTERNS.items():
+            for match in pattern.finditer(text):
+                findings.append(
+                    {
+                        "rule": name,
+                        "path": path.relative_to(root).as_posix(),
+                        "line": text.count("\n", 0, match.start()) + 1,
+                        "match": match.group(0)[:120],
+                    }
+                )
+    return findings
+
+
+def verify_origins_against_pulp(
+    pulp_root: Path, records: Iterable[dict[str, str]]
+) -> list[str]:
+    """Prove each record against the Pulp history it cites (identity oracle)."""
+    errors: list[str] = []
+    for record in records:
+        spec = f"{record['pulp_commit']}:{record['pulp_path']}"
+        try:
+            actual = git(pulp_root, "rev-parse", "--verify", "--quiet", spec)
+        except subprocess.CalledProcessError:
+            actual = ""
+        if actual != record["git_blob_sha"]:
+            errors.append(
+                f"mirror origin {record['mirror_path']} is not blob "
+                f"{record['git_blob_sha']} at Pulp {spec}"
+            )
+    return errors
+
+
 def verify_authority_phase(
     extraction: dict[str, object], lock: dict[str, object]
 ) -> tuple[bool, list[str]]:
@@ -257,7 +424,7 @@ def verify_authority_phase(
     return not errors, errors
 
 
-def verify(root: Path) -> dict[str, object]:
+def verify(root: Path, pulp_root: Path | None = None) -> dict[str, object]:
     provenance = root / "provenance"
     errors: list[str] = []
     checks: dict[str, object] = {}
@@ -331,6 +498,17 @@ def verify(root: Path) -> dict[str, object]:
         errors.append("active source roots differ from the required complete inventory")
     if retired_prefixes != EXPECTED_RETIRED_PREFIXES:
         errors.append("retired prefixes differ from the required extraction boundary")
+    expected_mirror = {
+        "root": MIRROR_ROOT,
+        "origin_records": MIRROR_ORIGIN_RECORDS,
+        "decision": MIRROR_DECISION,
+    }
+    if boundary.get("mirror") != expected_mirror:
+        errors.append("mirror scope differs from the Decision 0010 boundary")
+    if boundary.get("rules") != EXPECTED_RULES:
+        errors.append("declared boundary rules differ from the enforced rules")
+    if not (root / MIRROR_DECISION).is_file():
+        errors.append(f"{MIRROR_DECISION} is missing")
 
     inventory = sorted(path.relative_to(root).as_posix() for path in active_files(root, active_roots))
     checks["active_source_file_count"] = len(inventory)
@@ -341,20 +519,44 @@ def verify(root: Path) -> dict[str, object]:
     if retired_findings:
         errors.append(f"active tip still contains {len(retired_findings)} retired projection paths")
 
-    historical_source_blobs = {
+    records, record_errors = load_mirror_origin_records(root / MIRROR_ORIGIN_RECORDS)
+    errors.extend(record_errors)
+    checks["mirror_origin_record_count"] = len(records)
+
+    # A Pulp-origin blob is legal only under the mirror root with a matching
+    # record. In a native root it would be a second editable copy.
+    pulp_origin_blobs = {
         entry["git_blob_sha"]
         for entry in entries
         if entry["source_path"] not in {"DEPENDENCIES.md", "LICENSE.md", "NOTICE.md"}
-    }
-    copied_findings = copied_seed_findings(root, active_roots, historical_source_blobs)
+    } | {record["git_blob_sha"] for record in records}
+    pulp_origin_blobs.discard(EMPTY_BLOB_SHA)
+    copied_findings = copied_seed_findings(root, active_roots, pulp_origin_blobs)
     checks["active_historical_blob_matches"] = copied_findings
     if copied_findings:
-        errors.append(f"active source contains {len(copied_findings)} exact historical seed copies")
+        errors.append(
+            f"native source contains {len(copied_findings)} unrecorded Pulp-origin blob copies"
+        )
+
+    mirror_inventory = sorted(path.relative_to(root).as_posix() for path in mirror_files(root))
+    checks["mirror_file_count"] = len(mirror_inventory)
+    origin_findings = mirror_origin_findings(root, records)
+    checks["mirror_origin_findings"] = origin_findings
+    if origin_findings:
+        errors.append(f"mirror root has {len(origin_findings)} files without a matching origin record")
+    if pulp_root is not None:
+        pulp_errors = verify_origins_against_pulp(pulp_root, records)
+        checks["mirror_origins_verified_against_pulp"] = not pulp_errors
+        errors.extend(pulp_errors)
+    edge_findings = mirror_edge_findings(root)
+    checks["mirror_edge_findings"] = edge_findings
+    if edge_findings:
+        errors.append(f"mirror root has {len(edge_findings)} audio, plug-in, host, or product edges")
 
     active_findings = scan_active_surface(root, active_roots)
     checks["active_forbidden_findings"] = active_findings
     if active_findings:
-        errors.append(f"active build/authoring surface has {len(active_findings)} forbidden references")
+        errors.append(f"native build/authoring surface has {len(active_findings)} forbidden references")
 
     debt = provenance / "extraction-debt/initial.yaml"
     debt_status = top_level_scalar(debt, "status")
@@ -377,7 +579,7 @@ def verify(root: Path) -> dict[str, object]:
     checks["active_third_party_dependency_count"] = len(dependencies)
 
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "status": "pass" if not errors else "fail",
         "authority_transferred": authority_transferred,
         "raw_seed_present_at_active_tip": bool(retired_findings or copied_findings),
@@ -390,8 +592,15 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--pulp-root",
+        type=Path,
+        help="Pulp checkout used to prove every mirror origin record",
+    )
     args = parser.parse_args()
-    report = verify(args.root.resolve())
+    report = verify(
+        args.root.resolve(), args.pulp_root.resolve() if args.pulp_root else None
+    )
     rendered = json.dumps(report, indent=2, sort_keys=True) + "\n"
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
