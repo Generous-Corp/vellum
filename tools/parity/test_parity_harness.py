@@ -423,6 +423,27 @@ class CalibrationGateTests(HarnessFixture):
         self.assertFalse(self.run_parity(uncalibrated)["verdict"]["accepting"])
 
 
+class ControlScopeTests(HarnessFixture):
+    def test_unselected_lane_controls_are_out_of_scope_and_bites_is_enforced(self) -> None:
+        only_raster = corpus()
+        only_raster["cases"][0]["lanes"] = ["raster"]
+        ph.write_json(self.corpus_path, only_raster)
+        report = ph.calibrate(self.corpus_path, self.root / "src", self.impl_path, self.root / "out")
+        outcomes = {c["control"]: c["outcome"] for c in report["controls"]}
+        self.assertEqual(outcomes["geometry-shift-node"], "OUT OF SCOPE (no case selects this lane)")
+        self.assertEqual(outcomes["raster-one-pixel"], "REJECTED as required")
+        self.assertEqual(report["lanes_in_scope"], ["raster"])
+        self.assertTrue(report["calibrated"], report["control_failures"])
+        ph.ARTIFACT_CONTROLS["raster-wrong-reason"] = {
+            "lane": "raster", "candidate": lambda d: (ph.mutate_png(d / "render.png", ph.flip_center_pixel), True)[1],
+            "bites": lambda result: any("ink coverage" in r for r in result.get("reasons", []))}
+        try:
+            report = ph.calibrate(self.corpus_path, self.root / "src", self.impl_path, self.root / "out2")
+        finally:
+            del ph.ARTIFACT_CONTROLS["raster-wrong-reason"]
+        self.assertIn("raster-wrong-reason", report["control_failures"])
+
+
 class LaneRegistrationTests(unittest.TestCase):
     def test_duplicate_lane_and_control_are_refused(self) -> None:
         with self.assertRaises(ph.HarnessError):

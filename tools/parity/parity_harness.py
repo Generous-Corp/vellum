@@ -691,8 +691,10 @@ def register_controls(artifact: dict[str, dict[str, Any]] | None = None,
                       rerun: dict[str, dict[str, Any]] | None = None) -> None:
     """Add seeded negative controls. An artifact control mutates copied
     observations ("candidate" or "both" callables). A rerun control re-runs the
-    candidate: "prepare(case, source_root) -> (run_case, run_side kwargs) | None"
-    and "identical_inputs": False when it deliberately changes the inputs."""
+    candidate: "prepare(case, source_root, work_dir) -> (run_case, run_side kwargs)
+    | None" and "identical_inputs": False when it deliberately changes the inputs.
+    Either kind may add "bites": f(lane_result) -> bool, so the control counts only
+    when the lane rejected it for the targeted reason."""
     for table, entries in ((ARTIFACT_CONTROLS, artifact or {}), (RERUN_CONTROLS, rerun or {})):
         for name, spec in entries.items():
             if name in ARTIFACT_CONTROLS or name in RERUN_CONTROLS:
@@ -1108,8 +1110,9 @@ def strip_layout_to_rects(path: Path) -> bool:
     return bool(layout["nodes"])
 
 
-def builtin_rerun_prepare(name: str) -> Callable[[dict[str, Any], Path], tuple[dict[str, Any], dict[str, Any]] | None]:
-    def prepare(case: dict[str, Any], source_root: Path) -> tuple[dict[str, Any], dict[str, Any]] | None:
+def builtin_rerun_prepare(name: str) -> Callable[..., tuple[dict[str, Any], dict[str, Any]] | None]:
+    def prepare(case: dict[str, Any], source_root: Path,
+                work_dir: Path | None = None) -> tuple[dict[str, Any], dict[str, Any]] | None:
         if name == "input-one-byte":
             if "structure" not in case["lanes"]:
                 return None
@@ -1192,8 +1195,18 @@ def calibrate(corpus_path: Path, source_root: Path, impl_path: Path, out: Path,
     positive = receipt(positive_results)
     controls: list[dict[str, Any]] = []
 
+    lanes_in_scope = sorted({lane for case in cases for lane in case["lanes"]})
+
     def record(name: str, lane: str, expect: str, results: list[dict[str, Any]] | None,
-               verdict: dict[str, Any], applied_cases: list[str]) -> None:
+               verdict: dict[str, Any], applied_cases: list[str],
+               bites: Callable[[dict[str, Any]], bool] | None = None) -> None:
+        if lane != "*" and lane not in lanes_in_scope:
+            # The corpus selects this lane nowhere, so the lane makes no claim
+            # here; a control for a selected lane that applies to no case still fails.
+            controls.append({"control": name, "lane": lane, "applied_cases": [],
+                             "rejected": None, "lane_hit": None,
+                             "outcome": "OUT OF SCOPE (no case selects this lane)"})
+            return
         if not applied_cases:
             controls.append({"control": name, "lane": lane, "applied_cases": [],
                              "rejected": False, "lane_hit": False,
@@ -1202,6 +1215,7 @@ def calibrate(corpus_path: Path, source_root: Path, impl_path: Path, out: Path,
         hit = True
         if results is not None and lane != "*":
             hit = all(r["lanes"][lane]["status"] in (("blocked",) if expect == "blocked" else ("fail",))
+                      and (bites is None or bites(r["lanes"][lane]))
                       for r in results if r["case_id"] in applied_cases)
         elif results is not None:
             hit = all(any(l["status"] == "blocked" for l in r["lanes"].values())
@@ -1238,13 +1252,15 @@ def calibrate(corpus_path: Path, source_root: Path, impl_path: Path, out: Path,
             applied.append(case["case_id"])
             results.append(evaluate_case(case, mref, mcand, ref_run, cand_run))
         record(name, spec["lane"], spec.get("expect", "fail"), results,
-               receipt(results)["verdict"] if results else {"accepting": True, "reasons": []}, applied)
+               receipt(results)["verdict"] if results else {"accepting": True, "reasons": []}, applied,
+               spec.get("bites"))
 
     for name, spec in RERUN_CONTROLS.items():
         results, applied = [], []
         for case in cases:
             ref_dir, ref_run, _cand_dir, _cand_run = baseline[case["case_id"]]
-            prepared = spec["prepare"](case, source_root)
+            work_dir = out / "controls" / name / case["case_id"]
+            prepared = spec["prepare"](case, source_root, work_dir)
             if prepared is None:
                 continue
             run_case, kwargs = prepared
@@ -1257,7 +1273,7 @@ def calibrate(corpus_path: Path, source_root: Path, impl_path: Path, out: Path,
         verdict = (acceptance("calibration", results, identity, identity,
                               require_identical_inputs=spec.get("identical_inputs", True))
                    if results else {"accepting": True, "reasons": []})
-        record(name, spec["lane"], spec.get("expect", "fail"), results, verdict, applied)
+        record(name, spec["lane"], spec.get("expect", "fail"), results, verdict, applied, spec.get("bites"))
 
     def relabelled(**changes: Any) -> dict[str, Any]:
         return dict(copy.deepcopy(identity), **changes)
@@ -1280,11 +1296,13 @@ def calibrate(corpus_path: Path, source_root: Path, impl_path: Path, out: Path,
                   for r in positive_results[:1]]
     record("no-lane-selected", "*", "fail", None, receipt(unselected)["verdict"], ["*"])
 
-    failures = [c for c in controls if c["outcome"] != "REJECTED as required"]
+    failures = [c for c in controls
+                if c["outcome"] not in ("REJECTED as required", "OUT OF SCOPE (no case selects this lane)")]
     calibrated = positive["verdict"]["accepting"] and not failures
     return {
         "schema": CALIBRATION_SCHEMA,
         "calibrated": calibrated,
+        "lanes_in_scope": lanes_in_scope,
         "positive": positive,
         "controls": controls,
         "control_failures": [c["control"] for c in failures],
