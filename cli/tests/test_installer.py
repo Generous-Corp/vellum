@@ -273,6 +273,62 @@ class InstallerTests(unittest.TestCase):
             self.assertNotIn("require macOS 15.0 or newer", accepted_boundary.stderr)
             self.assertIn("GH_RELEASE_ACQUISITION_REACHED", accepted_boundary.stderr)
 
+    def test_retired_release_version_is_refused_before_acquisition(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            for name, body in {
+                "uname": (
+                    '#!/bin/sh\ncase "$1" in -s) printf "Darwin\\n" ;; '
+                    '-m) printf "arm64\\n" ;; *) exit 2 ;; esac\n'
+                ),
+                "sw_vers": "#!/bin/sh\nprintf '15.0\\n'\n",
+                "gh": (
+                    '#!/bin/sh\nif [ "$1" = "--version" ]; then '
+                    'printf "gh version 2.96.0 (test)\\n"; exit 0; fi\n'
+                    'if [ "$1" = "release" ] && [ "$2" = "verify-asset" ] '
+                    '&& [ "$3" = "--help" ]; then exit 0; fi\n'
+                    'printf "GH_RELEASE_ACQUISITION_REACHED\\n" >&2\nexit 19\n'
+                ),
+            }.items():
+                path = fake_bin / name
+                path.write_text(body, encoding="utf-8")
+                path.chmod(0o755)
+            environment = {
+                **os.environ,
+                "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
+            }
+            retired = json.loads(
+                (REPO / "provenance/retired-release-tags.json").read_text(
+                    encoding="utf-8"
+                )
+            )["tags"]
+            spellings = [row["tag"] for row in retired]
+            spellings += [tag.removeprefix("v") for tag in spellings]
+            self.assertIn("v0.1.7", spellings)
+            for spelling in spellings:
+                with self.subTest(spelling=spelling):
+                    rejected = _run_installer(
+                        root / f"prefix-{spelling}",
+                        "--version", spelling,
+                        env=environment,
+                    )
+                    self.assertEqual(rejected.returncode, 2)
+                    self.assertIn("retired release", rejected.stderr)
+                    self.assertNotIn(
+                        "GH_RELEASE_ACQUISITION_REACHED", rejected.stderr
+                    )
+            # Control: an unretired version passes the guard and reaches the
+            # (fake) release acquisition, so the refusal is version-specific.
+            control = _run_installer(
+                root / "prefix-control",
+                "--version", "0.1.6",
+                env=environment,
+            )
+            self.assertNotIn("retired release", control.stderr)
+            self.assertIn("GH_RELEASE_ACQUISITION_REACHED", control.stderr)
+
     def test_official_release_requires_gh_release_verification_capability(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

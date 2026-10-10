@@ -17,5 +17,6 @@ debts: []
 closure_evidence:
   - tools/provenance/verify_extraction.py
   - provenance/active-source-boundary.json
+  - provenance/mirror/blob-origins.json
   - scripts/verify_sdk_artifact.py
   - scripts/validate_installed_sdk.py
