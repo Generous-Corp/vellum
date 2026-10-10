@@ -541,7 +541,9 @@ class LaneModuleLoadingTests(unittest.TestCase):
                 ph.register_lane("demo-lane", ("demo.json",), lambda a, b, c: {"status": Verdict("pass").status})
             """), encoding="utf-8")
             try:
-                ph.load_lane_module(module)
+                loaded = ph.load_lane_module(module)
+                self.assertTrue(hasattr(loaded, "Verdict"))
+                self.assertIs(ph.load_lane_module(module), loaded)
                 self.assertIn("demo-lane", ph.LANES)
                 self.assertIn(module.resolve(), ph.LANE_MODULES)
                 self.assertIn(module.name, ph.harness_fingerprint()["files"])

@@ -764,11 +764,14 @@ def register_controls(artifact: dict[str, dict[str, Any]] | None = None,
             table[name] = spec
 
 
-def load_lane_module(path: Path) -> None:
+def load_lane_module(path: Path) -> Any:
+    """Load a lane module once and return it; a second call returns the same
+    module without re-registering its lanes."""
     path = path.resolve()
-    if path in LANE_MODULES:
-        return
-    spec = importlib.util.spec_from_file_location(f"parity_lane_{path.stem}", path)
+    name = f"parity_lane_{path.stem}"
+    if path in LANE_MODULES and name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
         raise HarnessError(f"cannot load lane module {path}")
     module = importlib.util.module_from_spec(spec)
@@ -781,6 +784,7 @@ def load_lane_module(path: Path) -> None:
         sys.modules.pop(spec.name, None)
         raise
     LANE_MODULES.append(path)
+    return module
 
 
 def side_blocked(run: dict[str, Any]) -> str | None:
