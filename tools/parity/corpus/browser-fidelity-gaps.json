@@ -1,0 +1,54 @@
+{
+  "schema": "vellum.parity.corpus.v1",
+  "description": "Browser-fidelity gaps the calibrated Pulp implementation does NOT yet meet (lanes module: lanes/browser_lanes.py). Run with `run --mode calibration`; it stays non-accepting until each gap is fixed.",
+  "volatile_allowlist": [
+    {
+      "pointer": "/settle_rounds",
+      "justification": "Chromium settle-loop round counter recorded in DesignIR capture metadata; under host load it varies run to run (13/14/15 observed) while every render, layout and text observation stayed byte-identical. It counts how long the capture waited, not what was captured."
+    }
+  ],
+  "cases": [
+    {
+      "case_id": "browser-image-card",
+      "source": "fixtures/browser/image-card.html",
+      "source_kind": "html-browser",
+      "width": 332,
+      "height": 96,
+      "scale": 2,
+      "lanes": [
+        "structure",
+        "raster",
+        "geometry",
+        "semantic",
+        "oracle",
+        "reimport"
+      ],
+      "volatile": {
+        "structure": [
+          "/imported_at",
+          "/settle_rounds"
+        ]
+      },
+      "params": {
+        "oracle_window": "1280,800",
+        "oracle_clip_x": 24,
+        "oracle_clip_y": 24
+      },
+      "args": {
+        "revision": [
+          "s/Image asset/Image file/"
+        ]
+      },
+      "oracle": {
+        "channel_threshold": 8,
+        "max_mismatch_fraction": 0.055,
+        "justification": "Skia-vs-Blink glyph rasterization and 1-device-px box-edge rounding, measured with Pulp e41854a (--native-panel-lowering) against Chrome 155.0.8059.39 at channel error > 8; the ceiling is about 1.5x that measurement, so a dropped node, a wrong fill or a missing text run exceeds it."
+      },
+      "source_base": "corpus",
+      "stage": [
+        "fixtures/browser/assets"
+      ],
+      "note": "natively lowered <img>: the DesignIR image node keeps src but no asset reference, so the native render leaves a 64x64 hole the browser fills; importer self-check reports 87% similarity and passes"
+    }
+  ]
+}

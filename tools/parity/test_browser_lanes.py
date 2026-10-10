@@ -304,7 +304,7 @@ class Fixtures(unittest.TestCase):
         self.assertEqual(subprocess.run([sys.executable, str(generator), "--check"]).returncode, 0)
 
     def test_corpora_validate(self) -> None:
-        for name in ("browser-calibration", "rejection-calibration", "rejection-contract-gaps"):
+        for name in ("browser-calibration", "browser-fidelity-gaps", "rejection-calibration", "rejection-contract-gaps"):
             path = HERE / "corpus" / f"{name}.json"
             self.assertTrue(ph.validate_corpus(ph.load_json(path), path.parent))
 
