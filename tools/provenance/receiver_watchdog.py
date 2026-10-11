@@ -76,10 +76,12 @@ def evaluate(
             violations.append("cursor-lag-sla-breached")
     # Vellum pull requests leave the cursor to the receiver, so main may run
     # ahead of its cursor for a bounded time; the same SLA bounds that lag.
+    # Lag inside the SLA is the steady state between a landing and the
+    # evidence PR, so it is reported but is not a violation; only a breach is.
+    vellum_lag_minutes = 0.0
     if not vellum_cursor_covers_main:
-        violations.append("vellum-cursor-lag")
         if vellum_main_committed_at is None:
-            raise WatchdogError("vellum_main_committed_at is required when the Vellum cursor lags")
+            raise WatchdogError("vellum_lag_started_at is required when the Vellum cursor lags")
         vellum_lag_minutes = (now - vellum_main_committed_at).total_seconds() / 60
         if vellum_lag_minutes > int(policy["cursor_lag_sla_minutes"]):
             violations.append("vellum-cursor-lag-sla-breached")
@@ -131,6 +133,7 @@ def evaluate(
         "owner": policy["named_response_owner"],
         "cursor_covers_latest": cursor_covers_latest,
         "vellum_cursor_covers_main": vellum_cursor_covers_main,
+        "vellum_cursor_lag_minutes": round(vellum_lag_minutes, 1),
         "pending_count": pending_count,
         "evidence_pr_open": evidence_pr_open,
         "retry_required": retry_required,
@@ -165,8 +168,8 @@ def main(argv: list[str] | None = None) -> int:
             # Vellum side must not look healthy.
             vellum_cursor_covers_main=state.get("vellum_cursor_covers_main") is True,
             vellum_main_committed_at=(
-                parse_time(state["vellum_main_committed_at"], "state.vellum_main_committed_at")
-                if state.get("vellum_main_committed_at") is not None
+                parse_time(state["vellum_lag_started_at"], "state.vellum_lag_started_at")
+                if state.get("vellum_lag_started_at") is not None
                 else None
             ),
         )

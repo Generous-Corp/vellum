@@ -56,9 +56,12 @@ class WatchdogTests(unittest.TestCase):
     def test_vellum_cursor_lag_is_reported_and_bounded_by_the_same_sla(self) -> None:
         recent = dt.datetime(2026, 8, 9, 11, 50, tzinfo=dt.timezone.utc)
         within = run(vellum_covered=False, vellum_main_at=recent)
-        self.assertIn("vellum-cursor-lag", within["violations"])
+        # Lag inside the SLA is the steady state between a landing and its
+        # evidence PR: reported, not a violation.
         self.assertNotIn("vellum-cursor-lag-sla-breached", within["violations"])
+        self.assertEqual(within["status"], "pass")
         self.assertFalse(within["vellum_cursor_covers_main"])
+        self.assertEqual(within["vellum_cursor_lag_minutes"], 10.0)
         # Lag asks the receiver to run, exactly like Pulp cursor lag.
         self.assertTrue(within["retry_required"])
         old = dt.datetime(2026, 8, 9, 11, 0, tzinfo=dt.timezone.utc)

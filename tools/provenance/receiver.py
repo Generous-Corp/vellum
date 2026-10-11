@@ -280,6 +280,24 @@ def vellum_needs_reconcile(root: Path, vellum_repo: Path, vellum_main: str) -> b
     return False
 
 
+def vellum_lag_started_at(vellum_repo: Path, cursor: str, vellum_main: str) -> str | None:
+    """Committer time of the oldest first-parent landing after the cursor.
+
+    The lag clock must start at the first landing the cursor does not cover,
+    not at main's tip: under steady traffic the tip is always fresh, so a
+    tip-based clock never breaches the SLA however stale the cursor is.
+    Queue and steward merge commits carry GitHub's own committer time.
+    """
+    if cursor == vellum_main:
+        return None
+    first = git(
+        vellum_repo, "rev-list", "--first-parent", "--reverse", f"{cursor}..{vellum_main}"
+    ).splitlines()
+    if not first:
+        return None
+    return git(vellum_repo, "show", "-s", "--format=%cI", first[0])
+
+
 def plan(
     *, root: Path, pulp_repo: Path, pulp_main: str, lower_bound: str,
     payload: object | None, vellum_repo: Path | None = None, vellum_main: str | None = None,

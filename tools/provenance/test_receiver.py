@@ -141,6 +141,24 @@ class ReceiverTests(unittest.TestCase):
         self.assertEqual(plan["status"], "noop")
         self.assertFalse(plan["vellum_cursor_lagging"])
 
+    def test_vellum_lag_clock_is_the_first_first_parent_landing(self) -> None:
+        import os
+        base = self._vellum_history()
+        self.set_vellum_cursor(base)
+        self.assertIsNone(receiver.vellum_lag_started_at(self.vellum, base, base))
+        for stamp, text in (("2026-08-09T11:00:00Z", "2"), ("2026-08-09T11:40:00Z", "3")):
+            (self.vellum / "graphics/render.cpp").write_text(f"int v = {text};\n", encoding="utf-8")
+            git(self.vellum, "add", "graphics")
+            subprocess.run(
+                ["git", "commit", "-qm", f"landing {text}"], cwd=self.vellum, check=True,
+                env=dict(os.environ, GIT_AUTHOR_DATE=stamp, GIT_COMMITTER_DATE=stamp),
+                capture_output=True,
+            )
+        main = git(self.vellum, "rev-parse", "HEAD")
+        self.assertTrue(
+            receiver.vellum_lag_started_at(self.vellum, base, main).startswith("2026-08-09T11:00:00")
+        )
+
     def test_vellum_main_behind_its_cursor_fails_closed(self) -> None:
         base = self._vellum_history()
         (self.vellum / "graphics/render.cpp").write_text("int v = 2;\n", encoding="utf-8")
