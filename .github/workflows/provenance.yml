@@ -740,11 +740,18 @@ jobs:
             git merge-base "$observatory_git_base" HEAD
           )"
           vellum_tail_args=()
+          # Pull requests and queue merges validate only the observed main
+          # tail; the PR's unlanded commits are reconciled after landing.
+          # Pushes to main intentionally use the full walk: a red result
+          # identifies newly landed code that the receiver must observe.
           if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
             git fetch --no-tags origin \
               refs/heads/main:refs/remotes/origin/main
             vellum_pr_main="$(git rev-parse refs/remotes/origin/main)"
             vellum_tail_args+=(--vellum-pr-main "$vellum_pr_main")
+          elif [[ "$GITHUB_EVENT_NAME" == merge_group ]]; then
+            test "$VELLUM_GIT_BASE" != ""
+            vellum_tail_args+=(--vellum-pr-main "$VELLUM_GIT_BASE")
           fi
           python3 tools/provenance/test_observatory.py
           python3 tools/provenance/test_receiver.py

@@ -548,6 +548,35 @@ class ObservatoryTests(unittest.TestCase):
                 repo, cursor, cursor, target
             )
 
+    def test_queue_merge_uses_base_to_ignore_pr_code(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary) / "vellum"
+            _, cursor = init_repo(repo, "graphics/render.cpp")
+            run(repo, "git", "checkout", "-b", "pull-request")
+            write(repo / "graphics/pr-change.cpp", "int value = 3;\n")
+            pr_head = commit_all(repo, "ordinary pull request change")
+            run(repo, "git", "checkout", "main")
+            run(
+                repo,
+                "git",
+                "merge",
+                "--no-ff",
+                pr_head,
+                "-m",
+                "synthetic merge queue commit",
+            )
+            queue_merge = run(repo, "git", "rev-parse", "HEAD")
+
+            observatory.verify_vellum_observatory_pr_tail(
+                repo, cursor, cursor, queue_merge
+            )
+            with self.assertRaisesRegex(
+                observatory.ObservatoryError, "non-evidence change"
+            ):
+                observatory.verify_vellum_observatory_tail(
+                    repo, cursor, queue_merge
+                )
+
     def test_pull_request_missing_current_main_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             repo = Path(temporary) / "vellum"
