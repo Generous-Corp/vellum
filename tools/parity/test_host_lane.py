@@ -176,7 +176,7 @@ def fixture(root: Path) -> tuple[Path, Path, dict[str, str], dict[str, str]]:
         tools[f"exe.{name}"] = str(app / "Contents" / "MacOS" / app.stem)
     all_roots = ["{root:%s}" % n for n in ("alpha.clap", "beta.clap", "alpha.vst3", "alpha.app", "beta.app")]
     impl = {
-        "schema": ph.IMPLEMENTATION_SCHEMA, "name": "fake-host", "repository": "example/fake", "source_sha": None,
+        "schema": ph.IMPLEMENTATION_SCHEMA, "name": "fake-host", "repository": "example/fake", "source_sha": None, "authority": "native-render",
         "tools": tools,
         "probes": [{"name": "build", "argv": ["{tool:runner}", "identity", "build", "{root:checkout}", *all_roots]},
                    {"name": "provider", "argv": ["{tool:runner}", "identity", "provider", *all_roots]},
