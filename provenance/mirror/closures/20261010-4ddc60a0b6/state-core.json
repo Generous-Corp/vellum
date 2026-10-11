@@ -1,0 +1,121 @@
+{
+  "build_dir": null,
+  "compile_definitions": [
+    "PULP_RT_WORK_COUNTERS=1",
+    "PULP_SIMD_DEFAULT_BACKEND_ACCELERATE=1",
+    "PULP_SIMD_HAS_ACCELERATE=1",
+    "PULP_SIMD_HAS_HIGHWAY=1"
+  ],
+  "configuration": "Release",
+  "external_inputs": [],
+  "files": [
+    "build-rehearsal/_deps/pulp-mutable-choc-src/choc/containers/choc_FIFOReadWritePosition.h",
+    "build-rehearsal/_deps/pulp-mutable-choc-src/choc/containers/choc_SingleReaderSingleWriterFIFO.h",
+    "build-rehearsal/_deps/pulp-mutable-choc-src/choc/containers/choc_Value.h",
+    "build-rehearsal/_deps/pulp-mutable-choc-src/choc/math/choc_MathHelpers.h",
+    "build-rehearsal/_deps/pulp-mutable-choc-src/choc/memory/choc_Endianness.h",
+    "build-rehearsal/_deps/pulp-mutable-choc-src/choc/platform/choc_Assert.h",
+    "build-rehearsal/_deps/pulp-mutable-choc-src/choc/text/choc_FloatToString.h",
+    "build-rehearsal/_deps/pulp-mutable-choc-src/choc/text/choc_JSON.h",
+    "build-rehearsal/_deps/pulp-mutable-choc-src/choc/text/choc_StringUtilities.h",
+    "build-rehearsal/_deps/pulp-mutable-choc-src/choc/text/choc_UTF8.h",
+    "core/content/include/pulp/state/content_registry.hpp",
+    "core/events/include/pulp/events/event_loop.hpp",
+    "core/events/include/pulp/events/main_thread_dispatcher.hpp",
+    "core/platform/include/pulp/platform/detect.hpp",
+    "core/platform/include/pulp/platform/win32_sane.hpp",
+    "core/runtime/include/pulp/runtime/assert.hpp",
+    "core/runtime/include/pulp/runtime/exceptions.hpp",
+    "core/runtime/include/pulp/runtime/log.hpp",
+    "core/runtime/include/pulp/runtime/spsc_queue.hpp",
+    "core/runtime/include/pulp/runtime/system.hpp",
+    "core/state/include/pulp/state/listener_token.hpp",
+    "core/state/include/pulp/state/param_json.hpp",
+    "core/state/include/pulp/state/parameter.hpp",
+    "core/state/include/pulp/state/preset_manager.hpp",
+    "core/state/include/pulp/state/properties_file.hpp",
+    "core/state/include/pulp/state/state_migration.hpp",
+    "core/state/include/pulp/state/state_tree.hpp",
+    "core/state/include/pulp/state/state_tree_sync.hpp",
+    "core/state/include/pulp/state/store.hpp",
+    "core/state/src/param_json.cpp",
+    "core/state/src/preset_manager.cpp",
+    "core/state/src/properties_file.cpp",
+    "core/state/src/state_migration.cpp",
+    "core/state/src/state_tree.cpp",
+    "core/state/src/state_tree_sync.cpp",
+    "core/state/src/store.cpp"
+  ],
+  "generated_inputs": [],
+  "missing_targets": [],
+  "public_include_dirs": [
+    "/Volumes/Atelier/Code/agent-worktrees/pulp-rehearsal-vellum-extract-20261010/build-rehearsal/_deps/pulp-mutable-choc-src",
+    "/Volumes/Atelier/Code/agent-worktrees/pulp-rehearsal-vellum-extract-20261010/build-rehearsal/core/runtime/generated/Release",
+    "/Volumes/Atelier/Code/agent-worktrees/pulp-rehearsal-vellum-extract-20261010/core/content/include",
+    "/Volumes/Atelier/Code/agent-worktrees/pulp-rehearsal-vellum-extract-20261010/core/events/include",
+    "/Volumes/Atelier/Code/agent-worktrees/pulp-rehearsal-vellum-extract-20261010/core/platform/include",
+    "/Volumes/Atelier/Code/agent-worktrees/pulp-rehearsal-vellum-extract-20261010/core/runtime/include",
+    "/Volumes/Atelier/Code/agent-worktrees/pulp-rehearsal-vellum-extract-20261010/core/simd/include",
+    "/Volumes/Atelier/Code/agent-worktrees/pulp-rehearsal-vellum-extract-20261010/core/state/include",
+    "/Volumes/Atelier/Code/agent-worktrees/pulp-rehearsal-vellum-extract-20261010/external/miniz"
+  ],
+  "resources": [],
+  "schema": "pulp.vellum.closure.v1",
+  "source_root": null,
+  "targets": [
+    {
+      "compile_definitions": [
+        "PULP_RT_WORK_COUNTERS=1",
+        "PULP_SIMD_DEFAULT_BACKEND_ACCELERATE=1",
+        "PULP_SIMD_HAS_ACCELERATE=1",
+        "PULP_SIMD_HAS_HIGHWAY=1"
+      ],
+      "include_dirs": [
+        "build-rehearsal/_deps/pulp-mutable-choc-src",
+        "build-rehearsal/core/runtime/generated/Release",
+        "core/content/include",
+        "core/events/include",
+        "core/platform/include",
+        "core/runtime/include",
+        "core/simd/include",
+        "core/state/include",
+        "external/miniz"
+      ],
+      "link_targets": [
+        "everest",
+        "hwy",
+        "mbedcrypto",
+        "mbedtls",
+        "mbedx509",
+        "p256m",
+        "pulp-events",
+        "pulp-platform",
+        "pulp-runtime",
+        "pulp-simd"
+      ],
+      "name": "pulp-state",
+      "sources": [
+        "core/state/src/param_json.cpp",
+        "core/state/src/preset_manager.cpp",
+        "core/state/src/properties_file.cpp",
+        "core/state/src/state_migration.cpp",
+        "core/state/src/state_tree.cpp",
+        "core/state/src/state_tree_sync.cpp",
+        "core/state/src/store.cpp"
+      ],
+      "type": "STATIC_LIBRARY"
+    }
+  ],
+  "transitive_link_targets": [
+    "everest",
+    "hwy",
+    "mbedcrypto",
+    "mbedtls",
+    "mbedx509",
+    "p256m",
+    "pulp-events",
+    "pulp-platform",
+    "pulp-runtime",
+    "pulp-simd"
+  ]
+}

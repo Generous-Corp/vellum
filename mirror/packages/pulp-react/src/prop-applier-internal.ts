@@ -1,0 +1,164 @@
+// prop-applier-internal — shared plumbing for the per-domain prop
+// handlers.
+//
+// This module owns the bridge `call` helper and the file-local value
+// coercion helpers that more than one domain handler needs. Domain
+// modules (prop-applier-layout / -paint / -typography / -transform /
+// -events) import from here so the single `_pa_count` logging counter
+// stays shared across all domains.
+
+// Bridge globals are looked up through globalThis at call time so the
+// mock-bridge install path picks them up. See host-config.ts for the
+// matching pattern.
+import { queueBridgeCall } from './bridge-batch.js';
+
+type AnyFn = (...args: unknown[]) => unknown;
+const g = globalThis as unknown as Record<string, AnyFn | undefined>;
+let _pa_count = 0;
+// THE SILENT RETURN BELOW IS DELIBERATE, AND IT IS A FOOTGUN. Read this
+// before adding a prop that routes through it.
+//
+// Effectful bridge groups are capability-scoped during hot reload, so an
+// ungranted group's symbols are genuinely ABSENT rather than installed and
+// guarded -- the generated globals type them `| undefined` for that reason.
+// Skipping those is correct.
+//
+// The hazard is that this helper cannot tell an intentionally-ungranted verb
+// from one that is simply MISSING because the host predates it. `call2` in
+// host-config.ts THROWS in the same situation, so element creation fails loudly
+// against an older host while prop application degrades in total silence: the
+// prop applies, no error is raised anywhere, and the feature is dead. A
+// keyboard-scroll prop forwarded to a host without the scroll verbs would look
+// wired, pass inspection, and do nothing.
+//
+// So: if a verb is NOT capability-gated and its absence means a broken feature
+// rather than a withheld one, route it through `callRequired` instead, or
+// feature-detect at mount and disable the affordance visibly. Do not rely on
+// this helper to tell you.
+export function call(name: string, ...args: unknown[]): void {
+    const fn = g[name];
+    if (typeof fn !== 'function') return; // capability-gated verbs: see above
+    _pa_count++;
+    if (_pa_count <= 100) {
+        const lg = (g as Record<string, AnyFn | undefined>).__spectrLog;
+        if (typeof lg === 'function') {
+            const a0 = args[0] !== undefined ? String(args[0]).slice(0, 25) : '';
+            const a1 = args[1] !== undefined ? String(args[1]).slice(0, 25) : '';
+            const a2 = args[2] !== undefined ? String(args[2]).slice(0, 25) : '';
+            lg('[pa#' + _pa_count + '] ' + name + '(' + a0 + ',' + a1 + (args.length > 2 ? ',' + a2 : '') + ')');
+        }
+    }
+    if (queueBridgeCall(name, fn, args)) return;
+    fn(...args);
+}
+
+/// Forward to a bridge verb whose absence is a BUG, not a withheld capability.
+///
+/// Throws rather than returning silently, matching `call2` on the element
+/// creation path. Use it for verbs that are always registered when the host is
+/// new enough, so a version skew surfaces as an error instead of a feature that
+/// quietly does nothing. Do NOT use it for capability-gated groups.
+export function callRequired(name: string, ...args: unknown[]): void {
+    const fn = g[name];
+    if (typeof fn !== 'function') {
+        throw new Error('@pulp/react: bridge function ' + name
+                        + ' is not installed; the host is too old for this prop');
+    }
+    call(name, ...args);
+}
+
+// Resolve `var(--name [, fallback])` references in string-valued style
+// props before forwarding to the bridge.
+//
+// The HTML-shim path (`core/view/js/css-parser.js`) already resolves
+// var() via the same lookup tiers, but the React-prop-applier lane
+// bypasses that — it forwards the raw `style.fontFamily` value straight
+// into `setFontFamily`. The string "var(--mono)" then reached Skia's
+// font matcher as a literal family name, returned no match, and fell
+// through to a proportional sans. Labels rendered in the wrong typeface,
+// and the fallback layer degraded LCD antialiasing.
+//
+// Resolution tiers (first hit wins):
+//   1. `globalThis.__pulpCssVars[name]` — developer-set runtime
+//       registry. Apps populate this at mount when they have direct
+//       knowledge of which CSS variables map to which strings.
+//   2. `getStringToken(name)` — bridge call into `theme.strings` (the
+//       same map design-import.cpp writes when loading Stitch / W3C
+//       tokens, and the same map `setStringToken` from the CSS shim
+//       writes for string-valued custom properties).
+//   3. `getMotionToken(name)` — bridge call into `theme.dimensions`
+//       (only useful when the var is numeric — fontFamily callers
+//       won't hit this branch, but length-typed callers might).
+//   4. The literal fallback supplied as `var(--name, FALLBACK)`.
+//   5. The original string, returned unchanged so the caller can decide
+//       how to handle the miss.
+//
+// The regex match is conservative: only top-level `^var(...)` is
+// resolved. Embedded `calc(var(...) + 10px)` is out of scope for the
+// React lane — the bridge consumers for `fontFamily` / `color` /
+// `borderColor` etc. don't accept calc-expressions anyway.
+export function _resolveVar(value: unknown): unknown {
+    if (typeof value !== 'string') return value;
+    const s = value.trim();
+    if (!s.startsWith('var(') || !s.endsWith(')')) return value;
+
+    // Find the FIRST top-level comma inside var(...) so a nested
+    // `var(--a, var(--b, default))` is split at the right point.
+    const inner = s.slice(4, s.length - 1);
+    let commaPos = -1;
+    let depth = 0;
+    for (let i = 0; i < inner.length; i++) {
+        const c = inner.charAt(i);
+        if (c === '(') depth++;
+        else if (c === ')') depth--;
+        else if (c === ',' && depth === 0) { commaPos = i; break; }
+    }
+
+    let name: string;
+    let fallback: string | undefined;
+    if (commaPos >= 0) {
+        name = inner.slice(0, commaPos).trim();
+        fallback = inner.slice(commaPos + 1).trim();
+    } else {
+        name = inner.trim();
+    }
+    if (name.startsWith('--')) name = name.slice(2);
+    if (!name) return value;
+
+    // Tier 1: runtime developer-set registry.
+    const reg = (globalThis as Record<string, unknown>).__pulpCssVars as
+        | Record<string, string> | undefined;
+    if (reg && typeof reg[name] === 'string' && reg[name]) {
+        return reg[name];
+    }
+
+    // Tier 2: theme.strings via bridge.
+    const getStr = (globalThis as Record<string, unknown>).getStringToken as
+        | ((n: string) => string) | undefined;
+    if (typeof getStr === 'function') {
+        const sv = getStr(name);
+        if (typeof sv === 'string' && sv) return sv;
+    }
+
+    // Tier 3: theme.dimensions via bridge (numeric tokens).
+    const getNum = (globalThis as Record<string, unknown>).getMotionToken as
+        | ((n: string) => number) | undefined;
+    if (typeof getNum === 'function') {
+        const nv = getNum(name);
+        if (typeof nv === 'number' && nv !== 0 && Number.isFinite(nv)) {
+            return String(nv);
+        }
+    }
+
+    // Tier 4: explicit fallback. Recurse so `var(--a, var(--b, 0))`
+    // walks the chain. Cap recursion via the input shrinking strictly
+    // on each step (we strip one var() wrapper per call).
+    if (fallback !== undefined && fallback.length > 0) {
+        return _resolveVar(fallback);
+    }
+
+    // Tier 5: surface the original unresolved string. Better than ""
+    // because downstream Skia / View code can at least log the unknown
+    // token name.
+    return value;
+}

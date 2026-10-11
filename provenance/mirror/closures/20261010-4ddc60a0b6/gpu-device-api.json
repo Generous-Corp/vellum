@@ -1,0 +1,40 @@
+{
+  "build_dir": null,
+  "compile_definitions": [],
+  "configuration": "Release",
+  "external_inputs": [],
+  "files": [
+    "core/render/include/pulp/render/bench/perf_counters.hpp",
+    "core/render/include/pulp/render/gpu_compute.hpp",
+    "core/render/include/pulp/render/gpu_diagnostics.hpp",
+    "core/render/include/pulp/render/gpu_render_time.hpp",
+    "core/render/include/pulp/render/gpu_startup_report.hpp",
+    "core/render/include/pulp/render/gpu_surface.hpp"
+  ],
+  "generated_inputs": [],
+  "missing_targets": [],
+  "public_include_dirs": [],
+  "resources": [],
+  "schema": "pulp.vellum.closure.v1",
+  "source_root": null,
+  "targets": [
+    {
+      "compile_definitions": [],
+      "include_dirs": [
+        "core/render/include"
+      ],
+      "link_targets": [],
+      "name": "pulp-gpu-device-api",
+      "sources": [
+        "core/render/include/pulp/render/gpu_surface.hpp",
+        "core/render/include/pulp/render/gpu_compute.hpp",
+        "core/render/include/pulp/render/gpu_diagnostics.hpp",
+        "core/render/include/pulp/render/gpu_startup_report.hpp",
+        "core/render/include/pulp/render/gpu_render_time.hpp",
+        "core/render/include/pulp/render/bench/perf_counters.hpp"
+      ],
+      "type": "INTERFACE"
+    }
+  ],
+  "transitive_link_targets": []
+}

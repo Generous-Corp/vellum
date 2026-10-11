@@ -1,0 +1,32 @@
+{
+  "build_dir": null,
+  "compile_definitions": [],
+  "configuration": "Release",
+  "external_inputs": [],
+  "files": [
+    "core/view/include/pulp/view/design_ir.hpp",
+    "core/view/include/pulp/view/design_source_types.hpp"
+  ],
+  "generated_inputs": [],
+  "missing_targets": [],
+  "public_include_dirs": [],
+  "resources": [],
+  "schema": "pulp.vellum.closure.v1",
+  "source_root": null,
+  "targets": [
+    {
+      "compile_definitions": [],
+      "include_dirs": [
+        "core/view/include"
+      ],
+      "link_targets": [],
+      "name": "pulp-design-ir",
+      "sources": [
+        "core/view/include/pulp/view/design_ir.hpp",
+        "core/view/include/pulp/view/design_source_types.hpp"
+      ],
+      "type": "INTERFACE"
+    }
+  ],
+  "transitive_link_targets": []
+}
