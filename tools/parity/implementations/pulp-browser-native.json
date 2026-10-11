@@ -3,7 +3,7 @@
   "name": "pulp-browser-native",
   "repository": "Generous-Corp/pulp",
   "source_sha": null,
-  "description": "Pulp's registered pulp-import-design and pulp-design-ir-observe for the oracle, reimport and rejection lanes. html-browser evaluates the source in the pinned Chromium and lowers every painted node natively (--native-panel-lowering), so the render is drawn from nodes, not from the browser capture; html-browser-faithful is Pulp's default browser import, which paints the capture itself, and exists only for the oracle lane's conflation control. The oracle steps run Chromium directly (--headless --screenshot): no Pulp or Vellum code is between the browser and oracle.png, so a capture defect in an importer cannot also be the reference. The same source is imported again unchanged (second/) and after the corpus's revision edit (revision/); each import's capture provenance (capture.json) names the exact source bytes and browser it came from. Rejection kinds wrap the import and observe commands in the harness's outcome_recorder, which maps Pulp's messages to the corpus's neutral diagnostic codes. design-ir copies a DesignIR document and observes it; it carries the corpus's staged-asset raster case.",
+  "description": "Pulp's registered pulp-import-design and pulp-design-ir-observe for the oracle, reimport and rejection lanes. html-browser evaluates the source in the pinned Chromium and lowers every painted node natively (--native-panel-lowering), so the render is drawn from nodes, not from the browser capture; html-browser-faithful is Pulp's default browser import, which paints the capture itself, and exists only for the oracle lane's conflation control. The oracle steps run Chromium directly (--headless --screenshot): no Pulp or Vellum code is between the browser and oracle.png, so a capture defect in an importer cannot also be the reference. Before the first import the staged inputs are copied to second/ and revision/ (revision/ then gets the corpus's sed edit), so the same source is imported again unchanged (second/) and after the corpus's revision edit (revision/); each import's capture provenance (capture.json) names the exact source bytes and browser it came from. Rejection kinds wrap the import and observe commands in the harness's outcome_recorder, which maps Pulp's messages to the corpus's neutral diagnostic codes. design-ir copies a DesignIR document and observes it; it carries the corpus's staged-asset raster case.",
   "tools": {
     "importer": "build/tools/import-design/pulp-import-design",
     "observer": "build/tools/import-design/pulp-design-ir-observe",
@@ -63,6 +63,20 @@
     }
   ],
   "steps": [
+    {
+      "id": "revise",
+      "source_kinds": [
+        "html-browser",
+        "html-browser-faithful"
+      ],
+      "argv": [
+        "/bin/sh",
+        "-c",
+        "mkdir -p .stage && for f in * .[!.]*; do case \"$f\" in .stage|.|..|'.[!.]*') ;; *) cp -R \"$f\" .stage/ ;; esac; done && mv .stage second && cp -R second revision && sed -e \"$1\" \"$0\" > \"revision/$0\"",
+        "{source}",
+        "@case_args:revision"
+      ]
+    },
     {
       "id": "import",
       "source_kinds": [
@@ -151,20 +165,6 @@
       ]
     },
     {
-      "id": "revise",
-      "source_kinds": [
-        "html-browser",
-        "html-browser-faithful"
-      ],
-      "argv": [
-        "/bin/sh",
-        "-c",
-        "mkdir -p second revision && sed -e \"$1\" \"$0\" > \"revision/$0\"",
-        "{source}",
-        "@case_args:revision"
-      ]
-    },
-    {
       "id": "reimport",
       "source_kinds": [
         "html-browser",
@@ -174,7 +174,7 @@
         "{tool:importer}",
         "@source_kind_args",
         "--file",
-        "{source}",
+        "second/{source}",
         "--emit",
         "ir-json",
         "--mode",
