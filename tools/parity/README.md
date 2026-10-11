@@ -58,6 +58,18 @@ on both sides.
 
   The staged bytes must match the pin.
 
+## Containment and delegation (`parity_policy.py`)
+
+- **Paths:** every corpus path (`source` and each `stage` entry) must stay inside its root. Absolute paths, `..`
+  and symlinks (along the path, or inside a staged directory) are refused before anything is copied. A rerun
+  control that writes its own file passes it as `extra_stage` to `run_side`, not as a corpus path.
+- **Regions:** a region must lie wholly inside both rendered images. It is never shortened to fit.
+- **Delegation:** an observation produced through a command string (`sh -c`, `bash -c`, `python -c`, `node -e`,
+  …) is refused, even if that shell is a declared passthrough. The shell's digest says nothing about the program
+  that wrote the file. Run the producer directly, as a declared tool or script.
+- **Limit:** a declared tool or script that itself starts an undeclared program is not traced. The declared
+  script is responsible for what it runs.
+
 ## Calibrate before trusting a comparison
 
 ```sh

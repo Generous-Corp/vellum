@@ -568,12 +568,12 @@ class AuthorityAndProvenanceTests(HarnessFixture):
         ph.LANE_ARTIFACTS["nested-probe"] = (nested,)
         try:
             impl = implementation(self.tool)
-            impl["steps"].append({"id": "nested", "argv": [
-                "/bin/sh", "-c", "mkdir -p deep && echo '{}' > deep/nested-observation.json"]})
+            impl["steps"].append({"id": "mkdir", "argv": ["/bin/mkdir", "-p", "deep"]})
+            impl["steps"].append({"id": "nested", "argv": ["/usr/bin/touch", "deep/nested-observation.json"]})
             case = corpus()["cases"][0] | {"_corpus_dir": str(self.root)}
             run = ph.run_side(case, impl, {"fake": self.tool}, self.root / "src", self.root / "nested-side")
             self.assertIn(nested, run["artifacts"])
-            self.assertEqual(run["produced_by"][nested]["binary"], "/bin/sh")
+            self.assertEqual(run["produced_by"][nested]["binary"], "/usr/bin/touch")
             identity = {"tools": {"fake": {"sha256": ph.sha256_file(self.tool)}}, "passthrough_binaries": []}
             errors = ph.provenance_errors(run, identity, "x", ["nested-probe"])
             self.assertTrue(any(nested in e and "undeclared binary" in e for e in errors), errors)
@@ -642,6 +642,96 @@ class AuthorityAndProvenanceTests(HarnessFixture):
                       _external_roots={"thirdparty": str(self.root / "src")})
         with self.assertRaises(ph.HarnessError):
             ph.stage_case(pinned, self.root / "src", self.root / "staged")
+
+
+class ContainmentTests(HarnessFixture):
+    """R10 must-fix 1: a corpus path may not leave its declared root."""
+
+    def staged(self, **changes) -> None:
+        case = dict(corpus()["cases"][0], **changes)
+        case["_corpus_dir"] = str(self.root)
+        ph.stage_case(case, self.root / "src", self.root / "staged")
+
+    def test_escapes_are_refused_before_staging(self) -> None:
+        (self.root / "outside.json").write_text("{}")
+        (self.root / "outside-dir").mkdir()
+        (self.root / "outside-dir/x.json").write_text("{}")
+        os.symlink(self.root / "outside.json", self.root / "src/link.json")
+        os.symlink(self.root / "outside-dir", self.root / "src/linkdir")
+        (self.root / "src/inner").mkdir()
+        os.symlink(self.root / "outside-dir", self.root / "src/inner/hop")
+        (self.root / "src/assets/sneaky.txt").symlink_to(self.root / "outside.json")
+        attempts = {
+            "dotdot": {"source": "../outside.json"},
+            "absolute": {"source": str(self.root / "outside.json")},
+            "symlinked file": {"source": "link.json"},
+            "symlinked dir": {"source": "linkdir/x.json"},
+            "intermediate symlink": {"source": "inner/hop/x.json"},
+            "companion escape": {"stage": ["../outside-dir"]},
+            "symlink inside a staged dir": {"stage": ["assets"]},
+        }
+        for label, change in attempts.items():
+            with self.subTest(label), self.assertRaises(ph.HarnessError):
+                self.staged(**change)
+        self.assertFalse((self.root / "staged/outside.json").exists())
+
+    def test_contained_paths_still_stage(self) -> None:
+        (self.root / "src/assets/sneaky.txt").unlink(missing_ok=True)
+        self.staged()
+        self.assertTrue((self.root / "staged/source.json").is_file())
+        self.assertTrue((self.root / "staged/assets/tint.txt").is_file())
+
+
+class RegionBoundsTests(HarnessFixture):
+    """R10 must-fix 2: a region is never shortened to fit the render."""
+
+    def pngs(self, ref_size, cand_size) -> tuple[Path, Path]:
+        dirs = []
+        for name, (w, h) in (("ref", ref_size), ("cand", cand_size)):
+            d = self.root / name
+            d.mkdir()
+            pixels = bytearray(b"\x10\x10\x10\xff" * (w * h))
+            pixels[0:4] = b"\xff\x00\x00\xff"
+            (d / "render.png").write_bytes(ph.encode_png(ph.RgbaImage(w, h, bytes(pixels))))
+            dirs.append(d)
+        return dirs[0], dirs[1]
+
+    def test_region_outside_both_smaller_renders_fails(self) -> None:
+        ref, cand = self.pngs((20, 16), (20, 16))
+        case = dict(corpus()["cases"][0], scale=1,
+                    regions=[{"name": "wide", "x": 0, "y": 0, "w": 30, "h": 10}])
+        result = ph.compare_regions(ref / "render.png", cand / "render.png", case)
+        self.assertTrue(any("not fully present" in r for r in result["wide"]["reasons"]), result)
+
+    def test_region_past_one_side_fails(self) -> None:
+        ref, cand = self.pngs((40, 32), (20, 16))
+        case = dict(corpus()["cases"][0], scale=1,
+                    regions=[{"name": "corner", "x": 0, "y": 0, "w": 30, "h": 10}])
+        result = ph.compare_regions(ref / "render.png", cand / "render.png", case)
+        self.assertTrue(any("candidate render" in r for r in result["corner"]["reasons"]), result)
+
+
+class DelegationTests(HarnessFixture):
+    """R10 guard gap: a declared wrapper delegating through a command string."""
+
+    def test_shell_command_string_is_refused_even_as_passthrough(self) -> None:
+        ph.LANE_ARTIFACTS["delegate-probe"] = ("delegated.json",)
+        try:
+            impl = implementation(self.tool)
+            impl["steps"].append({"id": "delegate", "argv": [
+                "/bin/sh", "-c", f"{sys.executable} -c 'open(\"delegated.json\", \"w\").write(\"{{}}\")'"]})
+            case = corpus()["cases"][0] | {"_corpus_dir": str(self.root)}
+            run = ph.run_side(case, impl, {"fake": self.tool}, self.root / "src", self.root / "side")
+            self.assertTrue(run["produced_by"]["delegated.json"].get("delegated"))
+            identity = {"tools": {"fake": {"sha256": ph.sha256_file(self.tool)}},
+                        "passthrough_binaries": ["/bin/sh"]}
+            errors = ph.provenance_errors(run, identity, "x", ["delegate-probe"])
+            self.assertTrue(any("shell command string" in e for e in errors), errors)
+            inline = ph.producing_binary([sys.executable, "-c", "pass"])
+            self.assertTrue(inline.get("delegated"))
+            self.assertFalse(ph.producing_binary(["/bin/cp", "a", "b"]).get("delegated"))
+        finally:
+            del ph.LANE_ARTIFACTS["delegate-probe"]
 
 
 class LaneRegistrationTests(unittest.TestCase):

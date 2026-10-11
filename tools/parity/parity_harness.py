@@ -48,6 +48,12 @@ from typing import Any, Callable
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "cli"))
 
 from vellum_image_compare import compare_images  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from parity_policy import (  # noqa: E402,F401
+    AUTHORITIES, PERMISSIVE_LICENSES, SHA1_RE, SHA256_RE, SHELLS, HarnessError, producing_binary,
+    region_bounds_errors, resolve_under, sha256_bytes, sha256_file, snapshot, validate_provenance,
+    validate_regions)
+import parity_policy  # noqa: E402
 from vellum_png import PngError, RgbaImage, decode_png_bytes, encode_png  # noqa: E402
 
 CORPUS_SCHEMA = "vellum.parity.corpus.v1"
@@ -65,8 +71,6 @@ LANE_ARTIFACTS = {
     "interaction": ("interaction.json", "interaction.png"),
 }
 SKIP_EXIT = 77
-SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
-SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 TEXT_BOX_TOLERANCE_PX = 0.5
 # A raster threshold above 0 must carry a justification and stay under this
 # ceiling; anything looser hides real rendering differences.
@@ -89,28 +93,13 @@ REQUIRED_LAYOUT_KEYS = ("id", "kind", "rect", "visible", "overflow", "z_order", 
 # raster difference can be attributed to build, provider or fonts.
 REQUIRED_PROBES = ("build", "provider", "fonts")
 LANE_MODULES: list[Path] = []
-# Which artifact an implementation's observations come from. Parity is only a
-# claim between two implementations of the same authority; a join across
-# authorities (a browser capture against a native render) is diagnostic.
-AUTHORITIES = ("native-render", "materialized-runtime", "browser-source")
-# Licences under which a third-party corpus source may be checked in or staged.
-PERMISSIVE_LICENSES = ("MIT", "BSD-2-Clause", "BSD-3-Clause", "Apache-2.0", "ISC", "Zlib", "BSL-1.0",
-                       "CC0-1.0", "0BSD")
 
 
-class HarnessError(ValueError):
-    """A malformed corpus, implementation, or manifest. Never a lane result."""
 
 
 # ── small utilities ────────────────────────────────────────────────────────
 
 
-def sha256_bytes(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
-def sha256_file(path: Path) -> str:
-    return sha256_bytes(path.read_bytes())
 
 
 def git_blob_sha(data: bytes) -> str:
@@ -220,35 +209,6 @@ def validate_corpus(corpus: Any, corpus_dir: Path | None = None,
             raise HarnessError(f"{case_id}: interaction lane selected without interactions")
         validate_case_knobs(case, volatile_allowlist(corpus))
     return cases
-
-
-def validate_provenance(case: dict[str, Any]) -> None:
-    """A third-party source is licensed, pinned, and checked byte for byte."""
-    prov = case.get("provenance")
-    case_id = case["case_id"]
-    if not isinstance(prov, dict):
-        raise HarnessError(f"{case_id}: an external source needs provenance (license, repository, commit, sha256)")
-    if prov.get("license") not in PERMISSIVE_LICENSES:
-        raise HarnessError(f"{case_id}: provenance license {prov.get('license')!r} is not a recorded permissive licence")
-    if not prov.get("repository") or not SHA1_RE.match(str(prov.get("commit", ""))):
-        raise HarnessError(f"{case_id}: provenance needs repository and a 40-hex commit")
-    if not SHA256_RE.match(str(prov.get("sha256", ""))):
-        raise HarnessError(f"{case_id}: provenance needs the source's sha256")
-
-
-def validate_regions(case: dict[str, Any]) -> None:
-    """Named regions in design px; each is scored on its own in the raster lane."""
-    names = set()
-    for region in case.get("regions", []):
-        if not isinstance(region, dict) or not region.get("name") or region["name"] in names:
-            raise HarnessError(f"{case['case_id']}: regions need unique names")
-        names.add(region["name"])
-        x, y, w, h = (region.get(k) for k in ("x", "y", "w", "h"))
-        if not all(isinstance(v, int) and not isinstance(v, bool) for v in (x, y, w, h)) or w <= 0 or h <= 0:
-            raise HarnessError(f"{case['case_id']}: region {region['name']} needs integer x, y and positive w, h")
-        if x < 0 or y < 0 or x + w > case["width"] or y + h > case["height"]:
-            raise HarnessError(f"{case['case_id']}: region {region['name']} lies outside the {case['width']}x"
-                               f"{case['height']} viewport")
 
 
 def volatile_allowlist(corpus: dict[str, Any]) -> set[str]:
@@ -425,7 +385,8 @@ def environment_identity() -> dict[str, Any]:
 
 
 def harness_fingerprint() -> dict[str, Any]:
-    files = [Path(__file__).resolve(), *sorted(p.resolve() for p in LANE_MODULES)]
+    files = [Path(__file__).resolve(), Path(parity_policy.__file__).resolve(),
+             *sorted(p.resolve() for p in LANE_MODULES)]
     hashes = {p.name: sha256_file(p) for p in files}
     return {"files": hashes, "sha256": sha256_bytes(json.dumps(hashes, sort_keys=True).encode())}
 
@@ -517,12 +478,15 @@ def case_root(case: dict[str, Any], source_root: Path) -> Path:
 
 
 def stage_case(case: dict[str, Any], source_root: Path, destination: Path,
-               source_override: bytes | None = None) -> dict[str, str]:
+               source_override: bytes | None = None,
+               extra_stage: list[Path] | None = None) -> dict[str, str]:
     """Copy the case source (and declared companions) into a side directory so
-    both sides read byte-identical inputs at identical relative paths."""
+    both sides read byte-identical inputs at identical relative paths. Every
+    corpus-named path must stay inside its root (no `..`, no symlinks);
+    `extra_stage` is for files a control wrote itself under its work dir."""
     destination.mkdir(parents=True, exist_ok=True)
     source_root = case_root(case, source_root)
-    source = source_root / case["source"]
+    source = resolve_under(source_root, case["source"], f"{case['case_id']} source")
     if not source.is_file():
         raise HarnessError(f"{case['case_id']}: source not found: {source}")
     staged = destination / source.name
@@ -531,8 +495,8 @@ def stage_case(case: dict[str, Any], source_root: Path, destination: Path,
     pinned = (case.get("provenance") or {}).get("sha256")
     if pinned and source_override is None and hashes[source.name] != pinned:
         raise HarnessError(f"{case['case_id']}: source sha256 {hashes[source.name]} != provenance pin {pinned}")
-    for companion in case.get("stage", []):
-        origin = source_root / companion
+    companions = [resolve_under(source_root, c, f"{case['case_id']} stage") for c in case.get("stage", [])]
+    for origin in companions + [Path(p) for p in (extra_stage or [])]:
         target = destination / origin.name
         if origin.is_dir():
             shutil.copytree(origin, target, dirs_exist_ok=True)
@@ -566,10 +530,11 @@ def placeholder_values(tools: dict[str, Path], roots: dict[str, Path]) -> dict[s
 def run_side(case: dict[str, Any], impl: dict[str, Any], tools: dict[str, Path],
              source_root: Path, out: Path, *, interactions: list[dict[str, Any]] | None = None,
              source_override: bytes | None = None, skip_steps: tuple[str, ...] = (),
-             timeout: int = 300, roots: dict[str, Path] | None = None) -> dict[str, Any]:
+             timeout: int = 300, roots: dict[str, Path] | None = None,
+             extra_stage: list[Path] | None = None) -> dict[str, Any]:
     if out.exists():
         shutil.rmtree(out)
-    inputs = stage_case(case, source_root, out, source_override)
+    inputs = stage_case(case, source_root, out, source_override, extra_stage)
     source_name = Path(case["source"]).name
     kind_args = impl["source_kinds"].get(case["source_kind"])
     if kind_args is None:
@@ -628,7 +593,8 @@ def run_side(case: dict[str, Any], impl: dict[str, Any], tools: dict[str, Path],
         for name, digest in after.items():
             if before.get(name) != digest:
                 produced[name] = {"step": step["id"], "sha256": digest,
-                                  **{k: record[k] for k in ("binary", "binary_sha256", "script_sha256") if k in record}}
+                                  **{k: record[k] for k in ("binary", "binary_sha256", "script_sha256", "delegated")
+                                     if k in record}}
         steps_out.append(record)
         if record["status"] != "ok":
             break
@@ -642,52 +608,12 @@ def run_side(case: dict[str, Any], impl: dict[str, Any], tools: dict[str, Path],
             "interaction_plan": plan, "scale": case.get("scale", DEFAULT_SCALE)}
 
 
-def producing_binary(argv: list[str]) -> dict[str, Any]:
-    """The binary a step runs, digested at the moment it runs, and the script
-    it interprets if any: an observation is bound to what actually drew it."""
-    info: dict[str, Any] = {}
-    if not argv:
-        return info
-    executable = Path(argv[0]) if os.sep in argv[0] else Path(shutil.which(argv[0]) or argv[0])
-    if executable.is_file():
-        info["binary"] = str(executable)
-        info["binary_sha256"] = sha256_file(executable)
-    if len(argv) > 1 and Path(argv[1]).suffix in (".py", ".mjs", ".js", ".sh") and Path(argv[1]).is_file():
-        info["script_sha256"] = sha256_file(Path(argv[1]))
-    return info
-
-
-def snapshot(directory: Path) -> dict[str, str]:
-    """Every regular file under the directory, by relative posix path."""
-    if not directory.is_dir():
-        return {}
-    return {p.relative_to(directory).as_posix(): sha256_file(p)
-            for p in directory.rglob("*") if p.is_file() and not p.is_symlink()}
+# ── lane comparators ───────────────────────────────────────────────────────
 
 
 def provenance_errors(run: dict[str, Any], identity: dict[str, Any], side: str,
                       lanes: list[str]) -> list[str]:
-    """Every observation a selected lane reads must have been produced by a
-    binary (or script) the side's identity declares, digested at run time."""
-    declared = {t.get("sha256") for t in (identity.get("tools") or {}).values()}
-    passthrough = set(identity.get("passthrough_binaries") or [])
-    errors = []
-    for lane in lanes:
-        for name in LANE_ARTIFACTS.get(lane, ()):
-            if name not in run.get("artifacts", {}):
-                continue
-            origin = (run.get("produced_by") or {}).get(name)
-            if origin is None:
-                errors.append(f"{side}/{name}: no producing step recorded")
-            elif origin.get("binary") in passthrough:
-                continue
-            elif origin.get("binary_sha256") not in declared and origin.get("script_sha256") not in declared:
-                errors.append(f"{side}/{name}: produced by an undeclared binary {origin.get('binary')} "
-                              f"({str(origin.get('binary_sha256'))[:12]})")
-    return errors
-
-
-# ── lane comparators ───────────────────────────────────────────────────────
+    return parity_policy.provenance_errors(run, identity, side, lanes, LANE_ARTIFACTS)
 
 
 def lane_result(status: str, **details: Any) -> dict[str, Any]:
@@ -815,7 +741,10 @@ def compare_regions(ref_png: Path, cand_png: Path, case: dict[str, Any]) -> dict
     for region in case["regions"]:
         x, y = int(region["x"] * scale), int(region["y"] * scale)
         w, h = int(region["w"] * scale), int(region["h"] * scale)
-        w, h = min(w, a.width - x), min(h, a.height - y)
+        bounds = region_bounds_errors(region, (x, y, w, h), ((a.width, a.height), (b.width, b.height)))
+        if bounds:
+            out[region["name"]] = {"rect_px": [x, y, w, h], "reasons": bounds}
+            continue
         ra, rb = crop(a, x, y, w, h), crop(b, x, y, w, h)
         report, _ = compare_images(ra, rb, threshold=threshold)
         # Ink in a region is anything that differs from the frame's background,
