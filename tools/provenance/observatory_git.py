@@ -62,6 +62,54 @@ def tree_identical_scanned_parent(
     return None
 
 
+def integration_merge_covered(repo: Path, commit: str) -> bool:
+    """True when a two-parent merge adds nothing beyond its second parent.
+
+    A merge queue (or a plain fast-forward-free merge) lands a merge commit
+    whose first parent is the branch and whose second parent is the pull
+    request head. When every path the merge changes relative to the branch
+    is a path the pull request itself changed, and the merge took the pull
+    request's blob for each of them, the merge introduced no change that the
+    pull request's own commits do not already describe, so it needs no
+    observation of its own. A merge whose resolution produced a blob neither
+    parent carries, or touched a path the pull request did not, is not covered
+    and still needs its own event.
+    """
+    row = git(repo, "rev-list", "--parents", "-n", "1", commit).split()
+    if len(row) != 3:
+        return False
+    first, second = row[1], row[2]
+    base = git(repo, "merge-base", first, second)
+    if not base:
+        return False
+    merged_paths = {
+        line
+        for line in git(
+            repo, "diff-tree", "-r", "--name-only", "--no-renames", first, commit
+        ).splitlines()
+        if line
+    }
+    second_paths = {
+        line
+        for line in git(
+            repo, "diff-tree", "-r", "--name-only", "--no-renames", base, second
+        ).splitlines()
+        if line
+    }
+    if not merged_paths <= second_paths:
+        return False
+    for path in merged_paths:
+        try:
+            if git(repo, "rev-parse", f"{commit}:{path}") != git(
+                repo, "rev-parse", f"{second}:{path}"
+            ):
+                return False
+        except ObservatoryError:
+            # A path the second parent never had (deleted or never present).
+            return False
+    return True
+
+
 def path_matches(path: str, patterns: Iterable[str]) -> bool:
     return any(path.startswith(pattern) for pattern in patterns)
 

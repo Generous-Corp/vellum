@@ -67,6 +67,7 @@ if __package__:
         require_commit,
         transitive_match,
         tree_identical_scanned_parent,
+        integration_merge_covered,
     )
     from .observatory_report import (
         activation_blockers,
@@ -124,6 +125,7 @@ else:
         require_commit,
         transitive_match,
         tree_identical_scanned_parent,
+        integration_merge_covered,
     )
     from observatory_report import (
         activation_blockers,
@@ -296,12 +298,31 @@ def verify_event_against_git(event: dict[str, object], source: str, repo: Path, 
         raise ObservatoryError(f"event derived fields differ from Git for {event['event_id']}: {mismatches}")
 
 
+def coverage_tail_start(repo: Path, cursor: str, target: str) -> str:
+    """Where the coverage tail begins: the cursor, or the merge base when the
+    target does not yet contain the cursor (a pull request behind main)."""
+    if is_ancestor(repo, cursor, target):
+        return cursor
+    base = git(repo, "merge-base", cursor, target)
+    if not base:
+        raise ObservatoryError(f"requested vellum target shares no history with the cursor: {target}")
+    return base
+
+
+VELLUM_TAIL_POLICIES = frozenset({"reconciled", "coverage"})
+
+
 def coverage_gaps(
     *, root: Path, mapping: dict[str, object], cursor: dict[str, object], events: list[tuple[Path, dict[str, object]]],
     pulp_repo: Path | None, vellum_repo: Path | None,
     pulp_target: str | None = None, vellum_target: str | None = None,
     incremental_from: dict[str, str] | None = None,
+    vellum_tail_policy: str = "reconciled",
 ) -> list[dict[str, str]]:
+    if vellum_tail_policy not in VELLUM_TAIL_POLICIES:
+        raise ObservatoryError(
+            f"vellum_tail_policy must be one of {sorted(VELLUM_TAIL_POLICIES)}"
+        )
     observations = {
         (str(event["source_repository"]), str(event["source_commit"])): event
         for _, event in events if event["kind"] == "observation"
@@ -347,8 +368,27 @@ def coverage_gaps(
                 gaps.append({"source": source, "commit": commit, "reason": "mapped-commit-has-no-event"})
             else:
                 verify_event_against_git(event, source, repo, mappings, rules)
+        # Under the coverage policy a pull request may carry events for its own
+        # commits ahead of the cursor; those are verified below rather than
+        # reported as outside the reconciled range.
+        tail_covered_commits: set[str] = set()
+        tail_start = target
+        if (
+            source == "vellum"
+            and vellum_tail_policy == "coverage"
+            and requested_target is not None
+            and target != requested_target
+        ):
+            require_commit(repo, requested_target, f"requested {source} target")
+            # A pull request behind main is judged on its own commits: the
+            # part of main it lacks is verified by main's own runs.
+            tail_start = coverage_tail_start(repo, target, requested_target)
+            tail_covered_commits = set(commits_between(repo, tail_start, requested_target))
         for (event_repository, event_commit), event in observations.items():
             if event_repository != repository:
+                continue
+            if event_commit in tail_covered_commits:
+                verify_event_against_git(event, source, repo, mappings, rules)
                 continue
             if event_commit not in scanned_commits:
                 if incremental_from is not None and source in incremental_from:
@@ -362,22 +402,41 @@ def coverage_gaps(
             verify_event_against_git(event, source, repo, mappings, rules)
         if requested_target is not None:
             require_commit(repo, requested_target, f"requested {source} target")
-            require_ancestor(repo, target, requested_target, f"requested {source} target")
-            if source == "vellum" and target != requested_target:
-                verify_vellum_observatory_tail(repo, target, requested_target)
-            for commit in commits_between(repo, target, requested_target):
+            if tail_start == target:
+                require_ancestor(repo, target, requested_target, f"requested {source} target")
+            require_event_coverage = tail_start != target
+            if source == "vellum" and target != requested_target and not require_event_coverage:
+                if vellum_tail_policy == "reconciled":
+                    verify_vellum_observatory_tail(repo, target, requested_target)
+                else:
+                    # Coverage policy: an exactly reconciled evidence tail still
+                    # passes; otherwise every mapped commit ahead of the cursor
+                    # must carry its own event in this tree, and a merge that
+                    # adds nothing beyond the pull request it lands is covered
+                    # by that pull request's events. The cursor itself advances
+                    # after the merge, by the receiver.
+                    try:
+                        verify_vellum_observatory_tail(repo, target, requested_target)
+                    except ObservatoryError:
+                        require_event_coverage = True
+            for commit in commits_between(repo, tail_start, requested_target):
+                if require_event_coverage and integration_merge_covered(repo, commit):
+                    continue
                 probe = observation_for_commit(
                     source=source, repository=repository, repo=repo, commit=commit,
-                    cursor_from=target, cursor_to=requested_target,
+                    cursor_from=tail_start, cursor_to=requested_target,
                     discovered_at="2000-01-01T00:00:00Z", mappings=mappings,
                     transitive_rules=rules,
                 )
-                if probe is not None:
-                    gaps.append({
-                        "source": source,
-                        "commit": commit,
-                        "reason": "mapped-commit-after-reconciled-cursor",
-                    })
+                if probe is None:
+                    continue
+                if require_event_coverage and (repository, commit) in observations:
+                    continue
+                gaps.append({
+                    "source": source,
+                    "commit": commit,
+                    "reason": "mapped-commit-after-reconciled-cursor",
+                })
     return gaps
 
 
@@ -632,7 +691,8 @@ def verify_append_only(
 def verify(
     *, root: Path, pulp_repo: Path | None, vellum_repo: Path | None, git_base: str | None,
     allow_missing_source_repositories: bool = False,
-    pulp_target: str | None = None, vellum_target: str | None = None
+    pulp_target: str | None = None, vellum_target: str | None = None,
+    vellum_tail_policy: str = "reconciled",
 ) -> dict[str, object]:
     lock, mapping, cursor, budgets = validate_lock_map_cursor(root)
     verify_active_cursor_ancestry(lock, cursor, pulp_repo, vellum_repo)
@@ -647,16 +707,60 @@ def verify(
         root=root, mapping=mapping, cursor=cursor, events=events,
         pulp_repo=pulp_repo, vellum_repo=vellum_repo,
         pulp_target=pulp_target, vellum_target=vellum_target,
+        vellum_tail_policy=vellum_tail_policy,
     )
     if allow_missing_source_repositories:
         gaps = [gap for gap in gaps if gap["reason"] != "source-repository-not-supplied"]
     now = parse_utc(cursor["reconciled_at"], "cursor.reconciled_at") if cursor.get("reconciled_at") else None
     report = build_report(root=root, lock=lock, cursor=cursor, events=events, budgets=budgets, now=now, coverage_gaps=gaps)
+    # The committed report describes the reconciled range. Under the coverage
+    # policy a pull request may add events for commits ahead of the cursor
+    # without regenerating the report (the receiver does that after the merge),
+    # so the staleness comparison excludes exactly those events.
+    committed_events = events
+    committed_gaps = gaps
+    if (
+        vellum_tail_policy == "coverage"
+        and vellum_repo is not None
+        and vellum_target is not None
+        and str(cursor["vellum"]["last_scanned_commit"]) != vellum_target
+    ):
+        vellum_cursor = cursor["vellum"]
+        tail = set(
+            commits_between(
+                vellum_repo,
+                coverage_tail_start(
+                    vellum_repo, str(vellum_cursor["last_scanned_commit"]), vellum_target
+                ),
+                vellum_target,
+            )
+        )
+        vellum_repository = str(vellum_cursor["repository"])
+        committed_events = [
+            (path, event)
+            for path, event in events
+            if not (
+                event["kind"] == "observation"
+                and str(event["source_repository"]) == vellum_repository
+                and str(event["source_commit"]) in tail
+            )
+        ]
+        committed_gaps = [
+            gap for gap in gaps if gap["reason"] != "mapped-commit-after-reconciled-cursor"
+        ]
+    committed_expected = (
+        report
+        if committed_events is events and committed_gaps is gaps
+        else build_report(
+            root=root, lock=lock, cursor=cursor, events=committed_events,
+            budgets=budgets, now=now, coverage_gaps=committed_gaps,
+        )
+    )
     committed_json = load_json(root / REPORT_JSON_PATH)
-    if committed_json != report:
+    if committed_json != committed_expected:
         raise ObservatoryError("reports/current.json is stale; run observatory reconcile")
     committed_md = (root / REPORT_MD_PATH).read_text(encoding="utf-8")
-    if committed_md != render_markdown(report):
+    if committed_md != render_markdown(committed_expected):
         raise ObservatoryError("reports/current.md is stale; run observatory reconcile")
     if report["health"] != "pass":
         raise ObservatoryError("observatory health budgets failed: " + ", ".join(report["budget_violations"]))
@@ -665,7 +769,7 @@ def verify(
 
 def reconcile(
     *, root: Path, pulp_repo: Path, vellum_repo: Path, pulp_target: str, vellum_target: str,
-    now_text: str, write: bool
+    now_text: str, write: bool, events_only: bool = False
 ) -> dict[str, object]:
     now = parse_utc(now_text, "--now")
     lock, mapping, cursor, budgets = validate_lock_map_cursor(root)
@@ -692,6 +796,10 @@ def reconcile(
             if mapping_changed
             else source_cursor["last_scanned_commit"]
         )
+        if events_only and source == "vellum" and not mapping_changed:
+            # A pull request records observations for its own commits only;
+            # when it is behind main the scan starts at the merge base.
+            start = coverage_tail_start(repo, start, target)
         repository = str(source_cursor["repository"])
         for event in expected_observations(
             source=source, repo=repo, repository=repository, start=start, target=target,
@@ -702,19 +810,34 @@ def reconcile(
                 verify_event_against_git(observations[key], source, repo, mappings, rules)
             else:
                 new_events.append(event)
-        source_cursor["last_scanned_commit"] = target
-    cursor["reconciled_at"] = now_text
-    cursor["mapping_sha256"] = current_mapping_fingerprint
+        if not events_only:
+            source_cursor["last_scanned_commit"] = target
+    if not events_only:
+        cursor["reconciled_at"] = now_text
+        cursor["mapping_sha256"] = current_mapping_fingerprint
     combined = existing + [(root / EVENTS_PATH / f"{event['event_id']}.yaml", event) for event in new_events]
-    gaps = coverage_gaps(
-        root=root,
-        mapping=mapping,
-        cursor=cursor,
-        events=combined,
-        pulp_repo=pulp_repo,
-        vellum_repo=vellum_repo,
-        incremental_from=None if mapping_changed else previous_cursor,
-    )
+    if events_only:
+        gaps = coverage_gaps(
+            root=root,
+            mapping=mapping,
+            cursor=cursor,
+            events=combined,
+            pulp_repo=pulp_repo,
+            vellum_repo=vellum_repo,
+            pulp_target=pulp_target,
+            vellum_target=vellum_target,
+            vellum_tail_policy="coverage",
+        )
+    else:
+        gaps = coverage_gaps(
+            root=root,
+            mapping=mapping,
+            cursor=cursor,
+            events=combined,
+            pulp_repo=pulp_repo,
+            vellum_repo=vellum_repo,
+            incremental_from=None if mapping_changed else previous_cursor,
+        )
     report = build_report(root=root, lock=lock, cursor=cursor, events=combined, budgets=budgets, now=now, coverage_gaps=gaps)
     if write:
         for event in new_events:
@@ -722,9 +845,13 @@ def reconcile(
             if path.exists():
                 raise ObservatoryError(f"refusing to overwrite append-only event: {path}")
             write_json_atomic(path, event)
-        write_json_atomic(root / CURSOR_PATH, cursor)
-        write_json_atomic(root / REPORT_JSON_PATH, report)
-        write_text_atomic(root / REPORT_MD_PATH, render_markdown(report))
+        # A pull request records its own observations and leaves the cursor and
+        # report to the post-merge receiver, so two pull requests never contend
+        # for the same two files.
+        if not events_only:
+            write_json_atomic(root / CURSOR_PATH, cursor)
+            write_json_atomic(root / REPORT_JSON_PATH, report)
+            write_text_atomic(root / REPORT_MD_PATH, render_markdown(report))
     return {"new_events": [event["event_id"] for event in new_events], "cursor": cursor, "report": report}
 
 
@@ -739,6 +866,16 @@ def main(argv: list[str] | None = None) -> int:
     verify_parser.add_argument("--pulp-target")
     verify_parser.add_argument("--vellum-target")
     verify_parser.add_argument("--allow-missing-source-repositories", action="store_true")
+    verify_parser.add_argument(
+        "--vellum-tail-policy",
+        choices=sorted(VELLUM_TAIL_POLICIES),
+        default="reconciled",
+        help=(
+            "reconciled: commits after the Vellum cursor must be evidence only; "
+            "coverage: they may be ordinary commits when each mapped one carries "
+            "its own event (the receiver advances the cursor after the merge)"
+        ),
+    )
     verify_parser.add_argument("--output", type=Path)
     reconcile_parser = subparsers.add_parser("reconcile")
     reconcile_parser.add_argument("--pulp-repo", type=Path, required=True)
@@ -747,6 +884,11 @@ def main(argv: list[str] | None = None) -> int:
     reconcile_parser.add_argument("--vellum-target", required=True)
     reconcile_parser.add_argument("--now", required=True)
     reconcile_parser.add_argument("--write", action="store_true")
+    reconcile_parser.add_argument(
+        "--events-only",
+        action="store_true",
+        help="with --write, record new observation events but leave cursor and report untouched",
+    )
     reconcile_parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
     try:
@@ -760,8 +902,11 @@ def main(argv: list[str] | None = None) -> int:
                 allow_missing_source_repositories=args.allow_missing_source_repositories,
                 pulp_target=args.pulp_target,
                 vellum_target=args.vellum_target,
+                vellum_tail_policy=args.vellum_tail_policy,
             )
         else:
+            if args.events_only and not args.write:
+                raise ObservatoryError("--events-only requires --write")
             result = reconcile(
                 root=root,
                 pulp_repo=args.pulp_repo.resolve(),
@@ -770,6 +915,7 @@ def main(argv: list[str] | None = None) -> int:
                 vellum_target=args.vellum_target,
                 now_text=args.now,
                 write=args.write,
+                events_only=args.events_only,
             )
         output = json.dumps(result, indent=2, sort_keys=True) + "\n"
         if args.output:
