@@ -720,6 +720,19 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Reject stale PR ancestry before observatory verification
+        run: |
+          set -euo pipefail
+          ancestry_base="$VELLUM_GIT_BASE"
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            git fetch --no-tags origin main
+            ancestry_base="$(git rev-parse origin/main)"
+          fi
+          python3 tools/provenance/verify_ancestry.py \
+            --repo . \
+            --base "$ancestry_base" \
+            --target "$VELLUM_TARGET_SHA"
+
       - name: Verify two-way observatory health and negative controls
         env:
           AUTHORITY_START_SHA: ${{ steps.authority-record.outputs.authority-start }}
