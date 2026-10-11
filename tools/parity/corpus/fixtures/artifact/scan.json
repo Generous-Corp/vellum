@@ -1,0 +1,14 @@
+{
+  "description": "Symbol families for the artifact link-floor lane: Python regular expressions over `nm -arch <a> -j` names of the main image. pulp-format must be present in every Pulp plug-in (it proves the scan can see symbols at all); the others separate audio-only (column A), GPU UI with the Pulp provider (column B) and the Vellum provider (column C).",
+  "families": {
+    "pulp-format": "N4pulp6format",
+    "pulp-view": "N4pulp4view",
+    "pulp-canvas": "N4pulp6canvas",
+    "pulp-render": "N4pulp6render",
+    "gpu-host": "GpuWindowHost",
+    "skia": "SkCanvas|SkSurface|skgpu",
+    "wgpu": "^_wgpu[A-Z]",
+    "dawn": "N4dawn|^_dawn",
+    "vellum": "(?i)vellum"
+  }
+}
