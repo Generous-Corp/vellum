@@ -168,5 +168,15 @@
         "standalone.png"
       ]
     }
+  ],
+  "content_roots": [
+    "spectral-lab.clap",
+    "spectral-lab.vst3",
+    "spectral-lab.component",
+    "super-convolver.clap",
+    "super-convolver.vst3",
+    "super-convolver.component",
+    "spectral-lab.app",
+    "super-convolver.app"
   ]
 }

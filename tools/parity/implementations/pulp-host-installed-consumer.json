@@ -180,5 +180,18 @@
         "standalone.png"
       ]
     }
+  ],
+  "content_roots": [
+    "spectral-lab.clap",
+    "spectral-lab.vst3",
+    "spectral-lab.component",
+    "spectral-lab-b.clap",
+    "spectral-lab-b.vst3",
+    "spectral-lab-b.component",
+    "gain.clap",
+    "gain.vst3",
+    "gain.component",
+    "spectral-lab.app",
+    "gain.app"
   ]
 }
