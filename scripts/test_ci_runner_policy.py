@@ -182,6 +182,20 @@ class RunnerPolicyTests(unittest.TestCase):
         self.assertIn("scripts/verify_sdk_artifact.py", finalizer)
         self.assertIn("scripts/build_sterile_acceptance_bundle.py", finalizer)
         self.assertGreaterEqual(finalizer.count("scripts/verify_release_tag.py"), 2)
+        eligibility = finalizer.index(
+            "- name: Require renderer release eligibility at the release source"
+        )
+        self.assertLess(
+            eligibility,
+            finalizer.index("- name: Publish only through live no-bypass controls"),
+        )
+        self.assertIn(
+            "--require-release-eligible", finalizer[eligibility:eligibility + 1200]
+        )
+        self.assertIn(
+            'git show "$SOURCE_COMMIT:provenance/third-party-lock.json"',
+            finalizer[eligibility:eligibility + 1200],
+        )
         self.assertIn('test "$(gh api "repos/$GITHUB_REPOSITORY/immutable-releases" --jq \'.enabled\')" = true', finalizer)
         self.assertIn('for row in page["jobs"]', finalizer)
         self.assertIn('"path": ".github/workflows/gpu-macos.yml"', finalizer)

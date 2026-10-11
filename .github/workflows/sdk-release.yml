@@ -431,6 +431,23 @@ jobs:
             --repository "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG" \
             --source-commit "$SOURCE_COMMIT" --tag-object-sha "$TAG_OBJECT_SHA"
 
+      - name: Require renderer release eligibility at the release source
+        run: |
+          set -euo pipefail
+          # A release stays blocked until the renderer lock at the exact source
+          # commit declares the renderer release-eligible.
+          lock_root="$RUNNER_TEMP/release-source-renderer-lock"
+          mkdir "$lock_root"
+          git show "$SOURCE_COMMIT:provenance/third-party-lock.json" \
+            > "$lock_root/third-party-lock.json"
+          git show "$SOURCE_COMMIT:provenance/renderer-attestation.json" \
+            > "$lock_root/renderer-attestation.json"
+          python3 tools/provenance/verify_renderer_dependency.py \
+            --lock "$lock_root/third-party-lock.json" \
+            --attestation "$lock_root/renderer-attestation.json" \
+            --require-release-eligible --json \
+            > "$RUNNER_TEMP/release-renderer-eligibility.json"
+
       - name: Publish only through live no-bypass controls
         env:
           GH_TOKEN: ${{ steps.finalizer-token.outputs.token }}

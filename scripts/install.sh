@@ -375,7 +375,10 @@ if [ -n "$version" ]; then
     v*) version=${version#v} ;;
   esac
   # A retired version once named published bytes that no longer exist; see
-  # provenance/retired-release-tags.json. Refuse it before any download.
+  # provenance/retired-release-tags.json. Refuse it before any download. The
+  # list is literal because this bootstrap runs standalone from a release
+  # asset, without the repository's records; cli/tests/test_installer.py fails
+  # if any retired tag in that record is missing here.
   case "$version" in
     0.1.7) printf '%s\n' "Vellum v$version is a retired release and cannot be installed; choose a published version such as 0.1.6." >&2; exit 2 ;;
   esac
