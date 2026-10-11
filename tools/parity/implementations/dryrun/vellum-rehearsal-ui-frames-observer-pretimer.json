@@ -1,0 +1,70 @@
+{
+  "schema": "vellum.parity.implementation.v1",
+  "name": "vellum-rehearsal-ui-frames-observer-pretimer",
+  "repository": "Generous-Corp/vellum",
+  "source_sha": null,
+  "description": "Vellum mirror build of pulp-ui-frames-observe as of Pulp ee89d25 (no script time source, so no --timer-clock). DRY-RUN: built from the X-export rehearsal mirror (receipt 20261010-4ddc60a0b6), not a published mirror; receipts produced with it are dry-run evidence only. The instrument sources are Pulp's; every closure-named unit archive linked into them is Vellum's mirror build (link-map census in provenance.json).",
+  "tools": {
+    "frames": "/Volumes/Atelier/Code/agent-worktrees/vellum-vadapters/build-observers/bin/pulp-ui-frames-observe"
+  },
+  "source_kinds": {
+    "frames-design-ir": [
+      "--design-ir"
+    ],
+    "frames-script": [
+      "--script"
+    ]
+  },
+  "steps": [
+    {
+      "id": "observe",
+      "argv": [
+        "{tool:frames}",
+        "@source_kind_args",
+        "{source}",
+        "--schedule",
+        "{param:schedule}",
+        "--width",
+        "{width}",
+        "--height",
+        "{height}",
+        "--scale",
+        "{scale}",
+        "--out-dir",
+        "."
+      ]
+    }
+  ],
+  "roots": {
+    "checkout": "Vellum dry-run checkout the mirror archives were built from (dry-run/v-adapters-20261011)",
+    "build": "Vellum CMake build directory holding the rehearsal archives",
+    "observers": "tools/parity/adapters/build_mirror_observers.py output (binaries, link maps, provenance.json)",
+    "export_receipt": "X-export receipt naming the Pulp origin of the mirror (H3-F9)"
+  },
+  "probes": [
+    {
+      "name": "build",
+      "argv": [
+        "/bin/sh",
+        "-c",
+        "grep -E '^(CMAKE_BUILD_TYPE|CMAKE_CXX_COMPILER|CMAKE_OSX_ARCHITECTURES|VELLUM_ENABLE_MIRROR|VELLUM_MIRROR_BUILD_REHEARSAL_UNITS|VELLUM_MIRROR_BUILD_INPUT_ROOT)[:=]' '{root:build}/CMakeCache.txt' && \"$(grep -E '^CMAKE_CXX_COMPILER:' '{root:build}/CMakeCache.txt' | cut -d= -f2)\" --version | head -1 && shasum -a 256 '{root:observers}/provenance.json'"
+      ]
+    },
+    {
+      "name": "provider",
+      "argv": [
+        "/bin/sh",
+        "-c",
+        "python3 -c \"import json,sys; d=json.load(open(sys.argv[1])); print('\\n'.join(sorted({a for t in d['tools'] for a in t['kept_archives'] if 'skia' in a or 'dawn' in a})))\" '{root:observers}/provenance.json'; echo 'renderer: pulp::view::render_to_file ScreenshotBackend::skia (CPU raster), view-core/canvas/render from the Vellum mirror archives'; otool -L '{tool:frames}' | tail -n +2 | sed 's/ (.*//'"
+      ]
+    },
+    {
+      "name": "fonts",
+      "argv": [
+        "/bin/sh",
+        "-c",
+        "python3 -c \"import json,sys; d=json.load(open(sys.argv[1])); print('\\n'.join(sorted({a for t in d['tools'] for a in t['kept_archives'] if 'bundled-fonts' in a})))\" '{root:observers}/provenance.json' | while read a; do shasum -a 256 \"$a\"; done"
+      ]
+    }
+  ]
+}
