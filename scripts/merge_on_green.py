@@ -19,12 +19,6 @@ API_ROOT = "https://api.github.com"
 RETRY_DELAYS_SECONDS = (0.0, 1.0, 2.0)
 
 
-REQUIRED_WORKFLOWS = (
-    "gpu-macos.yml",
-    "product-quality.yml",
-    "provenance.yml",
-    "readme-quick-start.yml",
-)
 
 
 class MergeError(RuntimeError):
