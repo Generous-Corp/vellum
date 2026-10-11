@@ -171,12 +171,13 @@ class Tests(unittest.TestCase):
         }
 
     @staticmethod
-    def open_pr_snapshot(*pulls: dict) -> dict:
+    def open_pr_snapshot(*pulls: dict, retired: bool = False) -> dict:
         grouped = {
             "Generous-Corp/pulp": [],
             "Generous-Corp/vellum": [],
-            "danielraffel/vellum": [],
         }
+        if not retired:
+            grouped["danielraffel/vellum"] = []
         for pull in pulls:
             grouped[pull["repository"]].append({
                 "number": pull["number"],
@@ -316,9 +317,9 @@ class Tests(unittest.TestCase):
         self.assertIn("repository: Generous-Corp/pulp", workflow)
         self.assertIn("Check out authoritative Pulp main with full history", workflow)
         self.assertIn("ref: main", workflow)
-        self.assertIn("repository: danielraffel/vellum", workflow)
+        self.assertNotIn("danielraffel/vellum", workflow)
         self.assertIn("--pulp-root .exact-boundary-pulp", workflow)
-        self.assertIn("--delivery-root .promotion-delivery", workflow)
+        self.assertIn('--delivery-root "$GITHUB_WORKSPACE"', workflow)
         self.assertIn("--promotion-attestation", workflow)
         self.assertIn("--check-runs-json", workflow)
         self.assertIn("actions: read", workflow)
@@ -327,8 +328,8 @@ class Tests(unittest.TestCase):
         self.assertIn("-f filter=all -F per_page=100", workflow)
         clean_workflow = (ROOT / ".github/workflows/readme-quick-start.yml").read_text()
         self.assertIn("push:\n    branches: [main]", clean_workflow)
-        self.assertIn("secrets.VELLUM_DELIVERY_READER_TOKEN", workflow)
-        self.assertIn("Require private delivery repository read access", workflow)
+        self.assertNotIn("VELLUM_DELIVERY_READER_TOKEN", workflow)
+        self.assertNotIn("DELIVERY_READER_TOKEN", workflow)
         self.assertIn("release tag lacks an SSH-signed JSON message", workflow)
         self.assertIn("object_pairs_hook=strict_object", workflow)
         self.assertIn("promotion-release-tag-trust.json", workflow)
@@ -1230,23 +1231,232 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
         )
         self.assertTrue(any("live overlap danielraffel/vellum#44 is absent" in error for error in errors))
 
+    def retired_fixture(self) -> tuple[Path, str]:
+        """A Git checkout whose history carries the retirement record's commits."""
+        temporary, root, _ = self.copy()
+        self.addCleanup(temporary.cleanup)
+        shutil.copy2(
+            ROOT / verifier.DELIVERY_RETIREMENT_PATH,
+            root / verifier.DELIVERY_RETIREMENT_PATH,
+        )
+        commit, _ = self.init_git_repo(
+            root, remote="https://github.com/Generous-Corp/vellum.git"
+        )
+        return root, commit
+
+    def patched_retirement_commits(
+        self, root: Path, final_main: str, authority_after: str
+    ):
+        consolidation = dict(verifier.EXPECTED_DELIVERY_RETIREMENT["consolidation"])
+        consolidation["retired_repository_final_main"] = final_main
+        consolidation["authority_main_after"] = authority_after
+        expected = dict(verifier.EXPECTED_DELIVERY_RETIREMENT)
+        expected["consolidation"] = consolidation
+        rendered = json.dumps(expected, indent=2) + "\n"
+        record = root / verifier.DELIVERY_RETIREMENT_PATH
+        record.write_text(rendered)
+        return mock.patch.multiple(
+            verifier,
+            EXPECTED_DELIVERY_RETIREMENT=expected,
+            EXPECTED_DELIVERY_RETIREMENT_SHA256=hashlib.sha256(
+                rendered.encode()
+            ).hexdigest(),
+        )
+
+    def test_committed_retirement_record_is_in_force(self) -> None:
+        retired, errors = verifier.validate_delivery_repository_retirement(ROOT)
+        self.assertEqual(errors, [])
+        self.assertTrue(retired)
+        self.assertEqual(
+            sorted(verifier.EXPECTED_DELIVERY_RETIREMENT["effects"][
+                "open_pr_snapshot_repositories"
+            ]),
+            sorted(verifier.RETIRED_OPEN_PR_REPOSITORIES),
+        )
+
+    def test_without_retirement_record_three_repository_protocol_fails_closed(self) -> None:
+        temporary, root, _ = self.copy()
+        self.addCleanup(temporary.cleanup)
+        self.assertEqual(
+            verifier.validate_delivery_repository_retirement(root), (False, [])
+        )
+        acknowledgement = self.exact_boundary_acknowledgement()
+        acceptance = self.pulp_exact_boundary_acceptance(acknowledgement)
+        matrix = json.loads((ROOT / verifier.MATRIX_PATH).read_text())
+        amendment = json.loads((ROOT / verifier.BOUNDARY_AMENDMENT_PATH).read_text())
+        errors = verifier.validate_open_pr_snapshot(
+            self.open_pr_snapshot(retired=True), acceptance, matrix, amendment
+        )
+        self.assertTrue(any(
+            "repository coverage differs" in error and "danielraffel/vellum" in error
+            for error in errors
+        ), errors)
+        self.assertEqual(
+            verifier.validate_open_pr_snapshot(
+                self.open_pr_snapshot(), acceptance, matrix, amendment
+            ),
+            [],
+        )
+        data = self.promotion_attestation("3" * 64)
+        self.assertEqual(data["promotion_mode"], "exact-mirror")
+        self.assertFalse(any(
+            "promotion_mode" in error
+            for error in verifier.validate_authority_promotion_attestation(data, amendment)
+        ))
+
+    def test_tampered_retirement_record_is_rejected(self) -> None:
+        root, _ = self.retired_fixture()
+        record = root / verifier.DELIVERY_RETIREMENT_PATH
+        data = json.loads(record.read_text())
+        data["effects"]["required_promotion_mode"] = "exact-mirror"
+        record.write_text(json.dumps(data, indent=2) + "\n")
+        retired, errors = verifier.validate_delivery_repository_retirement(root)
+        self.assertFalse(retired)
+        self.assertTrue(any("differs from pinned SHA-256" in error for error in errors))
+        report = verifier.verify(root, repository_checks=False)
+        self.assertEqual(report["status"], "fail")
+        self.assertTrue(any("retirement" in error for error in report["errors"]))
+        record.write_text(json.dumps(data, indent=2) + "\n")
+        with mock.patch.object(
+            verifier, "EXPECTED_DELIVERY_RETIREMENT_SHA256",
+            hashlib.sha256(record.read_bytes()).hexdigest(),
+        ):
+            retired, errors = verifier.validate_delivery_repository_retirement(root)
+        self.assertFalse(retired)
+        self.assertTrue(any("differs from pinned facts" in error for error in errors))
+
+    def test_retirement_rejects_final_main_off_authority_history(self) -> None:
+        root, commit = self.retired_fixture()
+        with self.patched_retirement_commits(root, commit, commit):
+            self.assertEqual(
+                verifier.validate_delivery_repository_retirement(root), (True, [])
+            )
+        foreign = tempfile.TemporaryDirectory()
+        self.addCleanup(foreign.cleanup)
+        foreign_root = Path(foreign.name)
+        (foreign_root / "foreign.txt").write_text("not authority history\n")
+        foreign_commit, _ = self.init_git_repo(
+            foreign_root, remote="https://github.com/danielraffel/vellum.git"
+        )
+        subprocess.run(
+            ["git", "-C", str(root), "fetch", "-q", str(foreign_root), foreign_commit],
+            check=True,
+        )
+        with self.patched_retirement_commits(root, foreign_commit, commit):
+            retired, errors = verifier.validate_delivery_repository_retirement(root)
+        self.assertFalse(retired)
+        self.assertTrue(any(
+            "retired final main: commit is not on the authoritative history" in error
+            for error in errors
+        ), errors)
+        with self.patched_retirement_commits(root, foreign_commit, foreign_commit):
+            retired, errors = verifier.validate_delivery_repository_retirement(root)
+        self.assertFalse(retired)
+        self.assertTrue(any(
+            "consolidated authority main: commit is not on the authoritative history"
+            in error for error in errors
+        ), errors)
+
+    def test_retired_delivery_commit_must_be_authority_ancestor(self) -> None:
+        temporary, root, _ = self.copy()
+        self.addCleanup(temporary.cleanup)
+        authority_commit, authority_tree = self.init_git_repo(
+            root, remote="https://github.com/Generous-Corp/vellum.git"
+        )
+        foreign = tempfile.TemporaryDirectory()
+        self.addCleanup(foreign.cleanup)
+        delivery_root = Path(foreign.name)
+        (delivery_root / "foreign.txt").write_text("not authority history\n")
+        delivery_commit, delivery_tree = self.init_git_repo(
+            delivery_root, remote="https://github.com/danielraffel/vellum.git"
+        )
+        data = self.promotion_attestation(
+            "3" * 64, commit=authority_commit, tree=authority_tree
+        )
+        data["promotion_mode"] = "repository-transfer"
+        data["delivery_commit"] = delivery_commit
+        data["delivery_tree"] = delivery_tree
+        arguments = dict(repository="Generous-Corp/vellum", release_source_commit=authority_commit)
+        legacy = verifier.validate_promotion_repository_evidence(
+            root, delivery_root, data, **arguments
+        )
+        self.assertFalse(any("authoritative history" in error for error in legacy), legacy)
+        errors = verifier.validate_promotion_repository_evidence(
+            root, delivery_root, data, delivery_retired=True, **arguments
+        )
+        self.assertTrue(any(
+            "delivery_commit: commit is not on the authoritative history" in error
+            for error in errors
+        ), errors)
+        data["delivery_commit"] = authority_commit
+        data["delivery_tree"] = authority_tree
+        self.assertEqual(
+            verifier.validate_promotion_repository_evidence(
+                root, root, data, delivery_retired=True, **arguments
+            ),
+            [],
+        )
+
+    def test_retired_delivery_repository_rejects_exact_mirror_promotion(self) -> None:
+        amendment = json.loads((ROOT / verifier.BOUNDARY_AMENDMENT_PATH).read_text())
+        data = self.promotion_attestation("3" * 64)
+        errors = verifier.validate_authority_promotion_attestation(
+            data, amendment, delivery_retired=True
+        )
+        self.assertTrue(any("requires 'repository-transfer'" in error for error in errors))
+        data["promotion_mode"] = "repository-transfer"
+        self.assertEqual(
+            verifier.validate_authority_promotion_attestation(
+                data, amendment, delivery_retired=True
+            ),
+            [],
+        )
+        self.assertEqual(data["delivery_repository"], "danielraffel/vellum")
+
+    def test_retired_snapshot_still_listing_delivery_repository_is_rejected(self) -> None:
+        acknowledgement = self.exact_boundary_acknowledgement()
+        acceptance = self.pulp_exact_boundary_acceptance(acknowledgement)
+        matrix = json.loads((ROOT / verifier.MATRIX_PATH).read_text())
+        amendment = json.loads((ROOT / verifier.BOUNDARY_AMENDMENT_PATH).read_text())
+        self.assertEqual(
+            verifier.validate_open_pr_snapshot(
+                self.open_pr_snapshot(retired=True), acceptance, matrix, amendment,
+                delivery_retired=True,
+            ),
+            [],
+        )
+        errors = verifier.validate_open_pr_snapshot(
+            self.open_pr_snapshot(), acceptance, matrix, amendment,
+            delivery_retired=True,
+        )
+        self.assertTrue(any(
+            "unexpected or duplicate repository" in error for error in errors
+        ), errors)
+
     def test_provenance_workflow_collects_live_open_prs_and_changed_files(self) -> None:
         workflow = (ROOT / ".github/workflows/provenance.yml").read_text()
-        self.assertIn(
-            'for repository in Generous-Corp/pulp Generous-Corp/vellum danielraffel/vellum', workflow
+        self.assertEqual(
+            workflow.count('for repository in Generous-Corp/pulp Generous-Corp/vellum; do'), 2
+        )
+        self.assertEqual(
+            workflow.count('for repository in ("Generous-Corp/pulp", "Generous-Corp/vellum"):'), 2
         )
         self.assertIn('pulls?state=open&per_page=100', workflow)
         # Merge-queue runs stay on the pull-request side of every trust gate.
         self.assertIn(
-            "github.event_name != 'pull_request' && github.event_name != 'merge_group' "
-            "&& secrets.VELLUM_DELIVERY_READER_TOKEN",
-            workflow,
-        )
-        self.assertIn(
             'if [[ "$GITHUB_EVENT_NAME" == pull_request || "$GITHUB_EVENT_NAME" == merge_group ]]; then',
             workflow,
         )
-        self.assertIn('export GH_TOKEN="$DELIVERY_READER_TOKEN"', workflow)
+        # The live open-PR snapshot and its cursor re-check never run in the queue.
+        snapshot_gate = (
+            'if [[ -n "$PULP_ACCEPTANCE_SHA" && "$GITHUB_EVENT_NAME" != pull_request '
+            '&& "$GITHUB_EVENT_NAME" != merge_group ]]; then'
+        )
+        self.assertEqual(workflow.count(snapshot_gate), 2)
+        self.assertNotIn(
+            'if [[ -n "$PULP_ACCEPTANCE_SHA" && "$GITHUB_EVENT_NAME" != pull_request ]]; then',
+            workflow,
+        )
         self.assertIn('repository_evidence+=(--defer-live-open-pr-audit)', workflow)
         self.assertIn('repos/$repository/pulls/$pull_number"', workflow)
         self.assertIn('compare/$base_commit...$head_commit', workflow)
