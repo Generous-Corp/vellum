@@ -373,6 +373,10 @@ class ClosureManifestIdentityTests(unittest.TestCase):
             self.assertEqual(check(good)["status"], "pass")
             mutated = self.commit(mirror, {"mirror/unit/a.cpp": "A\n"})
             self.assertEqual(check(mutated)["status"], "fail")
+            build_copy = dict(manifest, files=manifest["files"] + ["build/_deps/vendored.h"])
+            self.assertIn("closure path absent from origin commit: build/_deps/vendored.h",
+                          ph.compare_identity(build_copy, origin_blobs,
+                                              ph.git_exported_blobs(mirror, good, "mirror/"))["reasons"])
             extra = self.commit(mirror, {"mirror/unit/a.cpp": "a\n", "mirror/unit/extra.cpp": "e\n"})
             self.assertIn("not in origin closure: unit/extra.cpp", check(extra)["reasons"])
 

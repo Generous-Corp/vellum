@@ -1045,6 +1045,13 @@ def compare_identity(manifest: dict[str, Any], origin: dict[str, str], exported:
         reasons.append("empty closure manifest: no roots or files declared")
     if not origin:
         reasons.append("origin closure is empty")
+    if manifest.get("files") is not None:
+        # An exact-file closure must be verifiable: a listed path the origin
+        # commit does not contain (a build-tree copy, a generated file) cannot
+        # be proven identical, and silently dropping it from both sides would
+        # pass a closure nobody checked.
+        unverifiable = sorted(p for p in manifest_paths(manifest) if p not in origin)
+        reasons += [f"closure path absent from origin commit: {p}" for p in unverifiable[:25]]
     only_origin = sorted(set(origin) - set(exported))
     only_export = sorted(set(exported) - set(origin))
     changed = sorted(p for p in set(origin) & set(exported) if origin[p] != exported[p])
