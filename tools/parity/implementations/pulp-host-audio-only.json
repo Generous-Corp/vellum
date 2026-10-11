@@ -152,5 +152,11 @@
         "standalone.png"
       ]
     }
+  ],
+  "content_roots": [
+    "gain.clap",
+    "gain.vst3",
+    "gain.component",
+    "other.clap"
   ]
 }
