@@ -138,3 +138,47 @@ they are not build inputs, installed files, or release payloads. The active
 source boundary is `provenance/active-source-boundary.json`. Mirrored Pulp
 framework source admitted by Decision 0010 is recorded blob by blob in
 `provenance/mirror/blob-origins.json`; none is present yet.
+
+## Planned mirrored framework inventory
+
+The following rows are the legal inventory for bytes that may arrive under
+`mirror/` from the D3 units and the foundation amendment. They are scoped to
+the mirror root and do not make the corresponding historical Pulp paths active
+Vellum dependencies. Versions and licenses were cross-checked against Pulp's
+`DEPENDENCIES.md`, `NOTICE.md`, and `tools/deps/manifest.json` on 2026-10-10.
+
+| Dependency | Version or source identity | License | Mirror scope | Compatibility / handling |
+|---|---|---|---|---|
+| Abseil | `dd67f5ca84f65ebb88ac0ea0fe2c1d58663e519f` | Apache-2.0 | `mirror/render-2d/`, `mirror/render-3d/`, `mirror/view-script/` with V8 | MIT-compatible; transitive notice |
+| Brotli | `v1.2.0` | MIT | `mirror/canvas/` | MIT-compatible |
+| CHOC | `pulp-webview-dnd-poc1` (`df148a41`) | ISC | `mirror/view-script/` | MIT-compatible; retain fork attribution |
+| cpp-httplib | vendored snapshot | MIT | `mirror/foundation/` | MIT-compatible |
+| Dawn and Tint | `f91da75afe31d4d6f47a6da307e1fbabd1b1691a` | BSD-3-Clause | `mirror/gpu-device/`, `mirror/render-2d/`, `mirror/render-3d/` | MIT-compatible; renderer notice exists |
+| Expat | `6154446fccefbf3ca644894f598969113b0c7bcd` | MIT | `mirror/render-2d/`, `mirror/render-3d/` | MIT-compatible; renderer notice exists |
+| HarfBuzz | `9cb1fee51069b206effb4736e443b038d230789d` | Old MIT | `mirror/canvas/` | MIT-compatible; notice exists |
+| Highway | `1.2.0` | Apache-2.0 | `mirror/foundation/` | MIT-compatible |
+| ICU | `d578f2e8b7bd5938e21cfb6bf15c079e0aa5b738` | Unicode-3.0 plus bundled notices | `mirror/canvas/`, `mirror/view-script/` with V8 | Permissive; notice exists |
+| Inter | `4.001; git-9221beed3` | SIL OFL 1.1 | `mirror/canvas/`, `mirror/view-core/`, `mirror/view-platform/` | Allowed font license |
+| JavaScriptCore | Apple system framework | LGPL-2.1+ components and Apple terms | `mirror/view-script/` references only | **Not MIT-compatible**; system-only, never mirrored |
+| JetBrains Mono | `2.304` | SIL OFL 1.1 | `mirror/canvas/`, `mirror/view-core/` | Allowed font license |
+| Jost | `3.710` | SIL OFL 1.1 | `mirror/canvas/`, `mirror/view-core/` | Allowed font license |
+| Mbed TLS | `v3.6.2` | Apache-2.0 | `mirror/foundation/`, `mirror/gpu-device/` | MIT-compatible |
+| NanoSVG | vendored snapshot | zlib | `mirror/canvas/` | MIT-compatible |
+| Noto Sans Arabic | variable font | SIL OFL 1.1 | `mirror/canvas/`, `mirror/view-core/` | Allowed font license |
+| Noto Sans JP | variable font | SIL OFL 1.1 | `mirror/canvas/`, `mirror/view-core/` | Allowed font license |
+| PartitionAlloc | `03cc513177b4340bee3dbfd46f6dd5fdded43b79` | BSD-3-Clause | `mirror/gpu-device/`, `mirror/render-2d/`, `mirror/render-3d/` | MIT-compatible; transitive notice |
+| QuickJS | `2024-02-14` | MIT | `mirror/view-script/` | MIT-compatible |
+| SheenBidi | `v3.0.0` | Apache-2.0 | `mirror/canvas/` | MIT-compatible |
+| Skia and skcms | `8b8c3872fbc03f025855db96ce683f34ec98a815` | BSD-3-Clause | `mirror/canvas/`, `mirror/render-2d/`, `mirror/render-3d/` | MIT-compatible; renderer notice exists |
+| V8 | `v8-m153-15.3.76.5-26cef0256b0e` | BSD-3-Clause | `mirror/view-script/` when selected | MIT-compatible; sealed provider |
+| Yoga | `3.2.1` | MIT | `mirror/view-core/`, `mirror/view-platform/` | MIT-compatible |
+
+Pulp's external contributor `matthewfudge` authored four mirrored view files:
+`core/view/src/design_frame_view.cpp`,
+`core/view/include/pulp/view/widget_bridge.hpp`,
+`core/view/src/widget_bridge/state_binding_api.cpp`, and
+`core/view/src/widget_bridge/widget_callbacks.cpp`. The history-preserving
+mirror retains those author records; the inbound and outbound license is MIT,
+so no separate relicensing or waiver is required. JavaScriptCore is the only
+listed dependency with a non-MIT-compatible license concern, and it remains an
+OS-provided, non-mirrored adapter dependency.
