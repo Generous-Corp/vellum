@@ -322,8 +322,10 @@ def _rerun_with_schedule(mutate):
         staged = work / "schedule" / original.name
         staged.parent.mkdir(parents=True, exist_ok=True)
         staged.write_text(json.dumps(schedule, indent=1), encoding="utf-8")
-        stage = [str(staged) if Path(s).name == name else s for s in case.get("stage", [])]
-        return dict(case, stage=stage), {}
+        # A file a control writes itself travels as extra_stage; corpus `stage`
+        # entries stay relative to the case root.
+        stage = [s for s in case.get("stage", []) if Path(s).name != name]
+        return dict(case, stage=stage), {"extra_stage": [staged]}
 
     return prepare
 
