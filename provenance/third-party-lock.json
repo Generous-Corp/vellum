@@ -89,6 +89,7 @@
     "renderer": {
       "state": "artifact-bytes-proven-source-association-not-attested",
       "release_eligibility": "blocked",
+      "attestation_record": "provenance/renderer-attestation.json",
       "release_blockers": [
         {
           "id": "renderer-source-to-asset-attestation-missing",

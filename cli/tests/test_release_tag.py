@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import runpy
 import subprocess
@@ -11,6 +12,7 @@ REPO = Path(__file__).resolve().parents[2]
 MODULE = runpy.run_path(str(REPO / "scripts/verify_release_tag.py"))
 verify = MODULE["verify"]
 ReleaseTagVerificationError = MODULE["ReleaseTagVerificationError"]
+RETIRED_RELEASE_TAGS = MODULE["RETIRED_RELEASE_TAGS"]
 
 
 def command(*arguments: str, cwd: Path) -> str:
@@ -112,6 +114,21 @@ class ReleaseTagTests(unittest.TestCase):
         evidence = self.verify()
         self.assertEqual(evidence["tag_object_sha"], self.tag_object)
         self.assertEqual(evidence["source_commit"], self.commit)
+        # The repository is public; build attestations are absent because the
+        # release workflow does not generate them, not because of visibility.
+        self.assertEqual(
+            evidence["github_actions_build_attestation"],
+            {
+                "status": "not-generated",
+                "reason_code": (
+                    "release-workflow-does-not-generate-build-attestations"
+                ),
+                "documentation": (
+                    "https://docs.github.com/en/code-security/getting-started/"
+                    "github-security-features#artifact-attestations"
+                ),
+            },
+        )
 
     def test_peeled_commit_cannot_substitute_for_annotated_tag(self) -> None:
         with self.assertRaisesRegex(
@@ -170,6 +187,76 @@ class ReleaseTagTests(unittest.TestCase):
                 allowed_signers=other_allowed_signers,
                 expected_fingerprint=other_fingerprint,
             )
+
+    def write_retired(self, tags: list[str]) -> Path:
+        path = self.root / "retired-release-tags.json"
+        path.write_text(
+            json.dumps({
+                "schema": "vellum.retired-release-tags.v1",
+                "tags": [{"tag": tag} for tag in tags],
+            }),
+            encoding="utf-8",
+        )
+        return path
+
+    def test_checked_in_record_retires_v0_1_7(self) -> None:
+        self.assertEqual(
+            RETIRED_RELEASE_TAGS, REPO / "provenance/retired-release-tags.json"
+        )
+        payload = json.loads(RETIRED_RELEASE_TAGS.read_text(encoding="utf-8"))
+        entry = {row["tag"]: row for row in payload["tags"]}["v0.1.7"]
+        self.assertEqual(
+            entry["target_commit"], "47ebf852b9d8d49d3a61fac88cd993f454790e4e"
+        )
+        self.assertEqual(
+            entry["sdk_archive_sha256"],
+            "ccfb8d77e195b8efa742f5bb8204ad20670a5effcb912a469340d3f6c7ccc56d",
+        )
+
+    def test_retired_tag_is_refused_even_when_validly_signed(self) -> None:
+        command(
+            "git",
+            "-c",
+            "gpg.format=ssh",
+            "-c",
+            f"user.signingkey={self.key}",
+            "tag",
+            "-s",
+            "v0.1.7",
+            "-m",
+            "Release",
+            cwd=self.repo,
+        )
+        retired_object = command("git", "rev-parse", "v0.1.7", cwd=self.repo)
+        retired = self.write_retired(["v0.1.7"])
+        with self.assertRaisesRegex(
+            ReleaseTagVerificationError, "'v0.1.7' is retired"
+        ):
+            self.verify(
+                tag_name="v0.1.7",
+                tag_object_sha=retired_object,
+                retired_tags=retired,
+            )
+        with self.assertRaisesRegex(
+            ReleaseTagVerificationError, "'v0.1.7' is retired"
+        ):
+            self.verify(tag_name="v0.1.7", tag_object_sha=retired_object)
+        # Control: the identical signed tag verifies once the name is not
+        # retired, so the refusal above comes from the record alone.
+        evidence = self.verify(
+            tag_name="v0.1.7",
+            tag_object_sha=retired_object,
+            retired_tags=self.write_retired([]),
+        )
+        self.assertEqual(evidence["tag"], "v0.1.7")
+
+    def test_missing_or_malformed_retired_record_fails_closed(self) -> None:
+        with self.assertRaisesRegex(ReleaseTagVerificationError, "unreadable"):
+            self.verify(retired_tags=self.root / "absent.json")
+        malformed = self.root / "malformed.json"
+        malformed.write_text('{"schema": "other", "tags": []}', encoding="utf-8")
+        with self.assertRaisesRegex(ReleaseTagVerificationError, "does not declare"):
+            self.verify(retired_tags=malformed)
 
 
 if __name__ == "__main__":

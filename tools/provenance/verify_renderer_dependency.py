@@ -18,6 +18,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
 LOCK_PATH = ROOT / "provenance/third-party-lock.json"
+ATTESTATION_PATH = ROOT / "provenance/renderer-attestation.json"
 HEX_40 = re.compile(r"[0-9a-f]{40}")
 HEX_64 = re.compile(r"[0-9a-f]{64}")
 PLATFORMS = {1: "macos", 2: "ios", 3: "tvos", 4: "watchos", 6: "maccatalyst"}
@@ -44,7 +45,56 @@ def require(condition: bool, message: str) -> None:
         raise VerificationError(message)
 
 
-def load_lock(path: Path) -> tuple[dict[str, object], dict[str, object]]:
+def validate_renderer_attestation(
+    renderer: dict[str, object], attestation: object
+) -> dict[str, object]:
+    """Validate the digest-to-provenance binding without claiming release readiness."""
+    require(isinstance(attestation, dict),
+            "renderer artifact digest has no provenance record")
+    require(attestation.get("schema") == "vellum.renderer-provenance.v1",
+            "renderer provenance schema is missing or unsupported")
+    artifact = attestation.get("artifact")
+    locked_artifact = renderer.get("artifact")
+    require(isinstance(artifact, dict) and isinstance(locked_artifact, dict),
+            "renderer provenance artifact identity is missing")
+    require(artifact.get("sha256") == locked_artifact.get("sha256"),
+            "renderer artifact digest has no matching provenance record")
+    for field in ("repository", "release_tag", "name"):
+        require(artifact.get(field) == locked_artifact.get(field),
+                f"renderer provenance artifact {field} differs from the lock")
+
+    locked_identities = renderer.get("source_identities")
+    identities = attestation.get("source_identities")
+    require(isinstance(locked_identities, dict) and isinstance(identities, dict),
+            "renderer provenance source identities are missing")
+    for name in ("skia", "dawn", "builder"):
+        locked = locked_identities.get(name)
+        recorded = identities.get(name)
+        require(isinstance(locked, dict) and isinstance(recorded, dict),
+                f"renderer provenance identity is missing: {name}")
+        require(recorded.get("commit") == locked.get("commit"),
+                f"renderer provenance commit differs from the lock: {name}")
+
+    build_identity = attestation.get("build_identity")
+    require(isinstance(build_identity, dict),
+            "renderer compiler/linker/ABI identity is missing")
+    for field in ("target", "configuration", "compiler", "linker", "cpp_abi"):
+        require(field in build_identity,
+                f"renderer build identity is missing: {field}")
+    legal_inventory = attestation.get("legal_inventory")
+    require(isinstance(legal_inventory, dict)
+            and legal_inventory.get("state") in {"observed-not-exhaustive", "exhaustive"},
+            "renderer legal inventory state is invalid")
+    signature = attestation.get("signature")
+    require(isinstance(signature, dict)
+            and signature.get("state") in {"missing", "signed"},
+            "renderer attestation signature state is invalid")
+    return attestation
+
+
+def load_lock(
+    path: Path, attestation_path: Path = ATTESTATION_PATH
+) -> tuple[dict[str, object], dict[str, object]]:
     lock = json.loads(path.read_text(encoding="utf-8"))
     require(lock.get("schema_version") == 2, "renderer lock schema must be version 2")
     require(lock.get("status") == "incubation-byte-locked-not-release-attested",
@@ -55,6 +105,8 @@ def load_lock(path: Path) -> tuple[dict[str, object], dict[str, object]]:
     require(isinstance(renderer, dict), "renderer dependency lock is missing")
     require(renderer.get("release_eligibility") == "blocked",
             "GPU release must remain blocked while provenance gaps are open")
+    require(renderer.get("attestation_record") == "provenance/renderer-attestation.json",
+            "renderer attestation record path is missing or unexpected")
     blockers = renderer.get("release_blockers")
     require(isinstance(blockers, list) and blockers, "renderer release blockers are missing")
     blocker_ids = {row.get("id") for row in blockers if isinstance(row, dict)}
@@ -125,6 +177,11 @@ def load_lock(path: Path) -> tuple[dict[str, object], dict[str, object]]:
         require(commit in dependencies, f"DEPENDENCIES.md omits source identity {commit}")
     require("not an exhaustive legal/SBOM claim" in dependencies,
             "DEPENDENCIES.md does not disclose the transitive inventory limitation")
+    try:
+        attestation = json.loads(attestation_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as error:
+        raise VerificationError("renderer artifact digest has no provenance record") from error
+    validate_renderer_attestation(renderer, attestation)
     return lock, renderer
 
 
@@ -270,13 +327,14 @@ def verify_archive(path: Path, renderer: dict[str, object], require_macho: bool)
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--lock", type=Path, default=LOCK_PATH)
+    parser.add_argument("--attestation", type=Path, default=ATTESTATION_PATH)
     parser.add_argument("--archive", type=Path)
     parser.add_argument("--require-macho", action="store_true")
     parser.add_argument("--require-release-eligible", action="store_true")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
     try:
-        _, renderer = load_lock(args.lock)
+        _, renderer = load_lock(args.lock, args.attestation)
         result: dict[str, object] = {
             "ok": True,
             "lock": str(args.lock),

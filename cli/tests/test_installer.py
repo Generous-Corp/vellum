@@ -61,7 +61,7 @@ def _build_verified_fixture(
     *,
     fixture_name: str = "test",
     source_commit: str = "a" * 40,
-    framework_version: str = "0.1.7",
+    framework_version: str = "0.1.8",
     target: str = "test",
 ) -> tuple[Path, Path, str]:
     payload = root / f"{fixture_name}-payload"
@@ -89,7 +89,7 @@ def _build_verified_fixture(
         json.dumps({
             "schema": "vellum.sdk-artifact.v1",
             "framework_version": framework_version,
-            "cli_version": "0.1.7",
+            "cli_version": "0.1.8",
             "cli_api": 1,
             "source_commit": source_commit,
             "source_tree_clean": True,
@@ -250,7 +250,7 @@ class InstallerTests(unittest.TestCase):
             sw_vers.chmod(0o755)
             rejected = _run_installer(
                 root / "rejected-prefix",
-                "--version", "0.1.7",
+                "--version", "0.1.8",
                 env=environment,
             )
             self.assertNotEqual(rejected.returncode, 0)
@@ -266,12 +266,68 @@ class InstallerTests(unittest.TestCase):
             )
             accepted_boundary = _run_installer(
                 root / "accepted-prefix",
-                "--version", "0.1.7",
+                "--version", "0.1.8",
                 env=environment,
             )
             self.assertNotEqual(accepted_boundary.returncode, 0)
             self.assertNotIn("require macOS 15.0 or newer", accepted_boundary.stderr)
             self.assertIn("GH_RELEASE_ACQUISITION_REACHED", accepted_boundary.stderr)
+
+    def test_retired_release_version_is_refused_before_acquisition(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            for name, body in {
+                "uname": (
+                    '#!/bin/sh\ncase "$1" in -s) printf "Darwin\\n" ;; '
+                    '-m) printf "arm64\\n" ;; *) exit 2 ;; esac\n'
+                ),
+                "sw_vers": "#!/bin/sh\nprintf '15.0\\n'\n",
+                "gh": (
+                    '#!/bin/sh\nif [ "$1" = "--version" ]; then '
+                    'printf "gh version 2.96.0 (test)\\n"; exit 0; fi\n'
+                    'if [ "$1" = "release" ] && [ "$2" = "verify-asset" ] '
+                    '&& [ "$3" = "--help" ]; then exit 0; fi\n'
+                    'printf "GH_RELEASE_ACQUISITION_REACHED\\n" >&2\nexit 19\n'
+                ),
+            }.items():
+                path = fake_bin / name
+                path.write_text(body, encoding="utf-8")
+                path.chmod(0o755)
+            environment = {
+                **os.environ,
+                "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
+            }
+            retired = json.loads(
+                (REPO / "provenance/retired-release-tags.json").read_text(
+                    encoding="utf-8"
+                )
+            )["tags"]
+            spellings = [row["tag"] for row in retired]
+            spellings += [tag.removeprefix("v") for tag in spellings]
+            self.assertIn("v0.1.7", spellings)
+            for spelling in spellings:
+                with self.subTest(spelling=spelling):
+                    rejected = _run_installer(
+                        root / f"prefix-{spelling}",
+                        "--version", spelling,
+                        env=environment,
+                    )
+                    self.assertEqual(rejected.returncode, 2)
+                    self.assertIn("retired release", rejected.stderr)
+                    self.assertNotIn(
+                        "GH_RELEASE_ACQUISITION_REACHED", rejected.stderr
+                    )
+            # Control: an unretired version passes the guard and reaches the
+            # (fake) release acquisition, so the refusal is version-specific.
+            control = _run_installer(
+                root / "prefix-control",
+                "--version", "0.1.6",
+                env=environment,
+            )
+            self.assertNotIn("retired release", control.stderr)
+            self.assertIn("GH_RELEASE_ACQUISITION_REACHED", control.stderr)
 
     def test_official_release_requires_gh_release_verification_capability(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -299,7 +355,7 @@ class InstallerTests(unittest.TestCase):
             }
             rejected = _run_installer(
                 root / "prefix",
-                "--version", "0.1.7",
+                "--version", "0.1.8",
                 env=environment,
             )
             self.assertNotEqual(rejected.returncode, 0)
@@ -339,7 +395,7 @@ class InstallerTests(unittest.TestCase):
                 "verified": False,
                 "artifact": None,
                 "artifact_sha256": None,
-                "framework_version": "0.1.7",
+                "framework_version": "0.1.8",
                 "target": "local-development",
                 "source_commit": None,
             })
@@ -627,7 +683,7 @@ class InstallerTests(unittest.TestCase):
             )
             self.assertEqual(verified.returncode, 0, verified.stderr)
             self.assertEqual(
-                json.loads(verified.stdout)["cli_version"], "0.1.7"
+                json.loads(verified.stdout)["cli_version"], "0.1.8"
             )
 
             payload = root / "test-payload"
@@ -817,7 +873,7 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual((prefix / "lib/vellum").resolve(), active_before)
             self.assertEqual(
                 [path.name for path in (prefix / "lib/vellum-installs").iterdir()],
-                [f"0.1.7-test-{digest}"],
+                [f"0.1.8-test-{digest}"],
             )
             self.assertEqual(
                 {
@@ -857,7 +913,7 @@ class InstallerTests(unittest.TestCase):
             )
             self.assertEqual(first.returncode, 0, first.stderr)
             active_before = (prefix / "lib/vellum").resolve()
-            self.assertEqual(active_before.name, f"0.1.7-test-{first_digest}")
+            self.assertEqual(active_before.name, f"0.1.8-test-{first_digest}")
 
             failed = _run_installer(
                 prefix,
@@ -870,7 +926,7 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual((prefix / "lib/vellum").resolve(), active_before)
             self.assertNotEqual(first_digest, second_digest)
             self.assertTrue(
-                (prefix / "lib/vellum-installs" / f"0.1.7-test-{second_digest}").is_dir()
+                (prefix / "lib/vellum-installs" / f"0.1.8-test-{second_digest}").is_dir()
             )
             version = subprocess.run(
                 [str(prefix / "bin/vellum"), "--version"],
@@ -903,7 +959,7 @@ class InstallerTests(unittest.TestCase):
             )
             self.assertEqual(first.returncode, 0, first.stderr)
             active_before = (prefix / "lib/vellum").resolve()
-            self.assertEqual(active_before.name, f"0.1.7-test-{first_digest}")
+            self.assertEqual(active_before.name, f"0.1.8-test-{first_digest}")
 
             interrupted = _run_installer(
                 prefix,
@@ -919,7 +975,7 @@ class InstallerTests(unittest.TestCase):
             staged_install = (
                 prefix
                 / "lib/vellum-installs"
-                / f"0.1.7-test-{second_digest}"
+                / f"0.1.8-test-{second_digest}"
             )
             self.assertTrue(staged_install.is_dir())
             self.assertFalse(
@@ -1027,7 +1083,7 @@ class InstallerTests(unittest.TestCase):
                     "--archive", str(archive),
                     "--checksums", str(sums),
                     "--prefix", str(prefix),
-                    "--expected-version", "0.1.7",
+                    "--expected-version", "0.1.8",
                     "--expected-target", "wrong-target",
                 ],
                 text=True,
@@ -1044,7 +1100,7 @@ class InstallerTests(unittest.TestCase):
             archive = root / "vellum-sdk-collision.tar.gz"
             metadata = json.dumps({
                 "schema": "vellum.sdk-artifact.v1",
-                "framework_version": "0.1.7",
+                "framework_version": "0.1.8",
                 "cli_api": 1,
                 "source_commit": "a" * 40,
                 "target": "test",
