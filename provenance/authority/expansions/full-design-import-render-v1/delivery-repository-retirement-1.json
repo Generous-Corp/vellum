@@ -4,16 +4,21 @@
   "retirement_id": "full-design-import-render-v1-delivery-repository-retirement-1",
   "state": "retired",
   "retired_on": "2026-08-17",
-  "recorded_at": "2026-10-11T00:00:00Z",
-  "approved_by": "@danielraffel",
+  "record_authored_on": "2026-10-11",
+  "approval": {
+    "approved_by": "@danielraffel",
+    "reference": "danielraffel/pulp-planning vellum-move/DECISIONS.md, section \"OWNER SIGN-OFF 2026-10-11\", item 2 (A-B1a)"
+  },
   "authority_effect": "none",
   "retired_repository": "danielraffel/vellum",
   "authority_repository": "Generous-Corp/vellum",
   "consolidation": {
     "authority_main_before": "4a393a126750c0d93b8e45ca7ada9af0278c480a",
     "authority_main_after": "fa7a83dbbe6681968ec5cba5b31178a2a288ed95",
+    "authority_main_after_committed_at": "2026-08-17T06:42:51Z",
     "authority_only_commits_preserved_at": "refs/heads/archive/local-first-routing-20260817",
     "retired_repository_final_main": "4bfc7b03a4d0b4fc7d642f6d326028238f7b14af",
+    "retired_repository_final_main_basis": "recorded fact; the retired repository can no longer be queried, so the verifier proves only that this commit is on the authority history",
     "retired_repository_final_main_is_authority_ancestor": true
   },
   "effects": {

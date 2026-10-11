@@ -62,7 +62,16 @@ requests in `Generous-Corp/pulp` and `Generous-Corp/vellum` only, requires
 `promotion_mode: repository-transfer`, and accepts the authority checkout as
 the delivery checkout. Earlier artifacts keep `danielraffel/vellum` as the
 historical delivery identity. Without the record, or with a record that does
-not match, the three-repository protocol applies and fails closed.
+not match, the three-repository protocol applies and fails closed; the
+authority checkout is then rejected as a delivery root.
+
+The record's final `main` of the retired repository is a recorded fact: that
+repository can no longer be queried, so the verifier proves only that the
+commit is on the authority history. The consolidated `main` and its commit
+time, by contrast, are checked against Git. The checks need full history; a
+shallow clone fails closed with an explicit message. Owner approval is recorded
+in `danielraffel/pulp-planning` `vellum-move/DECISIONS.md`, section "OWNER
+SIGN-OFF 2026-10-11", item 2.
 
 **Release operators:** the next `v*` tag is the `full-design-import-render-v1`
 promotion release; it cannot be an ordinary patch release.

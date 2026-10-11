@@ -93,7 +93,7 @@ ARGUMENT_DRIVEN_PROOF_TEST_IDS = {
 FIXTURE_PROOF_CONSUMERS = {
     "fixtures/design-ir/pulp-emitter-generic.pulp.zip": "cli/tests/test_pulp_zip.py",
 }
-EXPECTED_README_SHA256 = "726a5b0a954deffb1330025e65ab773966ca4eab1ab524902f1c91935273c1cf"
+EXPECTED_README_SHA256 = "922481594d7f0fd784c9261303f6744cdde5bf72c8891739dce7ce9fd412eff5"
 EXPECTED_PROPOSAL_SHA256 = "7c2db05e110e7d9834806e08469f6d7cc70f6528b2242d1f6c0255dcdbc0a4c9"
 EXPECTED_ADDENDUM_SHA256 = "91bb269ce5a872037fd67e4735125772bcac50d82cf454edfd8c356b11f5a122"
 EXPECTED_ACKNOWLEDGEMENT_SHA256 = "877ac4a410e7ac8d5019aa8f2e09d9133a111acaab59eb2abef65c30527b78c8"
@@ -102,7 +102,7 @@ EXPECTED_BOUNDARY_AMENDMENT_SHA256 = (
     "cf9b07233e9c66763e1f68391d2df4252dca01bbc7de5acac10dca006fbf5287"
 )
 EXPECTED_DELIVERY_RETIREMENT_SHA256 = (
-    "badef6244ca6545d90197e2d73932562c954580423223a3f9d391900d7318ecb"
+    "3f327f4b1163ef3ede6791e449ea62cedb96d305f0b6502e2dc0e52dfb8f9ba5"
 )
 EXPECTED_DELIVERY_RETIREMENT = {
     "schema_version": 1,
@@ -110,18 +110,29 @@ EXPECTED_DELIVERY_RETIREMENT = {
     "retirement_id": "full-design-import-render-v1-delivery-repository-retirement-1",
     "state": "retired",
     "retired_on": "2026-08-17",
-    "recorded_at": "2026-10-11T00:00:00Z",
-    "approved_by": "@danielraffel",
+    "record_authored_on": "2026-10-11",
+    "approval": {
+        "approved_by": "@danielraffel",
+        "reference": (
+            "danielraffel/pulp-planning vellum-move/DECISIONS.md, section "
+            "\"OWNER SIGN-OFF 2026-10-11\", item 2 (A-B1a)"
+        ),
+    },
     "authority_effect": "none",
     "retired_repository": "danielraffel/vellum",
     "authority_repository": "Generous-Corp/vellum",
     "consolidation": {
         "authority_main_before": "4a393a126750c0d93b8e45ca7ada9af0278c480a",
         "authority_main_after": "fa7a83dbbe6681968ec5cba5b31178a2a288ed95",
+        "authority_main_after_committed_at": "2026-08-17T06:42:51Z",
         "authority_only_commits_preserved_at": (
             "refs/heads/archive/local-first-routing-20260817"
         ),
         "retired_repository_final_main": "4bfc7b03a4d0b4fc7d642f6d326028238f7b14af",
+        "retired_repository_final_main_basis": (
+            "recorded fact; the retired repository can no longer be queried, so the "
+            "verifier proves only that this commit is on the authority history"
+        ),
         "retired_repository_final_main_is_authority_ancestor": True,
     },
     "effects": {
@@ -597,8 +608,12 @@ def validate_delivery_repository_retirement(root: Path) -> tuple[bool, list[str]
 
     An absent record keeps the three-repository protocol. A present record is
     in force only when its bytes match the pinned digest, its content matches
-    the pinned facts, and the retired repository's final ``main`` is on the
-    authority history. A present but invalid record fails closed.
+    the pinned facts, the consolidated authority ``main`` carries the recorded
+    commit time, and the retired repository's recorded final ``main`` is on the
+    authority history. That final ``main`` is a recorded fact: the retired
+    repository no longer exists, so only its ancestry can be proven. A present
+    but invalid record fails closed, including in a shallow clone, where
+    ancestry cannot be proven.
     """
     path = root / DELIVERY_RETIREMENT_PATH
     if not path.exists() and not path.is_symlink():
@@ -623,6 +638,23 @@ def validate_delivery_repository_retirement(root: Path) -> tuple[bool, list[str]
     authority_after = consolidation["authority_main_after"]
     if git_output(root, "rev-parse", "--verify", "HEAD^{commit}") is None:
         return False, ["delivery repository retirement: authority checkout has no Git HEAD"]
+    shallow = git_output(root, "rev-parse", "--is-shallow-repository")
+    if shallow is None or shallow.decode().strip() != "false":
+        return False, [
+            "delivery repository retirement: shallow clone: ancestry unprovable; "
+            "fetch full history"
+        ]
+    committed = git_output(root, "show", "-s", "--format=%ct", authority_after)
+    expected_time = dt.datetime.fromisoformat(
+        consolidation["authority_main_after_committed_at"].replace("Z", "+00:00")
+    )
+    if committed is None or committed.decode().strip() != str(
+        int(expected_time.timestamp())
+    ):
+        errors.append(
+            "delivery repository retirement: consolidated authority main commit time "
+            "differs from the record"
+        )
     require_git_ancestor(
         root, final_main, authority_after,
         "delivery repository retirement: retired final main", errors,
@@ -823,6 +855,11 @@ def validate_promotion_repository_evidence(
             "authority_promotion evidence: --delivery-root is required for exact promotion proof"
         )
         return errors
+    if not delivery_retired and delivery_root.resolve() == authority_root.resolve():
+        errors.append(
+            "authority_promotion evidence: the authority checkout may serve as the "
+            "delivery root only while the delivery repository retirement is in force"
+        )
     delivery_commit = data.get("delivery_commit")
     delivery_tree = git_commit_tree(
         delivery_root, delivery_commit, "authority_promotion delivery_commit", errors
@@ -833,6 +870,9 @@ def validate_promotion_repository_evidence(
     if delivery_head is None or delivery_head.decode().strip() != delivery_commit:
         errors.append("authority_promotion evidence: delivery checkout HEAD differs from attestation")
     if delivery_retired and delivery_tree is not None:
+        # Defense in depth: the attestation already forces the delivery commit to
+        # equal the authority commit, the release source and HEAD. This guard only
+        # matters if that equality is ever relaxed.
         require_git_ancestor(
             authority_root, delivery_commit, "HEAD",
             "authority_promotion evidence: delivery_commit", errors,
