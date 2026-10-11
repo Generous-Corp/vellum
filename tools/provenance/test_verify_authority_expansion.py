@@ -1236,7 +1236,16 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
             'for repository in Generous-Corp/pulp Generous-Corp/vellum danielraffel/vellum', workflow
         )
         self.assertIn('pulls?state=open&per_page=100', workflow)
-        self.assertIn("github.event_name != 'pull_request' && secrets.VELLUM_DELIVERY_READER_TOKEN", workflow)
+        # Merge-queue runs stay on the pull-request side of every trust gate.
+        self.assertIn(
+            "github.event_name != 'pull_request' && github.event_name != 'merge_group' "
+            "&& secrets.VELLUM_DELIVERY_READER_TOKEN",
+            workflow,
+        )
+        self.assertIn(
+            'if [[ "$GITHUB_EVENT_NAME" == pull_request || "$GITHUB_EVENT_NAME" == merge_group ]]; then',
+            workflow,
+        )
         self.assertIn('export GH_TOKEN="$DELIVERY_READER_TOKEN"', workflow)
         self.assertIn('repository_evidence+=(--defer-live-open-pr-audit)', workflow)
         self.assertIn('repos/$repository/pulls/$pull_number"', workflow)
