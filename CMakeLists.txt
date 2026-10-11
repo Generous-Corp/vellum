@@ -267,6 +267,10 @@ if(VELLUM_BUILD_TESTS)
         COMMAND "${Python3_EXECUTABLE}"
             authoring/tests/test_phase3_contracts.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.parity-packaging-unit
+        COMMAND "${Python3_EXECUTABLE}"
+            tools/parity/packaging/test_packaging_lane.py
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME vellum.parity-harness-unit
         COMMAND "${Python3_EXECUTABLE}"
             tools/parity/test_parity_harness.py
