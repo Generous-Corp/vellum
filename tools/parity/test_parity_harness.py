@@ -207,7 +207,8 @@ class CalibrationTests(HarnessFixture):
     def test_honest_implementation_calibrates_and_every_control_bites(self) -> None:
         report = ph.calibrate(self.corpus_path, self.root / "src", self.impl_path, self.root / "out")
         self.assertTrue(report["positive"]["verdict"]["accepting"], report["positive"]["verdict"])
-        failed = {c["control"]: c for c in report["controls"] if c["outcome"] != "REJECTED as required"}
+        failed = {c["control"]: c for c in report["controls"]
+                  if c["outcome"] != "REJECTED as required" and not c["outcome"].startswith("OUT OF SCOPE")}
         self.assertEqual(failed, {})
         self.assertTrue(report["calibrated"])
         names = {c["control"] for c in report["controls"]}
@@ -578,6 +579,35 @@ class AuthorityAndProvenanceTests(HarnessFixture):
             self.assertTrue(any(nested in e and "undeclared binary" in e for e in errors), errors)
         finally:
             del ph.LANE_ARTIFACTS["nested-probe"]
+
+    def test_nested_artifact_calibration_control_bites(self) -> None:
+        def nested_lane(ref, cand, case):
+            same = (ref / "deep/obs.json").read_bytes() == (cand / "deep/obs.json").read_bytes()
+            return {"status": "pass" if same else "fail", "reasons": [] if same else ["differs"]}
+
+        ph.register_lane("nested-lane", ("deep/obs.json",), nested_lane)
+        try:
+            impl = implementation(self.tool)
+            impl["steps"].append({"id": "nested", "argv": [
+                sys.executable, str(self.tool), "nested", "--write", "deep/obs.json"]})
+            ph.write_json(self.impl_path, impl)
+            self.tool.write_text(self.tool.read_text().replace(
+                'mode = args.pop(0)',
+                'mode = args.pop(0)\nif mode == "nested":\n    import os\n'
+                '    os.makedirs("deep", exist_ok=True)\n    open("deep/obs.json", "w").write("{}")\n'
+                '    sys.exit(0)'))
+            ph.write_json(self.impl_path, implementation(self.tool) | {"steps": impl["steps"]})
+            nested_corpus = corpus()
+            nested_corpus["cases"][0]["lanes"].append("nested-lane")
+            ph.write_json(self.corpus_path, nested_corpus)
+            report = ph.calibrate(self.corpus_path, self.root / "src", self.impl_path, self.root / "out")
+            outcomes = {c["control"]: c["outcome"] for c in report["controls"]}
+            self.assertEqual(outcomes["provenance-undeclared-nested-binary"], "REJECTED as required")
+            self.assertTrue(report["calibrated"], report["control_failures"])
+        finally:
+            ph.LANES.remove("nested-lane")
+            ph.LANE_ARTIFACTS.pop("nested-lane", None)
+            ph.COMPARATORS.pop("nested-lane", None)
 
     def test_regions_are_validated_and_named_when_they_differ(self) -> None:
         good = corpus()["cases"][0]

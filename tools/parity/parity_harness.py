@@ -1674,6 +1674,25 @@ def calibrate(corpus_path: Path, source_root: Path, impl_path: Path, out: Path,
                 origin.pop("script_sha256", None)
                 break
     record("provenance-undeclared-binary", "*", "fail", None, receipt(swapped)["verdict"], ["*"])
+    # The same, aimed at a nested observation (an artifact declared with a
+    # subpath), which a top-level-only scan would never attribute.
+    nested = copy.deepcopy(positive_results)
+    nested_applied = []
+    for result in nested:
+        selected = {name for lane, r in result["lanes"].items() if r["status"] != "not_selected"
+                    for name in LANE_ARTIFACTS.get(lane, ()) if "/" in name}
+        for name, origin in (result["candidate"].get("produced_by") or {}).items():
+            if name in selected:
+                origin["binary_sha256"] = "0" * 64
+                origin.pop("script_sha256", None)
+                nested_applied.append(f"{result['case_id']}:{name}")
+                break
+    if nested_applied:
+        record("provenance-undeclared-nested-binary", "*", "fail", None, receipt(nested)["verdict"], nested_applied)
+    else:
+        controls.append({"control": "provenance-undeclared-nested-binary", "lane": "*", "applied_cases": [],
+                         "rejected": None, "lane_hit": None,
+                         "outcome": "OUT OF SCOPE (no selected lane declares a nested artifact)"})
     # A join across authorities may pass every lane but must never be cited as parity.
     cross = receipt(positive_results, mode="parity",
                     cand=relabelled(authority=next(a for a in AUTHORITIES if a != identity.get("authority")),
@@ -1687,7 +1706,7 @@ def calibrate(corpus_path: Path, source_root: Path, impl_path: Path, out: Path,
     record("no-lane-selected", "*", "fail", None, receipt(unselected)["verdict"], ["*"])
 
     failures = [c for c in controls
-                if c["outcome"] not in ("REJECTED as required", "OUT OF SCOPE (no case selects this lane)")]
+                if c["outcome"] != "REJECTED as required" and not c["outcome"].startswith("OUT OF SCOPE")]
     calibrated = positive["verdict"]["accepting"] and not failures
     return {
         "schema": CALIBRATION_SCHEMA,
