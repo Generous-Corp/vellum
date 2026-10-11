@@ -1,0 +1,375 @@
+{
+  "schema": "vellum.parity.corpus.v1",
+  "corpus_id": "pulp-artifact-macos-universal-v1",
+  "description": "G6 universal macOS (PULP_MACOS_ARCH=universal): columns A and B as bundles. Every Mach-O, nested runtimes included, carries exactly arm64 and x86_64 macOS slices, and the link floor holds in each slice separately.",
+  "declared_gaps": [
+    {
+      "row": "x86_64 execution",
+      "reason": "no Rosetta on this host (or m1/m3), so the x86_64 slice is checked statically here; executing it needs an Intel macOS runner (nightly-intel.yml / intel-portability.yml)."
+    },
+    {
+      "row": "column C",
+      "reason": "n/a for universal (Vellum is arm64-only); column D (Vellum requested on universal must fall back) needs a Vellum package to request."
+    }
+  ],
+  "declared_exceptions": [],
+  "cases": [
+    {
+      "source": "fixtures/artifact/scan.json",
+      "source_base": "corpus",
+      "width": 1,
+      "height": 1,
+      "case_id": "audio-only-clap",
+      "source_kind": "artifact",
+      "lanes": [
+        "artifact-slices",
+        "artifact-bundle",
+        "artifact-signature",
+        "artifact-linkfloor"
+      ],
+      "args": {
+        "artifact": [
+          "--artifact",
+          "{root:gain.clap}"
+        ]
+      },
+      "expect": {
+        "archs": [
+          "arm64",
+          "x86_64"
+        ],
+        "platform": 1,
+        "signed": "image",
+        "signed_archs": [
+          "arm64"
+        ],
+        "required": [
+          "Contents/Resources/pulp-build-info.json",
+          "Contents/Info.plist",
+          "Contents/PkgInfo"
+        ],
+        "plist": {
+          "CFBundlePackageType": "BNDL"
+        },
+        "forbid": [
+          "pulp-view",
+          "pulp-canvas",
+          "pulp-render",
+          "gpu-host",
+          "skia",
+          "wgpu",
+          "dawn",
+          "vellum"
+        ],
+        "require": [
+          "pulp-format"
+        ],
+        "forbid_load": [
+          "libwgpu_native",
+          "libvellum"
+        ]
+      },
+      "controls": {
+        "swap_floor": "gpu.clap"
+      }
+    },
+    {
+      "source": "fixtures/artifact/scan.json",
+      "source_base": "corpus",
+      "width": 1,
+      "height": 1,
+      "case_id": "gpu-ui-clap",
+      "source_kind": "artifact",
+      "lanes": [
+        "artifact-slices",
+        "artifact-runtimes",
+        "artifact-bundle",
+        "artifact-signature",
+        "artifact-linkfloor"
+      ],
+      "args": {
+        "artifact": [
+          "--artifact",
+          "{root:gpu.clap}"
+        ]
+      },
+      "expect": {
+        "archs": [
+          "arm64",
+          "x86_64"
+        ],
+        "platform": 1,
+        "signed": "image",
+        "signed_archs": [
+          "arm64"
+        ],
+        "runtimes": [
+          "Contents/MacOS/libwgpu_native.dylib"
+        ],
+        "required": [
+          "Contents/Resources/pulp-build-info.json",
+          "Contents/Info.plist",
+          "Contents/PkgInfo"
+        ],
+        "plist": {
+          "CFBundlePackageType": "BNDL"
+        },
+        "require": [
+          "pulp-format",
+          "pulp-view",
+          "pulp-render",
+          "gpu-host",
+          "skia",
+          "wgpu"
+        ],
+        "forbid": [
+          "vellum"
+        ],
+        "forbid_load": [
+          "libvellum"
+        ]
+      },
+      "controls": {
+        "swap_floor": "gain.clap"
+      }
+    },
+    {
+      "source": "fixtures/artifact/scan.json",
+      "source_base": "corpus",
+      "width": 1,
+      "height": 1,
+      "case_id": "audio-only-vst3",
+      "source_kind": "artifact",
+      "lanes": [
+        "artifact-slices",
+        "artifact-bundle",
+        "artifact-signature",
+        "artifact-linkfloor"
+      ],
+      "args": {
+        "artifact": [
+          "--artifact",
+          "{root:gain.vst3}"
+        ]
+      },
+      "expect": {
+        "archs": [
+          "arm64",
+          "x86_64"
+        ],
+        "platform": 1,
+        "signed": "image",
+        "signed_archs": [
+          "arm64"
+        ],
+        "required": [
+          "Contents/Resources/pulp-build-info.json",
+          "Contents/Info.plist",
+          "Contents/PkgInfo"
+        ],
+        "plist": {
+          "CFBundlePackageType": "BNDL"
+        },
+        "forbid": [
+          "pulp-view",
+          "pulp-canvas",
+          "pulp-render",
+          "gpu-host",
+          "skia",
+          "wgpu",
+          "dawn",
+          "vellum"
+        ],
+        "require": [
+          "pulp-format"
+        ],
+        "forbid_load": [
+          "libwgpu_native",
+          "libvellum"
+        ]
+      },
+      "controls": {
+        "swap_floor": "gpu.vst3"
+      }
+    },
+    {
+      "source": "fixtures/artifact/scan.json",
+      "source_base": "corpus",
+      "width": 1,
+      "height": 1,
+      "case_id": "gpu-ui-vst3",
+      "source_kind": "artifact",
+      "lanes": [
+        "artifact-slices",
+        "artifact-runtimes",
+        "artifact-bundle",
+        "artifact-signature",
+        "artifact-linkfloor"
+      ],
+      "args": {
+        "artifact": [
+          "--artifact",
+          "{root:gpu.vst3}"
+        ]
+      },
+      "expect": {
+        "archs": [
+          "arm64",
+          "x86_64"
+        ],
+        "platform": 1,
+        "signed": "image",
+        "signed_archs": [
+          "arm64"
+        ],
+        "runtimes": [
+          "Contents/MacOS/libwgpu_native.dylib"
+        ],
+        "required": [
+          "Contents/Resources/pulp-build-info.json",
+          "Contents/Info.plist",
+          "Contents/PkgInfo"
+        ],
+        "plist": {
+          "CFBundlePackageType": "BNDL"
+        },
+        "require": [
+          "pulp-format",
+          "pulp-view",
+          "pulp-render",
+          "gpu-host",
+          "skia",
+          "wgpu"
+        ],
+        "forbid": [
+          "vellum"
+        ],
+        "forbid_load": [
+          "libvellum"
+        ]
+      },
+      "controls": {
+        "swap_floor": "gain.vst3"
+      }
+    },
+    {
+      "source": "fixtures/artifact/scan.json",
+      "source_base": "corpus",
+      "width": 1,
+      "height": 1,
+      "case_id": "audio-only-component",
+      "source_kind": "artifact",
+      "lanes": [
+        "artifact-slices",
+        "artifact-bundle",
+        "artifact-signature",
+        "artifact-linkfloor"
+      ],
+      "args": {
+        "artifact": [
+          "--artifact",
+          "{root:gain.component}"
+        ]
+      },
+      "expect": {
+        "archs": [
+          "arm64",
+          "x86_64"
+        ],
+        "platform": 1,
+        "signed": "image",
+        "signed_archs": [
+          "arm64"
+        ],
+        "required": [
+          "Contents/Resources/pulp-build-info.json",
+          "Contents/Info.plist",
+          "Contents/PkgInfo"
+        ],
+        "plist": {
+          "CFBundlePackageType": "BNDL"
+        },
+        "forbid": [
+          "pulp-view",
+          "pulp-canvas",
+          "pulp-render",
+          "gpu-host",
+          "skia",
+          "wgpu",
+          "dawn",
+          "vellum"
+        ],
+        "require": [
+          "pulp-format"
+        ],
+        "forbid_load": [
+          "libwgpu_native",
+          "libvellum"
+        ]
+      },
+      "controls": {
+        "swap_floor": "gpu.component"
+      }
+    },
+    {
+      "source": "fixtures/artifact/scan.json",
+      "source_base": "corpus",
+      "width": 1,
+      "height": 1,
+      "case_id": "gpu-ui-component",
+      "source_kind": "artifact",
+      "lanes": [
+        "artifact-slices",
+        "artifact-runtimes",
+        "artifact-bundle",
+        "artifact-signature",
+        "artifact-linkfloor"
+      ],
+      "args": {
+        "artifact": [
+          "--artifact",
+          "{root:gpu.component}"
+        ]
+      },
+      "expect": {
+        "archs": [
+          "arm64",
+          "x86_64"
+        ],
+        "platform": 1,
+        "signed": "image",
+        "signed_archs": [
+          "arm64"
+        ],
+        "runtimes": [
+          "Contents/MacOS/libwgpu_native.dylib"
+        ],
+        "required": [
+          "Contents/Resources/pulp-build-info.json",
+          "Contents/Info.plist",
+          "Contents/PkgInfo"
+        ],
+        "plist": {
+          "CFBundlePackageType": "BNDL"
+        },
+        "require": [
+          "pulp-format",
+          "pulp-view",
+          "pulp-render",
+          "gpu-host",
+          "skia",
+          "wgpu"
+        ],
+        "forbid": [
+          "vellum"
+        ],
+        "forbid_load": [
+          "libvellum"
+        ]
+      },
+      "controls": {
+        "swap_floor": "gain.component"
+      }
+    }
+  ]
+}

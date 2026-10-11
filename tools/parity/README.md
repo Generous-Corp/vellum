@@ -162,3 +162,46 @@ python3 <vellum>/tools/parity/parity_harness.py calibrate \
   --root skew-runtime=<a libwgpu_native.dylib of a different build> --out <dir>
 python3 <vellum>/tools/parity/test_host_lane.py   # fake tools; NOT CALIBRATED reachable
 ```
+
+## Artifact lanes
+
+`lanes/artifact.py` checks the static shape of a built artifact without running
+it, for build modes no host on this machine can execute (a universal image's
+x86_64 slice, an iOS-simulator extension, an Android library). Each side runs
+`lanes/artifact_runner.py`, which records every file, the architectures and
+build platform of every Mach-O, the machine of every ELF image, Info.plist keys,
+codesign results, and, per architecture of the main image, symbol counts for the
+families named in `corpus/fixtures/artifact/scan.json`. A case selects only the
+lanes that apply to its artifact:
+
+- `artifact-slices`: every Mach-O carries exactly the case's architectures and
+  platform; every ELF image has the case's machine.
+- `artifact-runtimes`: each named bundled runtime is present, has the case's
+  architectures, and is loaded by every slice of the main image.
+- `artifact-bundle`: the Info.plist reads and matches, the main image exists, and
+  every required path is present.
+- `artifact-signature`: either the sealed bundle verifies, or each named slice of
+  the main image verifies on its own. A development build carries only the
+  linker's signature.
+- `artifact-linkfloor`: in each slice there is no forbidden symbol family and no
+  forbidden load command, every required family is present, and each
+  `require_load_once` load command appears exactly once.
+
+The controls fault a copy of the artifact:
+
+- a wrong-architecture slice;
+- a thinned bundled runtime;
+- a missing runtime or resource;
+- a flipped byte under the signature;
+- a differently linked image in place of this one.
+
+```sh
+python3 <vellum>/tools/parity/parity_harness.py calibrate \
+  --lane-module <vellum>/tools/parity/lanes/artifact.py \
+  --corpus <vellum>/tools/parity/corpus/pulp-artifact-macos-universal.json \
+  --implementation <vellum>/tools/parity/implementations/pulp-artifact-macos.json \
+  --source-root <checkout> --tool runner=<vellum>/tools/parity/lanes/artifact_runner.py \
+  --tool host-runner=<vellum>/tools/parity/lanes/host_runner.py --root checkout=<checkout> \
+  --root gain.clap=<build>/CLAP/<audio-only>.clap ... --root gpu.component=<build>/AU/<gpu>.component --out <dir>
+python3 <vellum>/tools/parity/test_artifact_lane.py   # universal fixture bundles built with clang
+```

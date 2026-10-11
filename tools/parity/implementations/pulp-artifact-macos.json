@@ -1,0 +1,85 @@
+{
+  "schema": "vellum.parity.implementation.v1",
+  "name": "pulp-artifact-macos",
+  "repository": "Generous-Corp/pulp",
+  "source_sha": null,
+  "description": "Static shape of macOS plug-in bundles (lanes/artifact.py) read by lanes/artifact_runner.py without executing them. Roots: checkout = the checkout or consumer the bundles were built from; gain.* = an editor-less pulp_add_plugin(NO_EDITOR) gain (column A); gpu.* = a GPU-editor plug-in with the Pulp provider (column B). Identity probes reuse lanes/host_runner.py.",
+  "tools": {
+    "runner": "tools/parity/lanes/artifact_runner.py",
+    "host-runner": "tools/parity/lanes/host_runner.py"
+  },
+  "probes": [
+    {
+      "name": "build",
+      "argv": [
+        "{tool:host-runner}",
+        "identity",
+        "build",
+        "{root:checkout}",
+        "{root:gain.clap}",
+        "{root:gain.vst3}",
+        "{root:gain.component}",
+        "{root:gpu.clap}",
+        "{root:gpu.vst3}",
+        "{root:gpu.component}"
+      ]
+    },
+    {
+      "name": "provider",
+      "argv": [
+        "{tool:host-runner}",
+        "identity",
+        "provider",
+        "{root:gain.clap}",
+        "{root:gain.vst3}",
+        "{root:gain.component}",
+        "{root:gpu.clap}",
+        "{root:gpu.vst3}",
+        "{root:gpu.component}"
+      ]
+    },
+    {
+      "name": "fonts",
+      "argv": [
+        "{tool:host-runner}",
+        "identity",
+        "fonts",
+        "{root:gain.clap}",
+        "{root:gain.vst3}",
+        "{root:gain.component}",
+        "{root:gpu.clap}",
+        "{root:gpu.vst3}",
+        "{root:gpu.component}"
+      ]
+    }
+  ],
+  "source_kinds": {
+    "artifact": []
+  },
+  "steps": [
+    {
+      "id": "observe",
+      "source_kinds": [
+        "artifact"
+      ],
+      "argv": [
+        "{tool:runner}",
+        "--scan",
+        "{source}",
+        "--out",
+        "artifact-observation.json",
+        "@case_args:artifact",
+        "@case_args:fault"
+      ]
+    }
+  ],
+  "content_roots": [
+    "gain.clap",
+    "gain.vst3",
+    "gain.component",
+    "gpu.clap",
+    "gpu.vst3",
+    "gpu.component"
+  ],
+  "authority": "native-render"
+}

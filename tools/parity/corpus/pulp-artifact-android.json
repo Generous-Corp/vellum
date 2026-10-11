@@ -1,0 +1,58 @@
+{
+  "schema": "vellum.parity.corpus.v1",
+  "corpus_id": "pulp-artifact-android-v1",
+  "description": "G7 Android arm64-v8a with PULP_ENABLE_GPU=OFF: libpulp.so (pulp-jni, the app's native library; Android has no plug-in format) is a 64-bit aarch64 ELF image carrying pulp::view and no GPU host, Skia, wgpu, Dawn or Vellum.",
+  "declared_gaps": [
+    {
+      "row": "ELF load commands",
+      "reason": "DT_NEEDED is not parsed; forbid_load does not apply to ELF."
+    },
+    {
+      "row": "host checks 3-5",
+      "reason": "need an emulator or device; Android lane in the android skill (x86_64 API-34 emulator)."
+    },
+    {
+      "row": "column B",
+      "reason": "Android Skia has no prebuilt slice and must be built from source."
+    }
+  ],
+  "declared_exceptions": [],
+  "cases": [
+    {
+      "source": "fixtures/artifact/scan.json",
+      "source_base": "corpus",
+      "width": 1,
+      "height": 1,
+      "case_id": "android-jni-arm64",
+      "source_kind": "artifact",
+      "lanes": [
+        "artifact-slices",
+        "artifact-linkfloor"
+      ],
+      "args": {
+        "artifact": [
+          "--artifact",
+          "{root:artifact}"
+        ]
+      },
+      "expect": {
+        "archs": [],
+        "elf_machine": "aarch64",
+        "bundle": false,
+        "forbid": [
+          "gpu-host",
+          "skia",
+          "wgpu",
+          "dawn",
+          "vellum"
+        ],
+        "require": [
+          "pulp-view"
+        ]
+      },
+      "controls": {
+        "swap_floor": "other"
+      }
+    }
+  ]
+}
