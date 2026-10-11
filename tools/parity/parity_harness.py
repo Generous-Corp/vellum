@@ -632,11 +632,11 @@ def run_side(case: dict[str, Any], impl: dict[str, Any], tools: dict[str, Path],
         steps_out.append(record)
         if record["status"] != "ok":
             break
-    artifacts = {
-        path.name: sha256_file(path)
-        for path in sorted(out.iterdir())
-        if path.is_file() and path.name in {a for names in LANE_ARTIFACTS.values() for a in names}
-    }
+    declared = {a for names in LANE_ARTIFACTS.values() for a in names}
+    # Keyed by path relative to the side directory: a lane may declare a nested
+    # artifact (solo-0/host-observation.json), and it must be hashed and have
+    # its producer checked like a top-level one.
+    artifacts = {name: digest for name, digest in sorted(snapshot(out).items()) if name in declared}
     return {"inputs": inputs, "steps": steps_out, "artifacts": artifacts,
             "produced_by": {name: produced[name] for name in artifacts if name in produced},
             "interaction_plan": plan, "scale": case.get("scale", DEFAULT_SCALE)}
@@ -658,7 +658,11 @@ def producing_binary(argv: list[str]) -> dict[str, Any]:
 
 
 def snapshot(directory: Path) -> dict[str, str]:
-    return {p.name: sha256_file(p) for p in directory.iterdir() if p.is_file()} if directory.is_dir() else {}
+    """Every regular file under the directory, by relative posix path."""
+    if not directory.is_dir():
+        return {}
+    return {p.relative_to(directory).as_posix(): sha256_file(p)
+            for p in directory.rglob("*") if p.is_file() and not p.is_symlink()}
 
 
 def provenance_errors(run: dict[str, Any], identity: dict[str, Any], side: str,

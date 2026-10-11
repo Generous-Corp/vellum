@@ -562,6 +562,23 @@ class AuthorityAndProvenanceTests(HarnessFixture):
         self.assertTrue(ph.provenance_errors(run, stranger, "x", ["raster"]))
         self.assertIn("binary_sha256", run["produced_by"]["render.png"])
 
+    def test_nested_artifacts_are_hashed_and_their_producer_checked(self) -> None:
+        nested = "deep/nested-observation.json"
+        ph.LANE_ARTIFACTS["nested-probe"] = (nested,)
+        try:
+            impl = implementation(self.tool)
+            impl["steps"].append({"id": "nested", "argv": [
+                "/bin/sh", "-c", "mkdir -p deep && echo '{}' > deep/nested-observation.json"]})
+            case = corpus()["cases"][0] | {"_corpus_dir": str(self.root)}
+            run = ph.run_side(case, impl, {"fake": self.tool}, self.root / "src", self.root / "nested-side")
+            self.assertIn(nested, run["artifacts"])
+            self.assertEqual(run["produced_by"][nested]["binary"], "/bin/sh")
+            identity = {"tools": {"fake": {"sha256": ph.sha256_file(self.tool)}}, "passthrough_binaries": []}
+            errors = ph.provenance_errors(run, identity, "x", ["nested-probe"])
+            self.assertTrue(any(nested in e and "undeclared binary" in e for e in errors), errors)
+        finally:
+            del ph.LANE_ARTIFACTS["nested-probe"]
+
     def test_regions_are_validated_and_named_when_they_differ(self) -> None:
         good = corpus()["cases"][0]
         for regions in ([{"name": "a", "x": 0, "y": 0, "w": 50, "h": 4}],
