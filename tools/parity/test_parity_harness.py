@@ -717,6 +717,70 @@ class RegionBoundsTests(HarnessFixture):
         self.assertTrue(any("candidate render" in r for r in result["corner"]["reasons"]), result)
 
 
+class PassthroughLaunderingTests(HarnessFixture):
+    """A passthrough copy is exempt only for staged inputs: copying a file an
+    undeclared program wrote earlier must be refused."""
+
+    def run_with(self, steps: list[dict]) -> dict:
+        ph.LANE_ARTIFACTS["copy-probe"] = ("out/copied.json",)
+        impl = implementation(self.tool)
+        impl["steps"] += steps
+        case = corpus()["cases"][0] | {"_corpus_dir": str(self.root)}
+        return ph.run_side(case, impl, {"fake": self.tool}, self.root / "src", self.root / "side")
+
+    def errors(self, run: dict) -> list[str]:
+        identity = {"tools": {"fake": {"sha256": ph.sha256_file(self.tool)}}, "passthrough_binaries": ["/bin/cp"]}
+        return ph.provenance_errors(run, identity, "x", ["copy-probe"])
+
+    def tearDown(self) -> None:
+        ph.LANE_ARTIFACTS.pop("copy-probe", None)
+        super().tearDown()
+
+    def test_copy_of_an_undeclared_output_is_refused(self) -> None:
+        run = self.run_with([
+            {"id": "mkdir", "argv": ["/bin/mkdir", "-p", "out"]},
+            {"id": "undeclared", "argv": ["/usr/bin/touch", "made-elsewhere.json"]},
+            {"id": "copy", "argv": ["/bin/cp", "made-elsewhere.json", "out/copied.json"]},
+        ])
+        self.assertEqual(run["produced_by"]["out/copied.json"]["reads"], ["made-elsewhere.json"])
+        errors = self.errors(run)
+        self.assertTrue(any("made-elsewhere.json" in e and "undeclared binary" in e and "copied into" in e
+                            for e in errors), errors)
+
+    def test_copy_of_a_staged_input_is_accepted(self) -> None:
+        run = self.run_with([
+            {"id": "mkdir", "argv": ["/bin/mkdir", "-p", "out"]},
+            {"id": "copy", "argv": ["/bin/cp", "source.json", "out/copied.json"]},
+        ])
+        self.assertEqual(self.errors(run), [])
+
+
+class NestedControlLoudTests(HarnessFixture):
+    def test_nested_lane_with_only_passthrough_outputs_does_not_calibrate(self) -> None:
+        def nested_lane(ref, cand, case):
+            return {"status": "pass", "reasons": []}
+
+        ph.register_lane("copied-lane", ("deep/only-copied.json",), nested_lane)
+        try:
+            impl = implementation(self.tool)
+            impl["passthrough_binaries"] = [{"path": "/bin/cp", "justification": "copies a staged input"}]
+            impl["steps"] += [{"id": "mkdir", "argv": ["/bin/mkdir", "-p", "deep"]},
+                              {"id": "copy", "argv": ["/bin/cp", "source.json", "deep/only-copied.json"]}]
+            ph.write_json(self.impl_path, impl)
+            only_copied = corpus()
+            only_copied["cases"][0]["lanes"].append("copied-lane")
+            ph.write_json(self.corpus_path, only_copied)
+            report = ph.calibrate(self.corpus_path, self.root / "src", self.impl_path, self.root / "out")
+            outcomes = {c["control"]: c["outcome"] for c in report["controls"]}
+            self.assertTrue(outcomes["provenance-undeclared-nested-binary"].startswith("NOT APPLICABLE"))
+            self.assertIn("provenance-undeclared-nested-binary", report["control_failures"])
+            self.assertFalse(report["calibrated"])
+        finally:
+            ph.LANES.remove("copied-lane")
+            ph.LANE_ARTIFACTS.pop("copied-lane", None)
+            ph.COMPARATORS.pop("copied-lane", None)
+
+
 class DelegationTests(HarnessFixture):
     """R10 guard gap: a declared wrapper delegating through a command string."""
 

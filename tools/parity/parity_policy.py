@@ -138,25 +138,40 @@ def producing_binary(argv: list[str]) -> dict[str, Any]:
 def provenance_errors(run: dict[str, Any], identity: dict[str, Any], side: str,
                       lanes: list[str], lane_artifacts: dict[str, tuple[str, ...]]) -> list[str]:
     """Every observation a selected lane reads must have been produced by a
-    binary (or script) the side's identity declares, digested at run time."""
+    binary (or script) the side's identity declares, digested at run time.
+    A passthrough (a plain copy) is exempt only for what it copies from
+    staged inputs: a file it copies from an earlier step is checked against
+    that step's producer, so a copy cannot launder an undeclared one."""
     declared = {t.get("sha256") for t in (identity.get("tools") or {}).values()}
     passthrough = set(identity.get("passthrough_binaries") or [])
+    producers = run.get("producers") or run.get("produced_by") or {}
+
+    def check(name: str, origin: dict[str, Any] | None, seen: frozenset[str]) -> list[str]:
+        if origin is None:
+            return [f"{side}/{name}: no producing step recorded"]
+        if origin.get("delegated"):
+            # A shell command string runs whatever it names; the shell's own
+            # digest says nothing about the program that wrote the file.
+            return [f"{side}/{name}: produced through a shell command string "
+                    f"({origin.get('binary')} -c); run the producer directly"]
+        if origin.get("binary") in passthrough:
+            problems = []
+            for source in origin.get("reads") or []:
+                if source in seen:
+                    continue
+                if source in producers:  # copied from an earlier step, not from a staged input
+                    problems += [f"{p} (copied into {name} by {origin.get('binary')})"
+                                 for p in check(source, producers[source], seen | {source})]
+            return problems
+        if origin.get("binary_sha256") not in declared and origin.get("script_sha256") not in declared:
+            return [f"{side}/{name}: produced by an undeclared binary {origin.get('binary')} "
+                    f"({str(origin.get('binary_sha256'))[:12]})"]
+        return []
+
     errors = []
     for lane in lanes:
         for name in lane_artifacts.get(lane, ()):
             if name not in run.get("artifacts", {}):
                 continue
-            origin = (run.get("produced_by") or {}).get(name)
-            if origin is None:
-                errors.append(f"{side}/{name}: no producing step recorded")
-            elif origin.get("delegated"):
-                # A shell command string runs whatever it names; the shell's own
-                # digest says nothing about the program that wrote the file.
-                errors.append(f"{side}/{name}: produced through a shell command string "
-                              f"({origin.get('binary')} -c); run the producer directly")
-            elif origin.get("binary") in passthrough:
-                continue
-            elif origin.get("binary_sha256") not in declared and origin.get("script_sha256") not in declared:
-                errors.append(f"{side}/{name}: produced by an undeclared binary {origin.get('binary')} "
-                              f"({str(origin.get('binary_sha256'))[:12]})")
+            errors += check(name, (run.get("produced_by") or {}).get(name), frozenset({name}))
     return errors

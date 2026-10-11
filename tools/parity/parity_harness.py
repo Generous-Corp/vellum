@@ -574,6 +574,9 @@ def run_side(case: dict[str, Any], impl: dict[str, Any], tools: dict[str, Path],
             record["env"] = {k: env[k] for k in step["env"]}
         record.update(producing_binary(argv))
         before = snapshot(out)
+        # Files in the side directory this step names as arguments: what a
+        # passthrough copy reads, so its output inherits their producer.
+        record["reads"] = sorted({arg for arg in argv[1:] if arg in before})
         started = time.monotonic()
         try:
             result = subprocess.run(argv, cwd=out, capture_output=True, text=True, encoding="utf-8",
@@ -593,7 +596,8 @@ def run_side(case: dict[str, Any], impl: dict[str, Any], tools: dict[str, Path],
         for name, digest in after.items():
             if before.get(name) != digest:
                 produced[name] = {"step": step["id"], "sha256": digest,
-                                  **{k: record[k] for k in ("binary", "binary_sha256", "script_sha256", "delegated")
+                                  **{k: record[k] for k in ("binary", "binary_sha256", "script_sha256", "delegated",
+                                                            "reads")
                                      if k in record}}
         steps_out.append(record)
         if record["status"] != "ok":
@@ -605,6 +609,7 @@ def run_side(case: dict[str, Any], impl: dict[str, Any], tools: dict[str, Path],
     artifacts = {name: digest for name, digest in sorted(snapshot(out).items()) if name in declared}
     return {"inputs": inputs, "steps": steps_out, "artifacts": artifacts,
             "produced_by": {name: produced[name] for name in artifacts if name in produced},
+            "producers": produced,
             "interaction_plan": plan, "scale": case.get("scale", DEFAULT_SCALE)}
 
 
@@ -1618,8 +1623,17 @@ def calibrate(corpus_path: Path, source_root: Path, impl_path: Path, out: Path,
                 origin.pop("script_sha256", None)
                 nested_applied.append(f"{result['case_id']}:{name}")
                 break
+    declares_nested = any("/" in name for result in positive_results
+                          for lane, r in result["lanes"].items() if r["status"] != "not_selected"
+                          for name in LANE_ARTIFACTS.get(lane, ()))
     if nested_applied:
         record("provenance-undeclared-nested-binary", "*", "fail", None, receipt(nested)["verdict"], nested_applied)
+    elif declares_nested:
+        # Selected lanes declare nested observations, but every one came from a
+        # passthrough: the control has nothing it can prove, which must not pass.
+        controls.append({"control": "provenance-undeclared-nested-binary", "lane": "*", "applied_cases": [],
+                         "rejected": False, "lane_hit": False,
+                         "outcome": "NOT APPLICABLE (every nested observation came from a passthrough)"})
     else:
         controls.append({"control": "provenance-undeclared-nested-binary", "lane": "*", "applied_cases": [],
                          "rejected": None, "lane_hit": None,
