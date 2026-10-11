@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import re
 import unittest
 
@@ -33,9 +34,20 @@ class ReceiverWorkflowTests(unittest.TestCase):
         text = self.text("pulp-observatory-receiver.yml")
         self.assertIn("types: [pulp-change-landed]", text)
         self.assertIn("github.event_name == 'workflow_dispatch'", text)
-        self.assertIn("vars.VELLUM_RECEIVER_LIVE == 'true'", text)
         self.assertIn("pulp_commit:", text)
         self.assertIn("options: [replay, enable]", text)
+        # The live switch is a committed file, not a repository variable:
+        # nothing this workflow can mint may write variables (R7 delta D3).
+        switch = json.loads(
+            (ROOT / "provenance/pulp-observatory/live-delivery.json").read_text()
+        )
+        self.assertIs(switch["enabled"], False)
+        self.assertIn('Path("provenance/pulp-observatory/live-delivery.json")', text)
+        self.assertIn('skip = os.environ["GITHUB_EVENT_NAME"] == "repository_dispatch" and not live', text)
+        self.assertIn("if: steps.coordinates.outputs.skip != 'true'", text)
+        self.assertIn("automation/pulp-observatory-live-delivery", text)
+        self.assertNotIn("actions/variables", text)
+        self.assertNotIn("VELLUM_RECEIVER_LIVE", text)
 
     def test_evidence_is_coalesced_to_one_reviewed_branch(self) -> None:
         text = self.text("pulp-observatory-receiver.yml")
@@ -77,7 +89,7 @@ class ReceiverWorkflowTests(unittest.TestCase):
         # token and fails late; a job gated on an undefined variable is a job
         # that silently never runs.
         defined_secrets = {"SHIPYARD_APP_ID", "SHIPYARD_APP_PRIVATE_KEY"}
-        deliberate_gate_vars = {"VELLUM_RECEIVER_LIVE"}  # Pulp live delivery only
+        deliberate_gate_vars: set[str] = set()  # the live switch is a committed file
         for name in ("pulp-observatory-receiver.yml", "pulp-observatory-watchdog.yml"):
             text = (ROOT / ".github/workflows" / name).read_text()
             with self.subTest(workflow=name):
@@ -114,23 +126,17 @@ class ReceiverWorkflowTests(unittest.TestCase):
                         for name, level in re.findall(r"permission-([a-z-]+): (\w+)", mint)
                     )
                     self.assertIn(requested, proved, f"{name} mints an unproved scope set")
-        watchdog = (ROOT / ".github/workflows/pulp-observatory-watchdog.yml").read_text()
-        self.assertNotIn("github.token", watchdog)
+                # GITHUB_TOKEN is never used, so a push or pull request from
+                # these workflows always triggers its required checks.
+                self.assertNotIn("github.token", text)
         receiver = (ROOT / ".github/workflows/pulp-observatory-receiver.yml").read_text()
-        # GITHUB_TOKEN is used by exactly one step: the manual enable path,
-        # which writes a repository variable and dispatches a workflow — both
-        # covered by the job's `actions: write`, neither mintable from the App.
-        uses = [m.start() for m in re.finditer(r"\$\{\{ github\.token \}\}", receiver)]
-        self.assertEqual(len(uses), 1)
-        enable = receiver.rindex("- name: Enable live delivery", 0, uses[0])
-        self.assertIn("if: inputs.operation == 'enable'", receiver[enable:uses[0]])
-        self.assertIn("permissions:\n  actions: write\n  contents: read\n", receiver)
+        self.assertIn("permissions:\n  contents: read\n", receiver)
         watchdog = (ROOT / ".github/workflows/pulp-observatory-watchdog.yml").read_text()
-        jobs = watchdog.split("\njobs:\n", 1)[1]
-        self.assertNotIn("vars.", jobs.split("    steps:", 1)[0], "watchdog job must not be gated on a variable")
-        receiver = (ROOT / ".github/workflows/pulp-observatory-receiver.yml").read_text()
+        gate = watchdog.split("\njobs:\n", 1)[1].split("    steps:", 1)[0]
+        self.assertNotIn("vars.", gate, "watchdog job must not be gated on a variable")
         gate = receiver.split("\njobs:\n", 1)[1].split("    steps:", 1)[0]
         self.assertIn("github.event_name == 'push' ||", gate)
+        self.assertNotIn("vars.VELLUM_RECEIVER", gate, "receiver job must not be gated on a variable")
 
     def test_watchdog_is_independent_and_always_on(self) -> None:
         text = self.text("pulp-observatory-watchdog.yml")

@@ -977,20 +977,49 @@ class ObservatoryTests(unittest.TestCase):
             self.assertFalse(observatory.integration_merge_covered(vellum, differing))
 
     def test_merge_that_reverts_a_transitive_build_file_needs_its_own_event(self) -> None:
-        # R7 delta D5: graphics/CMakeLists.txt is transitive-only (never mapped
-        # on its own) but is listed under transitive_paths when it lands with
-        # a mapped change. A merge that reverts main's change to it while
-        # keeping the mapped change must not be covered.
+        # R7 delta D5: with a file-level mapping (cli/backend.py), cli/CMakeLists.txt
+        # is transitive-only: never mapped on its own, but listed under
+        # transitive_paths when it lands next to the mapped file. A merge that
+        # drops main's change to it while keeping the mapped change must not be
+        # covered; a per-path mapping filter cannot see the build file at all.
         with tempfile.TemporaryDirectory() as temporary:
-            pulp, vellum, root, pulp_head, main, feature = self._coverage_state(Path(temporary))
+            top = Path(temporary)
+            pulp, vellum, root = top / "pulp", top / "vellum-source", top / "state"
+            pulp_base, pulp_head = init_repo(pulp, "unmapped/pulp.cpp")
+            vellum_base, _ = init_repo(vellum, "graphics/render.cpp")
+            write(vellum / "cli/backend.py", "VERSION = 1\n")
+            write(vellum / "cli/CMakeLists.txt", "add_subdirectory(backend)\n")
+            vellum_main = commit_all(vellum, "cli mapped file and its build file")
+            make_state(root, pulp_base, vellum_base)
+            mapping_path = root / observatory.MAP_PATH
+            mapping = observatory.load_json(mapping_path)
+            mapping["mappings"].append({
+                "id": "cli", "pulp_paths": ["tools/cli/"], "vellum_paths": ["cli/backend.py"],
+                "symbols": [], "targets": [], "schemas": [], "platform_hosts": [],
+                "contract_tests": ["cli-contract"], "authority": "pulp-authoritative-untransferred",
+            })
+            write_json(mapping_path, mapping)
+            observatory.reconcile(
+                root=root, pulp_repo=pulp, vellum_repo=vellum,
+                pulp_target=pulp_head, vellum_target=vellum_main,
+                now_text="2026-10-11T00:00:00Z", write=True,
+            )
+            rules = mapping["transitive_path_rules"]
+            # The build file alone never maps; next to the mapped file it is transitive.
+            self.assertIsNone(observatory.mapped_change(
+                [{"status": "M", "path": "cli/CMakeLists.txt"}], mapping["mappings"], "vellum", rules,
+            ))
+            run(vellum, "git", "checkout", "-q", "-b", "feature")
+            write(vellum / "graphics/render.cpp", "int value = 3;\n")
+            feature = commit_all(vellum, "feature mapped change")
             observatory.reconcile(
                 root=root, pulp_repo=pulp, vellum_repo=vellum,
                 pulp_target=pulp_head, vellum_target=feature,
                 now_text="2026-10-11T00:05:00Z", write=True, events_only=True,
             )
             run(vellum, "git", "checkout", "-q", "main")
-            write(vellum / "graphics/CMakeLists.txt", "add_library(render shared.cpp)\n")
-            write(vellum / "graphics/shared.cpp", "int shared = 2;\n")
+            write(vellum / "cli/backend.py", "VERSION = 2\n")
+            write(vellum / "cli/CMakeLists.txt", "add_subdirectory(backend)\nadd_test(backend)\n")
             m1 = commit_all(vellum, "main changes the build file with a mapped change")
             observatory.reconcile(
                 root=root, pulp_repo=pulp, vellum_repo=vellum,
@@ -998,17 +1027,19 @@ class ObservatoryTests(unittest.TestCase):
                 now_text="2026-10-11T00:06:00Z", write=True, events_only=True,
             )
             event = observatory.load_json(root / observatory.EVENTS_PATH / f"vellum-{m1}.yaml")
-            self.assertIn("graphics/CMakeLists.txt", json.dumps(event))
+            self.assertEqual(event["transitive_paths"], ["cli/CMakeLists.txt"])
             run(vellum, "git", "checkout", "-q", "-B", "queue", "main")
             run(vellum, "git", "merge", "--no-ff", "-q", "feature", "-m", "queue merge")
-            run(vellum, "git", "rm", "-q", "graphics/CMakeLists.txt")
+            run(vellum, "git", "checkout", "-q", str(vellum_main), "--", "cli/CMakeLists.txt")
             run(vellum, "git", "commit", "-q", "--amend", "--no-edit")
             reverting = run(vellum, "git", "rev-parse", "HEAD")
+            self.assertEqual(run(vellum, "git", "show", f"{reverting}:cli/backend.py").strip(), "VERSION = 2")
             self.assertEqual(
-                run(vellum, "git", "show", f"{reverting}:graphics/shared.cpp").strip(),
-                "int shared = 2;",
+                run(vellum, "git", "show", f"{reverting}:cli/CMakeLists.txt").strip(), "add_subdirectory(backend)",
             )
-            self.assertFalse(observatory.integration_merge_covered(vellum, reverting))
+            self.assertFalse(
+                observatory.integration_merge_covered(vellum, reverting, mapping["mappings"], rules)
+            )
             with self.assertRaisesRegex(observatory.ObservatoryError, "health budgets failed"):
                 observatory.verify(
                     root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
@@ -1018,9 +1049,15 @@ class ObservatoryTests(unittest.TestCase):
             # Control: carrying main's build file over is a plain integration merge.
             run(vellum, "git", "checkout", "-q", "-B", "clean", "main")
             run(vellum, "git", "merge", "--no-ff", "-q", "feature", "-m", "clean queue merge")
+            clean = run(vellum, "git", "rev-parse", "HEAD")
             self.assertTrue(
-                observatory.integration_merge_covered(vellum, run(vellum, "git", "rev-parse", "HEAD"))
+                observatory.integration_merge_covered(vellum, clean, mapping["mappings"], rules)
             )
+            report = observatory.verify(
+                root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                pulp_target=pulp_head, vellum_target=clean, vellum_tail_policy="coverage",
+            )
+            self.assertEqual(report["coverage_gaps"], [])
 
     def test_deleting_a_mapped_file_lands_through_a_moved_main(self) -> None:
         # R7 E2b: the PR deletes graphics/shared.cpp; main moves with an

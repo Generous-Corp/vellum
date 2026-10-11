@@ -21,10 +21,9 @@ on:
         type: choice
         options: [replay, enable]
 
-# GITHUB_TOKEN serves only the manual enable path (variable write + dispatch).
-# Every push, checkout and pull-request write uses a per-run App token.
+# GITHUB_TOKEN is never used: every checkout, push and pull-request write
+# uses a per-run App token with a scope set a completed run has proved.
 permissions:
-  actions: write
   contents: read
 
 concurrency:
@@ -35,11 +34,15 @@ jobs:
   receiver:
     name: receiver
     timeout-minutes: 60
+    # Live Pulp delivery (repository_dispatch) is switched by the committed
+    # provenance/pulp-observatory/live-delivery.json, read below from trusted
+    # main, not by a repository variable: no token this workflow can mint may
+    # write variables, and a committed switch lands through the same gates as
+    # every other change.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.event_name == 'push' ||
-      (github.event_name == 'repository_dispatch' &&
-       vars.VELLUM_RECEIVER_LIVE == 'true')
+      github.event_name == 'repository_dispatch'
     runs-on: ${{ fromJSON(vars.VELLUM_LINUX_RUNS_ON_JSON || '["ubuntu-latest"]') }}
     steps:
       # Tokens come from the same GitHub App the merge steward uses, minted
@@ -54,11 +57,10 @@ jobs:
           private-key: ${{ secrets.SHIPYARD_APP_PRIVATE_KEY }}
           owner: Generous-Corp
           repositories: vellum
-          # Exactly what landing an evidence pull request needs: push the
-          # branch and open the PR. Requesting more than the installation
-          # grants fails the mint on every push to main (proved 2026-10-11,
-          # run 38173182114), so the enable path mints nothing extra and uses
-          # the job's own token, scoped by the `permissions:` block above.
+          # Exactly what landing an evidence or switch pull request needs:
+          # push the branch and open the PR. Requesting more than the
+          # installation grants fails the mint on every push to main (proved
+          # 2026-10-11, run 38173182114), so nothing here asks for more.
           permission-contents: write
           permission-pull-requests: write
 
@@ -104,6 +106,11 @@ jobs:
           import re
 
           main = os.popen("git -C .receiver-pulp rev-parse HEAD").read().strip()
+          switch = json.loads(
+              Path("provenance/pulp-observatory/live-delivery.json").read_text(encoding="utf-8")
+          )
+          live = switch.get("enabled") is True
+          skip = os.environ["GITHUB_EVENT_NAME"] == "repository_dispatch" and not live
           if os.environ["GITHUB_EVENT_NAME"] == "repository_dispatch":
               payload = json.loads(os.environ["DISPATCH_PAYLOAD"])
               lower = payload.get("source_commit")
@@ -128,10 +135,15 @@ jobs:
               output.write(f"main={main}\n")
               output.write(f"lower={lower}\n")
               output.write(f"payload={payload_argument}\n")
+              output.write(f"live={'true' if live else 'false'}\n")
+              output.write(f"skip={'true' if skip else 'false'}\n")
           PY
 
       - name: Prove delivery and plan latest-head coalescing
         id: plan
+        # A live Pulp delivery arriving while the committed switch is off is
+        # recorded in the summary and otherwise ignored.
+        if: steps.coordinates.outputs.skip != 'true'
         env:
           PULP_MAIN: ${{ steps.coordinates.outputs.main }}
           LOWER_BOUND: ${{ steps.coordinates.outputs.lower }}
@@ -246,30 +258,47 @@ jobs:
       - name: Enable live delivery only across a proved current barrier
         if: inputs.operation == 'enable'
         env:
-          # The one step that writes a repository variable and dispatches a
-          # workflow. GITHUB_TOKEN's `actions: write` covers both, and a
-          # workflow_dispatch it posts does start a run (only ordinary events
-          # raised by GITHUB_TOKEN are suppressed). The pinned App-token
-          # action has no variables permission input, and asking the App for
-          # more than its installation grants fails the mint outright.
-          GH_TOKEN: ${{ github.token }}
+          # Enabling is a committed change: the switch file lands through a
+          # pull request pushed and opened with the same App token as the
+          # evidence PR, so it passes the required checks and the queue like
+          # any other change, and its landing on main runs this receiver.
+          GH_TOKEN: ${{ steps.evidence-token.outputs.token }}
           RECONCILE_STATUS: ${{ steps.plan.outputs.status }}
           LATEST_TARGET: ${{ steps.plan.outputs.target }}
+          LIVE_BRANCH: automation/pulp-observatory-live-delivery
         run: |
           set -euo pipefail
           test "$RECONCILE_STATUS" = noop || {
             echo "enable barrier requires a fully covered committed cursor" >&2
             exit 1
           }
-          gh api --method PATCH \
-            "repos/$GITHUB_REPOSITORY/actions/variables/VELLUM_RECEIVER_LIVE" \
-            -f value=true
-          gh api --method POST \
-            "repos/$GITHUB_REPOSITORY/actions/workflows/pulp-observatory-receiver.yml/dispatches" \
-            --input <(jq -n --arg commit "$LATEST_TARGET" '{
-              ref: "main",
-              inputs: {pulp_commit: $commit, operation: "replay"}
-            }')
+          vellum_main="$(git rev-parse HEAD)"
+          python3 - <<'PY'
+          import json
+          import os
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          path = Path("provenance/pulp-observatory/live-delivery.json")
+          switch = json.loads(path.read_text(encoding="utf-8"))
+          switch["enabled"] = True
+          switch["enabled_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+          switch["barrier_pulp_commit"] = os.environ["LATEST_TARGET"]
+          path.write_text(json.dumps(switch, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          PY
+          git config user.name vellum-observatory-receiver
+          git config user.email vellum-observatory-receiver@users.noreply.github.com
+          git switch -C "$LIVE_BRANCH"
+          git add provenance/pulp-observatory/live-delivery.json
+          git commit -m "chore(provenance): enable live Pulp delivery across a proved barrier"
+          git push --atomic --force-with-lease origin \
+            "$vellum_main:refs/heads/main" \
+            "HEAD:refs/heads/$LIVE_BRANCH"
+          gh pr create \
+            --base main \
+            --head "$LIVE_BRANCH" \
+            --title "chore(provenance): enable live Pulp delivery" \
+            --body "Switches provenance/pulp-observatory/live-delivery.json on across the barrier proved by run $GITHUB_RUN_ID. Lands by merge commit once the required checks pass; never squash or rebase."
 
       - name: Summarize receiver outcome
         if: always()
@@ -277,7 +306,7 @@ jobs:
           SUMMARY_LOWER_BOUND: ${{ steps.coordinates.outputs.lower }}
           SUMMARY_TARGET: ${{ steps.plan.outputs.target }}
           SUMMARY_STATUS: ${{ steps.plan.outputs.status }}
-          SUMMARY_LIVE: ${{ vars.VELLUM_RECEIVER_LIVE }}
+          SUMMARY_LIVE: ${{ steps.coordinates.outputs.live }}
         run: |
           {
             echo '### Pulp observatory receiver'
