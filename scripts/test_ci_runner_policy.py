@@ -13,7 +13,7 @@ EXPECTED_RUNNERS = {
     "authority-activation.yml": ("__hosted__", "ubuntu-latest"),
     "authority-release.yml": ("__hosted__", "ubuntu-latest"),
     "gpu-macos.yml": (
-        "VELLUM_MACOS_RUNS_ON_JSON",
+        "VELLUM_LOCAL_MACOS_RUNS_ON_JSON",
         '["macos-15"]',
     ),
     "merge-on-green.yml": (
@@ -313,6 +313,13 @@ class RunnerPolicyTests(unittest.TestCase):
                         any(label in fallback for label in HOSTED_LABELS),
                         f"{path.name} fallback is not a hosted label: {fallback}",
                     )
+
+        gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
+        for job in ("gpu-macos-arm64", "sterile-consumer"):
+            body = workflow_jobs(gpu).get(job)
+            self.assertIsNotNone(body, f"gpu-macos.yml: {job} is missing")
+            self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", body)
+            self.assertIn("vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON == ''", body)
 
     def test_external_actions_are_pinned_to_reviewed_node24_releases(self) -> None:
         for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]):

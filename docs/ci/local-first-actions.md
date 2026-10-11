@@ -25,7 +25,7 @@ fallback values:
 
 ```text
 VELLUM_LINUX_RUNS_ON_JSON=["ubuntu-latest"]
-VELLUM_MACOS_RUNS_ON_JSON=["macos-15"]
+VELLUM_LOCAL_MACOS_RUNS_ON_JSON=["macos-15"]
 ```
 
 When Shipyard enables a proven lane, it updates only the corresponding
@@ -53,3 +53,16 @@ the hosted value rather than leaving jobs queued indefinitely.
 Self-hosted execution reduces GitHub-hosted runner minutes, but it does not
 remove the requirement that the GitHub Actions account be in good standing.
 Billing failures can prevent dispatch before any runner is selected.
+
+
+## Required Vellum macOS GPU checks
+
+`gpu-macos-arm64` and `sterile-consumer` use `VELLUM_LOCAL_MACOS_RUNS_ON_JSON`
+with `['"'"'macos-15'"'"']` as the reversible fallback. The local profile registers
+one disposable Tart supervisor on each of M1, M3, and M5 with the shared
+`vellum-build-macos` label. Each supervisor is capped at one VM, uses the
+`vm` lease class (priority 60), and therefore yields to Pulp's required
+`pulp-build-pr-head` (100) and `pulp-build-merge-group` (110) leases. Both
+required jobs are restricted to first-party pull requests while the local
+selector is enabled; fork pull requests never run on self-hosted capacity.
+This preserves the merge-queue contract recorded in Decision 0008.

@@ -71,3 +71,12 @@ Until then, treat the settings above as part of the provenance contract.
 Rejected alternative: teaching the observatory to tolerate rewritten commits.
 That would mean an event could no longer be verified against the history it
 describes, which removes the guarantee the observatory exists to provide.
+
+## Local macOS required checks
+
+The required `gpu-macos-arm64` and `sterile-consumer` contexts also run for
+`merge_group` events. When the Vellum local macOS selector is enabled, both
+jobs use the repository variable `VELLUM_LOCAL_MACOS_RUNS_ON_JSON`; deleting
+that variable restores the hosted `macos-15` fallback. The jobs accept only
+first-party pull requests while the local selector is enabled, so a fork head
+cannot execute on the private runner fleet.
