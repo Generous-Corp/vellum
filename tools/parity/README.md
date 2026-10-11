@@ -37,6 +37,27 @@ justified corpus-level `volatile_allowlist` entries that can never erase a whole
 observation. Geometry and semantic observations must carry their full schema
 on both sides.
 
+## Authority, provenance, regions, licensed sources
+
+- **Authority.** Every implementation declares `authority`: `native-render`, `materialized-runtime` or
+  `browser-source`. It is never defaulted. Two sides with different authorities get scope `cross-authority`, which
+  is diagnostic and never `parity`.
+- **Producing binary.** Each step records the digest of the binary it ran (and of the script, for an
+  interpreter) at run time. Each observation records the step that produced it. An observation that a selected
+  lane reads must come from a declared tool, or from a `passthrough_binaries` entry that carries a justification
+  (for example `/bin/cp` copying an input DesignIR). Otherwise the receipt is refused.
+- **Regions.** A case may declare named `regions` in design px. The raster lane scores each one separately:
+  a localized difference is named, and a region that drew nothing fails even when the whole frame matches. Put
+  a shared deterministic fixture in `stage` so both renderers read the same bytes.
+- **Third-party sources.** `source_base: "external:<name>"` (resolved with `--external-root name=path`)
+  requires `provenance`:
+  - a permissive SPDX `license`;
+  - the `repository`;
+  - a 40-hex `commit`;
+  - the source's `sha256`.
+
+  The staged bytes must match the pin.
+
 ## Calibrate before trusting a comparison
 
 ```sh

@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -137,6 +138,7 @@ def implementation(tool: Path) -> dict:
         "source_sha": None,
         "tools": {"fake": str(tool)},
         "source_kinds": {"fake-json": []},
+        "authority": "native-render",
         "probes": [{"name": name, "argv": [sys.executable, "-c", f"print('{name} of the fake')"]}
                    for name in ("build", "provider", "fonts")],
         "interaction_encoding": "argv-click-drag-key",
@@ -173,6 +175,7 @@ def corpus(cases: list[dict] | None = None) -> dict:
             "scale": 1,
             "lanes": ["structure", "raster", "geometry", "semantic", "interaction"],
             "volatile": {"structure": ["/imported_at"]},
+            "regions": [{"name": "knob", "x": 4, "y": 4, "w": 12, "h": 12}],
             "interactions": [{"key": "tab"}, {"drag": [[8, 8], [8, 2]]}, {"click": [22, 10]}],
         }],
     }
@@ -537,6 +540,61 @@ class RelativeOutTests(HarnessFixture):
             ph.calibrate = real
             os.chdir(cwd)
         self.assertTrue(all(Path(v).is_absolute() for v in seen.values()), seen)
+
+
+class AuthorityAndProvenanceTests(HarnessFixture):
+    def test_authority_is_declared_and_cross_authority_is_never_parity(self) -> None:
+        impl = implementation(self.tool)
+        del impl["authority"]
+        with self.assertRaises(ph.HarnessError):
+            ph.validate_implementation(impl)
+        a = {"repository": "Generous-Corp/pulp", "source_sha": "a" * 40, "authority": "native-render"}
+        b = {"repository": "Generous-Corp/vellum", "source_sha": "b" * 40, "authority": "browser-source"}
+        self.assertEqual(ph.comparison_scope("parity", a, b), "cross-authority")
+        self.assertEqual(ph.comparison_scope("parity", a, dict(b, authority="native-render")), "parity")
+
+    def test_observations_must_come_from_declared_binaries(self) -> None:
+        run = ph.run_side(corpus()["cases"][0] | {"_corpus_dir": str(self.root)}, implementation(self.tool),
+                          {"fake": self.tool}, self.root / "src", self.root / "side")
+        identity = {"tools": {"fake": {"sha256": ph.sha256_file(self.tool)}}, "passthrough_binaries": []}
+        self.assertEqual(ph.provenance_errors(run, identity, "x", ["raster", "structure"]), [])
+        stranger = {"tools": {"fake": {"sha256": "1" * 64}}, "passthrough_binaries": []}
+        self.assertTrue(ph.provenance_errors(run, stranger, "x", ["raster"]))
+        self.assertIn("binary_sha256", run["produced_by"]["render.png"])
+
+    def test_regions_are_validated_and_named_when_they_differ(self) -> None:
+        good = corpus()["cases"][0]
+        for regions in ([{"name": "a", "x": 0, "y": 0, "w": 50, "h": 4}],
+                        [{"name": "a", "x": 0, "y": 0, "w": 4, "h": 4}, {"name": "a", "x": 1, "y": 1, "w": 2, "h": 2}],
+                        [{"name": "a", "x": 0, "y": 0, "w": 0, "h": 4}]):
+            with self.subTest(regions=regions), self.assertRaises(ph.HarnessError):
+                ph.validate_corpus(corpus([dict(good, regions=regions)]))
+        ph.calibrate(self.corpus_path, self.root / "src", self.impl_path, self.root / "out")
+        ref = self.root / "out/runs/fake-controls/reference"
+        cand = self.root / "regional"
+        shutil.copytree(self.root / "out/runs/fake-controls/candidate", cand)
+        self.assertTrue(ph.flip_region_pixel(cand / "render.png", dict(good, scale=1)))
+        result = ph.compare_raster(ref, cand, dict(good, scale=1))
+        self.assertEqual(result["status"], "fail")
+        self.assertTrue(any(r.startswith("region knob:") for r in result["reasons"]))
+        # A region on bare background drew nothing: it fails even though the
+        # whole frame matches exactly.
+        empty = dict(good, scale=1, regions=[{"name": "corner", "x": 30, "y": 26, "w": 8, "h": 4}])
+        same = ph.compare_raster(ref, self.root / "out/runs/fake-controls/candidate", empty)
+        self.assertEqual(same["differing_pixels"], 0)
+        self.assertEqual(same["status"], "fail")
+
+    def test_external_sources_need_a_permissive_pinned_licence(self) -> None:
+        good = dict(corpus()["cases"][0], source_base="external:thirdparty")
+        prov = {"license": "MIT", "repository": "example/x", "commit": "a" * 40, "sha256": "b" * 64}
+        ph.validate_corpus(corpus([dict(good, provenance=prov)]))
+        for bad in ({}, dict(prov, license="TBD"), dict(prov, commit="abc"), dict(prov, sha256="x")):
+            with self.subTest(bad=bad), self.assertRaises(ph.HarnessError):
+                ph.validate_corpus(corpus([dict(good, provenance=bad)]))
+        pinned = dict(good, provenance=dict(prov, sha256="0" * 64),
+                      _external_roots={"thirdparty": str(self.root / "src")})
+        with self.assertRaises(ph.HarnessError):
+            ph.stage_case(pinned, self.root / "src", self.root / "staged")
 
 
 class LaneRegistrationTests(unittest.TestCase):

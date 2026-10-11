@@ -123,5 +123,12 @@
         "cd '{root:checkout}/external/fonts' && shasum -a 256 *.ttf"
       ]
     }
+  ],
+  "authority": "native-render",
+  "passthrough_binaries": [
+    {
+      "path": "/bin/cp",
+      "justification": "The design-ir source kind copies the input DesignIR; its structure lane then compares inputs, not an import."
+    }
   ]
 }
