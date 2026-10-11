@@ -1,0 +1,53 @@
+{
+  "schema": "vellum.renderer-provenance.v1",
+  "state": "pending-owner-attestation",
+  "artifact": {
+    "repository": "https://github.com/danielraffel/skia-builder",
+    "release_tag": "chrome/m153",
+    "name": "skia-build-mac-universal-gpu-release.zip",
+    "sha256": "0ebfe03a209ceefe47edfeae70c3cc6c499583b74f35a26140ea55bad7f1e5a9"
+  },
+  "source_identities": {
+    "skia": {
+      "repository": "https://skia.googlesource.com/skia",
+      "commit": "8b8c3872fbc03f025855db96ce683f34ec98a815"
+    },
+    "dawn": {
+      "repository": "https://dawn.googlesource.com/dawn",
+      "commit": "f91da75afe31d4d6f47a6da307e1fbabd1b1691a"
+    },
+    "builder": {
+      "repository": "https://github.com/danielraffel/skia-builder",
+      "commit": "1f8c8d2c343f360a653bce92d11f8ded9a515208"
+    }
+  },
+  "build_identity": {
+    "target": "macos-arm64",
+    "configuration": "Release",
+    "compiler": {
+      "vendor": "pending-builder-attestation",
+      "version": "pending-builder-attestation",
+      "sha256": null
+    },
+    "linker": {
+      "vendor": "pending-builder-attestation",
+      "version": "pending-builder-attestation",
+      "sha256": null
+    },
+    "cpp_abi": {
+      "stdlib": "pending-builder-attestation",
+      "abi": "pending-builder-attestation"
+    }
+  },
+  "legal_inventory": {
+    "state": "observed-not-exhaustive",
+    "manifest_sha256": null,
+    "entries": []
+  },
+  "signature": {
+    "state": "missing",
+    "issuer": null,
+    "subject": null,
+    "signature_sha256": null
+  }
+}

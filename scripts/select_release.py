@@ -11,6 +11,9 @@ from typing import Iterable
 
 
 MISSING_EXIT = 4
+RETIRED_RELEASE_TAGS = (
+    Path(__file__).resolve().parents[1] / "provenance/retired-release-tags.json"
+)
 
 
 class ReleaseSelectionError(RuntimeError):
@@ -43,16 +46,36 @@ def release_rows(payload: object) -> list[dict[str, object]]:
     return rows
 
 
+def retired_release_tags(path: Path) -> set[str]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        tags = {row["tag"] for row in payload["tags"]}
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise ReleaseSelectionError(
+            f"retired release-tag record {path} is unreadable: {error}"
+        ) from error
+    if payload.get("schema") != "vellum.retired-release-tags.v1":
+        raise ReleaseSelectionError(
+            f"retired release-tag record {path} has an unexpected schema"
+        )
+    return tags
+
+
 def select_release(
     payload: object,
     expected_tag: str,
     *,
+    retired_tags: Path = RETIRED_RELEASE_TAGS,
     expected_name: str | None = None,
     expected_body: str | None = None,
     expected_author: str | None = None,
     expected_target: str | None = None,
     allowed_assets: set[str] | None = None,
 ) -> dict[str, object]:
+    if expected_tag in retired_release_tags(retired_tags):
+        raise ReleaseSelectionError(
+            f"release tag {expected_tag!r} is retired and must never be selected"
+        )
     matches = [
         row
         for row in release_rows(payload)
