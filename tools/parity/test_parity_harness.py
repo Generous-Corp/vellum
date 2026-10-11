@@ -11,6 +11,7 @@ the controls no longer bite and refuse to report the harness as calibrated.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -502,6 +503,40 @@ class ControlScopeTests(HarnessFixture):
         finally:
             del ph.ARTIFACT_CONTROLS["raster-wrong-reason"]
         self.assertIn("raster-wrong-reason", report["control_failures"])
+
+
+class RelativeOutTests(HarnessFixture):
+    def test_relative_out_and_corpus_resolve_against_the_invoking_directory(self) -> None:
+        cwd = Path.cwd()
+        try:
+            os.chdir(self.root)
+            status = ph.main(["calibrate", "--corpus", "corpus.json", "--source-root", "src",
+                              "--implementation", "impl.json", "--out", "../" + self.root.name + "/rel-out"])
+        finally:
+            os.chdir(cwd)
+        self.assertEqual(status, 0)
+        self.assertTrue((self.root / "rel-out" / "calibration.json").is_file())
+
+    def test_paths_reach_calibrate_absolute(self) -> None:
+        # A rerun control may stage a companion it wrote under the out dir; the
+        # stager joins it onto the corpus dir, which is only safe when out is absolute.
+        seen = {}
+        real = ph.calibrate
+
+        def capture(corpus_path, source_root, impl_path, out, *args, **kwargs):
+            seen.update(corpus=corpus_path, source=source_root, out=out)
+            return real(corpus_path, source_root, impl_path, out, *args, **kwargs)
+
+        cwd = Path.cwd()
+        try:
+            os.chdir(self.root)
+            ph.calibrate = capture
+            ph.main(["calibrate", "--corpus", "corpus.json", "--source-root", "src",
+                     "--implementation", "impl.json", "--out", "rel-out-2"])
+        finally:
+            ph.calibrate = real
+            os.chdir(cwd)
+        self.assertTrue(all(Path(v).is_absolute() for v in seen.values()), seen)
 
 
 class LaneRegistrationTests(unittest.TestCase):

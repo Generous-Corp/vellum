@@ -1558,6 +1558,16 @@ def main(argv: list[str] | None = None) -> int:
     ical.add_argument("--out", required=True, type=Path)
 
     args = parser.parse_args(argv)
+    # Paths given on the command line are relative to the invoking directory.
+    # Resolve them now: run steps execute in per-case directories, and a
+    # relative --out would otherwise be re-read from there.
+    for name in ("out", "corpus", "source_root", "implementation", "reference", "candidate",
+                 "calibration", "manifest", "origin_repo", "exported_root", "exported_repo"):
+        value = getattr(args, name, None)
+        if isinstance(value, Path):
+            setattr(args, name, value.resolve())
+        elif isinstance(value, list):
+            setattr(args, name, [v.resolve() if isinstance(v, Path) else v for v in value])
     try:
         for module in getattr(args, "lane_module", []) or []:
             load_lane_module(module)
