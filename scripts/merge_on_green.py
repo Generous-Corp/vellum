@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -15,12 +16,7 @@ from typing import Any
 API_ROOT = "https://api.github.com"
 
 
-REQUIRED_WORKFLOWS = (
-    "gpu-macos.yml",
-    "product-quality.yml",
-    "provenance.yml",
-    "readme-quick-start.yml",
-)
+RETRY_DELAYS_SECONDS = (0.0, 1.0, 2.0)
 
 
 class MergeError(RuntimeError):
@@ -81,52 +77,87 @@ def _api(path: str, *, method: str = "GET", body: dict[str, Any] | None = None) 
     return json.loads(payload)
 
 
-def _associated_run(
-    runs: list[dict[str, Any]], *, pull_number: int, head_sha: str
-) -> dict[str, Any] | None:
-    candidates = []
-    for run in runs:
-        if run.get("event") != "pull_request":
+def _required_contexts(payload: dict[str, Any]) -> list[str]:
+    contexts = payload.get("contexts")
+    if isinstance(contexts, list):
+        return [context for context in contexts if isinstance(context, str)]
+    checks = payload.get("checks")
+    if isinstance(checks, list):
+        return [
+            check["context"]
+            for check in checks
+            if isinstance(check, dict) and isinstance(check.get("context"), str)
+        ]
+    return []
+
+
+def _check_run_state(
+    check_runs: list[dict[str, Any]], required_contexts: list[str], head_sha: str
+) -> tuple[bool, list[str], bool]:
+    """Return (ready, details, retryable) for one live API snapshot."""
+    by_name: dict[str, dict[str, Any]] = {}
+    for check_run in check_runs:
+        if check_run.get("head_sha") != head_sha:
             continue
-        associations = run.get("pull_requests")
-        if not isinstance(associations, list):
+        name = check_run.get("name")
+        if not isinstance(name, str) or name not in required_contexts:
             continue
-        for association in associations:
-            if (
-                association.get("number") == pull_number
-                and association.get("head", {}).get("sha") == head_sha
-            ):
-                candidates.append(run)
-                break
-    if not candidates:
-        return None
-    return max(candidates, key=lambda run: (run.get("created_at", ""), run.get("id", 0)))
+        previous = by_name.get(name)
+        if previous is None or check_run.get("id", 0) > previous.get("id", 0):
+            by_name[name] = check_run
+
+    details: list[str] = []
+    retryable = False
+    ready = True
+    for context in required_contexts:
+        check_run = by_name.get(context)
+        if check_run is None:
+            details.append(f"{context}: missing")
+            ready = False
+            retryable = True
+            continue
+        status = check_run.get("status")
+        conclusion = check_run.get("conclusion")
+        details.append(f"{context}: {status}/{conclusion or '-'}")
+        if status != "completed" or conclusion != "success":
+            ready = False
+            if status != "completed" and conclusion is None:
+                retryable = True
+    return ready, details, retryable
 
 
 def gate_state(
-    runs_by_workflow: dict[str, list[dict[str, Any]]],
-    *,
-    pull_number: int,
-    head_sha: str,
+    check_runs: list[dict[str, Any]], *, required_contexts: list[str], head_sha: str
 ) -> tuple[bool, list[str]]:
-    details = []
-    ready = True
-    for workflow in REQUIRED_WORKFLOWS:
-        run = _associated_run(
-            runs_by_workflow.get(workflow, []),
-            pull_number=pull_number,
-            head_sha=head_sha,
-        )
-        if run is None:
-            ready = False
-            details.append(f"{workflow}: missing")
-            continue
-        status = run.get("status")
-        conclusion = run.get("conclusion")
-        details.append(f"{workflow}: {status}/{conclusion or '-'}")
-        if status != "completed" or conclusion != "success":
-            ready = False
+    ready, details, _ = _check_run_state(check_runs, required_contexts, head_sha)
     return ready, details
+
+
+def live_gate_state(
+    repository: str, *, base_ref: str, head_sha: str
+) -> tuple[bool, list[str]]:
+    """Read effective required contexts and exact-head check runs with retries."""
+    details: list[str] = []
+    for delay in RETRY_DELAYS_SECONDS:
+        if delay:
+            time.sleep(delay)
+        policy = _api(
+            f"repos/{repository}/branches/{urllib.parse.quote(base_ref, safe='')}/"
+            "protection/required_status_checks"
+        )
+        required_contexts = _required_contexts(policy)
+        if not required_contexts:
+            details = ["required contexts: missing"]
+            continue
+        checks = _api(
+            f"repos/{repository}/commits/{head_sha}/check-runs?per_page=100"
+        )
+        ready, details, retryable = _check_run_state(
+            checks.get("check_runs", []), required_contexts, head_sha
+        )
+        if ready or not retryable:
+            return ready, details
+    return False, details
 
 
 def _candidate(payload: dict[str, Any], repository: str) -> tuple[int, str] | None:
@@ -171,17 +202,9 @@ def run(event_path: Path, repository: str) -> int:
         print("merge steward: pull request is closed, draft, forked, non-main, or stale")
         return 0
 
-    runs_by_workflow = {}
-    for workflow in REQUIRED_WORKFLOWS:
-        response = _api(
-            f"repos/{repository}/actions/workflows/{workflow}/runs"
-            "?event=pull_request&per_page=100"
-        )
-        runs_by_workflow[workflow] = response.get("workflow_runs", [])
-
-    ready, details = gate_state(
-        runs_by_workflow,
-        pull_number=pull_number,
+    ready, details = live_gate_state(
+        repository,
+        base_ref=pull.get("base", {}).get("ref", ""),
         head_sha=current_head_sha,
     )
     print("\n".join(details))
