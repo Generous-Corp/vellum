@@ -750,6 +750,9 @@ jobs:
             --pulp-target "${{ steps.observatory-cursor.outputs.pulp-sha }}" \
             --vellum-target "$observatory_vellum_target" \
             --output "$RUNNER_TEMP/observatory-health-report.json"
+          python3 tools/provenance/test_verify_pulp_observation_scope.py
+          python3 tools/provenance/verify_pulp_observation_scope.py \
+            --output "$RUNNER_TEMP/pulp-observation-scope-report.json"
 
       - name: Upload verification evidence
         if: always()
@@ -770,5 +773,6 @@ jobs:
             ${{ runner.temp }}/promotion-release-tag-trust.json
             ${{ runner.temp }}/authority-tag-trust.json
             ${{ runner.temp }}/observatory-health-report.json
+            ${{ runner.temp }}/pulp-observation-scope-report.json
           if-no-files-found: error
           retention-days: 90
