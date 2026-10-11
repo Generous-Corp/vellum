@@ -61,6 +61,12 @@ jobs:
           latest_created_at = receiver.git(
               pulp, "show", "-s", "--format=%cI", oldest_event
           )
+          vellum_cursor = receiver.load_vellum_cursor(root)
+          vellum_main = receiver.git(root, "rev-parse", "HEAD")
+          vellum_covered = not receiver.vellum_needs_reconcile(root, root, vellum_main)
+          vellum_main_committed_at = receiver.git(
+              root, "show", "-s", "--format=%cI", vellum_main
+          )
           report = json.loads(
               Path("provenance/pulp-observatory/reports/current.json").read_text()
           )
@@ -74,6 +80,8 @@ jobs:
               "latest_event_created_at": latest_created_at,
               "latest_target": latest,
               "pending_count": pending,
+              "vellum_cursor_covers_main": vellum_covered,
+              "vellum_main_committed_at": vellum_main_committed_at,
           }))
           PY
           gh api \

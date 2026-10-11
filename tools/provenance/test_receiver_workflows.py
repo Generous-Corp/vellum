@@ -55,6 +55,21 @@ class ReceiverWorkflowTests(unittest.TestCase):
         self.assertNotIn("HEAD:refs/heads/main", text)
         self.assertIn("enable barrier requires a fully covered committed cursor", text)
 
+    def test_receiver_advances_the_vellum_cursor_after_every_landing(self) -> None:
+        text = (ROOT / ".github/workflows/pulp-observatory-receiver.yml").read_text()
+        self.assertIn("  push:\n    branches: [main]\n", text)
+        self.assertIn("github.event_name == 'push' ||", text)
+        self.assertIn('elif os.environ["GITHUB_EVENT_NAME"] == "push":', text)
+        self.assertIn("--vellum-repo . \\", text)
+        self.assertIn('--vellum-main "$(git rev-parse HEAD)"', text)
+        self.assertIn('--vellum-target "$(git rev-parse HEAD)"', text)
+
+    def test_watchdog_reports_vellum_cursor_lag(self) -> None:
+        text = (ROOT / ".github/workflows/pulp-observatory-watchdog.yml").read_text()
+        self.assertIn("receiver.vellum_needs_reconcile(root, root, vellum_main)", text)
+        self.assertIn('"vellum_cursor_covers_main": vellum_covered', text)
+        self.assertIn('"vellum_main_committed_at": vellum_main_committed_at', text)
+
     def test_watchdog_is_independent_and_default_off_until_cutover(self) -> None:
         text = self.text("pulp-observatory-watchdog.yml")
         self.assertIn("schedule:", text)

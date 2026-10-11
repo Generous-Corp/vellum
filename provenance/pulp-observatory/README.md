@@ -39,6 +39,35 @@ so the latest resolution wins independently of filename order. Add a later
 resolution to expand or close an obligation—never edit or delete an earlier
 observation or resolution.
 
+## Pull requests: record events, leave the cursor
+
+A pull request does not advance `cursor.json` or regenerate
+`reports/current.*`. It records the observation events for its own mapped
+commits and nothing else:
+
+```sh
+python3 tools/provenance/observatory.py reconcile \
+  --pulp-repo /path/to/pulp \
+  --vellum-repo . \
+  --pulp-target <committed-pulp-cursor-sha> \
+  --vellum-target <exact-pr-head-sha> \
+  --now <utc-timestamp> \
+  --write --events-only
+```
+
+`provenance-verify` runs `verify --vellum-tail-policy coverage` on pull
+requests, merge-queue builds and `main`: every mapped commit after the cursor
+must carry its own event in the tree, a merge that adds nothing beyond the pull
+request it lands is covered by that pull request's events, and the committed
+report is compared without those not-yet-reconciled events. Tags keep the
+exact `reconciled` policy. After a landing the receiver
+(`pulp-observatory-receiver.yml`, `push: main`) reconciles `main`, advances the
+cursor and report, and opens the evidence PR on
+`automation/pulp-observatory-coalesced`; the watchdog bounds the lag with
+`cursor_lag_sla_minutes`. A pull request that still ends with its own
+reconcile commit remains valid: an exactly reconciled evidence tail passes
+under either policy.
+
 ## Verify
 
 ```sh

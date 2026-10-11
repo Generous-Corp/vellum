@@ -3,6 +3,11 @@ name: Pulp observatory receiver
 on:
   repository_dispatch:
     types: [pulp-change-landed]
+  # Every landing on main may leave the Vellum cursor behind: pull requests
+  # record their own observation events and this receiver advances the cursor
+  # afterwards, through the same reviewed evidence branch.
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       pulp_commit:
@@ -31,6 +36,7 @@ jobs:
     timeout-minutes: 60
     if: >-
       github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
       (github.event_name == 'repository_dispatch' &&
        vars.VELLUM_RECEIVER_LIVE == 'true')
     runs-on: ${{ fromJSON(vars.VELLUM_LINUX_RUNS_ON_JSON || '["ubuntu-latest"]') }}
@@ -75,6 +81,13 @@ jobs:
                   json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8"
               )
               payload_argument = str(payload_path)
+          elif os.environ["GITHUB_EVENT_NAME"] == "push":
+              # A Vellum landing: the Pulp side has no new lower bound, so the
+              # committed Pulp cursor is the bound and the plan decides from
+              # the Vellum cursor alone.
+              cursor = json.loads(Path("provenance/pulp-observatory/cursor.json").read_text())
+              lower = cursor["pulp"]["last_scanned_commit"]
+              payload_argument = ""
           else:
               lower = os.environ["INPUT_PULP_COMMIT"]
               payload_argument = ""
@@ -103,6 +116,8 @@ jobs:
             --pulp-repo .receiver-pulp \
             --pulp-main "$PULP_MAIN" \
             --lower-bound "$LOWER_BOUND" \
+            --vellum-repo . \
+            --vellum-main "$(git rev-parse HEAD)" \
             "${payload_args[@]}" \
             --output "$RUNNER_TEMP/receiver-plan.json"
           jq -r '"status=" + .status, "target=" + .reconcile_target' \
@@ -127,7 +142,8 @@ jobs:
             --pulp-repo .receiver-pulp \
             --vellum-repo . \
             --git-base "$(git rev-parse HEAD)" \
-            --pulp-target "$RECONCILE_TARGET"
+            --pulp-target "$RECONCILE_TARGET" \
+            --vellum-target "$(git rev-parse HEAD)"
 
       - name: Prepare the reviewed evidence-only coalescing PR
         if: steps.plan.outputs.status == 'reconcile'

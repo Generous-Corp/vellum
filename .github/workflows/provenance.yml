@@ -776,6 +776,14 @@ jobs:
           observatory_git_base="$(
             git merge-base "$observatory_git_base" HEAD
           )"
+          # Pull requests, queue builds and main carry their own observation
+          # events and leave the cursor to the receiver, so they are judged on
+          # event coverage; a release or authority tag must be exactly
+          # reconciled.
+          observatory_tail_policy=coverage
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            observatory_tail_policy=reconciled
+          fi
           python3 tools/provenance/test_observatory.py
           python3 tools/provenance/test_receiver.py
           python3 tools/provenance/test_receiver_watchdog.py
@@ -786,6 +794,7 @@ jobs:
             --git-base "$observatory_git_base" \
             --pulp-target "${{ steps.observatory-cursor.outputs.pulp-sha }}" \
             --vellum-target "$observatory_vellum_target" \
+            --vellum-tail-policy "$observatory_tail_policy" \
             --output "$RUNNER_TEMP/observatory-health-report.json"
 
       - name: Upload verification evidence
