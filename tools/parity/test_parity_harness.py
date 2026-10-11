@@ -585,9 +585,14 @@ class AuthorityAndProvenanceTests(HarnessFixture):
             same = (ref / "deep/obs.json").read_bytes() == (cand / "deep/obs.json").read_bytes()
             return {"status": "pass" if same else "fail", "reasons": [] if same else ["differs"]}
 
-        ph.register_lane("nested-lane", ("deep/obs.json",), nested_lane)
+        ph.register_lane("nested-lane", ("deep/a-copied.json", "deep/obs.json"), nested_lane)
         try:
             impl = implementation(self.tool)
+            # A passthrough copy writes a nested file first; the control must skip
+            # it and aim at the nested observation the declared tool writes.
+            impl["passthrough_binaries"] = [{"path": "/bin/cp", "justification": "copies a staged input"}]
+            impl["steps"].append({"id": "copy", "argv": ["/bin/mkdir", "-p", "deep"]})
+            impl["steps"].append({"id": "copied", "argv": ["/bin/cp", "source.json", "deep/a-copied.json"]})
             impl["steps"].append({"id": "nested", "argv": [
                 sys.executable, str(self.tool), "nested", "--write", "deep/obs.json"]})
             ph.write_json(self.impl_path, impl)
@@ -596,7 +601,8 @@ class AuthorityAndProvenanceTests(HarnessFixture):
                 'mode = args.pop(0)\nif mode == "nested":\n    import os\n'
                 '    os.makedirs("deep", exist_ok=True)\n    open("deep/obs.json", "w").write("{}")\n'
                 '    sys.exit(0)'))
-            ph.write_json(self.impl_path, implementation(self.tool) | {"steps": impl["steps"]})
+            ph.write_json(self.impl_path, implementation(self.tool) | {"steps": impl["steps"],
+                                                                      "passthrough_binaries": impl["passthrough_binaries"]})
             nested_corpus = corpus()
             nested_corpus["cases"][0]["lanes"].append("nested-lane")
             ph.write_json(self.corpus_path, nested_corpus)

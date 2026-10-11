@@ -1611,7 +1611,9 @@ def calibrate(corpus_path: Path, source_root: Path, impl_path: Path, out: Path,
         selected = {name for lane, r in result["lanes"].items() if r["status"] != "not_selected"
                     for name in LANE_ARTIFACTS.get(lane, ()) if "/" in name}
         for name, origin in (result["candidate"].get("produced_by") or {}).items():
-            if name in selected:
+            # A passthrough producer is exempt from the check, so replacing its
+            # digest proves nothing; aim at a nested observation a tool produced.
+            if name in selected and origin.get("binary") not in (identity.get("passthrough_binaries") or []):
                 origin["binary_sha256"] = "0" * 64
                 origin.pop("script_sha256", None)
                 nested_applied.append(f"{result['case_id']}:{name}")
