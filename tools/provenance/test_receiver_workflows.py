@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 import unittest
 
 
@@ -42,8 +43,8 @@ class ReceiverWorkflowTests(unittest.TestCase):
         self.assertIn("--force-with-lease", text)
         self.assertIn("--atomic", text)
         self.assertIn("persist-credentials: true", text)
-        self.assertIn("VELLUM_RECEIVER_ADMIN_TOKEN", text)
-        self.assertIn("VELLUM_PULP_READER_TOKEN", text)
+        self.assertIn("steps.evidence-token.outputs.token", text)
+        self.assertIn("steps.pulp-reader.outputs.token", text)
         self.assertIn("--paginate", text)
         self.assertIn("--jq 'length'", text)
         self.assertIn("awk '{ total += $1 } END { print total + 0 }'", text)
@@ -64,18 +65,48 @@ class ReceiverWorkflowTests(unittest.TestCase):
         self.assertIn('--vellum-main "$(git rev-parse HEAD)"', text)
         self.assertIn('--vellum-target "$(git rev-parse HEAD)"', text)
 
-    def test_watchdog_reports_vellum_cursor_lag(self) -> None:
+    def test_watchdog_builds_its_state_with_the_tested_module(self) -> None:
         text = (ROOT / ".github/workflows/pulp-observatory-watchdog.yml").read_text()
-        self.assertIn("receiver.vellum_needs_reconcile(root, root, vellum_main)", text)
-        self.assertIn('"vellum_cursor_covers_main": vellum_covered', text)
-        self.assertIn('"vellum_main_committed_at": vellum_main_committed_at', text)
+        self.assertIn("python3 tools/provenance/test_receiver_watchdog_state.py", text)
+        self.assertIn("python3 tools/provenance/receiver_watchdog_state.py", text)
+        self.assertNotIn("import receiver", text)
 
-    def test_watchdog_is_independent_and_default_off_until_cutover(self) -> None:
+    def test_receiver_and_watchdog_use_only_credentials_that_exist(self) -> None:
+        # R7 MF3: the repository holds exactly the two App secrets and no
+        # variables. A job that reads an undefined secret runs with an empty
+        # token and fails late; a job gated on an undefined variable is a job
+        # that silently never runs.
+        defined_secrets = {"SHIPYARD_APP_ID", "SHIPYARD_APP_PRIVATE_KEY"}
+        deliberate_gate_vars = {"VELLUM_RECEIVER_LIVE"}  # Pulp live delivery only
+        for name in ("pulp-observatory-receiver.yml", "pulp-observatory-watchdog.yml"):
+            text = (ROOT / ".github/workflows" / name).read_text()
+            with self.subTest(workflow=name):
+                for secret in set(re.findall(r"secrets\.([A-Z0-9_]+)", text)):
+                    self.assertIn(secret, defined_secrets, f"{name} reads undefined secret {secret}")
+                for line in text.splitlines():
+                    for var in re.findall(r"vars\.([A-Z0-9_]+)", line):
+                        if "||" in line:
+                            continue  # inline fallback: safe when unset
+                        self.assertIn(var, deliberate_gate_vars, f"{name} depends on undefined var {var}")
+                # Every cross-repository checkout and every API write uses a
+                # per-run App token, never an undefined secret or GITHUB_TOKEN.
+                for block in re.findall(r"repository: Generous-Corp/pulp\n(?:.*\n){0,3}", text):
+                    self.assertIn("token: ${{ steps.pulp-reader.outputs.token }}", block)
+                self.assertNotIn("github.token", text)
+                self.assertIn("actions/create-github-app-token@", text)
+        watchdog = (ROOT / ".github/workflows/pulp-observatory-watchdog.yml").read_text()
+        jobs = watchdog.split("\njobs:\n", 1)[1]
+        self.assertNotIn("vars.", jobs.split("    steps:", 1)[0], "watchdog job must not be gated on a variable")
+        receiver = (ROOT / ".github/workflows/pulp-observatory-receiver.yml").read_text()
+        gate = receiver.split("\njobs:\n", 1)[1].split("    steps:", 1)[0]
+        self.assertIn("github.event_name == 'push' ||", gate)
+
+    def test_watchdog_is_independent_and_always_on(self) -> None:
         text = self.text("pulp-observatory-watchdog.yml")
         self.assertIn("schedule:", text)
         self.assertIn("runs-on: ubuntu-latest", text)
         self.assertIn("pull-requests: read", text)
-        self.assertIn("VELLUM_RECEIVER_WATCHDOG_ENABLED == 'true'", text)
+        self.assertNotIn("VELLUM_RECEIVER_WATCHDOG_ENABLED", text)
         self.assertIn("group: vellum-pulp-observatory-watchdog", text)
         self.assertIn("--paginate", text)
         self.assertIn("--jq 'length'", text)

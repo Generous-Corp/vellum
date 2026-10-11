@@ -41,10 +41,37 @@ jobs:
        vars.VELLUM_RECEIVER_LIVE == 'true')
     runs-on: ${{ fromJSON(vars.VELLUM_LINUX_RUNS_ON_JSON || '["ubuntu-latest"]') }}
     steps:
+      # Tokens come from the same GitHub App the merge steward uses, minted
+      # per run and scoped to one repository each. A pull request pushed and
+      # opened with an App token triggers its required checks; one opened with
+      # GITHUB_TOKEN never would, and the evidence PR could never land.
+      - name: Mint a Vellum evidence token
+        id: evidence-token
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3
+        with:
+          app-id: ${{ secrets.SHIPYARD_APP_ID }}
+          private-key: ${{ secrets.SHIPYARD_APP_PRIVATE_KEY }}
+          owner: Generous-Corp
+          repositories: vellum
+          permission-actions: write
+          permission-contents: write
+          permission-pull-requests: write
+          permission-variables: write
+
+      - name: Mint a read-only Pulp token for the fresh checkout
+        id: pulp-reader
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3
+        with:
+          app-id: ${{ secrets.SHIPYARD_APP_ID }}
+          private-key: ${{ secrets.SHIPYARD_APP_PRIVATE_KEY }}
+          owner: Generous-Corp
+          repositories: pulp
+          permission-contents: read
+
       - name: Check out trusted Vellum main controls
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          token: ${{ secrets.VELLUM_RECEIVER_ADMIN_TOKEN || github.token }}
+          token: ${{ steps.evidence-token.outputs.token }}
           ref: main
           fetch-depth: 0
           persist-credentials: true
@@ -53,7 +80,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: Generous-Corp/pulp
-          token: ${{ secrets.VELLUM_PULP_READER_TOKEN }}
+          token: ${{ steps.pulp-reader.outputs.token }}
           ref: main
           path: .receiver-pulp
           fetch-depth: 0
@@ -148,7 +175,7 @@ jobs:
       - name: Prepare the reviewed evidence-only coalescing PR
         if: steps.plan.outputs.status == 'reconcile'
         env:
-          GH_TOKEN: ${{ secrets.VELLUM_RECEIVER_ADMIN_TOKEN || github.token }}
+          GH_TOKEN: ${{ steps.evidence-token.outputs.token }}
           EVIDENCE_BRANCH: automation/pulp-observatory-coalesced
         run: |
           set -euo pipefail
@@ -215,7 +242,7 @@ jobs:
       - name: Enable live delivery only across a proved current barrier
         if: inputs.operation == 'enable'
         env:
-          GH_TOKEN: ${{ secrets.VELLUM_RECEIVER_ADMIN_TOKEN || github.token }}
+          GH_TOKEN: ${{ steps.evidence-token.outputs.token }}
           RECONCILE_STATUS: ${{ steps.plan.outputs.status }}
           LATEST_TARGET: ${{ steps.plan.outputs.target }}
         run: |

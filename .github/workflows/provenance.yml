@@ -56,7 +56,12 @@ jobs:
     name: provenance-verify
     runs-on: ${{ fromJSON(vars.VELLUM_LINUX_RUNS_ON_JSON || '["ubuntu-latest"]') }}
     env:
-      VELLUM_TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      # Always the checked-out commit: on pull_request that is the merge ref
+      # (main merged with the head), which is what the queue builds and what
+      # carries main's events; a head-only target fails whenever the cursor
+      # lags behind another landing. On merge_group it is the queue's merge
+      # commit; on push and tags it is the pushed commit.
+      VELLUM_TARGET_SHA: ${{ github.sha }}
       VELLUM_GIT_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
     steps:
       - name: Check out full preserved history

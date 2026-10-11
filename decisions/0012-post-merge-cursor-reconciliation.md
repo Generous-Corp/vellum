@@ -39,6 +39,46 @@ queue's merge commit contains the other entries.
 4. Tags keep the exact `reconciled` policy: a release or authority tag must be
    fully reconciled.
 
+## Edge cases, stated
+
+- **Integration merge, precisely.** The rule is symmetric, so it judges a
+  queue merge (first parent `main`, second parent the pull request) and an
+  author's merge of `main` into a pull request alike: for every observable path
+  changed on either side since the merge base, exactly one side changed it and
+  the merge carries that side's blob (absent on both counts as equal, so a
+  deletion lands). A path both sides changed, a path only the merge changed, or
+  a path the merge did not carry over from the side that changed it makes the
+  merge a change of its own. Unmapped paths are ignored, so two queue entries
+  that share only unmapped files do not eject each other.
+- **A merge that drops the other side's change** (an author's merge of `main`
+  that keeps the pull request's blob over `main`'s fix) shows no mapped change
+  against its first parent, so no observation can describe it. The coverage
+  check reports it as `merge-changes-other-side-without-first-parent-diff`; the
+  remedy is to make the revert an explicit commit on the branch, which does get
+  its own event and its own review. In the queue direction the same revert is
+  visible against `main` and needs (and can carry) an event.
+- **Octopus merges** (three or more parents) are never covered; they fail
+  closed and must carry their own event.
+- **A queue merge that needs its own event is unlandable by construction**:
+  the merge commit does not exist until the queue creates it, so no pull
+  request can carry its event. The remedy is always to update the branch
+  (merge `main` into it) so the queue merge becomes a plain integration merge,
+  or to record the resolved merge's event in the pull request itself.
+- **The receiver backfills.** A full reconcile on `main` creates `pending`
+  observation events for any mapped commit that landed without one (for
+  example an administrator's direct push). Those events are not a free pass:
+  they enter the ordinary review queue and age against the same budgets, and
+  the push-to-`main` provenance run reports the uncovered commit before the
+  receiver runs.
+- **Pull requests that change the mapping or add resolution events** still
+  regenerate the report, and still conflict with each other exactly as before;
+  only observation events for the pull request's own commits are excluded from
+  the report comparison.
+- **The lag clock** starts at the committer time of the first first-parent
+  landing after the cursor, never at `main`'s tip, so steady traffic cannot keep
+  the SLA from being breached. Lag inside the SLA is the steady state and is
+  reported, not a violation.
+
 ## What is kept
 
 - Coverage: every mapped commit has an event, verified against Git, before
