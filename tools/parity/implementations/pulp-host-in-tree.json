@@ -178,5 +178,6 @@
     "super-convolver.component",
     "spectral-lab.app",
     "super-convolver.app"
-  ]
+  ],
+  "authority": "native-render"
 }

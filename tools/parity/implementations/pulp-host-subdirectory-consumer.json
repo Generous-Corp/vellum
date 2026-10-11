@@ -193,5 +193,6 @@
     "gain.component",
     "spectral-lab.app",
     "gain.app"
-  ]
+  ],
+  "authority": "native-render"
 }

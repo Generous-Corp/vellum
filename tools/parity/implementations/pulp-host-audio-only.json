@@ -158,5 +158,6 @@
     "gain.vst3",
     "gain.component",
     "other.clap"
-  ]
+  ],
+  "authority": "native-render"
 }
