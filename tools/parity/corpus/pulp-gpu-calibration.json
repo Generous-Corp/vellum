@@ -1,0 +1,196 @@
+{
+  "schema": "vellum.parity.corpus.v1",
+  "description": "GPU calibration corpus: the CPU calibration cases, each also observed through Skia Graphite on Dawn (gpu-raster, gpu-receipt, provider-census). Run with --lane-module tools/parity/lanes/gpu.py and implementations/pulp-design-ir-observer-gpu.json. Calibration seed corpus. Sources are paths inside a Pulp checkout at the calibrated commit (--source-root), except source_base=corpus cases, which resolve beside this file. The bottom-right 2px corner of every case is bare root background; the pointer-moved control relies on it.",
+  "cases": [
+    {
+      "case_id": "controls-design-ir",
+      "source": "test/fixtures/design-ir-observe/controls.ir.json",
+      "source_kind": "design-ir",
+      "width": 240,
+      "height": 160,
+      "lanes": [
+        "structure",
+        "raster",
+        "geometry",
+        "interaction",
+        "gpu-raster",
+        "gpu-receipt",
+        "provider-census"
+      ],
+      "interactions": [
+        {
+          "key": "tab"
+        },
+        {
+          "drag": [
+            [
+              40,
+              60
+            ],
+            [
+              40,
+              10
+            ]
+          ]
+        },
+        {
+          "key": "tab"
+        },
+        {
+          "click": [
+            100,
+            60
+          ]
+        }
+      ],
+      "scale": 2,
+      "params": {
+        "insert_libraries": "",
+        "allow_extra_webgpu_api": "libwgpu_native.dylib",
+        "allow_extra_webgpu_api_justification": "Pulp's pulp-render links the wgpu-native webgpu target PUBLIC on macOS alongside Skia's static Dawn, so every Pulp GPU image also loads wgpu-native, a second (non-Dawn) WebGPU C API. Recorded, not endorsed: D4 has to rule on it. Any other extra exporter still fails."
+      },
+      "regions": [
+        {
+          "name": "cutoff-knob",
+          "x": 0,
+          "y": 0,
+          "w": 80,
+          "h": 80
+        },
+        {
+          "name": "level-fader",
+          "x": 80,
+          "y": 0,
+          "w": 40,
+          "h": 120
+        }
+      ]
+    },
+    {
+      "case_id": "figma-plugin-scene",
+      "source": "test/fixtures/import-fidelity/scene.pulp.json",
+      "source_kind": "figma-plugin",
+      "width": 300,
+      "height": 260,
+      "lanes": [
+        "structure",
+        "raster",
+        "geometry",
+        "interaction",
+        "gpu-raster",
+        "gpu-receipt",
+        "provider-census"
+      ],
+      "volatile": {
+        "structure": [
+          "/imported_at"
+        ]
+      },
+      "interactions": [
+        {
+          "drag": [
+            [
+              40,
+              60
+            ],
+            [
+              40,
+              10
+            ]
+          ]
+        },
+        {
+          "key": "tab"
+        }
+      ],
+      "note": "The scene's asset_ref images are reference art for audio widgets, not paint inputs: calibration showed a byte-identical render with and without them, so they are not staged. image-asset-design-ir is the case that consumes an asset.",
+      "scale": 2,
+      "params": {
+        "insert_libraries": "",
+        "allow_extra_webgpu_api": "libwgpu_native.dylib",
+        "allow_extra_webgpu_api_justification": "Pulp's pulp-render links the wgpu-native webgpu target PUBLIC on macOS alongside Skia's static Dawn, so every Pulp GPU image also loads wgpu-native, a second (non-Dawn) WebGPU C API. Recorded, not endorsed: D4 has to rule on it. Any other extra exporter still fails."
+      }
+    },
+    {
+      "case_id": "image-asset-design-ir",
+      "source_base": "corpus",
+      "source": "fixtures/image-asset.ir.json",
+      "stage": [
+        "fixtures/assets"
+      ],
+      "source_kind": "design-ir",
+      "width": 160,
+      "height": 120,
+      "lanes": [
+        "structure",
+        "raster",
+        "geometry",
+        "gpu-raster",
+        "gpu-receipt",
+        "provider-census"
+      ],
+      "scale": 2,
+      "params": {
+        "insert_libraries": "",
+        "allow_extra_webgpu_api": "libwgpu_native.dylib",
+        "allow_extra_webgpu_api_justification": "Pulp's pulp-render links the wgpu-native webgpu target PUBLIC on macOS alongside Skia's static Dawn, so every Pulp GPU image also loads wgpu-native, a second (non-Dawn) WebGPU C API. Recorded, not endorsed: D4 has to rule on it. Any other extra exporter still fails.",
+        "gpu_pixels_match_cpu": "true",
+        "gpu_pixels_match_cpu_justification": "Measured: this case is a solid fill and an unscaled image blit, and Graphite and the CPU raster produce byte-identical pixels for it, so a silent CPU fallback cannot be seen in gpu-raster here. provider-census and gpu-receipt still reject that fallback on this case."
+      }
+    },
+    {
+      "case_id": "html-basic-card",
+      "source": "test/fixtures/import-differential/01-basic-card.html",
+      "source_kind": "html-offline",
+      "width": 480,
+      "height": 320,
+      "lanes": [
+        "structure",
+        "raster",
+        "geometry",
+        "semantic",
+        "gpu-raster",
+        "gpu-receipt",
+        "provider-census"
+      ],
+      "volatile": {
+        "structure": [
+          "/imported_at"
+        ]
+      },
+      "scale": 2,
+      "params": {
+        "insert_libraries": "",
+        "allow_extra_webgpu_api": "libwgpu_native.dylib",
+        "allow_extra_webgpu_api_justification": "Pulp's pulp-render links the wgpu-native webgpu target PUBLIC on macOS alongside Skia's static Dawn, so every Pulp GPU image also loads wgpu-native, a second (non-Dawn) WebGPU C API. Recorded, not endorsed: D4 has to rule on it. Any other extra exporter still fails."
+      }
+    },
+    {
+      "case_id": "html-typography",
+      "source": "test/fixtures/import-differential/11-typography.html",
+      "source_kind": "html-offline",
+      "width": 480,
+      "height": 320,
+      "lanes": [
+        "structure",
+        "raster",
+        "geometry",
+        "semantic",
+        "gpu-raster",
+        "gpu-receipt",
+        "provider-census"
+      ],
+      "volatile": {
+        "structure": [
+          "/imported_at"
+        ]
+      },
+      "scale": 2,
+      "params": {
+        "insert_libraries": "",
+        "allow_extra_webgpu_api": "libwgpu_native.dylib",
+        "allow_extra_webgpu_api_justification": "Pulp's pulp-render links the wgpu-native webgpu target PUBLIC on macOS alongside Skia's static Dawn, so every Pulp GPU image also loads wgpu-native, a second (non-Dawn) WebGPU C API. Recorded, not endorsed: D4 has to rule on it. Any other extra exporter still fails."
+      }
+    }
+  ]
+}
