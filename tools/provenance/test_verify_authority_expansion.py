@@ -1282,11 +1282,7 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
         )
 
     def test_committed_retirement_record_is_in_force(self) -> None:
-        shallow = subprocess.check_output(
-            ["git", "-C", str(ROOT), "rev-parse", "--is-shallow-repository"], text=True
-        ).strip()
-        if shallow != "false":
-            self.skipTest("shallow clone: the committed record needs full history")
+        self.require_full_history()
         retired, errors = verifier.validate_delivery_repository_retirement(ROOT)
         self.assertEqual(errors, [])
         self.assertTrue(retired)
@@ -1475,6 +1471,24 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
             "unexpected or duplicate repository" in error for error in errors
         ), errors)
 
+    def require_full_history(self) -> None:
+        """Skip in a local shallow clone, but never let CI lose this coverage."""
+        shallow = subprocess.check_output(
+            ["git", "-C", str(ROOT), "rev-parse", "--is-shallow-repository"], text=True
+        ).strip()
+        if shallow == "false":
+            return
+        if os.environ.get("CI") == "true":
+            self.fail("shallow clone in CI: retirement coverage needs fetch-depth: 0")
+        self.skipTest("shallow clone: the committed record needs full history")
+
+    def test_provenance_verify_checkout_keeps_full_history(self) -> None:
+        workflow = (ROOT / ".github/workflows/provenance.yml").read_text()
+        job = workflow[workflow.index("  provenance-verify:"):]
+        checkout = job[job.index("Check out full preserved history"):]
+        checkout = checkout[:checkout.index("      - name:", 1)]
+        self.assertIn("fetch-depth: 0", checkout)
+
     def retired_authority_clone(self) -> tuple[Path, str, str]:
         """A full-history clone of this checkout carrying the working-tree artifacts."""
         temporary = tempfile.TemporaryDirectory()
@@ -1492,11 +1506,7 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
         return clone, commit, tree
 
     def test_release_readiness_end_to_end_honours_retirement(self) -> None:
-        shallow = subprocess.check_output(
-            ["git", "-C", str(ROOT), "rev-parse", "--is-shallow-repository"], text=True
-        ).strip()
-        if shallow != "false":
-            self.skipTest("shallow clone: the committed record needs full history")
+        self.require_full_history()
         amendment_commit = subprocess.check_output(
             [
                 "git", "-C", str(ROOT), "log", "--diff-filter=A", "--format=%H",
