@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import copy
 import json
+import subprocess
+import sys
 import unittest
 from pathlib import Path
 
@@ -35,6 +37,27 @@ class RendererAttestationTests(unittest.TestCase):
 
         with self.assertRaisesRegex(VerificationError, "no provenance record"):
             validate_renderer_attestation(self.renderer, None)
+
+    def test_release_gate_follows_declared_eligibility(self) -> None:
+        # The release finalizer passes --require-release-eligible. It must fail
+        # while the lock declares the renderer blocked and pass once eligible.
+        completed = subprocess.run(
+            [sys.executable, str(Path(__file__).with_name("verify_renderer_dependency.py")),
+             "--require-release-eligible", "--json"],
+            check=False, capture_output=True, text=True,
+        )
+        if self.renderer["release_eligibility"] == "eligible":
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+        else:
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("GPU release is blocked", completed.stderr)
+        # Control: without the flag the same lock verifies.
+        control = subprocess.run(
+            [sys.executable, str(Path(__file__).with_name("verify_renderer_dependency.py")),
+             "--json"],
+            check=False, capture_output=True, text=True,
+        )
+        self.assertEqual(control.returncode, 0, control.stderr)
 
 
 if __name__ == "__main__":

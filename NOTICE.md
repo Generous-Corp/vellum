@@ -1182,3 +1182,43 @@ publicity pertaining to distribution of the software without specific,
 written prior permission.  M.I.T. makes no representations about the
 suitability of this software for any purpose.  It is provided "as is"
 without express or implied warranty.
+
+## Mirrored Pulp framework legal index
+
+This index applies only to third-party bytes admitted below `mirror/` by
+Decision 0010. The current mirror is empty, so these rows declare the notice
+obligations for the D3 and foundation units without activating historical Pulp
+paths. Full license text for renderer, font, HarfBuzz, and ICU components is
+already reproduced above; the remaining rows use the upstream license named
+here and must travel with the mirrored files.
+
+| Dependency | License | Mirror scope | Notice action |
+|---|---|---|---|
+| Abseil | Apache-2.0 | `mirror/render-*`, `mirror/view-script/` with V8 | Retain transitive renderer/V8 notice |
+| Brotli | MIT | `mirror/canvas/` | Carry upstream MIT text |
+| CHOC | ISC | `mirror/view-script/` | Retain fork and upstream attribution |
+| cpp-httplib | MIT | `mirror/foundation/` | Carry upstream MIT text |
+| Dawn and Tint | BSD-3-Clause | `mirror/gpu-device/`, `mirror/render-*` | Text above |
+| Expat | MIT | `mirror/render-*` | Text above |
+| HarfBuzz | Old MIT | `mirror/canvas/` | Text above |
+| Highway | Apache-2.0 | `mirror/foundation/` | Carry Apache-2.0 text |
+| ICU | Unicode-3.0 plus bundled notices | `mirror/canvas/`, V8 path | Text above |
+| Inter | SIL OFL 1.1 | `mirror/canvas/`, `mirror/view-*` | Text above |
+| JavaScriptCore | LGPL-2.1+ components; Apple terms | `mirror/view-script/` references only | Do not mirror or redistribute framework bytes |
+| JetBrains Mono | SIL OFL 1.1 | `mirror/canvas/`, `mirror/view-core/` | Text above |
+| Jost | SIL OFL 1.1 | `mirror/canvas/`, `mirror/view-core/` | Text above |
+| Mbed TLS | Apache-2.0 | `mirror/foundation/`, `mirror/gpu-device/` | Carry Apache-2.0 text |
+| NanoSVG | zlib | `mirror/canvas/` | Carry zlib notice |
+| Noto Sans Arabic | SIL OFL 1.1 | `mirror/canvas/`, `mirror/view-core/` | Text above |
+| Noto Sans JP | SIL OFL 1.1 | `mirror/canvas/`, `mirror/view-core/` | Text above |
+| PartitionAlloc | BSD-3-Clause | `mirror/gpu-device/`, `mirror/render-*` | Text above |
+| QuickJS | MIT | `mirror/view-script/` | Carry upstream MIT text |
+| SheenBidi | Apache-2.0 | `mirror/canvas/` | Carry Apache-2.0 text |
+| Skia and skcms | BSD-3-Clause | `mirror/canvas/`, `mirror/render-*` | Text above |
+| V8 | BSD-3-Clause | `mirror/view-script/` when selected | Text above plus ICU/zlib/Abseil |
+| Yoga | MIT | `mirror/view-core/`, `mirror/view-platform/` | Carry upstream MIT text |
+
+The history-preserving mirror retains `matthewfudge` as contributor on four
+view files (design frame view, widget bridge header, state-binding API, and
+widget callbacks). Those contributions remain under Pulp's MIT inbound and
+outbound terms; no separate attribution waiver is needed.

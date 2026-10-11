@@ -1,0 +1,94 @@
+{
+  "version": 1,
+  "source": "figma-plugin",
+  "assetManifest": {
+    "version": 1,
+    "assets": [
+      {
+        "asset_id": "swatch",
+        "original_uri": "",
+        "local_path": "assets/swatch.png",
+        "content_hash": "",
+        "mime": "image/png",
+        "width": 32,
+        "height": 32,
+        "diagnostics": []
+      }
+    ]
+  },
+  "root": {
+    "type": "frame",
+    "name": "image-asset",
+    "style": {
+      "backgroundColor": "#202428",
+      "width": 160,
+      "height": 120
+    },
+    "layout": {
+      "direction": "row",
+      "gap": 0,
+      "paddingTop": 0,
+      "paddingRight": 0,
+      "paddingBottom": 0,
+      "paddingLeft": 0,
+      "justify": "flex-start",
+      "align": "flex-start",
+      "wrap": false,
+      "widthMode": "fixed",
+      "heightMode": "fixed"
+    },
+    "stable_anchor_id": "image-root",
+    "children": [
+      {
+        "type": "image",
+        "name": "Swatch",
+        "style": {
+          "width": 64,
+          "height": 64
+        },
+        "layout": {
+          "direction": "column",
+          "gap": 0,
+          "paddingTop": 0,
+          "paddingRight": 0,
+          "paddingBottom": 0,
+          "paddingLeft": 0,
+          "justify": "flex-start",
+          "align": "flex-start",
+          "wrap": false,
+          "widthMode": "fixed",
+          "heightMode": "fixed"
+        },
+        "attributes": {
+          "asset_ref": "swatch"
+        },
+        "stable_anchor_id": "swatch-image",
+        "children": []
+      },
+      {
+        "type": "frame",
+        "name": "Swatch frame",
+        "style": {
+          "width": 40,
+          "height": 40,
+          "backgroundColor": "#3a6ea5"
+        },
+        "layout": {
+          "direction": "column",
+          "gap": 0,
+          "paddingTop": 0,
+          "paddingRight": 0,
+          "paddingBottom": 0,
+          "paddingLeft": 0,
+          "justify": "flex-start",
+          "align": "flex-start",
+          "wrap": false,
+          "widthMode": "fixed",
+          "heightMode": "fixed"
+        },
+        "stable_anchor_id": "swatch-frame",
+        "children": []
+      }
+    ]
+  }
+}

@@ -3,6 +3,10 @@ name: Provenance and forbidden dependencies
 on:
   workflow_dispatch:
   pull_request:
+  # Merge-queue builds: the queue merges main's tip with the PR head on a
+  # gh-readonly-queue/* ref and needs every required check on that commit.
+  merge_group:
+    branches: [main]
   push:
     branches: [main]
     tags: ['v[0-9]*', 'authority/**']
@@ -17,7 +21,7 @@ concurrency:
   # GitHub keeps only one pending run per concurrency group. Keep PRs keyed
   # by ref so obsolete commits are canceled, but isolate every trusted or
   # manually dispatched run by run ID so pending provenance cannot be lost.
-  group: ${{ github.event_name == 'pull_request' && format('vellum-provenance-pr-{0}', github.ref) || format('vellum-provenance-run-{0}', github.run_id) }}
+  group: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && format('vellum-provenance-pr-{0}', github.ref) || format('vellum-provenance-run-{0}', github.run_id) }}
   # Do not spend a full provenance reconciliation on an obsolete PR commit;
   # trusted main/tag runs remain serialized and non-cancelable.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -53,7 +57,7 @@ jobs:
     runs-on: ${{ fromJSON(vars.VELLUM_LINUX_RUNS_ON_JSON || '["ubuntu-latest"]') }}
     env:
       VELLUM_TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-      VELLUM_GIT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+      VELLUM_GIT_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
     steps:
       - name: Check out full preserved history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -187,7 +191,7 @@ jobs:
       - name: Require private delivery repository read access
         if: startsWith(github.ref, 'refs/tags/v')
         env:
-          DELIVERY_READER_TOKEN: ${{ github.event_name != 'pull_request' && secrets.VELLUM_DELIVERY_READER_TOKEN || '' }}
+          DELIVERY_READER_TOKEN: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' && secrets.VELLUM_DELIVERY_READER_TOKEN || '' }}
         run: test -n "$DELIVERY_READER_TOKEN"
 
       - name: Check out the attested delivery repository commit
@@ -207,7 +211,7 @@ jobs:
           DELIVERY_PROMOTION_SHA: ${{ steps.expansion-evidence.outputs.delivery-sha }}
           PROMOTION_ATTESTATION_PATH: ${{ steps.expansion-evidence.outputs.promotion-path }}
           GH_TOKEN: ${{ github.token }}
-          DELIVERY_READER_TOKEN: ${{ github.event_name != 'pull_request' && secrets.VELLUM_DELIVERY_READER_TOKEN || '' }}
+          DELIVERY_READER_TOKEN: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' && secrets.VELLUM_DELIVERY_READER_TOKEN || '' }}
         run: |
           set -euo pipefail
           python3 tools/provenance/test_verify_authority_activation.py
@@ -218,7 +222,7 @@ jobs:
           python3 scripts/test_verify_exact_provenance_artifact.py
           release_readiness=()
           repository_evidence=(--repository "$GITHUB_REPOSITORY")
-          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+          if [[ "$GITHUB_EVENT_NAME" == pull_request || "$GITHUB_EVENT_NAME" == merge_group ]]; then
             repository_evidence+=(--defer-live-open-pr-audit)
           fi
           if [[ -n "$PULP_ACCEPTANCE_SHA" ]]; then
@@ -355,7 +359,7 @@ jobs:
               --check-runs-json "$RUNNER_TEMP/parity-check-runs.json"
             )
           fi
-          if [[ -n "$PULP_ACCEPTANCE_SHA" && "$GITHUB_EVENT_NAME" != pull_request ]]; then
+          if [[ -n "$PULP_ACCEPTANCE_SHA" && "$GITHUB_EVENT_NAME" != pull_request && "$GITHUB_EVENT_NAME" != merge_group ]]; then
             test -n "$DELIVERY_READER_TOKEN"
             primary_token="$GH_TOKEN"
             snapshot_root="$RUNNER_TEMP/open-pr-snapshot-input"
@@ -565,7 +569,7 @@ jobs:
             "${release_readiness[@]}" \
             "${repository_evidence[@]}" \
             --output "$RUNNER_TEMP/authority-expansion-report.json"
-          if [[ -n "$PULP_ACCEPTANCE_SHA" && "$GITHUB_EVENT_NAME" != pull_request ]]; then
+          if [[ -n "$PULP_ACCEPTANCE_SHA" && "$GITHUB_EVENT_NAME" != pull_request && "$GITHUB_EVENT_NAME" != merge_group ]]; then
             test "$live_pulp_main" = \
               "$(gh api repos/Generous-Corp/pulp/git/ref/heads/main --jq .object.sha)"
             write_live_open_pr_cursor "$RUNNER_TEMP/open-pr-cursor-after.json"

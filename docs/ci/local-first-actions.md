@@ -42,6 +42,9 @@ the hosted value rather than leaving jobs queued indefinitely.
 - Main, tag, manually dispatched, signing, and finalizer runs are never
   canceled by PR concurrency.
 - Required check names and merge-queue semantics remain unchanged.
+- Every workflow that produces a required check also runs on `merge_group`,
+  so a merge queue on `main` can admit entries; the steward arms auto-merge
+  (`MERGE`) and never merges directly once a queue exists.
 - Full diagnostic artifacts are retained for release and failed runs; routine
   passing checks should retain only the evidence required by their contract.
 - A scheduled or hosted canary may detect local drift, but it is not a reason
