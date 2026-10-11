@@ -11,9 +11,11 @@ endif()
 list(GET _mirror_closure_manifests 0 _mirror_first_manifest)
 get_filename_component(_mirror_closure_dir "${_mirror_first_manifest}" DIRECTORY)
 set(_mirror_generated_units "${CMAKE_CURRENT_BINARY_DIR}/generated/mirror/units.cmake")
+set(VELLUM_MIRROR_BUILD_INPUT_ROOT "" CACHE PATH
+    "Exporting build tree that supplies closure build-rehearsal/ inputs (third-party copies, generated files)")
 execute_process(
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/packaging/generate_mirror_units.py"
-        "${_VELLUM_MIRROR_ROOT}" "${_mirror_closure_dir}" "${_mirror_generated_units}"
+        "${_VELLUM_MIRROR_ROOT}" "${_mirror_closure_dir}" "${_mirror_generated_units}" "${VELLUM_MIRROR_BUILD_INPUT_ROOT}"
     RESULT_VARIABLE _mirror_generate_result)
 if(NOT _mirror_generate_result EQUAL 0)
     message(FATAL_ERROR "failed to generate mirror unit metadata")
@@ -69,10 +71,20 @@ if(VELLUM_MIRROR_BUILD_REHEARSAL_UNITS)
                 _mirror_id)
             string(TOUPPER "${_mirror_unit}_${_mirror_source_target}" _mirror_metadata_key)
             string(REPLACE "-" "_" _mirror_metadata_key "${_mirror_metadata_key}")
-            add_library("${_mirror_id}" STATIC)
-            set_target_properties("${_mirror_id}" PROPERTIES
-                EXPORT_NAME "MirrorRehearsal_${_mirror_unit}_${_mirror_source_target}")
-            _vellum_mirror_configure_target("${_mirror_id}" "${_mirror_unit}" "${_mirror_source_target}")
+            if(VELLUM_MIRROR_TARGET_${_mirror_metadata_key}_SOURCES)
+                add_library("${_mirror_id}" STATIC)
+                set_target_properties("${_mirror_id}" PROPERTIES
+                    EXPORT_NAME "MirrorRehearsal_${_mirror_unit}_${_mirror_source_target}")
+                _vellum_mirror_configure_target("${_mirror_id}" "${_mirror_unit}" "${_mirror_source_target}")
+            else()
+                # Header-only closure targets (design-ir, gpu-device-api) export
+                # their include roots as an INTERFACE target.
+                add_library("${_mirror_id}" INTERFACE)
+                set_target_properties("${_mirror_id}" PROPERTIES
+                    EXPORT_NAME "MirrorRehearsal_${_mirror_unit}_${_mirror_source_target}")
+                target_include_directories("${_mirror_id}" INTERFACE
+                    $<BUILD_INTERFACE:${_VELLUM_MIRROR_ROOT}> $<INSTALL_INTERFACE:include>)
+            endif()
             list(APPEND _vellum_rehearsal_targets "${_mirror_id}")
         endforeach()
     endforeach()

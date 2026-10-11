@@ -8,8 +8,21 @@ def quote(value: str) -> str:
 def key(value: str) -> str:
     return "".join(ch if ch.isalnum() else "_" for ch in value.upper())
 def main() -> int:
-    if len(sys.argv) != 4:
-        raise SystemExit("usage: generate_mirror_units.py MIRROR_ROOT CLOSURE_DIR OUTPUT")
+    if len(sys.argv) not in (4, 5):
+        raise SystemExit("usage: generate_mirror_units.py MIRROR_ROOT CLOSURE_DIR OUTPUT [BUILD_INPUT_ROOT]")
+    # Closure paths under build-rehearsal/ name the exporting build tree
+    # (third-party copies, generated headers and sources). The mirror does not
+    # carry them; an explicit build-input root supplies them as declared
+    # build-machine inputs, never silently.
+    build_input_root = pathlib.Path(sys.argv[4]).resolve() if len(sys.argv) == 5 and sys.argv[4] else None
+    def resolve(rel: pathlib.Path):
+        if (mirror_root / rel).exists():
+            return mirror_root / rel
+        if build_input_root is not None and rel.parts and rel.parts[0] == "build-rehearsal":
+            candidate = build_input_root / pathlib.Path(*rel.parts[1:])
+            if candidate.exists():
+                return candidate
+        return None
     mirror_root = pathlib.Path(sys.argv[1]).resolve()
     closure_dir = pathlib.Path(sys.argv[2]).resolve()
     output = pathlib.Path(sys.argv[3])
@@ -29,8 +42,8 @@ def main() -> int:
                 source_path = pathlib.Path(source)
                 if source_path.is_absolute():
                     continue
-                candidate = mirror_root / source_path
-                if candidate.exists() and candidate.suffix in SOURCE_SUFFIXES:
+                candidate = resolve(source_path)
+                if candidate is not None and candidate.suffix in SOURCE_SUFFIXES:
                     sources.append(str(candidate))
             target_rows.append((target_name, target_key, sources, target))
         units.append((unit, unit_key, target_rows))
@@ -49,8 +62,8 @@ def main() -> int:
                 if path.is_absolute():
                     if path.is_dir():
                         lines.append(f"list(APPEND VELLUM_MIRROR_TARGET_{target_key}_INCLUDE_DIRS {quote(str(path))})")
-                elif (mirror_root / path).is_dir():
-                    lines.append(f"list(APPEND VELLUM_MIRROR_TARGET_{target_key}_INCLUDE_DIRS {quote(str(mirror_root / path))})")
+                elif (resolved := resolve(path)) is not None and resolved.is_dir():
+                    lines.append(f"list(APPEND VELLUM_MIRROR_TARGET_{target_key}_INCLUDE_DIRS {quote(str(resolved))})")
             lines.append(f"set(VELLUM_MIRROR_TARGET_{target_key}_DEFINITIONS)")
             for definition in target.get("compile_definitions", []):
                 lines.append(f"list(APPEND VELLUM_MIRROR_TARGET_{target_key}_DEFINITIONS {quote(definition)})")
