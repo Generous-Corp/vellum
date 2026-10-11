@@ -23,10 +23,7 @@ sys.path.insert(0, str(HERE))
 
 import parity_harness as ph  # noqa: E402
 
-sys.path.insert(0, str(HERE / "lanes"))
-import frames as lane  # noqa: E402  (registers the lane and its controls on import)
-
-ph.LANE_MODULES.append((HERE / "lanes" / "frames.py").resolve())
+lane = ph.load_lane_module(HERE / "lanes" / "frames.py")
 
 FAKE = textwrap.dedent(
     """
