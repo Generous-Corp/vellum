@@ -385,11 +385,6 @@ def rehash_render(directory: Path, plugin: int, tag: str) -> None:
     ph.write_json(directory / "host-observation.json", obs)
 
 
-def animated(d: Path) -> set[int]:
-    path = d / "runner.json"
-    return set(ph.load_json(path).get("animated", [])) if path.is_file() else set()
-
-
 def png_edit(path: Path, edit) -> None:
     image = decode_png_bytes(path.read_bytes())
     path.write_bytes(encode_png(edit(image)))
@@ -426,9 +421,11 @@ def m_editor_perturbs_dsp(d: Path) -> bool:
     return True
 
 
-def m_frame_one_pixel(d: Path) -> bool:
+def m_frame_one_pixel(d: Path, case: dict[str, Any]) -> bool:
+    # An animated plug-in's frames are not compared pixel for pixel, so this
+    # control does not apply to it.
     f = d / "together" / "editor-0-open0.png"
-    if not f.is_file() or 0 in animated(d):
+    if not f.is_file() or 0 in case.get("expect", {}).get("animated", []):
         return False
     png_edit(f, one_pixel)
     return True
