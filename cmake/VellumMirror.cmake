@@ -1,4 +1,7 @@
 set(_VELLUM_MIRROR_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/mirror")
+if(VELLUM_MIRROR_EXTERNAL_SHEENBIDI_ROOT)
+    enable_language(C)
+endif()
 
 # X-export closure manifests are authoritative. This generated metadata is
 # recreated at configure time so new D3 units need no hand-maintained lists.
@@ -54,6 +57,33 @@ add_library(vellum-mirror-canvas STATIC)
 add_library(Vellum::MirrorCanvas ALIAS vellum-mirror-canvas)
 set_target_properties(vellum-mirror-canvas PROPERTIES EXPORT_NAME MirrorCanvas)
 _vellum_mirror_configure_target(vellum-mirror-canvas CANVAS pulp-canvas)
+if(NOT VELLUM_MIRROR_EXTERNAL_SHEENBIDI_ROOT)
+    foreach(_mirror_canvas_include IN LISTS VELLUM_MIRROR_TARGET_CANVAS_PULP_CANVAS_INCLUDE_DIRS)
+        if(_mirror_canvas_include MATCHES "/sheenbidi-[^/]+/Headers$")
+            get_filename_component(_mirror_sheen_headers "${_mirror_canvas_include}" DIRECTORY)
+            set(VELLUM_MIRROR_EXTERNAL_SHEENBIDI_ROOT "${_mirror_sheen_headers}")
+        endif()
+    endforeach()
+endif()
+if(VELLUM_MIRROR_EXTERNAL_SHEENBIDI_ROOT)
+    if(NOT EXISTS "${VELLUM_MIRROR_EXTERNAL_SHEENBIDI_ROOT}/Source/SheenBidi.c")
+        message(FATAL_ERROR "closure names SheenBidi but its source is unavailable")
+    endif()
+    add_library(vellum-mirror-sheenbidi STATIC
+        "${VELLUM_MIRROR_EXTERNAL_SHEENBIDI_ROOT}/Source/SheenBidi.c")
+    add_library(Vellum::SheenBidi ALIAS vellum-mirror-sheenbidi)
+    set_target_properties(vellum-mirror-sheenbidi PROPERTIES EXPORT_NAME SheenBidi LINKER_LANGUAGE C)
+    target_compile_definitions(vellum-mirror-sheenbidi PRIVATE SB_CONFIG_UNITY)
+    target_include_directories(vellum-mirror-sheenbidi PUBLIC
+        $<BUILD_INTERFACE:${VELLUM_MIRROR_EXTERNAL_SHEENBIDI_ROOT}/Headers>
+        $<BUILD_INTERFACE:${VELLUM_MIRROR_EXTERNAL_SHEENBIDI_ROOT}/Source>
+        $<INSTALL_INTERFACE:include>)
+    target_compile_features(vellum-mirror-sheenbidi PUBLIC c_std_99)
+    target_link_libraries(vellum-mirror-canvas PUBLIC Vellum::SheenBidi)
+    install(DIRECTORY "${VELLUM_MIRROR_EXTERNAL_SHEENBIDI_ROOT}/Headers/" DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+else()
+    message(FATAL_ERROR "canvas closure requires SheenBidi; external link cannot be omitted")
+endif()
 target_link_libraries(vellum-mirror-canvas PUBLIC Vellum::MirrorFoundation)
 
 set(_vellum_rehearsal_targets)

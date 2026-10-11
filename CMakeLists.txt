@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.24)
 project(Vellum
     VERSION 0.1.8
     DESCRIPTION "Experimental audio-free native application kernel"
-    LANGUAGES CXX)
+    LANGUAGES C CXX)
 
 if(APPLE)
     enable_language(OBJCXX)
@@ -276,6 +276,9 @@ endif()
 set(_vellum_install_targets vellum-foundation vellum-runtime vellum-component-abi)
 if(TARGET vellum-mirror-foundation)
     list(APPEND _vellum_install_targets vellum-mirror-foundation vellum-mirror-canvas)
+    if(TARGET vellum-mirror-sheenbidi)
+        list(APPEND _vellum_install_targets vellum-mirror-sheenbidi)
+    endif()
     if(VELLUM_MIRROR_BUILD_REHEARSAL_UNITS)
         list(APPEND _vellum_install_targets ${_vellum_rehearsal_targets})
     endif()
