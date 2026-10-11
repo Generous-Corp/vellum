@@ -441,6 +441,9 @@ class ScopeTests(unittest.TestCase):
             origin = ph.export_origin({"export_receipt": receipt})
             self.assertEqual((origin["repository"], origin["commit"]), ("Generous-Corp/pulp", "d" * 40))
             self.assertIsNone(ph.export_origin({}))
+            ph.write_json(receipt, {"pulp_repository": "Generous-Corp/pulp", "pulp_sha": "f" * 40, "mirror_sha": "e" * 40})
+            landed = ph.export_origin({"export_receipt": receipt})
+            self.assertEqual((landed["commit"], landed["mirror_commit"]), ("f" * 40, "e" * 40))
 
 
 class KnobBoundsTests(unittest.TestCase):

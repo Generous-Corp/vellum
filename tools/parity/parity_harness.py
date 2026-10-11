@@ -292,8 +292,11 @@ def export_origin(roots: dict[str, Path]) -> dict[str, Any] | None:
         receipt = load_json(receipt_path)
     except (OSError, json.JSONDecodeError):
         return {"error": f"unreadable export receipt {receipt_path}"}
-    return {"repository": receipt.get("pulp_repository"), "commit": receipt.get("pulp_commit"),
-            "mirror_commit": receipt.get("mirror_commit"),
+    # Both receipt shapes in use: X-export v2 (pulp_commit/mirror_commit) and the
+    # Vellum-landed receipts (pulp_sha/mirror_sha).
+    return {"repository": receipt.get("pulp_repository"),
+            "commit": receipt.get("pulp_commit") or receipt.get("pulp_sha"),
+            "mirror_commit": receipt.get("mirror_commit") or receipt.get("mirror_sha"),
             "receipt_sha256": sha256_file(Path(receipt_path))}
 
 
