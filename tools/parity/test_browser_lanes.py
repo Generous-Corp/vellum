@@ -18,7 +18,6 @@ import subprocess
 import sys
 import tempfile
 import textwrap
-import types
 import unittest
 
 HERE = Path(__file__).resolve().parent
@@ -26,9 +25,7 @@ sys.path.insert(0, str(HERE))
 
 import parity_harness as ph  # noqa: E402
 
-ph.load_lane_module(HERE / "lanes" / "browser_lanes.py")
-# load_lane_module does not publish the module; reach it through a registered comparator.
-lanes = types.SimpleNamespace(**ph.COMPARATORS["oracle"].__globals__)
+lanes = ph.load_lane_module(HERE / "lanes" / "browser_lanes.py")
 
 from vellum_png import RgbaImage, decode_png_bytes, encode_png  # noqa: E402
 
