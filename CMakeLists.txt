@@ -221,6 +221,12 @@ if(VELLUM_BUILD_TESTS)
                 "-DVELLUM_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
                 "-DTEST_CONFIG=$<CONFIG>"
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunInstallConsumer.cmake")
+        add_test(NAME vellum.install-arch-guard
+            COMMAND "${CMAKE_COMMAND}"
+                "-DVELLUM_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+                "-DVELLUM_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
+                "-DTEST_CONFIG=$<CONFIG>"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunArchGuardConsumer.cmake")
         if(TARGET vellum-gpu)
             add_test(NAME vellum.install-consumer-nested-libdir
                 COMMAND "${CMAKE_COMMAND}"
@@ -305,6 +311,14 @@ if(TARGET vellum-authoring)
     install(DIRECTORY authoring/include/ DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
 endif()
 
+# The system and architectures the installed binaries are built for. The
+# package config reports "not found" to a consumer that targets others.
+set(VELLUM_PACKAGE_SYSTEM_NAME "${CMAKE_SYSTEM_NAME}")
+if(APPLE AND CMAKE_OSX_ARCHITECTURES)
+    set(VELLUM_PACKAGE_ARCHITECTURES "${CMAKE_OSX_ARCHITECTURES}")
+else()
+    set(VELLUM_PACKAGE_ARCHITECTURES "${CMAKE_SYSTEM_PROCESSOR}")
+endif()
 configure_package_config_file(
     cmake/VellumConfig.cmake.in
     "${CMAKE_CURRENT_BINARY_DIR}/VellumConfig.cmake"
