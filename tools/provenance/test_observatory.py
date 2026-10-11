@@ -974,6 +974,33 @@ class ObservatoryTests(unittest.TestCase):
                     vellum_tail_policy="coverage",
                 )
 
+    def test_merge_that_rewrites_a_pull_request_only_path_is_not_covered(self) -> None:
+        # R7 M3 guard: only the PR changed graphics/render.cpp, main did not,
+        # yet the merge carries a third blob (a resolution edit). The blob rule
+        # is the only thing that sees this.
+        with tempfile.TemporaryDirectory() as temporary:
+            pulp, vellum, root, pulp_head, main, feature = self._coverage_state(Path(temporary))
+            observatory.reconcile(
+                root=root, pulp_repo=pulp, vellum_repo=vellum,
+                pulp_target=pulp_head, vellum_target=feature,
+                now_text="2026-10-11T00:05:00Z", write=True, events_only=True,
+            )
+            run(vellum, "git", "checkout", "-q", "main")
+            write(vellum / "unmapped/readme.txt", "unrelated\n")
+            commit_all(vellum, "unrelated main commit")
+            run(vellum, "git", "merge", "-q", "--no-ff", "--no-commit", "feature")
+            write(vellum / "graphics/render.cpp", "int value = 7; // edited in the merge\n")
+            run(vellum, "git", "add", ".")
+            run(vellum, "git", "commit", "-q", "-m", "merge with an edited PR-only path")
+            edited = run(vellum, "git", "rev-parse", "HEAD")
+            self.assertFalse(observatory.integration_merge_covered(vellum, edited))
+            with self.assertRaisesRegex(observatory.ObservatoryError, "health budgets failed"):
+                observatory.verify(
+                    root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                    pulp_target=pulp_head, vellum_target=edited,
+                    vellum_tail_policy="coverage",
+                )
+
     def test_octopus_merge_is_never_covered(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             pulp, vellum, root, pulp_head, main, feature = self._coverage_state(Path(temporary))
