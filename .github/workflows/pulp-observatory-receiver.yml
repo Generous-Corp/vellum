@@ -5,7 +5,7 @@ on:
     types: [pulp-change-landed]
   # Every landing on main may leave the Vellum cursor behind: pull requests
   # record their own observation events and this receiver advances the cursor
-  # afterwards, through the same reviewed evidence branch.
+  # afterwards, through the same evidence branch, which the steward merges on green.
   push:
     branches: [main]
   workflow_dispatch:
@@ -21,10 +21,11 @@ on:
         type: choice
         options: [replay, enable]
 
+# GITHUB_TOKEN serves only the manual enable path (variable write + dispatch).
+# Every push, checkout and pull-request write uses a per-run App token.
 permissions:
   actions: write
-  contents: write
-  pull-requests: write
+  contents: read
 
 concurrency:
   group: vellum-pulp-observatory-cursor
@@ -53,10 +54,13 @@ jobs:
           private-key: ${{ secrets.SHIPYARD_APP_PRIVATE_KEY }}
           owner: Generous-Corp
           repositories: vellum
-          permission-actions: write
+          # Exactly what landing an evidence pull request needs: push the
+          # branch and open the PR. Requesting more than the installation
+          # grants fails the mint on every push to main (proved 2026-10-11,
+          # run 38173182114), so the enable path mints nothing extra and uses
+          # the job's own token, scoped by the `permissions:` block above.
           permission-contents: write
           permission-pull-requests: write
-          permission-variables: write
 
       - name: Mint a read-only Pulp token for the fresh checkout
         id: pulp-reader
@@ -172,7 +176,7 @@ jobs:
             --pulp-target "$RECONCILE_TARGET" \
             --vellum-target "$(git rev-parse HEAD)"
 
-      - name: Prepare the reviewed evidence-only coalescing PR
+      - name: Prepare the evidence-only coalescing PR
         if: steps.plan.outputs.status == 'reconcile'
         env:
           GH_TOKEN: ${{ steps.evidence-token.outputs.token }}
@@ -236,13 +240,19 @@ jobs:
               --base main \
               --head "$EVIDENCE_BRANCH" \
               --title "chore(provenance): coalesce Pulp observatory evidence" \
-              --body "Automated evidence-only reconciliation. Review and merge with a merge commit; never squash or rebase."
+              --body "Automated evidence-only reconciliation. Lands by merge commit once the required checks pass; never squash or rebase."
           fi
 
       - name: Enable live delivery only across a proved current barrier
         if: inputs.operation == 'enable'
         env:
-          GH_TOKEN: ${{ steps.evidence-token.outputs.token }}
+          # The one step that writes a repository variable and dispatches a
+          # workflow. GITHUB_TOKEN's `actions: write` covers both, and a
+          # workflow_dispatch it posts does start a run (only ordinary events
+          # raised by GITHUB_TOKEN are suppressed). The pinned App-token
+          # action has no variables permission input, and asking the App for
+          # more than its installation grants fails the mint outright.
+          GH_TOKEN: ${{ github.token }}
           RECONCILE_STATUS: ${{ steps.plan.outputs.status }}
           LATEST_TARGET: ${{ steps.plan.outputs.target }}
         run: |

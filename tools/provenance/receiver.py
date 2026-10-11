@@ -287,15 +287,27 @@ def vellum_lag_started_at(vellum_repo: Path, cursor: str, vellum_main: str) -> s
     not at main's tip: under steady traffic the tip is always fresh, so a
     tip-based clock never breaches the SLA however stale the cursor is.
     Queue and steward merge commits carry GitHub's own committer time.
+
+    Landings the cursor already covers do not start the clock. The receiver
+    never moves the cursor past its own evidence merge, so after a quiet
+    period the oldest first-parent landing is that evidence merge; counting
+    from it would report a breach the moment the next real change lands.
     """
     if cursor == vellum_main:
         return None
-    first = git(
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import observatory  # noqa: E402  (same directory; the tail rule lives there)
+
+    previous = cursor
+    for commit in git(
         vellum_repo, "rev-list", "--first-parent", "--reverse", f"{cursor}..{vellum_main}"
-    ).splitlines()
-    if not first:
-        return None
-    return git(vellum_repo, "show", "-s", "--format=%cI", first[0])
+    ).splitlines():
+        try:
+            observatory.verify_vellum_observatory_tail(vellum_repo, previous, commit)
+        except observatory.ObservatoryError:
+            return git(vellum_repo, "show", "-s", "--format=%cI", commit)
+        previous = commit
+    return None
 
 
 def plan(

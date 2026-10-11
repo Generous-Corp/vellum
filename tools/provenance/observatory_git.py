@@ -75,28 +75,45 @@ def blob_at(repo: Path, commit: str, path: str) -> str | None:
     return completed.stdout.strip() or None
 
 
+def tree_entry_at(repo: Path, commit: str, path: str) -> tuple[str, str] | None:
+    """The (mode, object id) of `path` at `commit`, or None when absent.
+
+    The mode is part of the entry on purpose: a merge that keeps a file's
+    content but drops its executable bit changes what lands on main just as a
+    content edit does, and a blob-only comparison cannot see it.
+    """
+    line = git(repo, "ls-tree", commit, "--", path)
+    if not line:
+        return None
+    mode, _kind, rest = line.split(None, 2)
+    return mode, rest.split("\t", 1)[0]
+
+
 def integration_merge_covered(
     repo: Path,
     commit: str,
     mappings: list[dict[str, object]] | None = None,
     transitive_rules: list[str] | None = None,
 ) -> bool:
-    """True when a two-parent merge adds nothing beyond its second parent.
+    """True when a two-parent merge adds nothing beyond its two sides.
 
     A merge queue (or a plain fast-forward-free merge) lands a merge commit
     whose first parent is the branch and whose second parent is the pull
     request head; an author merging main into a pull request produces the
     mirror image. The merge is covered by the two sides' own observation
-    events when every observable path changed since the merge base was
-    changed by exactly one side and the merge carries that side's blob for it
-    (a path absent on both counts as equal, so a deletion lands). A path both
-    sides changed, a path only the merge changed, or a path the merge did not
-    carry over is a change of the merge's own and needs its own event.
+    events when every observable path changed since the merge base carries
+    exactly the (mode, blob) entry of the side that changed it (a path absent
+    on both counts as equal, so a deletion lands). A path both sides changed
+    is covered only when both sides and the merge hold the same entry (the
+    same fix landed twice); a path only the merge changed, or a path the merge
+    did not carry over, is a change of the merge's own and needs its own event.
 
     Only paths that would create an observation matter when `mappings` is
     given: unmapped content can never need an event, so two entries that
-    share an unmapped file do not make a batch merge uncovered. An octopus
-    merge is never covered; it must carry its own event.
+    share an unmapped file do not make a batch merge uncovered. Transitive
+    paths under a mapped root (build files) count, because the observation
+    for a real change lists them. An octopus merge is never covered; it must
+    carry its own event.
     """
     sides = _merge_sides(repo, commit, mappings, transitive_rules)
     if sides is None:
@@ -104,20 +121,24 @@ def integration_merge_covered(
     first, second, first_paths, second_paths, observable = sides
     # Symmetric rule, so it judges a queue merge (first = main, second = the
     # pull request) and an author's merge of main (first = the pull request,
-    # second = main) alike: every observable path must carry exactly the blob
-    # of the one side that changed it. A path both sides changed, a path the
-    # merge changed that neither side did, and a path the merge did not carry
-    # over from the side that changed it are all changes of the merge's own.
+    # second = main) alike: every observable path must carry exactly the entry
+    # of the one side that changed it. A path both sides changed differently,
+    # a path the merge changed that neither side did, and a path the merge did
+    # not carry over from the side that changed it are all changes of the
+    # merge's own.
     for path in observable:
         on_first = path in first_paths
         on_second = path in second_paths
+        merged = tree_entry_at(repo, commit, path)
         if on_first and on_second:
-            return False
-        if on_second:
-            if blob_at(repo, commit, path) != blob_at(repo, second, path):
+            first_entry = tree_entry_at(repo, first, path)
+            if first_entry != tree_entry_at(repo, second, path) or merged != first_entry:
+                return False
+        elif on_second:
+            if merged != tree_entry_at(repo, second, path):
                 return False
         elif on_first:
-            if blob_at(repo, commit, path) != blob_at(repo, first, path):
+            if merged != tree_entry_at(repo, first, path):
                 return False
         else:
             return False
@@ -167,17 +188,22 @@ def _merge_sides(
     second_paths = changed(base, second)
     observable = merged_paths | first_paths | second_paths
     if mappings is not None:
-        observable = {
-            path
-            for path in observable
-            if mapped_change(
-                [{"status": "M", "path": path}],
-                mappings,
-                "vellum",
-                transitive_rules or [],
+        # Judge the whole set at once, as the observation for a real change
+        # would: a build file under a mapped root is transitive-only, so on its
+        # own it never maps, but next to a mapped change it is listed under
+        # `transitive_paths` and a merge that reverts it must not be covered.
+        observation = mapped_change(
+            [{"status": "M", "path": path} for path in sorted(observable)],
+            mappings,
+            "vellum",
+            transitive_rules or [],
+        )
+        if observation is None:
+            observable = set()
+        else:
+            observable = set(observation["mapped_paths"]) | set(
+                observation["transitive_paths"]
             )
-            is not None
-        }
     return first, second, first_paths, second_paths, observable
 
 

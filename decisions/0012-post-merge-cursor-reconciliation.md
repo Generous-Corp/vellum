@@ -33,7 +33,9 @@ queue's merge commit contains the other entries.
 3. The receiver (`pulp-observatory-receiver.yml`) also runs on every push to
    `main`, reconciles it when the cursor lags behind ordinary commits (an
    evidence-only tail is not lag), and lands cursor and report through the
-   existing reviewed evidence branch and pull request. The watchdog reports
+   existing evidence branch and pull request. That pull request is gated by
+   the required checks and auto-merged by the merge steward on green; no
+   human reviews it. The watchdog reports
    `vellum-cursor-lag` and breaches `cursor_lag_sla_minutes` the same way it
    does for the Pulp cursor, and asks the receiver to run.
 4. Tags keep the exact `reconciled` policy: a release or authority tag must be
@@ -44,12 +46,17 @@ queue's merge commit contains the other entries.
 - **Integration merge, precisely.** The rule is symmetric, so it judges a
   queue merge (first parent `main`, second parent the pull request) and an
   author's merge of `main` into a pull request alike: for every observable path
-  changed on either side since the merge base, exactly one side changed it and
-  the merge carries that side's blob (absent on both counts as equal, so a
-  deletion lands). A path both sides changed, a path only the merge changed, or
-  a path the merge did not carry over from the side that changed it makes the
-  merge a change of its own. Unmapped paths are ignored, so two queue entries
-  that share only unmapped files do not eject each other.
+  changed on either side since the merge base, the merge carries exactly the
+  `(mode, blob)` entry of the side that changed it (absent on both counts as
+  equal, so a deletion lands; the mode counts, so a merge that drops a mapped
+  script's executable bit is a change of its own). A path both sides changed
+  is covered only when both sides and the merge hold the same entry, which is
+  the same fix landing twice; a path the two sides changed differently, a path
+  only the merge changed, or a path the merge did not carry over from the side
+  that changed it makes the merge a change of its own. Unmapped paths are
+  ignored, so two queue entries that share only unmapped files do not eject
+  each other; build files under a mapped root (transitive paths) are not
+  ignored, because the observation for the real change lists them.
 - **A merge that drops the other side's change** (an author's merge of `main`
   that keeps the pull request's blob over `main`'s fix) shows no mapped change
   against its first parent, so no observation can describe it. The coverage
@@ -57,6 +64,11 @@ queue's merge commit contains the other entries.
   remedy is to make the revert an explicit commit on the branch, which does get
   its own event and its own review. In the queue direction the same revert is
   visible against `main` and needs (and can carry) an event.
+- **The same fix on both sides.** A hotfix cherry-picked into a pull request
+  that `main` also landed leaves both sides with the same entry, and the merge
+  is covered. Had the two sides resolved the file differently, the queue merge
+  would need an event it cannot carry and the update-branch merge would show
+  no first-parent change, so the only remedy is to rebase the duplicate away.
 - **Octopus merges** (three or more parents) are never covered; they fail
   closed and must carry their own event.
 - **A queue merge that needs its own event is unlandable by construction**:
@@ -69,15 +81,20 @@ queue's merge commit contains the other entries.
   example an administrator's direct push). Those events are not a free pass:
   they enter the ordinary review queue and age against the same budgets, and
   the push-to-`main` provenance run reports the uncovered commit before the
-  receiver runs.
+  receiver runs. Coverage at merge time is enforced by `provenance-verify` on
+  `merge_group` and `push`; the receiver is a discovery backstop, not a second
+  gate.
 - **Pull requests that change the mapping or add resolution events** still
   regenerate the report, and still conflict with each other exactly as before;
   only observation events for the pull request's own commits are excluded from
   the report comparison.
 - **The lag clock** starts at the committer time of the first first-parent
-  landing after the cursor, never at `main`'s tip, so steady traffic cannot keep
-  the SLA from being breached. Lag inside the SLA is the steady state and is
-  reported, not a violation.
+  landing after the cursor that the cursor does not already cover, never at
+  `main`'s tip, so steady traffic cannot keep the SLA from being breached. The
+  receiver's own evidence merge and a tree-identical merge are covered landings
+  and do not start the clock, so the first real change after a quiet period is
+  not reported as an immediate breach. Lag inside the SLA is the steady state
+  and is reported, not a violation.
 
 ## What is kept
 

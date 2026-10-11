@@ -92,8 +92,39 @@ class ReceiverWorkflowTests(unittest.TestCase):
                 # per-run App token, never an undefined secret or GITHUB_TOKEN.
                 for block in re.findall(r"repository: Generous-Corp/pulp\n(?:.*\n){0,3}", text):
                     self.assertIn("token: ${{ steps.pulp-reader.outputs.token }}", block)
-                self.assertNotIn("github.token", text)
                 self.assertIn("actions/create-github-app-token@", text)
+                # The pinned action has no variables permission input, and a
+                # mint that asks for more than the installation grants fails
+                # outright (R7 delta D3, run 38173182114). Every App mint
+                # requests only permissions proved by a completed run.
+                self.assertNotIn("permission-variables", text)
+                proved = {
+                    frozenset({"contents: write", "pull-requests: write"}),  # steward
+                    frozenset({"actions: write", "pull-requests: read"}),  # watchdog
+                    frozenset({"contents: read"}),  # Pulp reader
+                }
+                mints = [
+                    step for step in text.split("\n      - name: ")
+                    if "uses: actions/create-github-app-token@" in step
+                ]
+                self.assertGreaterEqual(len(mints), 2, f"{name}: mint steps not found")
+                for mint in mints:
+                    requested = frozenset(
+                        f"{name}: {level}"
+                        for name, level in re.findall(r"permission-([a-z-]+): (\w+)", mint)
+                    )
+                    self.assertIn(requested, proved, f"{name} mints an unproved scope set")
+        watchdog = (ROOT / ".github/workflows/pulp-observatory-watchdog.yml").read_text()
+        self.assertNotIn("github.token", watchdog)
+        receiver = (ROOT / ".github/workflows/pulp-observatory-receiver.yml").read_text()
+        # GITHUB_TOKEN is used by exactly one step: the manual enable path,
+        # which writes a repository variable and dispatches a workflow — both
+        # covered by the job's `actions: write`, neither mintable from the App.
+        uses = [m.start() for m in re.finditer(r"\$\{\{ github\.token \}\}", receiver)]
+        self.assertEqual(len(uses), 1)
+        enable = receiver.rindex("- name: Enable live delivery", 0, uses[0])
+        self.assertIn("if: inputs.operation == 'enable'", receiver[enable:uses[0]])
+        self.assertIn("permissions:\n  actions: write\n  contents: read\n", receiver)
         watchdog = (ROOT / ".github/workflows/pulp-observatory-watchdog.yml").read_text()
         jobs = watchdog.split("\njobs:\n", 1)[1]
         self.assertNotIn("vars.", jobs.split("    steps:", 1)[0], "watchdog job must not be gated on a variable")

@@ -159,6 +159,38 @@ class ReceiverTests(unittest.TestCase):
             receiver.vellum_lag_started_at(self.vellum, base, main).startswith("2026-08-09T11:00:00")
         )
 
+    def test_vellum_lag_clock_skips_landings_the_cursor_already_covers(self) -> None:
+        # R7 delta D4: after the evidence PR lands the cursor stays behind its
+        # own evidence merge. The clock must start at the next real landing,
+        # not at that evidence commit, or the first change after a quiet
+        # period reports an immediate breach.
+        import os
+        base = self._vellum_history()
+        self.set_vellum_cursor(base)
+        (self.vellum / "provenance/pulp-observatory/reports/current.json").write_text(
+            '{"reconciled": true}\n', encoding="utf-8"
+        )
+        git(self.vellum, "add", "provenance/pulp-observatory/reports")
+        stamp = "2026-08-08T09:00:00Z"
+        subprocess.run(
+            ["git", "commit", "-qm", "evidence only"], cwd=self.vellum, check=True,
+            env=dict(os.environ, GIT_AUTHOR_DATE=stamp, GIT_COMMITTER_DATE=stamp),
+            capture_output=True,
+        )
+        evidence = git(self.vellum, "rev-parse", "HEAD")
+        self.assertIsNone(receiver.vellum_lag_started_at(self.vellum, base, evidence))
+        stamp = "2026-08-09T11:00:00Z"
+        (self.vellum / "graphics/render.cpp").write_text("int v = 2;\n", encoding="utf-8")
+        git(self.vellum, "add", "graphics")
+        subprocess.run(
+            ["git", "commit", "-qm", "first real landing"], cwd=self.vellum, check=True,
+            env=dict(os.environ, GIT_AUTHOR_DATE=stamp, GIT_COMMITTER_DATE=stamp),
+            capture_output=True,
+        )
+        main = git(self.vellum, "rev-parse", "HEAD")
+        started = receiver.vellum_lag_started_at(self.vellum, base, main)
+        self.assertTrue(started.startswith("2026-08-09T11:00:00"), started)
+
     def test_vellum_main_behind_its_cursor_fails_closed(self) -> None:
         base = self._vellum_history()
         (self.vellum / "graphics/render.cpp").write_text("int v = 2;\n", encoding="utf-8")
