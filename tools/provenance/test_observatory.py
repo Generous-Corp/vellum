@@ -243,10 +243,14 @@ class ObservatoryTests(unittest.TestCase):
             "VELLUM_TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}",
             workflow,
         )
+        # A merge-queue run verifies the queue's merge commit (github.sha) against
+        # the queue base; a push run falls back to the pre-push ref.
         self.assertIn(
-            "VELLUM_GIT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}",
+            "VELLUM_GIT_BASE: ${{ github.event.pull_request.base.sha || "
+            "github.event.merge_group.base_sha || github.event.before }}",
             workflow,
         )
+        self.assertIn("  merge_group:\n    branches: [main]\n", workflow)
         self.assertIn(
             'observatory_vellum_target="$VELLUM_TARGET_SHA"', workflow
         )

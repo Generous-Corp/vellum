@@ -173,9 +173,12 @@ class MergeOnGreenTests(unittest.TestCase):
                     return {"contexts": REQUIRED_CONTEXTS}
                 if "/commits/" in path and path.endswith("/check-runs?per_page=100"):
                     return {"check_runs": green_checks()}
-                if path.endswith(f"/pulls/{PR}/merge"):
-                    self.assertEqual(body, {"sha": HEAD, "merge_method": "merge"})
-                    return {"merged": True}
+                if path == "graphql":
+                    if body and "query" in body and "mutation" in body["query"]:
+                        return {"data": {"ok": True}}
+                    return {"data": {"repository": {"pullRequest": {
+                        "id": "PRID", "autoMergeRequest": None, "mergeQueueEntry": None
+                    }}}}
                 raise AssertionError(path)
 
             with mock.patch.object(steward, "_api", side_effect=api):
@@ -183,7 +186,7 @@ class MergeOnGreenTests(unittest.TestCase):
                     steward.run(event, "Generous-Corp/vellum"),
                     0,
                 )
-            self.assertEqual(calls[-1][1], "PUT")
+            self.assertEqual(calls[-1][0], "graphql")
 
     def test_run_does_not_merge_a_draft_or_stale_head(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
