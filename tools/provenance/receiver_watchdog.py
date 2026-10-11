@@ -59,6 +59,8 @@ def evaluate(
     *, policy: dict[str, object], now: dt.datetime, cursor_covers_latest: bool,
     latest_event_created_at: dt.datetime, pending_count: int,
     evidence_pr_open: bool, runs: object,
+    vellum_cursor_covers_main: bool = True,
+    vellum_main_committed_at: dt.datetime | None = None,
 ) -> dict[str, object]:
     if not isinstance(runs, list):
         raise WatchdogError("receiver runs must be an array")
@@ -72,6 +74,16 @@ def evaluate(
         lag_minutes = (now - latest_event_created_at).total_seconds() / 60
         if lag_minutes > int(policy["cursor_lag_sla_minutes"]):
             violations.append("cursor-lag-sla-breached")
+    # Vellum pull requests leave the cursor to the receiver, so main may run
+    # ahead of its cursor for a bounded time; the same SLA bounds that lag.
+    if not vellum_cursor_covers_main:
+        violations.append("vellum-cursor-lag")
+        if vellum_main_committed_at is None:
+            raise WatchdogError("vellum_main_committed_at is required when the Vellum cursor lags")
+        vellum_lag_minutes = (now - vellum_main_committed_at).total_seconds() / 60
+        if vellum_lag_minutes > int(policy["cursor_lag_sla_minutes"]):
+            violations.append("vellum-cursor-lag-sla-breached")
+    cursor_covers_latest = cursor_covers_latest and vellum_cursor_covers_main
     latest = runs[0] if runs else None
     receiver_active = False
     proof_recovery_required = False
@@ -118,6 +130,7 @@ def evaluate(
         "status": "pass" if not violations else "fail",
         "owner": policy["named_response_owner"],
         "cursor_covers_latest": cursor_covers_latest,
+        "vellum_cursor_covers_main": vellum_cursor_covers_main,
         "pending_count": pending_count,
         "evidence_pr_open": evidence_pr_open,
         "retry_required": retry_required,
@@ -148,6 +161,14 @@ def main(argv: list[str] | None = None) -> int:
             pending_count=int(state.get("pending_count", -1)),
             evidence_pr_open=state.get("evidence_pr_open") is True,
             runs=state.get("runs"),
+            # Absent fields read as "lagging": a state file that forgot the
+            # Vellum side must not look healthy.
+            vellum_cursor_covers_main=state.get("vellum_cursor_covers_main") is True,
+            vellum_main_committed_at=(
+                parse_time(state["vellum_main_committed_at"], "state.vellum_main_committed_at")
+                if state.get("vellum_main_committed_at") is not None
+                else None
+            ),
         )
         rendered = json.dumps(result, indent=2, sort_keys=True) + "\n"
         if args.output:

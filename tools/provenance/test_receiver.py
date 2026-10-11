@@ -88,6 +88,69 @@ class ReceiverTests(unittest.TestCase):
             ),
         }
 
+    def _vellum_history(self) -> str:
+        """A Vellum repository with evidence files committed at `base`; returns base."""
+        (self.vellum / "graphics/render.cpp").parent.mkdir(parents=True, exist_ok=True)
+        (self.vellum / "graphics/render.cpp").write_text("int v = 1;\n", encoding="utf-8")
+        report = self.vellum / "provenance/pulp-observatory/reports/current.json"
+        report.parent.mkdir(parents=True, exist_ok=True)
+        report.write_text("{}\n", encoding="utf-8")
+        self.set_vellum_cursor("0" * 40)
+        git(self.vellum, "add", ".")
+        git(self.vellum, "commit", "-qm", "vellum base")
+        return git(self.vellum, "rev-parse", "HEAD")
+
+    def set_vellum_cursor(self, commit: str) -> None:
+        path = self.vellum / "provenance/pulp-observatory/cursor.json"
+        value = json.loads(path.read_text(encoding="utf-8"))
+        value["vellum"] = {"last_scanned_commit": commit}
+        write_json(path, value)
+
+    def test_vellum_main_ahead_by_an_ordinary_commit_needs_reconcile(self) -> None:
+        base = self._vellum_history()
+        self.set_vellum_cursor(base)
+        self.assertFalse(receiver.vellum_needs_reconcile(self.vellum, self.vellum, base))
+        (self.vellum / "graphics/render.cpp").write_text("int v = 2;\n", encoding="utf-8")
+        git(self.vellum, "add", "graphics")
+        git(self.vellum, "commit", "-qm", "ordinary change")
+        main = git(self.vellum, "rev-parse", "HEAD")
+        self.assertTrue(receiver.vellum_needs_reconcile(self.vellum, self.vellum, main))
+        plan = receiver.plan(
+            root=self.vellum, pulp_repo=self.pulp, pulp_main=self.base, lower_bound=self.base,
+            payload=None, vellum_repo=self.vellum, vellum_main=main,
+        )
+        self.assertEqual(plan["status"], "reconcile")
+        self.assertTrue(plan["vellum_cursor_lagging"])
+        self.assertEqual(plan["reconcile_target"], self.base)
+
+    def test_vellum_evidence_only_tail_does_not_loop_the_receiver(self) -> None:
+        base = self._vellum_history()
+        self.set_vellum_cursor(base)
+        (self.vellum / "provenance/pulp-observatory/reports/current.json").write_text(
+            '{"reconciled": true}\n', encoding="utf-8"
+        )
+        git(self.vellum, "add", "provenance/pulp-observatory/reports")
+        git(self.vellum, "commit", "-qm", "evidence only")
+        main = git(self.vellum, "rev-parse", "HEAD")
+        # The receiver's own evidence commit landed: nothing to do, no loop.
+        self.assertFalse(receiver.vellum_needs_reconcile(self.vellum, self.vellum, main))
+        plan = receiver.plan(
+            root=self.vellum, pulp_repo=self.pulp, pulp_main=self.base, lower_bound=self.base,
+            payload=None, vellum_repo=self.vellum, vellum_main=main,
+        )
+        self.assertEqual(plan["status"], "noop")
+        self.assertFalse(plan["vellum_cursor_lagging"])
+
+    def test_vellum_main_behind_its_cursor_fails_closed(self) -> None:
+        base = self._vellum_history()
+        (self.vellum / "graphics/render.cpp").write_text("int v = 2;\n", encoding="utf-8")
+        git(self.vellum, "add", "graphics")
+        git(self.vellum, "commit", "-qm", "ordinary change")
+        ahead = git(self.vellum, "rev-parse", "HEAD")
+        self.set_vellum_cursor(ahead)
+        with self.assertRaisesRegex(receiver.ReceiverError, "not a descendant"):
+            receiver.vellum_needs_reconcile(self.vellum, self.vellum, base)
+
     def test_ordinary_change_reconciles_through_newer_durable_head(self) -> None:
         first, event = self.add_event("ordinary")
         latest, _ = self.add_event("newer")

@@ -247,9 +247,42 @@ def load_cursor(root: Path) -> str:
         raise ReceiverError(f"cannot read committed Pulp cursor: {error}") from error
 
 
+def load_vellum_cursor(root: Path) -> str:
+    path = root / "provenance/pulp-observatory/cursor.json"
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return require_sha(value["vellum"]["last_scanned_commit"], "committed Vellum cursor")
+    except (OSError, json.JSONDecodeError, KeyError, TypeError) as error:
+        raise ReceiverError(f"cannot read committed Vellum cursor: {error}") from error
+
+
+def vellum_needs_reconcile(root: Path, vellum_repo: Path, vellum_main: str) -> bool:
+    """True when Vellum main has moved past its cursor by ordinary commits.
+
+    Pull requests land their own observation events and leave the cursor to
+    this receiver, so after a merge main is ahead of the cursor. A tail that is
+    evidence only (the receiver's own evidence PR landing, or a tree-identical
+    merge of one) needs no reconcile; anything else does.
+    """
+    cursor = require_commit(vellum_repo, load_vellum_cursor(root), "committed Vellum cursor")
+    main = require_commit(vellum_repo, vellum_main, "fresh Vellum main")
+    if cursor == main:
+        return False
+    if not is_ancestor(vellum_repo, cursor, main):
+        raise ReceiverError("fresh Vellum main is not a descendant of the committed Vellum cursor")
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import observatory  # noqa: E402  (same directory; the tail rule lives there)
+
+    try:
+        observatory.verify_vellum_observatory_tail(vellum_repo, cursor, main)
+    except observatory.ObservatoryError:
+        return True
+    return False
+
+
 def plan(
     *, root: Path, pulp_repo: Path, pulp_main: str, lower_bound: str,
-    payload: object | None,
+    payload: object | None, vellum_repo: Path | None = None, vellum_main: str | None = None,
 ) -> dict[str, object]:
     cursor = require_commit(pulp_repo, load_cursor(root), "committed cursor")
     main = require_commit(pulp_repo, pulp_main, "fresh Pulp main")
@@ -270,7 +303,10 @@ def plan(
         raise ReceiverError("fresh durable event head does not cover the supplied lower bound")
     covered_lower = is_ancestor(pulp_repo, lower, cursor)
     covered_latest = is_ancestor(pulp_repo, latest, cursor)
-    status = "noop" if covered_lower and covered_latest else "reconcile"
+    vellum_lagging = False
+    if vellum_repo is not None and vellum_main is not None:
+        vellum_lagging = vellum_needs_reconcile(root, vellum_repo, vellum_main)
+    status = "noop" if covered_lower and covered_latest and not vellum_lagging else "reconcile"
     return {
         "schema_version": 1,
         "status": status,
@@ -280,6 +316,7 @@ def plan(
         "latest_durable_event_head": latest,
         "oldest_uncovered_durable_event_commit": oldest_event,
         "reconcile_target": latest,
+        "vellum_cursor_lagging": vellum_lagging,
     }
 
 
@@ -290,8 +327,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pulp-main", required=True)
     parser.add_argument("--lower-bound", required=True)
     parser.add_argument("--payload", type=Path)
+    parser.add_argument("--vellum-repo", type=Path)
+    parser.add_argument("--vellum-main")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
+    if (args.vellum_repo is None) != (args.vellum_main is None):
+        parser.error("--vellum-repo and --vellum-main are required together")
     try:
         payload = None
         if args.payload:
@@ -302,6 +343,8 @@ def main(argv: list[str] | None = None) -> int:
             pulp_main=args.pulp_main,
             lower_bound=args.lower_bound,
             payload=payload,
+            vellum_repo=args.vellum_repo.resolve() if args.vellum_repo else None,
+            vellum_main=args.vellum_main,
         )
         rendered = json.dumps(result, indent=2, sort_keys=True) + "\n"
         if args.output:
