@@ -338,6 +338,32 @@ class RunnerPolicyTests(unittest.TestCase):
                     f"{path.name}:{line_number}: action pin is not the reviewed Node.js 24 release",
                 )
 
+    def test_required_check_workflows_also_run_on_merge_group(self) -> None:
+        # A merge queue only admits an entry whose required checks reported on
+        # the queue's synthetic merge commit. A required-context workflow with
+        # no merge_group trigger never reports there, and the queue ejects the
+        # entry after its check timeout instead of merging it.
+        required = {
+            "gpu-macos.yml",
+            "product-quality.yml",
+            "provenance.yml",
+            "readme-quick-start.yml",
+        }
+        for path in sorted(WORKFLOWS.glob("*.yml")):
+            text = path.read_text(encoding="utf-8")
+            _, marker, triggers = text.partition("\non:\n")
+            self.assertTrue(marker or text.startswith("on:\n"), path.name)
+            triggers = triggers.split("\npermissions:", 1)[0].split("\nconcurrency:", 1)[0]
+            declares = re.search(r"^  merge_group:\s*$", triggers, re.M) is not None
+            with self.subTest(workflow=path.name):
+                if path.name in required:
+                    self.assertTrue(declares, f"{path.name} lacks a merge_group trigger")
+                    self.assertIsNotNone(
+                        re.search(r"^  pull_request:\s*$", triggers, re.M), path.name
+                    )
+                else:
+                    self.assertFalse(declares, f"{path.name} must not run on merge_group")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
