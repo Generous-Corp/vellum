@@ -1,4 +1,7 @@
 set(_VELLUM_MIRROR_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/mirror")
+# Mirrored closures include C sources (miniz); without C enabled CMake would
+# carry them as untyped sources and compile nothing.
+enable_language(C)
 
 # X-export closure manifests are authoritative. This generated metadata is
 # recreated at configure time so new D3 units need no hand-maintained lists.

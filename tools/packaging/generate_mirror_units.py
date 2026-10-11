@@ -41,6 +41,10 @@ def main() -> int:
             for source in target.get("sources", []):
                 source_path = pathlib.Path(source)
                 if source_path.is_absolute():
+                    # Third-party sources a Pulp target compiles in place (woff2
+                    # from the FetchContent cache). Declared build-machine inputs.
+                    if source_path.exists() and source_path.suffix in SOURCE_SUFFIXES:
+                        sources.append(str(source_path))
                     continue
                 candidate = resolve(source_path)
                 if candidate is not None and candidate.suffix in SOURCE_SUFFIXES:
