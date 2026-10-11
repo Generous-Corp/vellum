@@ -235,14 +235,15 @@ class ObservatoryTests(unittest.TestCase):
                     vellum,
                 )
 
-    def test_ci_verifies_pull_request_head_not_synthetic_merge(self) -> None:
+    def test_ci_verifies_the_checked_out_commit_on_every_event(self) -> None:
+        # On pull_request the checkout is the merge ref, which carries main's
+        # events for landings the cursor does not cover yet; a head-only target
+        # fails "report is stale" for every PR behind main while the cursor lags.
         workflow = (
             observatory.ROOT / ".github/workflows/provenance.yml"
         ).read_text(encoding="utf-8")
-        self.assertIn(
-            "VELLUM_TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}",
-            workflow,
-        )
+        self.assertIn("VELLUM_TARGET_SHA: ${{ github.sha }}", workflow)
+        self.assertNotIn("github.event.pull_request.head.sha", workflow)
         # A merge-queue run verifies the queue's merge commit (github.sha) against
         # the queue base; a push run falls back to the pre-push ref.
         self.assertIn(
@@ -771,6 +772,260 @@ class ObservatoryTests(unittest.TestCase):
                 observatory.load_json(root / observatory.CURSOR_PATH)["vellum"]["last_scanned_commit"],
                 landed,
             )
+
+    def test_merge_that_overwrites_mains_change_to_a_mapped_file_needs_its_own_event(
+        self,
+    ) -> None:
+        # R7 E1b: the PR changes graphics/render.cpp, main lands its own change
+        # to the same file (with an event), and the PR's hand-resolved merge
+        # takes the PR's blob. That reverts main's fix and must not be covered.
+        with tempfile.TemporaryDirectory() as temporary:
+            pulp, vellum, root, pulp_head, main, feature = self._coverage_state(Path(temporary))
+            observatory.reconcile(
+                root=root, pulp_repo=pulp, vellum_repo=vellum,
+                pulp_target=pulp_head, vellum_target=feature,
+                now_text="2026-10-11T00:05:00Z", write=True, events_only=True,
+            )
+            run(vellum, "git", "checkout", "-q", "main")
+            write(vellum / "graphics/render.cpp", "int value = 99; // main fix\n")
+            m1 = commit_all(vellum, "main fix to the same file")
+            observatory.reconcile(
+                root=root, pulp_repo=pulp, vellum_repo=vellum,
+                pulp_target=pulp_head, vellum_target=m1,
+                now_text="2026-10-11T00:06:00Z", write=True, events_only=True,
+            )
+            write(vellum / "unmapped/readme.txt", "unrelated\n")
+            commit_all(vellum, "unrelated main commit")
+            run(vellum, "git", "checkout", "-q", "feature")
+            merge = subprocess.run(
+                ["git", "merge", "--no-ff", "main", "-m", "resolve by taking the PR side"],
+                cwd=vellum, check=False, capture_output=True, text=True,
+            )
+            run(vellum, "git", "checkout", "-q", "feature", "--", "graphics/render.cpp")
+            if merge.returncode != 0:
+                run(vellum, "git", "add", ".")
+                run(vellum, "git", "commit", "-q", "-m", "resolve by taking the PR side")
+            else:
+                run(vellum, "git", "commit", "-q", "--amend", "--no-edit", "-a")
+            reverting = run(vellum, "git", "rev-parse", "HEAD")
+            self.assertEqual(
+                run(vellum, "git", "show", "HEAD:graphics/render.cpp").strip(), "int value = 3;"
+            )
+            self.assertFalse(observatory.integration_merge_covered(vellum, reverting))
+            # Author direction (first parent = the PR): the first-parent diff
+            # shows no mapped change, so no event can describe the drop; the
+            # gap names it and the author must make the revert an explicit commit.
+            with self.assertRaisesRegex(observatory.ObservatoryError, "health budgets failed") as raised:
+                observatory.verify(
+                    root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                    pulp_target=pulp_head, vellum_target=reverting,
+                    vellum_tail_policy="coverage",
+                )
+            gaps = observatory.coverage_gaps(
+                root=root, mapping=observatory.load_json(root / observatory.MAP_PATH),
+                cursor=observatory.load_json(root / observatory.CURSOR_PATH),
+                events=observatory.load_events(root), pulp_repo=pulp, vellum_repo=vellum,
+                pulp_target=pulp_head, vellum_target=reverting, vellum_tail_policy="coverage",
+            )
+            self.assertEqual(
+                [gap["reason"] for gap in gaps if gap["commit"] == reverting],
+                ["merge-changes-other-side-without-first-parent-diff"],
+            )
+            # Queue direction (first parent = main), R7's literal E1b: the diff
+            # against main shows the revert, so it needs an event and gets one.
+            main_tip = run(vellum, "git", "rev-parse", "main")
+            run(vellum, "git", "checkout", "-q", "-b", "queue-shape", main_tip)
+            merge = subprocess.run(
+                ["git", "merge", "--no-ff", str(feature), "-m", "queue-shaped resolve taking the PR side"],
+                cwd=vellum, check=False, capture_output=True, text=True,
+            )
+            run(vellum, "git", "checkout", "-q", str(feature), "--", "graphics/render.cpp")
+            if merge.returncode != 0:
+                run(vellum, "git", "add", ".")
+                run(vellum, "git", "commit", "-q", "-m", "queue-shaped resolve taking the PR side")
+            else:
+                run(vellum, "git", "commit", "-q", "--amend", "--no-edit", "-a")
+            queue_shaped = run(vellum, "git", "rev-parse", "HEAD")
+            self.assertFalse(observatory.integration_merge_covered(vellum, queue_shaped))
+            with self.assertRaisesRegex(observatory.ObservatoryError, "health budgets failed"):
+                observatory.verify(
+                    root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                    pulp_target=pulp_head, vellum_target=queue_shaped,
+                    vellum_tail_policy="coverage",
+                )
+            observatory.reconcile(
+                root=root, pulp_repo=pulp, vellum_repo=vellum,
+                pulp_target=pulp_head, vellum_target=queue_shaped,
+                now_text="2026-10-11T00:07:00Z", write=True, events_only=True,
+            )
+            self.assertTrue((root / observatory.EVENTS_PATH / f"vellum-{queue_shaped}.yaml").is_file())
+            report = observatory.verify(
+                root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                pulp_target=pulp_head, vellum_target=queue_shaped,
+                vellum_tail_policy="coverage",
+            )
+            self.assertEqual(report["coverage_gaps"], [])
+
+    def test_deleting_a_mapped_file_lands_through_a_moved_main(self) -> None:
+        # R7 E2b: the PR deletes graphics/shared.cpp; main moves with an
+        # unmapped commit; the clean queue merge must be covered.
+        with tempfile.TemporaryDirectory() as temporary:
+            pulp, vellum, root, pulp_head, main, feature = self._coverage_state(Path(temporary))
+            run(vellum, "git", "rm", "-q", "graphics/shared.cpp")
+            deleted = commit_all(vellum, "delete a mapped file")
+            observatory.reconcile(
+                root=root, pulp_repo=pulp, vellum_repo=vellum,
+                pulp_target=pulp_head, vellum_target=deleted,
+                now_text="2026-10-11T00:05:00Z", write=True, events_only=True,
+            )
+            run(vellum, "git", "checkout", "-q", "main")
+            write(vellum / "unmapped/readme.txt", "unrelated\n")
+            commit_all(vellum, "unrelated main commit")
+            run(vellum, "git", "merge", "-q", "--no-ff", "feature", "-m", "queue merge")
+            queued = run(vellum, "git", "rev-parse", "HEAD")
+            self.assertTrue(observatory.integration_merge_covered(vellum, queued))
+            report = observatory.verify(
+                root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                pulp_target=pulp_head, vellum_target=queued,
+                vellum_tail_policy="coverage",
+            )
+            self.assertEqual(report["coverage_gaps"], [])
+
+    def test_batch_entries_sharing_only_unmapped_files_are_both_covered(self) -> None:
+        # R7 E3b: two PRs each edit a different line of an unmapped file plus
+        # their own mapped file. Entry 2 of the batch must still be covered.
+        with tempfile.TemporaryDirectory() as temporary:
+            pulp, vellum, root, pulp_head, main, feature = self._coverage_state(Path(temporary))
+            mapping = observatory.load_json(root / observatory.MAP_PATH)
+            rules = mapping.get("transitive_path_rules", [])
+            write(vellum / "unmapped/readme.txt", "line one from PR1\nline two\n")
+            pr1 = commit_all(vellum, "PR1 touches the unmapped file")
+            observatory.reconcile(
+                root=root, pulp_repo=pulp, vellum_repo=vellum,
+                pulp_target=pulp_head, vellum_target=pr1,
+                now_text="2026-10-11T00:05:00Z", write=True, events_only=True,
+            )
+            run(vellum, "git", "checkout", "-q", "-b", "pr2", main)
+            write(vellum / "graphics/other.cpp", "int other = 1;\n")
+            write(vellum / "unmapped/readme.txt", "line one\nline two from PR2\n")
+            pr2 = commit_all(vellum, "PR2 touches the unmapped file")
+            observatory.reconcile(
+                root=root, pulp_repo=pulp, vellum_repo=vellum,
+                pulp_target=pulp_head, vellum_target=pr2,
+                now_text="2026-10-11T00:06:00Z", write=True, events_only=True,
+            )
+            run(vellum, "git", "checkout", "-q", "main")
+            run(vellum, "git", "merge", "-q", "--no-ff", "feature", "-m", "queue entry 1")
+            q1 = run(vellum, "git", "rev-parse", "HEAD")
+            merge = subprocess.run(
+                ["git", "merge", "--no-ff", "pr2", "-m", "queue entry 2"],
+                cwd=vellum, check=False, capture_output=True, text=True,
+            )
+            if merge.returncode != 0:
+                # GitHub resolves line-disjoint edits automatically; emulate it.
+                write(vellum / "unmapped/readme.txt", "line one from PR1\nline two from PR2\n")
+                run(vellum, "git", "add", ".")
+                run(vellum, "git", "commit", "-q", "-m", "queue entry 2")
+            q2 = run(vellum, "git", "rev-parse", "HEAD")
+            self.assertTrue(observatory.integration_merge_covered(vellum, q1, mapping["mappings"], rules))
+            self.assertTrue(observatory.integration_merge_covered(vellum, q2, mapping["mappings"], rules))
+            report = observatory.verify(
+                root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                pulp_target=pulp_head, vellum_target=q2,
+                vellum_tail_policy="coverage",
+            )
+            self.assertEqual(report["coverage_gaps"], [])
+
+    def test_pull_request_behind_a_lagging_main_passes_on_its_merge_ref(self) -> None:
+        # R7 E4b/E4c: PR A lands with its event (cursor now lags); PR B is
+        # behind main. Judged on its merge ref (what CI checks out and the
+        # queue builds) B passes; judged on its bare head it reports a stale
+        # report, which is why the workflow targets github.sha.
+        with tempfile.TemporaryDirectory() as temporary:
+            pulp, vellum, root, pulp_head, main, a_head = self._coverage_state(Path(temporary))
+            observatory.reconcile(
+                root=root, pulp_repo=pulp, vellum_repo=vellum,
+                pulp_target=pulp_head, vellum_target=a_head,
+                now_text="2026-10-11T00:05:00Z", write=True, events_only=True,
+            )
+            run(vellum, "git", "checkout", "-q", "-b", "b", main)
+            write(vellum / "graphics/other.cpp", "int other = 1;\n")
+            b_head = commit_all(vellum, "PR B mapped change")
+            observatory.reconcile(
+                root=root, pulp_repo=pulp, vellum_repo=vellum,
+                pulp_target=pulp_head, vellum_target=b_head,
+                now_text="2026-10-11T00:06:00Z", write=True, events_only=True,
+            )
+            run(vellum, "git", "checkout", "-q", "main")
+            run(vellum, "git", "merge", "-q", "--no-ff", "feature", "-m", "land A")
+            run(vellum, "git", "checkout", "-q", "-b", "b-merge-ref", "main")
+            run(vellum, "git", "merge", "-q", "--no-ff", "b", "-m", "refs/pull/B/merge")
+            merge_ref = run(vellum, "git", "rev-parse", "HEAD")
+            report = observatory.verify(
+                root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                pulp_target=pulp_head, vellum_target=merge_ref,
+                vellum_tail_policy="coverage",
+            )
+            self.assertEqual(report["coverage_gaps"], [])
+            with self.assertRaisesRegex(observatory.ObservatoryError, "stale|outside"):
+                observatory.verify(
+                    root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                    pulp_target=pulp_head, vellum_target=b_head,
+                    vellum_tail_policy="coverage",
+                )
+
+    def test_octopus_merge_is_never_covered(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            pulp, vellum, root, pulp_head, main, feature = self._coverage_state(Path(temporary))
+            run(vellum, "git", "checkout", "-q", "-b", "second", main)
+            write(vellum / "graphics/other.cpp", "int other = 1;\n")
+            commit_all(vellum, "second branch")
+            run(vellum, "git", "checkout", "-q", "main")
+            run(vellum, "git", "merge", "-q", "--no-ff", "feature", "second", "-m", "octopus")
+            octopus = run(vellum, "git", "rev-parse", "HEAD")
+            self.assertEqual(len(run(vellum, "git", "rev-list", "--parents", "-n", "1", octopus).split()), 4)
+            self.assertFalse(observatory.integration_merge_covered(vellum, octopus))
+
+    def test_cli_default_tail_policy_is_reconciled(self) -> None:
+        # R7 M19: without the flag a non-evidence tail must still be rejected.
+        with tempfile.TemporaryDirectory() as temporary:
+            pulp, vellum, root, pulp_head, main, feature = self._coverage_state(Path(temporary))
+            observatory.reconcile(
+                root=root, pulp_repo=pulp, vellum_repo=vellum,
+                pulp_target=pulp_head, vellum_target=feature,
+                now_text="2026-10-11T00:05:00Z", write=True, events_only=True,
+            )
+            common = [
+                "--root", str(root), "verify", "--pulp-repo", str(pulp),
+                "--vellum-repo", str(vellum), "--pulp-target", pulp_head,
+                "--vellum-target", feature,
+            ]
+            self.assertEqual(observatory.main(common), 1)
+            self.assertEqual(observatory.main(common + ["--vellum-tail-policy", "coverage"]), 0)
+
+    def test_ci_routes_tags_to_reconciled_and_everything_else_to_coverage(self) -> None:
+        # R7 M15: run the workflow's own shell fragment under each ref kind.
+        workflow = (
+            observatory.ROOT / ".github/workflows/provenance.yml"
+        ).read_text(encoding="utf-8")
+        start = workflow.index("observatory_tail_policy=coverage")
+        end = workflow.index("fi", start) + 2
+        fragment = "\n".join(line.strip() for line in workflow[start:end].splitlines())
+        for ref, expected in (
+            ("refs/tags/v0.1.8", "reconciled"),
+            ("refs/tags/authority/x", "reconciled"),
+            ("refs/pull/7/merge", "coverage"),
+            ("refs/heads/gh-readonly-queue/main/pr-7-abc", "coverage"),
+            ("refs/heads/main", "coverage"),
+        ):
+            with self.subTest(ref=ref):
+                out = subprocess.run(
+                    ["bash", "-c", fragment + '\necho "$observatory_tail_policy"'],
+                    env={"GITHUB_REF": ref, "PATH": "/usr/bin:/bin"},
+                    capture_output=True, text=True, check=True,
+                ).stdout.strip()
+                self.assertEqual(out, expected)
+        self.assertIn('--vellum-tail-policy "$observatory_tail_policy"', workflow)
 
     def test_events_only_requires_write_on_the_command_line(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

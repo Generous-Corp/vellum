@@ -68,6 +68,7 @@ if __package__:
         transitive_match,
         tree_identical_scanned_parent,
         integration_merge_covered,
+        merge_observable_paths,
     )
     from .observatory_report import (
         activation_blockers,
@@ -126,6 +127,7 @@ else:
         transitive_match,
         tree_identical_scanned_parent,
         integration_merge_covered,
+        merge_observable_paths,
     )
     from observatory_report import (
         activation_blockers,
@@ -420,7 +422,9 @@ def coverage_gaps(
                     except ObservatoryError:
                         require_event_coverage = True
             for commit in commits_between(repo, tail_start, requested_target):
-                if require_event_coverage and integration_merge_covered(repo, commit):
+                if require_event_coverage and integration_merge_covered(
+                    repo, commit, mappings, rules
+                ):
                     continue
                 probe = observation_for_commit(
                     source=source, repository=repository, repo=repo, commit=commit,
@@ -429,6 +433,19 @@ def coverage_gaps(
                     transitive_rules=rules,
                 )
                 if probe is None:
+                    # A merge whose diff against its first parent shows no
+                    # mapped change can still drop or override the other side's
+                    # change. No event can describe it (observations derive from
+                    # the first-parent diff), so it must become an explicit
+                    # commit on the branch, which does get an event.
+                    if require_event_coverage and merge_observable_paths(
+                        repo, commit, mappings, rules
+                    ):
+                        gaps.append({
+                            "source": source,
+                            "commit": commit,
+                            "reason": "merge-changes-other-side-without-first-parent-diff",
+                        })
                     continue
                 if require_event_coverage and (repository, commit) in observations:
                     continue
@@ -746,7 +763,11 @@ def verify(
             )
         ]
         committed_gaps = [
-            gap for gap in gaps if gap["reason"] != "mapped-commit-after-reconciled-cursor"
+            gap for gap in gaps
+            if gap["reason"] not in (
+                "mapped-commit-after-reconciled-cursor",
+                "merge-changes-other-side-without-first-parent-diff",
+            )
         ]
     committed_expected = (
         report
