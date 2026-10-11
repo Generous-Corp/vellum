@@ -35,10 +35,28 @@ Three layers, because the first two only cover automation:
 1. **Repository settings** — `allow_squash_merge` and `allow_rebase_merge` are
    `false`; `allow_merge_commit` is `true`. This is the only layer that stops a
    human choosing the wrong method in the web UI.
-2. **`scripts/merge_on_green.py`** — the merge steward sends
-   `merge_method: "merge"`.
-3. **`scripts/test_merge_on_green.py`** — asserts the steward requests `merge`
-   and rejects `squash` and `rebase`, so the automation cannot regress silently.
+2. **`scripts/merge_on_green.py`** — the merge steward arms GitHub-native
+   auto-merge with `mergeMethod: MERGE`; its pre-queue fallback, used only when
+   GitHub refuses to arm an already-mergeable head, sends `merge_method: "merge"`.
+   When a `merge_queue` ruleset protects `main`, the queue's own
+   `merge_method: MERGE` lands the commit and direct merges are refused, so the
+   ruleset becomes the enforcing layer for automation.
+3. **`scripts/test_merge_on_green.py`** — asserts the steward requests `MERGE` /
+   `merge` and rejects `squash` and `rebase` in both spellings, so the
+   automation cannot regress silently.
+
+## Merge queue
+
+A GitHub merge queue is compatible with this decision as long as its merge
+method is `MERGE`: the queue lands one two-parent merge commit per pull request
+and keeps every feature commit reachable, exactly like the steward's merge.
+Every required check therefore also runs on `merge_group` events (the queue's
+`gh-readonly-queue/main/*` refs), and the provenance verifier evaluates the
+queue's merge commit. The observatory evidence tail accepts that commit only
+while the pull request already contains `main`'s tip (its tree equals the head's
+tree), which is the same condition the steward's merge met; batching more than
+one entry at a time waits for the post-merge cursor reconciliation recorded in
+the Vellum-move decisions.
 
 ## Consequences
 

@@ -81,6 +81,54 @@ def _api(path: str, *, method: str = "GET", body: dict[str, Any] | None = None) 
     return json.loads(payload)
 
 
+# GraphQL is the only API that arms GitHub-native auto-merge. The merge method
+# is spelled MERGE here for the same reason the REST fallback spells it
+# "merge": Decision 0008 keeps every feature commit reachable on main.
+PULL_STATE_QUERY = """
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      id
+      autoMergeRequest { enabledAt mergeMethod }
+      mergeQueueEntry { id }
+    }
+  }
+}
+"""
+
+ENABLE_AUTO_MERGE_MUTATION = """
+mutation($pullRequestId: ID!, $expectedHeadOid: GitObjectID!) {
+  enablePullRequestAutoMerge(
+    input: {pullRequestId: $pullRequestId, mergeMethod: MERGE, expectedHeadOid: $expectedHeadOid}
+  ) {
+    pullRequest { autoMergeRequest { mergeMethod } }
+  }
+}
+"""
+
+
+def _graphql(query: str, variables: dict[str, Any]) -> dict[str, Any]:
+    response = _api("graphql", method="POST", body={"query": query, "variables": variables})
+    errors = response.get("errors")
+    if errors:
+        messages = "; ".join(str(error.get("message", error)) for error in errors)
+        raise MergeError(f"GitHub GraphQL failed: {messages}")
+    data = response.get("data")
+    if not isinstance(data, dict):
+        raise MergeError(f"GitHub GraphQL returned no data: {response}")
+    return data
+
+
+def _already_mergeable(error: MergeError) -> bool:
+    """GitHub refuses to arm auto-merge on a PR it could merge right now.
+
+    That only happens while no merge queue protects main: every requirement is
+    already met, so there is nothing for auto-merge to wait on. The steward
+    then lands the merge commit itself, exactly as it did before the queue.
+    """
+    return "clean status" in str(error).lower()
+
+
 def _associated_run(
     runs: list[dict[str, Any]], *, pull_number: int, head_sha: str
 ) -> dict[str, Any] | None:
@@ -189,24 +237,53 @@ def run(event_path: Path, repository: str) -> int:
         print("merge steward: exact-head gates are not all green")
         return 0
 
-    result = _api(
-        f"repos/{repository}/pulls/{pull_number}/merge",
-        method="PUT",
+    # Arm GitHub-native auto-merge rather than merging here. With a merge queue
+    # on main the PR enters the queue on green and the queue lands the merge
+    # commit; direct merges are refused there. Without a queue GitHub merges the
+    # PR itself as soon as protection is satisfied, so the outcome is the same
+    # merge commit either way.
+    owner, name = repository.split("/", 1)
+    state = _graphql(
+        PULL_STATE_QUERY, {"owner": owner, "name": name, "number": pull_number}
+    )
+    pull_state = (state.get("repository") or {}).get("pullRequest") or {}
+    node_id = pull_state.get("id")
+    if not isinstance(node_id, str) or not node_id:
+        raise MergeError(f"GitHub returned no node id for PR #{pull_number}")
+    if pull_state.get("mergeQueueEntry"):
+        print(f"merge steward: PR #{pull_number} is already in the merge queue")
+        return 0
+    if pull_state.get("autoMergeRequest"):
+        print(f"merge steward: PR #{pull_number} already has auto-merge armed")
+        return 0
+    try:
+        _graphql(
+            ENABLE_AUTO_MERGE_MUTATION,
+            {"pullRequestId": node_id, "expectedHeadOid": current_head_sha},
+        )
+    except MergeError as error:
+        if not _already_mergeable(error):
+            raise
         # Decision 0001 rejects squashing because it loses path/commit
         # correspondence, and the observatory depends on that: every
         # observation event is keyed to its source commit, so a squash orphans
         # those commits and the cursor-coverage invariant fails on main.
-        body={"sha": current_head_sha, "merge_method": "merge"},
-    )
-    if result.get("merged") is not True:
-        raise MergeError(f"GitHub declined the exact-head merge: {result}")
-    print(f"merge steward: merged PR #{pull_number} at {current_head_sha}")
+        result = _api(
+            f"repos/{repository}/pulls/{pull_number}/merge",
+            method="PUT",
+            body={"sha": current_head_sha, "merge_method": "merge"},
+        )
+        if result.get("merged") is not True:
+            raise MergeError(f"GitHub declined the exact-head merge: {result}") from error
+        print(f"merge steward: merged PR #{pull_number} at {current_head_sha}")
+        return 0
+    print(f"merge steward: armed auto-merge (MERGE) on PR #{pull_number} at {current_head_sha}")
     return 0
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Merge a same-repository Vellum PR after exact-head gates pass."
+        description="Arm auto-merge on a same-repository Vellum PR after exact-head gates pass."
     )
     parser.add_argument(
         "--event",
