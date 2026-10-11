@@ -69,20 +69,10 @@ if(VELLUM_MIRROR_BUILD_REHEARSAL_UNITS)
                 _mirror_id)
             string(TOUPPER "${_mirror_unit}_${_mirror_source_target}" _mirror_metadata_key)
             string(REPLACE "-" "_" _mirror_metadata_key "${_mirror_metadata_key}")
-            if(VELLUM_MIRROR_TARGET_${_mirror_metadata_key}_SOURCES)
-                add_library("${_mirror_id}" STATIC)
-                set_target_properties("${_mirror_id}" PROPERTIES
-                    EXPORT_NAME "MirrorRehearsal_${_mirror_unit}_${_mirror_source_target}")
-                _vellum_mirror_configure_target("${_mirror_id}" "${_mirror_unit}" "${_mirror_source_target}")
-            else()
-                # Header-only closure targets (design-ir, gpu-device-api) export
-                # their include roots as an INTERFACE target.
-                add_library("${_mirror_id}" INTERFACE)
-                set_target_properties("${_mirror_id}" PROPERTIES
-                    EXPORT_NAME "MirrorRehearsal_${_mirror_unit}_${_mirror_source_target}")
-                target_include_directories("${_mirror_id}" INTERFACE
-                    $<BUILD_INTERFACE:${_VELLUM_MIRROR_ROOT}> $<INSTALL_INTERFACE:include>)
-            endif()
+            add_library("${_mirror_id}" STATIC)
+            set_target_properties("${_mirror_id}" PROPERTIES
+                EXPORT_NAME "MirrorRehearsal_${_mirror_unit}_${_mirror_source_target}")
+            _vellum_mirror_configure_target("${_mirror_id}" "${_mirror_unit}" "${_mirror_source_target}")
             list(APPEND _vellum_rehearsal_targets "${_mirror_id}")
         endforeach()
     endforeach()
