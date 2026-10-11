@@ -142,7 +142,7 @@
       "argv": [
         "/bin/sh",
         "-c",
-        "\"$0\" --version > oracle-version.txt",
+        "\"$0\" --version > oracle-version.txt && /usr/bin/shasum -a 256 \"$0\" | cut -d' ' -f1 > oracle-binary.sha256",
         "{tool:browser}"
       ]
     },

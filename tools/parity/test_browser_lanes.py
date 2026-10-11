@@ -54,6 +54,7 @@ def write_oracle_side(directory: Path, *, native: bytes, ir: dict | None = None,
     # The browser drew a box; the native render is near it but never identical.
     (directory / "oracle.png").write_bytes(png(40, 20, box=(4, 4, 30, 16)))
     (directory / "oracle-version.txt").write_text(f"Google Chrome {version}\n", encoding="utf-8")
+    (directory / "oracle-binary.sha256").write_text("ab" * 32 + "\n", encoding="utf-8")
     (directory / "oracle-request.json").write_text(json.dumps({"window": "40,20", "scale": "2", "clip": [0, 0]}),
                                                    encoding="utf-8")
     (directory / "render.png").write_bytes(native)
@@ -104,6 +105,14 @@ class OracleLane(unittest.TestCase):
             write_oracle_side(side, native=NATIVE)
         (self.cand / "oracle.png").write_bytes(png(40, 20, box=(4, 4, 31, 16)))
         self.assertEqual(self.run_lane()["status"], "blocked")
+
+    def test_different_oracle_binaries_are_blocked(self) -> None:
+        for side in (self.ref, self.cand):
+            write_oracle_side(side, native=NATIVE)
+        (self.cand / "oracle-binary.sha256").write_text("cd" * 32 + "\n", encoding="utf-8")
+        result = self.run_lane()
+        self.assertEqual(result["status"], "blocked")
+        self.assertIn("different oracle browser binaries", " ".join(result["reasons"]))
 
     def test_unrecorded_oracle_version_is_blocked(self) -> None:
         for side in (self.ref, self.cand):

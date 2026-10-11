@@ -121,6 +121,11 @@ def compare_oracle(ref: Path, cand: Path, case: dict[str, Any]) -> dict[str, Any
         return ph.lane_result("blocked", reasons=["oracle browser version is unrecorded: the oracle has no identity"])
     if versions[0] != versions[1]:
         return ph.lane_result("blocked", reasons=[f"the two sides ran different oracle browsers: {versions}"])
+    binaries = [(d / "oracle-binary.sha256").read_text(encoding="utf-8").strip() for d in (ref, cand)]
+    if not all(binaries):
+        return ph.lane_result("blocked", reasons=["oracle browser binary hash is unrecorded"])
+    if binaries[0] != binaries[1]:
+        return ph.lane_result("blocked", reasons=[f"the two sides ran different oracle browser binaries: {binaries}"])
     requests = [ph.load_json(d / "oracle-request.json") for d in (ref, cand)]
     expected_request = {"window": settings["window"], "scale": str(settings["scale"]),
                         "clip": [float(v) for v in settings["clip"]]}
@@ -184,7 +189,8 @@ def compare_oracle(ref: Path, cand: Path, case: dict[str, Any]) -> dict[str, Any
                        f"{a['mismatch_pixels']} + budget {budget}")
     return ph.lane_result("fail" if reasons else "pass", reasons=reasons[:25],
                           scope="browser-fidelity diagnostic; not native parity",
-                          oracle={"sha256": hashes[0], "version": versions[0], "ink_pixels": ink,
+                          oracle={"sha256": hashes[0], "version": versions[0], "binary_sha256": binaries[0],
+                                  "ink_pixels": ink,
                                   "clip_device_px": [reference.width, reference.height]},
                           sides=per_side, ceiling=settings["ceiling"], channel_threshold=settings["threshold"])
 
@@ -380,7 +386,7 @@ def _one_side_accepts(case: dict[str, Any], source_root: Path, work_dir: Path | 
 
 
 ph.register_lane("oracle", ("design.ir.json", "render.png", "capture.json", "oracle.png",
-                            "oracle-version.txt", "oracle-request.json"), compare_oracle)
+                            "oracle-version.txt", "oracle-binary.sha256", "oracle-request.json"), compare_oracle)
 ph.register_lane("reimport", ("design.ir.json", "capture.json", "second/design.ir.json", "second/capture.json",
                               "revision/design.ir.json", "revision/capture.json"), compare_reimport)
 ph.register_lane("rejection", ("outcome.json",), compare_rejection)
@@ -395,6 +401,10 @@ ph.register_controls(
         "oracle-blank-both": {"lane": "oracle",
                               "both": lambda d: (ph.mutate_png(d / "oracle.png", ph.uniform_image), True)[1],
                               "bites": _reason("blank browser capture")},
+        "oracle-binary-differs": {"lane": "oracle", "expect": "blocked",
+                                  "candidate": lambda d: ((d / "oracle-binary.sha256").write_text(
+                                      "0" * 64 + "\n", encoding="utf-8"), True)[1],
+                                  "bites": _reason("different oracle browser binaries")},
         "oracle-browser-mismatch": {"lane": "oracle",
                                     "candidate": lambda d: _edit_json(d / "capture.json", _set_browser_version),
                                     "bites": _reason("captured with browser")},
