@@ -72,6 +72,67 @@ BROWSER_JOBS = {
 
 JOB_HEADER = re.compile(r"^  ([A-Za-z0-9_-]+):\s*$")
 
+PULP_REPOSITORY = "Generous-Corp/pulp"
+STEP_OUTPUT_REF = re.compile(
+    r"^\$\{\{\s*steps\.([A-Za-z0-9_-]+)\.outputs\.([A-Za-z0-9_-]+)\s*\}\}$"
+)
+# Text a pinning step must contain to prove its output is derived from
+# evidence committed in the Vellum tree, never from a live Pulp branch name.
+COMMITTED_PIN_SOURCES = (
+    "last_scanned_commit",  # provenance/pulp-observatory/cursor.json
+    "pulp_candidate_commit",  # authority pending record
+)
+# A pinning step may still name a live branch for events that are not
+# pull_request or merge_group; those runs pin themselves with a before/after
+# live-SHA equality test instead. The literal must sit in such a branch.
+LIVE_BRANCH_GUARD = 'if event in ("pull_request", "merge_group"):'
+# Pulp checkouts allowed to read a live branch on pull_request or merge_group
+# runs, keyed by (workflow, checkout path), each with the reason it is safe.
+# Empty on purpose: add an entry only with a monotonicity argument.
+LIVE_PULP_CHECKOUTS: dict[tuple[str, str], str] = {}
+
+CHECKOUT_STEP = re.compile(
+    r"^(?P<indent> +)- name: (?P<name>.+)\n"
+    r"(?:(?P=indent)  .*\n)*?"
+    r"(?P=indent)  uses: actions/checkout@[0-9a-f]{40}\n"
+    r"(?P<with>(?:(?P=indent)  .*\n)+)",
+    re.M,
+)
+STEP_START = re.compile(r"^(?P<indent> +)- name: .*$", re.M)
+
+
+def pulp_checkouts(text: str) -> list[dict[str, str]]:
+    """Return every actions/checkout step that reads Generous-Corp/pulp."""
+    found: list[dict[str, str]] = []
+    for match in CHECKOUT_STEP.finditer(text):
+        block = match.group(0)
+        fields = dict(
+            re.findall(r"^ +([a-z-]+): (.+)$", match.group("with"), re.M)
+        )
+        if fields.get("repository") != PULP_REPOSITORY:
+            continue
+        condition = re.search(r"^ +if: (.+)$", block, re.M)
+        found.append(
+            {
+                "name": match.group("name"),
+                "path": fields.get("path", ""),
+                "ref": fields.get("ref", ""),
+                "if": condition.group(1) if condition else "",
+            }
+        )
+    return found
+
+
+def step_body(text: str, step_id: str) -> str | None:
+    """Return the full text of the step whose `id:` is step_id."""
+    marker = re.search(rf"^ +id: {re.escape(step_id)}\s*$", text, re.M)
+    if marker is None:
+        return None
+    starts = [m for m in STEP_START.finditer(text)]
+    begin = max(m.start() for m in starts if m.start() < marker.start())
+    later = [m.start() for m in starts if m.start() > marker.start()]
+    return text[begin : later[0] if later else len(text)]
+
 
 def workflow_jobs(text: str) -> dict[str, str]:
     """Split the `jobs:` mapping into per-job bodies.
@@ -363,6 +424,56 @@ class RunnerPolicyTests(unittest.TestCase):
                     )
                 else:
                     self.assertFalse(declares, f"{path.name} must not run on merge_group")
+
+    def test_pull_request_and_queue_runs_pin_every_pulp_checkout(self) -> None:
+        # A required check that reads Pulp at a live branch can change verdict
+        # between a pull request's check and its merge-queue check with no
+        # change to the Vellum tree, and two queue entries built from the same
+        # Vellum state can disagree. Every Pulp checkout a pull_request or
+        # merge_group run can reach must therefore resolve its ref from
+        # evidence committed in this repository.
+        seen = 0
+        for path in sorted(WORKFLOWS.glob("*.yml")):
+            text = path.read_text(encoding="utf-8")
+            if not re.search(r"^  (pull_request|merge_group):", text, re.M):
+                continue
+            for checkout in pulp_checkouts(text):
+                seen += 1
+                with self.subTest(workflow=path.name, checkout=checkout["path"]):
+                    key = (path.name, checkout["path"])
+                    if key in LIVE_PULP_CHECKOUTS:
+                        self.assertTrue(LIVE_PULP_CHECKOUTS[key].strip(), key)
+                        continue
+                    expression = STEP_OUTPUT_REF.match(checkout["ref"])
+                    self.assertIsNotNone(
+                        expression,
+                        f"{checkout['name']!r} reads {PULP_REPOSITORY} at "
+                        f"{checkout['ref']!r}; pin it to a step output derived "
+                        "from committed evidence",
+                    )
+                    assert expression is not None
+                    body = step_body(text, expression.group(1))
+                    self.assertIsNotNone(body, f"missing step id {expression.group(1)}")
+                    assert body is not None
+                    self.assertTrue(
+                        any(source in body for source in COMMITTED_PIN_SOURCES),
+                        f"step {expression.group(1)} does not derive its output "
+                        "from committed evidence",
+                    )
+                    if "main" in re.sub(r"#.*", "", body):
+                        # The live branch name may only be the fallback of an
+                        # event guard that pins pull_request and merge_group.
+                        self.assertIn(LIVE_BRANCH_GUARD, body)
+                        guarded, _, fallback = body.partition(LIVE_BRANCH_GUARD)
+                        self.assertNotIn('"main"', re.sub(r"#.*", "", guarded))
+                        self.assertIn('ref = "main"', fallback)
+                    # The pin must exist whenever the checkout runs.
+                    condition = re.search(r"^ +if: (.+)$", body, re.M)
+                    self.assertEqual(
+                        condition.group(1) if condition else "", checkout["if"]
+                    )
+        # Control: the rule must have examined the checkouts it protects.
+        self.assertGreaterEqual(seen, 3)
 
 
 if __name__ == "__main__":
