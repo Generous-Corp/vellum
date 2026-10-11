@@ -77,6 +77,13 @@ describes, which removes the guarantee the observatory exists to provide.
 The required `gpu-macos-arm64` and `sterile-consumer` contexts also run for
 `merge_group` events. When the Vellum local macOS selector is enabled, both
 jobs use the repository variable `VELLUM_LOCAL_MACOS_RUNS_ON_JSON`; deleting
-that variable restores the hosted `macos-15` fallback. The jobs accept only
-first-party pull requests while the local selector is enabled, so a fork head
-cannot execute on the private runner fleet.
+that variable restores the hosted `macos-15` fallback. Local execution also
+depends on the runner group being restricted to this workflow, public-repository
+access being explicitly enabled, and approval being required for outside
+contributors. TartCI admits only runs whose `head_repository.full_name` is the
+first-party Vellum repository, so a fork head is rejected at admission. A
+merge-group run for a fork must therefore remain hosted or be maintainer
+approved before it can use local capacity; the workflow `if:` guard alone is
+not a security boundary. The `vm` lane has no cross-repository yield and can
+occupy a free host slot until its job completes, so the evidence must include
+concurrent Pulp lease observations.
