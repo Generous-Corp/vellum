@@ -33,15 +33,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Verify active-source quarantine and forbidden dependencies
-        run: |
-          python3 tools/provenance/test_verify_extraction.py
-          python3 tools/provenance/verify_extraction.py \
-            --output "$RUNNER_TEMP/forbidden-deps-report.json"
-
-      - name: Test mirror export receipt verification
-        run: python3 tools/provenance/test_verify_mirror_export.py
-
       - name: Resolve landed mirror export receipts
         id: mirror-receipts
         run: |
@@ -61,12 +52,15 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Prove every mirrored blob against its Pulp origin
-        if: steps.mirror-receipts.outputs.present == 'true'
+      - name: Verify active-source quarantine and forbidden dependencies
+        env:
+          MIRROR_PULP_ROOT: ${{ steps.mirror-receipts.outputs.present == 'true' && '.mirror-pulp' || '' }}
         run: |
-          python3 tools/provenance/verify_mirror_export.py \
-            --pulp-root .mirror-pulp --require-pulp-identity \
-            --output "$RUNNER_TEMP/mirror-identity-report.json"
+          python3 tools/provenance/test_verify_extraction.py
+          python3 tools/provenance/test_verify_mirror_export.py
+          python3 tools/provenance/verify_extraction.py \
+            ${MIRROR_PULP_ROOT:+--pulp-root "$MIRROR_PULP_ROOT"} \
+            --output "$RUNNER_TEMP/forbidden-deps-report.json"
 
       - name: Retain forbidden-dependency evidence
         if: always()
@@ -90,10 +84,33 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Resolve landed mirror export receipts
+        id: mirror-receipts
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          index = json.load(open("provenance/mirror/receipts/index.json"))
+          print("present=" + ("true" if index["receipts"] else "false"))
+          PY
+
+      - name: Check out Pulp main with full history for mirror identity
+        if: steps.mirror-receipts.outputs.present == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: Generous-Corp/pulp
+          ref: main
+          path: .mirror-pulp
+          fetch-depth: 0
+          persist-credentials: false
+
       - name: Verify extraction and active-source quarantine
+        env:
+          MIRROR_PULP_ROOT: ${{ steps.mirror-receipts.outputs.present == 'true' && '.mirror-pulp' || '' }}
         run: |
           python3 tools/provenance/test_verify_extraction.py
+          python3 tools/provenance/test_verify_mirror_export.py
           python3 tools/provenance/verify_extraction.py \
+            ${MIRROR_PULP_ROOT:+--pulp-root "$MIRROR_PULP_ROOT"} \
             --output "$RUNNER_TEMP/provenance-report.json"
 
       - name: Verify renderer digest-to-provenance binding

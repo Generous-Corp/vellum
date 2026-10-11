@@ -400,6 +400,16 @@ def verify_receipt_against_pulp(pulp_root: Path, receipt: dict[str, Any]) -> lis
     return errors
 
 
+def landed_receipts(root: Path) -> list[str]:
+    """Receipt paths in the index, or none when the index is unreadable."""
+    try:
+        index = strict_json(root / INDEX_PATH)
+    except (OSError, ValueError):
+        return []
+    receipts = index.get("receipts") if isinstance(index, dict) else None
+    return [r for r in receipts if isinstance(r, str)] if isinstance(receipts, list) else []
+
+
 def verify(root: Path, pulp_root: Path | None = None) -> dict[str, Any]:
     errors: list[str] = []
     head = git(root, "rev-parse", "HEAD")

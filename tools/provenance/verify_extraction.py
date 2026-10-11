@@ -63,6 +63,8 @@ EXPECTED_RULES = {
     "retired_paths_at_active_tip": 0,
     "native_files_matching_pulp_origin_blobs": 0,
     "mirror_files_without_matching_origin_record": 0,
+    "mirror_files_without_pulp_identity_proof": 0,
+    "mirror_origin_records_naming_unlanded_receipts": 0,
     "native_forbidden_namespace_or_product_references": 0,
     "mirror_audio_plugin_host_or_product_edges": 0,
     "open_extraction_debts": 0,
@@ -131,6 +133,23 @@ FORBIDDEN_MIRROR_EDGE_PATTERNS = {
         r"(?:AudioToolbox|AudioUnit|CoreAudio|CoreAudioKit|CoreMIDI|AVFAudio)\b",
     ),
 }
+# Pulp-kept files inside otherwise generic Pulp roots (Decision 0010 / D3):
+# the view-audio widgets, the graph editor view, and the product content
+# registry. Mirrored code may neither include them nor be one of them.
+_PULP_KEPT_VIEW_FILES = (
+    r"(?:audio_bridge|audio_inspector_\w+|eq_curve_view|midi_binding|midi_keyboard"
+    r"|musical_typing_keyboard\w*|plugin_manager_panel|sample_asset_drop_target"
+    r"|step_grid_view|waveform_\w+|graph_editor_view)"
+)
+FORBIDDEN_MIRROR_EDGE_PATTERNS["mirror-pulp-kept-include"] = re.compile(
+    r"#\s*(?:include|import)\s*[<\"]"
+    r"(?:pulp/view/(?:audio/|(?:widgets/)?" + _PULP_KEPT_VIEW_FILES + r"\.h)"
+    r"|pulp/state/content_registry\.h)",
+)
+PULP_KEPT_MIRROR_PATH = re.compile(
+    r"\Amirror/core/(?:view/(?:audio/|(?:.*/)?" + _PULP_KEPT_VIEW_FILES + r"\.)"
+    r"|host/|state/(?:.*/)?content_registry\.)"
+)
 MIRROR_EDGE_SUFFIXES = TEXT_SUFFIXES | {".inl", ".ipp", ".txt"}
 POLICY_IMPLEMENTATION_PATHS = {
     "scripts/verify_sdk_artifact.py",
@@ -343,6 +362,11 @@ def mirror_origin_findings(
 def mirror_edge_findings(root: Path) -> list[dict[str, object]]:
     findings: list[dict[str, object]] = []
     for path in mirror_files(root):
+        relative = path.relative_to(root).as_posix()
+        if PULP_KEPT_MIRROR_PATH.match(relative):
+            findings.append(
+                {"rule": "mirror-pulp-kept-file", "path": relative, "line": 0, "match": relative}
+            )
         if path.suffix.lower() not in MIRROR_EDGE_SUFFIXES:
             continue
         try:
@@ -367,7 +391,21 @@ def verify_origins_against_pulp(
 ) -> list[str]:
     """Prove each record against the Pulp history it cites (identity oracle)."""
     errors: list[str] = []
+    try:
+        main = git(pulp_root, "rev-parse", "--verify", "--quiet", "HEAD")
+    except subprocess.CalledProcessError:
+        return [f"Pulp checkout {pulp_root} has no HEAD"]
     for record in records:
+        on_main = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", record["pulp_commit"], main],
+            cwd=pulp_root, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        ).returncode == 0
+        if not on_main:
+            errors.append(
+                f"mirror origin {record['mirror_path']} cites Pulp commit "
+                f"{record['pulp_commit']}, which is not on the checked-out Pulp main"
+            )
+            continue
         spec = f"{record['pulp_commit']}:{record['pulp_path']}"
         try:
             actual = git(pulp_root, "rev-parse", "--verify", "--quiet", spec)
@@ -434,7 +472,9 @@ def verify_authority_phase(
     return not errors, errors
 
 
-def verify(root: Path, pulp_root: Path | None = None) -> dict[str, object]:
+def verify(
+    root: Path, pulp_root: Path | None = None, defer_mirror_identity: bool = False
+) -> dict[str, object]:
     provenance = root / "provenance"
     errors: list[str] = []
     checks: dict[str, object] = {}
@@ -554,11 +594,31 @@ def verify(root: Path, pulp_root: Path | None = None) -> dict[str, object]:
     checks["mirror_origin_findings"] = origin_findings
     if origin_findings:
         errors.append(f"mirror root has {len(origin_findings)} files without a matching origin record")
+    # Fail closed: a self-consistent record proves nothing about origin, so a
+    # mirrored file passes only where a Pulp checkout proved it. Lanes that are
+    # not the required provenance lane may defer that proof to it.
     if pulp_root is not None:
         pulp_errors = verify_origins_against_pulp(pulp_root, records)
         checks["mirror_origins_verified_against_pulp"] = not pulp_errors
         errors.extend(pulp_errors)
-    export_report = load_mirror_export_verifier().verify(root, pulp_root)
+    elif mirror_inventory and defer_mirror_identity:
+        checks["mirror_identity_deferred"] = True
+    elif mirror_inventory:
+        errors.append(
+            f"mirror root has {len(mirror_inventory)} files but no Pulp checkout proved "
+            "them; pass --pulp-root"
+        )
+    export_verifier = load_mirror_export_verifier()
+    landed_receipts = set(export_verifier.landed_receipts(root))
+    unlanded = sorted(
+        {record["export_receipt"] for record in records} - landed_receipts
+    )
+    checks["mirror_origin_records_naming_unlanded_receipts"] = unlanded
+    if unlanded:
+        errors.append(
+            f"blob-origin records name {len(unlanded)} receipts absent from the receipt index"
+        )
+    export_report = export_verifier.verify(root, pulp_root)
     checks["mirror_export_receipts"] = export_report["receipts"]
     checks["mirror_export_pulp_identity_checked"] = export_report["pulp_identity_checked"]
     errors.extend(f"mirror export: {error}" for error in export_report["errors"])
@@ -611,9 +671,16 @@ def main() -> int:
         type=Path,
         help="Pulp checkout used to prove every mirror origin record",
     )
+    parser.add_argument(
+        "--defer-mirror-identity",
+        action="store_true",
+        help="leave the Pulp identity proof of mirror/ to the required provenance lane",
+    )
     args = parser.parse_args()
     report = verify(
-        args.root.resolve(), args.pulp_root.resolve() if args.pulp_root else None
+        args.root.resolve(),
+        args.pulp_root.resolve() if args.pulp_root else None,
+        defer_mirror_identity=args.defer_mirror_identity,
     )
     rendered = json.dumps(report, indent=2, sort_keys=True) + "\n"
     if args.output:

@@ -40,7 +40,11 @@ validated audio-free Pulp framework closures by automation from an exact Pulp
 commit and lands by merge commit. Nothing is mirrored yet. Each mirrored file
 must equal a blob recorded in
 [`provenance/mirror/blob-origins.json`](../provenance/mirror/blob-origins.json)
-with its Pulp commit and path, so the root is read-only in Vellum. Pulp remains
+with its Pulp commit and path, so the root is read-only in Vellum. The check
+fails closed: the required provenance lane proves each mirrored blob against a
+checkout of Pulp `main`. Every landing carries a
+`pulp.vellum.export-receipt.v2` receipt whose projected tree must equal
+`HEAD:mirror`. Pulp remains
 the editable source owner of a mirrored unit until a separately approved Pulp
 change consumes the exact Vellum package and freezes its copy; there is no
 synchronization in either direction. The `pulp::` namespace is permitted only
