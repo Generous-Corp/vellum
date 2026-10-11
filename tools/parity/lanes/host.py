@@ -343,22 +343,28 @@ def compare_validator(ref: Path, cand: Path, case: dict[str, Any]) -> dict[str, 
 
 
 def compare_standalone(ref: Path, cand: Path, case: dict[str, Any]) -> dict[str, Any]:
-    reasons, images = [], {}
+    reasons, images, scales = [], {}, {}
     for side, d in (("reference", ref), ("candidate", cand)):
         image = decode_png_bytes((d / "standalone.png").read_bytes())
         images[side] = image
         stats = frame_stats(image)
         if stats["unique_colors"] < MIN_COLORS:
             reasons.append(f"{side}: standalone frame has {stats['unique_colors']} colours (blank)")
-        if [image.width, image.height] != [case["width"], case["height"]]:
-            reasons.append(f"{side}: standalone frame {image.width}x{image.height}, "
-                           f"case expects {case['width']}x{case['height']}")
+        # The standalone captures its own back buffer, so the frame is the case
+        # size times the display's backing scale (1 or 2 on macOS). Both sides
+        # must agree on the scale (the size comparison below), and it must be a
+        # whole multiple of the case size.
+        scale = image.width // case["width"] if case["width"] else 0
+        if scale < 1 or [image.width, image.height] != [case["width"] * scale, case["height"] * scale]:
+            reasons.append(f"{side}: standalone frame {image.width}x{image.height} is not a whole multiple "
+                           f"of the case size {case['width']}x{case['height']}")
+        scales[side] = scale
     a, b = images["reference"], images["candidate"]
     if (a.width, a.height) != (b.width, b.height):
         reasons.append(f"standalone frame {a.width}x{a.height} != {b.width}x{b.height}")
     elif a.pixels != b.pixels:
         reasons.append("standalone first frame differs")
-    return lane_result("fail" if reasons else "pass", reasons=reasons)
+    return lane_result("fail" if reasons else "pass", reasons=reasons, backing_scale=scales)
 
 
 ph.register_lane("host-load", (OBS, "provenance.json"), compare_load)
