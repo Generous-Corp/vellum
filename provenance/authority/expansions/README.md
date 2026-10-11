@@ -52,3 +52,37 @@ The proposal also distinguishes the canonical authority repository
 `danielraffel/vellum`. The watch handshake may proceed in the latter to avoid
 the current artifact-billing block, but an exact-boundary amendment must resolve
 and record the permanent authority location rather than silently changing it.
+
+`danielraffel/vellum` was retired on 2026-08-17, when its tree became the
+`Generous-Corp/vellum` `main` history. The append-only record
+[`full-design-import-render-v1/delivery-repository-retirement-1.json`](full-design-import-render-v1/delivery-repository-retirement-1.json)
+binds that fact. While its pinned digest matches and the retired repository's
+final `main` is on the authority history, the verifier audits open pull
+requests in `Generous-Corp/pulp` and `Generous-Corp/vellum` only, requires
+`promotion_mode: repository-transfer`, and accepts the authority checkout as
+the delivery checkout. Earlier artifacts keep `danielraffel/vellum` as the
+historical delivery identity. Without the record, or with a record that does
+not match, the three-repository protocol applies and fails closed; the
+authority checkout is then rejected as a delivery root.
+
+The record's final `main` of the retired repository is a recorded fact: that
+repository can no longer be queried, so the verifier proves only that the
+commit is on the authority history. The consolidated `main` and its commit
+time, by contrast, are checked against Git. The checks need full history; a
+shallow clone fails closed with an explicit message. Owner approval is recorded
+in `danielraffel/pulp-planning` `vellum-move/DECISIONS.md`, section "OWNER
+SIGN-OFF 2026-10-11", item 2.
+
+**Release operators:** the next `v*` tag is the `full-design-import-render-v1`
+promotion release; it cannot be an ordinary patch release.
+`.github/workflows/sdk-release.yml` publishes only after a successful
+`provenance.yml` run on the same tag, and that run requires all of:
+
+- an SSH-signed tag message carrying the authority promotion attestation
+  (`promotion_mode: repository-transfer`, authority commit = delivery commit =
+  the tagged commit);
+- `full-design-import-render-v1/exact-boundary-acknowledgement-1.json`, bound
+  to a landed Pulp exact-boundary acceptance;
+- `full-design-import-render-v1/parity-completion-1.json` at the tagged commit;
+- a Pulp acceptance whose open-PR audit lists every open pull request that
+  touches an exact route at release time (refresh it in Pulp if needed).
