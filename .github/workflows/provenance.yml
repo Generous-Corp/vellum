@@ -67,6 +67,12 @@ jobs:
           python3 tools/provenance/verify_extraction.py \
             --output "$RUNNER_TEMP/provenance-report.json"
 
+      - name: Verify renderer digest-to-provenance binding
+        run: |
+          python3 tools/provenance/test_verify_renderer_dependency.py
+          python3 tools/provenance/verify_renderer_dependency.py --json \
+            > "$RUNNER_TEMP/renderer-provenance-report.json"
+
       - name: Verify pinned Pulp tooling disposition
         run: |
           python3 tools/provenance/test_verify_pulp_tooling_disposition.py
