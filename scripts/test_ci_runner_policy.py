@@ -89,7 +89,16 @@ LIVE_BRANCH_GUARD = 'if event in ("pull_request", "merge_group"):'
 # Pulp checkouts allowed to read a live branch on pull_request or merge_group
 # runs, keyed by (workflow, checkout path), each with the reason it is safe.
 # Empty on purpose: add an entry only with a monotonicity argument.
-LIVE_PULP_CHECKOUTS: dict[tuple[str, str], str] = {}
+LIVE_PULP_CHECKOUTS: dict[tuple[str, str], str] = {
+    ("provenance.yml", ".exact-boundary-pulp"): (
+        "literal main checkout is immediately detached to the committed "
+        "observatory cursor by the following pinning step"
+    ),
+    ("provenance.yml", ".mirror-pulp"): (
+        "literal main checkout is immediately detached to the committed "
+        "Decision 0010 receipt SHA by the following pinning step"
+    ),
+}
 
 CHECKOUT_STEP = re.compile(
     r"^(?P<indent> +)- name: (?P<name>.+)\n"
