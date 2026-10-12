@@ -48,6 +48,12 @@ from typing import Any, Callable
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "cli"))
 
 from vellum_image_compare import compare_images  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from parity_policy import (  # noqa: E402,F401
+    AUTHORITIES, PERMISSIVE_LICENSES, SHA1_RE, SHA256_RE, SHELLS, HarnessError, producing_binary,
+    region_bounds_errors, resolve_under, sha256_bytes, sha256_file, snapshot, validate_provenance,
+    validate_regions)
+import parity_policy  # noqa: E402
 from vellum_png import PngError, RgbaImage, decode_png_bytes, encode_png  # noqa: E402
 
 CORPUS_SCHEMA = "vellum.parity.corpus.v1"
@@ -65,8 +71,6 @@ LANE_ARTIFACTS = {
     "interaction": ("interaction.json", "interaction.png"),
 }
 SKIP_EXIT = 77
-SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
-SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 TEXT_BOX_TOLERANCE_PX = 0.5
 # A raster threshold above 0 must carry a justification and stay under this
 # ceiling; anything looser hides real rendering differences.
@@ -91,19 +95,11 @@ REQUIRED_PROBES = ("build", "provider", "fonts")
 LANE_MODULES: list[Path] = []
 
 
-class HarnessError(ValueError):
-    """A malformed corpus, implementation, or manifest. Never a lane result."""
 
 
 # ── small utilities ────────────────────────────────────────────────────────
 
 
-def sha256_bytes(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
-def sha256_file(path: Path) -> str:
-    return sha256_bytes(path.read_bytes())
 
 
 def git_blob_sha(data: bytes) -> str:
@@ -175,7 +171,8 @@ def json_differences(left: Any, right: Any, path: str = "", limit: int = 25) -> 
 # ── corpus and implementation descriptions ─────────────────────────────────
 
 
-def validate_corpus(corpus: Any, corpus_dir: Path | None = None) -> list[dict[str, Any]]:
+def validate_corpus(corpus: Any, corpus_dir: Path | None = None,
+                    external_roots: dict[str, str] | None = None) -> list[dict[str, Any]]:
     if not isinstance(corpus, dict) or corpus.get("schema") != CORPUS_SCHEMA:
         raise HarnessError(f"corpus schema must be {CORPUS_SCHEMA}")
     cases = corpus.get("cases")
@@ -183,6 +180,8 @@ def validate_corpus(corpus: Any, corpus_dir: Path | None = None) -> list[dict[st
         raise HarnessError("corpus.cases must be a list")
     if corpus_dir is not None:
         cases = [dict(case, _corpus_dir=str(corpus_dir)) for case in cases]
+    if external_roots:
+        cases = [dict(case, _external_roots=dict(external_roots)) for case in cases]
     seen: set[str] = set()
     for case in cases:
         case_id = case.get("case_id")
@@ -200,8 +199,17 @@ def validate_corpus(corpus: Any, corpus_dir: Path | None = None) -> list[dict[st
         for key in ("width", "height"):
             if not isinstance(case.get(key), int) or case[key] <= 0:
                 raise HarnessError(f"{case_id}: {key} must be a positive integer")
-        if case.get("source_base", "source-root") not in ("source-root", "corpus"):
-            raise HarnessError(f"{case_id}: source_base must be source-root or corpus")
+        base = case.get("source_base", "source-root")
+        if base not in ("source-root", "corpus") and not str(base).startswith("external:"):
+            raise HarnessError(f"{case_id}: source_base must be source-root, corpus or external:<name>")
+        if str(base).startswith("external:") or "provenance" in case:
+            ext_root = None
+            if str(base).startswith("external:") and external_roots:
+                ext_name = str(base).split(":", 1)[1]
+                if ext_name in external_roots:
+                    ext_root = Path(external_roots[ext_name])
+            validate_provenance(case, ext_root if ext_root and ext_root.exists() else None)
+        validate_regions(case)
         if "interaction" in lanes and not case.get("interactions"):
             raise HarnessError(f"{case_id}: interaction lane selected without interactions")
         validate_case_knobs(case, volatile_allowlist(corpus))
@@ -260,6 +268,15 @@ def validate_implementation(impl: Any) -> dict[str, Any]:
     for key in ("name", "repository", "steps", "source_kinds"):
         if key not in impl:
             raise HarnessError(f"implementation missing {key}")
+    if impl.get("authority") not in AUTHORITIES:
+        raise HarnessError(f"implementation authority must be one of {AUTHORITIES} (declared, never defaulted)")
+    for entry in impl.get("passthrough_binaries", []):
+        if (not isinstance(entry, dict) or not entry.get("path")
+                or not str(entry.get("justification", "")).strip()
+                or not SHA256_RE.match(str(entry.get("sha256", "")))):
+            raise HarnessError("passthrough_binaries entries need path, sha256 and justification")
+        if Path(str(entry["path"])).name not in ("cp", "copy", "install"):
+            raise HarnessError("passthrough_binaries may only declare copy tools")
     return impl
 
 
@@ -357,6 +374,8 @@ def implementation_identity(impl: dict[str, Any], tools: dict[str, Path],
             for name, path in sorted(tools.items())
         },
         "probes": run_probes(impl, tools, roots),
+        "authority": impl.get("authority"),
+        "passthrough_binaries": [dict(entry) for entry in impl.get("passthrough_binaries", [])],
         "content_roots": {name: tree_sha256(roots[name]) if name in roots else None
                           for name in impl.get("content_roots", [])},
     }
@@ -375,7 +394,8 @@ def environment_identity() -> dict[str, Any]:
 
 
 def harness_fingerprint() -> dict[str, Any]:
-    files = [Path(__file__).resolve(), *sorted(p.resolve() for p in LANE_MODULES)]
+    files = [Path(__file__).resolve(), Path(parity_policy.__file__).resolve(),
+             *sorted(p.resolve() for p in LANE_MODULES)]
     hashes = {p.name: sha256_file(p) for p in files}
     return {"files": hashes, "sha256": sha256_bytes(json.dumps(hashes, sort_keys=True).encode())}
 
@@ -454,25 +474,42 @@ def encode_interactions(encoding: str, plan: list[dict[str, Any]]) -> list[str]:
 def case_root(case: dict[str, Any], source_root: Path) -> Path:
     """Sources resolve against --source-root, or against the corpus file's own
     directory for implementation-neutral fixtures the corpus carries itself."""
-    if case.get("source_base") == "corpus":
+    base = str(case.get("source_base", "source-root"))
+    if base == "corpus":
         return Path(case["_corpus_dir"])
+    if base.startswith("external:"):
+        name = base.split(":", 1)[1]
+        roots = case.get("_external_roots") or {}
+        if name not in roots:
+            raise HarnessError(f"{case['case_id']}: external source root {name!r} not supplied (--external-root)")
+        return Path(roots[name])
     return source_root
 
 
 def stage_case(case: dict[str, Any], source_root: Path, destination: Path,
-               source_override: bytes | None = None) -> dict[str, str]:
+               source_override: bytes | None = None,
+               extra_stage: list[Path] | None = None) -> dict[str, str]:
     """Copy the case source (and declared companions) into a side directory so
-    both sides read byte-identical inputs at identical relative paths."""
+    both sides read byte-identical inputs at identical relative paths. Every
+    corpus-named path must stay inside its root (no `..`, no symlinks);
+    `extra_stage` is for files a control wrote itself under its work dir."""
     destination.mkdir(parents=True, exist_ok=True)
     source_root = case_root(case, source_root)
-    source = source_root / case["source"]
+    if str(case.get("source_base", "")).startswith("external:"):
+        validate_provenance(case, source_root)
+    source = resolve_under(source_root, case["source"], f"{case['case_id']} source")
     if not source.is_file():
         raise HarnessError(f"{case['case_id']}: source not found: {source}")
     staged = destination / source.name
-    staged.write_bytes(source_override if source_override is not None else source.read_bytes())
+    source_bytes = source_override if source_override is not None else source.read_bytes()
+    resolve_under(source_root, case["source"], f"{case['case_id']} source (post-copy check)")
+    staged.write_bytes(source_bytes)
     hashes = {source.name: sha256_file(staged)}
-    for companion in case.get("stage", []):
-        origin = source_root / companion
+    pinned = (case.get("provenance") or {}).get("sha256")
+    if pinned and source_override is None and hashes[source.name] != pinned:
+        raise HarnessError(f"{case['case_id']}: source sha256 {hashes[source.name]} != provenance pin {pinned}")
+    companions = [resolve_under(source_root, c, f"{case['case_id']} stage") for c in case.get("stage", [])]
+    for origin in companions + [Path(p) for p in (extra_stage or [])]:
         target = destination / origin.name
         if origin.is_dir():
             shutil.copytree(origin, target, dirs_exist_ok=True)
@@ -484,7 +521,35 @@ def stage_case(case: dict[str, Any], source_root: Path, destination: Path,
             hashes[origin.name] = sha256_file(target)
         else:
             raise HarnessError(f"{case['case_id']}: staged companion not found: {origin}")
+    for companion in case.get("stage", []):
+        resolve_under(source_root, companion, f"{case['case_id']} stage (post-copy check)")
+    manifest = (case.get("provenance") or {}).get("files")
+    if manifest is not None:
+        missing = sorted(set(hashes) - set(manifest))
+        extra = sorted(set(manifest) - set(hashes))
+        if missing or extra:
+            raise HarnessError(f"{case['case_id']}: provenance file pins do not cover staged tree "
+                               f"(missing={missing}, extra={extra})")
+        mismatched = sorted(name for name, digest in hashes.items() if manifest.get(name) != digest)
+        if mismatched:
+            raise HarnessError(f"{case['case_id']}: staged file sha256 pins mismatch: {mismatched}")
     return hashes
+
+
+def _copy_read_paths(argv: list[str], before: dict[str, str], out: Path) -> list[str]:
+    reads: set[str] = set()
+    for raw in argv[1:]:
+        if raw.startswith("-"):
+            continue
+        candidate = Path(raw)
+        if not candidate.is_absolute():
+            candidate = out / candidate
+        resolved = Path(os.path.realpath(candidate))
+        for name in before:
+            path = Path(os.path.realpath(out / name))
+            if resolved == path or (candidate.is_dir() and path.is_relative_to(resolved)):
+                reads.add(name)
+    return sorted(reads)
 
 
 def expand(arg: str, values: dict[str, str]) -> str:
@@ -506,10 +571,11 @@ def placeholder_values(tools: dict[str, Path], roots: dict[str, Path]) -> dict[s
 def run_side(case: dict[str, Any], impl: dict[str, Any], tools: dict[str, Path],
              source_root: Path, out: Path, *, interactions: list[dict[str, Any]] | None = None,
              source_override: bytes | None = None, skip_steps: tuple[str, ...] = (),
-             timeout: int = 300, roots: dict[str, Path] | None = None) -> dict[str, Any]:
+             timeout: int = 300, roots: dict[str, Path] | None = None,
+             extra_stage: list[Path] | None = None) -> dict[str, Any]:
     if out.exists():
         shutil.rmtree(out)
-    inputs = stage_case(case, source_root, out, source_override)
+    inputs = stage_case(case, source_root, out, source_override, extra_stage)
     source_name = Path(case["source"]).name
     kind_args = impl["source_kinds"].get(case["source_kind"])
     if kind_args is None:
@@ -520,6 +586,7 @@ def run_side(case: dict[str, Any], impl: dict[str, Any], tools: dict[str, Path],
     values.update({f"param:{k}": str(v) for k, v in case.get("params", {}).items()})
     plan = interactions if interactions is not None else case.get("interactions", [])
     steps_out = []
+    produced: dict[str, dict[str, Any]] = {}
     for step in impl["steps"]:
         if step.get("when") == "interactions" and "interaction" not in case["lanes"]:
             continue
@@ -546,6 +613,11 @@ def run_side(case: dict[str, Any], impl: dict[str, Any], tools: dict[str, Path],
         if step.get("env"):
             env = dict(os.environ, **{k: expand(str(v), values) for k, v in step["env"].items()})
             record["env"] = {k: env[k] for k in step["env"]}
+        record.update(producing_binary(argv, out))
+        before = snapshot(out)
+        # Files in the side directory this step names as arguments: what a
+        # passthrough copy reads, so its output inherits their producer.
+        record["reads"] = _copy_read_paths(argv, before, out)
         started = time.monotonic()
         try:
             result = subprocess.run(argv, cwd=out, capture_output=True, text=True, encoding="utf-8",
@@ -561,19 +633,33 @@ def run_side(case: dict[str, Any], impl: dict[str, Any], tools: dict[str, Path],
         record["seconds"] = round(time.monotonic() - started, 3)
         record["status"] = ("ok" if record["exit"] == 0 else
                             "skipped" if record["exit"] == SKIP_EXIT else "failed")
+        after = snapshot(out)
+        for name, digest in after.items():
+            if before.get(name) != digest:
+                produced[name] = {"step": step["id"], "sha256": digest,
+                                  **{k: record[k] for k in ("binary", "binary_sha256", "script_sha256", "delegated",
+                                                            "reads")
+                                     if k in record}}
         steps_out.append(record)
         if record["status"] != "ok":
             break
-    artifacts = {
-        path.name: sha256_file(path)
-        for path in sorted(out.iterdir())
-        if path.is_file() and path.name in {a for names in LANE_ARTIFACTS.values() for a in names}
-    }
+    declared = {a for names in LANE_ARTIFACTS.values() for a in names}
+    # Keyed by path relative to the side directory: a lane may declare a nested
+    # artifact (solo-0/host-observation.json), and it must be hashed and have
+    # its producer checked like a top-level one.
+    artifacts = {name: digest for name, digest in sorted(snapshot(out).items()) if name in declared}
     return {"inputs": inputs, "steps": steps_out, "artifacts": artifacts,
+            "produced_by": {name: produced[name] for name in artifacts if name in produced},
+            "producers": produced,
             "interaction_plan": plan, "scale": case.get("scale", DEFAULT_SCALE)}
 
 
 # ── lane comparators ───────────────────────────────────────────────────────
+
+
+def provenance_errors(run: dict[str, Any], identity: dict[str, Any], side: str,
+                      lanes: list[str]) -> list[str]:
+    return parity_policy.provenance_errors(run, identity, side, lanes, LANE_ARTIFACTS)
 
 
 def lane_result(status: str, **details: Any) -> dict[str, Any]:
@@ -628,6 +714,11 @@ def ink_pixels(image: RgbaImage) -> int:
     return sum(counts.values()) - counts.most_common(1)[0][1]
 
 
+def background_colour(image: RgbaImage) -> bytes:
+    counts = Counter(image.pixels[offset:offset + 4] for offset in range(0, len(image.pixels), 4))
+    return counts.most_common(1)[0][0] if counts else b""
+
+
 def luminance_stddev(image: RgbaImage) -> float:
     total = len(image.pixels) // 4
     if not total:
@@ -665,8 +756,55 @@ def compare_png_pair(ref_png: Path, cand_png: Path, threshold: int, min_ink: int
 
 
 def compare_raster(ref: Path, cand: Path, case: dict[str, Any]) -> dict[str, Any]:
-    return compare_png_pair(ref / "render.png", cand / "render.png",
-                            int(case.get("raster_threshold", 0)), int(case.get("min_ink_pixels", 1)))
+    result = compare_png_pair(ref / "render.png", cand / "render.png",
+                              int(case.get("raster_threshold", 0)), int(case.get("min_ink_pixels", 1)))
+    if case.get("regions") and result.get("dimensions"):
+        regional = compare_regions(ref / "render.png", cand / "render.png", case)
+        result["regions"] = regional
+        result["reasons"] = result.get("reasons", []) + [
+            f"region {name}: {why}" for name, r in regional.items() for why in r["reasons"]]
+        if any(r["reasons"] for r in regional.values()):
+            result["status"] = "fail"
+    return result
+
+
+def crop(image: RgbaImage, x: int, y: int, w: int, h: int) -> RgbaImage:
+    rows = [image.pixels[((y + row) * image.width + x) * 4:((y + row) * image.width + x + w) * 4]
+            for row in range(h)]
+    return RgbaImage(w, h, b"".join(rows))
+
+
+def compare_regions(ref_png: Path, cand_png: Path, case: dict[str, Any]) -> dict[str, Any]:
+    """Score each declared region on its own, so a localized difference is
+    named and a region that rendered nothing on both sides cannot hide inside
+    a busy whole frame."""
+    a = decode_png_bytes(ref_png.read_bytes())
+    b = decode_png_bytes(cand_png.read_bytes())
+    scale = float(case.get("scale", DEFAULT_SCALE))
+    threshold = int(case.get("raster_threshold", 0))
+    backgrounds = tuple(background_colour(img) for img in (a, b))
+    out = {}
+    for region in case["regions"]:
+        x, y = int(region["x"] * scale), int(region["y"] * scale)
+        w, h = int(region["w"] * scale), int(region["h"] * scale)
+        bounds = region_bounds_errors(region, (x, y, w, h), ((a.width, a.height), (b.width, b.height)))
+        if bounds:
+            out[region["name"]] = {"rect_px": [x, y, w, h], "reasons": bounds}
+            continue
+        ra, rb = crop(a, x, y, w, h), crop(b, x, y, w, h)
+        report, _ = compare_images(ra, rb, threshold=threshold)
+        # Ink in a region is anything that differs from the frame's background,
+        # so a solid control filling its region still counts as drawn.
+        ink = tuple(sum(1 for o in range(0, len(img.pixels), 4) if img.pixels[o:o + 4] != bg)
+                    for img, bg in ((ra, backgrounds[0]), (rb, backgrounds[1])))
+        reasons = []
+        if min(ink) < int(region.get("min_ink_pixels", 1)):
+            reasons.append(f"ink {ink} below floor: the region drew nothing to compare")
+        if report["differing_pixels"]:
+            reasons.append(f"{report['differing_pixels']} pixels differ")
+        out[region["name"]] = {"rect_px": [x, y, w, h], "ink_pixels": list(ink),
+                               "differing_pixels": report["differing_pixels"], "reasons": reasons}
+    return out
 
 
 def rect_delta(a: dict[str, Any], b: dict[str, Any]) -> float:
@@ -850,6 +988,8 @@ def comparison_scope(mode: str, reference: dict[str, Any], candidate: dict[str, 
     whose origin commit is recorded)."""
     if mode == "calibration":
         return "harness-calibration"
+    if reference.get("authority") != candidate.get("authority"):
+        return "cross-authority"
     same_repo = str(reference.get("repository") or "").lower() == str(candidate.get("repository") or "").lower()
     if same_repo and reference.get("source_sha") == candidate.get("source_sha"):
         return "build-sensitivity"
@@ -878,6 +1018,11 @@ def acceptance(mode: str, cases: list[dict[str, Any]], reference: dict[str, Any]
         for lane, status in chosen.items():
             if status != "pass":
                 reasons.append(f"{result['case_id']}/{lane}: {status}")
+        chosen_lanes = [lane for lane, s in statuses.items() if s != "not_selected"]
+        for side, identity in (("reference", reference), ("candidate", candidate)):
+            run = result.get(side)
+            if run is not None:
+                reasons += provenance_errors(run, identity, f"{result['case_id']}/{side}", chosen_lanes)
         if require_identical_inputs and not result["inputs_identical"]:
             reasons.append(f"{result['case_id']}: reference and candidate inputs differ")
     return {"accepting": not reasons, "scope": comparison_scope(mode, reference, candidate),
@@ -925,9 +1070,10 @@ def run_corpus(corpus_path: Path, source_root: Path, reference_path: Path, candi
                out: Path, *, mode: str, tool_overrides: dict[str, dict[str, str]] | None = None,
                source_shas: dict[str, str | None] | None = None,
                roots: dict[str, dict[str, Path]] | None = None,
-               calibration: Any = None) -> dict[str, Any]:
+               calibration: Any = None,
+               external_roots: dict[str, str] | None = None) -> dict[str, Any]:
     corpus = load_json(corpus_path)
-    cases = validate_corpus(corpus, corpus_path.resolve().parent)
+    cases = validate_corpus(corpus, corpus_path.resolve().parent, external_roots)
     gate = calibration_errors(calibration, corpus) if mode == "parity" else []
     impls = {}
     for side, path in (("reference", reference_path), ("candidate", candidate_path)):
@@ -1256,6 +1402,22 @@ def stub_design_ir(path: Path) -> bool:
     return True
 
 
+def flip_region_pixel(path: Path, case: dict[str, Any]) -> bool:
+    """One pixel at the centre of the case's first declared region."""
+    if not case.get("regions"):
+        return False
+    region = case["regions"][0]
+    scale = float(case.get("scale", DEFAULT_SCALE))
+    image = decode_png_bytes(path.read_bytes())
+    x = int((region["x"] + region["w"] / 2) * scale)
+    y = int((region["y"] + region["h"] / 2) * scale)
+    pixels = bytearray(image.pixels)
+    offset = (y * image.width + x) * 4
+    pixels[offset] = (pixels[offset] + 1) % 256
+    path.write_bytes(encode_png(RgbaImage(image.width, image.height, bytes(pixels))))
+    return True
+
+
 def strip_layout_to_rects(path: Path) -> bool:
     """Both sides emit a thinner layout schema: bounds only."""
     layout = load_json(path)
@@ -1313,6 +1475,8 @@ ARTIFACT_CONTROLS: dict[str, dict[str, Any]] = {
     "semantic-one-byte": {"lane": "semantic", "candidate": lambda d: mutate_json_string(
         d / "text.json", lambda k, v: k == "text")},
     "interaction-state": {"lane": "interaction", "candidate": lambda d: perturb_interaction_state(d / "interaction.json")},
+    "raster-region-one-pixel": {"lane": "raster", "candidate": lambda d, case: flip_region_pixel(d / "render.png", case),
+                                "bites": lambda r: any(x.startswith("region ") for x in r.get("reasons", []))},
 }
 RERUN_CONTROLS: dict[str, dict[str, Any]] = {
     name: {"lane": lane, "prepare": builtin_rerun_prepare(name), **extra}
@@ -1332,9 +1496,10 @@ def calibrate(corpus_path: Path, source_root: Path, impl_path: Path, out: Path,
               tool_overrides: dict[str, str] | None = None,
               source_sha: str | None = None,
               roots: dict[str, Path] | None = None,
-              case_filter: list[str] | None = None) -> dict[str, Any]:
+              case_filter: list[str] | None = None,
+              external_roots: dict[str, str] | None = None) -> dict[str, Any]:
     corpus = load_json(corpus_path)
-    cases = validate_corpus(corpus, corpus_path.resolve().parent)
+    cases = validate_corpus(corpus, corpus_path.resolve().parent, external_roots)
     if case_filter:
         unknown = set(case_filter) - {case["case_id"] for case in cases}
         if unknown:
@@ -1348,6 +1513,8 @@ def calibrate(corpus_path: Path, source_root: Path, impl_path: Path, out: Path,
     if out.exists():
         shutil.rmtree(out)
     identity = implementation_identity(impl, tools, roots)
+    passthrough_paths = {str(entry.get("path")) for entry in identity.get("passthrough_binaries", [])
+                         if isinstance(entry, dict)}
 
     def side(case: dict[str, Any], label: str, **kwargs: Any) -> tuple[Path, dict[str, Any]]:
         directory = out / "runs" / case["case_id"] / label
@@ -1473,13 +1640,61 @@ def calibrate(corpus_path: Path, source_root: Path, impl_path: Path, out: Path,
     probes_missing["probes"] = {k: v for k, v in (identity.get("probes") or {}).items() if k != "fonts"}
     record("identity-probe-missing", "*", "fail", None,
            receipt(positive_results, cand=probes_missing)["verdict"], ["*"])
+    # The producing binary of one observation is swapped for an undeclared one.
+    swapped = copy.deepcopy(positive_results)
+    for result in swapped:
+        selected = {name for lane, r in result["lanes"].items() if r["status"] != "not_selected"
+                    for name in LANE_ARTIFACTS.get(lane, ())}
+        for name, origin in (result["candidate"].get("produced_by") or {}).items():
+            if name in selected and origin.get("binary") not in passthrough_paths:
+                origin["binary_sha256"] = "0" * 64
+                origin.pop("script_sha256", None)
+                break
+    record("provenance-undeclared-binary", "*", "fail", None, receipt(swapped)["verdict"], ["*"])
+    # The same, aimed at a nested observation (an artifact declared with a
+    # subpath), which a top-level-only scan would never attribute.
+    nested = copy.deepcopy(positive_results)
+    nested_applied = []
+    for result in nested:
+        selected = {name for lane, r in result["lanes"].items() if r["status"] != "not_selected"
+                    for name in LANE_ARTIFACTS.get(lane, ()) if "/" in name}
+        for name, origin in (result["candidate"].get("produced_by") or {}).items():
+            # A passthrough producer is exempt from the check, so replacing its
+            # digest proves nothing; aim at a nested observation a tool produced.
+            if name in selected and origin.get("binary") not in passthrough_paths:
+                origin["binary_sha256"] = "0" * 64
+                origin.pop("script_sha256", None)
+                nested_applied.append(f"{result['case_id']}:{name}")
+                break
+    declares_nested = any("/" in name for result in positive_results
+                          for lane, r in result["lanes"].items() if r["status"] != "not_selected"
+                          for name in LANE_ARTIFACTS.get(lane, ()))
+    if nested_applied:
+        record("provenance-undeclared-nested-binary", "*", "fail", None, receipt(nested)["verdict"], nested_applied)
+    elif declares_nested:
+        # Selected lanes declare nested observations, but every one came from a
+        # passthrough: the control has nothing it can prove, which must not pass.
+        controls.append({"control": "provenance-undeclared-nested-binary", "lane": "*", "applied_cases": [],
+                         "rejected": False, "lane_hit": False,
+                         "outcome": "NOT APPLICABLE (every nested observation came from a passthrough)"})
+    else:
+        controls.append({"control": "provenance-undeclared-nested-binary", "lane": "*", "applied_cases": [],
+                         "rejected": None, "lane_hit": None,
+                         "outcome": "OUT OF SCOPE (no selected lane declares a nested artifact)"})
+    # A join across authorities may pass every lane but must never be cited as parity.
+    cross = receipt(positive_results, mode="parity",
+                    cand=relabelled(authority=next(a for a in AUTHORITIES if a != identity.get("authority")),
+                                    tools={n: dict(t, sha256="e" * 64) for n, t in identity["tools"].items()}))
+    record("authority-mismatch-not-parity", "*", "fail", None,
+           {"accepting": cross["verdict"]["scope"] == "parity",
+            "reasons": [f"scope {cross['verdict']['scope']}"]}, ["*"])
     record("empty-corpus", "*", "fail", None, receipt([])["verdict"], ["*"])
     unselected = [dict(r, lanes={lane: lane_result("not_selected") for lane in LANES})
                   for r in positive_results[:1]]
     record("no-lane-selected", "*", "fail", None, receipt(unselected)["verdict"], ["*"])
 
     failures = [c for c in controls
-                if c["outcome"] not in ("REJECTED as required", "OUT OF SCOPE (no case selects this lane)")]
+                if c["outcome"] != "REJECTED as required" and not c["outcome"].startswith("OUT OF SCOPE")]
     calibrated = positive["verdict"]["accepting"] and not failures
     return {
         "schema": CALIBRATION_SCHEMA,
@@ -1525,6 +1740,8 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--calibration", type=Path,
                      help="calibration.json for this corpus and harness (required in parity mode)")
     run.add_argument("--lane-module", action="append", default=[], type=Path)
+    run.add_argument("--external-root", action="append", default=[],
+                     help="name=path for cases whose source_base is external:<name>")
     run.add_argument("--out", required=True, type=Path)
 
     cal = sub.add_parser("calibrate", help="positive comparison plus every negative control")
@@ -1536,6 +1753,8 @@ def main(argv: list[str] | None = None) -> int:
     cal.add_argument("--root", action="append", default=[],
                      help="name=path; defaults to checkout=<source-root>")
     cal.add_argument("--lane-module", action="append", default=[], type=Path)
+    cal.add_argument("--external-root", action="append", default=[],
+                     help="name=path for cases whose source_base is external:<name>")
     cal.add_argument("--case", action="append", default=[],
                      help="debug: calibrate only these case ids; the record is refused by parity runs")
     cal.add_argument("--out", required=True, type=Path)
@@ -1558,6 +1777,16 @@ def main(argv: list[str] | None = None) -> int:
     ical.add_argument("--out", required=True, type=Path)
 
     args = parser.parse_args(argv)
+    # Paths given on the command line are relative to the invoking directory.
+    # Resolve them now: run steps execute in per-case directories, and a
+    # relative --out would otherwise be re-read from there.
+    for name in ("out", "corpus", "source_root", "implementation", "reference", "candidate",
+                 "calibration", "manifest", "origin_repo", "exported_root", "exported_repo"):
+        value = getattr(args, name, None)
+        if isinstance(value, Path):
+            setattr(args, name, value.resolve())
+        elif isinstance(value, list):
+            setattr(args, name, [v.resolve() if isinstance(v, Path) else v for v in value])
     try:
         for module in getattr(args, "lane_module", []) or []:
             load_lane_module(module)
@@ -1572,7 +1801,9 @@ def main(argv: list[str] | None = None) -> int:
                                               "candidate": args.candidate_sha},
                                  roots={"reference": parse_tool_overrides(args.reference_root),
                                         "candidate": parse_tool_overrides(args.candidate_root)},
-                                 calibration=load_json(args.calibration) if args.calibration else None)
+                                 calibration=load_json(args.calibration) if args.calibration else None,
+                                 external_roots={k: str(Path(v).resolve()) for k, v in
+                                                 parse_tool_overrides(args.external_root).items()})
             write_json(args.out / "receipt.json", receipt)
             print(json.dumps(receipt["verdict"], indent=2))
             return 0 if receipt["verdict"]["accepting"] else 1
@@ -1580,7 +1811,8 @@ def main(argv: list[str] | None = None) -> int:
             roots = parse_tool_overrides(args.root) or {"checkout": str(args.source_root)}
             report = calibrate(args.corpus, args.source_root, args.implementation, args.out,
                                parse_tool_overrides(args.tool), args.source_sha,
-                               {k: Path(v) for k, v in roots.items()}, args.case)
+                               {k: Path(v) for k, v in roots.items()}, args.case,
+                               {k: str(Path(v).resolve()) for k, v in parse_tool_overrides(args.external_root).items()})
             write_json(args.out / "calibration.json", report)
             for control in report["controls"]:
                 print(f"{control['control']:36} {control['outcome']}")

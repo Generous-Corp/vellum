@@ -45,14 +45,9 @@ the hosted value rather than leaving jobs queued indefinitely.
 - Every workflow that produces a required check also runs on `merge_group`,
   so a merge queue on `main` can admit entries; the steward arms auto-merge
   (`MERGE`) and never merges directly once a queue exists.
-- A `pull_request` or `merge_group` run never reads Pulp at a live branch.
-  Every `Generous-Corp/pulp` checkout those runs can reach resolves its ref
-  from evidence committed in this repository (the observatory cursor or an
-  authority record), so replaying a check for the same Vellum tree yields the
-  same verdict and two queue entries cannot disagree because Pulp `main`
-  moved between them. Push and tag runs still read live Pulp `main` and pin
-  themselves with a before/after live-SHA equality test.
-  `scripts/test_ci_runner_policy.py` enforces the rule.
+- Pull requests record their own observatory events and leave the cursor to
+  the receiver (Decision 0012), so queue entries no longer serialize on
+  `provenance/pulp-observatory/cursor.json`.
 - Full diagnostic artifacts are retained for release and failed runs; routine
   passing checks should retain only the evidence required by their contract.
 - A scheduled or hosted canary may detect local drift, but it is not a reason

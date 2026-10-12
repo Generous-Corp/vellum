@@ -7949,14 +7949,27 @@
       ],
       "source_commit": "d216ad1732944ca6df253eb1cada0a7a45350e28",
       "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "rendering",
+      "deadline": "2026-10-15T05:50:44Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "pending",
+      "event_id": "vellum-f5383ce989fb2d1573d492b11b26f5c5858130f6",
+      "mapped_contracts": [
+        "canvas-kernel",
+        "render-skia-dawn"
+      ],
+      "source_commit": "f5383ce989fb2d1573d492b11b26f5c5858130f6",
+      "source_repository": "Generous-Corp/vellum"
     }
   ],
-  "generated_at": "2026-10-11T20:26:34Z",
+  "generated_at": "2026-10-12T05:50:44Z",
   "health": "pass",
   "maximum_pending_age_days": 0.0,
   "observatory_effort_percent": 0.0,
   "overdue": 0,
-  "pending": 0,
+  "pending": 1,
   "release_blockers": [],
   "repeated_generic_fixes": {
     "canvas-kernel": 2,
