@@ -46,6 +46,9 @@ the hosted value rather than leaving jobs queued indefinitely.
 - Every workflow that produces a required check also runs on `merge_group`,
   so a merge queue on `main` can admit entries; the steward arms auto-merge
   (`MERGE`) and never merges directly once a queue exists.
+- Pull requests record their own observatory events and leave the cursor to
+  the receiver (Decision 0012), so queue entries no longer serialize on
+  `provenance/pulp-observatory/cursor.json`.
 - Full diagnostic artifacts are retained for release and failed runs; routine
   passing checks should retain only the evidence required by their contract.
 - A scheduled or hosted canary may detect local drift, but it is not a reason

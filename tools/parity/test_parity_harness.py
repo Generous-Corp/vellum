@@ -11,7 +11,9 @@ the controls no longer bite and refuse to report the harness as calibrated.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -136,6 +138,7 @@ def implementation(tool: Path) -> dict:
         "source_sha": None,
         "tools": {"fake": str(tool)},
         "source_kinds": {"fake-json": []},
+        "authority": "native-render",
         "probes": [{"name": name, "argv": [sys.executable, "-c", f"print('{name} of the fake')"]}
                    for name in ("build", "provider", "fonts")],
         "interaction_encoding": "argv-click-drag-key",
@@ -172,6 +175,7 @@ def corpus(cases: list[dict] | None = None) -> dict:
             "scale": 1,
             "lanes": ["structure", "raster", "geometry", "semantic", "interaction"],
             "volatile": {"structure": ["/imported_at"]},
+            "regions": [{"name": "knob", "x": 4, "y": 4, "w": 12, "h": 12}],
             "interactions": [{"key": "tab"}, {"drag": [[8, 8], [8, 2]]}, {"click": [22, 10]}],
         }],
     }
@@ -203,7 +207,8 @@ class CalibrationTests(HarnessFixture):
     def test_honest_implementation_calibrates_and_every_control_bites(self) -> None:
         report = ph.calibrate(self.corpus_path, self.root / "src", self.impl_path, self.root / "out")
         self.assertTrue(report["positive"]["verdict"]["accepting"], report["positive"]["verdict"])
-        failed = {c["control"]: c for c in report["controls"] if c["outcome"] != "REJECTED as required"}
+        failed = {c["control"]: c for c in report["controls"]
+                  if c["outcome"] != "REJECTED as required" and not c["outcome"].startswith("OUT OF SCOPE")}
         self.assertEqual(failed, {})
         self.assertTrue(report["calibrated"])
         names = {c["control"] for c in report["controls"]}
@@ -502,6 +507,303 @@ class ControlScopeTests(HarnessFixture):
         finally:
             del ph.ARTIFACT_CONTROLS["raster-wrong-reason"]
         self.assertIn("raster-wrong-reason", report["control_failures"])
+
+
+class RelativeOutTests(HarnessFixture):
+    def test_relative_out_and_corpus_resolve_against_the_invoking_directory(self) -> None:
+        cwd = Path.cwd()
+        try:
+            os.chdir(self.root)
+            status = ph.main(["calibrate", "--corpus", "corpus.json", "--source-root", "src",
+                              "--implementation", "impl.json", "--out", "../" + self.root.name + "/rel-out"])
+        finally:
+            os.chdir(cwd)
+        self.assertEqual(status, 0)
+        self.assertTrue((self.root / "rel-out" / "calibration.json").is_file())
+
+    def test_paths_reach_calibrate_absolute(self) -> None:
+        # A rerun control may stage a companion it wrote under the out dir; the
+        # stager joins it onto the corpus dir, which is only safe when out is absolute.
+        seen = {}
+        real = ph.calibrate
+
+        def capture(corpus_path, source_root, impl_path, out, *args, **kwargs):
+            seen.update(corpus=corpus_path, source=source_root, out=out)
+            return real(corpus_path, source_root, impl_path, out, *args, **kwargs)
+
+        cwd = Path.cwd()
+        try:
+            os.chdir(self.root)
+            ph.calibrate = capture
+            ph.main(["calibrate", "--corpus", "corpus.json", "--source-root", "src",
+                     "--implementation", "impl.json", "--out", "rel-out-2"])
+        finally:
+            ph.calibrate = real
+            os.chdir(cwd)
+        self.assertTrue(all(Path(v).is_absolute() for v in seen.values()), seen)
+
+
+class AuthorityAndProvenanceTests(HarnessFixture):
+    def test_authority_is_declared_and_cross_authority_is_never_parity(self) -> None:
+        impl = implementation(self.tool)
+        del impl["authority"]
+        with self.assertRaises(ph.HarnessError):
+            ph.validate_implementation(impl)
+        a = {"repository": "Generous-Corp/pulp", "source_sha": "a" * 40, "authority": "native-render"}
+        b = {"repository": "Generous-Corp/vellum", "source_sha": "b" * 40, "authority": "browser-source"}
+        self.assertEqual(ph.comparison_scope("parity", a, b), "cross-authority")
+        self.assertEqual(ph.comparison_scope("parity", a, dict(b, authority="native-render")), "parity")
+
+    def test_observations_must_come_from_declared_binaries(self) -> None:
+        run = ph.run_side(corpus()["cases"][0] | {"_corpus_dir": str(self.root)}, implementation(self.tool),
+                          {"fake": self.tool}, self.root / "src", self.root / "side")
+        identity = {"tools": {"fake": {"sha256": ph.sha256_file(self.tool)}}, "passthrough_binaries": []}
+        self.assertEqual(ph.provenance_errors(run, identity, "x", ["raster", "structure"]), [])
+        stranger = {"tools": {"fake": {"sha256": "1" * 64}}, "passthrough_binaries": []}
+        self.assertTrue(ph.provenance_errors(run, stranger, "x", ["raster"]))
+        self.assertIn("binary_sha256", run["produced_by"]["render.png"])
+
+    def test_nested_artifacts_are_hashed_and_their_producer_checked(self) -> None:
+        nested = "deep/nested-observation.json"
+        ph.LANE_ARTIFACTS["nested-probe"] = (nested,)
+        try:
+            impl = implementation(self.tool)
+            impl["steps"].append({"id": "mkdir", "argv": ["/bin/mkdir", "-p", "deep"]})
+            impl["steps"].append({"id": "nested", "argv": ["/usr/bin/touch", "deep/nested-observation.json"]})
+            case = corpus()["cases"][0] | {"_corpus_dir": str(self.root)}
+            run = ph.run_side(case, impl, {"fake": self.tool}, self.root / "src", self.root / "nested-side")
+            self.assertIn(nested, run["artifacts"])
+            self.assertEqual(run["produced_by"][nested]["binary"], "/usr/bin/touch")
+            identity = {"tools": {"fake": {"sha256": ph.sha256_file(self.tool)}}, "passthrough_binaries": []}
+            errors = ph.provenance_errors(run, identity, "x", ["nested-probe"])
+            self.assertTrue(any(nested in e and "undeclared binary" in e for e in errors), errors)
+        finally:
+            del ph.LANE_ARTIFACTS["nested-probe"]
+
+    def test_nested_artifact_calibration_control_bites(self) -> None:
+        def nested_lane(ref, cand, case):
+            same = (ref / "deep/obs.json").read_bytes() == (cand / "deep/obs.json").read_bytes()
+            return {"status": "pass" if same else "fail", "reasons": [] if same else ["differs"]}
+
+        ph.register_lane("nested-lane", ("deep/obs.json",), nested_lane)
+        try:
+            impl = implementation(self.tool)
+            # A passthrough copy writes a nested file first; the control must skip
+            # it and aim at the nested observation the declared tool writes.
+            impl["passthrough_binaries"] = [{"path": "/bin/cp", "sha256": ph.sha256_file(Path("/bin/cp")),
+                                              "justification": "copies a staged input"}]
+            impl["steps"].append({"id": "copy", "argv": ["/bin/mkdir", "-p", "deep"]})
+            impl["steps"].append({"id": "copied", "argv": ["/bin/cp", "source.json", "deep/a-copied.json"]})
+            impl["steps"].append({"id": "nested", "argv": [
+                sys.executable, str(self.tool), "nested", "--write", "deep/obs.json"]})
+            ph.write_json(self.impl_path, impl)
+            self.tool.write_text(self.tool.read_text().replace(
+                'mode = args.pop(0)',
+                'mode = args.pop(0)\nif mode == "nested":\n    import os\n'
+                '    os.makedirs("deep", exist_ok=True)\n    open("deep/obs.json", "w").write("{}")\n'
+                '    sys.exit(0)'))
+            ph.write_json(self.impl_path, implementation(self.tool) | {"steps": impl["steps"],
+                                                                      "passthrough_binaries": impl["passthrough_binaries"]})
+            nested_corpus = corpus()
+            nested_corpus["cases"][0]["lanes"].append("nested-lane")
+            ph.write_json(self.corpus_path, nested_corpus)
+            report = ph.calibrate(self.corpus_path, self.root / "src", self.impl_path, self.root / "out")
+            outcomes = {c["control"]: c["outcome"] for c in report["controls"]}
+            self.assertEqual(outcomes["provenance-undeclared-nested-binary"], "REJECTED as required")
+            self.assertTrue(report["calibrated"], report["control_failures"])
+        finally:
+            ph.LANES.remove("nested-lane")
+            ph.LANE_ARTIFACTS.pop("nested-lane", None)
+            ph.COMPARATORS.pop("nested-lane", None)
+
+    def test_regions_are_validated_and_named_when_they_differ(self) -> None:
+        good = corpus()["cases"][0]
+        for regions in ([{"name": "a", "x": 0, "y": 0, "w": 50, "h": 4}],
+                        [{"name": "a", "x": 0, "y": 0, "w": 4, "h": 4}, {"name": "a", "x": 1, "y": 1, "w": 2, "h": 2}],
+                        [{"name": "a", "x": 0, "y": 0, "w": 0, "h": 4}]):
+            with self.subTest(regions=regions), self.assertRaises(ph.HarnessError):
+                ph.validate_corpus(corpus([dict(good, regions=regions)]))
+        ph.calibrate(self.corpus_path, self.root / "src", self.impl_path, self.root / "out")
+        ref = self.root / "out/runs/fake-controls/reference"
+        cand = self.root / "regional"
+        shutil.copytree(self.root / "out/runs/fake-controls/candidate", cand)
+        self.assertTrue(ph.flip_region_pixel(cand / "render.png", dict(good, scale=1)))
+        result = ph.compare_raster(ref, cand, dict(good, scale=1))
+        self.assertEqual(result["status"], "fail")
+        self.assertTrue(any(r.startswith("region knob:") for r in result["reasons"]))
+        # A region on bare background drew nothing: it fails even though the
+        # whole frame matches exactly.
+        empty = dict(good, scale=1, regions=[{"name": "corner", "x": 30, "y": 26, "w": 8, "h": 4}])
+        same = ph.compare_raster(ref, self.root / "out/runs/fake-controls/candidate", empty)
+        self.assertEqual(same["differing_pixels"], 0)
+        self.assertEqual(same["status"], "fail")
+
+    def test_external_sources_need_a_permissive_pinned_licence(self) -> None:
+        good = dict(corpus()["cases"][0], source_base="external:thirdparty")
+        prov = {"license": "MIT", "repository": "example/x", "commit": "a" * 40, "sha256": "b" * 64}
+        ph.validate_corpus(corpus([dict(good, provenance=prov)]))
+        for bad in ({}, dict(prov, license="TBD"), dict(prov, commit="abc"), dict(prov, sha256="x")):
+            with self.subTest(bad=bad), self.assertRaises(ph.HarnessError):
+                ph.validate_corpus(corpus([dict(good, provenance=bad)]))
+        pinned = dict(good, provenance=dict(prov, sha256="0" * 64),
+                      _external_roots={"thirdparty": str(self.root / "src")})
+        with self.assertRaises(ph.HarnessError):
+            ph.stage_case(pinned, self.root / "src", self.root / "staged")
+
+
+class ContainmentTests(HarnessFixture):
+    """R10 must-fix 1: a corpus path may not leave its declared root."""
+
+    def staged(self, **changes) -> None:
+        case = dict(corpus()["cases"][0], **changes)
+        case["_corpus_dir"] = str(self.root)
+        ph.stage_case(case, self.root / "src", self.root / "staged")
+
+    def test_escapes_are_refused_before_staging(self) -> None:
+        (self.root / "outside.json").write_text("{}")
+        (self.root / "outside-dir").mkdir()
+        (self.root / "outside-dir/x.json").write_text("{}")
+        os.symlink(self.root / "outside.json", self.root / "src/link.json")
+        os.symlink(self.root / "outside-dir", self.root / "src/linkdir")
+        (self.root / "src/inner").mkdir()
+        os.symlink(self.root / "outside-dir", self.root / "src/inner/hop")
+        (self.root / "src/assets/sneaky.txt").symlink_to(self.root / "outside.json")
+        attempts = {
+            "dotdot": {"source": "../outside.json"},
+            "absolute": {"source": str(self.root / "outside.json")},
+            "symlinked file": {"source": "link.json"},
+            "symlinked dir": {"source": "linkdir/x.json"},
+            "intermediate symlink": {"source": "inner/hop/x.json"},
+            "companion escape": {"stage": ["../outside-dir"]},
+            "symlink inside a staged dir": {"stage": ["assets"]},
+        }
+        for label, change in attempts.items():
+            with self.subTest(label), self.assertRaises(ph.HarnessError):
+                self.staged(**change)
+        self.assertFalse((self.root / "staged/outside.json").exists())
+
+    def test_contained_paths_still_stage(self) -> None:
+        (self.root / "src/assets/sneaky.txt").unlink(missing_ok=True)
+        self.staged()
+        self.assertTrue((self.root / "staged/source.json").is_file())
+        self.assertTrue((self.root / "staged/assets/tint.txt").is_file())
+
+
+class RegionBoundsTests(HarnessFixture):
+    """R10 must-fix 2: a region is never shortened to fit the render."""
+
+    def pngs(self, ref_size, cand_size) -> tuple[Path, Path]:
+        dirs = []
+        for name, (w, h) in (("ref", ref_size), ("cand", cand_size)):
+            d = self.root / name
+            d.mkdir()
+            pixels = bytearray(b"\x10\x10\x10\xff" * (w * h))
+            pixels[0:4] = b"\xff\x00\x00\xff"
+            (d / "render.png").write_bytes(ph.encode_png(ph.RgbaImage(w, h, bytes(pixels))))
+            dirs.append(d)
+        return dirs[0], dirs[1]
+
+    def test_region_outside_both_smaller_renders_fails(self) -> None:
+        ref, cand = self.pngs((20, 16), (20, 16))
+        case = dict(corpus()["cases"][0], scale=1,
+                    regions=[{"name": "wide", "x": 0, "y": 0, "w": 30, "h": 10}])
+        result = ph.compare_regions(ref / "render.png", cand / "render.png", case)
+        self.assertTrue(any("not fully present" in r for r in result["wide"]["reasons"]), result)
+
+    def test_region_past_one_side_fails(self) -> None:
+        ref, cand = self.pngs((40, 32), (20, 16))
+        case = dict(corpus()["cases"][0], scale=1,
+                    regions=[{"name": "corner", "x": 0, "y": 0, "w": 30, "h": 10}])
+        result = ph.compare_regions(ref / "render.png", cand / "render.png", case)
+        self.assertTrue(any("candidate render" in r for r in result["corner"]["reasons"]), result)
+
+
+class PassthroughLaunderingTests(HarnessFixture):
+    """A passthrough copy is exempt only for staged inputs: copying a file an
+    undeclared program wrote earlier must be refused."""
+
+    def run_with(self, steps: list[dict]) -> dict:
+        ph.LANE_ARTIFACTS["copy-probe"] = ("out/copied.json",)
+        impl = implementation(self.tool)
+        impl["steps"] += steps
+        case = corpus()["cases"][0] | {"_corpus_dir": str(self.root)}
+        return ph.run_side(case, impl, {"fake": self.tool}, self.root / "src", self.root / "side")
+
+    def errors(self, run: dict) -> list[str]:
+        identity = {"tools": {"fake": {"sha256": ph.sha256_file(self.tool)}},
+                    "passthrough_binaries": [{"path": "/bin/cp", "sha256": ph.sha256_file(Path("/bin/cp"))}]}
+        return ph.provenance_errors(run, identity, "x", ["copy-probe"])
+
+    def tearDown(self) -> None:
+        ph.LANE_ARTIFACTS.pop("copy-probe", None)
+        super().tearDown()
+
+    def test_copy_of_an_undeclared_output_is_refused(self) -> None:
+        run = self.run_with([
+            {"id": "mkdir", "argv": ["/bin/mkdir", "-p", "out"]},
+            {"id": "undeclared", "argv": ["/usr/bin/touch", "made-elsewhere.json"]},
+            {"id": "copy", "argv": ["/bin/cp", "made-elsewhere.json", "out/copied.json"]},
+        ])
+        self.assertEqual(run["produced_by"]["out/copied.json"]["reads"], ["made-elsewhere.json"])
+        errors = self.errors(run)
+        self.assertTrue(any("copied into" in e for e in errors), errors)
+
+    def test_copy_of_a_staged_input_is_accepted(self) -> None:
+        run = self.run_with([
+            {"id": "mkdir", "argv": ["/bin/mkdir", "-p", "out"]},
+            {"id": "copy", "argv": ["/bin/cp", "source.json", "out/copied.json"]},
+        ])
+        self.assertTrue(self.errors(run))
+
+
+class NestedControlLoudTests(HarnessFixture):
+    def test_nested_lane_with_only_passthrough_outputs_does_not_calibrate(self) -> None:
+        def nested_lane(ref, cand, case):
+            return {"status": "pass", "reasons": []}
+
+        ph.register_lane("copied-lane", ("deep/only-copied.json",), nested_lane)
+        try:
+            impl = implementation(self.tool)
+            impl["passthrough_binaries"] = [{"path": "/bin/cp", "sha256": ph.sha256_file(Path("/bin/cp")),
+                                              "justification": "copies a staged input"}]
+            impl["steps"] += [{"id": "mkdir", "argv": ["/bin/mkdir", "-p", "deep"]},
+                              {"id": "copy", "argv": ["/bin/cp", "source.json", "deep/only-copied.json"]}]
+            ph.write_json(self.impl_path, impl)
+            only_copied = corpus()
+            only_copied["cases"][0]["lanes"].append("copied-lane")
+            ph.write_json(self.corpus_path, only_copied)
+            report = ph.calibrate(self.corpus_path, self.root / "src", self.impl_path, self.root / "out")
+            outcomes = {c["control"]: c["outcome"] for c in report["controls"]}
+            self.assertTrue(outcomes["provenance-undeclared-nested-binary"].startswith("NOT APPLICABLE"))
+            self.assertIn("provenance-undeclared-nested-binary", report["control_failures"])
+            self.assertFalse(report["calibrated"])
+        finally:
+            ph.LANES.remove("copied-lane")
+            ph.LANE_ARTIFACTS.pop("copied-lane", None)
+            ph.COMPARATORS.pop("copied-lane", None)
+
+
+class DelegationTests(HarnessFixture):
+    """R10 guard gap: a declared wrapper delegating through a command string."""
+
+    def test_shell_command_string_is_refused_even_as_passthrough(self) -> None:
+        ph.LANE_ARTIFACTS["delegate-probe"] = ("delegated.json",)
+        try:
+            impl = implementation(self.tool)
+            impl["steps"].append({"id": "delegate", "argv": [
+                "/bin/sh", "-c", f"{sys.executable} -c 'open(\"delegated.json\", \"w\").write(\"{{}}\")'"]})
+            case = corpus()["cases"][0] | {"_corpus_dir": str(self.root)}
+            run = ph.run_side(case, impl, {"fake": self.tool}, self.root / "src", self.root / "side")
+            self.assertTrue(run["produced_by"]["delegated.json"].get("delegated"))
+            identity = {"tools": {"fake": {"sha256": ph.sha256_file(self.tool)}},
+                        "passthrough_binaries": ["/bin/sh"]}
+            errors = ph.provenance_errors(run, identity, "x", ["delegate-probe"])
+            self.assertTrue(any("shell command string" in e for e in errors), errors)
+            inline = ph.producing_binary([sys.executable, "-c", "pass"])
+            self.assertTrue(inline.get("delegated"))
+            self.assertFalse(ph.producing_binary(["/bin/cp", "a", "b"]).get("delegated"))
+        finally:
+            del ph.LANE_ARTIFACTS["delegate-probe"]
 
 
 class LaneRegistrationTests(unittest.TestCase):

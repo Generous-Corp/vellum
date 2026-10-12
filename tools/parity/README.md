@@ -37,6 +37,42 @@ justified corpus-level `volatile_allowlist` entries that can never erase a whole
 observation. Geometry and semantic observations must carry their full schema
 on both sides.
 
+## Authority, provenance, regions, licensed sources
+
+- **Authority.** Every implementation declares `authority`: `native-render`, `materialized-runtime` or
+  `browser-source`. It is never defaulted. Two sides with different authorities get scope `cross-authority`, which
+  is diagnostic and never `parity`.
+- **Producing binary.** Each step records the digest of the binary it ran (and of the script, for an
+  interpreter) at run time. Each observation records the step that produced it. An observation that a selected
+  lane reads must come from a declared tool. Passthrough entries are digest-bound, copy-only tools and may copy
+  staged inputs or earlier declared artifacts; they can never produce a selected observation. Copy arguments are
+  resolved in the side directory, including directory trees, so spelling changes cannot launder provenance.
+- **Regions.** A case may declare named `regions` in design px. The raster lane scores each one separately:
+  a localized difference is named, and a region that drew nothing fails even when the whole frame matches. Put
+  a shared deterministic fixture in `stage` so both renderers read the same bytes.
+- **Third-party sources.** `source_base: "external:<name>"` (resolved with `--external-root name=path`)
+  requires `provenance`:
+  - a permissive SPDX `license`;
+  - the `repository`;
+  - a 40-hex `commit`;
+  - the source's `sha256`;
+  - for staged companions, a `files` map covering every staged relative path with its sha256; and
+  - an external root whose checked-out `HEAD` equals `commit`.
+
+  The staged bytes must match the pin.
+
+## Containment and delegation (`parity_policy.py`)
+
+- **Paths:** every corpus path (`source` and each `stage` entry) must stay inside its root. Absolute paths, `..`
+  and symlinks (along the path, or inside a staged directory) are refused before anything is copied. A rerun
+  control that writes its own file passes it as `extra_stage` to `run_side`, not as a corpus path.
+- **Regions:** a region must lie wholly inside both rendered images. It is never shortened to fit.
+- **Delegation:** an observation produced through a command string (`sh -c`, `bash -c`, `python -c`, `node -e`,
+  …) is refused, even if that shell is a declared passthrough. The shell's digest says nothing about the program
+  that wrote the file. Run the producer directly, as a declared tool or script.
+- **Limit:** a declared tool or script that itself starts an undeclared program is not traced. The declared
+  script is responsible for what it runs.
+
 ## Calibrate before trusting a comparison
 
 ```sh
