@@ -75,6 +75,12 @@ class OracleLane(unittest.TestCase):
     def tearDown(self) -> None:
         shutil.rmtree(self.root)
 
+    def test_flat_capture_is_not_selected(self) -> None:
+        self.ref.mkdir(parents=True)
+        (self.ref / "capture.json").write_text("{}", encoding="utf-8")
+        self.assertEqual(lanes.capture_path(self.ref),
+                         self.ref / "design.ir-browser-capture" / "capture.json")
+
     def run_lane(self, case=None) -> dict:
         return lanes.compare_oracle(self.ref, self.cand, case or oracle_case())
 

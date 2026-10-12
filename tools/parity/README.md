@@ -48,7 +48,13 @@ on both sides.
   interpreter) at run time. Each observation records the step that produced it. An observation that a selected
   lane reads must come from a declared tool. Passthrough entries are digest-bound, copy-only tools and may copy
   staged inputs or earlier declared artifacts; they can never produce a selected observation. Copy arguments are
-  resolved in the side directory, including directory trees, so spelling changes cannot launder provenance.
+  resolved in the side directory, including directory trees, so spelling changes cannot launder provenance. The
+  policy retains every digest produced at every earlier step: a selected output whose bytes match any staged input
+  or strictly earlier output is treated as a copy, even when the source is overwritten later. This is a content
+  test with limits: it catches byte-for-byte copies, while a copy followed by an edit generally evades a digest-only
+  check unless the edited bytes happen to match another known digest. It cannot identify a copy from the other
+  side's directory without a matching digest in this run. Byte-identical legitimate outputs are therefore refused
+  as selected observations.
 - **Regions.** A case may declare named `regions` in design px. The raster lane scores each one separately:
   a localized difference is named, and a region that drew nothing fails even when the whole frame matches. Put
   a shared deterministic fixture in `stage` so both renderers read the same bytes.

@@ -176,6 +176,9 @@ def provenance_errors(run: dict[str, Any], identity: dict[str, Any], side: str,
         elif isinstance(entry, dict):
             passthrough[str(entry.get("path"))] = entry.get("sha256")
     producers = run.get("producers") or run.get("produced_by") or {}
+    produced_history = run.get("produced_history") or {
+        name: [producer] for name, producer in producers.items()
+    }
     inputs = run.get("inputs") or {}
 
     step_order = {step.get("id"): index for index, step in enumerate(run.get("steps") or [])}
@@ -192,11 +195,13 @@ def provenance_errors(run: dict[str, Any], identity: dict[str, Any], side: str,
         for source, source_sha in inputs.items():
             if source != name and source_sha == output_sha:
                 return True
-        for source, previous in producers.items():
-            if source == name or step_order.get(previous.get("step"), len(step_order)) >= origin_step:
+        for source, history in produced_history.items():
+            if source == name:
                 continue
-            if previous.get("sha256") == output_sha:
-                return True
+            for previous in history:
+                if step_order.get(previous.get("step"), len(step_order)) < origin_step \
+                        and previous.get("sha256") == output_sha:
+                    return True
         return False
 
     def check(name: str, origin: dict[str, Any] | None, seen: frozenset[str]) -> list[str]:
