@@ -426,7 +426,10 @@ Verified installs are immutable and content-addressed under
 `PREFIX/bin/vellum` is the managed stable launcher. The active CMake tree is
 therefore available at `PREFIX/lib/vellum/sdk`; consumers can add that
 directory to `CMAKE_PREFIX_PATH` and use
-`find_package(Vellum CONFIG REQUIRED)`.
+`find_package(Vellum CONFIG REQUIRED)`. A consumer that targets another system
+or architecture than the SDK was built for (for example a universal or x86_64
+macOS build against the arm64 SDK, or iOS) gets "not found" with the reason,
+and no targets, so an optional consumer can keep its own provider.
 
 Every immutable install writes an ownership receipt and
 `install-manifest.json`. Verified installs record the archive SHA-256, target,
