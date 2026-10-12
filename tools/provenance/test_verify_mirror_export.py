@@ -370,12 +370,28 @@ class VerifyMirrorExportTests(unittest.TestCase):
         )
         self.assertError(errors, "embedded pin must equal pin")
 
+    def test_external_input_positional_pin_rejects_tag_and_short_hash(self) -> None:
+        for positional in ("release-3.2.12", "a" * 12):
+            errors = verify_mirror_export.validate_external_inputs(
+                [{"path": f"@external/sdl3/{positional}/x.h", "source": "https://github.com/libsdl-org/SDL", "pin": "b" * 40}],
+                "fixture external inputs",
+            )
+            self.assertError(errors, "@external pin segment must equal pin")
+
+    def test_external_input_positional_pin_must_equal_full_pin(self) -> None:
+        pin = "a" * 40
+        errors = verify_mirror_export.validate_external_inputs(
+            [{"path": "@external/sdl3/" + "b" * 40 + "/x.h", "source": "https://github.com/libsdl-org/SDL", "pin": pin}],
+            "fixture external inputs",
+        )
+        self.assertError(errors, "@external pin segment must equal pin")
+
     def test_external_input_accepts_exact_googlesource_hosts(self) -> None:
         pin = "a" * 40
         for host in ("skia.googlesource.com/skia", "dawn.googlesource.com/dawn"):
             self.assertEqual(
                 verify_mirror_export.validate_external_inputs(
-                    [{"path": "@external/source/include/a.h", "source": f"https://{host}", "pin": pin}],
+                    [{"path": f"@external/source/{pin}/include/a.h", "source": f"https://{host}", "pin": pin}],
                     "fixture external inputs",
                 ),
                 [],
@@ -383,7 +399,7 @@ class VerifyMirrorExportTests(unittest.TestCase):
 
     def test_external_input_rejects_other_googlesource_hosts(self) -> None:
         errors = verify_mirror_export.validate_external_inputs(
-            [{"path": "@external/source/include/a.h", "source": "https://other.googlesource.com/source", "pin": "a" * 40}],
+            [{"path": "@external/source/" + "a" * 40 + "/include/a.h", "source": "https://other.googlesource.com/source", "pin": "a" * 40}],
             "fixture external inputs",
         )
         self.assertError(errors, "source must be a known repository URL")
@@ -396,8 +412,36 @@ class VerifyMirrorExportTests(unittest.TestCase):
         self.assertError(errors, "cache-relative identity")
 
     def test_embedded_host_paths_are_rejected(self) -> None:
-        for value in ("-I/Users/attacker/include", "prefix//Users/attacker/cache", "FOO=/Volumes/attacker/cache", "-I/home/attacker/include", "x=/private/attacker", "FOO=C:/attacker/cache", r"prefix=\\server\share\x", "prefix file:///Users/attacker/x"):
+        for value in ("-I/Users/attacker/include", "prefix//Users/attacker/cache", "FOO=/Volumes/attacker/cache", "-I/home/attacker/include", "x=/private/attacker", "FOO=C:/attacker/cache", r"prefix=\\server\share\x", "prefix file:///Users/attacker/x", "prefix file:///etc/x"):
             self.assertTrue(verify_mirror_export.host_path_violations(value, "fixture"), value)
+
+    def test_embedded_host_paths_in_dict_keys_are_rejected(self) -> None:
+        self.assertTrue(verify_mirror_export.host_path_violations({"/Users/attacker/key": "ok"}, "fixture"))
+
+    def test_non_dict_targets_fail_through_verify(self) -> None:
+        fixture = Fixture(self.base)
+        closure = json.loads((fixture.vellum / fixture.closure_path).read_text())
+        closure["targets"] = [1, "x", None]
+        write(fixture.vellum, fixture.closure_path, dump(closure))
+        fixture.receipt["units"][0]["closure_sha256"] = fixture.sha(fixture.closure_path)
+        fixture.reland()
+        self.assertError(fixture.errors(), "targets[0] must be an object")
+
+    def test_missing_pulp_origin_main_ref_fails_export_identity(self) -> None:
+        fixture = Fixture(self.base)
+        run(fixture.pulp, "update-ref", "-d", "refs/remotes/origin/main")
+        self.assertError(fixture.errors(pulp=True), "has no refs/remotes/origin/main")
+
+    def test_export_commit_reachable_from_head_but_not_origin_main_fails(self) -> None:
+        fixture = Fixture(self.base)
+        run(fixture.pulp, "checkout", "-q", "-b", "side")
+        write(fixture.pulp, "side.cpp", "int side;\n")
+        run(fixture.pulp, "add", "side.cpp")
+        run(fixture.pulp, "commit", "-q", "-m", "side")
+        side = run(fixture.pulp, "rev-parse", "HEAD")
+        receipt = dict(fixture.receipt, pulp_sha=side)
+        errors = verify_mirror_export.verify_receipt_against_pulp(fixture.pulp, receipt)
+        self.assertError(errors, "not reachable from Pulp main")
 
     def test_external_input_host_path_is_rejected(self) -> None:
         errors = verify_mirror_export.validate_external_inputs(

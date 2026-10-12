@@ -150,6 +150,8 @@ def host_path_violations(value: Any, label: str) -> list[str]:
             errors.append(f"{label} contains an absolute host path: {value}")
     elif isinstance(value, dict):
         for key, child in value.items():
+            if isinstance(key, str):
+                errors.extend(host_path_violations(key, f"{label}.<key>"))
             errors.extend(host_path_violations(child, f"{label}.{key}"))
     elif isinstance(value, list):
         for index, child in enumerate(value):
@@ -179,6 +181,11 @@ def validate_external_inputs(value: Any, label: str) -> list[str]:
         embedded = EMBEDDED_PIN.search(path) if isinstance(path, str) else None
         if embedded and (not isinstance(pin, str) or embedded.group(1).lower() != pin.lower()):
             errors.append(f"{where}.path embedded pin must equal pin")
+        if isinstance(path, str) and path.startswith("@external/"):
+            segments = path.split("/")
+            positional = segments[2] if len(segments) > 2 else ""
+            if not isinstance(pin, str) or positional != pin:
+                errors.append(f"{where}.path @external pin segment must equal pin")
     return errors
 
 

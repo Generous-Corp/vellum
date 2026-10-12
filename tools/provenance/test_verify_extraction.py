@@ -322,6 +322,38 @@ class VerifyExtractionTests(unittest.TestCase):
                 2,
             )
 
+    def test_origin_proof_requires_origin_main_ref(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            pulp = Path(temporary)
+            subprocess.check_call(["git", "init", "-q", "-b", "main"], cwd=pulp)
+            (pulp / "a.cpp").write_text("int a;\n")
+            subprocess.check_call(["git", "add", "a.cpp"], cwd=pulp)
+            subprocess.check_call(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "main"], cwd=pulp)
+            commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=pulp, text=True).strip()
+            record = {"mirror_path": "mirror/a.cpp", "git_blob_sha": verify_extraction.git_blob_sha(b"int a;\n"), "pulp_commit": commit, "pulp_path": "a.cpp", "export_receipt": "provenance/mirror/receipts/x.json"}
+            errors = verify_extraction.verify_origins_against_pulp(pulp, [record])
+            self.assertIn("has no refs/remotes/origin/main", errors[0])
+
+    def test_origin_proof_rejects_head_commit_off_origin_main(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            pulp = Path(temporary)
+            run = lambda *args: subprocess.check_output(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args], cwd=pulp, text=True).strip()
+            run("init", "-q", "-b", "main")
+            (pulp / "a.cpp").write_text("int a;\n")
+            run("add", "a.cpp"); run("commit", "-q", "-m", "main")
+            main = run("rev-parse", "HEAD"); run("update-ref", "refs/remotes/origin/main", main)
+            run("checkout", "-q", "-b", "side")
+            (pulp / "a.cpp").write_text("int side;\n")
+            run("add", "a.cpp"); run("commit", "-q", "-m", "side")
+            side = run("rev-parse", "HEAD")
+            record = {"mirror_path": "mirror/a.cpp", "git_blob_sha": verify_extraction.git_blob_sha(b"int side;\n"), "pulp_commit": side, "pulp_path": "a.cpp", "export_receipt": "provenance/mirror/receipts/x.json"}
+            errors = verify_extraction.verify_origins_against_pulp(pulp, [record])
+            self.assertIn("not on the checked-out Pulp main", errors[0])
+
+    def test_required_provenance_workflow_does_not_defer_mirror_identity(self) -> None:
+        workflow = MODULE_PATH.parents[2] / ".github/workflows/provenance.yml"
+        self.assertNotIn("--defer-mirror-identity", workflow.read_text(encoding="utf-8"))
+
     def test_origin_records_must_cite_pulp_main(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             pulp = Path(temporary)
