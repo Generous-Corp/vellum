@@ -1,6 +1,6 @@
 {
-  "schema_version": 1,
-  "status": "raw-seed-retired",
+  "schema_version": 2,
+  "status": "raw-seed-retired-mirror-admitted",
   "active_source_roots": [
     "CMakeLists.txt",
     "apps",
@@ -22,6 +22,11 @@
     "packages/pulp-import-ir/",
     "tools/figma-plugin/"
   ],
+  "mirror": {
+    "root": "mirror/",
+    "origin_records": "provenance/mirror/blob-origins.json",
+    "decision": "decisions/0010-mirror-extracted-pulp-framework-source.md"
+  },
   "historical_evidence": [
     "provenance/cut-manifest.json",
     "provenance/cut-paths.txt",
@@ -31,8 +36,10 @@
   ],
   "rules": {
     "retired_paths_at_active_tip": 0,
-    "active_files_matching_historical_seed_blobs": 0,
-    "forbidden_namespace_or_product_references": 0,
+    "native_files_matching_pulp_origin_blobs": 0,
+    "mirror_files_without_matching_origin_record": 0,
+    "native_forbidden_namespace_or_product_references": 0,
+    "mirror_audio_plugin_host_or_product_edges": 0,
     "open_extraction_debts": 0
   }
 }

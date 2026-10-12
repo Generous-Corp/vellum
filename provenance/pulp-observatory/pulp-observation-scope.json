@@ -1,0 +1,11 @@
+{
+  "schema": "vellum.pulp-observation-scope.v1",
+  "decision": "decisions/0011-scope-pulp-observation-to-the-activation-window.md",
+  "state": "frozen",
+  "pulp_repository": "Generous-Corp/pulp",
+  "frozen_pulp_commit": "aa630815630ca259b743651dacdc335f3d94a39a",
+  "later_history_covered_by": [
+    "extraction-program inheritance ledger (commit- and tree-anchored)",
+    "provenance/mirror export receipts and blob-origin records (Decision 0010)"
+  ]
+}

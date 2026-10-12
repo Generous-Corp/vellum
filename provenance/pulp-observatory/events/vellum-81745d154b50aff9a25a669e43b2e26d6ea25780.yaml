@@ -1,0 +1,71 @@
+{
+  "class": "rendering",
+  "contract_keys": [
+    "canvas-kernel",
+    "capture-primitives",
+    "macos-shell",
+    "render-skia-dawn"
+  ],
+  "contract_tests": [
+    "vellum.authoring",
+    "vellum.capture-stats",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-09-16T20:46:24Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-81745d154b50aff9a25a669e43b2e26d6ea25780",
+  "include_dependency_deltas": [
+    "graphics/include/vellum/graphics/dawn_bootstrap.hpp",
+    "graphics/include/vellum/graphics/dawn_native_bootstrap.hpp",
+    "graphics/include/vellum/graphics/skia_dawn_surface.hpp",
+    "graphics/tests/legacy_include/vellum/graphics/skia_dawn_surface.hpp",
+    "graphics/tests/legacy_install_consumer/CMakeLists.txt",
+    "graphics/tests/legacy_install_consumer/legacy_include/vellum/graphics/skia_dawn_surface.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel",
+    "capture-primitives",
+    "macos-shell",
+    "render-skia-dawn"
+  ],
+  "mapped_paths": [
+    "apps/app-host/main.mm",
+    "apps/gpu-native/main.mm",
+    "apps/minimal-scene/main.cpp",
+    "graphics/include/vellum/graphics/dawn_bootstrap.hpp",
+    "graphics/include/vellum/graphics/dawn_native_bootstrap.hpp",
+    "graphics/include/vellum/graphics/skia_dawn_surface.hpp",
+    "graphics/src/dawn_bootstrap.cpp",
+    "graphics/src/skia_dawn_surface.mm",
+    "graphics/tests/dawn_bootstrap_test.cpp",
+    "graphics/tests/dawn_provider_topology_test.cpp",
+    "graphics/tests/gpu_style_test.cpp",
+    "graphics/tests/legacy_config_caller_test.cpp",
+    "graphics/tests/legacy_include/vellum/graphics/skia_dawn_surface.hpp",
+    "graphics/tests/legacy_install_consumer/CMakeLists.txt",
+    "graphics/tests/legacy_install_consumer/legacy_include/vellum/graphics/skia_dawn_surface.hpp",
+    "graphics/tests/legacy_install_consumer/main.cpp",
+    "graphics/tests/test_dawn_provider_topology.py"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "eaaeb23db8c32bbb6fb91d05950064ed71f693bb",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "7bd7bb74dd4f3b3360307ccb212c63c4308ab802",
+    "to_commit": "968687f2f7349a16c6ef0392f5c1e4d6c860329a"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "81745d154b50aff9a25a669e43b2e26d6ea25780",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}

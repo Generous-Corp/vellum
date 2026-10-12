@@ -8,7 +8,7 @@ local_root=
 archive=
 checksums=
 version=
-official_release_base=https://github.com/danielraffel/vellum/releases/download
+official_release_base=https://github.com/Generous-Corp/vellum/releases/download
 release_base=${VELLUM_RELEASE_BASE_URL:-$official_release_base}
 release_target=
 uninstall=false
@@ -23,7 +23,7 @@ usage() {
     '  scripts/install.sh --verify-installed [--install-dir PREFIX]' \
     '  scripts/install.sh --uninstall [--install-dir PREFIX]' \
     '' \
-    'Private exact-version installs require an authenticated GitHub CLI.' \
+    'Exact-version installs require an authenticated GitHub CLI for release verification.' \
     '--local is an explicitly unverified development install. Artifact and' \
     'exact-version release modes verify release digests and SHA-256 before' \
     'extracting.'
@@ -121,7 +121,7 @@ require_node_20() {
 require_github_cli_release_verification() {
   command -v gh >/dev/null 2>&1 || {
     printf '%s\n' \
-      'GitHub CLI 2.75.0+ is required to authenticate and verify the private Vellum release.' >&2
+      'GitHub CLI 2.75.0+ is required to authenticate and verify the Vellum release.' >&2
     exit 1
   }
   gh_version=$(gh --version 2>/dev/null | sed -n '1s/^gh version \([0-9][0-9.]*\).*$/\1/p')
@@ -327,8 +327,8 @@ if [ -n "$local_root" ]; then
   cat > "$temporary/metadata.json" <<'JSON'
 {
   "schema": "vellum.sdk-artifact.v1",
-  "framework_version": "0.1.7",
-  "cli_version": "0.1.7",
+  "framework_version": "0.1.8",
+  "cli_version": "0.1.8",
   "cli_api": 1,
   "source_commit": null,
   "target": "local-development",
@@ -356,7 +356,7 @@ JSON
   "verified": false,
   "artifact": null,
   "artifact_sha256": null,
-  "framework_version": "0.1.7",
+  "framework_version": "0.1.8",
   "target": "local-development",
   "source_commit": null
 }
@@ -373,6 +373,14 @@ if [ -n "$version" ]; then
   case "$version" in
     latest|vlatest|'') printf '%s\n' 'Release installs require an exact version, not latest.' >&2; exit 2 ;;
     v*) version=${version#v} ;;
+  esac
+  # A retired version once named published bytes that no longer exist; see
+  # provenance/retired-release-tags.json. Refuse it before any download. The
+  # list is literal because this bootstrap runs standalone from a release
+  # asset, without the repository's records; cli/tests/test_installer.py fails
+  # if any retired tag in that record is missing here.
+  case "$version" in
+    0.1.7) printf '%s\n' "Vellum v$version is a retired release and cannot be installed; choose a published version such as 0.1.6." >&2; exit 2 ;;
   esac
   case "$version" in *[!0-9A-Za-z._-]*) printf '%s\n' 'Release version contains unsafe characters.' >&2; exit 2 ;; esac
   if [ -z "$release_target" ]; then
@@ -423,19 +431,19 @@ raise SystemExit(0 if match and int(match.group(1)) >= 15 else 1)' \
   if [ "$release_base" = "$official_release_base" ]; then
     require_github_cli_release_verification
     gh release download "v$version" \
-      --repo danielraffel/vellum \
+      --repo Generous-Corp/vellum \
       --pattern SHA256SUMS \
       --pattern install_core.py \
       --pattern "$archive_name" \
       --dir "$release_temporary" \
       --clobber || {
-      printf '%s\n' 'Could not authenticate the private Vellum release. Set GH_TOKEN/GITHUB_TOKEN or run gh auth login.' >&2
+      printf '%s\n' 'Could not download the Vellum release. Set GH_TOKEN/GITHUB_TOKEN or run gh auth login.' >&2
       exit 1
     }
     for release_asset in "$checksums" "$release_core" "$archive"
     do
       gh release verify-asset "v$version" "$release_asset" \
-        --repo danielraffel/vellum >/dev/null || {
+        --repo Generous-Corp/vellum >/dev/null || {
         printf 'GitHub release digest verification failed for %s.\n' \
           "$(basename "$release_asset")" >&2
         exit 1
@@ -494,7 +502,7 @@ raise SystemExit(0 if match and int(match.group(1)) >= 15 else 1)' \
 fi
 
 if [ -z "$archive" ] || [ -z "$checksums" ]; then
-  printf '%s\n' 'Choose --local, provide an archive plus SHA256SUMS, or request an exact private release version.' >&2
+  printf '%s\n' 'Choose --local, provide an archive plus SHA256SUMS, or request an exact release version.' >&2
   usage >&2
   exit 2
 fi

@@ -27,17 +27,17 @@ The macOS arm64 GPU proof uses one byte-locked prebuilt renderer artifact:
 
 | Artifact | Locked identity | Use |
 |---|---|---|
-| `skia-build-mac-arm64-gpu-release.zip` | `danielraffel/skia-builder` release `chrome/m150`; SHA-256 `13b0e9818c3b05db661af85cb1e2bf2ef10e30d468b81351dd90295237d17734` | Build-time Skia Graphite and Dawn/Metal static libraries and headers |
+| `skia-build-mac-universal-gpu-release.zip` | `danielraffel/skia-builder` release `chrome/m153`; SHA-256 `0ebfe03a209ceefe47edfeae70c3cc6c499583b74f35a26140ea55bad7f1e5a9` | Build-time Skia Graphite and Dawn/Metal static libraries and headers |
 
 The artifact was produced from builder commit
-`9b0215b1b2f4f3f06bac493c7e43fdeb0d35f9bc`. Its declared source tuple is
-Skia commit `587c5b0f5a7b0260826a0c19094c2d952195066e` and Dawn commit
-`63f25feec51e9351fb25222b6d5de1af791d7c4f`. The Dawn commit is embedded in
+`1f8c8d2c343f360a653bce92d11f8ded9a515208`. Its declared source tuple is
+Skia commit `8b8c3872fbc03f025855db96ce683f34ec98a815` and Dawn commit
+`f91da75afe31d4d6f47a6da307e1fbabd1b1691a`. The Dawn commit is embedded in
 `build/include/dawn/dawn_version.h`; the exact Skia and builder commits are not
 embedded in the artifact.
 
-The artifact SHA-256, all nine static-archive SHA-256 values, and a
-construction-specific digest over all 805 header files are locked in
+The artifact SHA-256, all eleven static-archive SHA-256 values, and a
+construction-specific digest over all 809 header files are locked in
 [`provenance/third-party-lock.json`](provenance/third-party-lock.json). Release
 construction must verify those bytes before configuring Vellum. An arbitrary
 local `VELLUM_SKIA_DIR` is a development convenience, not release provenance.
@@ -54,7 +54,7 @@ full DEPS file; each row has matching object members in the locked archive.
 
 | Name | Exact source identity | License | Binary evidence |
 |---|---|---|---|
-| Skia, including skcms | `587c5b0f5a7b0260826a0c19094c2d952195066e` | BSD-3-Clause | Skia/core/Graphite/skcms object members |
+| Skia, including skcms | `8b8c3872fbc03f025855db96ce683f34ec98a815` | BSD-3-Clause | Skia/core/Graphite/skcms object members |
 | Expat | `6154446fccefbf3ca644894f598969113b0c7bcd` | MIT | `libexpat.*` members |
 | libjpeg-turbo | `e14cbfaa85529d47f9f55b0f104a579c1061f9ad` (Chromium's 3.1.0 snapshot) | IJG and zlib for the packaged libjpeg API/SIMD code | `libjpeg.*`, `libjpeg12.*`, and `libjpeg16.*` members; no TurboJPEG API member was identified |
 | libpng | `d5515b5b8be3901aac04e5bd8bd5c89f287bcd33` (1.6.56) | Libpng-2.0 | `libpng.*` members |
@@ -66,9 +66,9 @@ full DEPS file; each row has matching object members in the locked archive.
 
 | Name | Exact source identity | License | Binary evidence |
 |---|---|---|---|
-| Dawn and Tint | `63f25feec51e9351fb25222b6d5de1af791d7c4f` | BSD-3-Clause | Dawn/Tint objects and symbol namespaces; exact revision embedded in `dawn_version.h` |
-| Abseil | `d16e32215c3ab90ba57c2e904a5344d85c7353e4` | Apache-2.0 | `absl::` symbols and implementation members including `raw_hash_set.cc.o` and `crc32c.cc.o` |
-| PartitionAlloc | `76c74af3a92809278b20d6816865a296d4704ca6` | BSD-3-Clause | `partition_alloc::` symbols and allocator implementation members including `low_level_alloc.cc.o` |
+| Dawn and Tint | `f91da75afe31d4d6f47a6da307e1fbabd1b1691a` | BSD-3-Clause | Dawn/Tint objects and symbol namespaces; exact revision embedded in `dawn_version.h` |
+| Abseil | `dd67f5ca84f65ebb88ac0ea0fe2c1d58663e519f` | Apache-2.0 | `absl::` symbols and implementation members including `raw_hash_set.cc.o` and `crc32c.cc.o` |
+| PartitionAlloc | `03cc513177b4340bee3dbfd46f6dd5fdded43b79` | BSD-3-Clause | `partition_alloc::` symbols and allocator implementation members including `low_level_alloc.cc.o` |
 
 Vellum also links the byte-locked `libskparagraph.a`, `libskshaper.a`,
 `libskunicode_core.a`, and `libskunicode_icu.a` archives into `vellum-gpu` to
@@ -82,7 +82,7 @@ survives the static linker's dead-code selection in a particular binary.
 The linked `libskshaper.a` contains HarfBuzz objects from commit
 `9cb1fee51069b206effb4736e443b038d230789d`. The linked
 `libskunicode_icu.a` contains ICU objects from commit
-`364118a1d9da24bb5b770ac3d762ac144d6da5a4`. Both identities come from the
+`d578f2e8b7bd5938e21cfb6bf15c079e0aa5b738`. Both identities come from the
 exact locked Skia revision's primary-source `DEPS`; archive member names provide
 the binary evidence. Their complete upstream license texts are reproduced in
 `NOTICE.md` and therefore travel with the installed SDK.
@@ -112,10 +112,10 @@ Representative Mach-O members report these `LC_BUILD_VERSION` tuples:
 
 | Input | Observed minimum macOS | Observed SDK |
 |---|---:|---:|
-| `libskia.a` | 11.0 | 15.5 |
-| `libdawn_combined.a` | 15.0 | 15.5 |
+| `libskia.a` | 13.0 | 15.5 |
+| `libdawn_combined.a` | 13.0 | 15.5 |
 
-The strictest observed minimum is therefore macOS 15.0. These are observations
+The strictest observed minimum is therefore macOS 13.0. These are observations
 from representative members, not proof over every object. The artifact does
 not record the exact compiler build, libc++ ABI, or linker identity. It also
 has no signed provenance or source-to-asset attestation and is not claimed to
@@ -135,4 +135,50 @@ The filtered seed once placed 232 projected source and vendored files in the
 working tree. Those paths are deleted from the active tip. Their exact
 historical identities remain in `provenance/cut-manifest.json` and Git history;
 they are not build inputs, installed files, or release payloads. The active
-source boundary is `provenance/active-source-boundary.json`.
+source boundary is `provenance/active-source-boundary.json`. Mirrored Pulp
+framework source admitted by Decision 0010 is recorded blob by blob in
+`provenance/mirror/blob-origins.json`; none is present yet.
+
+## Planned mirrored framework inventory
+
+The following rows are the legal inventory for bytes that may arrive under
+`mirror/` from the D3 units and the foundation amendment. They are scoped to
+the mirror root and do not make the corresponding historical Pulp paths active
+Vellum dependencies. Versions and licenses were cross-checked against Pulp's
+`DEPENDENCIES.md`, `NOTICE.md`, and `tools/deps/manifest.json` on 2026-10-10.
+
+| Dependency | Version or source identity | License | Mirror scope | Compatibility / handling |
+|---|---|---|---|---|
+| Abseil | `dd67f5ca84f65ebb88ac0ea0fe2c1d58663e519f` | Apache-2.0 | `mirror/render-2d/`, `mirror/render-3d/`, `mirror/view-script/` with V8 | MIT-compatible; transitive notice |
+| Brotli | `v1.2.0` | MIT | `mirror/canvas/` | MIT-compatible |
+| CHOC | `pulp-webview-dnd-poc1` (`df148a41`) | ISC | `mirror/view-script/` | MIT-compatible; retain fork attribution |
+| cpp-httplib | vendored snapshot | MIT | `mirror/foundation/` | MIT-compatible |
+| Dawn and Tint | `f91da75afe31d4d6f47a6da307e1fbabd1b1691a` | BSD-3-Clause | `mirror/gpu-device/`, `mirror/render-2d/`, `mirror/render-3d/` | MIT-compatible; renderer notice exists |
+| Expat | `6154446fccefbf3ca644894f598969113b0c7bcd` | MIT | `mirror/render-2d/`, `mirror/render-3d/` | MIT-compatible; renderer notice exists |
+| HarfBuzz | `9cb1fee51069b206effb4736e443b038d230789d` | Old MIT | `mirror/canvas/` | MIT-compatible; notice exists |
+| Highway | `1.2.0` | Apache-2.0 | `mirror/foundation/` | MIT-compatible |
+| ICU | `d578f2e8b7bd5938e21cfb6bf15c079e0aa5b738` | Unicode-3.0 plus bundled notices | `mirror/canvas/`, `mirror/view-script/` with V8 | Permissive; notice exists |
+| Inter | `4.001; git-9221beed3` | SIL OFL 1.1 | `mirror/canvas/`, `mirror/view-core/`, `mirror/view-platform/` | Allowed font license |
+| JavaScriptCore | Apple system framework | LGPL-2.1+ components and Apple terms | `mirror/view-script/` references only | **Not MIT-compatible**; system-only, never mirrored |
+| JetBrains Mono | `2.304` | SIL OFL 1.1 | `mirror/canvas/`, `mirror/view-core/` | Allowed font license |
+| Jost | `3.710` | SIL OFL 1.1 | `mirror/canvas/`, `mirror/view-core/` | Allowed font license |
+| Mbed TLS | `v3.6.2` | Apache-2.0 | `mirror/foundation/`, `mirror/gpu-device/` | MIT-compatible |
+| NanoSVG | vendored snapshot | zlib | `mirror/canvas/` | MIT-compatible |
+| Noto Sans Arabic | variable font | SIL OFL 1.1 | `mirror/canvas/`, `mirror/view-core/` | Allowed font license |
+| Noto Sans JP | variable font | SIL OFL 1.1 | `mirror/canvas/`, `mirror/view-core/` | Allowed font license |
+| PartitionAlloc | `03cc513177b4340bee3dbfd46f6dd5fdded43b79` | BSD-3-Clause | `mirror/gpu-device/`, `mirror/render-2d/`, `mirror/render-3d/` | MIT-compatible; transitive notice |
+| QuickJS | `2024-02-14` | MIT | `mirror/view-script/` | MIT-compatible |
+| SheenBidi | `v3.0.0` | Apache-2.0 | `mirror/canvas/` | MIT-compatible |
+| Skia and skcms | `8b8c3872fbc03f025855db96ce683f34ec98a815` | BSD-3-Clause | `mirror/canvas/`, `mirror/render-2d/`, `mirror/render-3d/` | MIT-compatible; renderer notice exists |
+| V8 | `v8-m153-15.3.76.5-26cef0256b0e` | BSD-3-Clause | `mirror/view-script/` when selected | MIT-compatible; sealed provider |
+| Yoga | `3.2.1` | MIT | `mirror/view-core/`, `mirror/view-platform/` | MIT-compatible |
+
+Pulp's external contributor `matthewfudge` authored four mirrored view files:
+`core/view/src/design_frame_view.cpp`,
+`core/view/include/pulp/view/widget_bridge.hpp`,
+`core/view/src/widget_bridge/state_binding_api.cpp`, and
+`core/view/src/widget_bridge/widget_callbacks.cpp`. The history-preserving
+mirror retains those author records; the inbound and outbound license is MIT,
+so no separate relicensing or waiver is required. JavaScriptCore is the only
+listed dependency with a non-MIT-compatible license concern, and it remains an
+OS-provided, non-mirrored adapter dependency.

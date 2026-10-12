@@ -301,6 +301,7 @@ def coverage_gaps(
     pulp_repo: Path | None, vellum_repo: Path | None,
     pulp_target: str | None = None, vellum_target: str | None = None,
     incremental_from: dict[str, str] | None = None,
+    vellum_pr_main: str | None = None,
 ) -> list[dict[str, str]]:
     observations = {
         (str(event["source_repository"]), str(event["source_commit"])): event
@@ -364,7 +365,12 @@ def coverage_gaps(
             require_commit(repo, requested_target, f"requested {source} target")
             require_ancestor(repo, target, requested_target, f"requested {source} target")
             if source == "vellum" and target != requested_target:
-                verify_vellum_observatory_tail(repo, target, requested_target)
+                if vellum_pr_main is not None:
+                    verify_vellum_observatory_pr_tail(
+                        repo, target, vellum_pr_main, requested_target
+                    )
+                else:
+                    verify_vellum_observatory_tail(repo, target, requested_target)
             for commit in commits_between(repo, target, requested_target):
                 probe = observation_for_commit(
                     source=source, repository=repository, repo=repo, commit=commit,
@@ -531,6 +537,17 @@ def verify_vellum_observatory_tail(repo: Path, cursor: str, target: str) -> None
         previous = commit
 
 
+def verify_vellum_observatory_pr_tail(
+    repo: Path, cursor: str, main_head: str, target: str
+) -> None:
+    """Check only main's observed tail while requiring a PR to contain main."""
+    require_commit(repo, main_head, "current main head")
+    require_commit(repo, target, "requested vellum target")
+    require_ancestor(repo, main_head, target, "pull-request target contains current main")
+    merge_base = git(repo, "merge-base", main_head, target)
+    verify_vellum_observatory_tail(repo, cursor, merge_base)
+
+
 def verify_append_only(
     root: Path,
     git_base: str | None,
@@ -632,7 +649,8 @@ def verify_append_only(
 def verify(
     *, root: Path, pulp_repo: Path | None, vellum_repo: Path | None, git_base: str | None,
     allow_missing_source_repositories: bool = False,
-    pulp_target: str | None = None, vellum_target: str | None = None
+    pulp_target: str | None = None, vellum_target: str | None = None,
+    vellum_pr_main: str | None = None,
 ) -> dict[str, object]:
     lock, mapping, cursor, budgets = validate_lock_map_cursor(root)
     verify_active_cursor_ancestry(lock, cursor, pulp_repo, vellum_repo)
@@ -647,6 +665,7 @@ def verify(
         root=root, mapping=mapping, cursor=cursor, events=events,
         pulp_repo=pulp_repo, vellum_repo=vellum_repo,
         pulp_target=pulp_target, vellum_target=vellum_target,
+        vellum_pr_main=vellum_pr_main,
     )
     if allow_missing_source_repositories:
         gaps = [gap for gap in gaps if gap["reason"] != "source-repository-not-supplied"]
@@ -738,6 +757,7 @@ def main(argv: list[str] | None = None) -> int:
     verify_parser.add_argument("--git-base")
     verify_parser.add_argument("--pulp-target")
     verify_parser.add_argument("--vellum-target")
+    verify_parser.add_argument("--vellum-pr-main")
     verify_parser.add_argument("--allow-missing-source-repositories", action="store_true")
     verify_parser.add_argument("--output", type=Path)
     reconcile_parser = subparsers.add_parser("reconcile")
@@ -760,6 +780,7 @@ def main(argv: list[str] | None = None) -> int:
                 allow_missing_source_repositories=args.allow_missing_source_repositories,
                 pulp_target=args.pulp_target,
                 vellum_target=args.vellum_target,
+                vellum_pr_main=args.vellum_pr_main,
             )
         else:
             result = reconcile(

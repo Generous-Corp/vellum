@@ -1,7 +1,9 @@
 # Decision 0002: use a clean CoreGraphics proof before the GPU slice
 
 - Date: 2026-07-22
-- Status: accepted for the first native-kernel checkpoint
+- Status: accepted for the first native-kernel checkpoint; the requirement
+  that GPU source be Vellum-authored is superseded for mirrored units by
+  Decision 0010
 
 The filtered Pulp canvas build file activates optional and unresolved source,
 exports `pulp/*` headers, and requires compatibility target names. Reusing it as

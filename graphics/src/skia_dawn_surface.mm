@@ -1,5 +1,9 @@
 #include <vellum/graphics/skia_dawn_surface.hpp>
+#include <vellum/graphics/capture_stats.hpp>
+#include <vellum/graphics/dawn_bootstrap.hpp>
 #include <vellum/graphics/paint_command.hpp>
+
+#include "utf8_text.hpp"
 
 #import <QuartzCore/CAMetalLayer.h>
 
@@ -118,42 +122,6 @@ struct PackagedFontSet {
     std::vector<sk_sp<SkTypeface>> typefaces;
 };
 
-struct DecodedUtf8 {
-    std::uint32_t code_point = 0xFFFDU;
-    std::size_t end = 0U;
-    bool valid = false;
-};
-
-DecodedUtf8 decode_utf8(std::string_view text, std::size_t start) {
-    const auto lead = static_cast<unsigned char>(text[start]);
-    if (lead < 0x80U) return {lead, start + 1U, true};
-    int length = 0;
-    std::uint32_t value = 0U;
-    std::uint32_t minimum = 0U;
-    if ((lead & 0xE0U) == 0xC0U) {
-        length = 2; value = lead & 0x1FU; minimum = 0x80U;
-    } else if ((lead & 0xF0U) == 0xE0U) {
-        length = 3; value = lead & 0x0FU; minimum = 0x800U;
-    } else if ((lead & 0xF8U) == 0xF0U) {
-        length = 4; value = lead & 0x07U; minimum = 0x10000U;
-    } else {
-        return {0xFFFDU, start + 1U, false};
-    }
-    if (start + static_cast<std::size_t>(length) > text.size()) {
-        return {0xFFFDU, start + 1U, false};
-    }
-    for (int index = 1; index < length; ++index) {
-        const auto byte = static_cast<unsigned char>(text[start + static_cast<std::size_t>(index)]);
-        if ((byte & 0xC0U) != 0x80U) return {0xFFFDU, start + 1U, false};
-        value = (value << 6U) | (byte & 0x3FU);
-    }
-    if (value < minimum || value > 0x10FFFFU ||
-        (value >= 0xD800U && value <= 0xDFFFU)) {
-        return {0xFFFDU, start + 1U, false};
-    }
-    return {value, start + static_cast<std::size_t>(length), true};
-}
-
 bool is_nonrendering_code_point(std::uint32_t code_point) {
     return code_point <= 0x1FU || (code_point >= 0x7FU && code_point <= 0x9FU) ||
         (code_point >= 0x200BU && code_point <= 0x200FU) || code_point == 0x2060U ||
@@ -175,19 +143,9 @@ bool has_packaged_glyph(
 std::string replace_unsupported_text(
     std::string_view text,
     const std::vector<sk_sp<SkTypeface>>& typefaces) {
-    constexpr std::string_view replacement = "?";
-    std::string result;
-    result.reserve(text.size());
-    for (std::size_t offset = 0U; offset < text.size();) {
-        const auto decoded = decode_utf8(text, offset);
-        if (decoded.valid && has_packaged_glyph(decoded.code_point, typefaces)) {
-            result.append(text.substr(offset, decoded.end - offset));
-        } else {
-            result.append(replacement);
-        }
-        offset = decoded.end;
-    }
-    return result;
+    return detail::replace_unsupported_text(text, [&typefaces](std::uint32_t code_point) {
+        return has_packaged_glyph(code_point, typefaces);
+    });
 }
 
 bool draw_linear_gradient(
@@ -473,8 +431,9 @@ public:
             return false;
         }
 
-        const DawnProcTable& procedures = dawn::native::GetProcs();
-        dawnProcSetProcs(&procedures);
+        if (!dawn_bootstrap_is_registered(error)) {
+            return false;
+        }
 
         wgpu::InstanceDescriptor instance_descriptor{};
         const wgpu::InstanceFeatureName instance_features[] = {
@@ -807,21 +766,29 @@ private:
 
     bool read_target_rgba(
         SkSurface& target, std::vector<std::uint8_t>& rgba, std::string* error) {
+        const auto pixel_width = static_cast<std::uint32_t>(physical_width());
+        const auto pixel_height = static_cast<std::uint32_t>(physical_height());
+        const auto byte_count = checked_image_byte_count(
+            pixel_width, pixel_height, 4U);
+        if (!byte_count) {
+            set_error(error, "GPU readback dimensions exceed addressable storage");
+            return false;
+        }
         const auto image_info = SkImageInfo::Make(
             physical_width(), physical_height(), kRGBA_8888_SkColorType,
             kPremul_SkAlphaType, SkColorSpace::MakeSRGB());
-        const auto row_bytes = static_cast<std::size_t>(physical_width()) * 4U;
+        const auto row_bytes = static_cast<std::size_t>(pixel_width) * 4U;
 
         struct ReadbackState final {
             std::size_t row_bytes = 0;
-            std::uint32_t height = 0;
+            std::size_t byte_count = 0;
             std::vector<std::uint8_t> pixels;
             std::atomic_bool finished{false};
             bool ok = false;
         };
         auto state = std::make_shared<ReadbackState>();
         state->row_bytes = row_bytes;
-        state->height = static_cast<std::uint32_t>(physical_height());
+        state->byte_count = *byte_count;
 
         auto callback = [](SkImage::ReadPixelsContext context,
                            std::unique_ptr<const SkImage::AsyncReadResult> result) {
@@ -835,12 +802,12 @@ private:
                 return;
             }
             const auto* source = static_cast<const std::uint8_t*>(result->data(0));
-            state->pixels.resize(
-                static_cast<std::size_t>(state->height) * state->row_bytes);
-            for (std::uint32_t y = 0; y < state->height; ++y) {
+            state->pixels.resize(state->byte_count);
+            const auto height = state->byte_count / state->row_bytes;
+            for (std::size_t y = 0; y < height; ++y) {
                 std::memcpy(
-                    state->pixels.data() + static_cast<std::size_t>(y) * state->row_bytes,
-                    source + static_cast<std::size_t>(y) * result->rowBytes(0),
+                    state->pixels.data() + y * state->row_bytes,
+                    source + y * result->rowBytes(0),
                     state->row_bytes);
             }
             state->ok = true;

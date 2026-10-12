@@ -3,6 +3,10 @@ name: Locked macOS GPU proof
 on:
   workflow_dispatch:
   pull_request:
+  # Merge-queue builds: the queue merges main's tip with the PR head on a
+  # gh-readonly-queue/* ref and needs every required check on that commit.
+  merge_group:
+    branches: [main]
   push:
     branches: [main]
     tags: ['v[0-9]*', 'authority/**']
@@ -17,16 +21,16 @@ concurrency:
   # by ref so obsolete commits are canceled, but isolate every trusted or
   # manually dispatched run by run ID so it cannot replace another pending
   # main, tag, schedule, or manual validation.
-  group: ${{ github.event_name == 'pull_request' && format('vellum-gpu-pr-{0}', github.ref) || format('vellum-gpu-run-{0}', github.run_id) }}
+  group: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && format('vellum-gpu-pr-{0}', github.ref) || format('vellum-gpu-run-{0}', github.run_id) }}
   # Preserve trusted main/tag and manually dispatched proofs; obsolete PR
   # commits should not consume another full macOS GPU run.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  VELLUM_RELEASE_VERSION: 0.1.7
-  VELLUM_RELEASE_TAG: v0.1.7
-  VELLUM_RELEASE_ARCHIVE: vellum-sdk-0.1.7-darwin-arm64.tar.gz
-  VELLUM_RELEASE_NAME: Vellum 0.1.7 experimental SDK
+  VELLUM_RELEASE_VERSION: 0.1.8
+  VELLUM_RELEASE_TAG: v0.1.8
+  VELLUM_RELEASE_ARCHIVE: vellum-sdk-0.1.8-darwin-arm64.tar.gz
+  VELLUM_RELEASE_NAME: Vellum 0.1.8 experimental SDK
 
 jobs:
   gpu-macos-arm64:
@@ -43,14 +47,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          archive="$RUNNER_TEMP/skia-build-mac-arm64-gpu-release.zip"
+          archive="$RUNNER_TEMP/skia-build-mac-universal-gpu-release.zip"
           curl --fail --location --silent --show-error \
             --retry 5 --retry-delay 2 --retry-all-errors \
             --continue-at - \
-            https://github.com/danielraffel/skia-builder/releases/download/chrome/m150/skia-build-mac-arm64-gpu-release.zip \
+            https://github.com/danielraffel/skia-builder/releases/download/chrome/m153/skia-build-mac-universal-gpu-release.zip \
             --output "$archive"
           printf '%s  %s\n' \
-            13b0e9818c3b05db661af85cb1e2bf2ef10e30d468b81351dd90295237d17734 \
+            0ebfe03a209ceefe47edfeae70c3cc6c499583b74f35a26140ea55bad7f1e5a9 \
             "$archive" | shasum -a 256 -c -
           printf 'VELLUM_SKIA_ARCHIVE=%s\n' "$archive" >> "$GITHUB_ENV"
 
@@ -337,8 +341,8 @@ jobs:
           app=build-gpu/apps/gpu-native/vellum-gpu-native.app/Contents/MacOS/vellum-gpu-native
           otool -l "$dylib" > "$RUNNER_TEMP/vellum-gpu-dylib-load-commands.txt"
           otool -l "$app" > "$RUNNER_TEMP/vellum-gpu-app-load-commands.txt"
-          /usr/bin/grep -Eq 'minos 15\.0' "$RUNNER_TEMP/vellum-gpu-dylib-load-commands.txt"
-          /usr/bin/grep -Eq 'minos 15\.0' "$RUNNER_TEMP/vellum-gpu-app-load-commands.txt"
+          /usr/bin/grep -Eq 'minos 13\.0' "$RUNNER_TEMP/vellum-gpu-dylib-load-commands.txt"
+          /usr/bin/grep -Eq 'minos 13\.0' "$RUNNER_TEMP/vellum-gpu-app-load-commands.txt"
 
       - name: Smoke every public template through the installed SDK
         shell: bash

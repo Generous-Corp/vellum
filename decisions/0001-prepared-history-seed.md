@@ -1,7 +1,8 @@
 # Decision 0001: preserve a non-authoritative Pulp history seed
 
 - Date: 2026-07-22
-- Status: accepted for historical preparation; active-tree quarantine superseded by Decision 0003
+- Status: accepted for historical preparation; active-tree quarantine superseded by Decision 0003;
+  mirror and Pulp-consumption alternatives re-recorded by Decision 0010
 - Source: `Generous-Corp/pulp@2ccff748f0d59da34b01ce1fbceabcf19f452731`
 
 We preserve the smallest audited set of Pulp canvas, render, retained-view,

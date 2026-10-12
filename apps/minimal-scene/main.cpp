@@ -8,6 +8,10 @@
 #include <vellum/graphics/capture_stats.hpp>
 #include <vellum/graphics/skia_dawn_surface.hpp>
 
+#if defined(VELLUM_CONSUMER_HAS_GPU_NATIVE_BOOTSTRAP)
+#include <vellum/graphics/dawn_native_bootstrap.hpp>
+#endif
+
 #include <cstdint>
 #include <cmath>
 #include <future>
@@ -52,8 +56,13 @@ int main() {
         if (std::abs(metrics.width - expected_metrics.width) > 0.01F ||
             std::abs(metrics.ascent - expected_metrics.ascent) > 0.01F) return 1;
     }
+#if defined(VELLUM_CONSUMER_HAS_GPU_NATIVE_BOOTSTRAP)
+    if (!vellum::app_host::register_native_dawn_bootstrap(&error)) return 1;
     auto surface = SkiaDawnSurface::create(
-        {.width = 240, .height = 160, .scale = 1.0F}, &error);
+        {.width = 240,
+         .height = 160,
+         .scale = 1.0F},
+        &error);
     if (!surface || !surface->evidence().available ||
         surface->evidence().fallback || surface->evidence().backend != "Metal") {
         return 1;
@@ -114,6 +123,7 @@ int main() {
         !passes_content_floor(analyze_capture_rgba(rgba, width, height))) {
         return 1;
     }
+#endif
 #endif
 
     return kernel.stop() ? 0 : 1;

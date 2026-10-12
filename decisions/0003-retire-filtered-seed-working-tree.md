@@ -1,7 +1,8 @@
 # Decision 0003: retire the filtered seed from the active working tree
 
 - Date: 2026-07-22
-- Status: accepted
+- Status: accepted; the active-tip blob and contamination rules are scoped
+  to Vellum-native roots by Decision 0010
 
 The prepared projection was useful for preserving authorship and proving an
 exact extraction boundary, but leaving it editable at the active tip would

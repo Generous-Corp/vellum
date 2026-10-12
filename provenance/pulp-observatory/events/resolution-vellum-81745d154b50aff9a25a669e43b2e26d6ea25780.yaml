@@ -1,0 +1,24 @@
+{
+  "contract_tests": [
+    "vellum.authoring",
+    "vellum.capture-stats",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-09-16T20:46:58Z",
+  "disposition": "framework-only",
+  "effort_minutes": 0,
+  "event_id": "resolution-vellum-81745d154b50aff9a25a669e43b2e26d6ea25780",
+  "kind": "resolution",
+  "linked_commits": [
+    "81745d154b50aff9a25a669e43b2e26d6ea25780"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/vellum/pull/28"
+  ],
+  "owner": "@danielraffel",
+  "rationale": "The clean-checkout Pulp/Vellum router classified this as Vellum-owned generic work with a framework-only observatory disposition and no affected Pulp counterpart. It is retained with its Vellum contract proofs; any future Pulp use must adopt a pinned Vellum SDK through an adapter rather than copy framework source.",
+  "resolves": "vellum-81745d154b50aff9a25a669e43b2e26d6ea25780",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

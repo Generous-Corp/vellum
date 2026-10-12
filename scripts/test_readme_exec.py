@@ -17,7 +17,7 @@ class Tests(unittest.TestCase):
         self.assertIn("  attestations: read\n",workflow)
         self.assertIn("  contents: read\n",workflow)
         self.assertIn(
-            "if: github.event_name == 'pull_request'\n"
+            "if: (github.event_name == 'pull_request' || github.event_name == 'merge_group')\n"
             "        run: |\n"
             "          python3 scripts/test_readme_exec.py\n"
             "          python3 scripts/readme_exec.py --lint",
@@ -25,6 +25,7 @@ class Tests(unittest.TestCase):
         )
         trusted_expression = (
             "github.event_name != 'pull_request' && "
+            "github.event_name != 'merge_group' && "
             "github.ref == 'refs/heads/main'"
         )
         self.assertEqual(workflow.count(trusted_expression), 2)

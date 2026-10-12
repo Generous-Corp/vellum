@@ -1,0 +1,25 @@
+{
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer",
+    "vellum.utf8-text"
+  ],
+  "created_at": "2026-10-11T15:34:14Z",
+  "disposition": "framework-only",
+  "effort_minutes": 0,
+  "event_id": "resolution-vellum-d216ad1732944ca6df253eb1cada0a7a45350e28",
+  "kind": "resolution",
+  "linked_commits": [
+    "843fcf84eb68d1b5c081452b3221d650773fc5d8",
+    "d216ad1732944ca6df253eb1cada0a7a45350e28"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/vellum/pull/35",
+    "https://github.com/Generous-Corp/vellum/pull/40"
+  ],
+  "owner": "@danielraffel",
+  "rationale": "Merge commit that folds the malformed UTF-8 coverage (843fcf84, already resolved framework-only) into the Decision 0011 branch per the batching ruling. It carries the same graphics changes and no new behavior; Pulp has its own repair under change event 20260830-malformed-utf8-text-shaping.",
+  "resolves": "vellum-d216ad1732944ca6df253eb1cada0a7a45350e28",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

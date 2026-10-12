@@ -5,6 +5,8 @@
 #include <vellum/graphics/capture_stats.hpp>
 #include <vellum/graphics/skia_dawn_surface.hpp>
 
+#include <vellum/graphics/dawn_native_bootstrap.hpp>
+
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -121,6 +123,10 @@ int self_test(std::string_view output, bool native_surface) {
         }
 
         std::string error;
+        if (!vellum::app_host::register_native_dawn_bootstrap(&error)) {
+            std::cerr << error << '\n';
+            return 1;
+        }
         auto surface = SkiaDawnSurface::create(
             {.width = width,
              .height = height,
@@ -227,6 +233,10 @@ int self_test(std::string_view output, bool native_surface) {
     layer.drawableSize = CGSizeMake(self.bounds.size.width * scale,
                                     self.bounds.size.height * scale);
     std::string error;
+    if (!vellum::app_host::register_native_dawn_bootstrap(&error)) {
+        NSLog(@"Vellum Dawn bootstrap failed: %s", error.c_str());
+        return;
+    }
     _surface = SkiaDawnSurface::create(
         {.width = static_cast<std::uint32_t>(self.bounds.size.width),
          .height = static_cast<std::uint32_t>(self.bounds.size.height),

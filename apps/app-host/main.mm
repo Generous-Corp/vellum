@@ -6,6 +6,8 @@
 #include <vellum/graphics/capture_stats.hpp>
 #include <vellum/graphics/skia_dawn_surface.hpp>
 
+#include <vellum/graphics/dawn_native_bootstrap.hpp>
+
 #include "component_registry.hpp"
 #include "macos_accessibility.hpp"
 #include "options.hpp"
@@ -318,8 +320,15 @@ int run_headless(const Options& options, std::string_view bundle) {
                       << " does not match scenario viewport\n";
             return 1;
         }
+        if (!vellum::app_host::register_native_dawn_bootstrap(&error)) {
+            std::cerr << error << '\n';
+            return 1;
+        }
         auto surface = SkiaDawnSurface::create(
-            {.width = width, .height = height, .scale = 1.0F}, &error);
+            {.width = width,
+             .height = height,
+             .scale = 1.0F},
+            &error);
         if (!surface || !validate_gpu(*surface, false, &error) ||
             !surface->render(rendered.scene, &error)) {
             std::cerr << error << '\n';
@@ -538,6 +547,10 @@ std::vector<ComponentModuleSpec> interactive_component_specs;
     layer.drawableSize = CGSizeMake(self.bounds.size.width * scale,
                                     self.bounds.size.height * scale);
     std::string error;
+    if (!vellum::app_host::register_native_dawn_bootstrap(&error)) {
+        NSLog(@"Vellum Dawn bootstrap failed: %s", error.c_str());
+        return;
+    }
     _surface = SkiaDawnSurface::create(
         {.width = static_cast<std::uint32_t>(self.bounds.size.width),
          .height = static_cast<std::uint32_t>(self.bounds.size.height),
