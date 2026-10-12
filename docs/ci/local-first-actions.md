@@ -25,6 +25,7 @@ fallback values:
 
 ```text
 VELLUM_LINUX_RUNS_ON_JSON=["ubuntu-latest"]
+VELLUM_LOCAL_MACOS_RUNS_ON_JSON=["macos-15"]
 VELLUM_MACOS_RUNS_ON_JSON=["macos-15"]
 ```
 
@@ -56,3 +57,38 @@ the hosted value rather than leaving jobs queued indefinitely.
 Self-hosted execution reduces GitHub-hosted runner minutes, but it does not
 remove the requirement that the GitHub Actions account be in good standing.
 Billing failures can prevent dispatch before any runner is selected.
+
+
+## Required Vellum macOS GPU checks
+
+`gpu-macos-arm64` and `sterile-consumer` use `VELLUM_LOCAL_MACOS_RUNS_ON_JSON`
+with `["macos-15"]` as the reversible fallback. The only reviewed local value
+is `["self-hosted","macOS","ARM64","vellum-build-macos"]`. The local
+profile registers one disposable Tart supervisor on each of M1, M3, M5, and
+M5 Studio with that label; each Vellum lane is capped at one VM and uses the
+`vm` lease class (priority 60), below Pulp's required `pulp-build-pr-head`
+(100) and `pulp-build-merge-group` (110) leases.
+
+The runner group must be restricted to this workflow and the repository must
+require approval for outside contributors before the selector is enabled. The
+workflow and TartCI admission checks reject fork head repositories. A Vellum
+VM does not preempt a running Pulp VM and the `vm` priority does not provide a
+cross-repository yield; it can occupy an otherwise free host slot until its
+job completes. That bounded exposure is recorded in the fleet evidence.
+
+`VELLUM_MACOS_RUNS_ON_JSON` remains the hosted selector used by
+`readme-quick-start.yml` and the hosted portion of `sdk-release.yml`; it is not
+the selector for these two required GPU jobs.
+
+### Organization settings required before enablement
+
+An organization administrator must update runner group **8**
+(`vellum-macos-build`) to:
+
+1. allow public repositories (Vellum is public);
+2. restrict access to `Generous-Corp/vellum/.github/workflows/gpu-macos.yml@refs/heads/main`;
+3. require approval for all outside contributors, including returning fork
+   contributors.
+
+These settings are part of the local runner boundary and must be delta-checked
+with the TartCI admission receipt before the repository variable is set.
