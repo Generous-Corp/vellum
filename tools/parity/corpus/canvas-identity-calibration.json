@@ -1,0 +1,6 @@
+{
+  "schema": "vellum.parity.closure-manifest.calibration.v1",
+  "unit": "canvas",
+  "description": "Hand-declared calibration closure for the identity lane. It is NOT the machine-generated closure manifest that D1 requires; it only exercises the comparator until that manifest exists.",
+  "roots": ["core/canvas"]
+}

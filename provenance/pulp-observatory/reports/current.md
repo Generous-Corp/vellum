@@ -613,6 +613,8 @@
 | `vellum-5cba7611ba032f3a5b670d1740ff153dd5e91a72` | framework-to-Pulp | rendering | framework-only | 2026-09-21T20:46:24Z |
 | `vellum-81745d154b50aff9a25a669e43b2e26d6ea25780` | framework-to-Pulp | rendering | framework-only | 2026-09-21T20:46:24Z |
 | `vellum-ef9d2c05ee2bfddcdb3cafe9327cd6223c3586d4` | framework-to-Pulp | rendering | framework-only | 2026-09-21T20:46:24Z |
+| `vellum-843fcf84eb68d1b5c081452b3221d650773fc5d8` | framework-to-Pulp | rendering | framework-only | 2026-10-14T00:45:53Z |
+| `vellum-d216ad1732944ca6df253eb1cada0a7a45350e28` | framework-to-Pulp | rendering | framework-only | 2026-10-14T15:34:14Z |
 
 ## Release blockers
 
