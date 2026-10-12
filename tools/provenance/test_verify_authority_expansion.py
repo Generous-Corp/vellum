@@ -16,6 +16,13 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+try:
+    from .git_test_environment import disable_auto_maintenance
+except ImportError:  # Direct script execution.
+    from git_test_environment import disable_auto_maintenance
+
+disable_auto_maintenance()
+
 
 SCRIPT = Path(__file__).with_name("verify_authority_expansion.py")
 SPEC = importlib.util.spec_from_file_location("verify_authority_expansion", SCRIPT)
