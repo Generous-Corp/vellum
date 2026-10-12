@@ -6,7 +6,8 @@
   "description": "Pulp's registered pulp-import-design (baked ir-json emit) and pulp-design-ir-observe (Skia CPU render, laid-out tree, text diagnostics, pointer/keyboard replay). Tool paths and roots (checkout = the git checkout the tools were built from; build = its CMake build directory) are supplied per run; the commit is read from the checkout and every binary is content-hashed.",
   "tools": {
     "importer": "build/tools/import-design/pulp-import-design",
-    "observer": "build/tools/import-design/pulp-design-ir-observe"
+    "observer": "build/tools/import-design/pulp-design-ir-observe",
+    "materializer": "tools/parity/lanes/materialize.py"
   },
   "source_kinds": {
     "figma-plugin": [
@@ -46,7 +47,7 @@
         "design-ir"
       ],
       "argv": [
-        "/bin/cp",
+        "{tool:materializer}",
         "{source}",
         "design.ir.json"
       ]
@@ -124,12 +125,5 @@
       ]
     }
   ],
-  "authority": "native-render",
-  "passthrough_binaries": [
-    {
-      "path": "/bin/cp",
-      "justification": "The design-ir source kind copies the input DesignIR; its structure lane then compares inputs, not an import.",
-      "sha256": "d7e1aa741105cfce82c6e7b2ea1359c715a570f86ce711e492c41315632ea182"
-    }
-  ]
+  "authority": "native-render"
 }
