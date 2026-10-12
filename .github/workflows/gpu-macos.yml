@@ -3,6 +3,10 @@ name: Locked macOS GPU proof
 on:
   workflow_dispatch:
   pull_request:
+  # Merge-queue builds: the queue merges main's tip with the PR head on a
+  # gh-readonly-queue/* ref and needs every required check on that commit.
+  merge_group:
+    branches: [main]
   push:
     branches: [main]
     tags: ['v[0-9]*', 'authority/**']
@@ -17,7 +21,7 @@ concurrency:
   # by ref so obsolete commits are canceled, but isolate every trusted or
   # manually dispatched run by run ID so it cannot replace another pending
   # main, tag, schedule, or manual validation.
-  group: ${{ github.event_name == 'pull_request' && format('vellum-gpu-pr-{0}', github.ref) || format('vellum-gpu-run-{0}', github.run_id) }}
+  group: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && format('vellum-gpu-pr-{0}', github.ref) || format('vellum-gpu-run-{0}', github.run_id) }}
   # Preserve trusted main/tag and manually dispatched proofs; obsolete PR
   # commits should not consume another full macOS GPU run.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}

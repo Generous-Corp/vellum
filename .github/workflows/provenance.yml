@@ -3,6 +3,10 @@ name: Provenance and forbidden dependencies
 on:
   workflow_dispatch:
   pull_request:
+  # Merge-queue builds: the queue merges main's tip with the PR head on a
+  # gh-readonly-queue/* ref and needs every required check on that commit.
+  merge_group:
+    branches: [main]
   push:
     branches: [main]
     tags: ['v[0-9]*', 'authority/**']
@@ -17,7 +21,7 @@ concurrency:
   # GitHub keeps only one pending run per concurrency group. Keep PRs keyed
   # by ref so obsolete commits are canceled, but isolate every trusted or
   # manually dispatched run by run ID so pending provenance cannot be lost.
-  group: ${{ github.event_name == 'pull_request' && format('vellum-provenance-pr-{0}', github.ref) || format('vellum-provenance-run-{0}', github.run_id) }}
+  group: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && format('vellum-provenance-pr-{0}', github.ref) || format('vellum-provenance-run-{0}', github.run_id) }}
   # Do not spend a full provenance reconciliation on an obsolete PR commit;
   # trusted main/tag runs remain serialized and non-cancelable.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -53,7 +57,7 @@ jobs:
     runs-on: ${{ fromJSON(vars.VELLUM_LINUX_RUNS_ON_JSON || '["ubuntu-latest"]') }}
     env:
       VELLUM_TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-      VELLUM_GIT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+      VELLUM_GIT_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
     steps:
       - name: Check out full preserved history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -184,30 +188,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Require private delivery repository read access
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          DELIVERY_READER_TOKEN: ${{ github.event_name != 'pull_request' && secrets.VELLUM_DELIVERY_READER_TOKEN || '' }}
-        run: test -n "$DELIVERY_READER_TOKEN"
-
-      - name: Check out the attested delivery repository commit
-        if: startsWith(github.ref, 'refs/tags/v') && steps.expansion-evidence.outputs.delivery-sha != ''
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          repository: danielraffel/vellum
-          ref: ${{ steps.expansion-evidence.outputs.delivery-sha }}
-          path: .promotion-delivery
-          fetch-depth: 0
-          persist-credentials: false
-          token: ${{ secrets.VELLUM_DELIVERY_READER_TOKEN }}
-
       - name: Test authority protocol and negative controls
         env:
           PULP_ACCEPTANCE_SHA: ${{ steps.expansion-evidence.outputs.pulp-sha }}
           DELIVERY_PROMOTION_SHA: ${{ steps.expansion-evidence.outputs.delivery-sha }}
           PROMOTION_ATTESTATION_PATH: ${{ steps.expansion-evidence.outputs.promotion-path }}
           GH_TOKEN: ${{ github.token }}
-          DELIVERY_READER_TOKEN: ${{ github.event_name != 'pull_request' && secrets.VELLUM_DELIVERY_READER_TOKEN || '' }}
         run: |
           set -euo pipefail
           python3 tools/provenance/test_verify_authority_activation.py
@@ -218,7 +204,7 @@ jobs:
           python3 scripts/test_verify_exact_provenance_artifact.py
           release_readiness=()
           repository_evidence=(--repository "$GITHUB_REPOSITORY")
-          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+          if [[ "$GITHUB_EVENT_NAME" == pull_request || "$GITHUB_EVENT_NAME" == merge_group ]]; then
             repository_evidence+=(--defer-live-open-pr-audit)
           fi
           if [[ -n "$PULP_ACCEPTANCE_SHA" ]]; then
@@ -350,22 +336,15 @@ jobs:
           )
           PY
             repository_evidence+=(
-              --delivery-root .promotion-delivery
+              --delivery-root "$GITHUB_WORKSPACE"
               --promotion-attestation "$PROMOTION_ATTESTATION_PATH"
               --check-runs-json "$RUNNER_TEMP/parity-check-runs.json"
             )
           fi
-          if [[ -n "$PULP_ACCEPTANCE_SHA" && "$GITHUB_EVENT_NAME" != pull_request ]]; then
-            test -n "$DELIVERY_READER_TOKEN"
-            primary_token="$GH_TOKEN"
+          if [[ -n "$PULP_ACCEPTANCE_SHA" && "$GITHUB_EVENT_NAME" != pull_request && "$GITHUB_EVENT_NAME" != merge_group ]]; then
             snapshot_root="$RUNNER_TEMP/open-pr-snapshot-input"
             mkdir "$snapshot_root"
-            for repository in Generous-Corp/pulp Generous-Corp/vellum danielraffel/vellum; do
-              if [[ "$repository" == danielraffel/vellum ]]; then
-                export GH_TOKEN="$DELIVERY_READER_TOKEN"
-              else
-                export GH_TOKEN="$primary_token"
-              fi
+            for repository in Generous-Corp/pulp Generous-Corp/vellum; do
               slug="${repository//\//__}"
               repository_root="$snapshot_root/$slug"
               mkdir -p "$repository_root/details" "$repository_root/trees"
@@ -415,7 +394,6 @@ jobs:
                   > "$repository_root/trees/$pull_number-head-tree.json"
               done < "$repository_root/numbers.txt"
             done
-            export GH_TOKEN="$primary_token"
             SNAPSHOT_ROOT="$snapshot_root" python3 - <<'PY'
           import json
           import os
@@ -423,9 +401,7 @@ jobs:
 
           root = Path(os.environ["SNAPSHOT_ROOT"])
           repositories = []
-          for repository in (
-              "Generous-Corp/pulp", "Generous-Corp/vellum", "danielraffel/vellum"
-          ):
+          for repository in ("Generous-Corp/pulp", "Generous-Corp/vellum"):
               repository_root = root / repository.replace("/", "__")
               pages = json.loads(
                   repository_root.joinpath("pulls.json").read_text(encoding="utf-8")
@@ -508,20 +484,13 @@ jobs:
             write_live_open_pr_cursor() {
               local destination="$1"
               local cursor_root
-              local cursor_primary_token="$GH_TOKEN"
               cursor_root="$(mktemp -d "$RUNNER_TEMP/open-pr-cursor-live.XXXXXX")"
-              for repository in Generous-Corp/pulp Generous-Corp/vellum danielraffel/vellum; do
-                if [[ "$repository" == danielraffel/vellum ]]; then
-                  export GH_TOKEN="$DELIVERY_READER_TOKEN"
-                else
-                  export GH_TOKEN="$cursor_primary_token"
-                fi
+              for repository in Generous-Corp/pulp Generous-Corp/vellum; do
                 slug="${repository//\//__}"
                 gh api --method GET --paginate --slurp \
                   "repos/$repository/pulls?state=open&per_page=100" \
                   > "$cursor_root/$slug.json"
               done
-              export GH_TOKEN="$cursor_primary_token"
               CURSOR_ROOT="$cursor_root" CURSOR_DESTINATION="$destination" python3 - <<'PY'
           import json
           import os
@@ -529,9 +498,7 @@ jobs:
 
           root = Path(os.environ["CURSOR_ROOT"])
           repositories = []
-          for repository in (
-              "Generous-Corp/pulp", "Generous-Corp/vellum", "danielraffel/vellum"
-          ):
+          for repository in ("Generous-Corp/pulp", "Generous-Corp/vellum"):
               pages = json.loads(
                   root.joinpath(repository.replace("/", "__") + ".json").read_text(
                       encoding="utf-8"
@@ -565,7 +532,7 @@ jobs:
             "${release_readiness[@]}" \
             "${repository_evidence[@]}" \
             --output "$RUNNER_TEMP/authority-expansion-report.json"
-          if [[ -n "$PULP_ACCEPTANCE_SHA" && "$GITHUB_EVENT_NAME" != pull_request ]]; then
+          if [[ -n "$PULP_ACCEPTANCE_SHA" && "$GITHUB_EVENT_NAME" != pull_request && "$GITHUB_EVENT_NAME" != merge_group ]]; then
             test "$live_pulp_main" = \
               "$(gh api repos/Generous-Corp/pulp/git/ref/heads/main --jq .object.sha)"
             write_live_open_pr_cursor "$RUNNER_TEMP/open-pr-cursor-after.json"
@@ -772,6 +739,20 @@ jobs:
           observatory_git_base="$(
             git merge-base "$observatory_git_base" HEAD
           )"
+          vellum_tail_args=()
+          # Pull requests and queue merges validate only the observed main
+          # tail; the PR's unlanded commits are reconciled after landing.
+          # Pushes to main intentionally use the full walk: a red result
+          # identifies newly landed code that the receiver must observe.
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            git fetch --no-tags origin \
+              refs/heads/main:refs/remotes/origin/main
+            vellum_pr_main="$(git rev-parse refs/remotes/origin/main)"
+            vellum_tail_args+=(--vellum-pr-main "$vellum_pr_main")
+          elif [[ "$GITHUB_EVENT_NAME" == merge_group ]]; then
+            test "$VELLUM_GIT_BASE" != ""
+            vellum_tail_args+=(--vellum-pr-main "$VELLUM_GIT_BASE")
+          fi
           python3 tools/provenance/test_observatory.py
           python3 tools/provenance/test_receiver.py
           python3 tools/provenance/test_receiver_watchdog.py
@@ -782,7 +763,11 @@ jobs:
             --git-base "$observatory_git_base" \
             --pulp-target "${{ steps.observatory-cursor.outputs.pulp-sha }}" \
             --vellum-target "$observatory_vellum_target" \
+            "${vellum_tail_args[@]}" \
             --output "$RUNNER_TEMP/observatory-health-report.json"
+          python3 tools/provenance/test_verify_pulp_observation_scope.py
+          python3 tools/provenance/verify_pulp_observation_scope.py \
+            --output "$RUNNER_TEMP/pulp-observation-scope-report.json"
 
       - name: Upload verification evidence
         if: always()
@@ -803,5 +788,6 @@ jobs:
             ${{ runner.temp }}/promotion-release-tag-trust.json
             ${{ runner.temp }}/authority-tag-trust.json
             ${{ runner.temp }}/observatory-health-report.json
+            ${{ runner.temp }}/pulp-observation-scope-report.json
           if-no-files-found: error
           retention-days: 90

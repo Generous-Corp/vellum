@@ -1,0 +1,21 @@
+{
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer",
+    "vellum.utf8-text"
+  ],
+  "created_at": "2026-10-11T00:46:19Z",
+  "disposition": "framework-only",
+  "effort_minutes": 0,
+  "event_id": "resolution-vellum-843fcf84eb68d1b5c081452b3221d650773fc5d8",
+  "kind": "resolution",
+  "linked_commits": [
+    "843fcf84eb68d1b5c081452b3221d650773fc5d8"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Vellum-side coverage for issue #27: the existing UTF-8 sanitizer moves unchanged into a header-only unit and gains malformed-input tests. Pulp carries its own repair under change event 20260830-malformed-utf8-text-shaping, so no Pulp change follows from this commit.",
+  "resolves": "vellum-843fcf84eb68d1b5c081452b3221d650773fc5d8",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

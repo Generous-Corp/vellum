@@ -63,8 +63,13 @@ repeated generic fixes, cursor gaps, and excessive observatory effort fail
 health. A release is blocked only by an overdue security event or an event
 explicitly marked as a shared-contract release blocker.
 
-The active cursor's `pulp.last_scanned_commit` begins at the exact landed Pulp
-activation boundary and advances through later reviewed reconciliation.
+The active cursor's `pulp.last_scanned_commit` began at the exact landed Pulp
+activation boundary and advanced through reviewed reconciliation until
+Decision 0011 froze Pulp observation at
+`aa630815630ca259b743651dacdc335f3d94a39a`. Pulp observation covers history only
+through that commit; later Pulp history is covered by the extraction program's
+inheritance ledger and by Decision 0010's export receipts. The
+`vellum.last_scanned_commit` cursor still advances with every change.
 Verification rejects a mapped commit beyond the checked-in cursor. Authority
 is active; the generated report records change-ledger health and currently has
 no activation blockers.
