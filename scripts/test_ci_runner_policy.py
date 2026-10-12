@@ -93,6 +93,7 @@ COMMITTED_PIN_SOURCES = (
 LIVE_BRANCH_GUARD = 'if event in ("pull_request", "merge_group"):'
 VERIFIED_POST_CHECKOUT_PINS = {
     ("provenance.yml", ".exact-boundary-pulp"),
+    ("provenance.yml", ".mirror-pulp"),
 }
 CHECKOUT_STEP = re.compile(
     r"^(?P<indent> +)- name: (?P<name>.+)\n"
@@ -147,6 +148,17 @@ def named_step_body(text: str, name: str) -> str | None:
     return text[marker.start() : later[0] if later else len(text)]
 
 
+def named_step_bodies(text: str, name: str) -> list[str]:
+    """Return every workflow step body with the given name."""
+    markers = list(re.finditer(rf"^ +- name: {re.escape(name)}\s*$", text, re.M))
+    starts = [m.start() for m in STEP_START.finditer(text)]
+    bodies: list[str] = []
+    for marker in markers:
+        later = [start for start in starts if start > marker.start()]
+        bodies.append(text[marker.start() : later[0] if later else len(text)])
+    return bodies
+
+
 def assert_exact_boundary_pulp_pin(text: str) -> None:
     """Require the exact-boundary checkout's post-checkout pin and proof."""
     checkout = next(
@@ -175,6 +187,32 @@ def assert_exact_boundary_pulp_pin(text: str) -> None:
         raise AssertionError("exact-boundary pin must detach the checkout to the committed SHA")
     if 'test "$(git -C .exact-boundary-pulp rev-parse HEAD)" = "$pulp_ref"' not in pin:
         raise AssertionError("exact-boundary pin must verify detached HEAD equals the committed SHA")
+
+
+def assert_mirror_pulp_pin(text: str) -> None:
+    """Require every mirror checkout to pin to the newest landed receipt SHA."""
+    checkouts = [row for row in pulp_checkouts(text) if row["path"] == ".mirror-pulp"]
+    if not checkouts:
+        raise AssertionError("provenance.yml: mirror Pulp checkout is missing")
+    if any(row["ref"] != "main" for row in checkouts):
+        raise AssertionError("mirror Pulp checkout must start at literal main before pinning")
+    name = "Pin mirror Pulp reads to committed Decision 0010 evidence"
+    pins = named_step_bodies(text, name)
+    if len(pins) < len(checkouts):
+        raise AssertionError("every mirror Pulp checkout needs a post-checkout pin step")
+    for pin in pins:
+        condition = re.search(r"^ +if: (.+)$", pin, re.M)
+        expression = condition.group(1) if condition else ""
+        if "steps.mirror-receipts.outputs.present == 'true'" not in expression:
+            raise AssertionError("mirror Pulp pin must run only when a landed receipt is present")
+        if "refs[-1]" not in pin or "receipt.get(\"pulp_sha\")" not in pin:
+            raise AssertionError("mirror Pulp pin must derive the newest receipt pulp_sha")
+        if "re.fullmatch(r\"[0-9a-f]{40}\", ref)" not in pin:
+            raise AssertionError("mirror Pulp pin must require a full 40-hex SHA")
+        if 'git -C .mirror-pulp checkout --detach "$pulp_ref"' not in pin:
+            raise AssertionError("mirror Pulp pin must detach the checkout to the receipt SHA")
+        if 'test "$(git -C .mirror-pulp rev-parse HEAD)" = "$pulp_ref"' not in pin:
+            raise AssertionError("mirror Pulp pin must verify detached HEAD equals the receipt SHA")
 
 
 def workflow_jobs(text: str) -> dict[str, str]:
@@ -511,6 +549,7 @@ class RunnerPolicyTests(unittest.TestCase):
         # evidence committed in this repository.
         seen = 0
         non_exempt = 0
+        verified_count = 0
         seen_verified: set[tuple[str, str]] = set()
         for path in sorted(WORKFLOWS.glob("*.yml")):
             text = path.read_text(encoding="utf-8")
@@ -521,7 +560,11 @@ class RunnerPolicyTests(unittest.TestCase):
                 with self.subTest(workflow=path.name, checkout=checkout["path"]):
                     key = (path.name, checkout["path"])
                     if key in VERIFIED_POST_CHECKOUT_PINS:
-                        assert_exact_boundary_pulp_pin(text)
+                        if checkout["path"] == ".exact-boundary-pulp":
+                            assert_exact_boundary_pulp_pin(text)
+                        else:
+                            assert_mirror_pulp_pin(text)
+                        verified_count += 1
                         seen_verified.add(key)
                         continue
                     non_exempt += 1
@@ -555,7 +598,7 @@ class RunnerPolicyTests(unittest.TestCase):
                     )
         # Control: the rule must have examined the checkouts it protects.
         self.assertGreaterEqual(seen, 3)
-        self.assertEqual(non_exempt, seen - len(VERIFIED_POST_CHECKOUT_PINS))
+        self.assertEqual(non_exempt, seen - verified_count)
         self.assertEqual(seen_verified, VERIFIED_POST_CHECKOUT_PINS)
 
     def test_exact_boundary_pin_mutations_fail_closed(self) -> None:
