@@ -13,7 +13,7 @@ EXPECTED_RUNNERS = {
     "authority-activation.yml": ("__hosted__", "ubuntu-latest"),
     "authority-release.yml": ("__hosted__", "ubuntu-latest"),
     "gpu-macos.yml": (
-        "VELLUM_MACOS_RUNS_ON_JSON",
+        "VELLUM_LOCAL_MACOS_RUNS_ON_JSON",
         '["macos-15"]',
     ),
     "merge-on-green.yml": (
@@ -71,6 +71,11 @@ BROWSER_JOBS = {
 }
 
 JOB_HEADER = re.compile(r"^  ([A-Za-z0-9_-]+):\s*$")
+GPU_GUARD = (
+    "    if: github.event_name != 'pull_request' || "
+    "github.event.pull_request.head.repo.full_name == github.repository || "
+    "vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON == ''"
+)
 
 PULP_REPOSITORY = "Generous-Corp/pulp"
 STEP_OUTPUT_REF = re.compile(
@@ -243,6 +248,19 @@ def assert_privileged_release_coordinate_isolation(text: str) -> None:
         )
 
 
+def assert_gpu_local_runner_policy(text: str) -> None:
+    jobs = workflow_jobs(text)
+    for job_name in ("gpu-macos-arm64", "sterile-consumer"):
+        body = jobs.get(job_name)
+        if body is None:
+            raise AssertionError(f"gpu-macos.yml: {job_name} is missing")
+        guards = [line for line in body.splitlines() if line.startswith("    if:")]
+        if guards != [GPU_GUARD]:
+            raise AssertionError(
+                f"gpu-macos.yml: {job_name} must have exactly the reviewed guard"
+            )
+
+
 class RunnerPolicyTests(unittest.TestCase):
     def test_only_trusted_default_branch_code_can_publish_sdk_releases(self) -> None:
         gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
@@ -412,6 +430,27 @@ class RunnerPolicyTests(unittest.TestCase):
                         any(label in fallback for label in HOSTED_LABELS),
                         f"{path.name} fallback is not a hosted label: {fallback}",
                     )
+
+        gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
+        for job in ("gpu-macos-arm64", "sterile-consumer"):
+            body = workflow_jobs(gpu).get(job)
+            self.assertIsNotNone(body, f"gpu-macos.yml: {job} is missing")
+        assert_gpu_local_runner_policy(gpu)
+
+    def test_gpu_local_runner_policy_rejects_guard_mutations(self) -> None:
+        gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
+        assert_gpu_local_runner_policy(gpu)
+        mutations = {
+            "truthy": gpu.replace(GPU_GUARD, GPU_GUARD + " || true"),
+            "missing event clause": gpu.replace(
+                "github.event_name != 'pull_request' || ", "", 2
+            ),
+            "commented guard": gpu.replace("    if: github.event_name", "    # if: github.event_name", 2),
+        }
+        for name, mutated in mutations.items():
+            with self.subTest(mutation=name):
+                with self.assertRaises(AssertionError):
+                    assert_gpu_local_runner_policy(mutated)
 
     def test_external_actions_are_pinned_to_reviewed_node24_releases(self) -> None:
         for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]):

@@ -33,6 +33,23 @@ def invoke(*arguments: str, cwd: Path | None = None, env: dict[str, str] | None 
 
 
 class CliTests(unittest.TestCase):
+    def test_html_import_without_browser_payload_reports_capability_unavailable(self) -> None:
+        """An SDK built without the browser payload must not surface a traceback."""
+        for source_type in ("html", "claude-design"):
+            with self.subTest(source_type=source_type):
+                # `None` in sys.modules makes the import statement raise ImportError,
+                # which is exactly what an SDK lacking the payload produces.
+                with mock.patch.dict(sys.modules, {"vellum_html_source": None}):
+                    with self.assertRaises(cli_module.CliFailure) as raised:
+                        cli_module.invoke_import_backend(
+                            Path("/nonexistent"), {}, source_type,
+                            Path("/nonexistent/index.html"), "main", None,
+                            lambda *a, **k: ({}, 0),
+                        )
+                self.assertEqual(raised.exception.status, "capability_unavailable")
+                self.assertEqual(raised.exception.exit_code, cli_module.EXIT_UNAVAILABLE)
+                self.assertIn(source_type, str(raised.exception))
+
     def test_web_interaction_plan_is_exposed_by_installed_cli_parser(self) -> None:
         args = cli_module.parser().parse_args([
             "test", "--target", "web", "--interaction-plan", "plans/smoke.json",
