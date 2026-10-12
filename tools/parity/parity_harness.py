@@ -203,7 +203,12 @@ def validate_corpus(corpus: Any, corpus_dir: Path | None = None,
         if base not in ("source-root", "corpus") and not str(base).startswith("external:"):
             raise HarnessError(f"{case_id}: source_base must be source-root, corpus or external:<name>")
         if str(base).startswith("external:") or "provenance" in case:
-            validate_provenance(case)
+            ext_root = None
+            if str(base).startswith("external:") and external_roots:
+                ext_name = str(base).split(":", 1)[1]
+                if ext_name in external_roots:
+                    ext_root = Path(external_roots[ext_name])
+            validate_provenance(case, ext_root if ext_root and ext_root.exists() else None)
         validate_regions(case)
         if "interaction" in lanes and not case.get("interactions"):
             raise HarnessError(f"{case_id}: interaction lane selected without interactions")
@@ -266,8 +271,12 @@ def validate_implementation(impl: Any) -> dict[str, Any]:
     if impl.get("authority") not in AUTHORITIES:
         raise HarnessError(f"implementation authority must be one of {AUTHORITIES} (declared, never defaulted)")
     for entry in impl.get("passthrough_binaries", []):
-        if not isinstance(entry, dict) or not entry.get("path") or not str(entry.get("justification", "")).strip():
-            raise HarnessError("passthrough_binaries entries need a path and a justification")
+        if (not isinstance(entry, dict) or not entry.get("path")
+                or not str(entry.get("justification", "")).strip()
+                or not SHA256_RE.match(str(entry.get("sha256", "")))):
+            raise HarnessError("passthrough_binaries entries need path, sha256 and justification")
+        if Path(str(entry["path"])).name not in ("cp", "copy", "install"):
+            raise HarnessError("passthrough_binaries may only declare copy tools")
     return impl
 
 
@@ -366,7 +375,7 @@ def implementation_identity(impl: dict[str, Any], tools: dict[str, Path],
         },
         "probes": run_probes(impl, tools, roots),
         "authority": impl.get("authority"),
-        "passthrough_binaries": sorted(entry["path"] for entry in impl.get("passthrough_binaries", [])),
+        "passthrough_binaries": [dict(entry) for entry in impl.get("passthrough_binaries", [])],
         "content_roots": {name: tree_sha256(roots[name]) if name in roots else None
                           for name in impl.get("content_roots", [])},
     }
@@ -486,11 +495,15 @@ def stage_case(case: dict[str, Any], source_root: Path, destination: Path,
     `extra_stage` is for files a control wrote itself under its work dir."""
     destination.mkdir(parents=True, exist_ok=True)
     source_root = case_root(case, source_root)
+    if str(case.get("source_base", "")).startswith("external:"):
+        validate_provenance(case, source_root)
     source = resolve_under(source_root, case["source"], f"{case['case_id']} source")
     if not source.is_file():
         raise HarnessError(f"{case['case_id']}: source not found: {source}")
     staged = destination / source.name
-    staged.write_bytes(source_override if source_override is not None else source.read_bytes())
+    source_bytes = source_override if source_override is not None else source.read_bytes()
+    resolve_under(source_root, case["source"], f"{case['case_id']} source (post-copy check)")
+    staged.write_bytes(source_bytes)
     hashes = {source.name: sha256_file(staged)}
     pinned = (case.get("provenance") or {}).get("sha256")
     if pinned and source_override is None and hashes[source.name] != pinned:
@@ -508,7 +521,35 @@ def stage_case(case: dict[str, Any], source_root: Path, destination: Path,
             hashes[origin.name] = sha256_file(target)
         else:
             raise HarnessError(f"{case['case_id']}: staged companion not found: {origin}")
+    for companion in case.get("stage", []):
+        resolve_under(source_root, companion, f"{case['case_id']} stage (post-copy check)")
+    manifest = (case.get("provenance") or {}).get("files")
+    if manifest is not None:
+        missing = sorted(set(hashes) - set(manifest))
+        extra = sorted(set(manifest) - set(hashes))
+        if missing or extra:
+            raise HarnessError(f"{case['case_id']}: provenance file pins do not cover staged tree "
+                               f"(missing={missing}, extra={extra})")
+        mismatched = sorted(name for name, digest in hashes.items() if manifest.get(name) != digest)
+        if mismatched:
+            raise HarnessError(f"{case['case_id']}: staged file sha256 pins mismatch: {mismatched}")
     return hashes
+
+
+def _copy_read_paths(argv: list[str], before: dict[str, str], out: Path) -> list[str]:
+    reads: set[str] = set()
+    for raw in argv[1:]:
+        if raw.startswith("-"):
+            continue
+        candidate = Path(raw)
+        if not candidate.is_absolute():
+            candidate = out / candidate
+        resolved = Path(os.path.realpath(candidate))
+        for name in before:
+            path = Path(os.path.realpath(out / name))
+            if resolved == path or (candidate.is_dir() and path.is_relative_to(resolved)):
+                reads.add(name)
+    return sorted(reads)
 
 
 def expand(arg: str, values: dict[str, str]) -> str:
@@ -572,11 +613,11 @@ def run_side(case: dict[str, Any], impl: dict[str, Any], tools: dict[str, Path],
         if step.get("env"):
             env = dict(os.environ, **{k: expand(str(v), values) for k, v in step["env"].items()})
             record["env"] = {k: env[k] for k in step["env"]}
-        record.update(producing_binary(argv))
+        record.update(producing_binary(argv, out))
         before = snapshot(out)
         # Files in the side directory this step names as arguments: what a
         # passthrough copy reads, so its output inherits their producer.
-        record["reads"] = sorted({arg for arg in argv[1:] if arg in before})
+        record["reads"] = _copy_read_paths(argv, before, out)
         started = time.monotonic()
         try:
             result = subprocess.run(argv, cwd=out, capture_output=True, text=True, encoding="utf-8",
@@ -1472,6 +1513,8 @@ def calibrate(corpus_path: Path, source_root: Path, impl_path: Path, out: Path,
     if out.exists():
         shutil.rmtree(out)
     identity = implementation_identity(impl, tools, roots)
+    passthrough_paths = {str(entry.get("path")) for entry in identity.get("passthrough_binaries", [])
+                         if isinstance(entry, dict)}
 
     def side(case: dict[str, Any], label: str, **kwargs: Any) -> tuple[Path, dict[str, Any]]:
         directory = out / "runs" / case["case_id"] / label
@@ -1603,7 +1646,7 @@ def calibrate(corpus_path: Path, source_root: Path, impl_path: Path, out: Path,
         selected = {name for lane, r in result["lanes"].items() if r["status"] != "not_selected"
                     for name in LANE_ARTIFACTS.get(lane, ())}
         for name, origin in (result["candidate"].get("produced_by") or {}).items():
-            if name in selected and origin.get("binary") not in (identity.get("passthrough_binaries") or []):
+            if name in selected and origin.get("binary") not in passthrough_paths:
                 origin["binary_sha256"] = "0" * 64
                 origin.pop("script_sha256", None)
                 break
@@ -1618,7 +1661,7 @@ def calibrate(corpus_path: Path, source_root: Path, impl_path: Path, out: Path,
         for name, origin in (result["candidate"].get("produced_by") or {}).items():
             # A passthrough producer is exempt from the check, so replacing its
             # digest proves nothing; aim at a nested observation a tool produced.
-            if name in selected and origin.get("binary") not in (identity.get("passthrough_binaries") or []):
+            if name in selected and origin.get("binary") not in passthrough_paths:
                 origin["binary_sha256"] = "0" * 64
                 origin.pop("script_sha256", None)
                 nested_applied.append(f"{result['case_id']}:{name}")

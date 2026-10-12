@@ -44,8 +44,9 @@ on both sides.
   is diagnostic and never `parity`.
 - **Producing binary.** Each step records the digest of the binary it ran (and of the script, for an
   interpreter) at run time. Each observation records the step that produced it. An observation that a selected
-  lane reads must come from a declared tool, or from a `passthrough_binaries` entry that carries a justification
-  (for example `/bin/cp` copying an input DesignIR). Otherwise the receipt is refused.
+  lane reads must come from a declared tool. Passthrough entries are digest-bound, copy-only tools and may copy
+  staged inputs or earlier declared artifacts; they can never produce a selected observation. Copy arguments are
+  resolved in the side directory, including directory trees, so spelling changes cannot launder provenance.
 - **Regions.** A case may declare named `regions` in design px. The raster lane scores each one separately:
   a localized difference is named, and a region that drew nothing fails even when the whole frame matches. Put
   a shared deterministic fixture in `stage` so both renderers read the same bytes.
@@ -54,7 +55,9 @@ on both sides.
   - a permissive SPDX `license`;
   - the `repository`;
   - a 40-hex `commit`;
-  - the source's `sha256`.
+  - the source's `sha256`;
+  - for staged companions, a `files` map covering every staged relative path with its sha256; and
+  - an external root whose checked-out `HEAD` equals `commit`.
 
   The staged bytes must match the pin.
 

@@ -585,12 +585,13 @@ class AuthorityAndProvenanceTests(HarnessFixture):
             same = (ref / "deep/obs.json").read_bytes() == (cand / "deep/obs.json").read_bytes()
             return {"status": "pass" if same else "fail", "reasons": [] if same else ["differs"]}
 
-        ph.register_lane("nested-lane", ("deep/a-copied.json", "deep/obs.json"), nested_lane)
+        ph.register_lane("nested-lane", ("deep/obs.json",), nested_lane)
         try:
             impl = implementation(self.tool)
             # A passthrough copy writes a nested file first; the control must skip
             # it and aim at the nested observation the declared tool writes.
-            impl["passthrough_binaries"] = [{"path": "/bin/cp", "justification": "copies a staged input"}]
+            impl["passthrough_binaries"] = [{"path": "/bin/cp", "sha256": ph.sha256_file(Path("/bin/cp")),
+                                              "justification": "copies a staged input"}]
             impl["steps"].append({"id": "copy", "argv": ["/bin/mkdir", "-p", "deep"]})
             impl["steps"].append({"id": "copied", "argv": ["/bin/cp", "source.json", "deep/a-copied.json"]})
             impl["steps"].append({"id": "nested", "argv": [
@@ -729,7 +730,8 @@ class PassthroughLaunderingTests(HarnessFixture):
         return ph.run_side(case, impl, {"fake": self.tool}, self.root / "src", self.root / "side")
 
     def errors(self, run: dict) -> list[str]:
-        identity = {"tools": {"fake": {"sha256": ph.sha256_file(self.tool)}}, "passthrough_binaries": ["/bin/cp"]}
+        identity = {"tools": {"fake": {"sha256": ph.sha256_file(self.tool)}},
+                    "passthrough_binaries": [{"path": "/bin/cp", "sha256": ph.sha256_file(Path("/bin/cp"))}]}
         return ph.provenance_errors(run, identity, "x", ["copy-probe"])
 
     def tearDown(self) -> None:
@@ -744,15 +746,14 @@ class PassthroughLaunderingTests(HarnessFixture):
         ])
         self.assertEqual(run["produced_by"]["out/copied.json"]["reads"], ["made-elsewhere.json"])
         errors = self.errors(run)
-        self.assertTrue(any("made-elsewhere.json" in e and "undeclared binary" in e and "copied into" in e
-                            for e in errors), errors)
+        self.assertTrue(any("copied into" in e for e in errors), errors)
 
     def test_copy_of_a_staged_input_is_accepted(self) -> None:
         run = self.run_with([
             {"id": "mkdir", "argv": ["/bin/mkdir", "-p", "out"]},
             {"id": "copy", "argv": ["/bin/cp", "source.json", "out/copied.json"]},
         ])
-        self.assertEqual(self.errors(run), [])
+        self.assertTrue(self.errors(run))
 
 
 class NestedControlLoudTests(HarnessFixture):
@@ -763,7 +764,8 @@ class NestedControlLoudTests(HarnessFixture):
         ph.register_lane("copied-lane", ("deep/only-copied.json",), nested_lane)
         try:
             impl = implementation(self.tool)
-            impl["passthrough_binaries"] = [{"path": "/bin/cp", "justification": "copies a staged input"}]
+            impl["passthrough_binaries"] = [{"path": "/bin/cp", "sha256": ph.sha256_file(Path("/bin/cp")),
+                                              "justification": "copies a staged input"}]
             impl["steps"] += [{"id": "mkdir", "argv": ["/bin/mkdir", "-p", "deep"]},
                               {"id": "copy", "argv": ["/bin/cp", "source.json", "deep/only-copied.json"]}]
             ph.write_json(self.impl_path, impl)

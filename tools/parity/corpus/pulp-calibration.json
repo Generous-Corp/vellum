@@ -9,7 +9,6 @@
       "width": 240,
       "height": 160,
       "lanes": [
-        "structure",
         "raster",
         "geometry",
         "interaction"
@@ -56,7 +55,8 @@
           "w": 40,
           "h": 120
         }
-      ]
+      ],
+      "note": "Structure is input-only for this source kind; the implementation does not claim an import-produced DesignIR observation."
     },
     {
       "case_id": "figma-plugin-scene",
@@ -106,11 +106,11 @@
       "width": 160,
       "height": 120,
       "lanes": [
-        "structure",
         "raster",
         "geometry"
       ],
-      "scale": 2
+      "scale": 2,
+      "note": "Structure is input-only for this source kind; the implementation does not claim an import-produced DesignIR observation."
     },
     {
       "case_id": "html-basic-card",

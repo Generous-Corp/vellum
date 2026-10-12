@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import subprocess
 from typing import Any
 
 SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -78,7 +79,7 @@ def region_bounds_errors(region: dict[str, Any], rect: tuple[int, int, int, int]
     return errors
 
 
-def validate_provenance(case: dict[str, Any]) -> None:
+def validate_provenance(case: dict[str, Any], external_root: Path | None = None) -> None:
     """A third-party source is licensed, pinned, and checked byte for byte."""
     prov = case.get("provenance")
     case_id = case["case_id"]
@@ -86,17 +87,34 @@ def validate_provenance(case: dict[str, Any]) -> None:
         raise HarnessError(f"{case_id}: an external source needs provenance (license, repository, commit, sha256)")
     if prov.get("license") not in PERMISSIVE_LICENSES:
         raise HarnessError(f"{case_id}: provenance license {prov.get('license')!r} is not a recorded permissive licence")
-    if not prov.get("repository") or not SHA1_RE.match(str(prov.get("commit", ""))):
+    commit = str(prov.get("commit", ""))
+    if not prov.get("repository") or not SHA1_RE.match(commit):
         raise HarnessError(f"{case_id}: provenance needs repository and a 40-hex commit")
     if not SHA256_RE.match(str(prov.get("sha256", ""))):
         raise HarnessError(f"{case_id}: provenance needs the source's sha256")
+    files = prov.get("files")
+    if files is not None and (not isinstance(files, dict)
+                              or any(not isinstance(k, str) or not SHA256_RE.match(str(v))
+                                     for k, v in files.items())):
+        raise HarnessError(f"{case_id}: provenance files must map relative paths to sha256 pins")
+    if external_root is not None:
+        try:
+            actual = subprocess.check_output(["git", "-C", str(external_root), "rev-parse", "HEAD"],
+                                             text=True, stderr=subprocess.DEVNULL).strip()
+        except (OSError, subprocess.CalledProcessError):
+            raise HarnessError(f"{case_id}: external source root is not a git checkout")
+        if actual != commit:
+            raise HarnessError(f"{case_id}: provenance commit {commit} != external root HEAD {actual}")
+        if not isinstance(files, dict):
+            raise HarnessError(f"{case_id}: external sources need per-file sha256 pins")
 
 
 def validate_regions(case: dict[str, Any]) -> None:
     """Named regions in design px; each is scored on its own in the raster lane."""
     names = set()
     for region in case.get("regions", []):
-        if not isinstance(region, dict) or not region.get("name") or region["name"] in names:
+        if (not isinstance(region, dict) or not isinstance(region.get("name"), str)
+                or not region.get("name") or region["name"] in names):
             raise HarnessError(f"{case['case_id']}: regions need unique names")
         names.add(region["name"])
         x, y, w, h = (region.get(k) for k in ("x", "y", "w", "h"))
@@ -115,22 +133,30 @@ def snapshot(directory: Path) -> dict[str, str]:
             for p in directory.rglob("*") if p.is_file() and not p.is_symlink()}
 
 
-def producing_binary(argv: list[str]) -> dict[str, Any]:
+def producing_binary(argv: list[str], cwd: Path | None = None) -> dict[str, Any]:
     """The binary a step runs, digested at the moment it runs, and the script
     it interprets if any: an observation is bound to what actually drew it."""
     info: dict[str, Any] = {}
     if not argv:
         return info
+    cwd = Path(cwd or os.getcwd())
     executable = Path(argv[0]) if os.sep in argv[0] else Path(shutil.which(argv[0]) or argv[0])
+    if not executable.is_absolute():
+        executable = cwd / executable
     if executable.is_file():
         info["binary"] = str(executable)
         info["binary_sha256"] = sha256_file(executable)
-    if len(argv) > 1 and Path(argv[1]).suffix in (".py", ".mjs", ".js", ".sh") and Path(argv[1]).is_file():
-        info["script_sha256"] = sha256_file(Path(argv[1]))
+    if len(argv) > 1 and Path(argv[1]).suffix in (".py", ".mjs", ".js", ".sh"):
+        script = Path(argv[1])
+        if not script.is_absolute():
+            script = cwd / script
+        if script.is_file():
+            info["script_sha256"] = sha256_file(script)
     name = executable.name
     inline_flags = ("-c",) if name in SHELLS or name.startswith("python") else (
         ("-e", "--eval", "-p", "--print") if name in ("node", "perl", "ruby") else ())
-    if any(flag in argv[1:] for flag in inline_flags):
+    if ("-m" in argv[1:] or any(flag in argv[1:] for flag in inline_flags)
+            or (name in SHELLS and len(argv) > 1 and Path(argv[1]).suffix in (".py", ".mjs", ".js", ".sh"))):
         info["delegated"] = True
     return info
 
@@ -143,7 +169,12 @@ def provenance_errors(run: dict[str, Any], identity: dict[str, Any], side: str,
     staged inputs: a file it copies from an earlier step is checked against
     that step's producer, so a copy cannot launder an undeclared one."""
     declared = {t.get("sha256") for t in (identity.get("tools") or {}).values()}
-    passthrough = set(identity.get("passthrough_binaries") or [])
+    passthrough: dict[str, str | None] = {}
+    for entry in identity.get("passthrough_binaries") or []:
+        if isinstance(entry, str):
+            passthrough[entry] = None
+        elif isinstance(entry, dict):
+            passthrough[str(entry.get("path"))] = entry.get("sha256")
     producers = run.get("producers") or run.get("produced_by") or {}
 
     def check(name: str, origin: dict[str, Any] | None, seen: frozenset[str]) -> list[str]:
@@ -155,6 +186,9 @@ def provenance_errors(run: dict[str, Any], identity: dict[str, Any], side: str,
             return [f"{side}/{name}: produced through a shell command string "
                     f"({origin.get('binary')} -c); run the producer directly"]
         if origin.get("binary") in passthrough:
+            expected = passthrough[origin.get("binary")]
+            if expected and expected != origin.get("binary_sha256"):
+                return [f"{side}/{name}: passthrough binary digest does not match declaration"]
             problems = []
             for source in origin.get("reads") or []:
                 if source in seen:
@@ -162,6 +196,8 @@ def provenance_errors(run: dict[str, Any], identity: dict[str, Any], side: str,
                 if source in producers:  # copied from an earlier step, not from a staged input
                     problems += [f"{p} (copied into {name} by {origin.get('binary')})"
                                  for p in check(source, producers[source], seen | {source})]
+            if name in {artifact for lane in lanes for artifact in lane_artifacts.get(lane, ())}:
+                problems.append(f"{side}/{name}: passthrough copy tools may not produce selected observations")
             return problems
         if origin.get("binary_sha256") not in declared and origin.get("script_sha256") not in declared:
             return [f"{side}/{name}: produced by an undeclared binary {origin.get('binary')} "
