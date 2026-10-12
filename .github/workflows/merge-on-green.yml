@@ -38,6 +38,7 @@ jobs:
           owner: Generous-Corp
           repositories: vellum
           permission-actions: read
+          permission-administration: read
           permission-contents: write
           permission-pull-requests: write
 
