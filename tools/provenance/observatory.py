@@ -320,6 +320,7 @@ def coverage_gaps(
     pulp_target: str | None = None, vellum_target: str | None = None,
     incremental_from: dict[str, str] | None = None,
     vellum_tail_policy: str = "reconciled",
+    vellum_pr_main: str | None = None,
 ) -> list[dict[str, str]]:
     if vellum_tail_policy not in VELLUM_TAIL_POLICIES:
         raise ObservatoryError(
@@ -382,6 +383,8 @@ def coverage_gaps(
             and target != requested_target
         ):
             require_commit(repo, requested_target, f"requested {source} target")
+            if vellum_pr_main is not None:
+                verify_vellum_observatory_pr_tail(repo, target, vellum_pr_main, requested_target)
             # A pull request behind main is judged on its own commits: the
             # part of main it lacks is verified by main's own runs.
             tail_start = coverage_tail_start(repo, target, requested_target)
@@ -607,6 +610,17 @@ def verify_vellum_observatory_tail(repo: Path, cursor: str, target: str) -> None
         previous = commit
 
 
+def verify_vellum_observatory_pr_tail(
+    repo: Path, cursor: str, main_head: str, target: str
+) -> None:
+    """Check the observed main tail and require the PR target to contain main."""
+    require_commit(repo, main_head, "current main head")
+    require_commit(repo, target, "requested vellum target")
+    require_ancestor(repo, main_head, target, "pull-request target contains current main")
+    merge_base = git(repo, "merge-base", main_head, target)
+    verify_vellum_observatory_tail(repo, cursor, merge_base)
+
+
 def verify_append_only(
     root: Path,
     git_base: str | None,
@@ -710,6 +724,7 @@ def verify(
     allow_missing_source_repositories: bool = False,
     pulp_target: str | None = None, vellum_target: str | None = None,
     vellum_tail_policy: str = "reconciled",
+    vellum_pr_main: str | None = None,
 ) -> dict[str, object]:
     lock, mapping, cursor, budgets = validate_lock_map_cursor(root)
     verify_active_cursor_ancestry(lock, cursor, pulp_repo, vellum_repo)
@@ -725,6 +740,7 @@ def verify(
         pulp_repo=pulp_repo, vellum_repo=vellum_repo,
         pulp_target=pulp_target, vellum_target=vellum_target,
         vellum_tail_policy=vellum_tail_policy,
+        vellum_pr_main=vellum_pr_main,
     )
     if allow_missing_source_repositories:
         gaps = [gap for gap in gaps if gap["reason"] != "source-repository-not-supplied"]
@@ -886,6 +902,7 @@ def main(argv: list[str] | None = None) -> int:
     verify_parser.add_argument("--git-base")
     verify_parser.add_argument("--pulp-target")
     verify_parser.add_argument("--vellum-target")
+    verify_parser.add_argument("--vellum-pr-main")
     verify_parser.add_argument("--allow-missing-source-repositories", action="store_true")
     verify_parser.add_argument(
         "--vellum-tail-policy",
@@ -924,6 +941,7 @@ def main(argv: list[str] | None = None) -> int:
                 pulp_target=args.pulp_target,
                 vellum_target=args.vellum_target,
                 vellum_tail_policy=args.vellum_tail_policy,
+                vellum_pr_main=args.vellum_pr_main,
             )
         else:
             if args.events_only and not args.write:

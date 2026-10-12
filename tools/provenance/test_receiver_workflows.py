@@ -49,6 +49,22 @@ class ReceiverWorkflowTests(unittest.TestCase):
         self.assertNotIn("actions/variables", text)
         self.assertNotIn("VELLUM_RECEIVER_LIVE", text)
 
+    def test_live_switch_is_read_from_trusted_main_only(self) -> None:
+        text = self.text("pulp-observatory-receiver.yml")
+        # A pull-request branch copy of the switch must never control a run.
+        self.assertIn("token: ${{ steps.evidence-token.outputs.token }}\n          ref: main", text)
+        self.assertIn('Path("provenance/pulp-observatory/live-delivery.json")', text)
+        self.assertNotIn("github.event.pull_request.head", text)
+        self.assertNotIn("client_payload.live", text)
+
+    def test_live_switch_enable_uses_required_provenance_check_and_fails_closed(self) -> None:
+        text = self.text("pulp-observatory-receiver.yml")
+        self.assertIn("required checks", text)
+        self.assertIn("provenance-verify", text)
+        self.assertIn("except (OSError, json.JSONDecodeError, TypeError)", text)
+        self.assertIn("live = False", text)
+        self.assertIn("isinstance(switch, dict)", text)
+
     def test_evidence_is_coalesced_to_one_reviewed_branch(self) -> None:
         text = self.text("pulp-observatory-receiver.yml")
         self.assertIn("automation/pulp-observatory-coalesced", text)

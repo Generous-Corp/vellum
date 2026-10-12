@@ -106,10 +106,15 @@ jobs:
           import re
 
           main = os.popen("git -C .receiver-pulp rev-parse HEAD").read().strip()
-          switch = json.loads(
-              Path("provenance/pulp-observatory/live-delivery.json").read_text(encoding="utf-8")
-          )
-          live = switch.get("enabled") is True
+          try:
+              switch = json.loads(
+                  Path("provenance/pulp-observatory/live-delivery.json").read_text(encoding="utf-8")
+              )
+              live = isinstance(switch, dict) and switch.get("enabled") is True
+          except (OSError, json.JSONDecodeError, TypeError):
+              # Missing or malformed controls fail closed to disabled delivery.
+              switch = {}
+              live = False
           skip = os.environ["GITHUB_EVENT_NAME"] == "repository_dispatch" and not live
           if os.environ["GITHUB_EVENT_NAME"] == "repository_dispatch":
               payload = json.loads(os.environ["DISPATCH_PAYLOAD"])
@@ -298,7 +303,7 @@ jobs:
             --base main \
             --head "$LIVE_BRANCH" \
             --title "chore(provenance): enable live Pulp delivery" \
-            --body "Switches provenance/pulp-observatory/live-delivery.json on across the barrier proved by run $GITHUB_RUN_ID. Lands by merge commit once the required checks pass; never squash or rebase."
+            --body "Switches provenance/pulp-observatory/live-delivery.json on across the barrier proved by run $GITHUB_RUN_ID. Lands by merge commit once the required provenance-verify and steward checks pass; never squash or rebase."
 
       - name: Summarize receiver outcome
         if: always()

@@ -789,6 +789,13 @@ jobs:
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             observatory_tail_policy=reconciled
           fi
+          vellum_pr_tail_args=()
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            git fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
+            vellum_pr_tail_args+=(--vellum-pr-main "$(git rev-parse refs/remotes/origin/main)")
+          elif [[ "$GITHUB_EVENT_NAME" == merge_group ]]; then
+            vellum_pr_tail_args+=(--vellum-pr-main "$VELLUM_GIT_BASE")
+          fi
           python3 tools/provenance/test_observatory.py
           python3 tools/provenance/test_receiver.py
           python3 tools/provenance/test_receiver_watchdog.py
@@ -800,6 +807,7 @@ jobs:
             --pulp-target "${{ steps.observatory-cursor.outputs.pulp-sha }}" \
             --vellum-target "$observatory_vellum_target" \
             --vellum-tail-policy "$observatory_tail_policy" \
+            "${vellum_pr_tail_args[@]}" \
             --output "$RUNNER_TEMP/observatory-health-report.json"
 
       - name: Upload verification evidence
