@@ -370,6 +370,24 @@ class VerifyMirrorExportTests(unittest.TestCase):
         )
         self.assertError(errors, "embedded pin must equal pin")
 
+    def test_external_input_accepts_exact_googlesource_hosts(self) -> None:
+        pin = "a" * 40
+        for host in ("skia.googlesource.com/skia", "dawn.googlesource.com/dawn"):
+            self.assertEqual(
+                verify_mirror_export.validate_external_inputs(
+                    [{"path": "@external/source/include/a.h", "source": f"https://{host}", "pin": pin}],
+                    "fixture external inputs",
+                ),
+                [],
+            )
+
+    def test_external_input_rejects_other_googlesource_hosts(self) -> None:
+        errors = verify_mirror_export.validate_external_inputs(
+            [{"path": "@external/source/include/a.h", "source": "https://other.googlesource.com/source", "pin": "a" * 40}],
+            "fixture external inputs",
+        )
+        self.assertError(errors, "source must be a known repository URL")
+
     def test_external_input_parent_escape_is_rejected(self) -> None:
         errors = verify_mirror_export.validate_external_inputs(
             [{"path": "@build/../..", "source": "https://github.com/Mbed-TLS/mbedtls", "pin": "a" * 40}],
@@ -378,7 +396,7 @@ class VerifyMirrorExportTests(unittest.TestCase):
         self.assertError(errors, "cache-relative identity")
 
     def test_embedded_host_paths_are_rejected(self) -> None:
-        for value in ("-I/Users/attacker/include", "FOO=/Users/attacker/cache", r"\\server\share\x", "file:///Users/attacker/x"):
+        for value in ("-I/Users/attacker/include", "prefix//Users/attacker/cache", "FOO=/Volumes/attacker/cache", "-I/home/attacker/include", "x=/private/attacker", "FOO=C:/attacker/cache", r"prefix=\\server\share\x", "prefix file:///Users/attacker/x"):
             self.assertTrue(verify_mirror_export.host_path_violations(value, "fixture"), value)
 
     def test_external_input_host_path_is_rejected(self) -> None:

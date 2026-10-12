@@ -50,7 +50,7 @@ UNIT_KEYS = {"name", "closure_manifest", "closure_sha256", "oracle_class"}
 FILE_KEYS = {"mirror_path", "pulp_path", "mode", "blob"}
 GENERATED_KEYS = {"path", "sha256", "producer_paths"}
 EXTERNAL_CACHE_PATH = re.compile(r"^@[A-Za-z0-9_.-]+/")
-EXTERNAL_REPOSITORY = re.compile(r"^https://(?:github\.com|gitlab\.com|codeberg\.org)/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?/?$")
+EXTERNAL_REPOSITORY = re.compile(r"^https://(?:github\.com|gitlab\.com|codeberg\.org|skia\.googlesource\.com|dawn\.googlesource\.com)/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*(?:\.git)?/?$")
 EMBEDDED_PIN = re.compile(r"(?:^|[-_/])([0-9a-f]{40})(?=$|[-_/])", re.IGNORECASE)
 POLICY_KEYS = {
     "schema", "allowed_external_targets", "forbidden_target_pattern",
@@ -142,10 +142,11 @@ def host_path_violations(value: Any, label: str) -> list[str]:
     errors: list[str] = []
     if isinstance(value, str):
         windows_absolute = bool(re.match(r"^[A-Za-z]:[\\/]", value))
-        embedded_unix = bool(re.search(r"(?:^|[=\s-])(?:-[A-Za-z])?/(?:Users|Volumes|private|home|var|tmp|opt|etc|usr)(?:/|$)", value))
-        unc = value.startswith(("\\\\", "//"))
-        file_url = value.lower().startswith("file://")
-        if Path(value).is_absolute() or value.startswith("~") or windows_absolute or embedded_unix or unc or file_url:
+        embedded_unix = bool(re.search(r"/(?:Users|Volumes|home|private)(?:/|$)", value, re.IGNORECASE))
+        embedded_windows = bool(re.search(r"(?i)(?:^|[^A-Za-z0-9])[A-Z]:[\\/]", value))
+        unc = bool(re.search(r"\\\\[^\\/\s]+[\\/]", value))
+        file_url = "file://" in value.lower()
+        if Path(value).is_absolute() or value.startswith("~") or windows_absolute or embedded_unix or embedded_windows or unc or file_url:
             errors.append(f"{label} contains an absolute host path: {value}")
     elif isinstance(value, dict):
         for key, child in value.items():
