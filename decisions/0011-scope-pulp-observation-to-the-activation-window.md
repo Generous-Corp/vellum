@@ -40,8 +40,8 @@ the operating plan still applies.
 
 Advancing the Pulp cursor again requires a later decision that supersedes this
 one, updates the scope record, and classifies every resulting observation in the
-same pull request. The live receiver (`VELLUM_RECEIVER_LIVE`) stays disabled;
-enabling it would advance the Pulp cursor and fail this verifier.
+same pull request. The live receiver stays disabled while this scope is frozen; enabling it
+requires a superseding decision and a covered barrier.
 
 This decision changes no authority record, no ownership map, and no Pulp
 change-event contract.

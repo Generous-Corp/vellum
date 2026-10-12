@@ -88,6 +88,119 @@ class ReceiverTests(unittest.TestCase):
             ),
         }
 
+    def _vellum_history(self) -> str:
+        """A Vellum repository with evidence files committed at `base`; returns base."""
+        (self.vellum / "graphics/render.cpp").parent.mkdir(parents=True, exist_ok=True)
+        (self.vellum / "graphics/render.cpp").write_text("int v = 1;\n", encoding="utf-8")
+        report = self.vellum / "provenance/pulp-observatory/reports/current.json"
+        report.parent.mkdir(parents=True, exist_ok=True)
+        report.write_text("{}\n", encoding="utf-8")
+        self.set_vellum_cursor("0" * 40)
+        git(self.vellum, "add", ".")
+        git(self.vellum, "commit", "-qm", "vellum base")
+        return git(self.vellum, "rev-parse", "HEAD")
+
+    def set_vellum_cursor(self, commit: str) -> None:
+        path = self.vellum / "provenance/pulp-observatory/cursor.json"
+        value = json.loads(path.read_text(encoding="utf-8"))
+        value["vellum"] = {"last_scanned_commit": commit}
+        write_json(path, value)
+
+    def test_vellum_main_ahead_by_an_ordinary_commit_needs_reconcile(self) -> None:
+        base = self._vellum_history()
+        self.set_vellum_cursor(base)
+        self.assertFalse(receiver.vellum_needs_reconcile(self.vellum, self.vellum, base))
+        (self.vellum / "graphics/render.cpp").write_text("int v = 2;\n", encoding="utf-8")
+        git(self.vellum, "add", "graphics")
+        git(self.vellum, "commit", "-qm", "ordinary change")
+        main = git(self.vellum, "rev-parse", "HEAD")
+        self.assertTrue(receiver.vellum_needs_reconcile(self.vellum, self.vellum, main))
+        plan = receiver.plan(
+            root=self.vellum, pulp_repo=self.pulp, pulp_main=self.base, lower_bound=self.base,
+            payload=None, vellum_repo=self.vellum, vellum_main=main,
+        )
+        self.assertEqual(plan["status"], "reconcile")
+        self.assertTrue(plan["vellum_cursor_lagging"])
+        self.assertEqual(plan["reconcile_target"], self.base)
+
+    def test_vellum_evidence_only_tail_does_not_loop_the_receiver(self) -> None:
+        base = self._vellum_history()
+        self.set_vellum_cursor(base)
+        (self.vellum / "provenance/pulp-observatory/reports/current.json").write_text(
+            '{"reconciled": true}\n', encoding="utf-8"
+        )
+        git(self.vellum, "add", "provenance/pulp-observatory/reports")
+        git(self.vellum, "commit", "-qm", "evidence only")
+        main = git(self.vellum, "rev-parse", "HEAD")
+        # The receiver's own evidence commit landed: nothing to do, no loop.
+        self.assertFalse(receiver.vellum_needs_reconcile(self.vellum, self.vellum, main))
+        plan = receiver.plan(
+            root=self.vellum, pulp_repo=self.pulp, pulp_main=self.base, lower_bound=self.base,
+            payload=None, vellum_repo=self.vellum, vellum_main=main,
+        )
+        self.assertEqual(plan["status"], "noop")
+        self.assertFalse(plan["vellum_cursor_lagging"])
+
+    def test_vellum_lag_clock_is_the_first_first_parent_landing(self) -> None:
+        import os
+        base = self._vellum_history()
+        self.set_vellum_cursor(base)
+        self.assertIsNone(receiver.vellum_lag_started_at(self.vellum, base, base))
+        for stamp, text in (("2026-08-09T11:00:00Z", "2"), ("2026-08-09T11:40:00Z", "3")):
+            (self.vellum / "graphics/render.cpp").write_text(f"int v = {text};\n", encoding="utf-8")
+            git(self.vellum, "add", "graphics")
+            subprocess.run(
+                ["git", "commit", "-qm", f"landing {text}"], cwd=self.vellum, check=True,
+                env=dict(os.environ, GIT_AUTHOR_DATE=stamp, GIT_COMMITTER_DATE=stamp),
+                capture_output=True,
+            )
+        main = git(self.vellum, "rev-parse", "HEAD")
+        self.assertTrue(
+            receiver.vellum_lag_started_at(self.vellum, base, main).startswith("2026-08-09T11:00:00")
+        )
+
+    def test_vellum_lag_clock_skips_landings_the_cursor_already_covers(self) -> None:
+        # R7 delta D4: after the evidence PR lands the cursor stays behind its
+        # own evidence merge. The clock must start at the next real landing,
+        # not at that evidence commit, or the first change after a quiet
+        # period reports an immediate breach.
+        import os
+        base = self._vellum_history()
+        self.set_vellum_cursor(base)
+        (self.vellum / "provenance/pulp-observatory/reports/current.json").write_text(
+            '{"reconciled": true}\n', encoding="utf-8"
+        )
+        git(self.vellum, "add", "provenance/pulp-observatory/reports")
+        stamp = "2026-08-08T09:00:00Z"
+        subprocess.run(
+            ["git", "commit", "-qm", "evidence only"], cwd=self.vellum, check=True,
+            env=dict(os.environ, GIT_AUTHOR_DATE=stamp, GIT_COMMITTER_DATE=stamp),
+            capture_output=True,
+        )
+        evidence = git(self.vellum, "rev-parse", "HEAD")
+        self.assertIsNone(receiver.vellum_lag_started_at(self.vellum, base, evidence))
+        stamp = "2026-08-09T11:00:00Z"
+        (self.vellum / "graphics/render.cpp").write_text("int v = 2;\n", encoding="utf-8")
+        git(self.vellum, "add", "graphics")
+        subprocess.run(
+            ["git", "commit", "-qm", "first real landing"], cwd=self.vellum, check=True,
+            env=dict(os.environ, GIT_AUTHOR_DATE=stamp, GIT_COMMITTER_DATE=stamp),
+            capture_output=True,
+        )
+        main = git(self.vellum, "rev-parse", "HEAD")
+        started = receiver.vellum_lag_started_at(self.vellum, base, main)
+        self.assertTrue(started.startswith("2026-08-09T11:00:00"), started)
+
+    def test_vellum_main_behind_its_cursor_fails_closed(self) -> None:
+        base = self._vellum_history()
+        (self.vellum / "graphics/render.cpp").write_text("int v = 2;\n", encoding="utf-8")
+        git(self.vellum, "add", "graphics")
+        git(self.vellum, "commit", "-qm", "ordinary change")
+        ahead = git(self.vellum, "rev-parse", "HEAD")
+        self.set_vellum_cursor(ahead)
+        with self.assertRaisesRegex(receiver.ReceiverError, "not a descendant"):
+            receiver.vellum_needs_reconcile(self.vellum, self.vellum, base)
+
     def test_ordinary_change_reconciles_through_newer_durable_head(self) -> None:
         first, event = self.add_event("ordinary")
         latest, _ = self.add_event("newer")
