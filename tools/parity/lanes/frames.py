@@ -322,8 +322,10 @@ def _rerun_with_schedule(mutate):
         staged = work / "schedule" / original.name
         staged.parent.mkdir(parents=True, exist_ok=True)
         staged.write_text(json.dumps(schedule, indent=1), encoding="utf-8")
-        stage = [str(staged) if Path(s).name == name else s for s in case.get("stage", [])]
-        return dict(case, stage=stage), {}
+        # Keep the declared stage paths relative so batch-3 containment policy
+        # can validate them. The harness copies this control-owned file into
+        # the case directory through its extra_stage channel.
+        return dict(case), {"extra_stage": [staged]}
 
     return prepare
 

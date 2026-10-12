@@ -246,6 +246,7 @@ def fake_rejection_setup(root: Path, mode: str) -> tuple[Path, Path, Path, Path]
     impl = root / "impl.json"
     impl.write_text(json.dumps({
         "schema": ph.IMPLEMENTATION_SCHEMA, "name": f"fake-{mode}", "repository": "example/fake",
+        "authority": "browser-source",
         "tools": {"importer": str(importer), "recorder": str(RECORDER)},
         "source_kinds": {"fake-outcome": []},
         "probes": [{"name": name, "argv": ["/bin/echo", name]} for name in ph.REQUIRED_PROBES],

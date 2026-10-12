@@ -151,6 +151,8 @@ def make_fixture(root: Path, mode: str) -> tuple[Path, Path, Path]:
     corpus_path = root / "corpus.json"
     corpus_path.write_text(json.dumps(corpus), encoding="utf-8")
     impl = json.loads((HERE / "implementations" / "pulp-ui-frames-observer.json").read_text(encoding="utf-8"))
+    # Batch-3 policy requires every implementation to declare its authority.
+    impl["authority"] = "native-render"
     impl["tools"] = {"frames": str(wrapper)}
     impl["probes"] = [{"name": name, "argv": [sys.executable, "-c", f"print('{name} of the fake')"]}
                       for name in ph.REQUIRED_PROBES]
