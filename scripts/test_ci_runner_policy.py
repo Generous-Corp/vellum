@@ -86,20 +86,9 @@ COMMITTED_PIN_SOURCES = (
 # pull_request or merge_group; those runs pin themselves with a before/after
 # live-SHA equality test instead. The literal must sit in such a branch.
 LIVE_BRANCH_GUARD = 'if event in ("pull_request", "merge_group"):'
-# Pulp checkouts allowed to read a live branch on pull_request or merge_group
-# runs, keyed by (workflow, checkout path), each with the reason it is safe.
-# Empty on purpose: add an entry only with a monotonicity argument.
-LIVE_PULP_CHECKOUTS: dict[tuple[str, str], str] = {
-    ("provenance.yml", ".exact-boundary-pulp"): (
-        "literal main checkout is immediately detached to the committed "
-        "observatory cursor by the following pinning step"
-    ),
-    ("provenance.yml", ".mirror-pulp"): (
-        "literal main checkout is immediately detached to the committed "
-        "Decision 0010 receipt SHA by the following pinning step"
-    ),
+VERIFIED_POST_CHECKOUT_PINS = {
+    ("provenance.yml", ".exact-boundary-pulp"),
 }
-
 CHECKOUT_STEP = re.compile(
     r"^(?P<indent> +)- name: (?P<name>.+)\n"
     r"(?:(?P=indent)  .*\n)*?"
@@ -141,6 +130,46 @@ def step_body(text: str, step_id: str) -> str | None:
     begin = max(m.start() for m in starts if m.start() < marker.start())
     later = [m.start() for m in starts if m.start() > marker.start()]
     return text[begin : later[0] if later else len(text)]
+
+
+def named_step_body(text: str, name: str) -> str | None:
+    """Return the complete text of a named workflow step."""
+    marker = re.search(rf"^ +- name: {re.escape(name)}\s*$", text, re.M)
+    if marker is None:
+        return None
+    starts = [m for m in STEP_START.finditer(text)]
+    later = [m.start() for m in starts if m.start() > marker.start()]
+    return text[marker.start() : later[0] if later else len(text)]
+
+
+def assert_exact_boundary_pulp_pin(text: str) -> None:
+    """Require the exact-boundary checkout's post-checkout pin and proof."""
+    checkout = next(
+        (row for row in pulp_checkouts(text) if row["path"] == ".exact-boundary-pulp"),
+        None,
+    )
+    if checkout is None:
+        raise AssertionError("provenance.yml: exact-boundary Pulp checkout is missing")
+    if checkout["ref"] != "main":
+        raise AssertionError(
+            "exact-boundary checkout must start at literal main before pinning"
+        )
+    pin = named_step_body(text, "Pin pull-request and queue Pulp reads to committed evidence")
+    if pin is None:
+        raise AssertionError("exact-boundary checkout has no post-checkout pin step")
+    condition = re.search(r"^ +if: (.+)$", pin, re.M)
+    expression = condition.group(1) if condition else ""
+    for event in ("pull_request", "merge_group"):
+        if f"github.event_name == '{event}'" not in expression:
+            raise AssertionError(
+                f"exact-boundary pin must run for {event} (condition={expression!r})"
+            )
+    if "last_scanned_commit" not in pin:
+        raise AssertionError("exact-boundary pin must derive its SHA from committed cursor evidence")
+    if "git -C .exact-boundary-pulp checkout --detach \"$pulp_ref\"" not in pin:
+        raise AssertionError("exact-boundary pin must detach the checkout to the committed SHA")
+    if 'test "$(git -C .exact-boundary-pulp rev-parse HEAD)" = "$pulp_ref"' not in pin:
+        raise AssertionError("exact-boundary pin must verify detached HEAD equals the committed SHA")
 
 
 def workflow_jobs(text: str) -> dict[str, str]:
@@ -442,6 +471,8 @@ class RunnerPolicyTests(unittest.TestCase):
         # merge_group run can reach must therefore resolve its ref from
         # evidence committed in this repository.
         seen = 0
+        non_exempt = 0
+        seen_verified: set[tuple[str, str]] = set()
         for path in sorted(WORKFLOWS.glob("*.yml")):
             text = path.read_text(encoding="utf-8")
             if not re.search(r"^  (pull_request|merge_group):", text, re.M):
@@ -450,9 +481,11 @@ class RunnerPolicyTests(unittest.TestCase):
                 seen += 1
                 with self.subTest(workflow=path.name, checkout=checkout["path"]):
                     key = (path.name, checkout["path"])
-                    if key in LIVE_PULP_CHECKOUTS:
-                        self.assertTrue(LIVE_PULP_CHECKOUTS[key].strip(), key)
+                    if key in VERIFIED_POST_CHECKOUT_PINS:
+                        assert_exact_boundary_pulp_pin(text)
+                        seen_verified.add(key)
                         continue
+                    non_exempt += 1
                     expression = STEP_OUTPUT_REF.match(checkout["ref"])
                     self.assertIsNotNone(
                         expression,
@@ -483,6 +516,38 @@ class RunnerPolicyTests(unittest.TestCase):
                     )
         # Control: the rule must have examined the checkouts it protects.
         self.assertGreaterEqual(seen, 3)
+        self.assertEqual(non_exempt, seen - len(VERIFIED_POST_CHECKOUT_PINS))
+        self.assertEqual(seen_verified, VERIFIED_POST_CHECKOUT_PINS)
+
+    def test_exact_boundary_pin_mutations_fail_closed(self) -> None:
+        workflow = (WORKFLOWS / "provenance.yml").read_text(encoding="utf-8")
+        pin = named_step_body(
+            workflow, "Pin pull-request and queue Pulp reads to committed evidence"
+        )
+        self.assertIsNotNone(pin)
+        assert pin is not None
+        mutations = {
+            "delete pin step": workflow.replace(pin, "", 1),
+            "drop merge_group guard": workflow.replace(
+                pin,
+                pin.replace(" || github.event_name == 'merge_group'", "", 1),
+                1,
+            ),
+            "drop detach": workflow.replace(
+                '          git -C .exact-boundary-pulp checkout --detach "$pulp_ref"\n',
+                "",
+                1,
+            ),
+            "drop equality check": workflow.replace(
+                '          test "$(git -C .exact-boundary-pulp rev-parse HEAD)" = "$pulp_ref"\n',
+                "",
+                1,
+            ),
+        }
+        for name, mutated in mutations.items():
+            with self.subTest(mutation=name):
+                with self.assertRaises(AssertionError):
+                    assert_exact_boundary_pulp_pin(mutated)
 
 
 if __name__ == "__main__":
