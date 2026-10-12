@@ -10,6 +10,13 @@ import subprocess
 import tempfile
 import unittest
 
+try:
+    from .git_test_environment import disable_auto_maintenance
+except ImportError:  # Direct script execution.
+    from git_test_environment import disable_auto_maintenance
+
+disable_auto_maintenance()
+
 
 SCRIPT = Path(__file__).with_name("receiver_watchdog_state.py")
 SPEC = importlib.util.spec_from_file_location("receiver_watchdog_state", SCRIPT)

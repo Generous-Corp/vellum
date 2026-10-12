@@ -12,6 +12,13 @@ import tempfile
 import unittest
 from unittest import mock
 
+try:
+    from .git_test_environment import disable_auto_maintenance
+except ImportError:  # Direct script execution.
+    from git_test_environment import disable_auto_maintenance
+
+disable_auto_maintenance()
+
 
 SCRIPT = Path(__file__).with_name("finalize_authority_reconciliation.py")
 SPEC = importlib.util.spec_from_file_location("finalize_authority_reconciliation", SCRIPT)
@@ -30,8 +37,14 @@ SLICES = [
 
 
 def git(repo: Path, *args: str) -> str:
+    # Disable Git's asynchronous post-command maintenance so temporary fixture
+    # repositories are quiescent before TemporaryDirectory cleanup (G4a).
     return subprocess.run(
-        ["git", *args], cwd=repo, check=True, capture_output=True, text=True
+        ["git", "-c", "maintenance.auto=false", *args],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
     ).stdout.strip()
 
 
