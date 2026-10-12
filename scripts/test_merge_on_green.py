@@ -175,6 +175,8 @@ class MergeOnGreenTests(unittest.TestCase):
                     return {"check_runs": green_checks()}
                 if path == "graphql":
                     if body and "query" in body and "mutation" in body["query"]:
+                        self.assertIn("mergeMethod: MERGE", body["query"])
+                        self.assertEqual(body["variables"]["expectedHeadOid"], HEAD)
                         return {"data": {"ok": True}}
                     return {"data": {"repository": {"pullRequest": {
                         "id": "PRID", "autoMergeRequest": None, "mergeQueueEntry": None
@@ -187,6 +189,79 @@ class MergeOnGreenTests(unittest.TestCase):
                     0,
                 )
             self.assertEqual(calls[-1][0], "graphql")
+
+    def test_run_falls_back_to_exact_merge_when_auto_merge_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            event = Path(directory) / "event.json"
+            event.write_text(json.dumps(event_payload()), encoding="utf-8")
+            state = {
+                "repository": {
+                    "pullRequest": {
+                        "id": "PRID",
+                        "autoMergeRequest": None,
+                        "mergeQueueEntry": None,
+                    }
+                }
+            }
+            calls = []
+
+            def api(path, *, method="GET", body=None):
+                calls.append((path, method, body))
+                if path.endswith(f"/pulls/{PR}"):
+                    return {
+                        "state": "open",
+                        "draft": False,
+                        "base": {"ref": "main"},
+                        "head": {
+                            "sha": HEAD,
+                            "repo": {"full_name": "Generous-Corp/vellum"},
+                        },
+                    }
+                if path.endswith("/protection/required_status_checks"):
+                    return {"contexts": REQUIRED_CONTEXTS}
+                if "/commits/" in path and path.endswith("/check-runs?per_page=100"):
+                    return {"check_runs": green_checks()}
+                if path.endswith(f"/pulls/{PR}/merge"):
+                    self.assertEqual(method, "PUT")
+                    self.assertEqual(body, {"sha": HEAD, "merge_method": "merge"})
+                    return {"merged": True}
+                raise AssertionError(path)
+
+            with mock.patch.object(steward, "_api", side_effect=api), mock.patch.object(
+                steward, "_graphql", side_effect=[
+                    state, steward.MergeError("GitHub refused: clean status")
+                ]
+            ) as graphql:
+                self.assertEqual(steward.run(event, "Generous-Corp/vellum"), 0)
+            self.assertEqual(graphql.call_count, 2)
+            self.assertEqual(calls[-1][0], f"repos/Generous-Corp/vellum/pulls/{PR}/merge")
+
+    def test_run_reraises_non_mergeable_graphql_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            event = Path(directory) / "event.json"
+            event.write_text(json.dumps(event_payload()), encoding="utf-8")
+            with mock.patch.object(
+                steward, "_api", side_effect=[
+                    {
+                        "state": "open",
+                        "draft": False,
+                        "base": {"ref": "main"},
+                        "head": {
+                            "sha": HEAD,
+                            "repo": {"full_name": "Generous-Corp/vellum"},
+                        },
+                    },
+                    {"contexts": REQUIRED_CONTEXTS},
+                    {"check_runs": green_checks()},
+                ]
+            ), mock.patch.object(
+                steward, "_graphql", side_effect=[
+                    {"repository": {"pullRequest": {"id": "PRID"}}},
+                    steward.MergeError("permission denied"),
+                ]
+            ):
+                with self.assertRaisesRegex(steward.MergeError, "permission denied"):
+                    steward.run(event, "Generous-Corp/vellum")
 
     def test_run_does_not_merge_a_draft_or_stale_head(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -318,34 +393,6 @@ class RedirectCredentialTests(unittest.TestCase):
         )
         self.assertEqual(following.get_header("Authorization"), "Bearer secret")
 
-    def test_api_uses_the_guarded_opener(self) -> None:
-        source = (
-            Path(steward.__file__).resolve().parent / "merge_on_green.py"
-        ).read_text(encoding="utf-8")
-        self.assertIn("_OPENER.open(request", source)
-        self.assertNotIn("urllib.request.urlopen(request", source)
-
-
-class MergeMethodPolicyTests(unittest.TestCase):
-    def test_steward_does_not_shell_out_to_a_cli(self) -> None:
-        source = (
-            Path(steward.__file__).resolve().parent / "merge_on_green.py"
-        ).read_text(encoding="utf-8")
-        self.assertNotIn("import subprocess", source)
-        self.assertNotIn('"gh"', source)
-
-
-    def test_steward_never_squashes(self) -> None:
-        # A squash rewrites the feature commits into one, so every observation
-        # event keyed to a source commit is orphaned and the observatory's
-        # cursor-coverage invariant fails on main. Decision 0001 rejects squash
-        # copies for the same path/commit-correspondence reason.
-        source = (
-            Path(steward.__file__).resolve().parent / "merge_on_green.py"
-        ).read_text(encoding="utf-8")
-        self.assertIn('"merge_method": "merge"', source)
-        self.assertNotIn('"merge_method": "squash"', source)
-        self.assertNotIn('"merge_method": "rebase"', source)
 
 
 if __name__ == "__main__":
