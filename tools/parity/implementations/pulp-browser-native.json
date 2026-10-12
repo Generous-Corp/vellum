@@ -4,7 +4,7 @@
   "repository": "Generous-Corp/pulp",
   "authority": "browser-source",
   "source_sha": null,
-  "description": "Pulp's registered pulp-import-design and pulp-design-ir-observe for the oracle, reimport and rejection lanes. html-browser evaluates the source in the pinned Chromium and lowers every painted node natively (--native-panel-lowering), so the render is drawn from nodes, not from the browser capture; html-browser-faithful is Pulp's default browser import, which paints the capture itself, and exists only for the oracle lane's conflation control. The oracle steps run Chromium directly (--headless --screenshot): no Pulp or Vellum code is between the browser and oracle.png, so a capture defect in an importer cannot also be the reference. Before the first import the staged inputs are copied to second/ and revision/ (revision/ then gets the corpus's sed edit), so the same source is imported again unchanged (second/) and after the corpus's revision edit (revision/); each import's capture provenance (capture.json) names the exact source bytes and browser it came from. Rejection kinds wrap the import and observe commands in the harness's outcome_recorder, which maps Pulp's messages to the corpus's neutral diagnostic codes. design-ir copies a DesignIR document and observes it; it carries the corpus's staged-asset raster case.",
+  "description": "Pulp import and observe tools for the browser oracle, reimport and expected-rejection lanes. Browser captures remain at the importer-owned design.ir-browser-capture/capture.json path; the lane reads them there without a copy step. Rejection kinds wrap importer and observer commands in outcome_recorder.py. DesignIR rejection staging uses the declared materializer only for a non-selected input.",
   "tools": {
     "importer": "build/tools/import-design/pulp-import-design",
     "observer": "build/tools/import-design/pulp-design-ir-observe",
@@ -100,18 +100,6 @@
       ]
     },
     {
-      "id": "bind",
-      "source_kinds": [
-        "html-browser",
-        "html-browser-faithful"
-      ],
-      "argv": [
-        "{tool:materializer}",
-        "design.ir-browser-capture/capture.json",
-        "capture.json"
-      ]
-    },
-    {
       "id": "observe",
       "source_kinds": [
         "html-browser",
@@ -187,18 +175,6 @@
       ]
     },
     {
-      "id": "rebind",
-      "source_kinds": [
-        "html-browser",
-        "html-browser-faithful"
-      ],
-      "argv": [
-        "{tool:materializer}",
-        "second/design.ir-browser-capture/capture.json",
-        "second/capture.json"
-      ]
-    },
-    {
       "id": "import-revision",
       "source_kinds": [
         "html-browser",
@@ -216,18 +192,6 @@
         "--output",
         "revision/design.ir.json",
         "--no-tokens"
-      ]
-    },
-    {
-      "id": "bind-revision",
-      "source_kinds": [
-        "html-browser",
-        "html-browser-faithful"
-      ],
-      "argv": [
-        "{tool:materializer}",
-        "revision/design.ir-browser-capture/capture.json",
-        "revision/capture.json"
       ]
     },
     {

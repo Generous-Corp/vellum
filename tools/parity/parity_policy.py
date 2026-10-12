@@ -176,6 +176,20 @@ def provenance_errors(run: dict[str, Any], identity: dict[str, Any], side: str,
         elif isinstance(entry, dict):
             passthrough[str(entry.get("path"))] = entry.get("sha256")
     producers = run.get("producers") or run.get("produced_by") or {}
+    inputs = run.get("inputs") or {}
+
+    def copy_only(name: str, origin: dict[str, Any]) -> bool:
+        """Recognize copy behavior even when the executable is renamed."""
+        output_sha = origin.get("sha256")
+        if not output_sha:
+            return False
+        for source in origin.get("reads") or []:
+            source_sha = inputs.get(source)
+            if source_sha is None and source in producers:
+                source_sha = producers[source].get("sha256")
+            if source_sha == output_sha:
+                return True
+        return False
 
     def check(name: str, origin: dict[str, Any] | None, seen: frozenset[str]) -> list[str]:
         if origin is None:
@@ -185,8 +199,9 @@ def provenance_errors(run: dict[str, Any], identity: dict[str, Any], side: str,
             # digest says nothing about the program that wrote the file.
             return [f"{side}/{name}: produced through a shell command string "
                     f"({origin.get('binary')} -c); run the producer directly"]
-        if origin.get("binary") in passthrough:
-            expected = passthrough[origin.get("binary")]
+        is_passthrough = origin.get("binary") in passthrough or copy_only(name, origin)
+        if is_passthrough:
+            expected = passthrough.get(origin.get("binary"))
             if expected and expected != origin.get("binary_sha256"):
                 return [f"{side}/{name}: passthrough binary digest does not match declaration"]
             problems = []

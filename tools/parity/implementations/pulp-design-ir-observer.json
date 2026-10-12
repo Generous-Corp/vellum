@@ -125,5 +125,12 @@
       ]
     }
   ],
-  "authority": "native-render"
+  "authority": "native-render",
+  "passthrough_binaries": [
+    {
+      "path": "/bin/cp",
+      "justification": "The design-ir source kind copies the input DesignIR; design-ir cases leave structure out of scope.",
+      "sha256": "d7e1aa741105cfce82c6e7b2ea1359c715a570f86ce711e492c41315632ea182"
+    }
+  ]
 }

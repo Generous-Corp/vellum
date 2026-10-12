@@ -111,6 +111,13 @@ def oracle_clip_image(directory: Path, settings: dict[str, Any], width: int, hei
     return crop(full, x, y, int(round(width * scale)), int(round(height * scale)))
 
 
+def capture_path(directory: Path) -> Path:
+    """Use the importer-owned capture path; retain the flat path for fixtures."""
+    flat = directory / "capture.json"
+    nested = directory / "design.ir-browser-capture" / "capture.json"
+    return flat if flat.is_file() else nested
+
+
 def compare_oracle(ref: Path, cand: Path, case: dict[str, Any]) -> dict[str, Any]:
     """Each native render against the same Chromium capture, independently."""
     settings, problems = oracle_settings(case)
@@ -148,7 +155,7 @@ def compare_oracle(ref: Path, cand: Path, case: dict[str, Any]) -> dict[str, Any
         try:
             ir = ph.load_json(directory / "design.ir.json")
             native = decode_png_bytes((directory / "render.png").read_bytes())
-            capture = ph.load_json(directory / "capture.json")
+            capture = ph.load_json(capture_path(directory))
         except (OSError, ValueError, PngError) as error:
             reasons.append(f"{side}: observation unusable: {error}")
             continue
@@ -215,7 +222,7 @@ def anchor_diff(before: dict[str, list[str]], after: dict[str, list[str]]) -> di
 
 
 def bound_source(directory: Path) -> str | None:
-    capture = ph.load_json(directory / "capture.json")
+    capture = ph.load_json(capture_path(directory))
     return ((capture.get("provenance") or {}).get("source") or {}).get("sha256")
 
 
@@ -335,13 +342,22 @@ def _set_browser_version(document: dict[str, Any]) -> None:
 
 
 def _stale(directory: Path) -> bool:
-    for name in ("design.ir.json", "capture.json"):
-        shutil.copy2(directory / name, directory / "revision" / name)
+    shutil.copy2(directory / "design.ir.json", directory / "revision" / "design.ir.json")
+    source = capture_path(directory)
+    destination = capture_path(directory / "revision")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, destination)
     return True
 
 
 def _undetected(directory: Path) -> bool:
     shutil.copy2(directory / "design.ir.json", directory / "revision" / "design.ir.json")
+    return True
+
+
+def _remove_revision_capture(directory: Path) -> bool:
+    path = capture_path(directory / "revision")
+    path.unlink()
     return True
 
 
@@ -379,10 +395,11 @@ def _one_side_accepts(case: dict[str, Any], source_root: Path, work_dir: Path | 
     return dict(case, **wellformed), {}
 
 
-ph.register_lane("oracle", ("design.ir.json", "render.png", "capture.json", "oracle.png",
+ph.register_lane("oracle", ("design.ir.json", "render.png", "design.ir-browser-capture/capture.json", "oracle.png",
                             "oracle-version.txt", "oracle-request.json"), compare_oracle)
-ph.register_lane("reimport", ("design.ir.json", "capture.json", "second/design.ir.json", "second/capture.json",
-                              "revision/design.ir.json", "revision/capture.json"), compare_reimport)
+ph.register_lane("reimport", ("design.ir.json", "design.ir-browser-capture/capture.json",
+                              "second/design.ir.json", "second/design.ir-browser-capture/capture.json",
+                              "revision/design.ir.json", "revision/design.ir-browser-capture/capture.json"), compare_reimport)
 ph.register_lane("rejection", ("outcome.json",), compare_rejection)
 
 ph.register_controls(
@@ -396,14 +413,14 @@ ph.register_controls(
                               "both": lambda d: (ph.mutate_png(d / "oracle.png", ph.uniform_image), True)[1],
                               "bites": _reason("blank browser capture")},
         "oracle-browser-mismatch": {"lane": "oracle",
-                                    "candidate": lambda d: _edit_json(d / "capture.json", _set_browser_version),
+                                    "candidate": lambda d: _edit_json(capture_path(d), _set_browser_version),
                                     "bites": _reason("captured with browser")},
         "oracle-native-regression": {"lane": "oracle",
                                      "candidate": lambda d: (ph.mutate_png(d / "render.png", _paint_block), True)[1],
                                      "bites": _reason("further from Chromium")},
         "reimport-stale-output": {"lane": "reimport", "candidate": _stale, "bites": _reason("stale output")},
         "reimport-binding-absent": {"lane": "reimport", "expect": "blocked",
-                                    "candidate": lambda d: ((d / "revision" / "capture.json").unlink(), True)[1]},
+                                    "candidate": _remove_revision_capture},
         "reimport-nondeterministic": {"lane": "reimport",
                                       "candidate": lambda d: ph.mutate_json_string(
                                           d / "second" / "design.ir.json", lambda k, v: k in ("name", "text")),
