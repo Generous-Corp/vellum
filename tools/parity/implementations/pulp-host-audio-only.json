@@ -1,0 +1,163 @@
+{
+  "schema": "vellum.parity.implementation.v1",
+  "name": "pulp-audio-only-host",
+  "repository": "Generous-Corp/pulp",
+  "source_sha": null,
+  "description": "G column A (audio-only): editor-less plug-ins built with pulp_add_plugin(NO_EDITOR) (Pulp P15), which link pulp::format-core only, hosted by Pulp's pulp-host-lane-probe through lanes/host_runner.py. Roots: checkout = the checkout or consumer project the bundles were built from; gain.clap/gain.vst3/gain.component = the NO_EDITOR bundles; other.clap = any other CLAP (bundle-swap control input). Tools exe.* must be overridden with each bundle's main executable.",
+  "tools": {
+    "runner": "tools/parity/lanes/host_runner.py",
+    "probe": "build/tools/editor-open/pulp-host-lane-probe",
+    "pluginval": "/Applications/pluginval.app/Contents/MacOS/pluginval",
+    "exe.gain.clap": "set-with---tool",
+    "exe.gain.vst3": "set-with---tool",
+    "exe.gain.component": "set-with---tool",
+    "exe.other.clap": "set-with---tool"
+  },
+  "probes": [
+    {
+      "name": "build",
+      "argv": [
+        "{tool:runner}",
+        "identity",
+        "build",
+        "{root:checkout}",
+        "{root:gain.clap}",
+        "{root:gain.vst3}",
+        "{root:gain.component}",
+        "{root:other.clap}"
+      ]
+    },
+    {
+      "name": "provider",
+      "argv": [
+        "{tool:runner}",
+        "identity",
+        "provider",
+        "{root:gain.clap}",
+        "{root:gain.vst3}",
+        "{root:gain.component}",
+        "{root:other.clap}"
+      ]
+    },
+    {
+      "name": "fonts",
+      "argv": [
+        "{tool:runner}",
+        "identity",
+        "fonts",
+        "{root:gain.clap}",
+        "{root:gain.vst3}",
+        "{root:gain.component}",
+        "{root:other.clap}"
+      ]
+    }
+  ],
+  "source_kinds": {
+    "host-probe": [],
+    "host-pair": [],
+    "host-validator": [],
+    "host-standalone": []
+  },
+  "steps": [
+    {
+      "id": "observe",
+      "source_kinds": [
+        "host-probe",
+        "host-pair"
+      ],
+      "stderr_artifact": "probe.stderr",
+      "argv": [
+        "{tool:runner}",
+        "probe",
+        "--probe",
+        "{tool:probe}",
+        "--settings",
+        "{source}",
+        "--checkout",
+        "{root:checkout}",
+        "--out",
+        "together",
+        "@case_args:plugins",
+        "@case_args:animated",
+        "@case_args:fault"
+      ]
+    },
+    {
+      "id": "solo-0",
+      "source_kinds": [
+        "host-pair"
+      ],
+      "argv": [
+        "{tool:runner}",
+        "probe",
+        "--probe",
+        "{tool:probe}",
+        "--settings",
+        "{source}",
+        "--out",
+        "solo-0",
+        "@case_args:solo0"
+      ]
+    },
+    {
+      "id": "solo-1",
+      "source_kinds": [
+        "host-pair"
+      ],
+      "argv": [
+        "{tool:runner}",
+        "probe",
+        "--probe",
+        "{tool:probe}",
+        "--settings",
+        "{source}",
+        "--out",
+        "solo-1",
+        "@case_args:solo1"
+      ]
+    },
+    {
+      "id": "observe",
+      "source_kinds": [
+        "host-validator"
+      ],
+      "argv": [
+        "{tool:runner}",
+        "validator",
+        "--tool",
+        "{tool:pluginval}",
+        "@case_args:bundle",
+        "--out",
+        "validator.json",
+        "@case_args:fault",
+        "--",
+        "--validate",
+        "@@BUNDLE@@",
+        "--strictness-level",
+        "5",
+        "--timeout-ms",
+        "60000"
+      ]
+    },
+    {
+      "id": "observe",
+      "source_kinds": [
+        "host-standalone"
+      ],
+      "argv": [
+        "{tool:runner}",
+        "standalone",
+        "@case_args:app",
+        "--png",
+        "standalone.png"
+      ]
+    }
+  ],
+  "content_roots": [
+    "gain.clap",
+    "gain.vst3",
+    "gain.component",
+    "other.clap"
+  ],
+  "authority": "native-render"
+}

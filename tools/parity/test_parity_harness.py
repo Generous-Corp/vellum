@@ -755,6 +755,89 @@ class PassthroughLaunderingTests(HarnessFixture):
         ])
         self.assertTrue(self.errors(run))
 
+    def test_declared_script_copy_into_selected_observation_is_refused(self) -> None:
+        materializer = self.root / "materializer.py"
+        materializer.write_text(
+            "import shutil, sys; shutil.copy2(sys.argv[1], sys.argv[2])\n",
+            encoding="utf-8")
+        ph.LANE_ARTIFACTS["copy-probe"] = ("out/copied.json",)
+        try:
+            impl = implementation(self.tool)
+            impl["steps"] += [
+                {"id": "mkdir", "argv": ["/bin/mkdir", "-p", "out"]},
+                {"id": "copy", "argv": [sys.executable, str(materializer),
+                                             "source.json", "out/copied.json"]},
+            ]
+            case = corpus()["cases"][0] | {"_corpus_dir": str(self.root)}
+            run = ph.run_side(case, impl,
+                              {"fake": self.tool, "materializer": materializer},
+                              self.root / "src", self.root / "side")
+            identity = {"tools": {"fake": {"sha256": ph.sha256_file(self.tool)},
+                                   "materializer": {"sha256": ph.sha256_file(materializer)}},
+                        "passthrough_binaries": []}
+            errors = ph.provenance_errors(run, identity, "x", ["copy-probe"])
+            self.assertTrue(any("passthrough copy tools may not produce selected observations" in e
+                                for e in errors), errors)
+        finally:
+            ph.LANE_ARTIFACTS.pop("copy-probe", None)
+
+    def test_flag_style_copy_into_selected_observation_is_refused(self) -> None:
+        materializer = self.root / "flag-materializer.py"
+        materializer.write_text(
+            "import shutil, sys; shutil.copy2(sys.argv[1].split('=', 1)[1], sys.argv[2])\n",
+            encoding="utf-8")
+        ph.LANE_ARTIFACTS["copy-probe"] = ("out/copied.json",)
+        try:
+            impl = implementation(self.tool)
+            impl["steps"] += [
+                {"id": "mkdir", "argv": ["/bin/mkdir", "-p", "out"]},
+                {"id": "copy", "argv": [sys.executable, str(materializer),
+                                             "--src=source.json", "out/copied.json"]},
+            ]
+            case = corpus()["cases"][0] | {"_corpus_dir": str(self.root)}
+            run = ph.run_side(case, impl,
+                              {"fake": self.tool, "materializer": materializer},
+                              self.root / "src", self.root / "side")
+            identity = {"tools": {"fake": {"sha256": ph.sha256_file(self.tool)},
+                                   "materializer": {"sha256": ph.sha256_file(materializer)}},
+                        "passthrough_binaries": []}
+            errors = ph.provenance_errors(run, identity, "x", ["copy-probe"])
+            self.assertEqual(run["produced_by"]["out/copied.json"]["reads"], [])
+            self.assertTrue(any("passthrough copy tools may not produce selected observations" in e
+                                for e in errors), errors)
+        finally:
+            ph.LANE_ARTIFACTS.pop("copy-probe", None)
+
+    def test_copy_of_overwritten_earlier_output_is_refused(self) -> None:
+        materializer = self.root / "overwrite-materializer.py"
+        materializer.write_text(
+            "import pathlib, shutil, sys\n"
+            "if sys.argv[1] == 'make': pathlib.Path('inter.json').write_text('{\"forged\": 1}')\n"
+            "elif sys.argv[1] == 'copy': shutil.copy2('inter.json', 'copied.json')\n"
+            "else: pathlib.Path('inter.json').write_text('{\"later\": 2}')\n",
+            encoding="utf-8")
+        ph.LANE_ARTIFACTS["copy-probe"] = ("copied.json",)
+        try:
+            impl = implementation(self.tool)
+            impl["steps"] += [
+                {"id": "make", "argv": [sys.executable, str(materializer), "make"]},
+                {"id": "copy", "argv": [sys.executable, str(materializer), "copy"]},
+                {"id": "overwrite", "argv": [sys.executable, str(materializer), "overwrite"]},
+            ]
+            case = corpus()["cases"][0] | {"_corpus_dir": str(self.root)}
+            run = ph.run_side(case, impl,
+                              {"fake": self.tool, "materializer": materializer},
+                              self.root / "src", self.root / "side")
+            identity = {"tools": {"fake": {"sha256": ph.sha256_file(self.tool)},
+                                   "materializer": {"sha256": ph.sha256_file(materializer)}},
+                        "passthrough_binaries": []}
+            self.assertEqual(len(run["produced_history"]["inter.json"]), 2)
+            errors = ph.provenance_errors(run, identity, "x", ["copy-probe"])
+            self.assertTrue(any("passthrough copy tools may not produce selected observations" in e
+                                for e in errors), errors)
+        finally:
+            ph.LANE_ARTIFACTS.pop("copy-probe", None)
+
 
 class NestedControlLoudTests(HarnessFixture):
     def test_nested_lane_with_only_passthrough_outputs_does_not_calibrate(self) -> None:

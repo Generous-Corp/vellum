@@ -1,0 +1,107 @@
+{
+ "assetManifest": {
+  "assets": [
+   {
+    "asset_id": "swatch",
+    "content_hash": "",
+    "diagnostics": [],
+    "height": 32,
+    "local_path": "assets/swatch.png",
+    "mime": "image/png",
+    "original_uri": "",
+    "width": 32
+   }
+  ],
+  "version": 1
+ },
+ "root": {
+  "children": [
+   {
+    "attributes": {
+     "asset_ref": "swatch"
+    },
+    "children": [],
+    "layout": {
+     "align": "flex-start",
+     "direction": "column",
+     "gap": 0,
+     "heightMode": "fixed",
+     "justify": "flex-start",
+     "paddingBottom": 0,
+     "paddingLeft": 0,
+     "paddingRight": 0,
+     "paddingTop": 0,
+     "widthMode": "fixed",
+     "wrap": false
+    },
+    "name": "Swatch",
+    "stable_anchor_id": "swatch-image",
+    "style": {
+     "height": 64,
+     "width": 64
+    },
+    "type": "image"
+   },
+   {
+    "children": [],
+    "layout": {
+     "align": "flex-start",
+     "direction": "column",
+     "gap": 0,
+     "heightMode": "fixed",
+     "justify": "flex-start",
+     "paddingBottom": 0,
+     "paddingLeft": 0,
+     "paddingRight": 0,
+     "paddingTop": 0,
+     "widthMode": "fixed",
+     "wrap": false
+    },
+    "name": "Swatch frame",
+    "stable_anchor_id": "swatch-frame",
+    "style": {
+     "backgroundColor": "#3a6ea5",
+     "height": 40,
+     "width": 40
+    },
+    "type": "frame"
+   },
+   {
+    "attributes": {
+     "asset_ref": "swatch"
+    },
+    "children": [],
+    "name": "Swatch copy",
+    "stable_anchor_id": "swatch-image",
+    "style": {
+     "height": 32,
+     "width": 32
+    },
+    "type": "image"
+   }
+  ],
+  "layout": {
+   "align": "flex-start",
+   "direction": "row",
+   "gap": 0,
+   "heightMode": "fixed",
+   "justify": "flex-start",
+   "paddingBottom": 0,
+   "paddingLeft": 0,
+   "paddingRight": 0,
+   "paddingTop": 0,
+   "widthMode": "fixed",
+   "wrap": false
+  },
+  "name": "image-asset",
+  "stable_anchor_id": "image-root",
+  "style": {
+   "backgroundColor": "#202428",
+   "height": 120,
+   "width": 160
+  },
+  "type": "frame"
+ },
+ "source": "figma-plugin",
+ "version": 1
+}

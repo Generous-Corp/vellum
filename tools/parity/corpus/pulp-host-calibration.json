@@ -1,0 +1,401 @@
+{
+  "schema": "vellum.parity.corpus.v1",
+  "corpus_id": "pulp-gpu-editor-host-v2",
+  "description": "Host-compatibility corpus, loaded with --lane-module tools/parity/lanes/host.py. Two Pulp example plug-ins whose editors require the GPU host (SpectralLab, SuperConvolver; editors 820x560), in CLAP, VST3 and AU v2 (AU registered in the probe process only), alone and side by side in one process; pluginval over both VST3 bundles; both standalone apps. width/height are the editor (and standalone frame) size each side must produce.",
+  "declared_gaps": [
+    {
+      "row": "auval (AU v2 validator)",
+      "reason": "auval only sees components registered in ~/Library/Audio/Plug-Ins/Components; this lane never installs into a system plug-in folder. AU load/editor/audio are covered in-process through AudioComponentRegister."
+    },
+    {
+      "row": "clap-validator",
+      "reason": "not installed on the measuring host (command -v clap-validator: absent; control: command -v auval resolves)."
+    },
+    {
+      "row": "LV2",
+      "reason": "no Pulp example builds an LV2 bundle (zero lv2_entry.cpp under examples/; only tools/templates carry one)."
+    },
+    {
+      "row": "REAPER daw-smoke",
+      "reason": "REAPER not installed on the measuring host; opt-in per Pulp daw-smoke policy."
+    },
+    {
+      "row": "editor_prewarm",
+      "reason": "no Pulp example overrides Processor::editor_prewarm(), so the request is a no-op in every bundle; the host cannot observe the static-initializer install from outside the plug-in image."
+    }
+  ],
+  "declared_exceptions": [
+    {
+      "plugin": "SuperConvolver",
+      "field": "expect.animated",
+      "reason": "its particle-field editor advances on wall-clock frames; frames after the first open differ between runs (measured 18451 of 459200 pixels in one calibration run), so its frames keep size, full-coverage and colour-floor checks but are not compared pixel for pixel."
+    },
+    {
+      "plugin": "SuperConvolver",
+      "field": "expect.readiness_dependent_initial",
+      "reason": "its first render after instantiation differed between two processes from sample 1536 onward by at most 2.98e-08 (35085 of 96256 samples), consistent with a background IR rebuild landing at a different block; renders after release + prepare were byte identical. The first render is recorded, not compared."
+    }
+  ],
+  "cases": [
+    {
+      "source": "fixtures/host/stimulus.json",
+      "source_base": "corpus",
+      "width": 820,
+      "height": 560,
+      "case_id": "spectral-lab-clap",
+      "source_kind": "host-probe",
+      "lanes": [
+        "host-load",
+        "host-editor",
+        "host-audio"
+      ],
+      "args": {
+        "plugins": [
+          "--plugin",
+          "{root:spectral-lab.clap}"
+        ]
+      },
+      "controls": {
+        "swap": "super-convolver.clap"
+      },
+      "expect": {
+        "editor": true,
+        "gpu": true
+      }
+    },
+    {
+      "source": "fixtures/host/stimulus.json",
+      "source_base": "corpus",
+      "width": 820,
+      "height": 560,
+      "case_id": "spectral-lab-vst3",
+      "source_kind": "host-probe",
+      "lanes": [
+        "host-load",
+        "host-editor",
+        "host-audio"
+      ],
+      "args": {
+        "plugins": [
+          "--plugin",
+          "{root:spectral-lab.vst3}"
+        ]
+      },
+      "controls": {
+        "swap": "super-convolver.vst3"
+      },
+      "expect": {
+        "editor": true,
+        "gpu": true
+      }
+    },
+    {
+      "source": "fixtures/host/stimulus.json",
+      "source_base": "corpus",
+      "width": 820,
+      "height": 560,
+      "case_id": "spectral-lab-au",
+      "source_kind": "host-probe",
+      "lanes": [
+        "host-load",
+        "host-editor",
+        "host-audio"
+      ],
+      "args": {
+        "plugins": [
+          "--plugin",
+          "{root:spectral-lab.component}"
+        ]
+      },
+      "controls": {
+        "swap": "super-convolver.component"
+      },
+      "expect": {
+        "editor": true,
+        "gpu": true
+      }
+    },
+    {
+      "source": "fixtures/host/stimulus.json",
+      "source_base": "corpus",
+      "width": 820,
+      "height": 560,
+      "case_id": "super-convolver-clap",
+      "source_kind": "host-probe",
+      "lanes": [
+        "host-load",
+        "host-editor",
+        "host-audio"
+      ],
+      "args": {
+        "plugins": [
+          "--plugin",
+          "{root:super-convolver.clap}"
+        ],
+        "animated": [
+          "--animated",
+          "0"
+        ]
+      },
+      "controls": {
+        "swap": "spectral-lab.clap"
+      },
+      "expect": {
+        "editor": true,
+        "gpu": true,
+        "animated": [
+          0
+        ],
+        "readiness_dependent_initial": [
+          0
+        ]
+      }
+    },
+    {
+      "source": "fixtures/host/stimulus.json",
+      "source_base": "corpus",
+      "width": 820,
+      "height": 560,
+      "case_id": "super-convolver-vst3",
+      "source_kind": "host-probe",
+      "lanes": [
+        "host-load",
+        "host-editor",
+        "host-audio"
+      ],
+      "args": {
+        "plugins": [
+          "--plugin",
+          "{root:super-convolver.vst3}"
+        ],
+        "animated": [
+          "--animated",
+          "0"
+        ]
+      },
+      "controls": {
+        "swap": "spectral-lab.vst3"
+      },
+      "expect": {
+        "editor": true,
+        "gpu": true,
+        "animated": [
+          0
+        ],
+        "readiness_dependent_initial": [
+          0
+        ]
+      }
+    },
+    {
+      "source": "fixtures/host/stimulus.json",
+      "source_base": "corpus",
+      "width": 820,
+      "height": 560,
+      "case_id": "super-convolver-au",
+      "source_kind": "host-probe",
+      "lanes": [
+        "host-load",
+        "host-editor",
+        "host-audio"
+      ],
+      "args": {
+        "plugins": [
+          "--plugin",
+          "{root:super-convolver.component}"
+        ],
+        "animated": [
+          "--animated",
+          "0"
+        ]
+      },
+      "controls": {
+        "swap": "spectral-lab.component"
+      },
+      "expect": {
+        "editor": true,
+        "gpu": true,
+        "animated": [
+          0
+        ],
+        "readiness_dependent_initial": [
+          0
+        ]
+      }
+    },
+    {
+      "source": "fixtures/host/stimulus.json",
+      "source_base": "corpus",
+      "width": 820,
+      "height": 560,
+      "case_id": "two-gpu-plugins-clap",
+      "source_kind": "host-pair",
+      "lanes": [
+        "host-load",
+        "host-editor",
+        "host-audio",
+        "host-coexist"
+      ],
+      "args": {
+        "plugins": [
+          "--plugin",
+          "{root:spectral-lab.clap}",
+          "--plugin",
+          "{root:super-convolver.clap}"
+        ],
+        "solo0": [
+          "--plugin",
+          "{root:spectral-lab.clap}"
+        ],
+        "solo1": [
+          "--plugin",
+          "{root:super-convolver.clap}"
+        ],
+        "animated": [
+          "--animated",
+          "1"
+        ]
+      },
+      "controls": {
+        "skew_runtime_root": "skew-runtime"
+      },
+      "expect": {
+        "editor": true,
+        "gpu": true,
+        "animated": [
+          1
+        ],
+        "readiness_dependent_initial": [
+          1
+        ]
+      }
+    },
+    {
+      "source": "fixtures/host/stimulus.json",
+      "source_base": "corpus",
+      "width": 820,
+      "height": 560,
+      "case_id": "two-gpu-plugins-vst3-au",
+      "source_kind": "host-pair",
+      "lanes": [
+        "host-load",
+        "host-editor",
+        "host-audio",
+        "host-coexist"
+      ],
+      "args": {
+        "plugins": [
+          "--plugin",
+          "{root:spectral-lab.vst3}",
+          "--plugin",
+          "{root:super-convolver.component}"
+        ],
+        "solo0": [
+          "--plugin",
+          "{root:spectral-lab.vst3}"
+        ],
+        "solo1": [
+          "--plugin",
+          "{root:super-convolver.component}"
+        ],
+        "animated": [
+          "--animated",
+          "1"
+        ]
+      },
+      "controls": {
+        "skew_runtime_root": "skew-runtime"
+      },
+      "expect": {
+        "editor": true,
+        "gpu": true,
+        "animated": [
+          1
+        ],
+        "readiness_dependent_initial": [
+          1
+        ]
+      }
+    },
+    {
+      "source": "fixtures/host/stimulus.json",
+      "source_base": "corpus",
+      "width": 820,
+      "height": 560,
+      "case_id": "spectral-lab-vst3-pluginval",
+      "source_kind": "host-validator",
+      "lanes": [
+        "host-validator"
+      ],
+      "args": {
+        "bundle": [
+          "--bundle",
+          "{root:spectral-lab.vst3}"
+        ]
+      },
+      "expect": {
+        "validator_success": "SUCCESS"
+      }
+    },
+    {
+      "source": "fixtures/host/stimulus.json",
+      "source_base": "corpus",
+      "width": 820,
+      "height": 560,
+      "case_id": "super-convolver-vst3-pluginval",
+      "source_kind": "host-validator",
+      "lanes": [
+        "host-validator"
+      ],
+      "args": {
+        "bundle": [
+          "--bundle",
+          "{root:super-convolver.vst3}"
+        ]
+      },
+      "expect": {
+        "validator_success": "SUCCESS"
+      }
+    },
+    {
+      "source": "fixtures/host/stimulus.json",
+      "source_base": "corpus",
+      "width": 820,
+      "height": 560,
+      "case_id": "spectral-lab-standalone",
+      "source_kind": "host-standalone",
+      "lanes": [
+        "host-standalone"
+      ],
+      "args": {
+        "app": [
+          "--app",
+          "{root:spectral-lab.app}"
+        ]
+      },
+      "controls": {
+        "swap": "super-convolver.app"
+      }
+    },
+    {
+      "source": "fixtures/host/stimulus.json",
+      "source_base": "corpus",
+      "width": 820,
+      "height": 560,
+      "case_id": "super-convolver-standalone",
+      "source_kind": "host-standalone",
+      "lanes": [
+        "host-standalone"
+      ],
+      "args": {
+        "app": [
+          "--app",
+          "{root:super-convolver.app}"
+        ]
+      },
+      "controls": {
+        "swap": "spectral-lab.app"
+      }
+    }
+  ]
+}

@@ -1,0 +1,100 @@
+{
+  "schema": "vellum.parity.corpus.v1",
+  "corpus_id": "pulp-host-audio-only-v1",
+  "description": "G build-mode column A (audio-only): an editor-less gain built with pulp_add_plugin(NO_EDITOR) in CLAP, VST3 and AU v2, hosted in one process (AU registered in-process only); pluginval over the VST3. width/height are unused (no editor). Pairs with the artifact link-floor scan (no view/canvas/render/Skia/Dawn/wgpu symbols, no GPU runtime) recorded alongside each calibration.",
+  "declared_gaps": [
+    {
+      "row": "editor, coexist and standalone lanes",
+      "reason": "column A plug-ins have no editor; a NO_EDITOR Standalone still links the view stack by design (P15), so it is not a column-A artifact."
+    }
+  ],
+  "declared_exceptions": [],
+  "cases": [
+    {
+      "source": "fixtures/host/stimulus.json",
+      "source_base": "corpus",
+      "width": 1,
+      "height": 1,
+      "case_id": "audio-only-clap",
+      "source_kind": "host-probe",
+      "lanes": [
+        "host-load",
+        "host-audio"
+      ],
+      "args": {
+        "plugins": [
+          "--plugin",
+          "{root:gain.clap}"
+        ]
+      },
+      "expect": {
+        "editor": false
+      },
+      "controls": {
+        "swap": "other.clap"
+      }
+    },
+    {
+      "source": "fixtures/host/stimulus.json",
+      "source_base": "corpus",
+      "width": 1,
+      "height": 1,
+      "case_id": "audio-only-vst3",
+      "source_kind": "host-probe",
+      "lanes": [
+        "host-load",
+        "host-audio"
+      ],
+      "args": {
+        "plugins": [
+          "--plugin",
+          "{root:gain.vst3}"
+        ]
+      },
+      "expect": {
+        "editor": false
+      }
+    },
+    {
+      "source": "fixtures/host/stimulus.json",
+      "source_base": "corpus",
+      "width": 1,
+      "height": 1,
+      "case_id": "audio-only-au",
+      "source_kind": "host-probe",
+      "lanes": [
+        "host-load",
+        "host-audio"
+      ],
+      "args": {
+        "plugins": [
+          "--plugin",
+          "{root:gain.component}"
+        ]
+      },
+      "expect": {
+        "editor": false
+      }
+    },
+    {
+      "source": "fixtures/host/stimulus.json",
+      "source_base": "corpus",
+      "width": 1,
+      "height": 1,
+      "case_id": "audio-only-vst3-pluginval",
+      "source_kind": "host-validator",
+      "lanes": [
+        "host-validator"
+      ],
+      "args": {
+        "bundle": [
+          "--bundle",
+          "{root:gain.vst3}"
+        ]
+      },
+      "expect": {
+        "validator_success": "SUCCESS"
+      }
+    }
+  ]
+}

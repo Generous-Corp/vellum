@@ -176,6 +176,33 @@ def provenance_errors(run: dict[str, Any], identity: dict[str, Any], side: str,
         elif isinstance(entry, dict):
             passthrough[str(entry.get("path"))] = entry.get("sha256")
     producers = run.get("producers") or run.get("produced_by") or {}
+    produced_history = run.get("produced_history") or {
+        name: [producer] for name, producer in producers.items()
+    }
+    inputs = run.get("inputs") or {}
+
+    step_order = {step.get("id"): index for index, step in enumerate(run.get("steps") or [])}
+
+    def copy_only(name: str, origin: dict[str, Any]) -> bool:
+        """Recognize copy behavior from content lineage, independent of argv."""
+        output_sha = origin.get("sha256")
+        if not output_sha:
+            return False
+        origin_step = step_order.get(origin.get("step"), len(step_order))
+        # A file rewritten in place is allowed to retain its own bytes. The
+        # comparison is against staged inputs and outputs from earlier steps,
+        # excluding the selected file itself.
+        for source, source_sha in inputs.items():
+            if source != name and source_sha == output_sha:
+                return True
+        for source, history in produced_history.items():
+            if source == name:
+                continue
+            for previous in history:
+                if step_order.get(previous.get("step"), len(step_order)) < origin_step \
+                        and previous.get("sha256") == output_sha:
+                    return True
+        return False
 
     def check(name: str, origin: dict[str, Any] | None, seen: frozenset[str]) -> list[str]:
         if origin is None:
@@ -185,8 +212,9 @@ def provenance_errors(run: dict[str, Any], identity: dict[str, Any], side: str,
             # digest says nothing about the program that wrote the file.
             return [f"{side}/{name}: produced through a shell command string "
                     f"({origin.get('binary')} -c); run the producer directly"]
-        if origin.get("binary") in passthrough:
-            expected = passthrough[origin.get("binary")]
+        is_passthrough = origin.get("binary") in passthrough or copy_only(name, origin)
+        if is_passthrough:
+            expected = passthrough.get(origin.get("binary"))
             if expected and expected != origin.get("binary_sha256"):
                 return [f"{side}/{name}: passthrough binary digest does not match declaration"]
             problems = []

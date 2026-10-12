@@ -1,0 +1,8 @@
+{
+  "blocks": 94,
+  "block_size": 512,
+  "sample_rate": 48000,
+  "opens": 2,
+  "watch_ms": 1500,
+  "resize_by": "120x80"
+}

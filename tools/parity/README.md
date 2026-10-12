@@ -14,6 +14,8 @@ closure, then these differential lanes, with similarity scores advisory only.
 | `geometry` | laid-out tree: id, kind, rect, visibility, clipping, hit regions, text boxes (0.5 px) | at least one sized non-root node |
 | `semantic` | text/selection observation | non-empty record list |
 | `interaction` | replayed pointer/keyboard log plus post-interaction render | every planned step logged, at least one handled |
+| `host-*` (`lanes/host.py`) | built plug-in bundles in a real host process: load + provenance, editor lifecycle, audio null, coexistence + runtime binding, validators, standalone | see "Host lane" below |
+| `frames` (module `lanes/frames.py`) | every frame under a fixed host clock: dispatch decision, dt, readiness, focus, control and animation state, menus, parameters, layout and pixel digests, captures | every scheduled frame present, full record schema, pixels on every frame, every event applied in its frame, the observation moved |
 
 Implementations are JSON descriptions of commands (`implementations/`); the
 harness never links or imports either implementation. Each side names its
@@ -46,7 +48,13 @@ on both sides.
   interpreter) at run time. Each observation records the step that produced it. An observation that a selected
   lane reads must come from a declared tool. Passthrough entries are digest-bound, copy-only tools and may copy
   staged inputs or earlier declared artifacts; they can never produce a selected observation. Copy arguments are
-  resolved in the side directory, including directory trees, so spelling changes cannot launder provenance.
+  resolved in the side directory, including directory trees, so spelling changes cannot launder provenance. The
+  policy retains every digest produced at every earlier step: a selected output whose bytes match any staged input
+  or strictly earlier output is treated as a copy, even when the source is overwritten later. This is a content
+  test with limits: it catches byte-for-byte copies, while a copy followed by an edit generally evades a digest-only
+  check unless the edited bytes happen to match another known digest. It cannot identify a copy from the other
+  side's directory without a matching digest in this run. Byte-identical legitimate outputs are therefore refused
+  as selected observations.
 - **Regions.** A case may declare named `regions` in design px. The raster lane scores each one separately:
   a localized difference is named, and a region that drew nothing fails even when the whole frame matches. Put
   a shared deterministic fixture in `stage` so both renderers read the same bytes.
@@ -146,3 +154,104 @@ ships with at least one control that must make it fail.
 The receipt (`<dir>/receipt.json`) records the corpus hash, both identities
 (repository, commit, content hash of every tool binary), every command with its
 exit status, the hash of every input and observation, and the verdict.
+
+## Host lane
+
+`lanes/host.py` is the host-compatibility row, separate from screenshot parity.
+It registers six lanes (`host-load`, `host-editor`, `host-audio`,
+`host-coexist`, `host-validator`, `host-standalone`) and their seeded controls
+with the core hook. Each side's implementation runs `lanes/host_runner.py`,
+which drives that side's host probe (Pulp's `pulp-host-lane-probe`), its
+validators and its standalone apps over built CLAP, VST3 and AU v2 bundles
+(AU is registered in the probe process only; nothing is installed). Bundles are
+roots named as in the corpus, and each bundle's main executable is also a tool,
+so two sides that test the same plug-in bytes cannot claim parity.
+`host-load` refuses a bundle whose build record names another commit than the
+side's checkout HEAD, or a dirty tree. `host-coexist` refuses a plug-in that is
+bound to another plug-in's copy of a shared runtime with different bytes (the
+`host-coexist-runtime-version-skew` control seeds that). Rows this host cannot
+run are `declared_gaps` in the corpus; per-plug-in exceptions (an animated
+editor, a readiness-dependent first render) are `declared_exceptions`.
+
+```sh
+cd <pulp checkout>        # implementation tool paths are relative to it
+python3 <vellum>/tools/parity/parity_harness.py calibrate \
+  --lane-module <vellum>/tools/parity/lanes/host.py \
+  --corpus <vellum>/tools/parity/corpus/pulp-host-calibration.json \
+  --implementation <vellum>/tools/parity/implementations/pulp-host-in-tree.json \
+  --source-root . --tool runner=<vellum>/tools/parity/lanes/host_runner.py \
+  --root checkout=. --root spectral-lab.clap=build/CLAP/SpectralLab.clap ... \
+  --root skew-runtime=<a libwgpu_native.dylib of a different build> --out <dir>
+python3 <vellum>/tools/parity/test_host_lane.py   # fake tools; NOT CALIBRATED reachable
+```
+
+## Frames lane
+
+```sh
+python3 tools/parity/parity_harness.py calibrate --lane-module tools/parity/lanes/frames.py \
+  --corpus tools/parity/corpus/pulp-frames-calibration.json \
+  --source-root <origin checkout> \
+  --implementation tools/parity/implementations/pulp-ui-frames-observer.json \
+  --tool frames=<pulp-ui-frames-observe> \
+  --root checkout=<origin checkout> --root build=<its build dir> --out <dir>
+```
+
+Both sides replay the case's staged schedule (`pulp-ui-frame-schedule-v1`:
+host timestamps, parameters, initial editor count, timed hover, click, drag,
+key, context-press, host parameter write, resize and editor attach/detach
+events, and the frames to capture). The comparison is exact and frame by frame;
+the lane result names the first divergent frame and whether the final frames
+agree, so a receipt shows when timing was the only difference. Each side must
+have read the schedule it was staged with, and the two environments (platform,
+architecture, backend, scale, size) must agree.
+
+Its controls: a change landing one frame late with the final frame untouched,
+a perturbed dt, a schema key dropped on both sides, a frozen observation on
+both sides, a truncated run, blank pixels on both sides, an event dropped on
+both sides, a capture pixel, and candidate re-runs at 120 Hz, with a dropped
+vsync, with an event one frame late, with an immediate instead of a view-first
+document load, with a different host parameter write, without the second
+editor, with a different resize, and (for cases that declare `timers`) with script timers left on the wall clock
+(`timer-clock-ignored`). A re-run control counts only when what a
+viewer would see differed at some frame, not when only the schedule's own
+timestamps or hash did.
+
+## GPU lanes (`lanes/gpu.py`)
+
+`gpu-raster`, `gpu-receipt` and `provider-census` compare a render through Skia
+Graphite on a Dawn device, not the Skia CPU raster the `raster` lane reads. Use
+them with `implementations/pulp-design-ir-observer-gpu.json` and
+`corpus/pulp-gpu-calibration.json`:
+
+```sh
+# The second-dawn-inserted control needs a real second Dawn; build it from the
+# archive the implementation links.
+python3 tools/parity/lanes/gpu.py build-second-dawn \
+  --dawn-archive <skia-build>/mac-gpu/lib/Release/libdawn_combined.a --out <dir>/libsecond_dawn.dylib
+export VELLUM_PARITY_SECOND_DAWN_DYLIB=<dir>/libsecond_dawn.dylib
+
+python3 tools/parity/parity_harness.py calibrate \
+  --lane-module tools/parity/lanes/gpu.py \
+  --corpus tools/parity/corpus/pulp-gpu-calibration.json \
+  --source-root <checkout> --root checkout=<checkout> --root build=<build> \
+  --implementation tools/parity/implementations/pulp-design-ir-observer-gpu.json \
+  --tool importer=<pulp-import-design> --tool observer=<pulp-design-ir-observe> --out <dir>
+```
+
+The render receipt is the renderer's own account, so it is never the only
+witness. `provider-census` reads the images the loader actually mapped
+(`DYLD_PRINT_LIBRARIES`, captured by the step wrapper) with `nm`: exactly one
+image may carry Dawn's implementation and exactly one Skia, a GPU driver must
+have been loaded, and a further WebGPU C API exporter fails unless the case
+names it with a justification. A renderer that falls back to the CPU and still
+reports `gpu` is caught by `gpu-raster` (Graphite and CPU raster anti-alias
+differently) and by the census (no GPU driver). The census is macOS-only;
+elsewhere the lane is blocked, not passed.
+
+Seeded controls: one-pixel, blank-both and missing GPU renders; a missing
+receipt, a changed Dawn revision and a changed adapter; a second Dawn image in
+the loader record, no GPU driver on both sides, a missing census; and reruns
+with the observer's `--gpu-fault` (destroyed device, undrawn frame, reported
+and unreported CPU fallback) and with a real second Dawn inserted into the
+process. Without `VELLUM_PARITY_SECOND_DAWN_DYLIB` that last control applies to
+no case, and calibration reports NOT CALIBRATED.

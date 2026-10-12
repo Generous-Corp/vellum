@@ -587,6 +587,7 @@ def run_side(case: dict[str, Any], impl: dict[str, Any], tools: dict[str, Path],
     plan = interactions if interactions is not None else case.get("interactions", [])
     steps_out = []
     produced: dict[str, dict[str, Any]] = {}
+    produced_history: dict[str, list[dict[str, Any]]] = {}
     for step in impl["steps"]:
         if step.get("when") == "interactions" and "interaction" not in case["lanes"]:
             continue
@@ -636,10 +637,12 @@ def run_side(case: dict[str, Any], impl: dict[str, Any], tools: dict[str, Path],
         after = snapshot(out)
         for name, digest in after.items():
             if before.get(name) != digest:
-                produced[name] = {"step": step["id"], "sha256": digest,
-                                  **{k: record[k] for k in ("binary", "binary_sha256", "script_sha256", "delegated",
-                                                            "reads")
-                                     if k in record}}
+                producer = {"step": step["id"], "sha256": digest,
+                            **{k: record[k] for k in ("binary", "binary_sha256", "script_sha256", "delegated",
+                                                      "reads")
+                               if k in record}}
+                produced[name] = producer
+                produced_history.setdefault(name, []).append(producer)
         steps_out.append(record)
         if record["status"] != "ok":
             break
@@ -650,7 +653,7 @@ def run_side(case: dict[str, Any], impl: dict[str, Any], tools: dict[str, Path],
     artifacts = {name: digest for name, digest in sorted(snapshot(out).items()) if name in declared}
     return {"inputs": inputs, "steps": steps_out, "artifacts": artifacts,
             "produced_by": {name: produced[name] for name in artifacts if name in produced},
-            "producers": produced,
+            "producers": produced, "produced_history": produced_history,
             "interaction_plan": plan, "scale": case.get("scale", DEFAULT_SCALE)}
 
 

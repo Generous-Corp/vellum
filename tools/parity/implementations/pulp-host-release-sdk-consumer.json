@@ -1,0 +1,198 @@
+{
+  "schema": "vellum.parity.implementation.v1",
+  "name": "pulp-release-sdk-consumer-host",
+  "repository": "Generous-Corp/pulp",
+  "source_sha": null,
+  "description": "G4: out-of-tree consumer built with find_package(Pulp) against the released SDK fetched by `pulp sdk install` (~/.pulp/sdk/<version>). The consumer (a git repository; root `checkout`) builds PulpGain (no editor), SpectralLab and SpectralLab B (GPU-host editors) in VST3/CLAP/AU/Standalone; hosted by Pulp's pulp-host-lane-probe through lanes/host_runner.py. Tool paths are relative to the consumer root; roots name the bundles as in corpus/pulp-host-consumer.json.",
+  "tools": {
+    "runner": "tools/parity/lanes/host_runner.py",
+    "probe": "build/tools/editor-open/pulp-host-lane-probe",
+    "pluginval": "/Applications/pluginval.app/Contents/MacOS/pluginval",
+    "exe.spectral-lab.clap": "build/CLAP/SpectralLab.clap/Contents/MacOS/SpectralLab",
+    "exe.spectral-lab.vst3": "build/VST3/SpectralLab.vst3/Contents/MacOS/SpectralLab",
+    "exe.spectral-lab.component": "build/AU/SpectralLab.component/Contents/MacOS/SpectralLab",
+    "exe.spectral-lab-b.clap": "build/CLAP/SpectralLab B.clap/Contents/MacOS/SpectralLab B",
+    "exe.spectral-lab-b.vst3": "build/VST3/SpectralLab B.vst3/Contents/MacOS/SpectralLab B",
+    "exe.spectral-lab-b.component": "build/AU/SpectralLab B.component/Contents/MacOS/SpectralLab B",
+    "exe.gain.clap": "build/CLAP/PulpGain.clap/Contents/MacOS/PulpGain",
+    "exe.gain.vst3": "build/VST3/PulpGain.vst3/Contents/MacOS/PulpGain",
+    "exe.gain.component": "build/AU/PulpGain.component/Contents/MacOS/PulpGain",
+    "exe.spectral-lab.app": "build/spectral-lab/SpectralLab.app/Contents/MacOS/SpectralLab",
+    "exe.gain.app": "build/gain/PulpGain.app/Contents/MacOS/PulpGain"
+  },
+  "probes": [
+    {
+      "name": "build",
+      "argv": [
+        "{tool:runner}",
+        "identity",
+        "build",
+        "{root:checkout}",
+        "{root:spectral-lab.clap}",
+        "{root:spectral-lab.vst3}",
+        "{root:spectral-lab.component}",
+        "{root:spectral-lab-b.clap}",
+        "{root:spectral-lab-b.vst3}",
+        "{root:spectral-lab-b.component}",
+        "{root:gain.clap}",
+        "{root:gain.vst3}",
+        "{root:gain.component}",
+        "{root:spectral-lab.app}",
+        "{root:gain.app}"
+      ]
+    },
+    {
+      "name": "provider",
+      "argv": [
+        "{tool:runner}",
+        "identity",
+        "provider",
+        "{root:spectral-lab.clap}",
+        "{root:spectral-lab.vst3}",
+        "{root:spectral-lab.component}",
+        "{root:spectral-lab-b.clap}",
+        "{root:spectral-lab-b.vst3}",
+        "{root:spectral-lab-b.component}",
+        "{root:gain.clap}",
+        "{root:gain.vst3}",
+        "{root:gain.component}",
+        "{root:spectral-lab.app}",
+        "{root:gain.app}"
+      ]
+    },
+    {
+      "name": "fonts",
+      "argv": [
+        "{tool:runner}",
+        "identity",
+        "fonts",
+        "{root:spectral-lab.clap}",
+        "{root:spectral-lab.vst3}",
+        "{root:spectral-lab.component}",
+        "{root:spectral-lab-b.clap}",
+        "{root:spectral-lab-b.vst3}",
+        "{root:spectral-lab-b.component}",
+        "{root:gain.clap}",
+        "{root:gain.vst3}",
+        "{root:gain.component}",
+        "{root:spectral-lab.app}",
+        "{root:gain.app}"
+      ]
+    }
+  ],
+  "source_kinds": {
+    "host-probe": [],
+    "host-pair": [],
+    "host-validator": [],
+    "host-standalone": []
+  },
+  "steps": [
+    {
+      "id": "observe",
+      "source_kinds": [
+        "host-probe",
+        "host-pair"
+      ],
+      "stderr_artifact": "probe.stderr",
+      "argv": [
+        "{tool:runner}",
+        "probe",
+        "--probe",
+        "{tool:probe}",
+        "--settings",
+        "{source}",
+        "--checkout",
+        "{root:checkout}",
+        "--out",
+        "together",
+        "@case_args:plugins",
+        "@case_args:animated",
+        "@case_args:fault"
+      ]
+    },
+    {
+      "id": "solo-0",
+      "source_kinds": [
+        "host-pair"
+      ],
+      "argv": [
+        "{tool:runner}",
+        "probe",
+        "--probe",
+        "{tool:probe}",
+        "--settings",
+        "{source}",
+        "--out",
+        "solo-0",
+        "@case_args:solo0"
+      ]
+    },
+    {
+      "id": "solo-1",
+      "source_kinds": [
+        "host-pair"
+      ],
+      "argv": [
+        "{tool:runner}",
+        "probe",
+        "--probe",
+        "{tool:probe}",
+        "--settings",
+        "{source}",
+        "--out",
+        "solo-1",
+        "@case_args:solo1"
+      ]
+    },
+    {
+      "id": "observe",
+      "source_kinds": [
+        "host-validator"
+      ],
+      "argv": [
+        "{tool:runner}",
+        "validator",
+        "--tool",
+        "{tool:pluginval}",
+        "@case_args:bundle",
+        "--out",
+        "validator.json",
+        "@case_args:fault",
+        "--",
+        "--validate",
+        "@@BUNDLE@@",
+        "--strictness-level",
+        "5",
+        "--timeout-ms",
+        "60000"
+      ]
+    },
+    {
+      "id": "observe",
+      "source_kinds": [
+        "host-standalone"
+      ],
+      "argv": [
+        "{tool:runner}",
+        "standalone",
+        "@case_args:app",
+        "--png",
+        "standalone.png"
+      ]
+    }
+  ],
+  "content_roots": [
+    "spectral-lab.clap",
+    "spectral-lab.vst3",
+    "spectral-lab.component",
+    "spectral-lab-b.clap",
+    "spectral-lab-b.vst3",
+    "spectral-lab-b.component",
+    "gain.clap",
+    "gain.vst3",
+    "gain.component",
+    "spectral-lab.app",
+    "gain.app"
+  ],
+  "authority": "native-render"
+}

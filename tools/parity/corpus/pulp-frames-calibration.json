@@ -1,0 +1,73 @@
+{
+  "schema": "vellum.parity.corpus.v1",
+  "description": "Frames calibration corpus: fixed-clock frame schedules over a bound DesignIR panel and a scripted UI. Fixtures resolve beside this file. Each case stages its schedule; drop_at names the frame a dropped-vsync control delays, chosen inside an animation so the control has something to change.",
+  "cases": [
+    {
+      "case_id": "frames-design-ir-controls",
+      "source_base": "corpus",
+      "source": "fixtures/frames/controls.ir.json",
+      "stage": [
+        "fixtures/frames/controls-ir.schedule.json"
+      ],
+      "source_kind": "frames-design-ir",
+      "width": 320,
+      "height": 160,
+      "lanes": [
+        "frames"
+      ],
+      "params": {
+        "schedule": "controls-ir.schedule.json",
+        "min_changed_frames": 8,
+        "drop_at": 4,
+        "timer_clock": "schedule"
+      },
+      "note": "Knob hover glow (frames 2-6 rise, 10-14 fall), host write to cutoff, a second editor attached at 16 and dragged at 18, combo open/highlight/select at 20-22, resize at 24, detach at 26.",
+      "scale": 2
+    },
+    {
+      "case_id": "frames-script-controls",
+      "source_base": "corpus",
+      "source": "fixtures/frames/controls.ui.js",
+      "stage": [
+        "fixtures/frames/controls-script.schedule.json"
+      ],
+      "source_kind": "frames-script",
+      "width": 240,
+      "height": 160,
+      "lanes": [
+        "frames"
+      ],
+      "params": {
+        "schedule": "controls-script.schedule.json",
+        "min_changed_frames": 8,
+        "drop_at": 9,
+        "timer_clock": "schedule"
+      },
+      "note": "View-first (deferred) document load, an animation-frame countdown to 'ready', hover glow from 8, a second editor attached at 10, a drag at 12, a host write at 14, resize of editor 1 at 16, combo select at 17-19, detach at 20.",
+      "scale": 2
+    },
+    {
+      "case_id": "frames-script-timers",
+      "source_base": "corpus",
+      "source": "fixtures/frames/timers.ui.js",
+      "stage": [
+        "fixtures/frames/timers.schedule.json"
+      ],
+      "source_kind": "frames-script",
+      "width": 200,
+      "height": 80,
+      "scale": 2,
+      "lanes": [
+        "frames"
+      ],
+      "params": {
+        "schedule": "timers.schedule.json",
+        "min_changed_frames": 4,
+        "drop_at": 2,
+        "timer_clock": "schedule",
+        "timers": 1
+      },
+      "note": "Timer-driven readiness and animation: a 50 ms setTimeout flips the status label and a 20 ms setInterval counts to five. Under the schedule's host clock both land on the frames whose scheduled time passes their deadlines; the timer-clock-ignored control re-runs it on the wall clock."
+    }
+  ]
+}
