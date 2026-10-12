@@ -37,14 +37,8 @@ SLICES = [
 
 
 def git(repo: Path, *args: str) -> str:
-    # Disable Git's asynchronous post-command maintenance so temporary fixture
-    # repositories are quiescent before TemporaryDirectory cleanup (G4a).
     return subprocess.run(
-        ["git", "-c", "maintenance.auto=false", *args],
-        cwd=repo,
-        check=True,
-        capture_output=True,
-        text=True,
+        ["git", *args], cwd=repo, check=True, capture_output=True, text=True
     ).stdout.strip()
 
 
