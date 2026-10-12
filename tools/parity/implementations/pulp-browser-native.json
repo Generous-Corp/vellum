@@ -8,7 +8,8 @@
     "importer": "build/tools/import-design/pulp-import-design",
     "observer": "build/tools/import-design/pulp-design-ir-observe",
     "browser": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    "recorder": "tools/parity/lanes/outcome_recorder.py"
+    "recorder": "tools/parity/lanes/outcome_recorder.py",
+    "materializer": "tools/parity/lanes/materialize.py"
   },
   "source_kinds": {
     "html-browser": [
@@ -104,7 +105,7 @@
         "html-browser-faithful"
       ],
       "argv": [
-        "/bin/cp",
+        "{tool:materializer}",
         "design.ir-browser-capture/capture.json",
         "capture.json"
       ]
@@ -191,7 +192,7 @@
         "html-browser-faithful"
       ],
       "argv": [
-        "/bin/cp",
+        "{tool:materializer}",
         "second/design.ir-browser-capture/capture.json",
         "second/capture.json"
       ]
@@ -223,7 +224,7 @@
         "html-browser-faithful"
       ],
       "argv": [
-        "/bin/cp",
+        "{tool:materializer}",
         "revision/design.ir-browser-capture/capture.json",
         "revision/capture.json"
       ]
@@ -284,7 +285,7 @@
         "--diagnostics",
         "[{\"code\":\"archive-unsafe-entry\",\"pattern\":\"refusing unsafe zip entry\"},{\"code\":\"archive-invalid\",\"pattern\":\"not a valid ZIP archive\"},{\"code\":\"archive-no-document\",\"pattern\":\"contains no scene\\\\.pulp\\\\.json\"},{\"code\":\"archive-duplicate-member\",\"pattern\":\"duplicate (zip )?(entry|member)\"},{\"code\":\"asset-unresolvable\",\"pattern\":\"asset '[^']*' is unresolvable\"},{\"code\":\"asset-undecodable\",\"pattern\":\"(could not decode|undecodable|corrupt) (image|asset)\"},{\"code\":\"asset-path-unsafe\",\"pattern\":\"(unsafe asset path|outside the document)\"},{\"code\":\"node-type-unknown\",\"pattern\":\"unknown (node )?type\"},{\"code\":\"identity-duplicate\",\"pattern\":\"duplicate (stable )?(anchor|identit)\"},{\"code\":\"document-unreadable\",\"pattern\":\"(could not (read|parse) DesignIR|invalid DesignIR|JSON parse error)\"},{\"code\":\"document-version-unsupported\",\"pattern\":\"unsupported DesignIR version\"},{\"code\":\"source-unresolved\",\"pattern\":\"\\\\[capture-source-unresolved\\\\]\"},{\"code\":\"native-paint-unsupported\",\"pattern\":\"native panel validation refused\"},{\"code\":\"font-undecodable\",\"pattern\":\"font.*(decod|pars|reject|invalid)\"}]",
         "--",
-        "/bin/cp",
+        "{tool:materializer}",
         "{source}",
         "design.ir.json",
         "--then",
@@ -354,7 +355,7 @@
         "design-ir"
       ],
       "argv": [
-        "/bin/cp",
+        "{tool:materializer}",
         "{source}",
         "design.ir.json"
       ]

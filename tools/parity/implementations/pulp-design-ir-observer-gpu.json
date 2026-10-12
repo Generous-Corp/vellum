@@ -6,7 +6,8 @@
   "description": "pulp-design-ir-observer plus a GPU observation: pulp-design-ir-observe --backend gpu renders through Skia Graphite on a Dawn device and writes a render receipt, and the step keeps its full stderr, in which the loader lists every image it mapped (DYLD_PRINT_LIBRARIES), as dyld-images.txt for the provider census. Seeded controls set case args gpu_fault (observer --gpu-fault) and param insert_libraries (DYLD_INSERT_LIBRARIES). Requires an observer with --backend/--render-receipt/--gpu-fault.",
   "tools": {
     "importer": "build/tools/import-design/pulp-import-design",
-    "observer": "build/tools/import-design/pulp-design-ir-observe"
+    "observer": "build/tools/import-design/pulp-design-ir-observe",
+    "materializer": "tools/parity/lanes/materialize.py"
   },
   "source_kinds": {
     "figma-plugin": [
@@ -46,7 +47,7 @@
         "design-ir"
       ],
       "argv": [
-        "/bin/cp",
+        "{tool:materializer}",
         "{source}",
         "design.ir.json"
       ]
@@ -152,11 +153,5 @@
       ]
     }
   ],
-  "authority": "native-render",
-  "passthrough_binaries": [
-    {
-      "path": "/bin/cp",
-      "justification": "The design-ir source kind copies the input DesignIR; its structure lane then compares inputs, not an import."
-    }
-  ]
+  "authority": "native-render"
 }
