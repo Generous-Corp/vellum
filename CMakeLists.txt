@@ -108,6 +108,13 @@ if(VELLUM_BUILD_TESTS)
     target_link_libraries(vellum-runtime-test PRIVATE Vellum::Runtime)
     add_test(NAME vellum.runtime COMMAND vellum-runtime-test)
 
+    # Header-only UTF-8 sanitizer used before text shaping. It has no renderer
+    # dependency, so its malformed-input coverage runs in every configuration.
+    add_executable(vellum-utf8-text-test
+        graphics/tests/utf8_text_test.cpp)
+    target_compile_features(vellum-utf8-text-test PRIVATE cxx_std_20)
+    add_test(NAME vellum.utf8-text COMMAND vellum-utf8-text-test)
+
     if(TARGET vellum-gpu)
         add_executable(vellum-dawn-bootstrap-test
             graphics/tests/dawn_bootstrap_test.cpp)
