@@ -178,48 +178,38 @@ jobs:
               SHA256:eMlEuZcnW6NJDrKQBuN5EX1q69bOlIRPl6XmutVTgcs \
             --output "$RUNNER_TEMP/promotion-release-tag-trust.json"
 
-      - name: Resolve the exact-boundary Pulp ref
-        # A pull-request or merge-queue run must reach the same verdict every
-        # time it is replayed for the same Vellum tree, so it reads Pulp at the
-        # committed observatory cursor rather than at whatever Pulp main is at
-        # that moment. Push and tag runs keep reading live main, where the
-        # before/after equality test below pins the run to one live SHA.
-        id: exact-boundary-pulp-ref
-        if: steps.expansion-evidence.outputs.pulp-sha != ''
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import json
-          import os
-          import re
-          from pathlib import Path
-
-          event = os.environ["GITHUB_EVENT_NAME"]
-          if event in ("pull_request", "merge_group"):
-              cursor = json.loads(
-                  Path("provenance/pulp-observatory/cursor.json").read_text(
-                      encoding="utf-8"
-                  )
-              )
-              ref = cursor["pulp"]["last_scanned_commit"]
-              if re.fullmatch(r"[0-9a-f]{40}", ref) is None:
-                  raise SystemExit("observatory Pulp cursor is not a full commit SHA")
-          else:
-              ref = "main"
-          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
-              output.write(f"ref={ref}\n")
-          PY
-
       - name: Check out authoritative Pulp with full history
+        # Start from the literal default branch. Pull-request and merge-queue
+        # runs pin this checkout to the committed observatory cursor below;
+        # push and tag runs intentionally retain the live-main read.
         if: steps.expansion-evidence.outputs.pulp-sha != ''
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: Generous-Corp/pulp
-          ref: ${{ steps.exact-boundary-pulp-ref.outputs.ref }}
+          ref: main
           path: .exact-boundary-pulp
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Pin pull-request and queue Pulp reads to committed evidence
+        if: steps.expansion-evidence.outputs.pulp-sha != '' && (github.event_name == 'pull_request' || github.event_name == 'merge_group')
+        shell: bash
+        run: |
+          set -euo pipefail
+          pulp_ref="$(python3 - <<'PY'
+          import json
+          import re
+          from pathlib import Path
+          cursor = json.loads(Path("provenance/pulp-observatory/cursor.json").read_text(encoding="utf-8"))
+          ref = cursor["pulp"]["last_scanned_commit"]
+          if re.fullmatch(r"[0-9a-f]{40}", ref) is None:
+              raise SystemExit("observatory Pulp cursor is not a full commit SHA")
+          print(ref)
+          PY
+          )"
+          git -C .exact-boundary-pulp fetch --no-tags origin "$pulp_ref"
+          git -C .exact-boundary-pulp checkout --detach "$pulp_ref"
+          test "$(git -C .exact-boundary-pulp rev-parse HEAD)" = "$pulp_ref"
 
       - name: Test authority protocol and negative controls
         env:
