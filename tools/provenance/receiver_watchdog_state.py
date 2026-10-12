@@ -21,7 +21,10 @@ import receiver  # noqa: E402
 
 def build_state(*, root: Path, pulp_repo: Path) -> dict[str, object]:
     cursor = receiver.load_cursor(root)
-    main = receiver.git(pulp_repo, "rev-parse", "HEAD")
+    # Decision 0011 freezes Pulp observation at the committed cursor. Do not
+    # walk today's Pulp main: its durable event files may have been edited
+    # after the freeze, and advancing past the boundary needs a new decision.
+    main = cursor
     latest, oldest_event = receiver.durable_event_range(pulp_repo, cursor, main)
     covered = receiver.is_ancestor(pulp_repo, latest, cursor)
     latest_created_at = receiver.git(pulp_repo, "show", "-s", "--format=%cI", oldest_event)

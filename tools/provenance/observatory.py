@@ -384,7 +384,13 @@ def coverage_gaps(
         ):
             require_commit(repo, requested_target, f"requested {source} target")
             if vellum_pr_main is not None:
-                verify_vellum_observatory_pr_tail(repo, target, vellum_pr_main, requested_target)
+                # The merge-base guard proves the checked-out PR/queue target
+                # contains current main. Option A deliberately treats mapped
+                # landings beyond the cursor as normal lag; demanding an
+                # evidence-only tail here would serialize every PR.
+                require_commit(repo, vellum_pr_main, "current main head")
+                require_ancestor(repo, vellum_pr_main, requested_target,
+                                 "pull-request target contains current main")
             # A pull request behind main is judged on its own commits: the
             # part of main it lacks is verified by main's own runs.
             tail_start = coverage_tail_start(repo, target, requested_target)

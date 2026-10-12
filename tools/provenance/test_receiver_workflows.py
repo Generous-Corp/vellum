@@ -7,10 +7,13 @@ from pathlib import Path
 import json
 import re
 import unittest
-
+import tempfile
+import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github/workflows"
+sys.path.insert(0, str(ROOT / "tools/provenance"))
+from live_delivery import enabled as live_enabled, validate_enabled_barrier
 
 
 class ReceiverWorkflowTests(unittest.TestCase):
@@ -43,7 +46,7 @@ class ReceiverWorkflowTests(unittest.TestCase):
         )
         self.assertIs(switch["enabled"], False)
         self.assertIn('Path("provenance/pulp-observatory/live-delivery.json")', text)
-        self.assertIn('skip = os.environ["GITHUB_EVENT_NAME"] == "repository_dispatch" and not live', text)
+        self.assertIn('skip = os.environ["GITHUB_EVENT_NAME"] == "repository_dispatch" and not live\n', text)
         self.assertIn("if: steps.coordinates.outputs.skip != 'true'", text)
         self.assertIn("automation/pulp-observatory-live-delivery", text)
         self.assertNotIn("actions/variables", text)
@@ -61,9 +64,30 @@ class ReceiverWorkflowTests(unittest.TestCase):
         text = self.text("pulp-observatory-receiver.yml")
         self.assertIn("required checks", text)
         self.assertIn("provenance-verify", text)
-        self.assertIn("except (OSError, json.JSONDecodeError, TypeError)", text)
-        self.assertIn("live = False", text)
-        self.assertIn("isinstance(switch, dict)", text)
+        self.assertIn("from live_delivery import enabled as live_enabled", text)
+        self.assertIn("live = live_enabled", text)
+
+    def test_live_switch_parser_is_fail_closed_and_strict(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "switch.json"
+            for raw, expected in ((b'{"enabled": true}', True),
+                                  (b'{"enabled": "true"}', False),
+                                  (b'{"enabled": false, "enabled": true}', False),
+                                  (b"{bad", False), (b"\xff", False)):
+                path.write_bytes(raw)
+                self.assertEqual(live_enabled(path), expected, raw)
+            path.write_text("null", encoding="utf-8")
+            self.assertFalse(live_enabled(path))
+
+    def test_live_switch_barrier_rejects_frozen_or_uncovered_enablement(self) -> None:
+        cursor = {"pulp": {"last_scanned_commit": "a" * 40}}
+        with self.assertRaises(ValueError):
+            validate_enabled_barrier({"enabled": True, "barrier_pulp_commit": "a" * 40},
+                                     {"state": "frozen"}, cursor)
+        with self.assertRaises(ValueError):
+            validate_enabled_barrier({"enabled": True, "barrier_pulp_commit": "b" * 40},
+                                     {"state": "active"}, cursor)
+        validate_enabled_barrier({"enabled": False}, {"state": "frozen"}, cursor)
 
     def test_evidence_is_coalesced_to_one_reviewed_branch(self) -> None:
         text = self.text("pulp-observatory-receiver.yml")

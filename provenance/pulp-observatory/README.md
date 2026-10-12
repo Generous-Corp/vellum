@@ -114,8 +114,9 @@ coalesces through the newest covered head. The completed one-time authority
 activation remains independently protected; it must not enter the receiver's
 lossy pending slot because activation cannot be coalesced or replaced.
 
-Live dispatch is off unless the reviewed repository variable
-`VELLUM_RECEIVER_LIVE` is exactly `true`. Replay accepts an exact Pulp commit,
+Live dispatch is off unless the committed
+`provenance/pulp-observatory/live-delivery.json` switch is exactly enabled by
+the receiver's reviewed enable PR. Replay accepts an exact Pulp commit,
 requires it to descend from the committed cursor and be landed on freshly
 fetched Pulp `main`, and fails closed on missing event coverage. The `enable`
 operation succeeds only when the committed cursor already covers both the
@@ -130,8 +131,8 @@ squash or rebase it. Credentials are minted per run from the same GitHub App
 the merge steward uses (`actions/create-github-app-token` with the
 `SHIPYARD_APP_*` secrets): a read-only token scoped to `Generous-Corp/pulp`
 for the fresh Pulp checkout, and a Vellum-only token with Contents and Pull
-requests write plus Actions and Variables write for the evidence push, the
-evidence PR, the trusted enable barrier and replay. A PR opened with an App
+requests write for the evidence push, the evidence PR, the trusted enable
+barrier and replay. A PR opened with an App
 token triggers its required checks; one opened with `GITHUB_TOKEN` would not,
 and could never land.
 

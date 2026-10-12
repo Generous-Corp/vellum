@@ -674,6 +674,14 @@ class ObservatoryTests(unittest.TestCase):
             )
             self.assertEqual(report["health"], "pass")
             self.assertEqual(report["coverage_gaps"], [])
+            # The #56 main-head hint is ancestry-only under Option A; a
+            # lagging main tail is not required to be evidence-only.
+            report = observatory.verify(
+                root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                pulp_target=pulp_head, vellum_target=feature,
+                vellum_tail_policy="coverage", vellum_pr_main=main,
+            )
+            self.assertEqual(report["health"], "pass")
             # Still not acceptable to the reconciled policy: nothing relaxed there.
             with self.assertRaisesRegex(observatory.ObservatoryError, "evidence tail"):
                 observatory.verify(

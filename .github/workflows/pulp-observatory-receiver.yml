@@ -104,17 +104,26 @@ jobs:
           import os
           from pathlib import Path
           import re
+          import sys
+          sys.path.insert(0, "tools/provenance")
+          from live_delivery import enabled as live_enabled
 
-          main = os.popen("git -C .receiver-pulp rev-parse HEAD").read().strip()
-          try:
-              switch = json.loads(
-                  Path("provenance/pulp-observatory/live-delivery.json").read_text(encoding="utf-8")
+          # Decision 0011 freezes Pulp observation at the committed boundary.
+          # Fresh Pulp main is still checked out for provenance, but it is not
+          # a permitted cursor target until a superseding decision lands.
+          scope = json.loads(
+              Path("provenance/pulp-observatory/pulp-observation-scope.json").read_text(
+                  encoding="utf-8"
               )
-              live = isinstance(switch, dict) and switch.get("enabled") is True
-          except (OSError, json.JSONDecodeError, TypeError):
-              # Missing or malformed controls fail closed to disabled delivery.
-              switch = {}
-              live = False
+          )
+          main = scope.get("frozen_pulp_commit")
+          if not isinstance(main, str) or re.fullmatch(r"[0-9a-f]{40}", main) is None:
+              raise SystemExit("frozen Pulp observation boundary is invalid")
+          if os.system(f"git -C .receiver-pulp cat-file -e {main}^{{commit}}") != 0:
+              raise SystemExit("frozen Pulp observation boundary is unavailable")
+          live = False
+          if os.environ["GITHUB_EVENT_NAME"] == "repository_dispatch":
+              live = live_enabled(Path("provenance/pulp-observatory/live-delivery.json"))
           skip = os.environ["GITHUB_EVENT_NAME"] == "repository_dispatch" and not live
           if os.environ["GITHUB_EVENT_NAME"] == "repository_dispatch":
               payload = json.loads(os.environ["DISPATCH_PAYLOAD"])
