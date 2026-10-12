@@ -56,6 +56,33 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Pin mirror Pulp reads to committed Decision 0010 evidence
+        if: steps.mirror-receipts.outputs.present == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          pulp_ref="$(python3 - <<'PY'
+          import json
+          import re
+          from pathlib import Path
+          index = json.loads(Path("provenance/mirror/receipts/index.json").read_text(encoding="utf-8"))
+          refs = []
+          for entry in index["receipts"]:
+              path = Path(entry)
+              receipt = json.loads(path.read_text(encoding="utf-8"))
+              ref = receipt.get("pulp_sha")
+              if not isinstance(ref, str) or re.fullmatch(r"[0-9a-f]{40}", ref) is None:
+                  raise SystemExit(f"invalid committed mirror receipt Pulp SHA: {path}")
+              refs.append(ref)
+          if not refs:
+              raise SystemExit("mirror receipt index said present but listed no receipts")
+          print(refs[-1])
+          PY
+          )"
+          git -C .mirror-pulp fetch --no-tags origin "$pulp_ref"
+          git -C .mirror-pulp checkout --detach "$pulp_ref"
+          test "$(git -C .mirror-pulp rev-parse HEAD)" = "$pulp_ref"
+
       - name: Verify active-source quarantine and forbidden dependencies
         env:
           MIRROR_PULP_ROOT: ${{ steps.mirror-receipts.outputs.present == 'true' && '.mirror-pulp' || '' }}
@@ -106,6 +133,33 @@ jobs:
           path: .mirror-pulp
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Pin mirror Pulp reads to committed Decision 0010 evidence
+        if: steps.mirror-receipts.outputs.present == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          pulp_ref="$(python3 - <<'PY'
+          import json
+          import re
+          from pathlib import Path
+          index = json.loads(Path("provenance/mirror/receipts/index.json").read_text(encoding="utf-8"))
+          refs = []
+          for entry in index["receipts"]:
+              path = Path(entry)
+              receipt = json.loads(path.read_text(encoding="utf-8"))
+              ref = receipt.get("pulp_sha")
+              if not isinstance(ref, str) or re.fullmatch(r"[0-9a-f]{40}", ref) is None:
+                  raise SystemExit(f"invalid committed mirror receipt Pulp SHA: {path}")
+              refs.append(ref)
+          if not refs:
+              raise SystemExit("mirror receipt index said present but listed no receipts")
+          print(refs[-1])
+          PY
+          )"
+          git -C .mirror-pulp fetch --no-tags origin "$pulp_ref"
+          git -C .mirror-pulp checkout --detach "$pulp_ref"
+          test "$(git -C .mirror-pulp rev-parse HEAD)" = "$pulp_ref"
 
       - name: Verify extraction and active-source quarantine
         env:
