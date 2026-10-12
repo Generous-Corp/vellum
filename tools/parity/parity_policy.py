@@ -178,16 +178,24 @@ def provenance_errors(run: dict[str, Any], identity: dict[str, Any], side: str,
     producers = run.get("producers") or run.get("produced_by") or {}
     inputs = run.get("inputs") or {}
 
+    step_order = {step.get("id"): index for index, step in enumerate(run.get("steps") or [])}
+
     def copy_only(name: str, origin: dict[str, Any]) -> bool:
-        """Recognize copy behavior even when the executable is renamed."""
+        """Recognize copy behavior from content lineage, independent of argv."""
         output_sha = origin.get("sha256")
         if not output_sha:
             return False
-        for source in origin.get("reads") or []:
-            source_sha = inputs.get(source)
-            if source_sha is None and source in producers:
-                source_sha = producers[source].get("sha256")
-            if source_sha == output_sha:
+        origin_step = step_order.get(origin.get("step"), len(step_order))
+        # A file rewritten in place is allowed to retain its own bytes. The
+        # comparison is against staged inputs and outputs from earlier steps,
+        # excluding the selected file itself.
+        for source, source_sha in inputs.items():
+            if source != name and source_sha == output_sha:
+                return True
+        for source, previous in producers.items():
+            if source == name or step_order.get(previous.get("step"), len(step_order)) >= origin_step:
+                continue
+            if previous.get("sha256") == output_sha:
                 return True
         return False
 

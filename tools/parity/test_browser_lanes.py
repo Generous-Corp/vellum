@@ -59,8 +59,9 @@ def write_oracle_side(directory: Path, *, native: bytes, ir: dict | None = None,
     (directory / "render.png").write_bytes(native)
     (directory / "design.ir.json").write_text(json.dumps(ir or {"root": {"stable_anchor_id": "r", "children": [
         {"stable_anchor_id": "box", "type": "frame"}]}}), encoding="utf-8")
-    (directory / "capture.json").write_text(json.dumps({"provenance": {"browser": {"version": version}}}),
-                                            encoding="utf-8")
+    capture = directory / "design.ir-browser-capture" / "capture.json"
+    capture.parent.mkdir(parents=True, exist_ok=True)
+    capture.write_text(json.dumps({"provenance": {"browser": {"version": version}}}), encoding="utf-8")
 
 
 NATIVE = png(40, 20, box=(4, 4, 30, 15))  # one row short of the browser's box
@@ -114,8 +115,8 @@ class OracleLane(unittest.TestCase):
     def test_capture_from_another_browser_fails(self) -> None:
         write_oracle_side(self.ref, native=NATIVE)
         write_oracle_side(self.cand, native=NATIVE)
-        (self.cand / "capture.json").write_text(json.dumps({"provenance": {"browser": {"version": "1.0"}}}),
-                                                encoding="utf-8")
+        capture = self.cand / "design.ir-browser-capture" / "capture.json"
+        capture.write_text(json.dumps({"provenance": {"browser": {"version": "1.0"}}}), encoding="utf-8")
         self.assertIn("captured with browser", " ".join(self.run_lane()["reasons"]))
 
     def test_candidate_further_from_the_browser_fails(self) -> None:
@@ -138,8 +139,9 @@ def write_reimport_side(directory: Path, *, first: dict, second: dict, revision:
         target.mkdir(parents=True, exist_ok=True)
         (target / "page.html").write_bytes(data)
         bound = ph.sha256_bytes(source if stale else data)
-        (target / "capture.json").write_text(json.dumps({"provenance": {"source": {"sha256": bound}}}),
-                                             encoding="utf-8")
+        capture = target / "design.ir-browser-capture" / "capture.json"
+        capture.parent.mkdir(parents=True, exist_ok=True)
+        capture.write_text(json.dumps({"provenance": {"source": {"sha256": bound}}}), encoding="utf-8")
         (target / "design.ir.json").write_text(json.dumps(ir), encoding="utf-8")
 
 

@@ -112,10 +112,8 @@ def oracle_clip_image(directory: Path, settings: dict[str, Any], width: int, hei
 
 
 def capture_path(directory: Path) -> Path:
-    """Use the importer-owned capture path; retain the flat path for fixtures."""
-    flat = directory / "capture.json"
-    nested = directory / "design.ir-browser-capture" / "capture.json"
-    return flat if flat.is_file() else nested
+    """Return the importer-owned browser capture artifact."""
+    return directory / "design.ir-browser-capture" / "capture.json"
 
 
 def compare_oracle(ref: Path, cand: Path, case: dict[str, Any]) -> dict[str, Any]:
