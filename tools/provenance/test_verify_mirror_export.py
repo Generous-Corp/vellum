@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -60,6 +61,7 @@ class Fixture:
         run(self.pulp, "add", "-A")
         run(self.pulp, "commit", "-q", "-m", "pulp")
         self.pulp_sha = run(self.pulp, "rev-parse", "HEAD")
+        run(self.pulp, "update-ref", "refs/remotes/origin/main", self.pulp_sha)
 
         self.vellum.mkdir()
         run(self.vellum, "init", "-q", "-b", "main")
@@ -332,14 +334,52 @@ class VerifyMirrorExportTests(unittest.TestCase):
         self.assertError(errors, ".path must be a relative @build/ path")
         self.assertError(errors, "producer_paths[0] must be repository-relative")
 
+    def test_generated_input_parent_escape_is_rejected(self) -> None:
+        errors = verify_mirror_export.validate_generated_input(
+            {
+                "path": "@build/../../etc/passwd",
+                "sha256": "0" * 64,
+                "producer_paths": ["core/runtime/CMakeLists.txt"],
+            },
+            "fixture generated input",
+        )
+        self.assertError(errors, ".path must be a relative @build/ path")
+
     def test_external_input_cache_relative_identity_is_valid(self) -> None:
+        pin = "a" * 40
         self.assertEqual(
             verify_mirror_export.validate_external_inputs(
-                [{"path": "@fetchcontent/mbedtls/include/mbedtls.h"}],
+                [{"path": "@fetchcontent/mbedtls/include/mbedtls.h", "source": "https://github.com/Mbed-TLS/mbedtls", "pin": pin}],
                 "fixture external inputs",
             ),
             [],
         )
+
+    def test_external_input_requires_repository_and_commit_pin(self) -> None:
+        errors = verify_mirror_export.validate_external_inputs(
+            [{"path": "@fetchcontent/mbedtls-release-3.2.12/include/a.h", "source": "build-tree", "pin": "release-3.2.12"}],
+            "fixture external inputs",
+        )
+        self.assertError(errors, "source must be a known repository URL")
+        self.assertError(errors, "pin must be a 40-hex commit SHA")
+
+    def test_external_input_embedded_pin_must_match(self) -> None:
+        errors = verify_mirror_export.validate_external_inputs(
+            [{"path": "@fetchcontent/mbedtls-" + "a" * 40 + "/include/a.h", "source": "https://github.com/Mbed-TLS/mbedtls", "pin": "b" * 40}],
+            "fixture external inputs",
+        )
+        self.assertError(errors, "embedded pin must equal pin")
+
+    def test_external_input_parent_escape_is_rejected(self) -> None:
+        errors = verify_mirror_export.validate_external_inputs(
+            [{"path": "@build/../..", "source": "https://github.com/Mbed-TLS/mbedtls", "pin": "a" * 40}],
+            "fixture external inputs",
+        )
+        self.assertError(errors, "cache-relative identity")
+
+    def test_embedded_host_paths_are_rejected(self) -> None:
+        for value in ("-I/Users/attacker/include", "FOO=/Users/attacker/cache", r"\\server\share\x", "file:///Users/attacker/x"):
+            self.assertTrue(verify_mirror_export.host_path_violations(value, "fixture"), value)
 
     def test_external_input_host_path_is_rejected(self) -> None:
         errors = verify_mirror_export.validate_external_inputs(
@@ -360,6 +400,25 @@ class VerifyMirrorExportTests(unittest.TestCase):
             "fixture closure",
         )
         self.assertError(errors, "absolute host path")
+
+    def test_end_to_end_closure_host_path_guard_is_required(self) -> None:
+        fixture = Fixture(self.base)
+        closure = json.loads((fixture.vellum / fixture.closure_path).read_text())
+        closure["public_include_dirs"] = ["/Users/attacker/include"]
+        write(fixture.vellum, fixture.closure_path, dump(closure))
+        fixture.receipt["units"][0]["closure_sha256"] = fixture.sha(fixture.closure_path)
+        fixture.reland()
+        self.assertError(fixture.errors(), "absolute host path")
+        with mock.patch.object(verify_mirror_export, "validate_closure_manifest", return_value=[]):
+            self.assertEqual(fixture.errors(), [])
+
+    def test_end_to_end_receipt_host_path_guard_is_required(self) -> None:
+        fixture = Fixture(self.base)
+        fixture.receipt["units"][0]["name"] = "FOO=/Users/attacker"
+        fixture.reland()
+        self.assertError(fixture.errors(), "absolute host path")
+        with mock.patch.object(verify_mirror_export, "host_path_violations", return_value=[]):
+            self.assertEqual(fixture.errors(), [])
 
 
 if __name__ == "__main__":

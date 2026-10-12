@@ -50,6 +50,8 @@ UNIT_KEYS = {"name", "closure_manifest", "closure_sha256", "oracle_class"}
 FILE_KEYS = {"mirror_path", "pulp_path", "mode", "blob"}
 GENERATED_KEYS = {"path", "sha256", "producer_paths"}
 EXTERNAL_CACHE_PATH = re.compile(r"^@[A-Za-z0-9_.-]+/")
+EXTERNAL_REPOSITORY = re.compile(r"^https://(?:github\.com|gitlab\.com|codeberg\.org)/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?/?$")
+EMBEDDED_PIN = re.compile(r"(?:^|[-_/])([0-9a-f]{40})(?=$|[-_/])", re.IGNORECASE)
 POLICY_KEYS = {
     "schema", "allowed_external_targets", "forbidden_target_pattern",
     "forbidden_path_prefixes", "forbidden_definition_pattern",
@@ -113,6 +115,7 @@ def validate_generated_input(value: Any, label: str) -> list[str]:
     if (
         not isinstance(path, str)
         or not path.startswith("@build/")
+        or not safe_relative(path)
         or Path(path).is_absolute()
         or path.startswith("~")
     ):
@@ -139,7 +142,10 @@ def host_path_violations(value: Any, label: str) -> list[str]:
     errors: list[str] = []
     if isinstance(value, str):
         windows_absolute = bool(re.match(r"^[A-Za-z]:[\\/]", value))
-        if Path(value).is_absolute() or value.startswith("~") or windows_absolute:
+        embedded_unix = bool(re.search(r"(?:^|[=\s-])(?:-[A-Za-z])?/(?:Users|Volumes|private|home|var|tmp|opt|etc|usr)(?:/|$)", value))
+        unc = value.startswith(("\\\\", "//"))
+        file_url = value.lower().startswith("file://")
+        if Path(value).is_absolute() or value.startswith("~") or windows_absolute or embedded_unix or unc or file_url:
             errors.append(f"{label} contains an absolute host path: {value}")
     elif isinstance(value, dict):
         for key, child in value.items():
@@ -163,6 +169,15 @@ def validate_external_inputs(value: Any, label: str) -> list[str]:
         path = row.get("path")
         if not isinstance(path, str) or not safe_relative(path) or not EXTERNAL_CACHE_PATH.match(path):
             errors.append(f"{where}.path must be a cache-relative identity such as @fetchcontent/name/path")
+        source = row.get("source")
+        if not isinstance(source, str) or source == "build-tree" or not EXTERNAL_REPOSITORY.fullmatch(source):
+            errors.append(f"{where}.source must be a known repository URL")
+        pin = row.get("pin")
+        if not isinstance(pin, str) or not SHA40.fullmatch(pin):
+            errors.append(f"{where}.pin must be a 40-hex commit SHA")
+        embedded = EMBEDDED_PIN.search(path) if isinstance(path, str) else None
+        if embedded and (not isinstance(pin, str) or embedded.group(1).lower() != pin.lower()):
+            errors.append(f"{where}.path embedded pin must equal pin")
     return errors
 
 
@@ -178,8 +193,13 @@ def validate_closure_manifest(closure: dict[str, Any], label: str) -> list[str]:
         for index, path in enumerate(values):
             if not safe_relative(path):
                 errors.append(f"{label}.{key}[{index}] must be repository/cache-relative")
-    for index, target in enumerate(closure.get("targets", [])):
+    targets = closure.get("targets", [])
+    if not isinstance(targets, list):
+        errors.append(f"{label}.targets must be a list")
+        targets = []
+    for index, target in enumerate(targets):
         if not isinstance(target, dict):
+            errors.append(f"{label}.targets[{index}] must be an object")
             continue
         for key in ("sources", "include_dirs"):
             values = target.get(key, [])
@@ -342,6 +362,9 @@ def link_closure_findings(
             findings.append(f"{unit}: missing targets {closure['missing_targets']}")
         links = set(closure.get("transitive_link_targets", []))
         for target in closure.get("targets", []):
+            if not isinstance(target, dict):
+                findings.append(f"{unit}: targets entry must be an object")
+                continue
             links.update(target.get("link_targets", []))
         for link in sorted(links):
             if forbidden_target.search(link):
@@ -480,9 +503,9 @@ def verify_receipt_against_pulp(pulp_root: Path, receipt: dict[str, Any]) -> lis
     pulp_sha = receipt["pulp_sha"]
     if not git_ok(pulp_root, "cat-file", "-e", f"{pulp_sha}^{{commit}}"):
         return [f"Pulp commit {pulp_sha} is not available in {pulp_root}"]
-    main = git_try(pulp_root, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/main") or git_try(
-        pulp_root, "rev-parse", "HEAD"
-    )
+    main = git_try(pulp_root, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/main")
+    if main is None:
+        return ["Pulp checkout has no refs/remotes/origin/main"]
     if main is None or not git_ok(pulp_root, "merge-base", "--is-ancestor", pulp_sha, main):
         errors.append(f"Pulp commit {pulp_sha} is not reachable from Pulp main")
     listing = git_try(pulp_root, "ls-tree", "-r", "--full-tree", pulp_sha) or ""

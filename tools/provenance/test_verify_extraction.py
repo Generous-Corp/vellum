@@ -305,6 +305,7 @@ class VerifyExtractionTests(unittest.TestCase):
                 "commit", "-q", "-m", "origin",
             )
             commit = run("rev-parse", "HEAD")
+            run("update-ref", "refs/remotes/origin/main", commit)
             record = {
                 "mirror_path": "mirror/core/a.cpp",
                 "git_blob_sha": verify_extraction.git_blob_sha(b"int a;\n"),
@@ -342,6 +343,7 @@ class VerifyExtractionTests(unittest.TestCase):
             run("commit", "-q", "-m", "side")
             side = run("rev-parse", "HEAD")
             run("checkout", "-q", "main")
+            run("update-ref", "refs/remotes/origin/main", run("rev-parse", "main"))
             record = {
                 "mirror_path": "mirror/core/a.cpp",
                 "git_blob_sha": verify_extraction.git_blob_sha(b"int side;\n"),
@@ -443,6 +445,8 @@ class VerifyExtractionTests(unittest.TestCase):
                  "commit", "-q", "-m", "pulp"],
                 cwd=pulp,
             )
+            main = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=pulp, text=True).strip()
+            subprocess.check_call(["git", "update-ref", "refs/remotes/origin/main", main], cwd=pulp)
             proved = verify_extraction.verify(clone, pulp)
 
             self.assertEqual(unproved["status"], "fail")

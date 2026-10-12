@@ -17,7 +17,7 @@
     "core/signal/",
     "core/smf/",
     "core/timebase/",
-    "core/timeline"
+    "core/timeline/"
   ],
   "forbidden_definition_pattern": "^PULP_(?:HAS_|BUILD_|ENABLE_)?(?:AUDIO|MIDI|SIGNAL|FORMAT|HOST|VST3|CLAP|AU|AUV2|AUV3|LV2|AAX|GPU_AUDIO)(?:$|[_=])"
 }

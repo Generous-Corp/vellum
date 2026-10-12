@@ -392,9 +392,9 @@ def verify_origins_against_pulp(
     """Prove each record against the Pulp history it cites (identity oracle)."""
     errors: list[str] = []
     try:
-        main = git(pulp_root, "rev-parse", "--verify", "--quiet", "HEAD")
+        main = git(pulp_root, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/main")
     except subprocess.CalledProcessError:
-        return [f"Pulp checkout {pulp_root} has no HEAD"]
+        return [f"Pulp checkout {pulp_root} has no refs/remotes/origin/main"]
     for record in records:
         on_main = subprocess.run(
             ["git", "merge-base", "--is-ancestor", record["pulp_commit"], main],
