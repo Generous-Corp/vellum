@@ -17,11 +17,31 @@ concurrency:
 jobs:
   watchdog:
     name: watchdog
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      vars.VELLUM_RECEIVER_WATCHDOG_ENABLED == 'true'
+    # No configuration gate: a watchdog that can be left switched off is a
+    # watchdog that is silently off. Every scheduled run evaluates.
     runs-on: ubuntu-latest
     steps:
+      - name: Mint a Vellum watchdog token
+        id: watchdog-token
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3
+        with:
+          app-id: ${{ secrets.SHIPYARD_APP_ID }}
+          private-key: ${{ secrets.SHIPYARD_APP_PRIVATE_KEY }}
+          owner: Generous-Corp
+          repositories: vellum
+          permission-actions: write
+          permission-pull-requests: read
+
+      - name: Mint a read-only Pulp token for the fresh checkout
+        id: pulp-reader
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3
+        with:
+          app-id: ${{ secrets.SHIPYARD_APP_ID }}
+          private-key: ${{ secrets.SHIPYARD_APP_PRIVATE_KEY }}
+          owner: Generous-Corp
+          repositories: pulp
+          permission-contents: read
+
       - name: Check out trusted Vellum main controls
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -33,7 +53,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: Generous-Corp/pulp
-          token: ${{ secrets.VELLUM_PULP_READER_TOKEN }}
+          token: ${{ steps.pulp-reader.outputs.token }}
           ref: main
           path: .watchdog-pulp
           fetch-depth: 0
@@ -41,41 +61,14 @@ jobs:
 
       - name: Build independent watchdog state
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.watchdog-token.outputs.token }}
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          import sys
-
-          sys.path.insert(0, "tools/provenance")
-          import receiver
-
-          root = Path(".")
-          pulp = Path(".watchdog-pulp")
-          cursor = receiver.load_cursor(root)
-          main = receiver.git(pulp, "rev-parse", "HEAD")
-          latest, oldest_event = receiver.durable_event_range(pulp, cursor, main)
-          covered = receiver.is_ancestor(pulp, latest, cursor)
-          latest_created_at = receiver.git(
-              pulp, "show", "-s", "--format=%cI", oldest_event
-          )
-          report = json.loads(
-              Path("provenance/pulp-observatory/reports/current.json").read_text()
-          )
-          pending = report.get("pending")
-          if not isinstance(pending, int) or isinstance(pending, bool) or pending < 0:
-              raise SystemExit("committed observatory pending count is invalid")
-          import os
-          base_path = Path(os.environ["RUNNER_TEMP"]) / "watchdog-base.json"
-          base_path.write_text(json.dumps({
-              "cursor_covers_latest": covered,
-              "latest_event_created_at": latest_created_at,
-              "latest_target": latest,
-              "pending_count": pending,
-          }))
-          PY
+          python3 tools/provenance/test_receiver_watchdog_state.py
+          python3 tools/provenance/receiver_watchdog_state.py \
+            --root . \
+            --pulp-repo .watchdog-pulp \
+            --output "$RUNNER_TEMP/watchdog-base.json"
           gh api \
             "repos/$GITHUB_REPOSITORY/actions/workflows/pulp-observatory-receiver.yml/runs?per_page=10" \
             --jq '[.workflow_runs[] | {status, conclusion, created_at}]' \
@@ -108,7 +101,7 @@ jobs:
 
       - name: Retry lag or refresh an aging receiver heartbeat
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.watchdog-token.outputs.token }}
         run: |
           set -euo pipefail
           if test "$(jq -r .dispatch_required "$RUNNER_TEMP/watchdog-result.json")" = true; then

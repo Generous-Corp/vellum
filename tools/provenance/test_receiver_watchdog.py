@@ -29,7 +29,8 @@ POLICY = {
 }
 
 
-def run(*, covered: bool = True, pending: int = 0, evidence_pr_open: bool = False, runs=None):
+def run(*, covered: bool = True, pending: int = 0, evidence_pr_open: bool = False, runs=None,
+        vellum_covered: bool = True, vellum_main_at=None):
     if runs is None:
         runs = [{
             "status": "completed",
@@ -46,10 +47,58 @@ def run(*, covered: bool = True, pending: int = 0, evidence_pr_open: bool = Fals
         pending_count=pending,
         evidence_pr_open=evidence_pr_open,
         runs=runs,
+        vellum_cursor_covers_main=vellum_covered,
+        vellum_main_committed_at=vellum_main_at,
     )
 
 
 class WatchdogTests(unittest.TestCase):
+    def test_vellum_cursor_lag_is_reported_and_bounded_by_the_same_sla(self) -> None:
+        recent = dt.datetime(2026, 8, 9, 11, 50, tzinfo=dt.timezone.utc)
+        within = run(vellum_covered=False, vellum_main_at=recent)
+        # Lag inside the SLA is the steady state between a landing and its
+        # evidence PR: reported, not a violation.
+        self.assertNotIn("vellum-cursor-lag-sla-breached", within["violations"])
+        self.assertEqual(within["status"], "pass")
+        self.assertFalse(within["vellum_cursor_covers_main"])
+        self.assertEqual(within["vellum_cursor_lag_minutes"], 10.0)
+        # Lag asks the receiver to run, exactly like Pulp cursor lag.
+        self.assertTrue(within["retry_required"])
+        old = dt.datetime(2026, 8, 9, 11, 0, tzinfo=dt.timezone.utc)
+        breached = run(vellum_covered=False, vellum_main_at=old)
+        self.assertIn("vellum-cursor-lag-sla-breached", breached["violations"])
+        self.assertEqual(breached["status"], "fail")
+        # An open evidence PR suppresses replay churn for the Vellum side too.
+        self.assertFalse(
+            run(vellum_covered=False, vellum_main_at=recent, evidence_pr_open=True)["retry_required"]
+        )
+
+    def test_vellum_lag_without_a_timestamp_fails_closed(self) -> None:
+        with self.assertRaises(watchdog.WatchdogError):
+            run(vellum_covered=False, vellum_main_at=None)
+
+    def test_state_file_without_vellum_fields_reads_as_lagging(self) -> None:
+        import json
+        import tempfile
+        from pathlib import Path as _Path
+        with tempfile.TemporaryDirectory() as directory:
+            policy = _Path(directory) / "policy.json"
+            policy.write_text(json.dumps(POLICY), encoding="utf-8")
+            state = _Path(directory) / "state.json"
+            state.write_text(json.dumps({
+                "cursor_covers_latest": True,
+                "latest_event_created_at": "2026-08-09T11:55:00Z",
+                "pending_count": 0,
+                "evidence_pr_open": False,
+                "runs": [{"status": "completed", "conclusion": "success",
+                          "created_at": "2026-08-09T11:55:00Z"}],
+            }), encoding="utf-8")
+            self.assertEqual(
+                watchdog.main(["--policy", str(policy), "--state", str(state),
+                               "--now", "2026-08-09T12:00:00Z"]),
+                1,
+            )
+
     def test_healthy_fixture_passes(self) -> None:
         self.assertEqual(run()["status"], "pass")
 
