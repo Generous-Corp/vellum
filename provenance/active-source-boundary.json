@@ -38,6 +38,8 @@
     "retired_paths_at_active_tip": 0,
     "native_files_matching_pulp_origin_blobs": 0,
     "mirror_files_without_matching_origin_record": 0,
+    "mirror_files_without_pulp_identity_proof": 0,
+    "mirror_origin_records_naming_unlanded_receipts": 0,
     "native_forbidden_namespace_or_product_references": 0,
     "mirror_audio_plugin_host_or_product_edges": 0,
     "open_extraction_debts": 0

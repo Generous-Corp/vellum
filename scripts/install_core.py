@@ -108,6 +108,62 @@ FORBIDDEN_PAYLOAD_CONTENT_PATTERNS = {
         rb"\b(?:AudioUnit|VST3|CLAP|LV2|Oboe)\b", re.IGNORECASE
     ),
 }
+# Mirrored Pulp framework source (Vellum Decision 0010) keeps its Pulp paths
+# and namespace byte for byte, so inside the mirror scope the Pulp-name rules
+# give way to edge rules mirroring tools/provenance/verify_extraction.py: no
+# Pulp audio/DSP/MIDI/format/host/GPU-audio/content subsystem, no Pulp-kept
+# view-audio file, no plug-in SDK, and no audio framework.
+MIRROR_PAYLOAD_SCOPE = re.compile(r"\A(?:sdk/)?mirror/")
+_MIRROR_PRODUCT_SUBSYSTEMS = rb"(?:audio|signal|midi|music|format|host|gpu_audio|content)"
+_MIRROR_KEPT_VIEW_FILES = (
+    rb"(?:audio_bridge|audio_inspector_\w+|eq_curve_view|midi_binding|midi_keyboard"
+    rb"|musical_typing_keyboard\w*|plugin_manager_panel|sample_asset_drop_target"
+    rb"|step_grid_view|waveform_\w+|graph_editor_view)"
+)
+MIRROR_PAYLOAD_PATH_PATTERNS = {
+    "mirror-product-path": re.compile(
+        r"(?:^|/)(?:core/(?:audio|signal|midi|music|format|host|gpu_audio|graph"
+        r"|playback|sequence|smf|timebase|timeline\w*|dawproject)"
+        r"|include/pulp/(?:audio|signal|midi|music|format|host|gpu_audio|content))(?:/|$)"
+        r"|(?:^|/)pulp/view/(?:audio/|(?:.*/)?(?:audio_bridge|audio_inspector_\w+"
+        r"|eq_curve_view|midi_binding|midi_keyboard|musical_typing_keyboard\w*"
+        r"|plugin_manager_panel|sample_asset_drop_target|step_grid_view|waveform_\w+"
+        r"|graph_editor_view)\.)"
+        r"|(?:^|/)(?:pulp/state/|core/state/(?:.*/)?)content_registry\.",
+        re.IGNORECASE,
+    ),
+}
+MIRROR_PAYLOAD_CONTENT_PATTERNS = {
+    "mirror-product-include": re.compile(
+        rb"#\s*(?:include|import)\s*[<\"]"
+        rb"(?:pulp/" + _MIRROR_PRODUCT_SUBSYSTEMS + rb"/"
+        rb"|pluginterfaces/|public\.sdk/|clap/|lv2/|AudioUnitSDK/|oboe/"
+        rb"|AudioToolbox/|AudioUnit/|CoreAudio/|CoreAudioKit/|CoreMIDI/|AVFAudio/)",
+    ),
+    "mirror-product-symbol": re.compile(
+        rb"\bpulp::" + _MIRROR_PRODUCT_SUBSYSTEMS + rb"\b"
+        rb"|\bpulp[-_](?:audio|signal|midi|music|format|host|gpu[-_]audio|content)\b",
+    ),
+    "mirror-audio-framework-link": re.compile(
+        rb"\b(?:AudioToolbox|AudioUnit|CoreAudio|CoreAudioKit|CoreMIDI|AVFAudio)"
+        rb"\.framework\b|-framework\s+"
+        rb"(?:AudioToolbox|AudioUnit|CoreAudio|CoreAudioKit|CoreMIDI|AVFAudio)\b",
+    ),
+    "mirror-pulp-kept-include": re.compile(
+        rb"#\s*(?:include|import)\s*[<\"]"
+        rb"(?:pulp/view/(?:audio/|(?:widgets/)?" + _MIRROR_KEPT_VIEW_FILES + rb"\.h)"
+        rb"|pulp/state/content_registry\.h)",
+    ),
+}
+
+
+def payload_rules(name: str) -> tuple[dict[str, re.Pattern], dict[str, re.Pattern]]:
+    """Return the (path, content) rules that apply to one payload path."""
+    if MIRROR_PAYLOAD_SCOPE.match(name):
+        return MIRROR_PAYLOAD_PATH_PATTERNS, MIRROR_PAYLOAD_CONTENT_PATTERNS
+    return FORBIDDEN_PAYLOAD_PATH_PATTERNS, FORBIDDEN_PAYLOAD_CONTENT_PATTERNS
+
+
 CONTENT_SCAN_SUFFIXES = frozenset({
     ".c",
     ".cc",
@@ -253,14 +309,15 @@ def payload_contamination_findings(
     name: str, content: bytes
 ) -> list[dict[str, str]]:
     findings: list[dict[str, str]] = []
-    for rule, pattern in FORBIDDEN_PAYLOAD_PATH_PATTERNS.items():
+    path_rules, content_rules = payload_rules(name)
+    for rule, pattern in path_rules.items():
         match = pattern.search(name)
         if match:
             findings.append(
                 {"rule": rule, "path": name, "match": match.group(0)}
             )
     if should_scan_payload_content(name):
-        for rule, pattern in FORBIDDEN_PAYLOAD_CONTENT_PATTERNS.items():
+        for rule, pattern in content_rules.items():
             match = pattern.search(content)
             if match:
                 findings.append(
@@ -297,6 +354,7 @@ def inspect_payload_stream(
     tail = b""
     findings = payload_contamination_findings(name, b"")
     scan_content = should_scan_payload_content(name)
+    _path_rules, content_rules = payload_rules(name)
     for chunk in iter(lambda: handle.read(1024 * 1024), b""):
         size += len(chunk)
         digest.update(chunk)
@@ -304,7 +362,7 @@ def inspect_payload_stream(
             retained.extend(chunk)
         if scan_content:
             window = tail + chunk
-            for rule, pattern in FORBIDDEN_PAYLOAD_CONTENT_PATTERNS.items():
+            for rule, pattern in content_rules.items():
                 match = pattern.search(window)
                 if match:
                     findings.append(

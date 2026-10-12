@@ -92,14 +92,30 @@ for both.
   `native_forbidden_namespace_or_product_references: 0` and
   `mirror_audio_plugin_host_or_product_edges: 0`.
 - `retired_paths_at_active_tip: 0` and `open_extraction_debts: 0` are unchanged.
+- `mirror_files_without_pulp_identity_proof: 0` makes the origin rule fail closed. A record that is
+  consistent with the bytes beside it proves nothing about where they came from. So a mirrored file
+  passes only when a Pulp checkout proved it: the record's commit must be on Pulp `main`, and its
+  path there must hold the recorded blob. The required provenance lane checks out Pulp `main`
+  whenever a receipt is landed and runs that proof. Other lanes may defer it explicitly to that
+  lane.
+- `mirror_origin_records_naming_unlanded_receipts: 0` requires every blob-origin record to name a
+  receipt listed in `provenance/mirror/receipts/index.json`.
+- Export receipts (`pulp.vellum.export-receipt.v2`, verified by
+  `tools/provenance/verify_mirror_export.py`) require tree equality between `HEAD:mirror` and the
+  newest receipt's projected commit. The commit map, closures and origin records must agree with
+  the receipt. Each closure must pass the Vellum-owned link-closure policy in
+  `provenance/mirror/link-policy.json`.
+- Under `mirror/`, the edge scan also rejects any include of a Pulp-kept view-audio header or of
+  the product content registry. It also rejects a mirrored file that is one of those files.
+- Blob-origin and receipt records are append-only by review. The verifier does not yet compare them
+  against the base revision, so deleting a record is caught only by reviewing the Git history.
 
-What this decision does not yet enforce, and therefore what still blocks the
-first export from landing:
+What remains open. Neither item blocks an export from landing, but each
+blocks the step it names:
 
-- tree equality between `mirror/` and the Pulp closure at the recorded commit
-  after the rename map, which needs the closure manifest and export receipt
-  formats;
-- the clean-configure link-closure gate for mirrored CMake;
+- building mirrored units in Vellum: a configure of the mirrored CMake inside
+  Vellum. Until then, the link-closure gate re-checks the closures that Pulp
+  generated from its own clean configure;
 - SDK payload scanning: `scripts/verify_sdk_artifact.py` still rejects any
   `pulp`-named payload, so no mirrored unit can ship in a Vellum SDK until that
   scan is scoped the same way.

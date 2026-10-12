@@ -63,6 +63,7 @@ jobs:
           python3 tools/provenance/test_verify_downstream_consumers.py
           python3 tools/provenance/verify_downstream_consumers.py
           python3 tools/provenance/verify_extraction.py \
+            --defer-mirror-identity \
             --output "$RUNNER_TEMP/provenance-report.json"
 
       - name: Verify DesignIR and UI packages

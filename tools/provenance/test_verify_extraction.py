@@ -305,6 +305,7 @@ class VerifyExtractionTests(unittest.TestCase):
                 "commit", "-q", "-m", "origin",
             )
             commit = run("rev-parse", "HEAD")
+            run("update-ref", "refs/remotes/origin/main", commit)
             record = {
                 "mirror_path": "mirror/core/a.cpp",
                 "git_blob_sha": verify_extraction.git_blob_sha(b"int a;\n"),
@@ -320,6 +321,186 @@ class VerifyExtractionTests(unittest.TestCase):
                 len(verify_extraction.verify_origins_against_pulp(pulp, [forged, wrong_path])),
                 2,
             )
+
+    def test_origin_proof_requires_origin_main_ref(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            pulp = Path(temporary)
+            subprocess.check_call(["git", "init", "-q", "-b", "main"], cwd=pulp)
+            (pulp / "a.cpp").write_text("int a;\n")
+            subprocess.check_call(["git", "add", "a.cpp"], cwd=pulp)
+            subprocess.check_call(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "main"], cwd=pulp)
+            commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=pulp, text=True).strip()
+            record = {"mirror_path": "mirror/a.cpp", "git_blob_sha": verify_extraction.git_blob_sha(b"int a;\n"), "pulp_commit": commit, "pulp_path": "a.cpp", "export_receipt": "provenance/mirror/receipts/x.json"}
+            errors = verify_extraction.verify_origins_against_pulp(pulp, [record])
+            self.assertIn("has no refs/remotes/origin/main", errors[0])
+
+    def test_origin_proof_rejects_head_commit_off_origin_main(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            pulp = Path(temporary)
+            run = lambda *args: subprocess.check_output(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args], cwd=pulp, text=True).strip()
+            run("init", "-q", "-b", "main")
+            (pulp / "a.cpp").write_text("int a;\n")
+            run("add", "a.cpp"); run("commit", "-q", "-m", "main")
+            main = run("rev-parse", "HEAD"); run("update-ref", "refs/remotes/origin/main", main)
+            run("checkout", "-q", "-b", "side")
+            (pulp / "a.cpp").write_text("int side;\n")
+            run("add", "a.cpp"); run("commit", "-q", "-m", "side")
+            side = run("rev-parse", "HEAD")
+            record = {"mirror_path": "mirror/a.cpp", "git_blob_sha": verify_extraction.git_blob_sha(b"int side;\n"), "pulp_commit": side, "pulp_path": "a.cpp", "export_receipt": "provenance/mirror/receipts/x.json"}
+            errors = verify_extraction.verify_origins_against_pulp(pulp, [record])
+            self.assertIn("not on the checked-out Pulp main", errors[0])
+
+    def test_required_provenance_workflow_does_not_defer_mirror_identity(self) -> None:
+        workflow = MODULE_PATH.parents[2] / ".github/workflows/provenance.yml"
+        self.assertNotIn("--defer-mirror-identity", workflow.read_text(encoding="utf-8"))
+
+    def test_origin_records_must_cite_pulp_main(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            pulp = Path(temporary)
+
+            def run(*args: str) -> str:
+                return subprocess.check_output(
+                    ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args],
+                    cwd=pulp, text=True,
+                ).strip()
+
+            run("init", "-q", "-b", "main")
+            (pulp / "a.cpp").write_bytes(b"int a;\n")
+            run("add", "a.cpp")
+            run("commit", "-q", "-m", "main")
+            run("checkout", "-q", "-b", "side")
+            (pulp / "core").mkdir()
+            (pulp / "core/a.cpp").write_bytes(b"int side;\n")
+            run("add", "core/a.cpp")
+            run("commit", "-q", "-m", "side")
+            side = run("rev-parse", "HEAD")
+            run("checkout", "-q", "main")
+            run("update-ref", "refs/remotes/origin/main", run("rev-parse", "main"))
+            record = {
+                "mirror_path": "mirror/core/a.cpp",
+                "git_blob_sha": verify_extraction.git_blob_sha(b"int side;\n"),
+                "pulp_commit": side,
+                "pulp_path": "core/a.cpp",
+                "export_receipt": "provenance/mirror/receipts/x.json",
+            }
+            errors = verify_extraction.verify_origins_against_pulp(pulp, [record])
+            self.assertEqual(len(errors), 1)
+            self.assertIn("not on the checked-out Pulp main", errors[0])
+
+    def test_mirror_rejects_pulp_kept_view_audio_and_content_edges(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.write_mirror(
+                root,
+                "mirror/core/view/src/panel.cpp",
+                b"#include <pulp/view/view.hpp>\n"
+                b"#include <pulp/view/eq_curve_view.hpp>\n"
+                b"#include \"pulp/view/widgets/graph_editor_view.hpp\"\n"
+                b"#include <pulp/view/waveform_overview_view.hpp>\n"
+                b"#include <pulp/view/audio/meter.hpp>\n"
+                b"#include <pulp/state/content_registry.hpp>\n"
+                b"#include <pulp/state/store.hpp>\n",
+            )
+            self.write_mirror(root, "mirror/core/view/src/eq_curve_view.cpp", b"int eq;\n")
+            self.write_mirror(
+                root, "mirror/core/state/src/content_registry.cpp", b"int registry;\n"
+            )
+            self.write_mirror(root, "mirror/core/view/src/view.cpp", b"int view;\n")
+
+            findings = verify_extraction.mirror_edge_findings(root)
+
+            kept_includes = [
+                finding["line"] for finding in findings
+                if finding["rule"] == "mirror-pulp-kept-include"
+            ]
+            self.assertEqual(sorted(kept_includes), [2, 3, 4, 5, 6])
+            self.assertEqual(
+                sorted(
+                    finding["path"] for finding in findings
+                    if finding["rule"] == "mirror-pulp-kept-file"
+                ),
+                [
+                    "mirror/core/state/src/content_registry.cpp",
+                    "mirror/core/view/src/eq_curve_view.cpp",
+                ],
+            )
+
+    def clone_repository(self, temporary: str) -> Path:
+        clone = Path(temporary) / "vellum"
+        subprocess.check_call(
+            ["git", "clone", "-q", "--no-hardlinks", str(MODULE_PATH.parents[2]), str(clone)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        for relative in (
+            "tools/provenance/verify_extraction.py",
+            "tools/provenance/verify_mirror_export.py",
+            "provenance/active-source-boundary.json",
+            "provenance/mirror/blob-origins.json",
+            "provenance/mirror/link-policy.json",
+            "provenance/mirror/receipts/index.json",
+        ):
+            source = MODULE_PATH.parents[2] / relative
+            (clone / relative).parent.mkdir(parents=True, exist_ok=True)
+            (clone / relative).write_bytes(source.read_bytes())
+        return clone
+
+    def test_fabricated_origin_record_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            clone = self.clone_repository(temporary)
+            content = b"namespace pulp::view { int forged; }\n"
+            record = self.write_mirror(clone, "mirror/core/view/src/forged.cpp", content)
+            record["pulp_commit"] = "f" * 40
+            (clone / "provenance/mirror/blob-origins.json").write_text(
+                json.dumps({
+                    "schema": "vellum.mirror-blob-origins.v1",
+                    "pulp_repository": "Generous-Corp/pulp",
+                    "records": [record],
+                }),
+                encoding="utf-8",
+            )
+            subprocess.check_call(["git", "add", "-A"], cwd=clone)
+            subprocess.check_call(
+                ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+                 "commit", "-q", "-m", "forge"],
+                cwd=clone,
+            )
+
+            unproved = verify_extraction.verify(clone)
+            deferred = verify_extraction.verify(clone, defer_mirror_identity=True)
+            pulp = Path(temporary) / "pulp"
+            pulp.mkdir()
+            subprocess.check_call(["git", "init", "-q"], cwd=pulp)
+            (pulp / "x").write_text("x\n")
+            subprocess.check_call(["git", "add", "x"], cwd=pulp)
+            subprocess.check_call(
+                ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+                 "commit", "-q", "-m", "pulp"],
+                cwd=pulp,
+            )
+            main = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=pulp, text=True).strip()
+            subprocess.check_call(["git", "update-ref", "refs/remotes/origin/main", main], cwd=pulp)
+            proved = verify_extraction.verify(clone, pulp)
+
+            self.assertEqual(unproved["status"], "fail")
+            self.assertIn(
+                "mirror root has 1 files but no Pulp checkout proved them; pass --pulp-root",
+                unproved["errors"],
+            )
+            for report in (unproved, deferred, proved):
+                self.assertEqual(report["status"], "fail")
+                self.assertIn(
+                    "blob-origin records name 1 receipts absent from the receipt index",
+                    report["errors"],
+                )
+                self.assertIn(
+                    "mirror export: mirror/ exists at HEAD without an export receipt",
+                    report["errors"],
+                )
+            self.assertNotIn(
+                "mirror root has 1 files but no Pulp checkout proved them; pass --pulp-root",
+                deferred["errors"],
+            )
+            self.assertTrue(any("not on the checked-out Pulp main" in e for e in proved["errors"]))
 
     def test_declared_rules_must_match_enforced_rules(self) -> None:
         root = MODULE_PATH.parents[2]

@@ -1,0 +1,23 @@
+{
+  "schema": "vellum.mirror-link-policy.v1",
+  "allowed_external_targets": [],
+  "forbidden_target_pattern": "(?:^|[-_:])(?:audio|signal|midi|music|format|host|gpu[-_]?audio|graph|playback|sequence|timeline|timebase|smf|dawproject|content|vst3|clap|lv2|auv2|auv3|aax|oboe)(?:$|[-_:])",
+  "forbidden_path_prefixes": [
+    "core/audio/",
+    "core/dawproject/",
+    "core/format/",
+    "core/gpu_audio/",
+    "core/graph/",
+    "core/host/",
+    "core/midi/",
+    "core/music/",
+    "core/playback/",
+    "core/sample_bank_manifest/",
+    "core/sequence/",
+    "core/signal/",
+    "core/smf/",
+    "core/timebase/",
+    "core/timeline/"
+  ],
+  "forbidden_definition_pattern": "^PULP_(?:HAS_|BUILD_|ENABLE_)?(?:AUDIO|MIDI|SIGNAL|FORMAT|HOST|VST3|CLAP|AU|AUV2|AUV3|LV2|AAX|GPU_AUDIO)(?:$|[_=])"
+}
