@@ -49,6 +49,7 @@ RECEIPT_KEYS = {
 UNIT_KEYS = {"name", "closure_manifest", "closure_sha256", "oracle_class"}
 FILE_KEYS = {"mirror_path", "pulp_path", "mode", "blob"}
 GENERATED_KEYS = {"path", "sha256", "producer_paths"}
+EXTERNAL_CACHE_PATH = re.compile(r"^@[A-Za-z0-9_.-]+/")
 POLICY_KEYS = {
     "schema", "allowed_external_targets", "forbidden_target_pattern",
     "forbidden_path_prefixes", "forbidden_definition_pattern",
@@ -101,6 +102,96 @@ def safe_relative(value: Any) -> bool:
     return ".." not in parts and "." not in parts and "\\" not in value
 
 
+def validate_generated_input(value: Any, label: str) -> list[str]:
+    """Validate one v2 generated-input object before reading its fields."""
+    if not isinstance(value, dict):
+        return [f"{label} must be an object; legacy string entries are rejected"]
+    if set(value) != GENERATED_KEYS:
+        return [f"{label} must contain exactly path, sha256, and producer_paths"]
+    errors: list[str] = []
+    path = value.get("path")
+    if (
+        not isinstance(path, str)
+        or not path.startswith("@build/")
+        or Path(path).is_absolute()
+        or path.startswith("~")
+    ):
+        errors.append(f"{label}.path must be a relative @build/ path")
+    if not SHA256.fullmatch(str(value.get("sha256"))):
+        errors.append(f"{label}.sha256 must be a SHA-256")
+    producers = value.get("producer_paths")
+    if not isinstance(producers, list) or not producers:
+        errors.append(f"{label}.producer_paths must be a non-empty list")
+    else:
+        for index, producer in enumerate(producers):
+            if (
+                not isinstance(producer, str)
+                or not safe_relative(producer)
+                or Path(producer).is_absolute()
+                or producer.startswith("~")
+            ):
+                errors.append(f"{label}.producer_paths[{index}] must be repository-relative")
+    return errors
+
+
+def host_path_violations(value: Any, label: str) -> list[str]:
+    """Reject host-absolute strings anywhere in a stored manifest/receipt."""
+    errors: list[str] = []
+    if isinstance(value, str):
+        windows_absolute = bool(re.match(r"^[A-Za-z]:[\\/]", value))
+        if Path(value).is_absolute() or value.startswith("~") or windows_absolute:
+            errors.append(f"{label} contains an absolute host path: {value}")
+    elif isinstance(value, dict):
+        for key, child in value.items():
+            errors.extend(host_path_violations(child, f"{label}.{key}"))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            errors.extend(host_path_violations(child, f"{label}[{index}]"))
+    return errors
+
+
+def validate_external_inputs(value: Any, label: str) -> list[str]:
+    """Require cache-relative external-input identities in v2 closures."""
+    if not isinstance(value, list):
+        return [f"{label} must be a list"]
+    errors: list[str] = []
+    for index, row in enumerate(value):
+        where = f"{label}[{index}]"
+        if not isinstance(row, dict):
+            errors.append(f"{where} must be an object")
+            continue
+        path = row.get("path")
+        if not isinstance(path, str) or not safe_relative(path) or not EXTERNAL_CACHE_PATH.match(path):
+            errors.append(f"{where}.path must be a cache-relative identity such as @fetchcontent/name/path")
+    return errors
+
+
+def validate_closure_manifest(closure: dict[str, Any], label: str) -> list[str]:
+    """Validate path-bearing closure fields before link-closure comparison."""
+    errors = host_path_violations(closure, label)
+    errors.extend(validate_external_inputs(closure.get("external_inputs", []), f"{label}.external_inputs"))
+    for key in ("files", "resources", "public_include_dirs"):
+        values = closure.get(key, [])
+        if not isinstance(values, list):
+            errors.append(f"{label}.{key} must be a list")
+            continue
+        for index, path in enumerate(values):
+            if not safe_relative(path):
+                errors.append(f"{label}.{key}[{index}] must be repository/cache-relative")
+    for index, target in enumerate(closure.get("targets", [])):
+        if not isinstance(target, dict):
+            continue
+        for key in ("sources", "include_dirs"):
+            values = target.get(key, [])
+            if not isinstance(values, list):
+                errors.append(f"{label}.targets[{index}].{key} must be a list")
+                continue
+            for path_index, path in enumerate(values):
+                if not safe_relative(path):
+                    errors.append(f"{label}.targets[{index}].{key}[{path_index}] must be repository/cache-relative")
+    return errors
+
+
 def tree_entries(root: Path, commit: str) -> list[dict[str, str]] | None:
     output = git_try(root, "ls-tree", "-r", "--full-tree", commit)
     if output is None:
@@ -117,6 +208,7 @@ def validate_receipt_shape(receipt: Any, label: str) -> list[str]:
     if not isinstance(receipt, dict) or set(receipt) != RECEIPT_KEYS:
         return [f"{label}: receipt keys must be exactly {sorted(RECEIPT_KEYS)}"]
     errors: list[str] = []
+    errors.extend(host_path_violations(receipt, label))
     expected = {
         "schema": RECEIPT_SCHEMA,
         "pulp_repository": PULP_REPOSITORY,
@@ -205,15 +297,7 @@ def validate_receipt_shape(receipt: Any, label: str) -> list[str]:
     else:
         for index, row in enumerate(generated):
             where = f"{label}: generated_inputs[{index}]"
-            if (
-                not isinstance(row, dict)
-                or set(row) != GENERATED_KEYS
-                or not str(row.get("path", "")).startswith("@build/")
-                or not SHA256.fullmatch(str(row.get("sha256")))
-                or not isinstance(row.get("producer_paths"), list)
-                or not row["producer_paths"]
-            ):
-                errors.append(f"{where} must be an @build/ path, sha256, and producer_paths")
+            errors.extend(validate_generated_input(row, where))
     return errors
 
 
@@ -339,6 +423,17 @@ def verify_receipt(
                 f"{label}: closure {unit['name']} must be {CLOSURE_SCHEMA} with null source_root/build_dir"
             )
             continue
+        errors.extend(validate_closure_manifest(closure, f"{label}: closure {unit['name']}"))
+        closure_generated_inputs = closure.get("generated_inputs", [])
+        for index, generated_input in enumerate(
+            closure_generated_inputs if isinstance(closure_generated_inputs, list) else [closure_generated_inputs]
+        ):
+            errors.extend(
+                validate_generated_input(
+                    generated_input,
+                    f"{label}: closure {unit['name']} generated_inputs[{index}]",
+                )
+            )
         closures[unit["name"]] = closure
     if len(closures) == len(receipt["units"]):
         closure_paths = {
@@ -348,7 +443,12 @@ def verify_receipt(
             errors.append(f"{label}: closure files differ from the exported file set")
         generated = {
             p for c in closures.values() for p in c["files"] if p.startswith("@build/")
-        } | {p for c in closures.values() for p in c.get("generated_inputs", [])}
+        } | {
+            generated_input["path"]
+            for c in closures.values()
+            for generated_input in c.get("generated_inputs", [])
+            if isinstance(generated_input, dict) and isinstance(generated_input.get("path"), str)
+        }
         if generated != {g["path"] for g in receipt["generated_inputs"]}:
             errors.append(f"{label}: generated_inputs differ from the closures' @build/ inputs")
         exported = {f["pulp_path"] for f in receipt["files"]}

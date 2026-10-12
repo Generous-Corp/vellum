@@ -291,6 +291,76 @@ class VerifyMirrorExportTests(unittest.TestCase):
         run(fixture.vellum, "commit", "-qm", "stray")
         self.assertError(fixture.errors(), "receipt files on disk differ from the receipt index")
 
+    def test_generated_input_dict_entry_is_valid(self) -> None:
+        self.assertEqual(
+            verify_mirror_export.validate_generated_input(
+                {
+                    "path": "@build/generated/value.hpp",
+                    "sha256": "0" * 64,
+                    "producer_paths": ["core/runtime/CMakeLists.txt"],
+                },
+                "fixture generated input",
+            ),
+            [],
+        )
+
+    def test_legacy_string_generated_input_is_rejected(self) -> None:
+        errors = verify_mirror_export.validate_generated_input(
+            "@build/generated/value.hpp", "fixture generated input"
+        )
+        self.assertError(errors, "legacy string entries are rejected")
+
+    def test_generated_input_missing_path_is_rejected(self) -> None:
+        errors = verify_mirror_export.validate_generated_input(
+            {
+                "sha256": "0" * 64,
+                "producer_paths": ["core/runtime/CMakeLists.txt"],
+            },
+            "fixture generated input",
+        )
+        self.assertError(errors, "must contain exactly path, sha256, and producer_paths")
+
+    def test_generated_input_absolute_paths_are_rejected(self) -> None:
+        errors = verify_mirror_export.validate_generated_input(
+            {
+                "path": "/Users/attacker/build/value.hpp",
+                "sha256": "0" * 64,
+                "producer_paths": ["/Users/attacker/source/CMakeLists.txt"],
+            },
+            "fixture generated input",
+        )
+        self.assertError(errors, ".path must be a relative @build/ path")
+        self.assertError(errors, "producer_paths[0] must be repository-relative")
+
+    def test_external_input_cache_relative_identity_is_valid(self) -> None:
+        self.assertEqual(
+            verify_mirror_export.validate_external_inputs(
+                [{"path": "@fetchcontent/mbedtls/include/mbedtls.h"}],
+                "fixture external inputs",
+            ),
+            [],
+        )
+
+    def test_external_input_host_path_is_rejected(self) -> None:
+        errors = verify_mirror_export.validate_external_inputs(
+            [{"path": "/Users/attacker/Library/Caches/Pulp/fetchcontent-src/foo/a.h"}],
+            "fixture external inputs",
+        )
+        self.assertError(errors, "cache-relative identity")
+
+    def test_closure_public_include_host_path_is_rejected(self) -> None:
+        errors = verify_mirror_export.validate_closure_manifest(
+            {
+                "external_inputs": [],
+                "files": [],
+                "resources": [],
+                "public_include_dirs": ["/Users/attacker/Library/Caches/Pulp/skia/include"],
+                "targets": [],
+            },
+            "fixture closure",
+        )
+        self.assertError(errors, "absolute host path")
+
 
 if __name__ == "__main__":
     unittest.main()
