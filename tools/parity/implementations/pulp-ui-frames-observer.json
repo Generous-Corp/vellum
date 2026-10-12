@@ -2,6 +2,7 @@
   "schema": "vellum.parity.implementation.v1",
   "name": "pulp-ui-frames-observer",
   "repository": "Generous-Corp/pulp",
+  "authority": "native-render",
   "source_sha": null,
   "description": "Pulp's pulp-ui-frames-observe: replays a fixed host frame schedule (HostFramePump timestamps, scheduled input, host parameter writes, resize, editor attach/detach) against a materialized DesignIR or a scripted UI and records every frame. Tool path and roots (checkout = the git checkout the tool was built from; build = its CMake build directory) are supplied per run; the commit is read from the checkout and the binary is content-hashed.",
   "tools": {
