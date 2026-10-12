@@ -7988,14 +7988,42 @@
       ],
       "source_commit": "b6c9beacd7641f16633434bc1a9f64139d6dd746",
       "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "rendering",
+      "deadline": "2026-10-15T08:19:08Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "pending",
+      "event_id": "vellum-866ec3a3ace61f93d1bf14d281afd2ecafa75986",
+      "mapped_contracts": [
+        "canvas-kernel",
+        "capture-primitives",
+        "macos-shell",
+        "render-skia-dawn"
+      ],
+      "source_commit": "866ec3a3ace61f93d1bf14d281afd2ecafa75986",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "rendering",
+      "deadline": "2026-10-15T08:19:08Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "pending",
+      "event_id": "vellum-93cd1f4a9d0a72f948acc9fd45a28105e03e6a30",
+      "mapped_contracts": [
+        "canvas-kernel",
+        "render-skia-dawn"
+      ],
+      "source_commit": "93cd1f4a9d0a72f948acc9fd45a28105e03e6a30",
+      "source_repository": "Generous-Corp/vellum"
     }
   ],
-  "generated_at": "2026-10-12T07:38:48Z",
+  "generated_at": "2026-10-12T08:19:08Z",
   "health": "pass",
-  "maximum_pending_age_days": 0.075,
+  "maximum_pending_age_days": 0.103,
   "observatory_effort_percent": 0.0,
   "overdue": 0,
-  "pending": 3,
+  "pending": 5,
   "release_blockers": [],
   "repeated_generic_fixes": {
     "canvas-kernel": 2,
