@@ -62,6 +62,151 @@ def tree_identical_scanned_parent(
     return None
 
 
+def blob_at(repo: Path, commit: str, path: str) -> str | None:
+    """The blob id of `path` at `commit`, or None when the path is absent."""
+    completed = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"{commit}:{path}"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        return None
+    return completed.stdout.strip() or None
+
+
+def tree_entry_at(repo: Path, commit: str, path: str) -> tuple[str, str] | None:
+    """The (mode, object id) of `path` at `commit`, or None when absent.
+
+    The mode is part of the entry on purpose: a merge that keeps a file's
+    content but drops its executable bit changes what lands on main just as a
+    content edit does, and a blob-only comparison cannot see it.
+    """
+    line = git(repo, "ls-tree", commit, "--", path)
+    if not line:
+        return None
+    mode, _kind, rest = line.split(None, 2)
+    return mode, rest.split("\t", 1)[0]
+
+
+def integration_merge_covered(
+    repo: Path,
+    commit: str,
+    mappings: list[dict[str, object]] | None = None,
+    transitive_rules: list[str] | None = None,
+) -> bool:
+    """True when a two-parent merge adds nothing beyond its two sides.
+
+    A merge queue (or a plain fast-forward-free merge) lands a merge commit
+    whose first parent is the branch and whose second parent is the pull
+    request head; an author merging main into a pull request produces the
+    mirror image. The merge is covered by the two sides' own observation
+    events when every observable path changed since the merge base carries
+    exactly the (mode, blob) entry of the side that changed it (a path absent
+    on both counts as equal, so a deletion lands). A path both sides changed
+    is covered only when both sides and the merge hold the same entry (the
+    same fix landed twice); a path only the merge changed, or a path the merge
+    did not carry over, is a change of the merge's own and needs its own event.
+
+    Only paths that would create an observation matter when `mappings` is
+    given: unmapped content can never need an event, so two entries that
+    share an unmapped file do not make a batch merge uncovered. Transitive
+    paths under a mapped root (build files) count, because the observation
+    for a real change lists them. An octopus merge is never covered; it must
+    carry its own event.
+    """
+    sides = _merge_sides(repo, commit, mappings, transitive_rules)
+    if sides is None:
+        return False
+    first, second, first_paths, second_paths, observable = sides
+    # Symmetric rule, so it judges a queue merge (first = main, second = the
+    # pull request) and an author's merge of main (first = the pull request,
+    # second = main) alike: every observable path must carry exactly the entry
+    # of the one side that changed it. A path both sides changed differently,
+    # a path the merge changed that neither side did, and a path the merge did
+    # not carry over from the side that changed it are all changes of the
+    # merge's own.
+    for path in observable:
+        on_first = path in first_paths
+        on_second = path in second_paths
+        merged = tree_entry_at(repo, commit, path)
+        if on_first and on_second:
+            first_entry = tree_entry_at(repo, first, path)
+            if first_entry != tree_entry_at(repo, second, path) or merged != first_entry:
+                return False
+        elif on_second:
+            if merged != tree_entry_at(repo, second, path):
+                return False
+        elif on_first:
+            if merged != tree_entry_at(repo, first, path):
+                return False
+        else:
+            return False
+    return True
+
+
+def merge_observable_paths(
+    repo: Path,
+    commit: str,
+    mappings: list[dict[str, object]] | None = None,
+    transitive_rules: list[str] | None = None,
+) -> set[str]:
+    """Observable paths a two-parent merge touches on either side or itself.
+
+    Non-empty for a merge that is not an integration merge means the merge
+    changed something observable, even when its diff against the first parent
+    shows nothing (a merge that drops the other side's change)."""
+    sides = _merge_sides(repo, commit, mappings, transitive_rules)
+    return set() if sides is None else sides[4]
+
+
+def _merge_sides(
+    repo: Path,
+    commit: str,
+    mappings: list[dict[str, object]] | None,
+    transitive_rules: list[str] | None,
+) -> tuple[str, str, set[str], set[str], set[str]] | None:
+    row = git(repo, "rev-list", "--parents", "-n", "1", commit).split()
+    if len(row) != 3:
+        return None
+    first, second = row[1], row[2]
+    base = git(repo, "merge-base", first, second)
+    if not base:
+        return None
+
+    def changed(a: str, b: str) -> set[str]:
+        return {
+            line
+            for line in git(
+                repo, "diff-tree", "-r", "--name-only", "--no-renames", a, b
+            ).splitlines()
+            if line
+        }
+
+    merged_paths = changed(first, commit)
+    first_paths = changed(base, first)
+    second_paths = changed(base, second)
+    observable = merged_paths | first_paths | second_paths
+    if mappings is not None:
+        # Judge the whole set at once, as the observation for a real change
+        # would: a build file under a mapped root is transitive-only, so on its
+        # own it never maps, but next to a mapped change it is listed under
+        # `transitive_paths` and a merge that reverts it must not be covered.
+        observation = mapped_change(
+            [{"status": "M", "path": path} for path in sorted(observable)],
+            mappings,
+            "vellum",
+            transitive_rules or [],
+        )
+        if observation is None:
+            observable = set()
+        else:
+            observable = set(observation["mapped_paths"]) | set(
+                observation["transitive_paths"]
+            )
+    return first, second, first_paths, second_paths, observable
+
+
 def path_matches(path: str, patterns: Iterable[str]) -> bool:
     return any(path.startswith(pattern) for pattern in patterns)
 

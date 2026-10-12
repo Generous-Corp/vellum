@@ -13,7 +13,7 @@ EXPECTED_RUNNERS = {
     "authority-activation.yml": ("__hosted__", "ubuntu-latest"),
     "authority-release.yml": ("__hosted__", "ubuntu-latest"),
     "gpu-macos.yml": (
-        "VELLUM_MACOS_RUNS_ON_JSON",
+        "VELLUM_LOCAL_MACOS_RUNS_ON_JSON",
         '["macos-15"]',
     ),
     "merge-on-green.yml": (
@@ -71,6 +71,110 @@ BROWSER_JOBS = {
 }
 
 JOB_HEADER = re.compile(r"^  ([A-Za-z0-9_-]+):\s*$")
+GPU_GUARD = (
+    "    if: github.event_name != 'pull_request' || "
+    "github.event.pull_request.head.repo.full_name == github.repository || "
+    "vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON == ''"
+)
+
+PULP_REPOSITORY = "Generous-Corp/pulp"
+STEP_OUTPUT_REF = re.compile(
+    r"^\$\{\{\s*steps\.([A-Za-z0-9_-]+)\.outputs\.([A-Za-z0-9_-]+)\s*\}\}$"
+)
+# Text a pinning step must contain to prove its output is derived from
+# evidence committed in the Vellum tree, never from a live Pulp branch name.
+COMMITTED_PIN_SOURCES = (
+    "last_scanned_commit",  # provenance/pulp-observatory/cursor.json
+    "pulp_candidate_commit",  # authority pending record
+)
+# A pinning step may still name a live branch for events that are not
+# pull_request or merge_group; those runs pin themselves with a before/after
+# live-SHA equality test instead. The literal must sit in such a branch.
+LIVE_BRANCH_GUARD = 'if event in ("pull_request", "merge_group"):'
+VERIFIED_POST_CHECKOUT_PINS = {
+    ("provenance.yml", ".exact-boundary-pulp"),
+}
+CHECKOUT_STEP = re.compile(
+    r"^(?P<indent> +)- name: (?P<name>.+)\n"
+    r"(?:(?P=indent)  .*\n)*?"
+    r"(?P=indent)  uses: actions/checkout@[0-9a-f]{40}\n"
+    r"(?P<with>(?:(?P=indent)  .*\n)+)",
+    re.M,
+)
+STEP_START = re.compile(r"^(?P<indent> +)- name: .*$", re.M)
+
+
+def pulp_checkouts(text: str) -> list[dict[str, str]]:
+    """Return every actions/checkout step that reads Generous-Corp/pulp."""
+    found: list[dict[str, str]] = []
+    for match in CHECKOUT_STEP.finditer(text):
+        block = match.group(0)
+        fields = dict(
+            re.findall(r"^ +([a-z-]+): (.+)$", match.group("with"), re.M)
+        )
+        if fields.get("repository") != PULP_REPOSITORY:
+            continue
+        condition = re.search(r"^ +if: (.+)$", block, re.M)
+        found.append(
+            {
+                "name": match.group("name"),
+                "path": fields.get("path", ""),
+                "ref": fields.get("ref", ""),
+                "if": condition.group(1) if condition else "",
+            }
+        )
+    return found
+
+
+def step_body(text: str, step_id: str) -> str | None:
+    """Return the full text of the step whose `id:` is step_id."""
+    marker = re.search(rf"^ +id: {re.escape(step_id)}\s*$", text, re.M)
+    if marker is None:
+        return None
+    starts = [m for m in STEP_START.finditer(text)]
+    begin = max(m.start() for m in starts if m.start() < marker.start())
+    later = [m.start() for m in starts if m.start() > marker.start()]
+    return text[begin : later[0] if later else len(text)]
+
+
+def named_step_body(text: str, name: str) -> str | None:
+    """Return the complete text of a named workflow step."""
+    marker = re.search(rf"^ +- name: {re.escape(name)}\s*$", text, re.M)
+    if marker is None:
+        return None
+    starts = [m for m in STEP_START.finditer(text)]
+    later = [m.start() for m in starts if m.start() > marker.start()]
+    return text[marker.start() : later[0] if later else len(text)]
+
+
+def assert_exact_boundary_pulp_pin(text: str) -> None:
+    """Require the exact-boundary checkout's post-checkout pin and proof."""
+    checkout = next(
+        (row for row in pulp_checkouts(text) if row["path"] == ".exact-boundary-pulp"),
+        None,
+    )
+    if checkout is None:
+        raise AssertionError("provenance.yml: exact-boundary Pulp checkout is missing")
+    if checkout["ref"] != "main":
+        raise AssertionError(
+            "exact-boundary checkout must start at literal main before pinning"
+        )
+    pin = named_step_body(text, "Pin pull-request and queue Pulp reads to committed evidence")
+    if pin is None:
+        raise AssertionError("exact-boundary checkout has no post-checkout pin step")
+    condition = re.search(r"^ +if: (.+)$", pin, re.M)
+    expression = condition.group(1) if condition else ""
+    for event in ("pull_request", "merge_group"):
+        if f"github.event_name == '{event}'" not in expression:
+            raise AssertionError(
+                f"exact-boundary pin must run for {event} (condition={expression!r})"
+            )
+    if "last_scanned_commit" not in pin:
+        raise AssertionError("exact-boundary pin must derive its SHA from committed cursor evidence")
+    if "git -C .exact-boundary-pulp checkout --detach \"$pulp_ref\"" not in pin:
+        raise AssertionError("exact-boundary pin must detach the checkout to the committed SHA")
+    if 'test "$(git -C .exact-boundary-pulp rev-parse HEAD)" = "$pulp_ref"' not in pin:
+        raise AssertionError("exact-boundary pin must verify detached HEAD equals the committed SHA")
 
 
 def workflow_jobs(text: str) -> dict[str, str]:
@@ -142,6 +246,19 @@ def assert_privileged_release_coordinate_isolation(text: str) -> None:
             "validated release coordinates must be loaded before minting the "
             "privileged finalizer token"
         )
+
+
+def assert_gpu_local_runner_policy(text: str) -> None:
+    jobs = workflow_jobs(text)
+    for job_name in ("gpu-macos-arm64", "sterile-consumer"):
+        body = jobs.get(job_name)
+        if body is None:
+            raise AssertionError(f"gpu-macos.yml: {job_name} is missing")
+        guards = [line for line in body.splitlines() if line.startswith("    if:")]
+        if guards != [GPU_GUARD]:
+            raise AssertionError(
+                f"gpu-macos.yml: {job_name} must have exactly the reviewed guard"
+            )
 
 
 class RunnerPolicyTests(unittest.TestCase):
@@ -314,6 +431,27 @@ class RunnerPolicyTests(unittest.TestCase):
                         f"{path.name} fallback is not a hosted label: {fallback}",
                     )
 
+        gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
+        for job in ("gpu-macos-arm64", "sterile-consumer"):
+            body = workflow_jobs(gpu).get(job)
+            self.assertIsNotNone(body, f"gpu-macos.yml: {job} is missing")
+        assert_gpu_local_runner_policy(gpu)
+
+    def test_gpu_local_runner_policy_rejects_guard_mutations(self) -> None:
+        gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
+        assert_gpu_local_runner_policy(gpu)
+        mutations = {
+            "truthy": gpu.replace(GPU_GUARD, GPU_GUARD + " || true"),
+            "missing event clause": gpu.replace(
+                "github.event_name != 'pull_request' || ", "", 2
+            ),
+            "commented guard": gpu.replace("    if: github.event_name", "    # if: github.event_name", 2),
+        }
+        for name, mutated in mutations.items():
+            with self.subTest(mutation=name):
+                with self.assertRaises(AssertionError):
+                    assert_gpu_local_runner_policy(mutated)
+
     def test_external_actions_are_pinned_to_reviewed_node24_releases(self) -> None:
         for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]):
             for line_number, line in enumerate(
@@ -363,6 +501,92 @@ class RunnerPolicyTests(unittest.TestCase):
                     )
                 else:
                     self.assertFalse(declares, f"{path.name} must not run on merge_group")
+
+    def test_pull_request_and_queue_runs_pin_every_pulp_checkout(self) -> None:
+        # A required check that reads Pulp at a live branch can change verdict
+        # between a pull request's check and its merge-queue check with no
+        # change to the Vellum tree, and two queue entries built from the same
+        # Vellum state can disagree. Every Pulp checkout a pull_request or
+        # merge_group run can reach must therefore resolve its ref from
+        # evidence committed in this repository.
+        seen = 0
+        non_exempt = 0
+        seen_verified: set[tuple[str, str]] = set()
+        for path in sorted(WORKFLOWS.glob("*.yml")):
+            text = path.read_text(encoding="utf-8")
+            if not re.search(r"^  (pull_request|merge_group):", text, re.M):
+                continue
+            for checkout in pulp_checkouts(text):
+                seen += 1
+                with self.subTest(workflow=path.name, checkout=checkout["path"]):
+                    key = (path.name, checkout["path"])
+                    if key in VERIFIED_POST_CHECKOUT_PINS:
+                        assert_exact_boundary_pulp_pin(text)
+                        seen_verified.add(key)
+                        continue
+                    non_exempt += 1
+                    expression = STEP_OUTPUT_REF.match(checkout["ref"])
+                    self.assertIsNotNone(
+                        expression,
+                        f"{checkout['name']!r} reads {PULP_REPOSITORY} at "
+                        f"{checkout['ref']!r}; pin it to a step output derived "
+                        "from committed evidence",
+                    )
+                    assert expression is not None
+                    body = step_body(text, expression.group(1))
+                    self.assertIsNotNone(body, f"missing step id {expression.group(1)}")
+                    assert body is not None
+                    self.assertTrue(
+                        any(source in body for source in COMMITTED_PIN_SOURCES),
+                        f"step {expression.group(1)} does not derive its output "
+                        "from committed evidence",
+                    )
+                    if "main" in re.sub(r"#.*", "", body):
+                        # The live branch name may only be the fallback of an
+                        # event guard that pins pull_request and merge_group.
+                        self.assertIn(LIVE_BRANCH_GUARD, body)
+                        guarded, _, fallback = body.partition(LIVE_BRANCH_GUARD)
+                        self.assertNotIn('"main"', re.sub(r"#.*", "", guarded))
+                        self.assertIn('ref = "main"', fallback)
+                    # The pin must exist whenever the checkout runs.
+                    condition = re.search(r"^ +if: (.+)$", body, re.M)
+                    self.assertEqual(
+                        condition.group(1) if condition else "", checkout["if"]
+                    )
+        # Control: the rule must have examined the checkouts it protects.
+        self.assertGreaterEqual(seen, 3)
+        self.assertEqual(non_exempt, seen - len(VERIFIED_POST_CHECKOUT_PINS))
+        self.assertEqual(seen_verified, VERIFIED_POST_CHECKOUT_PINS)
+
+    def test_exact_boundary_pin_mutations_fail_closed(self) -> None:
+        workflow = (WORKFLOWS / "provenance.yml").read_text(encoding="utf-8")
+        pin = named_step_body(
+            workflow, "Pin pull-request and queue Pulp reads to committed evidence"
+        )
+        self.assertIsNotNone(pin)
+        assert pin is not None
+        mutations = {
+            "delete pin step": workflow.replace(pin, "", 1),
+            "drop merge_group guard": workflow.replace(
+                pin,
+                pin.replace(" || github.event_name == 'merge_group'", "", 1),
+                1,
+            ),
+            "drop detach": workflow.replace(
+                '          git -C .exact-boundary-pulp checkout --detach "$pulp_ref"\n',
+                "",
+                1,
+            ),
+            "drop equality check": workflow.replace(
+                '          test "$(git -C .exact-boundary-pulp rev-parse HEAD)" = "$pulp_ref"\n',
+                "",
+                1,
+            ),
+        }
+        for name, mutated in mutations.items():
+            with self.subTest(mutation=name):
+                with self.assertRaises(AssertionError):
+                    assert_exact_boundary_pulp_pin(mutated)
 
 
 if __name__ == "__main__":
