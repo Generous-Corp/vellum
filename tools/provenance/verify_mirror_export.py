@@ -210,12 +210,15 @@ def host_path_violations(value: Any, label: str) -> list[str]:
     errors: list[str] = []
     if isinstance(value, str):
         windows_absolute = bool(re.match(r"^[A-Za-z]:[\\/]", value))
-        skia_private = bool(re.search(r"@external/skia/[0-9a-f]{40}/.*?/include/private/", value, re.IGNORECASE))
+        skia_match = re.search(r"@external/skia/[0-9a-f]{40}/[^;\"']*?/include/private/", value, re.IGNORECASE)
+        host_scan_value = value
+        if skia_match:
+            host_scan_value = value[:skia_match.start()] + value[skia_match.end():]
         embedded_unix = any(
-            (root == "private" and skia_private) is False and (
-                re.search(rf"(?:^|//){root}(?:/|$)", value, re.IGNORECASE)
-                or re.search(rf"(?:^|[=:\s,(;\"'])/{root}(?:/|$)", value, re.IGNORECASE)
-                or re.search(rf"(?:^|[-=:\s;\"'])-[Ii](?:system)?/{root}(?:/|$)", value, re.IGNORECASE)
+            (
+                re.search(rf"(?:^|//){root}(?:/|$)", host_scan_value, re.IGNORECASE)
+                or re.search(rf"(?:^|[=:\s,(;\"'])/{root}(?:/|$)", host_scan_value, re.IGNORECASE)
+                or re.search(rf"(?:^|[-=:\s;\"'])-[Ii](?:system)?/{root}(?:/|$)", host_scan_value, re.IGNORECASE)
             )
             for root in ("Users", "Volumes", "home", "private")
         )
@@ -603,8 +606,11 @@ def link_closure_findings(
                 continue
             if is_pulp_target(canonical) and canonical not in exported_targets:
                 findings.append(f"{unit}: transitive unmirrored target {canonical} lacks an exact source edge exception")
-            elif canonical not in exported_targets and canonical not in allowed_external and forbidden_target.search(canonical):
-                findings.append(f"{unit}: forbidden link target {canonical}")
+            elif canonical not in exported_targets and canonical not in allowed_external:
+                if forbidden_target.search(canonical):
+                    findings.append(f"{unit}: forbidden link target {canonical}")
+                else:
+                    findings.append(f"{unit}: link target {canonical} is neither exported nor allowed")
         for target in closure.get("targets", []):
             if not isinstance(target, dict):
                 findings.append(f"{unit}: targets entry must be an object")
@@ -633,7 +639,7 @@ def link_closure_findings(
                 findings.append(f"{unit}: forbidden compile definition {definition}")
     if enforce_stale:
         for entry in policy.get("approved_unmirrored_edges", []):
-            if entry.get("id") not in used_exceptions:
+            if canonical_target(str(entry.get("source", ""))) in exported_targets and entry.get("id") not in used_exceptions:
                 findings.append(f"stale approved unmirrored exception {entry.get('id')}")
     return findings
 

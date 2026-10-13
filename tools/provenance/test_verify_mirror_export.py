@@ -67,10 +67,6 @@ class Fixture:
         run(self.vellum, "init", "-q", "-b", "main")
         for name in ("link-policy.json", "blob-origins.json"):
             shutil.copy(REPO / "provenance/mirror" / name, write(self.vellum, f"provenance/mirror/{name}", ""))
-        policy_path = self.vellum / "provenance/mirror/link-policy.json"
-        policy = json.loads(policy_path.read_text())
-        policy["approved_unmirrored_edges"] = []
-        policy_path.write_text(dump(policy))
         write(self.vellum, "provenance/mirror/receipts/index.json",
               dump({"schema": "vellum.mirror-receipt-index.v1", "receipts": []}))
         write(self.vellum, "README.md", "vellum\n")
@@ -734,6 +730,77 @@ class VerifyMirrorExportTests(unittest.TestCase):
             "producer_paths": [], "producer_dependency": {"name": "sdl3", "pin": "a" * 40},
         }
         self.assertError(verify_mirror_export.validate_generated_input(row, "fixture"), "producer_dependency must contain")
+
+    def test_round3_configure_and_receipt_guards_have_negative_controls(self) -> None:
+        fixture = Fixture(self.base)
+        closure = json.loads((fixture.vellum / fixture.closure_path).read_text())
+        cases = (
+            (lambda c: c["configure"].update(extra=True), "unexpected keys"),
+            (lambda c: c["configure"].update(options=[]), "options must be an object"),
+            (lambda c: c["configure"].update(options_sha256="bad"), "options_sha256 must be a SHA-256"),
+            (lambda c: c["configure"]["options"].pop("PULP_ENABLE_GPU"), "identity.gpu disagrees"),
+            (lambda c: c["configure"]["options"].pop("CMAKE_BUILD_TYPE"), "must include non-empty CMAKE_BUILD_TYPE"),
+            (lambda c: c["configure"]["identity"].update(build_type="Debug"), "build_type disagrees"),
+            (lambda c: c["configure"]["identity"].update(system="Linux"), "system disagrees"),
+            (lambda c: c["configure"]["identity"].update(processor="x86_64"), "processor disagrees"),
+        )
+        for mutation, fragment in cases:
+            mutated = json.loads(json.dumps(closure))
+            mutation(mutated)
+            self.assertError(verify_mirror_export.validate_closure_manifest(mutated, "fixture", is_canvas=True), fragment)
+        malformed_unit = dict(fixture.receipt["units"][0], configure={"identity": {}})
+        fixture.reland(units=[malformed_unit])
+        self.assertError(fixture.errors(), "configure must contain identity, options_sha256, and label")
+
+    def test_round3_policy_schema_and_closure_guards_have_negative_controls(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "provenance/mirror").mkdir(parents=True)
+            policy = json.loads((REPO / "provenance/mirror/link-policy.json").read_text())
+            for mutation, fragment in (
+                (lambda p: p["approved_unmirrored_edges"][0].pop("id"), "must contain id"),
+                (lambda p: p["approved_unmirrored_edges"][0].update(owner=""), "string fields must be non-empty"),
+                (lambda p: p["approved_unmirrored_edges"][0].update(platforms="Darwin"), "platforms must be a non-empty list"),
+                (lambda p: p["approved_unmirrored_edges"][0].update(approver="someone"), "approver must be team-lead"),
+            ):
+                mutated = json.loads(json.dumps(policy))
+                mutation(mutated)
+                write(root, "provenance/mirror/link-policy.json", dump(mutated))
+                loaded, errors = verify_mirror_export.load_policy(root)
+                self.assertIsNone(loaded)
+                self.assertError(errors, fragment)
+        closure = {"configure": {"identity": {"system": "Darwin"}}, "targets": [], "unmirrored": []}
+        self.assertError(verify_mirror_export.validate_closure_manifest(closure, "fixture"), "unmirrored is not an accepted closure field")
+
+    def test_round3_replay_and_producer_guards_have_negative_controls(self) -> None:
+        base = {"path": "@external/choc/" + "a" * 40 + "/choc.h", "source": "https://github.com/danielraffel/choc.git", "pin": "a" * 40,
+                "sha256": "d" * 64, "patched": True, "patch": "b" * 64,
+                "patch_set": {"pulp_path": "tools/cmake/PulpPatchChoc.cmake", "pulp_blob": "e" * 40, "key": "c" * 64},
+                "base_modification": "", "copy_tree": "f" * 64,
+                "patch_recipe": {"id": "pulp.vellum.patch-id.v1", "formula": "wrong",
+                                 "replay": {"method": verify_mirror_export.REPLAY_METHOD, "patch_set_blob": "e" * 40, "functions": ["pulp_patch_choc_v8"]}}}
+        for mutation, fragment in (
+            (lambda r: r.pop("replay"), "must contain id, formula, and replay"),
+            (lambda r: r["replay"].update(method="wrong"), "method is not"),
+            (lambda r: r["replay"].update(functions=["bad"]), "functions must be"),
+            (lambda r: r["replay"].update(patch_set_blob="0" * 40), "patch_set_blob must equal"),
+            (lambda r: r.pop("formula"), "must contain id, formula, and replay"),
+        ):
+            row = json.loads(json.dumps(base))
+            mutation(row["patch_recipe"])
+            self.assertError(verify_mirror_export.validate_external_inputs([row], "fixture"), fragment)
+        dependency = {"path": "@build/_deps/x-build/x.h", "sha256": "0" * 64, "producer_paths": [],
+                      "producer_dependency": {"name": "", "source": "https://github.com/x/y", "pin": "a" * 40}}
+        self.assertError(verify_mirror_export.validate_generated_input(dependency, "fixture"), "name must be non-empty")
+
+    def test_pulp_canvas_must_stay_in_canvas_unit(self) -> None:
+        fixture = Fixture(self.base)
+        closure = json.loads((fixture.vellum / fixture.closure_path).read_text())
+        write(fixture.vellum, fixture.closure_path, dump(closure))
+        fixture.receipt["units"][0]["name"] = "foundation"
+        fixture.receipt["units"][0]["closure_sha256"] = fixture.sha(fixture.closure_path)
+        fixture.reland()
+        self.assertError(fixture.errors(), "pulp-canvas may only appear in the canvas D3 unit")
 
 
 if __name__ == "__main__":
