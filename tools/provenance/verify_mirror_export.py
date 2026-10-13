@@ -210,7 +210,14 @@ def host_path_violations(value: Any, label: str) -> list[str]:
     errors: list[str] = []
     if isinstance(value, str):
         windows_absolute = bool(re.match(r"^[A-Za-z]:[\\/]", value))
-        skia_match = re.search(r"@external/skia/[0-9a-f]{40}/[^;\"']*?/include/private/", value, re.IGNORECASE)
+        # Skia's generated include/private segment is the one intentional
+        # exemption.  Match only ordinary relative path segments so an
+        # embedded host path cannot hide inside the exemption span.
+        skia_match = re.search(
+            r"@external/skia/[0-9a-f]{40}/(?:[A-Za-z0-9._+-]+/)*include/private/",
+            value,
+            re.IGNORECASE,
+        )
         host_scan_value = value
         if skia_match:
             host_scan_value = value[:skia_match.start()] + value[skia_match.end():]

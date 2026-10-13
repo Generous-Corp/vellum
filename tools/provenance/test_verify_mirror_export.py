@@ -535,6 +535,11 @@ class VerifyMirrorExportTests(unittest.TestCase):
             ),
             [],
         )
+        for value in (
+            "@external/skia/" + "a" * 40 + "//Users/daniel/x/include/private/SkAPI.h",
+            "X=@external/skia/" + "a" * 40 + "/a /private/var/folders/x/include/private/SkAPI.h",
+        ):
+            self.assertTrue(verify_mirror_export.host_path_violations(value, "fixture"), value)
 
     def test_embedded_host_paths_in_dict_keys_are_rejected(self) -> None:
         self.assertTrue(verify_mirror_export.host_path_violations({"/Users/attacker/key": "ok"}, "fixture"))
