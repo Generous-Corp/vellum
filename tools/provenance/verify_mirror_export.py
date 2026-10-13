@@ -46,9 +46,11 @@ RECEIPT_KEYS = {
     "mirror_sha", "mirror_tree", "rename", "commit_map", "units", "files",
     "generated_inputs", "tool", "created_at",
 }
-UNIT_KEYS = {"name", "closure_manifest", "closure_sha256", "oracle_class"}
+RECEIPT_OPTIONAL_KEYS = {"unmirrored_link_targets"}
+UNIT_KEYS = {"name", "closure_manifest", "closure_sha256", "oracle_class", "configure"}
 FILE_KEYS = {"mirror_path", "pulp_path", "mode", "blob"}
 GENERATED_KEYS = {"path", "sha256", "producer_paths"}
+GENERATED_OPTIONAL_KEYS = {"producer_dependency"}
 EXTERNAL_CACHE_PATH = re.compile(r"^@[A-Za-z0-9_.-]+/")
 EXTERNAL_REPOSITORY = re.compile(r"^https://(?:github\.com|gitlab\.com|codeberg\.org|skia\.googlesource\.com|dawn\.googlesource\.com)/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*(?:\.git)?/?$")
 EMBEDDED_PIN = re.compile(r"(?:^|[-_/])([0-9a-f]{40})(?=$|[-_/])", re.IGNORECASE)
@@ -109,8 +111,8 @@ def validate_generated_input(value: Any, label: str) -> list[str]:
     """Validate one v2 generated-input object before reading its fields."""
     if not isinstance(value, dict):
         return [f"{label} must be an object; legacy string entries are rejected"]
-    if set(value) != GENERATED_KEYS:
-        return [f"{label} must contain exactly path, sha256, and producer_paths"]
+    if set(value) not in (GENERATED_KEYS, GENERATED_KEYS | GENERATED_OPTIONAL_KEYS):
+        return [f"{label} must contain path, sha256, producer_paths, and optional producer_dependency"]
     errors: list[str] = []
     path = value.get("path")
     if (
@@ -124,8 +126,8 @@ def validate_generated_input(value: Any, label: str) -> list[str]:
     if not SHA256.fullmatch(str(value.get("sha256"))):
         errors.append(f"{label}.sha256 must be a SHA-256")
     producers = value.get("producer_paths")
-    if not isinstance(producers, list) or not producers:
-        errors.append(f"{label}.producer_paths must be a non-empty list")
+    if not isinstance(producers, list) or (not producers and "producer_dependency" not in value):
+        errors.append(f"{label}.producer_paths must be a non-empty list unless producer_dependency is present")
     else:
         for index, producer in enumerate(producers):
             if (
@@ -135,6 +137,85 @@ def validate_generated_input(value: Any, label: str) -> list[str]:
                 or producer.startswith("~")
             ):
                 errors.append(f"{label}.producer_paths[{index}] must be repository-relative")
+    if "producer_dependency" in value:
+        dependency = value["producer_dependency"]
+        if not isinstance(dependency, dict) or set(dependency) != {"name", "source", "pin"}:
+            errors.append(f"{label}.producer_dependency must contain name, source, and pin")
+        else:
+            if not isinstance(dependency["name"], str) or not dependency["name"]:
+                errors.append(f"{label}.producer_dependency.name must be non-empty")
+            if not EXTERNAL_REPOSITORY.fullmatch(str(dependency["source"])):
+                errors.append(f"{label}.producer_dependency.source must be a known repository URL")
+            if not SHA40.fullmatch(str(dependency["pin"])):
+                errors.append(f"{label}.producer_dependency.pin must be a 40-hex commit SHA")
+    return errors
+
+
+def configure_violations(closure: dict[str, Any], label: str) -> list[str]:
+    configure = closure.get("configure")
+    if not isinstance(configure, dict):
+        return [f"{label}.configure must be recorded"]
+    if set(configure) - {"options", "options_sha256", "identity", "label"}:
+        return [f"{label}.configure has unexpected keys"]
+    options = configure.get("options")
+    identity = configure.get("identity")
+    if not isinstance(options, dict):
+        return [f"{label}.configure.options must be an object"]
+    if not isinstance(identity, dict) or set(identity) != {"gpu", "skia", "text_shaping", "build_type", "system", "processor"}:
+        return [f"{label}.configure.identity must contain gpu, skia, text_shaping, build_type, system, and processor"]
+    errors: list[str] = []
+    if not SHA256.fullmatch(str(configure.get("options_sha256"))):
+        errors.append(f"{label}.configure.options_sha256 must be a SHA-256")
+    elif hashlib.sha256(json.dumps(options, sort_keys=True).encode("utf-8")).hexdigest() != configure["options_sha256"]:
+        errors.append(f"{label}.configure.options_sha256 does not match options")
+    for field in ("gpu", "skia", "text_shaping"):
+        if not isinstance(identity[field], bool):
+            errors.append(f"{label}.configure.identity.{field} must be boolean")
+    for field in ("build_type", "system", "processor"):
+        if not isinstance(identity[field], str) or not identity[field]:
+            errors.append(f"{label}.configure.identity.{field} must be non-empty")
+    option_map = {"gpu": "PULP_ENABLE_GPU", "skia": "PULP_HAS_SKIA", "text_shaping": "PULP_TEXT_SHAPING"}
+    for field, option in option_map.items():
+        if option in options:
+            expected = str(options[option]).strip().upper() in {"1", "ON", "TRUE", "YES", "Y"}
+            if bool(identity[field]) != expected:
+                errors.append(f"{label}.configure.identity.{field} disagrees with {option}")
+    if "CMAKE_BUILD_TYPE" in options and identity["build_type"] != options["CMAKE_BUILD_TYPE"]:
+        errors.append(f"{label}.configure.identity.build_type disagrees with CMAKE_BUILD_TYPE")
+    if "CMAKE_SYSTEM_NAME" in options and identity["system"] != options["CMAKE_SYSTEM_NAME"]:
+        errors.append(f"{label}.configure.identity.system disagrees with CMAKE_SYSTEM_NAME")
+    if "CMAKE_SYSTEM_PROCESSOR" in options and identity["processor"] != options["CMAKE_SYSTEM_PROCESSOR"]:
+        errors.append(f"{label}.configure.identity.processor disagrees with CMAKE_SYSTEM_PROCESSOR")
+    if "label" in configure and configure["label"] != "cpu-only":
+        errors.append(f"{label}.configure.label must be cpu-only when present")
+    if any(isinstance(t, dict) and t.get("name") == "pulp-canvas" for t in closure.get("targets", [])):
+        if configure.get("label") == "cpu-only":
+            errors.append(f"{label}: canvas closure labelled cpu-only is refused for G2e")
+        if not identity["gpu"] or not identity["skia"]:
+            errors.append(f"{label}: canvas closure requires GPU and Skia configure")
+    return errors
+
+
+def unmirrored_violations(closure: dict[str, Any], label: str, receipt_targets: set[str] | None = None) -> list[str]:
+    rows = closure.get("unmirrored", [])
+    if rows is None:
+        rows = []
+    if not isinstance(rows, list):
+        return [f"{label}.unmirrored must be a list"]
+    errors: list[str] = []
+    approved: set[str] = set()
+    for index, row in enumerate(rows):
+        where = f"{label}.unmirrored[{index}]"
+        if not isinstance(row, dict) or set(row) != {"source", "target", "allowlist_id"}:
+            errors.append(f"{where} must contain source, target, and allowlist_id")
+            continue
+        if not all(isinstance(row[k], str) and row[k] for k in row):
+            errors.append(f"{where} fields must be non-empty strings")
+        approved.add(f"{row.get('source')}->{row.get('target')}")
+    if receipt_targets is not None:
+        for target in sorted(receipt_targets):
+            if not any(key.endswith(f"->{target}") for key in approved):
+                errors.append(f"{label}: unmirrored target {target} lacks an approved per-edge exception")
     return errors
 
 
@@ -266,6 +347,7 @@ def validate_closure_manifest(
 ) -> list[str]:
     """Validate path-bearing closure fields before link-closure comparison."""
     errors = host_path_violations(closure, label)
+    errors.extend(configure_violations(closure, label))
     errors.extend(validate_external_inputs(
         closure.get("external_inputs", []), f"{label}.external_inputs",
         pulp_root=pulp_root, pulp_sha=pulp_sha,
@@ -294,6 +376,7 @@ def validate_closure_manifest(
             for path_index, path in enumerate(values):
                 if not safe_relative(path):
                     errors.append(f"{label}.targets[{index}].{key}[{path_index}] must be repository/cache-relative")
+    errors.extend(unmirrored_violations(closure, label))
     return errors
 
 
@@ -310,7 +393,7 @@ def tree_entries(root: Path, commit: str) -> list[dict[str, str]] | None:
 
 
 def validate_receipt_shape(receipt: Any, label: str) -> list[str]:
-    if not isinstance(receipt, dict) or set(receipt) != RECEIPT_KEYS:
+    if not isinstance(receipt, dict) or set(receipt) not in (RECEIPT_KEYS, RECEIPT_KEYS | RECEIPT_OPTIONAL_KEYS):
         return [f"{label}: receipt keys must be exactly {sorted(RECEIPT_KEYS)}"]
     errors: list[str] = []
     errors.extend(host_path_violations(receipt, label))
@@ -361,6 +444,11 @@ def validate_receipt_shape(receipt: Any, label: str) -> list[str]:
             if not isinstance(unit, dict) or set(unit) != UNIT_KEYS:
                 errors.append(f"{where} has unexpected keys")
                 continue
+            unit_configure = unit["configure"]
+            if not isinstance(unit_configure, dict) or set(unit_configure) != {"identity", "options_sha256", "label"}:
+                errors.append(f"{where} configure must contain identity, options_sha256, and label")
+            elif not isinstance(unit_configure["identity"], dict) or set(unit_configure["identity"]) != {"gpu", "skia", "text_shaping", "build_type", "system", "processor"}:
+                errors.append(f"{where} configure identity is malformed")
             if not isinstance(unit["name"], str) or not unit["name"] or unit["name"] in names:
                 errors.append(f"{where} name is empty or duplicated")
             names.add(str(unit["name"]))
@@ -403,6 +491,10 @@ def validate_receipt_shape(receipt: Any, label: str) -> list[str]:
         for index, row in enumerate(generated):
             where = f"{label}: generated_inputs[{index}]"
             errors.extend(validate_generated_input(row, where))
+    if "unmirrored_link_targets" in receipt:
+        targets = receipt["unmirrored_link_targets"]
+        if not isinstance(targets, list) or not targets or not all(isinstance(t, str) and t for t in targets):
+            errors.append(f"{label}: unmirrored_link_targets must be a non-empty list of strings")
     return errors
 
 
@@ -535,6 +627,11 @@ def verify_receipt(
             closure, f"{label}: closure {unit['name']}",
             pulp_root=pulp_root, pulp_sha=receipt["pulp_sha"],
         ))
+        if "unmirrored_link_targets" in receipt:
+            errors.extend(unmirrored_violations(
+                closure, f"{label}: closure {unit['name']}",
+                set(receipt["unmirrored_link_targets"]),
+            ))
         closure_generated_inputs = closure.get("generated_inputs", [])
         for index, generated_input in enumerate(
             closure_generated_inputs if isinstance(closure_generated_inputs, list) else [closure_generated_inputs]

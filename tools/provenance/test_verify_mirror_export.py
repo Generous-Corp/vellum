@@ -108,6 +108,18 @@ class Fixture:
             "transitive_link_targets": [],
             "resources": [],
             "generated_inputs": [],
+            "configure": {
+                "options": {
+                    "PULP_ENABLE_GPU": "ON", "PULP_HAS_SKIA": "ON",
+                    "PULP_TEXT_SHAPING": "ON", "CMAKE_BUILD_TYPE": "Release",
+                },
+                "options_sha256": hashlib.sha256(json.dumps({
+                    "PULP_ENABLE_GPU": "ON", "PULP_HAS_SKIA": "ON",
+                    "PULP_TEXT_SHAPING": "ON", "CMAKE_BUILD_TYPE": "Release",
+                }, sort_keys=True).encode()).hexdigest(),
+                "identity": {"gpu": True, "skia": True, "text_shaping": True,
+                             "build_type": "Release", "system": "Darwin", "processor": "arm64"},
+            },
         }
         self.closure_path = f"provenance/mirror/closures/{self.export_id}/canvas.json"
         write(self.vellum, self.closure_path, dump(closure))
@@ -135,6 +147,7 @@ class Fixture:
             "units": [{
                 "name": "canvas", "closure_manifest": self.closure_path,
                 "closure_sha256": self.sha(self.closure_path), "oracle_class": "identity",
+                "configure": {"identity": self.receipt_configure_identity(), "options_sha256": self.receipt_configure_sha(), "label": ""},
             }],
             "files": files,
             "generated_inputs": [],
@@ -157,6 +170,15 @@ class Fixture:
             ],
         }
         self.land()
+
+    def receipt_configure_identity(self) -> dict[str, object]:
+        return {"gpu": True, "skia": True, "text_shaping": True,
+                "build_type": "Release", "system": "Darwin", "processor": "arm64"}
+
+    def receipt_configure_sha(self) -> str:
+        options = {"PULP_ENABLE_GPU": "ON", "PULP_HAS_SKIA": "ON",
+                   "PULP_TEXT_SHAPING": "ON", "CMAKE_BUILD_TYPE": "Release"}
+        return hashlib.sha256(json.dumps(options, sort_keys=True).encode()).hexdigest()
 
     def sha(self, relative: str) -> str:
         return hashlib.sha256((self.vellum / relative).read_bytes()).hexdigest()
@@ -320,7 +342,7 @@ class VerifyMirrorExportTests(unittest.TestCase):
             },
             "fixture generated input",
         )
-        self.assertError(errors, "must contain exactly path, sha256, and producer_paths")
+        self.assertError(errors, "must contain path, sha256, producer_paths")
 
     def test_generated_input_absolute_paths_are_rejected(self) -> None:
         errors = verify_mirror_export.validate_generated_input(
@@ -570,6 +592,44 @@ class VerifyMirrorExportTests(unittest.TestCase):
         self.assertError(fixture.errors(), "absolute host path")
         with mock.patch.object(verify_mirror_export, "host_path_violations", return_value=[]):
             self.assertEqual(fixture.errors(), [])
+
+    def test_configure_digest_and_identity_are_checked(self) -> None:
+        fixture = Fixture(self.base)
+        closure = json.loads((fixture.vellum / fixture.closure_path).read_text())
+        closure["configure"]["options_sha256"] = "0" * 64
+        closure["configure"]["identity"]["system"] = ""
+        errors = verify_mirror_export.validate_closure_manifest(closure, "fixture closure")
+        self.assertError(errors, "options_sha256 does not match")
+        self.assertError(errors, "identity.system")
+
+    def test_cpu_only_canvas_is_refused_for_g2e(self) -> None:
+        fixture = Fixture(self.base)
+        closure = json.loads((fixture.vellum / fixture.closure_path).read_text())
+        closure["configure"]["label"] = "cpu-only"
+        errors = verify_mirror_export.validate_closure_manifest(closure, "fixture closure")
+        self.assertError(errors, "cpu-only is refused for G2e")
+
+    def test_producer_dependency_is_validated(self) -> None:
+        valid = {
+            "path": "@build/_deps/sdl3-build/include/revision.h",
+            "sha256": "0" * 64,
+            "producer_paths": [],
+            "producer_dependency": {
+                "name": "sdl3", "source": "https://github.com/libsdl-org/SDL.git", "pin": "a" * 40,
+            },
+        }
+        self.assertEqual(verify_mirror_export.validate_generated_input(valid, "fixture"), [])
+        invalid = dict(valid, producer_dependency={"name": "sdl3", "source": "build-tree", "pin": "release"})
+        errors = verify_mirror_export.validate_generated_input(invalid, "fixture")
+        self.assertError(errors, "source must be a known repository URL")
+        self.assertError(errors, "pin must be a 40-hex commit SHA")
+
+    def test_unmirrored_targets_require_approved_per_edge_exception(self) -> None:
+        closure = {"unmirrored": [], "targets": []}
+        errors = verify_mirror_export.unmirrored_violations(closure, "fixture", {"pulp-events"})
+        self.assertError(errors, "lacks an approved per-edge exception")
+        closure["unmirrored"] = [{"source": "pulp-state", "target": "pulp-events", "allowlist_id": "unmirrored-events"}]
+        self.assertEqual(verify_mirror_export.unmirrored_violations(closure, "fixture", {"pulp-events"}), [])
 
 
 if __name__ == "__main__":
