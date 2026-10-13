@@ -98,13 +98,13 @@ class Fixture:
             "targets": [{
                 "name": "pulp-canvas", "type": "STATIC_LIBRARY",
                 "sources": ["core/canvas/src/canvas.cpp"], "include_dirs": [],
-                "compile_definitions": ["PULP_CANVAS_SKIA=1"], "link_targets": [],
+                "compile_definitions": ["PULP_HAS_SKIA=1", "PULP_HAS_TEXT_SHAPING=1"], "link_targets": [],
             }],
             "missing_targets": [],
             "files": sorted(PULP_FILES),
             "external_inputs": [],
             "public_include_dirs": [],
-            "compile_definitions": ["PULP_CANVAS_SKIA=1"],
+            "compile_definitions": ["PULP_HAS_SKIA=1", "PULP_HAS_TEXT_SHAPING=1"],
             "transitive_link_targets": [],
             "resources": [],
             "generated_inputs": [],
@@ -424,7 +424,7 @@ class VerifyMirrorExportTests(unittest.TestCase):
             "patch_set": {"pulp_path": "tools/cmake/PulpPatchChoc.cmake", "pulp_blob": "e" * 40, "key": key},
             "base_modification": base_modification,
             "copy_tree": copy_tree,
-            "patch_recipe": {"id": "pulp.vellum.patch-id.v1", "formula": formula},
+            "patch_recipe": {"id": "pulp.vellum.patch-id.v1", "formula": formula, "replay": ["pulp_patch_choc_v8"]},
         }
         self.assertEqual(
             verify_mirror_export.validate_external_inputs([row], "fixture"), []
@@ -447,7 +447,7 @@ class VerifyMirrorExportTests(unittest.TestCase):
             "patched": True, "patch": patch, "sha256": "d" * 64,
             "patch_set": {"pulp_path": "tools/cmake/PulpPatchChoc.cmake", "pulp_blob": "e" * 40, "key": key},
             "base_modification": "", "copy_tree": copy_tree,
-            "patch_recipe": {"id": "pulp.vellum.patch-id.v1", "formula": formula},
+            "patch_recipe": {"id": "pulp.vellum.patch-id.v1", "formula": formula, "replay": ["pulp_patch_choc_v8"]},
         }
         cases = [
             ({**base, "path": f"@external/choc/{pin}/choc.h"}, "path marker"),
@@ -456,7 +456,7 @@ class VerifyMirrorExportTests(unittest.TestCase):
             ({k: v for k, v in base.items() if k not in ("patched",)}, "patch fields require patched=true"),
             ({k: v for k, v in base.items() if k != "sha256"}, "sha256 must be a SHA-256"),
             ({k: v for k, v in base.items() if k != "patch_set"}, "patch_set must contain"),
-            ({**base, "patch_recipe": {"id": "wrong", "formula": formula}}, "patch_recipe.id"),
+            ({**base, "patch_recipe": {"id": "wrong", "formula": formula, "replay": ["pulp_patch_choc_v8"]}}, "patch_recipe.id"),
             ({**base, "base_modification": "a" * 64}, "base_modification must be empty"),
             ({**base, "path": "@fetchcontent/choc/choc.h"}, "must be @external"),
         ]
@@ -467,7 +467,7 @@ class VerifyMirrorExportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             pulp = Path(temporary)
             (pulp / "tools/cmake").mkdir(parents=True)
-            patch_bytes = b"set(PATCH 1)\n"
+            patch_bytes = b"function(pulp_patch_choc_v8 x)\nendfunction()\n"
             patch_path = pulp / "tools/cmake/PulpPatchChoc.cmake"
             patch_path.write_bytes(patch_bytes)
             run(pulp, "init", "-q", "-b", "main")
@@ -487,13 +487,14 @@ class VerifyMirrorExportTests(unittest.TestCase):
                 "sha256": "d" * 64, "patched": True, "patch": patch,
                 "patch_set": {"pulp_path": "tools/cmake/PulpPatchChoc.cmake", "pulp_blob": pulp_blob, "key": key},
                 "base_modification": "", "copy_tree": copy_tree,
-                "patch_recipe": {"id": "pulp.vellum.patch-id.v1", "formula": formula},
+                "patch_recipe": {"id": "pulp.vellum.patch-id.v1", "formula": formula, "replay": ["pulp_patch_choc_v8"]},
             }
             self.assertEqual(verify_mirror_export.validate_external_inputs([row], "fixture", pulp_root=pulp, pulp_sha=pulp_sha), [])
             for mutation, fragment in (
                 ({**row, "patch_set": {**row["patch_set"], "pulp_blob": "f" * 40}}, "pulp_blob"),
                 ({**row, "patch_set": {**row["patch_set"], "key": "e" * 64}}, "key"),
                 ({**row, "patch_set": {**row["patch_set"], "pulp_path": "missing.cmake"}}, "pulp_blob"),
+                ({**row, "patch_recipe": {**row["patch_recipe"], "replay": ["missing_patch"]}}, "replay function missing_patch"),
             ):
                 self.assertError(verify_mirror_export.validate_external_inputs([mutation], "fixture", pulp_root=pulp, pulp_sha=pulp_sha), fragment)
 
@@ -525,6 +526,12 @@ class VerifyMirrorExportTests(unittest.TestCase):
     def test_embedded_host_paths_are_rejected(self) -> None:
         for value in ("-I/Users/attacker/include", "prefix//Users/attacker/cache", "FOO=/Volumes/attacker/cache", "-I/home/attacker/include", "x=/private/attacker", "FOO=C:/attacker/cache", r"prefix=\\server\share\x", "prefix file:///Users/attacker/x", "prefix file:///etc/x"):
             self.assertTrue(verify_mirror_export.host_path_violations(value, "fixture"), value)
+        self.assertEqual(
+            verify_mirror_export.host_path_violations(
+                "@external/skia/" + "a" * 40 + "/build/include/include/private/SkAPI.h", "fixture"
+            ),
+            [],
+        )
 
     def test_embedded_host_paths_in_dict_keys_are_rejected(self) -> None:
         self.assertTrue(verify_mirror_export.host_path_violations({"/Users/attacker/key": "ok"}, "fixture"))
@@ -598,7 +605,7 @@ class VerifyMirrorExportTests(unittest.TestCase):
         closure = json.loads((fixture.vellum / fixture.closure_path).read_text())
         closure["configure"]["options_sha256"] = "0" * 64
         closure["configure"]["identity"]["system"] = ""
-        errors = verify_mirror_export.validate_closure_manifest(closure, "fixture closure")
+        errors = verify_mirror_export.validate_closure_manifest(closure, "fixture closure", is_canvas=True)
         self.assertError(errors, "options_sha256 does not match")
         self.assertError(errors, "identity.system")
 
@@ -606,7 +613,7 @@ class VerifyMirrorExportTests(unittest.TestCase):
         fixture = Fixture(self.base)
         closure = json.loads((fixture.vellum / fixture.closure_path).read_text())
         closure["configure"]["label"] = "cpu-only"
-        errors = verify_mirror_export.validate_closure_manifest(closure, "fixture closure")
+        errors = verify_mirror_export.validate_closure_manifest(closure, "fixture closure", is_canvas=True)
         self.assertError(errors, "cpu-only is refused for G2e")
 
     def test_producer_dependency_is_validated(self) -> None:
@@ -624,12 +631,88 @@ class VerifyMirrorExportTests(unittest.TestCase):
         self.assertError(errors, "source must be a known repository URL")
         self.assertError(errors, "pin must be a 40-hex commit SHA")
 
-    def test_unmirrored_targets_require_approved_per_edge_exception(self) -> None:
-        closure = {"unmirrored": [], "targets": []}
-        errors = verify_mirror_export.unmirrored_violations(closure, "fixture", {"pulp-events"})
-        self.assertError(errors, "lacks an approved per-edge exception")
-        closure["unmirrored"] = [{"source": "pulp-state", "target": "pulp-events", "allowlist_id": "unmirrored-events"}]
-        self.assertEqual(verify_mirror_export.unmirrored_violations(closure, "fixture", {"pulp-events"}), [])
+    def test_unmirrored_edges_require_exact_current_platform_exception(self) -> None:
+        policy = json.loads((REPO / "provenance/mirror/link-policy.json").read_text())
+        closure = {"configure": {"identity": {"system": "Darwin"}},
+                   "targets": [{"name": "pulp-canvas", "link_targets": ["pulp-events"]}],
+                   "files": [], "compile_definitions": []}
+        self.assertError(
+            verify_mirror_export.link_closure_findings({"canvas": closure}, policy),
+            "lacks a current approved exception",
+        )
+        policy["approved_unmirrored_edges"] = [{
+            "source": "pulp-canvas", "target": "pulp-events", "platforms": ["Darwin"],
+            "owner": "d3", "approver": "team-lead", "expiry": "2099-01-01",
+        }]
+        self.assertEqual(verify_mirror_export.link_closure_findings({"canvas": closure}, policy), [])
+
+    def test_unmirrored_edge_wrong_source_expiry_and_platform_fail(self) -> None:
+        policy = json.loads((REPO / "provenance/mirror/link-policy.json").read_text())
+        closure = {"configure": {"identity": {"system": "Darwin"}},
+                   "targets": [{"name": "pulp-canvas", "link_targets": ["pulp-events"]}],
+                   "files": [], "compile_definitions": []}
+        for source, platforms, expiry in (("pulp-state", ["Darwin"], "2099-01-01"),
+                                          ("pulp-canvas", ["Linux"], "2099-01-01"),
+                                          ("pulp-canvas", ["Darwin"], "2000-01-01")):
+            policy["approved_unmirrored_edges"] = [{"source": source, "target": "pulp-events", "platforms": platforms,
+                                                     "owner": "d3", "approver": "team-lead", "expiry": expiry}]
+            self.assertError(verify_mirror_export.link_closure_findings({"canvas": closure}, policy),
+                             "lacks a current approved exception")
+
+    def test_pulp_target_keyed_allowlist_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "provenance/mirror").mkdir(parents=True)
+            policy = json.loads((REPO / "provenance/mirror/link-policy.json").read_text())
+            policy["allowed_external_targets"] = ["pulp-events"]
+            write(root, "provenance/mirror/link-policy.json", dump(policy))
+            loaded, errors = verify_mirror_export.load_policy(root)
+            self.assertIsNone(loaded)
+            self.assertError(errors, "cannot contain Pulp targets")
+
+    def test_configure_required_and_identity_shape_checks(self) -> None:
+        fixture = Fixture(self.base)
+        closure = json.loads((fixture.vellum / fixture.closure_path).read_text())
+        for mutation, fragment in (
+            (lambda c: c.pop("configure"), ".configure must be recorded"),
+            (lambda c: c["configure"]["identity"].pop("processor"), "identity must contain"),
+            (lambda c: c["configure"]["identity"].update(gpu="yes"), "identity.gpu must be boolean"),
+            (lambda c: c["configure"]["identity"].update(gpu=False), "identity.gpu disagrees"),
+            (lambda c: c["configure"]["identity"].update(build_type="Debug"), "identity.build_type disagrees with configuration"),
+            (lambda c: c["configure"].update(label="wrong"), "label must be cpu-only"),
+        ):
+            mutated = json.loads(json.dumps(closure))
+            mutation(mutated)
+            self.assertError(verify_mirror_export.validate_closure_manifest(mutated, "fixture closure", is_canvas=True), fragment)
+
+    def test_canvas_requires_all_gpu_skia_text_shaping_evidence(self) -> None:
+        fixture = Fixture(self.base)
+        closure = json.loads((fixture.vellum / fixture.closure_path).read_text())
+        closure["configure"]["identity"]["gpu"] = False
+        closure["configure"]["options"]["PULP_ENABLE_GPU"] = "OFF"
+        closure["configure"]["options_sha256"] = hashlib.sha256(json.dumps(closure["configure"]["options"], sort_keys=True).encode()).hexdigest()
+        closure["compile_definitions"].remove("PULP_HAS_TEXT_SHAPING=1")
+        errors = verify_mirror_export.validate_closure_manifest(closure, "fixture closure", is_canvas=True)
+        self.assertError(errors, "requires GPU, Skia, and text shaping")
+        self.assertError(errors, "PULP_HAS_TEXT_SHAPING=1")
+
+    def test_receipt_unit_configure_must_match_closure(self) -> None:
+        fixture = Fixture(self.base)
+        unit = dict(fixture.receipt["units"][0], configure=dict(fixture.receipt["units"][0]["configure"], label="cpu-only"))
+        fixture.reland(units=[unit])
+        self.assertError(fixture.errors(), "configure differs from its closure configure")
+
+    def test_receipt_rejects_removed_unmirrored_list(self) -> None:
+        fixture = Fixture(self.base)
+        fixture.reland(unmirrored_link_targets=["pulp-events"])
+        self.assertError(fixture.errors(), "receipt keys must be exactly")
+
+    def test_producer_dependency_shape_is_required(self) -> None:
+        row = {
+            "path": "@build/_deps/sdl3-build/include/revision.h", "sha256": "0" * 64,
+            "producer_paths": [], "producer_dependency": {"name": "sdl3", "pin": "a" * 40},
+        }
+        self.assertError(verify_mirror_export.validate_generated_input(row, "fixture"), "producer_dependency must contain")
 
 
 if __name__ == "__main__":

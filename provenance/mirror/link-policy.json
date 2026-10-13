@@ -1,6 +1,7 @@
 {
   "schema": "vellum.mirror-link-policy.v1",
   "allowed_external_targets": [],
+  "approved_unmirrored_edges": [],
   "forbidden_target_pattern": "(?:^|[-_:])(?:audio|signal|midi|music|format|host|gpu[-_]?audio|graph|playback|sequence|timeline|timebase|smf|dawproject|content|vst3|clap|lv2|auv2|auv3|aax|oboe)(?:$|[-_:])",
   "forbidden_path_prefixes": [
     "core/audio/",
