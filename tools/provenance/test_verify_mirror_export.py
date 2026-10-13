@@ -349,7 +349,7 @@ class VerifyMirrorExportTests(unittest.TestCase):
         pin = "a" * 40
         self.assertEqual(
             verify_mirror_export.validate_external_inputs(
-                [{"path": "@fetchcontent/mbedtls/include/mbedtls.h", "source": "https://github.com/Mbed-TLS/mbedtls", "pin": pin}],
+                [{"path": "@fetchcontent/mbedtls/include/mbedtls.h", "source": "https://github.com/Mbed-TLS/mbedtls", "pin": pin, "sha256": "0" * 64}],
                 "fixture external inputs",
             ),
             [],
@@ -387,29 +387,61 @@ class VerifyMirrorExportTests(unittest.TestCase):
         self.assertError(errors, "@external pin segment must equal pin")
 
     def test_external_input_patched_copy_requires_patch_identity(self) -> None:
-        pin, patch = "a" * 40, "b" * 64
+        pin, key, copy_tree = "a" * 40, "b" * 64, "c" * 64
+        base_modification = ""
+        recipe = f"patch-set:{key}\nbase-modification:{base_modification}\ncopy-tree:{copy_tree}\n"
+        patch = hashlib.sha256(recipe.encode()).hexdigest()
         row = {
             "path": f"@external/choc/{pin}+patch-{patch[:16]}/choc.h",
             "source": "https://github.com/danielraffel/choc.git",
             "pin": pin,
             "patched": True,
             "patch": patch,
+            "sha256": "d" * 64,
+            "patch_set": {"pulp_path": "tools/cmake/PulpPatchChoc.cmake", "pulp_blob": "e" * 40, "key": key},
+            "base_modification": base_modification,
+            "copy_tree": copy_tree,
+            "patch_id_recipe": recipe,
         }
         self.assertEqual(
             verify_mirror_export.validate_external_inputs([row], "fixture"), []
         )
-        row["patch"] = "c" * 64
+        row["patch"] = "f" * 64
+        row["path"] = f"@external/choc/{pin}+patch-{row['patch'][:16]}/choc.h"
         self.assertError(
             verify_mirror_export.validate_external_inputs([row], "fixture"),
-            "@external pin segment must equal pin",
+            "does not recompute",
         )
+
+    def test_external_input_patch_negative_cases(self) -> None:
+        pin, key, copy_tree = "a" * 40, "b" * 64, "c" * 64
+        recipe = f"patch-set:{key}\nbase-modification:\ncopy-tree:{copy_tree}\n"
+        patch = hashlib.sha256(recipe.encode()).hexdigest()
+        base = {
+            "path": f"@external/choc/{pin}+patch-{patch[:16]}/choc.h",
+            "source": "https://github.com/danielraffel/choc.git", "pin": pin,
+            "patched": True, "patch": patch, "sha256": "d" * 64,
+            "patch_set": {"pulp_path": "tools/cmake/PulpPatchChoc.cmake", "pulp_blob": "e" * 40, "key": key},
+            "base_modification": "", "copy_tree": copy_tree, "patch_id_recipe": recipe,
+        }
+        cases = [
+            ({**base, "path": f"@external/choc/{pin}/choc.h"}, "path marker"),
+            ({**base, "patch": "not-a-digest"}, "patch must be a SHA-256"),
+            ({k: v for k, v in base.items() if k != "pin"}, "pin must be a 40-hex"),
+            ({k: v for k, v in base.items() if k not in ("patched",)}, "patch fields require patched=true"),
+            ({k: v for k, v in base.items() if k != "sha256"}, "sha256 must be a SHA-256"),
+            ({k: v for k, v in base.items() if k != "patch_set"}, "patch_set must contain"),
+            ({**base, "path": "@fetchcontent/choc/choc.h"}, "must be @external"),
+        ]
+        for row, fragment in cases:
+            self.assertError(verify_mirror_export.validate_external_inputs([row], "fixture"), fragment)
 
     def test_external_input_accepts_exact_googlesource_hosts(self) -> None:
         pin = "a" * 40
         for host in ("skia.googlesource.com/skia", "dawn.googlesource.com/dawn"):
             self.assertEqual(
                 verify_mirror_export.validate_external_inputs(
-                    [{"path": f"@external/source/{pin}/include/a.h", "source": f"https://{host}", "pin": pin}],
+                    [{"path": f"@external/source/{pin}/include/a.h", "source": f"https://{host}", "pin": pin, "sha256": "0" * 64}],
                     "fixture external inputs",
                 ),
                 [],
