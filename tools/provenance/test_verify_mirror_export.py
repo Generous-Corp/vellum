@@ -11,6 +11,7 @@ import tempfile
 import unittest
 from unittest import mock
 from pathlib import Path
+from typing import Callable
 
 
 MODULE_PATH = Path(__file__).with_name("verify_mirror_export.py")
@@ -49,7 +50,15 @@ def dump(value: object) -> str:
 class Fixture:
     """A Pulp repository and a Vellum repository with one landed export."""
 
-    def __init__(self, base: Path, *, mirror_overrides: dict[str, bytes] | None = None) -> None:
+    def __init__(
+        self,
+        base: Path,
+        *,
+        mirror_overrides: dict[str, bytes] | None = None,
+        base_files: dict[str, bytes] | None = None,
+        mirror_prelude: list[dict[str, bytes]] | None = None,
+        after_join: "Callable[[Fixture], None] | None" = None,
+    ) -> None:
         self.pulp = base / "pulp"
         self.vellum = base / "vellum"
         self.pulp.mkdir()
@@ -70,12 +79,25 @@ class Fixture:
         write(self.vellum, "provenance/mirror/receipts/index.json",
               dump({"schema": "vellum.mirror-receipt-index.v1", "receipts": []}))
         write(self.vellum, "README.md", "vellum\n")
+        for path, content in (base_files or {}).items():
+            write(self.vellum, path, content)
         run(self.vellum, "add", "-A")
         run(self.vellum, "commit", "-q", "-m", "base")
+        self.base_sha = run(self.vellum, "rev-parse", "HEAD")
 
         # Projected mirror commit: what filter-repo produces for pulp_sha.
         run(self.vellum, "checkout", "-q", "--orphan", "mirror")
         run(self.vellum, "rm", "-rq", "--cached", ".")
+        for child in list(self.vellum.iterdir()):
+            if child.name != ".git":
+                shutil.rmtree(child) if child.is_dir() else child.unlink()
+        # Earlier side-history commits; paths are written as given, and the
+        # mirror commit below replaces the whole tree with the export.
+        for index, files in enumerate(mirror_prelude or []):
+            for path, content in files.items():
+                write(self.vellum, path, content)
+            run(self.vellum, "add", "-A")
+            run(self.vellum, "commit", "-q", "-m", f"mirror prelude {index}")
         for child in list(self.vellum.iterdir()):
             if child.name != ".git":
                 shutil.rmtree(child) if child.is_dir() else child.unlink()
@@ -87,6 +109,8 @@ class Fixture:
         self.mirror_sha = run(self.vellum, "rev-parse", "HEAD")
         run(self.vellum, "checkout", "-q", "-f", "main")
         run(self.vellum, "merge", "-q", "--no-edit", "--allow-unrelated-histories", self.mirror_sha)
+        if after_join is not None:
+            after_join(self)
 
         self.export_id = f"20261010-{self.pulp_sha[:12]}"
         self.receipt_path = f"provenance/mirror/receipts/{self.export_id}.json"
