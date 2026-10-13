@@ -807,6 +807,73 @@ class VerifyMirrorExportTests(unittest.TestCase):
         fixture.reland()
         self.assertError(fixture.errors(), "pulp-canvas may only appear in the canvas D3 unit")
 
+    def test_guard_build_type_matches_cmake_option(self) -> None:
+        fixture = Fixture(self.base)
+        c = json.loads((fixture.vellum / fixture.closure_path).read_text())
+        c["configure"]["options"]["CMAKE_BUILD_TYPE"] = "Debug"
+        self.assertError(verify_mirror_export.validate_closure_manifest(c, "fixture"), "build_type disagrees with CMAKE_BUILD_TYPE")
+
+    def test_guard_canvas_text_shaping(self) -> None:
+        fixture = Fixture(self.base)
+        c = json.loads((fixture.vellum / fixture.closure_path).read_text())
+        c["configure"]["identity"]["text_shaping"] = False
+        self.assertError(verify_mirror_export.validate_closure_manifest(c, "fixture", is_canvas=True), "requires GPU, Skia, and text shaping")
+
+    def test_guard_full_verify_wires_canvas_and_stale(self) -> None:
+        fixture = Fixture(self.base)
+        c = json.loads((fixture.vellum / fixture.closure_path).read_text())
+        c["configure"]["label"] = "cpu-only"
+        write(fixture.vellum, fixture.closure_path, dump(c))
+        fixture.receipt["units"][0]["closure_sha256"] = fixture.sha(fixture.closure_path)
+        fixture.reland()
+        self.assertError(fixture.errors(), "canvas closure labelled cpu-only")
+
+    def test_guard_malformed_receipt_unit_identity(self) -> None:
+        fixture = Fixture(self.base)
+        unit = dict(fixture.receipt["units"][0], configure={"identity": {}})
+        fixture.reland(units=[unit])
+        self.assertError(fixture.errors(), "configure must contain identity, options_sha256, and label")
+
+    def test_guard_transitive_forbidden_branch(self) -> None:
+        policy = json.loads((REPO / "provenance/mirror/link-policy.json").read_text())
+        c = {"configure":{"identity":{"system":"Darwin"}},"targets":[],"transitive_link_targets":["pulp-audio-core"],"files":[],"compile_definitions":[]}
+        self.assertError(verify_mirror_export.link_closure_findings({"x": c}, policy), "transitive unmirrored target pulp-audio-core")
+
+    def test_guard_transitive_non_pulp_branch(self) -> None:
+        policy = json.loads((REPO / "provenance/mirror/link-policy.json").read_text())
+        c = {"configure":{"identity":{"system":"Darwin"}},"targets":[],"transitive_link_targets":["mystery"],"files":[],"compile_definitions":[]}
+        self.assertError(verify_mirror_export.link_closure_findings({"x": c}, policy), "link target mystery is neither exported nor allowed")
+
+    def test_guard_host_path_boundary_characters(self) -> None:
+        for value in ('x;"/Users/a', "x'/private/var/a"):
+            self.assertTrue(verify_mirror_export.host_path_violations(value, "fixture"))
+
+    def test_guard_skia_exemption_strips_only_segment(self) -> None:
+        value = "@external/skia/" + "a" * 40 + "/build//Users/a/include/private/x"
+        self.assertTrue(verify_mirror_export.host_path_violations(value, "fixture"))
+
+    def test_guard_replay_shape(self) -> None:
+        row = self._patched_row()
+        row["patch_recipe"]["replay"] = []
+        self.assertError(verify_mirror_export.validate_external_inputs([row], "fixture"), "replay must contain")
+
+    def test_guard_replay_order(self) -> None:
+        row = self._patched_row()
+        row["patch_recipe"]["replay"]["functions"] = ["pulp_patch_choc_v9", "pulp_patch_choc_v8"]
+        errors = verify_mirror_export.patch_provenance_violations(row, "fixture")
+        self.assertTrue(errors)
+
+    def test_guard_recipe_formula(self) -> None:
+        row = self._patched_row()
+        row["patch_recipe"]["formula"] = "wrong"
+        self.assertError(verify_mirror_export.validate_external_inputs([row], "fixture"), "recipe.formula")
+
+    def _patched_row(self) -> dict[str, Any]:
+        key = "c" * 64
+        copy_tree = "d" * 64
+        formula = f"sha256(utf8('patch-set:' + patch_set.key + '\\nbase-modification:' + base_modification + '\\ncopy-tree:' + copy_tree + '\\n'))"
+        return {"path": "@external/choc/" + "a" * 40 + "+patch-" + "b" * 16 + "/choc.h", "source": "https://github.com/danielraffel/choc.git", "pin": "a" * 40, "sha256": "e" * 64, "patched": True, "patch": "f" * 64, "patch_set": {"pulp_path": "tools/cmake/PulpPatchChoc.cmake", "pulp_blob": "a" * 40, "key": key}, "base_modification": "", "copy_tree": copy_tree, "patch_recipe": {"id": "pulp.vellum.patch-id.v1", "formula": formula, "replay": {"method": verify_mirror_export.REPLAY_METHOD, "patch_set_blob": "a" * 40, "functions": ["pulp_patch_choc_v8"]}}}
+
 
 if __name__ == "__main__":
     unittest.main()
