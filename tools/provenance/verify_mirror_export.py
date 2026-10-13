@@ -58,6 +58,7 @@ POLICY_KEYS = {
 }
 SHA40 = re.compile(r"[0-9a-f]{40}\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+PATCH_SET_KEYS = {"pulp_path", "pulp_blob", "key"}
 UTC = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
 FILE_MODES = {"100644", "100755", "120000"}
 
@@ -159,7 +160,69 @@ def host_path_violations(value: Any, label: str) -> list[str]:
     return errors
 
 
-def validate_external_inputs(value: Any, label: str) -> list[str]:
+def patch_provenance_violations(
+    row: dict[str, Any], label: str, *, pulp_root: Path | None = None, pulp_sha: str | None = None
+) -> list[str]:
+    errors: list[str] = []
+    path = row.get("path")
+    patched = row.get("patched") is True
+    if not SHA256.fullmatch(str(row.get("sha256", ""))):
+        errors.append(f"{label}.sha256 must be a SHA-256 content digest")
+    if not patched:
+        if any(key in row for key in (
+            "patch", "patched", "patch_set", "base_modification", "copy_tree", "patch_recipe"
+        )):
+            errors.append(f"{label} patch fields require patched=true")
+        return errors
+    if not isinstance(path, str) or not path.startswith("@external/"):
+        errors.append(f"{label}.path must be @external for patched inputs")
+    patch = row.get("patch")
+    if not SHA256.fullmatch(str(patch)):
+        errors.append(f"{label}.patch must be a SHA-256 when patched")
+    patch_set = row.get("patch_set")
+    if not isinstance(patch_set, dict) or set(patch_set) != PATCH_SET_KEYS:
+        errors.append(f"{label}.patch_set must contain pulp_path, pulp_blob, and key")
+        return errors
+    source_path, source_blob, key = (patch_set.get(k) for k in ("pulp_path", "pulp_blob", "key"))
+    if not isinstance(source_path, str) or not safe_relative(source_path):
+        errors.append(f"{label}.patch_set.pulp_path must be repository-relative")
+    if not isinstance(source_blob, str) or not SHA40.fullmatch(source_blob):
+        errors.append(f"{label}.patch_set.pulp_blob must be a Git blob SHA")
+    if not isinstance(key, str) or not SHA256.fullmatch(key):
+        errors.append(f"{label}.patch_set.key must be a SHA-256")
+    base_modification = row.get("base_modification")
+    copy_tree = row.get("copy_tree")
+    if base_modification != "":
+        errors.append(f"{label}.base_modification must be empty")
+    if not SHA256.fullmatch(str(copy_tree)):
+        errors.append(f"{label}.copy_tree must be a SHA-256")
+    patch_recipe = row.get("patch_recipe")
+    expected_formula = "sha256(utf8('patch-set:' + patch_set.key + '\\nbase-modification:' + base_modification + '\\ncopy-tree:' + copy_tree + '\\n'))"
+    if not isinstance(patch_recipe, dict) or set(patch_recipe) != {"id", "formula"}:
+        errors.append(f"{label}.patch_recipe must contain id and formula")
+    elif patch_recipe.get("id") != "pulp.vellum.patch-id.v1":
+        errors.append(f"{label}.patch_recipe.id is not pulp.vellum.patch-id.v1")
+    elif patch_recipe.get("formula") != expected_formula:
+        errors.append(f"{label}.patch_recipe.formula is not the supported recipe")
+    expected_recipe = f"patch-set:{key}\nbase-modification:{base_modification}\ncopy-tree:{copy_tree}\n"
+    if SHA256.fullmatch(str(patch)) and hashlib.sha256(expected_recipe.encode()).hexdigest() != patch:
+        errors.append(f"{label}.patch does not recompute from patch-set provenance")
+    if pulp_root is not None and isinstance(pulp_sha, str) and isinstance(source_path, str):
+        blob = git_try(pulp_root, "rev-parse", f"{pulp_sha}:{source_path}")
+        if blob != source_blob:
+            errors.append(f"{label}.patch_set.pulp_blob does not match Pulp {pulp_sha}:{source_path}")
+        content = subprocess.run(
+            ["git", "show", f"{pulp_sha}:{source_path}"], cwd=pulp_root,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        )
+        if content.returncode != 0 or hashlib.sha256(content.stdout).hexdigest() != key:
+            errors.append(f"{label}.patch_set.key does not match the Pulp patch-set blob")
+    return errors
+
+
+def validate_external_inputs(
+    value: Any, label: str, *, pulp_root: Path | None = None, pulp_sha: str | None = None
+) -> list[str]:
     """Require cache-relative external-input identities in v2 closures."""
     if not isinstance(value, list):
         return [f"{label} must be a list"]
@@ -178,21 +241,35 @@ def validate_external_inputs(value: Any, label: str) -> list[str]:
         pin = row.get("pin")
         if not isinstance(pin, str) or not SHA40.fullmatch(pin):
             errors.append(f"{where}.pin must be a 40-hex commit SHA")
+        errors.extend(patch_provenance_violations(row, where, pulp_root=pulp_root, pulp_sha=pulp_sha))
+        patch = row.get("patch")
         embedded = EMBEDDED_PIN.search(path) if isinstance(path, str) else None
         if embedded and (not isinstance(pin, str) or embedded.group(1).lower() != pin.lower()):
             errors.append(f"{where}.path embedded pin must equal pin")
         if isinstance(path, str) and path.startswith("@external/"):
             segments = path.split("/")
             positional = segments[2] if len(segments) > 2 else ""
-            if not isinstance(pin, str) or positional != pin:
-                errors.append(f"{where}.path @external pin segment must equal pin")
+            expected = pin
+            if row.get("patched") is True and isinstance(patch, str) and SHA256.fullmatch(patch):
+                expected = f"{pin}+patch-{patch[:16]}"
+            if positional != expected:
+                errors.append(
+                    f"{where}.path marker must equal pin+patch-<patch[:16]>"
+                    if row.get("patched") is True
+                    else f"{where}.path @external pin segment must equal pin"
+                )
     return errors
 
 
-def validate_closure_manifest(closure: dict[str, Any], label: str) -> list[str]:
+def validate_closure_manifest(
+    closure: dict[str, Any], label: str, *, pulp_root: Path | None = None, pulp_sha: str | None = None
+) -> list[str]:
     """Validate path-bearing closure fields before link-closure comparison."""
     errors = host_path_violations(closure, label)
-    errors.extend(validate_external_inputs(closure.get("external_inputs", []), f"{label}.external_inputs"))
+    errors.extend(validate_external_inputs(
+        closure.get("external_inputs", []), f"{label}.external_inputs",
+        pulp_root=pulp_root, pulp_sha=pulp_sha,
+    ))
     for key in ("files", "resources", "public_include_dirs"):
         values = closure.get(key, [])
         if not isinstance(values, list):
@@ -390,7 +467,7 @@ def link_closure_findings(
 
 def verify_receipt(
     root: Path, receipt_path: str, receipt: dict[str, Any], policy: dict[str, Any] | None,
-    origins: list[dict[str, Any]], *, newest: bool, head: str,
+    origins: list[dict[str, Any]], *, newest: bool, head: str, pulp_root: Path | None = None,
 ) -> list[str]:
     label = receipt_path
     errors = validate_receipt_shape(receipt, label)
@@ -454,7 +531,10 @@ def verify_receipt(
                 f"{label}: closure {unit['name']} must be {CLOSURE_SCHEMA} with null source_root/build_dir"
             )
             continue
-        errors.extend(validate_closure_manifest(closure, f"{label}: closure {unit['name']}"))
+        errors.extend(validate_closure_manifest(
+            closure, f"{label}: closure {unit['name']}",
+            pulp_root=pulp_root, pulp_sha=receipt["pulp_sha"],
+        ))
         closure_generated_inputs = closure.get("generated_inputs", [])
         for index, generated_input in enumerate(
             closure_generated_inputs if isinstance(closure_generated_inputs, list) else [closure_generated_inputs]
@@ -585,7 +665,8 @@ def verify(root: Path, pulp_root: Path | None = None) -> dict[str, Any]:
             continue
         newest = position == len(receipts) - 1
         receipt_errors = verify_receipt(
-            root, receipt_path, receipt, policy, origins, newest=newest, head=head
+            root, receipt_path, receipt, policy, origins, newest=newest, head=head,
+            pulp_root=pulp_root,
         )
         errors.extend(receipt_errors)
         if pulp_root is not None and not receipt_errors:

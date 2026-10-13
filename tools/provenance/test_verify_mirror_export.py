@@ -349,7 +349,7 @@ class VerifyMirrorExportTests(unittest.TestCase):
         pin = "a" * 40
         self.assertEqual(
             verify_mirror_export.validate_external_inputs(
-                [{"path": "@fetchcontent/mbedtls/include/mbedtls.h", "source": "https://github.com/Mbed-TLS/mbedtls", "pin": pin}],
+                [{"path": "@fetchcontent/mbedtls/include/mbedtls.h", "source": "https://github.com/Mbed-TLS/mbedtls", "pin": pin, "sha256": "0" * 64}],
                 "fixture external inputs",
             ),
             [],
@@ -386,12 +386,101 @@ class VerifyMirrorExportTests(unittest.TestCase):
         )
         self.assertError(errors, "@external pin segment must equal pin")
 
+    def test_external_input_patched_copy_requires_patch_identity(self) -> None:
+        pin, key, copy_tree = "a" * 40, "b" * 64, "c" * 64
+        base_modification = ""
+        recipe = f"patch-set:{key}\nbase-modification:{base_modification}\ncopy-tree:{copy_tree}\n"
+        formula = "sha256(utf8('patch-set:' + patch_set.key + '\\nbase-modification:' + base_modification + '\\ncopy-tree:' + copy_tree + '\\n'))"
+        patch = hashlib.sha256(recipe.encode()).hexdigest()
+        row = {
+            "path": f"@external/choc/{pin}+patch-{patch[:16]}/choc.h",
+            "source": "https://github.com/danielraffel/choc.git",
+            "pin": pin,
+            "patched": True,
+            "patch": patch,
+            "sha256": "d" * 64,
+            "patch_set": {"pulp_path": "tools/cmake/PulpPatchChoc.cmake", "pulp_blob": "e" * 40, "key": key},
+            "base_modification": base_modification,
+            "copy_tree": copy_tree,
+            "patch_recipe": {"id": "pulp.vellum.patch-id.v1", "formula": formula},
+        }
+        self.assertEqual(
+            verify_mirror_export.validate_external_inputs([row], "fixture"), []
+        )
+        row["patch"] = "f" * 64
+        row["path"] = f"@external/choc/{pin}+patch-{row['patch'][:16]}/choc.h"
+        self.assertError(
+            verify_mirror_export.validate_external_inputs([row], "fixture"),
+            "does not recompute",
+        )
+
+    def test_external_input_patch_negative_cases(self) -> None:
+        pin, key, copy_tree = "a" * 40, "b" * 64, "c" * 64
+        recipe = f"patch-set:{key}\nbase-modification:\ncopy-tree:{copy_tree}\n"
+        formula = "sha256(utf8('patch-set:' + patch_set.key + '\\nbase-modification:' + base_modification + '\\ncopy-tree:' + copy_tree + '\\n'))"
+        patch = hashlib.sha256(recipe.encode()).hexdigest()
+        base = {
+            "path": f"@external/choc/{pin}+patch-{patch[:16]}/choc.h",
+            "source": "https://github.com/danielraffel/choc.git", "pin": pin,
+            "patched": True, "patch": patch, "sha256": "d" * 64,
+            "patch_set": {"pulp_path": "tools/cmake/PulpPatchChoc.cmake", "pulp_blob": "e" * 40, "key": key},
+            "base_modification": "", "copy_tree": copy_tree,
+            "patch_recipe": {"id": "pulp.vellum.patch-id.v1", "formula": formula},
+        }
+        cases = [
+            ({**base, "path": f"@external/choc/{pin}/choc.h"}, "path marker"),
+            ({**base, "patch": "not-a-digest"}, "patch must be a SHA-256"),
+            ({k: v for k, v in base.items() if k != "pin"}, "pin must be a 40-hex"),
+            ({k: v for k, v in base.items() if k not in ("patched",)}, "patch fields require patched=true"),
+            ({k: v for k, v in base.items() if k != "sha256"}, "sha256 must be a SHA-256"),
+            ({k: v for k, v in base.items() if k != "patch_set"}, "patch_set must contain"),
+            ({**base, "patch_recipe": {"id": "wrong", "formula": formula}}, "patch_recipe.id"),
+            ({**base, "base_modification": "a" * 64}, "base_modification must be empty"),
+            ({**base, "path": "@fetchcontent/choc/choc.h"}, "must be @external"),
+        ]
+        for row, fragment in cases:
+            self.assertError(verify_mirror_export.validate_external_inputs([row], "fixture"), fragment)
+
+    def test_external_input_patch_set_is_checked_against_pulp_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            pulp = Path(temporary)
+            (pulp / "tools/cmake").mkdir(parents=True)
+            patch_bytes = b"set(PATCH 1)\n"
+            patch_path = pulp / "tools/cmake/PulpPatchChoc.cmake"
+            patch_path.write_bytes(patch_bytes)
+            run(pulp, "init", "-q", "-b", "main")
+            run(pulp, "add", "-A")
+            run(pulp, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "pulp")
+            pulp_sha = run(pulp, "rev-parse", "HEAD")
+            run(pulp, "update-ref", "refs/remotes/origin/main", pulp_sha)
+            pulp_blob = run(pulp, "rev-parse", f"{pulp_sha}:tools/cmake/PulpPatchChoc.cmake")
+            key = hashlib.sha256(patch_bytes).hexdigest()
+            copy_tree = "c" * 64
+            recipe = f"patch-set:{key}\nbase-modification:\ncopy-tree:{copy_tree}\n"
+            patch = hashlib.sha256(recipe.encode()).hexdigest()
+            formula = "sha256(utf8('patch-set:' + patch_set.key + '\\nbase-modification:' + base_modification + '\\ncopy-tree:' + copy_tree + '\\n'))"
+            row = {
+                "path": f"@external/choc/{'a' * 40}+patch-{patch[:16]}/choc.h",
+                "source": "https://github.com/danielraffel/choc.git", "pin": "a" * 40,
+                "sha256": "d" * 64, "patched": True, "patch": patch,
+                "patch_set": {"pulp_path": "tools/cmake/PulpPatchChoc.cmake", "pulp_blob": pulp_blob, "key": key},
+                "base_modification": "", "copy_tree": copy_tree,
+                "patch_recipe": {"id": "pulp.vellum.patch-id.v1", "formula": formula},
+            }
+            self.assertEqual(verify_mirror_export.validate_external_inputs([row], "fixture", pulp_root=pulp, pulp_sha=pulp_sha), [])
+            for mutation, fragment in (
+                ({**row, "patch_set": {**row["patch_set"], "pulp_blob": "f" * 40}}, "pulp_blob"),
+                ({**row, "patch_set": {**row["patch_set"], "key": "e" * 64}}, "key"),
+                ({**row, "patch_set": {**row["patch_set"], "pulp_path": "missing.cmake"}}, "pulp_blob"),
+            ):
+                self.assertError(verify_mirror_export.validate_external_inputs([mutation], "fixture", pulp_root=pulp, pulp_sha=pulp_sha), fragment)
+
     def test_external_input_accepts_exact_googlesource_hosts(self) -> None:
         pin = "a" * 40
         for host in ("skia.googlesource.com/skia", "dawn.googlesource.com/dawn"):
             self.assertEqual(
                 verify_mirror_export.validate_external_inputs(
-                    [{"path": f"@external/source/{pin}/include/a.h", "source": f"https://{host}", "pin": pin}],
+                    [{"path": f"@external/source/{pin}/include/a.h", "source": f"https://{host}", "pin": pin, "sha256": "0" * 64}],
                     "fixture external inputs",
                 ),
                 [],
