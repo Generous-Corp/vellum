@@ -526,6 +526,27 @@ class VerifyExtractionTests(unittest.TestCase):
         self.assertEqual(report["status"], "fail")
         self.assertIn("declared boundary rules differ from the enforced rules", report["errors"])
 
+    def test_mirror_edge_rules_come_from_the_shared_table(self) -> None:
+        table = json.loads(verify_extraction.MIRROR_EDGE_TABLE.read_text(encoding="utf-8"))
+        self.assertEqual(table["schema"], "pulp.vellum.mirror-edge-patterns.v1")
+        self.assertEqual(
+            {name: rule.pattern for name, rule in verify_extraction.FORBIDDEN_MIRROR_EDGE_PATTERNS.items()},
+            table["content_patterns"],
+        )
+        self.assertEqual(verify_extraction.MIRROR_EDGE_SUFFIXES, set(table["suffixes"]))
+        self.assertTrue({"", ".md", ".ps1", ".sh", ".ts", ".tsx", ".yaml", ".yml"} <= verify_extraction.MIRROR_EDGE_SUFFIXES)
+
+    def test_vendored_table_must_match_pulp(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            pulp = Path(directory)
+            target = pulp / verify_extraction.PULP_MIRROR_EDGE_TABLE
+            self.assertTrue(verify_extraction.mirror_edge_table_drift(pulp))
+            target.parent.mkdir(parents=True)
+            target.write_bytes(verify_extraction.MIRROR_EDGE_TABLE.read_bytes())
+            self.assertEqual(verify_extraction.mirror_edge_table_drift(pulp), [])
+            target.write_bytes(verify_extraction.MIRROR_EDGE_TABLE.read_bytes().replace(b"gpu_audio", b"gpuaudio", 1))
+            self.assertTrue(verify_extraction.mirror_edge_table_drift(pulp))
+
     def test_repository_passes_full_retirement_verification(self) -> None:
         root = MODULE_PATH.parents[2]
         report = verify_extraction.verify(root)

@@ -49,7 +49,11 @@ RECEIPT_KEYS = {
 UNIT_KEYS = {"name", "closure_manifest", "closure_sha256", "oracle_class", "configure"}
 FILE_KEYS = {"mirror_path", "pulp_path", "mode", "blob"}
 GENERATED_KEYS = {"path", "sha256", "producer_paths"}
-GENERATED_OPTIONAL_KEYS = {"producer_dependency"}
+GENERATED_OPTIONAL_KEYS = {"producer_dependency", "normalization"}
+# Pulp hashes build_info.hpp with its configure timestamp replaced by this
+# placeholder, so the recorded digest reproduces across configures.
+GENERATED_NORMALIZATION = {"build_timestamp": "<build-timestamp>"}
+EXTERNAL_LINK_KEYS = {"dependency", "source", "pin", "asset_sha256"}
 EXTERNAL_CACHE_PATH = re.compile(r"^@[A-Za-z0-9_.-]+/")
 EXTERNAL_REPOSITORY = re.compile(r"^https://(?:github\.com|gitlab\.com|codeberg\.org|skia\.googlesource\.com|dawn\.googlesource\.com)/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*(?:\.git)?/?$")
 EMBEDDED_PIN = re.compile(r"(?:^|[-_/])([0-9a-f]{40})(?=$|[-_/])", re.IGNORECASE)
@@ -111,8 +115,8 @@ def validate_generated_input(value: Any, label: str) -> list[str]:
     """Validate one v2 generated-input object before reading its fields."""
     if not isinstance(value, dict):
         return [f"{label} must be an object; legacy string entries are rejected"]
-    if set(value) not in (GENERATED_KEYS, GENERATED_KEYS | GENERATED_OPTIONAL_KEYS):
-        return [f"{label} must contain path, sha256, producer_paths, and optional producer_dependency"]
+    if not GENERATED_KEYS <= set(value) <= GENERATED_KEYS | GENERATED_OPTIONAL_KEYS:
+        return [f"{label} must contain path, sha256, producer_paths, and optional producer_dependency or normalization"]
     errors: list[str] = []
     path = value.get("path")
     if (
@@ -137,6 +141,8 @@ def validate_generated_input(value: Any, label: str) -> list[str]:
                 or producer.startswith("~")
             ):
                 errors.append(f"{label}.producer_paths[{index}] must be repository-relative")
+    if "normalization" in value and value["normalization"] != GENERATED_NORMALIZATION:
+        errors.append(f"{label}.normalization must be {GENERATED_NORMALIZATION}")
     if "producer_dependency" in value:
         dependency = value["producer_dependency"]
         if not isinstance(dependency, dict) or set(dependency) != {"name", "source", "pin"}:
@@ -394,6 +400,22 @@ def validate_closure_manifest(
         if not isinstance(target, dict):
             errors.append(f"{label}.targets[{index}] must be an object")
             continue
+        links = target.get("external_link_inputs", [])
+        if not isinstance(links, list):
+            errors.append(f"{label}.targets[{index}].external_link_inputs must be a list")
+            links = []
+        for link_index, link in enumerate(links):
+            where = f"{label}.targets[{index}].external_link_inputs[{link_index}]"
+            if not isinstance(link, dict) or set(link) != EXTERNAL_LINK_KEYS:
+                errors.append(f"{where} must contain dependency, source, pin, and asset_sha256")
+                continue
+            if link["dependency"] != "skia" or not EXTERNAL_REPOSITORY.fullmatch(str(link["source"])) \
+                    or not SHA40.fullmatch(str(link["pin"])) or not SHA256.fullmatch(str(link["asset_sha256"])):
+                errors.append(f"{where} must name the Skia repository, a 40-hex pin, and a SHA-256 asset")
+        defines = target.get("compile_definitions", [])
+        if isinstance(defines, list) and "PULP_HAS_SKIA=1" in defines and "external_link_inputs" in target \
+                and not any(isinstance(link, dict) and link.get("dependency") == "skia" for link in links):
+            errors.append(f"{label}.targets[{index}] compiles against Skia but records no Skia link input")
         for key in ("sources", "include_dirs"):
             values = target.get(key, [])
             if not isinstance(values, list):

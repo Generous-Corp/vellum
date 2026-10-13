@@ -112,45 +112,24 @@ FORBIDDEN_ACTIVE_PATTERNS = {
         re.IGNORECASE,
     ),
 }
-# Pulp subsystems that stay Pulp-owned under Decision 0010: audio, DSP, MIDI,
-# music theory, plug-in formats, plug-in hosting, GPU audio, and product
-# content. A mirrored framework file may not reach any of them.
-_PULP_PRODUCT_SUBSYSTEMS = r"(?:audio|signal|midi|music|format|host|gpu_audio|content)"
+# Forbidden mirror edges (Decision 0010 / D3): audio, DSP, MIDI, music theory,
+# plug-in formats, plug-in hosting, GPU audio and product content stay
+# Pulp-owned, and so do the Pulp-kept view and state files. The table is
+# vendored byte-for-byte from Pulp's tools/scripts/vellum_mirror_edge_patterns.json,
+# which Pulp's closure gate applies before export; with --pulp-root the
+# verifier proves the two copies have not drifted.
+MIRROR_EDGE_TABLE = Path(__file__).with_name("mirror_edge_patterns.json")
+PULP_MIRROR_EDGE_TABLE = "tools/scripts/vellum_mirror_edge_patterns.json"
+_MIRROR_EDGE_TABLE = json.loads(MIRROR_EDGE_TABLE.read_text(encoding="utf-8"))
 FORBIDDEN_MIRROR_EDGE_PATTERNS = {
-    "mirror-product-include": re.compile(
-        r"#\s*(?:include|import)\s*[<\"]"
-        r"(?:pulp/" + _PULP_PRODUCT_SUBSYSTEMS + r"/"
-        r"|pluginterfaces/|public\.sdk/|clap/|lv2/|AudioUnitSDK/|oboe/"
-        r"|AudioToolbox/|AudioUnit/|CoreAudio/|CoreAudioKit/|CoreMIDI/|AVFAudio/)",
-    ),
-    "mirror-product-symbol": re.compile(
-        r"\bpulp::" + _PULP_PRODUCT_SUBSYSTEMS + r"\b"
-        r"|\bpulp[-_](?:audio|signal|midi|music|format|host|gpu[-_]audio|content)\b",
-    ),
-    "mirror-audio-framework-link": re.compile(
-        r"\b(?:AudioToolbox|AudioUnit|CoreAudio|CoreAudioKit|CoreMIDI|AVFAudio)"
-        r"\.framework\b|-framework\s+"
-        r"(?:AudioToolbox|AudioUnit|CoreAudio|CoreAudioKit|CoreMIDI|AVFAudio)\b",
-    ),
+    name: re.compile(pattern) for name, pattern in _MIRROR_EDGE_TABLE["content_patterns"].items()
 }
-# Pulp-kept files inside otherwise generic Pulp roots (Decision 0010 / D3):
-# the view-audio widgets, the graph editor view, and the product content
-# registry. Mirrored code may neither include them nor be one of them.
-_PULP_KEPT_VIEW_FILES = (
-    r"(?:audio_bridge|audio_inspector_\w+|eq_curve_view|midi_binding|midi_keyboard"
-    r"|musical_typing_keyboard\w*|plugin_manager_panel|sample_asset_drop_target"
-    r"|step_grid_view|waveform_\w+|graph_editor_view)"
-)
-FORBIDDEN_MIRROR_EDGE_PATTERNS["mirror-pulp-kept-include"] = re.compile(
-    r"#\s*(?:include|import)\s*[<\"]"
-    r"(?:pulp/view/(?:audio/|(?:widgets/)?" + _PULP_KEPT_VIEW_FILES + r"\.h)"
-    r"|pulp/state/content_registry\.h)",
-)
-PULP_KEPT_MIRROR_PATH = re.compile(
-    r"\Amirror/core/(?:view/(?:audio/|(?:.*/)?" + _PULP_KEPT_VIEW_FILES + r"\.)"
-    r"|host/|state/(?:.*/)?content_registry\.)"
-)
-MIRROR_EDGE_SUFFIXES = TEXT_SUFFIXES | {".inl", ".ipp", ".txt"}
+# Path rules are relative to the mirror root.
+MIRROR_EDGE_PATH_PATTERNS = {
+    name: re.compile(pattern) for name, pattern in _MIRROR_EDGE_TABLE["path_patterns"].items()
+}
+PULP_KEPT_MIRROR_PATH = MIRROR_EDGE_PATH_PATTERNS["mirror-pulp-kept-file"]
+MIRROR_EDGE_SUFFIXES = set(_MIRROR_EDGE_TABLE["suffixes"])
 POLICY_IMPLEMENTATION_PATHS = {
     "scripts/verify_sdk_artifact.py",
 }
@@ -359,14 +338,24 @@ def mirror_origin_findings(
     return findings
 
 
+def mirror_edge_table_drift(pulp_root: Path) -> list[str]:
+    """The vendored edge table must be byte-identical to Pulp's own copy."""
+    pulp_table = pulp_root / PULP_MIRROR_EDGE_TABLE
+    if not pulp_table.is_file():
+        return [f"Pulp checkout {pulp_root} has no {PULP_MIRROR_EDGE_TABLE}"]
+    if pulp_table.read_bytes() != MIRROR_EDGE_TABLE.read_bytes():
+        return [f"{MIRROR_EDGE_TABLE.name} differs from Pulp's {PULP_MIRROR_EDGE_TABLE}"]
+    return []
+
+
 def mirror_edge_findings(root: Path) -> list[dict[str, object]]:
     findings: list[dict[str, object]] = []
     for path in mirror_files(root):
         relative = path.relative_to(root).as_posix()
-        if PULP_KEPT_MIRROR_PATH.match(relative):
-            findings.append(
-                {"rule": "mirror-pulp-kept-file", "path": relative, "line": 0, "match": relative}
-            )
+        in_mirror = relative.removeprefix(MIRROR_ROOT)
+        for name, pattern in MIRROR_EDGE_PATH_PATTERNS.items():
+            if pattern.search(in_mirror):
+                findings.append({"rule": name, "path": relative, "line": 0, "match": relative})
         if path.suffix.lower() not in MIRROR_EDGE_SUFFIXES:
             continue
         try:
@@ -598,6 +587,9 @@ def verify(
     # mirrored file passes only where a Pulp checkout proved it. Lanes that are
     # not the required provenance lane may defer that proof to it.
     if pulp_root is not None:
+        drift = mirror_edge_table_drift(pulp_root)
+        checks["mirror_edge_table_matches_pulp"] = not drift
+        errors.extend(drift)
         pulp_errors = verify_origins_against_pulp(pulp_root, records)
         checks["mirror_origins_verified_against_pulp"] = not pulp_errors
         errors.extend(pulp_errors)
