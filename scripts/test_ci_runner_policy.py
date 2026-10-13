@@ -33,6 +33,8 @@ EXPECTED_RUNNERS = {
         '["ubuntu-latest"]',
     ),
     "pulp-observatory-watchdog.yml": ("__hosted__", "ubuntu-latest"),
+    "review-verdict.yml": ("__hosted__", "ubuntu-24.04"),
+    "review-verdict-trigger.yml": ("__hosted__", "ubuntu-24.04"),
     "readme-quick-start.yml": (
         "VELLUM_MACOS_RUNS_ON_JSON",
         '["macos-15"]',
@@ -42,6 +44,7 @@ EXPECTED_RUNNERS = {
 
 HOSTED_LABELS = (
     "ubuntu-latest",
+    "ubuntu-24.04",
     "windows-latest",
     "macos-latest",
     "macos-13",
@@ -55,6 +58,7 @@ NODE24_ACTION_PINS = {
     "actions/create-github-app-token": "1b10c78c7865c340bc4f6099eb2f838309f1e8c3",
     "actions/download-artifact": "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",  # v8.0.1
     "actions/setup-node": "820762786026740c76f36085b0efc47a31fe5020",  # v7.0.0
+    "actions/setup-python": "ece7cb06caefa5fff74198d8649806c4678c61a1",  # v6.3.0
     "actions/upload-artifact": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",  # v7.0.1
     "browser-actions/setup-chrome": "2e1d749697dd1612b833dba4a722266286fbefcd",  # v2.1.2
 }
@@ -495,7 +499,8 @@ class RunnerPolicyTests(unittest.TestCase):
             for line_number, line in enumerate(
                 path.read_text(encoding="utf-8").splitlines(), start=1
             ):
-                if "uses:" not in line or "uses: ./" in line:
+                # `statuses: write` contains "uses:" too; only a step key counts.
+                if not re.match(r"^\s*-?\s*uses:", line) or "uses: ./" in line:
                     continue
                 match = ACTION_USE.match(line)
                 self.assertIsNotNone(
