@@ -828,16 +828,39 @@ class VerifyMirrorExportTests(unittest.TestCase):
         fixture.reland()
         self.assertError(fixture.errors(), "canvas closure labelled cpu-only")
 
+    def test_guard_full_verify_enforces_stale_exceptions(self) -> None:
+        fixture = Fixture(self.base)
+        self.assertEqual(fixture.errors(), [])
+        # pulp-canvas is exported by the landed receipt but links nothing, so an
+        # exception whose source is pulp-canvas can never be used: it is stale.
+        policy_path = fixture.vellum / "provenance/mirror/link-policy.json"
+        policy = json.loads(policy_path.read_text())
+        policy["approved_unmirrored_edges"].append({
+            "id": "stale-canvas-events", "source": "pulp-canvas", "target": "pulp-events",
+            "platforms": ["Darwin"], "owner": "d3", "approver": "team-lead 2026-10-13",
+            "exit_criterion": "Removed when canvas stops reaching events",
+        })
+        write(fixture.vellum, "provenance/mirror/link-policy.json", dump(policy))
+        fixture.reland()
+        self.assertError(fixture.errors(), "stale approved unmirrored exception stale-canvas-events")
+
     def test_guard_malformed_receipt_unit_identity(self) -> None:
         fixture = Fixture(self.base)
-        unit = dict(fixture.receipt["units"][0], configure={"identity": {}})
+        # A well-shaped configure whose identity lacks keys reaches the
+        # identity branch rather than the outer configure-shape check.
+        configure = {"identity": {"gpu": True}, "options_sha256": fixture.receipt_configure_sha(), "label": ""}
+        unit = dict(fixture.receipt["units"][0], configure=configure)
         fixture.reland(units=[unit])
-        self.assertError(fixture.errors(), "configure must contain identity, options_sha256, and label")
+        errors = fixture.errors()
+        self.assertError(errors, "units[0] configure identity is malformed")
+        self.assertFalse(any("configure must contain identity" in e for e in errors), errors)
 
     def test_guard_transitive_forbidden_branch(self) -> None:
         policy = json.loads((REPO / "provenance/mirror/link-policy.json").read_text())
-        c = {"configure":{"identity":{"system":"Darwin"}},"targets":[],"transitive_link_targets":["pulp-audio-core"],"files":[],"compile_definitions":[]}
-        self.assertError(verify_mirror_export.link_closure_findings({"x": c}, policy), "transitive unmirrored target pulp-audio-core")
+        # A non-Pulp name that matches the forbidden pattern, reachable only
+        # transitively, so the forbidden branch rather than the unmirrored one runs.
+        c = {"configure":{"identity":{"system":"Darwin"}},"targets":[],"transitive_link_targets":["juce-audio"],"files":[],"compile_definitions":[]}
+        self.assertError(verify_mirror_export.link_closure_findings({"x": c}, policy), "x: forbidden link target juce-audio")
 
     def test_guard_transitive_non_pulp_branch(self) -> None:
         policy = json.loads((REPO / "provenance/mirror/link-policy.json").read_text())
@@ -846,11 +869,17 @@ class VerifyMirrorExportTests(unittest.TestCase):
 
     def test_guard_host_path_boundary_characters(self) -> None:
         for value in ('x;"/Users/a', "x'/private/var/a"):
-            self.assertTrue(verify_mirror_export.host_path_violations(value, "fixture"))
+            self.assertError(verify_mirror_export.host_path_violations(value, "fixture"), "contains an absolute host path")
+
+    def test_guard_include_flag_boundary_characters(self) -> None:
+        for value in ("x;-I/Users/a", "x\"-isystem/Volumes/a", "x'-I/home/a"):
+            self.assertError(verify_mirror_export.host_path_violations(value, "fixture"), "contains an absolute host path")
 
     def test_guard_skia_exemption_strips_only_segment(self) -> None:
-        value = "@external/skia/" + "a" * 40 + "/build//Users/a/include/private/x"
-        self.assertTrue(verify_mirror_export.host_path_violations(value, "fixture"))
+        segment = "@external/skia/" + "a" * 40 + "/build/include/include/private/x"
+        self.assertEqual(verify_mirror_export.host_path_violations(segment, "fixture"), [])
+        value = segment + ";/private/var/folders/x"
+        self.assertError(verify_mirror_export.host_path_violations(value, "fixture"), "contains an absolute host path")
 
     def test_guard_replay_shape(self) -> None:
         row = self._patched_row()
@@ -858,10 +887,26 @@ class VerifyMirrorExportTests(unittest.TestCase):
         self.assertError(verify_mirror_export.validate_external_inputs([row], "fixture"), "replay must contain")
 
     def test_guard_replay_order(self) -> None:
-        row = self._patched_row()
-        row["patch_recipe"]["replay"]["functions"] = ["pulp_patch_choc_v9", "pulp_patch_choc_v8"]
-        errors = verify_mirror_export.patch_provenance_violations(row, "fixture")
-        self.assertTrue(errors)
+        with tempfile.TemporaryDirectory() as temporary:
+            pulp = Path(temporary)
+            patch_bytes = b"function(pulp_patch_choc_v8 x)\nendfunction()\nfunction(pulp_patch_choc_v9 x)\nendfunction()\n"
+            write(pulp, "tools/cmake/PulpPatchChoc.cmake", patch_bytes)
+            run(pulp, "init", "-q", "-b", "main")
+            run(pulp, "add", "-A")
+            run(pulp, "commit", "-q", "-m", "pulp")
+            pulp_sha = run(pulp, "rev-parse", "HEAD")
+            pulp_blob = run(pulp, "rev-parse", f"{pulp_sha}:tools/cmake/PulpPatchChoc.cmake")
+            key = hashlib.sha256(patch_bytes).hexdigest()
+            row = self._patched_row()
+            copy_tree = row["copy_tree"]
+            patch = hashlib.sha256(f"patch-set:{key}\nbase-modification:\ncopy-tree:{copy_tree}\n".encode()).hexdigest()
+            row.update(patch=patch, path=f"@external/choc/{'a' * 40}+patch-{patch[:16]}/choc.h")
+            row["patch_set"].update(pulp_blob=pulp_blob, key=key)
+            row["patch_recipe"]["replay"].update(patch_set_blob=pulp_blob, functions=["pulp_patch_choc_v8", "pulp_patch_choc_v9"])
+            self.assertEqual(verify_mirror_export.patch_provenance_violations(row, "fixture", pulp_root=pulp, pulp_sha=pulp_sha), [])
+            row["patch_recipe"]["replay"]["functions"] = ["pulp_patch_choc_v9", "pulp_patch_choc_v8"]
+            errors = verify_mirror_export.patch_provenance_violations(row, "fixture", pulp_root=pulp, pulp_sha=pulp_sha)
+            self.assertEqual(errors, ["fixture.patch_recipe.replay order does not match the patch-set blob"])
 
     def test_guard_recipe_formula(self) -> None:
         row = self._patched_row()
