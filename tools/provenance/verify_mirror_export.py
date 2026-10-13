@@ -169,7 +169,9 @@ def patch_provenance_violations(
     if not SHA256.fullmatch(str(row.get("sha256", ""))):
         errors.append(f"{label}.sha256 must be a SHA-256 content digest")
     if not patched:
-        if "patch" in row or "patched" in row or "patch_set" in row:
+        if any(key in row for key in (
+            "patch", "patched", "patch_set", "base_modification", "copy_tree", "patch_recipe"
+        )):
             errors.append(f"{label} patch fields require patched=true")
         return errors
     if not isinstance(path, str) or not path.startswith("@external/"):
@@ -190,14 +192,20 @@ def patch_provenance_violations(
         errors.append(f"{label}.patch_set.key must be a SHA-256")
     base_modification = row.get("base_modification")
     copy_tree = row.get("copy_tree")
-    if base_modification != "" and not SHA256.fullmatch(str(base_modification)):
-        errors.append(f"{label}.base_modification must be empty or a SHA-256")
+    if base_modification != "":
+        errors.append(f"{label}.base_modification must be empty")
     if not SHA256.fullmatch(str(copy_tree)):
         errors.append(f"{label}.copy_tree must be a SHA-256")
+    patch_recipe = row.get("patch_recipe")
+    expected_formula = "sha256(utf8('patch-set:' + patch_set.key + '\\nbase-modification:' + base_modification + '\\ncopy-tree:' + copy_tree + '\\n'))"
+    if not isinstance(patch_recipe, dict) or set(patch_recipe) != {"id", "formula"}:
+        errors.append(f"{label}.patch_recipe must contain id and formula")
+    elif patch_recipe.get("id") != "pulp.vellum.patch-id.v1":
+        errors.append(f"{label}.patch_recipe.id is not pulp.vellum.patch-id.v1")
+    elif patch_recipe.get("formula") != expected_formula:
+        errors.append(f"{label}.patch_recipe.formula is not the supported recipe")
     expected_recipe = f"patch-set:{key}\nbase-modification:{base_modification}\ncopy-tree:{copy_tree}\n"
-    if row.get("patch_id_recipe") != expected_recipe:
-        errors.append(f"{label}.patch_id_recipe does not match the recorded inputs")
-    elif SHA256.fullmatch(str(patch)) and hashlib.sha256(expected_recipe.encode()).hexdigest() != patch:
+    if SHA256.fullmatch(str(patch)) and hashlib.sha256(expected_recipe.encode()).hexdigest() != patch:
         errors.append(f"{label}.patch does not recompute from patch-set provenance")
     if pulp_root is not None and isinstance(pulp_sha, str) and isinstance(source_path, str):
         blob = git_try(pulp_root, "rev-parse", f"{pulp_sha}:{source_path}")
