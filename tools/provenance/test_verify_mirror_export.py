@@ -386,6 +386,24 @@ class VerifyMirrorExportTests(unittest.TestCase):
         )
         self.assertError(errors, "@external pin segment must equal pin")
 
+    def test_external_input_patched_copy_requires_patch_identity(self) -> None:
+        pin, patch = "a" * 40, "b" * 64
+        row = {
+            "path": f"@external/choc/{pin}+patch-{patch[:16]}/choc.h",
+            "source": "https://github.com/danielraffel/choc.git",
+            "pin": pin,
+            "patched": True,
+            "patch": patch,
+        }
+        self.assertEqual(
+            verify_mirror_export.validate_external_inputs([row], "fixture"), []
+        )
+        row["patch"] = "c" * 64
+        self.assertError(
+            verify_mirror_export.validate_external_inputs([row], "fixture"),
+            "@external pin segment must equal pin",
+        )
+
     def test_external_input_accepts_exact_googlesource_hosts(self) -> None:
         pin = "a" * 40
         for host in ("skia.googlesource.com/skia", "dawn.googlesource.com/dawn"):

@@ -178,13 +178,19 @@ def validate_external_inputs(value: Any, label: str) -> list[str]:
         pin = row.get("pin")
         if not isinstance(pin, str) or not SHA40.fullmatch(pin):
             errors.append(f"{where}.pin must be a 40-hex commit SHA")
+        patch = row.get("patch")
+        if row.get("patched") is True and not SHA256.fullmatch(str(patch)):
+            errors.append(f"{where}.patch must be a SHA-256 when patched")
         embedded = EMBEDDED_PIN.search(path) if isinstance(path, str) else None
         if embedded and (not isinstance(pin, str) or embedded.group(1).lower() != pin.lower()):
             errors.append(f"{where}.path embedded pin must equal pin")
         if isinstance(path, str) and path.startswith("@external/"):
             segments = path.split("/")
             positional = segments[2] if len(segments) > 2 else ""
-            if not isinstance(pin, str) or positional != pin:
+            expected = pin
+            if row.get("patched") is True and isinstance(patch, str) and SHA256.fullmatch(patch):
+                expected = f"{pin}+patch-{patch[:16]}"
+            if positional != expected:
                 errors.append(f"{where}.path @external pin segment must equal pin")
     return errors
 
