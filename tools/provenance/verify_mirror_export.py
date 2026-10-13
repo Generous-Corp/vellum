@@ -19,7 +19,6 @@ win over prose.
 from __future__ import annotations
 
 import argparse
-from datetime import date
 import hashlib
 import json
 import re
@@ -63,6 +62,7 @@ SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 PATCH_SET_KEYS = {"pulp_path", "pulp_blob", "key"}
 UTC = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
 FILE_MODES = {"100644", "100755", "120000"}
+REPLAY_METHOD = "export the pinned commit with `git archive <pin>`; in a CMake -P script, include the patch-set file whose git blob is patch_set_blob and call each name in functions, in order, with the exported tree's root; copy_tree is the digest of the result"
 
 
 def git(root: Path, *args: str) -> str:
@@ -164,6 +164,9 @@ def configure_violations(closure: dict[str, Any], label: str, *, is_canvas: bool
     if not isinstance(identity, dict) or set(identity) != {"gpu", "skia", "text_shaping", "build_type", "system", "processor"}:
         return [f"{label}.configure.identity must contain gpu, skia, text_shaping, build_type, system, and processor"]
     errors: list[str] = []
+    for option in ("CMAKE_BUILD_TYPE", "CMAKE_SYSTEM_NAME", "CMAKE_SYSTEM_PROCESSOR"):
+        if option not in options or not isinstance(options[option], str) or not options[option]:
+            errors.append(f"{label}.configure.options must include non-empty {option}")
     if not SHA256.fullmatch(str(configure.get("options_sha256"))):
         errors.append(f"{label}.configure.options_sha256 must be a SHA-256")
     elif hashlib.sha256(json.dumps(options, sort_keys=True).encode("utf-8")).hexdigest() != configure["options_sha256"]:
@@ -183,9 +186,9 @@ def configure_violations(closure: dict[str, Any], label: str, *, is_canvas: bool
         errors.append(f"{label}.configure.identity.build_type disagrees with CMAKE_BUILD_TYPE")
     if identity["build_type"] != closure.get("configuration"):
         errors.append(f"{label}.configure.identity.build_type disagrees with configuration")
-    if "CMAKE_SYSTEM_NAME" in options and identity["system"] != options["CMAKE_SYSTEM_NAME"]:
+    if identity["system"] != options.get("CMAKE_SYSTEM_NAME"):
         errors.append(f"{label}.configure.identity.system disagrees with CMAKE_SYSTEM_NAME")
-    if "CMAKE_SYSTEM_PROCESSOR" in options and identity["processor"] != options["CMAKE_SYSTEM_PROCESSOR"]:
+    if identity["processor"] != options.get("CMAKE_SYSTEM_PROCESSOR"):
         errors.append(f"{label}.configure.identity.processor disagrees with CMAKE_SYSTEM_PROCESSOR")
     if "label" in configure and configure["label"] != "cpu-only":
         errors.append(f"{label}.configure.label must be cpu-only when present")
@@ -194,7 +197,8 @@ def configure_violations(closure: dict[str, Any], label: str, *, is_canvas: bool
             errors.append(f"{label}: canvas closure labelled cpu-only is refused for G2e")
         if not identity["gpu"] or not identity["skia"] or not identity["text_shaping"]:
             errors.append(f"{label}: canvas closure requires GPU, Skia, and text shaping configure")
-        definitions = set(closure.get("compile_definitions", []))
+        canvas_targets = [t for t in closure.get("targets", []) if isinstance(t, dict) and t.get("name") == "pulp-canvas"]
+        definitions = {d for target in canvas_targets for d in target.get("compile_definitions", [])}
         for definition in ("PULP_HAS_SKIA=1", "PULP_HAS_TEXT_SHAPING=1"):
             if definition not in definitions:
                 errors.append(f"{label}: canvas compile definitions must include {definition}")
@@ -206,10 +210,13 @@ def host_path_violations(value: Any, label: str) -> list[str]:
     errors: list[str] = []
     if isinstance(value, str):
         windows_absolute = bool(re.match(r"^[A-Za-z]:[\\/]", value))
+        skia_private = bool(re.search(r"@external/skia/[0-9a-f]{40}/.*?/include/private/", value, re.IGNORECASE))
         embedded_unix = any(
-            re.search(rf"(?:^|//){root}(?:/|$)", value, re.IGNORECASE)
-            or re.search(rf"(?:^|[=:\s,(])/{root}(?:/|$)", value, re.IGNORECASE)
-            or re.search(rf"(?:^|[-=:\s])-[Ii](?:system)?/{root}(?:/|$)", value, re.IGNORECASE)
+            (root == "private" and skia_private) is False and (
+                re.search(rf"(?:^|//){root}(?:/|$)", value, re.IGNORECASE)
+                or re.search(rf"(?:^|[=:\s,(;\"'])/{root}(?:/|$)", value, re.IGNORECASE)
+                or re.search(rf"(?:^|[-=:\s;\"'])-[Ii](?:system)?/{root}(?:/|$)", value, re.IGNORECASE)
+            )
             for root in ("Users", "Volumes", "home", "private")
         )
         embedded_windows = bool(re.search(r"(?i)(?:^|[^A-Za-z0-9])[A-Z]:[\\/]", value))
@@ -273,11 +280,18 @@ def patch_provenance_violations(
     elif patch_recipe.get("formula") != expected_formula:
         errors.append(f"{label}.patch_recipe.formula is not the supported recipe")
     replay = patch_recipe.get("replay") if isinstance(patch_recipe, dict) else None
-    if not isinstance(replay, list) or not replay or not all(isinstance(name, str) and name for name in replay):
-        errors.append(f"{label}.patch_recipe.replay must be a non-empty list of function names")
+    replay_functions = replay.get("functions") if isinstance(replay, dict) else None
+    if not isinstance(replay, dict) or set(replay) != {"method", "patch_set_blob", "functions"}:
+        errors.append(f"{label}.patch_recipe.replay must contain method, patch_set_blob, and functions")
+    elif replay.get("method") != REPLAY_METHOD:
+        errors.append(f"{label}.patch_recipe.replay.method is not the supported replay")
+    if not isinstance(replay_functions, list) or not replay_functions or not all(isinstance(name, str) and name.startswith("pulp_patch_") for name in replay_functions):
+        errors.append(f"{label}.patch_recipe.replay.functions must be non-empty pulp_patch_* names")
     expected_recipe = f"patch-set:{key}\nbase-modification:{base_modification}\ncopy-tree:{copy_tree}\n"
     if SHA256.fullmatch(str(patch)) and hashlib.sha256(expected_recipe.encode()).hexdigest() != patch:
         errors.append(f"{label}.patch does not recompute from patch-set provenance")
+    if isinstance(replay, dict) and replay.get("patch_set_blob") != source_blob:
+        errors.append(f"{label}.patch_recipe.replay.patch_set_blob must equal patch_set.pulp_blob")
     if pulp_root is not None and isinstance(pulp_sha, str) and isinstance(source_path, str):
         blob = git_try(pulp_root, "rev-parse", f"{pulp_sha}:{source_path}")
         if blob != source_blob:
@@ -288,10 +302,10 @@ def patch_provenance_violations(
         )
         if content.returncode != 0 or hashlib.sha256(content.stdout).hexdigest() != key:
             errors.append(f"{label}.patch_set.key does not match the Pulp patch-set blob")
-        if isinstance(replay, list) and all(isinstance(name, str) and name for name in replay):
+        if isinstance(replay, dict) and isinstance(replay_functions, list) and all(isinstance(name, str) and name for name in replay_functions):
             positions = []
             text = content.stdout.decode("utf-8", errors="replace") if content.returncode == 0 else ""
-            for name in replay:
+            for name in replay_functions:
                 match = re.search(rf"(?m)^function\s*\(\s*{re.escape(name)}\b", text)
                 if match is None:
                     errors.append(f"{label}.patch_recipe.replay function {name} is absent from the patch-set blob")
@@ -519,23 +533,21 @@ def load_policy(root: Path) -> tuple[dict[str, Any] | None, list[str]]:
     if any(is_pulp_target(x) for x in policy.get("allowed_external_targets", [])):
         errors.append(f"{POLICY_PATH}: allowed_external_targets cannot contain Pulp targets")
     exceptions = policy.get("approved_unmirrored_edges")
-    required = {"source", "target", "platforms", "owner", "approver", "expiry"}
+    required = {"id", "source", "target", "platforms", "owner", "approver", "exit_criterion"}
     if not isinstance(exceptions, list):
         errors.append(f"{POLICY_PATH}: approved_unmirrored_edges must be a list")
     else:
         for index, entry in enumerate(exceptions):
             where = f"{POLICY_PATH}: approved_unmirrored_edges[{index}]"
             if not isinstance(entry, dict) or set(entry) != required:
-                errors.append(f"{where} must contain source, target, platforms, owner, approver, and expiry")
+                errors.append(f"{where} must contain id, source, target, platforms, owner, approver, and exit_criterion")
                 continue
-            if not all(isinstance(entry[k], str) and entry[k] for k in ("source", "target", "owner", "approver", "expiry")):
+            if not all(isinstance(entry[k], str) and entry[k] for k in ("id", "source", "target", "owner", "approver", "exit_criterion")):
                 errors.append(f"{where} string fields must be non-empty")
             if not isinstance(entry["platforms"], list) or not entry["platforms"] or not all(isinstance(p, str) and p for p in entry["platforms"]):
                 errors.append(f"{where}.platforms must be a non-empty list")
-            try:
-                date.fromisoformat(entry["expiry"])
-            except (TypeError, ValueError):
-                errors.append(f"{where}.expiry must be YYYY-MM-DD")
+            if not re.fullmatch(r"team-lead \d{4}-\d{2}-\d{2}", entry["approver"]):
+                errors.append(f"{where}.approver must be team-lead YYYY-MM-DD")
     return (policy if not errors else None), errors
 
 
@@ -547,31 +559,29 @@ def is_pulp_target(name: str) -> bool:
     return canonical_target(name).startswith(("pulp-", "pulp_"))
 
 
-def approved_unmirrored_edge(policy: dict[str, Any], source: str, target: str, system: Any) -> bool:
+def approved_unmirrored_edge(policy: dict[str, Any], source: str, target: str, system: Any, used: set[str] | None = None) -> bool:
     """Match one exact Pulp edge to a current Vellum-owned exception."""
     for entry in policy.get("approved_unmirrored_edges", []):
         if entry.get("source") != source or entry.get("target") != target:
             continue
         if not isinstance(system, str) or system not in entry.get("platforms", []):
             continue
-        try:
-            if date.fromisoformat(entry["expiry"]) < date.today():
-                continue
-        except (TypeError, ValueError):
-            continue
         if entry.get("owner") and entry.get("approver"):
+            if used is not None:
+                used.add(str(entry.get("id")))
             return True
     return False
 
 
 def link_closure_findings(
-    closures: dict[str, dict[str, Any]], policy: dict[str, Any]
+    closures: dict[str, dict[str, Any]], policy: dict[str, Any], *, enforce_stale: bool = False
 ) -> list[str]:
     """Re-check machine-generated closures against the Vellum-owned policy."""
     findings: list[str] = []
     forbidden_target = re.compile(policy["forbidden_target_pattern"], re.IGNORECASE)
     forbidden_define = re.compile(policy["forbidden_definition_pattern"])
     allowed_external = set(policy["allowed_external_targets"])
+    used_exceptions: set[str] = set()
     exported_targets = {
         canonical_target(str(target.get("name", "")))
         for closure in closures.values()
@@ -581,39 +591,50 @@ def link_closure_findings(
     for unit, closure in sorted(closures.items()):
         if closure.get("missing_targets"):
             findings.append(f"{unit}: missing targets {closure['missing_targets']}")
-        links = set(closure.get("transitive_link_targets", []))
         system = ((closure.get("configure") or {}).get("identity") or {}).get("system")
+        direct_links = {
+            canonical_target(str(link))
+            for target in closure.get("targets", []) if isinstance(target, dict)
+            for link in target.get("link_targets", [])
+        }
+        for link in closure.get("transitive_link_targets", []):
+            canonical = canonical_target(str(link))
+            if canonical in direct_links:
+                continue
+            if is_pulp_target(canonical) and canonical not in exported_targets:
+                findings.append(f"{unit}: transitive unmirrored target {canonical} lacks an exact source edge exception")
+            elif canonical not in exported_targets and canonical not in allowed_external and forbidden_target.search(canonical):
+                findings.append(f"{unit}: forbidden link target {canonical}")
         for target in closure.get("targets", []):
             if not isinstance(target, dict):
                 findings.append(f"{unit}: targets entry must be an object")
                 continue
-            links.update(target.get("link_targets", []))
-        for link in sorted(links):
-            canonical = canonical_target(str(link))
-            if forbidden_target.search(link):
-                findings.append(f"{unit}: forbidden link target {link}")
-            elif canonical not in exported_targets:
-                if canonical in allowed_external:
-                    continue
-                if is_pulp_target(canonical):
-                    continue
-                findings.append(f"{unit}: link target {link} is neither exported nor allowed")
         for target in closure.get("targets", []):
             if not isinstance(target, dict):
                 continue
             source = canonical_target(str(target.get("name", "")))
             for link in target.get("link_targets", []):
                 canonical = canonical_target(str(link))
-                if not is_pulp_target(canonical) or canonical in exported_targets or forbidden_target.search(canonical):
+                if canonical in exported_targets:
                     continue
-                if not approved_unmirrored_edge(policy, source, canonical, system):
+                if is_pulp_target(canonical) and approved_unmirrored_edge(policy, source, canonical, system, used_exceptions):
+                    continue
+                if forbidden_target.search(canonical):
+                    findings.append(f"{unit}: forbidden link target {canonical}")
+                elif is_pulp_target(canonical):
                     findings.append(f"{unit}: unmirrored edge {source}->{canonical} lacks a current approved exception")
+                elif canonical not in allowed_external:
+                    findings.append(f"{unit}: link target {canonical} is neither exported nor allowed")
         for path in closure.get("files", []):
             if any(path.startswith(prefix) for prefix in policy["forbidden_path_prefixes"]):
                 findings.append(f"{unit}: closure file under a forbidden Pulp root: {path}")
         for definition in closure.get("compile_definitions", []):
             if forbidden_define.search(definition):
                 findings.append(f"{unit}: forbidden compile definition {definition}")
+    if enforce_stale:
+        for entry in policy.get("approved_unmirrored_edges", []):
+            if entry.get("id") not in used_exceptions:
+                findings.append(f"stale approved unmirrored exception {entry.get('id')}")
     return findings
 
 
@@ -688,6 +709,11 @@ def verify_receipt(
             pulp_root=pulp_root, pulp_sha=receipt["pulp_sha"],
             is_canvas=unit["name"] == "canvas",
         ))
+        if unit["name"] != "canvas" and any(
+            isinstance(target, dict) and target.get("name") == "pulp-canvas"
+            for target in closure.get("targets", [])
+        ):
+            errors.append(f"{label}: pulp-canvas may only appear in the canvas D3 unit")
         expected_configure = {
             "identity": closure.get("configure", {}).get("identity"),
             "options_sha256": closure.get("configure", {}).get("options_sha256"),
@@ -728,7 +754,7 @@ def verify_receipt(
             if missing:
                 errors.append(f"{label}: generated input {row['path']} producers not exported: {missing}")
         if policy is not None:
-            errors.extend(f"{label}: {f}" for f in link_closure_findings(closures, policy))
+            errors.extend(f"{label}: {f}" for f in link_closure_findings(closures, policy, enforce_stale=True))
 
     recorded_origins = {
         (o.get("mirror_path"), o.get("git_blob_sha"))

@@ -1,7 +1,26 @@
 {
   "schema": "vellum.mirror-link-policy.v1",
   "allowed_external_targets": [],
-  "approved_unmirrored_edges": [],
+  "approved_unmirrored_edges": [
+    {
+      "id": "P4-edge-view-native-timebase",
+      "source": "pulp-view-native",
+      "target": "pulp-timebase",
+      "platforms": ["Darwin", "Linux"],
+      "owner": "carve-p4",
+      "approver": "team-lead 2026-10-13",
+      "exit_criterion": "Removed when the P4 view-audio carve stops view-native reaching audio"
+    },
+    {
+      "id": "P4-edge-view-native-sample-bank-manifest",
+      "source": "pulp-view-native",
+      "target": "pulp-sample-bank-manifest",
+      "platforms": ["Darwin", "Linux"],
+      "owner": "carve-p4",
+      "approver": "team-lead 2026-10-13",
+      "exit_criterion": "Removed when the P4 view-audio carve stops view-native reaching audio"
+    }
+  ],
   "forbidden_target_pattern": "(?:^|[-_:])(?:audio|signal|midi|music|format|host|gpu[-_]?audio|graph|playback|sequence|timeline|timebase|smf|dawproject|content|vst3|clap|lv2|auv2|auv3|aax|oboe)(?:$|[-_:])",
   "forbidden_path_prefixes": [
     "core/audio/",

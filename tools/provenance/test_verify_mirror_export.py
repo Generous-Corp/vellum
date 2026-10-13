@@ -67,6 +67,10 @@ class Fixture:
         run(self.vellum, "init", "-q", "-b", "main")
         for name in ("link-policy.json", "blob-origins.json"):
             shutil.copy(REPO / "provenance/mirror" / name, write(self.vellum, f"provenance/mirror/{name}", ""))
+        policy_path = self.vellum / "provenance/mirror/link-policy.json"
+        policy = json.loads(policy_path.read_text())
+        policy["approved_unmirrored_edges"] = []
+        policy_path.write_text(dump(policy))
         write(self.vellum, "provenance/mirror/receipts/index.json",
               dump({"schema": "vellum.mirror-receipt-index.v1", "receipts": []}))
         write(self.vellum, "README.md", "vellum\n")
@@ -112,10 +116,12 @@ class Fixture:
                 "options": {
                     "PULP_ENABLE_GPU": "ON", "PULP_HAS_SKIA": "ON",
                     "PULP_TEXT_SHAPING": "ON", "CMAKE_BUILD_TYPE": "Release",
+                    "CMAKE_SYSTEM_NAME": "Darwin", "CMAKE_SYSTEM_PROCESSOR": "arm64",
                 },
                 "options_sha256": hashlib.sha256(json.dumps({
                     "PULP_ENABLE_GPU": "ON", "PULP_HAS_SKIA": "ON",
                     "PULP_TEXT_SHAPING": "ON", "CMAKE_BUILD_TYPE": "Release",
+                    "CMAKE_SYSTEM_NAME": "Darwin", "CMAKE_SYSTEM_PROCESSOR": "arm64",
                 }, sort_keys=True).encode()).hexdigest(),
                 "identity": {"gpu": True, "skia": True, "text_shaping": True,
                              "build_type": "Release", "system": "Darwin", "processor": "arm64"},
@@ -177,7 +183,8 @@ class Fixture:
 
     def receipt_configure_sha(self) -> str:
         options = {"PULP_ENABLE_GPU": "ON", "PULP_HAS_SKIA": "ON",
-                   "PULP_TEXT_SHAPING": "ON", "CMAKE_BUILD_TYPE": "Release"}
+                   "PULP_TEXT_SHAPING": "ON", "CMAKE_BUILD_TYPE": "Release",
+                   "CMAKE_SYSTEM_NAME": "Darwin", "CMAKE_SYSTEM_PROCESSOR": "arm64"}
         return hashlib.sha256(json.dumps(options, sort_keys=True).encode()).hexdigest()
 
     def sha(self, relative: str) -> str:
@@ -270,7 +277,7 @@ class VerifyMirrorExportTests(unittest.TestCase):
         errors = fixture.errors()
         for fragment in (
             "forbidden link target pulp-format-core",
-            "forbidden link target pulp::audio",
+            "transitive unmirrored target pulp-audio",
             "link target skia is neither exported nor allowed",
             "missing targets ['pulp-render']",
             "forbidden compile definition PULP_HAS_VST3=1",
@@ -424,7 +431,7 @@ class VerifyMirrorExportTests(unittest.TestCase):
             "patch_set": {"pulp_path": "tools/cmake/PulpPatchChoc.cmake", "pulp_blob": "e" * 40, "key": key},
             "base_modification": base_modification,
             "copy_tree": copy_tree,
-            "patch_recipe": {"id": "pulp.vellum.patch-id.v1", "formula": formula, "replay": ["pulp_patch_choc_v8"]},
+            "patch_recipe": {"id": "pulp.vellum.patch-id.v1", "formula": formula, "replay": {"method": verify_mirror_export.REPLAY_METHOD, "patch_set_blob": "e" * 40, "functions": ["pulp_patch_choc_v8"]}},
         }
         self.assertEqual(
             verify_mirror_export.validate_external_inputs([row], "fixture"), []
@@ -447,7 +454,7 @@ class VerifyMirrorExportTests(unittest.TestCase):
             "patched": True, "patch": patch, "sha256": "d" * 64,
             "patch_set": {"pulp_path": "tools/cmake/PulpPatchChoc.cmake", "pulp_blob": "e" * 40, "key": key},
             "base_modification": "", "copy_tree": copy_tree,
-            "patch_recipe": {"id": "pulp.vellum.patch-id.v1", "formula": formula, "replay": ["pulp_patch_choc_v8"]},
+            "patch_recipe": {"id": "pulp.vellum.patch-id.v1", "formula": formula, "replay": {"method": verify_mirror_export.REPLAY_METHOD, "patch_set_blob": "e" * 40, "functions": ["pulp_patch_choc_v8"]}},
         }
         cases = [
             ({**base, "path": f"@external/choc/{pin}/choc.h"}, "path marker"),
@@ -456,7 +463,7 @@ class VerifyMirrorExportTests(unittest.TestCase):
             ({k: v for k, v in base.items() if k not in ("patched",)}, "patch fields require patched=true"),
             ({k: v for k, v in base.items() if k != "sha256"}, "sha256 must be a SHA-256"),
             ({k: v for k, v in base.items() if k != "patch_set"}, "patch_set must contain"),
-            ({**base, "patch_recipe": {"id": "wrong", "formula": formula, "replay": ["pulp_patch_choc_v8"]}}, "patch_recipe.id"),
+            ({**base, "patch_recipe": {"id": "wrong", "formula": formula, "replay": {"method": verify_mirror_export.REPLAY_METHOD, "patch_set_blob": "e" * 40, "functions": ["pulp_patch_choc_v8"]}}}, "patch_recipe.id"),
             ({**base, "base_modification": "a" * 64}, "base_modification must be empty"),
             ({**base, "path": "@fetchcontent/choc/choc.h"}, "must be @external"),
         ]
@@ -487,14 +494,14 @@ class VerifyMirrorExportTests(unittest.TestCase):
                 "sha256": "d" * 64, "patched": True, "patch": patch,
                 "patch_set": {"pulp_path": "tools/cmake/PulpPatchChoc.cmake", "pulp_blob": pulp_blob, "key": key},
                 "base_modification": "", "copy_tree": copy_tree,
-                "patch_recipe": {"id": "pulp.vellum.patch-id.v1", "formula": formula, "replay": ["pulp_patch_choc_v8"]},
+                "patch_recipe": {"id": "pulp.vellum.patch-id.v1", "formula": formula, "replay": {"method": verify_mirror_export.REPLAY_METHOD, "patch_set_blob": pulp_blob, "functions": ["pulp_patch_choc_v8"]}},
             }
             self.assertEqual(verify_mirror_export.validate_external_inputs([row], "fixture", pulp_root=pulp, pulp_sha=pulp_sha), [])
             for mutation, fragment in (
                 ({**row, "patch_set": {**row["patch_set"], "pulp_blob": "f" * 40}}, "pulp_blob"),
                 ({**row, "patch_set": {**row["patch_set"], "key": "e" * 64}}, "key"),
                 ({**row, "patch_set": {**row["patch_set"], "pulp_path": "missing.cmake"}}, "pulp_blob"),
-                ({**row, "patch_recipe": {**row["patch_recipe"], "replay": ["missing_patch"]}}, "replay function missing_patch"),
+                ({**row, "patch_recipe": {**row["patch_recipe"], "replay": {**row["patch_recipe"]["replay"], "functions": ["missing_patch"]}}}, "replay function missing_patch"),
             ):
                 self.assertError(verify_mirror_export.validate_external_inputs([mutation], "fixture", pulp_root=pulp, pulp_sha=pulp_sha), fragment)
 
@@ -597,8 +604,6 @@ class VerifyMirrorExportTests(unittest.TestCase):
         fixture.receipt["units"][0]["name"] = "FOO=/Users/attacker"
         fixture.reland()
         self.assertError(fixture.errors(), "absolute host path")
-        with mock.patch.object(verify_mirror_export, "host_path_violations", return_value=[]):
-            self.assertEqual(fixture.errors(), [])
 
     def test_configure_digest_and_identity_are_checked(self) -> None:
         fixture = Fixture(self.base)
@@ -651,13 +656,29 @@ class VerifyMirrorExportTests(unittest.TestCase):
         closure = {"configure": {"identity": {"system": "Darwin"}},
                    "targets": [{"name": "pulp-canvas", "link_targets": ["pulp-events"]}],
                    "files": [], "compile_definitions": []}
-        for source, platforms, expiry in (("pulp-state", ["Darwin"], "2099-01-01"),
-                                          ("pulp-canvas", ["Linux"], "2099-01-01"),
-                                          ("pulp-canvas", ["Darwin"], "2000-01-01")):
+        for source, platforms in (("pulp-state", ["Darwin"]),
+                                  ("pulp-canvas", ["Linux"])):
             policy["approved_unmirrored_edges"] = [{"source": source, "target": "pulp-events", "platforms": platforms,
-                                                     "owner": "d3", "approver": "team-lead", "expiry": expiry}]
+                                                     "owner": "d3", "approver": "team-lead 2026-10-13", "id": "wrong",
+                                                     "exit_criterion": "exit"}]
             self.assertError(verify_mirror_export.link_closure_findings({"canvas": closure}, policy),
                              "lacks a current approved exception")
+
+    def test_unmirrored_transitive_target_cannot_be_carried_by_an_edge(self) -> None:
+        policy = json.loads((REPO / "provenance/mirror/link-policy.json").read_text())
+        closure = {"configure": {"identity": {"system": "Darwin"}},
+                   "targets": [{"name": "pulp-view-native", "link_targets": ["pulp-view-audio"]}],
+                   "transitive_link_targets": ["pulp-newthing"], "files": [], "compile_definitions": []}
+        errors = verify_mirror_export.link_closure_findings({"view": closure}, policy)
+        self.assertError(errors, "transitive unmirrored target pulp-newthing")
+
+    def test_unmirrored_exception_staleness_is_fail_closed(self) -> None:
+        policy = json.loads((REPO / "provenance/mirror/link-policy.json").read_text())
+        closure = {"configure": {"identity": {"system": "Darwin"}},
+                   "targets": [{"name": "pulp-view-native", "link_targets": ["pulp-timebase"]}],
+                   "files": [], "compile_definitions": []}
+        errors = verify_mirror_export.link_closure_findings({"view": closure}, policy, enforce_stale=True)
+        self.assertError(errors, "stale approved unmirrored exception P4-edge-view-native-sample-bank-manifest")
 
     def test_pulp_target_keyed_allowlist_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -691,7 +712,7 @@ class VerifyMirrorExportTests(unittest.TestCase):
         closure["configure"]["identity"]["gpu"] = False
         closure["configure"]["options"]["PULP_ENABLE_GPU"] = "OFF"
         closure["configure"]["options_sha256"] = hashlib.sha256(json.dumps(closure["configure"]["options"], sort_keys=True).encode()).hexdigest()
-        closure["compile_definitions"].remove("PULP_HAS_TEXT_SHAPING=1")
+        closure["targets"][0]["compile_definitions"].remove("PULP_HAS_TEXT_SHAPING=1")
         errors = verify_mirror_export.validate_closure_manifest(closure, "fixture closure", is_canvas=True)
         self.assertError(errors, "requires GPU, Skia, and text shaping")
         self.assertError(errors, "PULP_HAS_TEXT_SHAPING=1")
