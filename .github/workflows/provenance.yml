@@ -161,6 +161,32 @@ jobs:
           git -C .mirror-pulp checkout --detach "$pulp_ref"
           test "$(git -C .mirror-pulp rev-parse HEAD)" = "$pulp_ref"
 
+      # Runs on every event, independent of landed receipts: the vendored
+      # table must be the exact blob Pulp holds at the commit the committed
+      # pin names. Only that commit's trees are fetched, into a bare
+      # repository outside the workspace, so no Pulp file is checked out or
+      # executed in this job.
+      - name: Fetch the pinned Pulp mirror-edge table commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          pin_commit="$(python3 - <<'PY'
+          import json
+          import re
+          pin = json.load(open("tools/provenance/mirror_edge_patterns.pin.json"))
+          commit = pin["pulp_commit"]
+          if re.fullmatch(r"[0-9a-f]{40}", commit) is None:
+              raise SystemExit("mirror edge table pin is not a full commit SHA")
+          print(commit)
+          PY
+          )"
+          pulp_git="$RUNNER_TEMP/mirror-edge-pulp.git"
+          git init -q --bare "$pulp_git"
+          git -C "$pulp_git" remote add origin https://github.com/Generous-Corp/pulp.git
+          git -C "$pulp_git" fetch -q --depth 1 --filter=blob:none --no-tags origin "$pin_commit"
+          git -C "$pulp_git" update-ref --no-deref HEAD "$pin_commit"
+          test "$(git -C "$pulp_git" rev-parse HEAD)" = "$pin_commit"
+
       - name: Verify extraction and active-source quarantine
         env:
           MIRROR_PULP_ROOT: ${{ steps.mirror-receipts.outputs.present == 'true' && '.mirror-pulp' || '' }}
@@ -169,7 +195,15 @@ jobs:
           python3 tools/provenance/test_verify_mirror_export.py
           python3 tools/provenance/verify_extraction.py \
             ${MIRROR_PULP_ROOT:+--pulp-root "$MIRROR_PULP_ROOT"} \
+            --mirror-edge-pulp-root "$RUNNER_TEMP/mirror-edge-pulp.git" \
             --output "$RUNNER_TEMP/provenance-report.json"
+          python3 - "$RUNNER_TEMP/provenance-report.json" <<'PY'
+          import json
+          import sys
+          report = json.load(open(sys.argv[1]))
+          if report["checks"].get("mirror_edge_table_proved_against_pulp") is not True:
+              raise SystemExit("the mirror-edge table was not proved against the pinned Pulp commit")
+          PY
 
       - name: Verify renderer digest-to-provenance binding
         run: |

@@ -27,6 +27,10 @@ PULP_FILES = {
     "core/canvas/include/pulp/canvas/canvas.hpp": b"#pragma once\n",
 }
 TOOL = b"#!/usr/bin/env python3\n"
+SKIA_LINK = {"dependency": "skia", "source": "https://skia.googlesource.com/skia.git",
+             "pin": "5" * 40, "asset_sha256": "6" * 64}
+PULP_DEPENDENCY_MANIFEST = {"dependencies": [{"name": "Skia", "repository": SKIA_LINK["source"], "determinism": {
+    "skia_commit": SKIA_LINK["pin"], "release_assets": {"darwin-arm64": {"sha256": SKIA_LINK["asset_sha256"]}}}}]}
 
 
 def run(root: Path, *args: str) -> str:
@@ -67,6 +71,7 @@ class Fixture:
             write(self.pulp, path, content)
         write(self.pulp, "tools/scripts/vellum_closure.py", TOOL)
         write(self.pulp, "core/audio/engine.cpp", b"int audio;\n")
+        write(self.pulp, "tools/deps/manifest.json", dump(PULP_DEPENDENCY_MANIFEST))
         run(self.pulp, "add", "-A")
         run(self.pulp, "commit", "-q", "-m", "pulp")
         self.pulp_sha = run(self.pulp, "rev-parse", "HEAD")
@@ -123,6 +128,7 @@ class Fixture:
                 "name": "pulp-canvas", "type": "STATIC_LIBRARY",
                 "sources": ["core/canvas/src/canvas.cpp"], "include_dirs": [],
                 "compile_definitions": ["PULP_HAS_SKIA=1", "PULP_HAS_TEXT_SHAPING=1"], "link_targets": [],
+                "external_link_inputs": [SKIA_LINK],
             }],
             "missing_targets": [],
             "files": sorted(PULP_FILES),
@@ -660,6 +666,73 @@ class VerifyMirrorExportTests(unittest.TestCase):
         errors = verify_mirror_export.validate_generated_input(invalid, "fixture")
         self.assertError(errors, "source must be a known repository URL")
         self.assertError(errors, "pin must be a 40-hex commit SHA")
+
+    def test_build_timestamp_normalization_is_the_only_accepted_one(self) -> None:
+        row = {
+            "path": "@build/core/runtime/generated/Release/pulp/runtime/build_info.hpp",
+            "sha256": "0" * 64,
+            "producer_paths": ["core/runtime/CMakeLists.txt"],
+            "normalization": {"build_timestamp": "<build-timestamp>"},
+        }
+        self.assertEqual(verify_mirror_export.validate_generated_input(row, "fixture"), [])
+        errors = verify_mirror_export.validate_generated_input(dict(row, normalization={"build_timestamp": "*"}), "fixture")
+        self.assertError(errors, "normalization must be")
+        errors = verify_mirror_export.validate_generated_input(dict(row, extra=1), "fixture")
+        self.assertError(errors, "must contain path, sha256, producer_paths")
+        errors = verify_mirror_export.validate_generated_input(
+            dict(row, path="@build/core/canvas/pulp-bundled-fonts_data_inter.cpp"), "fixture")
+        self.assertError(errors, "only accepted on the generated pulp/runtime/build_info.hpp")
+
+    def test_skia_link_input_is_validated(self) -> None:
+        link = {"dependency": "skia", "source": "https://skia.googlesource.com/skia.git",
+                "pin": "a" * 40, "asset_sha256": "b" * 64}
+        target = {"name": "pulp-canvas", "sources": [], "include_dirs": [],
+                  "compile_definitions": ["PULP_HAS_SKIA=1"], "external_link_inputs": [link]}
+        closure = {"targets": [target]}
+        self.assertFalse([e for e in verify_mirror_export.validate_closure_manifest(closure, "c")
+                          if "external_link_inputs" in e or "Skia link" in e])
+        broken = {"targets": [dict(target, external_link_inputs=[dict(link, pin="release")])]}
+        self.assertError(verify_mirror_export.validate_closure_manifest(broken, "c"), "40-hex pin")
+        missing = {"targets": [dict(target, external_link_inputs=[])]}
+        self.assertError(verify_mirror_export.validate_closure_manifest(missing, "c"), "records no Skia link input")
+        absent = {"targets": [{key: value for key, value in target.items() if key != "external_link_inputs"}]}
+        self.assertError(verify_mirror_export.validate_closure_manifest(absent, "c"), "records no Skia link input")
+        cpu = {"targets": [dict(target, compile_definitions=[])]}
+        self.assertError(verify_mirror_export.validate_closure_manifest(cpu, "c"), "does not compile against Skia")
+        twice = {"targets": [dict(target, external_link_inputs=[link, link])]}
+        self.assertError(verify_mirror_export.validate_closure_manifest(twice, "c"), "more than one Skia link input")
+        dawn = {"targets": [dict(target, external_link_inputs=[link, dict(link, dependency="dawn")])]}
+        self.assertError(verify_mirror_export.validate_closure_manifest(dawn, "c"), "must name the Skia repository")
+
+    def test_skia_link_input_is_checked_against_pulps_manifest(self) -> None:
+        asset = "b" * 64
+        link = {"dependency": "skia", "source": "https://skia.googlesource.com/skia.git",
+                "pin": "a" * 40, "asset_sha256": asset}
+        target = {"name": "pulp-canvas", "sources": [], "include_dirs": [],
+                  "compile_definitions": ["PULP_HAS_SKIA=1"], "external_link_inputs": [link]}
+        manifest = {"dependencies": [{"name": "Skia", "repository": link["source"], "determinism": {
+            "skia_commit": link["pin"], "release_assets": {"darwin-arm64": {"sha256": asset}}}}]}
+        with tempfile.TemporaryDirectory() as directory:
+            pulp = Path(directory)
+            subprocess.run(["git", "init", "-q"], cwd=pulp, check=True)
+            (pulp / "tools/deps").mkdir(parents=True)
+            (pulp / "tools/deps/manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+            subprocess.run(["git", "add", "-A"], cwd=pulp, check=True)
+            subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "t"], cwd=pulp, check=True)
+            sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=pulp, text=True).strip()
+
+            def link_errors(candidate: dict) -> list[str]:
+                closure = {"targets": [dict(target, external_link_inputs=[candidate])]}
+                return [e for e in verify_mirror_export.validate_closure_manifest(closure, "c", pulp_root=pulp, pulp_sha=sha)
+                        if "Skia" in e]
+
+            self.assertEqual(link_errors(link), [])
+            self.assertTrue(link_errors(dict(link, pin="c" * 40)))
+            self.assertTrue(link_errors(dict(link, asset_sha256="d" * 64)))
+            self.assertTrue(link_errors(dict(link, source="https://github.com/google/skia")))
+            closure = {"targets": [target]}
+            self.assertError(verify_mirror_export.validate_closure_manifest(
+                closure, "c", pulp_root=pulp, pulp_sha="e" * 40), "records no Skia pin")
 
     def test_unmirrored_edges_require_exact_current_platform_exception(self) -> None:
         policy = json.loads((REPO / "provenance/mirror/link-policy.json").read_text())

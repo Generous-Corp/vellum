@@ -112,45 +112,29 @@ FORBIDDEN_ACTIVE_PATTERNS = {
         re.IGNORECASE,
     ),
 }
-# Pulp subsystems that stay Pulp-owned under Decision 0010: audio, DSP, MIDI,
-# music theory, plug-in formats, plug-in hosting, GPU audio, and product
-# content. A mirrored framework file may not reach any of them.
-_PULP_PRODUCT_SUBSYSTEMS = r"(?:audio|signal|midi|music|format|host|gpu_audio|content)"
+# Forbidden mirror edges (Decision 0010 / D3): audio, DSP, MIDI, music theory,
+# plug-in formats, plug-in hosting, GPU audio and product content stay
+# Pulp-owned, and so do the Pulp-kept view and state files. The table is
+# vendored byte-for-byte from Pulp's tools/scripts/vellum_mirror_edge_patterns.json,
+# which Pulp's closure gate applies before export. mirror_edge_patterns.pin.json
+# records the Pulp commit and git blob it was vendored from: every run checks
+# the vendored bytes against that blob, --mirror-edge-pulp-root proves the blob
+# against a Pulp checkout of the pinned commit, and --pulp-root additionally
+# compares it with the Pulp commit of the last export.
+MIRROR_EDGE_TABLE = Path(__file__).with_name("mirror_edge_patterns.json")
+MIRROR_EDGE_TABLE_PIN = Path(__file__).with_name("mirror_edge_patterns.pin.json")
+PULP_MIRROR_EDGE_TABLE = "tools/scripts/vellum_mirror_edge_patterns.json"
+_MIRROR_EDGE_TABLE = json.loads(MIRROR_EDGE_TABLE.read_text(encoding="utf-8"))
 FORBIDDEN_MIRROR_EDGE_PATTERNS = {
-    "mirror-product-include": re.compile(
-        r"#\s*(?:include|import)\s*[<\"]"
-        r"(?:pulp/" + _PULP_PRODUCT_SUBSYSTEMS + r"/"
-        r"|pluginterfaces/|public\.sdk/|clap/|lv2/|AudioUnitSDK/|oboe/"
-        r"|AudioToolbox/|AudioUnit/|CoreAudio/|CoreAudioKit/|CoreMIDI/|AVFAudio/)",
-    ),
-    "mirror-product-symbol": re.compile(
-        r"\bpulp::" + _PULP_PRODUCT_SUBSYSTEMS + r"\b"
-        r"|\bpulp[-_](?:audio|signal|midi|music|format|host|gpu[-_]audio|content)\b",
-    ),
-    "mirror-audio-framework-link": re.compile(
-        r"\b(?:AudioToolbox|AudioUnit|CoreAudio|CoreAudioKit|CoreMIDI|AVFAudio)"
-        r"\.framework\b|-framework\s+"
-        r"(?:AudioToolbox|AudioUnit|CoreAudio|CoreAudioKit|CoreMIDI|AVFAudio)\b",
-    ),
+    name: re.compile(pattern) for name, pattern in _MIRROR_EDGE_TABLE["content_patterns"].items()
 }
-# Pulp-kept files inside otherwise generic Pulp roots (Decision 0010 / D3):
-# the view-audio widgets, the graph editor view, and the product content
-# registry. Mirrored code may neither include them nor be one of them.
-_PULP_KEPT_VIEW_FILES = (
-    r"(?:audio_bridge|audio_inspector_\w+|eq_curve_view|midi_binding|midi_keyboard"
-    r"|musical_typing_keyboard\w*|plugin_manager_panel|sample_asset_drop_target"
-    r"|step_grid_view|waveform_\w+|graph_editor_view)"
-)
-FORBIDDEN_MIRROR_EDGE_PATTERNS["mirror-pulp-kept-include"] = re.compile(
-    r"#\s*(?:include|import)\s*[<\"]"
-    r"(?:pulp/view/(?:audio/|(?:widgets/)?" + _PULP_KEPT_VIEW_FILES + r"\.h)"
-    r"|pulp/state/content_registry\.h)",
-)
-PULP_KEPT_MIRROR_PATH = re.compile(
-    r"\Amirror/core/(?:view/(?:audio/|(?:.*/)?" + _PULP_KEPT_VIEW_FILES + r"\.)"
-    r"|host/|state/(?:.*/)?content_registry\.)"
-)
-MIRROR_EDGE_SUFFIXES = TEXT_SUFFIXES | {".inl", ".ipp", ".txt"}
+# Path rules are relative to the mirror root.
+MIRROR_EDGE_PATH_PATTERNS = {
+    name: re.compile(pattern) for name, pattern in _MIRROR_EDGE_TABLE["path_patterns"].items()
+}
+PULP_KEPT_MIRROR_PATH = MIRROR_EDGE_PATH_PATTERNS["mirror-pulp-kept-file"]
+MIRROR_EDGE_SUFFIXES = set(_MIRROR_EDGE_TABLE["suffixes"])
+MIRROR_EDGE_BINARY_SUFFIXES = set(_MIRROR_EDGE_TABLE["binary_suffixes"])
 POLICY_IMPLEMENTATION_PATHS = {
     "scripts/verify_sdk_artifact.py",
 }
@@ -359,20 +343,66 @@ def mirror_origin_findings(
     return findings
 
 
+def mirror_edge_table_drift(pulp_root: Path) -> list[str]:
+    """The vendored edge table must be byte-identical to Pulp's own copy."""
+    pulp_table = pulp_root / PULP_MIRROR_EDGE_TABLE
+    if not pulp_table.is_file():
+        return [f"Pulp checkout {pulp_root} has no {PULP_MIRROR_EDGE_TABLE}"]
+    if pulp_table.read_bytes() != MIRROR_EDGE_TABLE.read_bytes():
+        return [f"{MIRROR_EDGE_TABLE.name} differs from Pulp's {PULP_MIRROR_EDGE_TABLE}"]
+    return []
+
+
+def git_blob_sha(data: bytes) -> str:
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+def mirror_edge_table_pin_errors(
+    pulp_root: Path | None = None, table: Path = MIRROR_EDGE_TABLE, pin_path: Path = MIRROR_EDGE_TABLE_PIN
+) -> list[str]:
+    """The vendored table is the exact blob its pin names, and, given a Pulp
+    checkout of the pinned commit, that blob is Pulp's table there."""
+    try:
+        pin = json.loads(pin_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return [f"{pin_path.name} is unreadable: {exc}"]
+    if pin.get("schema") != "vellum.mirror-edge-table-pin.v1" \
+            or pin.get("pulp_repository") != "Generous-Corp/pulp" \
+            or pin.get("pulp_path") != PULP_MIRROR_EDGE_TABLE \
+            or not re.fullmatch(r"[0-9a-f]{40}", str(pin.get("pulp_commit", ""))) \
+            or not re.fullmatch(r"[0-9a-f]{40}", str(pin.get("git_blob", ""))):
+        return [f"{pin_path.name} must name Generous-Corp/pulp, {PULP_MIRROR_EDGE_TABLE}, a commit and a git blob"]
+    errors: list[str] = []
+    if git_blob_sha(table.read_bytes()) != pin["git_blob"]:
+        errors.append(f"{table.name} is not the git blob {pin['git_blob']} its pin names")
+    if pulp_root is not None:
+        try:
+            head = git(pulp_root, "rev-parse", "HEAD")
+            blob = git(pulp_root, "rev-parse", f"HEAD:{PULP_MIRROR_EDGE_TABLE}")
+        except (OSError, subprocess.CalledProcessError) as exc:
+            return errors + [f"Pulp checkout {pulp_root} cannot resolve the pinned table: {exc}"]
+        if head != pin["pulp_commit"]:
+            errors.append(f"Pulp checkout {pulp_root} is at {head}, not the pinned {pin['pulp_commit']}")
+        if blob != pin["git_blob"]:
+            errors.append(f"Pulp's {PULP_MIRROR_EDGE_TABLE} at {head} is blob {blob}, not the pinned {pin['git_blob']}")
+    return errors
+
+
 def mirror_edge_findings(root: Path) -> list[dict[str, object]]:
     findings: list[dict[str, object]] = []
     for path in mirror_files(root):
         relative = path.relative_to(root).as_posix()
-        if PULP_KEPT_MIRROR_PATH.match(relative):
-            findings.append(
-                {"rule": "mirror-pulp-kept-file", "path": relative, "line": 0, "match": relative}
-            )
-        if path.suffix.lower() not in MIRROR_EDGE_SUFFIXES:
+        in_mirror = relative.removeprefix(MIRROR_ROOT)
+        for name, pattern in MIRROR_EDGE_PATH_PATTERNS.items():
+            if pattern.search(in_mirror):
+                findings.append({"rule": name, "path": relative, "line": 0, "match": relative})
+        suffix = path.suffix.lower()
+        if suffix in MIRROR_EDGE_BINARY_SUFFIXES:
             continue
-        try:
-            text = path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
+        if suffix not in MIRROR_EDGE_SUFFIXES:
+            findings.append({"rule": "mirror-unclassified-suffix", "path": relative, "line": 0, "match": suffix})
             continue
+        text = path.read_text(encoding="utf-8", errors="replace")
         for name, pattern in FORBIDDEN_MIRROR_EDGE_PATTERNS.items():
             for match in pattern.finditer(text):
                 findings.append(
@@ -473,11 +503,19 @@ def verify_authority_phase(
 
 
 def verify(
-    root: Path, pulp_root: Path | None = None, defer_mirror_identity: bool = False
+    root: Path,
+    pulp_root: Path | None = None,
+    defer_mirror_identity: bool = False,
+    mirror_edge_pulp_root: Path | None = None,
 ) -> dict[str, object]:
     provenance = root / "provenance"
     errors: list[str] = []
     checks: dict[str, object] = {}
+
+    pin_errors = mirror_edge_table_pin_errors(mirror_edge_pulp_root)
+    checks["mirror_edge_table_matches_pin"] = not pin_errors
+    checks["mirror_edge_table_proved_against_pulp"] = mirror_edge_pulp_root is not None and not pin_errors
+    errors.extend(pin_errors)
 
     for name, expected in EXPECTED_HASHES.items():
         actual = sha256(provenance / name)
@@ -598,6 +636,9 @@ def verify(
     # mirrored file passes only where a Pulp checkout proved it. Lanes that are
     # not the required provenance lane may defer that proof to it.
     if pulp_root is not None:
+        drift = mirror_edge_table_drift(pulp_root)
+        checks["mirror_edge_table_matches_pulp"] = not drift
+        errors.extend(drift)
         pulp_errors = verify_origins_against_pulp(pulp_root, records)
         checks["mirror_origins_verified_against_pulp"] = not pulp_errors
         errors.extend(pulp_errors)
@@ -672,6 +713,11 @@ def main() -> int:
         help="Pulp checkout used to prove every mirror origin record",
     )
     parser.add_argument(
+        "--mirror-edge-pulp-root",
+        type=Path,
+        help="Pulp checkout of the commit mirror_edge_patterns.pin.json names",
+    )
+    parser.add_argument(
         "--defer-mirror-identity",
         action="store_true",
         help="leave the Pulp identity proof of mirror/ to the required provenance lane",
@@ -681,6 +727,7 @@ def main() -> int:
         args.root.resolve(),
         args.pulp_root.resolve() if args.pulp_root else None,
         defer_mirror_identity=args.defer_mirror_identity,
+        mirror_edge_pulp_root=args.mirror_edge_pulp_root.resolve() if args.mirror_edge_pulp_root else None,
     )
     rendered = json.dumps(report, indent=2, sort_keys=True) + "\n"
     if args.output:
