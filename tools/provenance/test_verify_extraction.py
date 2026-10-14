@@ -615,7 +615,7 @@ class VerifyExtractionTests(unittest.TestCase):
             target.write_bytes(verify_extraction.MIRROR_EDGE_TABLE.read_bytes().replace(b"gpu_audio", b"gpuaudio", 1))
             self.assertTrue(verify_extraction.mirror_edge_table_drift(pulp))
 
-    def test_table_may_advance_past_the_export_commit_on_pulp_main(self) -> None:
+    def test_table_may_advance_past_the_export_commit_only_on_pulp_main(self) -> None:
         def commit(pulp: Path, data: bytes) -> str:
             target = pulp / verify_extraction.PULP_MIRROR_EDGE_TABLE
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -624,31 +624,96 @@ class VerifyExtractionTests(unittest.TestCase):
             subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "t"], cwd=pulp, check=True)
             return verify_extraction.git(pulp, "rev-parse", "HEAD")
 
+        def checkout(pulp: Path, commit_sha: str) -> None:
+            subprocess.run(["git", "checkout", "-q", "--detach", commit_sha], cwd=pulp, check=True)
+
         current = verify_extraction.MIRROR_EDGE_TABLE.read_bytes()
         older = current.replace(b"register_audio_widgets|", b"", 1)
+        weaker = older.replace(b"visualizers\\\\.hpp|", b"", 1)
         self.assertNotEqual(older, current)
+        self.assertNotEqual(weaker, older)
         with tempfile.TemporaryDirectory() as directory:
-            pulp, pin_path = Path(directory) / "pulp", Path(directory) / "pin.json"
+            work = Path(directory)
+            pulp, pin_path = work / "pulp", work / "pin.json"
             pulp.mkdir()
             subprocess.run(["git", "init", "-q"], cwd=pulp, check=True)
             export = commit(pulp, older)
             advanced = commit(pulp, current)
-            pin = dict(json.loads(verify_extraction.MIRROR_EDGE_TABLE_PIN.read_text(encoding="utf-8")),
-                       pulp_commit=advanced, git_blob=verify_extraction.git_blob_sha(current))
-            pin_path.write_text(json.dumps(pin), encoding="utf-8")
-            subprocess.run(["git", "checkout", "-q", "--detach", export], cwd=pulp, check=True)
-            # The export commit holds the older table; the pin descends from it.
-            self.assertEqual(verify_extraction.mirror_edge_table_drift(pulp, pin_path=pin_path), [])
-            # A pin that does not descend from the export commit fails.
-            subprocess.run(["git", "checkout", "-q", "--detach", advanced], cwd=pulp, check=True)
-            sideways = commit(pulp, older + b"\n")
-            errors = verify_extraction.mirror_edge_table_drift(pulp, pin_path=pin_path)
+            subprocess.run(["git", "update-ref", "refs/remotes/origin/main", advanced], cwd=pulp, check=True)
+            base_pin = json.loads(verify_extraction.MIRROR_EDGE_TABLE_PIN.read_text(encoding="utf-8"))
+
+            def drift(pinned: str, vendored: bytes) -> list[str]:
+                table = work / "vendored.json"
+                table.write_bytes(vendored)
+                pin_path.write_text(json.dumps(dict(base_pin, pulp_commit=pinned,
+                                                    git_blob=verify_extraction.git_blob_sha(vendored))),
+                                    encoding="utf-8")
+                return verify_extraction.mirror_edge_table_drift(pulp, table=table, pin_path=pin_path)
+
+            # The export commit holds the older table; a pin on Pulp main that
+            # descends from it and holds the vendored table passes.
+            checkout(pulp, export)
+            self.assertEqual(drift(advanced, current), [])
+
+            # An unreviewed side-branch commit that descends from the export
+            # and holds a weaker table is refused: it is not on Pulp main.
+            checkout(pulp, export)
+            side = commit(pulp, weaker)
+            checkout(pulp, export)
+            errors = drift(side, weaker)
+            self.assertEqual(errors, [f"vendored.json differs from Pulp's {verify_extraction.PULP_MIRROR_EDGE_TABLE}, "
+                                      f"and the pinned commit {side} is not on Pulp main"])
+
+            # Without origin/main nothing proves the pin is on main.
+            subprocess.run(["git", "update-ref", "-d", "refs/remotes/origin/main"], cwd=pulp, check=True)
+            errors = drift(advanced, current)
+            self.assertTrue(any("has no refs/remotes/origin/main" in error for error in errors), errors)
+            subprocess.run(["git", "update-ref", "refs/remotes/origin/main", advanced], cwd=pulp, check=True)
+
+            # A pin on main that does not descend from the export commit fails.
+            checkout(pulp, advanced)
+            later = commit(pulp, older + b"\n")
+            subprocess.run(["git", "update-ref", "refs/remotes/origin/main", later], cwd=pulp, check=True)
+            checkout(pulp, later)
+            errors = drift(advanced, current)
             self.assertTrue(any("does not descend" in error for error in errors), errors)
-            # A pin whose commit holds a different table fails.
-            subprocess.run(["git", "checkout", "-q", "--detach", export], cwd=pulp, check=True)
-            pin_path.write_text(json.dumps(dict(pin, pulp_commit=sideways)), encoding="utf-8")
-            errors = verify_extraction.mirror_edge_table_drift(pulp, pin_path=pin_path)
+
+            # A pin on main whose commit holds a different table fails.
+            checkout(pulp, export)
+            pin_path.write_text(json.dumps(dict(base_pin, pulp_commit=later,
+                                                git_blob=verify_extraction.git_blob_sha(current))), encoding="utf-8")
+            table = work / "vendored.json"
+            table.write_bytes(current)
+            errors = verify_extraction.mirror_edge_table_drift(pulp, table=table, pin_path=pin_path)
             self.assertTrue(any("does not hold the vendored table" in error for error in errors), errors)
+
+    def test_mirror_is_scanned_under_the_export_commit_table_too(self) -> None:
+        table = json.loads(verify_extraction.MIRROR_EDGE_TABLE.read_text(encoding="utf-8"))
+        # An export table that is stricter than the vendored one: it refuses
+        # a header the vendored table admits.
+        stricter = json.loads(json.dumps(table))
+        stricter["content_patterns"]["mirror-pulp-kept-include"] = r"#\s*include\s*<pulp/view/label\.hpp>"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.write_mirror(root, "mirror/core/view/src/a.cpp", b"#include <pulp/view/label.hpp>\n")
+            self.assertEqual(verify_extraction.mirror_edge_findings(root), [])
+            self.assertEqual(
+                [(f["rule"], f["line"]) for f in verify_extraction.mirror_edge_findings(root, stricter)],
+                [("mirror-pulp-kept-include", 1)],
+            )
+            # verify() fails the repository when the export commit's table
+            # refuses something in today's mirror the vendored table admits.
+            pulp = root / "pulp"
+            export_table = json.loads(json.dumps(table))
+            export_table["content_patterns"]["mirror-pulp-kept-include"] = r"#\s*include\s*<pulp/"
+            (pulp / verify_extraction.PULP_MIRROR_EDGE_TABLE).parent.mkdir(parents=True)
+            (pulp / verify_extraction.PULP_MIRROR_EDGE_TABLE).write_text(json.dumps(export_table), encoding="utf-8")
+            with mock.patch.object(verify_extraction, "mirror_edge_table_drift", return_value=[]), \
+                    mock.patch.object(verify_extraction, "verify_origins_against_pulp", return_value=[]):
+                report = verify_extraction.verify(MODULE_PATH.parents[2], pulp)
+        self.assertTrue(report["checks"]["mirror_edge_findings_under_export_table"])
+        self.assertTrue(any("under the export commit's mirror-edge table" in error for error in report["errors"]))
+        self.assertEqual(report["checks"]["mirror_edge_findings"], [])
 
     def test_unclassified_and_non_utf8_mirror_files_are_not_skipped(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

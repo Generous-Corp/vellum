@@ -116,6 +116,10 @@ class SdkMirrorScopeTests(unittest.TestCase):
             self.assertEqual(rules(name, debt), set(), name)
             stream = install_core.inspect_payload_stream(name, io.BytesIO(debt), retain=False)[3]
             self.assertEqual(stream, [], name)
+        # The installed header is the same file at its install path.
+        self.assertEqual(rules("sdk/mirror/include/pulp/view/widgets.hpp", debt), set())
+        self.assertIn("mirror-pulp-kept-include", rules("sdk/mirror/include/pulp/view/label.hpp", debt))
+        self.assertIn("mirror-pulp-kept-include", rules("sdk/mirror/include/pulp/widgets.hpp", debt))
         # Another file, another spelling, or another kept header on that file is refused.
         self.assertIn("mirror-pulp-kept-include", rules("sdk/mirror/core/view/src/a.cpp", debt))
         self.assertIn("mirror-pulp-kept-include", rules(
@@ -123,6 +127,20 @@ class SdkMirrorScopeTests(unittest.TestCase):
         self.assertIn("mirror-pulp-kept-include", rules(
             "sdk/mirror/core/view/include/pulp/view/widgets.hpp",
             debt + b"#include <pulp/view/register_audio_widgets.hpp>\n"))
+
+    def test_an_exempt_line_must_start_inside_the_scan_window(self) -> None:
+        name = "sdk/mirror/core/view/include/pulp/view/widgets.hpp"
+        line = b"#include <pulp/view/audio_widgets.hpp>\n"
+        rules_ = install_core.MIRROR_PAYLOAD_CONTENT_PATTERNS
+        self.assertEqual(install_core.content_rule_findings(name, rules_, line, True), [])
+        # A later window that starts mid-line cannot prove the line is the recorded one.
+        self.assertEqual([f["rule"] for f in install_core.content_rule_findings(name, rules_, line, False)],
+                         ["mirror-pulp-kept-include"])
+        self.assertEqual(install_core.content_rule_findings(name, rules_, b"// x\n" + line, False), [])
+        # End to end: a longer line cut at a chunk boundary is still refused.
+        prefix = b"x" * (1024 * 1024 - 6) + b"\n" + b"int a;"
+        stream = install_core.inspect_payload_stream(name, io.BytesIO(prefix + line), retain=False)[3]
+        self.assertIn("mirror-pulp-kept-include", {f["rule"] for f in stream})
 
     def test_installer_edge_rules_are_the_vendored_table(self) -> None:
         import json

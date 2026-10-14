@@ -132,6 +132,13 @@ MIRROR_EDGE_KEPT_FILE_PATTERN = '\\A(?:core/(?:view/(?:audio/|(?:.*/)?(?:audio_b
 MIRROR_EDGE_EXCEPTIONS = frozenset({
     ('mirror-pulp-kept-include', 'core/view/include/pulp/view/widgets.hpp', '#include <pulp/view/audio_widgets.hpp>'),
 })
+# A header exempted at its Pulp source path (core/<module>/include/<rel>) is
+# installed in the mirror at include/<rel>; both spellings name the same file.
+MIRROR_EDGE_EXCEPTION_KEYS = MIRROR_EDGE_EXCEPTIONS | frozenset(
+    (rule, "include/" + match.group(1), line)
+    for rule, path, line in MIRROR_EDGE_EXCEPTIONS
+    if (match := re.match(r"\Acore/[^/]+/include/(.+)\Z", path))
+)
 MIRROR_PAYLOAD_PATH_PATTERNS = {
     # Product source trees and installed product headers. Pulp-kept view and
     # state files are matched by the table's kept-file rule below.
@@ -170,25 +177,31 @@ def mirror_kept_path(relative: str) -> bool:
     return MIRROR_PAYLOAD_CONTENT_PATTERNS["mirror-pulp-kept-include"].search(spelled) is not None
 
 
-def mirror_exempt(name: str, rule: str, window: bytes, start: int) -> bool:
-    """Whether a content match sits on an approved exception line. A line cut
-    by the scan window does not equal the recorded line, so it stays a finding."""
+def mirror_exempt(
+    name: str, rule: str, window: bytes, start: int, window_at_start: bool = True
+) -> bool:
+    """Whether a content match sits on an approved exception line. The line
+    must start inside the scan window (or the window must start the file), so
+    a window cut cannot make a longer line look like the recorded one."""
     relative = mirror_relative(name)
     if relative is None:
         return False
-    line_start = window.rfind(b"\n", 0, start) + 1
+    newline = window.rfind(b"\n", 0, start)
+    if newline < 0 and not window_at_start:
+        return False
+    line_start = newline + 1
     line_end = window.find(b"\n", start)
     line = window[line_start:] if line_end < 0 else window[line_start:line_end]
-    return (rule, relative, line.decode("utf-8", errors="replace")) in MIRROR_EDGE_EXCEPTIONS
+    return (rule, relative, line.decode("utf-8", errors="replace")) in MIRROR_EDGE_EXCEPTION_KEYS
 
 
 def content_rule_findings(
-    name: str, rules: dict[str, re.Pattern], window: bytes
+    name: str, rules: dict[str, re.Pattern], window: bytes, window_at_start: bool = True
 ) -> list[dict[str, str]]:
     findings: list[dict[str, str]] = []
     for rule, pattern in rules.items():
         for match in pattern.finditer(window):
-            if mirror_exempt(name, rule, window, match.start()):
+            if mirror_exempt(name, rule, window, match.start(), window_at_start):
                 continue
             findings.append(
                 {
@@ -393,6 +406,7 @@ def inspect_payload_stream(
     findings = payload_contamination_findings(name, b"")
     scan_content = should_scan_payload_content(name)
     _path_rules, content_rules = payload_rules(name)
+    window_at_start = True
     for chunk in iter(lambda: handle.read(1024 * 1024), b""):
         size += len(chunk)
         digest.update(chunk)
@@ -400,7 +414,8 @@ def inspect_payload_stream(
             retained.extend(chunk)
         if scan_content:
             window = tail + chunk
-            findings.extend(content_rule_findings(name, content_rules, window))
+            findings.extend(content_rule_findings(name, content_rules, window, window_at_start))
+            window_at_start = False
             tail = window[-CONTAMINATION_OVERLAP_BYTES:]
     return (
         size,

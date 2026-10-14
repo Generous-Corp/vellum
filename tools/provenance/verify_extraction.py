@@ -142,12 +142,14 @@ MIRROR_EDGE_EXCEPTIONS = {
 }
 
 
-def mirror_edge_exempt(rule: str, path_in_mirror: str, text: str, start: int) -> bool:
+def mirror_edge_exempt(
+    rule: str, path_in_mirror: str, text: str, start: int, exceptions: set | None = None
+) -> bool:
     """Whether the match at `start` sits on an approved exception line."""
     line_start = text.rfind("\n", 0, start) + 1
     line_end = text.find("\n", start)
     line = text[line_start:] if line_end < 0 else text[line_start:line_end]
-    return (rule, path_in_mirror, line) in MIRROR_EDGE_EXCEPTIONS
+    return (rule, path_in_mirror, line) in (MIRROR_EDGE_EXCEPTIONS if exceptions is None else exceptions)
 POLICY_IMPLEMENTATION_PATHS = {
     "scripts/verify_sdk_artifact.py",
 }
@@ -363,9 +365,10 @@ def mirror_edge_table_drift(
 
     The checkout is the Pulp commit of the last export. The table may advance
     on Pulp main between exports (a stricter rule lands before the next
-    export), so a different copy passes only when the pinned commit descends
-    from this checkout and holds the vendored blob. The mirror itself is
-    scanned with the vendored table either way.
+    export), so a different copy passes only when the pinned commit is on
+    Pulp main (refs/remotes/origin/main), descends from this checkout and
+    holds the vendored blob. verify() then scans the mirror under both the
+    vendored table and this checkout's table.
     """
     pulp_table = pulp_root / PULP_MIRROR_EDGE_TABLE
     if not pulp_table.is_file():
@@ -385,6 +388,19 @@ def mirror_edge_table_drift(
         blob = git(pulp_root, "rev-parse", f"{pinned}:{PULP_MIRROR_EDGE_TABLE}")
     except (OSError, KeyError, json.JSONDecodeError, subprocess.CalledProcessError):
         return [f"{differs}, and the pinned commit cannot be resolved in {pulp_root}"]
+    # A descendant on a side branch is unreviewed: only Pulp main may advance the table.
+    main = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", "refs/remotes/origin/main"],
+        cwd=pulp_root, capture_output=True, text=True, check=False,
+    )
+    if main.returncode != 0 or not main.stdout.strip():
+        return [f"{differs}, and {pulp_root} has no refs/remotes/origin/main to prove the pin is on Pulp main"]
+    on_main = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", pinned, main.stdout.strip()],
+        cwd=pulp_root, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+    ).returncode == 0
+    if not on_main:
+        return [f"{differs}, and the pinned commit {pinned} is not on Pulp main"]
     if not descends:
         return [f"{differs}, and the pinned commit {pinned} does not descend from {head}"]
     if blob != git_blob_sha(vendored) or blob != pin.get("git_blob"):
@@ -427,24 +443,42 @@ def mirror_edge_table_pin_errors(
     return errors
 
 
-def mirror_edge_findings(root: Path) -> list[dict[str, object]]:
+def compile_mirror_edge_table(table: dict) -> dict[str, object]:
+    return {
+        "content": {name: re.compile(pattern) for name, pattern in table["content_patterns"].items()},
+        "path": {name: re.compile(pattern) for name, pattern in table["path_patterns"].items()},
+        "suffixes": set(table["suffixes"]),
+        "binary_suffixes": set(table.get("binary_suffixes", [])),
+        "exceptions": {(row["rule"], row["path"], row["line"]) for row in table.get("approved_exceptions", [])},
+    }
+
+
+def mirror_edge_findings(root: Path, table: dict | None = None) -> list[dict[str, object]]:
+    """Mirror edges under the vendored table, or under another table's rules."""
+    if table is not None:
+        rules = compile_mirror_edge_table(table)
+        content_rules, path_rules = rules["content"], rules["path"]
+        suffixes, binary, exceptions = rules["suffixes"], rules["binary_suffixes"], rules["exceptions"]
+    else:
+        content_rules, path_rules = FORBIDDEN_MIRROR_EDGE_PATTERNS, MIRROR_EDGE_PATH_PATTERNS
+        suffixes, binary, exceptions = MIRROR_EDGE_SUFFIXES, MIRROR_EDGE_BINARY_SUFFIXES, MIRROR_EDGE_EXCEPTIONS
     findings: list[dict[str, object]] = []
     for path in mirror_files(root):
         relative = path.relative_to(root).as_posix()
         in_mirror = relative.removeprefix(MIRROR_ROOT)
-        for name, pattern in MIRROR_EDGE_PATH_PATTERNS.items():
+        for name, pattern in path_rules.items():
             if pattern.search(in_mirror):
                 findings.append({"rule": name, "path": relative, "line": 0, "match": relative})
         suffix = path.suffix.lower()
-        if suffix in MIRROR_EDGE_BINARY_SUFFIXES:
+        if suffix in binary:
             continue
-        if suffix not in MIRROR_EDGE_SUFFIXES:
+        if suffix not in suffixes:
             findings.append({"rule": "mirror-unclassified-suffix", "path": relative, "line": 0, "match": suffix})
             continue
         text = path.read_text(encoding="utf-8", errors="replace")
-        for name, pattern in FORBIDDEN_MIRROR_EDGE_PATTERNS.items():
+        for name, pattern in content_rules.items():
             for match in pattern.finditer(text):
-                if mirror_edge_exempt(name, in_mirror, text, match.start()):
+                if mirror_edge_exempt(name, in_mirror, text, match.start(), exceptions):
                     continue
                 findings.append(
                     {
@@ -708,6 +742,16 @@ def verify(
     checks["mirror_edge_findings"] = edge_findings
     if edge_findings:
         errors.append(f"mirror root has {len(edge_findings)} audio, plug-in, host, or product edges")
+    # The export commit's own table must pass too, so an advanced table
+    # cannot admit an edge the exporting gate refused.
+    export_table_path = pulp_root / PULP_MIRROR_EDGE_TABLE if pulp_root is not None else None
+    if export_table_path is not None and export_table_path.is_file() \
+            and export_table_path.read_bytes() != MIRROR_EDGE_TABLE.read_bytes():
+        export_findings = mirror_edge_findings(root, json.loads(export_table_path.read_text(encoding="utf-8")))
+        checks["mirror_edge_findings_under_export_table"] = export_findings
+        if export_findings:
+            errors.append(
+                f"mirror root has {len(export_findings)} edges under the export commit's mirror-edge table")
 
     active_findings = scan_active_surface(root, active_roots)
     checks["active_forbidden_findings"] = active_findings
