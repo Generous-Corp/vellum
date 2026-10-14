@@ -1,0 +1,93 @@
+{
+ "note": "D6 rung 2 over the landed export 20261014-34d16417a460 (units foundation + canvas). Host locations are <roots> bound with --root.",
+ "closures": [
+  "<exported>/provenance/mirror/closures/20261014-34d16417a460/foundation.json",
+  "<exported>/provenance/mirror/closures/20261014-34d16417a460/canvas.json"
+ ],
+ "origin_repo": "<origin>",
+ "origin_commit": "34d16417a460da7bc83e6df9f6319625423e4847",
+ "exported_repo": "<exported>",
+ "exported_commit": "111adaa945af6474131a6c3a8774a7557906375a",
+ "exported_prefix": "mirror/",
+ "export_receipt": "provenance/mirror/receipts/20261014-34d16417a460.json",
+ "reference_build": "<reference-build>",
+ "groups": [
+  {
+   "name": "core-runtime",
+   "reference_binary": "<reference-build>/test/pulp-test-group-core-runtime",
+   "candidate_targets": [
+    "Vellum::MirrorFoundation"
+   ]
+  },
+  {
+   "name": "core-platform",
+   "reference_binary": "<reference-build>/test/pulp-test-group-core-platform",
+   "candidate_targets": [
+    "Vellum::MirrorFoundation"
+   ]
+  },
+  {
+   "name": "core-events",
+   "reference_binary": "<reference-build>/test/pulp-test-group-core-events",
+   "candidate_targets": [
+    "Vellum::MirrorFoundation"
+   ]
+  },
+  {
+   "name": "core-canvas",
+   "reference_binary": "<reference-build>/test/pulp-test-group-core-canvas",
+   "candidate_targets": [
+    "Vellum::MirrorCanvas"
+   ]
+  },
+  {
+   "name": "canvas-text",
+   "reference_binary": "<reference-build>/test/pulp-test-group-canvas-text",
+   "candidate_targets": [
+    "Vellum::MirrorCanvas"
+   ],
+   "expect_reference_provider": true
+  }
+ ],
+ "candidate_prefix": "<prefix>",
+ "candidate_package": "Vellum",
+ "catch2_source": "<catch2>",
+ "jobs": 4,
+ "control_header": "mirror/include/pulp/canvas/path.hpp",
+ "control_header_group": "core-canvas",
+ "divergent_prefix": "<divergent-prefix>",
+ "divergent_group": "canvas-text",
+ "exclude_sources": {
+  "test_bidi_text": "F-B: the package's public canvas headers include Skia headers (font_resolver.hpp, bundled_fonts.hpp, skia_canvas.hpp) that the package keeps private (D4), so this source cannot compile against the package",
+  "test_cluster_step": "F-B: the package's public canvas headers include Skia headers (font_resolver.hpp, bundled_fonts.hpp, skia_canvas.hpp) that the package keeps private (D4), so this source cannot compile against the package",
+  "test_device_capability": "F-A: the export omits public headers no unit source includes; this test's header (pulp/platform/device_capability.hpp) is in Pulp at the origin commit but absent from the closure and the package",
+  "test_events": "F-A: the export omits public headers no unit source includes; this test's header (pulp/events/events.hpp) is in Pulp at the origin commit but absent from the closure and the package",
+  "test_events_timer_helpers": "F-A: the export omits public headers no unit source includes; this test's header (pulp/events/events.hpp) is in Pulp at the origin commit but absent from the closure and the package",
+  "test_file_search_path": "F-A: the export omits public headers no unit source includes; this test's header (pulp/runtime/file_search_path.hpp) is in Pulp at the origin commit but absent from the closure and the package",
+  "test_font_aa_hinting": "F-B: the package's public canvas headers include Skia headers (font_resolver.hpp, bundled_fonts.hpp, skia_canvas.hpp) that the package keeps private (D4), so this source cannot compile against the package",
+  "test_font_async_lifecycle": "F-B: the package's public canvas headers include Skia headers (font_resolver.hpp, bundled_fonts.hpp, skia_canvas.hpp) that the package keeps private (D4), so this source cannot compile against the package",
+  "test_font_axis_animation": "F-B: the package's public canvas headers include Skia headers (font_resolver.hpp, bundled_fonts.hpp, skia_canvas.hpp) that the package keeps private (D4), so this source cannot compile against the package",
+  "test_font_color_mode": "F-B: the package's public canvas headers include Skia headers (font_resolver.hpp, bundled_fonts.hpp, skia_canvas.hpp) that the package keeps private (D4), so this source cannot compile against the package",
+  "test_font_flight_recorder": "F-B: the package's public canvas headers include Skia headers (font_resolver.hpp, bundled_fonts.hpp, skia_canvas.hpp) that the package keeps private (D4), so this source cannot compile against the package",
+  "test_font_locale_shaping": "F-B: the package's public canvas headers include Skia headers (font_resolver.hpp, bundled_fonts.hpp, skia_canvas.hpp) that the package keeps private (D4), so this source cannot compile against the package",
+  "test_font_options": "F-B: the package's public canvas headers include Skia headers (font_resolver.hpp, bundled_fonts.hpp, skia_canvas.hpp) that the package keeps private (D4), so this source cannot compile against the package",
+  "test_font_rendering_goldens": "F-B: the package's public canvas headers include Skia headers (font_resolver.hpp, bundled_fonts.hpp, skia_canvas.hpp) that the package keeps private (D4), so this source cannot compile against the package",
+  "test_font_scope_budget": "F-B: the package's public canvas headers include Skia headers (font_resolver.hpp, bundled_fonts.hpp, skia_canvas.hpp) that the package keeps private (D4), so this source cannot compile against the package",
+  "test_font_security": "F-B: the package's public canvas headers include Skia headers (font_resolver.hpp, bundled_fonts.hpp, skia_canvas.hpp) that the package keeps private (D4), so this source cannot compile against the package",
+  "test_font_variable_axes": "F-B: the package's public canvas headers include Skia headers (font_resolver.hpp, bundled_fonts.hpp, skia_canvas.hpp) that the package keeps private (D4), so this source cannot compile against the package",
+  "test_font_woff2": "F-B: the package's public canvas headers include Skia headers (font_resolver.hpp, bundled_fonts.hpp, skia_canvas.hpp) that the package keeps private (D4), so this source cannot compile against the package",
+  "test_image_convolution": "F-A: the export omits public headers no unit source includes; this test's header (pulp/canvas/image_convolution.hpp) is in Pulp at the origin commit but absent from the closure and the package",
+  "test_parity": "F-B: the package's public canvas headers include Skia headers (font_resolver.hpp, bundled_fonts.hpp, skia_canvas.hpp) that the package keeps private (D4), so this source cannot compile against the package",
+  "test_platform": "F-A: the export omits public headers no unit source includes; this test's header (pulp/platform/progress_parser.hpp) is in Pulp at the origin commit but absent from the closure and the package",
+  "test_retained_layer_store": "F-B: the package's public canvas headers include Skia headers (font_resolver.hpp, bundled_fonts.hpp, skia_canvas.hpp) that the package keeps private (D4), so this source cannot compile against the package",
+  "test_runtime_result": "F-A: the export omits public headers no unit source includes; this test's header (pulp/runtime/result.hpp) is in Pulp at the origin commit but absent from the closure and the package",
+  "test_safe_relative_path": "F-A: the export omits public headers no unit source includes; this test's header (pulp/runtime/safe_relative_path.hpp) is in Pulp at the origin commit but absent from the closure and the package",
+  "test_spsc_ring_index": "F-A: the export omits public headers no unit source includes; this test's header (pulp/runtime/spsc_ring_index.hpp) is in Pulp at the origin commit but absent from the closure and the package",
+  "test_text_run_planner_icu": "F-B: the package's public canvas headers include Skia headers (font_resolver.hpp, bundled_fonts.hpp, skia_canvas.hpp) that the package keeps private (D4), so this source cannot compile against the package",
+  "test_text_run_planner_parallel": "F-B: the package's public canvas headers include Skia headers (font_resolver.hpp, bundled_fonts.hpp, skia_canvas.hpp) that the package keeps private (D4), so this source cannot compile against the package",
+  "test_text_shaper": "F-B: the package's public canvas headers include Skia headers (font_resolver.hpp, bundled_fonts.hpp, skia_canvas.hpp) that the package keeps private (D4), so this source cannot compile against the package"
+ },
+ "unstable_tests": {
+  "test_ipc_endpoints::IPC socket connect timeout bounds a saturated listener": "origin flake, not a package difference: the reference binary alone (Pulp 34d16417, Release) failed it 1 of 6 idle runs and failed it in one calibration positive, where the candidate passed; it bounds a TCP connect to a saturated listener by wall-clock time"
+ }
+}

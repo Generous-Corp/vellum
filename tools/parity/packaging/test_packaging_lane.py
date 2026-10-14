@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Unit tests for the D6 rung-2 packaging lane's comparison, configuration,
-justification and single-definition rules. The end-to-end run needs an origin
-build and an installed package, so it is exercised by `calibrate` instead."""
+justification, package-binding, single-definition and single-provider rules.
+The end-to-end run needs an origin build and an installed package, so it is
+exercised by `calibrate` instead."""
 
 from __future__ import annotations
 
+import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -16,6 +19,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import packaging_lane as lane  # noqa: E402
 
+DARWIN_TOOLS = sys.platform == "darwin" and all(shutil.which(t) for t in ("cc", "ar", "nm"))
+
 
 class CompareTests(unittest.TestCase):
     def test_identical_passing_populations_match(self) -> None:
@@ -26,7 +31,8 @@ class CompareTests(unittest.TestCase):
         reference = {"a::x": "passed", "a::y": "passed"}
         self.assertTrue(lane.compare(reference, {"a::x": "passed"}))
         self.assertTrue(lane.compare(reference, dict(reference, **{"a::z": "passed"})))
-        self.assertTrue(lane.compare(reference, {"a::x": "passed", "a::y": "failed"}))
+        self.assertIn("a::y: reference passed != candidate failed",
+                      lane.compare(reference, {"a::x": "passed", "a::y": "failed"}))
         both_failing = {"a::x": "passed", "a::f": "failed"}
         self.assertIn("a::f: failed on both sides", lane.compare(both_failing, dict(both_failing)))
         self.assertTrue(lane.compare({}, {}))
@@ -39,20 +45,26 @@ class CompareTests(unittest.TestCase):
 
 
 class ConfigurationTests(unittest.TestCase):
-    closure = {"configuration": "Release", "compile_definitions": ["PULP_HAS_SHEENBIDI=1"]}
+    plain = {"configuration": "Release", "compile_definitions": ["PULP_HAS_SHEENBIDI=1"]}
+    skia = {"configuration": "Release", "compile_definitions": ["PULP_HAS_SKIA=1"]}
 
     def test_matching_build_is_accepted(self) -> None:
-        cache = {"CMAKE_BUILD_TYPE": "Release", "PULP_HAS_SKIA": "FALSE"}
-        self.assertEqual(lane.configuration_errors([self.closure], cache), [])
+        self.assertEqual(lane.configuration_errors([self.plain], {"CMAKE_BUILD_TYPE": "Release",
+                                                                  "PULP_HAS_SKIA": "FALSE"}), [])
+        # A Skia build serves a Skia closure and a non-Skia closure exported with it.
+        self.assertEqual(lane.configuration_errors([self.plain, self.skia], {"CMAKE_BUILD_TYPE": "Release",
+                                                                             "PULP_HAS_SKIA": "TRUE"}), [])
 
     def test_build_type_and_skia_mismatches_are_refused(self) -> None:
-        self.assertTrue(lane.configuration_errors([self.closure], {"CMAKE_BUILD_TYPE": "Debug",
-                                                                   "PULP_HAS_SKIA": "FALSE"}))
-        self.assertTrue(lane.configuration_errors([self.closure], {"CMAKE_BUILD_TYPE": "Release",
-                                                                   "PULP_HAS_SKIA": "TRUE"}))
+        self.assertTrue(lane.configuration_errors([self.plain], {"CMAKE_BUILD_TYPE": "Debug",
+                                                                 "PULP_HAS_SKIA": "FALSE"}))
+        self.assertTrue(lane.configuration_errors([self.plain], {"CMAKE_BUILD_TYPE": "Release",
+                                                                 "PULP_HAS_SKIA": "TRUE"}))
+        self.assertTrue(lane.configuration_errors([self.plain, self.skia], {"CMAKE_BUILD_TYPE": "Release",
+                                                                            "PULP_HAS_SKIA": "FALSE"}))
 
 
-@unittest.skipUnless(shutil.which("cc") and shutil.which("ar") and shutil.which("nm"), "needs cc, ar and nm")
+@unittest.skipUnless(DARWIN_TOOLS, "needs Darwin cc, ar and nm -m")
 class CensusTests(unittest.TestCase):
     def archive(self, root: Path, name: str, code: str) -> Path:
         source = root / f"{name}.c"
@@ -62,6 +74,12 @@ class CensusTests(unittest.TestCase):
         subprocess.run(["ar", "rcs", str(archive), str(root / f"{name}.o")], check=True)
         return archive
 
+    def executable(self, root: Path, name: str, code: str) -> Path:
+        source = root / f"{name}.c"
+        source.write_text(code, encoding="utf-8")
+        subprocess.run(["cc", str(source), "-o", str(root / name)], check=True)
+        return root / name
+
     def test_strong_duplicates_fail_and_weak_ones_do_not(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -69,20 +87,120 @@ class CensusTests(unittest.TestCase):
                                             "__attribute__((weak)) int inline_like(void) { return 3; }\n")
             two = self.archive(root, "two", "int other(void) { return 2; }\n"
                                             "__attribute__((weak)) int inline_like(void) { return 3; }\n")
-            clean = lane.archive_census([one, two])
+            clean = lane.library_census([one, two])
             self.assertEqual(clean["duplicate_count"], 0)
             self.assertGreaterEqual(clean["symbols"], 2)
             dup = self.archive(root, "dup", "int shared(void) { return 9; }\n")
-            dirty = lane.archive_census([one, two, dup])
+            dirty = lane.library_census([one, two, dup])
             self.assertEqual(dirty["duplicate_count"], 1)
             self.assertIn("_shared", dirty["duplicates"])
 
+    def test_image_that_redefines_a_package_symbol_or_carries_a_provider_is_seen(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            clean = self.executable(root, "clean", "int main(void) { return 0; }\n")
+            report = lane.image_census(clean, {"_shared"})
+            self.assertEqual((report["shadowed_count"], report["provider_count"]), (0, 0))
+            shadow = self.executable(root, "shadow", "int shared(void) { return 1; }\n"
+                                                     "int main(void) { return shared(); }\n")
+            self.assertEqual(lane.image_census(shadow, {"_shared"})["shadowed"], ["_shared"])
+            provider = self.executable(root, "provider", "void *wgpuCreateInstance(void *d) { return d; }\n"
+                                                         "int main(void) { return wgpuCreateInstance(0) != 0; }\n")
+            self.assertEqual(lane.image_census(provider, set())["providers"], ["_wgpuCreateInstance"])
+
+
+def git(repo: Path, *args: str) -> str:
+    env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@invalid",
+               GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@invalid")
+    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, check=True,
+                          env=env).stdout.strip()
+
+
+class BindingTests(unittest.TestCase):
+    """The identity and the package must describe the same export."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name)
+        self.origin = root / "origin"
+        self.exported = root / "exported"
+        for repo in (self.origin, self.exported):
+            repo.mkdir()
+            git(repo, "init", "-q")
+        (self.origin / "core").mkdir()
+        (self.origin / "core" / "a.cpp").write_text("int a;\n", encoding="utf-8")
+        git(self.origin, "add", ".")
+        git(self.origin, "commit", "-q", "-m", "origin")
+        self.origin_commit = git(self.origin, "rev-parse", "HEAD")
+        (self.exported / "mirror" / "core").mkdir(parents=True)
+        (self.exported / "mirror" / "core" / "a.cpp").write_text("int a;\n", encoding="utf-8")
+        self.receipt = {"schema": lane.RECEIPT_SCHEMA, "pulp_sha": self.origin_commit}
+        (self.exported / "receipts").mkdir()
+        (self.exported / "receipts" / "r.json").write_text(json.dumps(self.receipt), encoding="utf-8")
+        git(self.exported, "add", ".")
+        git(self.exported, "commit", "-q", "-m", "export")
+        self.closure = root / "closure.json"
+        self.closure.write_text(json.dumps({"schema": "pulp.vellum.closure.v1", "files": ["core/a.cpp"]}),
+                                encoding="utf-8")
+        self.prefix = root / "prefix"
+        (self.prefix / "mirror" / "share" / "provenance").mkdir(parents=True)
+        shutil.copy2(self.exported / "receipts" / "r.json", self.prefix / "mirror" / "share" / "provenance" / "r.json")
+        self.spec = {"closures": [str(self.closure)], "origin_repo": str(self.origin),
+                     "origin_commit": self.origin_commit, "exported_repo": str(self.exported),
+                     "exported_commit": git(self.exported, "rev-parse", "HEAD"), "exported_prefix": "mirror/",
+                     "export_receipt": "receipts/r.json"}
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_identity_passes_and_one_mutated_blob_fails(self) -> None:
+        self.assertEqual(lane.identity_result(self.spec)["status"], "pass")
+        mutated = lane.mutated_export_commit(self.exported, self.spec["exported_commit"], "mirror/")
+        result = lane.identity_result(self.spec, mutated)
+        self.assertEqual(result["status"], "fail")
+        self.assertTrue(any("blob differs: core/a.cpp" in r for r in result["reasons"]))
+        # The control commit is an unreferenced object: no branch moved.
+        self.assertEqual(git(self.exported, "rev-parse", "HEAD"), self.spec["exported_commit"])
+
+    def test_package_receipt_must_be_the_exported_one(self) -> None:
+        self.assertEqual(lane.receipt_binding(self.spec, self.prefix), [])
+        installed = self.prefix / "mirror" / "share" / "provenance" / "r.json"
+        installed.write_text(json.dumps(dict(self.receipt, pulp_sha="0" * 40)), encoding="utf-8")
+        reasons = lane.receipt_binding(self.spec, self.prefix)
+        self.assertTrue(any("differs" in r for r in reasons))
+        self.assertTrue(any("names origin" in r for r in reasons))
+        shutil.copy2(installed, installed.with_name("second.json"))
+        self.assertIn("expected exactly one", lane.receipt_binding(self.spec, self.prefix)[0])
+
+    def test_redaction_removes_host_paths(self) -> None:
+        roots = {"origin": str(self.origin), "prefix": str(self.prefix)}
+        text = json.dumps(lane.redact({"a": [str(self.origin / "test"), str(self.prefix)]}, roots))
+        self.assertNotIn(self.tmp.name, text)
+        self.assertIn("<origin>/test", text)
+
 
 class SpecRuleTests(unittest.TestCase):
-    def test_unjustified_reclassification_and_exclusion_are_refused(self) -> None:
-        spec = {"closures": [], "closure_external_paths": {"build/x.h": ""}}
+    roots = ("origin", "exported", "reference-build", "prefix", "catch2", "divergent-prefix")
+
+    def test_unbound_root_is_refused(self) -> None:
+        self.assertEqual(lane.bind_roots({"a": ["<origin>/test"]}, {"origin": "/o"}), {"a": ["/o/test"]})
         with self.assertRaises(lane.LaneError):
-            lane.evaluate(spec, Path(tempfile.gettempdir()) / "unused")
+            lane.bind_roots({"a": "<prefix>/lib"}, {"origin": "/o"})
+
+    def test_committed_specs_bind_and_justify_every_exclusion(self) -> None:
+        specs = sorted((Path(__file__).resolve().parent / "specs").glob("*.json"))
+        self.assertTrue(specs)
+        for path in specs:
+            spec = lane.bind_roots(json.loads(path.read_text(encoding="utf-8")), {r: "/x" for r in self.roots})
+            self.assertTrue(spec["groups"], path.name)
+            lane.justified(spec.get("exclude_sources") or {}, "exclude_sources")
+            for value in json.dumps(spec).split('"'):
+                self.assertFalse(value.startswith("/Users/") or value.startswith("/Volumes/"), value)
+
+    def test_unjustified_exclusion_is_refused(self) -> None:
+        with self.assertRaises(lane.LaneError):
+            lane.justified({"test_x": " "}, "exclude_sources")
+        self.assertEqual(lane.justified({"test_x": "why"}, "exclude_sources"), {"test_x": "why"})
 
 
 if __name__ == "__main__":

@@ -3,22 +3,30 @@
 
 The identity lane (rung 1) proves the exported tree equals the origin
 closure. This lane proves the *package* built from that tree behaves like the
-origin. It takes the origin repository's own test sources at the exported
-commit, compiles them against the installed package through `find_package`,
-runs them, and compares the Catch2 results test by test with the origin's
-in-tree run of the same sources.
+origin. For each origin test group it takes the origin's own test sources at
+the exported commit, compiles them against the installed package through
+`find_package`, runs them, and compares the Catch2 results test by test with
+the origin's in-tree run of the same sources.
 
-- The reference is the origin's own test binary, built in the configuration
-  the closure records. The binary's file tags (`-#`) choose which sources run.
+- The reference is the origin's own test binary, built at the origin commit in
+  the configuration the closures record. Its file tags (`-#`) choose which
+  sources run.
 - The candidate is a consumer project generated here. It links only the
-  package's exported target and adds no compile definitions of its own.
+  package targets the group names, plus Catch2, and adds no compile
+  definitions of its own.
 - Identity first: the lane is `blocked` unless rung 1 passes for the same
-  export (closure manifests + export receipt + exported commit).
-- Configuration: the reference build must match the closure's recorded
-  configuration (build type, Skia on/off, compile definitions), or the two
-  sides are not compiling the same thing.
-- Single definition: every global symbol in the package's archives has one
-  owning archive.
+  export (closure manifests + exported commit).
+- Package binding: the installed package must carry the export receipt of the
+  exported commit, byte for byte, and that receipt must name the origin
+  commit. A package built from another export is `blocked`.
+- Configuration: the reference build must match the closures' recorded
+  configuration (build type, Skia on/off).
+- Single definition: every strong global symbol in the package's libraries
+  has one owning library, and no candidate image defines a symbol the package
+  exports (that would be a second copy in one image).
+- Single provider: no candidate image defines Skia/Dawn itself; the package's
+  library is its only provider. The census is proven able to see a provider by
+  finding the statically linked one in the reference binary.
 
 `calibrate` runs the comparison and then seeded controls that must each make
 it non-accepting. The lane is only as trustworthy as its controls.
@@ -28,11 +36,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import xml.etree.ElementTree as ET
 from typing import Any
 
@@ -40,12 +50,120 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import parity_harness as ph  # noqa: E402
 
-SCHEMA = "vellum.parity.packaging-receipt.v1"
-CALIBRATION_SCHEMA = "vellum.parity.packaging-calibration.v1"
+SCHEMA = "vellum.parity.packaging-receipt.v2"
+CALIBRATION_SCHEMA = "vellum.parity.packaging-calibration.v2"
+RECEIPT_SCHEMA = "pulp.vellum.export-receipt.v2"
+# Definitions that mark an image as carrying its own Skia/Dawn provider.
+PROVIDER_SYMBOL = re.compile(r"^(_wgpuCreateInstance|__ZN8SkCanvas[0-9A-Za-z_]+|__ZN9SkSurface[0-9A-Za-z_]+)$")
 
 
 class LaneError(ph.HarnessError):
     pass
+
+
+def run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace", **kwargs)
+
+
+# ── symbols ───────────────────────────────────────────────────────────────
+
+
+def strong_definitions(binary: Path) -> set[str]:
+    """Strong external definitions of an archive, dylib or executable.
+    Weak definitions (inline functions, template instantiations) are
+    coalesced and legitimately appear in several images."""
+    result = run(["nm", "-gUm", str(binary)])
+    if result.returncode != 0:
+        raise LaneError(f"nm failed on {binary.name}: {result.stderr[-300:]}")
+    symbols = set()
+    for line in result.stdout.splitlines():
+        if "external" not in line or "weak" in line or "(undefined)" in line:
+            continue
+        symbols.add(line.rsplit(" ", 1)[-1])
+    return symbols
+
+
+def library_census(libraries: list[Path]) -> dict[str, Any]:
+    """Every strong global definition must come from exactly one library."""
+    owners: dict[str, set[str]] = {}
+    for library in libraries:
+        for symbol in strong_definitions(library):
+            owners.setdefault(symbol, set()).add(library.name)
+    duplicates = sorted(s for s, o in owners.items() if len(o) > 1)
+    return {"libraries": [lib.name for lib in libraries], "symbols": len(owners),
+            "duplicates": duplicates[:25], "duplicate_count": len(duplicates),
+            "_exported": set(owners)}
+
+
+def image_census(binary: Path, package_symbols: set[str]) -> dict[str, Any]:
+    """A candidate image may not define what the package exports, nor carry
+    its own Skia/Dawn provider."""
+    defined = strong_definitions(binary)
+    shadowed = sorted(defined & package_symbols)
+    providers = sorted(s for s in defined if PROVIDER_SYMBOL.match(s))
+    return {"defined": len(defined), "shadowed_count": len(shadowed), "shadowed": shadowed[:10],
+            "provider_count": len(providers), "providers": providers[:5]}
+
+
+def linked_libraries(binary: Path) -> list[str]:
+    result = run(["otool", "-L", str(binary)])
+    return [line.strip().split(" ", 1)[0] for line in result.stdout.splitlines()[1:] if line.strip()]
+
+
+# ── identity and package binding ──────────────────────────────────────────
+
+
+def identity_result(spec: dict[str, Any], exported_commit: str | None = None) -> dict[str, Any]:
+    closures = [ph.load_json(Path(p)) for p in spec["closures"]]
+    manifest = ph.merge_manifests(closures)
+    origin = ph.git_tree_blobs(Path(spec["origin_repo"]), spec["origin_commit"], ph.manifest_paths(manifest))
+    exported = ph.git_exported_blobs(Path(spec["exported_repo"]), exported_commit or spec["exported_commit"],
+                                     spec.get("exported_prefix", "mirror/"))
+    return ph.compare_identity(manifest, origin, exported)
+
+
+def receipt_binding(spec: dict[str, Any], prefix: Path) -> list[str]:
+    """The installed package must have been built from the export the
+    identity lane just checked."""
+    receipts = sorted((prefix / "mirror" / "share" / "provenance").glob("*.json"))
+    if len(receipts) != 1:
+        return [f"package carries {len(receipts)} export receipts; expected exactly one"]
+    installed = receipts[0].read_bytes()
+    committed = subprocess.run(["git", "-C", spec["exported_repo"], "show",
+                                f"{spec['exported_commit']}:{spec['export_receipt']}"], capture_output=True)
+    if committed.returncode != 0:
+        return [f"exported commit has no {spec['export_receipt']}"]
+    reasons = []
+    if installed != committed.stdout:
+        reasons.append(f"package receipt {receipts[0].name} differs from {spec['export_receipt']} at the exported commit")
+    receipt = json.loads(installed)
+    if receipt.get("schema") != RECEIPT_SCHEMA:
+        reasons.append(f"package receipt schema {receipt.get('schema')} != {RECEIPT_SCHEMA}")
+    if receipt.get("pulp_sha") != spec["origin_commit"]:
+        reasons.append(f"package receipt names origin {receipt.get('pulp_sha')} != {spec['origin_commit']}")
+    return reasons
+
+
+def mutated_export_commit(repo: Path, commit: str, prefix: str) -> str:
+    """A commit object identical to `commit` except one mirrored blob gains a
+    byte. It is written to the object store only; no ref names it."""
+    blobs = ph.git_exported_blobs(repo, commit, prefix)
+    victim = sorted(p for p in blobs if p.endswith(".cpp"))[0]
+    data = run(["git", "-C", str(repo), "cat-file", "blob", blobs[victim]]).stdout + "\n"
+    new_blob = subprocess.run(["git", "-C", str(repo), "hash-object", "-w", "--stdin"], input=data,
+                              capture_output=True, text=True, check=True).stdout.strip()
+    with tempfile.TemporaryDirectory() as tmp:
+        env = dict(os.environ, GIT_INDEX_FILE=str(Path(tmp) / "index"))
+        subprocess.run(["git", "-C", str(repo), "read-tree", commit], env=env, check=True)
+        subprocess.run(["git", "-C", str(repo), "update-index", "--cacheinfo", f"100644,{new_blob},{prefix}{victim}"],
+                       env=env, check=True)
+        tree = subprocess.run(["git", "-C", str(repo), "write-tree"], env=env, capture_output=True, text=True,
+                              check=True).stdout.strip()
+    return subprocess.run(["git", "-C", str(repo), "commit-tree", tree, "-p", commit, "-m",
+                           "parity packaging control: one mutated mirror blob"],
+                          capture_output=True, text=True, check=True,
+                          env=dict(os.environ, GIT_AUTHOR_NAME="parity", GIT_AUTHOR_EMAIL="parity@invalid",
+                                   GIT_COMMITTER_NAME="parity", GIT_COMMITTER_EMAIL="parity@invalid")).stdout.strip()
 
 
 # ── reference side ────────────────────────────────────────────────────────
@@ -53,9 +171,20 @@ class LaneError(ph.HarnessError):
 
 def file_tags(binary: Path) -> list[str]:
     """Source stems compiled into a Catch2 binary, from its file tags."""
-    output = subprocess.run([str(binary), "--list-tests", "-#"], capture_output=True, text=True,
-                            encoding="utf-8", errors="replace", timeout=300).stdout
+    output = run([str(binary), "--list-tests", "-#"], timeout=300).stdout
     return sorted(set(re.findall(r"\[#([A-Za-z0-9_]+)\]", output)))
+
+
+def resolve_sources(origin_repo: Path, commit: str, stems: list[str]) -> dict[str, Path]:
+    """Each file tag names exactly one test source at the origin commit."""
+    listed = run(["git", "-C", str(origin_repo), "ls-tree", "-r", "--name-only", commit, "--", "test"]).stdout.split()
+    out = {}
+    for stem in stems:
+        matches = [p for p in listed if Path(p).name == f"{stem}.cpp"]
+        if len(matches) != 1:
+            raise LaneError(f"file tag {stem} names {len(matches)} sources at the origin commit")
+        out[stem] = origin_repo / matches[0]
+    return out
 
 
 def run_junit(binary: Path, tags: list[str], out_xml: Path, cwd: Path | None = None) -> dict[str, Any]:
@@ -65,13 +194,15 @@ def run_junit(binary: Path, tags: list[str], out_xml: Path, cwd: Path | None = N
         raise LaneError("no sources selected: an empty population is not evidence")
     out_xml.parent.mkdir(parents=True, exist_ok=True)
     spec = ",".join(f"[#{tag}]" for tag in tags)
-    result = subprocess.run([str(binary), spec, "-#", "--reporter", "junit", "--out", str(out_xml)],
-                            capture_output=True, text=True, encoding="utf-8", errors="replace",
-                            timeout=1800, cwd=cwd)
+    result = run([str(binary), spec, "-#", "--reporter", "junit", "--out", str(out_xml)], timeout=1800, cwd=cwd)
     if not out_xml.is_file():
         raise LaneError(f"{binary.name} wrote no JUnit (exit {result.returncode}): {result.stderr[-400:]}")
+    return {"exit": result.returncode, "outcomes": junit_outcomes(out_xml), "junit_sha256": ph.sha256_file(out_xml)}
+
+
+def junit_outcomes(path: Path) -> dict[str, str]:
     outcomes: dict[str, str] = {}
-    for case in ET.parse(out_xml).getroot().iter("testcase"):
+    for case in ET.parse(path).getroot().iter("testcase"):
         stem = case.get("classname", "").rsplit(".", 1)[-1]
         if case.find("skipped") is not None:
             status = "skipped"
@@ -80,7 +211,7 @@ def run_junit(binary: Path, tags: list[str], out_xml: Path, cwd: Path | None = N
         else:
             status = "passed"
         outcomes[f"{stem}::{case.get('name')}"] = status
-    return {"exit": result.returncode, "outcomes": outcomes, "junit_sha256": ph.sha256_file(out_xml)}
+    return outcomes
 
 
 def cmake_cache(build: Path) -> dict[str, str]:
@@ -95,16 +226,18 @@ def cmake_cache(build: Path) -> dict[str, str]:
 def configuration_errors(closures: list[dict[str, Any]], cache: dict[str, str]) -> list[str]:
     """The reference build must be the configuration the export was cut from."""
     errors = []
+    build_skia = cache.get("PULP_HAS_SKIA", "").upper() in ("TRUE", "ON", "1")
     for closure in closures:
         want = closure.get("configuration")
         if want and cache.get("CMAKE_BUILD_TYPE") != want:
             errors.append(f"reference build type {cache.get('CMAKE_BUILD_TYPE')} != closure {want}")
         defs = set(closure.get("compile_definitions") or [])
         closure_skia = any(d.startswith("PULP_HAS_SKIA") for d in defs)
-        build_skia = cache.get("PULP_HAS_SKIA", "").upper() in ("TRUE", "ON", "1")
-        if closure_skia != build_skia:
-            errors.append(f"reference PULP_HAS_SKIA={cache.get('PULP_HAS_SKIA')} but the closure was cut "
-                          f"{'with' if closure_skia else 'without'} Skia")
+        if closure_skia and not build_skia:
+            errors.append(f"reference PULP_HAS_SKIA={cache.get('PULP_HAS_SKIA')} but a closure was cut with Skia")
+    if not any(any(d.startswith("PULP_HAS_SKIA") for d in c.get("compile_definitions") or []) for c in closures) \
+            and build_skia:
+        errors.append(f"reference PULP_HAS_SKIA={cache.get('PULP_HAS_SKIA')} but the closures were cut without Skia")
     return sorted(set(errors))
 
 
@@ -121,11 +254,11 @@ FetchContent_Declare(Catch2 SOURCE_DIR "{catch2}")
 FetchContent_MakeAvailable(Catch2)
 add_executable(parity-consumer {sources})
 target_include_directories(parity-consumer PRIVATE "{test_dir}")
-target_link_libraries(parity-consumer PRIVATE {target} Catch2::Catch2WithMain)
+target_link_libraries(parity-consumer PRIVATE {targets} Catch2::Catch2WithMain)
 """
 
 
-def build_consumer(work: Path, *, package: str, target: str, prefix: Path, sources: list[Path],
+def build_consumer(work: Path, *, package: str, targets: list[str], prefix: Path, sources: list[Path],
                    test_dir: Path, catch2: Path, jobs: int) -> dict[str, Any]:
     """Generate, configure and build the consumer; return the binary or the
     failing step. Sources are copied so a control can alter them."""
@@ -138,38 +271,20 @@ def build_consumer(work: Path, *, package: str, target: str, prefix: Path, sourc
         shutil.copy2(source, src / source.name)
         copied.append(source.name)
     (src / "CMakeLists.txt").write_text(CONSUMER_CMAKE.format(
-        package=package, target=target, catch2=catch2, test_dir=test_dir,
+        package=package, targets=" ".join(targets), catch2=catch2, test_dir=test_dir,
         sources=" ".join(copied)), encoding="utf-8")
     log = []
     for step, argv in (
         ("configure", ["cmake", "-S", str(src), "-B", str(work / "build"), "-G", "Ninja",
-                       "-DCMAKE_BUILD_TYPE=Release", f"-DCMAKE_PREFIX_PATH={prefix}"]),
+                       "-DCMAKE_BUILD_TYPE=Release", f"-DCMAKE_PREFIX_PATH={prefix}",
+                       "-DCMAKE_FIND_PACKAGE_NO_PACKAGE_REGISTRY=ON"]),
         ("build", ["cmake", "--build", str(work / "build"), "-j", str(jobs)]),
     ):
-        result = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                                timeout=3600)
+        result = run(argv, timeout=3600)
         log.append({"step": step, "exit": result.returncode, "tail": (result.stdout + result.stderr)[-1500:]})
         if result.returncode != 0:
             return {"binary": None, "log": log}
     return {"binary": work / "build" / "parity-consumer", "log": log}
-
-
-def archive_census(archives: list[Path]) -> dict[str, Any]:
-    """Every strong global definition must come from exactly one archive.
-    Weak definitions (inline functions, template instantiations) are coalesced
-    by the linker and legitimately appear in several archives."""
-    owners: dict[str, set[str]] = {}
-    for archive in archives:
-        out = subprocess.run(["nm", "-gUm", str(archive)], capture_output=True, text=True,
-                             encoding="utf-8", errors="replace").stdout
-        for line in out.splitlines():
-            if "external" not in line or "weak" in line or "(undefined)" in line:
-                continue
-            symbol = line.rsplit(" ", 1)[-1]
-            owners.setdefault(symbol, set()).add(archive.name)
-    duplicates = sorted(s for s, o in owners.items() if len(o) > 1)
-    return {"archives": [a.name for a in archives], "symbols": len(owners),
-            "duplicates": duplicates[:25], "duplicate_count": len(duplicates)}
 
 
 # ── comparison ────────────────────────────────────────────────────────────
@@ -200,94 +315,125 @@ def skipped_on_both(reference: dict[str, str], candidate: dict[str, str]) -> lis
                   if reference[t] == candidate[t] == "skipped")
 
 
-def evaluate(spec: dict[str, Any], out: Path, *, candidate_sources: list[Path] | None = None,
-             candidate_prefix: Path | None = None, reference_binary: Path | None = None,
-             tags_override: list[str] | None = None, extra_archives: list[Path] | None = None,
-             identity_override: dict[str, Any] | None = None,
+def justified(entries: dict[str, Any], what: str) -> dict[str, Any]:
+    if not all(str(why).strip() for why in entries.values()):
+        raise LaneError(f"{what} entries need a justification")
+    return entries
+
+
+def evaluate(spec: dict[str, Any], out: Path, *, prefix_override: Path | None = None,
+             source_overrides: dict[str, list[Path]] | None = None, reference_override: Path | None = None,
+             tags_override: list[str] | None = None, extra_libraries: list[Path] | None = None,
+             exported_commit_override: str | None = None,
              cache_override: dict[str, str] | None = None) -> dict[str, Any]:
     reasons: list[str] = []
     closures = [ph.load_json(Path(p)) for p in spec["closures"]]
-    manifest = ph.merge_manifests(closures)
-    reclassified = spec.get("closure_external_paths") or {}
-    if reclassified:
-        # A closure path that is really an external input (a build-tree copy of
-        # a fetched dependency) may be reclassified, one path at a time, with a
-        # justification; it then leaves the identity comparison and is
-        # reported in the receipt. Anything not listed still fails identity.
-        if not all(str(why).strip() for why in reclassified.values()):
-            raise LaneError("closure_external_paths entries need a justification")
-        manifest = dict(manifest, files=[p for p in ph.manifest_paths(manifest) if p not in reclassified])
-
-    identity = identity_override
-    if identity is None:
-        origin = ph.git_tree_blobs(Path(spec["origin_repo"]), spec["origin_commit"], ph.manifest_paths(manifest))
-        exported = ph.git_exported_blobs(Path(spec["exported_repo"]), spec["exported_commit"],
-                                         spec.get("exported_prefix", "mirror/"))
-        identity = ph.compare_identity(manifest, origin, exported)
+    identity = identity_result(spec, exported_commit_override)
     if identity["status"] != "pass":
         return {"status": "blocked", "reasons": ["rung 1 (identity) did not pass"] + identity["reasons"][:10],
                 "identity": identity}
 
-    checkout_head = ph.git_head(Path(spec["origin_repo"]))
+    prefix = Path(prefix_override or spec["candidate_prefix"])
+    binding = receipt_binding(spec, prefix)
+    if binding:
+        return {"status": "blocked", "reasons": ["package is not bound to the checked export"] + binding,
+                "identity": identity}
+
+    origin_repo = Path(spec["origin_repo"])
+    checkout_head = ph.git_head(origin_repo)
     if checkout_head != spec["origin_commit"]:
         reasons.append(f"origin checkout HEAD {checkout_head} != exported origin commit {spec['origin_commit']}")
-
     cache = cache_override or cmake_cache(Path(spec["reference_build"]))
     reasons += configuration_errors(closures, cache)
+    excluded = justified(spec.get("exclude_sources") or {}, "exclude_sources")
+    # A test the origin itself cannot repeat (it flips on the reference binary
+    # alone) is left out by name, never by source, and the receipt lists it.
+    unstable = justified(spec.get("unstable_tests") or {}, "unstable_tests")
 
-    binary = Path(reference_binary or spec["reference_binary"])
-    if not binary.is_file():
-        return {"status": "blocked", "reasons": [f"reference binary missing: {binary}"], "identity": identity}
-    tags = tags_override if tags_override is not None else file_tags(binary)
-    excluded = spec.get("exclude_sources") or {}
-    if excluded:
-        # A source left out of the comparison must say why, and the receipt
-        # names it: a partial population never reads as the whole one.
-        if not all(str(why).strip() for why in excluded.values()):
-            raise LaneError("exclude_sources entries need a justification")
-        tags = [t for t in tags if t not in excluded]
-    test_dir = Path(spec["origin_repo"]) / "test"
-    sources = candidate_sources or [test_dir / f"{tag}.cpp" for tag in tags]
-    try:
-        reference = run_junit(binary, tags, out / "reference.xml")
-    except LaneError as error:
-        return {"status": "fail", "reasons": [str(error)], "identity": identity}
-
-    prefix = Path(candidate_prefix or spec["candidate_prefix"])
-    built = build_consumer(out / "consumer", package=spec["candidate_package"],
-                           target=spec["candidate_target"], prefix=prefix, sources=sources,
-                           test_dir=test_dir, catch2=Path(spec["catch2_source"]), jobs=int(spec.get("jobs", 4)))
-    if built["binary"] is None:
-        return {"status": "fail", "reasons": reasons + ["candidate consumer did not build against the package"],
-                "consumer_log": built["log"], "identity": identity}
-    candidate = run_junit(built["binary"], tags, out / "candidate.xml", cwd=Path(spec["origin_repo"]))
-
-    archives = sorted((prefix / "lib").glob(spec.get("archive_glob", "libvellum-mirror-*.a")))
-    archives += list(extra_archives or [])
-    census = archive_census(archives)
-    if len(archives) == 0:
-        reasons.append("no package archives found for the single-definition census")
+    libraries = sorted(prefix.glob(spec.get("library_glob", "mirror/lib/libvellum-mirror-*.dylib")))
+    libraries += list(extra_libraries or [])
+    if not libraries:
+        reasons.append("no package libraries found for the single-definition census")
+    census = library_census(libraries) if libraries else {"_exported": set(), "duplicate_count": 0}
     if census["duplicate_count"]:
-        reasons.append(f"{census['duplicate_count']} symbols defined by more than one archive: "
+        reasons.append(f"{census['duplicate_count']} symbols defined by more than one package library: "
                        f"{census['duplicates'][:5]}")
 
-    reasons += compare(reference["outcomes"], candidate["outcomes"])
+    groups = []
+    for group in spec["groups"]:
+        name = group["name"]
+        binary = Path(reference_override or group["reference_binary"])
+        if not binary.is_file():
+            return {"status": "blocked", "reasons": [f"{name}: reference binary missing: {binary}"],
+                    "identity": identity}
+        tags = tags_override if tags_override is not None else file_tags(binary)
+        tags = [t for t in tags if t not in excluded]
+        try:
+            sources = (source_overrides or {}).get(name) or list(
+                resolve_sources(origin_repo, spec["origin_commit"], tags).values())
+            reference = run_junit(binary, tags, out / name / "reference.xml")
+        except LaneError as error:
+            return {"status": "fail", "reasons": reasons + [f"{name}: {error}"], "identity": identity}
+        reference_census = image_census(binary, set())
+        if group.get("expect_reference_provider") and not reference_census["provider_count"]:
+            reasons.append(f"{name}: provider census found no Skia/Dawn definition in the reference binary, "
+                           "which links them statically: the census is blind")
+        built = build_consumer(out / name / "consumer", package=spec["candidate_package"],
+                               targets=group["candidate_targets"], prefix=prefix, sources=sources,
+                               test_dir=origin_repo / "test", catch2=Path(spec["catch2_source"]),
+                               jobs=int(spec.get("jobs", 4)))
+        if built["binary"] is None:
+            reasons.append(f"{name}: candidate consumer did not build against the package")
+            groups.append({"group": name, "consumer_log": built["log"]})
+            continue
+        candidate = run_junit(built["binary"], tags, out / name / "candidate.xml", cwd=origin_repo)
+        image = image_census(built["binary"], census["_exported"])
+        links = linked_libraries(built["binary"])
+        if image["shadowed_count"]:
+            reasons.append(f"{name}: candidate image defines {image['shadowed_count']} symbols the package exports: "
+                           f"{image['shadowed'][:3]}")
+        if image["provider_count"]:
+            reasons.append(f"{name}: candidate image carries its own Skia/Dawn provider: {image['providers'][:3]}")
+        if not any("libvellum-mirror-" in lib for lib in links):
+            reasons.append(f"{name}: candidate image links no package library")
+        for test in unstable:
+            reference["outcomes"].pop(test, None)
+            candidate["outcomes"].pop(test, None)
+        compared = compare(reference["outcomes"], candidate["outcomes"])
+        reasons += [f"{name}: {r}" for r in compared]
+        groups.append({
+            "group": name,
+            "sources": sorted(s.name for s in sources),
+            "candidate_targets": group["candidate_targets"],
+            "tests": len(reference["outcomes"]),
+            "passed_on_both": sum(1 for t, s in reference["outcomes"].items()
+                                  if s == "passed" and candidate["outcomes"].get(t) == "passed"),
+            "skipped_on_both": skipped_on_both(reference["outcomes"], candidate["outcomes"]),
+            "reference": {"binary_sha256": ph.sha256_file(binary), "junit_sha256": reference["junit_sha256"],
+                          "exit": reference["exit"], "provider_definitions": reference_census["provider_count"]},
+            "candidate": {"binary_sha256": ph.sha256_file(built["binary"]),
+                          "junit_sha256": candidate["junit_sha256"], "exit": candidate["exit"],
+                          "linked_package_libraries": sorted(l.rsplit("/", 1)[-1] for l in links
+                                                             if "libvellum-mirror-" in l),
+                          "image_census": {k: v for k, v in image.items() if k != "defined"}},
+        })
+    total = sum(g.get("tests", 0) for g in groups)
+    if not total:
+        reasons.append("no group produced a population")
     return {
         "status": "fail" if reasons else "pass",
         "reasons": reasons,
         "identity": {k: identity[k] for k in ("status", "closure_paths", "origin_files", "exported_files")},
-        "closure_external_paths": reclassified,
+        "origin_commit": spec["origin_commit"],
+        "exported_commit": exported_commit_override or spec["exported_commit"],
+        "export_receipt": spec["export_receipt"],
         "excluded_sources": excluded,
-        "sources": [s.name for s in sources],
-        "tests": len(reference["outcomes"]),
-        "passed_on_both": sum(1 for t, s in reference["outcomes"].items()
-                              if s == "passed" and candidate["outcomes"].get(t) == "passed"),
-        "skipped_on_both": skipped_on_both(reference["outcomes"], candidate["outcomes"]),
-        "reference": {"binary": str(binary), "binary_sha256": ph.sha256_file(binary),
-                      "junit_sha256": reference["junit_sha256"], "exit": reference["exit"]},
-        "candidate": {"prefix": str(prefix), "binary_sha256": ph.sha256_file(built["binary"]),
-                      "junit_sha256": candidate["junit_sha256"], "exit": candidate["exit"]},
-        "census": census,
+        "unstable_tests": unstable,
+        "groups": groups,
+        "tests": total,
+        "passed_on_both": sum(g.get("passed_on_both", 0) for g in groups),
+        "census": {k: v for k, v in census.items() if k != "_exported"},
+        "package_libraries": {lib.name: ph.sha256_file(lib) for lib in libraries},
     }
 
 
@@ -303,12 +449,11 @@ def seeded_failure(source: Path, work: Path) -> Path:
     return seeded
 
 
-def prefix_without(prefix: Path, relative: str, work: Path) -> Path:
+def prefix_copy(prefix: Path, work: Path) -> Path:
     copy = work / "prefix"
     if copy.exists():
         shutil.rmtree(copy)
     shutil.copytree(prefix, copy, symlinks=True)
-    (copy / relative).unlink()
     return copy
 
 
@@ -323,62 +468,138 @@ def calibrate(spec: dict[str, Any], out: Path) -> dict[str, Any]:
         controls.append({"control": name, "status": result["status"], "reasons": result["reasons"][:4],
                          "outcome": "REJECTED as required" if bites else "CONTROL DID NOT FAIL"})
 
-    tags = [t for t in file_tags(Path(spec["reference_binary"])) if t not in (spec.get("exclude_sources") or {})]
-    sources = [Path(spec["origin_repo"]) / "test" / f"{tag}.cpp" for tag in tags]
-    seeded = [seeded_failure(sources[0], out / "seeded")] + sources[1:]
+    first = spec["groups"][0]
+    excluded = spec.get("exclude_sources") or {}
+    tags = [t for t in file_tags(Path(first["reference_binary"])) if t not in excluded]
+    sources = list(resolve_sources(Path(spec["origin_repo"]), spec["origin_commit"], tags).values())
+    one_group = dict(spec, groups=[first])
     control("seeded-failing-test-in-candidate",
-            evaluate(spec, out / "c-seeded", candidate_sources=seeded), must_mention="seeded failure")
+            evaluate(one_group, out / "c-seeded",
+                     source_overrides={first["name"]: [seeded_failure(sources[0], out / "seeded")] + sources[1:]}),
+            must_mention="seeded failure")
     control("dropped-source-in-candidate",
-            evaluate(spec, out / "c-dropped", candidate_sources=sources[1:]), must_mention="missing from candidate")
-    header = spec.get("control_header", "include/pulp/canvas/path.hpp")
+            evaluate(one_group, out / "c-dropped", source_overrides={first["name"]: sources[1:]}),
+            must_mention="missing from candidate")
+    header_prefix = prefix_copy(Path(spec["candidate_prefix"]), out / "c-header")
+    (header_prefix / spec["control_header"]).unlink()
     control("header-removed-from-package",
-            evaluate(spec, out / "c-header", candidate_prefix=prefix_without(Path(spec["candidate_prefix"]),
-                                                                            header, out / "c-header-prefix")),
-            must_mention="did not build")
-    control("empty-population", evaluate(spec, out / "c-empty", tags_override=[]), must_mention="no sources selected")
+            evaluate(dict(spec, groups=[g for g in spec["groups"] if g["name"] == spec["control_header_group"]]),
+                     out / "c-header", prefix_override=header_prefix), must_mention="did not build")
+    control("empty-population", evaluate(one_group, out / "c-empty", tags_override=[]),
+            must_mention="no sources selected")
     control("reference-binary-missing",
-            evaluate(spec, out / "c-nobin", reference_binary=out / "absent-binary"), expect="blocked")
-    archives = sorted((Path(spec["candidate_prefix"]) / "lib").glob(spec.get("archive_glob", "libvellum-mirror-*.a")))
-    dup = out / "c-dup" / "libduplicate-copy.a"
+            evaluate(one_group, out / "c-nobin", reference_override=out / "absent-binary"), expect="blocked")
+    libraries = sorted(Path(spec["candidate_prefix"]).glob(spec.get("library_glob",
+                                                                    "mirror/lib/libvellum-mirror-*.dylib")))
+    dup = out / "c-dup" / "libduplicate-copy.dylib"
     dup.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(archives[-1], dup)
-    control("duplicate-symbol-archive",
-            evaluate(spec, out / "c-dup", extra_archives=[dup]), must_mention="more than one archive")
+    shutil.copy2(libraries[0], dup)
+    control("duplicate-definition-library",
+            evaluate(one_group, out / "c-dup", extra_libraries=[dup]), must_mention="more than one package library")
     control("reference-config-mismatch",
-            evaluate(spec, out / "c-config", cache_override={"CMAKE_BUILD_TYPE": "Debug", "PULP_HAS_SKIA": "TRUE"}),
+            evaluate(one_group, out / "c-config", cache_override={"CMAKE_BUILD_TYPE": "Debug",
+                                                                  "PULP_HAS_SKIA": "FALSE"}),
             must_mention="reference build type")
-    control("identity-not-passing",
-            evaluate(spec, out / "c-ident", identity_override={"status": "fail", "reasons": ["planted"]}),
-            expect="blocked")
+    mutated = mutated_export_commit(Path(spec["exported_repo"]), spec["exported_commit"],
+                                    spec.get("exported_prefix", "mirror/"))
+    control("identity-one-mutated-mirror-blob",
+            evaluate(one_group, out / "c-ident", exported_commit_override=mutated), expect="blocked",
+            must_mention="blob differs")
+    receipt_prefix = prefix_copy(Path(spec["candidate_prefix"]), out / "c-receipt")
+    installed = next((receipt_prefix / "mirror" / "share" / "provenance").glob("*.json"))
+    receipt = json.loads(installed.read_text(encoding="utf-8"))
+    receipt["pulp_sha"] = "0" * 40
+    installed.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+    control("package-built-from-another-export",
+            evaluate(one_group, out / "c-receipt", prefix_override=receipt_prefix), expect="blocked",
+            must_mention="package receipt")
+    # The Vellum code is what is measured: a package built from a mirror with
+    # one planted behavior change must fail the differential, even though
+    # identity and the receipt binding (both about the commit) still pass.
+    divergent = spec.get("divergent_prefix")
+    if divergent:
+        group = next(g for g in spec["groups"] if g["name"] == spec["divergent_group"])
+        control("planted-divergence-in-package",
+                evaluate(dict(spec, groups=[group]), out / "c-divergent", prefix_override=Path(divergent)),
+                must_mention="reference passed != candidate failed")
+    else:
+        controls.append({"control": "planted-divergence-in-package", "status": "missing",
+                         "reasons": ["spec names no divergent_prefix"], "outcome": "CONTROL DID NOT FAIL"})
     failures = [c["control"] for c in controls if c["outcome"] != "REJECTED as required"]
     return {"schema": CALIBRATION_SCHEMA, "calibrated": positive["status"] == "pass" and not failures,
             "positive": positive, "controls": controls, "control_failures": failures,
             "harness": ph.sha256_file(Path(__file__).resolve())}
 
 
+def redact(value: Any, roots: dict[str, str]) -> Any:
+    """Receipts are committed as evidence: replace host paths with root names."""
+    if isinstance(value, dict):
+        return {k: redact(v, roots) for k, v in value.items()}
+    if isinstance(value, list):
+        return [redact(v, roots) for v in value]
+    if isinstance(value, str):
+        for name, root in sorted(roots.items(), key=lambda item: -len(item[1])):
+            value = value.replace(root, f"<{name}>")
+    return value
+
+
+def spec_roots(spec: dict[str, Any], out: Path) -> dict[str, str]:
+    roots = {"out": str(out.resolve()), "origin": spec["origin_repo"], "exported": spec["exported_repo"],
+             "prefix": spec["candidate_prefix"], "reference-build": spec["reference_build"],
+             "catch2": spec["catch2_source"], "home": str(Path.home())}
+    if spec.get("divergent_prefix"):
+        roots["divergent-prefix"] = spec["divergent_prefix"]
+    return {k: str(Path(v).resolve()) if k != "home" else v for k, v in roots.items()}
+
+
+def bind_roots(value: Any, roots: dict[str, str]) -> Any:
+    """A committed spec names host locations as `<root>`; `--root` binds them.
+    An unbound `<root>` left in a path is refused rather than guessed."""
+    if isinstance(value, dict):
+        return {k: bind_roots(v, roots) for k, v in value.items()}
+    if isinstance(value, list):
+        return [bind_roots(v, roots) for v in value]
+    if isinstance(value, str) and value.startswith("<"):
+        name, _, rest = value[1:].partition(">")
+        if name not in roots:
+            raise LaneError(f"spec path {value!r} names root <{name}>; pass --root {name}=PATH")
+        return roots[name] + rest
+    return value
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("command", choices=("run", "calibrate"))
     parser.add_argument("--spec", required=True, type=Path, help="JSON lane spec (see README)")
+    parser.add_argument("--root", action="append", default=[], metavar="NAME=PATH",
+                        help="bind a <NAME> root the spec uses")
     parser.add_argument("--out", required=True, type=Path)
     args = parser.parse_args(argv)
-    spec = ph.load_json(args.spec)
+    roots = {}
+    for item in args.root:
+        name, _, path = item.partition("=")
+        roots[name] = str(Path(path).resolve())
+    try:
+        spec = bind_roots(ph.load_json(args.spec), roots)
+    except LaneError as error:
+        print(f"packaging-lane: {error}", file=sys.stderr)
+        return 2
     try:
         if args.command == "run":
             result = evaluate(spec, args.out)
             result["schema"] = SCHEMA
-            ph.write_json(args.out / "packaging-receipt.json", result)
-            print(json.dumps({k: result.get(k) for k in ("status", "tests", "sources")}, indent=2))
-            for reason in result["reasons"][:10]:
+            ph.write_json(args.out / "packaging-receipt.json", redact(result, spec_roots(spec, args.out)))
+            print(json.dumps({k: result.get(k) for k in ("status", "tests", "passed_on_both")}, indent=2))
+            for reason in result["reasons"][:20]:
                 print(f"  {reason}")
             return 0 if result["status"] == "pass" else 1
         report = calibrate(spec, args.out)
-        ph.write_json(args.out / "packaging-calibration.json", report)
+        ph.write_json(args.out / "packaging-calibration.json", redact(report, spec_roots(spec, args.out)))
         print(f"positive: {report['positive']['status']} ({report['positive'].get('tests')} tests)")
-        for reason in report["positive"]["reasons"][:10]:
+        for reason in report["positive"]["reasons"][:20]:
             print(f"  {reason}")
         for c in report["controls"]:
-            print(f"{c['control']:36} {c['outcome']}")
+            print(f"{c['control']:36} {c['outcome']}  {c['reasons'][:1]}")
         print("CALIBRATED" if report["calibrated"] else "NOT CALIBRATED")
         return 0 if report["calibrated"] else 1
     except ph.HarnessError as error:
