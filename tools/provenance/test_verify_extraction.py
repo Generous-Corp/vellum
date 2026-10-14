@@ -544,6 +544,65 @@ class VerifyExtractionTests(unittest.TestCase):
         )
         self.assertEqual(verify_extraction.MIRROR_EDGE_SUFFIXES, set(table["suffixes"]))
         self.assertTrue({"", ".md", ".ps1", ".sh", ".ts", ".tsx", ".yaml", ".yml"} <= verify_extraction.MIRROR_EDGE_SUFFIXES)
+        self.assertEqual(set(table), {"schema", "description", "suffixes", "binary_suffixes",
+                                      "content_patterns", "path_patterns", "approved_exceptions"})
+        self.assertEqual(set(table["content_patterns"]), {
+            "mirror-product-include", "mirror-product-symbol", "mirror-audio-framework-link",
+            "mirror-pulp-kept-include", "mirror-pulp-kept-symbol"})
+        self.assertEqual(set(table["path_patterns"]), {"mirror-pulp-kept-file"})
+        for row in table["approved_exceptions"]:
+            self.assertEqual(set(row), {"rule", "path", "line", "debt"})
+            self.assertIn(row["rule"], table["content_patterns"])
+            self.assertFalse(row["path"].startswith("mirror/"))
+        self.assertEqual(
+            verify_extraction.MIRROR_EDGE_EXCEPTIONS,
+            {(row["rule"], row["path"], row["line"]) for row in table["approved_exceptions"]},
+        )
+
+    def test_pulp_kept_view_audio_edges_are_findings(self) -> None:
+        # The edges the Vellum #92 review planted: five kept view-audio
+        # headers and the register_audio_widgets symbol, with its control.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            headers = ("audio_widgets", "register_audio_widgets", "visualizers",
+                       "visualization_bridge", "hosted_editor_attachment", "audio_inspector_panel")
+            body = "".join(f"#include <pulp/view/{name}.hpp>\n" for name in headers)
+            body += "void f() { pulp::view::register_audio_widgets(); }\n"
+            self.write_mirror(root, "mirror/core/view/src/a.cpp", body.encode())
+            # Not kept: exported view headers, lookalike names and the gate macro.
+            self.write_mirror(root, "mirror/core/view/src/b.cpp", (
+                b"#include <pulp/view/widgets.hpp>\n#include <pulp/view/host_surfaces.hpp>\n"
+                b"int register_audio_widgets_count = 0;\n#if defined(PULP_VIEW_HAS_AUDIO_WIDGETS)\n#endif\n"))
+            findings = verify_extraction.mirror_edge_findings(root)
+        self.assertEqual(
+            sorted((f["rule"], f["path"], f["line"]) for f in findings),
+            sorted([("mirror-pulp-kept-include", "mirror/core/view/src/a.cpp", line) for line in range(1, 7)]
+                   # The register_audio_widgets.hpp include names the symbol too.
+                   + [("mirror-pulp-kept-symbol", "mirror/core/view/src/a.cpp", line) for line in (2, 7)]),
+        )
+
+    def test_only_the_recorded_seam_debt_line_is_exempt(self) -> None:
+        debt = (b"#pragma once\n#if defined(PULP_VIEW_HAS_AUDIO_WIDGETS)\n"
+                b"#include <pulp/view/audio_widgets.hpp>\n#endif\n")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.write_mirror(root, "mirror/core/view/include/pulp/view/widgets.hpp", debt)
+            self.assertEqual(verify_extraction.mirror_edge_findings(root), [])
+            # The same line in another file, or a second kept include in this one, is a finding.
+            self.write_mirror(root, "mirror/core/view/src/a.cpp", debt)
+            self.write_mirror(root, "mirror/core/view/include/pulp/view/widgets.hpp",
+                              debt + b"#include <pulp/view/visualizers.hpp>\n")
+            findings = verify_extraction.mirror_edge_findings(root)
+        self.assertEqual(
+            sorted((f["rule"], f["path"], f["line"]) for f in findings),
+            [("mirror-pulp-kept-include", "mirror/core/view/include/pulp/view/widgets.hpp", 5),
+             ("mirror-pulp-kept-include", "mirror/core/view/src/a.cpp", 3)],
+        )
+        self.assertEqual(
+            verify_extraction.MIRROR_EDGE_EXCEPTIONS,
+            {("mirror-pulp-kept-include", "core/view/include/pulp/view/widgets.hpp",
+              "#include <pulp/view/audio_widgets.hpp>")},
+        )
 
     def test_vendored_table_must_match_pulp(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -555,6 +614,41 @@ class VerifyExtractionTests(unittest.TestCase):
             self.assertEqual(verify_extraction.mirror_edge_table_drift(pulp), [])
             target.write_bytes(verify_extraction.MIRROR_EDGE_TABLE.read_bytes().replace(b"gpu_audio", b"gpuaudio", 1))
             self.assertTrue(verify_extraction.mirror_edge_table_drift(pulp))
+
+    def test_table_may_advance_past_the_export_commit_on_pulp_main(self) -> None:
+        def commit(pulp: Path, data: bytes) -> str:
+            target = pulp / verify_extraction.PULP_MIRROR_EDGE_TABLE
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+            subprocess.run(["git", "add", "-A"], cwd=pulp, check=True)
+            subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "t"], cwd=pulp, check=True)
+            return verify_extraction.git(pulp, "rev-parse", "HEAD")
+
+        current = verify_extraction.MIRROR_EDGE_TABLE.read_bytes()
+        older = current.replace(b"register_audio_widgets|", b"", 1)
+        self.assertNotEqual(older, current)
+        with tempfile.TemporaryDirectory() as directory:
+            pulp, pin_path = Path(directory) / "pulp", Path(directory) / "pin.json"
+            pulp.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=pulp, check=True)
+            export = commit(pulp, older)
+            advanced = commit(pulp, current)
+            pin = dict(json.loads(verify_extraction.MIRROR_EDGE_TABLE_PIN.read_text(encoding="utf-8")),
+                       pulp_commit=advanced, git_blob=verify_extraction.git_blob_sha(current))
+            pin_path.write_text(json.dumps(pin), encoding="utf-8")
+            subprocess.run(["git", "checkout", "-q", "--detach", export], cwd=pulp, check=True)
+            # The export commit holds the older table; the pin descends from it.
+            self.assertEqual(verify_extraction.mirror_edge_table_drift(pulp, pin_path=pin_path), [])
+            # A pin that does not descend from the export commit fails.
+            subprocess.run(["git", "checkout", "-q", "--detach", advanced], cwd=pulp, check=True)
+            sideways = commit(pulp, older + b"\n")
+            errors = verify_extraction.mirror_edge_table_drift(pulp, pin_path=pin_path)
+            self.assertTrue(any("does not descend" in error for error in errors), errors)
+            # A pin whose commit holds a different table fails.
+            subprocess.run(["git", "checkout", "-q", "--detach", export], cwd=pulp, check=True)
+            pin_path.write_text(json.dumps(dict(pin, pulp_commit=sideways)), encoding="utf-8")
+            errors = verify_extraction.mirror_edge_table_drift(pulp, pin_path=pin_path)
+            self.assertTrue(any("does not hold the vendored table" in error for error in errors), errors)
 
     def test_unclassified_and_non_utf8_mirror_files_are_not_skipped(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -135,6 +135,19 @@ MIRROR_EDGE_PATH_PATTERNS = {
 PULP_KEPT_MIRROR_PATH = MIRROR_EDGE_PATH_PATTERNS["mirror-pulp-kept-file"]
 MIRROR_EDGE_SUFFIXES = set(_MIRROR_EDGE_TABLE["suffixes"])
 MIRROR_EDGE_BINARY_SUFFIXES = set(_MIRROR_EDGE_TABLE["binary_suffixes"])
+# One exact line of one Pulp path may be exempt from one content rule, each
+# tied to a recorded Pulp view-audio seam debt (Pulp generates these rows).
+MIRROR_EDGE_EXCEPTIONS = {
+    (row["rule"], row["path"], row["line"]) for row in _MIRROR_EDGE_TABLE.get("approved_exceptions", [])
+}
+
+
+def mirror_edge_exempt(rule: str, path_in_mirror: str, text: str, start: int) -> bool:
+    """Whether the match at `start` sits on an approved exception line."""
+    line_start = text.rfind("\n", 0, start) + 1
+    line_end = text.find("\n", start)
+    line = text[line_start:] if line_end < 0 else text[line_start:line_end]
+    return (rule, path_in_mirror, line) in MIRROR_EDGE_EXCEPTIONS
 POLICY_IMPLEMENTATION_PATHS = {
     "scripts/verify_sdk_artifact.py",
 }
@@ -343,13 +356,39 @@ def mirror_origin_findings(
     return findings
 
 
-def mirror_edge_table_drift(pulp_root: Path) -> list[str]:
-    """The vendored edge table must be byte-identical to Pulp's own copy."""
+def mirror_edge_table_drift(
+    pulp_root: Path, table: Path = MIRROR_EDGE_TABLE, pin_path: Path = MIRROR_EDGE_TABLE_PIN
+) -> list[str]:
+    """The vendored edge table is Pulp's copy at this checkout, or a later one.
+
+    The checkout is the Pulp commit of the last export. The table may advance
+    on Pulp main between exports (a stricter rule lands before the next
+    export), so a different copy passes only when the pinned commit descends
+    from this checkout and holds the vendored blob. The mirror itself is
+    scanned with the vendored table either way.
+    """
     pulp_table = pulp_root / PULP_MIRROR_EDGE_TABLE
     if not pulp_table.is_file():
         return [f"Pulp checkout {pulp_root} has no {PULP_MIRROR_EDGE_TABLE}"]
-    if pulp_table.read_bytes() != MIRROR_EDGE_TABLE.read_bytes():
-        return [f"{MIRROR_EDGE_TABLE.name} differs from Pulp's {PULP_MIRROR_EDGE_TABLE}"]
+    vendored = table.read_bytes()
+    if pulp_table.read_bytes() == vendored:
+        return []
+    differs = f"{table.name} differs from Pulp's {PULP_MIRROR_EDGE_TABLE}"
+    try:
+        pin = json.loads(pin_path.read_text(encoding="utf-8"))
+        pinned = str(pin["pulp_commit"])
+        head = git(pulp_root, "rev-parse", "HEAD")
+        descends = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", head, pinned],
+            cwd=pulp_root, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+        ).returncode == 0
+        blob = git(pulp_root, "rev-parse", f"{pinned}:{PULP_MIRROR_EDGE_TABLE}")
+    except (OSError, KeyError, json.JSONDecodeError, subprocess.CalledProcessError):
+        return [f"{differs}, and the pinned commit cannot be resolved in {pulp_root}"]
+    if not descends:
+        return [f"{differs}, and the pinned commit {pinned} does not descend from {head}"]
+    if blob != git_blob_sha(vendored) or blob != pin.get("git_blob"):
+        return [f"{differs}, and the pinned commit {pinned} does not hold the vendored table"]
     return []
 
 
@@ -405,6 +444,8 @@ def mirror_edge_findings(root: Path) -> list[dict[str, object]]:
         text = path.read_text(encoding="utf-8", errors="replace")
         for name, pattern in FORBIDDEN_MIRROR_EDGE_PATTERNS.items():
             for match in pattern.finditer(text):
+                if mirror_edge_exempt(name, in_mirror, text, match.start()):
+                    continue
                 findings.append(
                     {
                         "rule": name,

@@ -110,51 +110,95 @@ FORBIDDEN_PAYLOAD_CONTENT_PATTERNS = {
 }
 # Mirrored Pulp framework source (Vellum Decision 0010) keeps its Pulp paths
 # and namespace byte for byte, so inside the mirror scope the Pulp-name rules
-# give way to edge rules mirroring tools/provenance/verify_extraction.py: no
-# Pulp audio/DSP/MIDI/format/host/GPU-audio/content subsystem, no Pulp-kept
-# view-audio file, no plug-in SDK, and no audio framework.
+# give way to edge rules: no Pulp audio/DSP/MIDI/format/host/GPU-audio/content
+# subsystem, no Pulp-kept view or state file, header or free function, no
+# plug-in SDK, and no audio framework.
+#
+# The edge rules are the shared mirror-edge table
+# (tools/provenance/mirror_edge_patterns.json, vendored from Pulp) carried here
+# as literals, because this installer ships as one checksummed file that
+# cannot read the table. cli/tests/test_installer.py holds them equal to it.
 MIRROR_PAYLOAD_SCOPE = re.compile(r"\A(?:sdk/)?mirror/")
-_MIRROR_PRODUCT_SUBSYSTEMS = rb"(?:audio|signal|midi|music|format|host|gpu_audio|content)"
-_MIRROR_KEPT_VIEW_FILES = (
-    rb"(?:audio_bridge|audio_inspector_\w+|eq_curve_view|midi_binding|midi_keyboard"
-    rb"|musical_typing_keyboard\w*|plugin_manager_panel|sample_asset_drop_target"
-    rb"|step_grid_view|waveform_\w+|graph_editor_view)"
-)
+MIRROR_EDGE_CONTENT_PATTERNS = {
+    'mirror-product-include': '#\\s*(?:include|import)\\s*[<\\"](?:pulp/(?:audio|signal|midi|music|format|host|gpu_audio|content)/|pluginterfaces/|public\\.sdk/|clap/|lv2/|AudioUnitSDK/|oboe/|AudioToolbox/|AudioUnit/|CoreAudio/|CoreAudioKit/|CoreMIDI/|AVFAudio/)',
+    'mirror-product-symbol': '\\bpulp::(?:audio|signal|midi|music|format|host|gpu_audio|content)\\b|\\bpulp[-_](?:audio|signal|midi|music|format|host|gpu[-_]audio|content)\\b',
+    'mirror-audio-framework-link': '\\b(?:AudioToolbox|AudioUnit|CoreAudio|CoreAudioKit|CoreMIDI|AVFAudio)\\.framework\\b|-framework\\s+(?:AudioToolbox|AudioUnit|CoreAudio|CoreAudioKit|CoreMIDI|AVFAudio)\\b',
+    'mirror-pulp-kept-include': '#\\s*(?:include|import)\\s*[<\\"](?:pulp/view/(?:audio/|(?:widgets/)?(?:audio_bridge|audio_inspector_\\w+|eq_curve_view|midi_binding|midi_keyboard|musical_typing_keyboard\\w*|plugin_manager_panel|sample_asset_drop_target|step_grid_view|waveform_\\w+|graph_editor_view)\\.h)|pulp/state/content_registry\\.h|(?:pulp/view/audio_inspector_panel\\.hpp|pulp/view/audio_inspector_window\\.hpp|pulp/view/audio_widgets\\.hpp|pulp/view/editor_bridge\\.hpp|pulp/view/eq_curve_view\\.hpp|pulp/view/host_param_surface\\.hpp|pulp/view/hosted_editor_attachment\\.hpp|pulp/view/inspector\\.hpp|pulp/view/inspector_window\\.hpp|pulp/view/midi_binding\\.hpp|pulp/view/plugin_manager_panel\\.hpp|pulp/view/register_audio_widgets\\.hpp|pulp/view/sample_asset_drop_target\\.hpp|pulp/view/script_inspector_bridge\\.hpp|pulp/view/visualization_bridge\\.hpp|pulp/view/visualizers\\.hpp|pulp/view/waveform_editor_primitives\\.hpp|pulp/view/waveform_gpu_primitives\\.hpp|pulp/view/waveform_gpu_render_controller\\.hpp|pulp/view/waveform_headless_render_backend\\.hpp|pulp/view/waveform_overview_view\\.hpp|pulp/view/widgets/graph_editor_view\\.hpp)[>\\"])',
+    'mirror-pulp-kept-symbol': '\\b(?:bind_midi_cc|bind_midi_note|dbfs_meter_fill|fill_waveform_peak_vertices|register_audio_widgets|to_cc_value)\\b',
+}
+MIRROR_EDGE_KEPT_FILE_PATTERN = '\\A(?:core/(?:view/(?:audio/|(?:.*/)?(?:audio_bridge|audio_inspector_\\w+|eq_curve_view|midi_binding|midi_keyboard|musical_typing_keyboard\\w*|plugin_manager_panel|sample_asset_drop_target|step_grid_view|waveform_\\w+|graph_editor_view)\\.)|host/|state/(?:.*/)?content_registry\\.)|(?:core/view/include/pulp/view/editor_bridge\\.hpp|core/view/include/pulp/view/host_param_surface\\.hpp|core/view/include/pulp/view/inspector\\.hpp|core/view/include/pulp/view/inspector_window\\.hpp|core/view/include/pulp/view/script_inspector_bridge\\.hpp|core/view/include/pulp/view/waveform_editor_primitives\\.hpp|core/view/src/editor_bridge\\.cpp|core/view/src/host_param_surface\\.cpp|core/view/src/inspector\\.cpp|core/view/src/inspector_window\\.cpp|core/view/src/script_inspector_bridge\\.cpp|core/view/src/waveform_editor_primitives\\.cpp)\\Z)'
+# One exact line of one Pulp path exempt from one content rule, each tied to
+# a recorded Pulp view-audio seam debt.
+MIRROR_EDGE_EXCEPTIONS = frozenset({
+    ('mirror-pulp-kept-include', 'core/view/include/pulp/view/widgets.hpp', '#include <pulp/view/audio_widgets.hpp>'),
+})
 MIRROR_PAYLOAD_PATH_PATTERNS = {
+    # Product source trees and installed product headers. Pulp-kept view and
+    # state files are matched by the table's kept-file rule below.
     "mirror-product-path": re.compile(
         r"(?:^|/)(?:core/(?:audio|signal|midi|music|format|host|gpu_audio|graph"
         r"|playback|sequence|smf|timebase|timeline\w*|dawproject)"
-        r"|include/pulp/(?:audio|signal|midi|music|format|host|gpu_audio|content))(?:/|$)"
-        r"|(?:^|/)pulp/view/(?:audio/|(?:.*/)?(?:audio_bridge|audio_inspector_\w+"
-        r"|eq_curve_view|midi_binding|midi_keyboard|musical_typing_keyboard\w*"
-        r"|plugin_manager_panel|sample_asset_drop_target|step_grid_view|waveform_\w+"
-        r"|graph_editor_view)\.)"
-        r"|(?:^|/)(?:pulp/state/|core/state/(?:.*/)?)content_registry\.",
+        r"|include/pulp/(?:audio|signal|midi|music|format|host|gpu_audio|content))(?:/|$)",
         re.IGNORECASE,
     ),
 }
+# The table's path rules are relative to the mirror root; the macOS install
+# filesystem is case-insensitive, so this one ignores case.
+MIRROR_KEPT_FILE_PATH = re.compile(MIRROR_EDGE_KEPT_FILE_PATTERN, re.IGNORECASE)
 MIRROR_PAYLOAD_CONTENT_PATTERNS = {
-    "mirror-product-include": re.compile(
-        rb"#\s*(?:include|import)\s*[<\"]"
-        rb"(?:pulp/" + _MIRROR_PRODUCT_SUBSYSTEMS + rb"/"
-        rb"|pluginterfaces/|public\.sdk/|clap/|lv2/|AudioUnitSDK/|oboe/"
-        rb"|AudioToolbox/|AudioUnit/|CoreAudio/|CoreAudioKit/|CoreMIDI/|AVFAudio/)",
-    ),
-    "mirror-product-symbol": re.compile(
-        rb"\bpulp::" + _MIRROR_PRODUCT_SUBSYSTEMS + rb"\b"
-        rb"|\bpulp[-_](?:audio|signal|midi|music|format|host|gpu[-_]audio|content)\b",
-    ),
-    "mirror-audio-framework-link": re.compile(
-        rb"\b(?:AudioToolbox|AudioUnit|CoreAudio|CoreAudioKit|CoreMIDI|AVFAudio)"
-        rb"\.framework\b|-framework\s+"
-        rb"(?:AudioToolbox|AudioUnit|CoreAudio|CoreAudioKit|CoreMIDI|AVFAudio)\b",
-    ),
-    "mirror-pulp-kept-include": re.compile(
-        rb"#\s*(?:include|import)\s*[<\"]"
-        rb"(?:pulp/view/(?:audio/|(?:widgets/)?" + _MIRROR_KEPT_VIEW_FILES + rb"\.h)"
-        rb"|pulp/state/content_registry\.h)",
-    ),
+    name: re.compile(pattern.encode("utf-8")) for name, pattern in MIRROR_EDGE_CONTENT_PATTERNS.items()
 }
+
+
+def mirror_relative(name: str) -> str | None:
+    """The payload path relative to the mirror root, or None outside it."""
+    match = MIRROR_PAYLOAD_SCOPE.match(name)
+    return name[match.end():] if match else None
+
+
+def mirror_kept_path(relative: str) -> bool:
+    """Whether a mirror-relative path is Pulp-kept: a kept source path by the
+    table's path rule, or an installed header (`include/pulp/...`) whose
+    include spelling the table's kept-include rule refuses."""
+    if MIRROR_KEPT_FILE_PATH.search(relative):
+        return True
+    header = re.search(r"(?:^|/)include/(pulp/.+)$", relative, re.IGNORECASE)
+    if header is None:
+        return False
+    # Kept names are lowercase and the install filesystem ignores case.
+    spelled = f"#include <{header.group(1).lower()}>".encode("utf-8")
+    return MIRROR_PAYLOAD_CONTENT_PATTERNS["mirror-pulp-kept-include"].search(spelled) is not None
+
+
+def mirror_exempt(name: str, rule: str, window: bytes, start: int) -> bool:
+    """Whether a content match sits on an approved exception line. A line cut
+    by the scan window does not equal the recorded line, so it stays a finding."""
+    relative = mirror_relative(name)
+    if relative is None:
+        return False
+    line_start = window.rfind(b"\n", 0, start) + 1
+    line_end = window.find(b"\n", start)
+    line = window[line_start:] if line_end < 0 else window[line_start:line_end]
+    return (rule, relative, line.decode("utf-8", errors="replace")) in MIRROR_EDGE_EXCEPTIONS
+
+
+def content_rule_findings(
+    name: str, rules: dict[str, re.Pattern], window: bytes
+) -> list[dict[str, str]]:
+    findings: list[dict[str, str]] = []
+    for rule, pattern in rules.items():
+        for match in pattern.finditer(window):
+            if mirror_exempt(name, rule, window, match.start()):
+                continue
+            findings.append(
+                {
+                    "rule": rule,
+                    "path": name,
+                    "match": match.group(0).decode("utf-8", errors="replace")[:120],
+                }
+            )
+            break
+    return findings
 
 
 def payload_rules(name: str) -> tuple[dict[str, re.Pattern], dict[str, re.Pattern]]:
@@ -316,19 +360,13 @@ def payload_contamination_findings(
             findings.append(
                 {"rule": rule, "path": name, "match": match.group(0)}
             )
+    relative = mirror_relative(name)
+    if relative is not None and mirror_kept_path(relative):
+        findings.append(
+            {"rule": "mirror-pulp-kept-file", "path": name, "match": relative}
+        )
     if should_scan_payload_content(name):
-        for rule, pattern in content_rules.items():
-            match = pattern.search(content)
-            if match:
-                findings.append(
-                    {
-                        "rule": rule,
-                        "path": name,
-                        "match": match.group(0).decode(
-                            "utf-8", errors="replace"
-                        )[:120],
-                    }
-                )
+        findings.extend(content_rule_findings(name, content_rules, content))
     return findings
 
 
@@ -362,18 +400,7 @@ def inspect_payload_stream(
             retained.extend(chunk)
         if scan_content:
             window = tail + chunk
-            for rule, pattern in content_rules.items():
-                match = pattern.search(window)
-                if match:
-                    findings.append(
-                        {
-                            "rule": rule,
-                            "path": name,
-                            "match": match.group(0).decode(
-                                "utf-8", errors="replace"
-                            )[:120],
-                        }
-                    )
+            findings.extend(content_rule_findings(name, content_rules, window))
             tail = window[-CONTAMINATION_OVERLAP_BYTES:]
     return (
         size,
