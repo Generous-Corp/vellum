@@ -490,6 +490,14 @@ Copyright (c) 2016 The Inter Project Authors (https://github.com/rsms/inter)
 
 Copyright 2020 The Jost Project Authors (https://github.com/indestructible-type/Jost)
 
+### JetBrains Mono
+
+Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono)
+
+JetBrains Mono Regular is carried only in the framework mirror
+(`mirror/external/fonts/`), not in the installed SDK, under the SIL Open Font
+License, Version 1.1 reproduced below.
+
 The installed SDK redistributes Inter Regular and Jost Regular, Medium,
 SemiBold, and Bold, plus variable-weight Noto Sans JP and variable-width/weight
 Noto Sans Arabic. All seven files are
@@ -1183,40 +1191,164 @@ written prior permission.  M.I.T. makes no representations about the
 suitability of this software for any purpose.  It is provided "as is"
 without express or implied warranty.
 
+## WOFF2
+
+Copyright (c) 2013-2017 by the WOFF2 Authors.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+---
+
+## miniz
+
+Copyright 2013-2014 RAD Game Tools and Valve Software
+Copyright 2010-2014 Rich Geldreich and Tenacious Software LLC
+
+MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+## cpp-httplib
+
+Copyright (c) 2026 Yuji Hirose. All rights reserved.
+
+MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+## pugixml
+
+Copyright (C) 2006-2026, by Arseny Kapoulkine (arseny.kapoulkine@gmail.com)
+
+MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+## TweetNaCl
+
+TweetNaCl (version 20140427) is a self-contained public-domain C library
+implementing the NaCl cryptographic primitives by Daniel J. Bernstein,
+Bernard van Gastel, Wesley Janssen, Tanja Lange, Peter Schwabe, and
+Sjaak Smetsers.
+
+Public domain (the TweetNaCl authors disclaim all copyright; see
+https://tweetnacl.cr.yp.to/). The mirrored runtime's Ed25519 helpers use it
+for RFC 8032 signing and verification of update feeds and signed package
+metadata. The mirrored runtime's crypto source supplies `randombytes()`,
+which draws from its Mbed TLS CTR-DRBG instance.
+
+---
+
 ## Mirrored Pulp framework legal index
 
 This index applies only to third-party bytes admitted below `mirror/` by
-Decision 0010. The current mirror is empty, so these rows declare the notice
-obligations for the D3 and foundation units without activating historical Pulp
-paths. Full license text for renderer, font, HarfBuzz, and ICU components is
+Decision 0010. The current mirror contains the D3 foundation and canvas projection under
+`mirror/core/` plus vendored dependencies under `mirror/external/`. The scope
+column names the mirrored path that carries a component's bytes, the unit that
+consumes it as a pinned external input without mirroring it, or that no landed
+unit consumes it yet. Full license text for renderer, font, HarfBuzz, and ICU components is
 already reproduced above; the remaining rows use the upstream license named
 here and must travel with the mirrored files.
 
 | Dependency | License | Mirror scope | Notice action |
 |---|---|---|---|
-| Abseil | Apache-2.0 | `mirror/render-*`, `mirror/view-script/` with V8 | Retain transitive renderer/V8 notice |
-| Brotli | MIT | `mirror/canvas/` | Carry upstream MIT text |
-| CHOC | ISC | `mirror/view-script/` | Retain fork and upstream attribution |
-| cpp-httplib | MIT | `mirror/foundation/` | Carry upstream MIT text |
-| Dawn and Tint | BSD-3-Clause | `mirror/gpu-device/`, `mirror/render-*` | Text above |
-| Expat | MIT | `mirror/render-*` | Text above |
-| HarfBuzz | Old MIT | `mirror/canvas/` | Text above |
-| Highway | Apache-2.0 | `mirror/foundation/` | Carry Apache-2.0 text |
-| ICU | Unicode-3.0 plus bundled notices | `mirror/canvas/`, V8 path | Text above |
-| Inter | SIL OFL 1.1 | `mirror/canvas/`, `mirror/view-*` | Text above |
-| JavaScriptCore | LGPL-2.1+ components; Apple terms | `mirror/view-script/` references only | Do not mirror or redistribute framework bytes |
-| JetBrains Mono | SIL OFL 1.1 | `mirror/canvas/`, `mirror/view-core/` | Text above |
-| Jost | SIL OFL 1.1 | `mirror/canvas/`, `mirror/view-core/` | Text above |
-| Mbed TLS | Apache-2.0 | `mirror/foundation/`, `mirror/gpu-device/` | Carry Apache-2.0 text |
-| NanoSVG | zlib | `mirror/canvas/` | Carry zlib notice |
-| Noto Sans Arabic | SIL OFL 1.1 | `mirror/canvas/`, `mirror/view-core/` | Text above |
-| Noto Sans JP | SIL OFL 1.1 | `mirror/canvas/`, `mirror/view-core/` | Text above |
-| PartitionAlloc | BSD-3-Clause | `mirror/gpu-device/`, `mirror/render-*` | Text above |
-| QuickJS | MIT | `mirror/view-script/` | Carry upstream MIT text |
-| SheenBidi | Apache-2.0 | `mirror/canvas/` | Carry Apache-2.0 text |
-| Skia and skcms | BSD-3-Clause | `mirror/canvas/`, `mirror/render-*` | Text above |
-| V8 | BSD-3-Clause | `mirror/view-script/` when selected | Text above plus ICU/zlib/Abseil |
-| Yoga | MIT | `mirror/view-core/`, `mirror/view-platform/` | Carry upstream MIT text |
+| Abseil | Apache-2.0 | not mirrored; no landed unit consumes it yet (planned renderer and V8 units) | Retain transitive renderer/V8 notice |
+| Brotli | MIT | `canvas` unit external input (`mirror/core/canvas/`, WOFF2 decoder); bytes not mirrored | Carry upstream MIT text |
+| CHOC | ISC | `foundation` unit external input, patched (`mirror/core/runtime/`, `mirror/core/events/`); bytes not mirrored | Retain fork and upstream attribution |
+| cpp-httplib | MIT | `mirror/external/cpp-httplib/` (`foundation` unit) | Text above |
+| Dawn and Tint | BSD-3-Clause | `canvas` unit external input: headers inside the Skia build tree; bytes not mirrored | Text above |
+| Expat | MIT | not mirrored; no landed unit consumes it yet (planned renderer units) | Text above |
+| HarfBuzz | Old MIT | `canvas` unit external input through the Skia build (text shaping); bytes not mirrored | Text above |
+| Highway | Apache-2.0 | `foundation` unit external input (`mirror/core/simd/`); bytes not mirrored | Carry Apache-2.0 text |
+| ICU | Unicode-3.0 plus bundled notices | `canvas` unit external input through the Skia build (text shaping); bytes not mirrored | Text above |
+| Inter | SIL OFL 1.1 | `mirror/external/fonts/` (`canvas` unit) | Text above |
+| JavaScriptCore | LGPL-2.1+ components; Apple terms | Never mirrored; system framework only | Do not mirror or redistribute framework bytes |
+| JetBrains Mono | SIL OFL 1.1 | `mirror/external/fonts/` (`canvas` unit) | Text above |
+| Jost | SIL OFL 1.1 | `mirror/external/fonts/` (`canvas` unit) | Text above |
+| Mbed TLS | Apache-2.0 | `foundation` unit external input (`mirror/core/runtime/`); bytes not mirrored | Carry Apache-2.0 text |
+| miniz | MIT | `mirror/external/miniz/` (`foundation` unit) | Text above |
+| pugixml | MIT | `mirror/external/pugixml/` (`foundation` unit) | Text above |
+| TweetNaCl | Public domain | `mirror/external/tweetnacl/` (`foundation` unit) | Text above |
+| WOFF2 | MIT | `canvas` unit external input (`mirror/core/canvas/`); bytes not mirrored | Text above |
+| NanoSVG | zlib | `mirror/external/nanosvg/` (`canvas` unit) | Carry zlib notice |
+| Noto Sans Arabic | SIL OFL 1.1 | not mirrored; no landed unit consumes it yet | Text above |
+| Noto Sans JP | SIL OFL 1.1 | not mirrored; no landed unit consumes it yet | Text above |
+| PartitionAlloc | BSD-3-Clause | not mirrored; no landed unit consumes it yet (planned GPU and renderer units) | Text above |
+| QuickJS | MIT | not mirrored; no landed unit consumes it yet (planned scripted-view unit) | Carry upstream MIT text |
+| SheenBidi | Apache-2.0 | `canvas` unit external input (`mirror/core/canvas/`); bytes not mirrored | Carry Apache-2.0 text |
+| Skia and skcms | BSD-3-Clause | `canvas` unit external input (`mirror/core/canvas/`); bytes not mirrored | Text above |
+| V8 | BSD-3-Clause | not mirrored; no landed unit consumes it yet (planned scripted-view unit, when selected) | Text above plus ICU/zlib/Abseil |
+| Yoga | MIT | not mirrored; no landed unit consumes it yet (planned view units) | Carry upstream MIT text |
 
 The history-preserving mirror retains `matthewfudge` as contributor on four
 view files (design frame view, widget bridge header, state-binding API, and
