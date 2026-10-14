@@ -47,6 +47,7 @@ jobs:
           python3 -m unittest tools.agent_instructions.test_verify
           python3 tools/parity/test_parity_harness.py
           python3 tools/parity/test_frames_lane.py
+          python3 tools/parity/packaging/test_packaging_lane.py
           python3 scripts/test_readme_exec.py
           python3 scripts/readme_exec.py --lint
           python3 scripts/test_readme_lint.py
