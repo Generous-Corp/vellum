@@ -109,33 +109,106 @@ CHECKOUT_STEP = re.compile(
 STEP_START = re.compile(r"^(?P<indent> +)- name: .*$", re.M)
 
 
-PULP_FETCH_URL = "https://github.com/Generous-Corp/pulp"
 MIRROR_EDGE_PIN = "tools/provenance/mirror_edge_patterns.pin.json"
+# Pulp named in any form a workflow can reach it by: https, ssh, a
+# server_url or repository_owner expression, or a plain owner/repo slug, in
+# any letter case. Other Generous-Corp repositories (pulp-planning) do not match.
+PULP_REFERENCE = re.compile(
+    r"(?:generous-corp|\$\{\{\s*github\.repository_owner\s*\}\})\s*/\s*pulp(?:\.git)?(?![\w-])",
+    re.I,
+)
+PINNED_PULP_FETCH_NAME = "Fetch the pinned Pulp mirror-edge table commit"
+PINNED_PULP_GIT_DIR = '"$RUNNER_TEMP/mirror-edge-pulp.git"'
+# The only step allowed to fetch Pulp outside actions/checkout, byte for byte:
+# it reads the commit from the committed pin and fetches exactly that
+# commit's trees into a bare repository. Any added, removed or reordered line
+# fails the comparison.
+PINNED_PULP_FETCH = """      - name: Fetch the pinned Pulp mirror-edge table commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          pin_commit="$(python3 - <<'PY'
+          import json
+          import re
+          pin = json.load(open("tools/provenance/mirror_edge_patterns.pin.json"))
+          commit = pin["pulp_commit"]
+          if re.fullmatch(r"[0-9a-f]{40}", commit) is None:
+              raise SystemExit("mirror edge table pin is not a full commit SHA")
+          print(commit)
+          PY
+          )"
+          pulp_git="$RUNNER_TEMP/mirror-edge-pulp.git"
+          git init -q --bare "$pulp_git"
+          git -C "$pulp_git" remote add origin https://github.com/Generous-Corp/pulp.git
+          git -C "$pulp_git" fetch -q --depth 1 --filter=blob:none --no-tags origin "$pin_commit"
+          git -C "$pulp_git" update-ref --no-deref HEAD "$pin_commit"
+          test "$(git -C "$pulp_git" rev-parse HEAD)" = "$pin_commit\""""
+# The single use of the pinned repository outside the fetch step.
+PINNED_PULP_GIT_DIR_USE = f"            --mirror-edge-pulp-root {PINNED_PULP_GIT_DIR} \\"
+# Steps that name Pulp only to read GitHub API metadata (check runs, live
+# refs, open pull requests); none may transfer Pulp content.
+PULP_API_ONLY_STEPS = {
+    ("provenance.yml", "Test authority protocol and negative controls"),
+}
+PULP_CONTENT_TRANSFER = re.compile(
+    r"\bgit\b[^\n]*\b(?:clone|fetch|pull|remote|worktree|archive|submodule|ls-remote)\b"
+    r"|\bgh\s+repo\s+clone\b|\b(?:tarball|zipball)\b|codeload\.|\bcurl\b|\bwget\b",
+    re.I,
+)
 
 
-def raw_pulp_fetch_steps(text: str) -> list[str]:
-    """Return every step that fetches Generous-Corp/pulp by URL instead of
-    through actions/checkout."""
+def strip_comments(step: str) -> str:
+    return "\n".join(re.sub(r"(?:^|\s)#.*$", "", line) for line in step.splitlines())
+
+
+def workflow_steps(text: str) -> list[str]:
     starts = [m.start() for m in STEP_START.finditer(text)] + [len(text)]
-    steps = [text[begin:end] for begin, end in zip(starts, starts[1:])]
-    return [step for step in steps if PULP_FETCH_URL in re.sub(r"#.*", "", step)]
+    return [text[begin:end] for begin, end in zip(starts, starts[1:])]
 
 
-def raw_pulp_fetch_problems(step: str) -> list[str]:
-    """A raw Pulp fetch must take its commit from the committed pin file,
-    fetch only that commit's trees into a bare repository, and never name a
-    live branch."""
-    code = re.sub(r"#.*", "", step)
-    problems = []
-    if MIRROR_EDGE_PIN not in code:
-        problems.append(f"does not read its commit from {MIRROR_EDGE_PIN}")
-    if not re.search(r'fetch -q --depth 1 --filter=blob:none --no-tags origin "\$pin_commit"', code):
-        problems.append("does not fetch exactly the pinned commit's trees")
-    if "git init -q --bare" not in code:
-        problems.append("does not fetch into a bare repository")
-    if re.search(r"\bcheckout\b|\bmain\b|refs/heads", code):
-        problems.append("checks out a working tree or names a live branch")
-    return problems
+def step_name(step: str) -> str:
+    return re.match(r"^ +- name: (.+)$", step, re.M).group(1).strip()
+
+
+def pulp_reach_problems(workflow: str, text: str) -> tuple[list[str], int]:
+    """Problems with how a pull_request or merge_group workflow reaches Pulp,
+    and how many steps name Pulp. A step that names Pulp in any form must be
+    an actions/checkout of the canonical slug (held by the checkout pin rule),
+    the canonical pinned fetch, or a reviewed API-only reader that transfers
+    no Pulp content. The pinned bare repository is used nowhere else."""
+    problems: list[str] = []
+    reaching = 0
+    fetches = 0
+    for step in workflow_steps(text):
+        code = strip_comments(step)
+        name = step_name(step)
+        if name == PINNED_PULP_FETCH_NAME:
+            fetches += 1
+            reaching += 1
+            if step.rstrip() != PINNED_PULP_FETCH:
+                problems.append(f"{name!r} is not the canonical pinned Pulp fetch")
+            continue
+        if PINNED_PULP_GIT_DIR.strip('"').split("/")[-1] in code:
+            uses = [line for line in step.splitlines() if "mirror-edge-pulp.git" in line]
+            if uses != [PINNED_PULP_GIT_DIR_USE]:
+                problems.append(f"{name!r} uses the pinned Pulp repository beyond reading it")
+        if not PULP_REFERENCE.search(code):
+            continue
+        reaching += 1
+        checkout = re.search(r"^ +uses: actions/checkout@[0-9a-f]{40}$", code, re.M)
+        if checkout:
+            repository = re.search(r"^ +repository: (.+)$", code, re.M)
+            if repository is None or repository.group(1).strip() != PULP_REPOSITORY:
+                problems.append(f"{name!r} names Pulp in a non-canonical form")
+            continue
+        if (workflow, name) in PULP_API_ONLY_STEPS:
+            if PULP_CONTENT_TRANSFER.search(code):
+                problems.append(f"{name!r} transfers Pulp content")
+            continue
+        problems.append(f"{name!r} reaches Pulp outside actions/checkout or the pinned fetch")
+    if fetches > 1:
+        problems.append("more than one pinned Pulp fetch step")
+    return problems, reaching
 
 
 def pulp_checkouts(text: str) -> list[dict[str, str]]:
@@ -146,7 +219,7 @@ def pulp_checkouts(text: str) -> list[dict[str, str]]:
         fields = dict(
             re.findall(r"^ +([a-z-]+): (.+)$", match.group("with"), re.M)
         )
-        if fields.get("repository") != PULP_REPOSITORY:
+        if not PULP_REFERENCE.fullmatch(fields.get("repository", "").strip()):
             continue
         condition = re.search(r"^ +if: (.+)$", block, re.M)
         found.append(
@@ -635,39 +708,83 @@ class RunnerPolicyTests(unittest.TestCase):
         self.assertEqual(non_exempt, seen - verified_count)
         self.assertEqual(seen_verified, VERIFIED_POST_CHECKOUT_PINS)
 
-    def test_raw_pulp_fetches_read_the_committed_pin(self) -> None:
+    def test_every_pulp_reach_is_a_reviewed_form(self) -> None:
         # A Pulp read that bypasses actions/checkout is invisible to the
-        # checkout rule above, so it is held to its own: only the committed
-        # pin decides which Pulp commit a pull_request or merge_group run sees.
-        seen = 0
+        # checkout rule above. Every step naming Pulp, in any form, is
+        # therefore classified, and the only raw fetch is the canonical one.
+        reaching = 0
         for path in sorted(WORKFLOWS.glob("*.yml")):
             text = path.read_text(encoding="utf-8")
             if not re.search(r"^  (pull_request|merge_group):", text, re.M):
                 continue
-            for step in raw_pulp_fetch_steps(text):
-                seen += 1
-                with self.subTest(workflow=path.name, step=step.splitlines()[0].strip()):
-                    self.assertEqual(raw_pulp_fetch_problems(step), [])
-        # Control: the mirror-edge table fetch is one such step.
-        self.assertGreaterEqual(seen, 1)
-
-    def test_raw_pulp_fetch_mutations_fail_closed(self) -> None:
+            problems, count = pulp_reach_problems(path.name, text)
+            reaching += count
+            with self.subTest(workflow=path.name):
+                self.assertEqual(problems, [])
+        # Control: provenance.yml alone has five Pulp checkouts, the pinned
+        # fetch and the API-only reader.
+        self.assertGreaterEqual(reaching, 7)
         workflow = (WORKFLOWS / "provenance.yml").read_text(encoding="utf-8")
-        steps = raw_pulp_fetch_steps(workflow)
-        self.assertEqual(len(steps), 1)
-        step = steps[0]
-        self.assertEqual(raw_pulp_fetch_problems(step), [])
+        self.assertIn(PINNED_PULP_FETCH + "\n", workflow)
+        self.assertEqual(workflow.count(PINNED_PULP_GIT_DIR_USE), 1)
+
+    def test_pulp_reach_bypasses_fail_closed(self) -> None:
+        workflow = (WORKFLOWS / "provenance.yml").read_text(encoding="utf-8")
+        self.assertEqual(pulp_reach_problems("provenance.yml", workflow)[0], [])
+        fetch = PINNED_PULP_FETCH
+        tail = '          test "$(git -C "$pulp_git" rev-parse HEAD)" = "$pin_commit"'
+        verify = "      - name: Verify extraction and active-source quarantine\n"
+
+        def in_fetch(extra: str) -> str:
+            return workflow.replace(fetch, fetch.replace(tail, tail + "\n" + extra), 1)
+
+        def new_step(body: str) -> str:
+            return workflow.replace(verify, f"      - name: Extra step\n        run: |\n{body}\n\n" + verify, 1)
+
         mutations = {
-            "live branch": step.replace('origin "$pin_commit"', "origin main", 1),
-            "unpinned source": step.replace(MIRROR_EDGE_PIN, "provenance/other.json", 1),
-            "full blobs": step.replace(" --filter=blob:none", "", 1),
-            "working tree": step.replace("git init -q --bare", "git init -q", 1),
-            "checkout": step + '          git -C "$pulp_git" checkout -q "$pin_commit"\n',
+            "extra fetch of origin HEAD": in_fetch('          git -C "$pulp_git" fetch -q origin HEAD'),
+            "second remote and branch": in_fetch(
+                '          git -C "$pulp_git" remote add dev https://github.com/Generous-Corp/pulp.git\n'
+                '          git -C "$pulp_git" fetch -q dev develop'),
+            "worktree add": in_fetch('          git -C "$pulp_git" worktree add "$RUNNER_TEMP/pulp" "$pin_commit"'),
+            "archive and run": in_fetch(
+                '          git -C "$pulp_git" archive "$pin_commit" | tar x && bash setup.sh'),
+            "live branch": workflow.replace(fetch, fetch.replace('origin "$pin_commit"', "origin main", 1), 1),
+            "unpinned source": workflow.replace(fetch, fetch.replace(MIRROR_EDGE_PIN, "provenance/other.json", 1), 1),
+            "full blobs": workflow.replace(fetch, fetch.replace(" --filter=blob:none", "", 1), 1),
+            "working tree": workflow.replace(fetch, fetch.replace("git init -q --bare", "git init -q", 1), 1),
+            "ssh url": new_step("          git clone git@github.com:Generous-Corp/pulp.git pulp"),
+            "lowercase slug": new_step("          git clone https://github.com/generous-corp/pulp pulp"),
+            "server_url": new_step("          git clone ${{ github.server_url }}/Generous-Corp/pulp pulp"),
+            "repository_owner": new_step("          git clone https://github.com/${{ github.repository_owner }}/pulp.git"),
+            "dot-git suffix": new_step("          git clone https://github.com/Generous-Corp/pulp.git"),
+            "reuse the pinned repository": new_step(
+                f'          git -C {PINNED_PULP_GIT_DIR} fetch -q origin develop'),
+            "lowercase checkout": workflow.replace(
+                "          repository: Generous-Corp/pulp\n", "          repository: generous-corp/pulp\n", 1),
+            "api-only step clones": workflow.replace(
+                "      - name: Test authority protocol and negative controls\n",
+                "      - name: Test authority protocol and negative controls\n"
+                "        # gh repo clone Generous-Corp/pulp\n", 1).replace(
+                "          PULP_ACCEPTANCE_SHA: ${{ steps.expansion-evidence.outputs.pulp-sha }}\n",
+                "          PULP_ACCEPTANCE_SHA: ${{ steps.expansion-evidence.outputs.pulp-sha }}\n"
+                "          CLONE: gh repo clone Generous-Corp/pulp\n", 1),
+            "second pinned fetch": workflow.replace(fetch + "\n", fetch + "\n\n" + fetch + "\n", 1),
         }
         for name, mutated in mutations.items():
             with self.subTest(mutation=name):
-                self.assertNotEqual(mutated, step)
-                self.assertTrue(raw_pulp_fetch_problems(mutated))
+                self.assertNotEqual(mutated, workflow)
+                self.assertTrue(pulp_reach_problems("provenance.yml", mutated)[0])
+
+    def test_pulp_reference_recognises_every_form(self) -> None:
+        for text in ("https://github.com/Generous-Corp/pulp", "git@github.com:Generous-Corp/pulp.git",
+                     "${{ github.server_url }}/Generous-Corp/pulp", "generous-corp/PULP",
+                     "${{ github.repository_owner }}/pulp", "repos/Generous-Corp/pulp/check-runs"):
+            with self.subTest(text=text):
+                self.assertIsNotNone(PULP_REFERENCE.search(text))
+        for text in ("Generous-Corp/pulp-planning", "Generous-Corp/vellum", "pulp_sha"):
+            with self.subTest(text=text):
+                self.assertIsNone(PULP_REFERENCE.search(text))
 
     def test_exact_boundary_pin_mutations_fail_closed(self) -> None:
         workflow = (WORKFLOWS / "provenance.yml").read_text(encoding="utf-8")
