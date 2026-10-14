@@ -166,6 +166,24 @@ PULP_API_READER_GH_CALLS = {
     'run download "$run_id" --name vellum-parity-proof-execution',
 }
 PULP_API_READER_GIT_CALLS = {"git -C .exact-boundary-pulp rev-parse HEAD"}
+# Every reader line that names Pulp, stripped, verbatim. A new line naming
+# Pulp (an anchor, an env export, a command through a variable) fails.
+PULP_API_READER_PULP_LINES = {
+    '"repos/Generous-Corp/pulp/commits/$PULP_ACCEPTANCE_SHA/check-runs?per_page=100" \\',
+    'repository == "Generous-Corp/pulp"',
+    'if [[ "$repository" == "Generous-Corp/pulp" ]]; then',
+    "for repository in Generous-Corp/pulp Generous-Corp/vellum; do",
+    'for repository in ("Generous-Corp/pulp", "Generous-Corp/vellum"):',
+    'live_pulp_main="$(gh api repos/Generous-Corp/pulp/git/ref/heads/main --jq .object.sha)"',
+    '"$(gh api repos/Generous-Corp/pulp/git/ref/heads/main --jq .object.sha)"',
+}
+# A command reached through a variable (`g=git; $g clone ...`).
+COMMAND_INDIRECTION = re.compile(
+    r"\b\w+=['\"]?(?:git|gh|curl|wget|python3?|bash|sh)\b"
+    r"|(?:^|[;&|(`]|\$\()\s*\$\{?\w+\}?\s+(?:repo|clone|api|fetch|run|-c)\b"
+)
+STEP_STATE_EXPORT = re.compile(r"GITHUB_(?:ENV|OUTPUT|PATH)\b")
+YAML_ANCHOR_OR_ALIAS = re.compile(r"(?:^\s*-\s+|:\s+|[\[{,]\s*|^\s*)[&*][A-Za-z0-9_-]")
 # Transports that bypass gh entirely.
 PULP_API_READER_FORBIDDEN = re.compile(
     r"\b(?:curl|wget|urllib|requests|http\.client|socket|subprocess|nc)\b"
@@ -174,7 +192,10 @@ PULP_API_READER_FORBIDDEN = re.compile(
 )
 # Triggers whose runs act on unmerged or queued code: a pull request, a
 # merge-queue entry, or a workflow_run fired by either.
-QUEUE_GATED_EVENTS = {"pull_request", "pull_request_target", "merge_group", "workflow_run"}
+QUEUE_GATED_EVENTS = {
+    "pull_request", "pull_request_target", "pull_request_review", "merge_group",
+    "workflow_run", "workflow_call",
+}
 BLOCK_SCALAR = re.compile(r"(?:^|:|-)\s*[|>][-+0-9]*\s*(?:#.*)?$")
 
 
@@ -300,6 +321,41 @@ def workflow_items(text: str) -> tuple[list[dict[str, object]], list[tuple[int, 
     return steps, outside
 
 
+def steps_lines(steps: list[dict[str, object]]) -> set[int]:
+    covered: set[int] = set()
+    for step in steps:
+        start = int(step["start"])
+        covered.update(range(start, start + len(step["lines"])))
+    return covered
+
+
+def open_quoted_scalar(line: str) -> bool:
+    """Whether a YAML node line opens a single- or double-quoted scalar
+    without closing it, at any position a scalar can start (after `- `, a key,
+    or a flow-collection separator). A continuation line of such a scalar may
+    start with `#` and still be text, so the rule refuses the form instead of
+    reading it. A plain scalar that happens to contain `: '` is refused too,
+    which is fail-closed."""
+    for start in re.finditer(r"(?:^\s*-\s+|^\s*|:\s+|[\[{,]\s*)(['\"])", line):
+        quote, index = start.group(1), start.end()
+        closed = False
+        while index < len(line):
+            char = line[index]
+            if quote == '"' and char == "\\":
+                index += 2
+                continue
+            if char == quote:
+                if quote == "'" and line[index + 1:index + 2] == "'":
+                    index += 2
+                    continue
+                closed = True
+                break
+            index += 1
+        if not closed:
+            return True
+    return False
+
+
 def step_text(step: dict[str, object]) -> str:
     """The step as written, without the trailing blank and comment lines that
     belong to whatever follows it."""
@@ -338,7 +394,20 @@ def pulp_reach_problems(workflow: str, text: str) -> tuple[list[str], int]:
     problems: list[str] = []
     reaching = 0
     fetches = 0
+    lines, kinds = text.splitlines(), yaml_line_kinds(text)
+    for number, (line, kind) in enumerate(zip(lines, kinds), 1):
+        if kind != "node":
+            continue
+        if YAML_ANCHOR_OR_ALIAS.search(line):
+            problems.append(f"line {number} uses a YAML anchor or alias")
+        if open_quoted_scalar(line):
+            problems.append(f"line {number} opens a quoted scalar that spans lines")
     steps, outside = workflow_items(text)
+    # Comment-looking lines are scanned too: proving a line is a YAML comment
+    # rather than quoted-scalar text is not worth the risk of hiding code.
+    covered = steps_lines(steps)
+    outside = [(number, line) for number, line in enumerate(lines, 1)
+               if line.strip() and number - 1 not in covered]
     for number, line in outside:
         if PULP_REFERENCE.search(line):
             problems.append(f"line {number} names Pulp outside a step")
@@ -346,7 +415,7 @@ def pulp_reach_problems(workflow: str, text: str) -> tuple[list[str], int]:
             problems.append(f"line {number} uses the pinned Pulp repository outside a step")
     pulp_checkout_steps = 0
     for step in steps:
-        code = "\n".join(step["code"])
+        code = "\n".join(line for line in step["lines"] if line.strip())
         name = step["name"]
         label = repr(name) if name else f"unnamed step at line {int(step['start']) + 1}"
         if name == PINNED_PULP_FETCH_NAME:
@@ -355,15 +424,18 @@ def pulp_reach_problems(workflow: str, text: str) -> tuple[list[str], int]:
             if step_text(step) != PINNED_PULP_FETCH:
                 problems.append(f"{label} is not the canonical pinned Pulp fetch")
             continue
-        uses = [line for line in step["code"] if re.search(r"mirror-edge-pulp", line, re.I)]
+        uses = [line for line in step["lines"] if re.search(r"mirror-edge-pulp", line, re.I)]
         if uses and uses != [PINNED_PULP_GIT_DIR_USE]:
             problems.append(f"{label} uses the pinned Pulp repository beyond reading it")
+        is_checkout = re.search(r"^ +(?:-\s+)?uses: actions/checkout@", code, re.M)
+        if is_checkout and re.search(r"^ +repository:\s*.*\$\{\{", code, re.M):
+            problems.append(f"{label} checks out a repository named by an expression")
         if not PULP_REFERENCE.search(code):
             continue
         reaching += 1
-        if re.search(r"^ +(?:-\s+)?uses: actions/checkout@[0-9a-f]{40}$", code, re.M):
+        if is_checkout:
             repository = re.findall(r"^ +repository: (.+)$", code, re.M)
-            mentions = [line for line in step["code"] if PULP_REFERENCE.search(line)]
+            mentions = [line for line in step["lines"] if PULP_REFERENCE.search(line)]
             if repository != [PULP_REPOSITORY] or mentions != [f"{' ' * (int(step['key_indent']) + 2)}repository: {PULP_REPOSITORY}"]:
                 problems.append(f"{label} names Pulp in a non-canonical form")
             elif step["first_key"] != "name":
@@ -377,6 +449,13 @@ def pulp_reach_problems(workflow: str, text: str) -> tuple[list[str], int]:
             if unreviewed or any(call.strip() not in PULP_API_READER_GIT_CALLS for call in git_calls) \
                     or PULP_API_READER_FORBIDDEN.search(code):
                 problems.append(f"{label} transfers Pulp content beyond its reviewed reads: {unreviewed}")
+            naming = {line.strip() for line in step["lines"] if PULP_REFERENCE.search(line)}
+            if naming - PULP_API_READER_PULP_LINES:
+                problems.append(f"{label} names Pulp on an unreviewed line: {sorted(naming - PULP_API_READER_PULP_LINES)}")
+            if STEP_STATE_EXPORT.search(code):
+                problems.append(f"{label} writes step state another step could read")
+            if COMMAND_INDIRECTION.search(code):
+                problems.append(f"{label} runs a command through a variable")
             continue
         problems.append(f"{label} reaches Pulp outside actions/checkout or the pinned fetch")
     if fetches > 1:
@@ -896,6 +975,12 @@ class RunnerPolicyTests(unittest.TestCase):
             reaching += count
             with self.subTest(workflow=path.name):
                 self.assertEqual(problems, [])
+        # Local composite actions run inside whichever job uses them.
+        for path in sorted((ROOT / ".github" / "actions").glob("**/action.y*ml")):
+            problems, count = pulp_reach_problems(path.name, path.read_text(encoding="utf-8"))
+            reaching += count
+            with self.subTest(action=str(path.relative_to(ROOT))):
+                self.assertEqual(problems, [])
         # Control: provenance.yml alone has five Pulp checkouts, the pinned
         # fetch and the API-only reader.
         self.assertGreaterEqual(reaching, 7)
@@ -916,6 +1001,9 @@ class RunnerPolicyTests(unittest.TestCase):
         pin_after_checkout = "      - name: Pin mirror Pulp reads to committed Decision 0010 evidence\n"
         reader_anchor = '            live_pulp_main="$(gh api repos/Generous-Corp/pulp/git/ref/heads/main --jq .object.sha)"\n'
         self.assertEqual(workflow.count(reader_anchor), 1)
+
+        reader_env = "          PULP_ACCEPTANCE_SHA: ${{ steps.expansion-evidence.outputs.pulp-sha }}\n"
+        self.assertEqual(workflow.count(reader_env), 1)
 
         def in_reader(line: str) -> str:
             return workflow.replace(reader_anchor, reader_anchor + "            " + line + "\n", 1)
@@ -996,6 +1084,41 @@ class RunnerPolicyTests(unittest.TestCase):
             "first job header": workflow.replace(
                 "  forbidden-deps:\n    name: forbidden-deps\n",
                 "  forbidden-deps:\n    name: forbidden-deps\n    if: github.repository != 'Generous-Corp/pulp'\n", 1),
+            # A quoted scalar's continuation line may start with `#` and still be text.
+            "double-quoted scalar spanning lines": workflow.replace(verify,
+                "      - name: Extra step\n        run: \"echo 'a\n          #' ; git clone https://github.com/Generous-Corp/pulp pulp\"\n\n"
+                + verify, 1),
+            "single-quoted scalar spanning lines": workflow.replace(verify,
+                "      - name: Extra step\n        run: 'echo a\n          #'' ; git clone https://github.com/Generous-Corp/pulp pulp'\n\n"
+                + verify, 1),
+            # The API reader must not hand Pulp to another step.
+            "reader anchor aliased into a checkout": workflow.replace(
+                reader_env, reader_env + "          PULP_URL: &pu Generous-Corp/pulp\n", 1).replace(verify,
+                "      - name: Extra checkout\n        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1\n"
+                "        with:\n          repository: *pu\n          ref: main\n\n" + verify, 1),
+            "reader anchor aliased into env": workflow.replace(
+                reader_env, reader_env + "          PULP_URL: &pu https://github.com/Generous-Corp/pulp\n", 1).replace(verify,
+                "      - name: Extra step\n        env:\n          U: *pu\n        run: git clone \"$U\"\n\n" + verify, 1),
+            "reader exports Pulp through GITHUB_ENV": in_reader(
+                'echo "PU=https://github.com/Generous-Corp/pulp" >> "$GITHUB_ENV"'),
+            "reader exports through GITHUB_OUTPUT without naming Pulp": in_reader(
+                'echo "repo=$repository" >> "$GITHUB_OUTPUT"'),
+            "reader runs git through a variable": in_reader("g=git; $g clone https://github.com/Generous-Corp/pulp"),
+            "reader runs gh through a variable": in_reader("G=gh; $G repo clone Generous-Corp/pulp"),
+            "reader names Pulp on a new line": in_reader('echo "Generous-Corp/pulp"'),
+            "reader runs git through a variable without naming Pulp": in_reader('g=git; $g -C .exact-boundary-pulp fetch origin develop'),
+            # Checkout shapes each guarded by one check.
+            "blank line hides an unpinned ref from the pin rule": workflow.replace(verify,
+                "      - name: Extra checkout\n        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1\n"
+                "        with:\n          path: .extra\n\n          repository: Generous-Corp/pulp\n          ref: main\n\n" + verify, 1),
+            "checkout that does not lead with name": workflow.replace(verify,
+                "      - if: always()\n        name: Extra checkout\n"
+                "        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1\n"
+                "        with:\n          repository: Generous-Corp/pulp\n          ref: main\n\n" + verify, 1),
+            "checkout repository from an expression": workflow.replace(verify,
+                "      - name: Extra checkout\n        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1\n"
+                "        with:\n          repository: ${{ format('{0}/pulp', github.repository_owner) }}\n          ref: main\n\n"
+                + verify, 1),
             "reusable Pulp workflow job": workflow.rstrip("\n")
                 + "\n\n  pulp-reuse:\n    uses: Generous-Corp/pulp/.github/workflows/x.yml@" + "0" * 40 + "\n",
         }
@@ -1019,6 +1142,25 @@ class RunnerPolicyTests(unittest.TestCase):
         flow = workflow.replace(block, "on: [workflow_dispatch, pull_request, merge_group, push]\n\n", 1)
         self.assertTrue(queue_gated(flow))
         self.assertEqual(pulp_reach_problems("provenance.yml", flow)[0], [])
+
+    def test_composite_action_steps_are_read(self) -> None:
+        action = (
+            "name: x\nruns:\n  using: composite\n  steps:\n"
+            "    - run: git clone https://github.com/Generous-Corp/pulp pulp\n      shell: bash\n"
+        )
+        self.assertEqual(pulp_reach_problems("action.yml", action)[0],
+                         ["unnamed step at line 5 reaches Pulp outside actions/checkout or the pinned fetch"])
+        self.assertTrue(queue_gated("on:\n  workflow_call:\n"))
+        self.assertTrue(queue_gated("on: pull_request_review\n"))
+
+    def test_quoted_scalar_detection(self) -> None:
+        for line in ('        run: "echo a', "        run: 'echo a", "      - 'a", '        x: ["a', "        run: 'it''s"):
+            with self.subTest(line=line):
+                self.assertTrue(open_quoted_scalar(line))
+        for line in ('        run: "echo a"', "        run: 'it''s'", '        run: echo "a"', "        run: echo don't",
+                     '        x: ["a", "b"]', '        run: "a \\" b"'):
+            with self.subTest(line=line):
+                self.assertFalse(open_quoted_scalar(line))
 
     def test_every_step_item_is_a_step(self) -> None:
         text = (
