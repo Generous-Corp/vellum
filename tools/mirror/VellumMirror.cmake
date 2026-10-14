@@ -286,6 +286,15 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
         target_link_options("${_library}" PRIVATE
             "LINKER:-exported_symbols_list,${_exports}")
         set_property(TARGET "${_library}" APPEND PROPERTY LINK_DEPENDS "${_exports}")
+        # The mirrored public headers name Skia types (font_resolver.hpp is
+        # where Pulp introduces them, and pulp-canvas links Skia PUBLIC), so a
+        # consumer needs Skia's declarations to compile them. Like
+        # Vellum::DawnHeaders this ships declarations only: the definitions
+        # stay inside this library, exported nowhere, so the consumer gains no
+        # second provider.
+        target_include_directories("${_library}" INTERFACE
+            "$<INSTALL_INTERFACE:${VELLUM_MIRROR_INSTALL_DIR}/include/skia>")
+        set(_vellum_mirror_ships_skia_headers ON)
         # Two Skia/Dawn providers in one image would be two WebGPU stacks.
         set_property(TARGET "${_library}" PROPERTY
             INTERFACE_VELLUM_SKIA_DAWN_PROVIDER "vellum-mirror-${_vellum_mirror_unit}")
@@ -322,6 +331,13 @@ foreach(_include IN LISTS _vellum_mirror_public_includes)
 endforeach()
 install(DIRECTORY "${VELLUM_MIRROR_BUILD_INFO_DIR}/"
     DESTINATION "${VELLUM_MIRROR_INSTALL_DIR}/include")
+if(_vellum_mirror_ships_skia_headers)
+    # Skia's public declarations from the locked archive, at the include root
+    # the mirrored headers spell ("include/core/SkFont.h").
+    install(DIRECTORY "${_vellum_skia_include}/include/"
+        DESTINATION "${VELLUM_MIRROR_INSTALL_DIR}/include/skia/include"
+        FILES_MATCHING PATTERN "*.h")
+endif()
 foreach(_header IN LISTS VELLUM_MIRROR_CHOC_HEADERS)
     get_filename_component(_directory "${_header}" DIRECTORY)
     install(FILES "${VELLUM_MIRROR_CHOC_ROOT}/${_header}"
