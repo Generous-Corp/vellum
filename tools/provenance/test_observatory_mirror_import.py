@@ -75,8 +75,12 @@ class ObservatoryMirrorImportTests(unittest.TestCase):
         run(fixture.vellum, "add", "-A")
         run(fixture.vellum, "commit", "-q", "-m", "unreceipted mirror commit")
         run(fixture.vellum, "checkout", "-q", "main")
-        run(fixture.vellum, "merge", "-q", "--no-edit", "extra")
-        self.assertRejected(fixture, "observatory cursor must exist on every history edge")
+        # Keep HEAD's tree, so the receipts still verify; only history is added.
+        run(fixture.vellum, "merge", "-q", "--no-edit", "-s", "ours", "extra")
+        self.assertEqual(fixture.errors(), [])
+        # The unreceipted commit extends the imported history without being a
+        # mainline join, so it is refused rather than skipped.
+        self.assertRejected(fixture, "joins an imported mirror history but is not a two-parent merge")
 
     def test_join_that_changes_the_cursor_is_rejected(self) -> None:
         def change_cursor(fixture: Fixture) -> None:
@@ -94,6 +98,60 @@ class ObservatoryMirrorImportTests(unittest.TestCase):
         run(fixture.vellum, "rm", "-q", CURSOR)
         run(fixture.vellum, "commit", "-q", "-m", "drop cursor")
         self.assertRejected(fixture, "observatory cursor must exist on every history edge")
+
+    @staticmethod
+    def rebuild_join(fixture: Fixture, *parents: str) -> None:
+        """Replace the join with a commit of the same tree and the given parents."""
+        tree = run(fixture.vellum, "rev-parse", "HEAD^{tree}")
+        args = [arg for parent in parents for arg in ("-p", parent)]
+        joined = run(fixture.vellum, "commit-tree", tree, *args, "-m", "join")
+        run(fixture.vellum, "reset", "-q", "--hard", joined)
+
+    def test_octopus_join_is_rejected(self) -> None:
+        def octopus(fixture: Fixture) -> None:
+            other = run(fixture.vellum, "commit-tree", "4b825dc642cb6eb9a060e54bf8d69288fbee4904", "-m", "other root")
+            self.rebuild_join(fixture, fixture.base_sha, fixture.mirror_sha, other)
+
+        self.assertRejected(self.fixture(after_join=octopus), "two-parent merge whose first parent is the mainline")
+
+    def test_join_with_both_parents_imported_is_rejected(self) -> None:
+        def both_imported(fixture: Fixture) -> None:
+            prelude = run(fixture.vellum, "rev-parse", f"{fixture.mirror_sha}^")
+            self.rebuild_join(fixture, prelude, fixture.mirror_sha)
+
+        # With no mainline parent the base is no longer an ancestor of HEAD.
+        self.assertRejected(self.fixture(after_join=both_imported), "is not an ancestor of")
+
+    def test_join_with_the_imported_parent_first_is_rejected(self) -> None:
+        def imported_first(fixture: Fixture) -> None:
+            self.rebuild_join(fixture, fixture.mirror_sha, fixture.base_sha)
+
+        self.assertRejected(self.fixture(after_join=imported_first), "two-parent merge whose first parent is the mainline")
+
+    def test_side_history_rooted_on_the_base_is_rejected(self) -> None:
+        def mirror_on_base(fixture: Fixture) -> None:
+            # Rebuild the mirror commit on the Vellum base instead of an orphan
+            # root, so its first edge would delete the whole observatory.
+            tree = run(fixture.vellum, "rev-parse", f"{fixture.mirror_sha}^{{tree}}")
+            rooted = run(fixture.vellum, "commit-tree", tree, "-p", fixture.base_sha, "-m", "mirror on base")
+            fixture.mirror_sha = rooted
+            self.rebuild_join(fixture, fixture.base_sha, rooted)
+
+        fixture = self.fixture(mirror_prelude=[], after_join=mirror_on_base)
+        self.assertEqual(fixture.errors(), [])
+        self.assertRejected(fixture, "outside the imported history")
+
+    def test_uncommitted_receipts_cannot_approve_an_import(self) -> None:
+        fixture = self.fixture()
+        write(fixture.vellum, "provenance/mirror/receipts/index.json", dump({
+            "schema": "vellum.mirror-receipt-index.v1", "receipts": [fixture.receipt_path],
+        }) + "\n")
+        self.assertRejected(fixture, "provenance/mirror has uncommitted changes")
+
+    def test_failed_mirror_export_verification_is_reported(self) -> None:
+        fixture = self.fixture()
+        fixture.reland(mirror_tree="0" * 40)
+        self.assertRejected(fixture, "mirror-export verification failed")
 
 
 if __name__ == "__main__":

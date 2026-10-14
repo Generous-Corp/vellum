@@ -640,9 +640,19 @@ def approved_mirror_shas(root: Path) -> set[str]:
         raise ObservatoryError(f"cannot load {module_path.name}")
     verifier = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(verifier)
+    # The mirror-export verifier reads the working tree, so the approved set
+    # must come from receipts that match the commit being verified.
+    if git(root, "status", "--porcelain", "--", "provenance/mirror"):
+        raise ObservatoryError(
+            "provenance/mirror has uncommitted changes; imported mirror history "
+            "is approved only from committed receipts"
+        )
     report = verifier.verify(root)
     if report["status"] != "pass":
-        return set()
+        raise ObservatoryError(
+            "imported mirror history cannot be approved: mirror-export verification "
+            "failed: " + "; ".join(str(error) for error in report["errors"])
+        )
     shas: set[str] = set()
     for receipt_path in report["receipts"]:
         receipt = json.loads((root / receipt_path).read_text(encoding="utf-8"))
@@ -662,12 +672,20 @@ def imported_mirror_commits(root: Path, git_base: str, head: str) -> set[str]:
     imported: set[str] = set()
     for tip in sorted(approved_mirror_shas(root) & range_commits):
         side = git(root, "rev-list", tip, f"^{git_base}").splitlines()
+        side_set = set(side)
         for commit in side:
             entries = tuple(git(root, "ls-tree", "--name-only", commit).splitlines())
             if entries != MIRROR_IMPORT_PATHS:
                 raise ObservatoryError(
                     f"imported mirror history commit {commit} holds paths other than "
                     f"mirror/: {', '.join(entries) or '(empty tree)'}"
+                )
+            parents = git(root, "rev-list", "--parents", "-n", "1", commit).split()[1:]
+            outside = [parent for parent in parents if parent not in side_set]
+            if outside:
+                raise ObservatoryError(
+                    f"imported mirror history commit {commit} descends from "
+                    f"{', '.join(outside)}, outside the imported history"
                 )
         imported.update(side)
     return imported
@@ -686,10 +704,10 @@ def verify_mirror_join(
 ) -> None:
     """A merge joining an imported mirror history must not touch the observatory."""
     mainline = [parent for parent in parents if parent not in imported_parents]
-    if len(parents) != 2 or len(mainline) != 1:
+    if len(parents) != 2 or mainline != parents[:1]:
         raise ObservatoryError(
             f"commit {commit} joins an imported mirror history but is not a "
-            "two-parent merge with one mainline parent"
+            "two-parent merge whose first parent is the mainline"
         )
     observatory = OBSERVATORY.as_posix()
     if not has_cursor(root, commit) or git(
