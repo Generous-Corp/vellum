@@ -280,9 +280,12 @@ if(VELLUM_BUILD_TESTS)
         COMMAND "${Python3_EXECUTABLE}"
             tools/provenance/test_verify_mirror_export.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    # The Pulp identity of mirror/ needs a Pulp checkout, which only the
+    # required provenance lanes have; they run this verifier with --pulp-root.
+    # Every other retirement check, including the mirror edge scan, runs here.
     add_test(NAME vellum.provenance-retirement
         COMMAND "${Python3_EXECUTABLE}"
-            tools/provenance/verify_extraction.py
+            tools/provenance/verify_extraction.py --defer-mirror-identity
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME vellum.downstream-consumer-registry-unit
         COMMAND "${Python3_EXECUTABLE}"

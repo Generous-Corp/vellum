@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -474,6 +475,15 @@ class VerifyExtractionTests(unittest.TestCase):
 
             unproved = verify_extraction.verify(clone)
             deferred = verify_extraction.verify(clone, defer_mirror_identity=True)
+            mirror_file_count = len(list(verify_extraction.mirror_files(clone)))
+            landed = json.loads(
+                (clone / "provenance/mirror/receipts/index.json").read_text(encoding="utf-8")
+            )["receipts"]
+            forged_export_error = (
+                f"mirror export: {landed[-1]}: HEAD:mirror is not the newest receipt's mirror tree"
+                if landed
+                else "mirror export: mirror/ exists at HEAD without an export receipt"
+            )
             pulp = Path(temporary) / "pulp"
             pulp.mkdir()
             subprocess.check_call(["git", "init", "-q"], cwd=pulp)
@@ -490,7 +500,7 @@ class VerifyExtractionTests(unittest.TestCase):
 
             self.assertEqual(unproved["status"], "fail")
             self.assertIn(
-                "mirror root has 1 files but no Pulp checkout proved them; pass --pulp-root",
+                f"mirror root has {mirror_file_count} files but no Pulp checkout proved them; pass --pulp-root",
                 unproved["errors"],
             )
             for report in (unproved, deferred, proved):
@@ -499,12 +509,11 @@ class VerifyExtractionTests(unittest.TestCase):
                     "blob-origin records name 1 receipts absent from the receipt index",
                     report["errors"],
                 )
-                self.assertIn(
-                    "mirror export: mirror/ exists at HEAD without an export receipt",
-                    report["errors"],
-                )
+                # The forged file changes HEAD:mirror, so the newest landed receipt
+                # (or, with none landed, the receipt requirement) must reject it.
+                self.assertIn(forged_export_error, report["errors"])
             self.assertNotIn(
-                "mirror root has 1 files but no Pulp checkout proved them; pass --pulp-root",
+                f"mirror root has {mirror_file_count} files but no Pulp checkout proved them; pass --pulp-root",
                 deferred["errors"],
             )
             self.assertTrue(any("not on the checked-out Pulp main" in e for e in proved["errors"]))
@@ -609,13 +618,24 @@ class VerifyExtractionTests(unittest.TestCase):
 
     def test_repository_passes_full_retirement_verification(self) -> None:
         root = MODULE_PATH.parents[2]
-        report = verify_extraction.verify(root)
+        # The required provenance lanes check out the receipt's Pulp commit and
+        # name it in MIRROR_PULP_ROOT, so there the mirror's Pulp identity is
+        # proved. Elsewhere that proof is deferred to those lanes, exactly as
+        # `verify_extraction.py --defer-mirror-identity` does; every other check,
+        # including the mirror edge scan, runs in full.
+        pulp_root_env = os.environ.get("MIRROR_PULP_ROOT")
+        pulp_root = Path(pulp_root_env).resolve() if pulp_root_env else None
+        report = verify_extraction.verify(
+            root, pulp_root, defer_mirror_identity=pulp_root is None
+        )
         self.assertEqual(report["status"], "pass", report["errors"])
         self.assertFalse(report["raw_seed_present_at_active_tip"])
         self.assertEqual(report["checks"]["retired_path_findings"], [])
         self.assertEqual(report["checks"]["active_historical_blob_matches"], [])
         self.assertEqual(report["checks"]["mirror_origin_findings"], [])
         self.assertEqual(report["checks"]["mirror_edge_findings"], [])
+        if pulp_root is not None:
+            self.assertTrue(report["checks"]["mirror_origins_verified_against_pulp"])
 
 
 if __name__ == "__main__":

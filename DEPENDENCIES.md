@@ -149,29 +149,33 @@ Vellum dependencies. Versions and licenses were cross-checked against Pulp's
 
 | Dependency | Version or source identity | License | Mirror scope | Compatibility / handling |
 |---|---|---|---|---|
-| Abseil | `dd67f5ca84f65ebb88ac0ea0fe2c1d58663e519f` | Apache-2.0 | `mirror/render-2d/`, `mirror/render-3d/`, `mirror/view-script/` with V8 | MIT-compatible; transitive notice |
-| Brotli | `v1.2.0` | MIT | `mirror/canvas/` | MIT-compatible |
-| CHOC | `pulp-webview-dnd-poc1` (`df148a41`) | ISC | `mirror/view-script/` | MIT-compatible; retain fork attribution |
-| cpp-httplib | vendored snapshot | MIT | `mirror/foundation/` | MIT-compatible |
-| Dawn and Tint | `f91da75afe31d4d6f47a6da307e1fbabd1b1691a` | BSD-3-Clause | `mirror/gpu-device/`, `mirror/render-2d/`, `mirror/render-3d/` | MIT-compatible; renderer notice exists |
-| Expat | `6154446fccefbf3ca644894f598969113b0c7bcd` | MIT | `mirror/render-2d/`, `mirror/render-3d/` | MIT-compatible; renderer notice exists |
-| HarfBuzz | `9cb1fee51069b206effb4736e443b038d230789d` | Old MIT | `mirror/canvas/` | MIT-compatible; notice exists |
-| Highway | `1.2.0` | Apache-2.0 | `mirror/foundation/` | MIT-compatible |
-| ICU | `d578f2e8b7bd5938e21cfb6bf15c079e0aa5b738` | Unicode-3.0 plus bundled notices | `mirror/canvas/`, `mirror/view-script/` with V8 | Permissive; notice exists |
-| Inter | `4.001; git-9221beed3` | SIL OFL 1.1 | `mirror/canvas/`, `mirror/view-core/`, `mirror/view-platform/` | Allowed font license |
-| JavaScriptCore | Apple system framework | LGPL-2.1+ components and Apple terms | `mirror/view-script/` references only | **Not MIT-compatible**; system-only, never mirrored |
-| JetBrains Mono | `2.304` | SIL OFL 1.1 | `mirror/canvas/`, `mirror/view-core/` | Allowed font license |
-| Jost | `3.710` | SIL OFL 1.1 | `mirror/canvas/`, `mirror/view-core/` | Allowed font license |
-| Mbed TLS | `v3.6.2` | Apache-2.0 | `mirror/foundation/`, `mirror/gpu-device/` | MIT-compatible |
-| NanoSVG | vendored snapshot | zlib | `mirror/canvas/` | MIT-compatible |
-| Noto Sans Arabic | variable font | SIL OFL 1.1 | `mirror/canvas/`, `mirror/view-core/` | Allowed font license |
-| Noto Sans JP | variable font | SIL OFL 1.1 | `mirror/canvas/`, `mirror/view-core/` | Allowed font license |
-| PartitionAlloc | `03cc513177b4340bee3dbfd46f6dd5fdded43b79` | BSD-3-Clause | `mirror/gpu-device/`, `mirror/render-2d/`, `mirror/render-3d/` | MIT-compatible; transitive notice |
-| QuickJS | `2024-02-14` | MIT | `mirror/view-script/` | MIT-compatible |
-| SheenBidi | `v3.0.0` | Apache-2.0 | `mirror/canvas/` | MIT-compatible |
-| Skia and skcms | `8b8c3872fbc03f025855db96ce683f34ec98a815` | BSD-3-Clause | `mirror/canvas/`, `mirror/render-2d/`, `mirror/render-3d/` | MIT-compatible; renderer notice exists |
-| V8 | `v8-m153-15.3.76.5-26cef0256b0e` | BSD-3-Clause | `mirror/view-script/` when selected | MIT-compatible; sealed provider |
-| Yoga | `3.2.1` | MIT | `mirror/view-core/`, `mirror/view-platform/` | MIT-compatible |
+| Abseil | `dd67f5ca84f65ebb88ac0ea0fe2c1d58663e519f` | Apache-2.0 | not mirrored; no landed unit consumes it yet (planned renderer and V8 units) | MIT-compatible; transitive notice |
+| Brotli | `v1.2.0` | MIT | `canvas` unit external input (`mirror/core/canvas/`, WOFF2 decoder); bytes not mirrored | MIT-compatible |
+| CHOC | `pulp-webview-dnd-poc1` (`df148a41`) | ISC | `foundation` unit external input, patched (`mirror/core/runtime/`, `mirror/core/events/`); bytes not mirrored | MIT-compatible; retain fork attribution |
+| cpp-httplib | vendored snapshot | MIT | `mirror/external/cpp-httplib/` (`foundation` unit) | MIT-compatible |
+| Dawn and Tint | `f91da75afe31d4d6f47a6da307e1fbabd1b1691a` | BSD-3-Clause | `canvas` unit external input: headers inside the Skia build tree; bytes not mirrored | MIT-compatible; renderer notice exists |
+| Expat | `6154446fccefbf3ca644894f598969113b0c7bcd` | MIT | not mirrored; no landed unit consumes it yet (planned renderer units) | MIT-compatible; renderer notice exists |
+| HarfBuzz | `9cb1fee51069b206effb4736e443b038d230789d` | Old MIT | `canvas` unit external input through the Skia build (text shaping); bytes not mirrored | MIT-compatible; notice exists |
+| Highway | `1.2.0` | Apache-2.0 | `foundation` unit external input (`mirror/core/simd/`); bytes not mirrored | MIT-compatible |
+| ICU | `d578f2e8b7bd5938e21cfb6bf15c079e0aa5b738` | Unicode-3.0 plus bundled notices | `canvas` unit external input through the Skia build (text shaping); bytes not mirrored | Permissive; notice exists |
+| Inter | `4.001; git-9221beed3` | SIL OFL 1.1 | `mirror/external/fonts/` (`canvas` unit) | Allowed font license |
+| JavaScriptCore | Apple system framework | LGPL-2.1+ components and Apple terms | Never mirrored; system framework only | **Not MIT-compatible**; system-only, never mirrored |
+| JetBrains Mono | `2.304` | SIL OFL 1.1 | `mirror/external/fonts/` (`canvas` unit) | Allowed font license |
+| Jost | `3.710` | SIL OFL 1.1 | `mirror/external/fonts/` (`canvas` unit) | Allowed font license |
+| Mbed TLS | `v3.6.2` | Apache-2.0 | `foundation` unit external input (`mirror/core/runtime/`); bytes not mirrored | MIT-compatible |
+| miniz | `3.0.2` | MIT | `mirror/external/miniz/` (`foundation` unit) | MIT-compatible |
+| pugixml | `1.14` | MIT | `mirror/external/pugixml/` (`foundation` unit) | MIT-compatible |
+| TweetNaCl | `20140427` | Public domain | `mirror/external/tweetnacl/` (`foundation` unit) | Public-domain code |
+| WOFF2 | `fb9c3379f260` | MIT | `canvas` unit external input (`mirror/core/canvas/`); bytes not mirrored | MIT-compatible |
+| NanoSVG | vendored snapshot | zlib | `mirror/external/nanosvg/` (`canvas` unit) | MIT-compatible |
+| Noto Sans Arabic | variable font | SIL OFL 1.1 | not mirrored; no landed unit consumes it yet | Allowed font license |
+| Noto Sans JP | variable font | SIL OFL 1.1 | not mirrored; no landed unit consumes it yet | Allowed font license |
+| PartitionAlloc | `03cc513177b4340bee3dbfd46f6dd5fdded43b79` | BSD-3-Clause | not mirrored; no landed unit consumes it yet (planned GPU and renderer units) | MIT-compatible; transitive notice |
+| QuickJS | `2024-02-14` | MIT | not mirrored; no landed unit consumes it yet (planned scripted-view unit) | MIT-compatible |
+| SheenBidi | `v3.0.0` | Apache-2.0 | `canvas` unit external input (`mirror/core/canvas/`); bytes not mirrored | MIT-compatible |
+| Skia and skcms | `8b8c3872fbc03f025855db96ce683f34ec98a815` | BSD-3-Clause | `canvas` unit external input (`mirror/core/canvas/`); bytes not mirrored | MIT-compatible; renderer notice exists |
+| V8 | `v8-m153-15.3.76.5-26cef0256b0e` | BSD-3-Clause | not mirrored; no landed unit consumes it yet (planned scripted-view unit, when selected) | MIT-compatible; sealed provider |
+| Yoga | `3.2.1` | MIT | not mirrored; no landed unit consumes it yet (planned view units) | MIT-compatible |
 
 Pulp's external contributor `matthewfudge` authored four mirrored view files:
 `core/view/src/design_frame_view.cpp`,

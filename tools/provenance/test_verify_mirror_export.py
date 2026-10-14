@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -12,6 +13,13 @@ import unittest
 from unittest import mock
 from pathlib import Path
 from typing import Callable
+
+try:
+    from .git_test_environment import disable_auto_maintenance
+except ImportError:  # Direct script execution.
+    from git_test_environment import disable_auto_maintenance
+
+disable_auto_maintenance()
 
 
 MODULE_PATH = Path(__file__).with_name("verify_mirror_export.py")
@@ -244,10 +252,36 @@ class VerifyMirrorExportTests(unittest.TestCase):
     def assertError(self, errors: list[str], fragment: str) -> None:
         self.assertTrue(any(fragment in e for e in errors), f"{fragment!r} not in {errors}")
 
-    def test_repository_has_no_receipts_and_passes(self) -> None:
+    def test_repository_receipts_all_verify(self) -> None:
+        receipts = verify_mirror_export.landed_receipts(REPO)
+        has_mirror = verify_mirror_export.git_ok(REPO, "cat-file", "-e", "HEAD:mirror")
+        self.assertEqual(bool(receipts), has_mirror, "mirror/ and the receipt index disagree")
         report = verify_mirror_export.verify(REPO)
         self.assertEqual(report["status"], "pass", report["errors"])
-        self.assertEqual(report["receipts"], [])
+        self.assertEqual(report["receipts"], receipts)
+
+    def test_repository_receipts_all_verify_with_pulp_identity(self) -> None:
+        receipts = verify_mirror_export.landed_receipts(REPO)
+        pulp_root_env = os.environ.get("MIRROR_PULP_ROOT")
+        if receipts and not pulp_root_env:
+            # The required provenance lanes check out the newest receipt's Pulp
+            # commit and set MIRROR_PULP_ROOT whenever a receipt is landed, so
+            # this proof is never skipped there.
+            self.skipTest("Pulp identity is proved where MIRROR_PULP_ROOT names a Pulp checkout")
+        pulp_root = Path(pulp_root_env).resolve() if pulp_root_env else None
+        report = verify_mirror_export.verify(REPO, pulp_root)
+        self.assertEqual(report["status"], "pass", report["errors"])
+        self.assertEqual(report["receipts"], receipts)
+        # The equivalent of `verify_mirror_export.py --require-pulp-identity`,
+        # applied to every landed receipt rather than to any one of them.
+        self.assertEqual(report["pulp_identity_checked"], bool(receipts))
+        for receipt_path in receipts:
+            receipt = json.loads((REPO / receipt_path).read_text(encoding="utf-8"))
+            self.assertEqual(
+                verify_mirror_export.verify_receipt_against_pulp(pulp_root, receipt),
+                [],
+                receipt_path,
+            )
 
     def test_valid_landing_passes_with_pulp_identity(self) -> None:
         fixture = Fixture(self.base)
