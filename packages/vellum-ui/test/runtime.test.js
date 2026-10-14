@@ -237,6 +237,29 @@ test('restore into a fresh runtime establishes effects at restore', async () => 
     assert.deepEqual(events, ['mount:start', 'count:start:1']);
 });
 
+test('back-to-back commits run each effect cleanup exactly once', async () => {
+    const events = [];
+    function Counter() {
+        const [count, setCount] = useState(0);
+        useEffect(() => {
+            events.push(`start:${count}`);
+            return () => events.push(`stop:${count}`);
+        }, [count]);
+        return jsx(Button, {
+            id: 'increment',
+            onPress: () => setCount((value) => value + 1),
+            children: `Count ${count}`,
+        });
+    }
+    const bridge = mount(Counter);
+    let tree = JSON.parse(bridge.renderJSON()).tree;
+    await settleEffects();
+    tree = press(bridge, tree);
+    tree = press(bridge, tree);
+    await settleEffects();
+    assert.deepEqual(events, ['start:0', 'stop:0', 'start:2']);
+});
+
 test('renders one deterministic serializable retained tree', () => {
     const bridge = mount(() => jsx(View, {
         id: 'screen',
