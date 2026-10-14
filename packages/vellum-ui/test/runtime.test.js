@@ -125,6 +125,141 @@ test('useEffect runs after commit, respects dependencies, and cleans up', async 
     assert.deepEqual(events, ['start:first', 'stop:first', 'start:second']);
 });
 
+function effectCounter(events) {
+    function Counter() {
+        const [count, setCount] = useState(0);
+        useEffect(() => {
+            events.push('mount:start');
+            return () => events.push('mount:stop');
+        }, []);
+        useEffect(() => {
+            events.push(`count:start:${count}`);
+            return () => events.push(`count:stop:${count}`);
+        }, [count]);
+        return jsx(Button, {
+            id: 'increment',
+            onPress: () => setCount((value) => value + 1),
+            children: `Count ${count}`,
+        });
+    }
+    return Counter;
+}
+
+const settleEffects = () => new Promise((resolve) => setImmediate(resolve));
+
+function press(bridge, tree) {
+    return JSON.parse(bridge.dispatchJSON(JSON.stringify({
+        protocol, action: tree.events.press, payload: null,
+    }))).tree;
+}
+
+test('in-place restore keeps unchanged effects live without rerunning them', async () => {
+    const events = [];
+    const bridge = mount(createApp({ id: 'effect-restore', render: effectCounter(events) }));
+    let tree = JSON.parse(bridge.renderJSON()).tree;
+    await settleEffects();
+    const snapshot = bridge.snapshotStateJSON();
+    events.length = 0;
+    tree = JSON.parse(bridge.restoreStateJSON(snapshot)).tree;
+    await settleEffects();
+    assert.deepEqual(events, []);
+    tree = press(bridge, tree);
+    await settleEffects();
+    assert.deepEqual(events, ['count:stop:0', 'count:start:1']);
+});
+
+test('restore reruns an effect whose dependencies changed at the restore commit', async () => {
+    const events = [];
+    const bridge = mount(createApp({ id: 'effect-restore', render: effectCounter(events) }));
+    let tree = JSON.parse(bridge.renderJSON()).tree;
+    tree = press(bridge, tree);
+    await settleEffects();
+    const snapshot = bridge.snapshotStateJSON();
+    tree = press(bridge, tree);
+    await settleEffects();
+    events.length = 0;
+    tree = JSON.parse(bridge.restoreStateJSON(snapshot)).tree;
+    assert.equal(tree.children[0].text, 'Count 1');
+    await settleEffects();
+    assert.deepEqual(events, ['count:stop:2', 'count:start:1']);
+    events.length = 0;
+    bridge.pumpJSON();
+    await settleEffects();
+    assert.deepEqual(events, []);
+});
+
+test('restore cleans up effects of components the restored state unmounts', async () => {
+    const events = [];
+    function Detail() {
+        useEffect(() => {
+            events.push('detail:start');
+            return () => events.push('detail:stop');
+        }, []);
+        return jsx(Text, { id: 'detail', children: 'Detail' });
+    }
+    function Application() {
+        const [open, setOpen] = useState(false);
+        return jsx(Stack, {
+            id: 'shell',
+            children: [
+                jsx(Button, {
+                    id: 'toggle',
+                    onPress: () => setOpen((value) => !value),
+                    children: open ? 'Close' : 'Open',
+                }),
+                open ? jsx(Detail, {}, 'detail') : null,
+            ],
+        });
+    }
+    const bridge = mount(createApp({ id: 'effect-unmount', render: Application }));
+    let tree = JSON.parse(bridge.renderJSON()).tree;
+    const closed = bridge.snapshotStateJSON();
+    tree = press(bridge, tree.children[0]);
+    await settleEffects();
+    assert.deepEqual(events, ['detail:start']);
+    tree = JSON.parse(bridge.restoreStateJSON(closed)).tree;
+    await settleEffects();
+    assert.deepEqual(events, ['detail:start', 'detail:stop']);
+});
+
+test('restore into a fresh runtime establishes effects at restore', async () => {
+    const events = [];
+    const first = mount(createApp({ id: 'effect-restore', render: effectCounter(events) }));
+    let tree = JSON.parse(first.renderJSON()).tree;
+    press(first, tree);
+    await settleEffects();
+    const snapshot = first.snapshotStateJSON();
+    events.length = 0;
+    const fresh = mount(createApp({ id: 'effect-restore', render: effectCounter(events) }));
+    tree = JSON.parse(fresh.restoreStateJSON(snapshot)).tree;
+    assert.equal(tree.children[0].text, 'Count 1');
+    await settleEffects();
+    assert.deepEqual(events, ['mount:start', 'count:start:1']);
+});
+
+test('back-to-back commits run each effect cleanup exactly once', async () => {
+    const events = [];
+    function Counter() {
+        const [count, setCount] = useState(0);
+        useEffect(() => {
+            events.push(`start:${count}`);
+            return () => events.push(`stop:${count}`);
+        }, [count]);
+        return jsx(Button, {
+            id: 'increment',
+            onPress: () => setCount((value) => value + 1),
+            children: `Count ${count}`,
+        });
+    }
+    const bridge = mount(Counter);
+    let tree = JSON.parse(bridge.renderJSON()).tree;
+    await settleEffects();
+    tree = press(bridge, tree);
+    tree = press(bridge, tree);
+    await settleEffects();
+    assert.deepEqual(events, ['start:0', 'stop:0', 'start:2']);
+});
+
 test('renders one deterministic serializable retained tree', () => {
     const bridge = mount(() => jsx(View, {
         id: 'screen',
