@@ -20,14 +20,23 @@ against the installed package and built with depfiles, and asserts:
 2. ``no-audio-headers``: no consumer translation unit includes a view-audio
    header, and the package ships none;
 3. ``no-audio-symbols``: neither the consumer image nor any packaged library
-   defines or references a view-audio symbol; while the package carries no
-   view unit, no ``pulp::view`` symbol may appear at all;
+   defines or references a view-audio symbol. "View-audio symbol" is Pulp's
+   ``view_audio_symbol_floor`` definition: a symbol the ``pulp-view-audio``
+   archive defines (``--view-audio-archive``), restricted to the namespaces
+   that target owns, since the archive also carries inline definitions it
+   shares with every other user of canvas, runtime and the C++ library.
+   Without the archive, and only while the package carries no view unit, the
+   stand-in is stricter: no ``pulp::view`` or Pulp product-namespace symbol
+   may appear at all. A package with a view unit needs the archive;
 4. ``name-only-forward-declarations``: no symbol of the forward-declared
    classes or the deprecated bind virtuals appears anywhere.
 
-It also records whether each debt's header ships in the package. A run that
-read nothing (no depfiles, no compile commands, an image without symbols) is
-refused, so a broken instrument cannot read as a pass.
+It records whether each debt's header ships in the package. A shipped debt
+header must have been compiled by a consumer translation unit (the sterile
+lane generates one from ``DEBTS`` with ``--write-debt-probe``); otherwise the
+checks above would pass without ever reading the shim, so the run is refused.
+A run that read nothing (no depfiles, no compile commands, an image without
+symbols) is refused too, so a broken instrument cannot read as a pass.
 
 Exit codes: 0 inert, 1 a debt is not inert, 2 the evidence is unusable.
 """
@@ -71,6 +80,14 @@ AUDIO_SYMBOL = re.compile(
 )
 FORWARD_DECLARED = re.compile(r"\bpulp::view::(?:Meter|WaveformView|\w+::bind_meter|\w+::bind_waveform_display)\b")
 VIEW_SYMBOL = re.compile(r"\bpulp::view::")
+# Namespaces the pulp-view-audio target owns: its own widgets and the product
+# subsystems it links. Every other floor symbol is an inline definition the
+# archive shares with any user of canvas, runtime or the C++ library.
+VIEW_AUDIO_OWNED = re.compile(
+    r"\bpulp::(?:view|audio|signal|midi|music|format|host|gpu_audio|content)::")
+# Pulp's tools/scripts/view_audio_symbol_floor.py reads `nm -A -P -g` output
+# with this line shape and treats every type but U, w and v as defined.
+FLOOR_LINE = re.compile(r"^(?P<archive>.*?)\[(?P<object>[^\]]+)\]: (?P<symbol>\S+) (?P<type>\S)")
 
 
 class EvidenceError(RuntimeError):
@@ -159,11 +176,47 @@ def header_findings(depfiles: dict[str, list[str]], package_headers: Iterable[st
     return findings
 
 
-def symbol_findings(symbols: dict[str, list[str]], *, view_unit_packaged: bool) -> tuple[list[str], list[str]]:
+def floor_defined(listing: str) -> set[str]:
+    """The symbols an archive defines, exactly as view_audio_symbol_floor reads them."""
+    defined = set()
+    for line in listing.splitlines():
+        match = FLOOR_LINE.match(line)
+        if match and match["type"] not in ("U", "w", "v"):
+            defined.add(match["symbol"])
+    return defined
+
+
+def view_audio_floor(archive: Path) -> set[str]:
+    """Demangled view-audio-owned symbols the pulp-view-audio archive defines."""
+    nm = shutil.which("nm")
+    if not nm:
+        raise EvidenceError("nm is required")
+    listed = subprocess.run([nm, "-A", "-P", "-g", str(archive)], capture_output=True,
+                            text=True, encoding="utf-8", errors="replace", check=False)
+    if listed.returncode:
+        raise EvidenceError(f"nm failed on {archive}: {listed.stderr.strip()}")
+    defined = sorted(floor_defined(listed.stdout))
+    names = demangle(defined)
+    owned = {name for name in names if VIEW_AUDIO_OWNED.search(name)}
+    if not owned:
+        # An empty floor would make the check pass vacuously.
+        raise EvidenceError(f"{archive} defines no view-audio-owned symbol")
+    return owned
+
+
+def symbol_findings(symbols: dict[str, list[str]], *, view_unit_packaged: bool,
+                    floor: set[str] | None = None) -> tuple[list[str], list[str]]:
+    if floor is None and view_unit_packaged:
+        raise EvidenceError(
+            "a package with a view unit needs the pulp-view-audio archive (--view-audio-archive)")
     audio, forward = [], []
     for image, names in sorted(symbols.items()):
         for name in names:
-            if AUDIO_SYMBOL.search(name) or (not view_unit_packaged and VIEW_SYMBOL.search(name)):
+            if floor is not None:
+                hit = name in floor or AUDIO_SYMBOL.search(name)
+            else:
+                hit = VIEW_SYMBOL.search(name) or VIEW_AUDIO_OWNED.search(name)
+            if hit:
                 audio.append(f"{image}: {name}")
             if FORWARD_DECLARED.search(name):
                 forward.append(f"{image}: {name}")
@@ -191,6 +244,16 @@ def demangler() -> list[str]:
     raise EvidenceError("no c++filt invocation demangles a known symbol")
 
 
+def demangle(names: list[str]) -> list[str]:
+    if not names:
+        return []
+    demangled = subprocess.run(demangler(), input="\n".join(names), capture_output=True, text=True, check=False)
+    lines = demangled.stdout.splitlines()
+    if demangled.returncode or len(lines) != len(names):
+        raise EvidenceError("c++filt failed")
+    return lines
+
+
 def image_symbols(path: Path) -> list[str]:
     nm = shutil.which("nm")
     if not nm:
@@ -200,13 +263,52 @@ def image_symbols(path: Path) -> list[str]:
     if listed.returncode:
         raise EvidenceError(f"nm failed on {path}: {listed.stderr.strip()}")
     names = [line.strip() for line in listed.stdout.splitlines() if line.strip()]
-    demangled = subprocess.run(demangler(), input="\n".join(names), capture_output=True, text=True, check=False)
-    if demangled.returncode:
-        raise EvidenceError("c++filt failed")
-    return [line for line in demangled.stdout.splitlines() if line]
+    return [line for line in demangle(names) if line]
 
 
-def verify(prefix: Path, consumer_build: Path, image: Path) -> dict[str, Any]:
+def shipped_debt_headers(prefix: Path) -> dict[str, list[Path]]:
+    """Each debt's header as the package ships it, under an include root."""
+    shipped: dict[str, list[Path]] = {}
+    for debt, header in DEBTS.items():
+        shipped[debt] = sorted(
+            path for path in prefix.rglob(Path(header).name)
+            if path.is_file() and path.as_posix().endswith(f"/include/{header}")
+        )
+    return shipped
+
+
+def write_debt_probe(prefix: Path, output: Path) -> list[str]:
+    """Write a translation unit that includes every shipped debt header.
+
+    Generated from DEBTS so the probe cannot drift from the debts the proof
+    names. With no debt header in the package it includes nothing.
+    """
+    included = sorted({header for debt, header in DEBTS.items() if shipped_debt_headers(prefix)[debt]})
+    lines = [
+        "// Generated by tools/mirror/verify_mirror_inertness.py --write-debt-probe.",
+        "// Compiles every Phase-6 debt header the installed package ships.",
+    ]
+    lines += [f"#include <{header}>" for header in included]
+    if not included:
+        lines.append("// The package ships no debt header.")
+    lines.append("")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text("\n".join(lines), encoding="utf-8")
+    return included
+
+
+def resolved(path: str, base: Path) -> Path:
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        candidate = base / candidate
+    try:
+        return candidate.resolve()
+    except OSError:
+        return candidate
+
+
+def verify(prefix: Path, consumer_build: Path, image: Path,
+           view_audio_archive: Path | None = None) -> dict[str, Any]:
     mirror = prefix / "mirror"
     if not (mirror / "lib/cmake/VellumMirror").is_dir():
         raise EvidenceError(f"{prefix} has no packaged mirror units")
@@ -250,13 +352,32 @@ def verify(prefix: Path, consumer_build: Path, image: Path) -> dict[str, Any]:
     if not any("pulp::" in name for name in symbols[image.name]):
         raise EvidenceError("the consumer image references no packaged symbol")
 
+    # A shipped debt header proves nothing unless a consumer compiled it.
+    compiled: dict[Path, list[str]] = {}
+    for depfile, includes in depfiles.items():
+        for include in includes:
+            compiled.setdefault(resolved(include, consumer_build), []).append(depfile)
+    debt_records = {}
+    for debt, headers_shipped in shipped_debt_headers(prefix).items():
+        compiled_by: list[str] = []
+        for header in headers_shipped:
+            users = compiled.get(header.resolve(), [])
+            if not users:
+                raise EvidenceError(
+                    f"package ships {header.relative_to(prefix).as_posix()} ({debt}), "
+                    "but no consumer translation unit compiled it")
+            compiled_by.extend(users)
+        debt_records[debt] = {
+            "header": DEBTS[debt],
+            "header_in_package": bool(headers_shipped),
+            "compiled_by": sorted(set(compiled_by)),
+        }
+
+    floor = view_audio_floor(view_audio_archive) if view_audio_archive else None
     definition = compile_command_findings(commands) + package_definition_findings(package_files)
     headers = header_findings(depfiles, package_headers)
-    audio_symbols, forward_symbols = symbol_findings(symbols, view_unit_packaged=view_unit_packaged)
-    debt_headers = {
-        debt: any(header.endswith(path) for header in package_headers)
-        for debt, path in DEBTS.items()
-    }
+    audio_symbols, forward_symbols = symbol_findings(
+        symbols, view_unit_packaged=view_unit_packaged, floor=floor)
     checks = {
         "no-widgets-gate-definition": not definition,
         "no-audio-headers": not headers,
@@ -270,10 +391,11 @@ def verify(prefix: Path, consumer_build: Path, image: Path) -> dict[str, Any]:
         "pulp_sha": receipt.get("pulp_sha"),
         "mirror_sha": receipt.get("mirror_sha"),
         "packaged_units": units,
-        "debts": {
-            debt: {"header": DEBTS[debt], "header_in_package": present}
-            for debt, present in debt_headers.items()
-        },
+        "debts": debt_records,
+        "symbol_rule": (
+            "view_audio_symbol_floor" if floor is not None
+            else "no pulp::view or product-namespace symbol (no view unit packaged)"
+        ),
         "checks": checks,
         "evidence": {
             "compile_commands": len(commands),
@@ -281,6 +403,7 @@ def verify(prefix: Path, consumer_build: Path, image: Path) -> dict[str, Any]:
             "package_headers": len(package_headers),
             "view_headers_in_package": sum(1 for h in package_headers if VIEW_HEADER.search(h)),
             "images": {name: len(names) for name, names in symbols.items()},
+            "view_audio_floor_symbols": len(floor) if floor is not None else None,
         },
         "findings": {
             "no-widgets-gate-definition": definition,
@@ -294,12 +417,23 @@ def verify(prefix: Path, consumer_build: Path, image: Path) -> dict[str, Any]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--prefix", type=Path, required=True, help="installed SDK CMake prefix")
-    parser.add_argument("--consumer-build", type=Path, required=True)
-    parser.add_argument("--image", type=Path, required=True, help="the linked consumer executable")
+    parser.add_argument("--write-debt-probe", type=Path, metavar="CPP",
+                        help="write the translation unit that compiles every shipped debt header, then exit")
+    parser.add_argument("--consumer-build", type=Path)
+    parser.add_argument("--image", type=Path, help="the linked consumer executable")
+    parser.add_argument("--view-audio-archive", type=Path,
+                        help="Pulp's pulp-view-audio archive; required once a view unit is packaged")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
+    if args.write_debt_probe:
+        included = write_debt_probe(args.prefix.resolve(), args.write_debt_probe)
+        print(json.dumps({"debt_probe": str(args.write_debt_probe), "includes": included}))
+        return 0
+    if not args.consumer_build or not args.image:
+        parser.error("--consumer-build and --image are required to verify")
     try:
-        proof = verify(args.prefix.resolve(), args.consumer_build.resolve(), args.image.resolve())
+        proof = verify(args.prefix.resolve(), args.consumer_build.resolve(), args.image.resolve(),
+                       args.view_audio_archive.resolve() if args.view_audio_archive else None)
     except (OSError, EvidenceError) as error:
         print(f"vellum-mirror-inertness: unusable evidence: {error}", file=sys.stderr)
         return 2

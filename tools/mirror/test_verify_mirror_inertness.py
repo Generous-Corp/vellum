@@ -54,21 +54,69 @@ class FindingTest(unittest.TestCase):
 
     def test_view_audio_symbols_are_found(self) -> None:
         planted = {"consumer": ["pulp::view::Meter::~Meter()"]}
-        audio, forward = vi.symbol_findings(planted, view_unit_packaged=True)
+        audio, forward = vi.symbol_findings(planted, view_unit_packaged=True,
+                                            floor={"pulp::view::Meter::~Meter()"})
         self.assertTrue(audio)
         self.assertTrue(forward)
         registration = {"consumer": ["pulp::view::register_audio_widgets()"]}
-        self.assertTrue(vi.symbol_findings(registration, view_unit_packaged=True)[0])
+        self.assertTrue(vi.symbol_findings(registration, view_unit_packaged=False)[0])
+        product = {"consumer": ["pulp::signal::ColorMapper::interpolate(float)"]}
+        self.assertTrue(vi.symbol_findings(product, view_unit_packaged=False)[0])
 
     def test_any_view_symbol_fails_while_no_view_unit_is_packaged(self) -> None:
         planted = {"consumer": ["pulp::view::Label::Label()"]}
         self.assertTrue(vi.symbol_findings(planted, view_unit_packaged=False)[0])
-        self.assertFalse(vi.symbol_findings(planted, view_unit_packaged=True)[0])
+        self.assertFalse(vi.symbol_findings(planted, view_unit_packaged=True, floor={"x"})[0])
         self.assertFalse(vi.symbol_findings(CLEAN_SYMBOLS, view_unit_packaged=False)[0])
+
+    def test_a_packaged_view_unit_needs_the_floor(self) -> None:
+        with self.assertRaises(vi.EvidenceError):
+            vi.symbol_findings(CLEAN_SYMBOLS, view_unit_packaged=True)
 
     def test_bind_virtuals_count_as_forward_declaration_references(self) -> None:
         planted = {"consumer": ["pulp::view::DesignHost::bind_meter(pulp::view::Meter&)"]}
-        self.assertTrue(vi.symbol_findings(planted, view_unit_packaged=True)[1])
+        self.assertTrue(vi.symbol_findings(planted, view_unit_packaged=False)[1])
+
+    def test_floor_reads_archives_like_view_audio_symbol_floor(self) -> None:
+        listing = (
+            "lib.a[a.o]: __ZN4pulp4view5MeterD1Ev T 0 0\n"
+            "lib.a[a.o]: __ZN4pulp6canvas4PathD1Ev U\n"
+            "lib.a[a.o]: __ZN4pulp4view4WeakEv w\n"
+            "lib.a[b.o]: __ZTVN4pulp4view5MeterE S 10 8\n"
+            "not a symbol line\n"
+        )
+        self.assertEqual(vi.floor_defined(listing),
+                         {"__ZN4pulp4view5MeterD1Ev", "__ZTVN4pulp4view5MeterE"})
+
+
+class FloorAgreementTest(unittest.TestCase):
+    """The stand-in rule covers every symbol Pulp's floor attributes to view-audio.
+
+    The fixture is the floor's defined set for a real pulp-view-audio archive.
+    """
+
+    def setUp(self) -> None:
+        fixture = HERE / "fixtures/view-audio-floor.txt"
+        self.floor = [line for line in fixture.read_text(encoding="utf-8").splitlines()
+                      if line and not line.startswith("#")]
+
+    def test_fixture_is_a_real_floor(self) -> None:
+        owned = [name for name in self.floor if vi.VIEW_AUDIO_OWNED.search(name)]
+        self.assertGreater(len(owned), 300)
+        self.assertTrue(any("register_audio_widgets" in name for name in owned))
+
+    def test_stand_in_flags_every_owned_floor_symbol(self) -> None:
+        owned = [name for name in self.floor if vi.VIEW_AUDIO_OWNED.search(name)]
+        flagged, _ = vi.symbol_findings({"image": owned}, view_unit_packaged=False)
+        self.assertEqual(len(flagged), len(owned))
+
+    def test_floor_rule_ignores_shared_inline_definitions(self) -> None:
+        shared = [name for name in self.floor if not vi.VIEW_AUDIO_OWNED.search(name)]
+        self.assertTrue(any("pulp::canvas::" in name for name in shared))
+        floor = {name for name in self.floor if vi.VIEW_AUDIO_OWNED.search(name)}
+        flagged, _ = vi.symbol_findings({"image": shared}, view_unit_packaged=True, floor=floor)
+        self.assertEqual(flagged, [f"image: {name}" for name in shared if vi.AUDIO_SYMBOL.search(name)])
+
 
     def test_depfile_and_ninja_listing_parse(self) -> None:
         self.assertEqual(vi.depfile_includes("a.o: a.cpp \\\n /x/b.hpp /x/c\\ d.hpp\n"),
@@ -131,9 +179,11 @@ class VerifyTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def run_verify(self) -> dict:
-        with mock.patch.object(vi, "image_symbols", side_effect=lambda path: self.symbols[path]):
-            return vi.verify(self.prefix, self.build, self.image)
+    def run_verify(self, floor: set[str] | None = None) -> dict:
+        with mock.patch.object(vi, "image_symbols", side_effect=lambda path: self.symbols[path]), \
+                mock.patch.object(vi, "view_audio_floor", side_effect=lambda archive: floor):
+            return vi.verify(self.prefix, self.build, self.image,
+                             Path("libpulp-view-audio.a") if floor is not None else None)
 
     def test_clean_package_is_inert_and_records_debt_absence(self) -> None:
         proof = self.run_verify()
@@ -155,6 +205,48 @@ class VerifyTest(unittest.TestCase):
         proof = self.run_verify()
         self.assertFalse(proof["checks"]["no-audio-symbols"])
         self.assertFalse(proof["checks"]["name-only-forward-declarations"])
+
+    def plant_debt_headers(self) -> list[Path]:
+        include = self.prefix / "mirror/include/pulp/view"
+        include.mkdir(parents=True)
+        widgets = include / "widgets.hpp"
+        widgets.write_text(
+            f"#pragma once\n#if defined({GUARD})\n#include <pulp/view/audio_widgets.hpp>\n#endif\n")
+        design = include / "design_import.hpp"
+        design.write_text("#pragma once\nnamespace pulp::view {\nclass Meter;\nclass WaveformView;\n}\n")
+        receipt = self.prefix / "mirror/share/provenance/receipt.json"
+        data = json.loads(receipt.read_text())
+        data["units"].append({"name": "view-core"})
+        receipt.write_text(json.dumps(data))
+        return [widgets, design]
+
+    def test_shipped_debt_header_no_consumer_compiled_is_refused(self) -> None:
+        self.plant_debt_headers()
+        with self.assertRaises(vi.EvidenceError) as caught:
+            self.run_verify()
+        self.assertIn("no consumer translation unit compiled it", str(caught.exception))
+
+    def test_shipped_debt_headers_compiled_by_the_consumer_are_judged(self) -> None:
+        headers = self.plant_debt_headers()
+        depfile = self.build / "probe.cpp.o.d"
+        depfile.write_text("probe.cpp.o: probe.cpp " + " ".join(str(h) for h in headers) + "\n")
+        commands = json.loads((self.build / "compile_commands.json").read_text())
+        commands.append({"file": "probe.cpp", "command": "c++ -c probe.cpp"})
+        (self.build / "compile_commands.json").write_text(json.dumps(commands))
+        proof = self.run_verify(floor={"pulp::view::Meter::~Meter()"})
+        self.assertTrue(proof["inert"], proof["findings"])
+        self.assertEqual(proof["symbol_rule"], "view_audio_symbol_floor")
+        self.assertEqual(proof["debts"]["vellum-header-audio-widgets-include"]["compiled_by"], ["probe.cpp.o.d"])
+
+    def test_debt_probe_includes_every_shipped_debt_header(self) -> None:
+        output = Path(self.temporary.name) / "probe.cpp"
+        self.assertEqual(vi.write_debt_probe(self.prefix, output), [])
+        self.assertNotIn("#include", output.read_text())
+        self.plant_debt_headers()
+        included = vi.write_debt_probe(self.prefix, output)
+        self.assertEqual(included, sorted(vi.DEBTS.values()))
+        for header in vi.DEBTS.values():
+            self.assertIn(f"#include <{header}>", output.read_text())
 
     def test_evidence_that_read_nothing_is_refused(self) -> None:
         (self.build / "main.cpp.o.d").unlink()

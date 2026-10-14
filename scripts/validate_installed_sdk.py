@@ -284,17 +284,26 @@ def validate_installed_mirror(sdk_prefix: Path, root: Path) -> dict[str, object]
     ]
     if shutil.which("ninja"):
         cmake_common.extend(["-G", "Ninja"])
+    inertness_tool = SUPPORT_ROOT / "tools/mirror/verify_mirror_inertness.py"
     source = root / "mirror-consumer-source"
     shutil.copytree(SUPPORT_ROOT / "tools/mirror/consumer", source)
+    # One generated translation unit compiles every debt header the package
+    # ships, so the inertness proof reads the shims instead of passing beside them.
+    debt_probe = root / "mirror-debt-probe.cpp"
+    debt_probe_includes = json.loads(run([
+        sys.executable, str(inertness_tool), "--prefix", str(sdk_prefix),
+        "--write-debt-probe", str(debt_probe),
+    ], cwd=root).stdout)["includes"]
     build = root / "mirror-consumer-build"
-    run(["cmake", "-S", str(source), "-B", str(build), *cmake_common], cwd=root)
+    run(["cmake", "-S", str(source), "-B", str(build), *cmake_common,
+         f"-DVELLUM_MIRROR_DEBT_PROBE={debt_probe}"], cwd=root)
     run(["cmake", "--build", str(build)], cwd=root)
     consumer = build / "vellum-mirror-consumer"
     consumer_output = run([str(consumer), origin], cwd=root).stdout.strip()
 
     inertness_path = root / "mirror-inertness.json"
     completed = subprocess.run([
-        sys.executable, str(SUPPORT_ROOT / "tools/mirror/verify_mirror_inertness.py"),
+        sys.executable, str(inertness_tool),
         "--prefix", str(sdk_prefix), "--consumer-build", str(build),
         "--image", str(consumer), "--output", str(inertness_path),
     ], text=True, capture_output=True, check=False)
@@ -319,6 +328,7 @@ def validate_installed_mirror(sdk_prefix: Path, root: Path) -> dict[str, object]
         "mirror_sha": receipt.get("mirror_sha"),
         "consumer_ran": consumer_output.startswith("mirror consumer: ok"),
         "consumer_output": consumer_output,
+        "debt_probe_includes": debt_probe_includes,
         "inertness": inertness,
         "two_providers_refused": two_providers_refused,
     }

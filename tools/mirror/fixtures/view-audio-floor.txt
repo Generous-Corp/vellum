@@ -1,0 +1,663 @@
+# Demangled symbols that Pulp's view_audio_symbol_floor reads as defined by
+# libpulp-view-audio.a (nm -A -P -g; every type but U, w, v), built at Pulp
+# 9cbd6899fa1e7698c623c37cc386168810efe031, a descendant of export origin 34d16417.
+___clang_call_terminate
+auto char const* std::__1::__format::__handle_replacement_field[abi:nqe220106]<char const*, std::__1::basic_format_parse_context<char>, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>>(char const*, char const*, std::__1::basic_format_parse_context<char>&, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>&)::'lambda'(char const*)::operator()<__int128>(char const*) const
+auto char const* std::__1::__format::__handle_replacement_field[abi:nqe220106]<char const*, std::__1::basic_format_parse_context<char>, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>>(char const*, char const*, std::__1::basic_format_parse_context<char>&, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>&)::'lambda'(char const*)::operator()<bool>(char const*) const
+auto char const* std::__1::__format::__handle_replacement_field[abi:nqe220106]<char const*, std::__1::basic_format_parse_context<char>, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>>(char const*, char const*, std::__1::basic_format_parse_context<char>&, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>&)::'lambda'(char const*)::operator()<char>(char const*) const
+auto char const* std::__1::__format::__handle_replacement_field[abi:nqe220106]<char const*, std::__1::basic_format_parse_context<char>, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>>(char const*, char const*, std::__1::basic_format_parse_context<char>&, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>&)::'lambda'(char const*)::operator()<int>(char const*) const
+auto char const* std::__1::__format::__handle_replacement_field[abi:nqe220106]<char const*, std::__1::basic_format_parse_context<char>, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>>(char const*, char const*, std::__1::basic_format_parse_context<char>&, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>&)::'lambda'(char const*)::operator()<long long>(char const*) const
+auto char const* std::__1::__format::__handle_replacement_field[abi:nqe220106]<char const*, std::__1::basic_format_parse_context<char>, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>>(char const*, char const*, std::__1::basic_format_parse_context<char>&, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>&)::'lambda'(char const*)::operator()<unsigned __int128>(char const*) const
+auto char const* std::__1::__format::__handle_replacement_field[abi:nqe220106]<char const*, std::__1::basic_format_parse_context<char>, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>>(char const*, char const*, std::__1::basic_format_parse_context<char>&, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>&)::'lambda'(char const*)::operator()<unsigned int>(char const*) const
+auto char const* std::__1::__format::__handle_replacement_field[abi:nqe220106]<char const*, std::__1::basic_format_parse_context<char>, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>>(char const*, char const*, std::__1::basic_format_parse_context<char>&, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>&)::'lambda'(char const*)::operator()<unsigned long long>(char const*) const
+bool std::__1::__format_spec::__parser<char>::__parse_fill_align[abi:nqe220106]<char const*>(char const*&, char const*)
+bool std::__1::__format_spec::__parser<char>::__parse_precision[abi:nqe220106]<char const*, std::__1::basic_format_parse_context<char>>(char const*&, char const*, std::__1::basic_format_parse_context<char>&)
+bool std::__1::__format_spec::__parser<char>::__parse_width[abi:nqe220106]<char const*, std::__1::basic_format_parse_context<char>>(char const*&, char const*, std::__1::basic_format_parse_context<char>&)
+bool std::__1::operator==[abi:nqe220106]<char, std::__1::char_traits<char>, std::__1::allocator<char>>(std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const&, char const*)
+char const* std::__1::__format::__handle_replacement_field[abi:nqe220106]<char const*, std::__1::basic_format_parse_context<char>, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>>(char const*, char const*, std::__1::basic_format_parse_context<char>&, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>&)
+decltype(auto) std::__1::__visit_format_arg[abi:nqe220106]<char const* std::__1::__format::__handle_replacement_field[abi:nqe220106]<char const*, std::__1::basic_format_parse_context<char>, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>>(char const*, char const*, std::__1::basic_format_parse_context<char>&, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>&)::'lambda'(char const*), std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>>(char const*&&, std::__1::basic_format_arg<std::__1::basic_format_parse_context<char>>)
+decltype(auto) std::__1::__visit_format_arg[abi:nqe220106]<unsigned int std::__1::__format_spec::__substitute_arg_id[abi:nqe220106]<std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>>(std::__1::basic_format_arg<std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>>)::'lambda'(std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>), std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>>(std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>&&, std::__1::basic_format_arg<std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>>)
+decltype(fp0) std::__1::__formatter::__write_string_no_precision[abi:nqe220106]<char, std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>>(std::__1::basic_string_view<char, std::__1::char_traits<char>>, std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, std::__1::__format_spec::__parsed_specifications<char>)
+decltype(fp0) std::__1::__formatter::__write[abi:nqe220106]<char, char, std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>>(std::__1::basic_string_view<char, std::__1::char_traits<char>>, std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, std::__1::__format_spec::__parsed_specifications<char>, long)
+decltype(fp1) std::__1::__formatter::__write_transformed[abi:nqe220106]<char*, char, char, char (*)(char), std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>>(char*, char*, std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, std::__1::__format_spec::__parsed_specifications<char>, char (*)(char))
+decltype(fp1) std::__1::__formatter::__write_using_trailing_zeros[abi:nqe220106]<char, char, std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>>(char const*, char const*, std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, std::__1::__format_spec::__parsed_specifications<char>, unsigned long, char const*, unsigned long)
+double pulp::signal::cascade_magnitude<float, 18446744073709551615ul>(std::__1::span<pulp::signal::BiquadCoefficientsT<float> const, 18446744073709551615ul>, double)
+float& std::__1::vector<float, std::__1::allocator<float>>::emplace_back<float const&>(float const&)::'lambda0'()::operator()() const
+guard variable for pulp::runtime::detail::log_impl(pulp::runtime::LogLevel, std::__1::basic_string_view<char, std::__1::char_traits<char>>)::pulp_log
+int std::__1::__to_chars_integral_width[abi:nqe220106]<unsigned __int128>(unsigned __int128, unsigned int)
+int std::__1::__to_chars_integral_width[abi:nqe220106]<unsigned int>(unsigned int, unsigned int)
+int std::__1::__to_chars_integral_width[abi:nqe220106]<unsigned long long>(unsigned long long, unsigned int)
+non-virtual thunk to pulp::view::Meter::~Meter()
+non-virtual thunk to pulp::view::Meter::clear_level_fill()
+non-virtual thunk to pulp::view::Meter::get_current_value() const
+non-virtual thunk to pulp::view::Meter::get_maximum_value() const
+non-virtual thunk to pulp::view::Meter::get_minimum_value() const
+non-virtual thunk to pulp::view::Meter::inspector_facts(std::__1::vector<pulp::view::InspectorFacts::Fact, std::__1::allocator<pulp::view::InspectorFacts::Fact>>&) const
+non-virtual thunk to pulp::view::Meter::inspector_type_name() const
+non-virtual thunk to pulp::view::Meter::set_current_value(double)
+non-virtual thunk to pulp::view::Meter::set_level_bar_ratio(float)
+non-virtual thunk to pulp::view::Meter::set_level_fill(std::__1::optional<pulp::canvas::Color>, std::__1::vector<pulp::canvas::Color, std::__1::allocator<pulp::canvas::Color>>)
+non-virtual thunk to pulp::view::Meter::set_level_orientation(pulp::view::LevelDisplay::Orientation)
+non-virtual thunk to pulp::view::Meter::set_level_render_style(pulp::view::WidgetRenderStyle)
+non-virtual thunk to pulp::view::Meter::set_levels(float, float)
+non-virtual thunk to pulp::view::SpectrumView::~SpectrumView()
+non-virtual thunk to pulp::view::SpectrumView::inspector_facts(std::__1::vector<pulp::view::InspectorFacts::Fact, std::__1::allocator<pulp::view::InspectorFacts::Fact>>&) const
+non-virtual thunk to pulp::view::SpectrumView::inspector_type_name() const
+non-virtual thunk to pulp::view::SpectrumView::set_bins(float const*, unsigned long)
+non-virtual thunk to pulp::view::WaveformView::~WaveformView()
+non-virtual thunk to pulp::view::WaveformView::inspector_facts(std::__1::vector<pulp::view::InspectorFacts::Fact, std::__1::allocator<pulp::view::InspectorFacts::Fact>>&) const
+non-virtual thunk to pulp::view::WaveformView::inspector_type_name() const
+non-virtual thunk to pulp::view::WaveformView::set_series_preview(std::__1::basic_string_view<char, std::__1::char_traits<char>>)
+non-virtual thunk to pulp::view::WaveformView::set_series(float const*, unsigned long)
+pulp::audio::AudioScopeResult::~AudioScopeResult()
+pulp::audio::AudioScopeResult::operator=(pulp::audio::AudioScopeResult const&)
+pulp::audio::AudioScopeResult::operator=(pulp::audio::AudioScopeResult&&)
+pulp::audio::Buffer<float>::~Buffer()
+pulp::audio::Buffer<float>::resize(unsigned long, unsigned long)
+pulp::audio::SampleAssetDropItem::operator=(pulp::audio::SampleAssetDropItem const&)
+pulp::audio::SampleAssetDropItem::SampleAssetDropItem(pulp::audio::SampleAssetDropItem const&)
+pulp::audio::SampleAssetPolicy::operator=(pulp::audio::SampleAssetPolicy&&)
+pulp::canvas::AttributedString::~AttributedString()
+pulp::canvas::Point2D& std::__1::vector<pulp::canvas::Point2D, std::__1::allocator<pulp::canvas::Point2D>>::emplace_back<pulp::canvas::Point2D>(pulp::canvas::Point2D&&)::'lambda0'()::operator()() const
+pulp::canvas::PreparedText::~PreparedText()
+pulp::canvas::ShapedLayout::~ShapedLayout()
+pulp::design::build_sampler_starter(pulp::view::Theme const&)
+pulp::runtime::detail::log_impl(pulp::runtime::LogLevel, std::__1::basic_string_view<char, std::__1::char_traits<char>>)
+pulp::runtime::detail::log_impl(pulp::runtime::LogLevel, std::__1::basic_string_view<char, std::__1::char_traits<char>>)::pulp_log
+pulp::signal::BiquadCoefficientsT<float>& std::__1::vector<pulp::signal::BiquadCoefficientsT<float>, std::__1::allocator<pulp::signal::BiquadCoefficientsT<float>>>::emplace_back<pulp::signal::BiquadCoefficientsT<float>>(pulp::signal::BiquadCoefficientsT<float>&&)::'lambda0'()::operator()() const
+pulp::signal::BiquadT<float>::set_coefficients(pulp::signal::BiquadT<float>::Type, float, float, float, float)
+pulp::signal::ColorMapper::interpolate(pulp::signal::ColorMapper::CP const*, int, float)
+pulp::signal::ColorMapper::map_heat(float)::pts
+pulp::signal::ColorMapper::map_inferno(float)::pts
+pulp::signal::ColorMapper::map_viridis(float)::pts
+pulp::signal::ColorMapper::map(float) const
+pulp::signal::MultiChannelBallistics::update(pulp::signal::MultiChannelMeterData const&, float)
+pulp::signal::MultiChannelMeterT<float>::emit_snapshot(int)
+pulp::signal::MultiChannelMeterT<float>::finish_loudness_hop(int)
+pulp::signal::MultiChannelMeterT<float>::gating_blocks_from(unsigned long) const
+pulp::signal::MultiChannelMeterT<float>::process(float const* const*, int, int)
+pulp::signal::MultiChannelMeterT<float>::reset_loudness_state()
+pulp::signal::MultiChannelMeterT<float>::update_integrated_loudness()
+pulp::signal::MultiChannelMeterT<float>::update_loudness_range()
+pulp::signal::MultiChannelMeterT<float>::update_short_term_and_range()
+pulp::signal::rt::detail::g_fft_count
+pulp::state::ListenerToken* std::__1::vector<pulp::state::ListenerToken, std::__1::allocator<pulp::state::ListenerToken>>::__emplace_back_slow_path<pulp::state::ListenerToken>(pulp::state::ListenerToken&&)
+pulp::view::AccessibilityValueInterface::get_step_size() const
+pulp::view::AudioInspectorPanel::~AudioInspectorPanel()
+pulp::view::AudioInspectorPanel::AudioInspectorPanel()
+pulp::view::AudioInspectorPanel::build_ui()
+pulp::view::AudioInspectorPanel::clear_scope_result()
+pulp::view::AudioInspectorPanel::peak_meter_display_peak() const
+pulp::view::AudioInspectorPanel::peak_meter_held_peak() const
+pulp::view::AudioInspectorPanel::refresh_labels()
+pulp::view::AudioInspectorPanel::rms_meter_held_peak() const
+pulp::view::AudioInspectorPanel::set_mode(pulp::view::AudioInspectorMode)
+pulp::view::AudioInspectorPanel::set_scope_result(pulp::audio::AudioScopeResult const&)
+pulp::view::AudioInspectorPanel::set_waveform_grid_visible(bool)
+pulp::view::AudioInspectorPanel::set_waveform_horizontal_scale(float)
+pulp::view::AudioInspectorPanel::set_waveform_trigger_mode(pulp::view::AudioWaveformView::TriggerMode)
+pulp::view::AudioInspectorPanel::update(pulp::view::AudioInspectorPanel::Status, pulp::audio::AudioProbeSnapshot const&, pulp::audio::AudioStats const&, float const*, int)
+pulp::view::AudioInspectorWindow::~AudioInspectorWindow()
+pulp::view::AudioInspectorWindow::apply_mode(pulp::view::AudioInspectorMode, bool)
+pulp::view::AudioInspectorWindow::AudioInspectorWindow(pulp::view::WindowManager*, pulp::view::WindowHost*, std::__1::function<std::__1::unique_ptr<pulp::view::WindowHost, std::__1::default_delete<pulp::view::WindowHost>> (pulp::view::View&, pulp::view::WindowOptions const&)>, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>)
+pulp::view::AudioInspectorWindow::build_scope_result(pulp::audio::AudioProbeSnapshot const&, pulp::audio::Buffer<float>&, int) const
+pulp::view::AudioInspectorWindow::build_ui()
+pulp::view::AudioInspectorWindow::commands() const
+pulp::view::AudioInspectorWindow::hide()
+pulp::view::AudioInspectorWindow::is_visible() const
+pulp::view::AudioInspectorWindow::load_mode_preference()
+pulp::view::AudioInspectorWindow::perform_command(unsigned int)
+pulp::view::AudioInspectorWindow::poll()
+pulp::view::AudioInspectorWindow::register_command_handler(pulp::view::CommandRegistry&)
+pulp::view::AudioInspectorWindow::save_mode_preference()
+pulp::view::AudioInspectorWindow::set_device_stats(pulp::audio::AudioStats const&)
+pulp::view::AudioInspectorWindow::set_mode(pulp::view::AudioInspectorMode)
+pulp::view::AudioInspectorWindow::set_preferences(pulp::state::PropertiesFile*)
+pulp::view::AudioInspectorWindow::set_probe(pulp::audio::AudioProbe*)
+pulp::view::AudioInspectorWindow::show()
+pulp::view::AudioInspectorWindow::toggle()
+pulp::view::AudioWaveformView::~AudioWaveformView()
+pulp::view::AudioWaveformView::AudioWaveformView()
+pulp::view::AudioWaveformView::clear_samples()
+pulp::view::AudioWaveformView::display_sample_count() const
+pulp::view::AudioWaveformView::display_start_index() const
+pulp::view::AudioWaveformView::find_rising_zero_crossing() const
+pulp::view::AudioWaveformView::paint(pulp::canvas::Canvas&)
+pulp::view::AudioWaveformView::set_horizontal_scale(float)
+pulp::view::AudioWaveformView::set_samples(float const*, int)
+pulp::view::AudioWaveformView::set_show_grid(bool)
+pulp::view::AudioWaveformView::set_trigger_mode(pulp::view::AudioWaveformView::TriggerMode)
+pulp::view::build_scrolling_widget_gallery(pulp::view::Theme const&, float, float)
+pulp::view::build_waveform_gpu_layer_plan(pulp::audio::WaveformOverview const&, pulp::view::WaveformViewport const&, long long, pulp::view::WaveformGpuLayerConfig const&, pulp::view::WaveformGpuUploadKey const*)
+pulp::view::build_waveform_gpu_static_layer_plan(pulp::audio::WaveformOverview const&, pulp::view::WaveformViewport const&, pulp::view::WaveformGpuLayerConfig const&)
+pulp::view::build_waveform_playhead_overlay(pulp::view::WaveformViewport const&, long long)
+pulp::view::build_waveform_render_plan(pulp::view::WaveformViewport const&, int)
+pulp::view::build_widget_gallery(pulp::view::Theme const&)
+pulp::view::classify_sample_asset_file_drop(std::__1::vector<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::allocator<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>> const&, pulp::audio::SampleAssetPolicy const&)
+pulp::view::ComboBox::set_items(std::__1::vector<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::allocator<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>)
+pulp::view::CommandInfo::~CommandInfo()
+pulp::view::CorrelationMeter::~CorrelationMeter()
+pulp::view::CorrelationMeter::paint(pulp::canvas::Canvas&)
+pulp::view::CorrelationMeter::update(float, float)
+pulp::view::DataDisplayCatalogRow::~DataDisplayCatalogRow()
+pulp::view::DataDisplayCatalogRow* std::__1::construct_at[abi:nqe220106]<pulp::view::DataDisplayCatalogRow, pulp::view::DataDisplayCatalogRow const&, pulp::view::DataDisplayCatalogRow*>(pulp::view::DataDisplayCatalogRow*, pulp::view::DataDisplayCatalogRow const&)
+pulp::view::DataDisplayRegistration::~DataDisplayRegistration()
+pulp::view::dbfs_meter_fill(float)
+pulp::view::DecibelScale::ticks(float) const
+pulp::view::DecibelScale::to_decibels(float) const
+pulp::view::DecibelScale::to_y(float) const
+pulp::view::DropTarget::on_drag_move(pulp::view::Point)
+pulp::view::easing::ease_out_quad(float)
+pulp::view::EqCurveView::~EqCurveView()
+pulp::view::EqCurveView::add_band(pulp::view::EqCurveView::Band)
+pulp::view::EqCurveView::analyzer_db_to_y(float) const
+pulp::view::EqCurveView::apply_param_from_host(unsigned int, float)
+pulp::view::EqCurveView::band_palette_color(unsigned long)
+pulp::view::EqCurveView::Band& std::__1::vector<pulp::view::EqCurveView::Band, std::__1::allocator<pulp::view::EqCurveView::Band>>::emplace_back<pulp::view::EqCurveView::Band>(pulp::view::EqCurveView::Band&&)::'lambda0'()::operator()() const
+pulp::view::EqCurveView::bind_bands(pulp::state::StateStore&, std::__1::span<pulp::view::EqCurveView::BandParamIds const, 18446744073709551615ul>)
+pulp::view::EqCurveView::clear_spectrum()
+pulp::view::EqCurveView::db_to_y(float) const
+pulp::view::EqCurveView::EqCurveView()
+pulp::view::EqCurveView::freq_to_x(float) const
+pulp::view::EqCurveView::frequency_scale() const
+pulp::view::EqCurveView::gain_scale() const
+pulp::view::EqCurveView::hit_test_band(pulp::view::Point) const
+pulp::view::EqCurveView::magnitude_db_at(float) const
+pulp::view::EqCurveView::on_gesture_event(pulp::view::GestureEvent const&)
+pulp::view::EqCurveView::on_hover_move(pulp::view::Point)
+pulp::view::EqCurveView::on_mouse_down(pulp::view::Point)
+pulp::view::EqCurveView::on_mouse_drag(pulp::view::Point)
+pulp::view::EqCurveView::on_mouse_event(pulp::view::MouseEvent const&)
+pulp::view::EqCurveView::on_mouse_leave()
+pulp::view::EqCurveView::on_mouse_up(pulp::view::Point)
+pulp::view::EqCurveView::paint(pulp::canvas::Canvas&)
+pulp::view::EqCurveView::point_in_analyzer_gutter(pulp::view::Point) const
+pulp::view::EqCurveView::rebuild_coefficients()
+pulp::view::EqCurveView::remove_band(unsigned long)
+pulp::view::EqCurveView::set_analyzer_enabled(bool)
+pulp::view::EqCurveView::set_band(unsigned long, pulp::view::EqCurveView::Band const&)
+pulp::view::EqCurveView::set_bands(std::__1::vector<pulp::view::EqCurveView::Band, std::__1::allocator<pulp::view::EqCurveView::Band>>)
+pulp::view::EqCurveView::set_frequency_range(float, float)
+pulp::view::EqCurveView::set_gain_range(float, float)
+pulp::view::EqCurveView::set_sample_rate(float)
+pulp::view::EqCurveView::set_spectrum(float const*, unsigned long)
+pulp::view::EqCurveView::store_begin(unsigned int)
+pulp::view::EqCurveView::store_end(unsigned int)
+pulp::view::EqCurveView::store_set(unsigned int, float)
+pulp::view::EqCurveView::wants_mouse_input() const
+pulp::view::EqCurveView::x_to_freq(float) const
+pulp::view::EqCurveView::y_to_db(float) const
+pulp::view::fill_waveform_peak_vertices(pulp::audio::WaveformOverview const&, pulp::view::WaveformGpuStaticLayerPlan const&, std::__1::span<pulp::view::WaveformPeakVertex, 18446744073709551615ul>)
+pulp::view::hit_test_waveform_handles(pulp::view::WaveformViewport const&, pulp::view::WaveformHandleModel const&, float, float)
+pulp::view::hit_test_waveform_handles(pulp::view::WaveformViewport const&, pulp::view::WaveformHandleModel const&, float, pulp::view::HitMetrics const&, float)
+pulp::view::InspectorFacts::Fact::~Fact()
+pulp::view::InspectorFacts::Fact* std::__1::vector<pulp::view::InspectorFacts::Fact, std::__1::allocator<pulp::view::InspectorFacts::Fact>>::__emplace_back_slow_path<pulp::view::InspectorFacts::Fact>(pulp::view::InspectorFacts::Fact&&)
+pulp::view::Knob::set_label(std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>)
+pulp::view::Knob::store_normalized(float, pulp::view::Notify)
+pulp::view::Label::Label(std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>)
+pulp::view::Label::MeasureBasis::~MeasureBasis()
+pulp::view::Label::set_text(std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>)
+pulp::view::Label::ShapedLayoutKey::~ShapedLayoutKey()
+pulp::view::LogFrequencyScale::frequency_at(unsigned long, unsigned long) const
+pulp::view::LogFrequencyScale::is_major_tick(float)
+pulp::view::LogFrequencyScale::ticks() const
+pulp::view::LogFrequencyScale::to_frequency(float) const
+pulp::view::LogFrequencyScale::to_x(float) const
+pulp::view::Meter::~Meter()
+pulp::view::Meter::clear_level_fill()
+pulp::view::Meter::get_current_value() const
+pulp::view::Meter::get_maximum_value() const
+pulp::view::Meter::get_minimum_value() const
+pulp::view::Meter::gradient_color_at(float) const
+pulp::view::Meter::inspector_facts(std::__1::vector<pulp::view::InspectorFacts::Fact, std::__1::allocator<pulp::view::InspectorFacts::Fact>>&) const
+pulp::view::Meter::inspector_type_name() const
+pulp::view::Meter::on_meter_frame(pulp::view::MeterFrame const&, float)
+pulp::view::Meter::paint(pulp::canvas::Canvas&)
+pulp::view::Meter::set_current_value(double)
+pulp::view::Meter::set_level_bar_ratio(float)
+pulp::view::Meter::set_level_fill(std::__1::optional<pulp::canvas::Color>, std::__1::vector<pulp::canvas::Color, std::__1::allocator<pulp::canvas::Color>>)
+pulp::view::Meter::set_level_orientation(pulp::view::LevelDisplay::Orientation)
+pulp::view::Meter::set_level_render_style(pulp::view::WidgetRenderStyle)
+pulp::view::Meter::set_level(float, float)
+pulp::view::Meter::set_levels(float, float)
+pulp::view::Meter::update(float, float, float)
+pulp::view::MeterBallistics::update(float, float, float, float, float, float)
+pulp::view::MultiMeter::~MultiMeter()
+pulp::view::MultiMeter::paint(pulp::canvas::Canvas&)
+pulp::view::MultiMeter::set_channel_count(int)
+pulp::view::MultiMeter::update(pulp::signal::MultiChannelMeterData const&, float)
+pulp::view::operator!=(pulp::view::WaveformGpuUploadKey const&, pulp::view::WaveformGpuUploadKey const&)
+pulp::view::operator==(pulp::view::WaveformGpuUploadKey const&, pulp::view::WaveformGpuUploadKey const&)
+pulp::view::register_audio_import_binders()
+pulp::view::register_audio_widgets()
+pulp::view::resample_spectrum_log(std::__1::span<float const, 18446744073709551615ul>, float, pulp::view::LogFrequencyScale const&, std::__1::span<float, 18446744073709551615ul>)
+pulp::view::resolve_waveform_snap(long long, long long, pulp::view::WaveformSnapSettings const&)
+pulp::view::SampleAssetDropPlan::~SampleAssetDropPlan()
+pulp::view::SampleAssetDropTarget::~SampleAssetDropTarget()
+pulp::view::SampleAssetDropTarget::on_drag_enter(pulp::view::DropData const&, pulp::view::Point)
+pulp::view::SampleAssetDropTarget::on_drag_exit()
+pulp::view::SampleAssetDropTarget::on_drop(pulp::view::DropData const&, pulp::view::Point)
+pulp::view::SampleAssetDropTarget::SampleAssetDropTarget(pulp::audio::SampleAssetPolicy)
+pulp::view::SampleAssetDropTarget::set_policy(pulp::audio::SampleAssetPolicy)
+pulp::view::SelectableLayout::~SelectableLayout()
+pulp::view::SpectrogramView::~SpectrogramView()
+pulp::view::SpectrogramView::configure(int, int, pulp::signal::ColorRamp, float, float)
+pulp::view::SpectrogramView::paint(pulp::canvas::Canvas&)
+pulp::view::SpectrogramView::push_spectrum(float const*, int)
+pulp::view::SpectrumView::~SpectrumView()
+pulp::view::SpectrumView::inspector_facts(std::__1::vector<pulp::view::InspectorFacts::Fact, std::__1::allocator<pulp::view::InspectorFacts::Fact>>&) const
+pulp::view::SpectrumView::inspector_type_name() const
+pulp::view::SpectrumView::paint(pulp::canvas::Canvas&)
+pulp::view::SpectrumView::set_bins(float const*, unsigned long)
+pulp::view::SpectrumView::set_spectrum(float const*, unsigned long)
+pulp::view::SpectrumView::set_spectrum(std::__1::vector<float, std::__1::allocator<float>>)
+pulp::view::TextButton::TextButton(std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>)
+pulp::view::TextEditor::set_text(char const*)
+pulp::view::TextEditor::TextEditor()
+pulp::view::ToggleButton::set_label(std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>)
+pulp::view::View::accepts_navigation_input() const
+pulp::view::View::accepts_text_input() const
+pulp::view::View::advance_animations(float)
+pulp::view::View::applies_child_paint_offset() const
+pulp::view::View::as_selectable_text()
+pulp::view::View::capture_native_overlay_png(unsigned int, unsigned int)
+pulp::view::View::child_paint_offset(pulp::view::View const&) const
+pulp::view::View::intrinsic_width() const
+pulp::view::View::is_gesture_active() const
+pulp::view::View::is_scroll_container() const
+pulp::view::View::on_accessibility_adjust(float)
+pulp::view::View::on_attached()
+pulp::view::View::on_detached()
+pulp::view::View::on_focus_changed(bool)
+pulp::view::View::on_frame_clock_changed()
+pulp::view::View::on_gesture_event(pulp::view::GestureEvent const&)
+pulp::view::View::on_hover_move(pulp::view::Point)
+pulp::view::View::on_key_event(pulp::view::KeyEvent const&)
+pulp::view::View::on_key_press(int)
+pulp::view::View::on_meter_frame(pulp::view::MeterFrame const&, float)
+pulp::view::View::on_mouse_cancel(pulp::view::Point)
+pulp::view::View::on_mouse_down(pulp::view::Point)
+pulp::view::View::on_mouse_drag(pulp::view::Point)
+pulp::view::View::on_mouse_enter()
+pulp::view::View::on_mouse_event(pulp::view::MouseEvent const&)
+pulp::view::View::on_mouse_leave()
+pulp::view::View::on_mouse_up(pulp::view::Point)
+pulp::view::View::on_resized()
+pulp::view::View::on_text_input(pulp::view::TextInputEvent const&)
+pulp::view::View::on_wheel(float)
+pulp::view::View::owns_child_layout() const
+pulp::view::View::paint(pulp::canvas::Canvas&)
+pulp::view::View::restore_reload_state(std::__1::basic_string_view<char, std::__1::char_traits<char>>)
+pulp::view::View::save_reload_state(std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>&) const
+pulp::view::View::scroll_offset_x() const
+pulp::view::View::scroll_offset_y() const
+pulp::view::View::supports_reuse() const
+pulp::view::View::wants_mouse_input() const
+pulp::view::View::wants_wheel_value() const
+pulp::view::VisualizationBridge::poll()
+pulp::view::VisualizationBridge::process(float const* const*, int, int)
+pulp::view::VisualizationBridge::reset_analysis_continuity()
+pulp::view::WaveformEditorSurface::apply_edit(pulp::view::WaveformHandleModel&, pulp::view::WaveformHandleKind, int, long long, long long)
+pulp::view::WaveformEditorSurface::begin_handle_edit(pulp::view::WaveformHandleKind, int)
+pulp::view::WaveformEditorSurface::begin_handle_edit(pulp::view::WaveformHitResult const&)
+pulp::view::WaveformEditorSurface::begin_selection_edit(long long)
+pulp::view::WaveformEditorSurface::can_edit(pulp::view::WaveformHandleKind, int) const
+pulp::view::WaveformEditorSurface::cancel_edit()
+pulp::view::WaveformEditorSurface::clear_fade_in()
+pulp::view::WaveformEditorSurface::clear_fade_out()
+pulp::view::WaveformEditorSurface::clear_loop()
+pulp::view::WaveformEditorSurface::clear_playhead()
+pulp::view::WaveformEditorSurface::clear_selection()
+pulp::view::WaveformEditorSurface::clear_trim()
+pulp::view::WaveformEditorSurface::commit_edit(long long)
+pulp::view::WaveformEditorSurface::edit_result_for_sample(long long, bool, bool) const
+pulp::view::WaveformEditorSurface::hit_test(float, float) const
+pulp::view::WaveformEditorSurface::hit_test(float, pulp::view::HitMetrics const&, float) const
+pulp::view::WaveformEditorSurface::render_plan(int) const
+pulp::view::WaveformEditorSurface::scroll(long long)
+pulp::view::WaveformEditorSurface::set_bounds(pulp::view::Rect)
+pulp::view::WaveformEditorSurface::set_fade_in(long long)
+pulp::view::WaveformEditorSurface::set_fade_out(long long)
+pulp::view::WaveformEditorSurface::set_loop(long long, long long)
+pulp::view::WaveformEditorSurface::set_playhead(long long)
+pulp::view::WaveformEditorSurface::set_selection(long long, long long)
+pulp::view::WaveformEditorSurface::set_slice_markers(std::__1::vector<long long, std::__1::allocator<long long>>)
+pulp::view::WaveformEditorSurface::set_snap_settings(pulp::view::WaveformSnapSettings)
+pulp::view::WaveformEditorSurface::set_total_samples(long long)
+pulp::view::WaveformEditorSurface::set_trim(long long, long long)
+pulp::view::WaveformEditorSurface::set_visible_range(long long, long long)
+pulp::view::WaveformEditorSurface::snapshot() const
+pulp::view::WaveformEditorSurface::update_edit(long long)
+pulp::view::WaveformEditorSurface::zoom_to_fit()
+pulp::view::WaveformEditorTransaction::begin(pulp::view::WaveformEditorOperationKind, long long, pulp::view::WaveformSampleRange, long long)
+pulp::view::WaveformEditorTransaction::cancel()
+pulp::view::WaveformEditorTransaction::commit(long long)
+pulp::view::WaveformEditorTransaction::result_for_sample(long long, bool, bool) const
+pulp::view::WaveformEditorTransaction::update(long long) const
+pulp::view::WaveformGpuRenderController::clear_and_return_records()
+pulp::view::WaveformGpuRenderController::commit_uploaded_resource(pulp::view::WaveformGpuRenderDecision const&, unsigned long long, unsigned long long)
+pulp::view::WaveformGpuRenderController::commit_uploaded_resource(pulp::view::WaveformGpuUploadKey const&, unsigned long long, unsigned long, unsigned long long)
+pulp::view::WaveformGpuRenderController::erase(pulp::view::WaveformGpuUploadKey const&, pulp::view::WaveformGpuResourceRecord&)
+pulp::view::WaveformGpuRenderController::plan_render(pulp::audio::WaveformOverview const&, pulp::view::WaveformGpuLayerPlan const&, pulp::view::WaveformGpuRenderContext const&, std::__1::span<pulp::view::WaveformPeakVertex, 18446744073709551615ul>)
+pulp::view::WaveformGpuRenderController::prepare(unsigned long, std::__1::vector<pulp::view::WaveformGpuResourceRecord, std::__1::allocator<pulp::view::WaveformGpuResourceRecord>>*)
+pulp::view::WaveformGpuRenderController::stats() const
+pulp::view::WaveformGpuRenderController::WaveformGpuRenderController(unsigned long)
+pulp::view::WaveformGpuResourceCache::clear_and_return_records()
+pulp::view::WaveformGpuResourceCache::erase(pulp::view::WaveformGpuUploadKey const&, pulp::view::WaveformGpuResourceRecord&)
+pulp::view::WaveformGpuResourceCache::find(pulp::view::WaveformGpuUploadKey const&, unsigned long long)
+pulp::view::WaveformGpuResourceCache::find(pulp::view::WaveformGpuUploadKey const&)
+pulp::view::WaveformGpuResourceCache::prepare(unsigned long, std::__1::vector<pulp::view::WaveformGpuResourceRecord, std::__1::allocator<pulp::view::WaveformGpuResourceRecord>>*)
+pulp::view::WaveformGpuResourceCache::put(pulp::view::WaveformGpuUploadKey const&, unsigned long long, unsigned long, unsigned long long)
+pulp::view::WaveformGpuResourceCache::stats() const
+pulp::view::WaveformGpuResourceCache::WaveformGpuResourceCache(unsigned long)
+pulp::view::WaveformGpuResourceRecord::valid() const
+pulp::view::WaveformGpuResourceRecord& std::__1::vector<pulp::view::WaveformGpuResourceRecord, std::__1::allocator<pulp::view::WaveformGpuResourceRecord>>::emplace_back<pulp::view::WaveformGpuResourceRecord const&>(pulp::view::WaveformGpuResourceRecord const&)::'lambda0'()::operator()() const
+pulp::view::WaveformGpuResourceRecord& std::__1::vector<pulp::view::WaveformGpuResourceRecord, std::__1::allocator<pulp::view::WaveformGpuResourceRecord>>::emplace_back<pulp::view::WaveformGpuResourceRecord>(pulp::view::WaveformGpuResourceRecord&&)::'lambda0'()::operator()() const
+pulp::view::WaveformGpuUploadKey::valid() const
+pulp::view::WaveformHandle& std::__1::vector<pulp::view::WaveformHandle, std::__1::allocator<pulp::view::WaveformHandle>>::emplace_back<pulp::view::WaveformHandle const&>(pulp::view::WaveformHandle const&)::'lambda0'()::operator()() const
+pulp::view::WaveformHandleModel::clear_fade_in()
+pulp::view::WaveformHandleModel::clear_fade_out()
+pulp::view::WaveformHandleModel::clear_loop()
+pulp::view::WaveformHandleModel::clear_playhead()
+pulp::view::WaveformHandleModel::clear_selection()
+pulp::view::WaveformHandleModel::clear_trim()
+pulp::view::WaveformHandleModel::handles() const
+pulp::view::WaveformHandleModel::set_fade_in(long long)
+pulp::view::WaveformHandleModel::set_fade_out(long long)
+pulp::view::WaveformHandleModel::set_loop(long long, long long)
+pulp::view::WaveformHandleModel::set_playhead(long long)
+pulp::view::WaveformHandleModel::set_selection(long long, long long)
+pulp::view::WaveformHandleModel::set_slice_markers(std::__1::vector<long long, std::__1::allocator<long long>>)
+pulp::view::WaveformHandleModel::set_total_samples(long long)
+pulp::view::WaveformHandleModel::set_trim(long long, long long)
+pulp::view::WaveformHeadlessRenderBackend::~WaveformHeadlessRenderBackend()
+pulp::view::WaveformHeadlessRenderBackend::clear()
+pulp::view::WaveformHeadlessRenderBackend::find_resource_by_id(unsigned long long)
+pulp::view::WaveformHeadlessRenderBackend::find_resource(pulp::view::WaveformGpuResourceRecord const&) const
+pulp::view::WaveformHeadlessRenderBackend::make_cached_frame(pulp::view::WaveformGpuRenderDecision const&, pulp::view::WaveformHeadlessRenderStatus) const
+pulp::view::WaveformHeadlessRenderBackend::make_noop_frame(pulp::view::WaveformGpuRenderDecision const&) const
+pulp::view::WaveformHeadlessRenderBackend::prepare(pulp::view::WaveformHeadlessRenderConfig)
+pulp::view::WaveformHeadlessRenderBackend::release_all_resources()
+pulp::view::WaveformHeadlessRenderBackend::release_commit_records(pulp::view::WaveformGpuResourcePutResult const&)
+pulp::view::WaveformHeadlessRenderBackend::release_record(pulp::view::WaveformGpuResourceRecord const&)
+pulp::view::WaveformHeadlessRenderBackend::release_resource_by_id(unsigned long long)
+pulp::view::WaveformHeadlessRenderBackend::render(pulp::audio::WaveformOverview const&, pulp::view::WaveformGpuLayerPlan const&, pulp::view::WaveformGpuRenderContext const&)
+pulp::view::WaveformHeadlessRenderBackend::ResourcePayload* std::__1::vector<pulp::view::WaveformHeadlessRenderBackend::ResourcePayload, std::__1::allocator<pulp::view::WaveformHeadlessRenderBackend::ResourcePayload>>::__emplace_back_slow_path<pulp::view::WaveformHeadlessRenderBackend::ResourcePayload>(pulp::view::WaveformHeadlessRenderBackend::ResourcePayload&&)
+pulp::view::WaveformHeadlessRenderBackend::stats() const
+pulp::view::WaveformHeadlessRenderBackend::upload_static_layer(pulp::view::WaveformGpuRenderDecision const&)
+pulp::view::WaveformHeadlessRenderBackend::WaveformHeadlessRenderBackend(pulp::view::WaveformHeadlessRenderConfig)
+pulp::view::WaveformRenderSpan& std::__1::vector<pulp::view::WaveformRenderSpan, std::__1::allocator<pulp::view::WaveformRenderSpan>>::emplace_back<pulp::view::WaveformRenderSpan>(pulp::view::WaveformRenderSpan&&)::'lambda0'()::operator()() const
+pulp::view::WaveformSampleRange::normalized() const
+pulp::view::WaveformView::~WaveformView()
+pulp::view::WaveformView::apply_trigger()
+pulp::view::WaveformView::clear_thumbnail()
+pulp::view::WaveformView::find_trigger_index(float const*, unsigned long, pulp::view::WaveformView::TriggerMode)
+pulp::view::WaveformView::inspector_facts(std::__1::vector<pulp::view::InspectorFacts::Fact, std::__1::allocator<pulp::view::InspectorFacts::Fact>>&) const
+pulp::view::WaveformView::inspector_type_name() const
+pulp::view::WaveformView::paint(pulp::canvas::Canvas&)
+pulp::view::WaveformView::set_data(float const*, unsigned long)
+pulp::view::WaveformView::set_data(std::__1::vector<float, std::__1::allocator<float>>)
+pulp::view::WaveformView::set_preview_shape(std::__1::basic_string_view<char, std::__1::char_traits<char>>)
+pulp::view::WaveformView::set_series_preview(std::__1::basic_string_view<char, std::__1::char_traits<char>>)
+pulp::view::WaveformView::set_series(float const*, unsigned long)
+pulp::view::WaveformView::set_thumbnail_borrowed(pulp::audio::WaveformOverview const*, unsigned int)
+pulp::view::WaveformView::set_thumbnail(pulp::audio::WaveformOverview const*, unsigned int)
+pulp::view::WaveformView::set_thumbnail(std::__1::shared_ptr<pulp::audio::WaveformOverview const>, unsigned int)
+pulp::view::WaveformViewport::clamp_sample(long long) const
+pulp::view::WaveformViewport::pixels_per_sample() const
+pulp::view::WaveformViewport::sample_point_visible(long long) const
+pulp::view::WaveformViewport::sample_to_x(long long) const
+pulp::view::WaveformViewport::sample_visible(long long) const
+pulp::view::WaveformViewport::samples_per_pixel() const
+pulp::view::WaveformViewport::scroll(long long)
+pulp::view::WaveformViewport::set_bounds(pulp::view::Rect)
+pulp::view::WaveformViewport::set_total_samples(long long)
+pulp::view::WaveformViewport::set_visible_range(long long, long long)
+pulp::view::WaveformViewport::visible_end() const
+pulp::view::WaveformViewport::x_to_sample(float) const
+pulp::view::WaveformViewport::zoom_in(double)
+pulp::view::WaveformViewport::zoom_out(double)
+pulp::view::WaveformViewport::zoom_to_fit()
+pulp::view::WindowOptions::~WindowOptions()
+std::__1::__exception_guard_exceptions<std::__1::_AllocatorDestroyRangeReverse<std::__1::allocator<pulp::audio::SampleAssetDropItem>, pulp::audio::SampleAssetDropItem*>>::~__exception_guard_exceptions[abi:nqe220106]()
+std::__1::__exception_guard_exceptions<std::__1::_AllocatorDestroyRangeReverse<std::__1::allocator<pulp::view::DataDisplayCatalogRow>, pulp::view::DataDisplayCatalogRow*>>::~__exception_guard_exceptions[abi:nqe220106]()
+std::__1::__exception_guard_exceptions<std::__1::_AllocatorDestroyRangeReverse<std::__1::allocator<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>*>>::~__exception_guard_exceptions[abi:nqe220106]()
+std::__1::__exception_guard_exceptions<std::__1::vector<pulp::view::DataDisplayCatalogRow, std::__1::allocator<pulp::view::DataDisplayCatalogRow>>::__destroy_vector>::~__exception_guard_exceptions[abi:nqe220106]()
+std::__1::__exception_guard_exceptions<std::__1::vector<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::allocator<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>::__destroy_vector>::~__exception_guard_exceptions[abi:nqe220106]()
+std::__1::__extended_grapheme_custer_property_boundary::__entries[abi:nqe220106]
+std::__1::__format_spec::__column_width_result<char const*> std::__1::__format_spec::__detail::__estimate_column_width_grapheme_clustering[abi:nqe220106]<char const*>(char const*, char const*, unsigned long, std::__1::__format_spec::__column_width_rounding)
+std::__1::__format_spec::__parsed_specifications<char> std::__1::__format_spec::__parser<char>::__get_parsed_std_specifications[abi:nqe220106]<std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>>(std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>&) const
+std::__1::__format_spec::__parser<char>::__validate[abi:nqe220106](std::__1::__format_spec::__fields[abi:nqe220106], char const*, unsigned int) const
+std::__1::__format_spec::__throw_invalid_option_format_error[abi:nqe220106](char const*, char const*)
+std::__1::__format_spec::__throw_invalid_type_format_error[abi:nqe220106](char const*)
+std::__1::__format::__allocating_buffer<char>::__prepare_write[abi:nqe220106](std::__1::__format::__output_buffer<char>&, unsigned long)
+std::__1::__format::__parse_number_result<char const*> std::__1::__format::__parse_arg_id[abi:nqe220106]<char const*, std::__1::basic_format_parse_context<char>>(char const*, char const*, std::__1::basic_format_parse_context<char>&)
+std::__1::__formatter::__float_result std::__1::__formatter::__format_buffer_hexadecimal_upper_case[abi:nqe220106]<double, double>(std::__1::__formatter::__float_buffer<double> const&, double, int, char*)
+std::__1::__formatter::__float_result std::__1::__formatter::__format_buffer_hexadecimal_upper_case[abi:nqe220106]<double, long double>(std::__1::__formatter::__float_buffer<double> const&, long double, int, char*)
+std::__1::__formatter::__float_result std::__1::__formatter::__format_buffer_hexadecimal_upper_case[abi:nqe220106]<float, float>(std::__1::__formatter::__float_buffer<float> const&, float, int, char*)
+std::__1::__formatter::__float_result std::__1::__formatter::__format_buffer[abi:nqe220106]<double, double>(std::__1::__formatter::__float_buffer<double>&, double, bool, bool, std::__1::__format_spec::__sign, std::__1::__format_spec::__type)
+std::__1::__formatter::__float_result std::__1::__formatter::__format_buffer[abi:nqe220106]<double, long double>(std::__1::__formatter::__float_buffer<double>&, long double, bool, bool, std::__1::__format_spec::__sign, std::__1::__format_spec::__type)
+std::__1::__formatter::__float_result std::__1::__formatter::__format_buffer[abi:nqe220106]<float, float>(std::__1::__formatter::__float_buffer<float>&, float, bool, bool, std::__1::__format_spec::__sign, std::__1::__format_spec::__type)
+std::__1::__function::__func<pulp::view::Knob::store_normalized(float, pulp::view::Notify)::'lambda'(), void ()>::__clone() const
+std::__1::__function::__func<pulp::view::Knob::store_normalized(float, pulp::view::Notify)::'lambda'(), void ()>::__clone(std::__1::__function::__base<void ()>*) const
+std::__1::__function::__func<pulp::view::Knob::store_normalized(float, pulp::view::Notify)::'lambda'(), void ()>::~__func()
+std::__1::__function::__func<pulp::view::Knob::store_normalized(float, pulp::view::Notify)::'lambda'(), void ()>::destroy_deallocate()
+std::__1::__function::__func<pulp::view::Knob::store_normalized(float, pulp::view::Notify)::'lambda'(), void ()>::destroy()
+std::__1::__function::__func<pulp::view::Knob::store_normalized(float, pulp::view::Notify)::'lambda'(), void ()>::operator()()
+std::__1::__function::__func<pulp::view::Knob::store_normalized(float, pulp::view::Notify)::'lambda'(), void ()>::target_type() const
+std::__1::__function::__func<pulp::view::Knob::store_normalized(float, pulp::view::Notify)::'lambda'(), void ()>::target(std::type_info const&) const
+std::__1::__function::__func<pulp::view::TextEditor::TextEditor()::'lambda'(pulp::view::Point), void (pulp::view::Point)>::__clone() const
+std::__1::__function::__func<pulp::view::TextEditor::TextEditor()::'lambda'(pulp::view::Point), void (pulp::view::Point)>::__clone(std::__1::__function::__base<void (pulp::view::Point)>*) const
+std::__1::__function::__func<pulp::view::TextEditor::TextEditor()::'lambda'(pulp::view::Point), void (pulp::view::Point)>::~__func()
+std::__1::__function::__func<pulp::view::TextEditor::TextEditor()::'lambda'(pulp::view::Point), void (pulp::view::Point)>::destroy_deallocate()
+std::__1::__function::__func<pulp::view::TextEditor::TextEditor()::'lambda'(pulp::view::Point), void (pulp::view::Point)>::destroy()
+std::__1::__function::__func<pulp::view::TextEditor::TextEditor()::'lambda'(pulp::view::Point), void (pulp::view::Point)>::operator()(pulp::view::Point&&)
+std::__1::__function::__func<pulp::view::TextEditor::TextEditor()::'lambda'(pulp::view::Point), void (pulp::view::Point)>::target_type() const
+std::__1::__function::__func<pulp::view::TextEditor::TextEditor()::'lambda'(pulp::view::Point), void (pulp::view::Point)>::target(std::type_info const&) const
+std::__1::__function::__value_func<void (bool)>::swap[abi:nqe220106](std::__1::__function::__value_func<void (bool)>&)
+std::__1::__function::__value_func<void (pulp::view::AudioInspectorMode)>::swap[abi:nqe220106](std::__1::__function::__value_func<void (pulp::view::AudioInspectorMode)>&)
+std::__1::__function::__value_func<void (pulp::view::Point)>::swap[abi:nqe220106](std::__1::__function::__value_func<void (pulp::view::Point)>&)
+std::__1::__hash_table<std::__1::__hash_value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, float>, std::__1::__unordered_map_hasher<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, float>, std::__1::hash<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::equal_to<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>, std::__1::__unordered_map_equal<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, float>, std::__1::equal_to<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::hash<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>, std::__1::allocator<std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, float>>>::__copy_construct[abi:nqe220106](std::__1::__hash_node_base<std::__1::__hash_node<std::__1::__hash_value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, float>, void*>*>*, std::__1::__hash_node_base<std::__1::__hash_node<std::__1::__hash_value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, float>, void*>*>*, unsigned long)
+std::__1::__hash_table<std::__1::__hash_value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, float>, std::__1::__unordered_map_hasher<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, float>, std::__1::hash<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::equal_to<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>, std::__1::__unordered_map_equal<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, float>, std::__1::equal_to<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::hash<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>, std::__1::allocator<std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, float>>>::__copy_construct[abi:nqe220106](std::__1::__hash_node_base<std::__1::__hash_node<std::__1::__hash_value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, float>, void*>*>*)
+std::__1::__hash_table<std::__1::__hash_value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, float>, std::__1::__unordered_map_hasher<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, float>, std::__1::hash<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::equal_to<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>, std::__1::__unordered_map_equal<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, float>, std::__1::equal_to<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::hash<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>, std::__1::allocator<std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, float>>>::operator=(std::__1::__hash_table<std::__1::__hash_value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, float>, std::__1::__unordered_map_hasher<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, float>, std::__1::hash<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::equal_to<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>, std::__1::__unordered_map_equal<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, float>, std::__1::equal_to<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::hash<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>, std::__1::allocator<std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, float>>> const&)
+std::__1::__hash_table<std::__1::__hash_value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, pulp::canvas::Color>, std::__1::__unordered_map_hasher<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, pulp::canvas::Color>, std::__1::hash<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::equal_to<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>, std::__1::__unordered_map_equal<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, pulp::canvas::Color>, std::__1::equal_to<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::hash<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>, std::__1::allocator<std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, pulp::canvas::Color>>>::__copy_construct[abi:nqe220106](std::__1::__hash_node_base<std::__1::__hash_node<std::__1::__hash_value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, pulp::canvas::Color>, void*>*>*, std::__1::__hash_node_base<std::__1::__hash_node<std::__1::__hash_value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, pulp::canvas::Color>, void*>*>*, unsigned long)
+std::__1::__hash_table<std::__1::__hash_value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, pulp::canvas::Color>, std::__1::__unordered_map_hasher<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, pulp::canvas::Color>, std::__1::hash<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::equal_to<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>, std::__1::__unordered_map_equal<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, pulp::canvas::Color>, std::__1::equal_to<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::hash<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>, std::__1::allocator<std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, pulp::canvas::Color>>>::__copy_construct[abi:nqe220106](std::__1::__hash_node_base<std::__1::__hash_node<std::__1::__hash_value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, pulp::canvas::Color>, void*>*>*)
+std::__1::__hash_table<std::__1::__hash_value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, pulp::canvas::Color>, std::__1::__unordered_map_hasher<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, pulp::canvas::Color>, std::__1::hash<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::equal_to<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>, std::__1::__unordered_map_equal<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, pulp::canvas::Color>, std::__1::equal_to<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::hash<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>, std::__1::allocator<std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, pulp::canvas::Color>>>::operator=(std::__1::__hash_table<std::__1::__hash_value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, pulp::canvas::Color>, std::__1::__unordered_map_hasher<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, pulp::canvas::Color>, std::__1::hash<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::equal_to<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>, std::__1::__unordered_map_equal<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, pulp::canvas::Color>, std::__1::equal_to<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::hash<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>, std::__1::allocator<std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, pulp::canvas::Color>>> const&)
+std::__1::__hash_table<std::__1::__hash_value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::__unordered_map_hasher<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::hash<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::equal_to<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>, std::__1::__unordered_map_equal<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::equal_to<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::hash<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>, std::__1::allocator<std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>>::__copy_construct[abi:nqe220106](std::__1::__hash_node_base<std::__1::__hash_node<std::__1::__hash_value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, void*>*>*)
+std::__1::__hash_table<std::__1::__hash_value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::__unordered_map_hasher<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::hash<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::equal_to<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>, std::__1::__unordered_map_equal<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::equal_to<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::hash<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>, std::__1::allocator<std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>>::operator=(std::__1::__hash_table<std::__1::__hash_value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::__unordered_map_hasher<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::hash<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::equal_to<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>, std::__1::__unordered_map_equal<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::equal_to<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::hash<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>, std::__1::allocator<std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>> const&)
+std::__1::__hex_to_upper[abi:nqe220106](char)
+std::__1::__indic_conjunct_break::__entries[abi:nqe220106]
+std::__1::__indic_conjunct_break::__get_property[abi:nqe220106](char32_t)
+std::__1::__invoke_result_impl<void, char const* std::__1::__format::__handle_replacement_field[abi:nqe220106]<char const*, std::__1::basic_format_parse_context<char>, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>>(char const*, char const*, std::__1::basic_format_parse_context<char>&, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>&)::'lambda'(char const*), void const*&>::type std::__1::__invoke[abi:nqe220106]<char const* std::__1::__format::__handle_replacement_field[abi:nqe220106]<char const*, std::__1::basic_format_parse_context<char>, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>>(char const*, char const*, std::__1::basic_format_parse_context<char>&, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>&)::'lambda'(char const*), void const*&>(char const* std::__1::__format::__handle_replacement_field[abi:nqe220106]<char const*, std::__1::basic_format_parse_context<char>, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>>(char const*, char const*, std::__1::basic_format_parse_context<char>&, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>&)::'lambda'(char const*)&&, void const*&)
+std::__1::__itoa::__base_10_u128[abi:nqe220106](char*, unsigned __int128)
+std::__1::__itoa::__base_10_u32[abi:nqe220106](char*, unsigned int)
+std::__1::__itoa::__base_16_lut
+std::__1::__itoa::__base_2_lut
+std::__1::__itoa::__base_8_lut
+std::__1::__itoa::__digits_base_10
+std::__1::__itoa::__pow10_128
+std::__1::__itoa::__pow10_32
+std::__1::__itoa::__pow10_64
+std::__1::__split_buffer<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::allocator<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>&>::~__split_buffer()
+std::__1::__throw_bad_function_call[abi:nqe220106]()
+std::__1::__throw_format_error[abi:nqe220106](char const*)
+std::__1::__throw_length_error[abi:nqe220106](char const*)
+std::__1::__throw_out_of_range[abi:nqe220106](char const*)
+std::__1::__to_chars_result std::__1::__to_chars_integral[abi:nqe220106]<16u, unsigned __int128, 0>(char*, char*, unsigned __int128)
+std::__1::__to_chars_result std::__1::__to_chars_integral[abi:nqe220106]<16u, unsigned int, 0>(char*, char*, unsigned int)
+std::__1::__to_chars_result std::__1::__to_chars_integral[abi:nqe220106]<16u, unsigned long long, 0>(char*, char*, unsigned long long)
+std::__1::__to_chars_result std::__1::__to_chars_integral[abi:nqe220106]<2u, unsigned __int128, 0>(char*, char*, unsigned __int128)
+std::__1::__to_chars_result std::__1::__to_chars_integral[abi:nqe220106]<2u, unsigned int, 0>(char*, char*, unsigned int)
+std::__1::__to_chars_result std::__1::__to_chars_integral[abi:nqe220106]<2u, unsigned long long, 0>(char*, char*, unsigned long long)
+std::__1::__to_chars_result std::__1::__to_chars_integral[abi:nqe220106]<8u, unsigned __int128, 0>(char*, char*, unsigned __int128)
+std::__1::__to_chars_result std::__1::__to_chars_integral[abi:nqe220106]<8u, unsigned int, 0>(char*, char*, unsigned int)
+std::__1::__to_chars_result std::__1::__to_chars_integral[abi:nqe220106]<8u, unsigned long long, 0>(char*, char*, unsigned long long)
+std::__1::__to_chars_result std::__1::__to_chars_integral[abi:nqe220106]<unsigned __int128, 0>(char*, char*, unsigned __int128, int)
+std::__1::__to_chars_result std::__1::__to_chars_integral[abi:nqe220106]<unsigned int, 0>(char*, char*, unsigned int, int)
+std::__1::__to_chars_result std::__1::__to_chars_integral[abi:nqe220106]<unsigned long long, 0>(char*, char*, unsigned long long, int)
+std::__1::__to_chars_result std::__1::__to_chars_itoa[abi:nqe220106]<unsigned __int128>(char*, char*, unsigned __int128, std::__1::integral_constant<bool, false>)
+std::__1::__tree<std::__1::__value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::__map_value_compare<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::less<void>>, std::__1::allocator<std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>>::__tree_deleter::operator()[abi:nqe220106](std::__1::__tree_node<std::__1::__value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, void*>*)
+std::__1::__unicode::__code_point_view<char>::__consume[abi:nqe220106]()
+std::__1::__unicode::__extended_grapheme_cluster_break::__evaluate_GB11_emoji[abi:nqe220106](char32_t, std::__1::__extended_grapheme_custer_property_boundary::__property)
+std::__1::__unicode::__extended_grapheme_cluster_break::__evaluate_GB9c_indic_conjunct_break[abi:nqe220106](char32_t, std::__1::__extended_grapheme_custer_property_boundary::__property)
+std::__1::__width_estimation_table::__entries[abi:nqe220106]
+std::__1::__wrap_iter<pulp::view::WaveformGpuResourceRecord*> std::__1::vector<pulp::view::WaveformGpuResourceRecord, std::__1::allocator<pulp::view::WaveformGpuResourceRecord>>::__insert_with_size[abi:nqe220106]<std::__1::_ClassicAlgPolicy, std::__1::__wrap_iter<pulp::view::WaveformGpuResourceRecord*>, std::__1::__wrap_iter<pulp::view::WaveformGpuResourceRecord*>>(std::__1::__wrap_iter<pulp::view::WaveformGpuResourceRecord const*>, std::__1::__wrap_iter<pulp::view::WaveformGpuResourceRecord*>, std::__1::__wrap_iter<pulp::view::WaveformGpuResourceRecord*>, long)
+std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>> std::__1::__formatter::__fill[abi:nqe220106]<char, std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>>(std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, unsigned long, std::__1::__format_spec::__code_point<char>)
+std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>> std::__1::__formatter::__format_floating_point_non_finite[abi:nqe220106]<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>(std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, std::__1::__format_spec::__parsed_specifications<char>, bool, bool)
+std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>> std::__1::__formatter::__format_locale_specific_form[abi:nqe220106]<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, double, char>(std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, std::__1::__formatter::__float_buffer<double> const&, std::__1::__formatter::__float_result const&, std::__1::locale, std::__1::__format_spec::__parsed_specifications<char>)
+std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>> std::__1::__formatter::__format_locale_specific_form[abi:nqe220106]<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, float, char>(std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, std::__1::__formatter::__float_buffer<float> const&, std::__1::__formatter::__float_result const&, std::__1::locale, std::__1::__format_spec::__parsed_specifications<char>)
+std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>> std::__1::__formatter::__write_using_decimal_separators[abi:nqe220106]<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char*, char>(std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char*, char*, char*, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>&&, char, std::__1::__format_spec::__parsed_specifications<char>)
+std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>> std::__1::__vformat_to[abi:nqe220106]<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char, std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>>(std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, std::__1::basic_string_view<char, std::__1::char_traits<char>>, std::__1::basic_format_args<std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>>)
+std::__1::bad_function_call::~bad_function_call()
+std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>::iterator std::__1::__format::__vformat_to[abi:nqe220106]<std::__1::basic_format_parse_context<char>, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>>(std::__1::basic_format_parse_context<char>&&, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>&&)
+std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>::iterator std::__1::__formatter_string<char>::format[abi:nqe220106]<std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>>(std::__1::basic_string_view<char, std::__1::char_traits<char>>, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>&) const
+std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>::iterator std::__1::__formatter::__format_bool[abi:nqe220106]<char, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>>(bool, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>&, std::__1::__format_spec::__parsed_specifications<char>)
+std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>::iterator std::__1::__formatter::__format_floating_point[abi:nqe220106]<double, char, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>>(double, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>&, std::__1::__format_spec::__parsed_specifications<char>)
+std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>::iterator std::__1::__formatter::__format_floating_point[abi:nqe220106]<float, char, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>>(float, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>&, std::__1::__format_spec::__parsed_specifications<char>)
+std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>::iterator std::__1::__formatter::__format_floating_point[abi:nqe220106]<long double, char, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>>(long double, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>&, std::__1::__format_spec::__parsed_specifications<char>)
+std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>::iterator std::__1::__formatter::__format_integer[abi:nqe220106]<unsigned __int128, char, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>>(unsigned __int128, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>&, std::__1::__format_spec::__parsed_specifications<char>, bool)
+std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>::iterator std::__1::__formatter::__format_integer[abi:nqe220106]<unsigned __int128, char*, char, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>>(unsigned __int128, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>&, std::__1::__format_spec::__parsed_specifications<char>, bool, char*, char*, char const*, int)
+std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>::iterator std::__1::__formatter::__format_integer[abi:nqe220106]<unsigned int, char, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>>(unsigned int, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>&, std::__1::__format_spec::__parsed_specifications<char>, bool)
+std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>::iterator std::__1::__formatter::__format_integer[abi:nqe220106]<unsigned int, char*, char, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>>(unsigned int, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>&, std::__1::__format_spec::__parsed_specifications<char>, bool, char*, char*, char const*, int)
+std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>::iterator std::__1::__formatter::__format_integer[abi:nqe220106]<unsigned long long, char, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>>(unsigned long long, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>&, std::__1::__format_spec::__parsed_specifications<char>, bool)
+std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>::iterator std::__1::__formatter::__format_integer[abi:nqe220106]<unsigned long long, char*, char, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>>(unsigned long long, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>&, std::__1::__format_spec::__parsed_specifications<char>, bool, char*, char*, char const*, int)
+std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>::iterator std::__1::__formatter::__format_integer[abi:nqe220106]<unsigned long, char, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>>(unsigned long, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>&, std::__1::__format_spec::__parsed_specifications<char>, bool)
+std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>::iterator std::__1::__formatter::__format_integer[abi:nqe220106]<unsigned long, char*, char, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>>(unsigned long, std::__1::basic_format_context<std::__1::back_insert_iterator<std::__1::__format::__output_buffer<char>>, char>&, std::__1::__format_spec::__parsed_specifications<char>, bool, char*, char*, char const*, int)
+std::__1::basic_format_parse_context<char>::iterator std::__1::__format_spec::__parser<char>::__parse[abi:nqe220106]<std::__1::basic_format_parse_context<char>>(std::__1::basic_format_parse_context<char>&, std::__1::__format_spec::__fields[abi:nqe220106])
+std::__1::basic_ostream<char, std::__1::char_traits<char>>& std::__1::__put_character_sequence[abi:nqe220106]<char, std::__1::char_traits<char>>(std::__1::basic_ostream<char, std::__1::char_traits<char>>&, char const*, unsigned long)
+std::__1::basic_ostringstream<char, std::__1::char_traits<char>, std::__1::allocator<char>>::~basic_ostringstream()
+std::__1::basic_ostringstream<char, std::__1::char_traits<char>, std::__1::allocator<char>>::basic_ostringstream[abi:nqe220106]()
+std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>::__init_copy_ctor_external(char const*, unsigned long)
+std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>::__throw_length_error[abi:nqe220106]()
+std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>::__throw_out_of_range[abi:nqe220106]()
+std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>* std::__1::vector<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::allocator<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>::__emplace_back_slow_path<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const&>(std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const&)
+std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>& std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>::__assign_no_alias<false>(char const*, unsigned long)
+std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>& std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>::__assign_no_alias<true>(char const*, unsigned long)
+std::__1::basic_stringbuf<char, std::__1::char_traits<char>, std::__1::allocator<char>>::__init_buf_ptrs[abi:nqe220106]()
+std::__1::default_delete<pulp::state::ApplicationProperties>::operator()[abi:nqe220106](pulp::state::ApplicationProperties*) const
+std::__1::format_error::~format_error()
+std::__1::format_error::format_error[abi:nqe220106](char const*)
+std::__1::ostreambuf_iterator<char, std::__1::char_traits<char>> std::__1::__pad_and_output[abi:nqe220106]<char, std::__1::char_traits<char>>(std::__1::ostreambuf_iterator<char, std::__1::char_traits<char>>, char const*, char const*, char const*, std::__1::ios_base&, char)
+std::__1::pair<std::__1::__wrap_iter<float*>, std::__1::__wrap_iter<float*>> std::__1::__rotate[abi:nqe220106]<std::__1::_ClassicAlgPolicy, std::__1::__wrap_iter<float*>, std::__1::__wrap_iter<float*>>(std::__1::__wrap_iter<float*>, std::__1::__wrap_iter<float*>, std::__1::__wrap_iter<float*>)
+std::__1::unique_ptr<pulp::view::Badge, std::__1::default_delete<pulp::view::Badge>> std::__1::make_unique[abi:nqe220106]<pulp::view::Badge, char const (&) [15], pulp::view::Tone, 0>(char const (&) [15], pulp::view::Tone&&)
+std::__1::unique_ptr<pulp::view::Badge, std::__1::default_delete<pulp::view::Badge>> std::__1::make_unique[abi:nqe220106]<pulp::view::Badge, char const*&, pulp::view::Tone const&, 0>(char const*&, pulp::view::Tone const&)
+std::__1::unique_ptr<pulp::view::Fader, std::__1::default_delete<pulp::view::Fader>> std::__1::make_unique[abi:nqe220106]<pulp::view::Fader, 0>()
+std::__1::unique_ptr<pulp::view::Knob, std::__1::default_delete<pulp::view::Knob>> std::__1::make_unique[abi:nqe220106]<pulp::view::Knob, 0>()
+std::__1::unique_ptr<pulp::view::Label, std::__1::default_delete<pulp::view::Label>> std::__1::make_unique[abi:nqe220106]<pulp::view::Label, char const (&) [13], 0>(char const (&) [13])
+std::__1::unique_ptr<pulp::view::Label, std::__1::default_delete<pulp::view::Label>> std::__1::make_unique[abi:nqe220106]<pulp::view::Label, char const (&) [32], 0>(char const (&) [32])
+std::__1::unique_ptr<pulp::view::Label, std::__1::default_delete<pulp::view::Label>> std::__1::make_unique[abi:nqe220106]<pulp::view::Label, char const (&) [5], 0>(char const (&) [5])
+std::__1::unique_ptr<pulp::view::Label, std::__1::default_delete<pulp::view::Label>> std::__1::make_unique[abi:nqe220106]<pulp::view::Label, char const (&) [7], 0>(char const (&) [7])
+std::__1::unique_ptr<pulp::view::Label, std::__1::default_delete<pulp::view::Label>> std::__1::make_unique[abi:nqe220106]<pulp::view::Label, char const (&) [8], 0>(char const (&) [8])
+std::__1::unique_ptr<pulp::view::TextButton, std::__1::default_delete<pulp::view::TextButton>> std::__1::make_unique[abi:nqe220106]<pulp::view::TextButton, char const (&) [12], 0>(char const (&) [12])
+std::__1::unique_ptr<pulp::view::TextButton, std::__1::default_delete<pulp::view::TextButton>> std::__1::make_unique[abi:nqe220106]<pulp::view::TextButton, char const (&) [5], 0>(char const (&) [5])
+std::__1::unique_ptr<pulp::view::TextButton, std::__1::default_delete<pulp::view::TextButton>> std::__1::make_unique[abi:nqe220106]<pulp::view::TextButton, char const (&) [7], 0>(char const (&) [7])
+std::__1::unique_ptr<std::__1::__hash_node<std::__1::__hash_value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, float>, void*>, std::__1::__hash_node_destructor<std::__1::allocator<std::__1::__hash_node<std::__1::__hash_value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, float>, void*>>>>::~unique_ptr[abi:nqe220106]()
+std::__1::unique_ptr<std::__1::__hash_node<std::__1::__hash_value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, pulp::canvas::Color>, void*>, std::__1::__hash_node_destructor<std::__1::allocator<std::__1::__hash_node<std::__1::__hash_value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, pulp::canvas::Color>, void*>>>>::~unique_ptr[abi:nqe220106]()
+std::__1::unique_ptr<std::__1::__hash_node<std::__1::__hash_value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, void*>, std::__1::__hash_node_destructor<std::__1::allocator<std::__1::__hash_node<std::__1::__hash_value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, void*>>>> std::__1::__hash_table<std::__1::__hash_value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::__unordered_map_hasher<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::hash<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::equal_to<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>, std::__1::__unordered_map_equal<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::equal_to<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::hash<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>, std::__1::allocator<std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>>::__construct_node_hash<std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>&>(unsigned long, std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>&)
+std::__1::unique_ptr<std::__1::__hash_node<std::__1::__hash_value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, void*>, std::__1::__hash_node_destructor<std::__1::allocator<std::__1::__hash_node<std::__1::__hash_value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, void*>>>>::~unique_ptr[abi:nqe220106]()
+std::__1::vector<float, std::__1::allocator<float>>::__throw_length_error[abi:nqe220106]()
+std::__1::vector<float, std::__1::allocator<float>>::assign(unsigned long, float const&)
+std::__1::vector<float, std::__1::allocator<float>>::resize(unsigned long, float const&)
+std::__1::vector<float, std::__1::allocator<float>>::resize(unsigned long)
+std::__1::vector<float*, std::__1::allocator<float*>>::__throw_length_error[abi:nqe220106]()
+std::__1::vector<float*, std::__1::allocator<float*>>::resize(unsigned long)
+std::__1::vector<long long, std::__1::allocator<long long>>::__throw_length_error[abi:nqe220106]()
+std::__1::vector<pulp::audio::SampleAssetDropItem, std::__1::allocator<pulp::audio::SampleAssetDropItem>>::__throw_length_error[abi:nqe220106]()
+std::__1::vector<pulp::canvas::Point2D, std::__1::allocator<pulp::canvas::Point2D>>::__throw_length_error[abi:nqe220106]()
+std::__1::vector<pulp::signal::BiquadCoefficientsT<float>, std::__1::allocator<pulp::signal::BiquadCoefficientsT<float>>>::__throw_length_error[abi:nqe220106]()
+std::__1::vector<pulp::signal::SpectrogramColor, std::__1::allocator<pulp::signal::SpectrogramColor>>::__throw_length_error[abi:nqe220106]()
+std::__1::vector<pulp::signal::SpectrogramColor, std::__1::allocator<pulp::signal::SpectrogramColor>>::resize(unsigned long)
+std::__1::vector<pulp::state::ListenerToken, std::__1::allocator<pulp::state::ListenerToken>>::__throw_length_error[abi:nqe220106]()
+std::__1::vector<pulp::state::ListenerToken, std::__1::allocator<pulp::state::ListenerToken>>::~vector[abi:nqe220106]()
+std::__1::vector<pulp::view::EqCurveView::Band, std::__1::allocator<pulp::view::EqCurveView::Band>>::__throw_length_error[abi:nqe220106]()
+std::__1::vector<pulp::view::EqCurveView::BandParamIds, std::__1::allocator<pulp::view::EqCurveView::BandParamIds>>::__throw_length_error[abi:nqe220106]()
+std::__1::vector<pulp::view::InspectorFacts::Fact, std::__1::allocator<pulp::view::InspectorFacts::Fact>>::__throw_length_error[abi:nqe220106]()
+std::__1::vector<pulp::view::WaveformGpuResourceRecord, std::__1::allocator<pulp::view::WaveformGpuResourceRecord>>::__throw_length_error[abi:nqe220106]()
+std::__1::vector<pulp::view::WaveformHandle, std::__1::allocator<pulp::view::WaveformHandle>>::__throw_length_error[abi:nqe220106]()
+std::__1::vector<pulp::view::WaveformHeadlessRenderBackend::ResourcePayload, std::__1::allocator<pulp::view::WaveformHeadlessRenderBackend::ResourcePayload>>::__throw_length_error[abi:nqe220106]()
+std::__1::vector<pulp::view::WaveformHeadlessRenderBackend::ResourcePayload, std::__1::allocator<pulp::view::WaveformHeadlessRenderBackend::ResourcePayload>>::~vector[abi:nqe220106]()
+std::__1::vector<pulp::view::WaveformHeadlessRenderBackend::ResourcePayload, std::__1::allocator<pulp::view::WaveformHeadlessRenderBackend::ResourcePayload>>::reserve(unsigned long)
+std::__1::vector<pulp::view::WaveformPeakVertex, std::__1::allocator<pulp::view::WaveformPeakVertex>>::__throw_length_error[abi:nqe220106]()
+std::__1::vector<pulp::view::WaveformPeakVertex, std::__1::allocator<pulp::view::WaveformPeakVertex>>::resize(unsigned long)
+std::__1::vector<pulp::view::WaveformRenderSpan, std::__1::allocator<pulp::view::WaveformRenderSpan>>::__throw_length_error[abi:nqe220106]()
+std::__1::vector<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::allocator<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>::__throw_length_error[abi:nqe220106]()
+std::__1::vector<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::allocator<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>::~vector[abi:nqe220106]()
+std::__throw_bad_array_new_length[abi:nqe220106]()
+std::length_error::length_error[abi:nqe220106](char const*)
+std::out_of_range::out_of_range[abi:nqe220106](char const*)
+typeinfo for pulp::view::AudioInspectorPanel
+typeinfo for pulp::view::AudioInspectorWindow
+typeinfo for pulp::view::AudioWaveformView
+typeinfo for pulp::view::CommandHandler
+typeinfo for pulp::view::CorrelationMeter
+typeinfo for pulp::view::DropTarget
+typeinfo for pulp::view::EqCurveView
+typeinfo for pulp::view::Knob::store_normalized(float, pulp::view::Notify)::'lambda'()
+typeinfo for pulp::view::Meter
+typeinfo for pulp::view::MultiMeter
+typeinfo for pulp::view::SampleAssetDropTarget
+typeinfo for pulp::view::SpectrogramView
+typeinfo for pulp::view::SpectrumView
+typeinfo for pulp::view::TextEditor::TextEditor()::'lambda'(pulp::view::Point)
+typeinfo for pulp::view::WaveformView
+typeinfo for std::__1::__function::__base<void ()>
+typeinfo for std::__1::__function::__base<void (bool)>
+typeinfo for std::__1::__function::__base<void (pulp::view::AudioInspectorMode)>
+typeinfo for std::__1::__function::__base<void (pulp::view::Point)>
+typeinfo for std::__1::__function::__base<void (unsigned int, float)>
+typeinfo for std::__1::__function::__func<pulp::view::Knob::store_normalized(float, pulp::view::Notify)::'lambda'(), void ()>
+typeinfo for std::__1::__function::__func<pulp::view::TextEditor::TextEditor()::'lambda'(pulp::view::Point), void (pulp::view::Point)>
+typeinfo for std::__1::bad_function_call
+typeinfo for std::__1::format_error
+typeinfo name for pulp::view::AudioInspectorPanel
+typeinfo name for pulp::view::AudioInspectorWindow
+typeinfo name for pulp::view::AudioWaveformView
+typeinfo name for pulp::view::CommandHandler
+typeinfo name for pulp::view::CorrelationMeter
+typeinfo name for pulp::view::DropTarget
+typeinfo name for pulp::view::EqCurveView
+typeinfo name for pulp::view::Knob::store_normalized(float, pulp::view::Notify)::'lambda'()
+typeinfo name for pulp::view::Meter
+typeinfo name for pulp::view::MultiMeter
+typeinfo name for pulp::view::SampleAssetDropTarget
+typeinfo name for pulp::view::SpectrogramView
+typeinfo name for pulp::view::SpectrumView
+typeinfo name for pulp::view::TextEditor::TextEditor()::'lambda'(pulp::view::Point)
+typeinfo name for pulp::view::WaveformView
+typeinfo name for std::__1::__function::__base<void ()>
+typeinfo name for std::__1::__function::__base<void (bool)>
+typeinfo name for std::__1::__function::__base<void (pulp::view::AudioInspectorMode)>
+typeinfo name for std::__1::__function::__base<void (pulp::view::Point)>
+typeinfo name for std::__1::__function::__base<void (unsigned int, float)>
+typeinfo name for std::__1::__function::__func<pulp::view::Knob::store_normalized(float, pulp::view::Notify)::'lambda'(), void ()>
+typeinfo name for std::__1::__function::__func<pulp::view::TextEditor::TextEditor()::'lambda'(pulp::view::Point), void (pulp::view::Point)>
+typeinfo name for std::__1::bad_function_call
+typeinfo name for std::__1::format_error
+unsigned long long pulp::audio::PlanarAudioRingBuffer::write_impl<float const>(pulp::audio::BufferView<float const>, unsigned long long)
+void pulp::runtime::log<>(pulp::runtime::LogLevel, std::__1::basic_format_string<char>)
+void pulp::signal::response_curve_db<float, 18446744073709551615ul>(std::__1::span<pulp::signal::BiquadCoefficientsT<float> const, 18446744073709551615ul>, double, double, double, std::__1::span<float, 18446744073709551615ul>)
+void pulp::signal::SpectrogramBuffer::push_column<float>(float const*, int, pulp::signal::ColorMapper const&, float, float)
+void std::__1::__format_spec::__parser<char>::__parse_type[abi:nqe220106]<char const*>(char const*&)
+void std::__1::__hash_table<std::__1::__hash_value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::__unordered_map_hasher<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::hash<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::equal_to<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>, std::__1::__unordered_map_equal<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::equal_to<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::hash<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>, std::__1::allocator<std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>>::__assign_value[abi:nqe220106]<std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>&, std::__1::__hash_value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, 0>(std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>&, std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>&)
+void std::__1::vector<float, std::__1::allocator<float>>::__assign_with_size[abi:nqe220106]<std::__1::_ClassicAlgPolicy, float const*, float const*>(float const*, float const*, long)
+void std::__1::vector<float, std::__1::allocator<float>>::__assign_with_size[abi:nqe220106]<std::__1::_ClassicAlgPolicy, float*, float*>(float*, float*, long)
+void std::__1::vector<float, std::__1::allocator<float>>::__assign_with_size[abi:nqe220106]<std::__1::_ClassicAlgPolicy, std::__1::__wrap_iter<float*>, std::__1::__wrap_iter<float*>>(std::__1::__wrap_iter<float*>, std::__1::__wrap_iter<float*>, long)
+void std::__1::vector<long long, std::__1::allocator<long long>>::__assign_with_size[abi:nqe220106]<std::__1::_ClassicAlgPolicy, long long*, long long*>(long long*, long long*, long)
+void std::__1::vector<pulp::audio::SampleAssetDropItem, std::__1::allocator<pulp::audio::SampleAssetDropItem>>::__assign_with_size[abi:nqe220106]<std::__1::_ClassicAlgPolicy, pulp::audio::SampleAssetDropItem*, pulp::audio::SampleAssetDropItem*>(pulp::audio::SampleAssetDropItem*, pulp::audio::SampleAssetDropItem*, long)
+void std::__1::vector<pulp::view::EqCurveView::BandParamIds, std::__1::allocator<pulp::view::EqCurveView::BandParamIds>>::__assign_with_size[abi:nqe220106]<std::__1::_ClassicAlgPolicy, std::__1::__wrap_iter<pulp::view::EqCurveView::BandParamIds const*>, std::__1::__wrap_iter<pulp::view::EqCurveView::BandParamIds const*>>(std::__1::__wrap_iter<pulp::view::EqCurveView::BandParamIds const*>, std::__1::__wrap_iter<pulp::view::EqCurveView::BandParamIds const*>, long)
+void std::__1::vector<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::allocator<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>::__assign_with_size[abi:nqe220106]<std::__1::_ClassicAlgPolicy, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>*, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>*>(std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>*, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>*, long)
+vtable for pulp::view::AudioInspectorPanel
+vtable for pulp::view::AudioInspectorWindow
+vtable for pulp::view::AudioWaveformView
+vtable for pulp::view::CorrelationMeter
+vtable for pulp::view::EqCurveView
+vtable for pulp::view::Meter
+vtable for pulp::view::MultiMeter
+vtable for pulp::view::SampleAssetDropTarget
+vtable for pulp::view::SpectrogramView
+vtable for pulp::view::SpectrumView
+vtable for pulp::view::WaveformView
+vtable for std::__1::__function::__func<pulp::view::Knob::store_normalized(float, pulp::view::Notify)::'lambda'(), void ()>
+vtable for std::__1::__function::__func<pulp::view::TextEditor::TextEditor()::'lambda'(pulp::view::Point), void (pulp::view::Point)>
+vtable for std::__1::bad_function_call
+vtable for std::__1::format_error

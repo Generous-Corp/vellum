@@ -53,9 +53,13 @@ find_program(_ninja ninja)
 if(_ninja)
     set(_generator -G Ninja)
 endif()
+_run("debt probe" "${Python3_EXECUTABLE}"
+    "${VELLUM_SOURCE_DIR}/tools/mirror/verify_mirror_inertness.py"
+    --prefix "${_prefix}" --write-debt-probe "${_work}/debt_probe.cpp")
 _run("consumer configure" "${CMAKE_COMMAND}"
     -S "${VELLUM_SOURCE_DIR}/tools/mirror/consumer" -B "${_work}/consumer"
     ${_generator} -DCMAKE_BUILD_TYPE=Release
+    "-DVELLUM_MIRROR_DEBT_PROBE=${_work}/debt_probe.cpp"
     "-DCMAKE_PREFIX_PATH=${_prefix}"
     -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE
     -DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=FALSE)
