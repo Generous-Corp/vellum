@@ -1,0 +1,247 @@
+#pragma once
+
+// Cryptographic primitives.
+// Portable SHA-256; Mbed TLS: SHA-1, MD5, AES-CBC/GCM, HMAC.
+// TweetNaCl: Ed25519 sign/verify.
+
+#include <string>
+#include <string_view>
+#include <vector>
+#include <cstddef>
+#include <cstdint>
+#include <filesystem>
+#include <optional>
+
+namespace pulp::runtime {
+
+// ── Secure random bytes ─────────────────────────────────────────────────
+
+/// Generate bytes from the runtime's entropy-seeded CTR-DRBG. Returns nullopt
+/// when entropy initialization or generation fails.
+std::optional<std::vector<uint8_t>> secure_random_bytes(size_t size);
+
+/// Overwrite sensitive bytes through volatile stores so the wipe is not
+/// removed as a dead store when the containing object is destroyed.
+void secure_zero_memory(void* data, size_t size) noexcept;
+
+// ── Encoding ────────────────────────────────────────────────────────────
+
+/// Lowercase-hex encode raw bytes. Header-only; the one place callers should
+/// reach for bytes→hex (e.g. key/signature fingerprints) instead of re-rolling a
+/// nibble loop.
+inline std::string hex_encode(const uint8_t* data, size_t size) {
+    static const char* d = "0123456789abcdef";
+    std::string out;
+    out.reserve(size * 2);
+    for (size_t i = 0; i < size; ++i) {
+        out.push_back(d[data[i] >> 4]);
+        out.push_back(d[data[i] & 0xF]);
+    }
+    return out;
+}
+inline std::string hex_encode(const std::vector<uint8_t>& bytes) {
+    return hex_encode(bytes.data(), bytes.size());
+}
+
+// ── Hashing ─────────────────────────────────────────────────────────────
+
+/// Compute SHA-256 hash. Returns 32-byte digest.
+std::vector<uint8_t> sha256(const uint8_t* data, size_t size);
+std::vector<uint8_t> sha256(std::string_view data);
+
+/// Compute SHA-256 hash as hex string (64 chars).
+std::string sha256_hex(const uint8_t* data, size_t size);
+std::string sha256_hex(std::string_view data);
+
+/// Stream a file through SHA-256 without retaining its contents in memory.
+/// Returns nullopt when the file cannot be read or exceeds max_bytes.
+std::optional<std::string> sha256_file_hex(const std::filesystem::path& path,
+                                           std::uint64_t max_bytes);
+
+/// Compute SHA-1 hash. Returns 20-byte digest. (Legacy protocols only —
+/// e.g., WebSocket handshake per RFC 6455.)
+std::vector<uint8_t> sha1(const uint8_t* data, size_t size);
+std::vector<uint8_t> sha1(std::string_view data);
+
+/// Compute MD5 hash. Returns 16-byte digest. (Legacy use only.)
+std::vector<uint8_t> md5(const uint8_t* data, size_t size);
+std::vector<uint8_t> md5(std::string_view data);
+
+/// Compute MD5 hash as hex string (32 chars).
+std::string md5_hex(std::string_view data);
+
+// ── AES ─────────────────────────────────────────────────────────────────
+
+/// AES-256-CBC encrypt. Key must be 32 bytes, IV 16 bytes.
+/// Returns ciphertext (PKCS7 padded).
+std::optional<std::vector<uint8_t>> aes_encrypt(
+    const uint8_t* plaintext, size_t size,
+    const uint8_t* key_32, const uint8_t* iv_16);
+
+/// AES-256-CBC decrypt. Returns plaintext (PKCS7 unpadded).
+std::optional<std::vector<uint8_t>> aes_decrypt(
+    const uint8_t* ciphertext, size_t size,
+    const uint8_t* key_32, const uint8_t* iv_16);
+
+// ── HMAC (RFC 2104 / RFC 2202 / RFC 4231) ───────────────────────────────
+
+/// Compute HMAC-SHA256(key, data). Returns 32-byte tag on success,
+/// `std::nullopt` if the underlying mbedTLS context fails (alloc /
+/// bad input / build-config mismatch — rare in practice).
+/// Vectors: RFC 4231 (HMAC-SHA-256).
+std::optional<std::vector<uint8_t>> hmac_sha256(
+    const uint8_t* key, size_t key_size,
+    const uint8_t* data, size_t data_size);
+std::optional<std::vector<uint8_t>> hmac_sha256(std::string_view key,
+                                                  std::string_view data);
+
+/// Compute HMAC-SHA1(key, data). Returns 20-byte tag on success,
+/// `std::nullopt` on mbedTLS failure (see hmac_sha256). Legacy use
+/// (e.g., AWS Signature v2).
+/// Vectors: RFC 2202 (HMAC-SHA-1).
+std::optional<std::vector<uint8_t>> hmac_sha1(
+    const uint8_t* key, size_t key_size,
+    const uint8_t* data, size_t data_size);
+
+// ── AES-GCM (AEAD, NIST SP 800-38D) ─────────────────────────────────────
+
+/// Output of AES-GCM encryption: ciphertext + 16-byte authentication tag.
+struct GcmOutput {
+    std::vector<uint8_t> ciphertext;
+    std::vector<uint8_t> tag; ///< 16 bytes
+};
+
+/// AES-256-GCM encrypt with optional Additional Authenticated Data (AAD).
+/// IV/nonce should be 12 bytes (96 bits) per NIST SP 800-38D §8.2.1.
+/// Returns ciphertext (same length as plaintext) + 16-byte authentication tag.
+/// Returns std::nullopt on internal mbedTLS failure (rare; mostly OOM).
+std::optional<GcmOutput> aes_gcm_encrypt(
+    const uint8_t* plaintext, size_t plaintext_size,
+    const uint8_t* key_32,
+    const uint8_t* iv_12, size_t iv_size,
+    const uint8_t* aad, size_t aad_size);
+
+/// AES-256-GCM decrypt + verify the 16-byte tag.
+/// Returns plaintext on success; std::nullopt if the tag fails to verify
+/// (caller must treat that as a hard failure — *do not* surface partial
+/// plaintext on tag mismatch; the buffer is overwritten regardless but
+/// the contract is "verified or null").
+std::optional<std::vector<uint8_t>> aes_gcm_decrypt(
+    const uint8_t* ciphertext, size_t ciphertext_size,
+    const uint8_t* key_32,
+    const uint8_t* iv_12, size_t iv_size,
+    const uint8_t* aad, size_t aad_size,
+    const uint8_t* tag_16);
+
+// ── Constant-time comparison ────────────────────────────────────────────
+
+/// Constant-time byte comparison. Returns true iff @p a and @p b match.
+/// Use whenever comparing MAC tags, key material, or other secret bytes
+/// — `std::memcmp` short-circuits and leaks timing information.
+bool constant_time_equal(const uint8_t* a, const uint8_t* b, size_t size);
+
+// ── Ed25519 (RFC 8032) ──────────────────────────────────────────────────
+//
+// Detached EdDSA signing over the Ed25519 curve. Used by:
+//   - Sparkle appcast `edSignature` (macOS auto-update)
+//
+// Implementation: vendored TweetNaCl reference (public domain, RFC 8032
+// compliant). TweetNaCl exposes a combined sign-and-message API; the
+// wrappers here expose a detached 64-byte signature for direct
+// interoperability with Sparkle and most ecosystem tools.
+
+/// Ed25519 key sizes (RFC 8032 §5.1).
+inline constexpr size_t ed25519_public_key_size = 32;
+inline constexpr size_t ed25519_private_key_size = 64;  // seed (32) + public key (32)
+inline constexpr size_t ed25519_seed_size = 32;
+inline constexpr size_t ed25519_signature_size = 64;
+
+/// Ed25519 keypair (NaCl convention: secret key contains seed || public key).
+struct Ed25519KeyPair {
+    std::vector<uint8_t> public_key;   ///< 32 bytes
+    std::vector<uint8_t> private_key;  ///< 64 bytes (seed || public_key)
+};
+
+/// Generate a fresh Ed25519 keypair using mbedTLS CTR-DRBG for entropy.
+/// Returns std::nullopt on RNG failure (rare; reserved for hardware-RNG
+/// failure on locked-down platforms).
+std::optional<Ed25519KeyPair> ed25519_keypair_generate();
+
+/// Derive a deterministic Ed25519 keypair from a 32-byte seed.
+/// Useful for test vectors and for reproducing a key from a backed-up seed.
+std::optional<Ed25519KeyPair> ed25519_keypair_from_seed(
+    const uint8_t* seed_32, size_t seed_size);
+
+/// Sign a message with an Ed25519 private key (64-byte NaCl-form).
+/// Returns the 64-byte detached signature, or std::nullopt on input
+/// size validation failure.
+std::optional<std::vector<uint8_t>> ed25519_sign(
+    const uint8_t* private_key_64, size_t private_key_size,
+    const uint8_t* message, size_t message_size);
+
+/// Verify a 64-byte detached signature against a message + 32-byte public key.
+/// Returns true iff the signature is authentic. Returns false on any input-
+/// size mismatch (defense in depth — callers should still range-check).
+bool ed25519_verify(
+    const uint8_t* public_key_32, size_t public_key_size,
+    const uint8_t* signature_64, size_t signature_size,
+    const uint8_t* message, size_t message_size);
+
+// ── X25519 (RFC 7748) ───────────────────────────────────────────────────
+//
+// Elliptic-curve Diffie-Hellman over Curve25519. Used by:
+//   - Forge private-backup capsules, to wrap a content key to the
+//     creator's identity key and to a recovery key
+//
+// Implementation: the same vendored TweetNaCl reference that backs
+// Ed25519 above. `crypto_scalarmult` performs RFC 7748 scalar decoding
+// (clamping) on its own private copy, so a private key here is 32
+// arbitrary bytes and callers must not pre-clamp.
+//
+// Ed25519 keys cannot stand in for these. Ed25519 signs; it carries no
+// key-agreement operation, which is the whole reason this section exists.
+
+/// X25519 key and output sizes (RFC 7748 §5).
+inline constexpr size_t x25519_public_key_size = 32;
+inline constexpr size_t x25519_private_key_size = 32;
+inline constexpr size_t x25519_shared_secret_size = 32;
+
+/// X25519 keypair. Unlike Ed25519's NaCl-form secret, the private key
+/// here is the scalar alone — the public key is not appended.
+struct X25519KeyPair {
+    std::vector<uint8_t> public_key;   ///< 32 bytes
+    std::vector<uint8_t> private_key;  ///< 32 bytes
+};
+
+/// Generate a fresh X25519 keypair using mbedTLS CTR-DRBG for entropy.
+/// Returns std::nullopt on RNG failure (rare; reserved for hardware-RNG
+/// failure on locked-down platforms).
+std::optional<X25519KeyPair> x25519_keypair_generate();
+
+/// Recover the public key for an existing 32-byte private scalar.
+/// Deterministic — this is how a keypair is reconstituted from a stored
+/// or backed-up secret, and how RFC 7748 test vectors are checked.
+std::optional<X25519KeyPair> x25519_keypair_from_private_key(
+    const uint8_t* private_key_32, size_t private_key_size);
+
+/// Compute the raw X25519 shared secret between our private key and a
+/// peer's public key. Returns std::nullopt on an input-size mismatch, and
+/// on an all-zero result — that output means the peer supplied a
+/// small-order point, so the "shared" secret would be a value the peer
+/// already knew (RFC 7748 §6.1).
+///
+/// The result is NOT a key. X25519 output is a curve point, not uniformly
+/// distributed bytes, and using it directly as an AES key is a real
+/// weakness. Run it through a KDF first — `hmac_sha256` above is
+/// sufficient when the salt and context string are fixed by the format.
+std::optional<std::vector<uint8_t>> x25519_shared_secret(
+    const uint8_t* private_key_32, size_t private_key_size,
+    const uint8_t* peer_public_key_32, size_t peer_public_key_size);
+
+// ── Machine ID ──────────────────────────────────────────────────────────
+
+/// Generate a machine-specific fingerprint (deterministic per machine).
+/// Uses hardware identifiers (MAC address, CPU info, hostname) hashed with SHA-256.
+std::string machine_id();
+
+}  // namespace pulp::runtime

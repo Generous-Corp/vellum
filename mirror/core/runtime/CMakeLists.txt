@@ -1,0 +1,296 @@
+add_library(pulp-runtime)
+add_library(pulp::runtime ALIAS pulp-runtime)
+
+# ── pulp/runtime/build_info.hpp ────────────────────────────────────────────
+# Generated at configure time so the running binary can stamp itself with
+# the CMake build type, an ISO 8601 configure timestamp, and the full git
+# SHA (plus a dirty-tree flag). A ready-to-display build label is the cheapest
+# way for editor, log, inspector, and About surfaces to show which binary is
+# running. Header lands under <build>/generated/pulp/runtime/build_info.hpp
+# and is exposed on the PUBLIC include path of pulp-runtime so any
+# consumer can `#include <pulp/runtime/build_info.hpp>`.
+set(_pulp_build_info_dir "${CMAKE_CURRENT_BINARY_DIR}/generated")
+set(_pulp_build_info_path
+    "${_pulp_build_info_dir}/$<CONFIG>/pulp/runtime/build_info.hpp")
+set(_pulp_build_info_configured
+    "${_pulp_build_info_dir}/build_info.hpp.configured")
+
+string(TIMESTAMP PULP_BUILD_ISO8601 "%Y-%m-%dT%H:%M:%SZ" UTC)
+# $<CONFIG> resolves at generation time for both single- and multi-config
+# generators, so an installed Release header records the configuration that
+# produced it instead of the configure-time generator default.
+set(PULP_BUILD_TYPE "$<CONFIG>")
+set(PULP_VERSION "${PROJECT_VERSION}")
+
+# Best-effort git commit SHA + tracked-change probe. Empty when the source
+# tree isn't a git checkout (distribution tarball) — the generated
+# header documents that case. Untracked configure/build inputs do not
+# change the identity of an otherwise clean source commit.
+set(PULP_GIT_SHA "")
+set(PULP_GIT_DIRTY "false")
+find_package(Git QUIET)
+if(GIT_FOUND AND EXISTS "${PULP_ROOT_DIR}/.git")
+    execute_process(
+        # Keep the immutable identity complete. Admission and provenance
+        # receipts compare this value with an exact source revision; a short
+        # SHA cannot distinguish commits in every repository shape.
+        COMMAND "${GIT_EXECUTABLE}" -C "${PULP_ROOT_DIR}" rev-parse HEAD
+        OUTPUT_VARIABLE PULP_GIT_SHA
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+    include("${PULP_ROOT_DIR}/tools/cmake/PulpGitState.cmake")
+    pulp_git_tracked_dirty("${PULP_ROOT_DIR}" PULP_GIT_DIRTY)
+endif()
+
+# Compose a single ready-to-display label so the running app can just
+# print kStampLabel without re-formatting.
+#
+# Multi-config generators (Xcode, Visual Studio) leave CMAKE_BUILD_TYPE
+# empty at configure time — the config is chosen per build invocation.
+# Stamp label composition must still produce a useful value in that
+# case: it falls back to "config@build" with the SHA + ISO timestamp
+# still appearing, so the inspector / About dialog never renders an
+# information-free label.
+set(PULP_BUILD_STAMP "${PULP_VERSION}")
+set(_pulp_build_label "${PULP_BUILD_TYPE}")
+if(NOT _pulp_build_label)
+    set(_pulp_build_label "config@build")
+endif()
+string(APPEND PULP_BUILD_STAMP " (${_pulp_build_label}")
+if(PULP_GIT_SHA)
+    string(APPEND PULP_BUILD_STAMP ", ${PULP_GIT_SHA}")
+    if(PULP_GIT_DIRTY STREQUAL "true")
+        string(APPEND PULP_BUILD_STAMP "+dirty")
+    endif()
+endif()
+string(APPEND PULP_BUILD_STAMP ", ${PULP_BUILD_ISO8601})")
+
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/include/pulp/runtime/build_info.hpp.in"
+    "${_pulp_build_info_configured}"
+    @ONLY)
+file(GENERATE
+    OUTPUT "${_pulp_build_info_path}"
+    INPUT "${_pulp_build_info_configured}")
+
+# Install the generated header so consumers using `find_package(Pulp)`
+# after `cmake --install` can `#include <pulp/runtime/build_info.hpp>`
+# the same way they do during a source-tree build. PulpInstallRules.cmake
+# only globs core/*/include for the canonical headers; the build-time-
+# generated header has to be installed explicitly.
+install(
+    FILES "${_pulp_build_info_path}"
+    DESTINATION include/pulp/runtime)
+
+target_include_directories(pulp-runtime
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<BUILD_INTERFACE:${_pulp_build_info_dir}/$<CONFIG>>
+        $<INSTALL_INTERFACE:include>
+)
+
+target_sources(pulp-runtime PRIVATE
+    src/runtime.cpp
+    src/trace.cpp
+    src/identity.cpp
+    src/scoped_no_alloc.cpp
+    src/memory_mapped_file.cpp
+    src/temporary_file.cpp
+    src/durable_file_replacement.cpp
+    src/dynamic_library.cpp
+    src/udev_monitor.cpp
+    src/child_process.cpp
+    src/inter_process_lock.cpp
+    src/base64.cpp
+    src/high_resolution_timer.cpp
+    src/system_info.cpp
+    src/text_diff.cpp
+    src/xml.cpp
+    src/zip.cpp
+    src/http.cpp
+    src/socket.cpp
+    src/named_pipe.cpp
+    src/stream.cpp
+    src/async_stream.cpp
+    src/background_job.cpp
+    src/search_index.cpp
+    src/network_stream.cpp
+    src/memory_message_channel.cpp
+    src/websocket_channel.cpp
+    src/json_rpc.cpp
+    src/model_registry.cpp
+    src/model_store.cpp
+    src/model_download.cpp
+    src/ip_address.cpp
+    src/mac_address.cpp
+    src/url.cpp
+    src/i18n.cpp
+    src/sha256.cpp
+    src/crypto.cpp
+    src/analytics.cpp
+    src/big_integer.cpp
+    src/license.cpp
+    src/primes.cpp
+    src/expression.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../external/pugixml/pugixml.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../external/miniz/miniz.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../external/miniz/miniz_tdef.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../external/miniz/miniz_tinfl.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../external/miniz/miniz_zip.c
+    # TweetNaCl (public domain) — Ed25519 sign/verify per RFC 8032.
+    # `randombytes()` is supplied by core/runtime/src/crypto.cpp,
+    # wired to the runtime's mbedTLS CTR-DRBG instance.
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../external/tweetnacl/tweetnacl.c
+)
+
+# Highway's foreach_target.h uses #include HWY_TARGET_INCLUDE to re-include
+# the source file for each SIMD target. The source dir must be on the include path.
+target_include_directories(pulp-runtime PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+# Vendored dependencies (header-only or single-file). cpp-httplib is consumed
+# via the pulp-cpp-httplib interface target (see below) so its include path and
+# the CPPHTTPLIB_MBEDTLS_SUPPORT macro stay identical across every TU that
+# includes httplib.h — mismatched macros ODR-corrupt httplib's mutexes.
+target_include_directories(pulp-runtime PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../external/pugixml
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../external/miniz
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../external
+)
+
+set(_pulp_ubsan_enabled OFF)
+if(PULP_SANITIZER STREQUAL "undefined"
+        OR CMAKE_CXX_FLAGS MATCHES "(^| )-fsanitize=[^ ]*undefined"
+        OR CMAKE_C_FLAGS MATCHES "(^| )-fsanitize=[^ ]*undefined")
+    set(_pulp_ubsan_enabled ON)
+endif()
+
+if(_pulp_ubsan_enabled AND CMAKE_C_COMPILER_ID MATCHES "Clang|AppleClang|GNU")
+    # These vendored C libraries use implementation patterns that trip UBSan.
+    # Keep sanitizer coverage on Pulp's wrappers and tests while compiling only
+    # the vendored C implementations without UBSan.
+    set_source_files_properties(
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../external/miniz/miniz.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../external/miniz/miniz_tdef.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../external/miniz/miniz_tinfl.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../external/miniz/miniz_zip.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../external/tweetnacl/tweetnacl.c
+        PROPERTIES COMPILE_OPTIONS "-fno-sanitize=undefined")
+endif()
+unset(_pulp_ubsan_enabled)
+
+# SHA-256 hashes whole artifacts: the trusted-host inventory digests every
+# executable it prepares or launches, and a Debug standalone is ~90 MB. At -O0
+# that costs ~8 s per digest, which puts a Debug launch past the control
+# protocol's 10 s management budget on a loaded host. The kernel is portable
+# arithmetic with nothing to step through, so it is optimized in every
+# configuration. MSVC is left alone: /O2 conflicts with Debug's /RTC1.
+# Single-config generators only: Xcode rejects a per-config source option,
+# and a plain -O2 would lower Release's -O3 for this file.
+get_property(_pulp_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(NOT _pulp_multi_config AND CMAKE_BUILD_TYPE STREQUAL "Debug"
+        AND CMAKE_CXX_COMPILER_ID MATCHES "Clang|AppleClang|GNU")
+    set_source_files_properties(src/sha256.cpp PROPERTIES COMPILE_OPTIONS "-O2")
+endif()
+unset(_pulp_multi_config)
+
+target_link_libraries(pulp-runtime PUBLIC pulp::platform)
+# The vectorized kernels live in pulp-simd; <pulp/runtime/simd.hpp> forwards to
+# them, so every runtime consumer keeps resolving the old spelling.
+target_link_libraries(pulp-runtime PUBLIC pulp::simd)
+
+if(WIN32)
+    target_link_libraries(pulp-runtime PRIVATE Advapi32)
+endif()
+
+# Tracing (Perfetto, dev-only). pulp::tracing is an empty INTERFACE target when
+# PULP_TRACING=OFF (the default), so this adds zero cost / zero symbols to a
+# normal build; ON exposes <pulp/runtime/trace.hpp>'s Perfetto-backed macros and
+# propagates PULP_TRACING_ENABLED to in-build consumers. Wrapped in
+# BUILD_INTERFACE (same pattern as pulp-cpp-httplib above) so this dev-only
+# target is not required by the installed PulpTargets export set.
+# With tracing OFF (the default and only shippable config) pulp-tracing is an
+# empty INTERFACE target that must NOT appear in the installed export, so it is
+# wrapped in BUILD_INTERFACE. With tracing ON the dependency is real — every TU
+# is compiled with PULP_TRACING_ENABLED=1 and pulls in Perfetto symbols — so the
+# export MUST carry it, or consumers of the installed SDK fail to link. The
+# install rules add pulp-tracing/pulp-perfetto to PulpTargets in that case.
+if(PULP_TRACING)
+    target_link_libraries(pulp-runtime PUBLIC pulp-tracing)
+else()
+    target_link_libraries(pulp-runtime PUBLIC $<BUILD_INTERFACE:pulp-tracing>)
+endif()
+
+# Mbed TLS for cryptographic operations (SHA-256, RSA, AES — used directly by
+# crypto.cpp, independent of HTTP).
+if(TARGET mbedcrypto)
+    target_link_libraries(pulp-runtime PRIVATE mbedcrypto mbedx509 mbedtls)
+    if(APPLE)
+        # Static SDK consumers need these link items in pulp-runtime's exported
+        # link interface because model_download.cpp compiles httplib's macOS
+        # trust-anchor helper into libpulp-runtime.a.
+        target_link_libraries(pulp-runtime PRIVATE
+            "-framework Security" "-framework CoreFoundation")
+    endif()
+    target_include_directories(pulp-runtime PRIVATE
+        ${mbedtls_SOURCE_DIR}/include
+    )
+endif()
+
+if(APPLE AND NOT IOS AND NOT PULP_IOS)
+    target_link_libraries(pulp-runtime PRIVATE bsm)
+endif()
+
+# cpp-httplib (header-only HTTP(S) client/server). Consumed via the shared
+# interface target so the CPPHTTPLIB_MBEDTLS_SUPPORT macro, include path, and
+# mbedTLS/Security links stay identical across every TU that includes httplib.h
+# (http.cpp, model_download.cpp here; the HTTP test fixtures elsewhere).
+# Inconsistent macros ODR-corrupt httplib's internal mutexes — see the target's
+# definition in tools/cmake/PulpDependencies.cmake.
+#
+# httplib is a private implementation detail (no public header includes it), so
+# wrap the link in $<BUILD_INTERFACE:...>: its usage requirements apply when
+# building pulp-runtime's own TUs, but it is absent from the installed/exported
+# interface (it is not itself in pulp's export set).
+target_link_libraries(pulp-runtime PRIVATE $<BUILD_INTERFACE:pulp-cpp-httplib>)
+
+# CHOC headers (used by SpscQueue wrapper)
+target_include_directories(pulp-runtime PUBLIC
+    $<BUILD_INTERFACE:${choc_SOURCE_DIR}>
+    $<INSTALL_INTERFACE:include>
+)
+
+# ── pulp::foundation ────────────────────────────────────────────────────────
+#
+# The header-only primitives the DSP, timebase and music layers are built on:
+# Result, TripleBuffer, SeqLock, Slot, and the SpscQueue wrapper over CHOC's
+# FIFO. Every one is a template with no translation unit behind it, so a target
+# that uses only these needs runtime's headers and none of its object code.
+#
+# libpulp-runtime.a also compiles an HTTPS model downloader, an HTTP client, a
+# WebSocket channel and a socket layer, so pulp-runtime links mbedTLS. A static
+# library's PRIVATE link items still reach the consumer as $<LINK_ONLY:...>,
+# which is how a biquad came to name libmbedcrypto.a, libmbedtls.a,
+# libmbedx509.a, libeverest.a and libp256m.a on its link command. Depending on
+# this target instead of pulp::runtime is what cuts that.
+#
+# It carries runtime's whole include directory, because the headers do not move
+# and CMake cannot export part of one. So this is a LINK-scope boundary, not a
+# header partition: a consumer can still reach `#include <pulp/runtime/http.hpp>`
+# through it and will then fail at link time. Partitioning the headers is a
+# separate change; this one buys the link line, which is what a consumer has to
+# acquire at configure time.
+add_library(pulp-foundation INTERFACE)
+add_library(pulp::foundation ALIAS pulp-foundation)
+
+target_compile_features(pulp-foundation INTERFACE cxx_std_20)
+
+target_include_directories(pulp-foundation
+    INTERFACE
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<BUILD_INTERFACE:${choc_SOURCE_DIR}>
+        $<INSTALL_INTERFACE:include>
+)
+
+# Every existing consumer of pulp::runtime keeps resolving these headers by the
+# same include paths, so the split is invisible from above.
+target_link_libraries(pulp-runtime PUBLIC pulp::foundation)
