@@ -151,7 +151,11 @@ class ObservatoryMirrorImportTests(unittest.TestCase):
     def test_failed_mirror_export_verification_is_reported(self) -> None:
         fixture = self.fixture()
         fixture.reland(mirror_tree="0" * 40)
-        self.assertRejected(fixture, "mirror-export verification failed")
+        with self.assertRaises(observatory.ObservatoryError) as caught:
+            self.verify(fixture)
+        message = str(caught.exception)
+        self.assertIn("observatory cursor must exist on every history edge", message)
+        self.assertIn("mirror-export verification failed", message)
 
 
 if __name__ == "__main__":

@@ -630,8 +630,12 @@ def verify_vellum_observatory_pr_tail(
 MIRROR_IMPORT_PATHS = ("mirror",)
 
 
-def approved_mirror_shas(root: Path) -> set[str]:
-    """Mirror tips named by receipts the mirror-export verifier accepts."""
+def approved_mirror_shas(root: Path) -> tuple[set[str], list[str]]:
+    """Mirror tips named by receipts the mirror-export verifier accepts.
+
+    Returns the approved tips and, when verification fails, its errors; a
+    failed verification approves nothing.
+    """
     import importlib.util
 
     module_path = Path(__file__).with_name("verify_mirror_export.py")
@@ -649,18 +653,17 @@ def approved_mirror_shas(root: Path) -> set[str]:
         )
     report = verifier.verify(root)
     if report["status"] != "pass":
-        raise ObservatoryError(
-            "imported mirror history cannot be approved: mirror-export verification "
-            "failed: " + "; ".join(str(error) for error in report["errors"])
-        )
+        return set(), [str(error) for error in report["errors"]]
     shas: set[str] = set()
     for receipt_path in report["receipts"]:
         receipt = json.loads((root / receipt_path).read_text(encoding="utf-8"))
         shas.add(str(receipt["mirror_sha"]))
-    return shas
+    return shas, []
 
 
-def imported_mirror_commits(root: Path, git_base: str, head: str) -> set[str]:
+def imported_mirror_commits(
+    root: Path, git_base: str, head: str
+) -> tuple[set[str], list[str]]:
     """Commits of an imported Pulp mirror history that the append-only check skips.
 
     A side history qualifies only when its tip is the mirror_sha of an accepted
@@ -669,8 +672,9 @@ def imported_mirror_commits(root: Path, git_base: str, head: str) -> set[str]:
     reject a history edge that lacks the observatory cursor.
     """
     range_commits = set(git(root, "rev-list", f"{git_base}..{head}").splitlines())
+    approved, verification_errors = approved_mirror_shas(root)
     imported: set[str] = set()
-    for tip in sorted(approved_mirror_shas(root) & range_commits):
+    for tip in sorted(approved & range_commits):
         side = git(root, "rev-list", tip, f"^{git_base}").splitlines()
         side_set = set(side)
         for commit in side:
@@ -688,7 +692,7 @@ def imported_mirror_commits(root: Path, git_base: str, head: str) -> set[str]:
                     f"{', '.join(outside)}, outside the imported history"
                 )
         imported.update(side)
-    return imported
+    return imported, verification_errors
 
 
 def has_cursor(root: Path, commit: str) -> bool:
@@ -741,6 +745,7 @@ def verify_append_only(
     # Only a range with an edge lacking the cursor can contain an imported
     # mirror history, so the receipt verification runs only then.
     imported_cache: list[set[str]] = []
+    verification_errors: list[str] = []
 
     def imported_for(commit: str, parents: list[str]) -> set[str]:
         if not base_has_cursor:
@@ -749,8 +754,10 @@ def verify_append_only(
             return imported_cache[0]
         if all(has_cursor(root, sha) for sha in (commit, *parents)):
             return set()
-        imported_cache.append(imported_mirror_commits(root, git_base, head))
-        return imported_cache[0]
+        imported, errors = imported_mirror_commits(root, git_base, head)
+        imported_cache.append(imported)
+        verification_errors.extend(errors)
+        return imported
 
     for commit in commits:
         parents = git(root, "rev-list", "--parents", "-n", "1", commit).split()[1:]
@@ -798,9 +805,16 @@ def verify_append_only(
                 )
             except ObservatoryError:
                 if base_has_cursor:
+                    detail = (
+                        "; no imported mirror history was approved because "
+                        "mirror-export verification failed: "
+                        + "; ".join(verification_errors)
+                        if verification_errors
+                        else ""
+                    )
                     raise ObservatoryError(
                         f"observatory cursor must exist on every history edge: "
-                        f"{parent} -> {commit}"
+                        f"{parent} -> {commit}{detail}"
                     )
                 continue
             for source in ("pulp", "vellum"):
