@@ -1,7 +1,7 @@
 # Installs this build, then builds and runs the mirror consumer against the
 # installed package alone, proves the Phase-6 debts inert there, and proves
 # that one image cannot take two Skia/Dawn providers.
-foreach(_required VELLUM_SOURCE_DIR VELLUM_BUILD_DIR VELLUM_MIRROR_ORIGIN Python3_EXECUTABLE)
+foreach(_required VELLUM_SOURCE_DIR VELLUM_BUILD_DIR VELLUM_MIRROR_DEPS_DIR VELLUM_MIRROR_ORIGIN Python3_EXECUTABLE)
     if(NOT DEFINED ${_required})
         message(FATAL_ERROR "mirror consumer test: ${_required} was not supplied")
     endif()
@@ -32,6 +32,21 @@ foreach(_package_file IN LISTS _package_files)
         endif()
     endforeach()
 endforeach()
+
+# The libraries ship to other machines: no build-host path may be inside.
+file(GLOB _libraries "${_prefix}/mirror/lib/*.dylib")
+if(NOT _libraries)
+    message(FATAL_ERROR "the install carries no mirror libraries")
+endif()
+foreach(_library IN LISTS _libraries)
+    foreach(_forbidden "${VELLUM_SOURCE_DIR}" "${VELLUM_BUILD_DIR}" "${VELLUM_MIRROR_DEPS_DIR}")
+        file(STRINGS "${_library}" _hits REGEX "${_forbidden}" LIMIT_COUNT 1)
+        if(_hits)
+            message(FATAL_ERROR "${_library} embeds the build-host path ${_forbidden}")
+        endif()
+    endforeach()
+endforeach()
+message(STATUS "mirror libraries carry no build-host path: ok")
 
 set(_generator)
 find_program(_ninja ninja)

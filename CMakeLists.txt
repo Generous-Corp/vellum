@@ -312,6 +312,7 @@ if(VELLUM_BUILD_TESTS)
                 "-DVELLUM_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
                 "-DVELLUM_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
                 "-DVELLUM_MIRROR_ORIGIN=${VELLUM_MIRROR_ORIGIN_SHA}"
+                "-DVELLUM_MIRROR_DEPS_DIR=${VELLUM_MIRROR_DEPS_DIR}"
                 "-DPython3_EXECUTABLE=${Python3_EXECUTABLE}"
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tools/mirror/RunMirrorConsumer.cmake")
     endif()
