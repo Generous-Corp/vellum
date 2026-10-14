@@ -109,33 +109,360 @@ CHECKOUT_STEP = re.compile(
 STEP_START = re.compile(r"^(?P<indent> +)- name: .*$", re.M)
 
 
-PULP_FETCH_URL = "https://github.com/Generous-Corp/pulp"
 MIRROR_EDGE_PIN = "tools/provenance/mirror_edge_patterns.pin.json"
+# Pulp named in any form a workflow can reach it by: https, ssh, a
+# server_url or repository_owner expression, or a plain owner/repo slug, in
+# any letter case. Other Generous-Corp repositories (pulp-planning) do not match.
+PULP_REFERENCE = re.compile(
+    r"(?:generous-corp|\$\{\{\s*github\.repository_owner\s*\}\})\s*/\s*pulp(?:\.git)?(?![\w-])",
+    re.I,
+)
+PINNED_PULP_FETCH_NAME = "Fetch the pinned Pulp mirror-edge table commit"
+PINNED_PULP_GIT_DIR = '"$RUNNER_TEMP/mirror-edge-pulp.git"'
+# The only step allowed to fetch Pulp outside actions/checkout, byte for byte:
+# it reads the commit from the committed pin and fetches exactly that
+# commit's trees into a bare repository. Any added, removed or reordered line
+# fails the comparison.
+PINNED_PULP_FETCH = """      - name: Fetch the pinned Pulp mirror-edge table commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          pin_commit="$(python3 - <<'PY'
+          import json
+          import re
+          pin = json.load(open("tools/provenance/mirror_edge_patterns.pin.json"))
+          commit = pin["pulp_commit"]
+          if re.fullmatch(r"[0-9a-f]{40}", commit) is None:
+              raise SystemExit("mirror edge table pin is not a full commit SHA")
+          print(commit)
+          PY
+          )"
+          pulp_git="$RUNNER_TEMP/mirror-edge-pulp.git"
+          git init -q --bare "$pulp_git"
+          git -C "$pulp_git" remote add origin https://github.com/Generous-Corp/pulp.git
+          git -C "$pulp_git" fetch -q --depth 1 --filter=blob:none --no-tags origin "$pin_commit"
+          git -C "$pulp_git" update-ref --no-deref HEAD "$pin_commit"
+          test "$(git -C "$pulp_git" rev-parse HEAD)" = "$pin_commit\""""
+# The single use of the pinned repository outside the fetch step.
+PINNED_PULP_GIT_DIR_USE = f"            --mirror-edge-pulp-root {PINNED_PULP_GIT_DIR} \\"
+# The one step that names Pulp only to read GitHub metadata and the
+# routing-contract execution artifact. Every gh invocation in it must be one
+# of these, verbatim; anything else (contents/, git/blobs, raw downloads,
+# another artifact) fails.
+PULP_API_READER = ("provenance.yml", "Test authority protocol and negative controls")
+PULP_API_READER_GH_CALLS = {
+    'api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?per_page=100"',
+    'api "repos/Generous-Corp/pulp/commits/$PULP_ACCEPTANCE_SHA/check-runs?per_page=100"',
+    'api "repos/$repository/actions/runs/$run_id"',
+    'api "repos/$repository/pulls?state=open&per_page=100"',
+    'api "repos/$repository/pulls/$pull_number"',
+    'api "repos/$repository/compare/$base_commit...$head_commit"',
+    'api "repos/$repository/git/commits/$merge_base_commit"',
+    'api "repos/$repository/git/commits/$head_commit"',
+    'api "repos/$repository/git/trees/$merge_base_tree?recursive=1"',
+    'api "repos/$repository/git/trees/$head_tree?recursive=1"',
+    "api repos/Generous-Corp/pulp/git/ref/heads/main",
+    'run download "$run_id" --name pulp-vellum-routing-contract-execution',
+    'run download "$run_id" --name vellum-parity-proof-execution',
+}
+PULP_API_READER_GIT_CALLS = {"git -C .exact-boundary-pulp rev-parse HEAD"}
+# Every reader line that names Pulp, stripped, verbatim. A new line naming
+# Pulp (an anchor, an env export, a command through a variable) fails.
+PULP_API_READER_PULP_LINES = {
+    '"repos/Generous-Corp/pulp/commits/$PULP_ACCEPTANCE_SHA/check-runs?per_page=100" \\',
+    'repository == "Generous-Corp/pulp"',
+    'if [[ "$repository" == "Generous-Corp/pulp" ]]; then',
+    "for repository in Generous-Corp/pulp Generous-Corp/vellum; do",
+    'for repository in ("Generous-Corp/pulp", "Generous-Corp/vellum"):',
+    'live_pulp_main="$(gh api repos/Generous-Corp/pulp/git/ref/heads/main --jq .object.sha)"',
+    '"$(gh api repos/Generous-Corp/pulp/git/ref/heads/main --jq .object.sha)"',
+}
+# A command reached through a variable (`g=git; $g clone ...`).
+COMMAND_INDIRECTION = re.compile(
+    r"\b\w+=['\"]?(?:git|gh|curl|wget|python3?|bash|sh)\b"
+    r"|(?:^|[;&|(`]|\$\()\s*\$\{?\w+\}?\s+(?:repo|clone|api|fetch|run|-c)\b"
+)
+STEP_STATE_EXPORT = re.compile(r"GITHUB_(?:ENV|OUTPUT|PATH)\b")
+YAML_ANCHOR_OR_ALIAS = re.compile(r"(?:^\s*-\s+|:\s+|[\[{,]\s*|^\s*)[&*][A-Za-z0-9_-]")
+# Transports that bypass gh entirely.
+PULP_API_READER_FORBIDDEN = re.compile(
+    r"\b(?:curl|wget|urllib|requests|http\.client|socket|subprocess|nc)\b"
+    r"|raw\.githubusercontent|codeload\.|\b(?:tarball|zipball)\b|contents/|git/blobs",
+    re.I,
+)
+# Triggers whose runs act on unmerged or queued code: a pull request, a
+# merge-queue entry, or a workflow_run fired by either.
+QUEUE_GATED_EVENTS = {
+    "pull_request", "pull_request_target", "pull_request_review", "merge_group",
+    "workflow_run", "workflow_call",
+}
+BLOCK_SCALAR = re.compile(r"(?:^|:|-)\s*[|>][-+0-9]*\s*(?:#.*)?$")
 
 
-def raw_pulp_fetch_steps(text: str) -> list[str]:
-    """Return every step that fetches Generous-Corp/pulp by URL instead of
-    through actions/checkout."""
-    starts = [m.start() for m in STEP_START.finditer(text)] + [len(text)]
-    steps = [text[begin:end] for begin, end in zip(starts, starts[1:])]
-    return [step for step in steps if PULP_FETCH_URL in re.sub(r"#.*", "", step)]
+def indent_of(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
 
 
-def raw_pulp_fetch_problems(step: str) -> list[str]:
-    """A raw Pulp fetch must take its commit from the committed pin file,
-    fetch only that commit's trees into a bare repository, and never name a
-    live branch."""
-    code = re.sub(r"#.*", "", step)
-    problems = []
-    if MIRROR_EDGE_PIN not in code:
-        problems.append(f"does not read its commit from {MIRROR_EDGE_PIN}")
-    if not re.search(r'fetch -q --depth 1 --filter=blob:none --no-tags origin "\$pin_commit"', code):
-        problems.append("does not fetch exactly the pinned commit's trees")
-    if "git init -q --bare" not in code:
-        problems.append("does not fetch into a bare repository")
-    if re.search(r"\bcheckout\b|\bmain\b|refs/heads", code):
-        problems.append("checks out a working tree or names a live branch")
-    return problems
+def yaml_line_kinds(text: str) -> list[str]:
+    """Classify each line as 'blank', 'comment' (a comment a YAML parser
+    drops), 'block' (block-scalar content, including lines that look like
+    comments: they are script text), or 'node'. A block scalar's content is
+    every following line indented beyond the key that opened it; a less
+    indented line ends it, which is the YAML rule for a parent's indentation."""
+    kinds: list[str] = []
+    block_parent: int | None = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if block_parent is not None:
+            if not stripped or indent_of(line) > block_parent:
+                kinds.append("block")
+                continue
+            block_parent = None
+        if not stripped:
+            kinds.append("blank")
+        elif stripped.startswith("#"):
+            kinds.append("comment")
+        else:
+            kinds.append("node")
+            if BLOCK_SCALAR.search(line):
+                key = re.match(r"^(\s*)(?:-\s+)?", line)
+                block_parent = len(key.group(0)) if key else indent_of(line)
+    return kinds
+
+
+def workflow_events(text: str) -> set[str]:
+    """Event names under the top-level `on:` key, in scalar, flow-sequence,
+    flow-mapping or block form."""
+    lines = text.splitlines()
+    kinds = yaml_line_kinds(text)
+    for index, line in enumerate(lines):
+        match = re.match(r"""^(?:on|"on"|'on'|true):(.*)$""", line)
+        if kinds[index] != "node" or match is None:
+            continue
+        inline = re.sub(r"\s#.*$", "", match.group(1)).strip()
+        if inline:
+            if inline[0] in "[{":
+                return {
+                    item.split(":")[0].strip().strip("'\"")
+                    for item in inline.strip("[]{}").split(",") if item.strip()
+                }
+            return {inline.strip("'\"")}
+        events: set[str] = set()
+        child: int | None = None
+        for following, kind in zip(lines[index + 1:], kinds[index + 1:]):
+            if kind in ("blank", "comment"):
+                continue
+            depth = indent_of(following)
+            if depth == 0:
+                break
+            child = depth if child is None else child
+            if depth == child:
+                events.add(re.sub(r"^-\s*", "", following.strip()).split(":")[0].strip("'\""))
+        return events
+    return set()
+
+
+def queue_gated(text: str) -> bool:
+    return bool(workflow_events(text) & QUEUE_GATED_EVENTS)
+
+
+def workflow_items(text: str) -> tuple[list[dict[str, object]], list[tuple[int, str]]]:
+    """Split a workflow into steps and the lines outside every step.
+
+    Each `- ` item of a `steps:` list is a step, whatever key it starts with.
+    A step records its name (None when unnamed), whether `name:` is its first
+    key, and its lines; YAML comments are kept out of `code`, script text is
+    not. Lines outside steps (workflow and job headers, env, container,
+    services, job-level uses) are returned with their line numbers."""
+    lines = text.splitlines()
+    kinds = yaml_line_kinds(text)
+    steps: list[dict[str, object]] = []
+    in_step = [False] * len(lines)
+    index = 0
+    while index < len(lines):
+        if kinds[index] == "node" and re.match(r"^\s*steps:\s*$", lines[index]):
+            owner = indent_of(lines[index])
+            item_indent: int | None = None
+            cursor = index + 1
+            current: dict[str, object] | None = None
+            while cursor < len(lines):
+                line, kind = lines[cursor], kinds[cursor]
+                if kind == "node":
+                    depth = indent_of(line)
+                    if item_indent is None:
+                        if not line.strip().startswith("- ") or depth < owner:
+                            break
+                        item_indent = depth
+                    if depth < item_indent or (depth == item_indent and not line.strip().startswith("- ")):
+                        break
+                    if depth == item_indent:
+                        first = re.match(r"^\s*-\s+([A-Za-z0-9_-]+):\s*(.*)$", line)
+                        current = {"start": cursor, "lines": [], "code": [], "kinds": [],
+                                   "first_key": first.group(1) if first else "",
+                                   "name": None, "key_indent": item_indent + 2}
+                        steps.append(current)
+                if current is not None:
+                    current["lines"].append(line)
+                    current["kinds"].append(kind)
+                    if kind != "comment":
+                        current["code"].append(line)
+                    in_step[cursor] = True
+                    named = re.match(r"^\s*(?:-\s+)?name:\s*(.+?)\s*$", line)
+                    if kind == "node" and named and current["name"] is None and (
+                        indent_of(line) == item_indent or indent_of(line) == current["key_indent"]
+                    ):
+                        current["name"] = named.group(1).strip("'\"")
+                cursor += 1
+            index = cursor
+            continue
+        index += 1
+    outside = [(number, line) for number, (line, kind, inside) in enumerate(zip(lines, kinds, in_step), 1)
+               if not inside and kind in ("node", "block")]
+    return steps, outside
+
+
+def steps_lines(steps: list[dict[str, object]]) -> set[int]:
+    covered: set[int] = set()
+    for step in steps:
+        start = int(step["start"])
+        covered.update(range(start, start + len(step["lines"])))
+    return covered
+
+
+def open_quoted_scalar(line: str) -> bool:
+    """Whether a YAML node line opens a single- or double-quoted scalar
+    without closing it, at any position a scalar can start (after `- `, a key,
+    or a flow-collection separator). A continuation line of such a scalar may
+    start with `#` and still be text, so the rule refuses the form instead of
+    reading it. A plain scalar that happens to contain `: '` is refused too,
+    which is fail-closed."""
+    for start in re.finditer(r"(?:^\s*-\s+|^\s*|:\s+|[\[{,]\s*)(['\"])", line):
+        quote, index = start.group(1), start.end()
+        closed = False
+        while index < len(line):
+            char = line[index]
+            if quote == '"' and char == "\\":
+                index += 2
+                continue
+            if char == quote:
+                if quote == "'" and line[index + 1:index + 2] == "'":
+                    index += 2
+                    continue
+                closed = True
+                break
+            index += 1
+        if not closed:
+            return True
+    return False
+
+
+def step_text(step: dict[str, object]) -> str:
+    """The step as written, without the trailing blank and comment lines that
+    belong to whatever follows it."""
+    lines, kinds = list(step["lines"]), list(step["kinds"])
+    while lines and (kinds[-1] == "comment" or not lines[-1].strip()):
+        lines.pop()
+        kinds.pop()
+    return "\n".join(lines)
+
+
+def gh_calls(code: str) -> list[str]:
+    """Each gh invocation as `<subcommand> <path or run id> [--name artifact]`,
+    with options that only shape output dropped."""
+    joined = re.sub(r"\\\n\s*", " ", code)
+    calls = []
+    for match in re.finditer(r"\bgh\s+(.*)", joined):
+        tokens = re.findall(r'"[^"]*"|\S+', match.group(1))
+        if tokens[:1] == ["api"]:
+            paths = [t for t in tokens[1:] if not t.startswith("-") and re.match(r'"?repos/', t)]
+            calls.append("api " + (paths[0] if paths else "<no path>"))
+        elif tokens[:2] == ["run", "download"]:
+            name = tokens[tokens.index("--name") + 1] if "--name" in tokens else "<no name>"
+            calls.append(f"run download {tokens[2] if len(tokens) > 2 else ''} --name {name}")
+        else:
+            calls.append(" ".join(tokens[:2]))
+    return calls
+
+
+def pulp_reach_problems(workflow: str, text: str) -> tuple[list[str], int]:
+    """Problems with how a queue-gated workflow reaches Pulp, and how many
+    steps name Pulp. A step that names Pulp in any form must be a named
+    actions/checkout of the canonical slug (held by the checkout pin rule),
+    the canonical pinned fetch, or the reviewed API reader. Nothing outside a
+    step may name Pulp, and the pinned bare repository is used nowhere but
+    its one verifier argument."""
+    problems: list[str] = []
+    reaching = 0
+    fetches = 0
+    lines, kinds = text.splitlines(), yaml_line_kinds(text)
+    for number, (line, kind) in enumerate(zip(lines, kinds), 1):
+        if kind != "node":
+            continue
+        if YAML_ANCHOR_OR_ALIAS.search(line):
+            problems.append(f"line {number} uses a YAML anchor or alias")
+        if open_quoted_scalar(line):
+            problems.append(f"line {number} opens a quoted scalar that spans lines")
+    steps, outside = workflow_items(text)
+    # Comment-looking lines are scanned too: proving a line is a YAML comment
+    # rather than quoted-scalar text is not worth the risk of hiding code.
+    covered = steps_lines(steps)
+    outside = [(number, line) for number, line in enumerate(lines, 1)
+               if line.strip() and number - 1 not in covered]
+    for number, line in outside:
+        if PULP_REFERENCE.search(line):
+            problems.append(f"line {number} names Pulp outside a step")
+        if re.search(r"mirror-edge-pulp", line, re.I):
+            problems.append(f"line {number} uses the pinned Pulp repository outside a step")
+    pulp_checkout_steps = 0
+    for step in steps:
+        code = "\n".join(line for line in step["lines"] if line.strip())
+        name = step["name"]
+        label = repr(name) if name else f"unnamed step at line {int(step['start']) + 1}"
+        if name == PINNED_PULP_FETCH_NAME:
+            fetches += 1
+            reaching += 1
+            if step_text(step) != PINNED_PULP_FETCH:
+                problems.append(f"{label} is not the canonical pinned Pulp fetch")
+            continue
+        uses = [line for line in step["lines"] if re.search(r"mirror-edge-pulp", line, re.I)]
+        if uses and uses != [PINNED_PULP_GIT_DIR_USE]:
+            problems.append(f"{label} uses the pinned Pulp repository beyond reading it")
+        is_checkout = re.search(r"^ +(?:-\s+)?uses: actions/checkout@", code, re.M)
+        if is_checkout and re.search(r"^ +repository:\s*.*\$\{\{", code, re.M):
+            problems.append(f"{label} checks out a repository named by an expression")
+        if not PULP_REFERENCE.search(code):
+            continue
+        reaching += 1
+        if is_checkout:
+            repository = re.findall(r"^ +repository: (.+)$", code, re.M)
+            mentions = [line for line in step["lines"] if PULP_REFERENCE.search(line)]
+            if repository != [PULP_REPOSITORY] or mentions != [f"{' ' * (int(step['key_indent']) + 2)}repository: {PULP_REPOSITORY}"]:
+                problems.append(f"{label} names Pulp in a non-canonical form")
+            elif step["first_key"] != "name":
+                problems.append(f"{label} checks out Pulp without a leading name, outside the checkout pin rule")
+            else:
+                pulp_checkout_steps += 1
+            continue
+        if (workflow, name) == PULP_API_READER:
+            unreviewed = [call for call in gh_calls(code) if call not in PULP_API_READER_GH_CALLS]
+            git_calls = re.findall(r"\bgit\s+[^\n|;)&]*", code)
+            if unreviewed or any(call.strip() not in PULP_API_READER_GIT_CALLS for call in git_calls) \
+                    or PULP_API_READER_FORBIDDEN.search(code):
+                problems.append(f"{label} transfers Pulp content beyond its reviewed reads: {unreviewed}")
+            naming = {line.strip() for line in step["lines"] if PULP_REFERENCE.search(line)}
+            if naming - PULP_API_READER_PULP_LINES:
+                problems.append(f"{label} names Pulp on an unreviewed line: {sorted(naming - PULP_API_READER_PULP_LINES)}")
+            if STEP_STATE_EXPORT.search(code):
+                problems.append(f"{label} writes step state another step could read")
+            if COMMAND_INDIRECTION.search(code):
+                problems.append(f"{label} runs a command through a variable")
+            continue
+        problems.append(f"{label} reaches Pulp outside actions/checkout or the pinned fetch")
+    if fetches > 1:
+        problems.append("more than one pinned Pulp fetch step")
+    if pulp_checkout_steps != len(pulp_checkouts(text)):
+        problems.append("a Pulp checkout is not visible to the checkout pin rule")
+    return problems, reaching
 
 
 def pulp_checkouts(text: str) -> list[dict[str, str]]:
@@ -146,7 +473,7 @@ def pulp_checkouts(text: str) -> list[dict[str, str]]:
         fields = dict(
             re.findall(r"^ +([a-z-]+): (.+)$", match.group("with"), re.M)
         )
-        if fields.get("repository") != PULP_REPOSITORY:
+        if not PULP_REFERENCE.fullmatch(fields.get("repository", "").strip()):
             continue
         condition = re.search(r"^ +if: (.+)$", block, re.M)
         found.append(
@@ -587,7 +914,7 @@ class RunnerPolicyTests(unittest.TestCase):
         seen_verified: set[tuple[str, str]] = set()
         for path in sorted(WORKFLOWS.glob("*.yml")):
             text = path.read_text(encoding="utf-8")
-            if not re.search(r"^  (pull_request|merge_group):", text, re.M):
+            if not queue_gated(text):
                 continue
             for checkout in pulp_checkouts(text):
                 seen += 1
@@ -635,39 +962,231 @@ class RunnerPolicyTests(unittest.TestCase):
         self.assertEqual(non_exempt, seen - verified_count)
         self.assertEqual(seen_verified, VERIFIED_POST_CHECKOUT_PINS)
 
-    def test_raw_pulp_fetches_read_the_committed_pin(self) -> None:
+    def test_every_pulp_reach_is_a_reviewed_form(self) -> None:
         # A Pulp read that bypasses actions/checkout is invisible to the
-        # checkout rule above, so it is held to its own: only the committed
-        # pin decides which Pulp commit a pull_request or merge_group run sees.
-        seen = 0
+        # checkout rule above. Every step naming Pulp, in any form, is
+        # therefore classified, and the only raw fetch is the canonical one.
+        reaching = 0
         for path in sorted(WORKFLOWS.glob("*.yml")):
             text = path.read_text(encoding="utf-8")
-            if not re.search(r"^  (pull_request|merge_group):", text, re.M):
+            if not queue_gated(text):
                 continue
-            for step in raw_pulp_fetch_steps(text):
-                seen += 1
-                with self.subTest(workflow=path.name, step=step.splitlines()[0].strip()):
-                    self.assertEqual(raw_pulp_fetch_problems(step), [])
-        # Control: the mirror-edge table fetch is one such step.
-        self.assertGreaterEqual(seen, 1)
-
-    def test_raw_pulp_fetch_mutations_fail_closed(self) -> None:
+            problems, count = pulp_reach_problems(path.name, text)
+            reaching += count
+            with self.subTest(workflow=path.name):
+                self.assertEqual(problems, [])
+        # Local composite actions run inside whichever job uses them.
+        for path in sorted((ROOT / ".github" / "actions").glob("**/action.y*ml")):
+            problems, count = pulp_reach_problems(path.name, path.read_text(encoding="utf-8"))
+            reaching += count
+            with self.subTest(action=str(path.relative_to(ROOT))):
+                self.assertEqual(problems, [])
+        # Control: provenance.yml alone has five Pulp checkouts, the pinned
+        # fetch and the API-only reader.
+        self.assertGreaterEqual(reaching, 7)
         workflow = (WORKFLOWS / "provenance.yml").read_text(encoding="utf-8")
-        steps = raw_pulp_fetch_steps(workflow)
-        self.assertEqual(len(steps), 1)
-        step = steps[0]
-        self.assertEqual(raw_pulp_fetch_problems(step), [])
+        self.assertIn(PINNED_PULP_FETCH + "\n", workflow)
+        self.assertEqual(workflow.count(PINNED_PULP_GIT_DIR_USE), 1)
+
+    def test_pulp_reach_bypasses_fail_closed(self) -> None:
+        workflow = (WORKFLOWS / "provenance.yml").read_text(encoding="utf-8")
+        self.assertEqual(pulp_reach_problems("provenance.yml", workflow)[0], [])
+        fetch = PINNED_PULP_FETCH
+        tail = '          test "$(git -C "$pulp_git" rev-parse HEAD)" = "$pin_commit"'
+        verify = "      - name: Verify extraction and active-source quarantine\n"
+
+        def in_fetch(extra: str) -> str:
+            return workflow.replace(fetch, fetch.replace(tail, tail + "\n" + extra), 1)
+
+        pin_after_checkout = "      - name: Pin mirror Pulp reads to committed Decision 0010 evidence\n"
+        reader_anchor = '            live_pulp_main="$(gh api repos/Generous-Corp/pulp/git/ref/heads/main --jq .object.sha)"\n'
+        self.assertEqual(workflow.count(reader_anchor), 1)
+
+        reader_env = "          PULP_ACCEPTANCE_SHA: ${{ steps.expansion-evidence.outputs.pulp-sha }}\n"
+        self.assertEqual(workflow.count(reader_env), 1)
+
+        def in_reader(line: str) -> str:
+            return workflow.replace(reader_anchor, reader_anchor + "            " + line + "\n", 1)
+
+        def new_step(body: str) -> str:
+            return workflow.replace(verify, f"      - name: Extra step\n        run: |\n{body}\n\n" + verify, 1)
+
         mutations = {
-            "live branch": step.replace('origin "$pin_commit"', "origin main", 1),
-            "unpinned source": step.replace(MIRROR_EDGE_PIN, "provenance/other.json", 1),
-            "full blobs": step.replace(" --filter=blob:none", "", 1),
-            "working tree": step.replace("git init -q --bare", "git init -q", 1),
-            "checkout": step + '          git -C "$pulp_git" checkout -q "$pin_commit"\n',
+            "extra fetch of origin HEAD": in_fetch('          git -C "$pulp_git" fetch -q origin HEAD'),
+            "second remote and branch": in_fetch(
+                '          git -C "$pulp_git" remote add dev https://github.com/Generous-Corp/pulp.git\n'
+                '          git -C "$pulp_git" fetch -q dev develop'),
+            "worktree add": in_fetch('          git -C "$pulp_git" worktree add "$RUNNER_TEMP/pulp" "$pin_commit"'),
+            "archive and run": in_fetch(
+                '          git -C "$pulp_git" archive "$pin_commit" | tar x && bash setup.sh'),
+            "live branch": workflow.replace(fetch, fetch.replace('origin "$pin_commit"', "origin main", 1), 1),
+            "unpinned source": workflow.replace(fetch, fetch.replace(MIRROR_EDGE_PIN, "provenance/other.json", 1), 1),
+            "full blobs": workflow.replace(fetch, fetch.replace(" --filter=blob:none", "", 1), 1),
+            "working tree": workflow.replace(fetch, fetch.replace("git init -q --bare", "git init -q", 1), 1),
+            "ssh url": new_step("          git clone git@github.com:Generous-Corp/pulp.git pulp"),
+            "lowercase slug": new_step("          git clone https://github.com/generous-corp/pulp pulp"),
+            "server_url": new_step("          git clone ${{ github.server_url }}/Generous-Corp/pulp pulp"),
+            "repository_owner": new_step("          git clone https://github.com/${{ github.repository_owner }}/pulp.git"),
+            "dot-git suffix": new_step("          git clone https://github.com/Generous-Corp/pulp.git"),
+            "reuse the pinned repository": new_step(
+                f'          git -C {PINNED_PULP_GIT_DIR} fetch -q origin develop'),
+            "lowercase checkout": workflow.replace(
+                "          repository: Generous-Corp/pulp\n", "          repository: generous-corp/pulp\n", 1),
+            "api-only step clones": workflow.replace(
+                "      - name: Test authority protocol and negative controls\n",
+                "      - name: Test authority protocol and negative controls\n"
+                "        # gh repo clone Generous-Corp/pulp\n", 1).replace(
+                "          PULP_ACCEPTANCE_SHA: ${{ steps.expansion-evidence.outputs.pulp-sha }}\n",
+                "          PULP_ACCEPTANCE_SHA: ${{ steps.expansion-evidence.outputs.pulp-sha }}\n"
+                "          CLONE: gh repo clone Generous-Corp/pulp\n", 1),
+            "second pinned fetch": workflow.replace(fetch + "\n", fetch + "\n\n" + fetch + "\n", 1),
+            # Steps that do not start with `name:` are steps too.
+            "unnamed run after a Pulp checkout": workflow.replace(
+                pin_after_checkout, "      - run: git clone https://github.com/Generous-Corp/pulp pulp\n\n" + pin_after_checkout, 1),
+            "unnamed Pulp action after a Pulp checkout": workflow.replace(
+                pin_after_checkout,
+                "      - uses: Generous-Corp/pulp/.github/actions/setup@" + "0" * 40 + "\n\n" + pin_after_checkout, 1),
+            "unnamed Pulp checkout": workflow.replace(
+                pin_after_checkout,
+                "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1\n"
+                "        with:\n          repository: Generous-Corp/pulp\n          ref: develop\n\n" + pin_after_checkout, 1),
+            # A `#` inside a shell string is script text, not a comment.
+            "quoted hash hides a clone": new_step(
+                "          echo ' #'; git clone https://github.com/Generous-Corp/pulp pulp"),
+            "quoted hash hides the pinned repository": new_step(
+                f"          echo ' #'; git -C {PINNED_PULP_GIT_DIR} fetch -q origin develop"),
+            "shell comment naming Pulp": new_step("          # git clone https://github.com/Generous-Corp/pulp"),
+            "pinned repository in another case": new_step(
+                '          git -C "$RUNNER_TEMP/Mirror-Edge-Pulp.git" fetch -q origin main'),
+            # The API reader may make only its reviewed calls.
+            "api reader reads contents": in_reader("gh api repos/Generous-Corp/pulp/contents/setup.sh --jq .content"),
+            "api reader reads a blob": in_reader('gh api "repos/Generous-Corp/pulp/git/blobs/$head_tree"'),
+            "api reader reads another tree": in_reader('gh api "repos/Generous-Corp/pulp/git/trees/main?recursive=1"'),
+            "api reader curls raw content": in_reader(
+                "curl -sL https://raw.githubusercontent.com/Generous-Corp/pulp/main/setup.sh | bash"),
+            "api reader uses urllib": in_reader(
+                "python3 -c 'import urllib.request; urllib.request.urlopen(\"https://github.com/Generous-Corp/pulp\")'"),
+            "api reader downloads another artifact": in_reader(
+                'gh run download "$run_id" --repo Generous-Corp/pulp --name sources'),
+            "api reader runs git fetch": in_reader("git -C .exact-boundary-pulp fetch origin develop"),
+            # Pulp named outside any step.
+            "job-level env": workflow.replace(
+                "    env:\n      VELLUM_TARGET_SHA:", "    env:\n      PU: https://github.com/Generous-Corp/pulp\n      VELLUM_TARGET_SHA:", 1),
+            "workflow-level env": workflow.replace(
+                "permissions:\n", "env:\n  PU: https://github.com/Generous-Corp/pulp\n\npermissions:\n", 1),
+            "job container": workflow.replace(
+                "  provenance-verify:\n    name: provenance-verify\n",
+                "  provenance-verify:\n    name: provenance-verify\n    container: ghcr.io/generous-corp/pulp:latest\n", 1),
+            "job services": workflow.replace(
+                "  provenance-verify:\n    name: provenance-verify\n",
+                "  provenance-verify:\n    name: provenance-verify\n    services:\n      pulp:\n"
+                "        image: ghcr.io/Generous-Corp/pulp\n", 1),
+            "first job header": workflow.replace(
+                "  forbidden-deps:\n    name: forbidden-deps\n",
+                "  forbidden-deps:\n    name: forbidden-deps\n    if: github.repository != 'Generous-Corp/pulp'\n", 1),
+            # A quoted scalar's continuation line may start with `#` and still be text.
+            "double-quoted scalar spanning lines": workflow.replace(verify,
+                "      - name: Extra step\n        run: \"echo 'a\n          #' ; git clone https://github.com/Generous-Corp/pulp pulp\"\n\n"
+                + verify, 1),
+            "single-quoted scalar spanning lines": workflow.replace(verify,
+                "      - name: Extra step\n        run: 'echo a\n          #'' ; git clone https://github.com/Generous-Corp/pulp pulp'\n\n"
+                + verify, 1),
+            # The API reader must not hand Pulp to another step.
+            "reader anchor aliased into a checkout": workflow.replace(
+                reader_env, reader_env + "          PULP_URL: &pu Generous-Corp/pulp\n", 1).replace(verify,
+                "      - name: Extra checkout\n        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1\n"
+                "        with:\n          repository: *pu\n          ref: main\n\n" + verify, 1),
+            "reader anchor aliased into env": workflow.replace(
+                reader_env, reader_env + "          PULP_URL: &pu https://github.com/Generous-Corp/pulp\n", 1).replace(verify,
+                "      - name: Extra step\n        env:\n          U: *pu\n        run: git clone \"$U\"\n\n" + verify, 1),
+            "reader exports Pulp through GITHUB_ENV": in_reader(
+                'echo "PU=https://github.com/Generous-Corp/pulp" >> "$GITHUB_ENV"'),
+            "reader exports through GITHUB_OUTPUT without naming Pulp": in_reader(
+                'echo "repo=$repository" >> "$GITHUB_OUTPUT"'),
+            "reader runs git through a variable": in_reader("g=git; $g clone https://github.com/Generous-Corp/pulp"),
+            "reader runs gh through a variable": in_reader("G=gh; $G repo clone Generous-Corp/pulp"),
+            "reader names Pulp on a new line": in_reader('echo "Generous-Corp/pulp"'),
+            "reader runs git through a variable without naming Pulp": in_reader('g=git; $g -C .exact-boundary-pulp fetch origin develop'),
+            # Checkout shapes each guarded by one check.
+            "blank line hides an unpinned ref from the pin rule": workflow.replace(verify,
+                "      - name: Extra checkout\n        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1\n"
+                "        with:\n          path: .extra\n\n          repository: Generous-Corp/pulp\n          ref: main\n\n" + verify, 1),
+            "checkout that does not lead with name": workflow.replace(verify,
+                "      - if: always()\n        name: Extra checkout\n"
+                "        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1\n"
+                "        with:\n          repository: Generous-Corp/pulp\n          ref: main\n\n" + verify, 1),
+            "checkout repository from an expression": workflow.replace(verify,
+                "      - name: Extra checkout\n        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1\n"
+                "        with:\n          repository: ${{ format('{0}/pulp', github.repository_owner) }}\n          ref: main\n\n"
+                + verify, 1),
+            "reusable Pulp workflow job": workflow.rstrip("\n")
+                + "\n\n  pulp-reuse:\n    uses: Generous-Corp/pulp/.github/workflows/x.yml@" + "0" * 40 + "\n",
         }
         for name, mutated in mutations.items():
             with self.subTest(mutation=name):
-                self.assertNotEqual(mutated, step)
-                self.assertTrue(raw_pulp_fetch_problems(mutated))
+                self.assertNotEqual(mutated, workflow)
+                self.assertTrue(pulp_reach_problems("provenance.yml", mutated)[0])
+
+    def test_queue_gated_scope_reads_every_on_form(self) -> None:
+        self.assertTrue(queue_gated("on: [pull_request, merge_group]\n"))
+        self.assertTrue(queue_gated("on: pull_request\n"))
+        self.assertTrue(queue_gated("'on': {merge_group: {branches: [main]}}\n"))
+        self.assertTrue(queue_gated("on:\n  workflow_run:\n    workflows: [x]\n"))
+        self.assertTrue(queue_gated("on:\n  # queue\n  - push\n  - merge_group\n"))
+        self.assertTrue(queue_gated("on:\n  pull_request_target:\n"))
+        self.assertFalse(queue_gated("on:\n  push:\n    branches: [main]\n  schedule:\n    - cron: '0 0 * * *'\n"))
+        self.assertFalse(queue_gated("on: workflow_dispatch\n"))
+        # A workflow rewritten in flow style stays in scope, and its bypasses still fail.
+        workflow = (WORKFLOWS / "provenance.yml").read_text(encoding="utf-8")
+        block = workflow[workflow.index("on:\n"):workflow.index("permissions:\n")]
+        flow = workflow.replace(block, "on: [workflow_dispatch, pull_request, merge_group, push]\n\n", 1)
+        self.assertTrue(queue_gated(flow))
+        self.assertEqual(pulp_reach_problems("provenance.yml", flow)[0], [])
+
+    def test_composite_action_steps_are_read(self) -> None:
+        action = (
+            "name: x\nruns:\n  using: composite\n  steps:\n"
+            "    - run: git clone https://github.com/Generous-Corp/pulp pulp\n      shell: bash\n"
+        )
+        self.assertEqual(pulp_reach_problems("action.yml", action)[0],
+                         ["unnamed step at line 5 reaches Pulp outside actions/checkout or the pinned fetch"])
+        self.assertTrue(queue_gated("on:\n  workflow_call:\n"))
+        self.assertTrue(queue_gated("on: pull_request_review\n"))
+
+    def test_quoted_scalar_detection(self) -> None:
+        for line in ('        run: "echo a', "        run: 'echo a", "      - 'a", '        x: ["a', "        run: 'it''s"):
+            with self.subTest(line=line):
+                self.assertTrue(open_quoted_scalar(line))
+        for line in ('        run: "echo a"', "        run: 'it''s'", '        run: echo "a"', "        run: echo don't",
+                     '        x: ["a", "b"]', '        run: "a \\" b"'):
+            with self.subTest(line=line):
+                self.assertFalse(open_quoted_scalar(line))
+
+    def test_every_step_item_is_a_step(self) -> None:
+        text = (
+            "jobs:\n  a:\n    steps:\n"
+            "      - uses: actions/checkout@" + "0" * 40 + "\n"
+            "      - run: |\n          echo ' #'\n          # script text\n\n"
+            "      # a YAML comment\n"
+            "      - name: Named\n        run: echo hi\n"
+            "  b:\n    uses: org/repo/.github/workflows/x.yml@main\n"
+        )
+        steps, outside = workflow_items(text)
+        self.assertEqual([(step["first_key"], step["name"]) for step in steps],
+                         [("uses", None), ("run", None), ("name", "Named")])
+        self.assertIn("          # script text", steps[1]["code"])
+        self.assertNotIn("      # a YAML comment", steps[1]["code"])
+        self.assertIn((13, "    uses: org/repo/.github/workflows/x.yml@main"), outside)
+
+    def test_pulp_reference_recognises_every_form(self) -> None:
+        for text in ("https://github.com/Generous-Corp/pulp", "git@github.com:Generous-Corp/pulp.git",
+                     "${{ github.server_url }}/Generous-Corp/pulp", "generous-corp/PULP",
+                     "${{ github.repository_owner }}/pulp", "repos/Generous-Corp/pulp/check-runs"):
+            with self.subTest(text=text):
+                self.assertIsNotNone(PULP_REFERENCE.search(text))
+        for text in ("Generous-Corp/pulp-planning", "Generous-Corp/vellum", "pulp_sha"):
+            with self.subTest(text=text):
+                self.assertIsNone(PULP_REFERENCE.search(text))
 
     def test_exact_boundary_pin_mutations_fail_closed(self) -> None:
         workflow = (WORKFLOWS / "provenance.yml").read_text(encoding="utf-8")
