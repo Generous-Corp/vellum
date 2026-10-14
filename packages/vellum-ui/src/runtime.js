@@ -1,5 +1,6 @@
 import { services } from './services.js';
 import {
+    adoptLiveEffects,
     cloneEffect,
     registerEffect,
     scheduleCommittedEffects,
@@ -839,16 +840,23 @@ class Runtime {
             }
             frames.set(source.id, frame);
         }
+        // Restore transplants state; it does not remount. Live effects keep
+        // their committed instance and rerun only if their dependencies
+        // differ under the restored state; this commit establishes, reruns,
+        // and cleans up effects instead of deferring them to a later one.
+        adoptLiveEffects(this.frames, frames);
         const model = durableValue(snapshot.model ?? null, 'model');
         const candidate = this.renderCandidate(frames, model);
         if (frameFingerprint(candidate.frames) !== snapshot.layout_fingerprint) {
             throw new Error('Vellum state snapshot is incompatible with this application layout');
         }
+        const previousFrames = this.frames;
         this.frames = candidate.frames;
         this.handlers = candidate.handlers;
         this.model = model;
         this.lastTree = candidate.tree;
         this.dirty = false;
+        scheduleCommittedEffects(this, previousFrames, candidate.frames);
         return this.lastTree;
     }
 }

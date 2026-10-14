@@ -114,6 +114,10 @@ Application components can use `useState`, `useMemo`, and `useEffect` from the
 same unchanged TSX source in native JavaScriptCore and browser JavaScript.
 Effects run after a committed retained-tree render, rerun only when declared
 dependencies change, and invoke their cleanup before replacement or unmount.
+Restoring a state snapshot transplants state rather than remounting: a live
+effect whose dependencies are unchanged under the restored state keeps running
+without a rerun, a changed one cleans up and reruns, an unmounted one cleans
+up, and a fresh runtime establishes its effects, all at the restore commit.
 Timers and Promise callbacks invalidate the versioned host pump rather than
 requiring a DOM event loop.
 
