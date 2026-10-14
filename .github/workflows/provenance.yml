@@ -161,30 +161,31 @@ jobs:
           git -C .mirror-pulp checkout --detach "$pulp_ref"
           test "$(git -C .mirror-pulp rev-parse HEAD)" = "$pulp_ref"
 
-      - name: Resolve the pinned Pulp mirror-edge table
-        id: mirror-edge-pin
+      # Runs on every event, independent of landed receipts: the vendored
+      # table must be the exact blob Pulp holds at the commit the committed
+      # pin names. Only that commit's trees are fetched, into a bare
+      # repository outside the workspace, so no Pulp file is checked out or
+      # executed in this job.
+      - name: Fetch the pinned Pulp mirror-edge table commit
+        shell: bash
         run: |
-          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          pin_commit="$(python3 - <<'PY'
           import json
           import re
           pin = json.load(open("tools/provenance/mirror_edge_patterns.pin.json"))
           commit = pin["pulp_commit"]
           if re.fullmatch(r"[0-9a-f]{40}", commit) is None:
               raise SystemExit("mirror edge table pin is not a full commit SHA")
-          print(f"pulp-sha={commit}")
+          print(commit)
           PY
-
-      # Runs on every event, independent of landed receipts: the vendored
-      # table must be the exact blob Pulp holds at the pinned commit.
-      - name: Check out the pinned Pulp mirror-edge table
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          repository: Generous-Corp/pulp
-          ref: ${{ steps.mirror-edge-pin.outputs.pulp-sha }}
-          path: .mirror-edge-pulp
-          sparse-checkout: tools/scripts/vellum_mirror_edge_patterns.json
-          sparse-checkout-cone-mode: false
-          persist-credentials: false
+          )"
+          pulp_git="$RUNNER_TEMP/mirror-edge-pulp.git"
+          git init -q --bare "$pulp_git"
+          git -C "$pulp_git" remote add origin https://github.com/Generous-Corp/pulp.git
+          git -C "$pulp_git" fetch -q --depth 1 --filter=blob:none --no-tags origin "$pin_commit"
+          git -C "$pulp_git" update-ref --no-deref HEAD "$pin_commit"
+          test "$(git -C "$pulp_git" rev-parse HEAD)" = "$pin_commit"
 
       - name: Verify extraction and active-source quarantine
         env:
@@ -194,7 +195,7 @@ jobs:
           python3 tools/provenance/test_verify_mirror_export.py
           python3 tools/provenance/verify_extraction.py \
             ${MIRROR_PULP_ROOT:+--pulp-root "$MIRROR_PULP_ROOT"} \
-            --mirror-edge-pulp-root .mirror-edge-pulp \
+            --mirror-edge-pulp-root "$RUNNER_TEMP/mirror-edge-pulp.git" \
             --output "$RUNNER_TEMP/provenance-report.json"
           python3 - "$RUNNER_TEMP/provenance-report.json" <<'PY'
           import json

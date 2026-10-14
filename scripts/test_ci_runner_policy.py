@@ -109,6 +109,35 @@ CHECKOUT_STEP = re.compile(
 STEP_START = re.compile(r"^(?P<indent> +)- name: .*$", re.M)
 
 
+PULP_FETCH_URL = "https://github.com/Generous-Corp/pulp"
+MIRROR_EDGE_PIN = "tools/provenance/mirror_edge_patterns.pin.json"
+
+
+def raw_pulp_fetch_steps(text: str) -> list[str]:
+    """Return every step that fetches Generous-Corp/pulp by URL instead of
+    through actions/checkout."""
+    starts = [m.start() for m in STEP_START.finditer(text)] + [len(text)]
+    steps = [text[begin:end] for begin, end in zip(starts, starts[1:])]
+    return [step for step in steps if PULP_FETCH_URL in re.sub(r"#.*", "", step)]
+
+
+def raw_pulp_fetch_problems(step: str) -> list[str]:
+    """A raw Pulp fetch must take its commit from the committed pin file,
+    fetch only that commit's trees into a bare repository, and never name a
+    live branch."""
+    code = re.sub(r"#.*", "", step)
+    problems = []
+    if MIRROR_EDGE_PIN not in code:
+        problems.append(f"does not read its commit from {MIRROR_EDGE_PIN}")
+    if not re.search(r'fetch -q --depth 1 --filter=blob:none --no-tags origin "\$pin_commit"', code):
+        problems.append("does not fetch exactly the pinned commit's trees")
+    if "git init -q --bare" not in code:
+        problems.append("does not fetch into a bare repository")
+    if re.search(r"\bcheckout\b|\bmain\b|refs/heads", code):
+        problems.append("checks out a working tree or names a live branch")
+    return problems
+
+
 def pulp_checkouts(text: str) -> list[dict[str, str]]:
     """Return every actions/checkout step that reads Generous-Corp/pulp."""
     found: list[dict[str, str]] = []
@@ -605,6 +634,40 @@ class RunnerPolicyTests(unittest.TestCase):
         self.assertGreaterEqual(seen, 3)
         self.assertEqual(non_exempt, seen - verified_count)
         self.assertEqual(seen_verified, VERIFIED_POST_CHECKOUT_PINS)
+
+    def test_raw_pulp_fetches_read_the_committed_pin(self) -> None:
+        # A Pulp read that bypasses actions/checkout is invisible to the
+        # checkout rule above, so it is held to its own: only the committed
+        # pin decides which Pulp commit a pull_request or merge_group run sees.
+        seen = 0
+        for path in sorted(WORKFLOWS.glob("*.yml")):
+            text = path.read_text(encoding="utf-8")
+            if not re.search(r"^  (pull_request|merge_group):", text, re.M):
+                continue
+            for step in raw_pulp_fetch_steps(text):
+                seen += 1
+                with self.subTest(workflow=path.name, step=step.splitlines()[0].strip()):
+                    self.assertEqual(raw_pulp_fetch_problems(step), [])
+        # Control: the mirror-edge table fetch is one such step.
+        self.assertGreaterEqual(seen, 1)
+
+    def test_raw_pulp_fetch_mutations_fail_closed(self) -> None:
+        workflow = (WORKFLOWS / "provenance.yml").read_text(encoding="utf-8")
+        steps = raw_pulp_fetch_steps(workflow)
+        self.assertEqual(len(steps), 1)
+        step = steps[0]
+        self.assertEqual(raw_pulp_fetch_problems(step), [])
+        mutations = {
+            "live branch": step.replace('origin "$pin_commit"', "origin main", 1),
+            "unpinned source": step.replace(MIRROR_EDGE_PIN, "provenance/other.json", 1),
+            "full blobs": step.replace(" --filter=blob:none", "", 1),
+            "working tree": step.replace("git init -q --bare", "git init -q", 1),
+            "checkout": step + '          git -C "$pulp_git" checkout -q "$pin_commit"\n',
+        }
+        for name, mutated in mutations.items():
+            with self.subTest(mutation=name):
+                self.assertNotEqual(mutated, step)
+                self.assertTrue(raw_pulp_fetch_problems(mutated))
 
     def test_exact_boundary_pin_mutations_fail_closed(self) -> None:
         workflow = (WORKFLOWS / "provenance.yml").read_text(encoding="utf-8")
