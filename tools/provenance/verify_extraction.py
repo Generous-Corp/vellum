@@ -116,9 +116,13 @@ FORBIDDEN_ACTIVE_PATTERNS = {
 # plug-in formats, plug-in hosting, GPU audio and product content stay
 # Pulp-owned, and so do the Pulp-kept view and state files. The table is
 # vendored byte-for-byte from Pulp's tools/scripts/vellum_mirror_edge_patterns.json,
-# which Pulp's closure gate applies before export; with --pulp-root the
-# verifier proves the two copies have not drifted.
+# which Pulp's closure gate applies before export. mirror_edge_patterns.pin.json
+# records the Pulp commit and git blob it was vendored from: every run checks
+# the vendored bytes against that blob, --mirror-edge-pulp-root proves the blob
+# against a Pulp checkout of the pinned commit, and --pulp-root additionally
+# compares it with the Pulp commit of the last export.
 MIRROR_EDGE_TABLE = Path(__file__).with_name("mirror_edge_patterns.json")
+MIRROR_EDGE_TABLE_PIN = Path(__file__).with_name("mirror_edge_patterns.pin.json")
 PULP_MIRROR_EDGE_TABLE = "tools/scripts/vellum_mirror_edge_patterns.json"
 _MIRROR_EDGE_TABLE = json.loads(MIRROR_EDGE_TABLE.read_text(encoding="utf-8"))
 FORBIDDEN_MIRROR_EDGE_PATTERNS = {
@@ -130,6 +134,7 @@ MIRROR_EDGE_PATH_PATTERNS = {
 }
 PULP_KEPT_MIRROR_PATH = MIRROR_EDGE_PATH_PATTERNS["mirror-pulp-kept-file"]
 MIRROR_EDGE_SUFFIXES = set(_MIRROR_EDGE_TABLE["suffixes"])
+MIRROR_EDGE_BINARY_SUFFIXES = set(_MIRROR_EDGE_TABLE["binary_suffixes"])
 POLICY_IMPLEMENTATION_PATHS = {
     "scripts/verify_sdk_artifact.py",
 }
@@ -348,6 +353,41 @@ def mirror_edge_table_drift(pulp_root: Path) -> list[str]:
     return []
 
 
+def git_blob_sha(data: bytes) -> str:
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+def mirror_edge_table_pin_errors(
+    pulp_root: Path | None = None, table: Path = MIRROR_EDGE_TABLE, pin_path: Path = MIRROR_EDGE_TABLE_PIN
+) -> list[str]:
+    """The vendored table is the exact blob its pin names, and, given a Pulp
+    checkout of the pinned commit, that blob is Pulp's table there."""
+    try:
+        pin = json.loads(pin_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return [f"{pin_path.name} is unreadable: {exc}"]
+    if pin.get("schema") != "vellum.mirror-edge-table-pin.v1" \
+            or pin.get("pulp_repository") != "Generous-Corp/pulp" \
+            or pin.get("pulp_path") != PULP_MIRROR_EDGE_TABLE \
+            or not re.fullmatch(r"[0-9a-f]{40}", str(pin.get("pulp_commit", ""))) \
+            or not re.fullmatch(r"[0-9a-f]{40}", str(pin.get("git_blob", ""))):
+        return [f"{pin_path.name} must name Generous-Corp/pulp, {PULP_MIRROR_EDGE_TABLE}, a commit and a git blob"]
+    errors: list[str] = []
+    if git_blob_sha(table.read_bytes()) != pin["git_blob"]:
+        errors.append(f"{table.name} is not the git blob {pin['git_blob']} its pin names")
+    if pulp_root is not None:
+        try:
+            head = git(pulp_root, "rev-parse", "HEAD")
+            blob = git(pulp_root, "rev-parse", f"HEAD:{PULP_MIRROR_EDGE_TABLE}")
+        except (OSError, subprocess.CalledProcessError) as exc:
+            return errors + [f"Pulp checkout {pulp_root} cannot resolve the pinned table: {exc}"]
+        if head != pin["pulp_commit"]:
+            errors.append(f"Pulp checkout {pulp_root} is at {head}, not the pinned {pin['pulp_commit']}")
+        if blob != pin["git_blob"]:
+            errors.append(f"Pulp's {PULP_MIRROR_EDGE_TABLE} at {head} is blob {blob}, not the pinned {pin['git_blob']}")
+    return errors
+
+
 def mirror_edge_findings(root: Path) -> list[dict[str, object]]:
     findings: list[dict[str, object]] = []
     for path in mirror_files(root):
@@ -356,12 +396,13 @@ def mirror_edge_findings(root: Path) -> list[dict[str, object]]:
         for name, pattern in MIRROR_EDGE_PATH_PATTERNS.items():
             if pattern.search(in_mirror):
                 findings.append({"rule": name, "path": relative, "line": 0, "match": relative})
-        if path.suffix.lower() not in MIRROR_EDGE_SUFFIXES:
+        suffix = path.suffix.lower()
+        if suffix in MIRROR_EDGE_BINARY_SUFFIXES:
             continue
-        try:
-            text = path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
+        if suffix not in MIRROR_EDGE_SUFFIXES:
+            findings.append({"rule": "mirror-unclassified-suffix", "path": relative, "line": 0, "match": suffix})
             continue
+        text = path.read_text(encoding="utf-8", errors="replace")
         for name, pattern in FORBIDDEN_MIRROR_EDGE_PATTERNS.items():
             for match in pattern.finditer(text):
                 findings.append(
@@ -462,11 +503,19 @@ def verify_authority_phase(
 
 
 def verify(
-    root: Path, pulp_root: Path | None = None, defer_mirror_identity: bool = False
+    root: Path,
+    pulp_root: Path | None = None,
+    defer_mirror_identity: bool = False,
+    mirror_edge_pulp_root: Path | None = None,
 ) -> dict[str, object]:
     provenance = root / "provenance"
     errors: list[str] = []
     checks: dict[str, object] = {}
+
+    pin_errors = mirror_edge_table_pin_errors(mirror_edge_pulp_root)
+    checks["mirror_edge_table_matches_pin"] = not pin_errors
+    checks["mirror_edge_table_proved_against_pulp"] = mirror_edge_pulp_root is not None and not pin_errors
+    errors.extend(pin_errors)
 
     for name, expected in EXPECTED_HASHES.items():
         actual = sha256(provenance / name)
@@ -664,6 +713,11 @@ def main() -> int:
         help="Pulp checkout used to prove every mirror origin record",
     )
     parser.add_argument(
+        "--mirror-edge-pulp-root",
+        type=Path,
+        help="Pulp checkout of the commit mirror_edge_patterns.pin.json names",
+    )
+    parser.add_argument(
         "--defer-mirror-identity",
         action="store_true",
         help="leave the Pulp identity proof of mirror/ to the required provenance lane",
@@ -673,6 +727,7 @@ def main() -> int:
         args.root.resolve(),
         args.pulp_root.resolve() if args.pulp_root else None,
         defer_mirror_identity=args.defer_mirror_identity,
+        mirror_edge_pulp_root=args.mirror_edge_pulp_root.resolve() if args.mirror_edge_pulp_root else None,
     )
     rendered = json.dumps(report, indent=2, sort_keys=True) + "\n"
     if args.output:

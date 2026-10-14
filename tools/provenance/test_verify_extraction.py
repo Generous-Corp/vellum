@@ -547,6 +547,66 @@ class VerifyExtractionTests(unittest.TestCase):
             target.write_bytes(verify_extraction.MIRROR_EDGE_TABLE.read_bytes().replace(b"gpu_audio", b"gpuaudio", 1))
             self.assertTrue(verify_extraction.mirror_edge_table_drift(pulp))
 
+    def test_unclassified_and_non_utf8_mirror_files_are_not_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.write_mirror(root, "mirror/core/view/src/x.weird", b"int x;\n")
+            self.write_mirror(root, "mirror/core/view/src/y.cpp", b"\xff\xfe // pulp::audio\n")
+            self.write_mirror(root, "mirror/external/fonts/Inter.ttf", b"\x00\x01pulp::audio")
+            findings = verify_extraction.mirror_edge_findings(root)
+        self.assertEqual(
+            sorted((finding["rule"], finding["path"]) for finding in findings),
+            [("mirror-product-symbol", "mirror/core/view/src/y.cpp"),
+             ("mirror-unclassified-suffix", "mirror/core/view/src/x.weird")],
+        )
+
+    def test_vendored_table_is_the_pinned_blob(self) -> None:
+        self.assertEqual(verify_extraction.mirror_edge_table_pin_errors(), [])
+        pin = json.loads(verify_extraction.MIRROR_EDGE_TABLE_PIN.read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory() as directory:
+            edited = Path(directory) / "table.json"
+            edited.write_bytes(verify_extraction.MIRROR_EDGE_TABLE.read_bytes().replace(b"gpu_audio", b"gpuaudio", 1))
+            self.assertTrue(verify_extraction.mirror_edge_table_pin_errors(table=edited))
+            forged = Path(directory) / "pin.json"
+            forged.write_text(json.dumps(dict(pin, pulp_path="tools/other.json")), encoding="utf-8")
+            self.assertTrue(verify_extraction.mirror_edge_table_pin_errors(pin_path=forged))
+
+    def test_pinned_blob_is_proved_against_a_pulp_checkout(self) -> None:
+        def commit(pulp: Path, data: bytes) -> str:
+            target = pulp / verify_extraction.PULP_MIRROR_EDGE_TABLE
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+            subprocess.run(["git", "add", "-A"], cwd=pulp, check=True)
+            subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "t"], cwd=pulp, check=True)
+            return verify_extraction.git(pulp, "rev-parse", "HEAD")
+
+        table = verify_extraction.MIRROR_EDGE_TABLE.read_bytes()
+        with tempfile.TemporaryDirectory() as directory:
+            pulp, pin_path = Path(directory) / "pulp", Path(directory) / "pin.json"
+            pulp.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=pulp, check=True)
+            good = commit(pulp, table)
+            pin = dict(json.loads(verify_extraction.MIRROR_EDGE_TABLE_PIN.read_text(encoding="utf-8")), pulp_commit=good)
+            pin_path.write_text(json.dumps(pin), encoding="utf-8")
+            self.assertEqual(verify_extraction.mirror_edge_table_pin_errors(pulp, pin_path=pin_path), [])
+
+            # Vendored bytes and pin agree, but Pulp holds a different blob at the pinned commit.
+            edited = table.replace(b"gpu_audio", b"gpuaudio", 1)
+            vendored = Path(directory) / "vendored.json"
+            vendored.write_bytes(edited)
+            pin_path.write_text(json.dumps(dict(pin, git_blob=verify_extraction.git_blob_sha(edited))), encoding="utf-8")
+            self.assertEqual(
+                verify_extraction.mirror_edge_table_pin_errors(pulp, table=vendored, pin_path=pin_path),
+                [f"Pulp's {verify_extraction.PULP_MIRROR_EDGE_TABLE} at {good} is blob "
+                 f"{verify_extraction.git_blob_sha(table)}, not the pinned {verify_extraction.git_blob_sha(edited)}"],
+            )
+
+            # The checkout is not at the pinned commit.
+            pin_path.write_text(json.dumps(pin), encoding="utf-8")
+            moved = commit(pulp, table + b"\n")
+            errors = verify_extraction.mirror_edge_table_pin_errors(pulp, pin_path=pin_path)
+            self.assertIn(f"Pulp checkout {pulp} is at {moved}, not the pinned {good}", errors)
+
     def test_repository_passes_full_retirement_verification(self) -> None:
         root = MODULE_PATH.parents[2]
         report = verify_extraction.verify(root)
