@@ -189,15 +189,31 @@ def resolve_sources(origin_repo: Path, commit: str, stems: list[str]) -> dict[st
 
 def run_junit(binary: Path, tags: list[str], out_xml: Path, cwd: Path | None = None) -> dict[str, Any]:
     """Run the binary over the given file tags; return per-test outcomes keyed
-    by "<source stem>::<test name>"."""
+    by "<source stem>::<test name>".
+
+    The JUnit file is removed first, so a binary that dies before writing it
+    can never be read through a previous run's file. A signal exit is an error,
+    and the exit status must agree with the run: nonzero only when a test
+    failed, zero only when none did. Anything else is a process that did not
+    finish the run it reported.
+    """
     if not tags:
         raise LaneError("no sources selected: an empty population is not evidence")
     out_xml.parent.mkdir(parents=True, exist_ok=True)
+    out_xml.unlink(missing_ok=True)
     spec = ",".join(f"[#{tag}]" for tag in tags)
     result = run([str(binary), spec, "-#", "--reporter", "junit", "--out", str(out_xml)], timeout=1800, cwd=cwd)
+    if result.returncode < 0:
+        raise LaneError(f"{binary.name} was killed by signal {-result.returncode}: {result.stderr[-400:]}")
     if not out_xml.is_file():
         raise LaneError(f"{binary.name} wrote no JUnit (exit {result.returncode}): {result.stderr[-400:]}")
-    return {"exit": result.returncode, "outcomes": junit_outcomes(out_xml), "junit_sha256": ph.sha256_file(out_xml)}
+    outcomes = junit_outcomes(out_xml)
+    failed = any(status == "failed" for status in outcomes.values())
+    if result.returncode != 0 and not failed:
+        raise LaneError(f"{binary.name} exited {result.returncode} with no failed test to explain it")
+    if result.returncode == 0 and failed:
+        raise LaneError(f"{binary.name} exited 0 although its JUnit records a failed test")
+    return {"exit": result.returncode, "outcomes": outcomes, "junit_sha256": ph.sha256_file(out_xml)}
 
 
 def junit_outcomes(path: Path) -> dict[str, str]:
@@ -287,6 +303,89 @@ def build_consumer(work: Path, *, package: str, targets: list[str], prefix: Path
     return {"binary": work / "build" / "parity-consumer", "log": log}
 
 
+PROBE_CMAKE = """cmake_minimum_required(VERSION 3.24)
+project(ParityPackagingExclusionProbe LANGUAGES C CXX OBJCXX)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+find_package({package} CONFIG REQUIRED)
+include(FetchContent)
+FetchContent_Declare(Catch2 SOURCE_DIR "{catch2}")
+FetchContent_MakeAvailable(Catch2)
+foreach(_source IN ITEMS {sources})
+    get_filename_component(_stem "${{_source}}" NAME_WE)
+    add_executable("probe-${{_stem}}" "${{_source}}")
+    target_include_directories("probe-${{_stem}}" PRIVATE "{test_dir}")
+    target_link_libraries("probe-${{_stem}}" PRIVATE {targets} Catch2::Catch2WithMain)
+endforeach()
+"""
+
+
+def excluded_sources_that_build(work: Path, *, package: str, targets: list[str], prefix: Path,
+                                sources: list[Path], test_dir: Path, catch2: Path, jobs: int) -> list[str]:
+    """An exclusion holds only while its source still cannot be built against
+    the package. Each excluded source is compiled and linked on its own; the
+    stems that now build are returned, so a stale exclusion cannot hide a
+    source that would compile and diverge."""
+    if not sources:
+        return []
+    if work.exists():
+        shutil.rmtree(work)
+    src = work / "src"
+    src.mkdir(parents=True)
+    for source in sources:
+        shutil.copy2(source, src / source.name)
+    (src / "CMakeLists.txt").write_text(PROBE_CMAKE.format(
+        package=package, targets=" ".join(targets), catch2=catch2, test_dir=test_dir,
+        sources=" ".join(source.name for source in sources)), encoding="utf-8")
+    configured = run(["cmake", "-S", str(src), "-B", str(work / "build"), "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
+                      f"-DCMAKE_PREFIX_PATH={prefix}", "-DCMAKE_FIND_PACKAGE_NO_PACKAGE_REGISTRY=ON"], timeout=3600)
+    if configured.returncode != 0:
+        raise LaneError(f"exclusion probe did not configure: {(configured.stdout + configured.stderr)[-400:]}")
+    run(["cmake", "--build", str(work / "build"), "-j", str(jobs), "--", "-k", "0"], timeout=3600)
+    return sorted(source.stem for source in sources if (work / "build" / f"probe-{source.stem}").is_file())
+
+
+def git_blob(repo: Path, commit: str, rel: str) -> str | None:
+    result = run(["git", "-C", str(repo), "rev-parse", "--verify", "--quiet", f"{commit}:{rel}"])
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def dependency_violations(build: Path, origin_repo: Path, origin_commit: str, exported_repo: Path,
+                          exported_commit: str, exported_prefix: str) -> list[str]:
+    """The candidate may read origin files only from test/. Any other origin
+    file a translation unit includes (a private `src/` header reached from a
+    test) is accepted only when the export carries the identical blob at the
+    same path, so the candidate still compiles nothing but exported code."""
+    result = run(["ninja", "-C", str(build), "-t", "deps"])
+    if result.returncode != 0:
+        return [f"cannot read the consumer's dependency log: {result.stderr[-200:]}"]
+    origin = origin_repo.resolve()
+    seen: set[str] = set()
+    violations = []
+    for line in result.stdout.splitlines():
+        if not line.startswith(" ") or not line.strip():
+            continue
+        path = Path(line.strip())
+        if not path.is_absolute():
+            path = build / path
+        try:
+            rel = path.resolve().relative_to(origin).as_posix()
+        except ValueError:
+            continue
+        if rel in seen or rel.startswith("test/"):
+            continue
+        seen.add(rel)
+        origin_blob = git_blob(origin_repo, origin_commit, rel)
+        worktree_blob = run(["git", "-C", str(origin_repo), "hash-object", rel]).stdout.strip()
+        exported_blob = git_blob(exported_repo, exported_commit, exported_prefix + rel)
+        if not origin_blob or origin_blob != worktree_blob or origin_blob != exported_blob:
+            violations.append(f"candidate compiled origin file {rel} outside test/ that the export does not carry "
+                              "identically")
+    if not result.stdout.strip():
+        violations.append("the consumer's dependency log is empty: nothing to audit")
+    return violations
+
+
 # ── comparison ────────────────────────────────────────────────────────────
 
 
@@ -360,20 +459,29 @@ def evaluate(spec: dict[str, Any], out: Path, *, prefix_override: Path | None = 
                        f"{census['duplicates'][:5]}")
 
     groups = []
+    unstable_seen: set[str] = set()
     for group in spec["groups"]:
         name = group["name"]
         binary = Path(reference_override or group["reference_binary"])
         if not binary.is_file():
             return {"status": "blocked", "reasons": [f"{name}: reference binary missing: {binary}"],
                     "identity": identity}
-        tags = tags_override if tags_override is not None else file_tags(binary)
-        tags = [t for t in tags if t not in excluded]
+        all_tags = tags_override if tags_override is not None else file_tags(binary)
+        tags = [t for t in all_tags if t not in excluded]
+        excluded_here = [t for t in all_tags if t in excluded]
         try:
             sources = (source_overrides or {}).get(name) or list(
                 resolve_sources(origin_repo, spec["origin_commit"], tags).values())
             reference = run_junit(binary, tags, out / name / "reference.xml")
+            now_build = excluded_sources_that_build(
+                out / name / "exclusion-probe", package=spec["candidate_package"],
+                targets=group["candidate_targets"], prefix=prefix,
+                sources=list(resolve_sources(origin_repo, spec["origin_commit"], excluded_here).values()),
+                test_dir=origin_repo / "test", catch2=Path(spec["catch2_source"]), jobs=int(spec.get("jobs", 4)))
         except LaneError as error:
             return {"status": "fail", "reasons": reasons + [f"{name}: {error}"], "identity": identity}
+        reasons += [f"{name}: excluded source {stem} now builds against the package; remove its exclusion"
+                    for stem in now_build]
         reference_census = image_census(binary, set())
         if group.get("expect_reference_provider") and not reference_census["provider_count"]:
             reasons.append(f"{name}: provider census found no Skia/Dawn definition in the reference binary, "
@@ -386,7 +494,15 @@ def evaluate(spec: dict[str, Any], out: Path, *, prefix_override: Path | None = 
             reasons.append(f"{name}: candidate consumer did not build against the package")
             groups.append({"group": name, "consumer_log": built["log"]})
             continue
-        candidate = run_junit(built["binary"], tags, out / name / "candidate.xml", cwd=origin_repo)
+        try:
+            candidate = run_junit(built["binary"], tags, out / name / "candidate.xml", cwd=origin_repo)
+        except LaneError as error:
+            reasons.append(f"{name}: candidate: {error}")
+            groups.append({"group": name, "candidate_error": str(error)})
+            continue
+        reasons += [f"{name}: {v}" for v in dependency_violations(
+            out / name / "consumer" / "build", origin_repo, spec["origin_commit"], Path(spec["exported_repo"]),
+            exported_commit_override or spec["exported_commit"], spec.get("exported_prefix", "mirror/"))]
         image = image_census(built["binary"], census["_exported"])
         links = linked_libraries(built["binary"])
         if image["shadowed_count"]:
@@ -397,6 +513,10 @@ def evaluate(spec: dict[str, Any], out: Path, *, prefix_override: Path | None = 
         if not any("libvellum-mirror-" in lib for lib in links):
             reasons.append(f"{name}: candidate image links no package library")
         for test in unstable:
+            if test in reference["outcomes"]:
+                unstable_seen.add(test)
+                if candidate["outcomes"].get(test) == "failed":
+                    reasons.append(f"{name}: unstable test {test} failed on the candidate")
             reference["outcomes"].pop(test, None)
             candidate["outcomes"].pop(test, None)
         compared = compare(reference["outcomes"], candidate["outcomes"])
@@ -404,6 +524,8 @@ def evaluate(spec: dict[str, Any], out: Path, *, prefix_override: Path | None = 
         groups.append({
             "group": name,
             "sources": sorted(s.name for s in sources),
+            "sources_total": len(all_tags),
+            "sources_excluded": excluded_here,
             "candidate_targets": group["candidate_targets"],
             "tests": len(reference["outcomes"]),
             "passed_on_both": sum(1 for t, s in reference["outcomes"].items()
@@ -417,10 +539,19 @@ def evaluate(spec: dict[str, Any], out: Path, *, prefix_override: Path | None = 
                                                              if "libvellum-mirror-" in l),
                           "image_census": {k: v for k, v in image.items() if k != "defined"}},
         })
+    if len(groups) == len(spec["groups"]) and all("tests" in g for g in groups):
+        reasons += [f"unstable test {t} is in no group's reference population" for t in sorted(set(unstable) - unstable_seen)]
     total = sum(g.get("tests", 0) for g in groups)
     if not total:
         reasons.append("no group produced a population")
+    compared_sources = sum(len(g.get("sources", [])) for g in groups)
+    total_sources = sum(g.get("sources_total", 0) for g in groups)
+    scope = (f"named subset: {compared_sources} of {total_sources} origin test sources ({total} tests) across "
+             f"{len(groups)} groups; {total_sources - compared_sources} excluded, each listed with its reason"
+             if compared_sources != total_sources else
+             f"full population: {total_sources} origin test sources ({total} tests) across {len(groups)} groups")
     return {
+        "scope": scope,
         "status": "fail" if reasons else "pass",
         "reasons": reasons,
         "identity": {k: identity[k] for k in ("status", "closure_paths", "origin_files", "exported_files")},
@@ -472,18 +603,37 @@ def calibrate(spec: dict[str, Any], out: Path) -> dict[str, Any]:
     excluded = spec.get("exclude_sources") or {}
     tags = [t for t in file_tags(Path(first["reference_binary"])) if t not in excluded]
     sources = list(resolve_sources(Path(spec["origin_repo"]), spec["origin_commit"], tags).values())
-    one_group = dict(spec, groups=[first])
+    def only(group: dict[str, Any]) -> dict[str, Any]:
+        # A single-group control drops unstable entries that name other
+        # groups' tests, so each control fails for its own reason only.
+        return dict(spec, groups=[group], unstable_tests={})
+
+    one_group = only(first)
     control("seeded-failing-test-in-candidate",
             evaluate(one_group, out / "c-seeded",
                      source_overrides={first["name"]: [seeded_failure(sources[0], out / "seeded")] + sources[1:]}),
             must_mention="seeded failure")
+    aborting = out / "aborting" / sources[0].name
+    aborting.parent.mkdir(parents=True, exist_ok=True)
+    aborting.write_text(sources[0].read_text(encoding="utf-8") +
+                        "\n#include <cstdlib>\nstatic const int parity_abort_before_main = (std::abort(), 0);\n",
+                        encoding="utf-8")
+    control("candidate-aborts-before-main",
+            evaluate(one_group, out / "c-abort", source_overrides={first["name"]: [aborting] + sources[1:]}),
+            must_mention="killed by signal")
+    control("stale-exclusion-of-a-building-source",
+            evaluate(dict(one_group, exclude_sources=dict(excluded, **{sources[0].stem: "planted stale exclusion"})),
+                     out / "c-stale-exclusion"), must_mention="now builds against the package")
+    control("unstable-test-not-in-population",
+            evaluate(dict(one_group, unstable_tests={"test_absent::planted": "planted typo"}),
+                     out / "c-unstable"), must_mention="is in no group's reference population")
     control("dropped-source-in-candidate",
             evaluate(one_group, out / "c-dropped", source_overrides={first["name"]: sources[1:]}),
             must_mention="missing from candidate")
     header_prefix = prefix_copy(Path(spec["candidate_prefix"]), out / "c-header")
     (header_prefix / spec["control_header"]).unlink()
     control("header-removed-from-package",
-            evaluate(dict(spec, groups=[g for g in spec["groups"] if g["name"] == spec["control_header_group"]]),
+            evaluate(only(next(g for g in spec["groups"] if g["name"] == spec["control_header_group"])),
                      out / "c-header", prefix_override=header_prefix), must_mention="did not build")
     control("empty-population", evaluate(one_group, out / "c-empty", tags_override=[]),
             must_mention="no sources selected")
@@ -520,7 +670,7 @@ def calibrate(spec: dict[str, Any], out: Path) -> dict[str, Any]:
     if divergent:
         group = next(g for g in spec["groups"] if g["name"] == spec["divergent_group"])
         control("planted-divergence-in-package",
-                evaluate(dict(spec, groups=[group]), out / "c-divergent", prefix_override=Path(divergent)),
+                evaluate(only(group), out / "c-divergent", prefix_override=Path(divergent)),
                 must_mention="reference passed != candidate failed")
     else:
         controls.append({"control": "planted-divergence-in-package", "status": "missing",
@@ -586,6 +736,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     try:
         if args.command == "run":
+            if args.out.exists():
+                shutil.rmtree(args.out)
             result = evaluate(spec, args.out)
             result["schema"] = SCHEMA
             ph.write_json(args.out / "packaging-receipt.json", redact(result, spec_roots(spec, args.out)))

@@ -179,6 +179,102 @@ class BindingTests(unittest.TestCase):
         self.assertIn("<origin>/test", text)
 
 
+JUNIT = """<?xml version="1.0" encoding="UTF-8"?>
+<testsuites><testsuite name="t">
+<testcase classname="bin.global.test_a" name="passes"/>
+<testcase classname="bin.global.test_a" name="skips"><skipped message="SKIP"/></testcase>
+<testcase classname="bin.global.test_b" name="fails"><failure message="x"/></testcase>
+<testcase classname="bin.global.test_b" name="errors"><error message="y"/></testcase>
+</testsuite></testsuites>
+"""
+PASSING = JUNIT.split("<testcase classname=\"bin.global.test_b\"")[0] + "</testsuite></testsuites>\n"
+
+
+class JunitTests(unittest.TestCase):
+    """A run's outcomes come only from that run, and its exit must agree."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.xml = self.root / "out.xml"
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def fake(self, name: str, body: str) -> Path:
+        script = self.root / name
+        script.write_text("#!/bin/sh\n" + body, encoding="utf-8")
+        script.chmod(0o755)
+        return script
+
+    def writer(self, name: str, document: str, code: int) -> Path:
+        payload = self.root / f"{name}.xml"
+        payload.write_text(document, encoding="utf-8")
+        # Catch2's --out is the last argument.
+        return self.fake(name, f'for last; do :; done\ncp "{payload}" "$last"\nexit {code}\n')
+
+    def test_skip_failure_and_error_are_parsed(self) -> None:
+        self.xml.write_text(JUNIT, encoding="utf-8")
+        self.assertEqual(lane.junit_outcomes(self.xml), {
+            "test_a::passes": "passed", "test_a::skips": "skipped",
+            "test_b::fails": "failed", "test_b::errors": "failed"})
+
+    def test_stale_junit_is_never_read_for_a_binary_that_dies_before_main(self) -> None:
+        self.xml.write_text(PASSING, encoding="utf-8")  # a previous run's file
+        aborting = self.fake("abort", "kill -ABRT $$\n")
+        with self.assertRaisesRegex(lane.LaneError, "killed by signal"):
+            lane.run_junit(aborting, ["test_a"], self.xml)
+        silent = self.fake("silent", "exit 0\n")
+        self.xml.write_text(PASSING, encoding="utf-8")
+        with self.assertRaisesRegex(lane.LaneError, "wrote no JUnit"):
+            lane.run_junit(silent, ["test_a"], self.xml)
+
+    def test_exit_status_must_agree_with_the_recorded_run(self) -> None:
+        self.assertEqual(lane.run_junit(self.writer("ok", PASSING, 0), ["test_a"], self.xml)["exit"], 0)
+        self.assertEqual(lane.run_junit(self.writer("fail", JUNIT, 42), ["test_a"], self.xml)["exit"], 42)
+        with self.assertRaisesRegex(lane.LaneError, "no failed test to explain it"):
+            lane.run_junit(self.writer("crash-at-exit", PASSING, 3), ["test_a"], self.xml)
+        with self.assertRaisesRegex(lane.LaneError, "exited 0 although"):
+            lane.run_junit(self.writer("liar", JUNIT, 0), ["test_a"], self.xml)
+
+
+@unittest.skipUnless(shutil.which("ninja") and shutil.which("cc"), "needs ninja and cc")
+class DependencyAuditTests(unittest.TestCase):
+    """The candidate reads origin files only from test/, or exported bytes."""
+
+    def test_private_origin_header_must_match_the_export(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            origin, exported, build = root / "origin", root / "exported", root / "build"
+            for repo in (origin, exported):
+                repo.mkdir()
+                git(repo, "init", "-q")
+            (origin / "test").mkdir()
+            (origin / "core" / "src").mkdir(parents=True)
+            (origin / "core" / "src" / "access.h").write_text("int access_value(void);\n", encoding="utf-8")
+            (origin / "test" / "t.c").write_text('#include "../core/src/access.h"\nint main(void){return 0;}\n',
+                                                 encoding="utf-8")
+            git(origin, "add", ".")
+            git(origin, "commit", "-q", "-m", "o")
+            (exported / "mirror" / "core" / "src").mkdir(parents=True)
+            (exported / "mirror" / "core" / "src" / "access.h").write_text("int access_value(void);\n",
+                                                                          encoding="utf-8")
+            git(exported, "add", ".")
+            git(exported, "commit", "-q", "-m", "e")
+            build.mkdir()
+            (build / "build.ninja").write_text(
+                "rule cc\n  command = cc -MD -MF $out.d -c $in -o $out\n  depfile = $out.d\n  deps = gcc\n"
+                f"build t.o: cc {origin / 'test' / 't.c'}\n", encoding="utf-8")
+            subprocess.run(["ninja", "-C", str(build)], check=True, capture_output=True)
+            ocommit, ecommit = git(origin, "rev-parse", "HEAD"), git(exported, "rev-parse", "HEAD")
+            self.assertEqual(lane.dependency_violations(build, origin, ocommit, exported, ecommit, "mirror/"), [])
+            (exported / "mirror" / "core" / "src" / "access.h").write_text("int other(void);\n", encoding="utf-8")
+            git(exported, "commit", "-q", "-am", "diverge")
+            changed = git(exported, "rev-parse", "HEAD")
+            violations = lane.dependency_violations(build, origin, ocommit, exported, changed, "mirror/")
+            self.assertTrue(any("core/src/access.h" in v for v in violations), violations)
+
+
 class SpecRuleTests(unittest.TestCase):
     roots = ("origin", "exported", "reference-build", "prefix", "catch2", "divergent-prefix")
 

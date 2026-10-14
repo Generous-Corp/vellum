@@ -22,9 +22,20 @@ It fails when:
 - a group that statically links Skia shows no provider definition in its reference binary (the census would be blind);
 - any test differs in population or outcome, fails on both sides, or nothing passed.
 
+It also fails when:
+- a test binary is killed by a signal, writes no JUnit, or exits with a status its JUnit does not explain (nonzero
+  with no failed test, or zero with one). Each run's JUnit file is deleted before the run, so a binary that dies
+  before `main` can never be read through an earlier file;
+- an excluded source now compiles and links against the package (each is probed on its own), so an exclusion cannot
+  outlive its reason;
+- an `unstable_tests` name is in no reference population, or fails on the candidate;
+- a candidate translation unit read an origin file outside `test/` whose blob the export does not carry identically
+  at the same path (audited from the consumer's ninja dependency log).
+
 A test that skips on both sides is listed, not counted. Every source left out (`exclude_sources`) and every origin
 test that cannot repeat on the reference binary alone (`unstable_tests`) must carry a justification, and the receipt
-names it. Receipts replace host paths with root names.
+names it, together with a `scope` line: a named subset (sources compared of the total) or the full population.
+Receipts replace host paths with root names.
 
 ```sh
 python3 tools/parity/packaging/packaging_lane.py calibrate \
@@ -38,8 +49,11 @@ python3 tools/parity/packaging/packaging_lane.py run --spec ... --root ... --out
 
 Committed specs name host locations as `<root>`; an unbound root is refused.
 
-`calibrate` runs ten seeded controls, and each must make the comparison non-accepting:
+`calibrate` runs thirteen seeded controls, and each must make the comparison non-accepting:
 - a failing test added to the candidate;
+- a candidate whose static initializer aborts before `main`;
+- an exclusion added for a source that builds;
+- an `unstable_tests` name that is in no population;
 - a source dropped from the candidate;
 - a header removed from the package;
 - an empty population;
@@ -67,3 +81,15 @@ The spec's `exclude_sources` record two package defects, each a reason the full 
   `pulp/events/events.hpp`, `pulp/canvas/image_convolution.hpp`);
 - **F-B:** public canvas headers include Skia headers the package keeps private (D4), so the text and font suites
   cannot compile against the package.
+
+Not yet bound, and therefore stated rather than assumed:
+- the reference binary is checked against the build's configuration and the checkout HEAD, not proven built from
+  `origin_commit`;
+- test sources are read from the origin worktree (the dependency audit hashes non-test origin files against git;
+  test sources themselves are not);
+- per-translation-unit compile definitions are not compared (the candidate gets the package's interface
+  definitions);
+- the provider census matches `wgpuCreateInstance`, `SkCanvas::*` and `SkSurface::*` only, and is checked for
+  blindness against the reference;
+- the receipt binding covers the export receipt, not the package library bytes, which are recorded but not tied to a
+  reproducible build of the mirror.
