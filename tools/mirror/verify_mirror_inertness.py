@@ -170,17 +170,37 @@ def symbol_findings(symbols: dict[str, list[str]], *, view_unit_packaged: bool) 
     return audio, forward
 
 
+DEMANGLE_CONTROL = ("__ZN4pulp6canvas5Color8from_hsvENS0_3HSVEf", "pulp::canvas::Color::from_hsv(")
+
+
+def demangler() -> list[str]:
+    """A c++filt invocation proved to demangle this platform's symbol names.
+
+    c++filt flags differ between toolchains: `-n` keeps the Mach-O leading
+    underscore on some releases, which leaves every symbol mangled. Each
+    candidate must demangle a known symbol before it is trusted.
+    """
+    tool = shutil.which("c++filt")
+    if not tool:
+        raise EvidenceError("c++filt is required")
+    mangled, expected = DEMANGLE_CONTROL
+    for flags in ([], ["-_"], ["-n"]):
+        probe = subprocess.run([tool, *flags], input=mangled + "\n", capture_output=True, text=True, check=False)
+        if probe.returncode == 0 and probe.stdout.startswith(expected):
+            return [tool, *flags]
+    raise EvidenceError("no c++filt invocation demangles a known symbol")
+
+
 def image_symbols(path: Path) -> list[str]:
     nm = shutil.which("nm")
-    filt = shutil.which("c++filt")
-    if not nm or not filt:
-        raise EvidenceError("nm and c++filt are required")
+    if not nm:
+        raise EvidenceError("nm is required")
     # -j lists every defined and undefined symbol name, one per line.
     listed = subprocess.run([nm, "-j", str(path)], capture_output=True, text=True, check=False)
     if listed.returncode:
         raise EvidenceError(f"nm failed on {path}: {listed.stderr.strip()}")
     names = [line.strip() for line in listed.stdout.splitlines() if line.strip()]
-    demangled = subprocess.run([filt, "-n"], input="\n".join(names), capture_output=True, text=True, check=False)
+    demangled = subprocess.run(demangler(), input="\n".join(names), capture_output=True, text=True, check=False)
     if demangled.returncode:
         raise EvidenceError("c++filt failed")
     return [line for line in demangled.stdout.splitlines() if line]

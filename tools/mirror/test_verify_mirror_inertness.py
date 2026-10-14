@@ -79,6 +79,27 @@ class FindingTest(unittest.TestCase):
             vi.ninja_deps("a.o: #deps 2, deps mtime 1 (STALE)\n    a.cpp\n")
 
 
+class DemanglerTest(unittest.TestCase):
+    def fake_filt(self, working_flags):
+        def run(arguments, **kwargs):
+            flags = arguments[1:]
+            mangled, expected = vi.DEMANGLE_CONTROL
+            output = expected + "pulp::canvas::HSV, float)\n" if flags == working_flags else mangled + "\n"
+            return mock.Mock(returncode=0, stdout=output)
+        return run
+
+    def test_only_an_invocation_that_demangles_the_control_is_used(self) -> None:
+        with mock.patch.object(vi.shutil, "which", return_value="/usr/bin/c++filt"), \
+                mock.patch.object(vi.subprocess, "run", side_effect=self.fake_filt(["-_"])):
+            self.assertEqual(vi.demangler(), ["/usr/bin/c++filt", "-_"])
+
+    def test_a_demangler_that_demangles_nothing_is_refused(self) -> None:
+        with mock.patch.object(vi.shutil, "which", return_value="/usr/bin/c++filt"), \
+                mock.patch.object(vi.subprocess, "run", side_effect=self.fake_filt(["--never"])):
+            with self.assertRaises(vi.EvidenceError):
+                vi.demangler()
+
+
 class VerifyTest(unittest.TestCase):
     """End to end over a planted package and consumer, with symbols injected."""
 
