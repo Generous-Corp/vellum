@@ -430,8 +430,21 @@ def coverage_gaps(
                         verify_vellum_observatory_tail(repo, target, requested_target)
                     except ObservatoryError:
                         require_event_coverage = True
+            imported = imported_mirror_history(repo, tail_start, requested_target)
             for commit in commits_between(repo, tail_start, requested_target):
-                if require_event_coverage and integration_merge_covered(
+                if commit in imported:
+                    # Imported Pulp mirror history is not Vellum-authored; its
+                    # content reaches the mainline only through the join below.
+                    continue
+                parents = git(repo, "rev-list", "--parents", "-n", "1", commit).split()[1:]
+                imported_parents = [parent for parent in parents if parent in imported]
+                if imported_parents:
+                    # The join of an imported history has no merge base with
+                    # the mainline. It must leave the observatory untouched,
+                    # and its first-parent diff, observed below, carries every
+                    # path the import adds.
+                    verify_mirror_join(repo, commit, parents, imported_parents)
+                elif require_event_coverage and integration_merge_covered(
                     repo, commit, mappings, rules
                 ):
                     continue
@@ -447,7 +460,7 @@ def coverage_gaps(
                     # change. No event can describe it (observations derive from
                     # the first-parent diff), so it must become an explicit
                     # commit on the branch, which does get an event.
-                    if require_event_coverage and merge_observable_paths(
+                    if require_event_coverage and not imported_parents and merge_observable_paths(
                         repo, commit, mappings, rules
                     ):
                         gaps.append({
@@ -693,6 +706,27 @@ def imported_mirror_commits(
                 )
         imported.update(side)
     return imported, verification_errors
+
+
+def imported_mirror_history(root: Path, start: str, target: str) -> set[str]:
+    """Imported mirror commits in start..target, or none when it has no root.
+
+    Only a range containing a root commit can import an unrelated history, so
+    the receipt verification runs only then. Every such root must belong to an
+    approved import; any other unrelated history is refused.
+    """
+    roots = git(root, "rev-list", "--max-parents=0", f"{start}..{target}").split()
+    if not roots:
+        return set()
+    imported, errors = imported_mirror_commits(root, start, target)
+    unexplained = [commit for commit in roots if commit not in imported]
+    if unexplained:
+        detail = f"; mirror-export verification failed: {'; '.join(errors)}" if errors else ""
+        raise ObservatoryError(
+            f"{start}..{target} joins unrelated history rooted at {', '.join(unexplained)} "
+            f"that is not an approved imported mirror history{detail}"
+        )
+    return imported
 
 
 def has_cursor(root: Path, commit: str) -> bool:
