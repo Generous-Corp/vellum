@@ -33,7 +33,7 @@ BASE_FILES = {
 }
 
 
-class ObservatoryMirrorImportTests(unittest.TestCase):
+class MirrorImportCase(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.base = Path(self.temporary.name)
@@ -47,6 +47,8 @@ class ObservatoryMirrorImportTests(unittest.TestCase):
         kwargs.setdefault("mirror_prelude", [{"mirror/core/canvas/README": b"history\n"}])
         return Fixture(self.base, **kwargs)  # type: ignore[arg-type]
 
+
+class ObservatoryMirrorImportTests(MirrorImportCase):
     def verify(self, fixture: Fixture) -> None:
         observatory.verify_append_only(fixture.vellum, fixture.base_sha)
 
@@ -156,6 +158,80 @@ class ObservatoryMirrorImportTests(unittest.TestCase):
         message = str(caught.exception)
         self.assertIn("observatory cursor must exist on every history edge", message)
         self.assertIn("mirror-export verification failed", message)
+
+
+def mapping_for(vellum_path: str) -> dict[str, object]:
+    return {
+        "mappings": [{
+            "id": "canvas", "pulp_paths": ["core/canvas/"], "vellum_paths": [vellum_path],
+            "symbols": [], "targets": [], "schemas": [], "platform_hosts": [],
+            "contract_tests": [], "authority": "pulp-authoritative-untransferred",
+        }],
+        "transitive_path_rules": [],
+    }
+
+
+class CoverageTailMirrorImportTests(MirrorImportCase):
+    """The coverage tail of a pull request that imports a mirror history."""
+
+    def gaps(self, fixture: Fixture, vellum_path: str = "graphics/") -> list[dict[str, str]]:
+        cursor = {
+            "pulp": {"repository": "Generous-Corp/pulp"},
+            "vellum": {
+                "repository": "Generous-Corp/vellum",
+                "scan_base_commit": fixture.base_sha,
+                "last_scanned_commit": fixture.base_sha,
+            },
+        }
+        gaps = observatory.coverage_gaps(
+            root=fixture.vellum, mapping=mapping_for(vellum_path), cursor=cursor, events=[],
+            pulp_repo=None, vellum_repo=fixture.vellum,
+            vellum_target=run(fixture.vellum, "rev-parse", "HEAD"),
+            vellum_tail_policy="coverage",
+        )
+        return [gap for gap in gaps if gap["source"] == "vellum"]
+
+    def test_imported_history_and_its_join_are_covered(self) -> None:
+        self.assertEqual(self.gaps(self.fixture()), [])
+
+    def test_join_diff_is_observed_for_mapped_mirror_paths(self) -> None:
+        fixture = self.fixture()
+        join = run(fixture.vellum, "rev-parse", "HEAD^")
+        gaps = self.gaps(fixture, vellum_path="mirror/core/canvas/")
+        # The join carries the import's mapped paths; the imported commits do not.
+        self.assertEqual(gaps, [{
+            "source": "vellum", "commit": join, "reason": "mapped-commit-after-reconciled-cursor",
+        }])
+
+    def test_join_that_changes_the_cursor_is_rejected_by_the_tail(self) -> None:
+        def change_cursor(fixture: Fixture) -> None:
+            cursor = json.loads((fixture.vellum / CURSOR).read_text())
+            cursor["reconciled_at"] = "2026-10-14T00:00:00Z"
+            write(fixture.vellum, CURSOR, dump(cursor))
+            run(fixture.vellum, "add", "-A")
+            run(fixture.vellum, "commit", "-q", "--amend", "--no-edit")
+
+        with self.assertRaisesRegex(observatory.ObservatoryError, "joining an imported mirror history changed"):
+            self.gaps(self.fixture(after_join=change_cursor))
+
+    def test_unreceipted_unrelated_history_is_rejected_by_the_tail(self) -> None:
+        fixture = self.fixture()
+        run(fixture.vellum, "checkout", "-q", "--orphan", "stray")
+        run(fixture.vellum, "rm", "-rq", "--cached", ".")
+        write(fixture.vellum, "mirror/core/canvas/stray.txt", "stray\n")
+        run(fixture.vellum, "add", "mirror/core/canvas/stray.txt")
+        run(fixture.vellum, "commit", "-q", "-m", "stray root")
+        stray = run(fixture.vellum, "rev-parse", "HEAD")
+        run(fixture.vellum, "checkout", "-q", "-f", "main")
+        run(fixture.vellum, "merge", "-q", "--no-edit", "-s", "ours", "--allow-unrelated-histories", stray)
+        with self.assertRaisesRegex(observatory.ObservatoryError, f"unrelated history rooted at {stray}"):
+            self.gaps(fixture)
+
+    def test_failed_receipt_verification_is_rejected_by_the_tail(self) -> None:
+        fixture = self.fixture()
+        fixture.reland(mirror_tree="0" * 40)
+        with self.assertRaisesRegex(observatory.ObservatoryError, "mirror-export verification failed"):
+            self.gaps(fixture)
 
 
 if __name__ == "__main__":
