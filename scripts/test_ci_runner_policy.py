@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import hashlib
 import re
 import unittest
 from pathlib import Path
@@ -166,6 +167,13 @@ PULP_API_READER_GH_CALLS = {
     'run download "$run_id" --name vellum-parity-proof-execution',
 }
 PULP_API_READER_GIT_CALLS = {"git -C .exact-boundary-pulp rev-parse HEAD"}
+# The reader step itself, byte for byte (sha256 of its text without trailing
+# blank and comment lines). Shell and Python can assemble a command or a
+# repository name in ways no line check reads (`eval "g""h ..."`, a
+# backslash continuation inside a word, a glued `os.system` argument, a
+# value written to a file for a later step), so any change to the reader is
+# a reviewed change to this digest. The checks below only explain a failure.
+PULP_API_READER_SHA256 = "65cd477615301089437089e468cfcf61a4a41dbf7c5c3175550770903b9b20d1"
 # Every reader line that names Pulp, stripped, verbatim. A new line naming
 # Pulp (an anchor, an env export, a command through a variable) fails.
 PULP_API_READER_PULP_LINES = {
@@ -183,7 +191,8 @@ COMMAND_INDIRECTION = re.compile(
     r"|(?:^|[;&|(`]|\$\()\s*\$\{?\w+\}?\s+(?:repo|clone|api|fetch|run|-c)\b"
 )
 STEP_STATE_EXPORT = re.compile(r"GITHUB_(?:ENV|OUTPUT|PATH)\b")
-YAML_ANCHOR_OR_ALIAS = re.compile(r"(?:^\s*-\s+|:\s+|[\[{,]\s*|^\s*)[&*][A-Za-z0-9_-]")
+# An anchor or alias name is any run of non-space, non-flow characters.
+YAML_ANCHOR_OR_ALIAS = re.compile(r"(?:^\s*-\s+|:\s+|[\[{,]\s*|^\s*)[&*][^\s\[\]{},]")
 # Transports that bypass gh entirely.
 PULP_API_READER_FORBIDDEN = re.compile(
     r"\b(?:curl|wget|urllib|requests|http\.client|socket|subprocess|nc)\b"
@@ -438,12 +447,17 @@ def pulp_reach_problems(workflow: str, text: str) -> tuple[list[str], int]:
             mentions = [line for line in step["lines"] if PULP_REFERENCE.search(line)]
             if repository != [PULP_REPOSITORY] or mentions != [f"{' ' * (int(step['key_indent']) + 2)}repository: {PULP_REPOSITORY}"]:
                 problems.append(f"{label} names Pulp in a non-canonical form")
+            # Backup to the count equality below: CHECKOUT_STEP only matches
+            # a step led by `- name:`, so a checkout refused here is also
+            # missing from pulp_checkouts. This check names the cause.
             elif step["first_key"] != "name":
                 problems.append(f"{label} checks out Pulp without a leading name, outside the checkout pin rule")
             else:
                 pulp_checkout_steps += 1
             continue
         if (workflow, name) == PULP_API_READER:
+            if hashlib.sha256(step_text(step).encode("utf-8")).hexdigest() != PULP_API_READER_SHA256:
+                problems.append(f"{label} is not the reviewed API reader")
             unreviewed = [call for call in gh_calls(code) if call not in PULP_API_READER_GH_CALLS]
             git_calls = re.findall(r"\bgit\s+[^\n|;)&]*", code)
             if unreviewed or any(call.strip() not in PULP_API_READER_GIT_CALLS for call in git_calls) \
@@ -1002,6 +1016,8 @@ class RunnerPolicyTests(unittest.TestCase):
         reader_anchor = '            live_pulp_main="$(gh api repos/Generous-Corp/pulp/git/ref/heads/main --jq .object.sha)"\n'
         self.assertEqual(workflow.count(reader_anchor), 1)
 
+        mirror_with = "        with:\n          repository: Generous-Corp/pulp\n          ref: main\n          path: .mirror-pulp\n"
+        self.assertEqual(workflow.count(mirror_with), 2)
         reader_env = "          PULP_ACCEPTANCE_SHA: ${{ steps.expansion-evidence.outputs.pulp-sha }}\n"
         self.assertEqual(workflow.count(reader_env), 1)
 
@@ -1106,8 +1122,27 @@ class RunnerPolicyTests(unittest.TestCase):
             "reader runs git through a variable": in_reader("g=git; $g clone https://github.com/Generous-Corp/pulp"),
             "reader runs gh through a variable": in_reader("G=gh; $G repo clone Generous-Corp/pulp"),
             "reader names Pulp on a new line": in_reader('echo "Generous-Corp/pulp"'),
+            # Routes only the reader's byte-for-byte pin catches.
+            "reader evals a split command name": in_reader('eval "g""h repo clone $repository"'),
+            "reader continues a word across lines": in_reader(
+                'gi\\\n            t -C .exact-boundary-pulp fetch origin develop'),
+            "reader glues a command in os.system": in_reader(
+                "python3 -c 'import os; os.system(\"g\" + \"it -C .exact-boundary-pulp fetch origin develop\")'"),
+            "reader writes the repository to a file": in_reader('echo "$repository" > "$RUNNER_TEMP/repository.txt"'),
+            # Anchors: an anchored mapping that names no Pulp slug on its own
+            # line, aliased into a checkout that names none either.
+            "anchored checkout inputs aliased into another checkout": workflow.replace(
+                mirror_with, mirror_with.replace("with:", "with: &w", 1), 1).replace(verify,
+                "      - name: Extra checkout\n        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1\n"
+                "        with: *w\n\n" + verify, 1),
+            "anchor name with punctuation": workflow.replace(
+                mirror_with, mirror_with.replace("with:", "with: &.w", 1), 1).replace(verify,
+                "      - name: Extra checkout\n        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1\n"
+                "        with: *.w\n\n" + verify, 1),
             "reader runs git through a variable without naming Pulp": in_reader('g=git; $g -C .exact-boundary-pulp fetch origin develop'),
-            # Checkout shapes each guarded by one check.
+            # Checkout shapes. The blank-line case is caught only by the
+            # checkout count; the name-not-first case is caught by the
+            # name-first check and, as its backup, by the count.
             "blank line hides an unpinned ref from the pin rule": workflow.replace(verify,
                 "      - name: Extra checkout\n        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1\n"
                 "        with:\n          path: .extra\n\n          repository: Generous-Corp/pulp\n          ref: main\n\n" + verify, 1),
