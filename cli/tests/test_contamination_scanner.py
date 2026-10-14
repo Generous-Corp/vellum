@@ -109,6 +109,39 @@ class ContaminationScannerTests(unittest.TestCase):
                 text_rejected.stderr,
             )
 
+    def test_installed_mirror_payload_keeps_the_mirror_scope(self) -> None:
+        scripts_path = str(REPO / "scripts")
+        sys.path.insert(0, scripts_path)
+        try:
+            validator = runpy.run_path(str(INSTALLED_VALIDATOR))
+        finally:
+            sys.path.remove(scripts_path)
+        scan = validator["installed_contamination_findings"]
+        with tempfile.TemporaryDirectory() as temporary:
+            prefix = Path(temporary)
+            install = prefix / "lib/vellum-installs/0.1.8-darwin-arm64-abc/sdk/mirror"
+            header = install / "include/pulp/canvas/canvas.hpp"
+            header.parent.mkdir(parents=True)
+            header.write_text("namespace pulp::canvas { struct Canvas; }\n", encoding="utf-8")
+            (prefix / "lib/vellum").symlink_to("vellum-installs/0.1.8-darwin-arm64-abc")
+            # Mirrored source keeps its origin names inside the mirror scope.
+            self.assertEqual(scan(prefix), [])
+            # The mirror edge rules still apply there.
+            product = install / "include/pulp/canvas/product.hpp"
+            product.write_text("#include <pulp/audio/buffer.hpp>\n", encoding="utf-8")
+            self.assertEqual(
+                {finding["rule"] for finding in scan(prefix)},
+                {"mirror-product-include"},
+            )
+            product.unlink()
+            # A Pulp-named file outside the mirror scope is still refused.
+            stray = prefix / "lib/vellum-installs/0.1.8-darwin-arm64-abc/sdk/include/pulp/x.hpp"
+            stray.parent.mkdir(parents=True)
+            stray.write_text("int x;\n", encoding="utf-8")
+            self.assertIn(
+                "pulp-named-payload", {finding["rule"] for finding in scan(prefix)}
+            )
+
     def test_installed_tree_scans_text_and_paths_but_not_binary_content(
         self,
     ) -> None:

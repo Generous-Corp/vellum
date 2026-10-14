@@ -42,6 +42,10 @@ SUPPORT_FILES = (
     "web/consumer/text_semantics.js",
     "web/consumer/vellum_host.js",
     "web/tests/run_text_semantics_browser.py",
+    "tools/mirror/consumer/CMakeLists.txt",
+    "tools/mirror/consumer/main.cpp",
+    "tools/mirror/provider-conflict/CMakeLists.txt",
+    "tools/mirror/verify_mirror_inertness.py",
 )
 
 

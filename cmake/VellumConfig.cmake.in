@@ -45,5 +45,10 @@ unset(_vellum_architecture)
 unset(_vellum_unsupported)
 
 include("${CMAKE_CURRENT_LIST_DIR}/VellumTargets.cmake")
+if(@VELLUM_PACKAGE_HAS_MIRROR@)
+    # Units built from the landed mirror (Decision 0010) live in their own
+    # subtree, where mirrored source keeps its origin names.
+    include("${PACKAGE_PREFIX_DIR}/mirror/lib/cmake/VellumMirror/VellumMirrorTargets.cmake")
+endif()
 
 check_required_components(Vellum)

@@ -177,6 +177,22 @@ Vellum dependencies. Versions and licenses were cross-checked against Pulp's
 | V8 | `v8-m153-15.3.76.5-26cef0256b0e` | BSD-3-Clause | not mirrored; no landed unit consumes it yet (planned scripted-view unit, when selected) | MIT-compatible; sealed provider |
 | Yoga | `3.2.1` | MIT | not mirrored; no landed unit consumes it yet (planned view units) | MIT-compatible |
 
+### Units built into the native SDK
+
+The macOS arm64 GPU SDK compiles the landed `foundation` and `canvas` units
+into `sdk/mirror/lib/libvellum-mirror-foundation.dylib` and
+`sdk/mirror/lib/libvellum-mirror-canvas.dylib`
+(`tools/mirror/VellumMirror.cmake`). The units' external inputs above are
+fetched at the commits their closure manifests pin, and every file a closure
+lists is checked against its recorded SHA-256 before configure
+(`tools/mirror/mirror_package.py`). Highway, Mbed TLS, SheenBidi, Brotli, and
+WOFF2 objects are linked into those libraries; CHOC headers that the public
+headers include ship under `sdk/mirror/include/choc/`. Each fetched
+dependency's license file is installed under `sdk/mirror/share/licenses/`. The
+canvas library links the locked Skia/Dawn archive above privately, exports only
+the mirrored namespace, and declares itself a Skia/Dawn provider, so a consumer
+cannot link it and `Vellum::Gpu` into one image.
+
 Pulp's external contributor `matthewfudge` authored four mirrored view files:
 `core/view/src/design_frame_view.cpp`,
 `core/view/include/pulp/view/widget_bridge.hpp`,

@@ -110,15 +110,15 @@ for both.
 - Blob-origin and receipt records are append-only by review. The verifier does not yet compare them
   against the base revision, so deleting a record is caught only by reviewing the Git history.
 
-What remains open. Neither item blocks an export from landing, but each
-blocks the step it names:
-
-- building mirrored units in Vellum: a configure of the mirrored CMake inside
-  Vellum. Until then, the link-closure gate re-checks the closures that Pulp
-  generated from its own clean configure;
-- SDK payload scanning: `scripts/verify_sdk_artifact.py` still rejects any
-  `pulp`-named payload, so no mirrored unit can ship in a Vellum SDK until that
-  scan is scoped the same way.
+Building mirrored units. Vellum builds the landed units from their closure
+manifests rather than from the mirrored CMake, which is partial: a closure is
+the export unit. `tools/mirror/mirror_package.py` refuses to plan unless
+`mirror/` equals the newest landed receipt blob for blob, each closure matches
+its receipt digest, every pinned external file a closure lists matches its
+recorded digest, and every generated input reproduces its recorded digest. The
+native SDK carries the result under `sdk/mirror/`, and the sterile consumer
+builds and runs against it. SDK payload scanning applies the mirror edge rules
+to `sdk/mirror/` and the Pulp-name rules everywhere else.
 
 ## Relationship to earlier decisions
 
