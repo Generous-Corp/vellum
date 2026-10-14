@@ -258,16 +258,28 @@ def external_dependencies(units: list[tuple[str, dict[str, Any]]]) -> dict[str, 
 
 
 def reusable_checkout(destination: Path, pin: str, patched: set[str]) -> bool:
-    """A cached checkout is reused only at the pin with no edit but its patches."""
+    """A cached checkout is reused only at the pin with no edit but its patches.
+
+    Untracked and ignored files count as edits: a source glob in a dependency's
+    own build would pick them up. A checkout that is not reusable is fetched
+    again from scratch.
+    """
     if not (destination / ".git").exists():
         return False
     head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=destination, capture_output=True, text=True, check=False)
     status = subprocess.run(
-        ["git", "status", "--porcelain", "--untracked-files=no", "--ignore-submodules=none"],
+        ["git", "status", "--porcelain", "--untracked-files=all", "--ignored=matching",
+         "--ignore-submodules=none"],
         cwd=destination, capture_output=True, text=True, check=False)
     if head.returncode or status.returncode or head.stdout.strip() != pin:
         return False
-    changed = {line[3:] for line in status.stdout.splitlines() if line.strip()}
+    changed = set()
+    for line in status.stdout.splitlines():
+        if not line.strip():
+            continue
+        if line.startswith(("??", "!!")):
+            return False
+        changed.add(line[3:])
     return changed <= patched
 
 
@@ -521,6 +533,13 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
                 else:
                     raise PlanError(f"{unit}/{name} links {link}, which is neither mirrored nor a recipe target")
             skia = [row for row in target.get("external_link_inputs", []) if row.get("dependency") == "skia"]
+            for row in skia:
+                # The target links the archive Vellum locks, not merely one
+                # whose headers happen to match.
+                if row.get("asset_sha256") != skia_asset_sha256:
+                    raise PlanError(
+                        f"{unit}/{name} links skia archive {row.get('asset_sha256')}, "
+                        f"but Vellum locks {skia_asset_sha256}")
             others = [row for row in target.get("external_link_inputs", []) if row.get("dependency") != "skia"]
             if others:
                 raise PlanError(f"{unit}/{name} has external link inputs with no recipe: {others}")

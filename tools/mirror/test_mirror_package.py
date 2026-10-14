@@ -178,6 +178,11 @@ class MirrorPackagePlanTest(unittest.TestCase):
         self.fixture.skia_asset = "0" * 64
         self.assertRefused("but Vellum locks")
 
+    def test_target_linking_another_skia_archive_is_refused(self) -> None:
+        self.fixture.closure["targets"][0]["external_link_inputs"][0]["asset_sha256"] = "0" * 64
+        self.fixture.write_receipt()
+        self.assertRefused("links skia archive")
+
     def test_dependency_without_a_recipe_is_refused(self) -> None:
         self.fixture.closure["external_inputs"][0]["path"] = f"@external/unknown/{'b' * 40}/x.h"
         self.fixture.write_receipt()
@@ -252,6 +257,18 @@ class CachedCheckoutTest(unittest.TestCase):
             (root / "patched.h").write_text("patched\n")
             self.assertTrue(mp.reusable_checkout(root, pin, {"patched.h"}))
             self.assertFalse(mp.reusable_checkout(root, pin, set()))
+            (root / "planted.c").write_text("int planted;\n")
+            self.assertFalse(mp.reusable_checkout(root, pin, {"patched.h"}))
+            (root / "planted.c").unlink()
+            (root / ".gitignore").write_text("*.o\n")
+            git("add", ".gitignore")
+            git("commit", "-q", "-m", "ignore")
+            pin = git("rev-parse", "HEAD")
+            (root / "patched.h").write_text("patched\n")
+            self.assertTrue(mp.reusable_checkout(root, pin, {"patched.h"}))
+            (root / "planted.o").write_text("x\n")
+            self.assertFalse(mp.reusable_checkout(root, pin, {"patched.h"}))
+            (root / "planted.o").unlink()
             (root / "a.h").write_text("tampered\n")
             self.assertFalse(mp.reusable_checkout(root, pin, {"patched.h"}))
 
