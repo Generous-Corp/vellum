@@ -69,15 +69,89 @@ class SdkMirrorScopeTests(unittest.TestCase):
 
     def test_mirror_scope_rejects_pulp_kept_and_product_paths(self) -> None:
         for name in (
+            "sdk/mirror/core/audio/src/engine.cpp",
+            "sdk/mirror/include/pulp/signal/gain.hpp",
+        ):
+            self.assertIn("mirror-product-path", rules(name, b""), name)
+        for name in (
             "sdk/mirror/include/pulp/view/eq_curve_view.hpp",
             "sdk/mirror/include/pulp/view/waveform_editor.hpp",
             "sdk/mirror/core/view/include/pulp/view/widgets/graph_editor_view.hpp",
-            "sdk/mirror/core/audio/src/engine.cpp",
-            "sdk/mirror/include/pulp/signal/gain.hpp",
             "mirror/core/state/src/content_registry.cpp",
+            # The view-audio headers the Vellum #92 review planted.
+            "sdk/mirror/include/pulp/view/audio_widgets.hpp",
+            "sdk/mirror/include/pulp/view/register_audio_widgets.hpp",
+            "sdk/mirror/include/pulp/view/visualizers.hpp",
+            "sdk/mirror/include/pulp/view/visualization_bridge.hpp",
+            "sdk/mirror/include/pulp/view/hosted_editor_attachment.hpp",
+            "sdk/mirror/core/view/audio/include/pulp/view/visualizers.hpp",
+            "sdk/mirror/core/view/src/inspector.cpp",
+            "sdk/mirror/Include/Pulp/View/Visualizers.hpp",
+            "sdk/mirror/Core/View/Src/Inspector.cpp",
         ):
-            self.assertIn("mirror-product-path", rules(name, b""), name)
-        self.assertEqual(rules("sdk/mirror/include/pulp/view/view.hpp", b""), set())
+            self.assertIn("mirror-pulp-kept-file", rules(name, b""), name)
+        for name in (
+            "sdk/mirror/include/pulp/view/view.hpp",
+            "sdk/mirror/include/pulp/view/widgets.hpp",
+            "sdk/mirror/include/pulp/view/host_surfaces.hpp",
+            "sdk/mirror/core/view/src/inspector_facts.cpp",
+        ):
+            self.assertEqual(rules(name, b""), set(), name)
+
+    def test_mirror_scope_rejects_pulp_kept_view_audio_edges(self) -> None:
+        name = "sdk/mirror/core/view/src/a.cpp"
+        for header in ("audio_widgets", "register_audio_widgets", "visualizers",
+                       "visualization_bridge", "hosted_editor_attachment", "audio_inspector_panel"):
+            for spelled in (f"#include <pulp/view/{header}.hpp>\n", f'#include "pulp/view/{header}.hpp"\n'):
+                self.assertIn("mirror-pulp-kept-include", rules(name, spelled.encode()), spelled)
+        self.assertIn("mirror-pulp-kept-symbol", rules(name, b"pulp::view::register_audio_widgets();\n"))
+        for content in (b"#include <pulp/view/widgets.hpp>\n", b"register_audio_widgets_count = 1;\n",
+                        b"#if defined(PULP_VIEW_HAS_AUDIO_WIDGETS)\n"):
+            self.assertEqual(rules(name, content), set(), content)
+
+    def test_only_the_recorded_seam_debt_line_is_exempt(self) -> None:
+        debt = b"#pragma once\n#if defined(PULP_VIEW_HAS_AUDIO_WIDGETS)\n#include <pulp/view/audio_widgets.hpp>\n#endif\n"
+        for name in ("sdk/mirror/core/view/include/pulp/view/widgets.hpp",
+                     "mirror/core/view/include/pulp/view/widgets.hpp"):
+            self.assertEqual(rules(name, debt), set(), name)
+            stream = install_core.inspect_payload_stream(name, io.BytesIO(debt), retain=False)[3]
+            self.assertEqual(stream, [], name)
+        # The installed header is the same file at its install path.
+        self.assertEqual(rules("sdk/mirror/include/pulp/view/widgets.hpp", debt), set())
+        self.assertIn("mirror-pulp-kept-include", rules("sdk/mirror/include/pulp/view/label.hpp", debt))
+        self.assertIn("mirror-pulp-kept-include", rules("sdk/mirror/include/pulp/widgets.hpp", debt))
+        # Another file, another spelling, or another kept header on that file is refused.
+        self.assertIn("mirror-pulp-kept-include", rules("sdk/mirror/core/view/src/a.cpp", debt))
+        self.assertIn("mirror-pulp-kept-include", rules(
+            "sdk/mirror/core/view/include/pulp/view/widgets.hpp", b'#include "pulp/view/audio_widgets.hpp"\n'))
+        self.assertIn("mirror-pulp-kept-include", rules(
+            "sdk/mirror/core/view/include/pulp/view/widgets.hpp",
+            debt + b"#include <pulp/view/register_audio_widgets.hpp>\n"))
+
+    def test_an_exempt_line_must_start_inside_the_scan_window(self) -> None:
+        name = "sdk/mirror/core/view/include/pulp/view/widgets.hpp"
+        line = b"#include <pulp/view/audio_widgets.hpp>\n"
+        rules_ = install_core.MIRROR_PAYLOAD_CONTENT_PATTERNS
+        self.assertEqual(install_core.content_rule_findings(name, rules_, line, True), [])
+        # A later window that starts mid-line cannot prove the line is the recorded one.
+        self.assertEqual([f["rule"] for f in install_core.content_rule_findings(name, rules_, line, False)],
+                         ["mirror-pulp-kept-include"])
+        self.assertEqual(install_core.content_rule_findings(name, rules_, b"// x\n" + line, False), [])
+        # End to end: a longer line cut at a chunk boundary is still refused.
+        prefix = b"x" * (1024 * 1024 - 6) + b"\n" + b"int a;"
+        stream = install_core.inspect_payload_stream(name, io.BytesIO(prefix + line), retain=False)[3]
+        self.assertIn("mirror-pulp-kept-include", {f["rule"] for f in stream})
+
+    def test_installer_edge_rules_are_the_vendored_table(self) -> None:
+        import json
+        table = json.loads((REPO / "tools/provenance/mirror_edge_patterns.json").read_text(encoding="utf-8"))
+        self.assertEqual(install_core.MIRROR_EDGE_CONTENT_PATTERNS, table["content_patterns"])
+        self.assertEqual(install_core.MIRROR_EDGE_KEPT_FILE_PATTERN, table["path_patterns"]["mirror-pulp-kept-file"])
+        self.assertEqual(
+            install_core.MIRROR_EDGE_EXCEPTIONS,
+            {(row["rule"], row["path"], row["line"]) for row in table["approved_exceptions"]},
+        )
+        self.assertEqual(set(table["path_patterns"]), {"mirror-pulp-kept-file"})
 
     def test_streaming_inspection_uses_scoped_rules(self) -> None:
         def stream_rules(name: str, content: bytes) -> set[str]:

@@ -1,9 +1,9 @@
 {
   "schema": "vellum.mirror-edge-table-pin.v1",
   "pulp_repository": "Generous-Corp/pulp",
-  "pulp_commit": "34d16417a460da7bc83e6df9f6319625423e4847",
+  "pulp_commit": "860c32c112946497cc8f65b51ef897aba38862f3",
   "pulp_path": "tools/scripts/vellum_mirror_edge_patterns.json",
-  "git_blob": "043002a90a31a83e2ec55ed5db90a1ed4dc49e4d",
+  "git_blob": "8584f8b234489130987d23d5446f6d19c76a49f0",
   "update_procedure": [
     "Land the table change in Pulp first.",
     "Copy Pulp's tools/scripts/vellum_mirror_edge_patterns.json at a Pulp main commit byte-for-byte to tools/provenance/mirror_edge_patterns.json.",
