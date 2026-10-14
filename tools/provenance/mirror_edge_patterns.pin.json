@@ -1,12 +1,12 @@
 {
   "schema": "vellum.mirror-edge-table-pin.v1",
   "pulp_repository": "Generous-Corp/pulp",
-  "pulp_commit": "0f74600c2dab91fc4827d15d6430b796e2a77c7c",
+  "pulp_commit": "34d16417a460da7bc83e6df9f6319625423e4847",
   "pulp_path": "tools/scripts/vellum_mirror_edge_patterns.json",
   "git_blob": "043002a90a31a83e2ec55ed5db90a1ed4dc49e4d",
   "update_procedure": [
     "Land the table change in Pulp first.",
-    "Copy Pulp's tools/scripts/vellum_mirror_edge_patterns.json at a Pulp commit reachable from main byte-for-byte to tools/provenance/mirror_edge_patterns.json.",
+    "Copy Pulp's tools/scripts/vellum_mirror_edge_patterns.json at a Pulp main commit byte-for-byte to tools/provenance/mirror_edge_patterns.json.",
     "Set pulp_commit to that commit and git_blob to `git -C <pulp> rev-parse <commit>:tools/scripts/vellum_mirror_edge_patterns.json`.",
     "Run python3 tools/provenance/test_verify_extraction.py and python3 tools/provenance/verify_extraction.py --mirror-edge-pulp-root <pulp checkout at pulp_commit>; the provenance-verify lane repeats the second check on every event."
   ]
