@@ -874,6 +874,7 @@ jobs:
             test "$VELLUM_GIT_BASE" != ""
           fi
           python3 tools/provenance/test_observatory.py
+          python3 tools/provenance/test_observatory_mirror_import.py
           python3 tools/provenance/test_receiver.py
           python3 tools/provenance/test_receiver_watchdog.py
           python3 tools/provenance/test_receiver_workflows.py

@@ -627,6 +627,101 @@ def verify_vellum_observatory_pr_tail(
     verify_vellum_observatory_tail(repo, cursor, merge_base)
 
 
+MIRROR_IMPORT_PATHS = ("mirror",)
+
+
+def approved_mirror_shas(root: Path) -> tuple[set[str], list[str]]:
+    """Mirror tips named by receipts the mirror-export verifier accepts.
+
+    Returns the approved tips and, when verification fails, its errors; a
+    failed verification approves nothing.
+    """
+    import importlib.util
+
+    module_path = Path(__file__).with_name("verify_mirror_export.py")
+    spec = importlib.util.spec_from_file_location("observatory_mirror_export", module_path)
+    if spec is None or spec.loader is None:
+        raise ObservatoryError(f"cannot load {module_path.name}")
+    verifier = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(verifier)
+    # The mirror-export verifier reads the working tree, so the approved set
+    # must come from receipts that match the commit being verified.
+    if git(root, "status", "--porcelain", "--", "provenance/mirror"):
+        raise ObservatoryError(
+            "provenance/mirror has uncommitted changes; imported mirror history "
+            "is approved only from committed receipts"
+        )
+    report = verifier.verify(root)
+    if report["status"] != "pass":
+        return set(), [str(error) for error in report["errors"]]
+    shas: set[str] = set()
+    for receipt_path in report["receipts"]:
+        receipt = json.loads((root / receipt_path).read_text(encoding="utf-8"))
+        shas.add(str(receipt["mirror_sha"]))
+    return shas, []
+
+
+def imported_mirror_commits(
+    root: Path, git_base: str, head: str
+) -> tuple[set[str], list[str]]:
+    """Commits of an imported Pulp mirror history that the append-only check skips.
+
+    A side history qualifies only when its tip is the mirror_sha of an accepted
+    export receipt and every one of its commits has a tree holding nothing but
+    the mirror directory. Anything else stays on the ordinary checks, which
+    reject a history edge that lacks the observatory cursor.
+    """
+    range_commits = set(git(root, "rev-list", f"{git_base}..{head}").splitlines())
+    approved, verification_errors = approved_mirror_shas(root)
+    imported: set[str] = set()
+    for tip in sorted(approved & range_commits):
+        side = git(root, "rev-list", tip, f"^{git_base}").splitlines()
+        side_set = set(side)
+        for commit in side:
+            entries = tuple(git(root, "ls-tree", "--name-only", commit).splitlines())
+            if entries != MIRROR_IMPORT_PATHS:
+                raise ObservatoryError(
+                    f"imported mirror history commit {commit} holds paths other than "
+                    f"mirror/: {', '.join(entries) or '(empty tree)'}"
+                )
+            parents = git(root, "rev-list", "--parents", "-n", "1", commit).split()[1:]
+            outside = [parent for parent in parents if parent not in side_set]
+            if outside:
+                raise ObservatoryError(
+                    f"imported mirror history commit {commit} descends from "
+                    f"{', '.join(outside)}, outside the imported history"
+                )
+        imported.update(side)
+    return imported, verification_errors
+
+
+def has_cursor(root: Path, commit: str) -> bool:
+    try:
+        git(root, "cat-file", "-e", f"{commit}:{CURSOR_PATH.as_posix()}")
+    except ObservatoryError:
+        return False
+    return True
+
+
+def verify_mirror_join(
+    root: Path, commit: str, parents: list[str], imported_parents: list[str]
+) -> None:
+    """A merge joining an imported mirror history must not touch the observatory."""
+    mainline = [parent for parent in parents if parent not in imported_parents]
+    if len(parents) != 2 or mainline != parents[:1]:
+        raise ObservatoryError(
+            f"commit {commit} joins an imported mirror history but is not a "
+            "two-parent merge whose first parent is the mainline"
+        )
+    observatory = OBSERVATORY.as_posix()
+    if not has_cursor(root, commit) or git(
+        root, "rev-parse", f"{mainline[0]}:{observatory}"
+    ) != git(root, "rev-parse", f"{commit}:{observatory}"):
+        raise ObservatoryError(
+            f"merge {commit} joining an imported mirror history changed {observatory}/"
+        )
+
+
 def verify_append_only(
     root: Path,
     git_base: str | None,
@@ -647,9 +742,36 @@ def verify_append_only(
         base_has_cursor = True
     except ObservatoryError:
         base_has_cursor = False
+    # Only a range with an edge lacking the cursor can contain an imported
+    # mirror history, so the receipt verification runs only then.
+    imported_cache: list[set[str]] = []
+    verification_errors: list[str] = []
+
+    def imported_for(commit: str, parents: list[str]) -> set[str]:
+        if not base_has_cursor:
+            return set()
+        if imported_cache:
+            return imported_cache[0]
+        if all(has_cursor(root, sha) for sha in (commit, *parents)):
+            return set()
+        imported, errors = imported_mirror_commits(root, git_base, head)
+        imported_cache.append(imported)
+        verification_errors.extend(errors)
+        return imported
+
     for commit in commits:
         parents = git(root, "rev-list", "--parents", "-n", "1", commit).split()[1:]
+        imported = imported_for(commit, parents)
+        if commit in imported:
+            continue
+        imported_parents = [parent for parent in parents if parent in imported]
+        if imported_parents:
+            verify_mirror_join(root, commit, parents, imported_parents)
         for parent in parents:
+            if parent in imported:
+                # verify_mirror_join proved this edge leaves the observatory
+                # exactly as the mainline parent had it.
+                continue
             # Inspect every tree edge, including each merge parent. A newly
             # appended event may resemble an old one, so disable similarity
             # detection; a real rename remains visible as a forbidden deletion.
@@ -683,9 +805,16 @@ def verify_append_only(
                 )
             except ObservatoryError:
                 if base_has_cursor:
+                    detail = (
+                        "; no imported mirror history was approved because "
+                        "mirror-export verification failed: "
+                        + "; ".join(verification_errors)
+                        if verification_errors
+                        else ""
+                    )
                     raise ObservatoryError(
                         f"observatory cursor must exist on every history edge: "
-                        f"{parent} -> {commit}"
+                        f"{parent} -> {commit}{detail}"
                     )
                 continue
             for source in ("pulp", "vellum"):
