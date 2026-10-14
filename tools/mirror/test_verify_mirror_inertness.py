@@ -1,0 +1,155 @@
+#!/usr/bin/env python3
+"""Negative controls for the Phase-6 debt inertness proof."""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+
+HERE = Path(__file__).resolve().parent
+spec = importlib.util.spec_from_file_location("verify_mirror_inertness", HERE / "verify_mirror_inertness.py")
+assert spec and spec.loader
+vi = importlib.util.module_from_spec(spec)
+sys.modules["verify_mirror_inertness"] = vi
+spec.loader.exec_module(vi)
+
+GUARD = vi.GUARD
+CLEAN_SYMBOLS = {
+    "consumer": ["pulp::canvas::BidiAnalyzer::analyze(std::string_view)", "_main"],
+    "libvellum-mirror-canvas.dylib": ["pulp::canvas::TextShaper::TextShaper()"],
+}
+
+
+class FindingTest(unittest.TestCase):
+    def test_guard_in_a_compile_command_is_found(self) -> None:
+        commands = [{"file": "a.cpp", "command": f"c++ -D{GUARD}=1 -c a.cpp"}]
+        self.assertTrue(vi.compile_command_findings(commands))
+        self.assertFalse(vi.compile_command_findings([{"file": "a.cpp", "command": "c++ -DOTHER=1 -c a.cpp"}]))
+
+    def test_guard_exported_or_defined_by_the_package_is_found(self) -> None:
+        exported = ("mirror/lib/cmake/VellumMirror/VellumMirrorTargets.cmake",
+                    f'INTERFACE_COMPILE_DEFINITIONS "{GUARD}=1"')
+        defined = ("mirror/include/pulp/view/config.hpp", f"#define {GUARD} 1\n")
+        guarded = ("mirror/include/pulp/view/widgets.hpp", f"#if defined({GUARD})\n#endif\n")
+        self.assertEqual(len(vi.package_definition_findings([exported, defined])), 2)
+        # A header that only tests the guard is the debt itself, not a definition.
+        self.assertFalse(vi.package_definition_findings([guarded]))
+
+    def test_view_audio_header_in_a_consumer_or_the_package_is_found(self) -> None:
+        for header in ("/p/mirror/include/pulp/view/audio_widgets.hpp",
+                       "/p/mirror/include/pulp/view/meter.hpp",
+                       "/p/mirror/include/pulp/view/audio/level.hpp",
+                       "/p/mirror/include/pulp/view/widgets/graph_editor_view.hpp"):
+            with self.subTest(header=header):
+                self.assertTrue(vi.header_findings({"main.o": [header]}, []))
+                self.assertTrue(vi.header_findings({}, [header]))
+        self.assertFalse(vi.header_findings({"main.o": ["/p/mirror/include/pulp/canvas/canvas.hpp"]},
+                                            ["mirror/include/pulp/view/widgets.hpp"]))
+
+    def test_view_audio_symbols_are_found(self) -> None:
+        planted = {"consumer": ["pulp::view::Meter::~Meter()"]}
+        audio, forward = vi.symbol_findings(planted, view_unit_packaged=True)
+        self.assertTrue(audio)
+        self.assertTrue(forward)
+        registration = {"consumer": ["pulp::view::register_audio_widgets()"]}
+        self.assertTrue(vi.symbol_findings(registration, view_unit_packaged=True)[0])
+
+    def test_any_view_symbol_fails_while_no_view_unit_is_packaged(self) -> None:
+        planted = {"consumer": ["pulp::view::Label::Label()"]}
+        self.assertTrue(vi.symbol_findings(planted, view_unit_packaged=False)[0])
+        self.assertFalse(vi.symbol_findings(planted, view_unit_packaged=True)[0])
+        self.assertFalse(vi.symbol_findings(CLEAN_SYMBOLS, view_unit_packaged=False)[0])
+
+    def test_bind_virtuals_count_as_forward_declaration_references(self) -> None:
+        planted = {"consumer": ["pulp::view::DesignHost::bind_meter(pulp::view::Meter&)"]}
+        self.assertTrue(vi.symbol_findings(planted, view_unit_packaged=True)[1])
+
+    def test_depfile_and_ninja_listing_parse(self) -> None:
+        self.assertEqual(vi.depfile_includes("a.o: a.cpp \\\n /x/b.hpp /x/c\\ d.hpp\n"),
+                         ["a.cpp", "/x/b.hpp", "/x/c d.hpp"])
+        listing = "a.o: #deps 2, deps mtime 1 (VALID)\n    a.cpp\n    /x/b.hpp\n\n"
+        self.assertEqual(vi.ninja_deps(listing), {"a.o": ["a.cpp", "/x/b.hpp"]})
+        with self.assertRaises(vi.EvidenceError):
+            vi.ninja_deps("a.o: #deps 2, deps mtime 1 (STALE)\n    a.cpp\n")
+
+
+class VerifyTest(unittest.TestCase):
+    """End to end over a planted package and consumer, with symbols injected."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        root = Path(self.temporary.name)
+        self.prefix = root / "prefix"
+        self.build = root / "build"
+        mirror = self.prefix / "mirror"
+        (mirror / "lib/cmake/VellumMirror").mkdir(parents=True)
+        (mirror / "lib/cmake/VellumMirror/VellumMirrorTargets.cmake").write_text(
+            'INTERFACE_COMPILE_DEFINITIONS "PULP_HAS_SKIA=1"\n')
+        (mirror / "lib/libvellum-mirror-canvas.dylib").write_bytes(b"\0")
+        (mirror / "include/pulp/canvas").mkdir(parents=True)
+        (mirror / "include/pulp/canvas/canvas.hpp").write_text("#pragma once\n")
+        (mirror / "share/provenance").mkdir(parents=True)
+        (mirror / "share/provenance/receipt.json").write_text(json.dumps({
+            "export_id": "x", "units": [{"name": "foundation"}, {"name": "canvas"}]}))
+        self.build.mkdir()
+        (self.build / "compile_commands.json").write_text(json.dumps([
+            {"file": "main.cpp", "command": "c++ -DPULP_HAS_SKIA=1 -c main.cpp"}]))
+        (self.build / "main.cpp.o.d").write_text(
+            f"main.cpp.o: main.cpp {mirror}/include/pulp/canvas/canvas.hpp\n")
+        self.image = self.build / "consumer"
+        self.image.write_bytes(b"\0")
+        self.symbols = {self.image: CLEAN_SYMBOLS["consumer"],
+                        mirror / "lib/libvellum-mirror-canvas.dylib": CLEAN_SYMBOLS["libvellum-mirror-canvas.dylib"]}
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def run_verify(self) -> dict:
+        with mock.patch.object(vi, "image_symbols", side_effect=lambda path: self.symbols[path]):
+            return vi.verify(self.prefix, self.build, self.image)
+
+    def test_clean_package_is_inert_and_records_debt_absence(self) -> None:
+        proof = self.run_verify()
+        self.assertTrue(proof["inert"], proof["findings"])
+        self.assertFalse(proof["debts"]["vellum-header-audio-widgets-include"]["header_in_package"])
+
+    def test_planted_guard_definition_is_not_inert(self) -> None:
+        (self.build / "compile_commands.json").write_text(json.dumps([
+            {"file": "main.cpp", "command": f"c++ -D{GUARD}=1 -c main.cpp"}]))
+        self.assertFalse(self.run_verify()["checks"]["no-widgets-gate-definition"])
+
+    def test_planted_audio_include_is_not_inert(self) -> None:
+        depfile = self.build / "main.cpp.o.d"
+        depfile.write_text(depfile.read_text().rstrip() + " /x/pulp/view/audio_widgets.hpp\n")
+        self.assertFalse(self.run_verify()["checks"]["no-audio-headers"])
+
+    def test_planted_audio_symbol_is_not_inert(self) -> None:
+        self.symbols[self.image] = self.symbols[self.image] + ["pulp::view::WaveformView::paint()"]
+        proof = self.run_verify()
+        self.assertFalse(proof["checks"]["no-audio-symbols"])
+        self.assertFalse(proof["checks"]["name-only-forward-declarations"])
+
+    def test_evidence_that_read_nothing_is_refused(self) -> None:
+        (self.build / "main.cpp.o.d").unlink()
+        with self.assertRaises(vi.EvidenceError):
+            self.run_verify()
+
+    def test_consumer_that_never_used_the_package_is_refused(self) -> None:
+        (self.build / "main.cpp.o.d").write_text("main.cpp.o: main.cpp /usr/include/stdio.h\n")
+        with self.assertRaises(vi.EvidenceError):
+            self.run_verify()
+
+    def test_image_without_packaged_symbols_is_refused(self) -> None:
+        self.symbols[self.image] = ["_main"]
+        with self.assertRaises(vi.EvidenceError):
+            self.run_verify()
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -20,6 +20,8 @@ option(VELLUM_ENABLE_GPU "Build the pinned Skia Graphite + Dawn GPU backend when
 option(VELLUM_REQUIRE_GPU "Fail configure unless the requested Skia/Dawn GPU backend is available" OFF)
 option(VELLUM_ENABLE_AUTHORING "Build the native JavaScript/TypeScript application host" ON)
 option(VELLUM_ENABLE_WEB "Build the experimental browser/Wasm proof" OFF)
+option(VELLUM_ENABLE_MIRROR
+    "Package the landed mirror's units (needs the locked Skia/Dawn archive)" OFF)
 option(VELLUM_ENABLE_ADDRESS_SANITIZER
     "Instrument Vellum targets with AddressSanitizer" OFF)
 set(VELLUM_AUTHORING_TEST_BUNDLE "" CACHE FILEPATH
@@ -57,6 +59,11 @@ add_subdirectory(components)
 
 if(VELLUM_ENABLE_GPU)
     include(cmake/VellumSkiaDawn.cmake)
+endif()
+
+set(VELLUM_PACKAGE_HAS_MIRROR OFF)
+if(VELLUM_ENABLE_MIRROR)
+    include(tools/mirror/VellumMirror.cmake)
 endif()
 
 if(VELLUM_ENABLE_GRAPHICS)
@@ -295,6 +302,19 @@ if(VELLUM_BUILD_TESTS)
         COMMAND "${Python3_EXECUTABLE}"
             tools/provenance/verify_downstream_consumers.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.mirror-package-unit
+        COMMAND "${Python3_EXECUTABLE}" -m unittest discover
+            -s tools/mirror -p "test_*.py"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    if(VELLUM_PACKAGE_HAS_MIRROR)
+        add_test(NAME vellum.mirror-install-consumer
+            COMMAND "${CMAKE_COMMAND}"
+                "-DVELLUM_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+                "-DVELLUM_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+                "-DVELLUM_MIRROR_ORIGIN=${VELLUM_MIRROR_ORIGIN_SHA}"
+                "-DPython3_EXECUTABLE=${Python3_EXECUTABLE}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tools/mirror/RunMirrorConsumer.cmake")
+    endif()
 endif()
 
 set(_vellum_install_targets vellum-foundation vellum-runtime vellum-component-abi)

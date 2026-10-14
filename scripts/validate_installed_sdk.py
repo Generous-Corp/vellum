@@ -37,14 +37,36 @@ class ValidationError(RuntimeError):
     pass
 
 
+INSTALLED_PAYLOAD_ROOT = "lib/vellum-installs/"
+ACTIVE_PAYLOAD_LINK = "lib/vellum/"
+
+
+def installed_payload_name(relative: str) -> str:
+    """The archive-payload name of an installed file.
+
+    The installer unpacks each verified archive under
+    `lib/vellum-installs/<install id>/` and points `lib/vellum` at it, so a
+    file there is judged by the same payload rules as its archive member:
+    `sdk/mirror/...` keeps the mirror scope. Every other prefix file is judged
+    by its prefix-relative path.
+    """
+    if relative.startswith(INSTALLED_PAYLOAD_ROOT):
+        _, separator, payload = relative[len(INSTALLED_PAYLOAD_ROOT):].partition("/")
+        if separator and payload:
+            return payload
+    if relative.startswith(ACTIVE_PAYLOAD_LINK):
+        return relative[len(ACTIVE_PAYLOAD_LINK):]
+    return relative
+
+
 def installed_contamination_findings(prefix: Path) -> list[dict[str, str]]:
     findings: list[dict[str, str]] = []
     for path in sorted(item for item in prefix.rglob("*") if item.is_file()):
         relative = path.relative_to(prefix).as_posix()
-        content = path.read_bytes() if should_scan_payload_content(relative) else b""
-        findings.extend(
-            payload_contamination_findings(relative, content)
-        )
+        name = installed_payload_name(relative)
+        content = path.read_bytes() if should_scan_payload_content(name) else b""
+        for finding in payload_contamination_findings(name, content):
+            findings.append({**finding, "path": relative})
     return findings
 
 
@@ -237,6 +259,71 @@ def validate_installed_phase3_browser(prefix: Path, root: Path,
     return True
 
 
+def validate_installed_mirror(sdk_prefix: Path, root: Path) -> dict[str, object]:
+    """Build and run a consumer of the landed mirror's units from the package alone.
+
+    The package carries the export receipt it was built from. The consumer
+    must report that receipt's origin commit, the Phase-6 view-audio debts
+    must be inert in it, and one image must not be able to take both Skia/Dawn
+    providers the package offers.
+    """
+    mirror = sdk_prefix / "mirror"
+    receipts = sorted((mirror / "share/provenance").glob("*.json"))
+    if len(receipts) != 1 or not (mirror / "lib/cmake/VellumMirror").is_dir():
+        raise ValidationError("GPU artifact does not carry the landed mirror's units and receipt")
+    receipt = json.loads(receipts[0].read_text(encoding="utf-8"))
+    origin = receipt.get("pulp_sha")
+    if not isinstance(origin, str) or len(origin) != 40:
+        raise ValidationError("installed mirror receipt names no origin commit")
+
+    cmake_common = [
+        f"-DCMAKE_PREFIX_PATH={sdk_prefix}",
+        "-DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE",
+        "-DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=FALSE",
+        "-DCMAKE_BUILD_TYPE=Release",
+    ]
+    if shutil.which("ninja"):
+        cmake_common.extend(["-G", "Ninja"])
+    source = root / "mirror-consumer-source"
+    shutil.copytree(SUPPORT_ROOT / "tools/mirror/consumer", source)
+    build = root / "mirror-consumer-build"
+    run(["cmake", "-S", str(source), "-B", str(build), *cmake_common], cwd=root)
+    run(["cmake", "--build", str(build)], cwd=root)
+    consumer = build / "vellum-mirror-consumer"
+    consumer_output = run([str(consumer), origin], cwd=root).stdout.strip()
+
+    inertness_path = root / "mirror-inertness.json"
+    completed = subprocess.run([
+        sys.executable, str(SUPPORT_ROOT / "tools/mirror/verify_mirror_inertness.py"),
+        "--prefix", str(sdk_prefix), "--consumer-build", str(build),
+        "--image", str(consumer), "--output", str(inertness_path),
+    ], text=True, capture_output=True, check=False)
+    if completed.returncode not in (0, 1) or not inertness_path.is_file():
+        raise ValidationError(
+            f"mirror inertness evidence is unusable:\n{completed.stdout}{completed.stderr}"
+        )
+    inertness = json.loads(inertness_path.read_text(encoding="utf-8"))
+
+    conflict_source = root / "mirror-provider-conflict"
+    shutil.copytree(SUPPORT_ROOT / "tools/mirror/provider-conflict", conflict_source)
+    conflict = subprocess.run([
+        "cmake", "-S", str(conflict_source), "-B", str(root / "mirror-provider-conflict-build"),
+        *cmake_common,
+    ], cwd=root, text=True, capture_output=True, check=False)
+    two_providers_refused = (
+        conflict.returncode != 0 and "VELLUM_SKIA_DAWN_PROVIDER" in conflict.stderr
+    )
+    return {
+        "export_id": receipt.get("export_id"),
+        "origin_commit": origin,
+        "mirror_sha": receipt.get("mirror_sha"),
+        "consumer_ran": consumer_output.startswith("mirror consumer: ok"),
+        "consumer_output": consumer_output,
+        "inertness": inertness,
+        "two_providers_refused": two_providers_refused,
+    }
+
+
 def validate(
     archive: Path,
     checksums: Path,
@@ -366,6 +453,9 @@ def validate(
             raise ValidationError("GPU artifact is missing its installed GPU/authoring/UI payload")
         if native_claimed and not native_present:
             raise ValidationError("native command claims have no installed native backend")
+        mirror_evidence = (
+            validate_installed_mirror(sdk_prefix, root) if gpu_claimed else None
+        )
         installed_phase3_scenario = (
             validate_installed_phase3(prefix, root, journey_env)
             if native_claimed else True
@@ -703,6 +793,12 @@ def validate(
         "gpu_authoring_ui_payload": not gpu_claimed or ui_present,
         "native_backend_payload": not native_claimed or native_present,
         "custom_component_abi": not verification["claims"].get("custom_components") or component_abi_present,
+        "installed_mirror_units": not gpu_claimed or mirror_evidence is not None,
+        "installed_mirror_consumer": not gpu_claimed or mirror_evidence["consumer_ran"],
+        "installed_mirror_phase6_debts_inert": not gpu_claimed or mirror_evidence["inertness"]["inert"],
+        "installed_mirror_single_skia_provider": (
+            not gpu_claimed or mirror_evidence["two_providers_refused"]
+        ),
         "sterile_consumer_configure": True,
         "sterile_consumer_build": True,
         "sterile_consumer_test": True,
@@ -770,6 +866,7 @@ def validate(
         "target": verification["target"],
         "claims": verification["claims"],
         "checks": checks,
+        "mirror": mirror_evidence,
     }
 
 

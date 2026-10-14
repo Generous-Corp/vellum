@@ -39,6 +39,11 @@ NATIVE_COMMANDS = ("build", "run", "test", "capture", "package")
 WEB_COMMANDS = ("build", "run", "test", "package")
 NODE_PROVENANCE_SCHEMA = "vellum.node-runtime-provenance.v1"
 DESIGN_IR_PAYLOAD_ENTRIES = ("LICENSE.md", "README.md", "bin", "package.json", "schema", "src")
+MIRROR_PACKAGE_FILES = (
+    "mirror/lib/cmake/VellumMirror/VellumMirrorTargets.cmake",
+    "mirror/lib/libvellum-mirror-foundation.dylib",
+    "mirror/lib/libvellum-mirror-canvas.dylib",
+)
 UI_PAYLOAD_ENTRIES = (
     "LICENSE.md", "README.md", "package.json", "package-lock.json", "scripts", "src", "test",
 )
@@ -628,7 +633,13 @@ def build(args: argparse.Namespace) -> dict[str, object]:
                 "-DVELLUM_REQUIRE_GPU=ON",
                 "-DVELLUM_ENABLE_AUTHORING=ON",
                 f"-DVELLUM_SKIA_ARCHIVE={skia_archive}",
+                # The native package carries the units built from the landed
+                # mirror (Decision 0010).
+                "-DVELLUM_ENABLE_MIRROR=ON",
             ])
+            mirror_deps = os.environ.get("VELLUM_MIRROR_DEPS_DIR")
+            if mirror_deps:
+                configure.append(f"-DVELLUM_MIRROR_DEPS_DIR={Path(mirror_deps).resolve()}")
         if shutil.which("ninja"):
             configure.extend(["-G", "Ninja"])
         run(configure)
@@ -653,6 +664,8 @@ def build(args: argparse.Namespace) -> dict[str, object]:
             raise ArtifactError(
                 "--skia-archive build did not install the complete native application runtime"
             )
+        if skia_archive and not all((install_tree / path).is_file() for path in MIRROR_PACKAGE_FILES):
+            raise ArtifactError("--skia-archive build did not install the landed mirror's units")
         if skia_archive and target != "darwin-arm64":
             raise ArtifactError("native application artifacts currently require target darwin-arm64")
         metadata = copy_payload(

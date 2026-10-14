@@ -53,6 +53,12 @@ if(VELLUM_HAS_SKIA_DAWN)
     target_link_libraries(vellum-gpu
         PUBLIC Vellum::Graphics
         PRIVATE VellumSkiaDawn)
+    # Every Vellum library that carries the locked Skia/Dawn archives names
+    # itself as the provider, so one image cannot link two of them.
+    set_property(TARGET vellum-gpu PROPERTY
+        INTERFACE_VELLUM_SKIA_DAWN_PROVIDER vellum-gpu)
+    set_property(TARGET vellum-gpu APPEND PROPERTY
+        COMPATIBLE_INTERFACE_STRING VELLUM_SKIA_DAWN_PROVIDER)
     add_custom_command(TARGET vellum-gpu POST_BUILD
         COMMAND "${CMAKE_COMMAND}" -E make_directory
             "${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_DATADIR}/vellum/fonts"
