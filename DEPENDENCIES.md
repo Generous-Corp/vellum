@@ -164,7 +164,7 @@ Vellum dependencies. Versions and licenses were cross-checked against Pulp's
 | Jost | `3.710` | SIL OFL 1.1 | `mirror/external/fonts/` (`canvas` unit) | Allowed font license |
 | Mbed TLS | `v3.6.2` | Apache-2.0 | `foundation` unit external input (`mirror/core/runtime/`); bytes not mirrored | MIT-compatible |
 | miniz | `3.0.2` | MIT | `mirror/external/miniz/` (`foundation` unit) | MIT-compatible |
-| pugixml | `1.14` | MIT | `mirror/external/pugixml/` (`foundation` unit) | MIT-compatible |
+| pugixml | `1.15` | MIT | `mirror/external/pugixml/` (`foundation` unit) | MIT-compatible |
 | TweetNaCl | `20140427` | Public domain | `mirror/external/tweetnacl/` (`foundation` unit) | Public-domain code |
 | WOFF2 | `fb9c3379f260` | MIT | `canvas` unit external input (`mirror/core/canvas/`); bytes not mirrored | MIT-compatible |
 | NanoSVG | vendored snapshot | zlib | `mirror/external/nanosvg/` (`canvas` unit) | MIT-compatible |

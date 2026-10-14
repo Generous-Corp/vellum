@@ -490,6 +490,14 @@ Copyright (c) 2016 The Inter Project Authors (https://github.com/rsms/inter)
 
 Copyright 2020 The Jost Project Authors (https://github.com/indestructible-type/Jost)
 
+### JetBrains Mono
+
+Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono)
+
+JetBrains Mono Regular is carried only in the framework mirror
+(`mirror/external/fonts/`), not in the installed SDK, under the SIL Open Font
+License, Version 1.1 reproduced below.
+
 The installed SDK redistributes Inter Regular and Jost Regular, Medium,
 SemiBold, and Bold, plus variable-weight Noto Sans JP and variable-width/weight
 Noto Sans Arabic. All seven files are
@@ -1234,9 +1242,35 @@ SOFTWARE.
 
 ---
 
+## cpp-httplib
+
+Copyright (c) 2026 Yuji Hirose. All rights reserved.
+
+MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
 ## pugixml
 
-Copyright (c) 2006-2024 Arseny Kapoulkine
+Copyright (C) 2006-2026, by Arseny Kapoulkine (arseny.kapoulkine@gmail.com)
 
 MIT License
 
@@ -1291,7 +1325,7 @@ here and must travel with the mirrored files.
 | Abseil | Apache-2.0 | not mirrored; no landed unit consumes it yet (planned renderer and V8 units) | Retain transitive renderer/V8 notice |
 | Brotli | MIT | `canvas` unit external input (`mirror/core/canvas/`, WOFF2 decoder); bytes not mirrored | Carry upstream MIT text |
 | CHOC | ISC | `foundation` unit external input, patched (`mirror/core/runtime/`, `mirror/core/events/`); bytes not mirrored | Retain fork and upstream attribution |
-| cpp-httplib | MIT | `mirror/external/cpp-httplib/` (`foundation` unit) | Carry upstream MIT text |
+| cpp-httplib | MIT | `mirror/external/cpp-httplib/` (`foundation` unit) | Text above |
 | Dawn and Tint | BSD-3-Clause | `canvas` unit external input: headers inside the Skia build tree; bytes not mirrored | Text above |
 | Expat | MIT | not mirrored; no landed unit consumes it yet (planned renderer units) | Text above |
 | HarfBuzz | Old MIT | `canvas` unit external input through the Skia build (text shaping); bytes not mirrored | Text above |
