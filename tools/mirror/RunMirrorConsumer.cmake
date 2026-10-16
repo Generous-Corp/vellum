@@ -65,6 +65,35 @@ _run("consumer configure" "${CMAKE_COMMAND}"
     -DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=FALSE)
 _run("consumer build" "${CMAKE_COMMAND}" --build "${_work}/consumer")
 _run("consumer run" "${_work}/consumer/vellum-mirror-consumer" "${VELLUM_MIRROR_ORIGIN}")
+
+# Keep a raw linker consumer as a separate contract check. It names only the
+# installed MirrorCanvas dylib, so the frontend itself must export its public
+# mirrored symbols; CMake target transitivity cannot mask a missing export.
+file(MAKE_DIRECTORY "${_work}/direct")
+file(WRITE "${_work}/direct/CMakeLists.txt" [=[
+cmake_minimum_required(VERSION 3.24)
+project(VellumMirrorDirectConsumer LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(VELLUM_MIRROR_PREFIX "" CACHE PATH "Installed Vellum prefix")
+add_library(vellum-mirror-direct SHARED IMPORTED)
+set_target_properties(vellum-mirror-direct PROPERTIES
+    IMPORTED_LOCATION "${VELLUM_MIRROR_PREFIX}/mirror/lib/libvellum-mirror-canvas.dylib"
+    INTERFACE_INCLUDE_DIRECTORIES "${VELLUM_MIRROR_PREFIX}/mirror/include")
+add_executable(vellum-mirror-direct-consumer direct_main.cpp)
+target_link_libraries(vellum-mirror-direct-consumer PRIVATE vellum-mirror-direct)
+set_target_properties(vellum-mirror-direct-consumer PROPERTIES
+    BUILD_RPATH "${VELLUM_MIRROR_PREFIX}/mirror/lib;${VELLUM_MIRROR_PREFIX}/lib")
+]=])
+file(COPY "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/direct_main.cpp"
+    DESTINATION "${_work}/direct")
+_run("direct consumer configure" "${CMAKE_COMMAND}"
+    -S "${_work}/direct" -B "${_work}/direct-build"
+    ${_generator} -DCMAKE_BUILD_TYPE=Release
+    "-DVELLUM_MIRROR_PREFIX=${_prefix}")
+_run("direct consumer build" "${CMAKE_COMMAND}" --build "${_work}/direct-build")
+_run("direct consumer run" "${_work}/direct-build/vellum-mirror-direct-consumer")
+
 _run("shared provider symbol ownership" "${Python3_EXECUTABLE}"
     "${VELLUM_SOURCE_DIR}/graphics/tests/test_dawn_provider_topology.py"
     "${_work}/consumer/vellum-mirror-consumer"
