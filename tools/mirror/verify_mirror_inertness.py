@@ -343,6 +343,12 @@ def verify(prefix: Path, consumer_build: Path, image: Path,
     libraries = sorted((mirror / "lib").glob("*.dylib"))
     if not libraries:
         raise EvidenceError("the package carries no mirror libraries")
+    # MirrorCanvas and Vellum::Gpu forward through this installed provider.
+    # Include the provider image in the closure so provider-owned symbols are
+    # covered by the same inertness and negative-control rules.
+    provider = prefix / "lib/libvellum-skia-dawn-provider.dylib"
+    if provider.is_file():
+        libraries.append(provider)
     symbols = {}
     for path in [image, *libraries]:
         names = image_symbols(path)

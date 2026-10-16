@@ -94,6 +94,32 @@ _run("direct consumer configure" "${CMAKE_COMMAND}"
 _run("direct consumer build" "${CMAKE_COMMAND}" --build "${_work}/direct-build")
 _run("direct consumer run" "${_work}/direct-build/vellum-mirror-direct-consumer")
 
+# The legacy GPU frontend has the same raw-link contract. Build a consumer
+# against only its installed dylib; running it would require a live GPU.
+file(MAKE_DIRECTORY "${_work}/direct-gpu")
+file(WRITE "${_work}/direct-gpu/CMakeLists.txt" [=[
+cmake_minimum_required(VERSION 3.24)
+project(VellumGpuDirectConsumer LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(VELLUM_MIRROR_PREFIX "" CACHE PATH "Installed Vellum prefix")
+add_library(vellum-gpu-direct SHARED IMPORTED)
+set_target_properties(vellum-gpu-direct PROPERTIES
+    IMPORTED_LOCATION "${VELLUM_MIRROR_PREFIX}/lib/libvellum-gpu.dylib"
+    INTERFACE_INCLUDE_DIRECTORIES "${VELLUM_MIRROR_PREFIX}/include")
+add_executable(vellum-gpu-direct-consumer direct_gpu_main.cpp)
+target_link_libraries(vellum-gpu-direct-consumer PRIVATE vellum-gpu-direct)
+target_link_directories(vellum-gpu-direct-consumer PRIVATE
+    "${VELLUM_MIRROR_PREFIX}/lib")
+]=])
+file(COPY "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/direct_gpu_main.cpp"
+    DESTINATION "${_work}/direct-gpu")
+_run("direct GPU consumer configure" "${CMAKE_COMMAND}"
+    -S "${_work}/direct-gpu" -B "${_work}/direct-gpu-build"
+    ${_generator} -DCMAKE_BUILD_TYPE=Release
+    "-DVELLUM_MIRROR_PREFIX=${_prefix}")
+_run("direct GPU consumer build" "${CMAKE_COMMAND}" --build "${_work}/direct-gpu-build")
+
 _run("shared provider symbol ownership" "${Python3_EXECUTABLE}"
     "${VELLUM_SOURCE_DIR}/graphics/tests/test_dawn_provider_topology.py"
     "${_work}/consumer/vellum-mirror-consumer"

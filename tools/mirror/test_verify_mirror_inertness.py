@@ -161,6 +161,9 @@ class VerifyTest(unittest.TestCase):
         (mirror / "lib/cmake/VellumMirror/VellumMirrorTargets.cmake").write_text(
             'INTERFACE_COMPILE_DEFINITIONS "PULP_HAS_SKIA=1"\n')
         (mirror / "lib/libvellum-mirror-canvas.dylib").write_bytes(b"\0")
+        self.provider = self.prefix / "lib/libvellum-skia-dawn-provider.dylib"
+        self.provider.parent.mkdir(parents=True, exist_ok=True)
+        self.provider.write_bytes(b"\0")
         (mirror / "include/pulp/canvas").mkdir(parents=True)
         (mirror / "include/pulp/canvas/canvas.hpp").write_text("#pragma once\n")
         (mirror / "share/provenance").mkdir(parents=True)
@@ -174,7 +177,8 @@ class VerifyTest(unittest.TestCase):
         self.image = self.build / "consumer"
         self.image.write_bytes(b"\0")
         self.symbols = {self.image: CLEAN_SYMBOLS["consumer"],
-                        mirror / "lib/libvellum-mirror-canvas.dylib": CLEAN_SYMBOLS["libvellum-mirror-canvas.dylib"]}
+                        mirror / "lib/libvellum-mirror-canvas.dylib": CLEAN_SYMBOLS["libvellum-mirror-canvas.dylib"],
+                        self.provider: ["SkFont::setSize(float)"]}
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -202,6 +206,12 @@ class VerifyTest(unittest.TestCase):
 
     def test_planted_audio_symbol_is_not_inert(self) -> None:
         self.symbols[self.image] = self.symbols[self.image] + ["pulp::view::WaveformView::paint()"]
+        proof = self.run_verify()
+        self.assertFalse(proof["checks"]["no-audio-symbols"])
+        self.assertFalse(proof["checks"]["name-only-forward-declarations"])
+
+    def test_provider_owned_audio_symbol_is_not_inert(self) -> None:
+        self.symbols[self.provider].append("pulp::view::WaveformView::paint()")
         proof = self.run_verify()
         self.assertFalse(proof["checks"]["no-audio-symbols"])
         self.assertFalse(proof["checks"]["name-only-forward-declarations"])
