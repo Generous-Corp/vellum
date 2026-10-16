@@ -68,8 +68,10 @@ _run("consumer build" "${CMAKE_COMMAND}" --build "${_work}/consumer")
 _run("consumer run" "${_work}/consumer/vellum-mirror-consumer" "${VELLUM_MIRROR_ORIGIN}")
 
 # Keep a raw linker consumer as a separate contract check. It names only the
-# installed MirrorCanvas dylib, so the frontend itself must export its public
-# mirrored symbols; CMake target transitivity cannot mask a missing export.
+# installed MirrorCanvas dylib as a link input, so CMake target transitivity
+# cannot mask a missing export. The provider directory is also a link search
+# path: on macOS, ld resolves LC_REEXPORT_DYLIB symbols at link time and does
+# not use an executable's runtime rpath to locate that re-exported image.
 file(MAKE_DIRECTORY "${_work}/direct")
 file(WRITE "${_work}/direct/CMakeLists.txt" [=[
 cmake_minimum_required(VERSION 3.24)
@@ -77,21 +79,27 @@ project(VellumMirrorDirectConsumer LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(VELLUM_MIRROR_PREFIX "" CACHE PATH "Installed Vellum prefix")
+set(VELLUM_INSTALL_LIBDIR "lib" CACHE STRING "Installed Vellum library directory")
 add_library(vellum-mirror-direct SHARED IMPORTED)
 set_target_properties(vellum-mirror-direct PROPERTIES
     IMPORTED_LOCATION "${VELLUM_MIRROR_PREFIX}/mirror/lib/libvellum-mirror-canvas.dylib"
     INTERFACE_INCLUDE_DIRECTORIES "${VELLUM_MIRROR_PREFIX}/mirror/include")
 add_executable(vellum-mirror-direct-consumer direct_main.cpp)
 target_link_libraries(vellum-mirror-direct-consumer PRIVATE vellum-mirror-direct)
+# This emits -L for the provider at link time while retaining only
+# libvellum-mirror-canvas.dylib as the explicit link input.
+target_link_directories(vellum-mirror-direct-consumer PRIVATE
+    "${VELLUM_MIRROR_PREFIX}/${VELLUM_INSTALL_LIBDIR}")
 set_target_properties(vellum-mirror-direct-consumer PROPERTIES
-    BUILD_RPATH "${VELLUM_MIRROR_PREFIX}/mirror/lib;${VELLUM_MIRROR_PREFIX}/lib")
+    BUILD_RPATH "${VELLUM_MIRROR_PREFIX}/mirror/lib;${VELLUM_MIRROR_PREFIX}/${VELLUM_INSTALL_LIBDIR}")
 ]=])
 file(COPY "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/direct_main.cpp"
     DESTINATION "${_work}/direct")
 _run("direct consumer configure" "${CMAKE_COMMAND}"
     -S "${_work}/direct" -B "${_work}/direct-build"
     ${_generator} -DCMAKE_BUILD_TYPE=Release
-    "-DVELLUM_MIRROR_PREFIX=${_prefix}")
+    "-DVELLUM_MIRROR_PREFIX=${_prefix}"
+    "-DVELLUM_INSTALL_LIBDIR=${VELLUM_INSTALL_LIBDIR}")
 _run("direct consumer build" "${CMAKE_COMMAND}" --build "${_work}/direct-build")
 _run("direct consumer run" "${_work}/direct-build/vellum-mirror-direct-consumer")
 
