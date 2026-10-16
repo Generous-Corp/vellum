@@ -4,9 +4,13 @@
 // linker could satisfy without the unit: SheenBidi through the bidi
 // analyzer, Skia text shaping through the bundled Inter face, CHOC through the
 // runtime queue, and the rendered build info that names the export's origin.
+// font_resolver.hpp exercises the provider-owned text path without making
+// private Skia/Dawn definitions part of the consumer ABI.
 
 #include <pulp/canvas/bidi.hpp>
 #include <pulp/canvas/canvas.hpp>
+#include <pulp/canvas/font_resolver.hpp>
+#include <vellum/graphics/skia_dawn_surface.hpp>
 #include <pulp/canvas/text_shaper.hpp>
 #include <pulp/runtime/base64.hpp>
 #include <pulp/runtime/build_info.hpp>
@@ -45,6 +49,19 @@ int main(int argc, char** argv) {
     const auto wide = shaper.layout(prepared, 1000.0f);
     if (wide.lines.size() != 1 || narrow.lines.size() < 2 || wide.total_width <= 60.0f)
         return fail("text shaping through the bundled face");
+
+    // The Vellum GPU frontend and mirrored canvas run in one provider group.
+    vellum::graphics::TextMetrics gpu_metrics;
+    std::string gpu_error;
+    if (!vellum::graphics::SkiaDawnSurface::measure_text(
+            {{.text = "Shared provider"}}, gpu_metrics, {}, &gpu_error) || gpu_metrics.width <= 0)
+        return fail("GPU text measurement through the shared provider");
+
+    pulp::canvas::FontOptions options;
+    options.family_stack = {"Inter"};
+    const auto resolved = pulp::canvas::FontResolver::instance().resolve_family_list(options);
+    if (!resolved.has_typeface() || resolved.actual_family != "Inter")
+        return fail("font resolution through the package's Skia declarations");
 
     pulp::runtime::SpscQueue<int, 8> queue;
     int value = 0;

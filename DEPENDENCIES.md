@@ -42,9 +42,11 @@ construction-specific digest over all 809 header files are locked in
 construction must verify those bytes before configuring Vellum. An arbitrary
 local `VELLUM_SKIA_DIR` is a development convenience, not release provenance.
 
-Selected archive members are statically linked into Vellum's installed
-`vellum-gpu` shared library. Consumers do not need a Skia checkout or receive
-the prebuilt static archives.
+The locked archives are linked into the installed `Vellum::SkiaDawnProvider`
+shared library. `Vellum::Gpu` and `Vellum::MirrorCanvas` share that provider
+and its installed declaration roots. Consumers do not need a Skia checkout
+or receive the prebuilt static archives. A distinct provider is rejected by
+the `VELLUM_SKIA_DAWN_PROVIDER` compatible-interface requirement.
 
 ### Code packaged inside `libskia.a`
 
@@ -71,13 +73,16 @@ full DEPS file; each row has matching object members in the locked archive.
 | PartitionAlloc | `03cc513177b4340bee3dbfd46f6dd5fdded43b79` | BSD-3-Clause | `partition_alloc::` symbols and allocator implementation members including `low_level_alloc.cc.o` |
 
 Vellum also links the byte-locked `libskparagraph.a`, `libskshaper.a`,
-`libskunicode_core.a`, and `libskunicode_icu.a` archives into `vellum-gpu` to
+`libskunicode_core.a`, and `libskunicode_icu.a` archives into the provider to
 provide paragraph-level attributed text, shaping, bidi, and Unicode fallback.
 The CMake integration checks each archive against the digest already recorded
 in the lock before linking it. HarfBuzz and ICU implementation objects are
 packaged in these separate archives rather than `libskia.a` or
-`libdawn_combined.a`; archive membership does not prove that every member
-survives the static linker's dead-code selection in a particular binary.
+`libdawn_combined.a`. The provider also carries the locked `libsvg.a` and
+`libskresources.a` used by the mirror. Whole-archive linking keeps the core definitions
+available to either frontend and to consumers of the installed declarations.
+The SVG factory anchor uses ordinary archive selection because `libsvg.a`
+also embeds duplicate Skia/resource objects.
 
 The linked `libskshaper.a` contains HarfBuzz objects from commit
 `9cb1fee51069b206effb4736e443b038d230789d`. The linked
@@ -188,10 +193,13 @@ lists is checked against its recorded SHA-256 before configure
 (`tools/mirror/mirror_package.py`). Highway, Mbed TLS, SheenBidi, Brotli, and
 WOFF2 objects are linked into those libraries; CHOC headers that the public
 headers include ship under `sdk/mirror/include/choc/`. Each fetched
-dependency's license file is installed under `sdk/mirror/share/licenses/`. The
-canvas library links the locked Skia/Dawn archive above privately, exports only
-the mirrored namespace, and declares itself a Skia/Dawn provider, so a consumer
-cannot link it and `Vellum::Gpu` into one image.
+dependency's license file is installed under `sdk/mirror/share/licenses/`.
+The canvas library is an installed forwarding dylib: the shared
+`Vellum::SkiaDawnProvider` owns its Skia-consuming objects and the locked
+Skia/Dawn archives. `Vellum::MirrorCanvas` exports only the mirrored namespace
+and links that provider transitively, so a consumer can link it and
+`Vellum::Gpu` into one image; a distinct provider is rejected by
+`VELLUM_SKIA_DAWN_PROVIDER`.
 
 Pulp's external contributor `matthewfudge` authored four mirrored view files:
 `core/view/src/design_frame_view.cpp`,

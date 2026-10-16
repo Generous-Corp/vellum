@@ -591,6 +591,8 @@ def derived_capabilities(
             "sdk/bin/vellum-app-host",
             "sdk/lib/libvellum-authoring.dylib",
             "sdk/lib/libvellum-gpu.dylib",
+            "sdk/lib/libvellum-skia-dawn-provider.dylib",
+            "sdk/mirror/lib/libvellum-mirror-foundation.dylib",
         )
     )
     node_runtime = validate_node_runtime(
