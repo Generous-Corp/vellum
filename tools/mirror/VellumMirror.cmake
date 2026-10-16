@@ -9,7 +9,8 @@
 # under the package's mirror/ subtree.
 #
 # GPU and canvas resolve Skia/Dawn through the same installed provider. Mirror
-# libraries export only their mirrored namespaces and contain no Skia archives.
+# libraries forward their public namespace, while the provider owns the
+# mirrored implementation objects and pinned Skia/Dawn definitions.
 
 if(NOT APPLE OR NOT VELLUM_HAS_SKIA_DAWN)
     message(FATAL_ERROR
@@ -248,10 +249,12 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
             "-framework UniformTypeIdentifiers"
             "-framework UserNotifications"
             bsm)
-        # MirrorCanvas remains an installed forwarding dylib; it carries no
-        # closure objects and resolves its API through the provider group.
+        # MirrorCanvas forwards its public mirrored symbols from the shared
+        # provider while retaining a standalone direct-link contract.
         target_link_libraries("${_library}" PUBLIC
             Vellum::SkiaDawnProvider ${_unit_links})
+        target_link_options("${_library}" PRIVATE
+            "LINKER:-reexport_library,$<TARGET_FILE:vellum-skia-dawn-provider>")
     else()
         target_link_libraries("${_library}" PRIVATE
             "$<LINK_LIBRARY:WHOLE_ARCHIVE,${_whole}>"
