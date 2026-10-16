@@ -264,8 +264,8 @@ def validate_installed_mirror(sdk_prefix: Path, root: Path) -> dict[str, object]
 
     The package carries the export receipt it was built from. The consumer
     must report that receipt's origin commit, the Phase-6 view-audio debts
-    must be inert in it, and one image must not be able to take both Skia/Dawn
-    providers the package offers.
+    must be inert in it, both frontends must use the shared provider, and an
+    alternate Skia/Dawn provider must be rejected.
     """
     mirror = sdk_prefix / "mirror"
     receipts = sorted((mirror / "share/provenance").glob("*.json"))
@@ -300,6 +300,13 @@ def validate_installed_mirror(sdk_prefix: Path, root: Path) -> dict[str, object]
     run(["cmake", "--build", str(build)], cwd=root)
     consumer = build / "vellum-mirror-consumer"
     consumer_output = run([str(consumer), origin], cwd=root).stdout.strip()
+
+    run([
+        sys.executable, str(SUPPORT_ROOT / "graphics/tests/test_dawn_provider_topology.py"),
+        str(consumer), str(sdk_prefix / "lib/libvellum-gpu.dylib"),
+        str(sdk_prefix / "lib/libvellum-skia-dawn-provider.dylib"),
+        str(mirror / "lib/libvellum-mirror-canvas.dylib"),
+    ], cwd=root)
 
     inertness_path = root / "mirror-inertness.json"
     completed = subprocess.run([

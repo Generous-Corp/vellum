@@ -45,6 +45,7 @@ SUPPORT_FILES = (
     "tools/mirror/consumer/CMakeLists.txt",
     "tools/mirror/consumer/main.cpp",
     "tools/mirror/provider-conflict/CMakeLists.txt",
+    "graphics/tests/test_dawn_provider_topology.py",
     "tools/mirror/verify_mirror_inertness.py",
 )
 

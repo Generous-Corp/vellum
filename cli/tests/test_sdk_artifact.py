@@ -279,6 +279,8 @@ class SdkArtifactTests(unittest.TestCase):
                 "bin/vellum-app-host",
                 "lib/libvellum-authoring.dylib",
                 "lib/libvellum-gpu.dylib",
+                "lib/libvellum-skia-dawn-provider.dylib",
+                "mirror/lib/libvellum-mirror-foundation.dylib",
             ):
                 path = install_tree / relative
                 path.parent.mkdir(parents=True, exist_ok=True)

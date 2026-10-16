@@ -159,6 +159,8 @@ def derive_capabilities(payload: Path, install_tree: Path) -> dict[str, object]:
         "bin/vellum-app-host",
         "lib/libvellum-authoring.dylib",
         "lib/libvellum-gpu.dylib",
+        "lib/libvellum-skia-dawn-provider.dylib",
+        "mirror/lib/libvellum-mirror-foundation.dylib",
     ))
     node_runtime = (
         any((payload / name).is_file() for name in ("node/bin/node", "node/bin/node.exe"))
@@ -659,7 +661,8 @@ def build(args: argparse.Namespace) -> dict[str, object]:
             installed_cmake_target(install_tree, "Authoring") and
             (install_tree / "bin/vellum-app-host").is_file() and
             (install_tree / "lib/libvellum-authoring.dylib").is_file() and
-            (install_tree / "lib/libvellum-gpu.dylib").is_file()
+            (install_tree / "lib/libvellum-gpu.dylib").is_file() and
+            (install_tree / "lib/libvellum-skia-dawn-provider.dylib").is_file()
         ):
             raise ArtifactError(
                 "--skia-archive build did not install the complete native application runtime"

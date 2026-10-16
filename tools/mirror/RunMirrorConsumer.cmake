@@ -1,7 +1,7 @@
 # Installs this build, then builds and runs the mirror consumer against the
 # installed package alone, proves the Phase-6 debts inert there, and proves
 # that one image cannot take two Skia/Dawn providers.
-foreach(_required VELLUM_SOURCE_DIR VELLUM_BUILD_DIR VELLUM_MIRROR_DEPS_DIR VELLUM_MIRROR_ORIGIN Python3_EXECUTABLE)
+foreach(_required VELLUM_SOURCE_DIR VELLUM_BUILD_DIR VELLUM_MIRROR_DEPS_DIR VELLUM_MIRROR_ORIGIN VELLUM_INSTALL_LIBDIR Python3_EXECUTABLE)
     if(NOT DEFINED ${_required})
         message(FATAL_ERROR "mirror consumer test: ${_required} was not supplied")
     endif()
@@ -65,6 +65,12 @@ _run("consumer configure" "${CMAKE_COMMAND}"
     -DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=FALSE)
 _run("consumer build" "${CMAKE_COMMAND}" --build "${_work}/consumer")
 _run("consumer run" "${_work}/consumer/vellum-mirror-consumer" "${VELLUM_MIRROR_ORIGIN}")
+_run("shared provider symbol ownership" "${Python3_EXECUTABLE}"
+    "${VELLUM_SOURCE_DIR}/graphics/tests/test_dawn_provider_topology.py"
+    "${_work}/consumer/vellum-mirror-consumer"
+    "${_prefix}/${VELLUM_INSTALL_LIBDIR}/libvellum-gpu.dylib"
+    "${_prefix}/${VELLUM_INSTALL_LIBDIR}/libvellum-skia-dawn-provider.dylib"
+    "${_prefix}/mirror/lib/libvellum-mirror-canvas.dylib")
 _run("Phase-6 debt inertness" "${Python3_EXECUTABLE}"
     "${VELLUM_SOURCE_DIR}/tools/mirror/verify_mirror_inertness.py"
     --prefix "${_prefix}" --consumer-build "${_work}/consumer"

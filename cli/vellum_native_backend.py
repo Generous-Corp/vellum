@@ -190,14 +190,19 @@ def sdk_node(sdk: Path) -> Path:
 
 def copy_frameworks(sdk: Path, destination: Path) -> list[str]:
     source = sdk / "sdk/lib"
-    names = ["libvellum-authoring.dylib", "libvellum-gpu.dylib"]
+    files = [
+        ("libvellum-authoring.dylib", source / "libvellum-authoring.dylib"),
+        ("libvellum-gpu.dylib", source / "libvellum-gpu.dylib"),
+        ("libvellum-skia-dawn-provider.dylib", source / "libvellum-skia-dawn-provider.dylib"),
+        ("libvellum-mirror-foundation.dylib",
+         sdk / "sdk/mirror/lib/libvellum-mirror-foundation.dylib"),
+    ]
     destination.mkdir(parents=True)
-    for name in names:
-        candidate = source / name
+    for name, candidate in files:
         if not candidate.is_file():
             raise BackendFailure(f"Installed SDK is missing {candidate}", status="invalid_sdk")
         shutil.copy2(candidate, destination / name)
-    return names
+    return [name for name, _ in files]
 
 
 PACKAGED_FONT_NAMES = (

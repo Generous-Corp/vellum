@@ -26,12 +26,27 @@ endif()
 if(VELLUM_HAS_SKIA_DAWN)
     file(RELATIVE_PATH _vellum_datadir_from_libdir
         "${CMAKE_INSTALL_FULL_LIBDIR}" "${CMAKE_INSTALL_FULL_DATADIR}")
-    file(RELATIVE_PATH _vellum_build_datadir_from_gpu_dir
-        "${CMAKE_CURRENT_BINARY_DIR}"
+    file(RELATIVE_PATH _vellum_build_datadir_from_provider_dir
+        "${CMAKE_BINARY_DIR}"
         "${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_DATADIR}")
-    add_library(vellum-gpu SHARED
+    # The provider group is the only image that contains Skia-consuming
+    # implementation objects. Keeping these objects beside the pinned Skia
+    # definitions avoids a private Skia symbol crossing a dylib boundary.
+    target_sources(vellum-skia-dawn-provider PRIVATE
         src/dawn_bootstrap.cpp
         src/skia_dawn_surface.mm)
+    target_include_directories(vellum-skia-dawn-provider PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    target_compile_features(vellum-skia-dawn-provider PRIVATE cxx_std_20)
+    target_compile_definitions(vellum-skia-dawn-provider PRIVATE
+        VELLUM_HAS_SKIA_DAWN=1
+        VELLUM_DATADIR_FROM_LIBDIR="${_vellum_datadir_from_libdir}"
+        VELLUM_BUILD_DATADIR_FROM_PROVIDER_DIR="${_vellum_build_datadir_from_provider_dir}")
+    target_link_libraries(vellum-skia-dawn-provider PUBLIC Vellum::Graphics)
+
+    # Preserve the Vellum::Gpu binary identity for existing consumers. It is a
+    # forwarding frontend; all GPU implementation symbols live in the group.
+    add_library(vellum-gpu SHARED src/gpu_frontend_anchor.cpp)
     add_library(Vellum::Gpu ALIAS vellum-gpu)
 
     set_target_properties(vellum-gpu PROPERTIES
@@ -46,19 +61,8 @@ if(VELLUM_HAS_SKIA_DAWN)
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
             $<INSTALL_INTERFACE:include>)
     target_compile_features(vellum-gpu PUBLIC cxx_std_20)
-    target_compile_definitions(vellum-gpu PUBLIC VELLUM_HAS_SKIA_DAWN=1)
-    target_compile_definitions(vellum-gpu PRIVATE
-        VELLUM_DATADIR_FROM_LIBDIR="${_vellum_datadir_from_libdir}"
-        VELLUM_BUILD_DATADIR_FROM_GPU_DIR="${_vellum_build_datadir_from_gpu_dir}")
     target_link_libraries(vellum-gpu
-        PUBLIC Vellum::Graphics
-        PRIVATE VellumSkiaDawn)
-    # Every Vellum library that carries the locked Skia/Dawn archives names
-    # itself as the provider, so one image cannot link two of them.
-    set_property(TARGET vellum-gpu PROPERTY
-        INTERFACE_VELLUM_SKIA_DAWN_PROVIDER vellum-gpu)
-    set_property(TARGET vellum-gpu APPEND PROPERTY
-        COMPATIBLE_INTERFACE_STRING VELLUM_SKIA_DAWN_PROVIDER)
+        PUBLIC Vellum::Graphics Vellum::SkiaDawnProvider)
     add_custom_command(TARGET vellum-gpu POST_BUILD
         COMMAND "${CMAKE_COMMAND}" -E make_directory
             "${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_DATADIR}/vellum/fonts"
