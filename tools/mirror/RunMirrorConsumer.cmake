@@ -94,7 +94,8 @@ target_link_libraries(vellum-mirror-direct-consumer PRIVATE vellum-mirror-direct
 target_link_directories(vellum-mirror-direct-consumer PRIVATE
     "${VELLUM_MIRROR_PREFIX}/${VELLUM_INSTALL_LIBDIR}")
 target_link_options(vellum-mirror-direct-consumer PRIVATE
-    "LINKER:-dylib_file,@rpath/libvellum-skia-dawn-provider.dylib:${VELLUM_MIRROR_PREFIX}/${VELLUM_INSTALL_LIBDIR}/libvellum-skia-dawn-provider.dylib")
+    "LINKER:-dylib_file,@rpath/libvellum-skia-dawn-provider.dylib:${VELLUM_MIRROR_PREFIX}/${VELLUM_INSTALL_LIBDIR}/libvellum-skia-dawn-provider.dylib"
+    "LINKER:-undefined,dynamic_lookup")
 set_target_properties(vellum-mirror-direct-consumer PROPERTIES
     BUILD_RPATH "${VELLUM_MIRROR_PREFIX}/mirror/lib;${VELLUM_MIRROR_PREFIX}/${VELLUM_INSTALL_LIBDIR}")
 ]=])
@@ -156,6 +157,20 @@ _run("direct GPU consumer configure" "${CMAKE_COMMAND}"
     "-DVELLUM_MIRROR_PREFIX=${_prefix}"
     "-DVELLUM_INSTALL_LIBDIR=${VELLUM_INSTALL_LIBDIR}")
 _run("direct GPU consumer build" "${CMAKE_COMMAND}" --build "${_work}/direct-gpu-build")
+
+execute_process(
+    COMMAND "${_otool}" -L "${_prefix}/${VELLUM_INSTALL_LIBDIR}/libvellum-gpu.dylib"
+    RESULT_VARIABLE _gpu_otool_result
+    OUTPUT_VARIABLE _gpu_otool
+    ERROR_VARIABLE _gpu_otool_error)
+if(NOT _gpu_otool_result EQUAL 0 OR
+   NOT _gpu_otool MATCHES "libvellum-skia-dawn-provider\\.dylib" OR
+   NOT _gpu_otool MATCHES "reexport")
+    message(FATAL_ERROR
+        "GPU frontend does not carry the provider re-export contract:\n"
+        "${_gpu_otool}\n${_gpu_otool_error}")
+endif()
+message(STATUS "GPU provider re-export metadata: ok")
 
 _run("shared provider symbol ownership" "${Python3_EXECUTABLE}"
     "${VELLUM_SOURCE_DIR}/graphics/tests/test_dawn_provider_topology.py"
