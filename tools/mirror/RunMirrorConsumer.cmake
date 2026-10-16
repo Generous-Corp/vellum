@@ -95,7 +95,8 @@ target_link_directories(vellum-mirror-direct-consumer PRIVATE
     "${VELLUM_MIRROR_PREFIX}/${VELLUM_INSTALL_LIBDIR}")
 target_link_options(vellum-mirror-direct-consumer PRIVATE
     "LINKER:-dylib_file,@rpath/libvellum-skia-dawn-provider.dylib:${VELLUM_MIRROR_PREFIX}/${VELLUM_INSTALL_LIBDIR}/libvellum-skia-dawn-provider.dylib"
-    "LINKER:-undefined,dynamic_lookup")
+    "LINKER:-undefined,dynamic_lookup"
+    "LINKER:-flat_namespace")
 set_target_properties(vellum-mirror-direct-consumer PROPERTIES
     BUILD_RPATH "${VELLUM_MIRROR_PREFIX}/mirror/lib;${VELLUM_MIRROR_PREFIX}/${VELLUM_INSTALL_LIBDIR}")
 ]=])
