@@ -61,6 +61,9 @@ if(VELLUM_HAS_SKIA_DAWN)
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
             $<INSTALL_INTERFACE:include>)
     target_compile_features(vellum-gpu PUBLIC cxx_std_20)
+    # Preserve the installed consumer compile contract from the pre-provider
+    # GPU target. Public headers and downstream feature gates use this marker.
+    target_compile_definitions(vellum-gpu PUBLIC VELLUM_HAS_SKIA_DAWN=1)
     target_link_libraries(vellum-gpu
         PUBLIC Vellum::Graphics Vellum::SkiaDawnProvider)
     # Preserve the legacy direct-link ABI while the provider remains the sole

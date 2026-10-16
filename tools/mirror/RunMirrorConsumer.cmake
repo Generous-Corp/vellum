@@ -55,7 +55,8 @@ if(_ninja)
 endif()
 _run("debt probe" "${Python3_EXECUTABLE}"
     "${VELLUM_SOURCE_DIR}/tools/mirror/verify_mirror_inertness.py"
-    --prefix "${_prefix}" --write-debt-probe "${_work}/debt_probe.cpp")
+    --prefix "${_prefix}" --install-libdir "${VELLUM_INSTALL_LIBDIR}"
+    --write-debt-probe "${_work}/debt_probe.cpp")
 _run("consumer configure" "${CMAKE_COMMAND}"
     -S "${VELLUM_SOURCE_DIR}/tools/mirror/consumer" -B "${_work}/consumer"
     ${_generator} -DCMAKE_BUILD_TYPE=Release
@@ -103,21 +104,23 @@ project(VellumGpuDirectConsumer LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(VELLUM_MIRROR_PREFIX "" CACHE PATH "Installed Vellum prefix")
+set(VELLUM_INSTALL_LIBDIR "" CACHE STRING "Installed Vellum library directory")
 add_library(vellum-gpu-direct SHARED IMPORTED)
 set_target_properties(vellum-gpu-direct PROPERTIES
-    IMPORTED_LOCATION "${VELLUM_MIRROR_PREFIX}/lib/libvellum-gpu.dylib"
+    IMPORTED_LOCATION "${VELLUM_MIRROR_PREFIX}/${VELLUM_INSTALL_LIBDIR}/libvellum-gpu.dylib"
     INTERFACE_INCLUDE_DIRECTORIES "${VELLUM_MIRROR_PREFIX}/include")
 add_executable(vellum-gpu-direct-consumer direct_gpu_main.cpp)
 target_link_libraries(vellum-gpu-direct-consumer PRIVATE vellum-gpu-direct)
 target_link_directories(vellum-gpu-direct-consumer PRIVATE
-    "${VELLUM_MIRROR_PREFIX}/lib")
+    "${VELLUM_MIRROR_PREFIX}/${VELLUM_INSTALL_LIBDIR}")
 ]=])
 file(COPY "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/direct_gpu_main.cpp"
     DESTINATION "${_work}/direct-gpu")
 _run("direct GPU consumer configure" "${CMAKE_COMMAND}"
     -S "${_work}/direct-gpu" -B "${_work}/direct-gpu-build"
     ${_generator} -DCMAKE_BUILD_TYPE=Release
-    "-DVELLUM_MIRROR_PREFIX=${_prefix}")
+    "-DVELLUM_MIRROR_PREFIX=${_prefix}"
+    "-DVELLUM_INSTALL_LIBDIR=${VELLUM_INSTALL_LIBDIR}")
 _run("direct GPU consumer build" "${CMAKE_COMMAND}" --build "${_work}/direct-gpu-build")
 
 _run("shared provider symbol ownership" "${Python3_EXECUTABLE}"
@@ -128,7 +131,8 @@ _run("shared provider symbol ownership" "${Python3_EXECUTABLE}"
     "${_prefix}/mirror/lib/libvellum-mirror-canvas.dylib")
 _run("Phase-6 debt inertness" "${Python3_EXECUTABLE}"
     "${VELLUM_SOURCE_DIR}/tools/mirror/verify_mirror_inertness.py"
-    --prefix "${_prefix}" --consumer-build "${_work}/consumer"
+    --prefix "${_prefix}" --install-libdir "${VELLUM_INSTALL_LIBDIR}"
+    --consumer-build "${_work}/consumer"
     --image "${_work}/consumer/vellum-mirror-consumer"
     --output "${_work}/inertness.json")
 

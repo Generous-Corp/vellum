@@ -183,11 +183,13 @@ class VerifyTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def run_verify(self, floor: set[str] | None = None) -> dict:
+    def run_verify(self, floor: set[str] | None = None,
+                   install_libdir: str = "lib") -> dict:
         with mock.patch.object(vi, "image_symbols", side_effect=lambda path: self.symbols[path]), \
                 mock.patch.object(vi, "view_audio_floor", side_effect=lambda archive: floor):
             return vi.verify(self.prefix, self.build, self.image,
-                             Path("libpulp-view-audio.a") if floor is not None else None)
+                             Path("libpulp-view-audio.a") if floor is not None else None,
+                             install_libdir)
 
     def test_clean_package_is_inert_and_records_debt_absence(self) -> None:
         proof = self.run_verify()
@@ -215,6 +217,15 @@ class VerifyTest(unittest.TestCase):
         proof = self.run_verify()
         self.assertFalse(proof["checks"]["no-audio-symbols"])
         self.assertFalse(proof["checks"]["name-only-forward-declarations"])
+
+    def test_nested_install_library_directory_is_scanned(self) -> None:
+        nested_provider = self.prefix / "lib/vellum/libvellum-skia-dawn-provider.dylib"
+        nested_provider.parent.mkdir(parents=True)
+        nested_provider.write_bytes(b"\0")
+        self.provider.unlink()
+        self.symbols[nested_provider] = ["pulp::view::WaveformView::paint()"]
+        proof = self.run_verify(install_libdir="lib/vellum")
+        self.assertFalse(proof["checks"]["no-audio-symbols"])
 
     def plant_debt_headers(self) -> list[Path]:
         include = self.prefix / "mirror/include/pulp/view"
