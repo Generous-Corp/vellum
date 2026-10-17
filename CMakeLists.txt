@@ -183,11 +183,14 @@ if(VELLUM_BUILD_TESTS)
             OSX_ARCHITECTURES arm64
             MACOSX_DEPLOYMENT_TARGET 13.0
             BUILD_RPATH "$<TARGET_FILE_DIR:vellum-gpu>")
+        add_test(NAME vellum.dawn-provider-bootstrap
+            COMMAND vellum-dawn-provider-topology-test)
         add_test(NAME vellum.dawn-provider-topology
             COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/graphics/tests/test_dawn_provider_topology.py"
                 "$<TARGET_FILE:vellum-dawn-provider-topology-test>"
-                "$<TARGET_FILE:vellum-gpu>")
+                "$<TARGET_FILE:vellum-gpu>"
+                "$<TARGET_FILE:vellum-skia-dawn-provider>")
 
         add_executable(vellum-legacy-config-caller-test
             graphics/tests/legacy_config_caller_test.cpp)
@@ -247,6 +250,8 @@ if(VELLUM_BUILD_TESTS)
                     "-DVELLUM_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
                     "-DVELLUM_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
                     "-DVELLUM_SKIA_DIR=${VELLUM_SKIA_DIR}"
+                    "-DVELLUM_ENABLE_MIRROR=${VELLUM_ENABLE_MIRROR}"
+                    "-DVELLUM_MIRROR_DEPS_DIR=${VELLUM_MIRROR_DEPS_DIR}"
                 "-DTEST_CONFIG=$<CONFIG>"
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunNestedInstallConsumer.cmake")
             add_test(NAME vellum.install-legacy-config-consumer
@@ -317,6 +322,7 @@ if(VELLUM_BUILD_TESTS)
                 "-DVELLUM_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
                 "-DVELLUM_MIRROR_ORIGIN=${VELLUM_MIRROR_ORIGIN_SHA}"
                 "-DVELLUM_MIRROR_DEPS_DIR=${VELLUM_MIRROR_DEPS_DIR}"
+                "-DVELLUM_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
                 "-DPython3_EXECUTABLE=${Python3_EXECUTABLE}"
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tools/mirror/RunMirrorConsumer.cmake")
     endif()
@@ -326,8 +332,11 @@ set(_vellum_install_targets vellum-foundation vellum-runtime vellum-component-ab
 if(VELLUM_ENABLE_GRAPHICS)
     list(APPEND _vellum_install_targets vellum-graphics)
     if(TARGET vellum-gpu)
-        list(APPEND _vellum_install_targets vellum-gpu vellum-dawn-headers)
+        list(APPEND _vellum_install_targets vellum-gpu)
     endif()
+endif()
+if(TARGET vellum-skia-dawn-provider)
+    list(APPEND _vellum_install_targets vellum-skia-dawn-provider vellum-dawn-headers)
 endif()
 if(TARGET vellum-authoring)
     list(APPEND _vellum_install_targets vellum-authoring)

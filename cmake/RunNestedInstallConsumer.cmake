@@ -1,7 +1,11 @@
 if(NOT DEFINED VELLUM_SOURCE_DIR OR
    NOT DEFINED VELLUM_BUILD_DIR OR
-   NOT DEFINED VELLUM_SKIA_DIR)
+   NOT DEFINED VELLUM_SKIA_DIR OR
+   NOT DEFINED VELLUM_ENABLE_MIRROR)
     message(FATAL_ERROR "nested install-consumer paths were not supplied")
+endif()
+if(VELLUM_ENABLE_MIRROR AND NOT DEFINED VELLUM_MIRROR_DEPS_DIR)
+    message(FATAL_ERROR "nested mirror install paths were not supplied")
 endif()
 
 set(_build "${VELLUM_BUILD_DIR}/nested-install-layout-test")
@@ -15,7 +19,9 @@ execute_process(
         -DCMAKE_INSTALL_LIBDIR=lib/vellum
         -DCMAKE_INSTALL_DATADIR=data
         -DVELLUM_REQUIRE_GPU=ON
+        "-DVELLUM_ENABLE_MIRROR=${VELLUM_ENABLE_MIRROR}"
         "-DVELLUM_SKIA_DIR=${VELLUM_SKIA_DIR}"
+        "-DVELLUM_MIRROR_DEPS_DIR=${VELLUM_MIRROR_DEPS_DIR}"
     RESULT_VARIABLE _configure_result
     OUTPUT_VARIABLE _configure_stdout
     ERROR_VARIABLE _configure_stderr)
@@ -30,7 +36,7 @@ if(DEFINED TEST_CONFIG AND NOT TEST_CONFIG STREQUAL "")
     list(APPEND _config_args --config "${TEST_CONFIG}")
 endif()
 execute_process(
-    COMMAND "${CMAKE_COMMAND}" --build "${_build}" ${_config_args} --parallel 8
+    COMMAND "${CMAKE_COMMAND}" --build "${_build}" ${_config_args} --parallel 4
     RESULT_VARIABLE _build_result
     OUTPUT_VARIABLE _build_stdout
     ERROR_VARIABLE _build_stderr)

@@ -17,9 +17,10 @@ The public slice consists of:
 - one serialized SkParagraph builder/layout boundary around the shared
   packaged-font collection, with stable caller-owned run values and randomized
   Release plus AddressSanitizer concurrency coverage;
-- an installed shared `Vellum::Gpu` target that hides Skia/Dawn static-link
-  details from application builds, plus a headers-only `Vellum::DawnHeaders`
-  target for an embedding host's authenticated bootstrap and compute code.
+- an installed shared `Vellum::Gpu` forwarding target backed by the shared
+  `Vellum::SkiaDawnProvider`, which hides Skia/Dawn static-link details from
+  application builds, plus a headers-only `Vellum::DawnHeaders` target for an
+  embedding host's authenticated bootstrap and compute code.
 
 Native self-test is deliberately fail-closed. A requested native surface is
 not allowed to fall back to CoreGraphics or an offscreen surface. The test also
@@ -36,8 +37,9 @@ headers; reaching into Vellum source or renderer internals is forbidden.
 `Vellum::Gpu` and `Vellum::DawnHeaders` calls the separate versioned
 `register_dawn_bootstrap` API before `create`, authenticating its Dawn header,
 exported proc table, and native provider before it calls `dawnProcSetProcs`.
-The GPU dylib owns the sole static Dawn definitions and the process bootstrap
-coordinator; the host contributes declarations and the callback only.
+The `Vellum::SkiaDawnProvider` dylib owns the sole static Dawn definitions and
+the process bootstrap coordinator; `Vellum::Gpu` is a forwarding frontend and
+the host contributes declarations and the callback only.
 Same-revision requests are idempotent, a different revision is rejected before
 callback execution, and a reentrant or simultaneous initialization fails
 without waiting on host code. An old `Config` caller cannot be read past and

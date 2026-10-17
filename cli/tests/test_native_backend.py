@@ -75,8 +75,15 @@ def fake_build_sdk(root: Path) -> Path:
     host.chmod(0o755)
     libraries = sdk / "sdk/lib"
     libraries.mkdir(parents=True)
-    for name in ("libvellum-authoring.dylib", "libvellum-gpu.dylib"):
+    for name in (
+        "libvellum-authoring.dylib",
+        "libvellum-gpu.dylib",
+        "libvellum-skia-dawn-provider.dylib",
+    ):
         (libraries / name).write_bytes(b"test")
+    mirror_foundation = sdk / "sdk/mirror/lib/libvellum-mirror-foundation.dylib"
+    mirror_foundation.parent.mkdir(parents=True)
+    mirror_foundation.write_bytes(b"test")
     fonts = sdk / "sdk/share/vellum/fonts"
     fonts.mkdir(parents=True)
     for name in PACKAGED_FONT_NAMES:
@@ -348,6 +355,15 @@ class NativeBackendTests(unittest.TestCase):
             ], env={"VELLUM_SDK_ROOT": str(sdk)})
             self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
             app = Path(json.loads(built.stdout)["data"]["app"])
+            self.assertEqual(
+                sorted(path.name for path in (app / "Contents/Frameworks").iterdir()),
+                sorted([
+                    "libvellum-authoring.dylib",
+                    "libvellum-gpu.dylib",
+                    "libvellum-skia-dawn-provider.dylib",
+                    "libvellum-mirror-foundation.dylib",
+                ]),
+            )
             bundled_fonts = app / "Contents/Resources/vellum/fonts"
             self.assertEqual(
                 sorted(path.name for path in bundled_fonts.iterdir()),
