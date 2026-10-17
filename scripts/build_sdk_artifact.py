@@ -391,6 +391,27 @@ def normalize_macho_executable(path: Path, commit: str, target: str) -> None:
     run([codesign, "--verify", "--strict", str(path)])
 
 
+def normalize_macho_dylibs(install_tree: Path, commit: str, target: str) -> None:
+    """Give every installed dylib stable UUID and ad-hoc signature identities."""
+
+    codesign = shutil.which("codesign")
+    if codesign is None:
+        raise ArtifactError("deterministic Darwin artifacts require codesign")
+    for path in sorted(install_tree.rglob("*.dylib")):
+        relative = path.relative_to(install_tree).as_posix()
+        identity = bytearray(hashlib.sha256(
+            f"vellum-dylib\0{relative}\0{commit}\0{target}".encode("utf-8")
+        ).digest()[:16])
+        identity[6] = (identity[6] & 0x0F) | 0x50
+        identity[8] = (identity[8] & 0x3F) | 0x80
+        rewrite_macho_uuid(path, bytes(identity))
+        identifier = "org.generous.vellum.dylib." + hashlib.sha256(
+            relative.encode("utf-8")
+        ).hexdigest()[:16]
+        run([codesign, "--force", "--sign", "-", "--identifier", identifier, str(path)])
+        run([codesign, "--verify", "--strict", str(path)])
+
+
 def target_name() -> str:
     os_name = platform.system().lower()
     os_part = {"darwin": "darwin", "linux": "linux", "windows": "windows"}.get(os_name)
@@ -655,6 +676,7 @@ def build(args: argparse.Namespace) -> dict[str, object]:
         for archive in sorted(install_tree.rglob("*.a")):
             normalize_static_archive(archive)
         if skia_archive and target == "darwin-arm64":
+            normalize_macho_dylibs(install_tree, commit, target)
             normalize_macho_executable(install_tree / "bin/vellum-app-host", commit, target)
         if skia_archive and not (
             installed_cmake_target(install_tree, "Gpu") and
