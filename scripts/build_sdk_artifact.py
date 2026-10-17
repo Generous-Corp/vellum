@@ -643,6 +643,16 @@ def build(args: argparse.Namespace) -> dict[str, object]:
         install_tree = temporary / "install"
         payload = temporary / "payload"
         payload.mkdir()
+        # The artifact is built twice in the reproducibility gate. Remap the
+        # per-build temporary root in source, macro, and DWARF paths so the
+        # installed binaries do not retain a random TemporaryDirectory name.
+        canonical_root = "/vellum-sdk-artifact"
+        path_map_flags = " ".join((
+            f"-ffile-prefix-map={temporary}={canonical_root}",
+            f"-fmacro-prefix-map={temporary}={canonical_root}",
+            f"-fdebug-prefix-map={temporary}={canonical_root}",
+            f"-fdebug-compilation-dir={canonical_root}",
+        ))
         configure = [
             "cmake", "-S", str(repo), "-B", str(build_dir),
             "-DCMAKE_BUILD_TYPE=Release",
@@ -650,6 +660,8 @@ def build(args: argparse.Namespace) -> dict[str, object]:
             "-DVELLUM_BUILD_SMOKE_NATIVE=OFF",
             f"-DVELLUM_ENABLE_GRAPHICS={'ON' if graphics else 'OFF'}",
         ]
+        for language in ("C", "CXX", "OBJC", "OBJCXX"):
+            configure.append(f"-DCMAKE_{language}_FLAGS={path_map_flags}")
         if skia_archive:
             configure.extend([
                 "-DVELLUM_ENABLE_GPU=ON",
