@@ -9,7 +9,7 @@ int main() {
 
     using FromHsv = pulp::canvas::Color (*)(pulp::canvas::Color::HSV, float);
     auto const from_hsv = reinterpret_cast<FromHsv>(dlsym(
-        frontend, "_ZN4pulp6canvas5Color8from_hsvENS1_3HSVEf"));
+        RTLD_DEFAULT, "_ZN4pulp6canvas5Color8from_hsvENS1_3HSVEf"));
     if (from_hsv == nullptr)
         return 3;
 
