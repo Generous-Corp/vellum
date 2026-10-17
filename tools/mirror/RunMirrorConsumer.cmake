@@ -67,14 +67,11 @@ _run("consumer configure" "${CMAKE_COMMAND}"
 _run("consumer build" "${CMAKE_COMMAND}" --build "${_work}/consumer")
 _run("consumer run" "${_work}/consumer/vellum-mirror-consumer" "${VELLUM_MIRROR_ORIGIN}")
 
-# Keep a raw linker consumer as a separate contract check. It names only the
-# installed MirrorCanvas dylib as a link input, so CMake target transitivity
-# cannot mask a missing export. AppleClang's linker resolves an
-# LC_REEXPORT_DYLIB's @rpath dependency differently across toolchain
-# generations: older ld versions do not use an executable's runtime rpath to
-# locate an indirect re-export while linking. Map the installed provider only
-# for link-time resolution; MirrorCanvas remains the sole explicit input and
-# the resulting image still carries the re-export relationship.
+# Keep a raw installed-consumer contract check separate from CMake target
+# transitivity. The consumer force-loads only MirrorCanvas, then resolves and
+# calls Color::from_hsv through that frontend handle. This validates the
+# installed LC_REEXPORT_DYLIB path on older AppleClang/dyld combinations that
+# cannot statically bind a C++ symbol through an indirect re-export.
 file(MAKE_DIRECTORY "${_work}/direct")
 file(WRITE "${_work}/direct/CMakeLists.txt" [=[
 cmake_minimum_required(VERSION 3.24)
@@ -89,13 +86,11 @@ set_target_properties(vellum-mirror-direct PROPERTIES
     INTERFACE_INCLUDE_DIRECTORIES "${VELLUM_MIRROR_PREFIX}/mirror/include")
 add_executable(vellum-mirror-direct-consumer direct_main.cpp)
 target_link_libraries(vellum-mirror-direct-consumer PRIVATE vellum-mirror-direct)
-# This emits -L for the provider at link time while retaining only
-# libvellum-mirror-canvas.dylib as the explicit link input.
+# Retain only libvellum-mirror-canvas.dylib as the explicit link input; the
+# installed prefix also supplies the runtime search paths below.
 target_link_directories(vellum-mirror-direct-consumer PRIVATE
     "${VELLUM_MIRROR_PREFIX}/${VELLUM_INSTALL_LIBDIR}")
 target_link_options(vellum-mirror-direct-consumer PRIVATE
-    "LINKER:-dylib_file,@rpath/libvellum-skia-dawn-provider.dylib:${VELLUM_MIRROR_PREFIX}/${VELLUM_INSTALL_LIBDIR}/libvellum-skia-dawn-provider.dylib"
-    "LINKER:-undefined,dynamic_lookup"
     "LINKER:-needed_library,${VELLUM_MIRROR_PREFIX}/mirror/lib/libvellum-mirror-canvas.dylib")
 set_target_properties(vellum-mirror-direct-consumer PROPERTIES
     BUILD_RPATH "${VELLUM_MIRROR_PREFIX}/mirror/lib;${VELLUM_MIRROR_PREFIX}/${VELLUM_INSTALL_LIBDIR}")
@@ -110,10 +105,9 @@ _run("direct consumer configure" "${CMAKE_COMMAND}"
 _run("direct consumer build" "${CMAKE_COMMAND}" --build "${_work}/direct-build")
 _run("direct consumer run" "${_work}/direct-build/vellum-mirror-direct-consumer")
 
-# The link-time mapping above must not turn the frontend into an ordinary
-# provider dependency. Keep the ABI assertion explicit so a future change
-# cannot make this fixture pass by hiding the re-export behind target
-# transitivity or a second provider definition.
+# Keep the ABI assertion explicit so a future change cannot make this fixture
+# pass by hiding the re-export behind target transitivity or a second provider
+# definition.
 find_program(_otool otool REQUIRED)
 execute_process(
     COMMAND "${_otool}" -L "${_prefix}/mirror/lib/libvellum-mirror-canvas.dylib"
