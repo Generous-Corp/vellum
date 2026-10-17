@@ -94,6 +94,7 @@ FORBIDDEN_PAYLOAD_PATH_PATTERNS = {
         r"(?:^|/)(?:pulp(?:[-_][^/]*)?)(?:/|$)", re.IGNORECASE
     ),
 }
+VELLUM_SKIA_PAYLOAD_SCOPE = re.compile(r"\Asdk/include/vellum/skia/")
 FORBIDDEN_PAYLOAD_CONTENT_PATTERNS = {
     "pulp-public-namespace": re.compile(
         rb"(?:\bnamespace\s+pulp\b|\bpulp::|#\s*include\s*[<\"]pulp/)",
@@ -368,6 +369,11 @@ def payload_contamination_findings(
     findings: list[dict[str, str]] = []
     path_rules, content_rules = payload_rules(name)
     for rule, pattern in path_rules.items():
+        # Skia's public headers intentionally contain an `include/core/`
+        # subtree. It is vendor payload under the Vellum SDK, not a retired
+        # Vellum/Pulp source projection.
+        if rule == "retired-projection-path" and VELLUM_SKIA_PAYLOAD_SCOPE.match(name):
+            continue
         match = pattern.search(name)
         if match:
             findings.append(
