@@ -69,7 +69,7 @@ _run("consumer run" "${_work}/consumer/vellum-mirror-consumer" "${VELLUM_MIRROR_
 
 # Keep a raw installed-consumer contract check separate from CMake target
 # transitivity. The consumer force-loads only MirrorCanvas, then resolves and
-# calls Color::from_hsv through that frontend handle. This validates the
+# calls Color::from_hsv through its re-exported provider. This validates the
 # installed LC_REEXPORT_DYLIB path on older AppleClang/dyld combinations that
 # cannot statically bind a C++ symbol through an indirect re-export.
 file(MAKE_DIRECTORY "${_work}/direct")
