@@ -249,6 +249,13 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
             "-framework UniformTypeIdentifiers"
             "-framework UserNotifications"
             bsm)
+        # Retain a concrete provider binding in this otherwise empty frontend.
+        # Loading the frontend must also load its re-exported provider.
+        target_sources("${_library}" PRIVATE
+            "${PROJECT_SOURCE_DIR}/tools/mirror/canvas_provider_anchor.cpp")
+        target_include_directories("${_library}" PRIVATE
+            "${PROJECT_SOURCE_DIR}/mirror/core/canvas/include")
+        target_compile_features("${_library}" PRIVATE cxx_std_20)
         # MirrorCanvas forwards its public mirrored symbols from the shared
         # provider while retaining a standalone direct-link contract.
         target_link_libraries("${_library}" PUBLIC
