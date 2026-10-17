@@ -47,6 +47,8 @@ MIRROR_PACKAGE_FILES = (
 UI_PAYLOAD_ENTRIES = (
     "LICENSE.md", "README.md", "package.json", "package-lock.json", "scripts", "src", "test",
 )
+MACHO_TEMP_ROOT = b"vellum-sdk-artifact-00000000"
+MACHO_TEMP_ROOT_TOKEN = re.compile(rb"vellum-sdk-artifact-[A-Za-z0-9_]{8}")
 
 
 class ArtifactError(RuntimeError):
@@ -372,6 +374,25 @@ def rewrite_macho_uuid(path: Path, identity: bytes) -> None:
     path.write_bytes(data)
 
 
+def canonicalize_macho_temp_root(path: Path) -> None:
+    """Replace random SDK build-root suffixes without changing Mach-O size."""
+
+    original = path.read_bytes()
+    matches = list(MACHO_TEMP_ROOT_TOKEN.finditer(original))
+    if not matches:
+        return
+    data = bytearray(original)
+    for match in reversed(matches):
+        if len(MACHO_TEMP_ROOT) != match.end() - match.start():
+            raise ArtifactError(
+                f"canonical Mach-O temporary-root token does not fit: {path}"
+            )
+        data[match.start():match.end()] = MACHO_TEMP_ROOT
+    if len(data) != len(original):
+        raise ArtifactError(f"canonical Mach-O temporary-root rewrite changed size: {path}")
+    path.write_bytes(data)
+
+
 def normalize_macho_executable(path: Path, commit: str, target: str) -> None:
     """Give the installed host a deterministic launchable UUID and ad-hoc signature."""
 
@@ -384,6 +405,7 @@ def normalize_macho_executable(path: Path, commit: str, target: str) -> None:
     codesign = shutil.which("codesign")
     if codesign is None:
         raise ArtifactError("deterministic Darwin artifacts require codesign")
+    canonicalize_macho_temp_root(path)
     run([
         codesign, "--force", "--sign", "-", "--identifier",
         "org.generous.vellum.app-host", str(path),
@@ -404,6 +426,7 @@ def normalize_macho_dylibs(install_tree: Path, commit: str, target: str) -> None
         ).digest()[:16])
         identity[6] = (identity[6] & 0x0F) | 0x50
         identity[8] = (identity[8] & 0x3F) | 0x80
+        canonicalize_macho_temp_root(path)
         rewrite_macho_uuid(path, bytes(identity))
         identifier = "org.generous.vellum.dylib." + hashlib.sha256(
             relative.encode("utf-8")
@@ -651,7 +674,6 @@ def build(args: argparse.Namespace) -> dict[str, object]:
             f"-ffile-prefix-map={temporary}={canonical_root}",
             f"-fmacro-prefix-map={temporary}={canonical_root}",
             f"-fdebug-prefix-map={temporary}={canonical_root}",
-            f"-fdebug-compilation-dir={canonical_root}",
         ))
         configure = [
             "cmake", "-S", str(repo), "-B", str(build_dir),
