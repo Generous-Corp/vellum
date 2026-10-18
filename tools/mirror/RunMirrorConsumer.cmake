@@ -167,6 +167,78 @@ if(NOT _gpu_otool_result EQUAL 0 OR
 endif()
 message(STATUS "GPU provider re-export metadata: ok")
 
+# Exercise the image-boundary case that CMake's compatible-interface property
+# cannot see. Copy the real pinned provider to a distinct install name, load
+# both images into one process, then run the symbol census with the duplicate
+# as an expected negative control. This proves the guard catches a provider
+# introduced through an intermediate/raw dylib path.
+find_program(_install_name_tool install_name_tool REQUIRED)
+set(_cross_image_dir "${_work}/cross-image")
+file(MAKE_DIRECTORY "${_cross_image_dir}")
+set(_provider "${_prefix}/${VELLUM_INSTALL_LIBDIR}/libvellum-skia-dawn-provider.dylib")
+set(_duplicate "${_cross_image_dir}/libvellum-skia-dawn-provider-duplicate.dylib")
+file(COPY "${_provider}" DESTINATION "${_cross_image_dir}")
+file(RENAME
+    "${_cross_image_dir}/libvellum-skia-dawn-provider.dylib"
+    "${_duplicate}")
+execute_process(
+    COMMAND "${_install_name_tool}" -id
+        "@rpath/libvellum-skia-dawn-provider-duplicate.dylib" "${_duplicate}"
+    RESULT_VARIABLE _duplicate_id_result
+    OUTPUT_VARIABLE _duplicate_id_stdout
+    ERROR_VARIABLE _duplicate_id_stderr)
+if(NOT _duplicate_id_result EQUAL 0)
+    message(FATAL_ERROR
+        "provider duplicate install-name rewrite failed (${_duplicate_id_result})\n"
+        "${_duplicate_id_stdout}\n${_duplicate_id_stderr}")
+endif()
+set(_cross_source "${_cross_image_dir}/main.cpp")
+file(COPY "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/cross_image_main.cpp"
+    DESTINATION "${_cross_image_dir}")
+file(RENAME
+    "${_cross_image_dir}/cross_image_main.cpp"
+    "${_cross_source}")
+file(WRITE "${_cross_image_dir}/CMakeLists.txt" [=[
+cmake_minimum_required(VERSION 3.24)
+project(VellumCrossImageProviderConsumer LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+add_executable(vellum-cross-image-consumer main.cpp)
+set_target_properties(vellum-cross-image-consumer PROPERTIES
+    BUILD_RPATH "@CROSS_RPATH@")
+]=])
+file(READ "${_cross_image_dir}/CMakeLists.txt" _cross_cmake)
+string(REPLACE "@CROSS_RPATH@"
+    "${_prefix}/${VELLUM_INSTALL_LIBDIR};${_prefix}/mirror/lib;${_cross_image_dir}"
+    _cross_cmake "${_cross_cmake}")
+file(WRITE "${_cross_image_dir}/CMakeLists.txt" "${_cross_cmake}")
+_run("cross-image consumer configure" "${CMAKE_COMMAND}"
+    -S "${_cross_image_dir}" -B "${_work}/cross-image-build"
+    ${_generator} -DCMAKE_BUILD_TYPE=Release)
+_run("cross-image consumer build" "${CMAKE_COMMAND}"
+    --build "${_work}/cross-image-build")
+_run("cross-image consumer load" "${_work}/cross-image-build/vellum-cross-image-consumer"
+    "${_provider}" "${_duplicate}")
+
+execute_process(
+    COMMAND "${Python3_EXECUTABLE}"
+        "${VELLUM_SOURCE_DIR}/graphics/tests/test_dawn_provider_topology.py"
+        "${_work}/consumer/vellum-mirror-consumer"
+        "${_prefix}/${VELLUM_INSTALL_LIBDIR}/libvellum-gpu.dylib"
+        "${_provider}"
+        "${_prefix}/mirror/lib/libvellum-mirror-canvas.dylib"
+        "${_duplicate}"
+    RESULT_VARIABLE _duplicate_census_result
+    OUTPUT_VARIABLE _duplicate_census_stdout
+    ERROR_VARIABLE _duplicate_census_stderr)
+if(_duplicate_census_result EQUAL 0 OR
+   NOT _duplicate_census_stderr MATCHES "defines a second|incorrect dawn::native::GetProcs")
+    message(FATAL_ERROR
+        "provider census accepted a second image:\n"
+        "${_duplicate_census_stdout}\n${_duplicate_census_stderr}")
+endif()
+message(STATUS "cross-image provider census negative control: ok")
+
 _run("shared provider symbol ownership" "${Python3_EXECUTABLE}"
     "${VELLUM_SOURCE_DIR}/graphics/tests/test_dawn_provider_topology.py"
     "${_work}/consumer/vellum-mirror-consumer"

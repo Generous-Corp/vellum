@@ -22,9 +22,9 @@ def require(condition: bool, message: str) -> None:
 
 
 def main() -> int:
-    if len(sys.argv) not in (4, 5):
+    if len(sys.argv) < 4:
         raise SystemExit(
-            "usage: test_dawn_provider_topology.py <host> <gpu> <provider> [<mirror>]"
+            "usage: test_dawn_provider_topology.py <host> <gpu> <provider> [<image> ...]"
         )
     host, gpu, provider, *mirror = map(Path, sys.argv[1:])
     symbols = {path: defined_symbols(path) for path in (host, gpu, provider, *mirror)}
