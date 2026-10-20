@@ -27,6 +27,7 @@ export {
     FIGMA_PLUGIN_PARSER_VERSION,
 } from './figma-plugin.js';
 export { decodeAssetDataUrl, localizeAssetDataUrl, normalizeSha256ContentHash } from './assets.js';
+export { AUDIO_CONTROL_MAP_SCHEMA, AUDIO_CONTROL_MAP_VERSION, validateAudioControlMap } from './audio-control-map.js';
 export {
     BROWSER_CAPTURE_ENVELOPE_SCHEMA,
     lowerBrowserCaptureToDesignIR,
