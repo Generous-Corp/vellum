@@ -139,6 +139,8 @@ set_target_properties(vellum-gpu-direct PROPERTIES
     INTERFACE_INCLUDE_DIRECTORIES "${VELLUM_MIRROR_PREFIX}/include")
 add_executable(vellum-gpu-direct-consumer direct_gpu_main.cpp)
 target_link_libraries(vellum-gpu-direct-consumer PRIVATE vellum-gpu-direct)
+target_include_directories(vellum-gpu-direct-consumer PRIVATE
+    "${VELLUM_MIRROR_PREFIX}/include/vellum/dawn")
 target_link_directories(vellum-gpu-direct-consumer PRIVATE
     "${VELLUM_MIRROR_PREFIX}/${VELLUM_INSTALL_LIBDIR}")
 target_link_options(vellum-gpu-direct-consumer PRIVATE
@@ -152,6 +154,28 @@ _run("direct GPU consumer configure" "${CMAKE_COMMAND}"
     "-DVELLUM_MIRROR_PREFIX=${_prefix}"
     "-DVELLUM_INSTALL_LIBDIR=${VELLUM_INSTALL_LIBDIR}")
 _run("direct GPU consumer build" "${CMAKE_COMMAND}" --build "${_work}/direct-gpu-build")
+
+# A local mirror-consumer run may not have a live GPU even when the installed
+# dylib was built with the GPU provider. Require an explicit opt-in for the
+# runtime probe so an unavailable device is reported as such rather than being
+# mistaken for a passing consumer test. The hosted GPU proof sets this variable
+# around ctest; an opted-in runtime failure remains fatal through _run().
+set(_run_direct_gpu FALSE)
+if(DEFINED ENV{VELLUM_MIRROR_LIVE_GPU})
+    set(_live_gpu "$ENV{VELLUM_MIRROR_LIVE_GPU}")
+    if(_live_gpu MATCHES "^(1|ON|TRUE|YES)$")
+        set(_run_direct_gpu TRUE)
+    elseif(NOT _live_gpu MATCHES "^(0|OFF|FALSE|NO)?$")
+        message(FATAL_ERROR
+            "VELLUM_MIRROR_LIVE_GPU must be one of 1/0, ON/OFF, TRUE/FALSE, or YES/NO")
+    endif()
+endif()
+if(_run_direct_gpu)
+    _run("direct GPU consumer run" "${_work}/direct-gpu-build/vellum-gpu-direct-consumer")
+else()
+    message(STATUS
+        "direct GPU consumer run: unavailable (set VELLUM_MIRROR_LIVE_GPU=1 on a live GPU host)")
+endif()
 
 execute_process(
     COMMAND "${_otool}" -L "${_prefix}/${VELLUM_INSTALL_LIBDIR}/libvellum-gpu.dylib"
