@@ -177,6 +177,34 @@ else()
         "direct GPU consumer run: unavailable (set VELLUM_MIRROR_LIVE_GPU=1 on a live GPU host)")
 endif()
 
+# Exercise the installed frontend paths in a fresh process and census the
+# images dyld actually mapped. Loading the raw GPU frontend beside the
+# intermediate MirrorCanvas frontend must still resolve to one provider image.
+file(MAKE_DIRECTORY "${_work}/runtime-census")
+file(WRITE "${_work}/runtime-census/CMakeLists.txt" [=[
+cmake_minimum_required(VERSION 3.24)
+project(VellumRuntimeImageCensus LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(VELLUM_MIRROR_PREFIX "" CACHE PATH "Installed Vellum prefix")
+add_executable(vellum-runtime-image-census runtime_image_census_main.cpp)
+set_target_properties(vellum-runtime-image-census PROPERTIES
+    BUILD_RPATH "${VELLUM_MIRROR_PREFIX}/lib;${VELLUM_MIRROR_PREFIX}/mirror/lib")
+]=])
+file(COPY "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/runtime_image_census_main.cpp"
+    DESTINATION "${_work}/runtime-census")
+_run("runtime image census configure" "${CMAKE_COMMAND}"
+    -S "${_work}/runtime-census" -B "${_work}/runtime-census-build"
+    ${_generator} -DCMAKE_BUILD_TYPE=Release
+    "-DVELLUM_MIRROR_PREFIX=${_prefix}")
+_run("runtime image census build" "${CMAKE_COMMAND}"
+    --build "${_work}/runtime-census-build")
+_run("runtime image census"
+    "${_work}/runtime-census-build/vellum-runtime-image-census"
+    "${_prefix}/${VELLUM_INSTALL_LIBDIR}/libvellum-skia-dawn-provider.dylib"
+    "${_prefix}/${VELLUM_INSTALL_LIBDIR}/libvellum-gpu.dylib"
+    "${_prefix}/mirror/lib/libvellum-mirror-canvas.dylib")
+
 execute_process(
     COMMAND "${_otool}" -L "${_prefix}/${VELLUM_INSTALL_LIBDIR}/libvellum-gpu.dylib"
     RESULT_VARIABLE _gpu_otool_result
