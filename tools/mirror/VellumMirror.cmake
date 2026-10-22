@@ -230,14 +230,38 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
             list(REMOVE_ITEM _third_party ${_carried})
         endif()
     endforeach()
+    # Publish the closure shape before a later Skia unit resolves an internal
+    # dependency on this library.  The provider must consume the static
+    # objects of earlier Skia units, rather than their shared frontends: those
+    # frontends themselves link the provider and would create a shared-library
+    # cycle at CMake generate time.
+    set_target_properties("${_library}" PROPERTIES
+        VELLUM_MIRROR_WHOLE_TARGETS "${_whole}"
+        VELLUM_MIRROR_IS_SKIA "${_skia}")
     if(_skia)
         # The provider group owns every Skia-consuming mirror object. Keeping
         # these objects beside the pinned archives prevents private Skia
         # symbols from crossing a dylib boundary.
+        set(_provider_whole ${_whole})
+        set(_provider_unit_links)
+        foreach(_provider_link IN LISTS _unit_links)
+            get_target_property(_provider_link_is_skia
+                "${_provider_link}" VELLUM_MIRROR_IS_SKIA)
+            if(_provider_link_is_skia)
+                get_target_property(_provider_link_whole
+                    "${_provider_link}" VELLUM_MIRROR_WHOLE_TARGETS)
+                list(APPEND _provider_whole ${_provider_link_whole})
+            else()
+                list(APPEND _provider_unit_links "${_provider_link}")
+            endif()
+        endforeach()
+        list(REMOVE_DUPLICATES _provider_whole)
+        list(REMOVE_DUPLICATES _provider_unit_links)
         target_link_libraries(vellum-skia-dawn-provider PRIVATE
-            "$<LINK_LIBRARY:WHOLE_ARCHIVE,${_whole}>")
-        if(_unit_links)
-            target_link_libraries(vellum-skia-dawn-provider PRIVATE ${_unit_links})
+            "$<LINK_LIBRARY:WHOLE_ARCHIVE,${_provider_whole}>")
+        if(_provider_unit_links)
+            target_link_libraries(vellum-skia-dawn-provider PRIVATE
+                ${_provider_unit_links})
         endif()
         target_link_libraries(vellum-skia-dawn-provider PRIVATE
             ${_third_party}
