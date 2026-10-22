@@ -21,6 +21,7 @@
 #include <pulp/render/gpu_diagnostics.hpp>
 #include <pulp/runtime/log.hpp>
 #include <pulp/runtime/trace.hpp>
+#include <vellum/graphics/dawn_bootstrap.hpp>
 
 namespace pulp::render {
 
@@ -121,9 +122,17 @@ public:
         timings_ = {};
         auto stage_start = std::chrono::steady_clock::now();
 
-        // Install Dawn native procs
-        const DawnProcTable& procs = dawn::native::GetProcs();
-        dawnProcSetProcs(&procs);
+#if !defined(__EMSCRIPTEN__)
+        // Dawn's proc table is process-global.  The host owns installation
+        // and must authenticate the provider before this mirrored Pulp path
+        // can create any native Dawn object.
+        std::string bootstrap_error;
+        if (!vellum::graphics::dawn_bootstrap_is_registered(&bootstrap_error)) {
+            runtime::log_error("GpuSurface: host Dawn bootstrap unavailable: " +
+                               bootstrap_error);
+            return false;
+        }
+#endif
 
         // Create Dawn native instance — must stay alive for the lifetime of
         // all adapters and devices created from it. The wgpu::Instance wrapper

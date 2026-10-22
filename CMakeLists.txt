@@ -316,6 +316,12 @@ if(VELLUM_BUILD_TESTS)
             -s tools/mirror -p "test_*.py"
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     if(VELLUM_PACKAGE_HAS_MIRROR)
+        set(_vellum_view_audio_archive_arg)
+        if(DEFINED VELLUM_VIEW_AUDIO_ARCHIVE AND
+           NOT VELLUM_VIEW_AUDIO_ARCHIVE STREQUAL "")
+            set(_vellum_view_audio_archive_arg
+                "-DVELLUM_VIEW_AUDIO_ARCHIVE=${VELLUM_VIEW_AUDIO_ARCHIVE}")
+        endif()
         add_test(NAME vellum.mirror-install-consumer
             COMMAND "${CMAKE_COMMAND}"
                 "-DVELLUM_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
@@ -324,6 +330,7 @@ if(VELLUM_BUILD_TESTS)
                 "-DVELLUM_MIRROR_DEPS_DIR=${VELLUM_MIRROR_DEPS_DIR}"
                 "-DVELLUM_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
                 "-DPython3_EXECUTABLE=${Python3_EXECUTABLE}"
+                ${_vellum_view_audio_archive_arg}
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tools/mirror/RunMirrorConsumer.cmake")
     endif()
 endif()

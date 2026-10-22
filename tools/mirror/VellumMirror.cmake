@@ -153,7 +153,10 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
             CXX_STANDARD_REQUIRED ON
             OBJCXX_STANDARD 20)
         target_include_directories("${_vellum_mirror_target}" PRIVATE
-            ${VELLUM_MIRROR_TARGET_${_tkey}_INCLUDE_DIRS})
+            ${VELLUM_MIRROR_TARGET_${_tkey}_INCLUDE_DIRS}
+            # Divergent mirror adapters use Vellum's authenticated host
+            # bootstrap contract without changing the Pulp-owned source.
+            "${PROJECT_SOURCE_DIR}/graphics/include")
         target_compile_definitions("${_vellum_mirror_target}" PRIVATE
             ${VELLUM_MIRROR_TARGET_${_tkey}_DEFINITIONS})
         # Apple libc++ annotates std::format's floating-point implementation

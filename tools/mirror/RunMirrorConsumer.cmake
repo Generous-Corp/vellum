@@ -7,6 +7,21 @@ foreach(_required VELLUM_SOURCE_DIR VELLUM_BUILD_DIR VELLUM_MIRROR_DEPS_DIR VELL
     endif()
 endforeach()
 
+# A view unit makes the archive-backed symbol-floor proof mandatory.  Keep the
+# value explicit at the test boundary so CI can supply the provenance-pinned
+# Pulp artifact and local runs fail closed instead of silently using a stale
+# checkout output.
+if(DEFINED VELLUM_VIEW_AUDIO_ARCHIVE AND
+   NOT VELLUM_VIEW_AUDIO_ARCHIVE STREQUAL "" AND
+   NOT EXISTS "${VELLUM_VIEW_AUDIO_ARCHIVE}")
+    message(FATAL_ERROR "mirror consumer test: VELLUM_VIEW_AUDIO_ARCHIVE does not exist")
+endif()
+set(_view_audio_args)
+if(DEFINED VELLUM_VIEW_AUDIO_ARCHIVE AND
+   NOT VELLUM_VIEW_AUDIO_ARCHIVE STREQUAL "")
+    set(_view_audio_args --view-audio-archive "${VELLUM_VIEW_AUDIO_ARCHIVE}")
+endif()
+
 set(_work "${VELLUM_BUILD_DIR}/mirror-consumer-test")
 set(_prefix "${_work}/prefix")
 file(REMOVE_RECURSE "${_work}")
@@ -56,6 +71,7 @@ endif()
 _run("debt probe" "${Python3_EXECUTABLE}"
     "${VELLUM_SOURCE_DIR}/tools/mirror/verify_mirror_inertness.py"
     --prefix "${_prefix}" --install-libdir "${VELLUM_INSTALL_LIBDIR}"
+    ${_view_audio_args}
     --write-debt-probe "${_work}/debt_probe.cpp")
 _run("consumer configure" "${CMAKE_COMMAND}"
     -S "${VELLUM_SOURCE_DIR}/tools/mirror/consumer" -B "${_work}/consumer"
@@ -300,6 +316,7 @@ _run("shared provider symbol ownership" "${Python3_EXECUTABLE}"
 _run("Phase-6 debt inertness" "${Python3_EXECUTABLE}"
     "${VELLUM_SOURCE_DIR}/tools/mirror/verify_mirror_inertness.py"
     --prefix "${_prefix}" --install-libdir "${VELLUM_INSTALL_LIBDIR}"
+    ${_view_audio_args}
     --consumer-build "${_work}/consumer"
     --image "${_work}/consumer/vellum-mirror-consumer"
     --output "${_work}/inertness.json")

@@ -10,6 +10,7 @@
 #include "webgpu/webgpu_cpp.h"
 #include <pulp/render/gpu_diagnostics.hpp>
 #include <pulp/runtime/log.hpp>
+#include <vellum/graphics/dawn_bootstrap.hpp>
 
 // Dawn's *native* implementation headers: the instance factory and the C proc
 // table. emdawnwebgpu implements webgpu.h over the browser's navigator.gpu and
@@ -4386,8 +4387,14 @@ private:
     void pump_events() {}
 #else
     bool create_instance() {
-        const DawnProcTable& procs = dawn::native::GetProcs();
-        dawnProcSetProcs(&procs);
+#if !defined(__EMSCRIPTEN__)
+        std::string bootstrap_error;
+        if (!vellum::graphics::dawn_bootstrap_is_registered(&bootstrap_error)) {
+            runtime::log_error("GpuCompute: host Dawn bootstrap unavailable: " +
+                               bootstrap_error);
+            return false;
+        }
+#endif
 
         wgpu::InstanceDescriptor inst_desc{};
         native_instance_ = std::make_unique<dawn::native::Instance>(
