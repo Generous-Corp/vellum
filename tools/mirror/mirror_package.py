@@ -161,6 +161,23 @@ def git_blob_sha(data: bytes) -> str:
     return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
 
 
+def recompute_dawn_adaptation(path: str, base: bytes) -> bytes | None:
+    text = base.decode("utf-8", errors="strict")
+    if path.endswith("gpu_compute.cpp"):
+        include = '#include <pulp/runtime/log.hpp>\n'
+        old = "        const DawnProcTable& procs = dawn::native::GetProcs();\n        dawnProcSetProcs(&procs);"
+        new = "#if !defined(__EMSCRIPTEN__)\n        std::string bootstrap_error;\n        if (!vellum::graphics::dawn_bootstrap_is_registered(&bootstrap_error)) {\n            runtime::log_error(\"GpuCompute: host Dawn bootstrap unavailable: \" +\n                               bootstrap_error);\n            return false;\n        }\n#endif"
+    elif path.endswith("gpu_surface_dawn.cpp"):
+        include = '#include <pulp/runtime/trace.hpp>\n'
+        old = "        // Install Dawn native procs\n        const DawnProcTable& procs = dawn::native::GetProcs();\n        dawnProcSetProcs(&procs);"
+        new = "#if !defined(__EMSCRIPTEN__)\n        // Dawn's proc table is process-global.  The host owns installation\n        // and must authenticate the provider before this mirrored Pulp path\n        // can create any native Dawn object.\n        std::string bootstrap_error;\n        if (!vellum::graphics::dawn_bootstrap_is_registered(&bootstrap_error)) {\n            runtime::log_error(\"GpuSurface: host Dawn bootstrap unavailable: \" +\n                               bootstrap_error);\n            return false;\n        }\n#endif"
+    else:
+        return None
+    if text.count(include) != 1 or text.count(old) != 1:
+        return None
+    return text.replace(include, include + '#include <vellum/graphics/dawn_bootstrap.hpp>\n', 1).replace(old, new, 1).encode()
+
+
 def load_json(path: Path) -> Any:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -195,18 +212,27 @@ def verify_mirror_identity(repo: Path, receipt: dict[str, Any]) -> int:
     overlay_map: dict[str, str] = {}
     base_rows = {row.get("mirror_path"): row for row in receipt.get("files", []) if isinstance(row, dict)}
     for row in overlays:
-        if not isinstance(row, dict) or set(row) != {"mirror_path", "vellum_blob", "unit", "owner", "reason", "recipe", "evidence"}:
+        if not isinstance(row, dict) or set(row) != {"mirror_path", "base_blob", "vellum_blob", "unit", "owner", "reason", "recipe", "evidence"}:
             raise PlanError("receipt divergent_files row is malformed")
         path, blob = row.get("mirror_path"), row.get("vellum_blob")
         if not isinstance(path, str) or path in overlay_map or path not in base_rows or not SHA40.match(str(blob)):
             raise PlanError("receipt divergent_files row does not name a unique receipt file and blob")
-        if blob == base_rows[path].get("blob") or row.get("owner") != "vellum" or not row.get("unit") or not row.get("reason"):
+        if row.get("base_blob") != base_rows[path].get("blob") or blob == base_rows[path].get("blob") or row.get("owner") != "vellum" or not row.get("unit") or not row.get("reason"):
             raise PlanError("receipt divergent_files row is not an explicit Vellum-owned divergence")
-        if row.get("evidence") != ["registered-bootstrap-positive", "unregistered-bootstrap-negative", "identity-mismatch-negative", "retry-negative"]:
+        if row.get("evidence") != {"positive": "graphics/tests/dawn_bootstrap_test.cpp", "negatives": ["graphics/tests/dawn_bootstrap_test.cpp:unregistered", "graphics/tests/dawn_bootstrap_test.cpp:identity-mismatch", "graphics/tests/dawn_bootstrap_test.cpp:retry"], "receipt": f"provenance/mirror/receipts/{receipt.get('export_id')}.json"}:
             raise PlanError("receipt divergent_files evidence controls are incomplete")
         recipe = row.get("recipe")
         if not isinstance(recipe, dict) or set(recipe) != {"id", "algorithm", "operations"} or recipe.get("id") != "vellum.dawn-bootstrap-adaptation.v1" or recipe.get("algorithm") != "exact-replacements-v1" or recipe.get("operations") != ["add <vellum/graphics/dawn_bootstrap.hpp> include", "replace dawn::native::GetProcs plus dawnProcSetProcs with dawn_bootstrap_is_registered guard"]:
             raise PlanError("receipt divergent_files recipe is malformed")
+        base = subprocess.run(
+            ["git", "show", f"{receipt['mirror_sha']}:{path}"],
+            cwd=repo, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        if base.returncode != 0 or git_blob_sha(base.stdout) != row["base_blob"]:
+            raise PlanError(f"receipt divergent_files base blob cannot be resolved for {path}")
+        transformed = recompute_dawn_adaptation(path, base.stdout)
+        if transformed is None or git_blob_sha(transformed) != blob:
+            raise PlanError(f"receipt divergent_files adaptation does not reproduce {path}")
         overlay_map[path] = blob
     expected: dict[str, str] = {}
     for row in receipt.get("files", []):

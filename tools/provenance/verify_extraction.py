@@ -707,15 +707,22 @@ def verify(
     mirror_inventory = sorted(path.relative_to(root).as_posix() for path in mirror_files(root))
     checks["mirror_file_count"] = len(mirror_inventory)
     divergent: dict[str, dict[str, object]] = {}
+    receipt_shape_errors: list[str] = []
     try:
         export_verifier = load_mirror_export_verifier()
         index = export_verifier.strict_json(root / export_verifier.INDEX_PATH)
         receipt_paths = index.get("receipts", []) if isinstance(index, dict) else []
         if receipt_paths:
             newest = export_verifier.strict_json(root / receipt_paths[-1])
-            divergent = export_verifier.divergent_file_map(newest)
-    except (OSError, ValueError, AttributeError, IndexError, TypeError):
+            receipt_shape_errors = export_verifier.validate_receipt_shape(
+                newest, str(receipt_paths[-1])
+            )
+            if not receipt_shape_errors:
+                divergent = export_verifier.divergent_file_map(newest)
+    except (OSError, ValueError, AttributeError, IndexError, TypeError) as error:
+        receipt_shape_errors = [f"mirror export receipt could not be loaded: {error}"]
         divergent = {}
+    errors.extend(receipt_shape_errors)
     origin_findings = mirror_origin_findings(root, records, divergent)
     checks["mirror_origin_findings"] = origin_findings
     if origin_findings:

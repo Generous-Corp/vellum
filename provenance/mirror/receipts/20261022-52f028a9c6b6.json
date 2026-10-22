@@ -5242,7 +5242,7 @@
         "options_sha256": "baadeb2e38625f4ea79414123f15a28db4e516cbe79fcffeb0ea424256d90f00"
       },
       "name": "gpu-device-api",
-      "oracle_class": "identity"
+      "oracle_class": "divergent"
     },
     {
       "closure_manifest": "provenance/mirror/closures/20261022-52f028a9c6b6/canvas.json",
@@ -5368,12 +5368,16 @@
           "replace dawn::native::GetProcs plus dawnProcSetProcs with dawn_bootstrap_is_registered guard"
         ]
       },
-      "evidence": [
-        "registered-bootstrap-positive",
-        "unregistered-bootstrap-negative",
-        "identity-mismatch-negative",
-        "retry-negative"
-      ]
+      "evidence": {
+        "positive": "graphics/tests/dawn_bootstrap_test.cpp",
+        "negatives": [
+          "graphics/tests/dawn_bootstrap_test.cpp:unregistered",
+          "graphics/tests/dawn_bootstrap_test.cpp:identity-mismatch",
+          "graphics/tests/dawn_bootstrap_test.cpp:retry"
+        ],
+        "receipt": "provenance/mirror/receipts/20261022-52f028a9c6b6.json"
+      },
+      "base_blob": "866dff4e1b92f69cb6a1b575a2fb34500b7e4a12"
     },
     {
       "mirror_path": "mirror/core/render/src/gpu_surface_dawn.cpp",
@@ -5389,12 +5393,16 @@
           "replace dawn::native::GetProcs plus dawnProcSetProcs with dawn_bootstrap_is_registered guard"
         ]
       },
-      "evidence": [
-        "registered-bootstrap-positive",
-        "unregistered-bootstrap-negative",
-        "identity-mismatch-negative",
-        "retry-negative"
-      ]
+      "evidence": {
+        "positive": "graphics/tests/dawn_bootstrap_test.cpp",
+        "negatives": [
+          "graphics/tests/dawn_bootstrap_test.cpp:unregistered",
+          "graphics/tests/dawn_bootstrap_test.cpp:identity-mismatch",
+          "graphics/tests/dawn_bootstrap_test.cpp:retry"
+        ],
+        "receipt": "provenance/mirror/receipts/20261022-52f028a9c6b6.json"
+      },
+      "base_blob": "01a2c6e23c8de18efdfab9e1aef60f0770cf630a"
     }
   ]
 }

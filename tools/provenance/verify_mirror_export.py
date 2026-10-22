@@ -49,7 +49,7 @@ RECEIPT_KEYS = {
 RECEIPT_OPTIONAL_KEYS = {"divergent_files"}
 UNIT_KEYS = {"name", "closure_manifest", "closure_sha256", "oracle_class", "configure"}
 FILE_KEYS = {"mirror_path", "pulp_path", "mode", "blob"}
-DIVERGENT_FILE_KEYS = {"mirror_path", "vellum_blob", "unit", "owner", "reason", "recipe", "evidence"}
+DIVERGENT_FILE_KEYS = {"mirror_path", "base_blob", "vellum_blob", "unit", "owner", "reason", "recipe", "evidence"}
 DAWN_ADAPTATION_OPERATIONS = [
     "add <vellum/graphics/dawn_bootstrap.hpp> include",
     "replace dawn::native::GetProcs plus dawnProcSetProcs with dawn_bootstrap_is_registered guard",
@@ -98,6 +98,10 @@ def git_try(root: Path, *args: str) -> str | None:
 
 def sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def git_blob_sha(data: bytes) -> str:
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
 
 
 def strict_json(path: Path) -> Any:
@@ -610,6 +614,8 @@ def validate_receipt_shape(receipt: Any, label: str) -> list[str]:
             if not isinstance(path, str) or path in seen or path not in file_map:
                 errors.append(f"{where}.mirror_path must uniquely name a receipt file")
             seen.add(str(path))
+            if not SHA40.fullmatch(str(row.get("base_blob"))) or path in file_map and row.get("base_blob") != file_map[path]["blob"]:
+                errors.append(f"{where}.base_blob must equal the receipt Pulp blob")
             if not SHA40.fullmatch(str(row.get("vellum_blob"))):
                 errors.append(f"{where}.vellum_blob must be a Git blob SHA")
             elif path in file_map and row["vellum_blob"] == file_map[path]["blob"]:
@@ -625,13 +631,46 @@ def validate_receipt_shape(receipt: Any, label: str) -> list[str]:
                 errors.append(f"{where}.recipe must contain id, algorithm, and operations")
             elif recipe.get("id") != "vellum.dawn-bootstrap-adaptation.v1" or recipe.get("algorithm") != "exact-replacements-v1" or recipe.get("operations") != DAWN_ADAPTATION_OPERATIONS:
                 errors.append(f"{where}.recipe is not the reviewed deterministic adaptation")
-            if row.get("evidence") != ["registered-bootstrap-positive", "unregistered-bootstrap-negative", "identity-mismatch-negative", "retry-negative"]:
-                errors.append(f"{where}.evidence must name the four Dawn bootstrap controls")
+            evidence = row.get("evidence")
+            if not isinstance(evidence, dict) or set(evidence) != {"positive", "negatives", "receipt"} or evidence.get("positive") != DAWN_EVIDENCE["positive"] or evidence.get("negatives") != DAWN_EVIDENCE["negatives"] or evidence.get("receipt") != f"{RECEIPT_DIR}{receipt.get('export_id')}.json":
+                errors.append(f"{where}.evidence must bind the four Dawn controls to this receipt")
     return errors
 
 
 def divergent_file_map(receipt: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {row["mirror_path"]: row for row in receipt.get("divergent_files", []) if isinstance(row, dict) and isinstance(row.get("mirror_path"), str)}
+
+
+DAWN_EVIDENCE = {
+    "positive": "graphics/tests/dawn_bootstrap_test.cpp",
+    "negatives": [
+        "graphics/tests/dawn_bootstrap_test.cpp:unregistered",
+        "graphics/tests/dawn_bootstrap_test.cpp:identity-mismatch",
+        "graphics/tests/dawn_bootstrap_test.cpp:retry",
+    ],
+}
+
+
+def recompute_dawn_adaptation(path: str, base: bytes) -> bytes | None:
+    """Apply the reviewed path-specific Dawn bootstrap transformation."""
+    try:
+        text = base.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    if path.endswith("gpu_compute.cpp"):
+        include = '#include <pulp/runtime/log.hpp>\n'
+        old = "        const DawnProcTable& procs = dawn::native::GetProcs();\n        dawnProcSetProcs(&procs);"
+        new = "#if !defined(__EMSCRIPTEN__)\n        std::string bootstrap_error;\n        if (!vellum::graphics::dawn_bootstrap_is_registered(&bootstrap_error)) {\n            runtime::log_error(\"GpuCompute: host Dawn bootstrap unavailable: \" +\n                               bootstrap_error);\n            return false;\n        }\n#endif"
+    elif path.endswith("gpu_surface_dawn.cpp"):
+        include = '#include <pulp/runtime/trace.hpp>\n'
+        old = "        // Install Dawn native procs\n        const DawnProcTable& procs = dawn::native::GetProcs();\n        dawnProcSetProcs(&procs);"
+        new = "#if !defined(__EMSCRIPTEN__)\n        // Dawn's proc table is process-global.  The host owns installation\n        // and must authenticate the provider before this mirrored Pulp path\n        // can create any native Dawn object.\n        std::string bootstrap_error;\n        if (!vellum::graphics::dawn_bootstrap_is_registered(&bootstrap_error)) {\n            runtime::log_error(\"GpuSurface: host Dawn bootstrap unavailable: \" +\n                               bootstrap_error);\n            return false;\n        }\n#endif"
+    else:
+        return None
+    if text.count(include) != 1 or text.count(old) != 1:
+        return None
+    text = text.replace(include, include + '#include <vellum/graphics/dawn_bootstrap.hpp>\n', 1)
+    return text.replace(old, new, 1).encode("utf-8")
 
 
 def load_policy(root: Path) -> tuple[dict[str, Any] | None, list[str]]:
@@ -770,8 +809,6 @@ def verify_receipt(
 ) -> list[str]:
     label = receipt_path
     errors = validate_receipt_shape(receipt, label)
-    if errors:
-        return errors
     export_id = receipt["export_id"]
     if receipt_path != f"{RECEIPT_DIR}{export_id}.json":
         errors.append(f"{label}: file name must be {RECEIPT_DIR}<export_id>.json")
@@ -812,6 +849,18 @@ def verify_receipt(
     ]
     if projected != recorded:
         errors.append(f"{label}: files differ from the projected tree of mirror_sha")
+    for path, adaptation in divergent_file_map(receipt).items():
+        row = next((item for item in receipt["files"] if item["mirror_path"] == path), None)
+        base = subprocess.run(
+            ["git", "show", f"{mirror_sha}:{path}"], cwd=root,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False,
+        )
+        if row is None or base.returncode != 0 or git_blob_sha(base.stdout) != adaptation.get("base_blob"):
+            errors.append(f"{label}: divergent file {path} cannot resolve its recorded base blob")
+            continue
+        transformed = recompute_dawn_adaptation(path, base.stdout)
+        if transformed is None or git_blob_sha(transformed) != adaptation.get("vellum_blob"):
+            errors.append(f"{label}: divergent file {path} does not reproduce its recorded Vellum blob")
 
     commit_map = root / receipt["commit_map"]["path"]
     if not commit_map.is_file() or sha256_file(commit_map) != receipt["commit_map"]["sha256"]:
@@ -871,9 +920,27 @@ def verify_receipt(
         closures[unit["name"]] = closure
     if len(closures) == len(receipt["units"]):
         unit_names = {unit["name"] for unit in receipt["units"]}
+        unit_rows = {unit["name"]: unit for unit in receipt["units"]}
+        overlays_by_unit: dict[str, list[dict[str, Any]]] = {}
         for overlay in receipt.get("divergent_files", []):
-            if overlay.get("unit") not in unit_names:
+            unit_name = overlay.get("unit")
+            if unit_name not in unit_names:
                 errors.append(f"{label}: divergent file {overlay.get('mirror_path')} names unknown unit {overlay.get('unit')}")
+                continue
+            overlays_by_unit.setdefault(unit_name, []).append(overlay)
+            file_row = next(
+                (item for item in receipt["files"] if item["mirror_path"] == overlay.get("mirror_path")),
+                None,
+            )
+            if file_row is None or file_row.get("pulp_path") not in closures[unit_name].get("files", []):
+                errors.append(
+                    f"{label}: divergent file {overlay.get('mirror_path')} is outside unit {unit_name} closure"
+                )
+            if unit_rows[unit_name].get("oracle_class") != "divergent":
+                errors.append(f"{label}: unit {unit_name} with divergent files must use oracle_class divergent")
+        for unit_name, unit in unit_rows.items():
+            if unit_name not in overlays_by_unit and unit.get("oracle_class") != "identity":
+                errors.append(f"{label}: unit {unit_name} without divergent files must use oracle_class identity")
         closure_paths = {
             p for c in closures.values() for p in c["files"] if not p.startswith("@build/")
         }
