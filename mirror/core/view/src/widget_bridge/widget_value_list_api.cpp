@@ -1,0 +1,182 @@
+// widget_bridge/widget_value_list_api.cpp - list value registrations for WidgetBridge.
+
+#include <pulp/view/widget_bridge.hpp>
+#include "api_registry.hpp"
+
+#include <pulp/view/ui_components.hpp>
+#include <pulp/view/virtual_list.hpp>
+#include <pulp/view/virtual_grid.hpp>
+
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace pulp::view {
+
+void BridgeRegistrars::register_widget_value_list_api(WidgetBridge& self) {
+    BridgeApiContext api{self.engine_};
+
+    register_bridge_function(api, "setListItems", [&self](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto* v = self.widget(id); if (!v) return choc::value::Value{};
+        if (auto* lb = dynamic_cast<ListBox*>(v)) {
+            std::vector<std::string> items;
+            if (args.numArgs > 1 && args[1]) {
+                auto& arr = *args[1];
+                for (uint32_t i = 0; i < arr.size(); ++i)
+                    items.push_back(std::string(arr[i].getString()));
+            }
+            lb->set_items(std::move(items));
+        }
+        return choc::value::Value{};
+    });
+
+    register_bridge_function(api, "setListSelected", [&self](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto* v = self.widget(id); if (!v) return choc::value::Value{};
+        if (auto* lb = dynamic_cast<ListBox*>(v)) {
+            lb->set_selected(args.get<int>(1, 0));
+            lb->ensure_visible(lb->selected());
+        }
+        return choc::value::Value{};
+    });
+
+    register_bridge_function(api, "setListRowHeight", [&self](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto* v = self.widget(id); if (!v) return choc::value::Value{};
+        if (auto* vl = dynamic_cast<VirtualList*>(v))
+            vl->set_row_height(static_cast<float>(args.get<double>(1, 24.0)));
+        else if (auto* lb = dynamic_cast<ListBox*>(v))
+            lb->set_row_height(static_cast<float>(args.get<double>(1, 24.0)));
+        return choc::value::Value{};
+    });
+
+    register_bridge_function(api, "setVirtualListRowCount", [&self](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto* v = self.widget(id); if (!v) return choc::value::Value{};
+        if (auto* vl = dynamic_cast<VirtualList*>(v))
+            vl->set_row_count(static_cast<std::size_t>(std::max(0, args.get<int>(1, 0))));
+        return choc::value::Value{};
+    });
+
+    register_bridge_function(api, "setVirtualListOverscan", [&self](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto* v = self.widget(id); if (!v) return choc::value::Value{};
+        if (auto* vl = dynamic_cast<VirtualList*>(v))
+            vl->set_overscan(args.get<int>(1, 3));
+        return choc::value::Value{};
+    });
+
+    register_bridge_function(api, "setVirtualListSelectionMode", [&self](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto mode = args.get<std::string>(1, "single");
+        auto* v = self.widget(id); if (!v) return choc::value::Value{};
+        if (auto* vl = dynamic_cast<VirtualList*>(v)) {
+            if (mode == "none") vl->set_selection_mode(VirtualList::SelectionMode::none);
+            else if (mode == "multi") vl->set_selection_mode(VirtualList::SelectionMode::multi);
+            else vl->set_selection_mode(VirtualList::SelectionMode::single);
+        }
+        return choc::value::Value{};
+    });
+
+    register_bridge_function(api, "setVirtualListSelected", [&self](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto* v = self.widget(id); if (!v) return choc::value::Value{};
+        if (auto* vl = dynamic_cast<VirtualList*>(v)) {
+            const auto index = args.get<int>(1, -1);
+            if (index < 0) vl->clear_selection();
+            else vl->select_row(static_cast<std::size_t>(index));
+        }
+        return choc::value::Value{};
+    });
+
+    register_bridge_function(api, "scrollVirtualListToRow", [&self](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto* v = self.widget(id); if (!v) return choc::value::Value{};
+        if (auto* vl = dynamic_cast<VirtualList*>(v))
+            vl->scroll_to_row(static_cast<std::size_t>(std::max(0, args.get<int>(1, 0))));
+        return choc::value::Value{};
+    });
+
+    register_bridge_function(api, "refreshVirtualListRows", [&self](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto* v = self.widget(id); if (!v) return choc::value::Value{};
+        if (auto* vl = dynamic_cast<VirtualList*>(v))
+            vl->refresh_rows();
+        return choc::value::Value{};
+    });
+
+    register_bridge_function(api, "setVirtualGridItemCount", [&self](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto* v = self.widget(id); if (!v) return choc::value::Value{};
+        if (auto* vg = dynamic_cast<VirtualGrid*>(v))
+            vg->set_item_count(static_cast<std::size_t>(std::max(0, args.get<int>(1, 0))));
+        return choc::value::Value{};
+    });
+
+    register_bridge_function(api, "setVirtualGridCellSize", [&self](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto* v = self.widget(id); if (!v) return choc::value::Value{};
+        if (auto* vg = dynamic_cast<VirtualGrid*>(v))
+            vg->set_cell_size(static_cast<float>(args.get<double>(1, 80.0)),
+                              static_cast<float>(args.get<double>(2, 60.0)));
+        return choc::value::Value{};
+    });
+
+    register_bridge_function(api, "setVirtualGridColumnCount", [&self](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto* v = self.widget(id); if (!v) return choc::value::Value{};
+        if (auto* vg = dynamic_cast<VirtualGrid*>(v))
+            vg->set_column_count(args.get<int>(1, 0));
+        return choc::value::Value{};
+    });
+
+    register_bridge_function(api, "setVirtualGridOverscan", [&self](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto* v = self.widget(id); if (!v) return choc::value::Value{};
+        if (auto* vg = dynamic_cast<VirtualGrid*>(v))
+            vg->set_overscan(args.get<int>(1, 2));
+        return choc::value::Value{};
+    });
+
+    register_bridge_function(api, "setVirtualGridSelectionMode", [&self](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto mode = args.get<std::string>(1, "single");
+        auto* v = self.widget(id); if (!v) return choc::value::Value{};
+        if (auto* vg = dynamic_cast<VirtualGrid*>(v)) {
+            if (mode == "none") vg->set_selection_mode(VirtualGrid::SelectionMode::none);
+            else if (mode == "multi") vg->set_selection_mode(VirtualGrid::SelectionMode::multi);
+            else vg->set_selection_mode(VirtualGrid::SelectionMode::single);
+        }
+        return choc::value::Value{};
+    });
+
+    register_bridge_function(api, "setVirtualGridSelected", [&self](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto* v = self.widget(id); if (!v) return choc::value::Value{};
+        if (auto* vg = dynamic_cast<VirtualGrid*>(v)) {
+            const auto index = args.get<int>(1, -1);
+            if (index < 0) vg->clear_selection();
+            else vg->select_cell(static_cast<std::size_t>(index));
+        }
+        return choc::value::Value{};
+    });
+
+    register_bridge_function(api, "scrollVirtualGridToItem", [&self](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto* v = self.widget(id); if (!v) return choc::value::Value{};
+        if (auto* vg = dynamic_cast<VirtualGrid*>(v))
+            vg->scroll_to_item(static_cast<std::size_t>(std::max(0, args.get<int>(1, 0))));
+        return choc::value::Value{};
+    });
+
+    register_bridge_function(api, "refreshVirtualGridCells", [&self](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto* v = self.widget(id); if (!v) return choc::value::Value{};
+        if (auto* vg = dynamic_cast<VirtualGrid*>(v))
+            vg->refresh_cells();
+        return choc::value::Value{};
+    });
+}
+
+} // namespace pulp::view

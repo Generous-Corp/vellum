@@ -1,0 +1,196 @@
+#include <pulp/view/widget_bridge.hpp>
+#include <pulp/view/widgets.hpp>
+#include <pulp/view/gap_widgets.hpp>
+#include "bridge_dispatch.hpp"
+
+#include <pulp/view/ui_components.hpp>
+#include <pulp/view/virtual_list.hpp>
+
+#include <algorithm>
+#include <atomic>
+#include <memory>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+namespace pulp::view {
+
+namespace {
+
+void dispatch_virtual_list_row_release(const std::shared_ptr<BridgeCallbackState>& alive,
+                                       ScriptEngine* engine,
+                                       const std::string& id_literal,
+                                       const std::string& row_id) {
+    safe_dispatch_eval(alive, engine,
+        "__dispatch__(" + id_literal + ", 'releaserow', { rowId: " +
+        js_string_literal(row_id) + " })",
+        "virtual list releaserow");
+}
+
+} // namespace
+
+void WidgetBridge::wire_callbacks(const std::string& id, View* w) {
+    auto alive = callback_alive_;
+    auto* engine = &engine_;
+    if (auto* k = dynamic_cast<Knob*>(w)) {
+        wire_parameter_gestures(id, w);
+        k->on_change = [alive, engine, id](float v) {
+            BridgeCallbackScope scope(alive);
+            dispatch_event(alive, engine, id, "change", std::to_string(v));
+        };
+    } else if (auto* f = dynamic_cast<Fader*>(w)) {
+        wire_parameter_gestures(id, w);
+        f->on_change = [alive, engine, id](float v) {
+            BridgeCallbackScope scope(alive);
+            dispatch_event(alive, engine, id, "change", std::to_string(v));
+        };
+    } else if (auto* t = dynamic_cast<Toggle*>(w)) {
+        // A Toggle has no drag lifecycle, so it never opened a host parameter
+        // gesture — its edits were not reported to the host the way a Knob's
+        // are, and because is_gesture_active() is therefore always false, the
+        // declarative binding re-asserted the store value over the top of the
+        // click on the very next frame. Bracket the instantaneous edit with a
+        // gesture so the host records it and the binding yields to it.
+        wire_parameter_gestures(id, w);
+        t->on_toggle = [this, alive, engine, id](bool v) {
+            BridgeCallbackScope scope(alive);
+            if (!alive || !alive->load(std::memory_order_acquire)) return;
+            begin_param_gesture(id);
+            dispatch_event(alive, engine, id, "toggle", v ? "1" : "0");
+            if (alive && alive->load(std::memory_order_acquire))
+                end_param_gesture(id);
+        };
+    } else if (auto* r = dynamic_cast<RangeSlider*>(w)) {
+        wire_parameter_gestures(id, w);
+        // HTML <input type="range"> change event. The payload is the
+        // post-quantisation value, not normalized, so JS callers see the same
+        // number they handed us via setValue/setMin/setMax/setStep.
+        r->on_change = [alive, engine, id](float v) {
+            BridgeCallbackScope scope(alive);
+            dispatch_event(alive, engine, id, "change", std::to_string(v));
+        };
+    } else if (auto* st = dynamic_cast<Stepper*>(w)) {
+        // Mirror createStepper's inline `change` wiring, and bracket the edit
+        // with a gesture: a stepper nudge is instantaneous, so without one the
+        // declarative binding re-asserts the store value over the click on the
+        // next frame. The payload is the PLAIN value the widget shows.
+        wire_parameter_gestures(id, w);
+        st->on_change = [this, alive, engine, id](double v) {
+            BridgeCallbackScope scope(alive);
+            if (!alive || !alive->load(std::memory_order_acquire)) return;
+            begin_param_gesture(id);
+            dispatch_event(alive, engine, id, "change", std::to_string(v));
+            if (alive && alive->load(std::memory_order_acquire))
+                end_param_gesture(id);
+        };
+    } else if (auto* seg = dynamic_cast<SegmentedControl*>(w)) {
+        // Mirror createSegmented's inline wiring so a `<segmented>` tag routed
+        // through __domAppend dispatches the same `select` event the factory
+        // path does. Without this the DOM path builds a real, clickable
+        // selector whose changes reach nothing — the factory path works and
+        // the tag path does not, which is invisible from the emitted script.
+        //
+        // A selector has no drag lifecycle, so bracket its instantaneous edit
+        // with a gesture the way a Toggle does, or the declarative binding
+        // re-asserts the store value over the click on the very next frame.
+        wire_parameter_gestures(id, w);
+        seg->on_change = [this, alive, engine, id](int index) {
+            BridgeCallbackScope scope(alive);
+            if (!alive || !alive->load(std::memory_order_acquire)) return;
+            begin_param_gesture(id);
+            dispatch_event(alive, engine, id, "select", std::to_string(index));
+            if (alive && alive->load(std::memory_order_acquire))
+                end_param_gesture(id);
+        };
+    } else if (auto* c = dynamic_cast<ComboBox*>(w)) {
+        // Mirror createCombo's inline wiring so a `<combo>`/`<select>` tag
+        // routed through __domAppend dispatches the same `select` event as the
+        // factory path. A selection is an instantaneous parameter edit, so
+        // bracket it like SegmentedControl to keep host automation balanced.
+        wire_parameter_gestures(id, w);
+        c->on_change = [this, alive, engine, id](int idx) {
+            BridgeCallbackScope scope(alive);
+            if (!alive || !alive->load(std::memory_order_acquire)) return;
+            begin_param_gesture(id);
+            dispatch_event(alive, engine, id, "select", std::to_string(idx));
+            if (alive && alive->load(std::memory_order_acquire))
+                end_param_gesture(id);
+        };
+    } else if (auto* cb = dynamic_cast<Checkbox*>(w)) {
+        // Mirror createCheckbox's inline `change` wiring.
+        cb->on_change = [alive, engine, id](bool v) {
+            BridgeCallbackScope scope(alive);
+            dispatch_event(alive, engine, id, "change", v ? "1" : "0");
+        };
+    } else if (auto* lb = dynamic_cast<ListBox*>(w)) {
+        // Mirror createListBox's inline select/activate wiring.
+        lb->on_select = [alive, engine, id](int idx) {
+            BridgeCallbackScope scope(alive);
+            dispatch_event(alive, engine, id, "select", std::to_string(idx));
+        };
+        lb->on_activate = [alive, engine, id](int idx) {
+            BridgeCallbackScope scope(alive);
+            dispatch_event(alive, engine, id, "activate", std::to_string(idx));
+        };
+    } else if (auto* vl = dynamic_cast<VirtualList*>(w)) {
+        const auto id_literal = js_string_literal(id);
+        auto* widgets = &widgets_;
+        auto row_bindings = std::make_shared<std::unordered_map<std::string, std::size_t>>();
+        vl->set_row_releaser([this, alive, engine, id_literal, row_bindings](View& row) {
+            BridgeCallbackScope scope(alive);
+            if (!alive || !alive->load(std::memory_order_acquire)) return;
+            row_bindings->erase(row.id());
+            dispatch_virtual_list_row_release(alive, engine, id_literal, row.id());
+            if (!alive || !alive->load(std::memory_order_acquire)) return;
+            forget_widget_subtree(&row);
+        });
+        vl->set_row_factory([widgets, alive, id](std::size_t slot) {
+            BridgeCallbackScope scope(alive);
+            auto row = std::make_unique<View>();
+            row->set_id(id + "__row_" + std::to_string(slot));
+            if (alive && alive->load(std::memory_order_acquire)) {
+                auto* row_ptr = row.get();
+                (*widgets)[row->id()] = row_ptr;
+            }
+            return row;
+        });
+        vl->set_row_binder([this, alive, engine, id_literal, row_bindings](View& row, std::size_t index) {
+            BridgeCallbackScope scope(alive);
+            if (!alive || !alive->load(std::memory_order_acquire)) return;
+            const auto row_id = row.id();
+            if (row_bindings->find(row_id) != row_bindings->end()) {
+                forget_widget_event_state(row);
+                while (row.child_count() > 0) {
+                    auto* child = row.child_at(row.child_count() - 1);
+                    auto removed = row.remove_child(child);
+                    forget_widget_subtree(removed.get());
+                    retire_removed_widget(std::move(removed));
+                }
+            }
+            (*row_bindings)[row_id] = index;
+            safe_dispatch_eval(alive, engine,
+                "__dispatch__(" + id_literal + ", 'bindrow', { rowId: " +
+                js_string_literal(row_id) + ", index: " + std::to_string(index) + " })",
+                "virtual list bindrow");
+        });
+        vl->on_selection_changed([alive, engine, id_literal](const std::vector<std::size_t>& selection) {
+            BridgeCallbackScope scope(alive);
+            std::string payload = "[";
+            for (std::size_t i = 0; i < selection.size(); ++i) {
+                if (i > 0) payload += ",";
+                payload += std::to_string(selection[i]);
+            }
+            payload += "]";
+            safe_dispatch_eval(alive, engine, "__dispatch__(" + id_literal + ", 'change', " + payload + ")",
+                               "virtual list change");
+        });
+        vl->on_row_activated([alive, engine, id_literal](std::size_t index) {
+            BridgeCallbackScope scope(alive);
+            safe_dispatch_eval(alive, engine, "__dispatch__(" + id_literal + ", 'activate', " +
+                               std::to_string(index) + ")", "virtual list activate");
+        });
+    }
+}
+
+} // namespace pulp::view

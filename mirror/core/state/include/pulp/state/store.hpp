@@ -1,0 +1,746 @@
+#pragma once
+
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <pulp/state/listener_token.hpp>
+#include <pulp/state/parameter.hpp>
+#include <pulp/state/state_migration.hpp>
+#include <span>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <vector>
+
+namespace pulp::events { class EventLoop; }
+
+namespace pulp::state {
+
+/// Named parameter group for hierarchical UI organization.
+///
+/// Groups can be nested: set @c parent_id to another group's @c id.
+/// A @c parent_id of 0 means the group is at the root level.
+struct ParamGroup {
+    int id = 0;
+    std::string name;
+    int parent_id = 0; ///< 0 = root-level group.
+};
+
+/// Snapshot of StateStore's real-time listener queue.
+struct RtListenerQueueTelemetry {
+    std::size_t size_approx = 0;
+    std::size_t capacity = 0;
+    std::uint64_t overflow_count = 0;
+};
+
+/// Outcome of a generation-bound complete parameter gesture.
+enum class ParameterGestureApplyStatus {
+    Applied,
+    GenerationConflict,
+    InvalidParameter,
+    ConcurrentMutation,
+    CallbackFailureRolledBack,
+    CallbackFailureUnknown,
+};
+
+struct ParameterGestureApplyResult {
+    ParameterGestureApplyStatus status = ParameterGestureApplyStatus::InvalidParameter;
+    std::uint64_t generation = 0;
+};
+
+class StateStore;
+
+/// Opaque exact identity captured when asynchronous work is ordered against a
+/// parameter. The identity includes the value bits and a monotonic per-slot
+/// revision, so equal values written at different times remain distinct.
+class ParameterFeedbackBaseline {
+  public:
+    ParameterFeedbackBaseline() = default;
+
+    bool valid() const noexcept {
+        return valid_;
+    }
+
+    ParamID id() const noexcept {
+        return id_;
+    }
+    std::uint64_t packed_identity() const noexcept {
+        return packed_identity_;
+    }
+
+  private:
+    friend class StateStore;
+    ParameterFeedbackBaseline(const StateStore* owner, ParamID id, std::uint64_t packed_identity)
+        : owner_(owner), id_(id), packed_identity_(packed_identity), valid_(true) {}
+
+    const StateStore* owner_ = nullptr;
+    ParamID id_ = 0;
+    std::uint64_t packed_identity_ = 0;
+    bool valid_ = false;
+};
+
+enum class ConditionalParameterApplyStatus {
+    Applied,
+    Conflict,
+    InvalidParameter,
+};
+
+struct ConditionalParameterApplyResult {
+    ConditionalParameterApplyStatus status = ConditionalParameterApplyStatus::InvalidParameter;
+    std::uint64_t current_identity = 0;
+};
+
+/// Centralized parameter storage with lock-free value access.
+///
+/// StateStore is the single source of truth for all plugin parameters.
+/// Register parameters at initialization via add_parameter(), then
+/// read/write values from any thread using the lock-free accessors.
+///
+/// @code
+/// pulp::state::StateStore store;
+/// store.add_parameter({.id = 1, .name = "Gain", .range = {-60, 12, 0}});
+/// store.set_value(1, -3.0f);
+/// float gain = store.get_value(1); // -3.0
+/// @endcode
+///
+/// @note Parameter registration (add_parameter, add_group) is NOT thread-safe.
+///       Call these only during plugin initialization, before processing starts.
+/// @note Value access (get_value, set_value, etc.) is lock-free and safe to
+///       call from the audio thread.
+class StateStore {
+public:
+    StateStore();
+    ~StateStore();
+
+    StateStore(const StateStore&) = delete;
+    StateStore& operator=(const StateStore&) = delete;
+
+    /// Register a parameter. Call during initialization only.
+    /// @param info  Immutable metadata for this parameter.
+    void add_parameter(const ParamInfo& info);
+
+    /// Register a parameter group. Call during initialization only.
+    void add_group(const ParamGroup& group);
+
+    /// Read a parameter's base value (lock-free).
+    /// @note Safe to call from the audio thread.
+    float get_value(ParamID id) const;
+
+    /// Read a parameter's modulated value: base + mod_offset (lock-free).
+    /// @note Safe to call from the audio thread.
+    float get_modulated(ParamID id) const;
+
+    /// Read the canonical base-vs-offset pair without collapsing its fields.
+    BaseOffsetValue get_base_offset(ParamID id) const;
+
+    /// Write a parameter's base value (lock-free).
+    /// @note Safe to call from any thread.
+    void set_value(ParamID id, float value);
+
+    /// Real-time-safe parameter write for use from the audio thread.
+    ///
+    /// Performs the atomic value store (lock-free, no allocation) and
+    /// fires registered @c ListenerThread::Audio listeners inline. Any
+    /// @c ListenerThread::Main listeners are NOT invoked here — the
+    /// change is pushed onto a single-producer/single-reader queue and
+    /// drained by @c pump_listeners() on the main thread. This avoids
+    /// the @c EventLoop::dispatch lambda allocation that the generic
+    /// @c set_value() path performs when a Main listener exists.
+    ///
+    /// Use this from format-adapter audio callbacks (CLAP / VST3 / AU
+    /// process) for host-driven parameter writes. UI-driven writes from
+    /// the main thread should use @c set_value().
+    ///
+    /// @note The pending-changes queue is bounded; if @c pump_listeners()
+    ///       is not called fast enough the oldest queued events are
+    ///       dropped (the atomic value is still up-to-date, so the UI
+    ///       picks up the latest on its next pump). Use
+    ///       @c rt_listener_queue_telemetry() to inspect this pressure.
+    void set_value_rt(ParamID id, float value);
+
+    /// Real-time-safe normalized-value write. Denormalizes through the
+    /// parameter's @c ParamRange and then dispatches through
+    /// @c set_value_rt(). Used by the VST3 adapter where the host
+    /// reports parameter changes in normalized [0, 1] form.
+    void set_normalized_rt(ParamID id, float normalized);
+
+    /// Capture an exact per-parameter identity at the caller's ordering point.
+    /// This is a single lock-free load and performs no allocation.
+    std::optional<ParameterFeedbackBaseline> capture_feedback_baseline(ParamID id) const noexcept;
+
+    /// Publish asynchronous feedback only if the captured identity is still
+    /// current. The packed identity CAS is the linearization point. A
+    /// conflict leaves the newer value untouched and emits no notification.
+    /// @c current_identity is diagnostic only; callers recapture a fresh
+    /// baseline before retrying and must not treat it as an authority token.
+    /// Revision exhaustion is reported as Conflict and never wraps.
+    ConditionalParameterApplyResult
+    set_value_rt_if_baseline(const ParameterFeedbackBaseline& baseline, float value);
+
+    /// Set the absolute modulation offset for a parameter.
+    void set_mod_offset(ParamID id, float offset);
+
+    /// Add a delta to a parameter's modulation offset.
+    void add_mod_offset(ParamID id, float delta);
+
+    /// Clear all modulation offsets to zero.
+    void reset_all_mod();
+
+    // ── Modulated value for display ─────────────────────────────────────
+    //
+    // A control bound to a parameter shows two things: the BASE (what the
+    // user set or host automation plays; what gestures edit and the host
+    // records) and, when something modulates the parameter, the value
+    // PLAYING. Two sources feed the second, and neither is ever a host
+    // automation write:
+    //
+    //   * host modulation -- a CLAP host's parameter modulation, which the
+    //     adapter writes as the mod offset (set_mod_offset). Shown by every
+    //     bound control with no plugin code.
+    //   * the plugin's own modulation (an internal LFO) -- opt-in: the
+    //     plugin publishes the value its DSP plays with
+    //     set_display_modulation(), from any thread, real-time safe.
+    //
+    // A published display value wins over the host offset; nothing published
+    // and a zero offset means nothing is shown.
+
+    /// Publish the value (plain units) a plugin's own modulator plays for
+    /// @p id. Display only. Real-time safe (one relaxed store).
+    void set_display_modulation(ParamID id, float plain_value) noexcept;
+    /// Stop showing a plugin-published modulated value for @p id.
+    void clear_display_modulation(ParamID id) noexcept;
+    /// The modulated value a control should show, normalized to the
+    /// parameter's range, or nullopt when nothing modulates @p id.
+    std::optional<float> displayed_modulation(ParamID id) const noexcept;
+
+    class ModulationWatch;
+    /// Call @p on_change on the main thread, from pump_listeners(), whenever
+    /// displayed_modulation(@p id) changes (nullopt when it stops). The watch
+    /// lasts as long as the returned token. Main thread only.
+    [[nodiscard]] ModulationWatch
+    watch_modulation(ParamID id, std::function<void(std::optional<float>)> on_change);
+
+    /// Read a parameter's value mapped to [0, 1] (lock-free).
+    float get_normalized(ParamID id) const;
+
+    /// Write a parameter from a normalized [0, 1] value (lock-free).
+    void set_normalized(ParamID id, float normalized);
+
+    /// Current mutation generation for every parameter-state writer.
+    ///
+    /// Base-value writes (UI and audio), modulation changes, trigger resets,
+    /// state restore, and generation-bound gestures all advance this one
+    /// monotonic source. Registration does not: parameters are defined before
+    /// the live store is published.
+    std::uint64_t state_generation() const noexcept {
+        return state_generation_.load(std::memory_order_acquire);
+    }
+
+    bool state_snapshot_is_current(std::uint64_t generation) const noexcept {
+        return active_state_writers_.load(std::memory_order_acquire) == 0 &&
+               state_generation() == generation;
+    }
+
+    /// Atomically claim @p expected_generation and apply one complete host
+    /// gesture if it is still current.
+    ///
+    /// A stale caller fails before begin_gesture. Callback failure restores the
+    /// old value when no newer writer has replaced it. A concurrent writer is
+    /// never overwritten during rollback; the caller must refresh when the
+    /// result is not Applied.
+    ParameterGestureApplyResult apply_normalized_gesture_if_generation(
+        std::uint64_t expected_generation, ParamID id, float normalized);
+
+    /// Get the default value for a parameter (from its ParamRange).
+    float get_default(ParamID id) const;
+
+    /// Reset a single parameter to its default value.
+    void reset_to_default(ParamID id);
+
+    /// Reset all parameters to their default values.
+    void reset_all_to_defaults();
+
+    /// Reset every trigger / momentary parameter to its range default.
+    ///
+    /// A trigger parameter (see `ParamInfo::is_trigger` / a `Reset`
+    /// designation) is a one-shot "do this now" control. Format adapters call
+    /// this once at the end of each process block, after the Processor has
+    /// observed the value, so the control returns to its resting default for
+    /// the next block.
+    ///
+    /// Real-time safe: writes directly to the lock-free atomic value of each
+    /// trigger parameter (no allocation, no listener dispatch, no queueing).
+    /// The set of trigger indices is cached at registration, so this is O(number
+    /// of trigger params), and a store with no triggers does no work.
+    ///
+    /// @return true if any trigger parameter was reset this call.
+    bool reset_triggers_rt();
+
+    /// True when at least one registered parameter is a trigger / momentary
+    /// control. Adapters can skip calling `reset_triggers_rt()` when false.
+    bool has_trigger_params() const { return !trigger_indices_.empty(); }
+
+    /// Look up immutable metadata for a parameter.
+    /// @return Pointer to ParamInfo, or nullptr if @p id is not registered.
+    const ParamInfo* info(ParamID id) const;
+
+    /// Override only the host-facing presentation name of a stable parameter.
+    ///
+    /// The registered ParamInfo remains immutable: its ID, ordering, range,
+    /// value, and authoring name do not change. Format adapters may use this
+    /// overlay when a plugin keeps a fixed automation slot but changes the
+    /// semantic label shown by the host (for example, a generated macro slot
+    /// changing from "Tone" to "Cutoff").
+    ///
+    /// Passing an empty name clears the overlay and restores ParamInfo::name.
+    /// Safe to call from non-audio threads while processing is active. Readers
+    /// observe an immutable copy-on-write snapshot.
+    ///
+    /// @return true only when a registered parameter's displayed name changed.
+    bool set_parameter_display_name(ParamID id, std::string name);
+
+    /// Current host-facing name: overlay when present, otherwise ParamInfo::name.
+    ///
+    /// Returns an owned string so a concurrent overlay publication cannot
+    /// invalidate the caller's view.
+    std::string parameter_display_name(ParamID id) const;
+
+    /// Monotonic edge for format adapters that republish ParameterInfo.
+    std::uint64_t parameter_display_revision() const noexcept {
+        return parameter_display_revision_.load(std::memory_order_acquire);
+    }
+
+    /// Block-local snapshot of @p N parameter values.
+    ///
+    /// Loads each parameter once and returns the values in a stack-
+    /// allocated @c std::array. DSP code should call this once at the
+    /// top of @c process() and read from the returned array inside
+    /// the per-sample loop, instead of calling @c get_value() per
+    /// sample (each per-sample atomic load is a memory fence and
+    /// fans out across cores). Mirrors the usual audio-thread pattern:
+    /// snapshot the values you need before entering the inner loop.
+    ///
+    /// @tparam N  Compile-time count of parameter IDs to read.
+    /// @param ids  Parameter IDs to snapshot, in the desired output
+    ///             order. Unknown IDs yield @c 0.0f at their slot.
+    /// @return std::array<float, N> — same order as @p ids.
+    ///
+    /// @code
+    /// constexpr std::array<ParamID, 2> kIds = { kGainId, kMixId };
+    /// auto p = store.snapshot(kIds);
+    /// for (int s = 0; s < n; ++s) {
+    ///     out[s] = in[s] * p[0] + dry[s] * (1.f - p[1]);
+    /// }
+    /// @endcode
+    template <std::size_t N>
+    [[nodiscard]] std::array<float, N> snapshot(
+        const std::array<ParamID, N>& ids) const noexcept;
+
+    /// Modulated variant of @c snapshot — returns each parameter's
+    /// base + per-buffer modulation offset (see
+    /// @c set_mod_offset). Use this from a synth that consumes
+    /// CLAP's modulated values inside the voice loop.
+    template <std::size_t N>
+    [[nodiscard]] std::array<float, N> snapshot_modulated(
+        const std::array<ParamID, N>& ids) const noexcept;
+
+    /// View of all registered parameters (in registration order).
+    std::span<const ParamInfo> all_params() const { return params_; }
+
+    /// View of all registered groups (in registration order).
+    std::span<const ParamGroup> all_groups() const { return groups_; }
+
+    /// Number of registered parameters.
+    std::size_t param_count() const { return params_.size(); }
+
+    /// Signal the host that a gesture (drag, click) has begun on a parameter.
+    ///
+    /// **Main-thread only.** The registered gesture callbacks forward to the
+    /// host's undo-grouping calls — VST3 `beginEdit`, AU
+    /// `AudioUnitEvent(kAudioUnitEvent_BeginParameterChangeGesture)`, CLAP
+    /// `CLAP_EVENT_PARAM_GESTURE_BEGIN` — all of which are only legal on the
+    /// host UI/main thread. Call this from the UI thread before a series of
+    /// `set_value()` calls so the host groups them into a single undo step.
+    ///
+    /// A background writer (e.g. a MIDI-learn engine setting a mapped
+    /// parameter from a timer thread) must NOT call this directly; route the
+    /// whole gesture through @c run_gesture_on_main(). When a main-thread
+    /// backend is registered and this is called off it, the misuse is counted
+    /// (see @c gesture_thread_violation_count) and, in debug builds, asserts.
+    void begin_gesture(ParamID id);
+
+    /// Signal the host that the current gesture has ended.
+    /// **Main-thread only** — see @c begin_gesture().
+    void end_gesture(ParamID id);
+
+    /// Acquire/release a shared gesture lease. Multiple live editors may bind
+    /// controls to the same StateStore parameter; only the first lease emits
+    /// begin_gesture() and only the last release emits end_gesture().
+    /// **Main-thread only** — see @c begin_gesture().
+    void acquire_gesture(ParamID id);
+    void release_gesture(ParamID id);
+    /// Release a lease without synchronously entering host code. The matching
+    /// host end callback is queued for flush_deferred_gesture_releases().
+    void defer_gesture_release(ParamID id);
+    void flush_deferred_gesture_releases() noexcept;
+
+    /// Close every gesture still open and report each end to the host.
+    ///
+    /// The store tracks which parameters have an open gesture (a
+    /// @c begin_gesture with no matching @c end_gesture) so that begin/end are
+    /// balanced 1:1 toward the host — a second @c begin_gesture on an
+    /// already-open parameter is suppressed, and an @c end_gesture on a
+    /// parameter that was never opened is a no-op. An editor torn down mid-drag
+    /// (the user closes the plugin window without lifting the mouse) would
+    /// otherwise leave the host's automation record open forever; a format
+    /// adapter calls this on editor teardown to release everything still held.
+    /// **Main-thread only** — see @c begin_gesture().
+    void release_open_gestures();
+
+    /// Number of parameters with an open gesture (begin without a matching
+    /// end). Observability for tests and adapters.
+    std::size_t open_gesture_count() const noexcept { return open_gestures_.size(); }
+
+    /// Run a complete parameter gesture (begin_gesture → value writes →
+    /// end_gesture) on the host's main thread, from ANY thread.
+    ///
+    /// This is the enforced marshalling path for background writers. If a
+    /// main-thread backend is registered (i.e. inside a real host) and the
+    /// caller is off it, @p gesture is posted via
+    /// @c events::MainThreadDispatcher::call_async and runs later on the main
+    /// thread. Otherwise (already on the main thread, or a headless test with
+    /// no backend) it runs inline. The whole begin→set→end sequence must be
+    /// posted as one unit so the host sees the calls in order on one thread —
+    /// posting only begin/end while writing the value elsewhere would corrupt
+    /// undo grouping.
+    void run_gesture_on_main(std::function<void()> gesture);
+
+    /// Number of times a gesture entry point (@c begin_gesture / @c
+    /// end_gesture) was called off the host main thread while a main-thread
+    /// backend was registered. Always zero in headless tests (no backend) and
+    /// for correctly main-thread-confined UIs. A non-zero value flags a
+    /// threading bug — a background writer that bypassed @c run_gesture_on_main.
+    std::uint64_t gesture_thread_violation_count() const {
+        return gesture_thread_violations_.load(std::memory_order_relaxed);
+    }
+
+    /// Install an @c EventLoop used to marshal @c ListenerThread::Main
+    /// listeners onto the main thread. If unset, Main listeners run
+    /// inline on whichever thread fired @c set_value().
+    ///
+    /// Format adapters and standalone hosts install this during plugin
+    /// initialization; tests usually leave it unset.
+    void set_main_loop(pulp::events::EventLoop* loop);
+
+    /// Subscribe to parameter-value changes.
+    ///
+    /// The returned @c ListenerToken owns the subscription. Destroy it
+    /// (or call @c ListenerToken::reset()) to remove the listener. The
+    /// token MUST outlive the listener's expected firing window — discarding
+    /// it removes the subscription immediately.
+    ///
+    /// @param callback  Invoked for every change. Pass an empty
+    ///                  @c ParamChangeCallback to register a no-op slot.
+    /// @param thread    @c ListenerThread::Main (default) marshals the
+    ///                  callback through the installed @c EventLoop;
+    ///                  @c ListenerThread::Audio runs it inline on the
+    ///                  firing thread and asserts caller RT-safety.
+    /// @param restore_behavior  @c ListenerRestoreBehavior::Silent preserves
+    ///                  deserialize's listener-silent contract. UI bindings
+    ///                  whose cached presentation must follow restored state
+    ///                  opt into @c ListenerRestoreBehavior::Reconcile.
+    ///
+    /// @note Main-thread listeners fed by the real-time path
+    ///       (@c set_value_rt / @c set_normalized_rt, drained by
+    ///       @c pump_listeners) are CURRENT-VALUE notifications: the
+    ///       @c float passed to the callback is a live snapshot read at
+    ///       drain time (not the value queued when the change fired), and
+    ///       deliveries are COALESCED to one call per changed parameter
+    ///       per pump. This keeps the value coherent under dense
+    ///       automation — a burst of N writes to one parameter yields a
+    ///       single callback carrying the latest value, never a sequence
+    ///       of stale intermediate values. @c ListenerThread::Audio
+    ///       listeners are unaffected: they fire inline per change with
+    ///       that change's value.
+    [[nodiscard]]
+    ListenerToken add_listener(ParamChangeCallback callback,
+                               ListenerThread thread);
+
+    /// Subscribe with explicit state-restore behavior.
+    [[nodiscard]]
+    ListenerToken add_listener(ParamChangeCallback callback,
+                               ListenerThread thread,
+                               ListenerRestoreBehavior restore_behavior);
+
+    /// Convenience for opting into real-time-safe inline invocation.
+    /// Equivalent to @c add_listener(cb, ListenerThread::Audio).
+    [[nodiscard]]
+    ListenerToken add_audio_listener(ParamChangeCallback callback);
+
+    /// Remove a listener explicitly. Equivalent to letting the token
+    /// fall out of scope.
+    void remove_listener(ListenerToken& token);
+
+    /// Drain queued main-thread listener invocations posted by
+    /// @c set_value_rt() / @c set_normalized_rt() from the audio thread.
+    /// Call this from the main thread (e.g. the editor's per-frame
+    /// timer or the host's UI tick).
+    ///
+    /// @return Number of changes drained from the queue.
+    std::size_t pump_listeners();
+
+    /// Reconcile opted-in Main listeners with the current parameter snapshot.
+    ///
+    /// State restore writes parameter atomics without invoking listeners
+    /// because the host may deserialize on a non-UI thread. ViewBridge calls
+    /// this from its main-thread idle tick after observing a successful
+    /// deserialize edge. Only listeners registered with
+    /// @c ListenerRestoreBehavior::Reconcile participate; ordinary Main and
+    /// Audio listeners are never invoked.
+    ///
+    /// The restore revision is consumed store-wide, so multiple ViewBridges
+    /// sharing this store do not replay the same callbacks. Each bridge still
+    /// tracks the edge independently so every attached view repaints.
+    ///
+    /// Listener additions and removals during callbacks are safe. A listener
+    /// removed before its turn is skipped, and a listener added during this
+    /// pass participates only in the next reconciliation.
+    ///
+    /// @return Number of Main-listener callbacks invoked.
+    std::size_t reconcile_restore_listeners();
+
+    /// Latest telemetry for the RT-to-main listener queue used by
+    /// @c set_value_rt() / @c pump_listeners().
+    RtListenerQueueTelemetry rt_listener_queue_telemetry() const;
+
+    /// Reset only the RT listener queue overflow counter. Queued events are
+    /// untouched.
+    void reset_rt_listener_queue_overflow_count();
+
+    /// Legacy permanent-listener registration. Prefer the
+    /// @c ListenerToken-returning overload above for new code.
+    ///
+    /// The callback is invoked inline on whichever thread fires
+    /// @c set_value() and cannot be removed for the lifetime of the
+    /// @c StateStore. Pulp's own subsystems are migrating to the token
+    /// API; this overload remains for one release as a compatibility
+    /// shim.
+    void add_listener(ParamChangeCallback callback);
+
+    /// Serialize all parameter values to a binary blob for preset/state save.
+    ///
+    /// This is the parameter-only payload. Format adapters may wrap it in a
+    /// higher-level host blob alongside Processor::serialize_plugin_state().
+    /// @return Byte vector suitable for storage or transmission.
+    std::vector<uint8_t> serialize() const;
+
+    /// Restore parameter values from a parameter-only binary blob.
+    ///
+    /// Format adapters may decode a higher-level host blob first, then pass
+    /// only the embedded StateStore payload here.
+    /// @return True if deserialization succeeded.
+    bool deserialize(std::span<const uint8_t> data);
+
+    /// Monotonic reconciliation edge published after each successful
+    /// deserialize().
+    ///
+    /// Deserialization deliberately does not dispatch parameter listeners:
+    /// format hosts may restore from a thread where author/UI callbacks are
+    /// unsafe. An attached ViewBridge polls this revision on its main-thread
+    /// idle tick and schedules one editor repaint, whose paint boundary can
+    /// then reconcile listener-silent control state.
+    ///
+    /// This is an edge, not a count of host-level restore successes. A
+    /// higher-level restore that applies parameter state and then rejects its
+    /// plugin-owned payload may deserialize the previous parameter snapshot as
+    /// rollback, advancing this revision twice. Consumers compare for
+    /// inequality and may coalesce either advance into one refresh of the final
+    /// state.
+    std::uint64_t state_restore_revision() const noexcept {
+        return state_restore_revision_.load(std::memory_order_acquire);
+    }
+
+    /// Set the schema version embedded in serialized state.
+    /// Increment this when the parameter layout changes between plugin versions.
+    void set_state_version(uint32_t version) { state_version_ = version; }
+
+    /// Get the current state schema version.
+    uint32_t state_version() const { return state_version_; }
+
+    /// Register a load-time migration for this store's parameter schema.
+    ///
+    /// Migrations are scoped to the StateStore instance because state schema
+    /// versions are plugin-defined; two plugins may both need a different
+    /// migration from version 1 to 2.
+    bool register_state_migration(uint32_t from_version,
+                                  uint32_t to_version,
+                                  StateMigrationRegistry::MigrationFn migration);
+
+    /// Copy schema migrations from another store with the same registered
+    /// parameters. Used by restore probes that validate before touching live
+    /// state.
+    void copy_state_migrations_from(const StateStore& source);
+
+private:
+    // Member ORDER is load-bearing for the RT->main listener path. The
+    // parameter storage (id_to_index_ + values_) MUST be declared before
+    // registry_ so that, on destruction (reverse declaration order),
+    // registry_ is torn down FIRST. registry_'s value_getter captures
+    // `this` and reads id_to_index_/values_ during drain_main_listeners;
+    // destroying registry_ before that storage guarantees the getter can
+    // never run after the storage it reads is gone. Do not reorder.
+    std::vector<ParamInfo> params_;
+    std::vector<ParamGroup> groups_;
+    std::unordered_map<ParamID, std::size_t> id_to_index_;
+    std::vector<ParamValue> values_;
+    using ParameterDisplayNames =
+        std::unordered_map<ParamID, std::string>;
+    mutable std::mutex parameter_display_mutex_;
+    std::shared_ptr<const ParameterDisplayNames> parameter_display_names_;
+    std::atomic<std::uint64_t> parameter_display_revision_{0};
+    std::atomic<std::uint64_t> state_restore_revision_{0};
+    std::atomic<std::uint64_t> reconciled_state_restore_revision_{0};
+    std::atomic<std::uint64_t> state_generation_{0};
+    std::atomic<std::uint32_t> active_state_writers_{0};
+    // Indices (into values_/params_) of trigger / momentary parameters, cached
+    // at registration so reset_triggers_rt() is allocation-free on the audio
+    // thread. Empty for the overwhelmingly common no-trigger store.
+    std::vector<std::size_t> trigger_indices_;
+    std::shared_ptr<detail::ListenerRegistry> registry_;
+
+  public:
+    struct ModulationWatchers {
+        struct Entry {
+            std::uint64_t id = 0;
+            ParamID param = 0;
+            std::function<void(std::optional<float>)> on_change;
+            std::optional<float> last;
+        };
+        std::vector<Entry> entries;
+        std::uint64_t next_id = 1;
+    };
+    /// RAII handle for watch_modulation(). Move-only; dropping it unwatches.
+    class ModulationWatch {
+      public:
+        ModulationWatch() = default;
+        ModulationWatch(std::weak_ptr<ModulationWatchers> owner, std::uint64_t id) noexcept
+            : owner_(std::move(owner)), id_(id) {}
+        ModulationWatch(ModulationWatch&& other) noexcept
+            : owner_(std::move(other.owner_)), id_(std::exchange(other.id_, 0)) {}
+        ModulationWatch& operator=(ModulationWatch&& other) noexcept {
+            if (this != &other) {
+                reset();
+                owner_ = std::move(other.owner_);
+                id_ = std::exchange(other.id_, 0);
+            }
+            return *this;
+        }
+        ModulationWatch(const ModulationWatch&) = delete;
+        ModulationWatch& operator=(const ModulationWatch&) = delete;
+        ~ModulationWatch() {
+            reset();
+        }
+        void reset() noexcept {
+            if (id_ == 0)
+                return;
+            if (auto owner = owner_.lock()) {
+                auto& e = owner->entries;
+                e.erase(std::remove_if(e.begin(), e.end(),
+                                       [this](const auto& x) { return x.id == id_; }),
+                        e.end());
+            }
+            id_ = 0;
+        }
+        explicit operator bool() const noexcept {
+            return id_ != 0;
+        }
+
+      private:
+        std::weak_ptr<ModulationWatchers> owner_;
+        std::uint64_t id_ = 0;
+    };
+
+  private:
+    std::shared_ptr<ModulationWatchers> modulation_watchers_ =
+        std::make_shared<ModulationWatchers>();
+    void service_modulation_watchers();
+    std::vector<ListenerToken> permanent_listener_tokens_;
+    StateMigrationRegistry migrations_;
+    uint32_t state_version_ = 1;
+
+    std::function<void(ParamID)> on_begin_gesture_;
+    std::function<void(ParamID)> on_end_gesture_;
+
+    // Parameters with an open gesture (begin without a matching end). Keeps
+    // begin/end balanced 1:1 toward the host and lets release_open_gestures()
+    // close everything still held on editor teardown. Main-thread-only, like
+    // the gesture entry points that mutate it.
+    std::unordered_set<ParamID> open_gestures_;
+    // Direct begin/end callers retain the historical duplicate-suppression
+    // contract independently of shared editor leases. open_gestures_ is the
+    // union that is actually open toward the host.
+    std::unordered_set<ParamID> direct_gestures_;
+    std::unordered_map<ParamID, std::size_t> gesture_leases_;
+    std::vector<ParamID> deferred_gesture_releases_;
+
+    // Close a retired owner's pending host bracket before a replacement owner
+    // is allowed to begin the same parameter again.
+    void flush_deferred_gesture_release(ParamID id) noexcept;
+    std::uint64_t advance_state_generation() noexcept;
+
+    // Off-main-thread gesture-misuse counter. Bumped (relaxed) by
+    // begin_gesture/end_gesture when a MainThreadDispatcher backend is live but
+    // the caller is not on the main thread. Observability only — never blocks
+    // the audio path (gestures are main-thread UI events, not audio).
+    std::atomic<std::uint64_t> gesture_thread_violations_{0};
+
+public:
+    /// Install callbacks that forward gesture begin/end to the plugin host.
+    /// Format adapters (VST3, AU, CLAP) call this during initialization so
+    /// that UI-driven gestures are reported to the host for undo grouping.
+    void set_gesture_callbacks(
+        std::function<void(ParamID)> begin_fn,
+        std::function<void(ParamID)> end_fn)
+    {
+        on_begin_gesture_ = std::move(begin_fn);
+        on_end_gesture_ = std::move(end_fn);
+        // A new callback set is a new host/editor session: any gesture tracked
+        // against the previous callbacks is stale. Reset so a re-opened editor
+        // (e.g. AU clears callbacks on teardown, then re-installs on reopen)
+        // does not have a lingering entry suppress a fresh begin_gesture.
+        open_gestures_.clear();
+        direct_gestures_.clear();
+        gesture_leases_.clear();
+        deferred_gesture_releases_.clear();
+    }
+};
+
+// ─── Template definitions ──────────────────────────────────────────────────
+
+template <std::size_t N>
+std::array<float, N> StateStore::snapshot(
+    const std::array<ParamID, N>& ids) const noexcept
+{
+    std::array<float, N> out{};
+    for (std::size_t i = 0; i < N; ++i) {
+        out[i] = get_value(ids[i]);
+    }
+    return out;
+}
+
+template <std::size_t N>
+std::array<float, N> StateStore::snapshot_modulated(
+    const std::array<ParamID, N>& ids) const noexcept
+{
+    std::array<float, N> out{};
+    for (std::size_t i = 0; i < N; ++i) {
+        out[i] = get_modulated(ids[i]);
+    }
+    return out;
+}
+
+} // namespace pulp::state

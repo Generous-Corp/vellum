@@ -1,0 +1,251 @@
+#include <pulp/state/properties_file.hpp>
+#include <choc/text/choc_JSON.h>
+#include <cerrno>
+#include <cctype>
+#include <cmath>
+#include <cstdlib>
+#include <fstream>
+#include <sstream>
+#include <filesystem>
+
+namespace pulp::state {
+
+// ── PropertiesFile ──────────────────────────────────────────────────────
+
+static bool parse_property_int(const std::string& text, int64_t& out) {
+    if (text.empty()) return false;
+    char* end = nullptr;
+    errno = 0;
+    long long value = std::strtoll(text.c_str(), &end, 10);
+    if (end == text.c_str()) return false;
+    if (errno == ERANGE) return false;
+    while (*end != '\0') {
+        if (!std::isspace(static_cast<unsigned char>(*end))) return false;
+        ++end;
+    }
+    out = static_cast<int64_t>(value);
+    return true;
+}
+
+static bool parse_property_double(const std::string& text, double& out) {
+    if (text.empty()) return false;
+    char* end = nullptr;
+    double value = std::strtod(text.c_str(), &end);
+    if (end == text.c_str() || !std::isfinite(value)) return false;
+    while (*end != '\0') {
+        if (!std::isspace(static_cast<unsigned char>(*end))) return false;
+        ++end;
+    }
+    out = value;
+    return true;
+}
+
+bool PropertiesFile::load(std::string_view path) {
+    path_ = std::string(path);
+
+    std::ifstream file(path_);
+    if (!file) return false;
+
+    std::ostringstream ss;
+    ss << file.rdbuf();
+    std::string content = ss.str();
+
+    if (content.empty()) {
+        values_.clear();  // Clear any stale state when loading empty file
+        return true;
+    }
+
+    try {
+        auto json = choc::json::parse(content);
+
+        if (!json.isObject()) return false;
+
+        values_.clear();
+        for (uint32_t i = 0; i < json.size(); ++i) {
+            auto member = json.getObjectMemberAt(i);
+            std::string key(member.name);
+
+            if (member.value.isString())
+                values_[key] = std::string(member.value.getString());
+            else if (member.value.isBool())
+                values_[key] = member.value.getBool() ? "true" : "false";
+            else if (member.value.isInt32())
+                values_[key] = std::to_string(member.value.getInt32());
+            else if (member.value.isInt64())
+                values_[key] = std::to_string(member.value.getInt64());
+            else if (member.value.isFloat64())
+                values_[key] = std::to_string(member.value.getFloat64());
+        }
+
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool PropertiesFile::save(std::string_view path) {
+    path_ = std::string(path);
+    return save_to(path_);
+}
+
+bool PropertiesFile::save() const {
+    if (path_.empty()) return false;
+    return save_to(path_);
+}
+
+bool PropertiesFile::save_to(const std::string& dest) const {
+    auto parent = std::filesystem::path(dest).parent_path();
+    if (!parent.empty()) {
+        std::error_code ec;
+        std::filesystem::create_directories(parent, ec);
+    }
+    auto obj = choc::value::createObject("settings");
+    for (auto& [key, value] : values_)
+        obj.addMember(key, value);
+    std::string json = choc::json::toString(obj, true);
+
+    // Atomic save: write to a sibling temp file, fully flush it, then rename it
+    // onto the destination. A crash, power loss, or full disk mid-write
+    // therefore leaves the previously-saved settings intact rather than
+    // truncating them — settings/preset files are user data, so a partial
+    // write must never clobber a known-good file. Mirrors the temp-then-rename
+    // convention already used by skp_capture and waveform_overview_cache.
+    const std::string tmp_path = dest + ".tmp";
+    {
+        std::ofstream file(tmp_path);
+        if (!file) return false;
+        file << json;
+        file.flush();
+        if (!file.good()) {
+            file.close();
+            std::error_code ec;
+            std::filesystem::remove(tmp_path, ec);
+            return false;
+        }
+    }  // ofstream destructor closes the temp file before the rename.
+
+    std::error_code ec;
+    std::filesystem::rename(tmp_path, dest, ec);
+    if (ec) {
+        std::error_code rm_ec;
+        std::filesystem::remove(tmp_path, rm_ec);
+        return false;
+    }
+    return true;
+}
+
+std::optional<std::string> PropertiesFile::get_string(std::string_view key) const {
+    auto it = values_.find(key);
+    if (it == values_.end()) return std::nullopt;
+    return it->second;
+}
+
+void PropertiesFile::set_string(std::string_view key, std::string_view value) {
+    values_[std::string(key)] = std::string(value);
+}
+
+std::optional<int64_t> PropertiesFile::get_int(std::string_view key) const {
+    auto it = values_.find(key);
+    if (it == values_.end()) return std::nullopt;
+    int64_t value = 0;
+    if (parse_property_int(it->second, value)) return value;
+    return std::nullopt;
+}
+
+void PropertiesFile::set_int(std::string_view key, int64_t value) {
+    values_[std::string(key)] = std::to_string(value);
+}
+
+std::optional<double> PropertiesFile::get_double(std::string_view key) const {
+    auto it = values_.find(key);
+    if (it == values_.end()) return std::nullopt;
+    double value = 0.0;
+    if (parse_property_double(it->second, value)) return value;
+    return std::nullopt;
+}
+
+void PropertiesFile::set_double(std::string_view key, double value) {
+    values_[std::string(key)] = std::to_string(value);
+}
+
+std::optional<bool> PropertiesFile::get_bool(std::string_view key) const {
+    auto it = values_.find(key);
+    if (it == values_.end()) return std::nullopt;
+    return it->second == "true" || it->second == "1";
+}
+
+void PropertiesFile::set_bool(std::string_view key, bool value) {
+    values_[std::string(key)] = value ? "true" : "false";
+}
+
+void PropertiesFile::remove(std::string_view key) {
+    auto it = values_.find(key);
+    if (it != values_.end()) values_.erase(it);
+}
+
+bool PropertiesFile::contains(std::string_view key) const {
+    return values_.find(key) != values_.end();
+}
+
+void PropertiesFile::clear() {
+    values_.clear();
+}
+
+std::vector<std::string> PropertiesFile::keys() const {
+    std::vector<std::string> result;
+    result.reserve(values_.size());
+    for (auto& [k, v] : values_)
+        result.push_back(k);
+    return result;
+}
+
+// ── ApplicationProperties ───────────────────────────────────────────────
+
+ApplicationProperties::ApplicationProperties(std::string_view app_name)
+    : app_name_(app_name) {}
+
+void ApplicationProperties::load() {
+    auto user_dir = user_settings_dir(app_name_);
+    auto common_dir = common_settings_dir(app_name_);
+
+    user_.load(user_dir + "/settings.json");
+    common_.load(common_dir + "/settings.json");
+}
+
+void ApplicationProperties::save() {
+    auto user_dir = user_settings_dir(app_name_);
+    auto common_dir = common_settings_dir(app_name_);
+
+    user_.save(user_dir + "/settings.json");
+    common_.save(common_dir + "/settings.json");
+}
+
+std::string ApplicationProperties::user_settings_dir(std::string_view app_name) {
+#ifdef __APPLE__
+    const char* home = std::getenv("HOME");
+    if (home) return std::string(home) + "/Library/Preferences/" + std::string(app_name);
+    return "/tmp/" + std::string(app_name);
+#elif defined(_WIN32)
+    const char* appdata = std::getenv("APPDATA");
+    if (appdata) return std::string(appdata) + "\\" + std::string(app_name);
+    return "C:\\Users\\Public\\" + std::string(app_name);
+#else
+    const char* home = std::getenv("HOME");
+    if (home) return std::string(home) + "/.config/" + std::string(app_name);
+    return "/tmp/" + std::string(app_name);
+#endif
+}
+
+std::string ApplicationProperties::common_settings_dir(std::string_view app_name) {
+#ifdef __APPLE__
+    return "/Library/Application Support/" + std::string(app_name);
+#elif defined(_WIN32)
+    const char* progdata = std::getenv("ProgramData");
+    if (progdata) return std::string(progdata) + "\\" + std::string(app_name);
+    return "C:\\ProgramData\\" + std::string(app_name);
+#else
+    return "/etc/" + std::string(app_name);
+#endif
+}
+
+}  // namespace pulp::state

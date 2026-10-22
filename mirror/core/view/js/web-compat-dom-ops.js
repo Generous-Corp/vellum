@@ -1,0 +1,353 @@
+// DOM manipulation methods (small file for QuickJS compilation limit).
+//
+// Single source of truth for the prototype methods that underpin
+// web-compat DOM mutation. Earlier the same code lived twice: in this
+// file (embedded into web_compat_preludes_gen.hpp via embed_js.py) and
+// inline in widget_bridge.cpp as `kDomOpsInit`. The two had drifted,
+// and the inline version was the one actually evaluated, so this file
+// was dead code that the build still included. Now the file is the only
+// copy.
+//
+function __pulpRememberNativeElement__(element) {
+    if (typeof __nativeElements__ !== "undefined") __nativeElements__[element._id] = element;
+}
+
+function __pulpReplayNativeEventListeners__(element) {
+    if (typeof __eventListeners__ === "undefined" ||
+            !element || !element._registerNativeEvent) {
+        return;
+    }
+    var listeners = __eventListeners__[element._id];
+    if (!listeners) return;
+    for (var type in listeners) {
+        if (listeners[type] && listeners[type].length > 0) {
+            element._registerNativeEvent(type);
+        }
+    }
+}
+
+function __pulpRegisterAutoDomEvents__(child) {
+    if (child._autoEventsRegistered) return;
+    child._autoEventsRegistered = true;
+    if (typeof on === "function") {
+        // These callbacks arm native delivery for root-delegated listeners;
+        // they must not enter Element::dispatchEvent themselves. __dispatch__
+        // is the sole DOM fan-out owner, and the pointer registrar emits the
+        // corresponding mouse event on its own channel.
+        on(child._id, "click", function () {});
+        on(child._id, "pointerdown", function () {});
+        on(child._id, "pointermove", function () {});
+        on(child._id, "pointerup", function () {});
+        on(child._id, "pointercancel", function () {});
+    }
+}
+
+// Idempotency guard: callers may eval this script more than once
+// (constructor + manual reload, or a deferred-init transition). The
+// flag-on-prototype check makes a second eval a no-op
+// instead of re-defining the methods (which would also re-publish the
+// same logic but re-trigger any global side effects readers attach via
+// Object.defineProperty / proxies).
+
+if (!Element.prototype.appendChild ||
+    !Element.prototype.appendChild.__pulp_dom_ops__) {
+
+    Element.prototype.appendChild = function(child) {
+        if (!(child instanceof Element)) return child;
+        // DocumentFragment flatten: a fragment must splice its children
+        // into the parent, and the fragment node itself never enters the
+        // tree. React 18's reconciler stages commits inside fragments;
+        // without this they show up as phantom wrappers.
+        if (child._isDocumentFragment) {
+            var kids = child._children.slice(0);
+            child._children.length = 0;
+            try {
+                for (var i = 0; i < kids.length; i++) this.appendChild(kids[i]);
+            } catch (e) {
+                // Restore JS ownership for every fragment child. Native
+                // append is transactional for each child; this closes the
+                // outer flattening transaction when a later child rejects.
+                for (var ri = 0; ri < kids.length; ri++) {
+                    var owner = kids[ri]._parentElement;
+                    if (owner) {
+                        var oi = owner._children.indexOf(kids[ri]);
+                        if (oi >= 0) owner._children.splice(oi, 1);
+                    }
+                    kids[ri]._parentElement = child;
+                }
+                child._children = kids;
+                throw e;
+            }
+            return child;
+        }
+        // Reject cycles before changing JS parent bookkeeping. The native
+        // bridge also guards this, but reaching it after mutation would leave
+        // the emulated DOM cyclic even when the native operation refuses.
+        if (child === this) throw new Error("HierarchyRequestError");
+        for (var ancestor = this; ancestor; ancestor = ancestor._parentElement) {
+            if (ancestor === child) throw new Error("HierarchyRequestError");
+        }
+        var previousParent = child._parentElement;
+        var previousIndex = previousParent
+            ? previousParent._children.indexOf(child) : -1;
+        // Reparenting must preserve the native widget identity. Calling the
+        // public removeChild() here would invoke __domRemove(), which retires
+        // the native subtree and aliases before __domAppend() gets a chance
+        // to move an existing retained wrapper. Detach only the JS parent
+        // bookkeeping; __domAppend() owns the native move/upgrade transaction.
+        if (child._parentElement) {
+            var oldParent = child._parentElement;
+            var oldIndex = oldParent._children.indexOf(child);
+            if (oldIndex >= 0) oldParent._children.splice(oldIndex, 1);
+            child._parentElement = null;
+        }
+        child._parentElement = this;
+        this._children.push(child);
+        this._ensureNative();
+        __pulpRememberNativeElement__(child);
+        // Pass an optional widget-type hint to the C++ __domAppend fast
+        // path so it can route `<input>` to the right native widget
+        // (Fader for type=range, Checkbox for type=checkbox). Computing
+        // the hint here is cheaper than re-entering JS from C++ and
+        // avoids the QuickJS stack-overflow risk that motivated the
+        // __domAppend fast path in the first place.
+        var __domAppendHint = "";
+        if (typeof __pulpElementWantsScrollView__ === "function" &&
+            __pulpElementWantsScrollView__(child)) {
+            __domAppendHint = "scroll";
+        } else if (child.tagName === "INPUT") {
+            if (child._type === "range") {
+                __domAppendHint = "range:" +
+                    ((typeof __resolveRangeOrientation__ === "function")
+                        ? __resolveRangeOrientation__(child)
+                        : "horizontal");
+            } else if (child._type === "checkbox") {
+                __domAppendHint = "checkbox";
+            } else {
+                // Plain `<input>` (the default `_type` is "text") and
+                // the text-input subtypes (text/search/email/url/tel/
+                // password) route to a TextEditor on the C++ side.
+                // Other non-range/non-checkbox inputs fall through to a
+                // plain View.
+                var t = child._type || "text";
+                if (t === "text" || t === "search" || t === "email" ||
+                    t === "url"  || t === "tel"    || t === "password") {
+                    __domAppendHint = "text";
+                }
+            }
+        }
+        try {
+            __domAppend(this._id, child._id, child.tagName.toLowerCase(), __domAppendHint);
+        } catch (e) {
+            var rollbackIndex = this._children.indexOf(child);
+            if (rollbackIndex >= 0) this._children.splice(rollbackIndex, 1);
+            child._parentElement = previousParent;
+            if (previousParent && previousIndex >= 0)
+                previousParent._children.splice(previousIndex, 0, child);
+            throw e;
+        }
+        child._nativeCreated = true;
+        __invalidateStyleCache__(child);
+        if (child._textContent) setText(child._id, child._textContent);
+        // Replay presentational `width`/`height` HTML attributes that
+        // were captured before mount. React/JSX commits setAttribute()
+        // before appendChild(), and the C++ __domAppend path doesn't
+        // see those attributes, so a fresh SVG arrives here as 0×0 and
+        // the row collapses. Style flushAll() doesn't cover attribute
+        // paths, only `style.*`. Apply only to layout-leaf media tags so
+        // semantic block elements aren't surprised by stale
+        // presentational hints.
+        if (typeof __replayMediaAttributes__ === "function") {
+            __replayMediaAttributes__(child);
+        }
+        // Same flush for ARIA attributes (`aria-label` / `role`) captured
+        // before mount. Without this the React commit order
+        // (setAttribute -> appendChild) leaves the access slots empty
+        // even though _attributes carries them.
+        if (typeof __replayAriaAttributes__ === "function") {
+            __replayAriaAttributes__(child);
+        }
+        // Rect / line / circle SVG primitives. React/JSX commits
+        // setAttribute() before appendChild(), so geometry and
+        // fill/stroke land on _attributes before the bridge sees the
+        // native id. Flush them now that the native widget exists.
+        if (typeof __replaySvgRectAttributes__ === "function") {
+            __replaySvgRectAttributes__(child);
+        }
+        if (typeof __replaySvgLineAttributes__ === "function") {
+            __replaySvgLineAttributes__(child);
+        }
+        if (typeof __replaySvgCircleAttributes__ === "function") {
+            __replaySvgCircleAttributes__(child);
+        }
+        // Replay SvgPath attributes (d / stroke / stroke-width / fill /
+        // viewBox-from-parent) for `<path>` elements. React commits
+        // these via setAttribute BEFORE the appendChild that materializes
+        // the native widget, so the SvgPathWidget is empty until this
+        // replay runs.
+        if (typeof __replaySvgPathAttributes__ === "function") {
+            __replaySvgPathAttributes__(child);
+        }
+        child.style._flushAll();
+        child._reapplyStylesheets();
+
+        // Auto-register native click + pointer events on EVERY appended
+        // element so React 17+'s root-delegated event system receives
+        // events. React attaches a single delegate listener to the root
+        // container; individual JSX elements never call addEventListener
+        // ('click', fn). The shim's _dispatchEvent implements proper
+        // capture/bubble through _parentElement, so once native
+        // click/pointer fires `on(id, 'click')` we synthesize a DOM Event,
+        // dispatch on the target child Element, and the existing bubble
+        // walk delivers to React's root.
+        //
+        // Idempotent via _autoEventsRegistered flag.
+        __pulpRegisterAutoDomEvents__(child);
+        __pulpReplayNativeEventListeners__(child);
+        // `<style>` elements receive CSS via either direct textContent
+        // assignment or child Text nodes; React's reconciler takes the
+        // second path. When a Text-bearing child lands under a `<style>`
+        // parent, route the aggregated text through the CSS translator so
+        // `:hover` rules get registered.
+        if ((this.tagName === "STYLE" || this._isStyleElement)
+                && typeof _processStyleElement === "function") {
+            var aggregated = "";
+            for (var ci = 0; ci < this._children.length; ci++) {
+                aggregated += this._children[ci]._textContent || "";
+            }
+            this._textContent = aggregated;
+            _processStyleElement(this);
+        }
+        // `autofocus` and the dialog first-field default, once the subtree
+        // is connected and every native widget in it exists.
+        if (typeof __pulpApplyMountFocus__ === "function")
+            __pulpApplyMountFocus__(child);
+        return child;
+    };
+    Element.prototype.appendChild.__pulp_dom_ops__ = true;
+
+    Element.prototype.removeChild = function(child) {
+        var idx = this._children.indexOf(child);
+        if (idx < 0) return child;
+        this._children.splice(idx, 1);
+        child._parentElement = null;
+        if (child._nativeCreated) __domRemove(child._id, 1);
+        child._nativeCreated = false;
+        __invalidateStyleCache__(child);
+        return child;
+    };
+    Element.prototype.removeChild.__pulp_dom_ops__ = true;
+
+    Element.prototype.remove = function() {
+        if (this._parentElement) this._parentElement.removeChild(this);
+    };
+    Element.prototype.remove.__pulp_dom_ops__ = true;
+
+    Element.prototype.insertBefore = function(newChild, refChild) {
+        if (!refChild) return this.appendChild(newChild);
+        // DocumentFragment flatten: each child of the fragment is inserted
+        // at the ref position individually.
+        if (newChild._isDocumentFragment) {
+            var kids = newChild._children.slice(0);
+            newChild._children.length = 0;
+            try {
+                for (var i = 0; i < kids.length; i++) this.insertBefore(kids[i], refChild);
+            } catch (e) {
+                for (var ri = 0; ri < kids.length; ri++) {
+                    var owner = kids[ri]._parentElement;
+                    if (owner) {
+                        var oi = owner._children.indexOf(kids[ri]);
+                        if (oi >= 0) owner._children.splice(oi, 1);
+                    }
+                    kids[ri]._parentElement = newChild;
+                }
+                newChild._children = kids;
+                throw e;
+            }
+            return newChild;
+        }
+        if (newChild === this) throw new Error("HierarchyRequestError");
+        for (var ancestor = this; ancestor; ancestor = ancestor._parentElement) {
+            if (ancestor === newChild) throw new Error("HierarchyRequestError");
+        }
+        var previousParent = newChild._parentElement;
+        var previousIndex = previousParent
+            ? previousParent._children.indexOf(newChild) : -1;
+        var idx = this._children.indexOf(refChild);
+        if (idx < 0) return this.appendChild(newChild);
+        // As in appendChild(), detach the JS relationship without retiring
+        // the native subtree. The C++ append path must see the existing widget
+        // so retained ScrollView aliases and callback identity survive.
+        if (newChild._parentElement) {
+            var oldParent = newChild._parentElement;
+            var oldIndex = oldParent._children.indexOf(newChild);
+            if (oldIndex >= 0) {
+                oldParent._children.splice(oldIndex, 1);
+                // The reference index was captured before removing a child
+                // from this same parent. Account for the shifted slot when
+                // moving an earlier sibling in front of the reference.
+                if (oldParent === this && oldIndex < idx) idx--;
+            }
+            newChild._parentElement = null;
+        }
+        newChild._parentElement = this;
+        this._children.splice(idx, 0, newChild);
+        this._ensureNative();
+        __pulpRememberNativeElement__(newChild);
+        var __insertHint = (typeof __pulpElementWantsScrollView__ === "function" &&
+            __pulpElementWantsScrollView__(newChild)) ? "scroll" : "";
+        try {
+            __domAppend(this._id, newChild._id, newChild.tagName.toLowerCase(), __insertHint);
+        } catch (e) {
+            var rollbackIndex = this._children.indexOf(newChild);
+            if (rollbackIndex >= 0) this._children.splice(rollbackIndex, 1);
+            newChild._parentElement = previousParent;
+            if (previousParent && previousIndex >= 0)
+                previousParent._children.splice(previousIndex, 0, newChild);
+            throw e;
+        }
+        newChild._nativeCreated = true;
+        __invalidateStyleCache__(newChild);
+        if (newChild._textContent) setText(newChild._id, newChild._textContent);
+        // Same pre-mount attribute replay path as appendChild, including
+        // ARIA attributes.
+        if (typeof __replayMediaAttributes__ === "function") {
+            __replayMediaAttributes__(newChild);
+        }
+        if (typeof __replayAriaAttributes__ === "function") {
+            __replayAriaAttributes__(newChild);
+        }
+        // See appendChild for the SVG primitive replay rationale.
+        if (typeof __replaySvgRectAttributes__ === "function") {
+            __replaySvgRectAttributes__(newChild);
+        }
+        if (typeof __replaySvgLineAttributes__ === "function") {
+            __replaySvgLineAttributes__(newChild);
+        }
+        if (typeof __replaySvgCircleAttributes__ === "function") {
+            __replaySvgCircleAttributes__(newChild);
+        }
+        // See appendChild for the SvgPath replay rationale.
+        if (typeof __replaySvgPathAttributes__ === "function") {
+            __replaySvgPathAttributes__(newChild);
+        }
+        newChild.style._flushAll();
+        newChild._reapplyStylesheets();
+        __pulpRegisterAutoDomEvents__(newChild);
+        __pulpReplayNativeEventListeners__(newChild);
+        // Same mount-time focus pass as appendChild.
+        if (typeof __pulpApplyMountFocus__ === "function")
+            __pulpApplyMountFocus__(newChild);
+        return newChild;
+    };
+    Element.prototype.insertBefore.__pulp_dom_ops__ = true;
+
+    Element.prototype.replaceChild = function(newChild, oldChild) {
+        var idx = this._children.indexOf(oldChild);
+        if (idx < 0) return oldChild;
+        this.removeChild(oldChild);
+        this.appendChild(newChild);  // fragment-aware via appendChild above
+        return oldChild;
+    };
+    Element.prototype.replaceChild.__pulp_dom_ops__ = true;
+}
