@@ -1,0 +1,666 @@
+#pragma once
+
+/// @file motion.hpp
+/// Agent-first motion observability: sample view geometry, scroll
+/// state, and arbitrary scalar values at a chosen FPS, emit
+/// epsilon-bounded change-only events with Start/End burst framing,
+/// and route them to pluggable sinks (log lines and structured
+/// events). Off by default; activate with
+/// `Coordinator::set_tracing_enabled(true)`.
+
+#include <pulp/view/geometry.hpp>
+
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace pulp::view {
+
+class FrameClock;
+class ScrollView;
+class View;
+
+namespace motion {
+
+// ── Geometry taxonomy ────────────────────────────────────────────────
+
+enum class GeometrySource {
+    Layout,        ///< Yoga-computed bounds, ignoring paint-time transforms.
+    Presentation,  ///< After paint_all() composition; currently falls back to Layout.
+};
+
+enum class GeometrySpace {
+    ViewLocal,    ///< Origin at the target view's top-left, in its own frame.
+    ViewGlobal,   ///< Root-view coordinate space.
+    Window,       ///< Currently same as ViewGlobal; reserved for window origin.
+    Screen,       ///< Currently same as ViewGlobal; reserved for screen offset.
+};
+
+enum class GeometryProperty {
+    MinX, MinY, MaxX, MaxY,
+    MidX, MidY,
+    Width, Height,
+};
+
+// ── Scroll taxonomy ──────────────────────────────────────────────────
+//
+// Properties readable from a `pulp::view::ScrollView` — content offset,
+// visible (viewport) rect, content size, content insets, and the max
+// scrollable extent on each axis. ScrollView does not currently expose
+// per-edge content insets; the four Inset* properties always report 0.0
+// and remain on the enum so callers can wire them once insets land
+// without breaking the API surface.
+enum class ScrollProperty {
+    ContentOffsetX, ContentOffsetY,
+    VisibleRectMinX, VisibleRectMinY, VisibleRectWidth, VisibleRectHeight,
+    ContentSizeWidth, ContentSizeHeight,
+    InsetTop, InsetBottom, InsetLeft, InsetRight,
+    ScrollableMaxX, ScrollableMaxY,   // max(0, contentSize - viewport) per axis
+};
+
+// ── Trace options ────────────────────────────────────────────────────
+
+struct TraceOptions {
+    int fps = 15;
+};
+
+// ── Provenance envelope ───────────────────────────────────────────────
+//
+// Opaque metadata describing *where* a trace came from. Carried on
+// TraceStarted (trace-level) and on burst Start events (burst-level).
+// Animation surfaces (Tween / CSS / AnimatorSet / JS rAF / design-import)
+// can fill this envelope to make offline traces explainable.
+
+struct Provenance {
+    std::string source_kind;   ///< "tween" | "css-transition" | "animator-set"
+                               ///< | "rAF" | "design-import" | "user" | "publish"
+    std::string source_id;     ///< Free-form id, e.g. "Card.opacity tween" or
+                               ///< "figma:LevelMeter/Panel" or "import:claude:1234"
+    std::string source_file;   ///< Optional, e.g. __FILE__ at attach site
+    int source_line = 0;       ///< Optional, e.g. __LINE__ at attach site
+
+    bool is_set() const noexcept {
+        return !source_kind.empty() || !source_id.empty() ||
+               !source_file.empty() || source_line != 0;
+    }
+};
+
+// ── Sample event ─────────────────────────────────────────────────────
+//
+// Per-tick or per-publish event in a motion stream. Schema v2 carries
+// stable identifiers (trace_id / metric_id / burst_id) so fixtures can
+// be compared by identity instead of position — reordered identical
+// bursts no longer false-fail an `assert_matches`.
+
+struct SampleEvent {
+    enum class Kind {
+        TraceStarted,  ///< Emitted once per trace registration. Carries
+                       ///< the trace's provenance envelope.
+        Baseline,      ///< First sample of a metric.
+        Sample,        ///< Value sample within a change burst.
+        Start,         ///< Burst opened (value drifted off baseline / last
+                       ///< stable).
+        End,           ///< Burst closed (value stabilized). Carries deltas.
+        Input,         ///< Recorded `View::simulate_*` interaction.
+                       ///< Carries `input_kind` ("click" / "drag" / "hover"),
+                       ///< the target view's id() if any, and root-space
+                       ///< coordinates in `components`. Replayed by
+                       ///< `replay_inputs` against a fresh tree.
+    };
+
+    Kind kind = Kind::Baseline;
+    std::string view_name;
+    std::string metric_name;
+    double t_seconds = 0.0;                  ///< Monotonic FrameClock::time().
+    std::uint64_t frame = 0;                 ///< Monotonic FrameClock::frame().
+    int precision = 3;
+
+    // Stable identifiers (schema v2). Sampler-driven traces get a
+    // positive `trace_id` from `register_trace`; publishes use 0 to
+    // signal the publish channel. `metric_id` is the metric's index
+    // within its trace (or 0 for publish). `burst_id` increments at
+    // each Start within a given (trace_id, metric_id).
+    int trace_id = 0;
+    int metric_id = 0;
+    int burst_id = 0;
+
+    Provenance provenance;  ///< Populated on TraceStarted; empty otherwise.
+
+    std::vector<std::pair<std::string, double>> components;  ///< Sorted by name.
+    std::vector<std::pair<std::string, double>> deltas;      ///< End events only.
+
+    // ── Input fields (populated only when `kind == Input`) ───────────
+    //
+    // `input_kind` is one of `"click"`, `"drag"`, `"hover"`. `view_id`
+    // is the recorded target's `View::id()` (empty when the recorder
+    // captured an event that didn't land on an id-bearing view). The
+    // Root-space coordinates ride on `components`. Click and drag also
+    // carry `button`, `modifiers`, `pointer_id`, `pointer_type`, and
+    // `pressure`; hover remains coordinate-only:
+    //   - click: `{ "button": ..., "modifiers": ..., "pointer_id": ...,
+    //               "pointer_type": ..., "pressure": ..., "x": ..., "y": ... }`
+    //   - drag : `{ "button": ..., "end_x": ..., "end_y": ...,
+    //               "modifiers": ..., "pointer_id": ..., "pointer_type": ...,
+    //               "pressure": ..., "start_x": ..., "start_y": ...,
+    //               "steps": ... }`
+    //   - hover: `{ "x": ..., "y": ... }`
+    // (Sorted by name, same as every other event.) The optional name
+    // ride along with `view_name` set to "input" by convention so
+    // `format_line` and existing groupers don't trip on an empty view.
+    std::string input_kind;
+    std::string view_id;
+};
+
+/// Render the canonical `[PulpMotion][view][metric] ...` line for a sample event.
+std::string format_line(const SampleEvent& e);
+
+// ── Publish channel ──────────────────────────────────────────────────
+//
+// `publish_value()` is the entry point for any code that wants to make
+// its scalar / structured values observable without taking a
+// FrameClock sampler subscription. Typical callers are animation
+// primitives — a `Tween`, a CSS `TransitionSpec`, a JS rAF callback —
+// that already advance once per frame; calling publish at the same
+// tick site avoids the doubled-sampling cost.
+//
+// Routing:
+//   - When `Coordinator::tracing_enabled()` is false, publish is a
+//     no-op (cheap, branch-predictable; safe to leave in hot paths).
+//   - When `Coordinator::firehose()` is true, the published value fans
+//     out as a Sample event to every installed sink, with the same
+//     epsilon / Start/End burst semantics as sampler-driven traces.
+//   - When `firehose()` is false and no subscription is wired, publish
+//     is also a no-op.
+//
+// The publish channel is the underlying primitive for trace subscribers
+// and firehose-style diagnostics.
+
+struct PublishOptions {
+    int precision = 3;
+    double epsilon = 0.0001;
+    /// Optional Provenance envelope. When set, the publish channel stamps
+    /// each emitted event (Baseline / Start / Sample / End) with this
+    /// provenance so an offline reader can answer "what animation surface
+    /// drove this value?" Empty by default for backward compatibility.
+    Provenance provenance;
+};
+
+/// Single-component publish.
+void publish_value(std::string view_name,
+                   std::string metric_name,
+                   double value,
+                   PublishOptions opts = {});
+
+/// Multi-component publish (e.g., a 2D point or a geometry rect).
+/// Components are sorted by name before emission so log lines are stable.
+void publish_components(std::string view_name,
+                        std::string metric_name,
+                        std::vector<std::pair<std::string, double>> components,
+                        PublishOptions opts = {});
+
+// ── Ambient provenance ───────────────────────────────────────────────
+//
+// Some animation surfaces (JS rAF, design-import codegen) don't easily
+// thread a `PublishOptions{ .provenance = ... }` through every call site.
+// For those, the publish channel offers a process-wide "ambient"
+// provenance slot — `set_ambient_provenance(p)` is sticky until cleared
+// (or replaced). When a publish call carries an empty `opts.provenance`,
+// the coordinator stamps the ambient provenance instead. When both are
+// set, the explicit `opts.provenance` wins.
+//
+// Ambient state is intended for single-threaded scripted contexts (one
+// JS engine per bridge). Tests should call `clear_ambient_provenance()`
+// between scenarios so leftover state doesn't bleed across.
+void set_ambient_provenance(Provenance p);
+void clear_ambient_provenance();
+Provenance current_ambient_provenance();
+
+// ── Record / replay fixtures ─────────────────────────────────────────
+//
+// A fixture is the on-disk form of a motion stream — one JSONL event
+// per line, preceded by a header line carrying the schema version. The
+// format is deliberately stable so checked-in goldens survive long
+// after the recording session.
+//
+// Layered intent:
+//   - `make_fixture_sink(path)` is a Sink that writes events to disk
+//     as they're emitted. Plug it into the Coordinator's sink set to
+//     record everything an active trace produces.
+//   - `replay_fixture(path, sink)` re-emits a fixture's events to any
+//     sink without running the original UI. Lets analyzers /
+//     assertions work offline on a captured run.
+//   - `assert_matches(golden, captured, opts)` compares two fixtures
+//     and returns a structured diff agents can act on.
+//
+// Fixture schema v2 header:
+//   {"motion_fixture_version":2,
+//    "policy":"full|reduced|off",
+//    "duration_scale":1.0}
+//
+// `policy` / `duration_scale` are optional. When absent, the loader
+// defaults `policy` to `"full"` and `duration_scale` to `1.0` —
+// earlier v2 fixtures still load. When `make_fixture_sink` writes a fresh
+// fixture it snapshots `MotionPreferences::current()` /
+// `current_duration_scale()` at first event.
+
+constexpr int kFixtureSchemaVersion = 2;
+/// Sentinel for a default-constructed / unrecognised fixture header.
+/// `load_fixture_header()` returns a FixtureHeader with this version
+/// when the file is missing, empty, or its header fails to parse, so
+/// callers can distinguish "valid empty fixture" from "load failed".
+constexpr int kInvalidFixtureSchemaVersion = 0;
+
+/// Header metadata recorded once at the top of a fixture file.
+struct FixtureHeader {
+    int version = kInvalidFixtureSchemaVersion;
+    /// Policy in effect when the fixture was recorded. `"full"` /
+    /// `"reduced"` / `"off"`. Stored as a string so loaders without
+    /// `motion_preferences.hpp` can still compare.
+    std::string policy = "full";
+    /// Duration scale in effect when the fixture was recorded.
+    double duration_scale = 1.0;
+};
+
+// (`make_fixture_sink` and `replay_fixture` are declared below
+// alongside the other Sink helpers so the `using Sink = …` typedef is
+// visible at their declaration site.)
+
+/// Load a fixture file into memory. Returns events in file order.
+/// Empty vector on missing / unreadable / unknown-version files.
+std::vector<SampleEvent> load_fixture(const std::string& path);
+
+/// Load a fixture's header (schema version + policy + duration_scale).
+/// Returns a default-constructed FixtureHeader on parse failure.
+FixtureHeader load_fixture_header(const std::string& path);
+
+/// Comparison result from `assert_matches`. Empty `differences` means
+/// the captured run matched the golden within tolerances.
+struct FixtureDiff {
+    struct Item {
+        std::string kind;      ///< "missing-event", "extra-event",
+                               ///< "component-drift", "timing-drift"
+        std::string view_name;
+        std::string metric_name;
+        std::string component_name;
+        std::string detail;
+        double observed = 0.0;
+        double expected = 0.0;
+    };
+    std::vector<Item> differences;
+    bool matches() const noexcept { return differences.empty(); }
+};
+
+struct FixtureMatchOptions {
+    double component_epsilon = 0.05;
+    double timing_epsilon_seconds = 0.05;
+    bool require_same_event_count = true;
+    /// When true (default), `assert_matches_headers` will flag a
+    /// `"policy-mismatch"` diff item if the two fixtures recorded
+    /// different MotionPolicy values or differ in `duration_scale`
+    /// beyond `duration_scale_epsilon`. The event-only overload
+    /// (no headers passed) skips this check.
+    bool require_matching_policy = true;
+    double duration_scale_epsilon = 1e-6;
+};
+
+FixtureDiff assert_matches(const std::vector<SampleEvent>& golden,
+                           const std::vector<SampleEvent>& captured,
+                           FixtureMatchOptions opts = {});
+
+/// Overload that also compares fixture headers. Adds a
+/// `"policy-mismatch"` Item to the diff when policy / duration_scale
+/// differ and `opts.require_matching_policy` is true. Otherwise
+/// behaves identically to the event-only overload.
+FixtureDiff assert_matches(const FixtureHeader& golden_header,
+                           const std::vector<SampleEvent>& golden,
+                           const FixtureHeader& captured_header,
+                           const std::vector<SampleEvent>& captured,
+                           FixtureMatchOptions opts = {});
+
+// ── Assertion helpers ────────────────────────────────────────────────
+//
+// Each helper operates on a flat sequence of scalars extracted from
+// the captured events. Use `extract_scalar(events, view, metric, comp)`
+// to pull the time-ordered series, then pass it to the assertion.
+// Helpers favor explicit semantics over heuristics — `is_monotonic` is
+// strictly monotonic (with epsilon), `settling_time_seconds` is "time
+// from first change to final stable value", etc.
+
+/// Flatten a fixture's events into a (time, value) series for one
+/// (view, metric, component) triple. Includes Baseline + Sample only;
+/// Start / End markers are skipped.
+struct ScalarSample { double t = 0.0; double value = 0.0; };
+std::vector<ScalarSample> extract_scalar(
+    const std::vector<SampleEvent>& events,
+    std::string_view view_name,
+    std::string_view metric_name,
+    std::string_view component_name = "value");
+
+/// Strict monotonicity check with epsilon. Direction inferred from the
+/// first non-zero change. Returns false if any subsequent change
+/// reverses direction beyond epsilon.
+bool is_monotonic(const std::vector<ScalarSample>& samples,
+                  double epsilon = 1e-6);
+
+/// Time from first change above epsilon to last change above epsilon.
+/// 0.0 if fewer than 2 changes.
+double settling_time_seconds(const std::vector<ScalarSample>& samples,
+                             double epsilon = 1e-6);
+
+/// Overshoot relative to the final value: max excursion beyond the
+/// final value's direction from the first stable region. Reported as a
+/// fraction of total displacement (0.0 = clean, 0.1 = 10% overshoot).
+double overshoot(const std::vector<ScalarSample>& samples,
+                 double epsilon = 1e-6);
+
+/// Time from t0 to the first change above epsilon.
+double start_delay_seconds(const std::vector<ScalarSample>& samples,
+                           double epsilon = 1e-6);
+
+/// Standard deviation of inter-sample intervals — proxy for frame-pacing
+/// jitter when the sampler is run at a fixed FPS.
+double frame_jitter_seconds(const std::vector<ScalarSample>& samples);
+
+/// Returns the last sample's value, or NaN when empty.
+double final_value(const std::vector<ScalarSample>& samples);
+
+/// Local-step outlier ratio. Given a sample series, computes for each
+/// sample the ratio of its step magnitude to the median step magnitude
+/// in a sliding window of `window_radius` neighbors on each side. Returns
+/// the maximum ratio observed. A value of 1.0 means every step is close
+/// to the local median (smooth); 5.0 means at least one step was 5x
+/// larger than its neighbors (a jump). Useful as a SEPARATE assertion
+/// from `is_monotonic` / `overshoot` — does NOT conflate continuity,
+/// timing, or direction into one number.
+///
+/// Returns `0.0` when `samples.size() < 2 * window_radius + 1`. The local
+/// median excludes the candidate step itself so a one-off jump cannot
+/// dominate its own reference window.
+double local_step_outlier_ratio(
+    const std::vector<ScalarSample>& samples,
+    std::size_t window_radius = 3,
+    double epsilon = 1e-9);
+
+// ── Sinks ────────────────────────────────────────────────────────────
+
+using Sink = std::function<void(const SampleEvent&)>;
+
+/// Sink that writes one log line per event via `pulp::runtime::log_debug`.
+Sink make_log_sink();
+
+/// Sink that appends events to a caller-owned buffer. For tests and
+/// in-process consumers; the buffer pointer must outlive the sink.
+Sink make_buffer_sink(std::vector<SampleEvent>* buffer);
+
+/// Sink that appends each `SampleEvent` as a JSONL line to `path`.
+/// Opens the file (truncates) on first event. Subsequent events
+/// append. Closes implicitly when the returned Sink is dropped.
+/// Pair with `Coordinator::add_sink(make_fixture_sink(path))`.
+Sink make_fixture_sink(std::string path);
+
+/// Read a fixture file from disk and dispatch each event to `sink`.
+/// Returns the number of events replayed, or `-1` on parse error.
+int replay_fixture(const std::string& path, const Sink& sink);
+
+// ── Input recording / replay ─────────────────────────────────────────
+//
+// `View::simulate_click` / `simulate_drag` / `simulate_hover` can feed the same
+// fixture stream that carries motion samples. Recording is opt-in: nothing
+// changes about simulate_* until a caller installs a recorder, after which every
+// simulate_* dispatch emits an `Input` `SampleEvent` to the Coordinator's sinks
+// (so the already-installed `make_fixture_sink(path)` captures inputs alongside
+// samples). Replay reads the fixture, walks the view tree by `id()` to reattach
+// each input to a live target, and re-invokes the matching `View::simulate_*`.
+// The motion fixture that emerges from the replay — when paired with the same
+// animation primitives — matches the originally-recorded one.
+//
+// Layered intent:
+//   - `make_input_recorder(path)` is a one-call companion to
+//     `make_fixture_sink(path)`: it installs a fixture sink AND turns
+//     on simulate_* recording, returning a handle whose destructor
+//     turns recording back off. Off by default everywhere else.
+//   - `replay_inputs(path, root_view, frame_clock)` reads the fixture
+//     and re-dispatches each `Input` event by `view_id` against
+//     `root_view`. The `frame_clock` is advanced between inputs to
+//     reproduce the original timing (FrameClock-relative).
+
+/// Recording handle returned by `make_input_recorder`. RAII: destruction
+/// removes the installed sink and turns input recording back off.
+class InputRecorder {
+public:
+    InputRecorder() noexcept = default;
+    InputRecorder(InputRecorder&&) noexcept;
+    InputRecorder& operator=(InputRecorder&&) noexcept;
+    InputRecorder(const InputRecorder&) = delete;
+    InputRecorder& operator=(const InputRecorder&) = delete;
+    ~InputRecorder();
+
+    /// Stop recording inputs and close the fixture sink. Idempotent.
+    void stop();
+
+    bool is_recording() const noexcept { return sink_id_ != 0; }
+
+private:
+    friend InputRecorder make_input_recorder(std::string path);
+    explicit InputRecorder(int sink_id) noexcept : sink_id_(sink_id) {}
+    int sink_id_ = 0;
+};
+
+/// Install a fixture sink at `path` and enable simulate_* recording.
+/// Returns an `InputRecorder` whose destructor stops both the sink and
+/// the recording. Off by default. Repeated calls install independent
+/// recorders; each gets its own sink id.
+InputRecorder make_input_recorder(std::string path);
+
+/// Read a fixture file, find each `Input` event, resolve `view_id` from
+/// `root_view` for diagnostics, and re-dispatch the matching
+/// `View::simulate_*` through `root_view`. Between inputs the
+/// frame_clock is advanced by the delta between recorded
+/// `t_seconds`. Click and drag events also restore the optional pointer
+/// metadata components (`pointer_type`, `pressure`, `modifiers`, `button`,
+/// `pointer_id`). Coordinate-only v2 fixtures retain the historical synthetic
+/// mouse defaults. Invalid metadata fields fall back independently to those
+/// defaults. Returns the number of inputs replayed, or `-1` on parse error.
+int replay_inputs(const std::string& path,
+                  View& root_view,
+                  FrameClock& frame_clock);
+
+/// Process-wide entry point called by `View::simulate_*` when input
+/// recording is active. Public so the View free functions can reach
+/// it without a friend relationship; callers should prefer the
+/// `View::simulate_*` API.
+void record_simulated_input(const std::string& input_kind,
+                            const std::string& view_id,
+                            std::vector<std::pair<std::string, double>> coords);
+
+/// True while at least one `InputRecorder` is alive. Off by default;
+/// `View::simulate_*` gates on this so the non-recording cost stays a
+/// single load + branch.
+bool input_recording_enabled() noexcept;
+
+// ── Forward declarations ─────────────────────────────────────────────
+
+class Coordinator;
+class TraceBuilder;
+
+// ── Trace handle (RAII) ──────────────────────────────────────────────
+
+class TraceHandle {
+public:
+    TraceHandle() noexcept = default;
+    TraceHandle(TraceHandle&& other) noexcept;
+    TraceHandle& operator=(TraceHandle&& other) noexcept;
+    TraceHandle(const TraceHandle&) = delete;
+    TraceHandle& operator=(const TraceHandle&) = delete;
+    ~TraceHandle();
+
+    /// Remove the trace from its coordinator. Idempotent.
+    void detach();
+
+    bool is_attached() const noexcept { return coord_ != nullptr; }
+    int id() const noexcept { return id_; }
+
+private:
+    friend class Coordinator;
+    friend class TraceBuilder;
+    TraceHandle(int id, Coordinator* coord) noexcept
+        : id_(id), coord_(coord) {}
+
+    int id_ = 0;
+    Coordinator* coord_ = nullptr;
+};
+
+// ── Trace builder DSL ────────────────────────────────────────────────
+
+class TraceBuilder {
+public:
+    using ValueSampler = std::function<double()>;
+    using Component = std::pair<std::string, ValueSampler>;
+
+    /// Single-scalar metric. The sampler is invoked once per sampler tick.
+    TraceBuilder& value(std::string name, ValueSampler sampler,
+                        int precision = 3, double epsilon = 0.0001);
+
+    /// Multi-component metric (e.g., a 2D point). Components are sampled
+    /// together and emitted as one log line.
+    TraceBuilder& multi(std::string name, std::vector<Component> components,
+                        int precision = 3, double epsilon = 0.0001);
+
+    /// Geometry metric over a target view. `Presentation` currently falls back
+    /// to `Layout`.
+    TraceBuilder& geometry(std::string name,
+                           pulp::view::View& target,
+                           std::vector<GeometryProperty> props
+                               = {GeometryProperty::MinX, GeometryProperty::MinY,
+                                  GeometryProperty::Width, GeometryProperty::Height},
+                           GeometrySpace space = GeometrySpace::Window,
+                           GeometrySource source = GeometrySource::Layout,
+                           int precision = 2, double epsilon = 0.1);
+
+    /// Scroll-geometry metric over a `ScrollView`. Emits the requested
+    /// `ScrollProperty` set as a multi-component sample using camelCase
+    /// component names (`"contentOffsetX"`, `"visibleRectMinY"`, …) so
+    /// fixture diffs read naturally next to `geometry()` traces. Passing
+    /// an empty `props` list defaults to the most common 4 properties
+    /// (`ContentOffsetX`, `ContentOffsetY`, `VisibleRectMinY`,
+    /// `VisibleRectHeight`).
+    TraceBuilder& scroll_geometry(
+        std::string name,
+        pulp::view::ScrollView& target,
+        std::vector<ScrollProperty> props = {
+            ScrollProperty::ContentOffsetX, ScrollProperty::ContentOffsetY,
+            ScrollProperty::VisibleRectMinY, ScrollProperty::VisibleRectHeight,
+        },
+        int precision = 2, double epsilon = 0.1);
+
+    /// Attach a provenance envelope to the trace. Emitted once on
+    /// the trace's `TraceStarted` event.
+    TraceBuilder& with_provenance(Provenance p);
+
+    /// Register the trace with the coordinator and return an owning handle.
+    TraceHandle attach();
+
+    /// Internal spec (PIMPL-style). Public so Coordinator can hold a
+    /// shared_ptr<Spec> in its public-API signature; clients should not
+    /// construct or inspect it directly.
+    struct Spec;
+
+private:
+    friend class Coordinator;
+    TraceBuilder(Coordinator* coord, std::string view_name, TraceOptions opts);
+
+    std::shared_ptr<Spec> spec_;
+    Coordinator* coord_ = nullptr;
+};
+
+// ── Coordinator ──────────────────────────────────────────────────────
+
+/// Process-wide singleton that owns one FrameClock subscription, holds
+/// the active trace set, and dispatches sample events to registered
+/// sinks. Off by default; call `set_tracing_enabled(true)` to start
+/// emitting events.
+class Coordinator {
+public:
+    /// Process-wide instance. Bound to a FrameClock via `bind()`.
+    static Coordinator& instance();
+
+    /// Bind the coordinator's single tick subscription to a FrameClock.
+    /// Replaces any prior binding.
+    void bind(pulp::view::FrameClock& clock);
+
+    /// Drop the FrameClock subscription. No effect if not bound.
+    void unbind();
+
+    bool is_bound() const noexcept;
+
+    /// Add a sink and return its id (for later removal).
+    int add_sink(Sink sink);
+    void remove_sink(int sink_id);
+    void clear_sinks();
+
+    /// Convenience: add the default `make_log_sink()` and return its id.
+    int install_default_log_sink();
+
+    /// Global tracing toggle. Off by default. When off, `on_tick` is a no-op.
+    void set_tracing_enabled(bool on);
+    bool tracing_enabled() const noexcept;
+
+    /// Filter-scope firehose toggle. Stored and exposed for diagnostics that
+    /// want publish-channel events without explicit metric subscriptions.
+    void set_firehose(bool on);
+    bool firehose() const noexcept;
+
+    /// Start building a trace.
+    TraceBuilder trace(std::string view_name, TraceOptions opts = {});
+
+    /// Remove a trace by id (called automatically by TraceHandle destruction).
+    void detach(int trace_id);
+
+    /// Reset all state (binding, sinks, traces, counters). For tests.
+    void reset();
+
+    std::size_t active_trace_count() const noexcept;
+
+    /// Cumulative count of SampleEvents dispatched since `reset()`. For tests.
+    std::size_t emitted_event_count() const noexcept;
+
+    // ── Publish-channel internals ─────────────────────────────────────
+    /// Called by `publish_value` / `publish_components`. Public so the
+    /// free functions can reach it without becoming friends; callers
+    /// should prefer the `publish_*` free functions for forward
+    /// compatibility.
+    void publish_internal(std::string view_name,
+                          std::string metric_name,
+                          std::vector<std::pair<std::string, double>> components,
+                          PublishOptions opts);
+
+    // ── Ambient provenance internals ──────────────────────────────────
+    /// Called by `set_ambient_provenance` / `clear_ambient_provenance`.
+    /// Callers should prefer the free functions for forward compatibility.
+    void set_ambient_provenance_internal(Provenance p);
+    Provenance current_ambient_provenance_internal() const;
+
+    // ── Input recording dispatch ──────────────────────────────────────
+    /// Stamp `e` with the bound FrameClock's `t`/`frame` and dispatch
+    /// it to every installed sink. Called by `record_simulated_input`.
+    void dispatch_input_event(SampleEvent e);
+
+private:
+    Coordinator();
+    ~Coordinator();
+    Coordinator(const Coordinator&) = delete;
+    Coordinator& operator=(const Coordinator&) = delete;
+
+    void on_tick(float dt);
+    int register_trace(std::shared_ptr<TraceBuilder::Spec> spec);
+    friend class TraceBuilder;
+
+    struct State;
+    std::unique_ptr<State> state_;
+};
+
+} // namespace motion
+} // namespace pulp::view

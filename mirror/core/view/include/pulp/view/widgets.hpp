@@ -1,0 +1,2714 @@
+#pragma once
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <optional>
+#include <pulp/canvas/attributed_string.hpp>
+#include <pulp/canvas/text_shaper.hpp> // canvas::ShapedLayout for Label's shaped-layout cache
+#include <pulp/view/accessibility.hpp>
+#include <pulp/view/animation.hpp>
+#include <pulp/view/inspector_facts.hpp>
+#include <pulp/view/data_display.hpp>
+#include <pulp/view/caret.hpp>
+#include <pulp/view/custom_shader_host.hpp>
+#include <pulp/view/frame_clock.hpp>
+#include <pulp/view/hit_metrics.hpp>
+#include <pulp/view/selectable_text.hpp>
+#include <pulp/view/slider_core.hpp>
+#include <pulp/view/sprite_strip.hpp>
+#include <pulp/view/value_source.hpp>
+#include <pulp/view/view.hpp>
+#include <pulp/view/widget_painter.hpp>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace pulp::view {
+
+class TextEditor;   // pulp/view/text_editor.hpp — the Label's inline edit field
+
+// ── Label ────────────────────────────────────────────────────────────────────
+// Static or dynamic text display
+
+/// Text alignment for Label.
+/// `auto_` resolves at paint time to left (LTR) or right (RTL);
+/// pulp doesn't model RTL yet so `auto_` currently degrades to
+/// `left`. `justify` wires through to the canvas `TextAlign::justify`
+/// enum value; SkParagraph kJustify rendering lands in a follow-up —
+/// existing canvas backends treat it as `left` until then. Both values
+/// are claimed in the rn/css catalog (Figma exports + Tailwind classes
+/// emit `auto` and `justify` routinely).
+/// `match_parent` resolves at paint time by
+/// walking the View parent chain (via `inheritable_text_align()`) and
+/// adopting the first ancestor's resolved value. If no ancestor set
+/// one, falls back to `left` (the CSS spec default for `text-align`).
+/// Symmetric with `auto_` in that the resolution is paint-time, not
+/// setter-time — matches CSS `match-parent` semantics which inherit
+/// from the parent's *computed* (not specified) value.
+enum class LabelAlign { left, center, right, auto_, justify, match_parent };
+
+class Label : public View, public SelectableText {
+  public:
+    Label() { set_access_role(AccessRole::label); }
+    explicit Label(std::string text) : text_(std::move(text)) {
+        set_access_role(AccessRole::label);
+        set_derived_access_label(text_);
+    }
+
+    void set_text(std::string text) {
+        if (text == text_) return;
+        // A horizontal, single-line Label whose laid-out box does not move
+        // when its copy changes cannot move its siblings either, so it does
+        // not need a layout pass. Live readouts update this kind of Label on
+        // every pointer sample; re-running Yoga over the whole imported tree
+        // per sample is pure work and can consume the entire input budget.
+        //
+        // Keep the conservative path for intrinsic-width, multiline,
+        // vertical, attributed, and captured-wrap Labels. Their text can
+        // change measured geometry, so they must still invalidate layout.
+        const auto& style = flex();
+        const bool has_explicit_width =
+            style.preferred_width > 0.0f ||
+            (style.dim_width.unit != DimensionUnit::auto_ &&
+             style.dim_width.value > 0.0f);
+        const bool has_explicit_height =
+            style.preferred_height > 0.0f ||
+            (style.dim_height.unit != DimensionUnit::auto_ &&
+             style.dim_height.value > 0.0f);
+        const bool horizontal =
+            text_direction_ != canvas::TextDirection::top_to_bottom &&
+            text_direction_ != canvas::TextDirection::bottom_to_top;
+        const bool single_line_simple =
+            horizontal && !soft_wraps() && !captured_wrap_fallback_ && !has_attributed_;
+        // Baseline alignment reads this Label's ASCENT, not its height, to
+        // place its siblings: under YGAlignBaseline a row's cross-axis
+        // positions derive from the max baseline of the participating items.
+        // Ascent and line height are independent maxes over the faces the
+        // text resolves (TextShaper::prepare takes max of the base font box
+        // and the shaped box per metric), so new copy can hold the height
+        // constant while moving the ascent -- and then a skipped
+        // invalidate_layout() would leave every sibling stale. An unchanged
+        // height is only a sufficient proof of "nothing can move" when this
+        // Label is not a baseline participant, so decline the fast path when
+        // it is. `align_self` overrides the parent's `align_items`, and
+        // `auto_` means inherit, so both have to be consulted.
+        const View* flex_parent = parent();
+        const bool baseline_aligned =
+            flex().align_self == FlexAlign::baseline ||
+            (flex().align_self == FlexAlign::auto_ && flex_parent != nullptr &&
+             flex_parent->flex().align_items == FlexAlign::baseline);
+        // An explicit width pins the horizontal axis outright. The vertical
+        // axis is pinned either by an explicit height, or -- for a single-line
+        // Label -- by measuring it: a single-line height is one line box, so
+        // it only moves when the new copy resolves a different font (fallback
+        // to a taller family) or a different inherited metric. Probing costs
+        // one shaper prepare() on a short string, which paint() is about to
+        // do anyway and which the measure memo caches; invalidate_layout()
+        // costs a Yoga pass over the whole tree. Probe only when it can pay
+        // off -- an intrinsic-width Label must reflow regardless.
+        const bool probe_height = has_explicit_width && single_line_simple &&
+                                  !has_explicit_height && !baseline_aligned;
+        const float height_before = probe_height ? intrinsic_height() : 0.0f;
+        // The ink a fixed-box, single-line Label paints can run past its box
+        // when the copy is wider than the box; measured before the copy
+        // changes so the repaint below covers the old text's ink too.
+        const float ink_before =
+            has_explicit_width && single_line_simple ? intrinsic_width() : 0.0f;
+        text_ = std::move(text);
+        // A captured browser line box describes ONE string. Once the copy
+        // diverges from it the Label paints natively, and it must keep doing
+        // so even when a later value equals the captured string again: a live
+        // readout that flipped between the captured basis and native placement
+        // would visibly jump every time its value passed through the design's
+        // original copy.
+        // The boxes themselves stay: the responsive reflow still reads their
+        // line count and wrap intent, and the line-break accounting still
+        // reports a reflow rather than an uncached shape. Only the basis is
+        // retired, so no later value can resurrect it.
+        bool captured_basis_dropped = false;
+        if (!cached_line_boxes_.empty() && !cached_line_basis_retired_ &&
+            apply_text_transform(text_) != cached_line_basis_text_) {
+            cached_line_basis_retired_ = true;
+            shaped_cache_valid_ = false;
+            captured_basis_dropped = true;
+        }
+        // The text IS the accessible name for a label — the two-arg ctor set it
+        // and set_text() did not, so every Label built by the JS bridge
+        // (<span>, <p>, <label>) or by set_text() carried an empty name. It is
+        // the DERIVED name: an author-set aria-label wins over content, and
+        // react-reconciler rewrites textContent on every re-render.
+        set_derived_access_label(text_);
+        // A plain set_text() supersedes any per-range styled runs from a
+        // prior set_attributed_string(): the old spans index into the OLD
+        // string and are stale. Drop them so paint() takes the single-style
+        // path for the new text.
+        has_attributed_ = false;
+        // The Yoga measure callback (yoga_measure ->
+        // Label::intrinsic_width / measured_height) re-runs TextShaper::prepare
+        // keyed on the CURRENT text_, so a text change re-shapes correctly —
+        // but only if a re-layout is actually triggered. Mark this Label's
+        // layout dirty here so the new copy re-measures + reflows; without it
+        // the laid-out width stays stale at the old text's advance. The
+        // PreText-style shaper cache is keyed by (text, family, size), so the
+        // new text simply hits a different cache entry — no algorithm change,
+        // just cache-correct re-measurement.
+        const bool text_geometry_is_fixed = !captured_basis_dropped && has_explicit_width &&
+                                            single_line_simple &&
+                                            ((has_explicit_height && !baseline_aligned) ||
+                                             (probe_height && intrinsic_height() == height_before));
+        if (!text_geometry_is_fixed) invalidate_layout();
+        // selectable_text() already exposes the new source bytes, so geometry
+        // from the previous paint can no longer describe it honestly. Keep
+        // the capability unmeasured until the repaint records the new run.
+        selection_layout_ = {};
+        selection_layout_pending_ = {};
+        if (!text_geometry_is_fixed) {
+            request_repaint();
+            return;
+        }
+        // Nothing moved: repaint this Label's box, widened by however far
+        // the old or new copy overhangs it (either side: the alignment is
+        // the paint's business), plus room for anti-aliasing. A live readout
+        // or a modulated value label then repaints itself, not the editor.
+        const float box_w = local_bounds().width;
+        const float overhang = std::max(0.0f, std::max(ink_before, intrinsic_width()) - box_w);
+        const float halo = 4.0f;
+        request_repaint(Rect{-overhang - halo, -halo, box_w + 2.0f * (overhang + halo),
+                             local_bounds().height + 2.0f * halo});
+    }
+    const std::string& text() const { return text_; }
+
+    // Per-range styled text (design-import mixed text). Every line shape and
+    // paint path retains the spans; captured lines and responsive reflow share
+    // the same attributed renderer.
+    void set_attributed_string(canvas::AttributedString a) {
+        attributed_runs_ = std::move(a);
+        has_attributed_ = !attributed_runs_.spans().empty();
+        // A run mutation changes advances independently of the Label-wide
+        // typography captured in set_cached_line_boxes(). Callers that want to
+        // install both must set the runs first and the captured basis second.
+        cached_line_boxes_.clear();
+        shaped_cache_valid_ = false;
+        invalidate_layout();
+    }
+    void clear_attributed_string() {
+        has_attributed_ = false;
+        cached_line_boxes_.clear();
+        shaped_cache_valid_ = false;
+        invalidate_layout();
+    }
+    bool has_attributed_string() const { return has_attributed_; }
+    std::size_t attributed_span_count() const { return attributed_runs_.spans().size(); }
+
+    // Each setter marks the corresponding has_own_* flag so
+    // paint() can distinguish "default value" from "explicitly set" and
+    // fall through to inheritable_*() for unset properties.
+    // Typography that feeds the shaper's cache key — size, family, weight,
+    // style, letter spacing, line height, wrap mode, case transform — decides
+    // this Label's measured box, so changing it is a geometry mutation and has
+    // to advance the layout generation. Both layout gates
+    // (View::layout_children_if_needed and WidgetBridge::ensure_layout) elide
+    // the pass while the applied generation matches the tree's, so a setter
+    // that stays silent here leaves the Label painting at the box its PREVIOUS
+    // typography solved to, and leaves every ancestor sized for it.
+    //
+    // Each setter is guarded on an actual change. A materialized React commit
+    // replays an element's complete style object when only paint state moved;
+    // dirtying the tree for an identical write would make every following
+    // geometry read pay for a full Yoga pass, which is the same contract
+    // flex_styles_equal keeps on the flex path.
+    void set_font_size(float size) {
+        if (has_own_font_size_ && font_size_ == size)
+            return;
+        font_size_ = size;
+        has_own_font_size_ = true;
+        invalidate_layout();
+    }
+    float font_size() const { return font_size_; }
+    bool has_own_font_size() const { return has_own_font_size_; }
+
+    /// CSS font-family string (e.g. "Inter", "JetBrains Mono"). Empty means
+    /// the widget falls back to the default theme family ("Inter").
+    void set_font_family(std::string family) {
+        if (font_family_ == family)
+            return;
+        font_family_ = std::move(family);
+        invalidate_layout();
+    }
+    const std::string& font_family() const { return font_family_; }
+
+    // 100-900, 400=normal, 700=bold
+    void set_font_weight(int weight) {
+        if (has_own_font_weight_ && font_weight_ == weight)
+            return;
+        font_weight_ = weight;
+        has_own_font_weight_ = true;
+        invalidate_layout();
+    }
+    int font_weight() const { return font_weight_; }
+    bool has_own_font_weight() const { return has_own_font_weight_; }
+
+    // 0=normal, 1=italic, 2=oblique
+    void set_font_style(int style) {
+        if (font_style_ == style)
+            return;
+        font_style_ = style;
+        invalidate_layout();
+    }
+    int font_style() const { return font_style_; }
+
+    void set_letter_spacing(float sp) {
+        if (has_own_letter_spacing_ && letter_spacing_ == sp)
+            return;
+        letter_spacing_ = sp;
+        has_own_letter_spacing_ = true;
+        invalidate_layout();
+    }
+    float letter_spacing() const { return letter_spacing_; }
+    bool has_own_letter_spacing() const { return has_own_letter_spacing_; }
+
+    void set_line_height(float lh) {
+        if (line_height_ == lh)
+            return;
+        line_height_ = lh;
+        invalidate_layout();
+    }
+    float line_height() const { return line_height_; }
+
+    void set_text_align(LabelAlign align) { text_align_ = align; has_own_text_align_ = true; }
+    LabelAlign text_align() const { return text_align_; }
+    bool has_own_text_align() const { return has_own_text_align_; }
+
+    // Explicit text color override on the Label itself. When
+    // set, overrides any inherited typography color and the theme token.
+    void set_text_color(canvas::Color c) { text_color_ = c; has_own_text_color_ = true; }
+    bool has_own_text_color() const { return has_own_text_color_; }
+    canvas::Color text_color() const { return text_color_; }
+
+    void set_multi_line(bool ml) {
+        if (multi_line_ == ml)
+            return;
+        multi_line_ = ml;
+        invalidate_layout();
+    }
+    bool multi_line() const { return multi_line_; }
+
+    /// Whether this Label soft-wraps once CSS `white-space` inheritance is
+    /// applied: it is multi-line AND no ancestor's `white-space: nowrap`
+    /// reaches it. `white-space` is an inherited property, so the text inside
+    /// `<div style="white-space: nowrap"><span>…</span></div>` stays on one
+    /// line. A Label whose own mode is `normal` -- the CSS initial value, which
+    /// the React and web-compat importers stamp on every text element they
+    /// create -- defers to its nearest ancestor that set a different mode:
+    /// `nowrap` there means one line here. A Label that set `nowrap`, `pre`,
+    /// `pre-wrap`, `pre-line` or `break-spaces` itself keeps its own mode.
+    /// The native tree cannot tell the importers' stamped `normal` from an
+    /// authored one, so an authored `normal` under a `nowrap` ancestor also
+    /// stays on one line.
+    bool soft_wraps() const { return multi_line_ && !inherits_nowrap(); }
+    /// True when this Label's own mode is `normal` and its nearest ancestor
+    /// with a non-`normal` mode is `nowrap`.
+    bool inherits_nowrap() const;
+
+    /// CSS `line-clamp` / `-webkit-line-clamp`. Maximum number of visible
+    /// text lines for a multi-line label; 0 disables clamping.
+    /// When set on a `multi_line_` Label, paint() emits at most N lines
+    /// (newline- or wrap-broken) and appends the U+2026 ellipsis to the
+    /// trailing visible line if any source lines were dropped. Matches the
+    /// CSS spec's "block-axis line clamp" behavior at the keyword level
+    /// (no `none` token — set 0 to clear). Wiring is shared between
+    /// `line-clamp` and `-webkit-line-clamp` in the JS shim and the
+    /// @pulp/react prop-applier; both keys funnel through the same case.
+    void set_line_clamp(int n) { line_clamp_ = (n < 0) ? 0 : n; }
+    int line_clamp() const { return line_clamp_; }
+
+    /// CSS text-transform: uppercase, lowercase, capitalize, none
+    enum class TextTransform { none, uppercase, lowercase, capitalize };
+    void set_text_transform(TextTransform t) {
+        if (text_transform_ == t)
+            return;
+        text_transform_ = t;
+        invalidate_layout();
+    }
+    TextTransform text_transform() const { return text_transform_; }
+
+    /// CSS text-decoration: none, underline, line-through, overline
+    enum class TextDecoration { none, underline, line_through, overline };
+    void set_text_decoration(TextDecoration d) { text_decoration_ = d; }
+    TextDecoration text_decoration() const { return text_decoration_; }
+    void set_text_decoration_color(canvas::Color c) { decoration_color_ = c; has_decoration_color_ = true; }
+    canvas::Color text_decoration_color() const { return decoration_color_; }
+    bool has_text_decoration_color() const { return has_decoration_color_; }
+
+    /// CSS text-decoration-style: solid, double, dotted, dashed, wavy.
+    /// Accepted via the JS CSS shim and the bridge so authors can express
+    /// the per-style longhand. Today the paint path always renders as
+    /// `solid`; the value is stored so future paint logic can honor it
+    /// without an API break (matches the spec's optional fallback to solid
+    /// for renderers that don't implement non-solid styles).
+    enum class TextDecorationStyle { solid, double_, dotted, dashed, wavy };
+    void set_text_decoration_style(TextDecorationStyle s) { text_decoration_style_ = s; }
+    TextDecorationStyle text_decoration_style() const { return text_decoration_style_; }
+
+    void paint(canvas::Canvas& canvas) override;
+
+    /// Layout slot for this Label's own text when it also has element
+    /// children. CSS wraps a container's bare text in an anonymous inline box
+    /// that takes its own place on the flex line; this rect is that box, in
+    /// the Label's local coordinates. A negative width means there is no
+    /// anonymous box and the text uses the Label's whole content area — the
+    /// ordinary childless case.
+    Rect own_text_box() const { return own_text_box_; }
+    bool has_own_text_box() const { return own_text_box_.width >= 0.0f; }
+    void set_own_text_box(Rect box) { own_text_box_ = box; }
+    void clear_own_text_box() { own_text_box_ = {0.0f, 0.0f, -1.0f, -1.0f}; }
+
+    /// Intrinsic width — measured text width.
+    /// Uses TextShaper (HarfBuzz/SkParagraph) when available, otherwise
+    /// falls back to the same character-width estimate the base Canvas
+    /// uses. This lets Yoga reserve enough horizontal space for the full
+    /// label content instead of clipping to a parent-inherited width.
+    /// Applies the same text-transform as paint() so measurement matches
+    /// what is actually drawn.
+    float intrinsic_width() const override;
+
+    /// Widest this label can be if nothing soft-wrapped — CSS max-content.
+    ///
+    /// A soft-wrapping label reports `intrinsic_width() == 0` so its parent's
+    /// width, not the single-line advance, decides where lines break. That
+    /// leaves an auto-width ANCESTOR with no content measurement at all, so
+    /// the shrink-to-fit pass has nothing to hug and the ancestor stretches to
+    /// fill the space it was offered. This reports the unwrapped width for
+    /// exactly that pass.
+    float max_content_width() const;
+
+    /// Intrinsic height based on font size and line height.
+    /// Walks the inheritance cascade so an unset font_size
+    /// picks up an ancestor View's setInheritableFontSize value.
+    /// Counts visible explicit `\n`-delimited lines for multi_line labels,
+    /// ignoring a trailing newline and honoring `line_clamp_` when set.
+    /// Soft-wrap (multi_line + bounded width) is handled by the width-aware
+    /// `measured_height()` overload below.
+    float intrinsic_height() const override;
+
+    /// Width-aware height: shaper-true line count × line-height for a
+    /// multi_line Label given the parent's available content width.
+    /// Invoked by the Yoga measure callback when a multi-line Label is laid
+    /// out in a bounded-width parent (CSS
+    /// `flex: 1`, `width: 100%`, fixed-width section subtitles). Falls
+    /// back to `intrinsic_height()` when `multi_line_` is false or
+    /// `available_width <= 0`, so single-line labels and unbounded
+    /// containers keep the legacy one-line metric.
+    float measured_height(float available_width) const;
+
+    /// Width-aware painted width: how far this Label's glyphs actually reach
+    /// at `available_width`, as opposed to the horizontal space Yoga reserves
+    /// for it.
+    ///
+    /// The two differ, and the gap is not cosmetic. `intrinsic_width()` is a
+    /// layout hint and returns 0 for a wrapped Label on purpose, so the parent
+    /// drives wrapping; a caller that reports it as painted geometry describes
+    /// every wrapped label as occupying no width at all. This reports the
+    /// shaped extent instead: the widest visible line, honoring `line_clamp_`.
+    /// Single-line labels and unbounded widths fall back to
+    /// `intrinsic_width()`, which is already the shaped width for them.
+    float measured_width(float available_width) const;
+
+    /// The extents of the glyphs this Label will actually paint, given the
+    /// content width it has been laid out at. `measured_width()` above
+    /// answers the width half of this question on its own; this also reports
+    /// the painted height, the clamped line count, and where the ink lands.
+    ///
+    /// `intrinsic_width()` answers a different question and deliberately
+    /// returns 0 for a multi-line Label so the parent's available width drives
+    /// wrapping — a Yoga contract, not a measurement. Anything that wants to
+    /// know where the ink lands (does it collide with a sibling, does it run
+    /// past its own box) therefore cannot use it: a multi-line Label reads as
+    /// having no text at all. This runs the same shaper, the same
+    /// own->inherited cascade, the same text-transform, the same break mode and
+    /// the same line clamp that `paint()` does, and reports the result in the
+    /// Label's LOCAL coordinates.
+    ///
+    /// `measured` false means the extents are unknown (empty text), which is
+    /// not the same as zero-sized and must never be reported as "no overlap".
+    struct PaintedTextExtents {
+        bool measured = false;
+        float width = 0.0f;       ///< widest painted line
+        float height = 0.0f;      ///< total painted height (line clamp applied)
+        int line_count = 0;
+        Rect ink{};               ///< local ink box, text-align applied to x
+    };
+    PaintedTextExtents painted_text_extents(float available_width) const;
+
+    /// One captured line of text: where it sits in this Label's box, and which
+    /// slice of the text it holds (UTF-16 code units, as the capture indexes).
+    struct CachedLineBox {
+        float left = 0.0f;
+        float top = 0.0f;
+        float width = 0.0f;
+        float height = 0.0f;
+        int start = 0;
+        int length = 0;
+    };
+
+    /// How many Labels took each line-breaking path since the last reset.
+    ///
+    /// Three paths now decide where text breaks, and pixels cannot tell them
+    /// apart: a captured layout used verbatim, a captured layout rejected and
+    /// reflowed, and text that never had one. A render that looks wrong is a
+    /// different bug in each case, so the counts are reported rather than
+    /// inferred — and a cache that never activates and one that always does
+    /// look identical without them.
+    struct LineBreakPathCounts {
+        int cached = 0;      ///< captured layout used verbatim
+        int reflowed = 0;    ///< captured layout present but rejected
+        int uncached = 0;    ///< no captured layout at all
+    };
+    static LineBreakPathCounts line_break_path_counts();
+    static void reset_line_break_path_counts();
+
+    /// Adopt a browser's own line breaking for this text.
+    ///
+    /// The Label stays a paragraph — full text, one style, one box — and this
+    /// is a CACHE of how the text was already broken, not a replacement for
+    /// breaking it. Paint uses it verbatim while `basis_width` and
+    /// `basis_face` still describe the situation, and reflows through the
+    /// shaper the moment they do not. Adopting a foreign layout is only sound
+    /// while the thing that produced it still holds.
+    ///
+    /// `basis_face` is the PostScript name of the face the boxes were laid out
+    /// with, not the requested family. Empty means unverifiable, and an
+    /// unverifiable cache is never used.
+    /// `wrap_on_cache_miss` keeps a captured one-line attributed run styled
+    /// while valid, but re-enters paragraph wrapping after resize/font drift.
+    void set_cached_line_boxes(std::vector<CachedLineBox> boxes,
+                               float basis_width, std::string basis_face,
+                               bool wrap_on_cache_miss = false);
+    /// Drop browser-captured line geometry when a responsive layout
+    /// intentionally changes typography. The label returns to native shaping
+    /// at its current font metrics and bounds.
+    void clear_cached_line_boxes() {
+        cached_line_boxes_.clear();
+        shaped_cache_valid_ = false;
+        invalidate_layout();
+    }
+    const std::vector<CachedLineBox>& cached_line_boxes() const {
+        return cached_line_boxes_;
+    }
+    bool captured_wrap_fallback() const { return captured_wrap_fallback_; }
+
+    /// The CSS numeric weight this Label will actually be painted at — its own
+    /// when it was given one, otherwise the nearest ancestor's.
+    ///
+    /// Not the same as `font_weight()`, and the difference is not cosmetic: an
+    /// imported design sets the weight on the *view* via
+    /// `set_inheritable_font_weight`, leaving `font_weight()` at its 400
+    /// default. Anything that measures this text has to ask the same question
+    /// the painter does, or a bold run is measured as regular on exactly the
+    /// panels where weight came from the cascade.
+    int effective_font_weight() const;
+
+    /// The font family this Label paints with: its own `font_family()` if set,
+    /// else the nearest ancestor's `inheritable_font_family()`, else "Inter".
+    ///
+    /// Every stage that reasons about this text has to resolve the family the
+    /// same way. `intrinsic_width()` hands Yoga an advance, `paint()` hands the
+    /// canvas a face, and if those disagree Yoga reserves one face's width
+    /// while the painter needs another's. An auto-width Label absorbs that by
+    /// overflowing; a Label pinned to its intrinsic width has nowhere to put
+    /// the surplus, so the tail clips inside the box with nothing to show that
+    /// it happened.
+    std::string effective_font_family() const;
+
+    /// Baseline offset from the top of the Label's measured box, used by Yoga's
+    /// `YGNodeSetBaselineFunc` to honor `align-items: baseline` on
+    /// flex containers. Returns
+    /// `ascent + (leading / 2)` from `TextShaper::measure_metrics` so
+    /// the value tracks the same per-(family, size) cache the painter
+    /// uses; mixed-size text in a row therefore aligns on its true
+    /// typographic baselines rather than top-of-box.
+    float baseline_y() const;
+
+    /// WYSIWYG text-edit metrics — the geometry an inspector edit overlay
+    /// needs to draw a caret + selection band that EXACTLY matches the
+    /// glyphs `paint()` renders. The label's painter resolves inherited
+    /// size/weight/letter-spacing, family fallback, slant, text-transform,
+    /// and an alignment-dependent draw origin; an overlay that re-measures
+    /// with the Label's OWN fields drifts whenever any of those differ
+    /// (e.g. a PARENT sets `letter-spacing`, or the label is center/right
+    /// aligned). This factors the same style/origin resolution `paint()`
+    /// uses so the two can never disagree.
+    ///
+    /// `caret_x_by_byte[i]` is the caret x (local, measured from
+    /// `local_text_left`) for the byte boundary at index `i` over the
+    /// supplied `edit_text` — the buffer the overlay is currently editing,
+    /// NOT `text()` (which is mid-edit). It has `edit_text.size() + 1`
+    /// entries (one per boundary, including end-of-text).
+    struct TextEditMetrics {
+        std::string display_text;
+        float local_text_left = 0.0f;   ///< local x where text starts (handles center/right align)
+        float local_band_y = 0.0f;      ///< local y of the caret/selection band (top of text)
+        float band_height = 0.0f;
+        std::vector<float> caret_x_by_byte;  ///< size == display_text.size()+1
+    };
+    TextEditMetrics text_edit_metrics(canvas::Canvas& canvas,
+                                      std::string_view edit_text) const;
+
+    // ── Click-to-edit ────────────────────────────────────────────────────
+    //
+    // A Label can turn itself into a text field in place. `set_editable`
+    // arms the gesture; a matching click spawns a child TextEditor sized to
+    // the Label's bounds, seeded with the Label's text, focused and
+    // select-all'd. Return commits (the Label's text is replaced and
+    // `on_text_change` fires), Escape reverts, and clicking away commits —
+    // the three endings a rename field is expected to have.
+    //
+    // The editor is a real child View, so a painter or metrics delegate
+    // installed on an ancestor styles it exactly like any other text field.
+
+    enum class EditTrigger {
+        none,          ///< not editable
+        single_click,
+        double_click,
+    };
+
+    void set_editable(EditTrigger trigger) {
+        edit_trigger_ = trigger;
+        set_cursor(trigger == EditTrigger::none ? CursorStyle::default_ : CursorStyle::text);
+    }
+    EditTrigger editable() const { return edit_trigger_; }
+
+    /// Fires when an edit is COMMITTED with new text (not on every keystroke,
+    /// and not at all when the edit is reverted).
+    std::function<void(const std::string& text)> on_text_change;
+
+    /// Fires when the inline editor opens / closes, for owners that need to
+    /// suppress a hover highlight or a drag gesture for the duration.
+    std::function<void()> on_editor_show;
+    std::function<void()> on_editor_hide;
+
+    /// Open the inline editor now, regardless of the click trigger. This is
+    /// the programmatic route — a rename command in a menu, or a keyboard
+    /// shortcut.
+    void show_editor();
+    /// Close the inline editor. `commit` false discards the edit.
+    void hide_editor(bool commit);
+    bool editor_active() const { return editor_ != nullptr; }
+    /// The live inline editor, or null. For tests and for owners that want to
+    /// configure it (an input filter, a max length) after it opens.
+    TextEditor* editor() const { return editor_; }
+
+    void on_mouse_down(Point pos) override;
+    bool wants_mouse_input() const override { return edit_trigger_ != EditTrigger::none; }
+
+    // ── SelectableText ──────────────────────────────────────────────────
+    // A Label joins a document-level selection (pulp/view/selectable_text.hpp)
+    // using the line geometry its own paint already computes. The geometry is
+    // recorded during paint rather than re-derived, so the band a selection
+    // draws sits on the glyphs that were actually emitted — including after
+    // text-transform, soft wrap, line-clamp and ellipsis truncation, none of
+    // which a re-measurement from `text_` would reproduce.
+
+    SelectableText* as_selectable_text() override {
+        return is_selectable() ? this : nullptr;
+    }
+
+    /// Whether this Label takes part in text selection.
+    ///
+    /// `inherit` (the default) means "selectable exactly when an enclosing
+    /// `View::set_text_selection_region()` says this is content" — so an author
+    /// declares one region around their prose and every Label in it is
+    /// selectable, with no per-widget wiring. `never` opts one Label back out
+    /// inside a region (a live value readout in a prose panel is not prose);
+    /// `always` opts one in outside every region.
+    ///
+    /// Deliberately NOT globally on. A drag that starts on text in a plugin
+    /// editor is frequently a control gesture, and a tree-wide default would
+    /// break those everywhere to fix selection in one place.
+    enum class SelectionPolicy { inherit, always, never };
+    void set_selection_policy(SelectionPolicy policy) {
+        if (selection_policy_ == policy)
+            return;
+        selection_policy_ = policy;
+        if (!is_selectable())
+            set_selection_highlight(0, 0);
+        request_repaint();
+    }
+    SelectionPolicy selection_policy() const {
+        return selection_policy_;
+    }
+
+    /// Resolved answer for this Label right now. Walks to the nearest
+    /// enclosing content region, so it changes when the Label is reparented
+    /// without anything having to notify it.
+    ///
+    /// The cursor deliberately does NOT change over selectable text. The text
+    /// is not editable, so an I-beam would promise an insertion point that
+    /// does not exist; a pointer that merely permits highlighting is the
+    /// honest affordance, and it keeps every region out of the cursor
+    /// hit-testing path.
+    bool is_selectable() const {
+        if (selection_policy_ == SelectionPolicy::always)
+            return true;
+        if (selection_policy_ == SelectionPolicy::never)
+            return false;
+        return enclosing_text_selection_region(*const_cast<Label*>(this)) != nullptr;
+    }
+
+    std::string_view selectable_text() const override {
+        return text_;
+    }
+    SelectableLayout selectable_layout() const override {
+        return selection_layout_;
+    }
+    void set_selection_highlight(int start_utf8, int end_utf8) override;
+    bool selection_highlight(int& start_utf8, int& end_utf8) const override;
+    View* selectable_view() override {
+        return this;
+    }
+
+private:
+  SelectionPolicy selection_policy_ = SelectionPolicy::inherit;
+  int selection_start_utf8_ = 0;
+  int selection_end_utf8_ = 0;
+  /// Line geometry captured by the last paint. `measured` stays false for
+  /// the paint paths this capability does not model (attributed runs and
+  /// rotated vertical text), so a caller can tell "not supported" from
+  /// "no text" — the distinction `PaintedTextExtents::measured` exists for.
+  mutable SelectableLayout selection_layout_;
+  mutable SelectableLayout selection_layout_pending_;
+
+  /// Record one painted line into `selection_layout_pending_` and, when the
+  /// live highlight touches it, fill its selection band. Called immediately
+  /// before the line's own `fill_text` so the band lands under the glyphs it
+  /// describes, in one paint pass.
+  ///
+  /// `line` is the text as PAINTED (post-transform); `source_start` is where
+  /// that line begins in `text_`. Returns the band this line is selected
+  /// over, or a zero-width rect when none of it is selected.
+  void paint_selection_line_(canvas::Canvas& canvas, const std::string& line, float x, float top,
+                             float line_height, int source_start, const canvas::Color& text_color,
+                             bool vertical);
+
+  EditTrigger edit_trigger_ = EditTrigger::none;
+  TextEditor* editor_ = nullptr; ///< non-owning; the child vector owns it
+  int click_count_ = 0;
+  double last_click_time_ = 0.0;
+
+  /// Resolved typography + origin shared by paint() and
+  /// text_edit_metrics(). Factoring this out is the WYSIWYG invariant:
+  /// the caret overlay and the painter resolve the SAME inherited
+  /// size/weight/letter-spacing, family fallback, slant, alignment, and
+  /// vertical band so a letter-spaced or center/right-aligned label can't
+  /// drift between the two. `apply_text_transform()` mirrors paint()'s
+  /// transform so the measured run matches the rendered run.
+  struct ResolvedTextStyle {
+      std::string family;
+      float font_size = 14.0f;
+      int font_weight = 400;
+      int font_slant = 0;
+      float letter_spacing = 0.0f;
+      LabelAlign text_align = LabelAlign::left;
+      float baseline_y = 0.0f; ///< first-line baseline in local space
+  };
+    ResolvedTextStyle resolve_text_style() const;
+    std::string apply_text_transform(const std::string& in) const;
+    /// Translate the CSS `font-variant` CSV (View::font_variant_) into SkShaper
+    /// OpenType feature tags and apply them to `canvas` (empty CSV → clear).
+    /// paint() AND text_edit_metrics() both call this so the caret/selection
+    /// geometry shapes with the SAME features the painter renders — without it
+    /// a tabular-nums / small-caps label's caret x drifts (pulp WYSIWYG sweep).
+    std::vector<canvas::Canvas::FontFeature> resolved_font_features() const;
+    void apply_font_features(canvas::Canvas& canvas) const;
+    canvas::AttributedString resolved_attributed_string() const;
+
+    std::string text_;
+    /// Anonymous-inline-box slot for text_ when this Label also has
+    /// element children. Negative width == no slot.
+    Rect own_text_box_{0.0f, 0.0f, -1.0f, -1.0f};
+    std::string font_family_;     ///< Empty == widget default ("Inter")
+    float font_size_ = 14.0f;
+    int font_weight_ = 400;       ///< 400=normal, 700=bold
+    int font_style_ = 0;          ///< 0=normal, 1=italic, 2=oblique
+    float letter_spacing_ = 0;    ///< Extra spacing between characters (px)
+    float line_height_ = 0;       ///< 0=auto (font_size * 1.4)
+    LabelAlign text_align_ = LabelAlign::left;
+    bool multi_line_ = false;
+    int line_clamp_ = 0;          ///< 0=no clamp, >=1=max lines
+    TextTransform text_transform_ = TextTransform::none;
+    TextDecoration text_decoration_ = TextDecoration::none;
+    canvas::Color decoration_color_{};
+    bool has_decoration_color_ = false;
+    TextDecorationStyle text_decoration_style_ = TextDecorationStyle::solid;
+    canvas::TextDirection text_direction_ = canvas::TextDirection::left_to_right;
+    canvas::TextVerticalAlign vertical_align_ = canvas::TextVerticalAlign::top;
+    // Explicit-vs-inherited tracking. Fields keep their default
+    // values until a setter is called; the has_own_* flag tells paint()
+    // whether to honor the field or fall through to View::inheritable_*().
+    canvas::Color text_color_{};
+    bool has_own_text_color_ = false;
+    canvas::AttributedString attributed_runs_;  ///< per-range styled text (mixed)
+    bool has_attributed_ = false;
+    /// Draw text_ into `text_box`, whose origin the caller has already
+    /// translated onto. Alignment, wrap width, and vertical rotation all
+    /// resolve against that box rather than the Label's full bounds.
+    void paint_text_(canvas::Canvas& canvas, Rect text_box);
+
+    void paint_decoration_(canvas::Canvas& canvas, float x, float width,
+                           float baseline, float font_size,
+                           const canvas::Color& color);
+    void paint_attributed_lines_(canvas::Canvas& canvas,
+                                 const canvas::ShapedLayout& layout,
+                                 float baseline_y, float line_height,
+                                 int visible_lines, bool append_ellipsis,
+                                 bool single_line_ellipsis,
+                                 bool captured_positions);
+    LabelAlign
+    resolve_effective_align_() const; ///< text-align cascade (auto/match-parent resolved)
+    bool has_own_font_size_ = false;
+    bool has_own_font_weight_ = false;
+    bool has_own_letter_spacing_ = false;
+    bool has_own_text_align_ = false;
+
+    // Cache of the soft-wrap shaped layout so paint() reuses it instead of
+    // re-running the expensive TextShaper prepare()+layout each frame. Keyed on
+    // every input the shaper reads; a key mismatch recomputes, so no stale hit
+    // is possible.
+    //
+    // Weight IS one of those inputs. A Bold face is a different set of glyph
+    // advances, not a Regular one drawn heavier, so the same string at the same
+    // size in the same family breaks at a different word depending on it —
+    // which is why a key without it serves a Regular layout to a Bold label.
+    struct ShapedLayoutKey {
+        std::string display_text;  // text_ after text-transform
+        std::string family;        // resolved family ("Inter" fallback)
+        std::string font_variant;
+        float font_size = 0.0f;
+        int font_weight = 400;     // CSS numeric weight; selects the face
+        int font_style = 0;
+        float letter_spacing = 0.0f;
+        float width = 0.0f;        // bounds().width — changes every resize
+        float line_height = 0.0f;
+        int break_mode = 0;        // canvas::BreakMode as int
+        int max_lines = 0;         // attributed nowrap uses one; wrap is unlimited
+        // Captured browser line positions and native reflow can have identical
+        // shaping inputs but different x/y origins. Eligibility may change as
+        // imported ancestor styles settle, so it is part of the cache key,
+        // not merely a branch taken on cache construction.
+        bool captured_positions = false;
+        std::uint64_t font_gen = 0;  // font_registration_generation() snapshot
+        bool operator==(const ShapedLayoutKey& o) const {
+            return display_text == o.display_text && family == o.family &&
+                   font_variant == o.font_variant &&
+                   font_size == o.font_size && font_weight == o.font_weight &&
+                   font_style == o.font_style &&
+                   letter_spacing == o.letter_spacing &&
+                   width == o.width && line_height == o.line_height &&
+                   break_mode == o.break_mode && max_lines == o.max_lines &&
+                   captured_positions == o.captured_positions &&
+                   font_gen == o.font_gen;
+        }
+    };
+    /// Everything needed to shape this Label's text the way `paint()` will:
+    /// resolved font, text-transform applied, line height, break mode.
+    ///
+    /// Height and width are two readings of one shaped block, so they share
+    /// this setup rather than each rebuilding it. Two copies would be free to
+    /// drift on font inheritance or text-transform, and a measured box the
+    /// glyphs do not occupy is worse than no measurement.
+    struct ShapingSetup {
+        std::string display_text;
+        float line_height = 0.0f;
+        float font_size = 0.0f;
+        float letter_spacing = 0.0f;
+        float shaping_line_height = 0.0f;
+        canvas::BreakMode break_mode = canvas::BreakMode::normal;
+    };
+    ShapingSetup shaping_setup() const;
+
+    /// Shape the text described by `setup`. Split from `shaping_setup()` so
+    /// the captured-line fast path can decide it does not need to shape at
+    /// all — `TextShaper::prepare()` is the expensive half.
+    canvas::PreparedText prepare_shaped(const ShapingSetup& setup) const;
+
+    /// Lay `prepared` out at `available_width` using `setup`'s break mode and
+    /// line height — the one call whose result both measures read.
+    canvas::ShapedLayout shaper_layout_for(const canvas::PreparedText& prepared,
+                                           const ShapingSetup& setup,
+                                           float available_width) const;
+
+    /// Whether the captured line boxes still describe this Label.
+    ///
+    /// CONSERVATIVE BY CONSTRUCTION: every condition that could move a break
+    /// must match, and anything unknown counts as a mismatch. Reusing a cache
+    /// that no longer applies reintroduces exactly the defect it exists to
+    /// prevent; discarding one that still applies costs a reflow.
+    bool cached_line_layout_usable(const std::string& display_text,
+                                   float effective_font_size,
+                                   float effective_letter_spacing,
+                                   float layout_width) const;
+
+    /// Build a ShapedLayout from the captured boxes, so the rest of paint —
+    /// line-clamp, vertical-align, alignment — is the same code either way.
+    /// A single captured line whose copy changed (`cached_line_basis_retired_`)
+    /// keeps the box's vertical placement and its left edge, adjusted for the
+    /// new width under the label's alignment, with the width measured for the
+    /// live text: the font and the box are unchanged, so where the line sits
+    /// is still Chromium's answer and only how wide it is has to be asked
+    /// again.
+    canvas::ShapedLayout layout_from_cached_lines(const std::string& text, float line_height,
+                                                  const std::string& family,
+                                                  float effective_font_size,
+                                                  float effective_letter_spacing) const;
+    canvas::ShapedLayout layout_attributed_from_cached_lines(
+        const canvas::AttributedString& text, float line_height) const;
+
+    std::vector<CachedLineBox> cached_line_boxes_;
+    bool captured_wrap_fallback_ = false;
+    // Measured-size memo. See Label::sync_measure_basis in label.cpp for why
+    // the basis is the resolved style and why the face is keyed through the
+    // font-registration generation rather than resolved per call.
+    struct MeasureBasis {
+        std::string text;
+        std::string family;
+        std::string font_variant;
+        float font_size = 0.0f;
+        float letter_spacing = 0.0f;
+        int font_weight = 400;
+        int font_style = 0;
+        int text_direction = 0;
+        int line_clamp = 0;
+        bool multi_line = false;
+        bool wrap_fallback = false;
+        std::uint64_t font_gen = 0;
+        // Every input shaping_setup()/prepare_shaped() reads must appear
+        // here, or a restyle that changes only one of them keeps the stale
+        // box: line height scales measured height directly, a text-transform
+        // changes advances and so can change the line count, the word-break
+        // mode changes where lines break, and font features change shaping.
+        float line_height = 0.0f;
+        int text_transform = 0;
+        std::string word_break;
+        std::vector<canvas::Canvas::FontFeature> font_features;
+        bool operator==(const MeasureBasis&) const = default;
+    };
+    /// Refreshes the memo basis, dropping cached measurements when it moved.
+    /// Returns false when this Label opts out of measure caching.
+    bool sync_measure_basis() const;
+    float compute_intrinsic_width() const;
+    float compute_max_content_width() const;
+    /// Whether paint() will emit one line per `\n` rather than drawing the
+    /// whole string in a single fill_text. Measurement has to agree with
+    /// paint on this or width and height disagree about the same string.
+    /// paint()'s own predicate also admits a usable captured line cache and
+    /// the attributed path; neither belongs here -- the cache check reads a
+    /// laid-out width (measurement cannot depend on the layout it feeds) and
+    /// attributed text is measured on its own branch.
+    bool paints_as_lines() const { return soft_wraps() || captured_wrap_fallback_; }
+    float compute_intrinsic_height() const;
+    float compute_measured_height(float available_width) const;
+    mutable MeasureBasis measure_basis_;
+    mutable bool measure_basis_valid_ = false;
+    mutable float measure_width_ = -1.0f;
+    mutable float measure_height_ = -1.0f;
+    mutable float measure_wrapped_for_width_ = -1.0f;
+    mutable float measure_wrapped_height_ = -1.0f;
+
+    float cached_line_basis_width_ = 0.0f;
+    std::string cached_line_basis_face_;
+    std::string cached_line_basis_text_;
+    // Set once the label's copy diverged from the captured basis; the boxes
+    // are kept for reflow but never honored verbatim again.
+    bool cached_line_basis_retired_ = false;
+    std::string cached_line_basis_font_variant_;
+    float cached_line_basis_font_size_ = 0.0f;
+    float cached_line_basis_letter_spacing_ = 0.0f;
+    int cached_line_basis_font_weight_ = 400;
+    int cached_line_basis_font_style_ = 0;
+
+    ShapedLayoutKey shaped_cache_key_;
+    canvas::ShapedLayout shaped_cache_layout_;
+    bool shaped_cache_valid_ = false;
+    // The shaped-layout cache cannot prevent work performed before its lookup.
+    // Retain the expensive attributed preparation separately so an unchanged
+    // paint performs no shaping even though it still resolves inherited spans.
+    canvas::AttributedString attributed_prepare_source_;
+    std::vector<canvas::Canvas::FontFeature> attributed_prepare_features_;
+    canvas::PreparedText attributed_prepare_cache_;
+    std::uint64_t attributed_prepare_font_gen_ = 0;
+    bool attributed_prepare_valid_ = false;
+
+    /// Real ink metrics of the face `paint()` actually draws with.
+    ///
+    /// A baseline placed at `font_size * 0.85` is a rule-of-thumb, and
+    /// `PreparedText::ascent()` documents that paint code should use the
+    /// resolved face instead. It is also inconsistent with the box this
+    /// Label reports: `intrinsic_height()` measures the line box from the
+    /// typeface's real ink extremes, so a face whose ascent is not 0.85 em
+    /// gets a box sized one way and ink placed another. Two labels centered
+    /// in equal-height boxes then paint their ink at different heights, and
+    /// `align-items: baseline` aligns rows on a number nothing draws at,
+    /// because `baseline_y()` already reports the real ascent.
+    ///
+    /// Metrics depend on the resolved face alone, never on the string, so a
+    /// Label whose text changes every frame still hits this cache.
+    struct FaceMetrics {
+        float ascent = 0.0f;
+        float descent = 0.0f;
+        bool real = false;
+    };
+    FaceMetrics face_metrics(const std::string& family, float font_size,
+                             int font_weight, int font_style) const;
+    mutable std::string face_metrics_family_;
+    mutable float face_metrics_font_size_ = 0.0f;
+    mutable int face_metrics_font_weight_ = 400;
+    mutable int face_metrics_font_style_ = 0;
+    mutable std::uint64_t face_metrics_font_gen_ = 0;
+    mutable FaceMetrics face_metrics_cache_;
+    mutable bool face_metrics_valid_ = false;
+public:
+    /// Set text direction (LTR, RTL, vertical top-to-bottom, vertical bottom-to-top).
+    void set_text_direction(canvas::TextDirection d) { text_direction_ = d; }
+    canvas::TextDirection text_direction() const { return text_direction_; }
+
+    /// Set vertical text alignment within the label's bounds.
+    void set_vertical_align(canvas::TextVerticalAlign a) { vertical_align_ = a; }
+    canvas::TextVerticalAlign vertical_align() const { return vertical_align_; }
+};
+
+// ── Knob ─────────────────────────────────────────────────────────────────────
+// Rotary control for audio parameters (gain, frequency, etc.)
+
+// AccessibilityValueInterface: `AccessRole::slider` advertises the UIA
+// RangeValue/Value patterns and the AT-SPI Value interface. A slider with no
+// value source announces its name and then reads nothing (macOS) or reports
+// 0 in a degenerate 0..0 range (Windows). The role and the value ship together.
+class Knob : public View, public CustomShaderHost, public AccessibilityValueInterface {
+public:
+    Knob() {
+        mark_runtime_view_kind(RuntimeViewKind::knob);
+        set_access_role(AccessRole::slider);
+        set_focusable(true);
+        // A knob's pointer travel is shorter than a fader's: 150px crosses the
+        // whole range, which is what a compact plugin panel expects.
+        core_.set_drag_sensitivity(150);
+    }
+
+    // ── Value engine ─────────────────────────────────────────────────────
+    //
+    // The knob's REAL-WORLD value, range, interval, response curve and drag law
+    // live in a SliderCore (slider_core.hpp). `value()` below stays the
+    // normalized [0,1] position in that range — that is the space a parameter
+    // store and the design/JS bridges speak — so a knob with the default 0..1
+    // range behaves exactly as it always has, and `set_range()` is what turns it
+    // into a real control (20..20000 Hz, -60..+12 dB, quantized to an interval).
+
+    SliderCore& slider() { return core_; }
+    const SliderCore& slider() const { return core_; }
+
+    /// Real-world range and quantization interval. Re-derives the real value from
+    /// the current normalized position; silent (a reconfiguration is not an edit).
+    void set_range(double min_value, double max_value, double interval = 0.0) {
+        core_.set_range(min_value, max_value, interval);
+        core_.set_normalized(value_, Notify::none);
+        value_ = static_cast<float>(core_.normalized());
+        request_repaint();
+    }
+    double real_value() const { return core_.value(); }
+    /// Write in real-world units. Snapped to the interval, clamped to the range.
+    bool set_real_value(double v, Notify notify = Notify::sync) {
+        core_.set_value(v, Notify::none);
+        return store_normalized(static_cast<float>(core_.normalized()), notify);
+    }
+
+    // ── AccessibilityValueInterface (normalized 0..1, like value()) ──────
+    double get_current_value() const override { return value_; }
+    void set_current_value(double v) override {
+        const float prev = value_;
+        set_value(static_cast<float>(v));
+        if (value_ != prev && on_change) on_change(value_);
+    }
+    double get_minimum_value() const override { return 0.0; }
+    double get_maximum_value() const override { return 1.0; }
+    /// Prefer the widget's own display formatter ("-6.0 dB") over the generic
+    /// percentage — it is the string the sighted user reads.
+    std::string get_value_string() const override {
+        return format_ ? format_(value_)
+                       : AccessibilityValueInterface::get_value_string();
+    }
+
+    void set_render_style(WidgetRenderStyle s) { render_style_ = s; }
+    WidgetRenderStyle render_style() const { return render_style_; }
+
+    // Programmatic set_value() must request_repaint() when the value actually
+    // changes. The host's mouseDown handler invalidates after every input event,
+    // so user drags repaint correctly via that side channel; preset application
+    // and other JS-driven bridge mutations go through this code path and would
+    // otherwise leave the painted state stale until the next user input.
+    //
+    // Gate the invalidation on a real change. WidgetBridge::sync_from_store()
+    // and restore_values(...) call set_value()/set_on() in tight loops during
+    // sync/reload; firing a host repaint per call when the value is unchanged
+    // burns wall-clock on large widget trees with no visible benefit.
+    void set_value(float v) { store_normalized(v, Notify::none); }
+
+    /// Notifying overload. `Notify::none` matches the historical `set_value(v)`
+    /// (repaint, no callback) — the right choice when the knob is being synced
+    /// FROM the thing it drives. `Notify::sync` fires `on_change` before
+    /// returning; `Notify::async` defers it to the next
+    /// `pulp::view::flush_async_notifications()`.
+    bool set_value(float v, Notify notify) { return store_normalized(v, notify); }
+
+    float value() const { return value_; }
+
+    void set_default_value(float v) {
+        default_value_ = std::clamp(v, 0.0f, 1.0f);
+        core_.set_default_value(core_.value_for_normalized(default_value_));
+    }
+    float default_value() const { return default_value_; }
+
+    /// Skew / response curve (see RangeSlider::set_skew). 1 = linear (default);
+    /// <1 gives finer control near the low end (the law a frequency/time knob
+    /// wants). Value is normalized 0..1; set_skew_from_midpoint takes a
+    /// normalized midpoint. Applies to the value arc, dot, and drag; modulation
+    /// rings are unaffected.
+    void set_skew(float s) { core_.set_skew(s); }
+    float skew() const { return static_cast<float>(core_.skew()); }
+    /// `mid_normalized` is in the knob's NORMALIZED space (see value()), so this
+    /// call means the same thing with or without a real range configured.
+    void set_skew_from_midpoint(float mid_normalized) {
+        core_.set_skew_from_midpoint(
+            core_.value_for_normalized(std::clamp(mid_normalized, 1e-4f, 1.0f - 1e-4f)));
+    }
+    float position_for_value() const {
+        const float s = skew();
+        return s == 1.0f ? value_ : std::pow(value_, s);
+    }
+    float value_for_position(float p) const {
+        p = std::clamp(p, 0.0f, 1.0f);
+        const float s = skew();
+        return s == 1.0f ? p : std::pow(p, 1.0f / s);
+    }
+
+    void set_label(std::string text) {
+        if (label_ == text) return;
+        label_ = std::move(text);
+        set_derived_access_label(label_);  // the visible label is the accessible name
+        request_repaint();
+    }
+    const std::string& label() const { return label_; }
+
+    void set_show_label(bool show) {
+        if (show_label_ == show) return;
+        show_label_ = show;
+        request_repaint();
+    }
+    bool show_label() const { return show_label_; }
+
+    /// Controls only the formatter text painted inside the dial. The formatter
+    /// remains active for accessibility even when the visible value is supplied
+    /// by a separate label elsewhere in the layout.
+    void set_show_value(bool show) {
+        if (show_value_ == show) return;
+        show_value_ = show;
+        request_repaint();
+    }
+    bool show_value() const { return show_value_; }
+
+    // Display format: called with normalized value to produce display text.
+    // No equality check (std::function doesn't compare) — formatters are
+    // set at construction or theme-change time, not in tight sync loops.
+    void set_format(std::function<std::string(float)> fmt) {
+        format_ = std::move(fmt);
+        request_repaint();
+    }
+
+    /// Called when the value changes (from user interaction or programmatic).
+    std::function<void(float)> on_change;
+    std::function<void()> on_gesture_begin;
+    std::function<void()> on_gesture_end;
+
+    void paint(canvas::Canvas& canvas) override;
+    void on_mouse_event(const MouseEvent& event) override;
+    void on_mouse_enter() override;
+    void on_mouse_leave() override;
+    void on_mouse_down(Point pos) override;
+    void on_mouse_up(Point pos) override;
+    void on_mouse_drag(Point pos) override;
+    bool wants_mouse_input() const override { return true; }
+
+    // Animation accessors for testing
+    float hover_glow() const { return hover_glow_.value(); }
+    void advance_animations(float dt) override;
+
+    // Arc range in radians (default: 270-degree sweep)
+    static constexpr float start_angle = 2.356f;  // 135 degrees (bottom-left)
+    static constexpr float end_angle = 7.069f;    // 405 degrees (bottom-right via top)
+
+    // Custom body shader comes from CustomShaderHost — it replaces the
+    // body/track/fill arc drawing; labels, value text, and hover glow still
+    // draw in C++.
+
+    // Declarative widget schema: JSON defining appearance as data (Rive-inspired)
+    void set_widget_schema(std::string json) { widget_schema_ = std::move(json); }
+    const std::string& widget_schema() const { return widget_schema_; }
+
+    // ── Modulation rings (Saturn) ───────────────────────────────────────
+    // Thin concentric rings drawn OUTSIDE the value arc, one per modulation
+    // source. Matches the Figma "Knob Modulation" set (LFO / ENV / VEL / MACRO).
+    // Empty by default (a plain knob).
+    struct ModulationRing {
+        // Two INDEPENDENT signed offsets from the base value, one per arc end —
+        // dragging one handle moves only that end (not a symmetric grow/shrink
+        // off a single depth). Unipolar-positive: lo=0, hi>0. Unipolar-negative:
+        // lo<0, hi=0. Bipolar: lo<0, hi>0. The range is [base+lo, base+hi]; the
+        // endpoints sort themselves, so the two may cross without breaking paint.
+        float lo = 0.0f;             ///< low-end offset from base (−1..1)
+        float hi = 0.0f;             ///< high-end offset from base (−1..1)
+        canvas::Color color;         ///< per-source color
+    };
+    void set_modulation_rings(std::vector<ModulationRing> rings) {
+        mod_rings_ = std::move(rings);
+        request_repaint();
+    }
+    const std::vector<ModulationRing>& modulation_rings() const { return mod_rings_; }
+
+    // Live modulation phase in [-1, 1] — the instantaneous output of the
+    // assigned source(s). Drives the indicator dot that rides the modulation
+    // arc, showing where the parameter actually IS right now. Set it from a
+    // master/macro control or animate it from the host (e.g. an LFO).
+    void set_modulation_phase(float p) {
+        float c = std::clamp(p, -1.0f, 1.0f);
+        // Also a hot path — a host/LFO can drive this every frame.
+        if (c != mod_phase_) { mod_phase_ = c; request_repaint_self(); }
+    }
+    float modulation_phase() const { return mod_phase_; }
+
+    // ── Modulated value display ─────────────────────────────────────────
+    //
+    // The value a processor is PLAYING while a modulator (an internal LFO, an
+    // envelope, MPE) moves this parameter around the value the user set.
+    // Display only, and the contract every modulated control keeps:
+    //
+    //   * value() stays the BASE. A drag, a wheel notch or a key starts from
+    //     it, and on_change / gestures report it, so
+    //     host automation records the user's moves and nothing else.
+    //   * set_modulated_value() never fires on_change and never writes a
+    //     parameter: modulation must not write a host automation lane. It
+    //     offsets around the automated (or user-set) base, so a control host
+    //     automation is moving shows both -- the base following the lane and
+    //     the modulated marker following the modulator around it.
+    //   * The marker repaints the knob's own box (request_repaint_self), never
+    //     the whole surface and never the layout, so a modulator animating a
+    //     control at the display rate costs one bounded repaint per frame.
+    //
+    // One indicator, never two: while a played value is set, the knob's single
+    // pointer and value arc show the value PLAYING, in the modulation colour
+    // (token `knob.modulation`), on every body style; the base is a quiet
+    // notch across the ring. The value text prints the played value, and the
+    // base while the user drags it (the drag edits the base and the notch
+    // follows).
+    // Values are normalized 0..1, like value(). Unlike the Saturn rings above,
+    // which DERIVE the live value from base + depth x phase, this takes the
+    // value the processor computed, for modulation laws that are not a linear
+    // offset (a proportional pull, a clamp, a stepped target).
+    void set_modulated_value(float normalized) {
+        const float v = std::isfinite(normalized) ? std::clamp(normalized, 0.0f, 1.0f) : value_;
+        if (has_modulated_ && v == modulated_)
+            return;
+        has_modulated_ = true;
+        modulated_ = v;
+        request_repaint_self(kModulatedMarkerHalo);
+    }
+    void clear_modulated_value() {
+        if (!has_modulated_)
+            return;
+        has_modulated_ = false;
+        request_repaint_self(kModulatedMarkerHalo);
+    }
+    bool has_modulated_value() const {
+        return has_modulated_;
+    }
+    /// The played value while one is set, else value().
+    float modulated_display_value() const {
+        return has_modulated_ ? modulated_ : value_;
+    }
+
+    // The modulation range is [value+lo, value+hi] clipped to [0,1], sorted so
+    // the returned .first ≤ .second regardless of which end is which. Exposes the
+    // clipped endpoints of ring i for tests / hosts. Returns {lo_v, hi_v}.
+    std::pair<float, float> modulation_range(size_t ring) const;
+    // The live modulated value of ring i: phase≥0 sweeps toward base+hi, phase<0
+    // toward base+lo, clipped to [0,1].
+    float modulated_value(size_t ring) const;
+
+    // Fired when dragging a modulation-arc handle changes a ring's endpoints.
+    // Reports BOTH offsets (the dragged one moved, the other is unchanged).
+    std::function<void(int ring, float lo, float hi)> on_modulation_change;
+    // True while a modulation-arc handle is being dragged (vs the value).
+    bool dragging_modulation() const { return mod_drag_ring_ >= 0; }
+
+    // Scroll-wheel adjusts the value (hover + wheel).
+    bool wants_wheel_value() const override { return true; }
+    void on_wheel(float delta_y) override {
+        // A QUANTIZED control moves by exactly one interval per notch. The
+        // continuous nudge below is smaller than most intervals, so snapping
+        // would return the value to the step it started on and the wheel would
+        // do nothing at all — a control with an interval had a dead wheel.
+        if (core_.interval() > 0.0) {
+            const double step = (delta_y < 0.0f ? 1.0 : -1.0) * core_.interval();
+            set_real_value(core_.value() + step, Notify::sync);
+            return;
+        }
+        store_normalized(value_ + (-delta_y) * 0.004f, Notify::sync);
+    }
+
+    // True while a value drag (or modulation-handle drag) is in progress so a
+    // declarative param binding yields the value to the user mid-turn.
+    bool is_gesture_active() const override { return gesture_active_ || mod_drag_ring_ >= 0; }
+
+private:
+  /// Covers the played-value dot and arc caps painted on the rim.
+  static constexpr float kModulatedMarkerHalo = 6.0f;
+  void paint_modulated_marker(canvas::Canvas& canvas, float cx, float cy, float ring_r,
+                              float arc_w);
+  bool has_modulated_ = false; ///< a played value is being displayed
+  float modulated_ = 0.0f;     ///< played value, normalized (display only)
+  std::vector<ModulationRing> mod_rings_;
+  float mod_phase_ = 0.0f;           ///< live source value in [-1,1] (indicator)
+  int mod_drag_ring_ = -1;           ///< ring whose handle is being dragged (-1 none)
+  bool mod_drag_is_high_ = true;     ///< dragging the high (vs low) handle
+  float mod_drag_last_angle_ = 0.0f; ///< continuous (unwrapped) drag angle; the
+                                     ///< bottom gap is a hard wall — see on_mouse_drag
+  /// The knob's position in its range, normalized to [0,1]. Mirrors
+  /// `core_.normalized()`; the two are kept in lockstep by store_normalized().
+  float value_ = 0.0f;
+  SliderCore core_;            ///< range, interval, curve, default, drag law
+  float default_value_ = 0.5f; ///< the reset target, in normalized units
+  std::string label_;
+  std::function<std::string(float)> format_;
+  ValueAnimation hover_glow_{0.0f};
+  float drag_start_y_ = 0;
+  float drag_start_proportion_ = 0; ///< travel proportion when the drag began
+  float drag_last_y_ = 0;           ///< previous tick (velocity-mode integration)
+  bool gesture_active_ = false;
+
+  /// The single place `value_` and `core_` are written. Clamps to [0,1], snaps
+  /// through the core's interval, repaints on a real change, and notifies per
+  /// the policy. Returns true if the stored value moved.
+
+  bool store_normalized(float n, Notify notify) {
+      core_.set_normalized(std::clamp(n, 0.0f, 1.0f), Notify::none);
+      const float snapped = static_cast<float>(core_.normalized());
+      if (snapped == value_)
+          return false;
+      value_ = snapped;
+      request_repaint_self();
+      if (notify == Notify::sync) {
+          if (on_change)
+              on_change(value_);
+      } else if (notify == Notify::async && on_change) {
+          auto fn = on_change;
+          const float v = value_;
+          queue_async_notification([fn, v] { fn(v); });
+      }
+      return true;
+  }
+    bool show_label_ = true;
+    bool show_value_ = true;
+    std::string widget_schema_;   // JSON declarative schema
+    std::string lottie_json_;     // Lottie animation JSON
+    WidgetRenderStyle render_style_ = WidgetRenderStyle::standard;
+    float lottie_time_ = 0;       // Current playback position (0-1)
+
+public:
+    void set_lottie_json(std::string json) { lottie_json_ = std::move(json); }
+    const std::string& lottie_json() const { return lottie_json_; }
+    void set_lottie_time(float t) { lottie_time_ = std::clamp(t, 0.0f, 1.0f); }
+    float lottie_time() const { return lottie_time_; }
+
+    /// Sprite strip: designer-created filmstrip for knob appearance.
+    /// The current value selects which frame to display.
+    void set_sprite_strip(std::shared_ptr<SpriteStrip> strip) { sprite_strip_ = std::move(strip); }
+    const std::shared_ptr<SpriteStrip>& sprite_strip() const { return sprite_strip_; }
+
+    /// Opaque-core rectangle of the sprite body frame, in the FRAME's own
+    /// pixel space (x, y, w, h). When set on a single-frame strip, Knob::paint
+    /// scales the frame so the core fills the layout box (the soft drop-shadow
+    /// bleed extends beyond) and centers the core — then draws the native
+    /// rotating indicator notch over the static disc, sized to that core.
+    /// Mirrors the importer's compute_opaque_core / have_core sizing so an
+    /// imported sprite knob turns at the right size. Zero w/h leaves it unset
+    /// (the legacy natural/2× centering path).
+    void set_sprite_core(float x, float y, float w, float h) {
+        sprite_core_x_ = x; sprite_core_y_ = y;
+        sprite_core_w_ = w; sprite_core_h_ = h;
+    }
+    bool has_sprite_core() const { return sprite_core_w_ > 0.0f && sprite_core_h_ > 0.0f; }
+
+    /// A browser crop records an exact device-pixel origin and DPR. Layout and
+    /// hit bounds stay fractional; only its static PNG destination is aligned
+    /// back to that captured origin so exact pixels are not resampled.
+    void set_captured_raster_origin(float x, float y, float scale) {
+        captured_raster_origin_x_ = x;
+        captured_raster_origin_y_ = y;
+        captured_raster_scale_ = scale > 0.0f ? scale : 0.0f;
+    }
+    float captured_raster_scale() const { return captured_raster_scale_; }
+    float captured_raster_origin_x() const { return captured_raster_origin_x_; }
+    float captured_raster_origin_y() const { return captured_raster_origin_y_; }
+
+    /// Geometry of the design's OWN pointer (e.g. the Figma "Vector 7" hairline)
+    /// captured by hoist_captured_art_knobs, expressed relative to the disc core
+    /// so the renderer can reproduce the design's indicator instead of the
+    /// generic synthetic notch. `r_in`/`r_out` are fractions of the core's half
+    /// extent (the radius the line runs between); `width_px` is the logical
+    /// stroke width; `color` is the line color. When set on a single-frame
+    /// captured-art knob, Knob::paint draws THIS pointer — pivoted at the disc
+    /// core center on the [-135°,+135°] arc — and skips the synthetic notch, so
+    /// the moving line rides the disc's baked min/center/max reference ticks.
+    void set_captured_indicator(float r_in, float r_out, float width_px,
+                                canvas::Color color, float phase_rad = 0.0f,
+                                bool color_authored = true) {
+        ind_r_in_ = r_in; ind_r_out_ = r_out;
+        ind_width_ = width_px; ind_color_ = color;
+        ind_phase_rad_ = phase_rad;
+        ind_color_authored_ = color_authored;
+        has_captured_indicator_ = true;
+        request_repaint();
+    }
+    bool has_captured_indicator() const { return has_captured_indicator_; }
+    float captured_indicator_r_in() const { return ind_r_in_; }
+    float captured_indicator_r_out() const { return ind_r_out_; }
+    float captured_indicator_phase_rad() const { return ind_phase_rad_; }
+    bool captured_indicator_color_authored() const {
+        return ind_color_authored_;
+    }
+    /// Optional authored CSS border around a captured HTML pointer. SVG/stroke
+    /// pointers retain their single-paint rendering path.
+    void set_captured_indicator_outline(canvas::Color color, float width_px) {
+        ind_outline_color_ = color;
+        ind_outline_width_ = std::max(0.0f, width_px);
+        request_repaint();
+    }
+    float captured_indicator_outline_width() const { return ind_outline_width_; }
+    canvas::Color captured_indicator_outline_color() const {
+        return ind_outline_color_;
+    }
+
+private:
+    std::shared_ptr<SpriteStrip> sprite_strip_;
+    float sprite_core_x_ = 0.0f;
+    float sprite_core_y_ = 0.0f;
+    float sprite_core_w_ = 0.0f;
+    float sprite_core_h_ = 0.0f;
+    float captured_raster_origin_x_ = 0.0f;
+    float captured_raster_origin_y_ = 0.0f;
+    float captured_raster_scale_ = 0.0f;
+    bool has_captured_indicator_ = false;
+    float ind_r_in_ = 0.0f;
+    float ind_r_out_ = 0.0f;
+    float ind_width_ = 0.0f;
+    float ind_phase_rad_ = 0.0f;
+    canvas::Color ind_color_ = canvas::Color::rgba(1.0f, 1.0f, 1.0f, 1.0f);
+    bool ind_color_authored_ = true;
+    canvas::Color ind_outline_color_ = canvas::Color::rgba(0, 0, 0, 1.0f);
+    float ind_outline_width_ = 0.0f;
+};
+
+// ── Fader ────────────────────────────────────────────────────────────────────
+// Linear slider for audio parameters
+
+class Fader : public View, public CustomShaderHost, public AccessibilityValueInterface {
+public:
+    enum class Orientation { vertical, horizontal };
+    enum class ThumbShape { circle, rectangle };
+
+    Fader() {
+        mark_runtime_view_kind(RuntimeViewKind::fader);
+        set_access_role(AccessRole::slider);
+        set_focusable(true);
+    }
+
+    // ── AccessibilityValueInterface (normalized 0..1) ────────────────────
+    double get_current_value() const override { return value_; }
+    void set_current_value(double v) override {
+        const float prev = value_;
+        set_value(static_cast<float>(v));
+        if (value_ != prev && on_change) on_change(value_);
+    }
+    double get_minimum_value() const override { return 0.0; }
+    double get_maximum_value() const override { return 1.0; }
+
+    void set_render_style(WidgetRenderStyle s) { render_style_ = s; }
+    WidgetRenderStyle render_style() const { return render_style_; }
+
+    // Same programmatic repaint contract as Knob::set_value(), including the
+    // no-change guard for bridge sync/reload loops. This form is silent (no
+    // change callback), which is what a sync FROM the bound parameter wants.
+    void set_value(float v) {
+        float clamped = std::clamp(v, 0.0f, 1.0f);
+        if (clamped == value_) return;
+        value_ = clamped;
+        request_repaint_self();
+    }
+
+    /// Notifying overload. `Notify::none` matches the historical `set_value(v)`
+    /// (repaint, no callback) — the right choice when the fader is being synced
+    /// FROM the thing it drives. `Notify::sync` fires `on_change` before
+    /// returning; `Notify::async` defers it to the next
+    /// `pulp::view::flush_async_notifications()`. Fires only on a real change,
+    /// so a redundant write in a sync loop is free. Returns true if the stored
+    /// value moved.
+    bool set_value(float v, Notify notify) {
+        float clamped = std::clamp(v, 0.0f, 1.0f);
+        if (clamped == value_) return false;
+        value_ = clamped;
+        request_repaint_self();
+        if (notify == Notify::sync) {
+            if (on_change) on_change(value_);
+        } else if (notify == Notify::async && on_change) {
+            auto fn = on_change;
+            const float nv = value_;
+            queue_async_notification([fn, nv] { fn(nv); });
+        }
+        return true;
+    }
+    float value() const { return value_; }
+
+    /// Display-only played value while a modulator moves this parameter
+    /// around value(). Same contract as Knob::set_modulated_value(): never
+    /// fires on_change, never writes a parameter, repaints the fader's own box
+    /// only. One thumb: while a played value is set, the fader's thumb and
+    /// fill sit at the value PLAYING in the modulation colour (token
+    /// `knob.modulation`), and the base is a quiet tick across the track.
+    void set_modulated_value(float normalized) {
+        const float v = std::isfinite(normalized) ? std::clamp(normalized, 0.0f, 1.0f) : value_;
+        if (has_modulated_ && v == modulated_)
+            return;
+        has_modulated_ = true;
+        modulated_ = v;
+        request_repaint_self(kModulatedMarkerHalo);
+    }
+    void clear_modulated_value() {
+        if (!has_modulated_)
+            return;
+        has_modulated_ = false;
+        request_repaint_self(kModulatedMarkerHalo);
+    }
+    bool has_modulated_value() const {
+        return has_modulated_;
+    }
+    float modulated_display_value() const {
+        return has_modulated_ ? modulated_ : value_;
+    }
+
+    // Scroll-wheel adjusts the value (hover + wheel).
+    bool wants_wheel_value() const override { return true; }
+    void on_wheel(float delta_y) override {
+        float nv = std::clamp(value_ + (-delta_y) * 0.004f, 0.0f, 1.0f);
+        if (nv != value_) { set_value(nv); if (on_change) on_change(value_); }
+    }
+
+    // True while the thumb is being dragged so a param binding yields mid-drag.
+    bool is_gesture_active() const override { return dragging_; }
+
+    void set_orientation(Orientation o) { orientation_ = o; }
+    Orientation orientation() const { return orientation_; }
+
+    void set_thumb_shape(ThumbShape shape) {
+        if (thumb_shape_ == shape) return;
+        thumb_shape_ = shape;
+        request_repaint();
+    }
+    ThumbShape thumb_shape() const { return thumb_shape_; }
+
+    void set_thumb_size(float width, float height) {
+        thumb_width_ = std::max(0.0f, width);
+        thumb_height_ = std::max(0.0f, height);
+        request_repaint();
+    }
+    float thumb_width() const { return thumb_width_; }
+    float thumb_height() const { return thumb_height_; }
+
+    void set_thumb_corner_radius(float radius) {
+        thumb_corner_radius_ = std::max(0.0f, radius);
+        request_repaint();
+    }
+    float thumb_corner_radius() const { return thumb_corner_radius_; }
+
+    void set_label(std::string text) {
+        if (label_ == text) return;
+        label_ = std::move(text);
+        set_derived_access_label(label_);  // the visible label is the accessible name
+        request_repaint();
+    }
+    const std::string& label() const { return label_; }
+
+    /// Called when the value changes.
+    std::function<void(float)> on_change;
+    std::function<void()> on_gesture_begin;
+    std::function<void()> on_gesture_end;
+
+    void paint(canvas::Canvas& canvas) override;
+    void on_mouse_enter() override;
+    void on_mouse_leave() override;
+    void on_mouse_down(Point pos) override;
+    void on_mouse_up(Point pos) override;
+    void on_mouse_event(const MouseEvent& event) override;
+    void on_mouse_drag(Point pos) override;
+    bool wants_mouse_input() const override { return true; }
+
+    // Animation accessors for testing
+    float hover_scale() const { return hover_thumb_scale_.value(); }
+    void advance_animations(float dt) override;
+
+    /// Skew / response curve (see RangeSlider::set_skew). 1 = linear (default);
+    /// <1 gives finer control near the bottom of the fader. Value is normalized
+    /// 0..1, so set_skew_from_midpoint takes a normalized midpoint.
+    void set_skew(float s) { skew_ = std::max(0.0001f, s); }
+    float skew() const { return skew_; }
+    void set_skew_from_midpoint(float mid_normalized) {
+        float p = std::clamp(mid_normalized, 1e-4f, 1.0f - 1e-4f);
+        skew_ = std::max(0.0001f, std::log(0.5f) / std::log(p));
+    }
+    /// Track position [0,1] (skew-mapped) for the current value, and the
+    /// inverse used while dragging.
+    float position_for_value() const { return skew_ == 1.0f ? value_ : std::pow(value_, skew_); }
+    float value_for_position(float p) const {
+        p = std::clamp(p, 0.0f, 1.0f);
+        return skew_ == 1.0f ? p : std::pow(p, 1.0f / skew_);
+    }
+
+    // Custom body shader comes from CustomShaderHost.
+    void set_widget_schema(std::string json) { widget_schema_ = std::move(json); }
+    const std::string& widget_schema() const { return widget_schema_; }
+    void set_lottie_json(std::string json) { lottie_json_ = std::move(json); }
+    const std::string& lottie_json() const { return lottie_json_; }
+    void set_lottie_time(float t) { lottie_time_ = std::clamp(t, 0.0f, 1.0f); }
+    float lottie_time() const { return lottie_time_; }
+
+
+private:
+  static constexpr float kModulatedMarkerHalo = 6.0f;
+  void paint_modulated_marker(canvas::Canvas& canvas);
+  bool has_modulated_ = false;
+  float modulated_ = 0.0f;
+  float value_ = 0.0f;
+  float skew_ = 1.0f; ///< 1 = linear; <1 = finer control at the low end
+  Orientation orientation_ = Orientation::vertical;
+  // Ink & Signal faders use a slab/handle thumb by default (matches the Figma
+  // design language); callers can opt back to a circle per-widget.
+  ThumbShape thumb_shape_ = ThumbShape::rectangle;
+  float thumb_width_ = 0.0f;
+  float thumb_height_ = 0.0f;
+  float thumb_corner_radius_ = 0.0f;
+  bool has_skin_thumb_style_ = false;
+  ThumbShape pre_skin_thumb_shape_ = ThumbShape::rectangle;
+  float pre_skin_thumb_width_ = 0.0f;
+  float pre_skin_thumb_height_ = 0.0f;
+  float pre_skin_thumb_corner_radius_ = 0.0f;
+  std::string label_;
+  ValueAnimation hover_thumb_scale_{1.0f};
+  bool dragging_ = false;
+  std::string widget_schema_;
+  std::string lottie_json_;
+  float lottie_time_ = 0.0f;
+  WidgetRenderStyle render_style_ = WidgetRenderStyle::standard;
+
+public:
+    /// Sprite strip: designer-created filmstrip for fader appearance.
+    void set_sprite_strip(std::shared_ptr<SpriteStrip> strip) { sprite_strip_ = std::move(strip); }
+    const std::shared_ptr<SpriteStrip>& sprite_strip() const { return sprite_strip_; }
+
+    /// Browser-captured fader art. The body is the authored control crop with
+    /// its declared indicator removed; the indicator is the authored thumb
+    /// crop, translated along the value axis at paint time. Keeping these
+    /// separate lets the functional track/fill remain live without drawing the
+    /// stock white slab over the designer's own thumb.
+    void set_captured_art(std::shared_ptr<SpriteStrip> body,
+                          std::shared_ptr<SpriteStrip> indicator,
+                          float indicator_cross = 0.5f,
+                          float body_origin_x = 0.0f,
+                          float body_origin_y = 0.0f,
+                          float control_natural_w = 0.0f,
+                          float control_natural_h = 0.0f,
+                          bool body_includes_static_track = false) {
+        captured_body_ = std::move(body);
+        captured_indicator_ = std::move(indicator);
+        captured_indicator_cross_ = std::clamp(indicator_cross, 0.0f, 1.0f);
+        captured_body_origin_x_ = body_origin_x;
+        captured_body_origin_y_ = body_origin_y;
+        captured_control_natural_w_ = control_natural_w;
+        captured_control_natural_h_ = control_natural_h;
+        captured_body_includes_static_track_ = body_includes_static_track;
+        request_repaint();
+    }
+    void set_captured_raster_origin(float x, float y, float scale) {
+        captured_raster_origin_x_ = x;
+        captured_raster_origin_y_ = y;
+        captured_raster_scale_ = scale > 0.0f ? scale : 0.0f;
+    }
+    float captured_raster_scale() const { return captured_raster_scale_; }
+    float captured_raster_origin_x() const { return captured_raster_origin_x_; }
+    float captured_raster_origin_y() const { return captured_raster_origin_y_; }
+    bool has_captured_indicator_art() const {
+        return captured_indicator_ && captured_indicator_->loaded();
+    }
+    float captured_indicator_cross() const { return captured_indicator_cross_; }
+    bool captured_body_includes_static_track() const {
+        return captured_body_includes_static_track_;
+    }
+
+    // ── Skin overrides ────────────────────────────────────────────────────
+    // Per-widget appearance, generalising the knob sprite-strip path to the
+    // fader: instead of baking the captured Figma art (which would freeze the
+    // thumb at its captured value), the importer derives the track / fill /
+    // thumb colors from the design and the widget redraws them procedurally
+    // so the thumb still MOVES with set_value(). Unset → today's theme-token
+    // behavior (back-compat). Mirrors RangeSlider's accent override.
+    void set_skin_track_color(canvas::Color c) { track_color_ = c; has_skin_track_ = true; request_repaint(); }
+    void set_skin_fill_color(canvas::Color c)  { fill_color_  = c; has_skin_fill_  = true; request_repaint(); }
+    void set_skin_thumb_color(canvas::Color c) { thumb_color_ = c; has_skin_thumb_ = true; request_repaint(); }
+    /// Snapshot the non-skin thumb geometry before a scripted skin takes
+    /// ownership. Repeated authored updates share the same baseline so a later
+    /// fallback restores the host/application geometry rather than whichever
+    /// authored update happened to run last.
+    void begin_skin_thumb_style() {
+        if (has_skin_thumb_style_) return;
+        pre_skin_thumb_shape_ = thumb_shape_;
+        pre_skin_thumb_width_ = thumb_width_;
+        pre_skin_thumb_height_ = thumb_height_;
+        pre_skin_thumb_corner_radius_ = thumb_corner_radius_;
+        has_skin_thumb_style_ = true;
+    }
+    /// Panel-wide fallback for a thumb. Unlike a per-control authored colour,
+    /// this remains subordinate to a live `control.thumb` theme token.
+    void set_skin_thumb_fallback_color(canvas::Color c) {
+        thumb_fallback_color_ = c;
+        has_skin_thumb_fallback_ = true;
+        // A later panel/theme fallback is a provenance transition, not merely
+        // another stored palette value. Retire any older per-control override
+        // so paint can resolve the live control.thumb token again.
+        has_skin_thumb_ = false;
+        request_repaint();
+    }
+    /// Return thumb colour authority entirely to the live theme. This is
+    /// distinct from clear_skin(): track/fill styling may remain authored.
+    void clear_skin_thumb_colors() {
+        has_skin_thumb_ = false;
+        has_skin_thumb_fallback_ = false;
+        request_repaint();
+    }
+    /// Retire every scripted thumb-specific override while leaving authored
+    /// track/fill styling intact. This is the inverse of begin_skin_thumb_style
+    /// and is used when replay changes thumb authority back to the live theme.
+    void clear_skin_thumb_style() {
+        clear_skin_thumb_colors();
+        has_skin_thumb_border_ = false;
+        if (has_skin_thumb_style_) {
+            thumb_shape_ = pre_skin_thumb_shape_;
+            thumb_width_ = pre_skin_thumb_width_;
+            thumb_height_ = pre_skin_thumb_height_;
+            thumb_corner_radius_ = pre_skin_thumb_corner_radius_;
+            has_skin_thumb_style_ = false;
+        }
+        request_repaint();
+    }
+    void set_skin_thumb_border_color(canvas::Color c) { thumb_border_color_ = c; has_skin_thumb_border_ = true; request_repaint(); }
+    // Outline of the empty track: the lighter edge the captured art draws
+    // around the dark channel. When set, the skinned fader strokes the track
+    // rect so it doesn't read as a flat dark slab.
+    void set_skin_track_border_color(canvas::Color c) { track_border_color_ = c; has_skin_track_border_ = true; request_repaint(); }
+    // Derived thin track width (logical px). When set, the skinned fader draws
+    // its track / fill at exactly this width (centerd) instead of a fraction of
+    // the widget box, matching the captured art's narrow track.
+    void set_skin_track_width(float w) {
+        if (w > 0.0f) { skin_track_width_ = w; has_skin_track_width_ = true; request_repaint(); }
+    }
+    float skin_track_width() const { return skin_track_width_; }
+    bool has_skin_track_width() const { return has_skin_track_width_; }
+    void clear_skin() {
+        clear_skin_thumb_style();
+        has_skin_track_ = has_skin_fill_ = false;
+        has_skin_track_border_ = false;
+        has_skin_track_width_ = false;
+        request_repaint();
+    }
+    bool has_skin() const {
+        return has_skin_track_ || has_skin_fill_ || has_skin_thumb_ ||
+               has_skin_thumb_border_ || has_skin_track_border_;
+    }
+    bool has_skin_track_color() const { return has_skin_track_; }
+    bool has_skin_fill_color() const { return has_skin_fill_; }
+    bool has_skin_thumb_color() const { return has_skin_thumb_; }
+    bool has_skin_thumb_fallback_color() const {
+        return has_skin_thumb_fallback_;
+    }
+    bool has_skin_thumb_border_color() const { return has_skin_thumb_border_; }
+    bool has_skin_track_border_color() const { return has_skin_track_border_; }
+    canvas::Color skin_track_color() const { return track_color_; }
+    canvas::Color skin_fill_color() const { return fill_color_; }
+    canvas::Color skin_thumb_color() const { return thumb_color_; }
+    canvas::Color skin_thumb_fallback_color() const {
+        return thumb_fallback_color_;
+    }
+    canvas::Color skin_thumb_border_color() const { return thumb_border_color_; }
+    canvas::Color skin_track_border_color() const { return track_border_color_; }
+
+private:
+    std::shared_ptr<SpriteStrip> sprite_strip_;
+    std::shared_ptr<SpriteStrip> captured_body_;
+    std::shared_ptr<SpriteStrip> captured_indicator_;
+    float captured_indicator_cross_ = 0.5f;
+    float captured_body_origin_x_ = 0.0f;
+    float captured_body_origin_y_ = 0.0f;
+    float captured_control_natural_w_ = 0.0f;
+    float captured_control_natural_h_ = 0.0f;
+    bool captured_body_includes_static_track_ = false;
+    float captured_raster_origin_x_ = 0.0f;
+    float captured_raster_origin_y_ = 0.0f;
+    float captured_raster_scale_ = 0.0f;
+    canvas::Color track_color_{};
+    canvas::Color fill_color_{};
+    canvas::Color thumb_color_{};
+    canvas::Color thumb_fallback_color_{};
+    canvas::Color thumb_border_color_{};
+    canvas::Color track_border_color_{};
+    bool has_skin_track_ = false;
+    bool has_skin_fill_ = false;
+    bool has_skin_thumb_ = false;
+    bool has_skin_thumb_fallback_ = false;
+    bool has_skin_thumb_border_ = false;
+    bool has_skin_track_border_ = false;
+    float skin_track_width_ = 0.0f;
+    bool has_skin_track_width_ = false;
+};
+
+// ── RangeSlider ──────────────────────────────────────────────────────────────
+// Generic min/max/step slider mapped to HTML <input type="range">.
+//
+// Distinct from Knob (rotary, normalized 0..1) and Fader (DSP linear with
+// decorative track + large thumb). RangeSlider is the plain rectangular
+// track + circular handle the web uses for volume / morph / scrubber UIs.
+// Caller-supplied min/max/step are honoured natively — the bridge does
+// not preprocess them. Quantisation happens inside the widget so JS-side
+// callers see the same value the renderer paints.
+//
+class RangeSlider : public View, public AccessibilityValueInterface {
+public:
+    enum class Orientation { horizontal, vertical };
+
+    RangeSlider() {
+        set_access_role(AccessRole::slider);
+        set_focusable(true);
+        // The control paints 16pt on its minor axis, which is comfortable to
+        // look at and uncomfortable to hit. Grow only the hit area to the 44pt
+        // touch target HitMetrics specifies -- (44 - 16) / 2 = 14pt per edge --
+        // so the thumb is grabbable without the box, the layout or the paint
+        // changing. The major axis gets the same 14pt so the thumb is still
+        // grabbable at either travel extreme, where half of it sits outside
+        // the track.
+        const float target = HitMetrics::default_min_target_pt(PointerType::touch);
+        const float slop = std::max(0.0f, (target - kMinorAxisExtent) * 0.5f);
+        set_hit_slop(slop);
+    }
+
+    /// The thumb's minor-axis extent at rest, in points. `paint()` derives the
+    /// thumb from this and the constructor sizes the hit slop from it, so the
+    /// two cannot drift.
+    static constexpr float kMinorAxisExtent = 16.0f;
+
+    // ── AccessibilityValueInterface (caller's min/max/step units) ────────
+    double get_current_value() const override { return value_; }
+    void set_current_value(double v) override {
+        const float prev = value_;
+        set_value(static_cast<float>(v));
+        if (value_ != prev && on_change) on_change(value_);
+    }
+    double get_minimum_value() const override { return min_; }
+    double get_maximum_value() const override { return max_; }
+    double get_step_size() const override {
+        return step_ > 0.0f
+            ? step_
+            : AccessibilityValueInterface::get_step_size();
+    }
+
+    /// Inclusive lower bound (default 0).
+    void set_min(float v) { min_ = v; clamp_and_quantize_(); }
+    float min_value() const { return min_; }
+
+    /// Inclusive upper bound (default 1). If max < min, value falls
+    /// back to min — matches HTMLInputElement behavior for invalid ranges.
+    void set_max(float v) { max_ = v; clamp_and_quantize_(); }
+    float max_value() const { return max_; }
+
+    /// Step size for quantisation. Zero or negative = no quantisation
+    /// (any value in [min,max] is allowed). HTML default is 1, but the
+    /// pulp default is 0 because most plugin UIs want continuous values
+    /// and explicitly opt in via `step` when they want stepping.
+    void set_step(float v) { step_ = v; clamp_and_quantize_(); }
+    float step() const { return step_; }
+
+    /// Set the current value. The value is clamped to [min,max] and
+    /// quantised to the nearest step if step > 0.
+    ///
+    /// request_repaint() lets programmatic preset application reach the screen,
+    /// not just the next user-input event. Gate on actual changes to avoid
+    /// redundant invalidations during sync_from_store / restore_values loops.
+    ///
+    /// `notify` controls whether the (post-quantisation) change reaches
+    /// `on_change`. `Notify::sync` (the default) fires it before returning, so
+    /// existing callers are unchanged; `Notify::none` writes silently, the right
+    /// choice when the slider is being synced FROM the value it drives (firing
+    /// back would echo into a feedback loop); `Notify::async` defers the
+    /// callback to the next `pulp::view::flush_async_notifications()`.
+    void set_value(float v, Notify notify = Notify::sync) {
+        float prev = value_;
+        value_ = v;
+        clamp_and_quantize_(notify);
+        if (value_ != prev) request_repaint();
+    }
+    float value() const { return value_; }
+
+    /// Display-only played value while a modulator moves this parameter
+    /// around value() (same contract as Knob::set_modulated_value): never
+    /// fires on_change, never writes a parameter, repaints the slider's own
+    /// box. `normalized` is a fraction of [min, max]. One thumb: the thumb
+    /// and fill sit at the value playing in the modulation colour (token
+    /// `knob.modulation`); the base is a quiet tick across the track.
+    void set_modulated_value(float normalized) {
+        const float v =
+            std::isfinite(normalized) ? std::clamp(normalized, 0.0f, 1.0f) : value_to_position_();
+        if (has_modulated_ && v == modulated_)
+            return;
+        has_modulated_ = true;
+        modulated_ = v;
+        request_repaint_self(kModulatedMarkerHalo);
+    }
+    void clear_modulated_value() {
+        if (!has_modulated_)
+            return;
+        has_modulated_ = false;
+        request_repaint_self(kModulatedMarkerHalo);
+    }
+    bool has_modulated_value() const {
+        return has_modulated_;
+    }
+    /// The played fraction of [min, max] while one is set.
+    float modulated_display_value() const {
+        return modulated_;
+    }
+
+    // Scroll-wheel adjusts the value (hover + wheel), scaled to the range.
+    bool wants_wheel_value() const override { return true; }
+    void on_wheel(float delta_y) override {
+        float prev = value_;
+        set_value(value_ + (-delta_y) * 0.004f * (max_ - min_));
+        if (value_ != prev && on_change) on_change(value_);
+    }
+
+    // True while the handle is being dragged so a param binding yields mid-drag.
+    bool is_gesture_active() const override { return dragging_; }
+
+    void set_orientation(Orientation o) { orientation_ = o; }
+    Orientation orientation() const { return orientation_; }
+
+    /// Override the accent color for the active fill.  CSS `accent-color`
+    /// does not recolor the range thumb: an enabled accented control keeps
+    /// the opaque light platform handle used by native HTML range controls.
+    void set_accent_color(canvas::Color c) {
+        accent_color_ = c;
+        has_accent_color_ = true;
+    }
+    void clear_accent_color() { has_accent_color_ = false; }
+    bool has_accent_color() const { return has_accent_color_; }
+    canvas::Color accent_color() const { return accent_color_; }
+
+    /// Track thickness in pixels (default 5). Anything in 4–6 matches
+    /// the visual weight of common HTML range styling.
+    void set_track_thickness(float t) { track_thickness_ = std::max(1.0f, t); }
+    float track_thickness() const { return track_thickness_; }
+
+    /// Skew / response curve, shaping the mapping between track position and
+    /// value. skew == 1 is linear (default). The drawn thumb position is
+    /// pow(valueProportion, skew); dragging is the inverse, so a linear drag
+    /// yields a non-linear value. skew < 1 spends more travel (finer control)
+    /// near the minimum — the law a frequency or time control wants; skew > 1
+    /// biases resolution toward the maximum.
+    void set_skew(float s) { skew_ = std::max(0.0001f, s); }
+    float skew() const { return skew_; }
+    /// Choose skew so `mid_value` lands at the middle of the track (position
+    /// 0.5). E.g. a 20 Hz–20 kHz slider with set_skew_from_midpoint(1000).
+    void set_skew_from_midpoint(float mid_value);
+    /// Track position [0,1] (skew-mapped) the thumb is drawn at for the value.
+    float position_for_value() const { return value_to_position_(); }
+
+    /// Fired when the value changes — from drag, click, or set_value(). The
+    /// callback receives the post-quantisation value, exactly the same
+    /// number value() will return.
+    std::function<void(float)> on_change;
+
+    /// Fired when an interactive drag begins / ends, so a binding can
+    /// bracket the edit in a host automation gesture.
+    std::function<void()> on_gesture_begin;
+    std::function<void()> on_gesture_end;
+
+    void paint(canvas::Canvas& canvas) override;
+    /// The control's own default box height. A childless leaf that reports
+    /// no intrinsic size gets no Yoga measure function, so in a row with
+    /// `align-items: center` and no authored height it lays out at zero
+    /// height -- and because the thumb's minor axis is derived from the box
+    /// height, the handle collapses to zero area and only the track keyline
+    /// paints. 16 is the thumb minor-axis size `paint()` already targets.
+    float intrinsic_height() const override { return 16.0f; }
+    void on_mouse_event(const MouseEvent& event) override;
+    void on_mouse_drag(Point pos) override;
+    void on_mouse_enter() override;
+    void on_mouse_leave() override;
+    bool wants_mouse_input() const override { return true; }
+    void advance_animations(float dt) override { hover_scale_.advance(dt); }
+    float hover_scale() const { return hover_scale_.value(); }
+
+private:
+    ValueAnimation hover_scale_{1.0f};  ///< thumb grows on hover (matches Fader)
+    /// Convert a position along the track (0=start, 1=end) to a value
+    /// after applying clamp + step quantisation.
+    float position_to_value_(float t) const;
+
+    /// Clamp value_ to [min_,max_] and snap it to the nearest step, then
+    /// notify on_change (per `notify`) if the post-quantisation value actually
+    /// changed. `Notify::sync` fires now, `Notify::none` suppresses, and
+    /// `Notify::async` defers to the next flush.
+    void clamp_and_quantize_(Notify notify = Notify::sync);
+
+    /// Common drag/click handler — `pos` is in local coordinates.
+    void update_from_position_(Point pos);
+
+    /// Track position [0,1] the thumb is drawn at for the current value,
+    /// applying the skew curve.
+    float value_to_position_() const;
+
+    float min_ = 0.0f;
+    float max_ = 1.0f;
+    float step_ = 0.0f;
+    float value_ = 0.0f;
+    bool has_modulated_ = false;
+    float modulated_ = 0.0f;
+    static constexpr float kModulatedMarkerHalo = 2.0f;
+    float skew_ = 1.0f;   ///< 1 = linear; <1 = finer control at the low end
+    Orientation orientation_ = Orientation::horizontal;
+    bool dragging_ = false;
+    float track_thickness_ = 5.0f;
+    canvas::Color accent_color_{};
+    bool has_accent_color_ = false;
+};
+
+// ── Toggle ───────────────────────────────────────────────────────────────────
+// Boolean on/off switch
+
+class Toggle : public View, public CustomShaderHost {
+public:
+    Toggle() : thumb_position_(0.0f), hover_opacity_(0.0f) {
+        mark_runtime_view_kind(RuntimeViewKind::toggle);
+        set_access_role(AccessRole::toggle);
+        // Seed the ARIA state; Toggle::set_on() keeps it in sync. A `toggle`
+        // (ARIA switch) with no state announces nothing about on/off.
+        set_access_checked("false");
+        set_focusable(true);
+    }
+
+    /// Set the on/off state. By default the thumb animates to the new position;
+    /// pass `animate = false` to snap immediately. Use the snapping form for the
+    /// initial seed from stored/preset state: there is nothing to animate from,
+    /// and a single headless paint (screenshot baseline) never advances the
+    /// animation clock, so an animated seed would render stuck in the off
+    /// position regardless of the logical state.
+    void set_on(bool v, bool animate = true);
+    bool is_on() const { return on_; }
+
+    /// Notifying overload. The plain `set_on(v)` / `set_on(v, animate)` forms
+    /// are silent (the mouse handler fires `on_toggle` for user input); this
+    /// form lets a programmatic write choose whether to fire it. `Notify::none`
+    /// changes state silently (matches the plain setter — the right choice when
+    /// syncing FROM the bound parameter); `Notify::sync` fires `on_toggle`
+    /// before returning; `Notify::async` defers it to the next flush. Fires only
+    /// on a real state change. Returns true if the state moved.
+    bool set_on(bool v, Notify notify, bool animate = true);
+
+    void set_label(std::string text) {
+        label_ = std::move(text);
+        set_derived_access_label(label_);  // the visible label is the accessible name
+    }
+    const std::string& label() const { return label_; }
+
+    /// Called when the toggle state changes.
+    std::function<void(bool)> on_toggle;
+
+    void paint(canvas::Canvas& canvas) override;
+    void on_mouse_down(Point pos) override;
+    void on_mouse_enter() override;
+    void on_mouse_leave() override;
+    bool wants_mouse_input() const override { return true; }
+
+    // Animation accessors for testing
+    float thumb_position() const { return thumb_position_.value(); }
+    float hover_opacity() const { return hover_opacity_.value(); }
+    void advance_animations(float dt) override;
+
+    void set_designed_overlay(bool enabled) { designed_overlay_ = enabled; request_repaint(); }
+    bool designed_overlay() const { return designed_overlay_; }
+
+    // Custom body shader comes from CustomShaderHost.
+    void set_widget_schema(std::string json) { widget_schema_ = std::move(json); }
+    const std::string& widget_schema() const { return widget_schema_; }
+    void set_lottie_json(std::string json) { lottie_json_ = std::move(json); }
+    const std::string& lottie_json() const { return lottie_json_; }
+    void set_lottie_time(float t) { lottie_time_ = std::clamp(t, 0.0f, 1.0f); }
+    float lottie_time() const { return lottie_time_; }
+
+
+private:
+    bool on_ = false;
+    std::string label_;
+    ValueAnimation thumb_position_;
+    ValueAnimation hover_opacity_;
+    std::string widget_schema_;
+    std::string lottie_json_;
+    float lottie_time_ = 0.0f;
+    bool designed_overlay_ = false;
+};
+
+// ── Checkbox ────────────────────────────────────────────────────────────────
+// Rounded-square checkbox with check glyph
+
+class Checkbox : public View {
+public:
+    // `checkbox`, not `toggle`: ARIA/AT-SPI/UIA all distinguish a checkbox
+    // from a switch. Toggle/ToggleButton keep `toggle` (ARIA `switch`).
+    // access_checked is the state slot every bridge reads (NSAccessibility
+    // accessibilityValue, UIA ToggleState, the AT-SPI CHECKED state): a
+    // `checkbox` role with an unset state announces the control and then says
+    // nothing about whether it is checked. Seeded here, kept in sync below.
+    Checkbox() {
+        set_access_role(AccessRole::checkbox);
+        set_access_checked("false");
+        set_focusable(true);
+    }
+
+    // Same programmatic repaint contract as Knob::set_value(), including the
+    // no-change guard for bridge sync/reload loops.
+    void set_checked(bool v) {
+        if (checked_ == v) return;
+        checked_ = v;
+        set_access_checked(v ? "true" : "false");
+        request_repaint_self();
+    }
+
+    /// Notifying overload. The plain `set_checked(v)` is silent (the mouse
+    /// handler fires `on_change` for user input); this form lets a programmatic
+    /// write choose whether to fire it. `Notify::none` changes state silently
+    /// (matches the plain setter — the right choice when syncing FROM the bound
+    /// parameter); `Notify::sync` fires `on_change` before returning;
+    /// `Notify::async` defers it to the next flush. Fires only on a real change.
+    /// Returns true if the state moved.
+    bool set_checked(bool v, Notify notify) {
+        if (checked_ == v) return false;
+        checked_ = v;
+        set_access_checked(v ? "true" : "false");
+        request_repaint();
+        if (notify == Notify::sync) {
+            if (on_change) on_change(checked_);
+        } else if (notify == Notify::async && on_change) {
+            auto fn = on_change;
+            const bool nv = checked_;
+            queue_async_notification([fn, nv] { fn(nv); });
+        }
+        return true;
+    }
+    bool is_checked() const { return checked_; }
+
+    std::function<void(bool)> on_change;
+
+    void paint(canvas::Canvas& canvas) override;
+    void on_mouse_down(Point pos) override;
+    bool wants_mouse_input() const override { return true; }
+
+private:
+    bool checked_ = false;
+};
+
+// ── ToggleButton ────────────────────────────────────────────────────────────
+// Full-width rounded button that toggles on/off
+
+class ToggleButton : public View {
+public:
+    ToggleButton() {
+        set_access_role(AccessRole::toggle);
+        set_access_checked("false");
+        set_focusable(true);
+    }
+
+    // Same programmatic repaint contract as Knob::set_value(), including the
+    // no-change guard for bridge sync/reload loops.
+    void set_on(bool v) {
+        if (on_ == v) return;
+        on_ = v;
+        set_access_checked(v ? "true" : "false");
+        request_repaint();
+    }
+
+    /// Notifying overload. The plain `set_on(v)` is silent (the mouse handler
+    /// fires `on_toggle`, and drives radio-group exclusivity, for user input);
+    /// this form lets a programmatic write choose whether to fire it.
+    /// `Notify::none` changes state silently (matches the plain setter — the
+    /// right choice when syncing FROM the bound parameter); `Notify::sync` fires
+    /// `on_toggle` before returning; `Notify::async` defers it to the next
+    /// flush. Fires only on a real change. Returns true if the state moved.
+    bool set_on(bool v, Notify notify) {
+        if (on_ == v) return false;
+        on_ = v;
+        set_access_checked(v ? "true" : "false");
+        request_repaint();
+        if (notify == Notify::sync) {
+            if (on_toggle) on_toggle(on_);
+        } else if (notify == Notify::async && on_toggle) {
+            auto fn = on_toggle;
+            const bool nv = on_;
+            queue_async_notification([fn, nv] { fn(nv); });
+        }
+        return true;
+    }
+    bool is_on() const { return on_; }
+
+    void set_label(std::string text) {
+        if (label_ == text) return;
+        label_ = std::move(text);
+        set_derived_access_label(label_);  // the visible label is the accessible name
+        request_repaint();
+    }
+    const std::string& label() const { return label_; }
+
+    void set_on_background_color(canvas::Color color) { on_background_color_ = color; request_repaint(); }
+    void set_off_background_color(canvas::Color color) { off_background_color_ = color; request_repaint(); }
+    void set_on_text_color(canvas::Color color) { on_text_color_ = color; request_repaint(); }
+    void set_off_text_color(canvas::Color color) { off_text_color_ = color; request_repaint(); }
+    void set_on_border_color(canvas::Color color) { on_border_color_ = color; request_repaint(); }
+    void set_off_border_color(canvas::Color color) { off_border_color_ = color; request_repaint(); }
+    void set_corner_radius(float radius) { corner_radius_ = std::max(0.0f, radius); request_repaint(); }
+    void set_font_size(float size) { font_size_ = std::max(1.0f, size); request_repaint(); }
+
+    /// Radio-group id (0 = independent toggle, the default). Sibling
+    /// ToggleButtons under the same parent that share a non-zero id are
+    /// mutually exclusive: clicking one turns it on and the others off, and
+    /// clicking the already-on one is a no-op (it stays selected). Grouping is
+    /// by shared parent: the id is only compared against siblings, so the same
+    /// id under a different parent forms an independent group.
+    void set_radio_group(int id) { radio_group_ = id; }
+    int radio_group() const { return radio_group_; }
+
+    const std::optional<canvas::Color>& on_background_color_override() const { return on_background_color_; }
+    const std::optional<canvas::Color>& off_background_color_override() const { return off_background_color_; }
+    const std::optional<canvas::Color>& on_text_color_override() const { return on_text_color_; }
+    const std::optional<canvas::Color>& off_text_color_override() const { return off_text_color_; }
+    const std::optional<canvas::Color>& on_border_color_override() const { return on_border_color_; }
+    const std::optional<canvas::Color>& off_border_color_override() const { return off_border_color_; }
+    std::optional<float> corner_radius_override() const { return corner_radius_; }
+    std::optional<float> font_size_override() const { return font_size_; }
+    /// Marks a browser-captured control as a live replacement. Paint remains
+    /// complete so captured ON/OFF pixels cannot survive a state change.
+    void set_designed_overlay(bool enabled) { designed_overlay_ = enabled; request_repaint(); }
+    bool designed_overlay() const { return designed_overlay_; }
+
+    std::function<void(bool)> on_toggle;
+
+    void paint(canvas::Canvas& canvas) override;
+    void on_mouse_down(Point pos) override;
+    bool wants_mouse_input() const override { return true; }
+
+    float intrinsic_height() const override { return 36.0f; }
+
+private:
+    bool on_ = false;
+    int radio_group_ = 0;   ///< 0 = independent; shared non-zero id = mutually exclusive
+    std::string label_;
+    std::optional<canvas::Color> on_background_color_;
+    std::optional<canvas::Color> off_background_color_;
+    std::optional<canvas::Color> on_text_color_;
+    std::optional<canvas::Color> off_text_color_;
+    std::optional<canvas::Color> on_border_color_;
+    std::optional<canvas::Color> off_border_color_;
+    std::optional<float> corner_radius_;
+    std::optional<float> font_size_;
+    bool designed_overlay_ = false;
+};
+
+// ── Icon ────────────────────────────────────────────────────────────────────
+// Simple vector icons drawn with canvas strokes and fills
+
+class Icon : public View {
+public:
+    enum class Type { image_upload, send, search, close };
+
+    Icon() {}
+    explicit Icon(Type t) : type_(t) {}
+
+    void set_type(Type t) { type_ = t; }
+    Type type() const { return type_; }
+
+    void paint(canvas::Canvas& canvas) override;
+
+private:
+    Type type_ = Type::image_upload;
+};
+
+// ── ImageView ───────────────────────────────────────────────────────────────
+// Displays an image loaded from a file path
+
+class ImageCache;  // fwd; include pulp/view/image_cache.hpp in consumers
+
+class ImageView : public View {
+public:
+    ImageView() {}
+
+    /// Legacy API: filesystem path. Internally routed to set_image_source
+    /// as `file://<path>` so the cache can normalize keys.
+    void set_image_path(const std::string& path) {
+        set_image_source(path.empty() ? std::string{} : "file://" + path);
+    }
+    const std::string& image_path() const { return path_; }
+
+    /// URI-keyed image source. Accepts file://, resource://, or
+    /// memory://sha256=<hex>. When an ImageCache is
+    /// attached via set_image_cache(), paint() consults it instead of
+    /// re-reading the file; the cache owns decode + eviction.
+    void set_image_source(const std::string& uri) {
+        if (uri != path_) {
+            path_ = uri;
+            loaded_ = false;
+            cached_data_.clear();
+        }
+    }
+    const std::string& image_source() const { return path_; }
+
+    /// Attach an ImageCache. Lifetime: cache must outlive the view.
+    /// Multiple views can share a cache — eviction is global. Passing
+    /// nullptr detaches the cache and returns the view to the
+    /// decode-on-paint legacy path.
+    void set_image_cache(ImageCache* cache) { cache_ = cache; }
+    ImageCache* image_cache() const { return cache_; }
+
+    /// Value-driven silhouette fill (design-import shape-fill, e.g. ELYSIUM's
+    /// prism / cube / cylinder illustrations). When `value` is in [0,1], paint()
+    /// overlays `fill_color` from the bottom up to `value` of the height, masked
+    /// to this image's own alpha silhouette via the canvas url() mask — so the
+    /// shape "fills" with color as the bound value rises. A negative value (the
+    /// default) disables the overlay and the image renders plainly.
+    void set_fill_value(float value) {
+        fill_value_ = value;
+        request_repaint();
+    }
+    float fill_value() const { return fill_value_; }
+    void set_fill_color(canvas::Color color) {
+        fill_color_ = color;
+        request_repaint();
+    }
+    bool has_fill() const { return fill_value_ >= 0.0f; }
+
+    /// Per-shape gradient fill (design-import shape-fill enhancement). When ≥2
+    /// stops are set, the value-driven silhouette fill paints THIS gradient
+    /// (stop[0] at the shape bottom → stop[last] at the top) revealed up to
+    /// `fill_value`, instead of the flat `fill_color`. The importer samples
+    /// each shape's OWN colors from its art and stamps them here so the fill
+    /// reproduces the original look — only adjustable. Storing stops is inert
+    /// until `fill_value >= 0`, so it never changes a plainly-rendered image
+    /// (keeps the capability opt-in). Fewer than 2 stops clears the gradient
+    /// and the flat-color path is used.
+    void set_fill_gradient(std::vector<canvas::Color> stops) {
+        fill_gradient_ = std::move(stops);
+        request_repaint();
+    }
+    const std::vector<canvas::Color>& fill_gradient() const { return fill_gradient_; }
+    bool has_fill_gradient() const { return fill_gradient_.size() >= 2; }
+
+    void paint(canvas::Canvas& canvas) override;
+
+private:
+    /// Sample the fill gradient at t∈[0,1] (0 = bottom stop, 1 = top stop).
+    canvas::Color fill_gradient_color_at(float t) const;
+
+    std::string path_;
+    bool loaded_ = false;
+    std::vector<uint8_t> cached_data_;  // File bytes cached after first successful load
+    ImageCache* cache_ = nullptr;       // optional; owned externally
+    float fill_value_ = -1.0f;          // <0 disables the silhouette fill overlay
+    canvas::Color fill_color_ = canvas::Color::rgba(0.49f, 0.42f, 1.0f, 0.55f);
+    std::vector<canvas::Color> fill_gradient_;  // ≥2 stops ⇒ gradient fill
+};
+
+// ── XYPad ────────────────────────────────────────────────────────────────────
+// 2D parameter control surface (e.g., filter frequency × resonance)
+
+class XYPad : public View {
+public:
+    XYPad() = default;
+
+    void set_x(float v) { x_ = std::clamp(v, 0.0f, 1.0f); request_repaint(); }
+    void set_y(float v) { y_ = std::clamp(v, 0.0f, 1.0f); request_repaint(); }
+    float x_value() const { return x_; }
+    float y_value() const { return y_; }
+
+    /// Display-only played position on either axis while a modulator moves
+    /// that parameter around the base (same contract as
+    /// Knob::set_modulated_value): never fires on_change, never writes a
+    /// parameter, repaints the pad's own box. One puck: it sits at the
+    /// position playing (an unmodulated axis keeps its base) in the
+    /// modulation colour (token `knob.modulation`); the base is a small ring.
+    void set_modulated_x(float normalized) {
+        set_modulated_axis(has_mod_x_, mod_x_, x_, normalized);
+    }
+    void set_modulated_y(float normalized) {
+        set_modulated_axis(has_mod_y_, mod_y_, y_, normalized);
+    }
+    void clear_modulated_x() {
+        clear_modulated_axis(has_mod_x_);
+    }
+    void clear_modulated_y() {
+        clear_modulated_axis(has_mod_y_);
+    }
+    bool has_modulated_value() const {
+        return has_mod_x_ || has_mod_y_;
+    }
+    /// The played position on each axis while one is set, else the base.
+    float modulated_display_x() const {
+        return has_mod_x_ ? mod_x_ : x_;
+    }
+    float modulated_display_y() const {
+        return has_mod_y_ ? mod_y_ : y_;
+    }
+
+    void set_x_label(std::string l) { x_label_ = std::move(l); }
+    void set_y_label(std::string l) { y_label_ = std::move(l); }
+
+    std::function<void(float, float)> on_change;
+    std::function<void()> on_gesture_begin;
+    std::function<void()> on_gesture_end;
+
+    void paint(canvas::Canvas& canvas) override;
+    void on_mouse_down(Point pos) override;
+    void on_mouse_drag(Point pos) override;
+    void on_mouse_up(Point pos) override;
+    bool wants_mouse_input() const override { return true; }
+
+    // True while the puck is being dragged so a param binding yields mid-drag.
+    bool is_gesture_active() const override { return dragging_; }
+
+private:
+    void update_from_pos(Point pos);
+    void set_modulated_axis(bool& has, float& slot, float base, float normalized) {
+        const float v = std::isfinite(normalized) ? std::clamp(normalized, 0.0f, 1.0f) : base;
+        if (has && v == slot)
+            return;
+        has = true;
+        slot = v;
+        request_repaint_self(kModulatedMarkerHalo);
+    }
+    void clear_modulated_axis(bool& has) {
+        if (!has)
+            return;
+        has = false;
+        request_repaint_self(kModulatedMarkerHalo);
+    }
+    static constexpr float kModulatedMarkerHalo = 2.0f;
+    float x_ = 0.5f, y_ = 0.5f;
+    bool has_mod_x_ = false, has_mod_y_ = false;
+    float mod_x_ = 0.0f, mod_y_ = 0.0f;
+    std::string x_label_, y_label_;
+    bool dragging_ = false;
+};
+
+// ── Panel ────────────────────────────────────────────────────────────────────
+// Styled container with background, border, and rounding. For visual chrome.
+
+class Panel : public View {
+public:
+    // Seed the View-side radius slot so the default 8px rounding paints.
+    Panel() { View::set_border_radius(8.0f); }
+
+    void set_background_token(std::string token) { bg_token_ = std::move(token); }
+    void set_border_token(std::string token) { border_token_ = std::move(token); }
+    // Route through View::set_border_radius so the px slot the painter reads is
+    // updated and the pct slot is cleared, matching documented semantics.
+    void set_corner_radius(float r) { View::set_border_radius(r); }
+    void set_border_width(float w) { border_width_ = w; }
+
+    const std::string& background_token() const { return bg_token_; }
+    const std::string& border_token() const { return border_token_; }
+    float corner_radius() const { return View::corner_radius(); }
+    float border_width() const { return border_width_; }
+
+    void paint(canvas::Canvas& canvas) override;
+
+private:
+    std::string bg_token_ = "bg.surface";
+    std::string border_token_ = "control.border";
+    float border_width_ = 1.0f;
+};
+
+// ── GroupBox ───────────────────────────────────────────────────────────────
+// A titled container: rounded frame, a title chip at the top-left, and an
+// optional collapse chevron at the top-right. Collapsing hides the child
+// content (the caller sizes a collapsed box to header height). Matches the
+// Figma "Group Box" specimen (default / collapsible-expanded / collapsed /
+// empty-title-only). Children are added via add_child() and positioned by the
+// caller within the content area (origin = content_top()).
+class GroupBox : public View {
+public:
+    static constexpr float header_height = 30.0f;
+
+    void set_title(std::string t) { title_ = std::move(t); request_repaint(); }
+    const std::string& title() const { return title_; }
+
+    void set_collapsible(bool c) { collapsible_ = c; request_repaint(); }
+    bool collapsible() const { return collapsible_; }
+
+    // Collapsed hides all child content; expanded shows it. `notify` controls
+    // whether the change reaches `on_toggle`: `Notify::sync` (default) fires it,
+    // `Notify::none` writes silently (syncing FROM the bound state), and
+    // `Notify::async` defers it to the next flush. Fires only on a real change.
+    void set_collapsed(bool c, Notify notify = Notify::sync);
+    bool collapsed() const { return collapsed_; }
+
+    // Y at which child content begins (below the header band).
+    float content_top() const { return header_height + 6.0f; }
+
+    std::function<void(bool collapsed)> on_toggle;
+
+    void paint(canvas::Canvas& canvas) override;
+    void on_mouse_event(const MouseEvent& event) override;
+    bool wants_mouse_input() const override { return true; }
+
+private:
+    void apply_child_visibility();
+    std::string title_;
+    bool collapsible_ = false;
+    bool collapsed_ = false;
+};
+
+// ── DualRangeSlider ──────────────────────────────────────────────────────────
+// Two-thumb min↔max range selector (the Figma "Range Slider"): a track with a
+// filled segment between an independently-draggable low and high thumb. (The
+// single-thumb pulp::view::RangeSlider is a plain value slider; this is the
+// dual-handle variant.) Horizontal or vertical; optional disabled state.
+class DualRangeSlider : public View {
+public:
+    enum class Orientation { horizontal, vertical };
+    void set_orientation(Orientation o) { orientation_ = o; request_repaint(); }
+    void set_range(float min, float max) { min_ = min; max_ = std::max(min, max); clamp_(); }
+    void set_low(float v) { low_ = v; clamp_(); }
+    void set_high(float v) { high_ = v; clamp_(); }
+    float low() const { return low_; }
+    float high() const { return high_; }
+    float min_value() const { return min_; }
+    float max_value() const { return max_; }
+    void set_enabled(bool e) { enabled_ = e; request_repaint(); }
+    bool enabled() const { return enabled_; }
+    // When true, a dragged thumb stops at the other thumb instead of crossing it
+    // (low ≤ high always). Default false (ends move freely / may cross).
+    void set_no_cross(bool b) { no_cross_ = b; }
+    bool no_cross() const { return no_cross_; }
+
+    // Fired on a thumb drag with the (possibly-updated) low and high values.
+    std::function<void(float low, float high)> on_change;
+
+    void paint(canvas::Canvas& canvas) override;
+    void on_mouse_down(Point pos) override;
+    void on_mouse_drag(Point pos) override;
+    void on_mouse_up(Point pos) override;
+    bool wants_mouse_input() const override { return true; }
+
+private:
+    void clamp_();
+    float pos_for_(float v) const;        // value → 0..1 along the track
+    float value_for_pos_(float t) const;  // 0..1 → value
+    float pointer_t_(Point pos) const;    // pointer → 0..1 along the track
+    void apply_(Point pos);               // move the active thumb to the pointer
+    Orientation orientation_ = Orientation::horizontal;
+    float min_ = 0.0f, max_ = 1.0f, low_ = 0.25f, high_ = 0.70f;
+    bool enabled_ = true;
+    bool no_cross_ = false;
+    int drag_ = -1;   // 0 = low thumb, 1 = high thumb, -1 = none
+};
+
+// ── InlineValueEditor ────────────────────────────────────────────────────────
+// A click-to-type numeric value readout (the Figma "Inline Value Editor"): shows
+// `value + suffix` idle; click to edit (caret), Enter commits, Esc cancels. A
+// committed value outside [min,max] shows a danger ring and is rejected. Pair it
+// with a Knob/Fader (the readout drives the control via on_change; the control
+// updates the readout via set_value). States: idle / editing / invalid / disabled.
+class InlineValueEditor : public View {
+public:
+    InlineValueEditor() { set_focusable(true); }
+
+    void set_value(double v) { value_ = v; request_repaint(); }
+    double value() const { return value_; }
+    void set_range(double min, double max) { min_ = min; max_ = max; }
+    void set_suffix(std::string s) { suffix_ = std::move(s); request_repaint(); }
+    void set_decimals(int d) { decimals_ = d; request_repaint(); }
+    void set_enabled(bool e) { enabled_ = e; if (!e) editing_ = false; request_repaint(); }
+    bool enabled() const { return enabled_; }
+    bool editing() const { return editing_; }
+    bool invalid() const { return invalid_; }
+
+    // Fired when a typed value is committed in range.
+    std::function<void(double)> on_change;
+
+    void begin_edit();
+    void commit_edit();
+    void cancel_edit();
+
+    /// Caret shape. Defaults to the process-wide style (`CaretStyle::ibeam`).
+    void set_caret_style(CaretStyle style) { caret_style_ = style; request_repaint(); }
+    CaretStyle caret_style() const { return caret_style_; }
+
+    /// Blink timing. Defaults to the process-wide config.
+    void set_caret_blink(const CaretBlinkConfig& config) {
+        caret_blink_.set_config(config);
+        request_repaint();
+    }
+    const CaretBlinkConfig& caret_blink() const { return caret_blink_.config(); }
+
+    ~InlineValueEditor() override;
+
+    void paint(canvas::Canvas& canvas) override;
+    void on_mouse_down(Point pos) override;
+    void on_text_input(const TextInputEvent& event) override;
+    bool on_key_event(const KeyEvent& event) override;
+    void on_focus_changed(bool gained) override;
+    /// Re-home the caret-blink subscription when the tree's FrameClock changes —
+    /// same dangling-cached-clock hazard as TextEditor. See the definition.
+    void on_frame_clock_changed() override;
+    bool wants_mouse_input() const override { return true; }
+
+private:
+    std::string display_() const;     // value + suffix
+    void subscribe_caret_blink_();
+    void unsubscribe_caret_blink_();
+    double value_ = 0.0, min_ = -1e9, max_ = 1e9;
+    int decimals_ = 1;
+    std::string suffix_;
+    bool enabled_ = true, editing_ = false, invalid_ = false;
+    std::string edit_buffer_;
+    CaretBlink caret_blink_;
+    CaretStyle caret_style_ = default_caret_style();
+    int caret_blink_sub_ = -1;
+    FrameClock* caret_blink_clock_ = nullptr;  ///< cached: frame_clock() returns
+                                               ///< null once detached, which would
+                                               ///< leak the sub with a dangling `this`
+};
+
+// ── WaveformRecorder ─────────────────────────────────────────────────────────
+// Three-state recorder control (Ink & Signal "Recorder" component). One widget
+// composes a filled waveform display, a bottom level meter with a draggable
+// threshold thumb, a center transport button, and a top-right status badge,
+// and re-skins all four for each state:
+//
+//   armed     — faint/empty waveform, red record dot, "READY" badge; the
+//               threshold thumb is draggable to arm the capture trigger.
+//   recording — waveform tinted with accent.error, stop square, live "REC"
+//               badge; the meter shows the incoming level but the thumb is
+//               locked (you can't re-arm mid-take).
+//   captured  — waveform in accent.primary (teal), play triangle, "CAPTURED"
+//               badge with a check; the meter is inert.
+//
+// Clicking the center transport button advances the state in the cycle
+// armed → recording → captured → armed and fires on_state_change plus the
+// matching transport callback (on_record / on_stop / on_play). All chrome is
+// drawn from theme tokens so it stays legible on the dark Ink & Signal theme.
+class WaveformRecorder : public View {
+public:
+    enum class State { armed, recording, captured };
+
+    WaveformRecorder() {
+        set_access_role(AccessRole::group);
+        set_focusable(true);
+    }
+
+    /// Transport state. Setting a new state repaints and, per `notify`, fires
+    /// on_state_change: `Notify::sync` (default) fires it now, `Notify::none`
+    /// writes silently (syncing FROM the bound state), `Notify::async` defers it
+    /// to the next flush. Fires only on a real change.
+    void set_state(State s, Notify notify = Notify::sync);
+    State state() const { return state_; }
+    std::function<void(State)> on_state_change;
+
+    /// Normalized waveform samples (-1..1) drawn across the main area.
+    void set_waveform(std::vector<float> samples) {
+        waveform_ = std::move(samples);
+        request_repaint();
+    }
+    const std::vector<float>& waveform() const { return waveform_; }
+
+    /// Live input level (0..1) shown by the bottom meter fill.
+    void set_level(float level) {
+        float c = std::clamp(level, 0.0f, 1.0f);
+        if (c == level_) return;
+        level_ = c;
+        request_repaint();
+    }
+    float level() const { return level_; }
+
+    /// Capture threshold (0..1) marked by the draggable meter thumb. The setter
+    /// is silent (programmatic); user drags fire on_threshold_change.
+    void set_threshold(float threshold) {
+        float c = std::clamp(threshold, 0.0f, 1.0f);
+        if (c == threshold_) return;
+        threshold_ = c;
+        request_repaint();
+    }
+    float threshold() const { return threshold_; }
+    std::function<void(float)> on_threshold_change;
+
+    /// Optional transport-action callbacks, fired alongside the state advance.
+    std::function<void()> on_record;
+    std::function<void()> on_stop;
+    std::function<void()> on_play;
+
+    void paint(canvas::Canvas& canvas) override;
+    void on_mouse_down(Point pos) override;
+    void on_mouse_drag(Point pos) override;
+    void on_mouse_up(Point pos) override;
+    bool wants_mouse_input() const override { return true; }
+
+private:
+    /// Bottom level-meter strip (the draggable threshold track).
+    Rect meter_rect_() const;
+    /// Main waveform area (between the badge row and the meter).
+    Rect waveform_rect_() const;
+    float transport_radius_() const;
+    Point transport_center_() const;
+    /// Button-driven cycle: fires the current state's transport callback,
+    /// then advances armed→recording→captured→armed (via set_state).
+    void advance_state_();
+    /// Map a local x within the meter to a threshold and fire on_threshold_change.
+    void update_threshold_from_x_(float x);
+
+    State state_ = State::armed;
+    std::vector<float> waveform_;
+    float level_ = 0.0f;
+    float threshold_ = 0.5f;
+    bool dragging_threshold_ = false;
+};
+
+} // namespace pulp::view
+
+// clang-format off
+#if defined(PULP_VIEW_HAS_AUDIO_WIDGETS)
+#include <pulp/view/audio_widgets.hpp>
+#endif  // PULP_VIEW_HAS_AUDIO_WIDGETS
+// clang-format on
