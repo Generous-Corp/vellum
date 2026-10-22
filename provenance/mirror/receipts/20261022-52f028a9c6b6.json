@@ -5352,5 +5352,49 @@
       "name": "view-script",
       "oracle_class": "identity"
     }
+  ],
+  "divergent_files": [
+    {
+      "mirror_path": "mirror/core/render/src/gpu_compute.cpp",
+      "vellum_blob": "bd6de21c7bc4ade9f816c0e70aa6b5824a43b016",
+      "unit": "gpu-device-api",
+      "owner": "vellum",
+      "reason": "Dawn proc-table installation is authenticated by Vellum host bootstrap; mirrored code must not install the process-global table directly.",
+      "recipe": {
+        "id": "vellum.dawn-bootstrap-adaptation.v1",
+        "algorithm": "exact-replacements-v1",
+        "operations": [
+          "add <vellum/graphics/dawn_bootstrap.hpp> include",
+          "replace dawn::native::GetProcs plus dawnProcSetProcs with dawn_bootstrap_is_registered guard"
+        ]
+      },
+      "evidence": [
+        "registered-bootstrap-positive",
+        "unregistered-bootstrap-negative",
+        "identity-mismatch-negative",
+        "retry-negative"
+      ]
+    },
+    {
+      "mirror_path": "mirror/core/render/src/gpu_surface_dawn.cpp",
+      "vellum_blob": "6cf71c9efd04a92959c64d0be7e3c224bc746d36",
+      "unit": "gpu-device-api",
+      "owner": "vellum",
+      "reason": "Dawn proc-table installation is authenticated by Vellum host bootstrap; mirrored code must not install the process-global table directly.",
+      "recipe": {
+        "id": "vellum.dawn-bootstrap-adaptation.v1",
+        "algorithm": "exact-replacements-v1",
+        "operations": [
+          "add <vellum/graphics/dawn_bootstrap.hpp> include",
+          "replace dawn::native::GetProcs plus dawnProcSetProcs with dawn_bootstrap_is_registered guard"
+        ]
+      },
+      "evidence": [
+        "registered-bootstrap-positive",
+        "unregistered-bootstrap-negative",
+        "identity-mismatch-negative",
+        "retry-negative"
+      ]
+    }
   ]
 }

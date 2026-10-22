@@ -46,8 +46,14 @@ RECEIPT_KEYS = {
     "mirror_sha", "mirror_tree", "rename", "commit_map", "units", "files",
     "generated_inputs", "tool", "created_at",
 }
+RECEIPT_OPTIONAL_KEYS = {"divergent_files"}
 UNIT_KEYS = {"name", "closure_manifest", "closure_sha256", "oracle_class", "configure"}
 FILE_KEYS = {"mirror_path", "pulp_path", "mode", "blob"}
+DIVERGENT_FILE_KEYS = {"mirror_path", "vellum_blob", "unit", "owner", "reason", "recipe", "evidence"}
+DAWN_ADAPTATION_OPERATIONS = [
+    "add <vellum/graphics/dawn_bootstrap.hpp> include",
+    "replace dawn::native::GetProcs plus dawnProcSetProcs with dawn_bootstrap_is_registered guard",
+]
 GENERATED_KEYS = {"path", "sha256", "producer_paths"}
 GENERATED_OPTIONAL_KEYS = {"producer_dependency", "normalization"}
 # Pulp hashes build_info.hpp with its configure timestamp replaced by this
@@ -104,6 +110,8 @@ def strict_json(path: Path) -> Any:
         return result
 
     return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=no_duplicates)
+
+
 
 
 def safe_relative(value: Any) -> bool:
@@ -489,8 +497,8 @@ def tree_entries(root: Path, commit: str) -> list[dict[str, str]] | None:
 
 
 def validate_receipt_shape(receipt: Any, label: str) -> list[str]:
-    if not isinstance(receipt, dict) or set(receipt) != RECEIPT_KEYS:
-        return [f"{label}: receipt keys must be exactly {sorted(RECEIPT_KEYS)}"]
+    if not isinstance(receipt, dict) or not RECEIPT_KEYS <= set(receipt) <= RECEIPT_KEYS | RECEIPT_OPTIONAL_KEYS:
+        return [f"{label}: receipt keys must be exactly {sorted(RECEIPT_KEYS)} plus optional divergent_files"]
     errors: list[str] = []
     errors.extend(host_path_violations(receipt, label))
     expected = {
@@ -587,7 +595,43 @@ def validate_receipt_shape(receipt: Any, label: str) -> list[str]:
         for index, row in enumerate(generated):
             where = f"{label}: generated_inputs[{index}]"
             errors.extend(validate_generated_input(row, where))
+    divergent = receipt.get("divergent_files", [])
+    if not isinstance(divergent, list):
+        errors.append(f"{label}: divergent_files must be a list")
+    else:
+        seen: set[str] = set()
+        file_map = {row["mirror_path"]: row for row in files if isinstance(row, dict) and "mirror_path" in row}
+        for index, row in enumerate(divergent):
+            where = f"{label}: divergent_files[{index}]"
+            if not isinstance(row, dict) or set(row) != DIVERGENT_FILE_KEYS:
+                errors.append(f"{where} has unexpected keys")
+                continue
+            path = row.get("mirror_path")
+            if not isinstance(path, str) or path in seen or path not in file_map:
+                errors.append(f"{where}.mirror_path must uniquely name a receipt file")
+            seen.add(str(path))
+            if not SHA40.fullmatch(str(row.get("vellum_blob"))):
+                errors.append(f"{where}.vellum_blob must be a Git blob SHA")
+            elif path in file_map and row["vellum_blob"] == file_map[path]["blob"]:
+                errors.append(f"{where}.vellum_blob must differ from the Pulp base blob")
+            if not isinstance(row.get("unit"), str) or not row["unit"]:
+                errors.append(f"{where}.unit must be non-empty")
+            if row.get("owner") != "vellum":
+                errors.append(f"{where}.owner must be vellum")
+            if not isinstance(row.get("reason"), str) or not row["reason"]:
+                errors.append(f"{where}.reason must be recorded")
+            recipe = row.get("recipe")
+            if not isinstance(recipe, dict) or set(recipe) != {"id", "algorithm", "operations"}:
+                errors.append(f"{where}.recipe must contain id, algorithm, and operations")
+            elif recipe.get("id") != "vellum.dawn-bootstrap-adaptation.v1" or recipe.get("algorithm") != "exact-replacements-v1" or recipe.get("operations") != DAWN_ADAPTATION_OPERATIONS:
+                errors.append(f"{where}.recipe is not the reviewed deterministic adaptation")
+            if row.get("evidence") != ["registered-bootstrap-positive", "unregistered-bootstrap-negative", "identity-mismatch-negative", "retry-negative"]:
+                errors.append(f"{where}.evidence must name the four Dawn bootstrap controls")
     return errors
+
+
+def divergent_file_map(receipt: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {row["mirror_path"]: row for row in receipt.get("divergent_files", []) if isinstance(row, dict) and isinstance(row.get("mirror_path"), str)}
 
 
 def load_policy(root: Path) -> tuple[dict[str, Any] | None, list[str]]:
@@ -741,8 +785,19 @@ def verify_receipt(
         errors.append(f"{label}: mirror_sha root tree must contain only mirror/")
     if git_try(root, "rev-parse", f"{mirror_sha}:{MIRROR_DIR}") != receipt["mirror_tree"]:
         errors.append(f"{label}: mirror_tree differs from {mirror_sha}:mirror")
-    if newest and git_try(root, "rev-parse", f"{head}:{MIRROR_DIR}") != receipt["mirror_tree"]:
-        errors.append(f"{label}: HEAD:mirror is not the newest receipt's mirror tree")
+    if newest:
+        head_entries = tree_entries(root, head) or []
+        head_mirror_entries = [e for e in head_entries if e["mirror_path"].startswith(f"{MIRROR_DIR}/")]
+        if any(e["kind"] != "blob" for e in head_mirror_entries):
+            errors.append(f"{label}: HEAD:mirror contains non-blob entries")
+        head_blobs = {e["mirror_path"]: e["blob"] for e in head_mirror_entries if e["kind"] == "blob"}
+        overlays = divergent_file_map(receipt)
+        expected_head = {
+            row["mirror_path"]: overlays.get(row["mirror_path"], {}).get("vellum_blob", row["blob"])
+            for row in receipt["files"]
+        }
+        if head_blobs != expected_head:
+            errors.append(f"{label}: HEAD:mirror is not the newest receipt's mirror tree")
     entries = tree_entries(root, mirror_sha) or []
     projected = [
         {"mirror_path": e["mirror_path"], "mode": e["mode"], "blob": e["blob"]}
@@ -815,6 +870,10 @@ def verify_receipt(
             )
         closures[unit["name"]] = closure
     if len(closures) == len(receipt["units"]):
+        unit_names = {unit["name"] for unit in receipt["units"]}
+        for overlay in receipt.get("divergent_files", []):
+            if overlay.get("unit") not in unit_names:
+                errors.append(f"{label}: divergent file {overlay.get('mirror_path')} names unknown unit {overlay.get('unit')}")
         closure_paths = {
             p for c in closures.values() for p in c["files"] if not p.startswith("@build/")
         }

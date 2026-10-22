@@ -334,7 +334,7 @@ def mirror_files(root: Path) -> Iterable[Path]:
 
 
 def mirror_origin_findings(
-    root: Path, records: Iterable[dict[str, str]]
+    root: Path, records: Iterable[dict[str, str]], divergent: dict[str, dict[str, object]] | None = None
 ) -> list[dict[str, str]]:
     """Every mirrored file must equal a recorded Pulp-origin blob at its path.
 
@@ -348,6 +348,9 @@ def mirror_origin_findings(
     for path in mirror_files(root):
         relative = path.relative_to(root).as_posix()
         blob = git_blob_sha(path.read_bytes())
+        adaptation = (divergent or {}).get(relative)
+        if isinstance(adaptation, dict) and adaptation.get("vellum_blob") == blob:
+            continue
         if relative not in recorded:
             rule = "mirror-file-without-origin-record"
         elif blob not in recorded[relative]:
@@ -703,7 +706,17 @@ def verify(
 
     mirror_inventory = sorted(path.relative_to(root).as_posix() for path in mirror_files(root))
     checks["mirror_file_count"] = len(mirror_inventory)
-    origin_findings = mirror_origin_findings(root, records)
+    divergent: dict[str, dict[str, object]] = {}
+    try:
+        export_verifier = load_mirror_export_verifier()
+        index = export_verifier.strict_json(root / export_verifier.INDEX_PATH)
+        receipt_paths = index.get("receipts", []) if isinstance(index, dict) else []
+        if receipt_paths:
+            newest = export_verifier.strict_json(root / receipt_paths[-1])
+            divergent = export_verifier.divergent_file_map(newest)
+    except (OSError, ValueError, AttributeError, IndexError, TypeError):
+        divergent = {}
+    origin_findings = mirror_origin_findings(root, records, divergent)
     checks["mirror_origin_findings"] = origin_findings
     if origin_findings:
         errors.append(f"mirror root has {len(origin_findings)} files without a matching origin record")

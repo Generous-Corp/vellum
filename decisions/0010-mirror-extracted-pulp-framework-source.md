@@ -37,10 +37,14 @@ export appends records and merges again; it never rewrites `main`.
 ## One editable owner, one direction
 
 - Pulp remains the only editable source owner of every mirrored unit until that
-  unit's ownership flip. Files under `mirror/` are read-only in Vellum: a file
-  passes only while its bytes equal a recorded Pulp-origin blob, and every
-  record must resolve to that blob at the cited Pulp commit and path. A manual
-  edit therefore cannot pass, and Vellum carries no reverse flow into Pulp.
+  unit's ownership flip. Files under `mirror/` are read-only in Vellum: an
+  unlisted file passes only while its bytes equal a recorded Pulp-origin blob,
+  and every record must resolve to that blob at the cited Pulp commit and path.
+  A narrowly scoped Vellum-owned adaptation may be listed in the receipt's
+  `divergent_files` overlay only with its exact blob, owner, deterministic
+  recipe, and behavioral evidence; all other files retain byte identity. A
+  manual edit therefore cannot pass, and Vellum carries no reverse flow into
+  Pulp.
 - Promotion readiness is a Vellum release built from the mirror at an exact
   Pulp commit, with all evidence lanes green and an owner-signed promotion
   record. From then on Vellum is the authoritative release of that unit while

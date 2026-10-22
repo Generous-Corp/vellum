@@ -189,6 +189,25 @@ def newest_receipt(repo: Path) -> tuple[str, dict[str, Any]]:
 
 def verify_mirror_identity(repo: Path, receipt: dict[str, Any]) -> int:
     """Prove the working tree's mirror/ is byte-identical to the receipt."""
+    overlays = receipt.get("divergent_files", [])
+    if not isinstance(overlays, list):
+        raise PlanError("receipt divergent_files must be a list")
+    overlay_map: dict[str, str] = {}
+    base_rows = {row.get("mirror_path"): row for row in receipt.get("files", []) if isinstance(row, dict)}
+    for row in overlays:
+        if not isinstance(row, dict) or set(row) != {"mirror_path", "vellum_blob", "unit", "owner", "reason", "recipe", "evidence"}:
+            raise PlanError("receipt divergent_files row is malformed")
+        path, blob = row.get("mirror_path"), row.get("vellum_blob")
+        if not isinstance(path, str) or path in overlay_map or path not in base_rows or not SHA40.match(str(blob)):
+            raise PlanError("receipt divergent_files row does not name a unique receipt file and blob")
+        if blob == base_rows[path].get("blob") or row.get("owner") != "vellum" or not row.get("unit") or not row.get("reason"):
+            raise PlanError("receipt divergent_files row is not an explicit Vellum-owned divergence")
+        if row.get("evidence") != ["registered-bootstrap-positive", "unregistered-bootstrap-negative", "identity-mismatch-negative", "retry-negative"]:
+            raise PlanError("receipt divergent_files evidence controls are incomplete")
+        recipe = row.get("recipe")
+        if not isinstance(recipe, dict) or set(recipe) != {"id", "algorithm", "operations"} or recipe.get("id") != "vellum.dawn-bootstrap-adaptation.v1" or recipe.get("algorithm") != "exact-replacements-v1" or recipe.get("operations") != ["add <vellum/graphics/dawn_bootstrap.hpp> include", "replace dawn::native::GetProcs plus dawnProcSetProcs with dawn_bootstrap_is_registered guard"]:
+            raise PlanError("receipt divergent_files recipe is malformed")
+        overlay_map[path] = blob
     expected: dict[str, str] = {}
     for row in receipt.get("files", []):
         path, blob = row.get("mirror_path"), row.get("blob")
@@ -209,8 +228,10 @@ def verify_mirror_identity(repo: Path, receipt: dict[str, Any]) -> int:
         raise PlanError(f"mirror/ is missing files the landed receipt lists: {missing[:5]}")
     for path, blob in sorted(expected.items()):
         data = (repo / path).read_bytes()
-        if git_blob_sha(data) != blob:
-            raise PlanError(f"{path} differs from the landed mirror blob {blob}")
+        actual = git_blob_sha(data)
+        overlay = overlay_map.get(path)
+        if actual != (overlay or blob):
+            raise PlanError(f"{path} differs from the landed mirror blob {overlay or blob}")
     return len(expected)
 
 
