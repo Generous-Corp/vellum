@@ -156,6 +156,17 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
             ${VELLUM_MIRROR_TARGET_${_tkey}_INCLUDE_DIRS})
         target_compile_definitions("${_vellum_mirror_target}" PRIVATE
             ${VELLUM_MIRROR_TARGET_${_tkey}_DEFINITIONS})
+        # Apple libc++ annotates std::format's floating-point implementation
+        # as requiring macOS 13.3 even though the mirrored runtime's supported
+        # deployment boundary is 13.0.  The package already owns the runtime
+        # compatibility decision; suppress this header-only availability
+        # diagnostic for the mirrored targets while retaining the 13.0
+        # deployment target in the produced binaries.
+        if(APPLE AND CMAKE_OSX_DEPLOYMENT_TARGET AND
+           CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS "13.3")
+            target_compile_definitions("${_vellum_mirror_target}" PRIVATE
+                _LIBCPP_DISABLE_AVAILABILITY=1)
+        endif()
         target_compile_options("${_vellum_mirror_target}" PRIVATE
             ${_vellum_mirror_prefix_maps})
         # Link edges are resolved once, by the unit libraries below: a static
