@@ -86,8 +86,17 @@ afterwards invalidates the signature.
   `__.SYMDEF` symbol table must have the same content in both archives, fat
   slices are keyed by CPU type and subtype (a duplicate slice is refused), and
   the rebound receipt's toolchain fields must equal the rebuild receipt that
-  measured them. Both rebuild proofs are required whenever the manifest is
-  derived.
+  measured them. The rebound manifest must carry the rebuild manifest's
+  license mapping unchanged (files, licenses, per-member licenses, origins).
+  Because the rebound records rest on the rebuild's own claims, the rebuild
+  archive, manifest and receipt must each verify against the rebuild run's
+  build-provenance bundle (named in the signed record's
+  `legal_inventory.derived_from.rebuild_bundle`) for `build-skia.yml` on
+  `refs/heads/main`, with `--deny-self-hosted-runners`. `--rebuild-archive`,
+  `--rebuild-receipt`, `--rebuild-manifest` and `--rebuild-provenance-bundle`
+  are all required whenever the manifest is derived.
+- A record may not contain keys starting with `_`; the verifier reserves them
+  for its own results, which are not signed.
 - `verify_extraction.py` requires every landed mirror receipt's Pulp commit
   to pin this same renderer (branch, Skia, Dawn and builder commits, archive
   URL and digest).
