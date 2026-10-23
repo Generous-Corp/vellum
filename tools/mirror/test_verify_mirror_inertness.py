@@ -128,6 +128,44 @@ class VendoredNmSymbolsTest(unittest.TestCase):
         self.assertEqual(vi.floor_defined(listing), vi.nm_symbols.defined_any(listing))
 
 
+# GNU nm on an ELF archive: no leading underscore, `u` for a unique global
+# (GNU extension, a definition the dynamic linker keeps one copy of) and `i`
+# for an indirect function, both definitions; `w`/`v` and `U` are references.
+ELF_FLOOR_LISTING = (
+    "libpulp-view-audio.a[meter.cpp.o]: _ZN4pulp4view5Meter9set_levelEff T 0000000000000040 0000000000000010\n"
+    "libpulp-view-audio.a[meter.cpp.o]: _ZTIN4pulp4view5MeterE V 0000000000000000 0000000000000018\n"
+    "libpulp-view-audio.a[meter.cpp.o]: _ZTVN4pulp4view5MeterE W 0000000000000000 0000000000000030\n"
+    "libpulp-view-audio.a[meter.cpp.o]: _ZZN4pulp4view5Meter8instanceEvE1s u 0000000000000000 0000000000000008\n"
+    "libpulp-view-audio.a[meter.cpp.o]: _ZN4pulp4view13resolve_simdEv i 0000000000000080 0000000000000004\n"
+    "libpulp-view-audio.a[meter.cpp.o]: _ZN4pulp4view4View5paintEv U\n"
+    "libpulp-view-audio.a[meter.cpp.o]: _ZN4pulp4view4WeakEv w\n"
+    "libpulp-view-audio.a[meter.cpp.o]: _ZN4pulp4view6WeakObjEv v\n"
+)
+ELF_FLOOR_DEFINED = {
+    "_ZN4pulp4view5Meter9set_levelEff", "_ZTIN4pulp4view5MeterE", "_ZTVN4pulp4view5MeterE",
+    "_ZZN4pulp4view5Meter8instanceEvE1s", "_ZN4pulp4view13resolve_simdEv",
+}
+
+
+class ElfFloorTest(unittest.TestCase):
+    """GNU unique (`u`) and indirect (`i`) definitions belong to the floor."""
+
+    def test_vellum_counts_unique_and_indirect_definitions(self) -> None:
+        self.assertEqual(vi.floor_defined(ELF_FLOOR_LISTING), ELF_FLOOR_DEFINED)
+
+    def test_pulp_reads_the_same_floor_when_a_checkout_is_given(self) -> None:
+        root = os.environ.get("VELLUM_PULP_ROOT")
+        if not root:
+            self.skipTest("VELLUM_PULP_ROOT not set")
+        pin = json.loads((HERE / "nm_symbols.pin.json").read_text(encoding="utf-8"))
+        source = subprocess.run(["git", "-C", root, "show", f"{pin['pulp_commit']}:{pin['pulp_path']}"],
+                                capture_output=True, check=True, text=True).stdout
+        pulp: dict = {}
+        exec(compile(source, pin["pulp_path"], "exec"), pulp)
+        self.assertEqual(pulp["defined_any"](ELF_FLOOR_LISTING), vi.floor_defined(ELF_FLOOR_LISTING))
+        self.assertEqual(pulp["defined_any"](ELF_FLOOR_LISTING), ELF_FLOOR_DEFINED)
+
+
 class FloorAgreementTest(unittest.TestCase):
     """The stand-in rule covers every symbol Pulp's floor attributes to view-audio.
 
