@@ -215,35 +215,53 @@ def configure_violations(closure: dict[str, Any], label: str, *, is_canvas: bool
     return errors
 
 
+# Flags whose argument may be glued to them (`-I/x`, `-isystem/x`), longest first.
+PATH_FLAG_PREFIX = re.compile(
+    r"\A-(?:idirafter|iframework|imacros|include|isysroot|isystem|iquote|I|L|F|D|U|o)"
+)
+# Separators between the flags, defines, list items and quoted values a stored
+# string can carry.
+PATH_TOKEN_SEPARATORS = re.compile(r"[\s;,=()<>\"'`]+")
+CACHE_PREFIX = re.compile(r"\A@[A-Za-z0-9_.-]+/")
+# Fixed recipe text whose exact value is checked where it is used.
+HOST_PATH_EXEMPT_LITERALS = frozenset({
+    REPLAY_METHOD,
+    "sha256(utf8('patch-set:' + patch_set.key + '\\nbase-modification:' + base_modification"
+    " + '\\ncopy-tree:' + copy_tree + '\\n'))",
+})
+
+
+def path_token_allowed(token: str) -> bool:
+    """A token that names a path must be cache-relative (`@cache/...`),
+    repository-relative, or an https URL; nothing that resolves on a host."""
+    if "\\" in token:
+        return False
+    if token.startswith("https://"):
+        return ".." not in token[len("https://"):].split("/")
+    cache = CACHE_PREFIX.match(token)
+    body = token[cache.end():] if cache else token
+    if not cache and (token.startswith(("/", "~", "@")) or ":" in token.split("/", 1)[0]):
+        return False
+    segments = body.split("/")
+    if segments[-1] == "":
+        segments.pop()
+    return bool(segments) and all(segment not in {"", ".", ".."} for segment in segments)
+
+
 def host_path_violations(value: Any, label: str) -> list[str]:
-    """Reject host-absolute strings anywhere in a stored manifest/receipt."""
+    """Allow only cache- or repository-relative paths anywhere in a stored
+    manifest or receipt. Each string is split into its flags, defines and
+    list items, and every token that names a path must pass
+    path_token_allowed; a host path is refused whatever its root is."""
     errors: list[str] = []
     if isinstance(value, str):
-        windows_absolute = bool(re.match(r"^[A-Za-z]:[\\/]", value))
-        # Skia's generated include/private segment is the one intentional
-        # exemption.  Match only ordinary relative path segments so an
-        # embedded host path cannot hide inside the exemption span.
-        skia_match = re.search(
-            r"@external/skia/[0-9a-f]{40}/(?:[A-Za-z0-9._+-]+/)*include/private/",
-            value,
-            re.IGNORECASE,
-        )
-        host_scan_value = value
-        if skia_match:
-            host_scan_value = value[:skia_match.start()] + value[skia_match.end():]
-        embedded_unix = any(
-            (
-                re.search(rf"(?:^|//){root}(?:/|$)", host_scan_value, re.IGNORECASE)
-                or re.search(rf"(?:^|[=:\s,(;\"'])/{root}(?:/|$)", host_scan_value, re.IGNORECASE)
-                or re.search(rf"(?:^|[-=:\s;\"'])-[Ii](?:system)?/{root}(?:/|$)", host_scan_value, re.IGNORECASE)
-            )
-            for root in ("Users", "Volumes", "home", "private")
-        )
-        embedded_windows = bool(re.search(r"(?i)(?:^|[^A-Za-z0-9])[A-Z]:[\\/]", value))
-        unc = bool(re.search(r"\\\\[^\\/\s]+[\\/]", value))
-        file_url = "file://" in value.lower()
-        if Path(value).is_absolute() or value.startswith("~") or windows_absolute or embedded_unix or embedded_windows or unc or file_url:
-            errors.append(f"{label} contains an absolute host path: {value}")
+        if value in HOST_PATH_EXEMPT_LITERALS:
+            return errors
+        for piece in PATH_TOKEN_SEPARATORS.split(value):
+            token = PATH_FLAG_PREFIX.sub("", piece, count=1) if piece.startswith("-") else piece
+            if ("/" in token or "\\" in token or token.startswith("~")) and not path_token_allowed(token):
+                errors.append(f"{label} contains an absolute host path: {value}")
+                break
     elif isinstance(value, dict):
         for key, child in value.items():
             if isinstance(key, str):

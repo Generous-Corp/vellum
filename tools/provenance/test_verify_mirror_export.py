@@ -605,6 +605,28 @@ class VerifyMirrorExportTests(unittest.TestCase):
         ):
             self.assertTrue(verify_mirror_export.host_path_violations(value, "fixture"), value)
 
+    def test_host_paths_are_refused_whatever_their_root(self) -> None:
+        # The check is an allowlist: a path-bearing token must be cache- or
+        # repository-relative, so a host root it has never heard of is refused.
+        for value in (
+            "/opt/homebrew/include", "-I/opt/homebrew/include", "-isystem/usr/local/include",
+            "/tmp/vellum-build/x.hpp", "FOO=/var/folders/kb/T/x", "/__w/vellum/vellum/x",
+            "-F/Library/Frameworks", "-Wl,-rpath,/usr/local/lib", "--sysroot=/opt/sdk",
+            "@build/../../../../etc/x", "-I@build/../../../../etc/x", "core/../../etc/x",
+            "~/cache", "@/x", "C:/x", "file:///etc/x",
+        ):
+            with self.subTest(value=value):
+                self.assertError(verify_mirror_export.host_path_violations(value, "fixture"),
+                                 "contains an absolute host path")
+        for value in (
+            "@external/skia/" + "a" * 40 + "/build/include/include/private/SkAPI.h",
+            "@build/core/runtime/generated/Release/pulp/runtime/build_info.hpp",
+            "-Icore/canvas/include", "-isystem@external/mbed-tls/" + "a" * 40 + "/include",
+            "PULP_HAS_SKIA=1", "https://github.com/google/skia", "mirror/", "<catch2/catch_test_macros.hpp>",
+        ):
+            with self.subTest(value=value):
+                self.assertEqual(verify_mirror_export.host_path_violations(value, "fixture"), [])
+
     def test_embedded_host_paths_in_dict_keys_are_rejected(self) -> None:
         self.assertTrue(verify_mirror_export.host_path_violations({"/Users/attacker/key": "ok"}, "fixture"))
 
