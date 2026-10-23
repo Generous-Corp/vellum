@@ -1020,7 +1020,41 @@ class HostRequestTests(HarnessFixture):
         def positive_without_verdict(document) -> None:
             document["positive"]["verdict"] = None
 
-        for edit, expected in ((control_did_not_fail, "did not reject"), (not_applicable, "did not reject"),
+        def all_out_of_scope(document) -> None:
+            for control in document["controls"]:
+                if control["outcome"] == "REJECTED as required":
+                    control["outcome"] = "OUT OF SCOPE (no case selects this lane)"
+
+        def all_out_of_scope_with_no_evidence(document) -> None:
+            for control in document["controls"]:
+                control.update(outcome="OUT OF SCOPE (no case selects this lane)", rejected=None,
+                               lane_hit=None, applied_cases=[])
+            document["lanes_in_scope"] = []
+
+        def nothing_rejected(document) -> None:
+            for control in document["controls"]:
+                control["rejected"] = False
+
+        def lane_scope_shrunk(document) -> None:
+            lane = document["lanes_in_scope"][0]
+            document["lanes_in_scope"] = document["lanes_in_scope"][1:]
+            for control in document["controls"]:
+                if control["lane"] == lane:
+                    control.update(outcome="OUT OF SCOPE (no case selects this lane)", rejected=None,
+                                   lane_hit=None, applied_cases=[])
+
+        def receipt_control_out_of_scope(document) -> None:
+            for control in document["controls"]:
+                if control["control"] == "empty-corpus":
+                    control.update(outcome="OUT OF SCOPE (no case selects this lane)", rejected=None,
+                                   lane_hit=None, applied_cases=[])
+
+        for edit, expected in ((all_out_of_scope, "out of scope but records an application"),
+                               (all_out_of_scope_with_no_evidence, "no control rejected anything in selected lane"),
+                               (nothing_rejected, "marked rejected but its evidence says otherwise"),
+                               (lane_scope_shrunk, "differs from the lanes the positive run selected"),
+                               (receipt_control_out_of_scope, "receipt control empty-corpus cannot be out of scope"),
+                               (control_did_not_fail, "did not reject"), (not_applicable, "did not reject"),
                                (failures_named, "names control failures"), (no_controls, "lists no controls"),
                                (positive_rejected, "positive run did not accept"),
                                (positive_without_verdict, "positive run did not accept")):

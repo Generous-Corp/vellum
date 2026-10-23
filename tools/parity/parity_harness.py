@@ -1080,6 +1080,61 @@ def corpus_sha256(corpus: dict[str, Any]) -> str:
     return sha256_bytes(json.dumps(corpus, sort_keys=True).encode())
 
 
+REJECTED_OUTCOME = "REJECTED as required"
+# The one receipt-wide control that may make no claim: it applies only where a
+# selected lane declares a nested artifact.
+OPTIONAL_RECEIPT_CONTROLS = frozenset({"provenance-undeclared-nested-binary"})
+
+
+def control_evidence_errors(calibration: dict[str, Any]) -> list[str]:
+    """Every control's outcome must agree with its own evidence, every lane the
+    positive run selected must have a control that bit, and so must the
+    receipt-wide (lane `*`) controls. Out of scope is a claim about a lane the
+    corpus never selects, so it cannot stand in for a rejection."""
+    errors: list[str] = []
+    positive = calibration.get("positive")
+    cases = positive.get("cases") if isinstance(positive, dict) else None
+    selected: set[str] = set()
+    for case in cases if isinstance(cases, list) else []:
+        lanes = case.get("lanes") if isinstance(case, dict) else None
+        for lane, result in (lanes.items() if isinstance(lanes, dict) else ()):
+            if not isinstance(result, dict) or result.get("status") != "not_selected":
+                selected.add(lane)
+    if not selected:
+        errors.append("calibration positive run selected no lane")
+    declared = calibration.get("lanes_in_scope")
+    if declared is not None and (not isinstance(declared, list) or set(map(str, declared)) != selected):
+        errors.append(f"lanes_in_scope {declared!r} differs from the lanes the positive run selected {sorted(selected)}")
+    controls = calibration.get("controls")
+    if not isinstance(controls, list) or not controls:
+        return errors + ["calibration record lists no controls"]
+    bitten: set[str] = set()
+    for index, control in enumerate(controls):
+        if not isinstance(control, dict):
+            errors.append(f"control #{index} is not an object")
+            continue
+        name, lane, outcome = control.get("control", f"#{index}"), control.get("lane"), control.get("outcome")
+        if outcome == REJECTED_OUTCOME:
+            if control.get("rejected") is not True or control.get("lane_hit") is not True:
+                errors.append(f"control {name} is marked rejected but its evidence says otherwise")
+            else:
+                bitten.add(str(lane))
+        elif isinstance(outcome, str) and outcome.startswith("OUT OF SCOPE"):
+            if control.get("rejected") is not None or control.get("applied_cases"):
+                errors.append(f"control {name} is out of scope but records an application")
+            elif lane == "*" and name not in OPTIONAL_RECEIPT_CONTROLS:
+                errors.append(f"receipt control {name} cannot be out of scope")
+            elif lane != "*" and lane in selected:
+                errors.append(f"control {name} is out of scope for lane {lane}, which the positive run selected")
+        else:
+            errors.append(f"control {name} did not reject: {outcome!r}")
+    for lane in sorted(selected - bitten):
+        errors.append(f"no control rejected anything in selected lane {lane}")
+    if "*" not in bitten:
+        errors.append("no receipt-wide control rejected anything")
+    return errors
+
+
 def calibration_errors(calibration: Any, corpus: dict[str, Any]) -> list[str]:
     """A parity run is only as good as the controls that proved its corpus and
     harness can fail. Refuse a run whose corpus or harness code was not the
@@ -1090,16 +1145,7 @@ def calibration_errors(calibration: Any, corpus: dict[str, Any]) -> list[str]:
     if not calibration.get("calibrated"):
         errors.append("calibration record is not CALIBRATED")
     # `calibrated` is the record's own claim; re-derive it from the evidence.
-    controls = calibration.get("controls")
-    if not isinstance(controls, list) or not controls:
-        errors.append("calibration record lists no controls")
-    else:
-        for index, control in enumerate(controls):
-            outcome = control.get("outcome") if isinstance(control, dict) else None
-            name = control.get("control", f"#{index}") if isinstance(control, dict) else f"#{index}"
-            if not isinstance(outcome, str) or not (
-                    outcome == "REJECTED as required" or outcome.startswith("OUT OF SCOPE")):
-                errors.append(f"control {name} did not reject: {outcome!r}")
+    errors.extend(control_evidence_errors(calibration))
     if calibration.get("control_failures") != []:
         errors.append(f"calibration record names control failures: {calibration.get('control_failures')!r}")
     if calibration.get("case_filter"):
