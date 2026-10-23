@@ -521,7 +521,7 @@ class RendererEligibilityTests(unittest.TestCase):
         # so a rebind bundle never covers the published archive. A gh that
         # refuses the archive (as the real one would) must not fail a derived
         # record; the archive is bound by the rebound manifest's digest.
-        self.write_manifest(self.legal_manifest())
+        self.write_manifest(self.legal_manifest(derived_from={"method": verifier.REBIND_METHOD}))
         def derive(lock, record):
             record["legal_inventory"]["derived_from"] = {"rebuild_archive": {"sha256": "8" * 64}}
             record["build_provenance"]["signer_workflow"] = verifier.REBIND_SIGNER_WORKFLOW
@@ -542,6 +542,34 @@ class RendererEligibilityTests(unittest.TestCase):
         other.write_bytes(b"not the archive")
         with self.assertRaisesRegex(VerificationError, "not the one the rebind-attested legal manifest describes"):
             verifier.build_provenance_subjects(attestation, self.manifest_path, self.receipt_path, other)
+
+    def test_record_and_manifest_must_agree_on_derivation(self) -> None:
+        # A build record with a derived manifest, and a derived record with a
+        # build manifest, are both refused before a subject set is chosen.
+        lock_path, record_path, signature = self.eligible()
+        _, renderer = self.load(lock_path, record_path, signature)
+        derived_manifest = self.tmp / "derived-manifest.json"
+        derived_manifest.write_text(json.dumps(dict(self.legal_manifest(), derived_from={"method": "x"})))
+        with self.assertRaisesRegex(VerificationError, "disagree on whether the records were rebound"):
+            verifier.build_provenance_subjects(renderer["_attestation"], derived_manifest,
+                                               self.receipt_path, self.archive)
+
+        def derive(lock, record):
+            record["legal_inventory"]["derived_from"] = {"rebuild_archive": {"sha256": "8" * 64}}
+            record["build_provenance"]["signer_workflow"] = verifier.REBIND_SIGNER_WORKFLOW
+            record["build_provenance"]["source_digest"] = "a" * 40
+        lock_path, record_path, signature = self.eligible(mutate=derive)
+        _, renderer = self.load(lock_path, record_path, signature)
+        with self.assertRaisesRegex(VerificationError, "disagree on whether the records were rebound"):
+            verifier.build_provenance_subjects(renderer["_attestation"], self.manifest_path,
+                                               self.receipt_path, self.archive)
+
+    def test_run_invocation_parser_refuses_non_list_results(self) -> None:
+        certificate = {"verificationResult": {"signature": {"certificate": {"runInvocationURI": RUN_URI}}}}
+        self.assertEqual(verifier.result_invocations(json.dumps([certificate]), "x"), {RUN_URI})
+        for stdout in (json.dumps(certificate), json.dumps("text"), "not json", "[]", json.dumps([{}])):
+            with self.assertRaisesRegex(VerificationError, "names no run invocation"):
+                verifier.result_invocations(stdout, "x")
 
     def test_build_records_keep_the_archive_as_a_subject(self) -> None:
         lock_path, record_path, signature = self.eligible()

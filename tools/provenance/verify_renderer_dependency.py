@@ -704,13 +704,21 @@ def build_provenance_subjects(
     """What the build-provenance bundle must cover.
 
     A build's own records are attested together with the archive it built. A
-    rebound record's bundle is rebind-provenance.yml's, which attests only the
-    rebound manifest and receipt; the published archive is bound instead by
-    the rebound manifest's archive digest (and by the member comparison
-    against the rebuild-attested rebuild archive).
+    rebound record's bundle is rebind-provenance.yml's, which attests the
+    rebound manifest, receipt and member-comparison report, never the
+    published archive; the archive is bound instead by the rebound manifest's
+    archive digest (and by the member comparison against the rebuild-attested
+    rebuild archive). The signed record and the manifest must agree on which
+    kind they are, so neither can pick the weaker subject set alone.
     """
+    record_derived = (attestation.get("legal_inventory") or {}).get("derived_from") is not None
+    if legal_manifest is not None:
+        manifest_derived = json.loads(legal_manifest.read_bytes()).get("derived_from") is not None
+        require(record_derived == manifest_derived,
+                "the signed record and the legal manifest disagree on whether the records were "
+                "rebound from a rebuild")
     subjects = {"legal manifest": legal_manifest, "toolchain receipt": toolchain_receipt}
-    if (attestation.get("legal_inventory") or {}).get("derived_from") is None:
+    if not record_derived:
         subjects["archive"] = archive
     elif archive is not None and legal_manifest is not None:
         described = (json.loads(legal_manifest.read_bytes()).get("archive") or {}).get("sha256")

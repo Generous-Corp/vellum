@@ -80,10 +80,13 @@ afterwards invalidates the signature.
   names as `build_provenance.source_digest` for records rebound from a
   member-identical rebuild. Every result must name the run invocation the
   signed record names as `build_provenance.run` (`run_id`, `run_attempt`).
-  A rebind bundle covers only the rebound manifest and receipt: for rebound
-  records the archive is not a bundle subject, and is bound instead by the
-  rebound manifest's `archive.sha256` and the member comparison against the
-  rebuild-attested rebuild archive.
+  A rebind bundle covers the rebound manifest, the rebound receipt and the
+  member-comparison report, never the published archive: for rebound records
+  the archive is not a bundle subject, and is bound instead by the rebound
+  manifest's `archive.sha256` and the member comparison against the
+  rebuild-attested rebuild archive. The signed record and the legal manifest
+  must agree on whether the records are rebound before the subject set is
+  chosen.
 - With `--archive`, the manifest's static-archive inventory is re-derived from
   the archive bytes: every member of every slice must be listed with its
   digest, and the inventoried archives must be exactly the lock's.
