@@ -725,6 +725,24 @@ class VerifyMirrorExportTests(unittest.TestCase):
         with mock.patch.object(verify_mirror_export, "validate_closure_manifest", return_value=[]):
             self.assertEqual(fixture.errors(), [])
 
+    def test_unit_name_is_bound_to_its_closure_manifest(self) -> None:
+        # Renaming the canvas unit would otherwise keep its closure and skip
+        # the canvas-only configure contract, which keys on the unit name.
+        for name in ("x", "foundation", "canvas.."):
+            with self.subTest(name=name):
+                base = self.base / f"renamed-{len(name)}-{name.strip('.')}"
+                base.mkdir()
+                fixture = Fixture(base)
+                fixture.receipt["units"][0]["name"] = name
+                fixture.reland()
+                self.assertError(fixture.errors(), "closure_manifest must be")
+        base = self.base / "path-name"
+        base.mkdir()
+        fixture = Fixture(base)
+        fixture.receipt["units"][0]["name"] = "canvas/../canvas"
+        fixture.reland()
+        self.assertError(fixture.errors(), "name must be a plain unit name")
+
     def test_end_to_end_receipt_host_path_guard_is_required(self) -> None:
         fixture = Fixture(self.base)
         fixture.receipt["units"][0]["name"] = "FOO=/Users/attacker"
@@ -994,8 +1012,13 @@ class VerifyMirrorExportTests(unittest.TestCase):
         fixture = Fixture(self.base)
         closure = json.loads((fixture.vellum / fixture.closure_path).read_text())
         write(fixture.vellum, fixture.closure_path, dump(closure))
+        # The canvas closure filed under another unit's name, as the exporter would.
+        renamed = fixture.closure_path.replace("/canvas.json", "/foundation.json")
+        write(fixture.vellum, renamed, dump(closure))
+        (fixture.vellum / fixture.closure_path).unlink()
         fixture.receipt["units"][0]["name"] = "foundation"
-        fixture.receipt["units"][0]["closure_sha256"] = fixture.sha(fixture.closure_path)
+        fixture.receipt["units"][0]["closure_manifest"] = renamed
+        fixture.receipt["units"][0]["closure_sha256"] = fixture.sha(renamed)
         fixture.reland()
         self.assertError(fixture.errors(), "pulp-canvas may only appear in the canvas D3 unit")
 

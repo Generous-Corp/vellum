@@ -47,6 +47,7 @@ RECEIPT_KEYS = {
     "generated_inputs", "tool", "created_at",
 }
 UNIT_KEYS = {"name", "closure_manifest", "closure_sha256", "oracle_class", "configure"}
+UNIT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 FILE_KEYS = {"mirror_path", "pulp_path", "mode", "blob"}
 GENERATED_KEYS = {"path", "sha256", "producer_paths"}
 GENERATED_OPTIONAL_KEYS = {"producer_dependency", "normalization"}
@@ -565,6 +566,8 @@ def validate_receipt_shape(receipt: Any, label: str) -> list[str]:
                 errors.append(f"{where} configure identity is malformed")
             if not isinstance(unit["name"], str) or not unit["name"] or unit["name"] in names:
                 errors.append(f"{where} name is empty or duplicated")
+            elif not UNIT_NAME.fullmatch(unit["name"]):
+                errors.append(f"{where} name must be a plain unit name")
             names.add(str(unit["name"]))
             if not isinstance(unit["oracle_class"], str) or unit["oracle_class"] not in {"identity", "divergent"}:
                 errors.append(f"{where} oracle_class must be identity or divergent")
@@ -575,6 +578,11 @@ def validate_receipt_shape(receipt: Any, label: str) -> list[str]:
                 or not manifest.endswith(".json")
             ):
                 errors.append(f"{where} closure_manifest must live under {CLOSURE_DIR}<export_id>/")
+            elif isinstance(unit["name"], str) and manifest != f"{CLOSURE_DIR}{export_id}/{unit['name']}.json":
+                # The exporter names each closure after its unit, and per-unit
+                # rules (the canvas configure contract) key on the name, so a
+                # renamed unit must not keep another unit's closure.
+                errors.append(f"{where} closure_manifest must be {CLOSURE_DIR}<export_id>/<name>.json")
             if not SHA256.fullmatch(str(unit["closure_sha256"])):
                 errors.append(f"{where} closure_sha256 is not a SHA-256")
     files = receipt["files"]
