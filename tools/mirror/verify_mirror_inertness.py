@@ -90,9 +90,10 @@ VIEW_AUDIO_OWNED = re.compile(
 # except U (undefined) and lowercase w/v (weak references) counts as defined,
 # weak definitions (W, V) included. This is a contamination check: a weak
 # view-audio definition is view-audio inline code, and finding one in a Vellum
-# consumer means that code was compiled into Vellum. It is deliberately wider
-# than a dependency gate's strong-only rule (TDBRSCG), where an inline
-# definition repeated across archives is not a dependency.
+# consumer means that code was compiled into Vellum. Pulp's
+# tools/scripts/archive_symbol_closure_check.py deliberately counts strong
+# definitions only (TDBRSCG): it resolves dependencies between archives, where
+# an inline definition repeated in both is not a dependency.
 FLOOR_UNDEFINED_TYPES = frozenset("Uwv")
 FLOOR_LINE = re.compile(r"^(?P<archive>.*?)\[(?P<object>[^\]]+)\]: (?P<symbol>\S+) (?P<type>\S)")
 
