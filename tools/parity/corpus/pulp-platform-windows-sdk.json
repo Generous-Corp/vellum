@@ -1,0 +1,186 @@
+{
+  "schema": "vellum.parity.corpus.v1",
+  "corpus_id": "pulp-platform-windows-sdk-v1",
+  "description": "G7 Windows, Pulp vs Pulp, read statically: the PE images of Pulp's release SDKs pulp-sdk-windows-x64 and pulp-sdk-windows-arm64 v0.1009.0 (source e31f2976, built by release-cli.yml on GitHub-hosted Windows; tarball sha256 b57bdf1e... and 93d8a47a..., matching the release's SHA256SUMS): the C++ CLI pulp-cpp.exe and the Rust CLI pulp.exe are console executables for the slice's machine that import KERNEL32 and no debug CRT; the bundled wgpu_native.dll is a DLL for the same machine exporting the WebGPU C API.",
+  "declared_gaps": [
+    {
+      "row": "Windows plug-in DLLs (.clap / .vst3)",
+      "reason": "no Windows host was reachable from this session (the macpro Windows x64 VM is a dedicated, golden-reset CI slot; the win/win2/win3 hosts did not answer), and no Pulp workflow uploads a Windows plug-in binary (cross-platform-check.yml windows uploads build/test logs only). The lane is ready for them: require_exports clap_entry / GetPluginFactory, InitDll, ExitDll, required path <name>.vst3/Contents/x86_64-win/<name>.vst3."
+    },
+    {
+      "row": "Authenticode",
+      "reason": "the SDK images are not Authenticode-signed (no security directory); signature verification needs a Windows host or osslsigncode and is not asserted."
+    },
+    {
+      "row": "host checks 3-5 on Windows",
+      "reason": "nothing is executed; the images are read statically."
+    }
+  ],
+  "declared_exceptions": [],
+  "cases": [
+    {
+      "source": "fixtures/platform/scan.json",
+      "source_base": "corpus",
+      "width": 1,
+      "height": 1,
+      "case_id": "windows-x64-sdk-images",
+      "description": "pulp-sdk-windows-x64 v0.1009.0 images",
+      "source_kind": "platform",
+      "lanes": [
+        "windows"
+      ],
+      "args": {
+        "mode": [
+          "static"
+        ],
+        "artifact": [
+          "--artifact",
+          "{root:artifact}/x64"
+        ]
+      },
+      "expect": {
+        "machine": "x86_64",
+        "required": [
+          "pulp-cpp.exe",
+          "pulp.exe",
+          "wgpu_native.dll",
+          "sdk-provenance.json"
+        ],
+        "images": {
+          "pulp-cpp.exe": {
+            "dll": false,
+            "subsystem": "windows-cui",
+            "require_linked": [
+              "KERNEL32.dll"
+            ],
+            "forbid_linked": [
+              "^(msvcp|vcruntime)\\d+(_\\d+)?d\\.dll$",
+              "^ucrtbased\\.dll$",
+              "^concrt\\d+d\\.dll$"
+            ]
+          },
+          "pulp.exe": {
+            "dll": false,
+            "subsystem": "windows-cui",
+            "require_linked": [
+              "KERNEL32.dll"
+            ],
+            "forbid_linked": [
+              "^(msvcp|vcruntime)\\d+(_\\d+)?d\\.dll$",
+              "^ucrtbased\\.dll$",
+              "^concrt\\d+d\\.dll$"
+            ]
+          },
+          "wgpu_native.dll": {
+            "dll": true,
+            "require_exports": [
+              "wgpuCreateInstance",
+              "wgpuInstanceRequestAdapter"
+            ],
+            "require_linked": [
+              "KERNEL32.dll"
+            ],
+            "forbid_linked": [
+              "^(msvcp|vcruntime)\\d+(_\\d+)?d\\.dll$",
+              "^ucrtbased\\.dll$",
+              "^concrt\\d+d\\.dll$"
+            ],
+            "require_families": [
+              "wgpu"
+            ],
+            "forbid_families": [
+              "vellum"
+            ]
+          }
+        }
+      },
+      "controls": {
+        "machine": "pe-machine",
+        "rename_export": "pe-rename-export:wgpuCreateInstance=wgpuCreateInstancz",
+        "rename_import": "pe-rename-import:KERNEL32.dll=KERNEL33.dll"
+      }
+    },
+    {
+      "source": "fixtures/platform/scan.json",
+      "source_base": "corpus",
+      "width": 1,
+      "height": 1,
+      "case_id": "windows-arm64-sdk-images",
+      "description": "pulp-sdk-windows-arm64 v0.1009.0 images",
+      "source_kind": "platform",
+      "lanes": [
+        "windows"
+      ],
+      "args": {
+        "mode": [
+          "static"
+        ],
+        "artifact": [
+          "--artifact",
+          "{root:artifact}/arm64"
+        ]
+      },
+      "expect": {
+        "machine": "arm64",
+        "required": [
+          "pulp-cpp.exe",
+          "pulp.exe",
+          "wgpu_native.dll",
+          "sdk-provenance.json"
+        ],
+        "images": {
+          "pulp-cpp.exe": {
+            "dll": false,
+            "subsystem": "windows-cui",
+            "require_linked": [
+              "KERNEL32.dll"
+            ],
+            "forbid_linked": [
+              "^(msvcp|vcruntime)\\d+(_\\d+)?d\\.dll$",
+              "^ucrtbased\\.dll$",
+              "^concrt\\d+d\\.dll$"
+            ]
+          },
+          "pulp.exe": {
+            "dll": false,
+            "subsystem": "windows-cui",
+            "require_linked": [
+              "KERNEL32.dll"
+            ],
+            "forbid_linked": [
+              "^(msvcp|vcruntime)\\d+(_\\d+)?d\\.dll$",
+              "^ucrtbased\\.dll$",
+              "^concrt\\d+d\\.dll$"
+            ]
+          },
+          "wgpu_native.dll": {
+            "dll": true,
+            "require_exports": [
+              "wgpuCreateInstance",
+              "wgpuInstanceRequestAdapter"
+            ],
+            "require_linked": [
+              "KERNEL32.dll"
+            ],
+            "forbid_linked": [
+              "^(msvcp|vcruntime)\\d+(_\\d+)?d\\.dll$",
+              "^ucrtbased\\.dll$",
+              "^concrt\\d+d\\.dll$"
+            ],
+            "require_families": [
+              "wgpu"
+            ],
+            "forbid_families": [
+              "vellum"
+            ]
+          }
+        }
+      },
+      "controls": {
+        "machine": "pe-machine",
+        "rename_export": "pe-rename-export:wgpuCreateInstance=wgpuCreateInstancz",
+        "rename_import": "pe-rename-import:KERNEL32.dll=KERNEL33.dll"
+      }
+    }
+  ]
+}

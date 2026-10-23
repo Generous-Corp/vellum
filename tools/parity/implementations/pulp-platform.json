@@ -1,0 +1,29 @@
+{
+  "schema": "vellum.parity.implementation.v1",
+  "name": "pulp-platform",
+  "repository": "Generous-Corp/pulp",
+  "source_sha": null,
+  "description": "Pulp artifacts of platforms a Mac cannot host as a plug-in (lanes/platforms.py), read by lanes/platform_runner.py: Linux ELF and Windows PE images read statically; WebAssembly modules read statically and run under Pulp's own Node host checks; an iOS host app installed on a booted simulator; an Android APK installed and launched on an emulator. Roots: checkout = the checkout the artifact was built from; artifact = the artifact; other = a second artifact recorded in the identity probes (any; it is read, never run).",
+  "tools": {
+    "runner": "tools/parity/lanes/platform_runner.py",
+    "host-runner": "tools/parity/lanes/host_runner.py"
+  },
+  "probes": [
+    {"name": "build", "argv": ["{tool:host-runner}", "identity", "build", "{root:checkout}", "{root:artifact}", "{root:other}"]},
+    {"name": "provider", "argv": ["{tool:host-runner}", "identity", "provider", "{root:artifact}", "{root:other}"]},
+    {"name": "fonts", "argv": ["{tool:host-runner}", "identity", "fonts", "{root:artifact}", "{root:other}"]}
+  ],
+  "source_kinds": {
+    "platform": []
+  },
+  "steps": [
+    {
+      "id": "observe",
+      "source_kinds": ["platform"],
+      "argv": ["{tool:runner}", "@case_args:mode", "--scan", "{source}", "--out", "platform-observation.json",
+               "@case_args:artifact", "@case_args:host", "@case_args:fault"]
+    }
+  ],
+  "content_roots": ["artifact", "other"],
+  "authority": "native-render"
+}
