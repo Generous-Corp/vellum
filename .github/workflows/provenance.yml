@@ -206,8 +206,14 @@ jobs:
           PY
 
       - name: Verify renderer digest-to-provenance binding
+        env:
+          # The real-bundle tests run gh attestation verify, which wants a token.
+          GH_TOKEN: ${{ github.token }}
+          # Fail rather than skip the real Sigstore verification tests here.
+          VELLUM_REQUIRE_REAL_SIGSTORE: "1"
         run: |
           python3 tools/provenance/test_verify_renderer_dependency.py
+          python3 tools/provenance/test_verify_renderer_eligibility.py
           python3 tools/provenance/verify_renderer_dependency.py --json \
             > "$RUNNER_TEMP/renderer-provenance-report.json"
 
