@@ -844,15 +844,16 @@ class RendererPinTests(unittest.TestCase):
         self.assertTrue(rows[0]["matches_lock"])
 
     def test_export_against_another_milestone_fails(self) -> None:
-        # The case this check exists for: an m157 export against an m153 lock.
+        # The case this check exists for: an export from a Pulp commit that
+        # pins another milestone than the lock (for example m157 against m153).
         pin = json.loads(json.dumps(self.matching_pin))
-        pin["skia_branch"] = "chrome/m157"
-        pin["skia_commit"] = "b94213a11b3a2edadfae89f0c57a7f4ab72772c9"
-        pin["built_dawn"] = "ada567700e13aecf7989d78b21f7d330b522ea80"
+        pin["skia_branch"] = "chrome/m999"
+        pin["skia_commit"] = "1" * 40
+        pin["built_dawn"] = "2" * 40
         pin["release_assets"]["mac-universal"] = {
-            "url": "https://github.com/danielraffel/skia-builder/releases/download/chrome/m157/"
+            "url": "https://github.com/danielraffel/skia-builder/releases/download/chrome/m999/"
                    "skia-build-mac-universal-gpu-release.zip",
-            "sha256": "bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86"}
+            "sha256": "3" * 64}
         receipt = self.receipt(self.pulp_commit(pin))
         errors, rows = verify_extraction.renderer_pin_errors(self.root, self.pulp, [receipt])
         self.assertFalse(rows[0]["matches_lock"])
