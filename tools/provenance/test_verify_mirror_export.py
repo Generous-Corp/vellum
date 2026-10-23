@@ -652,7 +652,8 @@ class VerifyMirrorExportTests(unittest.TestCase):
             "/tmp/vellum-build/x.hpp", "FOO=/var/folders/kb/T/x", "/__w/vellum/vellum/x",
             "-F/Library/Frameworks", "-Wl,-rpath,/usr/local/lib", "--sysroot=/opt/sdk",
             "@build/../../../../etc/x", "-I@build/../../../../etc/x", "core/../../etc/x",
-            "~/cache", "@/x", "C:/x", "file:///etc/x",
+            "~/cache", "@/x", "C:/x", "file:///etc/x", "@../Users/me/x", "@./x", "-I@../Users/me/include",
+            "@attacker-cache/x",
         ):
             with self.subTest(value=value):
                 self.assertError(verify_mirror_export.host_path_violations(value, "fixture"),
@@ -662,6 +663,7 @@ class VerifyMirrorExportTests(unittest.TestCase):
             "@build/core/runtime/generated/Release/pulp/runtime/build_info.hpp",
             "-Icore/canvas/include", "-isystem@external/mbed-tls/" + "a" * 40 + "/include",
             "PULP_HAS_SKIA=1", "https://github.com/google/skia", "mirror/", "<catch2/catch_test_macros.hpp>",
+            "@system/sdl3/3.2.0/include",
         ):
             with self.subTest(value=value):
                 self.assertEqual(verify_mirror_export.host_path_violations(value, "fixture"), [])

@@ -223,7 +223,9 @@ PATH_FLAG_PREFIX = re.compile(
 # Separators between the flags, defines, list items and quoted values a stored
 # string can carry.
 PATH_TOKEN_SEPARATORS = re.compile(r"[\s;,=()<>\"'`]+")
-CACHE_PREFIX = re.compile(r"\A@[A-Za-z0-9_.-]+/")
+# The cache roots Pulp's closure exporter writes (vellum_closure.py): the
+# configured build tree, pinned external sources and system packages.
+CACHE_PREFIX = re.compile(r"\A@(?:build|external|system)/")
 # Fixed recipe text whose exact value is checked where it is used.
 HOST_PATH_EXEMPT_LITERALS = frozenset({
     REPLAY_METHOD,
