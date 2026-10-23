@@ -24,7 +24,7 @@ spec.loader.exec_module(fva)
 
 REPO = "Generous-Corp/pulp"
 PULP_SHA = "a" * 40
-WORKFLOW_SHA = "b" * 40
+WORKFLOW_SHA = PULP_SHA
 RECEIPT = "provenance/mirror/receipts/20990101-aaaaaaaaaaaa.json"
 TAG = f"artifact/pulp-view-audio/{PULP_SHA}"
 ARCHIVE = b"!<arch>\npublished pulp-view-audio\n"
@@ -192,6 +192,13 @@ class FetchTest(unittest.TestCase):
         self.publish()
         with self.assertRaisesRegex(fva.Mismatch, "symbol_floor_gate.exit_code"):
             self.fetch()
+
+    def test_a_run_at_another_commit_is_refused(self) -> None:
+        self.manifest["workflow"]["workflow_sha"] = "b" * 40
+        self.publish(workflow_sha="b" * 40)
+        with self.assertRaisesRegex(fva.Mismatch, "workflow_sha"):
+            self.fetch()
+        self.assertEqual(self.urls, [])
 
     def test_a_rejected_attestation_is_refused(self) -> None:
         self.gh_status.write_text("1", encoding="utf-8")

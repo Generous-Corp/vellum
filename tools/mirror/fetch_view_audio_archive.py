@@ -15,8 +15,9 @@ local build. provenance/mirror/pulp-view-audio-archive.json pins it:
   * the manifest must name the same commit, archive digest, size and run,
     and record a passing symbol-floor gate;
   * `gh attestation verify` must accept the archive and the manifest as
-    built by Pulp's view-audio-archive workflow on main, at the pinned
-    workflow commit, on a GitHub-hosted runner.
+    built by Pulp's view-audio-archive workflow on main, run at source_sha
+    itself (the workflow builds only its own commit), on a GitHub-hosted
+    runner.
 
     fetch_view_audio_archive.py --root . --repository Generous-Corp/pulp \
         --output-dir DIR [--json]
@@ -108,6 +109,10 @@ def check_descriptor(root: Path, repository: str) -> dict[str, Any]:
             unpinned.append(key)
     if descriptor.get("workflow_sha") and not SHA40.match(str(descriptor["workflow_sha"])):
         raise Unusable(f"workflow_sha {descriptor['workflow_sha']!r} is not a full commit")
+    # Pulp's workflow builds the commit it runs on, so the run that signed the
+    # archive ran at the archive's source commit.
+    if descriptor.get("workflow_sha") and descriptor["workflow_sha"] != source_sha:
+        raise Mismatch(f"workflow_sha {descriptor['workflow_sha']} != source_sha {source_sha}")
     for asset in ASSETS:
         entry = descriptor.get(asset)
         if not isinstance(entry, dict) or not entry.get("name") or "/" in str(entry.get("name")):
