@@ -86,16 +86,14 @@ VIEW_SYMBOL = re.compile(r"\bpulp::view::")
 # archive shares with any user of canvas, runtime or the C++ library.
 VIEW_AUDIO_OWNED = re.compile(
     r"\bpulp::(?:view|audio|signal|midi|music|format|host|gpu_audio|content)::")
-# The floor reads `nm -A -P -g` output with this line shape. A symbol counts
-# as defined only for the nm types Pulp's tools/scripts/
-# archive_symbol_closure_check.py counts (DEFINED_TYPES): strong external
-# definitions. Weak definitions (W, V) are inline code any user of the headers
-# may emit, so they are not view-audio's alone; lowercase w and v are weak
-# references, not definitions. Pulp's view_audio_symbol_floor.py still counts
-# every type but U, w and v; the shared nm_symbols.py module Pulp is
-# extracting is meant to settle one rule, and Vellum should vendor it, pinned,
-# once it lands.
-NM_DEFINED_TYPES = frozenset("TDBRSCG")
+# The floor reads `nm -A -P -g` output with this line shape. Every nm type
+# except U (undefined) and lowercase w/v (weak references) counts as defined,
+# weak definitions (W, V) included. This is a contamination check: a weak
+# view-audio definition is view-audio inline code, and finding one in a Vellum
+# consumer means that code was compiled into Vellum. It is deliberately wider
+# than a dependency gate's strong-only rule (TDBRSCG), where an inline
+# definition repeated across archives is not a dependency.
+FLOOR_UNDEFINED_TYPES = frozenset("Uwv")
 FLOOR_LINE = re.compile(r"^(?P<archive>.*?)\[(?P<object>[^\]]+)\]: (?P<symbol>\S+) (?P<type>\S)")
 
 
@@ -200,11 +198,11 @@ def header_findings(depfiles: dict[str, list[str]], package_headers: Iterable[st
 
 
 def floor_defined(listing: str) -> set[str]:
-    """The symbols an archive defines with a strong external definition."""
+    """The symbols an archive defines, strongly or weakly."""
     defined = set()
     for line in listing.splitlines():
         match = FLOOR_LINE.match(line)
-        if match and match["type"] in NM_DEFINED_TYPES:
+        if match and match["type"] not in FLOOR_UNDEFINED_TYPES:
             defined.add(match["symbol"])
     return defined
 

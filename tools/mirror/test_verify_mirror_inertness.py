@@ -77,15 +77,23 @@ class FindingTest(unittest.TestCase):
         planted = {"consumer": ["pulp::view::DesignHost::bind_meter(pulp::view::Meter&)"]}
         self.assertTrue(vi.symbol_findings(planted, view_unit_packaged=False)[1])
 
-    def test_floor_counts_strong_definitions_only(self) -> None:
-        # Pulp's archive_symbol_closure_check.py rule: TDBRSCG are defined,
-        # U is undefined, and weak W/V definitions are not counted.
+    def test_floor_counts_weak_definitions_and_no_references(self) -> None:
+        # A weak (W/V) view-audio definition is view-audio inline code, so it
+        # belongs to the floor; U, w and v are references, never definitions.
         listing = (
             "lib.a[a.o]: __ZN4pulp4view5MeterD1Ev T 0 0\n"
             "lib.a[a.o]: __ZN4pulp4view5Meter5paintEv W 10 4\n"
-            "lib.a[b.o]: __ZTSN4pulp4view5MeterE V 20 8\n"
+            "lib.a[b.o]: __ZN4pulp4view5Meter6layoutEv W 20 8\n"
         )
-        self.assertEqual(vi.floor_defined(listing), {"__ZN4pulp4view5MeterD1Ev"})
+        self.assertEqual(vi.floor_defined(listing), {
+            "__ZN4pulp4view5MeterD1Ev", "__ZN4pulp4view5Meter5paintEv", "__ZN4pulp4view5Meter6layoutEv"})
+        references = (
+            "lib.a[a.o]: __ZN4pulp6canvas4PathD1Ev U\n"
+            "lib.a[a.o]: __ZN4pulp4view4WeakEv w\n"
+            "lib.a[b.o]: __ZTIN4pulp4view4WeakE v\n"
+        )
+        self.assertEqual(vi.floor_defined(references), set())
+        self.assertEqual(vi.floor_defined("lib.a[a.o]: __ZN4pulp6canvas4PathD1Ev U\n"), set())
 
     def test_floor_reads_nm_posix_member_lines(self) -> None:
         listing = (
