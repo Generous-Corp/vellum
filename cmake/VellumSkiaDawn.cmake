@@ -4,19 +4,19 @@ set(VELLUM_SKIA_DIR "" CACHE PATH
     "Development-only path to the extracted pinned Skia/Dawn archive")
 
 set(_vellum_expected_archive_sha256
-    "0ebfe03a209ceefe47edfeae70c3cc6c499583b74f35a26140ea55bad7f1e5a9")
+    "bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86")
 set(_vellum_expected_skia_sha256
-    "39f9b1e1c8663ded30afdccce47375e578696e5504c31c6ba1474f1dcddffcd9")
+    "e6152842da957a8548a9931c8d7aade0475d6dce32c920d6fb2bc7a9eaa856e2")
 set(_vellum_expected_dawn_sha256
-    "73727ddf86ffc34eea6fb6392d8d688f44e317ff37b3bb421f8223c8b8815dc9")
+    "7f24a7c906a16d61e108ca7475494bf949cf288fa42b2b2c2811bf3d000a3602")
 set(_vellum_expected_skshaper_sha256
-    "c4120a6149cc63054766e040f020f379ff3e2172b3887d88e8c5f15eb29667c3")
+    "ca7df9d95609d0f11b98d3719b19140e9e98138689729266f992b639eace0fa9")
 set(_vellum_expected_skparagraph_sha256
-    "0f295b4262d0dd26dbf29e69fbe6696a278aa6ae8fec9a935555ec1058665274")
+    "94ea982e976fa76e4e36dbbd828bb22c45a4884aa1eaa2c4fcc6daae77fe4da8")
 set(_vellum_expected_skunicode_core_sha256
-    "a79b68a3a5bb72b12de9b07b1f78b332eaa01c0de5eae0f8ff37c8c1fd57cbaa")
+    "e0e46a61bd45fe1037babbf0607df1f42ec0b5acf1b61f2ec9b78e105ef10314")
 set(_vellum_expected_skunicode_icu_sha256
-    "c4b68ea5b8a71740634c9d40b6f2fb4e91a5ac355ea2c5f7f19e5d2364b8f204")
+    "e57859c9e6c238632067b3d6a4cafd014fc86af6fd91250d093da5796c42ea89")
 
 if(VELLUM_SKIA_ARCHIVE)
     if(NOT EXISTS "${VELLUM_SKIA_ARCHIVE}")
@@ -127,7 +127,7 @@ if(NOT _vellum_skia_sha256 STREQUAL _vellum_expected_skia_sha256 OR
    NOT _vellum_skunicode_icu_sha256 STREQUAL _vellum_expected_skunicode_icu_sha256)
     message(FATAL_ERROR
         "Vellum: extracted Skia/Dawn libraries do not match the locked "
-        "chrome/m153 macOS universal tuple")
+        "chrome/m157 macOS universal tuple")
 endif()
 
 # This public headers-only target lets an embedding host compile its Dawn

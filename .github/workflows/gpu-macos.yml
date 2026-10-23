@@ -54,10 +54,10 @@ jobs:
           curl --fail --location --silent --show-error \
             --retry 5 --retry-delay 2 --retry-all-errors \
             --continue-at - \
-            https://github.com/danielraffel/skia-builder/releases/download/chrome/m153/skia-build-mac-universal-gpu-release.zip \
+            https://github.com/danielraffel/skia-builder/releases/download/chrome/m157/skia-build-mac-universal-gpu-release.zip \
             --output "$archive"
           printf '%s  %s\n' \
-            0ebfe03a209ceefe47edfeae70c3cc6c499583b74f35a26140ea55bad7f1e5a9 \
+            bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86 \
             "$archive" | shasum -a 256 -c -
           printf 'VELLUM_SKIA_ARCHIVE=%s\n' "$archive" >> "$GITHUB_ENV"
           # One digest-checked fetch of the mirror's pinned dependencies serves

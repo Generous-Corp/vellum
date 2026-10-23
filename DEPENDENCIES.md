@@ -27,12 +27,12 @@ The macOS arm64 GPU proof uses one byte-locked prebuilt renderer artifact:
 
 | Artifact | Locked identity | Use |
 |---|---|---|
-| `skia-build-mac-universal-gpu-release.zip` | `danielraffel/skia-builder` release `chrome/m153`; SHA-256 `0ebfe03a209ceefe47edfeae70c3cc6c499583b74f35a26140ea55bad7f1e5a9` | Build-time Skia Graphite and Dawn/Metal static libraries and headers |
+| `skia-build-mac-universal-gpu-release.zip` | `danielraffel/skia-builder` release `chrome/m157`; SHA-256 `bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86` | Build-time Skia Graphite and Dawn/Metal static libraries and headers |
 
 The artifact was produced from builder commit
-`1f8c8d2c343f360a653bce92d11f8ded9a515208`. Its declared source tuple is
-Skia commit `8b8c3872fbc03f025855db96ce683f34ec98a815` and Dawn commit
-`f91da75afe31d4d6f47a6da307e1fbabd1b1691a`. The Dawn commit is embedded in
+`f710b2834eaf37dbf1bd39408f9361d10d85eda2`. Its declared source tuple is
+Skia commit `b94213a11b3a2edadfae89f0c57a7f4ab72772c9` and Dawn commit
+`ada567700e13aecf7989d78b21f7d330b522ea80`. The Dawn commit is embedded in
 `build/include/dawn/dawn_version.h`; the exact Skia and builder commits are not
 embedded in the artifact.
 
@@ -54,7 +54,7 @@ full DEPS file; each row has matching object members in the locked archive.
 
 | Name | Exact source identity | License | Binary evidence |
 |---|---|---|---|
-| Skia, including skcms | `8b8c3872fbc03f025855db96ce683f34ec98a815` | BSD-3-Clause | Skia/core/Graphite/skcms object members |
+| Skia, including skcms | `b94213a11b3a2edadfae89f0c57a7f4ab72772c9` | BSD-3-Clause | Skia/core/Graphite/skcms object members |
 | Expat | `6154446fccefbf3ca644894f598969113b0c7bcd` | MIT | `libexpat.*` members |
 | libjpeg-turbo | `e14cbfaa85529d47f9f55b0f104a579c1061f9ad` (Chromium's 3.1.0 snapshot) | IJG and zlib for the packaged libjpeg API/SIMD code | `libjpeg.*`, `libjpeg12.*`, and `libjpeg16.*` members; no TurboJPEG API member was identified |
 | libpng | `d5515b5b8be3901aac04e5bd8bd5c89f287bcd33` (1.6.56) | Libpng-2.0 | `libpng.*` members |
@@ -66,8 +66,8 @@ full DEPS file; each row has matching object members in the locked archive.
 
 | Name | Exact source identity | License | Binary evidence |
 |---|---|---|---|
-| Dawn and Tint | `f91da75afe31d4d6f47a6da307e1fbabd1b1691a` | BSD-3-Clause | Dawn/Tint objects and symbol namespaces; exact revision embedded in `dawn_version.h` |
-| Abseil | `dd67f5ca84f65ebb88ac0ea0fe2c1d58663e519f` | Apache-2.0 | `absl::` symbols and implementation members including `raw_hash_set.cc.o` and `crc32c.cc.o` |
+| Dawn and Tint | `ada567700e13aecf7989d78b21f7d330b522ea80` | BSD-3-Clause | Dawn/Tint objects and symbol namespaces; exact revision embedded in `dawn_version.h` |
+| Abseil | `af5aede14a0b4013be6890148d34e0fd7b1fac69` | Apache-2.0 | `absl::` symbols and implementation members including `raw_hash_set.cc.o` and `crc32c.cc.o` |
 | PartitionAlloc | `03cc513177b4340bee3dbfd46f6dd5fdded43b79` | BSD-3-Clause | `partition_alloc::` symbols and allocator implementation members including `low_level_alloc.cc.o` |
 
 Vellum also links the byte-locked `libskparagraph.a`, `libskshaper.a`,
@@ -149,11 +149,11 @@ Vellum dependencies. Versions and licenses were cross-checked against Pulp's
 
 | Dependency | Version or source identity | License | Mirror scope | Compatibility / handling |
 |---|---|---|---|---|
-| Abseil | `dd67f5ca84f65ebb88ac0ea0fe2c1d58663e519f` | Apache-2.0 | not mirrored; no landed unit consumes it yet (planned renderer and V8 units) | MIT-compatible; transitive notice |
+| Abseil | `af5aede14a0b4013be6890148d34e0fd7b1fac69` | Apache-2.0 | not mirrored; no landed unit consumes it yet (planned renderer and V8 units) | MIT-compatible; transitive notice |
 | Brotli | `v1.2.0` | MIT | `canvas` unit external input (`mirror/core/canvas/`, WOFF2 decoder); bytes not mirrored | MIT-compatible |
 | CHOC | `pulp-webview-dnd-poc1` (`df148a41`) | ISC | `foundation` unit external input, patched (`mirror/core/runtime/`, `mirror/core/events/`); bytes not mirrored | MIT-compatible; retain fork attribution |
 | cpp-httplib | vendored snapshot | MIT | `mirror/external/cpp-httplib/` (`foundation` unit) | MIT-compatible |
-| Dawn and Tint | `f91da75afe31d4d6f47a6da307e1fbabd1b1691a` | BSD-3-Clause | `canvas` unit external input: headers inside the Skia build tree; bytes not mirrored | MIT-compatible; renderer notice exists |
+| Dawn and Tint | `ada567700e13aecf7989d78b21f7d330b522ea80` | BSD-3-Clause | `canvas` unit external input: headers inside the Skia build tree; bytes not mirrored | MIT-compatible; renderer notice exists |
 | Expat | `6154446fccefbf3ca644894f598969113b0c7bcd` | MIT | not mirrored; no landed unit consumes it yet (planned renderer units) | MIT-compatible; renderer notice exists |
 | HarfBuzz | `9cb1fee51069b206effb4736e443b038d230789d` | Old MIT | `canvas` unit external input through the Skia build (text shaping); bytes not mirrored | MIT-compatible; notice exists |
 | Highway | `1.2.0` | Apache-2.0 | `foundation` unit external input (`mirror/core/simd/`); bytes not mirrored | MIT-compatible |
@@ -173,7 +173,7 @@ Vellum dependencies. Versions and licenses were cross-checked against Pulp's
 | PartitionAlloc | `03cc513177b4340bee3dbfd46f6dd5fdded43b79` | BSD-3-Clause | not mirrored; no landed unit consumes it yet (planned GPU and renderer units) | MIT-compatible; transitive notice |
 | QuickJS | `2024-02-14` | MIT | not mirrored; no landed unit consumes it yet (planned scripted-view unit) | MIT-compatible |
 | SheenBidi | `v3.0.0` | Apache-2.0 | `canvas` unit external input (`mirror/core/canvas/`); bytes not mirrored | MIT-compatible |
-| Skia and skcms | `8b8c3872fbc03f025855db96ce683f34ec98a815` | BSD-3-Clause | `canvas` unit external input (`mirror/core/canvas/`); bytes not mirrored | MIT-compatible; renderer notice exists |
+| Skia and skcms | `b94213a11b3a2edadfae89f0c57a7f4ab72772c9` | BSD-3-Clause | `canvas` unit external input (`mirror/core/canvas/`); bytes not mirrored | MIT-compatible; renderer notice exists |
 | V8 | `v8-m153-15.3.76.5-26cef0256b0e` | BSD-3-Clause | not mirrored; no landed unit consumes it yet (planned scripted-view unit, when selected) | MIT-compatible; sealed provider |
 | Yoga | `3.2.1` | MIT | not mirrored; no landed unit consumes it yet (planned view units) | MIT-compatible |
 
