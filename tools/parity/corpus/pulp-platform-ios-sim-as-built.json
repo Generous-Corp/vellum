@@ -26,7 +26,7 @@
       "case_id": "ios-sim-sinesynth-install",
       "source_kind": "platform",
       "lanes": [
-        "ios-host-checks"
+        "ios-install-registration"
       ],
       "args": {
         "mode": [

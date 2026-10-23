@@ -31,7 +31,7 @@
       "description": "PulpGain CLAP",
       "source_kind": "platform",
       "lanes": [
-        "linux"
+        "linux-elf-static"
       ],
       "args": {
         "mode": [

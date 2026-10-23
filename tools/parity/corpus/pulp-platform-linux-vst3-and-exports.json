@@ -27,7 +27,7 @@
       "description": "PulpGain VST3",
       "source_kind": "platform",
       "lanes": [
-        "linux"
+        "linux-elf-static"
       ],
       "args": {
         "mode": [
@@ -92,7 +92,7 @@
       "description": "PulpGain CLAP exports",
       "source_kind": "platform",
       "lanes": [
-        "linux"
+        "linux-elf-static"
       ],
       "args": {
         "mode": [

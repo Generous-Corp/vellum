@@ -307,9 +307,9 @@ class PlatformCalibrationTest(unittest.TestCase):
 
     def test_linux_calibrates_and_every_control_rejects(self):
         self.write_linux(["clap_entry"])
-        report = self.calibrate([static_case("linux-clap", "linux", "linux", LINUX_EXPECT, LINUX_CONTROLS)])
+        report = self.calibrate([static_case("linux-clap", "linux-elf-static", "linux", LINUX_EXPECT, LINUX_CONTROLS)])
         self.assertTrue(report["positive"]["verdict"]["accepting"], report["positive"]["verdict"]["reasons"])
-        lane = self.lane_controls(report, "linux-")
+        lane = self.lane_controls(report, "linux-elf-")
         self.assertEqual(len(lane), 4)
         self.assertTrue(all(c["outcome"] == "REJECTED as required" for c in lane), lane)
         self.assertTrue(report["calibrated"])
@@ -318,15 +318,15 @@ class PlatformCalibrationTest(unittest.TestCase):
         # Negative control for the lane itself: the same corpus over an image
         # that does not export clap_entry must not calibrate.
         self.write_linux(["clap_init"])
-        report = self.calibrate([static_case("linux-clap", "linux", "linux", LINUX_EXPECT, LINUX_CONTROLS)])
+        report = self.calibrate([static_case("linux-clap", "linux-elf-static", "linux", LINUX_EXPECT, LINUX_CONTROLS)])
         self.assertFalse(report["positive"]["verdict"]["accepting"])
         self.assertFalse(report["calibrated"])
 
     def test_a_control_whose_fault_cannot_apply_is_not_counted(self):
         self.write_linux(["clap_entry"])
         controls = dict(LINUX_CONTROLS, rename_export="elf-rename-export:GetPluginFactory=GetPluginFactorz")
-        report = self.calibrate([static_case("linux-clap", "linux", "linux", LINUX_EXPECT, controls)])
-        outcome = next(c for c in report["controls"] if c["control"] == "linux-entry-export-missing")["outcome"]
+        report = self.calibrate([static_case("linux-clap", "linux-elf-static", "linux", LINUX_EXPECT, controls)])
+        outcome = next(c for c in report["controls"] if c["control"] == "linux-elf-entry-export-missing")["outcome"]
         self.assertEqual(outcome, "CONTROL DID NOT FAIL")
         self.assertFalse(report["calibrated"])
 
@@ -334,9 +334,9 @@ class PlatformCalibrationTest(unittest.TestCase):
         d = self.root / "artifact" / "win"
         d.mkdir()
         (d / "wgpu_native.dll").write_bytes(pe_dll(0x8664, ["wgpuCreateInstance"], ["KERNEL32.dll", "ntdll.dll"]))
-        report = self.calibrate([static_case("win", "windows", "win", WINDOWS_EXPECT, WINDOWS_CONTROLS)])
+        report = self.calibrate([static_case("win", "windows-sdk-pe", "win", WINDOWS_EXPECT, WINDOWS_CONTROLS)])
         self.assertTrue(report["positive"]["verdict"]["accepting"], report["positive"]["verdict"]["reasons"])
-        lane = self.lane_controls(report, "windows-")
+        lane = self.lane_controls(report, "windows-pe-")
         self.assertEqual(len(lane), 3)
         self.assertTrue(all(c["outcome"] == "REJECTED as required" for c in lane), lane)
         self.assertTrue(report["calibrated"])

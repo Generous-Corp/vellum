@@ -5,9 +5,12 @@ Registered with the parity harness through ``--lane-module
 tools/parity/lanes/platforms.py``. Each side's implementation runs
 ``platform_runner.py`` over its artifact, which writes
 platform-observation.json. These lanes compare those files against the case's
-expectations and across sides:
+expectations and across sides. The static lanes are named for what they read,
+not for a platform: none of them hosts a plug-in, so none of them stands in
+for a platform's host checks (validators, two plug-ins in one process, editor
+lifecycle, offline render).
 
-  linux                every ELF image has the case's machine and type; each
+  linux-elf-static     every ELF image has the case's machine and type; each
                        image the case names exports what its format's host
                        looks up (clap_entry, GetPluginFactory, ...) and, when
                        the case says so, nothing matching a forbidden export
@@ -16,7 +19,7 @@ expectations and across sides:
                        library the case requires and none it forbids, and
                        carries no symbol of a forbidden family; the files the
                        case requires exist; images and bytes agree across sides
-  windows              the same over PE images: machine, DLL or executable,
+  windows-sdk-pe       the same over PE images: machine, DLL or executable,
                        subsystem, exported names, imported DLLs (no debug CRT
                        when the case forbids it), symbol families of the
                        exports
@@ -25,7 +28,8 @@ expectations and across sides:
                        entry points for WAM) and imports only the modules the
                        case allows; Pulp's own Node host checks for the module
                        exit 0 and print their PASS marker
-  ios-host-checks      the host app and every embedded extension verify as
+  ios-install-registration
+                       the host app and every embedded extension verify as
                        sealed bundles; the app installs on a booted simulator;
                        the installed app carries each extension; each extension
                        has the case's extension point and is listed by
@@ -306,10 +310,10 @@ def compare_android(ref: Path, cand: Path, case: dict[str, Any]) -> dict[str, An
     return both(android_side, lambda o: android_shape(o, markers), ref, cand, case, "Android run")
 
 
-ph.register_lane("linux", (OBS,), compare_linux)
-ph.register_lane("windows", (OBS,), compare_windows)
+ph.register_lane("linux-elf-static", (OBS,), compare_linux)
+ph.register_lane("windows-sdk-pe", (OBS,), compare_windows)
 ph.register_lane("web-wam-wclap", (OBS,), compare_web)
-ph.register_lane("ios-host-checks", (OBS,), compare_ios)
+ph.register_lane("ios-install-registration", (OBS,), compare_ios)
 ph.register_lane("android-host-checks", (OBS,), compare_android)
 
 
@@ -337,18 +341,18 @@ def prep(lane: str, key: str):
 
 
 CONTROLS = {
-    "linux-wrong-machine": ("linux", "machine", ("case expects",)),
-    "linux-entry-export-missing": ("linux", "rename_export", ("is missing export",)),
-    "linux-forbidden-library-linked": ("linux", "rename_needed", ("links forbidden library",)),
-    "linux-required-path-missing": ("linux", "drop", ("is missing",)),
-    "windows-wrong-machine": ("windows", "machine", ("case expects",)),
-    "windows-export-missing": ("windows", "rename_export", ("is missing export",)),
-    "windows-required-import-missing": ("windows", "rename_import", ("does not link required library",)),
+    "linux-elf-wrong-machine": ("linux-elf-static", "machine", ("case expects",)),
+    "linux-elf-entry-export-missing": ("linux-elf-static", "rename_export", ("is missing export",)),
+    "linux-elf-forbidden-library-linked": ("linux-elf-static", "rename_needed", ("links forbidden library",)),
+    "linux-elf-required-path-missing": ("linux-elf-static", "drop", ("is missing",)),
+    "windows-pe-wrong-machine": ("windows-sdk-pe", "machine", ("case expects",)),
+    "windows-pe-export-missing": ("windows-sdk-pe", "rename_export", ("is missing export",)),
+    "windows-pe-required-import-missing": ("windows-sdk-pe", "rename_import", ("does not link required library",)),
     "web-export-missing": ("web-wam-wclap", "rename_export", ("is missing export",)),
     "web-node-check-rejects-broken-module": ("web-wam-wclap", "rename_export", ("node check",)),
-    "ios-extension-seal-broken": ("ios-host-checks", "unsigned_edit", ("codesign",)),
-    "ios-extension-point-wrong": ("ios-host-checks", "extension_point", ("extension point is",)),
-    "ios-extension-not-embedded": ("ios-host-checks", "drop_extension", ("not embedded",)),
+    "ios-extension-seal-broken": ("ios-install-registration", "unsigned_edit", ("codesign",)),
+    "ios-extension-point-wrong": ("ios-install-registration", "extension_point", ("extension point is",)),
+    "ios-extension-not-embedded": ("ios-install-registration", "drop_extension", ("not embedded",)),
     "android-native-library-dropped": ("android-host-checks", "drop_native_lib", ("does not carry",)),
     "android-jni-export-missing": ("android-host-checks", "rename_jni_export", ("does not export JNI symbol",)),
     "android-app-does-not-start-cleanly": ("android-host-checks", "drop_native_lib",

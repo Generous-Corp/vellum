@@ -27,7 +27,7 @@
       "description": "pulp-sdk-windows-x64 v0.1009.0 images",
       "source_kind": "platform",
       "lanes": [
-        "windows"
+        "windows-sdk-pe"
       ],
       "args": {
         "mode": [
@@ -109,7 +109,7 @@
       "description": "pulp-sdk-windows-arm64 v0.1009.0 images",
       "source_kind": "platform",
       "lanes": [
-        "windows"
+        "windows-sdk-pe"
       ],
       "args": {
         "mode": [

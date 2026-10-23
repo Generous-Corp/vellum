@@ -302,21 +302,24 @@ python3 <vellum>/tools/parity/test_artifact_lane.py   # universal fixture bundle
 ## Platform lanes
 
 `lanes/platforms.py` covers the platforms whose plug-ins and apps a Mac cannot
-host. It registers one lane per platform, named as the G7 matrix row names them.
+host. A lane is named for what it actually observes. Only `web-wam-wclap` and
+`android-host-checks` run the artifact in a host; the static and install lanes
+do not stand in for a platform's host checks (validators, two plug-ins in one
+process, editor lifecycle, offline render).
 Each side runs `lanes/platform_runner.py`, which writes
 `platform-observation.json`:
 
-- `linux`: every ELF image has the case's machine and type. Each named image
+- `linux-elf-static`: every ELF image has the case's machine and type. Each named image
   exports its format's entry points, needs the libraries the case requires and
   none it forbids, and carries no symbol of a forbidden family. Optionally it
   exports nothing that matches a forbidden pattern: internal symbols are
   interposed between two plug-ins in one host process.
-- `windows`: the same over PE images: machine, DLL or executable, subsystem,
+- `windows-sdk-pe`: the same over PE images: machine, DLL or executable, subsystem,
   imported and delay-imported DLLs, and exported names.
 - `web-wam-wclap`: each WebAssembly module has the exports its ABI needs and
   imports only allowed modules. Pulp's own Node host checks for the module exit
   0 and print PASS.
-- `ios-host-checks`: the host app and every embedded extension verify as sealed
+- `ios-install-registration`: the host app and every embedded extension verify as sealed
   bundles, and the app installs on the booted simulator. The installed app
   carries each extension, with the case's extension point, and pluginkit lists
   it. The simulator installs broken seals, so the seal is checked by codesign.
