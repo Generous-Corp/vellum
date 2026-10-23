@@ -442,9 +442,29 @@ jobs:
             > "$lock_root/third-party-lock.json"
           git show "$SOURCE_COMMIT:provenance/renderer-attestation.json" \
             > "$lock_root/renderer-attestation.json"
+          # An eligible renderer must also prove its signature and that the
+          # attested legal manifest is the published release asset, by
+          # GitHub's own asset digests. A blocked lock fails without them.
+          proof=()
+          if git cat-file -e "$SOURCE_COMMIT:provenance/renderer-attestation.json.sig" 2>/dev/null; then
+            git show "$SOURCE_COMMIT:provenance/renderer-attestation.json.sig" \
+              > "$lock_root/renderer-attestation.json.sig"
+            proof+=(--signature "$lock_root/renderer-attestation.json.sig")
+          fi
+          manifest_url="$(python3 -c 'import json, sys; m = json.load(open(sys.argv[1]))["legal_inventory"].get("manifest") or {}; print(m.get("url", ""))' \
+            "$lock_root/renderer-attestation.json")"
+          if [ -n "$manifest_url" ]; then
+            release_api="$(python3 -c 'import json, sys; a = json.load(open(sys.argv[1]))["artifact"]; print(a["repository"].replace("https://github.com/", "https://api.github.com/repos/") + "/releases/tags/" + a["release_tag"])' \
+              "$lock_root/renderer-attestation.json")"
+            curl -fsSL "$release_api" -o "$lock_root/renderer-release.json"
+            curl -fsSL "$manifest_url" -o "$lock_root/renderer-legal-manifest.json"
+            proof+=(--release-json "$lock_root/renderer-release.json"
+                    --legal-manifest "$lock_root/renderer-legal-manifest.json")
+          fi
           python3 tools/provenance/verify_renderer_dependency.py \
             --lock "$lock_root/third-party-lock.json" \
             --attestation "$lock_root/renderer-attestation.json" \
+            ${proof[@]+"${proof[@]}"} \
             --require-release-eligible --json \
             > "$RUNNER_TEMP/release-renderer-eligibility.json"
 

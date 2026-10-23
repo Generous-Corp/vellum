@@ -208,6 +208,7 @@ jobs:
       - name: Verify renderer digest-to-provenance binding
         run: |
           python3 tools/provenance/test_verify_renderer_dependency.py
+          python3 tools/provenance/test_verify_renderer_eligibility.py
           python3 tools/provenance/verify_renderer_dependency.py --json \
             > "$RUNNER_TEMP/renderer-provenance-report.json"
 
