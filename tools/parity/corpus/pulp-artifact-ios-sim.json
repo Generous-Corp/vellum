@@ -1,0 +1,126 @@
+{
+  "schema": "vellum.parity.corpus.v1",
+  "corpus_id": "pulp-artifact-ios-sim-v1",
+  "description": "G7 iOS AUv3 on the simulator, column A (PULP_ENABLE_GPU=OFF): the .appex is a single arm64 iOS-simulator slice (platform 7), an AudioUnit-UI extension, links pulp::format and no GPU host, Skia, wgpu, Dawn or Vellum. Case ios-auv3-signed additionally requires the sealed bundle signature an installable extension needs.",
+  "declared_gaps": [
+    {
+      "row": "host checks 3-5",
+      "reason": "running the extension needs a booted simulator and an AUv3 host app (audio device); not run here (no device audio). Lane that would cover it: the ios skill's simulator recipe on a CI Mac."
+    },
+    {
+      "row": "column B",
+      "reason": "needs the Skia iOS-simulator slice; not built in this pass."
+    }
+  ],
+  "declared_exceptions": [],
+  "cases": [
+    {
+      "source": "fixtures/artifact/scan.json",
+      "source_base": "corpus",
+      "width": 1,
+      "height": 1,
+      "case_id": "ios-auv3-shape",
+      "source_kind": "artifact",
+      "lanes": [
+        "artifact-slices",
+        "artifact-bundle",
+        "artifact-linkfloor"
+      ],
+      "args": {
+        "artifact": [
+          "--artifact",
+          "{root:artifact}"
+        ]
+      },
+      "expect": {
+        "archs": [
+          "arm64"
+        ],
+        "platform": 7,
+        "required": [
+          "Info.plist",
+          "Resources/pulp-build-info.json"
+        ],
+        "plist": {
+          "CFBundlePackageType": "XPC!",
+          "NSExtensionPointIdentifier": "com.apple.AudioUnit-UI",
+          "CFBundleSupportedPlatforms": [
+            "iPhoneSimulator"
+          ]
+        },
+        "forbid": [
+          "gpu-host",
+          "skia",
+          "wgpu",
+          "dawn",
+          "vellum"
+        ],
+        "require": [
+          "pulp-format"
+        ],
+        "forbid_load": [
+          "libwgpu_native",
+          "libvellum"
+        ]
+      },
+      "controls": {
+        "swap_floor": "other"
+      }
+    },
+    {
+      "source": "fixtures/artifact/scan.json",
+      "source_base": "corpus",
+      "width": 1,
+      "height": 1,
+      "case_id": "ios-auv3-signed",
+      "source_kind": "artifact",
+      "lanes": [
+        "artifact-slices",
+        "artifact-bundle",
+        "artifact-signature",
+        "artifact-linkfloor"
+      ],
+      "args": {
+        "artifact": [
+          "--artifact",
+          "{root:artifact}"
+        ]
+      },
+      "expect": {
+        "archs": [
+          "arm64"
+        ],
+        "platform": 7,
+        "required": [
+          "Info.plist",
+          "Resources/pulp-build-info.json"
+        ],
+        "plist": {
+          "CFBundlePackageType": "XPC!",
+          "NSExtensionPointIdentifier": "com.apple.AudioUnit-UI",
+          "CFBundleSupportedPlatforms": [
+            "iPhoneSimulator"
+          ]
+        },
+        "forbid": [
+          "gpu-host",
+          "skia",
+          "wgpu",
+          "dawn",
+          "vellum"
+        ],
+        "require": [
+          "pulp-format"
+        ],
+        "forbid_load": [
+          "libwgpu_native",
+          "libvellum"
+        ],
+        "signed": "bundle"
+      },
+      "controls": {
+        "swap_floor": "other"
+      }
+    }
+  ]
+}

@@ -1,0 +1,62 @@
+{
+  "schema": "vellum.parity.corpus.v1",
+  "corpus_id": "pulp-artifact-ios-sim-shape-v1",
+  "description": "The ios-auv3-shape case of pulp-artifact-ios-sim.json alone (no signing expectation).",
+  "declared_gaps": [],
+  "declared_exceptions": [],
+  "cases": [
+    {
+      "source": "fixtures/artifact/scan.json",
+      "source_base": "corpus",
+      "width": 1,
+      "height": 1,
+      "case_id": "ios-auv3-shape",
+      "source_kind": "artifact",
+      "lanes": [
+        "artifact-slices",
+        "artifact-bundle",
+        "artifact-linkfloor"
+      ],
+      "args": {
+        "artifact": [
+          "--artifact",
+          "{root:artifact}"
+        ]
+      },
+      "expect": {
+        "archs": [
+          "arm64"
+        ],
+        "platform": 7,
+        "required": [
+          "Info.plist",
+          "Resources/pulp-build-info.json"
+        ],
+        "plist": {
+          "CFBundlePackageType": "XPC!",
+          "NSExtensionPointIdentifier": "com.apple.AudioUnit-UI",
+          "CFBundleSupportedPlatforms": [
+            "iPhoneSimulator"
+          ]
+        },
+        "forbid": [
+          "gpu-host",
+          "skia",
+          "wgpu",
+          "dawn",
+          "vellum"
+        ],
+        "require": [
+          "pulp-format"
+        ],
+        "forbid_load": [
+          "libwgpu_native",
+          "libvellum"
+        ]
+      },
+      "controls": {
+        "swap_floor": "other"
+      }
+    }
+  ]
+}

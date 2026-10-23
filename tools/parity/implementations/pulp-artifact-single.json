@@ -1,0 +1,69 @@
+{
+  "schema": "vellum.parity.implementation.v1",
+  "name": "pulp-artifact-single",
+  "repository": "Generous-Corp/pulp",
+  "source_sha": null,
+  "description": "Static shape of one built artifact (lanes/artifact.py) read by lanes/artifact_runner.py without executing it: an iOS app extension, an Android shared library or APK, a web build output. Roots: checkout = the checkout the artifact was built from; artifact = the artifact; other = a GPU-linked image (link-floor swap control input; any GPU-linked image, since the floor reads symbols only).",
+  "tools": {
+    "runner": "tools/parity/lanes/artifact_runner.py",
+    "host-runner": "tools/parity/lanes/host_runner.py"
+  },
+  "probes": [
+    {
+      "name": "build",
+      "argv": [
+        "{tool:host-runner}",
+        "identity",
+        "build",
+        "{root:checkout}",
+        "{root:artifact}",
+        "{root:other}"
+      ]
+    },
+    {
+      "name": "provider",
+      "argv": [
+        "{tool:host-runner}",
+        "identity",
+        "provider",
+        "{root:artifact}",
+        "{root:other}"
+      ]
+    },
+    {
+      "name": "fonts",
+      "argv": [
+        "{tool:host-runner}",
+        "identity",
+        "fonts",
+        "{root:artifact}",
+        "{root:other}"
+      ]
+    }
+  ],
+  "source_kinds": {
+    "artifact": []
+  },
+  "steps": [
+    {
+      "id": "observe",
+      "source_kinds": [
+        "artifact"
+      ],
+      "argv": [
+        "{tool:runner}",
+        "--scan",
+        "{source}",
+        "--out",
+        "artifact-observation.json",
+        "@case_args:artifact",
+        "@case_args:fault"
+      ]
+    }
+  ],
+  "content_roots": [
+    "artifact",
+    "other"
+  ],
+  "authority": "native-render"
+}
