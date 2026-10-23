@@ -86,8 +86,16 @@ VIEW_SYMBOL = re.compile(r"\bpulp::view::")
 # archive shares with any user of canvas, runtime or the C++ library.
 VIEW_AUDIO_OWNED = re.compile(
     r"\bpulp::(?:view|audio|signal|midi|music|format|host|gpu_audio|content)::")
-# Pulp's tools/scripts/view_audio_symbol_floor.py reads `nm -A -P -g` output
-# with this line shape and treats every type but U, w and v as defined.
+# The floor reads `nm -A -P -g` output with this line shape. A symbol counts
+# as defined only for the nm types Pulp's tools/scripts/
+# archive_symbol_closure_check.py counts (DEFINED_TYPES): strong external
+# definitions. Weak definitions (W, V) are inline code any user of the headers
+# may emit, so they are not view-audio's alone; lowercase w and v are weak
+# references, not definitions. Pulp's view_audio_symbol_floor.py still counts
+# every type but U, w and v; the shared nm_symbols.py module Pulp is
+# extracting is meant to settle one rule, and Vellum should vendor it, pinned,
+# once it lands.
+NM_DEFINED_TYPES = frozenset("TDBRSCG")
 FLOOR_LINE = re.compile(r"^(?P<archive>.*?)\[(?P<object>[^\]]+)\]: (?P<symbol>\S+) (?P<type>\S)")
 
 
@@ -192,11 +200,11 @@ def header_findings(depfiles: dict[str, list[str]], package_headers: Iterable[st
 
 
 def floor_defined(listing: str) -> set[str]:
-    """The symbols an archive defines, exactly as view_audio_symbol_floor reads them."""
+    """The symbols an archive defines with a strong external definition."""
     defined = set()
     for line in listing.splitlines():
         match = FLOOR_LINE.match(line)
-        if match and match["type"] not in ("U", "w", "v"):
+        if match and match["type"] in NM_DEFINED_TYPES:
             defined.add(match["symbol"])
     return defined
 
