@@ -265,8 +265,10 @@ class VerifyMirrorExportTests(unittest.TestCase):
         pulp_root_env = os.environ.get("MIRROR_PULP_ROOT")
         if receipts and not pulp_root_env:
             # The required provenance lanes check out the newest receipt's Pulp
-            # commit and set MIRROR_PULP_ROOT whenever a receipt is landed, so
-            # this proof is never skipped there.
+            # commit and set MIRROR_PULP_ROOT whenever a receipt is landed. In
+            # CI a missing checkout is a broken lane, not a reason to skip.
+            if os.environ.get("CI", "").lower() == "true":
+                self.fail("CI is set but MIRROR_PULP_ROOT names no Pulp checkout; the Pulp identity proof did not run")
             self.skipTest("Pulp identity is proved where MIRROR_PULP_ROOT names a Pulp checkout")
         pulp_root = Path(pulp_root_env).resolve() if pulp_root_env else None
         report = verify_mirror_export.verify(REPO, pulp_root)
