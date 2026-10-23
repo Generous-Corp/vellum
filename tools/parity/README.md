@@ -298,3 +298,53 @@ python3 <vellum>/tools/parity/parity_harness.py calibrate \
   --root gain.clap=<build>/CLAP/<audio-only>.clap ... --root gpu.component=<build>/AU/<gpu>.component --out <dir>
 python3 <vellum>/tools/parity/test_artifact_lane.py   # universal fixture bundles built with clang
 ```
+
+## Platform lanes
+
+`lanes/platforms.py` covers the platforms whose plug-ins and apps a Mac cannot
+host. It registers one lane per platform, named as the G7 matrix row names them.
+Each side runs `lanes/platform_runner.py`, which writes
+`platform-observation.json`:
+
+- `linux`: every ELF image has the case's machine and type. Each named image
+  exports its format's entry points, needs the libraries the case requires and
+  none it forbids, and carries no symbol of a forbidden family. Optionally it
+  exports nothing that matches a forbidden pattern: internal symbols are
+  interposed between two plug-ins in one host process.
+- `windows`: the same over PE images: machine, DLL or executable, subsystem,
+  imported and delay-imported DLLs, and exported names.
+- `web-wam-wclap`: each WebAssembly module has the exports its ABI needs and
+  imports only allowed modules. Pulp's own Node host checks for the module exit
+  0 and print PASS.
+- `ios-host-checks`: the host app and every embedded extension verify as sealed
+  bundles, and the app installs on the booted simulator. The installed app
+  carries each extension, with the case's extension point, and pluginkit lists
+  it. The simulator installs broken seals, so the seal is checked by codesign.
+- `android-host-checks`: the APK carries the required native libraries, and each
+  exports the JNI symbol of every native method the case lists. The APK
+  installs, its activity starts and the process is alive after the settle time.
+  No fatal exception is logged and every required log marker appears.
+
+Every control faults a copy of the artifact's bytes:
+
+- a swapped machine;
+- an export, import or DT_NEEDED renamed in place;
+- a dropped path;
+- a byte flipped under the old signature;
+- an extension point rewritten and re-sealed;
+- an APK library removed, or its `JNI_OnLoad` renamed, then the APK re-signed
+  with the debug key.
+
+A host mode with no booted simulator or attached device exits 77, so the lane
+reports blocked, never pass.
+
+```sh
+python3 <vellum>/tools/parity/parity_harness.py calibrate \
+  --lane-module <vellum>/tools/parity/lanes/platforms.py \
+  --corpus <vellum>/tools/parity/corpus/pulp-platform-linux-clap.json \
+  --implementation <vellum>/tools/parity/implementations/pulp-platform.json \
+  --source-root <checkout> --tool runner=<vellum>/tools/parity/lanes/platform_runner.py \
+  --tool host-runner=<vellum>/tools/parity/lanes/host_runner.py --root checkout=<checkout> \
+  --root artifact=<artifacts> --root other=<any second artifact> --out <dir>
+python3 <vellum>/tools/parity/test_platform_lane.py   # ELF, PE and wasm fixtures assembled in the test
+```
