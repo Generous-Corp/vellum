@@ -74,9 +74,19 @@ afterwards invalidates the signature.
   object built against the attested SDK.
 - `--provenance-bundle <file>` runs `gh attestation verify --bundle
   --deny-self-hosted-runners` for the archive, manifest and receipt, accepting
-  only `danielraffel/skia-builder` on `refs/heads/main`: `build-skia.yml` for
-  records a build wrote, and `rebind-provenance.yml` for records rebound from a
-  member-identical rebuild.
+  only `danielraffel/skia-builder` workflows pinned at `refs/heads/main`:
+  `build-skia.yml` at the lock's builder commit (`--source-digest`) for records
+  a build wrote, and `rebind-provenance.yml` at the commit the signed record
+  names as `build_provenance.source_digest` for records rebound from a
+  member-identical rebuild. Every result must name the run invocation the
+  signed record names as `build_provenance.run` (`run_id`, `run_attempt`).
+  A rebind bundle covers the rebound manifest, the rebound receipt and the
+  member-comparison report, never the published archive: for rebound records
+  the archive is not a bundle subject, and is bound instead by the rebound
+  manifest's `archive.sha256` and the member comparison against the
+  rebuild-attested rebuild archive. The signed record and the legal manifest
+  must agree on whether the records are rebound before the subject set is
+  chosen.
 - With `--archive`, the manifest's static-archive inventory is re-derived from
   the archive bytes: every member of every slice must be listed with its
   digest, and the inventoried archives must be exactly the lock's.
@@ -86,8 +96,23 @@ afterwards invalidates the signature.
   `__.SYMDEF` symbol table must have the same content in both archives, fat
   slices are keyed by CPU type and subtype (a duplicate slice is refused), and
   the rebound receipt's toolchain fields must equal the rebuild receipt that
-  measured them. Both rebuild proofs are required whenever the manifest is
-  derived.
+  measured them. The rebound manifest must carry the rebuild manifest's
+  license mapping unchanged (files, licenses, per-member licenses, origins).
+  Because the rebound records rest on the rebuild's own claims, the rebuild
+  archive, manifest and receipt must each verify against the rebuild run's
+  build-provenance bundle (named in the signed record's
+  `legal_inventory.derived_from.rebuild_bundle`) for
+  `build-skia.yml@refs/heads/main`, with `--source-digest` set to the signed
+  record's `rebuild_run.head_sha` and `--deny-self-hosted-runners`. All three
+  certificates must name the run invocation of the signed record's
+  `rebuild_run` (repository, run, attempt); `rebuild_run` and `rebuild_bundle`
+  must equal the manifest's derivation; and the rebuild manifest and receipt
+  must describe the rebuild archive, with the manifest listing each of its
+  zip members (once) with its digest. `--rebuild-archive`,
+  `--rebuild-receipt`, `--rebuild-manifest` and `--rebuild-provenance-bundle`
+  are all required whenever the manifest is derived.
+- A record may not contain keys starting with `_`; the verifier reserves them
+  for its own results, which are not signed.
 - `verify_extraction.py` requires every landed mirror receipt's Pulp commit
   to pin this same renderer (branch, Skia, Dawn and builder commits, archive
   URL and digest).
