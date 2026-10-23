@@ -67,13 +67,35 @@ afterwards invalidates the signature.
   GitHub's own `digest` for the archive and for the manifest asset equals the
   attested digests.
 
+- `--toolchain-receipt <file>` checks the content-addressed receipt that
+  `build_identity.toolchain_receipt` names, and requires every structured
+  `build_identity` field (clang banner, ld version, tool paths and digests,
+  SDK, libc++ version and ABI) to equal what the receipt measured, with every
+  object built against the attested SDK.
+- `--provenance-bundle <file>` runs `gh attestation verify --bundle` for the
+  archive, manifest and receipt, accepting only
+  `danielraffel/skia-builder`'s `build-skia.yml` on `refs/heads/main`.
+- With `--archive`, the manifest's static-archive inventory is re-derived from
+  the archive bytes: every member of every slice must be listed with its
+  digest, and the inventoried archives must be exactly the lock's.
+- A manifest and receipt rebound from a member-identical rebuild carry
+  `derived_from`. `--rebuild-archive` (and `--rebuild-receipt`) re-run the
+  comparison: every zip member and every static-archive member must have the
+  same content in both archives, and the rebound receipt's toolchain fields
+  must equal the rebuild receipt that measured them.
+- `verify_extraction.py` requires every landed mirror receipt's Pulp commit
+  to pin this same renderer (branch, Skia, Dawn and builder commits, archive
+  URL and digest).
+
 The lock may say `release_eligibility: eligible` only when the record is
 `owner-attested`, the signature verifies, the inventory is exhaustive, the
 lock's `bundled_components_completeness` claims `exhaustive` for the same
 manifest digest, no release blockers remain, and the lock `status` is
 `byte-locked-renderer-release-attested`. `--require-release-eligible`
-additionally requires `--legal-manifest` and `--release-json`. The SDK release
-workflow fetches both from the locked release before it runs that check.
+additionally requires `--archive`, `--legal-manifest`, `--toolchain-receipt`,
+`--provenance-bundle` and `--release-json`. The SDK release
+workflow fetches all of them, and any rebuild evidence the record's
+`legal_inventory.derived_from` names, before it runs that check.
 
 Pulp's render-toolchain pin must consume this same artifact/source tuple after
 the Vellum record is signed. No second provider or independent Skia/Dawn pin

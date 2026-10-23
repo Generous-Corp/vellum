@@ -176,6 +176,69 @@ def validate_release_asset_record(
     return record
 
 
+REBIND_METHOD = "member-identical-rebuild"
+RECEIPT_TOOLCHAIN_FIELDS = ("runner", "xcode", "compiler", "archiver", "linker", "sdk", "cpp_abi",
+                            "ccache", "target")
+
+
+def zip_contents(path: Path) -> dict[str, bytes]:
+    with zipfile.ZipFile(path) as handle:
+        members = safe_members(handle)
+        return {name: handle.read(info) for name, info in members.items() if not info.is_dir()}
+
+
+def verify_rebind(
+    attestation: dict[str, object], manifest_path: Path, receipt_path: Path,
+    archive: Path, rebuild_archive: Path, rebuild_receipt: Path | None,
+) -> dict[str, object]:
+    """Re-run the member comparison behind records derived from a rebuild.
+
+    The locked archive's manifest and receipt may be rebound from a rebuild
+    that is member-identical to it. Both records must name the same
+    derivation; the rebuild archive given here must be the one they name; and
+    every zip member and every static-archive member of the two archives must
+    have the same content. Only archive container metadata may differ.
+    """
+    manifest = json.loads(manifest_path.read_bytes())
+    receipt = json.loads(receipt_path.read_bytes())
+    derived = manifest.get("derived_from")
+    require(isinstance(derived, dict) and derived.get("method") == REBIND_METHOD,
+            "legal manifest does not record a member-identical rebuild")
+    require(receipt.get("derived_from") == derived,
+            "toolchain receipt and legal manifest name different derivations")
+    # The signed record names the rebuild's evidence assets (with URLs); they
+    # must be the ones the manifest was derived from.
+    attested = (attestation.get("legal_inventory") or {}).get("derived_from")
+    if attested is not None:
+        for key in ("rebuild_archive", "rebuild_receipt", "rebuild_manifest", "comparison"):
+            require((attested.get(key) or {}).get("sha256") == (derived.get(key) or {}).get("sha256"),
+                    f"the attested derivation's {key} differs from the legal manifest's")
+    require(sha256_file(rebuild_archive) == (derived.get("rebuild_archive") or {}).get("sha256"),
+            "the rebuild archive is not the one the records were derived from")
+    locked, rebuilt = zip_contents(archive), zip_contents(rebuild_archive)
+    require(set(locked) == set(rebuilt), "the rebuild's zip members differ from the locked archive's")
+    compared = 0
+    for name in sorted(locked):
+        data, other = locked[name], rebuilt[name]
+        if data == other:
+            continue
+        is_archive = data.startswith(AR_MAGIC) or int.from_bytes(data[:4], "big") in (0xCAFEBABE, 0xCAFEBABF)
+        require(is_archive, f"{name} differs in content between the locked archive and the rebuild")
+        require(static_archive_members(data) == static_archive_members(other),
+                f"{name}: a static-archive member differs between the locked archive and the rebuild")
+        compared += 1
+    if rebuild_receipt is not None:
+        rebuild = json.loads(rebuild_receipt.read_bytes())
+        require(sha256_bytes(rebuild_receipt.read_bytes())
+                == (derived.get("rebuild_receipt") or {}).get("sha256"),
+                "the rebuild receipt is not the one the records were derived from")
+        for field in RECEIPT_TOOLCHAIN_FIELDS:
+            require(receipt.get(field) == rebuild.get(field),
+                    f"rebound receipt {field} differs from the rebuild receipt that measured it")
+    return {"rebind_verified": True, "rebind_archives_with_container_differences": compared,
+            "rebind_zip_members_compared": len(locked)}
+
+
 def validate_legal_inventory_record(attestation: dict[str, object]) -> dict[str, object]:
     """Check the exhaustive inventory names one content-addressed release asset."""
     inventory = attestation["legal_inventory"]
@@ -819,6 +882,10 @@ def main() -> int:
                         help="the downloaded content-addressed Apple toolchain receipt asset")
     parser.add_argument("--provenance-bundle", type=Path,
                         help="the downloaded Sigstore bundle of the builder's provenance attestation")
+    parser.add_argument("--rebuild-archive", type=Path,
+                        help="the rebuild a derived manifest and receipt name (derived_from)")
+    parser.add_argument("--rebuild-receipt", type=Path,
+                        help="the rebuild's own toolchain receipt, to re-check the rebound one")
     parser.add_argument("--release-json", type=Path,
                         help="GitHub's release JSON for the locked tag (assets[].digest)")
     parser.add_argument("--require-release-eligible", action="store_true",
@@ -864,6 +931,13 @@ def main() -> int:
                 {archive_root + row["name"] for row in renderer["archives"]}))
         if args.toolchain_receipt:
             result.update(verify_toolchain_receipt_file(attestation, args.toolchain_receipt))
+        if args.legal_manifest and args.toolchain_receipt and args.archive:
+            derived = json.loads(args.legal_manifest.read_bytes()).get("derived_from")
+            if derived is not None or args.rebuild_archive is not None:
+                require(args.rebuild_archive is not None,
+                        "the legal manifest is derived from a rebuild; --rebuild-archive is required")
+                result.update(verify_rebind(attestation, args.legal_manifest, args.toolchain_receipt,
+                                            args.archive, args.rebuild_archive, args.rebuild_receipt))
         if args.provenance_bundle:
             subjects = {"legal manifest": args.legal_manifest, "toolchain receipt": args.toolchain_receipt,
                         "archive": args.archive}

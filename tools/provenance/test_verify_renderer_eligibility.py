@@ -37,12 +37,12 @@ OBJECT = b"\xcf\xfa\xed\xfe object bytes"
 BIN = "/Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin"
 
 
-def bsd_ar(members: list[tuple[str, bytes]]) -> bytes:
+def bsd_ar(members: list[tuple[str, bytes]], date: int = 0) -> bytes:
     out = bytearray(b"!<arch>\n")
     for name, data in members:
         encoded = name.encode().ljust(8, b"\0")
         body = encoded + data
-        out += f"#1/{len(encoded)}".ljust(16).encode() + b"0".ljust(12) + b"501   20    100644  "
+        out += f"#1/{len(encoded)}".ljust(16).encode() + str(date).ljust(12).encode() + b"501   20    100644  "
         out += str(len(body)).ljust(10).encode() + b"`\n" + body + (b"\n" if len(body) & 1 else b"")
     return bytes(out)
 
@@ -586,6 +586,78 @@ class RendererEligibilityTests(unittest.TestCase):
             check=True, capture_output=True)
         record = json.loads(record_path.read_text())
         self.assertEqual(sha256(completed.stdout), record["signature"]["payload_sha256"])
+
+
+class RebindVerificationTests(unittest.TestCase):
+    """Records rebound from a member-identical rebuild are re-compared, not trusted."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="vellum-rebind-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.locked = self.archive("locked", date=1)
+
+    def archive(self, where: str, date: int, objects=None, header: bytes = b"int core(void);\n") -> Path:
+        path = self.tmp / where / "skia-build-mac-universal-gpu-release.zip"
+        path.parent.mkdir(parents=True)
+        with zipfile.ZipFile(path, "w") as handle:
+            handle.writestr(zipfile.ZipInfo("build/include/core.h", (2026, 8, 18, 4, 0, date * 2)), header)
+            handle.writestr("build/mac-gpu/lib/Release/libskia.a",
+                            bsd_ar(objects or [("a.o", OBJECT), ("a.o", b"dup")], date=date))
+        return path
+
+    def records(self, rebuild: Path, receipt_fields=None, receipt_derived=None):
+        rebuild_receipt = {"compiler": {"cxx": {"version": "Apple clang version 17.0.0"}},
+                           "sdk": {"version": "15.5"}, "runner": {"image_version": "20260907.0337.1"}}
+        rebuild_receipt_path = self.tmp / "rebuild-receipt.json"
+        rebuild_receipt_path.write_text(json.dumps(rebuild_receipt))
+        derived = {"method": verifier.REBIND_METHOD,
+                   "rebuild_archive": {"name": rebuild.name, "sha256": sha256(rebuild.read_bytes())},
+                   "rebuild_receipt": {"name": "r.json", "sha256": sha256(rebuild_receipt_path.read_bytes())}}
+        manifest_path, receipt_path = self.tmp / "manifest.json", self.tmp / "receipt.json"
+        manifest_path.write_text(json.dumps({"derived_from": derived}))
+        receipt = dict(rebuild_receipt, derived_from=receipt_derived or derived, **(receipt_fields or {}))
+        receipt_path.write_text(json.dumps(receipt))
+        return manifest_path, receipt_path, rebuild_receipt_path
+
+    def verify(self, rebuild: Path, **kwargs):
+        manifest_path, receipt_path, rebuild_receipt = self.records(rebuild, **kwargs)
+        return verifier.verify_rebind({}, manifest_path, receipt_path, self.locked, rebuild, rebuild_receipt)
+
+    def test_member_identical_rebuild_verifies(self) -> None:
+        result = self.verify(self.archive("rebuild", date=2))
+        self.assertEqual(result["rebind_archives_with_container_differences"], 1)
+
+    def test_rebuild_with_different_object_content_is_refused(self) -> None:
+        with self.assertRaisesRegex(VerificationError, "static-archive member differs"):
+            self.verify(self.archive("rebuild", date=2, objects=[("a.o", b"other"), ("a.o", b"dup")]))
+
+    def test_rebuild_with_a_different_header_is_refused(self) -> None:
+        with self.assertRaisesRegex(VerificationError, "core.h differs in content"):
+            self.verify(self.archive("rebuild", date=2, header=b"patched\n"))
+
+    def test_another_rebuild_archive_is_refused(self) -> None:
+        rebuild = self.archive("rebuild", date=2)
+        manifest_path, receipt_path, rebuild_receipt = self.records(rebuild)
+        other = self.archive("other", date=3)
+        with self.assertRaisesRegex(VerificationError, "not the one the records were derived from"):
+            verifier.verify_rebind({}, manifest_path, receipt_path, self.locked, other, rebuild_receipt)
+
+    def test_receipt_naming_another_derivation_is_refused(self) -> None:
+        with self.assertRaisesRegex(VerificationError, "different derivations"):
+            self.verify(self.archive("rebuild", date=2),
+                        receipt_derived={"method": verifier.REBIND_METHOD, "rebuild_archive": {}})
+
+    def test_attested_derivation_must_match_the_manifest(self) -> None:
+        rebuild = self.archive("rebuild", date=2)
+        manifest_path, receipt_path, rebuild_receipt = self.records(rebuild)
+        attestation = {"legal_inventory": {"derived_from": {"rebuild_archive": {"sha256": "7" * 64}}}}
+        with self.assertRaisesRegex(VerificationError, "attested derivation's rebuild_archive differs"):
+            verifier.verify_rebind(attestation, manifest_path, receipt_path, self.locked, rebuild,
+                                   rebuild_receipt)
+
+    def test_rebound_receipt_differing_from_the_rebuild_receipt_is_refused(self) -> None:
+        with self.assertRaisesRegex(VerificationError, "sdk differs from the rebuild receipt"):
+            self.verify(self.archive("rebuild", date=2), receipt_fields={"sdk": {"version": "26.0"}})
 
 
 TESTDATA = Path(__file__).with_name("testdata")
