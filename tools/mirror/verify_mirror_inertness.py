@@ -85,9 +85,13 @@ VIEW_SYMBOL = re.compile(r"\bpulp::view::")
 # archive shares with any user of canvas, runtime or the C++ library.
 VIEW_AUDIO_OWNED = re.compile(
     r"\bpulp::(?:view|audio|signal|midi|music|format|host|gpu_audio|content)::")
-# Pulp's tools/scripts/view_audio_symbol_floor.py reads `nm -A -P -g` output
-# with this line shape and treats every type but U, w and v as defined.
-FLOOR_LINE = re.compile(r"^(?P<archive>.*?)\[(?P<object>[^\]]+)\]: (?P<symbol>\S+) (?P<type>\S)")
+# The floor is read with nm_symbols.py, vendored byte for byte from Pulp
+# (nm_symbols.pin.json), using its contamination rule defined_any(): every
+# type except U, w and v, weak definitions (W/V) included. A weak view-audio
+# definition is still view-audio code (typeinfo and vtables are often weak),
+# so finding one in a Vellum consumer means that code was compiled in.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import nm_symbols  # noqa: E402
 
 
 class EvidenceError(RuntimeError):
@@ -177,13 +181,8 @@ def header_findings(depfiles: dict[str, list[str]], package_headers: Iterable[st
 
 
 def floor_defined(listing: str) -> set[str]:
-    """The symbols an archive defines, exactly as view_audio_symbol_floor reads them."""
-    defined = set()
-    for line in listing.splitlines():
-        match = FLOOR_LINE.match(line)
-        if match and match["type"] not in ("U", "w", "v"):
-            defined.add(match["symbol"])
-    return defined
+    """The symbols an archive defines, strongly or weakly (nm_symbols.defined_any)."""
+    return nm_symbols.defined_any(listing)
 
 
 def view_audio_floor(archive: Path) -> set[str]:

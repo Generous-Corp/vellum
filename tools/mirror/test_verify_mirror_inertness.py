@@ -3,8 +3,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
+import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -87,6 +90,42 @@ class FindingTest(unittest.TestCase):
         )
         self.assertEqual(vi.floor_defined(listing),
                          {"__ZN4pulp4view5MeterD1Ev", "__ZTVN4pulp4view5MeterE"})
+
+
+class VendoredNmSymbolsTest(unittest.TestCase):
+    """nm_symbols.py is Pulp's file byte for byte, and the floor uses its contamination rule."""
+
+    def setUp(self) -> None:
+        self.pin = json.loads((HERE / "nm_symbols.pin.json").read_text(encoding="utf-8"))
+        self.vendored = HERE / "nm_symbols.py"
+
+    def test_the_vendored_file_matches_its_pin(self) -> None:
+        data = self.vendored.read_bytes()
+        blob = hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+        self.assertEqual(blob, self.pin["git_blob"])
+        self.assertEqual(self.pin["vendored_path"], "tools/mirror/nm_symbols.py")
+        self.assertEqual(self.pin["pulp_path"], "tools/scripts/nm_symbols.py")
+        self.assertRegex(self.pin["pulp_commit"], r"^[0-9a-f]{40}$")
+
+    def test_the_vendored_file_matches_pulp_when_a_checkout_is_given(self) -> None:
+        root = os.environ.get("VELLUM_PULP_ROOT")
+        if not root:
+            self.skipTest("VELLUM_PULP_ROOT not set")
+        pulp = subprocess.run(["git", "-C", root, "show",
+                               f"{self.pin['pulp_commit']}:{self.pin['pulp_path']}"],
+                              capture_output=True, check=True).stdout
+        self.assertEqual(pulp, self.vendored.read_bytes())
+
+    def test_one_strong_and_two_weak_definitions_count_three(self) -> None:
+        listing = (
+            "lib.a[m.o]: __ZN4pulp4view5Meter9set_levelEff T 20 0\n"
+            "lib.a[m.o]: __ZTIN4pulp4view5MeterE W 0 0\n"
+            "lib.a[m.o]: __ZTVN4pulp4view5MeterE W 0 0\n"
+            "lib.a[m.o]: __ZN4pulp4view4View5paintEv U 0 0\n"
+            "lib.a[m.o]: __ZN4pulp4view4WeakEv w 0 0\n"
+        )
+        self.assertEqual(len(vi.floor_defined(listing)), 3)
+        self.assertEqual(vi.floor_defined(listing), vi.nm_symbols.defined_any(listing))
 
 
 class FloorAgreementTest(unittest.TestCase):
