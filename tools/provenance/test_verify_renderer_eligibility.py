@@ -8,9 +8,12 @@ the real record is exercised end to end, including ``ssh-keygen -Y verify``.
 
 from __future__ import annotations
 
+import contextlib
 import copy
+import io
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -109,7 +112,8 @@ class RendererEligibilityTests(unittest.TestCase):
             "static_archives": {"build/mac-gpu/lib/Release/libskia.a": {"slices": {"arm64": {
                 "members": [{"name": "a.o", "sha256": sha256(OBJECT),
                              "objects": ["generated:arm64:obj/a.o"],
-                             "licenses": ["source:LICENSE"]}]}}}},
+                             "licenses": ["source:LICENSE"]}],
+                "symbol_tables": []}}}},
             "licenses": {"source:LICENSE": {"sha256": "0" * 64, "text": "BSD"}},
         }
         manifest.update(overrides)
@@ -251,6 +255,7 @@ class RendererEligibilityTests(unittest.TestCase):
                                  "danielraffel/skia-builder/.github/workflows/build-skia.yml"),
                                 ("--source-ref", "refs/heads/main")):
                 self.assertEqual(args[args.index(flag) + 1], value)
+            self.assertIn("--deny-self-hosted-runners", args)
 
     # -- the signature is checked, never trusted -----------------------------
     def test_signed_state_without_a_signature_file_fails(self) -> None:
@@ -451,6 +456,20 @@ class RendererEligibilityTests(unittest.TestCase):
         with self.assertRaisesRegex(VerificationError, "pinned builder repository, workflow and ref"):
             self.load(lock_path, record_path, signature)
 
+    def test_derived_records_must_be_attested_by_the_rebind_workflow(self) -> None:
+        def derive(lock, record, workflow):
+            record["legal_inventory"]["derived_from"] = {"rebuild_archive": {"sha256": "8" * 64}}
+            record["build_provenance"]["signer_workflow"] = workflow
+        lock_path, record_path, signature = self.eligible(
+            mutate=lambda lock, record: derive(lock, record, verifier.BUILDER_SIGNER_WORKFLOW))
+        with self.assertRaisesRegex(VerificationError, "pinned builder repository, workflow and ref"):
+            self.load(lock_path, record_path, signature)
+        lock_path, record_path, signature = self.eligible(
+            mutate=lambda lock, record: derive(lock, record, verifier.REBIND_SIGNER_WORKFLOW))
+        _, renderer = self.load(lock_path, record_path, signature)
+        self.assertEqual(renderer["_attestation"]["build_provenance"]["signer_workflow"],
+                         verifier.REBIND_SIGNER_WORKFLOW)
+
     def test_attestation_that_does_not_cover_a_subject_fails(self) -> None:
         lock_path, record_path, signature = self.eligible()
         _, renderer = self.load(lock_path, record_path, signature)
@@ -512,6 +531,16 @@ class RendererEligibilityTests(unittest.TestCase):
         with self.assertRaisesRegex(VerificationError, "does not cover every member"):
             verifier.verify_legal_manifest_file(renderer["_attestation"], self.manifest_path, self.archive)
 
+    def test_manifest_symbol_table_differing_from_the_archive_fails(self) -> None:
+        manifest = self.legal_manifest()
+        manifest["static_archives"]["build/mac-gpu/lib/Release/libskia.a"]["slices"]["arm64"][
+            "symbol_tables"] = ["9" * 64]
+        self.write_manifest(manifest)
+        lock_path, record_path, signature = self.eligible()
+        _, renderer = self.load(lock_path, record_path, signature)
+        with self.assertRaisesRegex(VerificationError, "symbol tables .* differ from the archive"):
+            verifier.verify_legal_manifest_file(renderer["_attestation"], self.manifest_path, self.archive)
+
     def test_static_archive_relisting_reads_fat_and_bsd_archives(self) -> None:
         arm = bsd_ar([("a.o", b"arm"), ("long_member_name.o", b"x" * 9)])
         x86 = bsd_ar([("a.o", b"x86")])
@@ -519,8 +548,8 @@ class RendererEligibilityTests(unittest.TestCase):
         table = b""
         body = b""
         offset = 4096
-        for cputype, data in ((0x0100000C, arm), (0x01000007, x86)):
-            table += b"".join(v.to_bytes(4, "big") for v in (cputype, 0, offset + len(body), len(data), 12))
+        for cputype, subtype, data in ((0x0100000C, 0, arm), (0x01000007, 3, x86)):
+            table += b"".join(v.to_bytes(4, "big") for v in (cputype, subtype, offset + len(body), len(data), 12))
             body += data
         fat = (header + table).ljust(offset, b"\0") + body
         self.assertEqual(verifier.static_archive_members(fat), {
@@ -542,13 +571,21 @@ class RendererEligibilityTests(unittest.TestCase):
         self.assertIn("GPU release is blocked", completed.stderr)
 
     def run_cli(self, lock_path: Path, record_path: Path, signature: Path, *extra: str):
-        return subprocess.run(
-            [sys.executable, str(Path(__file__).with_name("verify_renderer_dependency.py")),
-             "--lock", str(lock_path), "--attestation", str(record_path),
-             "--signature", str(signature), "--allowed-signers", str(self.allowed),
-             "--owner-principal", PRINCIPAL, "--owner-fingerprint", self.fingerprint,
-             "--require-release-eligible", "--json", *extra],
-            check=False, capture_output=True, text=True)
+        """The CLI in process, with the pinned owner swapped for the test key.
+
+        The CLI has no flag that overrides the owner identity, so a release
+        invocation cannot pass one; only the module constants change here.
+        """
+        argv = ["verify_renderer_dependency.py", "--lock", str(lock_path),
+                "--attestation", str(record_path), "--signature", str(signature),
+                "--allowed-signers", str(self.allowed), "--require-release-eligible", "--json", *extra]
+        stderr = io.StringIO()
+        with unittest.mock.patch.object(verifier, "OWNER_PRINCIPAL", PRINCIPAL), \
+                unittest.mock.patch.object(verifier, "OWNER_FINGERPRINT", self.fingerprint), \
+                unittest.mock.patch.object(sys, "argv", argv), \
+                contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(io.StringIO()):
+            code = verifier.main()
+        return subprocess.CompletedProcess(argv, code, "", stderr.getvalue())
 
     def test_cli_eligible_lock_still_requires_every_proof(self) -> None:
         lock_path, record_path, signature = self.eligible()
@@ -628,12 +665,60 @@ class RebindVerificationTests(unittest.TestCase):
         self.assertEqual(result["rebind_archives_with_container_differences"], 1)
 
     def test_rebuild_with_different_object_content_is_refused(self) -> None:
-        with self.assertRaisesRegex(VerificationError, "static-archive member differs"):
+        with self.assertRaisesRegex(VerificationError, "member, symbol table or slice differs"):
             self.verify(self.archive("rebuild", date=2, objects=[("a.o", b"other"), ("a.o", b"dup")]))
 
     def test_rebuild_with_a_different_header_is_refused(self) -> None:
         with self.assertRaisesRegex(VerificationError, "core.h differs in content"):
             self.verify(self.archive("rebuild", date=2, header=b"patched\n"))
+
+    def fat_archive(self, where: str, date: int, x86_symdef: bytes = b"\0" * 8, extra=None) -> Path:
+        x86 = bsd_ar([("__.SYMDEF SORTED", x86_symdef), ("x.o", b"x86 object")], date=date)
+        pieces = [(0x0100000C, 0, bsd_ar([("a.o", OBJECT)], date=date)), (0x01000007, 3, x86)]
+        if extra is not None:
+            pieces.insert(0, extra)
+        header = (0xCAFEBABE).to_bytes(4, "big") + len(pieces).to_bytes(4, "big")
+        table, body, offset = b"", b"", 4096
+        for cputype, subtype, data in pieces:
+            table += b"".join(v.to_bytes(4, "big") for v in (cputype, subtype, offset + len(body), len(data), 12))
+            body += data + b"\0" * ((-len(data)) % 16)
+        path = self.tmp / where / "skia-build-mac-universal-gpu-release.zip"
+        path.parent.mkdir(parents=True)
+        with zipfile.ZipFile(path, "w") as handle:
+            handle.writestr("build/mac-gpu/lib/Release/libskresources.a",
+                            (header + table).ljust(offset, b"\0") + body)
+        return path
+
+    def test_flipped_symbol_table_byte_is_refused(self) -> None:
+        # Reviewer mutation: one byte flipped in the x86_64 __.SYMDEF body.
+        self.locked = self.fat_archive("locked-fat", date=1)
+        self.assertEqual(self.verify(self.fat_archive("control", date=2))["rebind_verified"], True)
+        with self.assertRaisesRegex(VerificationError, "member, symbol table or slice differs"):
+            self.verify(self.fat_archive("rebuild", date=2, x86_symdef=b"\0" * 7 + b"\1"))
+
+    def test_extra_slice_of_the_same_cpu_type_is_refused(self) -> None:
+        # Reviewer mutation: an extra x86_64 slice (cpusubtype 4) with a flipped object.
+        self.locked = self.fat_archive("locked-fat", date=1)
+        extra = (0x01000007, 4, bsd_ar([("x.o", b"X86 object")], date=2))
+        with self.assertRaisesRegex(VerificationError, "member, symbol table or slice differs"):
+            self.verify(self.fat_archive("rebuild", date=2, extra=extra))
+
+    def test_duplicate_slice_is_refused(self) -> None:
+        self.locked = self.fat_archive("locked-fat", date=1)
+        duplicate = (0x01000007, 3, bsd_ar([("x.o", b"x86 object")], date=2))
+        with self.assertRaisesRegex(VerificationError, "more than one x86_64 slice"):
+            self.verify(self.fat_archive("rebuild", date=2, extra=duplicate))
+
+    def test_derived_manifest_requires_both_rebuild_proofs(self) -> None:
+        rebuild = self.archive("rebuild", date=2)
+        manifest_path, _receipt, rebuild_receipt = self.records(rebuild)
+        for archive, receipt in ((None, None), (rebuild, None), (None, rebuild_receipt)):
+            with self.assertRaisesRegex(VerificationError, "--rebuild-archive and --rebuild-receipt"):
+                verifier.rebuild_proofs_required(manifest_path, archive, receipt)
+        self.assertTrue(verifier.rebuild_proofs_required(manifest_path, rebuild, rebuild_receipt))
+        plain = self.tmp / "plain.json"
+        plain.write_text("{}")
+        self.assertFalse(verifier.rebuild_proofs_required(plain, None, None))
 
     def test_another_rebuild_archive_is_refused(self) -> None:
         rebuild = self.archive("rebuild", date=2)
@@ -671,7 +756,13 @@ def gh_can_verify() -> bool:
     return probe.returncode == 0 and "--bundle" in probe.stdout
 
 
-@unittest.skipUnless(gh_can_verify(), "a gh that verifies Sigstore bundles is required")
+# CI sets VELLUM_REQUIRE_REAL_SIGSTORE=1 so these tests can never be skipped
+# there; elsewhere they skip when gh cannot verify bundles.
+REQUIRE_REAL_SIGSTORE = os.environ.get("VELLUM_REQUIRE_REAL_SIGSTORE") == "1"
+
+
+@unittest.skipUnless(REQUIRE_REAL_SIGSTORE or gh_can_verify(),
+                     "a gh that verifies Sigstore bundles is required")
 class RealSigstoreBundleTests(unittest.TestCase):
     """The production verify path against a real skia-builder attestation bundle.
 
@@ -696,6 +787,9 @@ class RealSigstoreBundleTests(unittest.TestCase):
         return verifier.verify_build_provenance(
             record, {"toolchain receipt": subject}, TESTDATA / "skia-builder-probe-provenance.sigstore.json",
             runner=lambda args: subprocess.run([shutil.which("gh"), *args[1:]], capture_output=True, text=True))
+
+    def test_gh_can_verify_bundles(self) -> None:
+        self.assertTrue(gh_can_verify(), "gh cannot verify Sigstore bundles on this runner")
 
     def test_real_bundle_covers_its_subject(self) -> None:
         # Bypass the pinned-ref check to exercise Sigstore itself on the probe's ref.

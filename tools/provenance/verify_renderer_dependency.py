@@ -47,6 +47,9 @@ SDK_VERSION = re.compile(r"^[0-9]+\.[0-9]+(\.[0-9]+)?$")
 # accepted for the renderer archive and its records.
 BUILDER_REPOSITORY = "danielraffel/skia-builder"
 BUILDER_SIGNER_WORKFLOW = "danielraffel/skia-builder/.github/workflows/build-skia.yml"
+# Records rebound from a member-identical rebuild are attested by the
+# dispatch-only workflow that rebinds them, never by build-skia.yml.
+REBIND_SIGNER_WORKFLOW = "danielraffel/skia-builder/.github/workflows/rebind-provenance.yml"
 BUILDER_SOURCE_REF = "refs/heads/main"
 AR_MAGIC = b"!<arch>\n"
 PENDING_MARKERS = ("pending", "unknown")
@@ -109,10 +112,13 @@ def verify_signature(
     signature_path: Path,
     allowed_signers: Path,
     *,
-    owner_principal: str = OWNER_PRINCIPAL,
-    owner_fingerprint: str = OWNER_FINGERPRINT,
+    owner_principal: str | None = None,
+    owner_fingerprint: str | None = None,
 ) -> dict[str, str]:
     """Verify the SSH signature over the canonical record; never trust the state string."""
+    # Resolved at call time, so the pin is the module's, never a stale default.
+    owner_principal = owner_principal or OWNER_PRINCIPAL
+    owner_fingerprint = owner_fingerprint or OWNER_FINGERPRINT
     signature = attestation["signature"]
     require(shutil.which("ssh-keygen") is not None,
             "ssh-keygen is required to verify the renderer attestation signature")
@@ -224,8 +230,9 @@ def verify_rebind(
             continue
         is_archive = data.startswith(AR_MAGIC) or int.from_bytes(data[:4], "big") in (0xCAFEBABE, 0xCAFEBABF)
         require(is_archive, f"{name} differs in content between the locked archive and the rebuild")
-        require(static_archive_members(data) == static_archive_members(other),
-                f"{name}: a static-archive member differs between the locked archive and the rebuild")
+        require(static_archive_contents(data) == static_archive_contents(other),
+                f"{name}: a static-archive member, symbol table or slice differs between the "
+                "locked archive and the rebuild")
         compared += 1
     if rebuild_receipt is not None:
         rebuild = json.loads(rebuild_receipt.read_bytes())
@@ -237,6 +244,18 @@ def verify_rebind(
                     f"rebound receipt {field} differs from the rebuild receipt that measured it")
     return {"rebind_verified": True, "rebind_archives_with_container_differences": compared,
             "rebind_zip_members_compared": len(locked)}
+
+
+def rebuild_proofs_required(manifest_path: Path, rebuild_archive: Path | None,
+                            rebuild_receipt: Path | None) -> bool:
+    """Whether to re-run the rebind comparison; a derived manifest always needs both proofs."""
+    derived = json.loads(manifest_path.read_bytes()).get("derived_from")
+    if derived is None and rebuild_archive is None and rebuild_receipt is None:
+        return False
+    require(rebuild_archive is not None and rebuild_receipt is not None,
+            "the legal manifest is derived from a rebuild; --rebuild-archive and "
+            "--rebuild-receipt are required")
+    return True
 
 
 def validate_legal_inventory_record(attestation: dict[str, object]) -> dict[str, object]:
@@ -326,7 +345,7 @@ def verify_legal_manifest_file(
                     continue
                 recorded = static_archives.get(name)
                 require(recorded is not None, f"legal manifest has no member inventory for {name}")
-                relisted = static_archive_members(data)
+                relisted = static_archive_contents(data)
                 require(set(relisted) == set(recorded["slices"]) or set(relisted) == {"thin"}
                         and len(recorded["slices"]) == 1,
                         f"legal manifest slices for {name} differ from the archive")
@@ -334,8 +353,10 @@ def verify_legal_manifest_file(
                     piece = (recorded["slices"][arch] if arch != "thin"
                              else next(iter(recorded["slices"].values())))
                     got = [(member.get("name"), member.get("sha256")) for member in piece["members"]]
-                    require(got == expected,
+                    require(got == expected["members"],
                             f"legal manifest does not cover every member of {name}[{arch}]")
+                    require(piece.get("symbol_tables") == expected["symbol_tables"],
+                            f"legal manifest symbol tables for {name}[{arch}] differ from the archive")
     return {"legal_manifest_sha256": record["sha256"],
             "legal_manifest_members": len(manifest.get("zip_members", [])),
             "legal_manifest_licenses": len(licenses)}
@@ -401,8 +422,10 @@ def validate_build_identity(build_identity: dict[str, object], artifact: dict[st
 def validate_build_provenance_record(attestation: dict[str, object]) -> dict[str, object]:
     record = attestation.get("build_provenance")
     require(isinstance(record, dict), "an owner-attested record must name its build provenance")
+    derived = (attestation.get("legal_inventory") or {}).get("derived_from") is not None
+    expected_workflow = REBIND_SIGNER_WORKFLOW if derived else BUILDER_SIGNER_WORKFLOW
     require(record.get("repository") == BUILDER_REPOSITORY
-            and record.get("signer_workflow") == BUILDER_SIGNER_WORKFLOW
+            and record.get("signer_workflow") == expected_workflow
             and record.get("source_ref") == BUILDER_SOURCE_REF,
             "build provenance must name the pinned builder repository, workflow and ref")
     validate_release_asset_record(attestation["artifact"], record.get("bundle"),
@@ -469,7 +492,8 @@ def verify_build_provenance(
     for label, path in sorted(subjects.items()):
         result = runner(["gh", "attestation", "verify", str(path), "--bundle", str(bundle),
                          "--repo", record["repository"], "--signer-workflow", record["signer_workflow"],
-                         "--source-ref", record["source_ref"], "--format", "json"])
+                         "--source-ref", record["source_ref"], "--deny-self-hosted-runners",
+                         "--format", "json"])
         detail = ((result.stdout or "") + (result.stderr or "")).strip()
         require(result.returncode == 0,
                 f"build provenance attestation does not cover the {label}: {detail[-400:]}")
@@ -477,11 +501,26 @@ def verify_build_provenance(
     return {"build_provenance_verified": verified}
 
 
-def static_archive_members(data: bytes) -> dict[str, list[tuple[str, str]]]:
-    """Architecture -> [(member name, member SHA-256)] for a fat or thin static archive.
+FAT_CPU_NAMES = {0x01000007: "x86_64", 0x0100000C: "arm64", 7: "i386", 12: "arm"}
+PLAIN_SUBTYPES = {"x86_64": 3, "arm64": 0, "i386": 3, "arm": 0}
+NAMED_SUBTYPES = {("x86_64", 8): "x86_64h", ("arm64", 2): "arm64e", ("arm64", 1): "arm64v8"}
 
-    Independent of the builder's own parser: the manifest's claim of covering
-    every member is re-derived from the archive bytes here.
+
+def fat_slice_name(cputype: int, cpusubtype: int) -> str:
+    """A name unique to (cputype, cpusubtype), so no two slices share a key."""
+    name = FAT_CPU_NAMES.get(cputype, f"cpu-{cputype:#x}")
+    subtype = cpusubtype & 0x00FFFFFF
+    if name in PLAIN_SUBTYPES and subtype == PLAIN_SUBTYPES[name]:
+        return name
+    return NAMED_SUBTYPES.get((name, subtype), f"{name}-subtype{subtype}")
+
+
+def static_archive_contents(data: bytes) -> dict[str, dict[str, list]]:
+    """Slice -> {"members": [(name, SHA-256)], "symbol_tables": [SHA-256]}.
+
+    Independent of the builder's own parser. The symbol table is content: the
+    linker resolves members through it. A fat file with two slices of the
+    same CPU type and subtype is refused.
     """
     pieces: list[tuple[str, bytes]] = []
     magic = int.from_bytes(data[:4], "big") if len(data) >= 4 else 0
@@ -490,6 +529,7 @@ def static_archive_members(data: bytes) -> dict[str, list[tuple[str, str]]]:
         offset = 8
         for _ in range(count):
             cputype = int.from_bytes(data[offset:offset + 4], "big")
+            subtype = int.from_bytes(data[offset + 4:offset + 8], "big")
             if magic == 0xCAFEBABE:
                 start = int.from_bytes(data[offset + 8:offset + 12], "big")
                 size = int.from_bytes(data[offset + 12:offset + 16], "big")
@@ -498,15 +538,16 @@ def static_archive_members(data: bytes) -> dict[str, list[tuple[str, str]]]:
                 start = int.from_bytes(data[offset + 8:offset + 16], "big")
                 size = int.from_bytes(data[offset + 16:offset + 24], "big")
                 offset += 32
-            arch = {0x01000007: "x86_64", 0x0100000C: "arm64"}.get(cputype, f"cpu-{cputype:#x}")
-            pieces.append((arch, data[start:start + size]))
+            name = fat_slice_name(cputype, subtype)
+            require(all(existing != name for existing, _ in pieces),
+                    f"fat archive has more than one {name} slice")
+            pieces.append((name, data[start:start + size]))
     else:
-        cputype = None
         pieces.append(("thin", data))
-    result: dict[str, list[tuple[str, str]]] = {}
+    result: dict[str, dict[str, list]] = {}
     for arch, piece in pieces:
         require(piece.startswith(AR_MAGIC), f"{arch} slice is not a static archive")
-        members, offset = [], len(AR_MAGIC)
+        members, tables, offset = [], [], len(AR_MAGIC)
         while offset < len(piece):
             if piece[offset:offset + 1] == b"\n":
                 offset += 1
@@ -522,11 +563,18 @@ def static_archive_members(data: bytes) -> dict[str, list[tuple[str, str]]]:
                 name, body = body[:length].rstrip(b"\0").decode("utf-8", "replace"), body[length:]
             else:
                 name = raw[:-1] if raw.endswith("/") else raw
-            if name.startswith("__.SYMDEF") or name in ("/", "//", "/SYM64/"):
+            if raw == "//":
+                continue
+            if name.startswith("__.SYMDEF") or name in ("/", "/SYM64/"):
+                tables.append(sha256_bytes(body))
                 continue
             members.append((name, sha256_bytes(body)))
-        result[arch] = members
+        result[arch] = {"members": members, "symbol_tables": tables}
     return result
+
+
+def static_archive_members(data: bytes) -> dict[str, list[tuple[str, str]]]:
+    return {arch: row["members"] for arch, row in static_archive_contents(data).items()}
 
 
 def validate_renderer_attestation(
@@ -535,8 +583,8 @@ def validate_renderer_attestation(
     *,
     signature_path: Path = SIGNATURE_PATH,
     allowed_signers: Path = ALLOWED_SIGNERS_PATH,
-    owner_principal: str = OWNER_PRINCIPAL,
-    owner_fingerprint: str = OWNER_FINGERPRINT,
+    owner_principal: str | None = None,
+    owner_fingerprint: str | None = None,
 ) -> dict[str, object]:
     """Validate the digest-to-provenance binding.
 
@@ -621,8 +669,8 @@ def load_lock(
     *,
     signature_path: Path = SIGNATURE_PATH,
     allowed_signers: Path = ALLOWED_SIGNERS_PATH,
-    owner_principal: str = OWNER_PRINCIPAL,
-    owner_fingerprint: str = OWNER_FINGERPRINT,
+    owner_principal: str | None = None,
+    owner_fingerprint: str | None = None,
 ) -> tuple[dict[str, object], dict[str, object]]:
     lock = json.loads(path.read_text(encoding="utf-8"))
     require(lock.get("schema_version") == 2, "renderer lock schema must be version 2")
@@ -892,10 +940,6 @@ def main() -> int:
                         help="fail unless the renderer is eligible, its signature verifies, and "
                              "--archive, --legal-manifest, --toolchain-receipt, "
                              "--provenance-bundle and --release-json prove every attested asset")
-    # Test-only overrides of the pinned owner identity. The release workflow
-    # never passes them (scripts/test_ci_runner_policy.py asserts that).
-    parser.add_argument("--owner-principal", default=OWNER_PRINCIPAL, help=argparse.SUPPRESS)
-    parser.add_argument("--owner-fingerprint", default=OWNER_FINGERPRINT, help=argparse.SUPPRESS)
     parser.add_argument("--print-signing-payload", action="store_true",
                         help="write the exact bytes the owner signs to stdout and exit")
     parser.add_argument("--json", action="store_true")
@@ -910,9 +954,7 @@ def main() -> int:
         return 0
     try:
         _, renderer = load_lock(args.lock, args.attestation, signature_path=args.signature,
-                                allowed_signers=args.allowed_signers,
-                                owner_principal=args.owner_principal,
-                                owner_fingerprint=args.owner_fingerprint)
+                                allowed_signers=args.allowed_signers)
         attestation = renderer["_attestation"]
         result: dict[str, object] = {
             "ok": True,
@@ -932,10 +974,7 @@ def main() -> int:
         if args.toolchain_receipt:
             result.update(verify_toolchain_receipt_file(attestation, args.toolchain_receipt))
         if args.legal_manifest and args.toolchain_receipt and args.archive:
-            derived = json.loads(args.legal_manifest.read_bytes()).get("derived_from")
-            if derived is not None or args.rebuild_archive is not None:
-                require(args.rebuild_archive is not None,
-                        "the legal manifest is derived from a rebuild; --rebuild-archive is required")
+            if rebuild_proofs_required(args.legal_manifest, args.rebuild_archive, args.rebuild_receipt):
                 result.update(verify_rebind(attestation, args.legal_manifest, args.toolchain_receipt,
                                             args.archive, args.rebuild_archive, args.rebuild_receipt))
         if args.provenance_bundle:

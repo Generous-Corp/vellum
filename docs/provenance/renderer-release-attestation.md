@@ -72,17 +72,22 @@ afterwards invalidates the signature.
   `build_identity` field (clang banner, ld version, tool paths and digests,
   SDK, libc++ version and ABI) to equal what the receipt measured, with every
   object built against the attested SDK.
-- `--provenance-bundle <file>` runs `gh attestation verify --bundle` for the
-  archive, manifest and receipt, accepting only
-  `danielraffel/skia-builder`'s `build-skia.yml` on `refs/heads/main`.
+- `--provenance-bundle <file>` runs `gh attestation verify --bundle
+  --deny-self-hosted-runners` for the archive, manifest and receipt, accepting
+  only `danielraffel/skia-builder` on `refs/heads/main`: `build-skia.yml` for
+  records a build wrote, and `rebind-provenance.yml` for records rebound from a
+  member-identical rebuild.
 - With `--archive`, the manifest's static-archive inventory is re-derived from
   the archive bytes: every member of every slice must be listed with its
   digest, and the inventoried archives must be exactly the lock's.
 - A manifest and receipt rebound from a member-identical rebuild carry
   `derived_from`. `--rebuild-archive` (and `--rebuild-receipt`) re-run the
-  comparison: every zip member and every static-archive member must have the
-  same content in both archives, and the rebound receipt's toolchain fields
-  must equal the rebuild receipt that measured them.
+  comparison: every zip member, every static-archive member and every
+  `__.SYMDEF` symbol table must have the same content in both archives, fat
+  slices are keyed by CPU type and subtype (a duplicate slice is refused), and
+  the rebound receipt's toolchain fields must equal the rebuild receipt that
+  measured them. Both rebuild proofs are required whenever the manifest is
+  derived.
 - `verify_extraction.py` requires every landed mirror receipt's Pulp commit
   to pin this same renderer (branch, Skia, Dawn and builder commits, archive
   URL and digest).
