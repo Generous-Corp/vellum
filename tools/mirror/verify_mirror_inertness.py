@@ -25,9 +25,10 @@ against the installed package and built with depfiles, and asserts:
    archive defines (``--view-audio-archive``), restricted to the namespaces
    that target owns, since the archive also carries inline definitions it
    shares with every other user of canvas, runtime and the C++ library.
-   Without the archive, and only while the package carries no view unit, the
-   stand-in is stricter: no ``pulp::view`` or Pulp product-namespace symbol
-   may appear at all. A package with a view unit needs the archive;
+   Without the archive, and only while the package carries no Pulp view
+   source (no receipt file row under ``core/view/``), the stand-in is
+   stricter: no ``pulp::view`` or Pulp product-namespace symbol may appear at
+   all. A package with view source needs the archive;
 4. ``name-only-forward-declarations``: no symbol of the forward-declared
    classes or the deprecated bind virtuals appears anywhere.
 
@@ -90,8 +91,22 @@ VIEW_AUDIO_OWNED = re.compile(
 FLOOR_LINE = re.compile(r"^(?P<archive>.*?)\[(?P<object>[^\]]+)\]: (?P<symbol>\S+) (?P<type>\S)")
 
 
+# Packaged mirror libraries on every platform, shared and static.
+LIBRARY_GLOBS = ("*.dylib", "*.so", "*.so.*", "*.a", "*.dll")
+
+
 class EvidenceError(RuntimeError):
     pass
+
+
+def packages_view_source(receipt: dict[str, Any]) -> bool:
+    """Whether the package carries Pulp view source, read from the receipt's
+    file rows rather than from unit names, which are free text."""
+    files = receipt.get("files")
+    if not isinstance(files, list) or not files or not all(
+            isinstance(row, dict) and isinstance(row.get("pulp_path"), str) for row in files):
+        raise EvidenceError("the export receipt lists no file rows with a pulp_path")
+    return any(row["pulp_path"].startswith("core/view/") for row in files)
 
 
 def compile_command_findings(commands: list[dict[str, Any]]) -> list[str]:
@@ -317,7 +332,7 @@ def verify(prefix: Path, consumer_build: Path, image: Path,
         raise EvidenceError("the package must carry exactly one export receipt")
     receipt = json.loads(receipts[0].read_text(encoding="utf-8"))
     units = sorted(unit["name"] for unit in receipt.get("units", []))
-    view_unit_packaged = any(name.startswith("view") for name in units)
+    view_unit_packaged = packages_view_source(receipt)
 
     commands_path = consumer_build / "compile_commands.json"
     try:
@@ -340,7 +355,7 @@ def verify(prefix: Path, consumer_build: Path, image: Path,
             package_files.append((relative, path.read_text(encoding="utf-8", errors="replace")))
         if path.suffix in {".h", ".hh", ".hpp", ".hxx"}:
             package_headers.append(relative)
-    libraries = sorted((mirror / "lib").glob("*.dylib"))
+    libraries = sorted({path for pattern in LIBRARY_GLOBS for path in (mirror / "lib").glob(pattern)})
     if not libraries:
         raise EvidenceError("the package carries no mirror libraries")
     symbols = {}
