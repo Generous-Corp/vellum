@@ -1,7 +1,7 @@
 {
   "schema": "vellum.vendored-pulp-file-pin.v1",
   "pulp_repository": "Generous-Corp/pulp",
-  "pulp_commit": "a9f288e869edd0a727eb23dc84dd5acf3ffd3fb6",
+  "pulp_commit": "aeea7c60fedd424adca17f7f703e56d2455d5d99",
   "pulp_path": "tools/scripts/nm_symbols.py",
   "vendored_path": "tools/mirror/nm_symbols.py",
   "git_blob": "7370d79efe28f4ddb4e449d99bb825bae4f49f29",
