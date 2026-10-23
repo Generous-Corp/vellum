@@ -12,7 +12,8 @@ local build. provenance/mirror/pulp-view-audio-archive.json pins it:
   * the archive, its manifest and the Sigstore bundle are release assets of
     Pulp's immutable artifact/pulp-view-audio/<source_sha> release, each pinned
     by sha256;
-  * the manifest must name the same commit, archive digest, size and run;
+  * the manifest must name the same commit, archive digest, size and run,
+    and record a passing symbol-floor gate;
   * `gh attestation verify` must accept the archive and the manifest as
     built by Pulp's view-audio-archive workflow on main, at the pinned
     workflow commit, on a GitHub-hosted runner.
@@ -148,6 +149,7 @@ def check_manifest(manifest: Any, descriptor: dict[str, Any], repository: str) -
         "archive.size": descriptor["archive"]["size"],
         "workflow.run_id": str(descriptor["workflow_run_id"]),
         "workflow.workflow_sha": descriptor["workflow_sha"],
+        "symbol_floor_gate.exit_code": 0,
     }
     problems = []
     for dotted, want in expected.items():

@@ -52,6 +52,7 @@ class FetchTest(unittest.TestCase):
             "target": "pulp-view-audio",
             "archive": {"name": "libpulp-view-audio.a", "sha256": sha(ARCHIVE), "size": len(ARCHIVE)},
             "workflow": {"run_id": "4242", "workflow_sha": WORKFLOW_SHA},
+            "symbol_floor_gate": {"exit_code": 0},
         }
         self.assets: dict[str, bytes] = {}
         self.publish()
@@ -184,6 +185,12 @@ class FetchTest(unittest.TestCase):
         self.manifest["workflow"]["run_id"] = "1"
         self.publish()
         with self.assertRaisesRegex(fva.Mismatch, "workflow.run_id"):
+            self.fetch()
+
+    def test_a_failing_floor_gate_is_refused(self) -> None:
+        self.manifest["symbol_floor_gate"]["exit_code"] = 1
+        self.publish()
+        with self.assertRaisesRegex(fva.Mismatch, "symbol_floor_gate.exit_code"):
             self.fetch()
 
     def test_a_rejected_attestation_is_refused(self) -> None:
