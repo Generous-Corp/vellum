@@ -723,8 +723,12 @@ class RunnerPolicyTests(unittest.TestCase):
             'git show "$SOURCE_COMMIT:provenance/third-party-lock.json"',
             eligibility_step,
         )
-        self.assertIn("--legal-manifest", eligibility_step)
-        self.assertIn("--release-json", eligibility_step)
+        for proof in ("archive", "legal-manifest", "toolchain-receipt",
+                      "provenance-bundle", "release-json"):
+            self.assertIn(f'("{proof}"', eligibility_step)
+        # The pinned owner identity is never overridden in a release.
+        self.assertNotIn("--owner-principal", eligibility_step)
+        self.assertNotIn("--owner-fingerprint", eligibility_step)
         self.assertIn('test "$(gh api "repos/$GITHUB_REPOSITORY/immutable-releases" --jq \'.enabled\')" = true', finalizer)
         self.assertIn('for row in page["jobs"]', finalizer)
         self.assertIn('"path": ".github/workflows/gpu-macos.yml"', finalizer)

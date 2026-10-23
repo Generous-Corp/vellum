@@ -1,0 +1,227 @@
+{
+ "archive": {
+  "name": "skia-build-mac-universal-gpu-release.zip",
+  "sha256": "94705be257cb9bbc3e92006a342d49fc4c27c8f2c32ef0e81c171781482bcfc6"
+ },
+ "archiver": {
+  "ar": {
+   "path": "/Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ar",
+   "realpath": "/Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ar",
+   "sha256": "f362372395c1dd8ef349b6ceaad3b7958f1207a32e95d285721eba4c84ca55ae",
+   "version": "not reported (the tool has no version flag)"
+  },
+  "libtool": {
+   "path": "/Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/libtool",
+   "realpath": "/Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/libtool",
+   "sha256": "97c2359c5fccef22387f6ce0f4f5af6e4d808ae995b7b40ceaa9e1eb9b80f91e",
+   "version": "Apple Inc. version cctools-1024.3"
+  },
+  "lipo": {
+   "path": "/Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/lipo",
+   "realpath": "/Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/lipo",
+   "sha256": "1cd322ae54394e71eefceda6a74946ef0ff678924f890de7520341c34133ef84",
+   "version": "not reported (the tool has no version flag)"
+  }
+ },
+ "ccache": {
+  "compiler_check": "content",
+  "stats": {
+   "cache_miss": "0",
+   "direct_cache_hit": "4063",
+   "local_storage_hit": "4077",
+   "local_storage_miss": "0",
+   "preprocessed_cache_hit": "14"
+  },
+  "used": true,
+  "version": "ccache version 4.14"
+ },
+ "compiler": {
+  "c": {
+   "path": "/Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang",
+   "realpath": "/Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang",
+   "sha256": "4c458256bcdf913774de1bb4a37768244d3b41f32ad55afb2dfec3432f46f4fe",
+   "version": "Apple clang version 17.0.0 (clang-1700.0.13.5)"
+  },
+  "clang_on_path": {
+   "note": "GN's mac toolchain invokes bare clang/clang++ from PATH; /usr/bin/clang is the xcrun shim that resolves to compiler.c",
+   "path": "/usr/bin/clang"
+  },
+  "cxx": {
+   "path": "/Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++",
+   "realpath": "/Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang",
+   "sha256": "4c458256bcdf913774de1bb4a37768244d3b41f32ad55afb2dfec3432f46f4fe",
+   "version": "Apple clang version 17.0.0 (clang-1700.0.13.5)"
+  },
+  "gn_toolchain_commands": {
+   "build/tmp/skia/mac_Release_arm64_gpu/toolchain.ninja": {
+    "alink": "libtool -static -o ${out} -no_warning_for_no_symbols ${in}",
+    "cc": "ccache clang -MD -MF ${out}.d ${defines} ${include_dirs} ${cflags} ${cflags_c} -c ${in} -o ${out}",
+    "cxx": "ccache clang++ -MD -MF ${out}.d ${defines} ${include_dirs} ${cflags} ${cflags_cc} -c ${in} -o ${out}",
+    "link": "clang++ ${ldflags}  @${root_out_dir}/${target_output_name}${output_extension}.rsp ${frameworks} ${solibs}  ${libs} -o ${root_out_dir}/${target_output_name}${output_extension}",
+    "objc": "ccache clang -MD -MF ${out}.d ${defines} ${include_dirs} ${framework_dirs} ${cflags} ${cflags_objc} -c ${in} -o ${out}",
+    "objcxx": "ccache clang++ -MD -MF ${out}.d ${defines} ${include_dirs} ${framework_dirs} ${cflags} ${cflags_objcc} -c ${in} -o ${out}",
+    "solink": "clang++ -shared ${ldflags}  @${out}.rsp ${frameworks} ${solibs}  ${libs} -Wl,-install_name,@rpath/${target_output_name}${output_extension}  -o ${out}"
+   },
+   "build/tmp/skia/mac_Release_x86_64_gpu/toolchain.ninja": {
+    "alink": "libtool -static -o ${out} -no_warning_for_no_symbols ${in}",
+    "cc": "ccache clang -MD -MF ${out}.d ${defines} ${include_dirs} ${cflags} ${cflags_c} -c ${in} -o ${out}",
+    "cxx": "ccache clang++ -MD -MF ${out}.d ${defines} ${include_dirs} ${cflags} ${cflags_cc} -c ${in} -o ${out}",
+    "link": "clang++ ${ldflags}  @${root_out_dir}/${target_output_name}${output_extension}.rsp ${frameworks} ${solibs}  ${libs} -o ${root_out_dir}/${target_output_name}${output_extension}",
+    "objc": "ccache clang -MD -MF ${out}.d ${defines} ${include_dirs} ${framework_dirs} ${cflags} ${cflags_objc} -c ${in} -o ${out}",
+    "objcxx": "ccache clang++ -MD -MF ${out}.d ${defines} ${include_dirs} ${framework_dirs} ${cflags} ${cflags_objcc} -c ${in} -o ${out}",
+    "solink": "clang++ -shared ${ldflags}  @${out}.rsp ${frameworks} ${solibs}  ${libs} -Wl,-install_name,@rpath/${target_output_name}${output_extension}  -o ${out}"
+   }
+  }
+ },
+ "cpp_abi": {
+  "arm64": {
+   "libcpp_abi_namespace": "__1",
+   "libcpp_abi_version": "1",
+   "libcpp_version": "190102",
+   "stdlib": "libc++",
+   "target": "arm64-apple-macos13.0"
+  },
+  "x86_64": {
+   "libcpp_abi_namespace": "__1",
+   "libcpp_abi_version": "1",
+   "libcpp_version": "190102",
+   "stdlib": "libc++",
+   "target": "x86_64-apple-macos13.0"
+  }
+ },
+ "linker": {
+  "note": "not invoked for static archives; recorded for consumers that link them",
+  "path": "/Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld",
+  "realpath": "/Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld",
+  "sha256": "648a8aac7f6f829a42305d24dddd7a3cfa48ee0bd9d4e7ec1ded5c51edea372b",
+  "version": "@(#)PROGRAM:ld PROJECT:ld-1167.5"
+ },
+ "observed_macho": {
+  "libraries": {
+   "build/mac-gpu/lib/Release/libdawn_combined.a": {
+    "arm64": {
+     "macos/13.0/15.5": 657
+    },
+    "x86_64": {
+     "macos/13.0/15.5": 657
+    }
+   },
+   "build/mac-gpu/lib/Release/libjsonreader.a": {
+    "arm64": {
+     "macos/13.0/15.5": 1
+    },
+    "x86_64": {
+     "macos/13.0/15.5": 1
+    }
+   },
+   "build/mac-gpu/lib/Release/libskia.a": {
+    "arm64": {
+     "macos/13.0/15.5": 1250
+    },
+    "x86_64": {
+     "macos/13.0/15.5": 1239
+    }
+   },
+   "build/mac-gpu/lib/Release/libskottie.a": {
+    "arm64": {
+     "macos/13.0/15.5": 424
+    },
+    "x86_64": {
+     "macos/13.0/15.5": 424
+    }
+   },
+   "build/mac-gpu/lib/Release/libskparagraph.a": {
+    "arm64": {
+     "macos/13.0/15.5": 15
+    },
+    "x86_64": {
+     "macos/13.0/15.5": 15
+    }
+   },
+   "build/mac-gpu/lib/Release/libskresources.a": {
+    "arm64": {
+     "macos/13.0/15.5": 2
+    },
+    "x86_64": {
+     "macos/13.0/15.5": 2
+    }
+   },
+   "build/mac-gpu/lib/Release/libsksg.a": {
+    "arm64": {
+     "macos/13.0/15.5": 372
+    },
+    "x86_64": {
+     "macos/13.0/15.5": 372
+    }
+   },
+   "build/mac-gpu/lib/Release/libskshaper.a": {
+    "arm64": {
+     "macos/13.0/15.5": 78
+    },
+    "x86_64": {
+     "macos/13.0/15.5": 78
+    }
+   },
+   "build/mac-gpu/lib/Release/libskunicode_core.a": {
+    "arm64": {
+     "macos/13.0/15.5": 2
+    },
+    "x86_64": {
+     "macos/13.0/15.5": 2
+    }
+   },
+   "build/mac-gpu/lib/Release/libskunicode_icu.a": {
+    "arm64": {
+     "macos/13.0/0.0": 1,
+     "macos/13.0/15.5": 449
+    },
+    "x86_64": {
+     "macos/13.0/0.0": 1,
+     "macos/13.0/15.5": 449
+    }
+   },
+   "build/mac-gpu/lib/Release/libsvg.a": {
+    "arm64": {
+     "macos/13.0/15.5": 395
+    },
+    "x86_64": {
+     "macos/13.0/15.5": 395
+    }
+   }
+  },
+  "members_with_unset_sdk": 2,
+  "members_without_build_version": 0,
+  "sdk_versions": [
+   "15.5"
+  ]
+ },
+ "runner": {
+  "image_os": "macos15",
+  "image_version": "20260907.0337.1",
+  "macos_build_version": "24G830",
+  "macos_product_version": "15.7.9",
+  "runner_arch": "ARM64"
+ },
+ "schema": "skia-builder.apple-toolchain-receipt.v1",
+ "sdk": {
+  "build_version": "24F74",
+  "libcxx_tbd_sha256": "9308fbc3ad208130b750f66475035ea10d312b99a97259b3c7a07fa8a2658ac7",
+  "path": "/Applications/Xcode_16.4.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk",
+  "version": "15.5"
+ },
+ "target": {
+  "architectures": [
+   "arm64",
+   "x86_64"
+  ],
+  "configuration": "Release",
+  "minimum_os": "13.0",
+  "platform": "mac",
+  "sdk_name": "macosx",
+  "variant": "gpu"
+ },
+ "xcode": {
+  "developer_dir": "/Applications/Xcode_16.4.app/Contents/Developer",
+  "version": "Xcode 16.4 Build version 16F6"
+ }
+}

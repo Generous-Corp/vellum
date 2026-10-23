@@ -206,6 +206,9 @@ jobs:
           PY
 
       - name: Verify renderer digest-to-provenance binding
+        env:
+          # The real-bundle tests run gh attestation verify, which wants a token.
+          GH_TOKEN: ${{ github.token }}
         run: |
           python3 tools/provenance/test_verify_renderer_dependency.py
           python3 tools/provenance/test_verify_renderer_eligibility.py

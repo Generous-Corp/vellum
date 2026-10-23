@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import zipfile
+from typing import Callable
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -35,6 +36,19 @@ SIGNATURE_NAMESPACE = "vellum-renderer-attestation"
 SIGNING_DOMAIN = b"vellum.renderer-provenance.v1 signed record\n"
 LEGAL_MANIFEST_SCHEMA = "skia-builder.legal-manifest.v1"
 CONTENT_ADDRESSED_MANIFEST = re.compile(r"\.legal-manifest\.sha256-([0-9a-f]{64})\.json$")
+CONTENT_ADDRESSED_RECEIPT = re.compile(r"\.apple-toolchain\.sha256-([0-9a-f]{64})\.json$")
+CONTENT_ADDRESSED_BUNDLE = re.compile(
+    r"\.provenance-attestation\.sha256-([0-9a-f]{64})\.sigstore\.json$")
+TOOLCHAIN_RECEIPT_SCHEMA = "skia-builder.apple-toolchain-receipt.v1"
+CLANG_BANNER = re.compile(r"^(Apple )?clang version [0-9][0-9A-Za-z.()_ -]*$")
+LD_VERSION = re.compile(r"PROJECT:ld-[0-9][0-9.]*")
+SDK_VERSION = re.compile(r"^[0-9]+\.[0-9]+(\.[0-9]+)?$")
+# The only workflow, repository and ref whose build-provenance attestation is
+# accepted for the renderer archive and its records.
+BUILDER_REPOSITORY = "danielraffel/skia-builder"
+BUILDER_SIGNER_WORKFLOW = "danielraffel/skia-builder/.github/workflows/build-skia.yml"
+BUILDER_SOURCE_REF = "refs/heads/main"
+AR_MAGIC = b"!<arch>\n"
 PENDING_MARKERS = ("pending", "unknown")
 LOCK_STATUS_BLOCKED = "incubation-byte-locked-not-release-attested"
 LOCK_STATUS_ELIGIBLE = "byte-locked-renderer-release-attested"
@@ -144,6 +158,24 @@ def release_asset_url(artifact: dict[str, object], name: str) -> str:
     return (f"{artifact['repository']}/releases/download/{artifact['release_tag']}/{name}")
 
 
+def validate_release_asset_record(
+    artifact: dict[str, object], record: object, pattern: re.Pattern[str], label: str
+) -> dict[str, object]:
+    """A record naming one content-addressed asset of the locked release."""
+    require(isinstance(record, dict), f"{label} names no release asset")
+    name, digest = record.get("name"), record.get("sha256")
+    require(isinstance(digest, str) and HEX_64.fullmatch(digest) is not None,
+            f"{label} digest is malformed")
+    match = pattern.search(name) if isinstance(name, str) else None
+    require(match is not None and match.group(1) == digest,
+            f"{label} asset name must carry its own SHA-256")
+    require(name.startswith(str(artifact["name"]).removesuffix(".zip") + "."),
+            f"{label} asset does not belong to the locked archive")
+    require(record.get("url") == release_asset_url(artifact, name),
+            f"{label} URL is not the locked release's asset")
+    return record
+
+
 def validate_legal_inventory_record(attestation: dict[str, object]) -> dict[str, object]:
     """Check the exhaustive inventory names one content-addressed release asset."""
     inventory = attestation["legal_inventory"]
@@ -167,7 +199,8 @@ def validate_legal_inventory_record(attestation: dict[str, object]) -> dict[str,
 
 
 def verify_legal_manifest_file(
-    attestation: dict[str, object], manifest_path: Path, archive: Path | None = None
+    attestation: dict[str, object], manifest_path: Path, archive: Path | None = None,
+    locked_archives: set[str] | None = None,
 ) -> dict[str, object]:
     """Verify the downloaded manifest is the attested one and covers the archive."""
     record = validate_legal_inventory_record(attestation)
@@ -192,8 +225,24 @@ def verify_legal_manifest_file(
         if row["kind"] != "static-archive":
             require(row.get("licenses") and all(item in licenses for item in row["licenses"]),
                     f"legal manifest leaves {row.get('name')} without a license")
-    for name, row in (manifest.get("static_archives") or {}).items():
-        for arch, piece in row.get("slices", {}).items():
+    require(isinstance(manifest.get("zip_members"), list) and manifest["zip_members"],
+            "legal manifest inventories no zip member")
+    static_archives = manifest.get("static_archives")
+    require(isinstance(static_archives, dict) and static_archives,
+            "legal manifest inventories no static archive")
+    if locked_archives is not None:
+        require(set(static_archives) == locked_archives,
+                "legal manifest static archives differ from the lock's archives")
+    listed_archives = {row["name"] for row in manifest.get("zip_members", [])
+                       if row.get("kind") == "static-archive"}
+    require(set(static_archives) == listed_archives,
+            "legal manifest static-archive inventory differs from its zip members")
+    for name, row in static_archives.items():
+        slices = row.get("slices") if isinstance(row, dict) else None
+        require(isinstance(slices, dict) and slices, f"legal manifest lists no slices for {name}")
+        for arch, piece in slices.items():
+            require(isinstance(piece.get("members"), list) and piece["members"],
+                    f"legal manifest lists no members for {name}[{arch}]")
             for member in piece.get("members", []):
                 require(member.get("objects") and member.get("licenses")
                         and all(item in licenses for item in member["licenses"]),
@@ -205,6 +254,25 @@ def verify_legal_manifest_file(
             actual = {name: sha256_bytes(handle.read(info))
                       for name, info in members.items() if not info.is_dir()}
         require(actual == listed, "legal manifest zip-member inventory differs from the archive")
+        with zipfile.ZipFile(archive) as handle:
+            members = safe_members(handle)
+            for name, info in members.items():
+                data = handle.read(info)
+                if info.is_dir() or not data.startswith(AR_MAGIC) and int.from_bytes(
+                        data[:4], "big") not in (0xCAFEBABE, 0xCAFEBABF):
+                    continue
+                recorded = static_archives.get(name)
+                require(recorded is not None, f"legal manifest has no member inventory for {name}")
+                relisted = static_archive_members(data)
+                require(set(relisted) == set(recorded["slices"]) or set(relisted) == {"thin"}
+                        and len(recorded["slices"]) == 1,
+                        f"legal manifest slices for {name} differ from the archive")
+                for arch, expected in relisted.items():
+                    piece = (recorded["slices"][arch] if arch != "thin"
+                             else next(iter(recorded["slices"].values())))
+                    got = [(member.get("name"), member.get("sha256")) for member in piece["members"]]
+                    require(got == expected,
+                            f"legal manifest does not cover every member of {name}[{arch}]")
     return {"legal_manifest_sha256": record["sha256"],
             "legal_manifest_members": len(manifest.get("zip_members", [])),
             "legal_manifest_licenses": len(licenses)}
@@ -218,32 +286,184 @@ def verify_release_assets(attestation: dict[str, object], release_json: Path) ->
             "release JSON is not the locked release tag")
     assets = {row.get("name"): row for row in release.get("assets", []) if isinstance(row, dict)}
     record = validate_legal_inventory_record(attestation)
-    for name, digest in ((artifact["name"], artifact["sha256"]), (record["name"], record["sha256"])):
+    expected = [(artifact["name"], artifact["sha256"]), (record["name"], record["sha256"])]
+    receipt = (attestation.get("build_identity") or {}).get("toolchain_receipt")
+    bundle = (attestation.get("build_provenance") or {}).get("bundle")
+    for extra in (receipt, bundle):
+        if isinstance(extra, dict):
+            expected.append((extra.get("name"), extra.get("sha256")))
+    for name, digest in expected:
         row = assets.get(name)
         require(row is not None, f"release asset is missing: {name}")
         require(row.get("digest") == f"sha256:{digest}",
                 f"release asset {name} digest {row.get('digest')} differs from sha256:{digest}")
-    return {"release_assets_verified": 2}
+    return {"release_assets_verified": len(expected)}
 
 
-def validate_build_identity(build_identity: dict[str, object]) -> None:
-    for side in ("compiler", "linker"):
+def attested_string(row: dict[str, object], field: str, label: str,
+                    pattern: re.Pattern[str] | None = None) -> str:
+    value = row.get(field)
+    require(isinstance(value, str) and value.strip()
+            and not any(marker in value.lower() for marker in PENDING_MARKERS),
+            f"renderer build identity {label}.{field} is not attested")
+    if pattern is not None:
+        require(pattern.search(value) is not None,
+                f"renderer build identity {label}.{field} {value!r} is not a measured value")
+    return value
+
+
+def validate_build_identity(build_identity: dict[str, object], artifact: dict[str, object]) -> None:
+    """Structured fields in the shape the builder's toolchain receipt measures."""
+    for side, version_pattern in (("compiler", CLANG_BANNER), ("linker", LD_VERSION)):
         row = build_identity.get(side)
         require(isinstance(row, dict), f"renderer build identity {side} is missing")
-        for field in ("vendor", "version"):
-            value = row.get(field)
-            require(isinstance(value, str) and value.strip()
-                    and not any(marker in value for marker in PENDING_MARKERS),
-                    f"renderer build identity {side}.{field} is not attested")
+        attested_string(row, "vendor", side)
+        attested_string(row, "version", side, version_pattern)
+        path = attested_string(row, "path", side)
+        require(path.startswith("/"), f"renderer build identity {side}.path must be absolute")
         require(isinstance(row.get("sha256"), str) and HEX_64.fullmatch(row["sha256"]) is not None,
                 f"renderer build identity {side}.sha256 is not a SHA-256")
+    sdk = build_identity.get("sdk")
+    require(isinstance(sdk, dict), "renderer build identity sdk is missing")
+    attested_string(sdk, "version", "sdk", SDK_VERSION)
     abi = build_identity.get("cpp_abi")
     require(isinstance(abi, dict), "renderer build identity cpp_abi is missing")
-    for field in ("stdlib", "abi"):
-        value = abi.get(field)
-        require(isinstance(value, str) and value.strip()
-                and not any(marker in value for marker in PENDING_MARKERS),
-                f"renderer build identity cpp_abi.{field} is not attested")
+    require(abi.get("stdlib") == "libc++", "renderer build identity cpp_abi.stdlib must be libc++")
+    attested_string(abi, "abi", "cpp_abi", re.compile(r"^[0-9]+$"))
+    attested_string(abi, "libcpp_version", "cpp_abi", re.compile(r"^[0-9]{5,6}$"))
+    validate_release_asset_record(artifact, build_identity.get("toolchain_receipt"),
+                                  CONTENT_ADDRESSED_RECEIPT, "toolchain receipt")
+
+
+def validate_build_provenance_record(attestation: dict[str, object]) -> dict[str, object]:
+    record = attestation.get("build_provenance")
+    require(isinstance(record, dict), "an owner-attested record must name its build provenance")
+    require(record.get("repository") == BUILDER_REPOSITORY
+            and record.get("signer_workflow") == BUILDER_SIGNER_WORKFLOW
+            and record.get("source_ref") == BUILDER_SOURCE_REF,
+            "build provenance must name the pinned builder repository, workflow and ref")
+    validate_release_asset_record(attestation["artifact"], record.get("bundle"),
+                                  CONTENT_ADDRESSED_BUNDLE, "build provenance bundle")
+    return record
+
+
+def verify_toolchain_receipt_file(attestation: dict[str, object], path: Path) -> dict[str, object]:
+    """Cross-check every build_identity field against the receipt that measured it."""
+    identity = attestation["build_identity"]
+    record = validate_release_asset_record(attestation["artifact"], identity.get("toolchain_receipt"),
+                                           CONTENT_ADDRESSED_RECEIPT, "toolchain receipt")
+    data = path.read_bytes()
+    require(sha256_bytes(data) == record["sha256"],
+            f"toolchain receipt SHA-256 {sha256_bytes(data)} differs from the attestation")
+    receipt = json.loads(data)
+    artifact = attestation["artifact"]
+    require(receipt.get("schema") == TOOLCHAIN_RECEIPT_SCHEMA, "toolchain receipt schema is unsupported")
+    bound = receipt.get("archive") or {}
+    require(bound.get("sha256") == artifact["sha256"] and bound.get("name") == artifact["name"],
+            "toolchain receipt describes a different archive")
+    cxx = (receipt.get("compiler") or {}).get("cxx") or {}
+    linker = receipt.get("linker") or {}
+    for label, attested, measured in (("compiler", identity["compiler"], cxx),
+                                      ("linker", identity["linker"], linker)):
+        for field in ("version", "path", "sha256"):
+            require(attested.get(field) == measured.get(field),
+                    f"build identity {label}.{field} differs from the toolchain receipt")
+    sdk_version = identity["sdk"]["version"]
+    require((receipt.get("sdk") or {}).get("version") == sdk_version,
+            "build identity sdk.version differs from the toolchain receipt")
+    observed = receipt.get("observed_macho") or {}
+    require(observed.get("sdk_versions") == [sdk_version],
+            "the receipt's objects were not all built against the attested SDK")
+    abi_rows = receipt.get("cpp_abi") or {}
+    require(abi_rows, "toolchain receipt records no C++ ABI")
+    for arch, row in abi_rows.items():
+        require(row.get("libcpp_abi_version") == identity["cpp_abi"]["abi"]
+                and row.get("libcpp_version") == identity["cpp_abi"]["libcpp_version"],
+                f"build identity cpp_abi differs from the toolchain receipt for {arch}")
+    return {"toolchain_receipt_sha256": record["sha256"],
+            "toolchain_receipt_architectures": sorted(abi_rows)}
+
+
+GhRunner = Callable[[list[str]], subprocess.CompletedProcess]
+
+
+def run_gh(args: list[str]) -> subprocess.CompletedProcess:
+    return subprocess.run(args, capture_output=True, text=True, check=False)
+
+
+def verify_build_provenance(
+    attestation: dict[str, object], subjects: dict[str, Path], bundle: Path,
+    runner: GhRunner = run_gh,
+) -> dict[str, object]:
+    """Verify the builder's Sigstore attestation covers each subject, offline from the bundle."""
+    record = validate_build_provenance_record(attestation)
+    data = bundle.read_bytes()
+    require(sha256_bytes(data) == record["bundle"]["sha256"],
+            "build provenance bundle SHA-256 differs from the attestation")
+    require(shutil.which("gh") is not None or runner is not run_gh,
+            "gh is required to verify the build provenance attestation")
+    verified = []
+    for label, path in sorted(subjects.items()):
+        result = runner(["gh", "attestation", "verify", str(path), "--bundle", str(bundle),
+                         "--repo", record["repository"], "--signer-workflow", record["signer_workflow"],
+                         "--source-ref", record["source_ref"], "--format", "json"])
+        detail = ((result.stdout or "") + (result.stderr or "")).strip()
+        require(result.returncode == 0,
+                f"build provenance attestation does not cover the {label}: {detail[-400:]}")
+        verified.append(label)
+    return {"build_provenance_verified": verified}
+
+
+def static_archive_members(data: bytes) -> dict[str, list[tuple[str, str]]]:
+    """Architecture -> [(member name, member SHA-256)] for a fat or thin static archive.
+
+    Independent of the builder's own parser: the manifest's claim of covering
+    every member is re-derived from the archive bytes here.
+    """
+    pieces: list[tuple[str, bytes]] = []
+    magic = int.from_bytes(data[:4], "big") if len(data) >= 4 else 0
+    if magic in (0xCAFEBABE, 0xCAFEBABF):
+        count = int.from_bytes(data[4:8], "big")
+        offset = 8
+        for _ in range(count):
+            cputype = int.from_bytes(data[offset:offset + 4], "big")
+            if magic == 0xCAFEBABE:
+                start = int.from_bytes(data[offset + 8:offset + 12], "big")
+                size = int.from_bytes(data[offset + 12:offset + 16], "big")
+                offset += 20
+            else:
+                start = int.from_bytes(data[offset + 8:offset + 16], "big")
+                size = int.from_bytes(data[offset + 16:offset + 24], "big")
+                offset += 32
+            arch = {0x01000007: "x86_64", 0x0100000C: "arm64"}.get(cputype, f"cpu-{cputype:#x}")
+            pieces.append((arch, data[start:start + size]))
+    else:
+        cputype = None
+        pieces.append(("thin", data))
+    result: dict[str, list[tuple[str, str]]] = {}
+    for arch, piece in pieces:
+        require(piece.startswith(AR_MAGIC), f"{arch} slice is not a static archive")
+        members, offset = [], len(AR_MAGIC)
+        while offset < len(piece):
+            if piece[offset:offset + 1] == b"\n":
+                offset += 1
+                continue
+            header = piece[offset:offset + 60]
+            require(len(header) == 60 and header[58:60] == b"`\n", "malformed static archive header")
+            raw = header[:16].decode("ascii", "replace").rstrip(" ")
+            size = int(header[48:58].decode("ascii").strip() or "0")
+            body = piece[offset + 60:offset + 60 + size]
+            offset += 60 + size + (size & 1)
+            if raw.startswith("#1/"):
+                length = int(raw[3:])
+                name, body = body[:length].rstrip(b"\0").decode("utf-8", "replace"), body[length:]
+            else:
+                name = raw[:-1] if raw.endswith("/") else raw
+            if name.startswith("__.SYMDEF") or name in ("/", "//", "/SYM64/"):
+                continue
+            members.append((name, sha256_bytes(body)))
+        result[arch] = members
+    return result
 
 
 def validate_renderer_attestation(
@@ -316,7 +536,8 @@ def validate_renderer_attestation(
                 "an owner-attested record must carry a verified signature")
         require(legal_inventory["state"] == "exhaustive",
                 "an owner-attested record must carry an exhaustive legal inventory")
-        validate_build_identity(build_identity)
+        validate_build_identity(build_identity, attestation["artifact"])
+        validate_build_provenance_record(attestation)
     return attestation
 
 
@@ -594,11 +815,20 @@ def main() -> int:
     parser.add_argument("--allowed-signers", type=Path, default=ALLOWED_SIGNERS_PATH)
     parser.add_argument("--legal-manifest", type=Path,
                         help="the downloaded content-addressed legal manifest asset")
+    parser.add_argument("--toolchain-receipt", type=Path,
+                        help="the downloaded content-addressed Apple toolchain receipt asset")
+    parser.add_argument("--provenance-bundle", type=Path,
+                        help="the downloaded Sigstore bundle of the builder's provenance attestation")
     parser.add_argument("--release-json", type=Path,
                         help="GitHub's release JSON for the locked tag (assets[].digest)")
     parser.add_argument("--require-release-eligible", action="store_true",
                         help="fail unless the renderer is eligible, its signature verifies, and "
-                             "--legal-manifest and --release-json prove the attested manifest")
+                             "--archive, --legal-manifest, --toolchain-receipt, "
+                             "--provenance-bundle and --release-json prove every attested asset")
+    # Test-only overrides of the pinned owner identity. The release workflow
+    # never passes them (scripts/test_ci_runner_policy.py asserts that).
+    parser.add_argument("--owner-principal", default=OWNER_PRINCIPAL, help=argparse.SUPPRESS)
+    parser.add_argument("--owner-fingerprint", default=OWNER_FINGERPRINT, help=argparse.SUPPRESS)
     parser.add_argument("--print-signing-payload", action="store_true",
                         help="write the exact bytes the owner signs to stdout and exit")
     parser.add_argument("--json", action="store_true")
@@ -613,7 +843,9 @@ def main() -> int:
         return 0
     try:
         _, renderer = load_lock(args.lock, args.attestation, signature_path=args.signature,
-                                allowed_signers=args.allowed_signers)
+                                allowed_signers=args.allowed_signers,
+                                owner_principal=args.owner_principal,
+                                owner_fingerprint=args.owner_fingerprint)
         attestation = renderer["_attestation"]
         result: dict[str, object] = {
             "ok": True,
@@ -626,14 +858,29 @@ def main() -> int:
         if args.archive:
             result.update(verify_archive(args.archive, renderer, args.require_macho))
         if args.legal_manifest:
-            result.update(verify_legal_manifest_file(attestation, args.legal_manifest, args.archive))
+            archive_root = str(renderer["artifact"]["archive_root"]).rstrip("/") + "/"
+            result.update(verify_legal_manifest_file(
+                attestation, args.legal_manifest, args.archive,
+                {archive_root + row["name"] for row in renderer["archives"]}))
+        if args.toolchain_receipt:
+            result.update(verify_toolchain_receipt_file(attestation, args.toolchain_receipt))
+        if args.provenance_bundle:
+            subjects = {"legal manifest": args.legal_manifest, "toolchain receipt": args.toolchain_receipt,
+                        "archive": args.archive}
+            result.update(verify_build_provenance(
+                attestation, {label: path for label, path in subjects.items() if path},
+                args.provenance_bundle))
         if args.release_json:
             result.update(verify_release_assets(attestation, args.release_json))
         if args.require_release_eligible:
             require(renderer["release_eligibility"] == "eligible",
                     "GPU release is blocked: " + ", ".join(result["release_blockers"]))
-            require(args.legal_manifest is not None and args.release_json is not None,
-                    "release eligibility requires --legal-manifest and --release-json")
+            missing = [flag for flag, value in (
+                ("--archive", args.archive), ("--legal-manifest", args.legal_manifest),
+                ("--toolchain-receipt", args.toolchain_receipt),
+                ("--provenance-bundle", args.provenance_bundle),
+                ("--release-json", args.release_json)) if value is None]
+            require(not missing, "release eligibility requires " + ", ".join(missing))
     except (OSError, ValueError, json.JSONDecodeError, zipfile.BadZipFile,
             subprocess.CalledProcessError, VerificationError) as error:
         print(f"renderer-dependency-verify: {error}", file=sys.stderr)
