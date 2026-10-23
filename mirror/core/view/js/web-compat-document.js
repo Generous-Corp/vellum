@@ -1,0 +1,1588 @@
+// ═══════════════════════════════════════════════════════════════════════════════
+// StyleSheet
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function StyleSheet(rules) {
+    this._rules = rules || {};
+    this._attached = false;
+    this._parsedRules = [];
+
+    // Parse rules into structured form
+    for (var selector in this._rules) {
+        this._parsedRules.push({
+            selector: selector,
+            properties: this._rules[selector],
+            parsed: _parseSelector(selector)
+        });
+    }
+}
+
+StyleSheet.prototype.attach = function() {
+    if (this._attached) return;
+    this._attached = true;
+    __stylesheets__.push(this);
+    // Apply to all existing elements
+    for (var id in __elements__) {
+        if (id[0] !== "#") { // Skip getElementById entries
+            this._applyTo(__elements__[id]);
+        }
+    }
+};
+
+StyleSheet.prototype.detach = function() {
+    var idx = __stylesheets__.indexOf(this);
+    if (idx >= 0) __stylesheets__.splice(idx, 1);
+    this._attached = false;
+};
+
+StyleSheet.prototype._applyTo = function(el) {
+    for (var i = 0; i < this._parsedRules.length; i++) {
+        var rule = this._parsedRules[i];
+        var parsed = rule.parsed;
+
+        // Handle pseudo-classes separately. We pass `parsedNoPseudo`
+        // (the parsed selector with pseudo stripped) to `_matchesSelector`
+        // because the stylesheet wire-up path matches "would this
+        // selector apply if state X were true?" — that's the structural
+        // match, not the live state. The live state check is then either
+        // (a) deferred to the event-handler wiring (`:hover` / `:focus` /
+        // `:active`), or (b) done explicitly here (`:disabled` reads
+        // `el._disabled` after the structural match). The querySelector-
+        // side _matchesSelector pseudo evaluator honours pseudo when
+        // present, but is bypassed here so the wire-up still sees
+        // structural matches before the user has moused over anything.
+        var parsedNoPseudo = parsed;
+        if (parsed.pseudo) {
+            parsedNoPseudo = {
+                tag: parsed.tag, id: parsed.id, classes: parsed.classes,
+                attrs: parsed.attrs, pseudo: null,
+                parent: parsed.parent, direct: parsed.direct,
+            };
+        }
+
+        if (parsed.pseudo === "hover") {
+            if (_matchesSelector(el, parsedNoPseudo)) {
+                _setupPseudoHover(el, rule.properties);
+            }
+        } else if (parsed.pseudo === "focus") {
+            if (_matchesSelector(el, parsedNoPseudo)) {
+                _setupPseudoFocus(el, rule.properties);
+            }
+        } else if (parsed.pseudo === "active") {
+            if (_matchesSelector(el, parsedNoPseudo)) {
+                _setupPseudoActive(el, rule.properties);
+            }
+        } else if (parsed.pseudo === "disabled") {
+            if (_matchesSelector(el, parsedNoPseudo) && el._disabled) {
+                _applyStyles(el, rule.properties);
+            }
+        } else {
+            if (_matchesSelector(el, parsed)) {
+                _applyStyles(el, rule.properties);
+            }
+        }
+    }
+};
+
+function _applyStyles(el, props) {
+    for (var k in props) {
+        el.style[k] = props[k];
+    }
+}
+
+function _setupPseudoHover(el, props) {
+    // Multiple `:hover` rules on the same element layer merge their
+    // property maps. We keep a per-element list so `mouseleave`
+    // restores the union of all hover-touched properties to their
+    // pre-hover values, even when a later rule introduced a new key.
+    // The list is keyed on the props *object identity* so repeated
+    // _applyTo() runs (e.g. from className mutation) don't grow the
+    // list — each rule object goes in exactly once per element.
+    var hoverState = el._hoverState;
+    if (!hoverState) {
+        hoverState = el._hoverState = {
+            propsList: [],
+            savedProps: {},
+            wired: false
+        };
+    }
+
+    // Append unique rules; idempotent across repeated _applyTo() runs.
+    var alreadyHave = false;
+    for (var pi = 0; pi < hoverState.propsList.length; pi++) {
+        if (hoverState.propsList[pi] === props) { alreadyHave = true; break; }
+    }
+    if (!alreadyHave) hoverState.propsList.push(props);
+
+    // registerHover(id) arms the native dispatcher. The C++
+    // side requires the widget to exist before the call lands, so we
+    // defer wiring until _nativeCreated. _applyTo() runs again from
+    // appendChild's _reapplyStylesheets() after _nativeCreated flips,
+    // giving us a second chance to wire even for elements that matched
+    // the rule pre-mount.
+    if (hoverState.wired) return;
+    if (!el._nativeCreated) return;
+    hoverState.wired = true;
+
+    // Use addEventListener (multi-callback __eventListeners__ map) so we
+    // coexist with JSX onMouseEnter / addEventListener('mouseenter')
+    // handlers the user may register independently. The lower-level
+    // `on()` channel is single-callback per (id, event) — using it here
+    // would clobber, or be clobbered by, any other mouseenter listener.
+    // addEventListener also routes through _registerNativeEvent which
+    // calls registerHover(id) for us — but only if _nativeCreated is
+    // already true on this code path, which we just asserted above.
+    el.addEventListener("mouseenter", function() {
+        var list = hoverState.propsList;
+        // Snapshot the BEFORE state for every property any rule touches.
+        // Refreshed on every enter so a hover-after-className-change
+        // (or a JS-driven style mutation between hovers) still reverts
+        // to the pre-hover value rather than to a stale snapshot.
+        for (var i = 0; i < list.length; i++) {
+            var p = list[i];
+            for (var k in p) {
+                if (!Object.prototype.hasOwnProperty.call(hoverState.savedProps, k)) {
+                    hoverState.savedProps[k] = el.style[k];
+                }
+            }
+        }
+        // Layer rules in registration order — last write wins per
+        // property, which matches CSS specificity for equally-specific
+        // selectors (later rules in source order win).
+        for (var j = 0; j < list.length; j++) {
+            _applyStyles(el, list[j]);
+        }
+    });
+    el.addEventListener("mouseleave", function() {
+        for (var k in hoverState.savedProps) {
+            el.style[k] = hoverState.savedProps[k];
+        }
+        // Drop the snapshot so the next enter re-captures the current
+        // style (which may have been mutated by JS in between).
+        hoverState.savedProps = {};
+    });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CSS text → StyleSheet translator
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// Converts the contents of a `<style>` element into a StyleSheet so the
+// existing rule-application path picks it up. We deliberately keep the
+// parser conservative: simple selectors (tag, .class, #id) optionally
+// suffixed with a single `:hover` / `:focus` / `:active` pseudo-class,
+// comma-separated selector lists, and `prop: value;` declarations.
+//
+// Out of scope for this conservative CSS-text parser:
+//   - Descendant / child / sibling combinators in the CSS-text input
+//     (the underlying matcher supports them via `_parseSelector` but
+//     bringing them through the text parser opens a larger correctness
+//     surface).
+//   - At-rules (@media, @keyframes, @supports, @import).
+//   - CSS variable resolution at parse time (handled by the existing
+//     style-decl path on apply).
+
+function _stripCssComments(text) {
+    return text.replace(/\/\*[\s\S]*?\*\//g, "");
+}
+
+function _parseCssDeclarations(body) {
+    var props = {};
+    var decls = body.split(";");
+    for (var i = 0; i < decls.length; i++) {
+        var d = decls[i].trim();
+        if (!d) continue;
+        var colon = d.indexOf(":");
+        if (colon <= 0) continue;
+        var name = d.slice(0, colon).trim();
+        var value = d.slice(colon + 1).trim();
+        if (!name || !value) continue;
+        // CSS uses kebab-case; CSSStyleDeclaration._props expects camelCase.
+        // The setter side handles both, but normalize here so layered
+        // overrides on the same logical property collapse correctly.
+        var camel = name.replace(/-([a-z])/g, function(_, c) { return c.toUpperCase(); });
+        props[camel] = value;
+    }
+    return props;
+}
+
+function _parseCssText(text) {
+    // Returns an array of { selector, properties } records — array (not
+    // object) so duplicate selectors layer in source order.
+    var rules = [];
+    var src = _stripCssComments(text || "");
+    var i = 0;
+    while (i < src.length) {
+        // Skip whitespace and at-rule blocks (we don't support them; just
+        // jump over the matching brace pair so a stray @media doesn't
+        // poison the rest of the sheet).
+        var ch = src.charAt(i);
+        if (ch === " " || ch === "\t" || ch === "\n" || ch === "\r") { i++; continue; }
+        if (ch === "@") {
+            var depth = 0, found = false;
+            while (i < src.length) {
+                var c2 = src.charAt(i++);
+                if (c2 === "{") { depth++; found = true; }
+                else if (c2 === "}") { depth--; if (depth === 0 && found) break; }
+                else if (c2 === ";" && !found) { break; } // at-rule with no block
+            }
+            continue;
+        }
+        // Read selector list up to '{'
+        var brace = src.indexOf("{", i);
+        if (brace < 0) break;
+        var selectorList = src.slice(i, brace).trim();
+        var endBrace = src.indexOf("}", brace + 1);
+        if (endBrace < 0) break;
+        var body = src.slice(brace + 1, endBrace);
+        var props = _parseCssDeclarations(body);
+        // Split selector list on commas (top-level only; we don't support
+        // selectors with parenthesized commas in this slice).
+        var selectors = selectorList.split(",");
+        for (var s = 0; s < selectors.length; s++) {
+            var sel = selectors[s].trim();
+            if (!sel) continue;
+            rules.push({ selector: sel, properties: props });
+        }
+        i = endBrace + 1;
+    }
+    return rules;
+}
+
+function _processStyleElement(el) {
+    // Detach any previously-applied sheet so re-setting textContent
+    // (React commits, hot-reload) replaces rather than stacks.
+    if (el._appliedSheet && typeof el._appliedSheet.detach === "function") {
+        el._appliedSheet.detach();
+        el._appliedSheet = null;
+    }
+    var rules = _parseCssText(el._textContent || "");
+    if (rules.length === 0) return;
+    // StyleSheet's constructor takes { selector: properties }; we feed it
+    // a raw _parsedRules list to preserve duplicate selectors and
+    // source-order layering for `:hover` rules.
+    var sheet = Object.create(StyleSheet.prototype);
+    sheet._rules = {};
+    sheet._attached = false;
+    sheet._parsedRules = [];
+    for (var i = 0; i < rules.length; i++) {
+        var r = rules[i];
+        sheet._parsedRules.push({
+            selector: r.selector,
+            properties: r.properties,
+            parsed: _parseSelector(r.selector)
+        });
+    }
+    sheet.attach();
+    el._appliedSheet = sheet;
+}
+
+function _setupPseudoFocus(el, props) {
+    if (el._focusSetup) return;
+    el._focusSetup = true;
+    var savedProps = {};
+
+    el.addEventListener("focus", function() {
+        for (var k in props) savedProps[k] = el.style[k];
+        _applyStyles(el, props);
+    });
+
+    el.addEventListener("blur", function() {
+        for (var k in savedProps) el.style[k] = savedProps[k];
+    });
+}
+
+function _setupPseudoActive(el, props) {
+    if (el._activeSetup) return;
+    el._activeSetup = true;
+    var savedProps = {};
+
+    el.addEventListener("mousedown", function() {
+        for (var k in props) savedProps[k] = el.style[k];
+        _applyStyles(el, props);
+    });
+
+    el.addEventListener("mouseup", function() {
+        for (var k in savedProps) el.style[k] = savedProps[k];
+    });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// getComputedStyle
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function getComputedStyle(el) {
+    // Return a read-only object that reflects the element's current style
+    // For properties set via style, return those; for layout properties, query bridge
+    var obj = {};
+    for (var k in el.style._props) {
+        obj[k] = el.style._props[k];
+    }
+
+    // If native, query layout dimensions
+    if (el._nativeCreated && typeof getLayoutRect === "function") {
+        var rect = getLayoutRect(el._id);
+        if (rect) {
+            obj.width = rect.width + "px";
+            obj.height = rect.height + "px";
+        }
+    }
+
+    return obj;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// document object
+// ═══════════════════════════════════════════════════════════════════════════════
+
+var __bodyElement__ = new Element("div", "__root__");
+__bodyElement__._nativeCreated = true; // root already exists
+__elements__["__root__"] = __bodyElement__;
+
+var __documentElement__ = new Element("html", "__docRoot__");
+__documentElement__.style = new CSSStyleDeclaration(__documentElement__);
+__documentElement__._nativeCreated = true;
+
+// Native web-compat buttons should provide the same baseline pointer feedback
+// developers get from a browser even when an app has no authored hover rule.
+// Install this user-agent sheet lazily after selector parsing is available.
+// Application sheets attach later, so their `button:hover` properties win.
+var __pulpDefaultButtonHoverSheet__ = null;
+function __pulpEnsureDefaultButtonHoverSheet__() {
+    if (__pulpDefaultButtonHoverSheet__ || typeof _parseSelector !== "function")
+        return;
+    __pulpDefaultButtonHoverSheet__ = new StyleSheet({
+        "button:hover": { opacity: 0.86 }
+    });
+    __pulpDefaultButtonHoverSheet__.attach();
+}
+
+var document = {
+    body: __bodyElement__,
+    documentElement: __documentElement__,
+    activeElement: null,
+
+    createElement: function(tag) {
+        __pulpEnsureDefaultButtonHoverSheet__();
+        var el = new Element(tag);
+        __elements__[el._id] = el;
+        return el;
+    },
+
+    getElementById: function(id) {
+        return __elements__["#" + id] || null;
+    },
+
+    querySelector: function(selector) {
+        return _querySelector(__bodyElement__, selector);
+    },
+
+    querySelectorAll: function(selector) {
+        return _querySelectorAll(__bodyElement__, selector);
+    },
+
+    createTextNode: function(text) {
+        // Backed by an Element (`<span>`) so renderers handle text uniformly,
+        // but flagged as a DOM-spec text node so reconcilers (React 18, etc.)
+        // see `node.nodeType === 3` and `node.nodeName === "#text"`.
+        // React's reconciler reads both on every node it walks.
+        var el = new Element("span");
+        el._textContent = text;
+        el._isTextNode = true;
+        Object.defineProperty(el, "nodeType", { value: 3, configurable: true });
+        Object.defineProperty(el, "nodeName", { value: "#text", configurable: true });
+        // Spec: a Text node's `data` and `nodeValue` mirror its content.
+        Object.defineProperty(el, "data", {
+            get: function() { return this._textContent; },
+            set: function(v) {
+                this._textContent = v == null ? "" : String(v);
+                if (this._nativeCreated) setText(this._id, this._textContent);
+            },
+            configurable: true
+        });
+        Object.defineProperty(el, "nodeValue", {
+            get: function() { return this._textContent; },
+            set: function(v) {
+                this._textContent = v == null ? "" : String(v);
+                if (this._nativeCreated) setText(this._id, this._textContent);
+            },
+            configurable: true
+        });
+        __elements__[el._id] = el;
+        return el;
+    },
+
+    createComment: function(text) {
+        // Comment nodes are invisible scaffolding for renderers (e.g. React's
+        // hydration markers and ReactDOM's portal sentinels). Backed by a
+        // hidden Element so DOM tree ops still work.
+        var el = new Element("span");
+        el._textContent = "";
+        el._isCommentNode = true;
+        el._hidden = true;
+        Object.defineProperty(el, "nodeType", { value: 8, configurable: true });
+        Object.defineProperty(el, "nodeName", { value: "#comment", configurable: true });
+        Object.defineProperty(el, "data", {
+            get: function() { return this._commentText || ""; },
+            set: function(v) { this._commentText = v == null ? "" : String(v); },
+            configurable: true
+        });
+        Object.defineProperty(el, "nodeValue", {
+            get: function() { return this._commentText || ""; },
+            set: function(v) { this._commentText = v == null ? "" : String(v); },
+            configurable: true
+        });
+        if (text != null) el.data = text;
+        __elements__[el._id] = el;
+        return el;
+    },
+
+    createDocumentFragment: function() {
+        // A DocumentFragment is a lightweight container that vanishes when
+        // appended to a real parent (its children move, the fragment itself
+        // doesn't). For our needs (React batching commits) it's sufficient
+        // to model it as an Element that flattens on appendChild.
+        var el = new Element("div");
+        el._isDocumentFragment = true;
+        Object.defineProperty(el, "nodeType", { value: 11, configurable: true });
+        Object.defineProperty(el, "nodeName", { value: "#document-fragment", configurable: true });
+        __elements__[el._id] = el;
+        return el;
+    },
+
+    // document-level EventTarget with real fan-out.
+    //
+    // Previously these were no-ops, kept that way so Three.js
+    // OrbitControls' `ownerDocument.removeEventListener` didn't throw on
+    // cleanup. That cleanup story is preserved (removeEventListener still
+    // doesn't throw on unknown handlers) but listeners now actually fire,
+    // which is needed so React "click-outside" patterns that hook
+    // `document.addEventListener('mousedown', onDoc)` work. Popovers and
+    // context menus using this pattern were silently dead before.
+    //
+    // The bridge dispatches into this map via `__dispatch__('document',
+    // eventName, eventObj)` from C++ (see widget_bridge.cpp __dispatch__
+    // preamble + claimOverlay's dismiss path).
+    __eventListeners__: {},
+    addEventListener: function(type, handler) {
+        if (typeof type !== 'string' || typeof handler !== 'function') return;
+        var list = this.__eventListeners__[type] || (this.__eventListeners__[type] = []);
+        if (list.indexOf(handler) < 0) list.push(handler);
+    },
+    removeEventListener: function(type, handler) {
+        var list = this.__eventListeners__ && this.__eventListeners__[type];
+        if (!list) return;
+        var idx = list.indexOf(handler);
+        if (idx >= 0) list.splice(idx, 1);
+    },
+    dispatchEvent: function(event) {
+        if (!event || typeof event !== 'object' || typeof event.type !== 'string') return true;
+        var list = this.__eventListeners__ && this.__eventListeners__[event.type];
+        if (typeof event.preventDefault !== 'function') {
+            event.preventDefault = function() { this.defaultPrevented = true; };
+        }
+        if (typeof event.stopPropagation !== 'function') {
+            event.stopPropagation = function() { this._stopped = true; };
+        }
+        if (typeof event.stopImmediatePropagation !== 'function') {
+            event.stopImmediatePropagation = function() {
+                this._stopped = true;
+                this._stoppedImmediate = true;
+            };
+        }
+        // Snapshot the list to tolerate handlers that
+        // remove themselves during dispatch.
+        var snapshot = list ? list.slice() : [];
+        for (var i = 0; i < snapshot.length; i++) {
+            try { snapshot[i](event); }
+            catch (e) {
+                if (typeof __dispatchError__ === 'function') {
+                    __dispatchError__('document', event.type, String(e && e.stack ? e.stack : e));
+                }
+            }
+            if (event._stoppedImmediate) break;
+        }
+        if (!event.defaultPrevented && !event.__pulpPopupOffered
+            && typeof globalThis.__pulpPopupDefaultHandle__ === "function") {
+            event.__pulpPopupOffered = true;
+            globalThis.__pulpPopupDefaultHandle__(event);
+        }
+        return !event.defaultPrevented;
+    }
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// window object (minimal shim)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// The root view's live size. A script that positions a popover against
+// `window.innerWidth/innerHeight` is asking how big its surface is; a constant
+// 800x600 answered for a screen that does not exist, so a menu in a larger
+// editor believed it had no room on the right and was clamped upward. Kept in
+// lockstep with the legacy web-compat.js bundle, whose getters read the same.
+function __pulpWindowRootDims__() {
+    if (typeof getRootSize === "function") {
+        var s = getRootSize();
+        return { w: (s && s.width) || 800, h: (s && s.height) || 600 };
+    }
+    return { w: 800, h: 600 };
+}
+
+var window = {
+    document: document,
+    getComputedStyle: getComputedStyle,
+    get innerWidth() { return __pulpWindowRootDims__().w; },
+    get innerHeight() { return __pulpWindowRootDims__().h; },
+    devicePixelRatio: 2,
+    requestAnimationFrame: function(fn) {
+        // Map to Pulp's frame clock
+        if (typeof __requestFrame__ === "function") {
+            if (typeof fn !== "function") return 0;
+            var id = __frameNextId__++;
+            __frameCallbacks__[id] = fn;
+            return __requestFrame__(id);
+        }
+        return 0;
+    },
+    cancelAnimationFrame: function(id) {
+        if (typeof __cancelFrame__ === "function") __cancelFrame__(id);
+    }
+};
+
+// A browser classic-script realm has one Window object: `window`, `self`, and
+// `globalThis.window` must all observe the same property bag. WidgetBridge
+// evaluates compatibility modules independently, so relying on an engine's
+// top-level `var` mirroring rules can leave captured application scripts
+// writing to this lexical `window` while native runtime services read a
+// different object from `globalThis.window`.
+globalThis.window = window;
+globalThis.document = document;
+globalThis.self = window;
+
+// Default behavior for semantic popup controls. Apps own selection callbacks
+// and markup; Pulp owns native keyboard/pointer parity. Authors can opt out
+// with data-pulp-popup-default="off" or by preventing the incoming event.
+(function installPopupDefaults() {
+    var state = null;
+    var suppressOutsideSequence = false;
+    var suppressOutsideTimer = 0;
+    function optedOut(element) {
+        while (element) {
+            if (element.getAttribute
+                && element.getAttribute("data-pulp-popup-default") === "off") return true;
+            element = element._parentElement;
+        }
+        return false;
+    }
+    // Enter and Space activate a focused <button> in every browser, which is
+    // how a keyboard user opens and closes a menu button. Scoped to real
+    // buttons on purpose: a browser gives a `role="button"` element no such
+    // activation, so its author handles the key in script, and activating it
+    // here as well would toggle the menu twice.
+    function keyActivates(trigger, event) {
+        return (event.key === "Enter" || event.key === " ")
+            && !!trigger && trigger.tagName === "BUTTON";
+    }
+    function triggerFrom(element) {
+        while (element) {
+            if (element.getAttribute && element.getAttribute("aria-haspopup")) return element;
+            element = element._parentElement;
+        }
+        return null;
+    }
+    function popupFor(trigger) {
+        var controlledId = trigger.getAttribute && trigger.getAttribute("aria-controls");
+        if (controlledId) {
+            var controlled = document.getElementById(controlledId);
+            var controlledRole = controlled && controlled.getAttribute
+                ? controlled.getAttribute("role") : "";
+            if (controlledRole === "listbox" || controlledRole === "menu")
+                return controlled;
+        }
+        var nodes = document.querySelectorAll('[role="listbox"]')
+            .concat(document.querySelectorAll('[role="menu"]'));
+        var ancestor = trigger._parentElement;
+        while (ancestor) {
+            var match = null;
+            for (var i = 0; i < nodes.length; ++i) {
+                if (!ancestor.contains || !ancestor.contains(nodes[i])) continue;
+                if (match) return null;
+                match = nodes[i];
+            }
+            if (match) return match;
+            ancestor = ancestor._parentElement;
+        }
+        return null;
+    }
+    function optionsFor(popup) {
+        var nodes = document.querySelectorAll('[role="option"]')
+            .concat(document.querySelectorAll('[role="menuitem"]'))
+            .concat(document.querySelectorAll('button'));
+        var options = [];
+        for (var i = 0; popup && i < nodes.length; ++i)
+            if (popup.contains(nodes[i]) && !nodes[i].disabled
+                && options.indexOf(nodes[i]) < 0) options.push(nodes[i]);
+        return options;
+    }
+    function currentTrigger(popupState) {
+        // An adopted menu has no trigger to re-resolve, and must not fall
+        // through to the ordinal lookup below: that would pick an unrelated
+        // control that merely shares the popup kind.
+        if (!popupState.trigger && !popupState.triggerKind) return null;
+        if (document.body.contains(popupState.trigger)) return popupState.trigger;
+        var id = popupState.triggerId;
+        if (id) {
+            var byId = document.getElementById(id);
+            if (byId) return byId;
+        }
+        var triggers = document.querySelectorAll('[aria-haspopup="'
+            + popupState.triggerKind + '"]');
+        return popupState.triggerOrdinal >= 0
+            ? triggers[popupState.triggerOrdinal] || null : null;
+    }
+    // The highlight is an overlay: it has to come off a row as cleanly as it
+    // went on. Assigning the captured base back is not enough on its own --
+    // the style bridge drops a value it cannot parse as a color, so the empty
+    // string is a silent no-op and the highlight stays behind on every row the
+    // selection has visited, smearing instead of moving. Assigning
+    // "transparent" instead is also wrong: it paints a transparent fill over a
+    // background the row may have from somewhere other than its inline style,
+    // blanking rows the app had filled. Restore what was there, and where
+    // nothing was, remove ours.
+    function restoreOptionBackground(option, base) {
+        if (base) {
+            option.style.background = base;
+            option.style.backgroundColor = base;
+            return;
+        }
+        option.style.removeProperty("background");
+        option.style.removeProperty("background-color");
+        if (option._nativeCreated && typeof clearBackground === "function")
+            clearBackground(option._id);
+    }
+    // A list that shows both its selection and a keyboard cursor the instant
+    // it opens reads as two selections, and a user who has not touched the
+    // keyboard or the mouse has not asked for a cursor at all. So the cursor
+    // exists from the moment the popup is owned -- arrow keys need somewhere
+    // to start from -- but it is not PAINTED until the user reveals it by
+    // moving the pointer over a row, by pressing an arrow, or by opening the
+    // popup with an arrow in the first place. Until then the only thing on
+    // screen is whatever the app paints for its own selected row.
+    function paint() {
+        if (!state) return;
+        for (var i = 0; i < state.options.length; ++i) {
+            var active = state.activeVisible && i === state.activeIndex;
+            state.options[i].setAttribute("data-pulp-popup-active", active ? "true" : "false");
+            if (active) {
+                state.options[i].style.background = "rgba(120,180,255,0.18)";
+                state.options[i].style.backgroundColor = "rgba(120,180,255,0.18)";
+            } else {
+                restoreOptionBackground(state.options[i], state.baseBackgrounds[i]);
+            }
+        }
+        globalThis.__pulpPopupDefaultState__ = state;
+    }
+    // Seed order for the keyboard cursor when a popup opens. Every signal
+    // requires the author to have explicitly marked a selection, so an
+    // unmarked list falls through to the edge the caller asked for.
+    // Ordered most to least authoritative:
+    //   1. aria-activedescendant on the trigger or the popup: an explicit id
+    //      pointer at exactly one option, so it cannot be ambiguous.
+    //   2. aria-selected="true": ARIA's selection state for role="option".
+    //   3. aria-checked="true": ARIA's state for menuitemradio/menuitemcheckbox.
+    //   4. the option's own checked property, a path distinct from
+    //      aria-checked because assigning the property writes no attribute.
+    //   5. aria-current: "the current item in a set". Weakest, because it
+    //      also marks navigation position rather than selection.
+    function selectedIndexIn(popup, trigger, options) {
+        var pointerHolders = [trigger, popup];
+        for (var h = 0; h < pointerHolders.length; ++h) {
+            var holder = pointerHolders[h];
+            var activeId = holder && holder.getAttribute
+                ? holder.getAttribute("aria-activedescendant") : null;
+            if (!activeId) continue;
+            for (var p = 0; p < options.length; ++p)
+                if (options[p].id === activeId) return p;
+        }
+        var marks = ["aria-selected", "aria-checked"];
+        for (var m = 0; m < marks.length; ++m)
+            for (var i = 0; i < options.length; ++i)
+                if (options[i].getAttribute
+                    && options[i].getAttribute(marks[m]) === "true") return i;
+        for (var c = 0; c < options.length; ++c)
+            if (options[c].checked === true) return c;
+        for (var u = 0; u < options.length; ++u) {
+            var current = options[u].getAttribute
+                ? options[u].getAttribute("aria-current") : null;
+            if (current && current !== "false") return u;
+        }
+        return -1;
+    }
+    // An open `role="menu"` that NO trigger owns. A context menu is summoned
+    // at coordinates by a pointer press, so there is no `aria-haspopup`
+    // element for `triggerFrom` to find and the trigger-driven entry below
+    // never fires -- which is why arrow keys did nothing inside one while the
+    // header dropdowns navigated fine. Returns the menu so the caller can
+    // adopt it with the SAME state machine the dropdowns already use.
+    //
+    // Deliberately narrow: a listbox is skipped (those are combo popups and
+    // always have a trigger), a menu whose trigger IS resolvable is left to
+    // the trigger path so this can never hijack a dropdown, and a menu with
+    // no options is not adopted so an empty panel cannot swallow keys.
+    function unownedOpenMenu() {
+        var menus = document.querySelectorAll('[role="menu"]');
+        var found = null;
+        for (var i = 0; i < menus.length; ++i) {
+            var menu = menus[i];
+            if (!document.body.contains(menu)) continue;
+            if (optedOut(menu)) continue;
+            if (triggerFor(menu)) continue;
+            if (!optionsFor(menu).length) continue;
+            // Two unowned menus open at once is ambiguous, and guessing would
+            // route keys to whichever the DOM happened to list first.
+            if (found) return null;
+            found = menu;
+        }
+        return found;
+    }
+    // The inverse of `popupFor`: does any trigger claim this popup?
+    function triggerFor(popup) {
+        var triggers = document.querySelectorAll('[aria-haspopup]');
+        for (var i = 0; i < triggers.length; ++i)
+            if (popupFor(triggers[i]) === popup) return triggers[i];
+        return null;
+    }
+    function activate(trigger, edge, reveal) {
+        return adopt(trigger, popupFor(trigger), edge, reveal);
+    }
+    function adopt(trigger, popup, edge, reveal) {
+        var options = optionsFor(popup);
+        // Resolve the replacement before retiring what is already owned. A
+        // trigger whose menu has just closed still resolves as a trigger, so
+        // dismissing first would drop a live claim on the way to discovering
+        // there is nothing to claim -- and the caller that was closing the
+        // menu then finds nothing left to hand focus back to.
+        if (!popup || !options.length) return false;
+        if (state) dismiss(false);
+        var baseBackgrounds = [];
+        // An app may author its row fill through either longhand, and only the
+        // one it used reads back -- and it may not have authored it in script
+        // at all, in which case the inline style is empty while the row is
+        // still painted. Ask the widget for its applied background so the
+        // restore returns the row to the app's own appearance rather than
+        // blanking it.
+        for (var i = 0; i < options.length; ++i) {
+            var authored = options[i].style.background
+                || options[i].style.backgroundColor || "";
+            if (!authored && options[i]._nativeCreated
+                && typeof getBackground === "function")
+                authored = getBackground(options[i]._id) || "";
+            baseBackgrounds.push(authored);
+        }
+        var hoverHandlers = [];
+        // An adopted menu has no trigger, so it carries no kind or ordinal to
+        // re-resolve by. Leaving these empty is what makes `currentTrigger`
+        // return null for it rather than picking an unrelated peer control.
+        var triggerKind = trigger ? trigger.getAttribute("aria-haspopup") : "";
+        var triggerPeers = triggerKind
+            ? document.querySelectorAll('[aria-haspopup="' + triggerKind + '"]')
+            : [];
+        var selectedIndex = selectedIndexIn(popup, trigger, options);
+        state = { trigger: trigger || null,
+                  triggerId: trigger && trigger.id ? trigger.id : "",
+                  triggerKind: triggerKind,
+                  triggerOrdinal: trigger
+                      ? Array.prototype.indexOf.call(triggerPeers, trigger) : -1,
+                  popup: popup, options: options,
+                  baseBackgrounds: baseBackgrounds,
+                  hoverHandlers: hoverHandlers,
+                  seededFromSelection: selectedIndex >= 0,
+                  // An arrow key is itself the request for a cursor, so a
+                  // popup opened that way shows one immediately; a pointer
+                  // press is not.
+                  activeVisible: !!reveal,
+                  activeIndex: selectedIndex >= 0 ? selectedIndex
+                      : (edge === "last" ? options.length - 1 : 0) };
+        state.onNativeDismiss = function() {
+            if (!state || state.popup !== popup) return;
+            var liveTrigger = currentTrigger(state);
+            if (liveTrigger) clickSelf(liveTrigger);
+            dismiss(false);
+        };
+        popup.addEventListener("dismiss", state.onNativeDismiss);
+        // Name the trigger as the overlay's anchor. A pointer-opened menu
+        // learns it natively from the press, but a keyboard-opened one has no
+        // press to learn from; without the name a later click on its trigger
+        // would close the menu and then let the same click reopen it.
+        if (typeof claimOverlay === "function")
+            claimOverlay(popup._id, true, "", trigger && trigger._id ? trigger._id : "");
+        for (var optionIndex = 0; optionIndex < options.length; ++optionIndex) {
+            (function(index) {
+                var onEnter = function() {
+                    if (!state || state.options[index] !== options[index]) return;
+                    state.activeIndex = index;
+                    state.activeVisible = true;
+                    paint();
+                };
+                hoverHandlers.push(onEnter);
+                options[index].addEventListener("pointerenter", onEnter);
+            })(optionIndex);
+        }
+        paint();
+        if (typeof claimDocumentNavigationFocus === "function")
+            claimDocumentNavigationFocus();
+        return true;
+    }
+    function dismiss(returnFocus) {
+        if (!state) return;
+        var dismissedState = state;
+        var trigger = currentTrigger(state);
+        state.popup.removeEventListener("dismiss", state.onNativeDismiss);
+        if (typeof releaseOverlay === "function") releaseOverlay(state.popup._id);
+        for (var i = 0; i < state.options.length; ++i) {
+            state.options[i].removeEventListener(
+                "pointerenter", state.hoverHandlers[i]);
+            restoreOptionBackground(state.options[i], state.baseBackgrounds[i]);
+            state.options[i].removeAttribute("data-pulp-popup-active");
+        }
+        state = null;
+        globalThis.__pulpPopupDefaultState__ = null;
+        if (typeof releaseDocumentNavigationFocus === "function")
+            releaseDocumentNavigationFocus();
+        if (returnFocus) {
+            if (trigger) trigger.focus();
+            requestAnimationFrame(function() {
+                var replacement = currentTrigger(dismissedState);
+                if (replacement && replacement !== trigger) replacement.focus();
+            });
+        }
+    }
+    // A trigger's own handler is what creates the menu, and it does not
+    // necessarily run before the event that opened it finishes: the standalone
+    // mac host defers its click to the main queue, and a React app commits its
+    // open state on a later tick. Claiming once, synchronously, therefore
+    // inspects a DOM where the popup does not exist yet and silently gives up —
+    // leaving an open menu with no owner, so arrow keys do nothing and the
+    // highlight is never painted. Re-offer the claim across a few frames, and
+    // treat an already-owned popup as done so a pointerdown and its trailing
+    // click cannot fight over the same menu.
+    function claimAfterCommit(trigger, edge, retries) {
+        if (state && state.trigger === trigger
+            && document.body.contains(state.popup)) return;
+        if (activate(trigger, edge)) return;
+        if (retries > 0) {
+            requestAnimationFrame(function() {
+                claimAfterCommit(trigger, edge, retries - 1);
+            });
+            return;
+        }
+        if (state && state.trigger === trigger) dismiss(false);
+    }
+    // This owner clicks a trigger or an option itself to commit, to close, or
+    // to mirror a keyboard open onto the app's own handler. Those are its own
+    // gestures, already accounted for by the branch that issued them; feeding
+    // them back in as if a user had pressed the control makes a close look
+    // like an open.
+    var syntheticClicks = 0;
+    function clickSelf(node) {
+        syntheticClicks++;
+        try { node.click(); } finally { syntheticClicks--; }
+    }
+    function outsidePopupTarget(target) {
+        // `state.trigger` is null for a menu this owner ADOPTED rather than
+        // opened: a context menu is summoned at coordinates, so there is no
+        // trigger element for the press to have landed inside.
+        return state && !state.popup.contains(target)
+            && !(state.trigger && state.trigger.contains(target));
+    }
+    function consumeOutsideSequence(event) {
+        if (event.type === "pointerdown" && outsidePopupTarget(event.target)) {
+            var trigger = currentTrigger(state);
+            if (trigger) clickSelf(trigger);
+            dismiss(false);
+            suppressOutsideSequence = true;
+            if (suppressOutsideTimer) clearTimeout(suppressOutsideTimer);
+            suppressOutsideTimer = setTimeout(function() {
+                suppressOutsideSequence = false;
+                suppressOutsideTimer = 0;
+            }, 1000);
+        }
+        if (!suppressOutsideSequence) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        if (event.type === "click") {
+            suppressOutsideSequence = false;
+            if (suppressOutsideTimer) clearTimeout(suppressOutsideTimer);
+            suppressOutsideTimer = 0;
+        }
+    }
+    // Capture at the materialized root before the underlay target sees the
+    // event. Dismissing only from document bubbling is too late: a graph or
+    // other control has already mutated on the initiating press by then.
+    ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach(
+        function(type) { document.body.addEventListener(type, consumeOutsideSequence, true); });
+    globalThis.__pulpPopupDefaultHandle__ = function(event) {
+        // Nothing dispatched inside this owner's own click is news to it. The
+        // stale-state sweep below must not run either: the branch that issued
+        // the click is mid-gesture and still needs the state it is about to
+        // retire itself, and a menu the app has just closed would otherwise be
+        // swept away before the branch can hand focus back to its trigger.
+        if (syntheticClicks) return;
+        // Only a menu that HAS a trigger can have lost it. An adopted menu's
+        // trigger is null, and `contains(null)` is false, so testing it
+        // unconditionally read "my trigger vanished" on every event and
+        // dismissed the state between one arrow key and the next -- the menu
+        // was then re-adopted from scratch and the cursor snapped back to the
+        // first row instead of stepping.
+        if (state && ((state.trigger && !document.body.contains(state.trigger))
+                      || !document.body.contains(state.popup))) dismiss(false);
+        if (event.type === "pointerdown") {
+            var pointerTrigger = triggerFrom(event.target);
+            if (pointerTrigger && !optedOut(pointerTrigger))
+                claimAfterCommit(pointerTrigger, "first", 3);
+            return;
+        }
+        // A press and its click are one gesture, and which of the two the app
+        // opens its menu on is the app's choice, not something this owner can
+        // observe. Offer the claim on both; claimAfterCommit is idempotent for
+        // a menu already owned, so the second offer is a no-op rather than a
+        // re-open.
+        if (event.type === "click") {
+            var clickTrigger = triggerFrom(event.target);
+            if (clickTrigger && !optedOut(clickTrigger))
+                claimAfterCommit(clickTrigger, "first", 3);
+            return;
+        }
+        if (event.type === "pointermove") {
+            if (!state) return;
+            for (var i = 0; i < state.options.length; ++i)
+                if (state.options[i].contains(event.target)) {
+                    state.activeIndex = i;
+                    state.activeVisible = true;
+                    paint();
+                    return;
+                }
+            return;
+        }
+        if (event.type !== "keydown") return;
+        var trigger = triggerFrom(document.activeElement);
+        // A menu nobody triggered still deserves a cursor. Adopt it on the
+        // first arrow so ArrowUp/ArrowDown, Home/End, Enter and Escape all
+        // reach it through the same state machine the dropdowns use, instead
+        // of each app re-implementing roving focus in script.
+        //
+        // Gated on there being an unowned menu OPEN: with nothing open this
+        // arm does not fire, so an arrow key still reaches the app and the
+        // host still forwards it to the DAW.
+        if (!state && !trigger
+            && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+            var unowned = unownedOpenMenu();
+            if (unowned) {
+                event.preventDefault();
+                adopt(null, unowned, event.key === "ArrowUp" ? "last" : "first",
+                      true);
+                return;
+            }
+        }
+        if (!state && trigger && !optedOut(trigger)
+            && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+            event.preventDefault();
+            clickSelf(trigger);
+            var edge = event.key === "ArrowUp" ? "last" : "first";
+            if (!activate(trigger, edge, true))
+                requestAnimationFrame(function() { activate(trigger, edge, true); });
+            return;
+        }
+        // Enter/Space on a closed menu button opens it, like a click. The
+        // cursor stays hidden, so the same key pressed again closes it.
+        if (!state && trigger && !optedOut(trigger) && keyActivates(trigger, event)) {
+            event.preventDefault();
+            clickSelf(trigger);
+            if (!activate(trigger, "first", false))
+                requestAnimationFrame(function() { activate(trigger, "first", false); });
+            return;
+        }
+        if (!state || optedOut(state.trigger)) return;
+        var count = state.options.length;
+        // Enter/Space on the trigger of its own open menu TOGGLES it shut, the
+        // keyboard twin of clicking the trigger. Only while no row has been
+        // revealed: once the user has moved the cursor onto a row, Enter
+        // commits that row (below), as every platform list does.
+        if (!state.activeVisible && state.trigger
+            && keyActivates(state.trigger, event)
+            && state.trigger.contains(document.activeElement)) {
+            event.preventDefault();
+            var toggled = currentTrigger(state);
+            if (toggled) clickSelf(toggled);
+            dismiss(true);
+            return;
+        }
+        if (event.key === "Escape") {
+            event.preventDefault();
+            // An adopted menu has no trigger to toggle shut; dismissing the
+            // overlay fires `on_overlay_dismissed`, which is what flips the
+            // app's own open flag. With an overlay STACK this closes the top
+            // entry only, so Escape inside a submenu returns to its parent.
+            if (state.trigger) clickSelf(state.trigger);
+            dismiss(true);
+        } else if (event.key === "ArrowDown" || event.key === "ArrowUp"
+                   || event.key === "Home" || event.key === "End") {
+            event.preventDefault();
+            // The first arrow on a popup whose cursor is still hidden has to
+            // decide whether it REVEALS the cursor or MOVES it. Both, but the
+            // answer differs by whether the cursor had a home: seeded from the
+            // app's own selected row it steps off it, the way every platform
+            // combo box steps from the selection (ArrowDown on a list showing
+            // LEVEL goes to the row after LEVEL, not back onto LEVEL). Seeded
+            // from an edge because nothing was selected, there is nothing to
+            // step away from, so the first arrow lands ON that edge rather
+            // than skipping the row the user was aiming at.
+            var landOnSeed = !state.activeVisible && !state.seededFromSelection
+                && (event.key === "ArrowDown" || event.key === "ArrowUp");
+            state.activeVisible = true;
+            if (landOnSeed)
+                state.activeIndex = event.key === "ArrowUp" ? count - 1 : 0;
+            else
+                state.activeIndex = event.key === "Home" ? 0
+                    : event.key === "End" ? count - 1
+                    : event.key === "ArrowDown" ? (state.activeIndex + 1) % count
+                    : (state.activeIndex - 1 + count) % count;
+            paint();
+            state.options[state.activeIndex].focus();
+        } else if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            var selectedState = state;
+            var option = state.options[state.activeIndex];
+            // Selection callbacks commonly replace both the popup and its
+            // trigger (for example a React commit that paints the selected
+            // value). Retire ownership while the authored nodes are still
+            // attached so cleanup cannot mutate a detached pre-commit tree.
+            dismiss(false);
+            clickSelf(option);
+            var replacement = currentTrigger(selectedState);
+            if (replacement) replacement.focus();
+            requestAnimationFrame(function() {
+                var settledTrigger = currentTrigger(selectedState);
+                if (settledTrigger && settledTrigger !== replacement)
+                    settledTrigger.focus();
+            });
+        }
+    };
+})();
+
+function __installGlobalIfMissing(name, value) {
+    if (typeof globalThis[name] === "undefined") {
+        globalThis[name] = value;
+    }
+    window[name] = globalThis[name];
+}
+
+__installGlobalIfMissing("GPUMapMode", {
+    READ: 0x1,
+    WRITE: 0x2
+});
+
+__installGlobalIfMissing("GPUShaderStage", {
+    VERTEX: 0x1,
+    FRAGMENT: 0x2,
+    COMPUTE: 0x4
+});
+
+__installGlobalIfMissing("GPUBufferUsage", {
+    MAP_READ: 0x0001,
+    MAP_WRITE: 0x0002,
+    COPY_SRC: 0x0004,
+    COPY_DST: 0x0008,
+    INDEX: 0x0010,
+    VERTEX: 0x0020,
+    UNIFORM: 0x0040,
+    STORAGE: 0x0080,
+    INDIRECT: 0x0100,
+    QUERY_RESOLVE: 0x0200
+});
+
+__installGlobalIfMissing("GPUTextureUsage", {
+    COPY_SRC: 0x01,
+    COPY_DST: 0x02,
+    TEXTURE_BINDING: 0x04,
+    STORAGE_BINDING: 0x08,
+    RENDER_ATTACHMENT: 0x10
+});
+
+__installGlobalIfMissing("GPUColorWrite", {
+    RED: 0x1,
+    GREEN: 0x2,
+    BLUE: 0x4,
+    ALPHA: 0x8,
+    ALL: 0xF
+});
+
+
+var navigator = globalThis.navigator || {};
+if (typeof navigatorGPU !== "undefined" && navigatorGPU) {
+    navigator.gpu = navigatorGPU;
+    navigator.gpu.requestAdapter = function() {
+        // prefer the native Dawn adapter when the host advertises one
+        // via __describeNativeAdapterImpl. Falls back to the pure-mock adapter so
+        // headless test paths (no host bridge) still resolve cleanly.
+        var descriptor = null;
+        if (typeof __describeNativeAdapterImpl === "function") {
+            descriptor = __describeNativeAdapterImpl();
+        }
+        if (descriptor && descriptor.nativeBridge) {
+            return Promise.resolve(__createGPUAdapter(descriptor));
+        }
+        return Promise.resolve(window.pulp.gpu.createMockAdapter());
+    };
+}
+window.navigator = navigator;
+globalThis.navigator = navigator;
+
+var performance = {
+    now: function() {
+        if (typeof __performanceNow__ === "function") return __performanceNow__();
+        return Date.now();
+    }
+};
+window.performance = performance;
+globalThis.performance = performance;
+
+if (!window.navigator.clipboard) {
+    window.navigator.clipboard = {
+        readText: function() {
+            if (typeof readClipboard === "function") return readClipboard();
+            return "";
+        },
+        writeText: function(text) {
+            if (typeof writeClipboard === "function") writeClipboard(text);
+        }
+    };
+}
+
+var localStorage = {
+    getItem: function(key) {
+        if (typeof storageGetItem === "function") {
+            var v = storageGetItem(key);
+            return v || null;
+        }
+        return null;
+    },
+    setItem: function(key, value) {
+        if (typeof storageSetItem === "function") storageSetItem(key, String(value));
+    },
+    removeItem: function(key) {
+        if (typeof storageRemoveItem === "function") storageRemoveItem(key);
+    },
+    clear: function() {},
+    get length() { return 0; },
+    key: function() { return null; }
+};
+window.localStorage = localStorage;
+globalThis.localStorage = localStorage;
+window.sessionStorage = localStorage;
+globalThis.sessionStorage = localStorage;
+
+// `self` alias for the window object.
+//
+// Browser/WebGPU spec: `self`, `window`, and `globalThis` all reference the
+// same object in a page context. Three.js's `Animation` class (and many
+// other libraries) keys its `requestAnimationFrame` lookup on `self`:
+//   `this._context = typeof self !== "undefined" ? self : null;`
+// If `self` is undefined here, libraries set their context to `null` and
+// then crash with TypeError when they try to call rAF/cAF on null. Aliasing
+// `self` to our window shim (which already provides `requestAnimationFrame`
+// + `cancelAnimationFrame`) is the spec-conforming fix and unblocks
+// Three.js, vanilla `setInterval`-via-self code, and any other library that
+// follows the standard browser globals convention.
+globalThis.self = window;
+
+function Image() {
+    var self = this;
+    self.width = 0;
+    self.height = 0;
+    self.onload = null;
+    self.onerror = null;
+    self.complete = false;
+
+    Object.defineProperty(self, "src", {
+        get: function() { return self._src || ""; },
+        set: function(v) {
+            self._src = v;
+            if (v && typeof createImage === "function") {
+                var id = __genId__();
+                createImage(id, "");
+                if (typeof setImageSource === "function") setImageSource(id, v);
+                self.complete = true;
+                if (self.onload) self.onload();
+            }
+        }
+    });
+}
+window.Image = Image;
+globalThis.Image = Image;
+
+function btoa(str) {
+    var chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=";
+    var out = "";
+    for (var i = 0; i < str.length; i += 3) {
+        var a = str.charCodeAt(i);
+        var b = i + 1 < str.length ? str.charCodeAt(i + 1) : 0;
+        var c = i + 2 < str.length ? str.charCodeAt(i + 2) : 0;
+        out += chars[(a >> 2) & 63];
+        out += chars[((a << 4) | (b >> 4)) & 63];
+        out += i + 1 < str.length ? chars[((b << 2) | (c >> 6)) & 63] : "=";
+        out += i + 2 < str.length ? chars[c & 63] : "=";
+    }
+    return out;
+}
+window.btoa = btoa;
+globalThis.btoa = btoa;
+
+function atob(encoded) {
+    var chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=";
+    var out = "";
+    for (var i = 0; i < encoded.length; i += 4) {
+        var a = chars.indexOf(encoded[i]);
+        var b = chars.indexOf(encoded[i + 1]);
+        var c = chars.indexOf(encoded[i + 2]);
+        var d = chars.indexOf(encoded[i + 3]);
+        out += String.fromCharCode((a << 2) | (b >> 4));
+        if (c !== 64) out += String.fromCharCode(((b << 4) | (c >> 2)) & 255);
+        if (d !== 64) out += String.fromCharCode(((c << 6) | d) & 255);
+    }
+    return out;
+}
+window.atob = atob;
+globalThis.atob = atob;
+
+var crypto = {
+    getRandomValues: function(arr) {
+        for (var i = 0; i < arr.length; i++) {
+            arr[i] = Math.floor(Math.random() * 256);
+        }
+        return arr;
+    }
+};
+window.crypto = crypto;
+globalThis.crypto = crypto;
+
+function TextEncoder() {}
+TextEncoder.prototype.encode = function(str) {
+    var arr = [];
+    for (var i = 0; i < str.length; i++) {
+        var c = str.charCodeAt(i);
+        if (c < 128) arr.push(c);
+        else if (c < 2048) {
+            arr.push(192 | (c >> 6));
+            arr.push(128 | (c & 63));
+        } else {
+            arr.push(224 | (c >> 12));
+            arr.push(128 | ((c >> 6) & 63));
+            arr.push(128 | (c & 63));
+        }
+    }
+    return new Uint8Array(arr);
+};
+window.TextEncoder = TextEncoder;
+globalThis.TextEncoder = TextEncoder;
+
+function TextDecoder() {}
+TextDecoder.prototype.decode = function(buf) {
+    var out = "";
+    var arr = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+    for (var i = 0; i < arr.length; ) {
+        var b = arr[i];
+        if (b < 128) {
+            out += String.fromCharCode(b);
+            i++;
+        } else if (b < 224) {
+            out += String.fromCharCode(((b & 31) << 6) | (arr[i + 1] & 63));
+            i += 2;
+        } else {
+            out += String.fromCharCode(((b & 15) << 12) | ((arr[i + 1] & 63) << 6) | (arr[i + 2] & 63));
+            i += 3;
+        }
+    }
+    return out;
+};
+window.TextDecoder = TextDecoder;
+globalThis.TextDecoder = TextDecoder;
+
+function __bytesFromBase64(encoded) {
+    var binary = atob(encoded || "");
+    var bytes = new Uint8Array(binary.length);
+    for (var i = 0; i < binary.length; ++i) {
+        bytes[i] = binary.charCodeAt(i) & 255;
+    }
+    return bytes;
+}
+
+function __bytesToBase64(bytes) {
+    var binary = "";
+    for (var i = 0; i < bytes.length; ++i) {
+        binary += String.fromCharCode(bytes[i] & 255);
+    }
+    return btoa(binary);
+}
+
+function __canonicalDataUriMimeType(mimeType) {
+    if (!mimeType) return "application/octet-stream";
+    var lower = String(mimeType).toLowerCase();
+    if (lower === "application/json" || lower === "text/json") {
+        return "application/json;charset=utf-8";
+    }
+    return String(mimeType);
+}
+
+function __toUint8Array(value) {
+    if (value == null) return new Uint8Array(0);
+    if (value instanceof Uint8Array) return value;
+    if (value instanceof ArrayBuffer) return new Uint8Array(value);
+    if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    if (Array.isArray(value)) return new Uint8Array(value);
+    if (typeof value === "string") return new TextEncoder().encode(value);
+    return new TextEncoder().encode(String(value));
+}
+
+function __toArrayBuffer(bytes) {
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+}
+
+function PulpHeaders(init) {
+    this._map = {};
+    if (!init) return;
+    for (var key in init) {
+        if (Object.prototype.hasOwnProperty.call(init, key)) {
+            this.set(key, init[key]);
+        }
+    }
+}
+PulpHeaders.prototype.get = function(name) {
+    var key = String(name || "").toLowerCase();
+    return Object.prototype.hasOwnProperty.call(this._map, key) ? this._map[key] : null;
+};
+PulpHeaders.prototype.set = function(name, value) {
+    this._map[String(name || "").toLowerCase()] = String(value == null ? "" : value);
+};
+var __PulpHeaders = typeof globalThis.Headers !== "undefined" ? globalThis.Headers : PulpHeaders;
+if (typeof globalThis.Headers === "undefined") {
+    globalThis.Headers = __PulpHeaders;
+}
+
+function PulpBlob(parts, options) {
+    var chunks = [];
+    var size = 0;
+    var sourceParts = parts || [];
+    for (var i = 0; i < sourceParts.length; ++i) {
+        var bytes = __toUint8Array(sourceParts[i]);
+        chunks.push(bytes);
+        size += bytes.length;
+    }
+
+    var merged = new Uint8Array(size);
+    var offset = 0;
+    for (var j = 0; j < chunks.length; ++j) {
+        merged.set(chunks[j], offset);
+        offset += chunks[j].length;
+    }
+
+    this._bytes = merged;
+    this.size = merged.length;
+    this.type = options && options.type ? String(options.type) : "";
+}
+PulpBlob.prototype.arrayBuffer = function() {
+    return __toArrayBuffer(this._bytes);
+};
+PulpBlob.prototype.text = function() {
+    return new TextDecoder().decode(this._bytes);
+};
+var __PulpBlob = typeof globalThis.Blob !== "undefined" ? globalThis.Blob : PulpBlob;
+if (typeof globalThis.Blob === "undefined") {
+    globalThis.Blob = __PulpBlob;
+}
+
+function PulpResponse(body, init) {
+    init = init || {};
+    this.status = init.status == null ? 200 : init.status;
+    this.ok = this.status >= 200 && this.status < 300;
+    this.statusText = init.statusText || "";
+    this.url = init.url || "";
+    this.headers = init.headers instanceof __PulpHeaders ? init.headers : new __PulpHeaders(init.headers || {});
+    if (init.contentType && !this.headers.get("content-type")) {
+        this.headers.set("content-type", init.contentType);
+    }
+    this._bytes = __toUint8Array(body);
+}
+PulpResponse.prototype.arrayBuffer = function() {
+    return __toArrayBuffer(this._bytes);
+};
+PulpResponse.prototype.text = function() {
+    return new TextDecoder().decode(this._bytes);
+};
+PulpResponse.prototype.json = function() {
+    return JSON.parse(this.text());
+};
+PulpResponse.prototype.blob = function() {
+    return new __PulpBlob([this._bytes], { type: this.headers.get("content-type") || "" });
+};
+PulpResponse.prototype.clone = function() {
+    return new __PulpResponse(this._bytes.slice(0), {
+        status: this.status,
+        statusText: this.statusText,
+        url: this.url,
+        headers: this.headers
+    });
+};
+var __PulpResponse = typeof globalThis.Response !== "undefined" ? globalThis.Response : PulpResponse;
+if (typeof globalThis.Response === "undefined") {
+    globalThis.Response = __PulpResponse;
+}
+
+function createImageBitmap(source) {
+    var bytes;
+    if (source && source._bytes) {
+        bytes = source._bytes;
+    } else if (source instanceof ArrayBuffer) {
+        bytes = new Uint8Array(source);
+    } else if (source instanceof Uint8Array) {
+        bytes = source;
+    } else {
+        return Promise.reject(new Error("createImageBitmap: unsupported source type"));
+    }
+
+    if (typeof __decodeImageDataImpl === "function") {
+        var payload = JSON.stringify({ data: Array.from(bytes) });
+        var result = __decodeImageDataImpl(payload);
+        if (result && result.ok) {
+            var bitmap = {
+                width: result.width,
+                height: result.height,
+                _decodedPixels: new Uint8Array(result.pixels),
+                close: function() {}
+            };
+            return Promise.resolve(bitmap);
+        }
+        return Promise.reject(new Error("createImageBitmap: failed to decode image"));
+    }
+
+    return Promise.reject(new Error("createImageBitmap: no native decoder available"));
+}
+if (typeof globalThis.createImageBitmap === "undefined") {
+    globalThis.createImageBitmap = createImageBitmap;
+}
+
+function PulpURL(url) {
+    this.href = String(url || "");
+}
+PulpURL.createObjectURL = function(blobLike) {
+    var blob = blobLike instanceof PulpBlob ? blobLike : new PulpBlob([blobLike]);
+    return "data:" + __canonicalDataUriMimeType(blob.type || "application/octet-stream")
+        + ";base64," + __bytesToBase64(blob._bytes);
+};
+PulpURL.revokeObjectURL = function() {};
+var __PulpURL = typeof globalThis.URL !== "undefined" ? globalThis.URL : PulpURL;
+if (typeof __PulpURL.createObjectURL !== "function") {
+    __PulpURL.createObjectURL = PulpURL.createObjectURL;
+}
+if (typeof __PulpURL.revokeObjectURL !== "function") {
+    __PulpURL.revokeObjectURL = PulpURL.revokeObjectURL;
+}
+if (typeof globalThis.URL === "undefined") {
+    globalThis.URL = __PulpURL;
+}
+
+function __responseFromDataUri(uri, sourceUrl) {
+    var text = String(uri || "");
+    var comma = text.indexOf(",");
+    if (comma < 0) throw new Error("Malformed data URI");
+    var meta = text.slice(5, comma);
+    var payload = text.slice(comma + 1);
+    var isBase64 = /;base64$/i.test(meta);
+    var mime = meta.replace(/;base64$/i, "") || "application/octet-stream";
+    var bytes = isBase64 ? __bytesFromBase64(payload) : new TextEncoder().encode(decodeURIComponent(payload));
+    return new __PulpResponse(bytes, {
+        status: 200,
+        url: sourceUrl || text,
+        contentType: __canonicalDataUriMimeType(mime)
+    });
+}
+
+function __responseFromAssetRecord(record) {
+    return new __PulpResponse(__bytesFromBase64(record && record.base64 ? record.base64 : ""), {
+        status: record && record.status != null ? record.status : 404,
+        url: record && record.url ? record.url : "",
+        contentType: record && record.contentType ? record.contentType : "application/octet-stream"
+    });
+}
+
+function __pulpFetch(url) {
+    var requestUrl = String(url || "");
+    return new Promise(function(resolve, reject) {
+        try {
+            if (requestUrl.indexOf("data:") === 0) {
+                resolve(__responseFromDataUri(requestUrl, requestUrl));
+                return;
+            }
+
+            if (typeof __loadAssetSync__ !== "function") {
+                reject(new Error("Asset bridge unavailable"));
+                return;
+            }
+
+            var record = __loadAssetSync__(requestUrl);
+            if (!record || !record.ok) {
+                var error = new Error("Failed to fetch asset: " + requestUrl);
+                error.status = record && record.status ? record.status : 404;
+                reject(error);
+                return;
+            }
+
+            resolve(__responseFromAssetRecord(record));
+        } catch (error) {
+            reject(error);
+        }
+    });
+}
+if (typeof globalThis.fetch === "undefined") {
+    globalThis.fetch = __pulpFetch;
+}
+window.pulp = window.pulp || {};
+window.pulp.fetch = __pulpFetch;
+
+function structuredClone(obj) {
+    return JSON.parse(JSON.stringify(obj));
+}
+window.structuredClone = structuredClone;
+globalThis.structuredClone = structuredClone;
+
+window.pulp = window.pulp || {};
+window.pulp.gpu = {
+    getInfo: function() {
+        if (typeof getGPUInfo === "function") return getGPUInfo();
+        return { available: false, backend: "unavailable" };
+    },
+    createMockAdapter: function() {
+        var info = __mockGpuInfo();
+        return __createMockGPUAdapter({
+            backend: info.backend,
+            preferredCanvasFormat: __mockPreferredCanvasFormat()
+        });
+    },
+    createMockDevice: function(adapter, descriptor) {
+        adapter = adapter && adapter._objectName === "GPUAdapter" ? adapter : window.pulp.gpu.createMockAdapter();
+        descriptor = descriptor || {};
+        return __createMockGPUDevice(adapter, descriptor);
+    },
+    // explicit accessors for the native Dawn adapter so test
+    // harnesses and demos can opt into the bridge path without relying on
+    // requestAdapter's auto-detection.
+    describeNativeAdapter: function() {
+        if (typeof __describeNativeAdapterImpl === "function") return __describeNativeAdapterImpl();
+        return null;
+    },
+    createNativeAdapter: function() {
+        var descriptor = window.pulp.gpu.describeNativeAdapter();
+        if (!descriptor || !descriptor.nativeBridge) return null;
+        return __createGPUAdapter(descriptor);
+    }
+};

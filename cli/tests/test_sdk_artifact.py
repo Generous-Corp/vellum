@@ -177,6 +177,31 @@ class SdkArtifactTests(unittest.TestCase):
             with self.assertRaises(artifact_error):
                 rewrite(path, b"short")
 
+    def test_macho_temp_root_normalization_makes_archives_equal(self) -> None:
+        module = runpy.run_path(str(BUILDER))
+        normalize = module["canonicalize_macho_temp_root"]
+        write_archive = module["write_archive"]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            first = root / "first"
+            second = root / "second"
+            first.mkdir()
+            second.mkdir()
+            first_payload = b"prefix/vellum-sdk-artifact-abc12345/build/path\0"
+            second_payload = b"prefix/vellum-sdk-artifact-zyx98765/build/path\0"
+            (first / "mirror.dylib").write_bytes(first_payload)
+            (second / "mirror.dylib").write_bytes(second_payload)
+            normalize(first / "mirror.dylib")
+            normalize(second / "mirror.dylib")
+            self.assertEqual((first / "mirror.dylib").read_bytes(),
+                             (second / "mirror.dylib").read_bytes())
+            self.assertEqual((first / "mirror.dylib").stat().st_size, len(first_payload))
+            first_archive = root / "first.tar.gz"
+            second_archive = root / "second.tar.gz"
+            write_archive(first, first_archive)
+            write_archive(second, second_archive)
+            self.assertEqual(first_archive.read_bytes(), second_archive.read_bytes())
+
     def test_node_license_and_provenance_match_exact_runtime(self) -> None:
         module = runpy.run_path(str(BUILDER))
         validate = module["validate_node_inputs"]
@@ -279,6 +304,8 @@ class SdkArtifactTests(unittest.TestCase):
                 "bin/vellum-app-host",
                 "lib/libvellum-authoring.dylib",
                 "lib/libvellum-gpu.dylib",
+                "lib/libvellum-skia-dawn-provider.dylib",
+                "mirror/lib/libvellum-mirror-foundation.dylib",
             ):
                 path = install_tree / relative
                 path.parent.mkdir(parents=True, exist_ok=True)

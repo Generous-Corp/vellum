@@ -1,0 +1,846 @@
+#include <pulp/view/canvas_widget.hpp>
+
+#include "canvas_replay_state.hpp"
+
+#include <cstdio>
+#include <cstdlib>
+#include <map>
+#include <string>
+#include <choc/text/choc_JSON.h>
+
+#ifdef PULP_HAS_SKIA
+#include <pulp/canvas/skia_canvas.hpp>
+#endif
+
+namespace pulp::view {
+
+namespace {
+
+// Env-gated paint trace. When `PULP_LOG_CANVAS_PAINT=1`
+// is exported the live process logs one grep-able line per CanvasWidget paint
+// to stderr with the widget id, its bounds, and the inbound canvas CTM. The
+// trace distinguishes off-window CTM/bounds problems from widgets that never
+// reach paint(). Returns false when the variable is unset / "0" / empty so
+// production builds incur a single getenv lookup per paint and nothing else.
+inline bool canvas_paint_logging_enabled() {
+    const char* v = std::getenv("PULP_LOG_CANVAS_PAINT");
+    if (!v || !*v) return false;
+    if (v[0] == '0' && v[1] == '\0') return false;
+    return true;
+}
+
+inline bool backend_satisfies(
+    NativeCanvasBackendRequirement requirement,
+    canvas::RendererBackend backend) noexcept {
+    switch (requirement) {
+        case NativeCanvasBackendRequirement::any:
+            return true;
+        case NativeCanvasBackendRequirement::skia_dawn_allow_recording:
+            return backend == canvas::RendererBackend::skia_dawn ||
+                   backend == canvas::RendererBackend::recording;
+        case NativeCanvasBackendRequirement::skia_dawn:
+            return backend == canvas::RendererBackend::skia_dawn;
+    }
+    return false;
+}
+
+// Translate CanvasDrawCmd::Type to a stable, grep-able
+// short string so the env-gated trace can summarise commands_ without dragging
+// a heavyweight reflection helper into the hot path. Names mirror the enum
+// labels exactly so `grep fill_rect` lines up with the source.
+inline const char* canvas_cmd_type_name(CanvasDrawCmd::Type t) {
+    switch (t) {
+        case CanvasDrawCmd::Type::fill_rect: return "fill_rect";
+        case CanvasDrawCmd::Type::stroke_rect: return "stroke_rect";
+        case CanvasDrawCmd::Type::fill_rounded_rect: return "fill_rounded_rect";
+        case CanvasDrawCmd::Type::stroke_rounded_rect: return "stroke_rounded_rect";
+        case CanvasDrawCmd::Type::fill_circle: return "fill_circle";
+        case CanvasDrawCmd::Type::stroke_circle: return "stroke_circle";
+        case CanvasDrawCmd::Type::stroke_line: return "stroke_line";
+        case CanvasDrawCmd::Type::stroke_arc: return "stroke_arc";
+        case CanvasDrawCmd::Type::fill_text: return "fill_text";
+        case CanvasDrawCmd::Type::stroke_text: return "stroke_text";
+        case CanvasDrawCmd::Type::set_font: return "set_font";
+        case CanvasDrawCmd::Type::set_font_full: return "set_font_full";
+        case CanvasDrawCmd::Type::set_text_align: return "set_text_align";
+        case CanvasDrawCmd::Type::set_text_baseline: return "set_text_baseline";
+        case CanvasDrawCmd::Type::set_fill_color: return "set_fill_color";
+        case CanvasDrawCmd::Type::set_stroke_color: return "set_stroke_color";
+        case CanvasDrawCmd::Type::set_line_width: return "set_line_width";
+        case CanvasDrawCmd::Type::set_line_cap: return "set_line_cap";
+        case CanvasDrawCmd::Type::set_line_join: return "set_line_join";
+        case CanvasDrawCmd::Type::set_global_alpha: return "set_global_alpha";
+        case CanvasDrawCmd::Type::set_blend_mode: return "set_blend_mode";
+        case CanvasDrawCmd::Type::set_fill_gradient_linear: return "set_fill_gradient_linear";
+        case CanvasDrawCmd::Type::set_fill_gradient_radial: return "set_fill_gradient_radial";
+        case CanvasDrawCmd::Type::set_fill_gradient_radial_two_circles: return "set_fill_gradient_radial_two_circles";
+        case CanvasDrawCmd::Type::set_fill_gradient_conic: return "set_fill_gradient_conic";
+        case CanvasDrawCmd::Type::set_fill_pattern: return "set_fill_pattern";
+        case CanvasDrawCmd::Type::set_stroke_pattern: return "set_stroke_pattern";
+        case CanvasDrawCmd::Type::clear_fill_gradient: return "clear_fill_gradient";
+        case CanvasDrawCmd::Type::set_stroke_gradient_linear: return "set_stroke_gradient_linear";
+        case CanvasDrawCmd::Type::set_stroke_gradient_radial: return "set_stroke_gradient_radial";
+        case CanvasDrawCmd::Type::set_stroke_gradient_radial_two_circles: return "set_stroke_gradient_radial_two_circles";
+        case CanvasDrawCmd::Type::set_stroke_gradient_conic: return "set_stroke_gradient_conic";
+        case CanvasDrawCmd::Type::clear_stroke_gradient: return "clear_stroke_gradient";
+        case CanvasDrawCmd::Type::begin_path: return "begin_path";
+        case CanvasDrawCmd::Type::move_to: return "move_to";
+        case CanvasDrawCmd::Type::line_to: return "line_to";
+        case CanvasDrawCmd::Type::quad_to: return "quad_to";
+        case CanvasDrawCmd::Type::cubic_to: return "cubic_to";
+        case CanvasDrawCmd::Type::close_path: return "close_path";
+        case CanvasDrawCmd::Type::fill_path: return "fill_path";
+        case CanvasDrawCmd::Type::stroke_path: return "stroke_path";
+        case CanvasDrawCmd::Type::clip_path: return "clip_path";
+        case CanvasDrawCmd::Type::save: return "save";
+        case CanvasDrawCmd::Type::restore: return "restore";
+        case CanvasDrawCmd::Type::translate: return "translate";
+        case CanvasDrawCmd::Type::scale: return "scale";
+        case CanvasDrawCmd::Type::rotate: return "rotate";
+        case CanvasDrawCmd::Type::clip_rect: return "clip_rect";
+        case CanvasDrawCmd::Type::set_transform: return "set_transform";
+        case CanvasDrawCmd::Type::clip: return "clip";
+        case CanvasDrawCmd::Type::draw_image: return "draw_image";
+        case CanvasDrawCmd::Type::draw_sdf: return "draw_sdf";
+        case CanvasDrawCmd::Type::set_line_dash: return "set_line_dash";
+        case CanvasDrawCmd::Type::put_image_data: return "put_image_data";
+        case CanvasDrawCmd::Type::set_shadow_color: return "set_shadow_color";
+        case CanvasDrawCmd::Type::set_shadow_blur: return "set_shadow_blur";
+        case CanvasDrawCmd::Type::set_shadow_offset_x: return "set_shadow_offset_x";
+        case CanvasDrawCmd::Type::set_shadow_offset_y: return "set_shadow_offset_y";
+        case CanvasDrawCmd::Type::set_miter_limit: return "set_miter_limit";
+        case CanvasDrawCmd::Type::set_image_smoothing: return "set_image_smoothing";
+        case CanvasDrawCmd::Type::set_direction: return "set_direction";
+        case CanvasDrawCmd::Type::set_filter: return "set_filter";
+        case CanvasDrawCmd::Type::clear: return "clear";
+        case CanvasDrawCmd::Type::clear_rect: return "clear_rect";
+        // Native arc subpaths.
+        case CanvasDrawCmd::Type::path_arc: return "path_arc";
+        case CanvasDrawCmd::Type::path_arc_to: return "path_arc_to";
+        case CanvasDrawCmd::Type::path_ellipse: return "path_ellipse";
+        case CanvasDrawCmd::Type::path_round_rect: return "path_round_rect";
+        case CanvasDrawCmd::Type::replay_group: return "replay_group";
+    }
+    return "unknown";
+}
+
+} // namespace
+
+void CanvasWidget::append_replay_sequence(const RecordedCommands& stream,
+                                          std::vector<const CanvasDrawCmd*>& out) {
+    static const CanvasDrawCmd group_save = [] {
+        CanvasDrawCmd c; c.type = CanvasDrawCmd::Type::save; return c;
+    }();
+    static const CanvasDrawCmd group_restore = [] {
+        CanvasDrawCmd c; c.type = CanvasDrawCmd::Type::restore; return c;
+    }();
+    out.reserve(out.size() + stream.commands.size());
+    for (const auto& cmd : stream.commands) {
+        if (cmd.type != CanvasDrawCmd::Type::replay_group) {
+            out.push_back(&cmd);
+            continue;
+        }
+        const auto group = stream.groups.find(cmd.text);
+        if (group == stream.groups.end()) continue;
+        out.push_back(&group_save);
+        int open_saves = 0;
+        for (const auto& inner : group->second.commands) {
+            if (inner.type == CanvasDrawCmd::Type::replay_group) continue;
+            if (inner.type == CanvasDrawCmd::Type::save) ++open_saves;
+            if (inner.type == CanvasDrawCmd::Type::restore) {
+                if (open_saves == 0) continue;
+                --open_saves;
+            }
+            out.push_back(&inner);
+        }
+        for (; open_saves > 0; --open_saves) out.push_back(&group_restore);
+        out.push_back(&group_restore);
+    }
+}
+
+std::vector<const CanvasDrawCmd*> CanvasWidget::replay_sequence() const {
+    std::vector<const CanvasDrawCmd*> out;
+    append_replay_sequence(*recorded_commands_, out);
+    return out;
+}
+
+void CanvasWidget::paint(canvas::Canvas& canvas) {
+    const auto commands = recorded_commands_;
+    // Env-gated paint trace. Logged at entry, BEFORE any
+    // baseline / save_count snapshots so the line reflects the matrix the
+    // parent View::paint_all chain handed us. Format is grep-able:
+    //   [pulp:canvas-paint] id=<id> bounds=(x,y,w,h) ctm=[a,b,c,d,e,f]
+    //       cmd_total=<N> cmds={fill_rect=42,stroke_path=15,...}
+    //
+    // The per-type summary distinguishes "rich command list processed but never
+    // composited" (cmd_total>0, varied types) from "silently truncated"
+    // (cmd_total tiny or 0). Tally is allocation-light: a single std::map walk
+    // gated behind the same env var, so production paints incur a single getenv
+    // lookup and nothing else.
+    if (canvas_paint_logging_enabled()) {
+        const auto& b = bounds();
+        const auto m = canvas.current_transform();
+        std::map<int, int> type_counts;
+        for (const auto& cmd : commands->commands) {
+            ++type_counts[static_cast<int>(cmd.type)];
+        }
+        std::string summary;
+        summary.reserve(type_counts.size() * 24);
+        bool first = true;
+        for (const auto& [tk, count] : type_counts) {
+            if (count <= 0) continue;
+            if (!first) summary.push_back(',');
+            first = false;
+            summary.append(canvas_cmd_type_name(static_cast<CanvasDrawCmd::Type>(tk)));
+            summary.push_back('=');
+            summary.append(std::to_string(count));
+        }
+        std::fprintf(stderr,
+                     "[pulp:canvas-paint] id=%s bounds=(%g,%g,%g,%g) "
+                     "ctm=[%g,%g,%g,%g,%g,%g] cmd_total=%zu cmds={%s}\n",
+                     id().c_str(), b.x, b.y, b.width, b.height,
+                     static_cast<double>(m.a), static_cast<double>(m.b),
+                     static_cast<double>(m.c), static_cast<double>(m.d),
+                     static_cast<double>(m.e), static_cast<double>(m.f),
+                     commands->commands.size(), summary.c_str());
+        std::fflush(stderr);
+    }
+
+    // Snapshot the inbound device matrix so JS-driven setTransform() composes
+    // onto the parent View transform rather than overwriting it.
+    canvas.capture_paint_baseline_transform();
+    last_native_gpu_texture_draw_succeeded_ = false;
+    last_native_paint_succeeded_ = false;
+    last_native_paint_backend_ = canvas.renderer_backend();
+
+    // Defend against unbalanced JS save/restore. If the
+    // draw script reaches an early-return path that skips a matching
+    // `ctx.restore()`, the leftover save accumulates on the canvas's
+    // GState stack every frame. The parent `View::paint_all`'s outer
+    // `canvas.save()` / `canvas.restore()` only pops one level, so any
+    // surplus GState (transform, clip) leaks into sibling paint scopes
+    // and silently corrupts their drawing. Snapshot depth at entry, then
+    // pop back to it after replay so the parent always sees the canvas at
+    // the depth it expects.
+    //
+    // JS-driven `clearRect()` lowers to a kClear blend on the underlying surface
+    // (SkBlendMode::kClear / CGContextClearRect), which unconditionally
+    // zeros destination texels regardless of the source alpha. With
+    // multiple sibling CanvasWidgets sharing the parent View's paint surface,
+    // one sibling's clearRect at the start of its draw replay erases pixels
+    // another sibling just painted.
+    //
+    // HTML <canvas> semantics give every canvas its own backing store,
+    // so clearRect on canvas A cannot affect canvas B, and a non-source-over
+    // composite operation (lighter, multiply, destination-out, ...) blends
+    // against this canvas's own pixels, never the parent's. When the stream
+    // contains such a command (needs_backdrop_isolation()), wrap the replay
+    // in `save_layer()` over the local bounds: inside the layer those
+    // commands see only this canvas, and the matching `restore()` blends the
+    // layer back with SrcOver, as the spec demands.
+    //
+    // Every other stream is source-over throughout, and source-over is
+    // associative: drawing it straight onto the parent gives the same pixels
+    // as drawing it into a transparent layer and compositing that. The layer
+    // is then pure cost - a full-bounds offscreen allocated, cleared and
+    // composited every paint, per canvas - so those streams get a plain
+    // save() plus the same bounds clip the layer would have imposed. Native
+    // painters, native GPU textures and shader effects keep the layer; their
+    // content is not visible to the scan.
+    //
+    // Skip both when bounds are degenerate so we don't open a zero-sized
+    // offscreen.
+    const int saved_depth = canvas.save_count();
+    const auto& widget_bounds = bounds();
+    const bool has_extent = (widget_bounds.width > 0.0f && widget_bounds.height > 0.0f);
+    // Curated named GPU post-effect (Forge scripted UIs): when an effect is
+    // active, open the SAME per-canvas layer through the shader-effect path so
+    // the whole canvas content is post-processed at restore — no extra layer,
+    // no extra cost. Unknown names / non-Skia backends fall back to a plain
+    // layer inside save_layer_with_shader_effect, so the effect is simply
+    // skipped and save/restore stays balanced.
+    const bool has_shader_effect =
+        !shader_effect_name_.empty() && shader_effect_name_ != "none";
+    const bool needs_layer = has_shader_effect ||
+                             commands->needs_backdrop_isolation ||
+                             content_mode_ == ContentMode::native_painter ||
+                             static_cast<bool>(native_gpu_texture_provider_);
+    if (has_extent) {
+        if (has_shader_effect) {
+            canvas.save_layer_with_shader_effect(
+                0.0f, 0.0f, widget_bounds.width, widget_bounds.height,
+                shader_effect_name_, shader_effect_intensity_);
+        } else if (needs_layer) {
+            canvas.save_layer(0.0f, 0.0f, widget_bounds.width, widget_bounds.height,
+                              /*opacity=*/1.0f, /*blur_radius=*/0.0f);
+        } else {
+            canvas.save();
+            canvas.clip_rect(0.0f, 0.0f, widget_bounds.width, widget_bounds.height);
+        }
+    }
+
+    // Canvas widget paint contract:
+    //   * The widget MUST NOT fill its bounds with an opaque background
+    //     before processing JS draw commands. The default state is fully
+    //     transparent so the parent's paint surface (View::paint_self_and_children
+    //     paints background + border before invoking this paint()) shows
+    //     through wherever the JS code does not explicitly draw.
+    //   * If the JS code wants an opaque background it must issue an explicit
+    //     fill_rect / clear command.
+    //   * If the host caller wants a regression check, the test below records
+    //     against a RecordingCanvas and asserts no full-bounds fill_rect was
+    //     emitted.
+    // Do NOT add any unconditional fill / clear here.
+#ifdef PULP_HAS_SKIA
+    if (native_gpu_texture_provider_) {
+        auto frame = native_gpu_texture_provider_();
+        if (frame.available) {
+            if (auto* skia_canvas = dynamic_cast<canvas::SkiaCanvas*>(&canvas)) {
+                last_native_gpu_texture_draw_succeeded_ =
+                    skia_canvas->draw_native_dawn_texture(frame.texture_handle,
+                                                          frame.width,
+                                                          frame.height,
+                                                          frame.format,
+                                                          0.0f,
+                                                          0.0f,
+                                                          bounds().width,
+                                                          bounds().height);
+            }
+        }
+    }
+#endif
+
+    // Native content is a distinct retained mode, not an extra overlay on the
+    // recorded Canvas2D stream. Take a strong snapshot so a painter may safely
+    // replace/reset itself from inside paint without invalidating the active
+    // call. The renderer identity comes from Canvas and is checked before any
+    // application drawing, providing a fail-closed Graphite/Dawn contract.
+    if (content_mode_ == ContentMode::native_painter) {
+        auto painter = native_painter_;
+        const auto backend = canvas.renderer_backend();
+        if (painter && backend_satisfies(native_backend_requirement_, backend)) {
+            // Establish a widget-local clip and an independently balanced
+            // state scope. restore_to_count cleans up extra saves left by a
+            // painter; callers must not restore below the scope they receive.
+            const int painter_depth = canvas.save_count();
+            canvas.save();
+            canvas.clip_rect(0.0f, 0.0f, widget_bounds.width,
+                             widget_bounds.height);
+            NativeCanvasPaintContext context{
+                canvas,
+                {0.0f, 0.0f, widget_bounds.width, widget_bounds.height},
+                canvas.backing_scale(),
+                native_frame_id_++,
+                backend,
+            };
+            painter->paint(context);
+            canvas.restore_to_count(painter_depth);
+            last_native_paint_succeeded_ = true;
+        }
+        canvas.restore_to_count(saved_depth);
+        return;
+    }
+
+    // Canvas::fill_text() consumes a baseline Y coordinate, whereas the
+    // browser Canvas2D API lets callers choose whether Y denotes the top,
+    // middle, or bottom of the font box. Keep this replay-only state beside
+    // the recorded save stack and translate to a real baseline immediately
+    // before painting. The bridge has recorded this state for years; dropping
+    // it here displaced imported canvas labels by roughly one ascent.
+    auto text_baseline = canvas::TextBaseline::alphabetic;
+    std::vector<canvas::TextBaseline> text_baseline_stack;
+    const auto baseline_y = [&](const std::string& text, float y) {
+        // `alphabetic` needs no metrics: y already IS the baseline. Skipping
+        // the measure there also keeps the default path off a shaping call.
+        if (text_baseline == canvas::TextBaseline::alphabetic)
+            return y;
+        const auto metrics = canvas.measure_text_full(text);
+        switch (text_baseline) {
+        case canvas::TextBaseline::middle:
+            return y + (metrics.ascent - metrics.descent) * 0.5f;
+        case canvas::TextBaseline::bottom:
+        case canvas::TextBaseline::ideographic:
+            // No ideographic metric is available from TextMetrics, and the
+            // ideographic baseline sits at or just above the descent line for
+            // the Latin faces this canvas shapes, so it shares `bottom`.
+            return y - metrics.descent;
+        case canvas::TextBaseline::hanging:
+            // The hanging baseline is a Devanagari-derived metric absent from
+            // TextMetrics. Engines that cannot read a BASE table place it a
+            // fixed fraction down the ascent; 0.8 is the conventional value.
+            return y + metrics.ascent * 0.8f;
+        case canvas::TextBaseline::top:
+        default:
+            return y + metrics.ascent;
+        }
+    };
+
+    // Sticky Canvas2D state and its save/restore stack. Setters go through
+    // it so restore() reverts the drawing state identically on every backend;
+    // see canvas_replay_state.hpp.
+    detail::CanvasReplayState replay_state;
+
+    // A stream that replays cached groups is walked through its expanded
+    // sequence (see replay_sequence()); every other stream is walked in place.
+    const bool expand_groups = commands->has_group_replays;
+    std::vector<const CanvasDrawCmd*> expanded;
+    if (expand_groups) append_replay_sequence(*commands, expanded);
+    const std::size_t sequence_length =
+        expand_groups ? expanded.size() : commands->commands.size();
+
+    for (std::size_t index = 0; index < sequence_length; ++index) {
+        const auto& cmd = expand_groups ? *expanded[index] : commands->commands[index];
+        if (const auto slot = detail::CanvasReplayState::slot_for(cmd.type)) {
+            detail::apply_canvas_state_setter(canvas, cmd);
+            replay_state.note_setter(*slot, cmd);
+            continue;
+        }
+        switch (cmd.type) {
+        // Sticky state setters, applied above.
+        case CanvasDrawCmd::Type::set_font:
+        case CanvasDrawCmd::Type::set_font_full:
+        case CanvasDrawCmd::Type::set_text_align:
+        case CanvasDrawCmd::Type::set_line_cap:
+        case CanvasDrawCmd::Type::set_line_join:
+        case CanvasDrawCmd::Type::set_miter_limit:
+        case CanvasDrawCmd::Type::set_image_smoothing:
+        case CanvasDrawCmd::Type::set_global_alpha:
+        case CanvasDrawCmd::Type::set_blend_mode:
+        case CanvasDrawCmd::Type::set_shadow_color:
+        case CanvasDrawCmd::Type::set_shadow_blur:
+        case CanvasDrawCmd::Type::set_shadow_offset_x:
+        case CanvasDrawCmd::Type::set_shadow_offset_y:
+        case CanvasDrawCmd::Type::set_direction:
+        case CanvasDrawCmd::Type::set_filter:
+        case CanvasDrawCmd::Type::set_line_dash:
+        case CanvasDrawCmd::Type::set_fill_gradient_linear:
+        case CanvasDrawCmd::Type::set_fill_gradient_radial:
+        case CanvasDrawCmd::Type::set_fill_gradient_radial_two_circles:
+        case CanvasDrawCmd::Type::set_fill_gradient_conic:
+        case CanvasDrawCmd::Type::set_fill_pattern:
+        case CanvasDrawCmd::Type::clear_fill_gradient:
+        case CanvasDrawCmd::Type::set_stroke_gradient_linear:
+        case CanvasDrawCmd::Type::set_stroke_gradient_radial:
+        case CanvasDrawCmd::Type::set_stroke_gradient_radial_two_circles:
+        case CanvasDrawCmd::Type::set_stroke_gradient_conic:
+        case CanvasDrawCmd::Type::set_stroke_pattern:
+        case CanvasDrawCmd::Type::clear_stroke_gradient:
+        // Expanded above; an unexpanded replay has nothing to draw.
+        case CanvasDrawCmd::Type::replay_group:
+            break;
+
+        // Shapes
+        case CanvasDrawCmd::Type::clear:
+            canvas.set_fill_color(cmd.color);
+            replay_state.note_fill_color(cmd.color);
+            canvas.fill_rect(0, 0, bounds().width, bounds().height);
+            break;
+        case CanvasDrawCmd::Type::fill_rect:
+            // When use_active_style is set the bridge's caller
+            // omitted the color arg (Canvas2D `ctx.fillRect(x,y,w,h)` shim),
+            // so honor the active fillStyle (color OR gradient set most
+            // recently on the canvas) instead of overwriting with cmd.color.
+            if (!cmd.use_active_style) {
+                canvas.set_fill_color(cmd.color);
+                replay_state.note_fill_color(cmd.color);
+            }
+            canvas.fill_rect(cmd.x, cmd.y, cmd.w, cmd.h);
+            break;
+        case CanvasDrawCmd::Type::stroke_rect:
+            // Same fallback as fill_rect, applied to strokeStyle.
+            if (!cmd.use_active_style) {
+                canvas.set_stroke_color(cmd.color);
+                replay_state.note_stroke_color(cmd.color);
+            }
+            canvas.set_line_width(cmd.extra);
+            replay_state.note_line_width(cmd.extra);
+            canvas.stroke_rect(cmd.x, cmd.y, cmd.w, cmd.h);
+            break;
+        case CanvasDrawCmd::Type::fill_rounded_rect:
+            canvas.set_fill_color(cmd.color);
+            replay_state.note_fill_color(cmd.color);
+            canvas.fill_rounded_rect(cmd.x, cmd.y, cmd.w, cmd.h, cmd.extra);
+            break;
+        case CanvasDrawCmd::Type::stroke_rounded_rect:
+            canvas.set_stroke_color(cmd.color);
+            canvas.set_line_width(cmd.x2);  // x2 = line width
+            replay_state.note_stroke_color(cmd.color);
+            replay_state.note_line_width(cmd.x2);
+            canvas.stroke_rounded_rect(cmd.x, cmd.y, cmd.w, cmd.h, cmd.extra);
+            break;
+        case CanvasDrawCmd::Type::fill_circle:
+            canvas.set_fill_color(cmd.color);
+            replay_state.note_fill_color(cmd.color);
+            canvas.fill_circle(cmd.x, cmd.y, cmd.extra);
+            break;
+        case CanvasDrawCmd::Type::stroke_circle:
+            canvas.set_stroke_color(cmd.color);
+            canvas.set_line_width(cmd.x2);
+            replay_state.note_stroke_color(cmd.color);
+            replay_state.note_line_width(cmd.x2);
+            canvas.stroke_circle(cmd.x, cmd.y, cmd.extra);
+            break;
+        case CanvasDrawCmd::Type::stroke_line:
+            canvas.set_stroke_color(cmd.color);
+            canvas.set_line_width(cmd.extra);
+            replay_state.note_stroke_color(cmd.color);
+            replay_state.note_line_width(cmd.extra);
+            canvas.stroke_line(cmd.x, cmd.y, cmd.w, cmd.h);
+            break;
+
+        // Text
+        case CanvasDrawCmd::Type::fill_text:
+            canvas.set_fill_color(cmd.color);
+            replay_state.note_fill_color(cmd.color);
+            // Do NOT call canvas.set_font() / set_text_align
+            // here. The JS shim's fillText path runs `_syncTextState()`
+            // BEFORE canvasFillText, which records a `set_font` (legacy) or
+            // `set_font_full` (rich CSS shorthand) cmd plus a
+            // `set_text_align` cmd ahead of this fill_text cmd. Re-setting
+            // the font here clobbers the rich state: SkiaCanvas::set_font()
+            // resets weight/slant to normal/upright, so
+            // `ctx.font = "italic bold 18px Inter"`
+            // would record set_font_full(weight=700, slant=1) and then
+            // immediately have weight/slant reset to 400/0 here, rendering
+            // the text as plain upright Regular even though the rich state
+            // was correctly captured. Same logic for text alignment: the
+            // prior set_text_align cmd already configured the canvas; the
+            // hard-coded TextAlign::left below would force every JS draw
+            // back to left-align. Drop both calls — the prior state cmds
+            // own the font + alignment.
+            //
+            // Route through the maxWidth-aware overload when
+            // the JS caller supplied `maxWidth` (cmd.w > 0). The Canvas
+            // base class default forwards back to fill_text(text, x, y),
+            // so backends without a custom override behave bit-for-bit
+            // identically to the legacy 3-arg path.
+            if (cmd.w > 0.0f) {
+                canvas.fill_text_with_max_width(cmd.text, cmd.x,
+                                                baseline_y(cmd.text, cmd.y), cmd.w);
+            } else {
+                canvas.fill_text(cmd.text, cmd.x, baseline_y(cmd.text, cmd.y));
+            }
+            break;
+        case CanvasDrawCmd::Type::stroke_text:
+            // True outlined-glyph rendering. The JS shim's
+            // strokeText path emits this distinct cmd so the bridge can
+            // route through `Canvas::stroke_text` (Skia/CG override to
+            // build a stroke paint and honor `lineWidth`). The base
+            // class default still falls through to fill_text — preserving
+            // the older visual approximation on backends that haven't
+            // adopted the new override yet (RecordingCanvas in tests).
+            //
+            // Stroke color comes from the `set_stroke_color` cmd that
+            // ran ahead of this one via the JS shim's _syncStrokeColor
+            // path; line width comes from the prior `set_line_width`
+            // cmd. We do NOT re-set them here (mirrors fill_text's
+            // commentary above).
+            canvas.stroke_text(cmd.text, cmd.x, baseline_y(cmd.text, cmd.y), cmd.w);
+            break;
+
+        // Style
+        case CanvasDrawCmd::Type::set_fill_color:
+            canvas.set_fill_color(cmd.color);
+            replay_state.note_fill_color(cmd.color);
+            break;
+        case CanvasDrawCmd::Type::set_stroke_color:
+            canvas.set_stroke_color(cmd.color);
+            replay_state.note_stroke_color(cmd.color);
+            break;
+        case CanvasDrawCmd::Type::set_line_width:
+            canvas.set_line_width(cmd.extra);
+            replay_state.note_line_width(cmd.extra);
+            break;
+
+        // Path
+        case CanvasDrawCmd::Type::begin_path:
+            canvas.begin_path();
+            break;
+        case CanvasDrawCmd::Type::move_to:
+            canvas.move_to(cmd.x, cmd.y);
+            break;
+        case CanvasDrawCmd::Type::line_to:
+            canvas.line_to(cmd.x, cmd.y);
+            break;
+        case CanvasDrawCmd::Type::quad_to:
+            canvas.quad_to(cmd.x, cmd.y, cmd.x2, cmd.y2);
+            break;
+        case CanvasDrawCmd::Type::cubic_to:
+            canvas.cubic_to(cmd.x, cmd.y, cmd.x2, cmd.y2, cmd.x3, cmd.y3);
+            break;
+        case CanvasDrawCmd::Type::close_path:
+            canvas.close_path();
+            break;
+        case CanvasDrawCmd::Type::fill_path:
+            // Thread the JS-supplied fillRule
+            // (0 = nonzero, 1 = evenodd) recorded in cmd.int_val by
+            // canvas2d_api.cpp's `canvasFillPath` reader.
+            canvas.fill_current_path(cmd.int_val == 1
+                                         ? canvas::FillRule::evenodd
+                                         : canvas::FillRule::nonzero);
+            break;
+        case CanvasDrawCmd::Type::stroke_path:
+            canvas.stroke_current_path();
+            break;
+
+        // State
+        case CanvasDrawCmd::Type::save:
+            canvas.save();
+            replay_state.save();
+            text_baseline_stack.push_back(text_baseline);
+            break;
+        case CanvasDrawCmd::Type::restore:
+            canvas.restore();
+            replay_state.restore(canvas);
+            if (!text_baseline_stack.empty()) {
+                text_baseline = text_baseline_stack.back();
+                text_baseline_stack.pop_back();
+            }
+            break;
+
+        // Transform
+        case CanvasDrawCmd::Type::translate:
+            canvas.translate(cmd.x, cmd.y);
+            break;
+        case CanvasDrawCmd::Type::scale:
+            canvas.scale(cmd.x, cmd.y);
+            break;
+        case CanvasDrawCmd::Type::rotate:
+            canvas.rotate(cmd.extra);
+            break;
+        case CanvasDrawCmd::Type::clip_rect:
+            canvas.clip_rect(cmd.x, cmd.y, cmd.w, cmd.h);
+            break;
+        case CanvasDrawCmd::Type::clip_path:
+            // Rect-only fallback; bridge path clipping uses `clip` below.
+            canvas.clip_rect(cmd.x, cmd.y, cmd.w, cmd.h); // fallback
+            break;
+        case CanvasDrawCmd::Type::set_transform:
+            // Affine matrix laid out as cmd.x = a, cmd.y = b, cmd.w = c,
+            // cmd.h = d, cmd.x2 = e, cmd.y2 = f.
+            canvas.set_transform(cmd.x, cmd.y, cmd.w, cmd.h, cmd.x2, cmd.y2);
+            break;
+        case CanvasDrawCmd::Type::clip:
+            // Intersect clip with current path. Thread the JS-supplied fillRule
+            // (0 = nonzero, 1 = evenodd) recorded in cmd.int_val by
+            // canvas2d_api.cpp's `canvasClip` reader.
+            canvas.clip(cmd.int_val == 1
+                            ? canvas::FillRule::evenodd
+                            : canvas::FillRule::nonzero);
+            break;
+
+        // Arc
+        case CanvasDrawCmd::Type::stroke_arc:
+            canvas.set_stroke_color(cmd.color);
+            canvas.set_line_width(cmd.extra);
+            replay_state.note_stroke_color(cmd.color);
+            replay_state.note_line_width(cmd.extra);
+            canvas.stroke_arc(cmd.x, cmd.y, cmd.w, cmd.x2, cmd.y2); // cx, cy, radius, start, end
+            break;
+
+        // Native arc subpaths.
+        case CanvasDrawCmd::Type::path_arc:
+            canvas.arc(cmd.x, cmd.y, cmd.extra,
+                       cmd.x2, cmd.y2,
+                       cmd.int_val != 0);
+            break;
+        case CanvasDrawCmd::Type::path_arc_to:
+            canvas.arc_to(cmd.x, cmd.y, cmd.x2, cmd.y2, cmd.extra);
+            break;
+        case CanvasDrawCmd::Type::path_ellipse:
+            // x=cx, y=cy, w=rx, h=ry, extra=rotation, x2=startAngle,
+            // y2=endAngle, int_val=anticlockwise
+            canvas.ellipse(cmd.x, cmd.y, cmd.w, cmd.h,
+                           cmd.extra,
+                           cmd.x2, cmd.y2,
+                           cmd.int_val != 0);
+            break;
+        case CanvasDrawCmd::Type::path_round_rect: {
+            // gradient_positions packed [tl_x,tl_y, tr_x,tr_y,
+            // br_x,br_y, bl_x,bl_y]. If the JS shim only sent 1/2/4
+            // values the bridge has already normalized to 8.
+            const auto& r = cmd.gradient_positions;
+            float tl_x = r.size() > 0 ? r[0] : 0.0f;
+            float tl_y = r.size() > 1 ? r[1] : 0.0f;
+            float tr_x = r.size() > 2 ? r[2] : 0.0f;
+            float tr_y = r.size() > 3 ? r[3] : 0.0f;
+            float br_x = r.size() > 4 ? r[4] : 0.0f;
+            float br_y = r.size() > 5 ? r[5] : 0.0f;
+            float bl_x = r.size() > 6 ? r[6] : 0.0f;
+            float bl_y = r.size() > 7 ? r[7] : 0.0f;
+            canvas.round_rect(cmd.x, cmd.y, cmd.w, cmd.h,
+                              tl_x, tl_y, tr_x, tr_y,
+                              br_x, br_y, bl_x, bl_y);
+            break;
+        }
+
+        // Text baseline is replay-only state; see baseline_y above.
+        case CanvasDrawCmd::Type::set_text_baseline:
+            if (cmd.int_val == 0) text_baseline = canvas::TextBaseline::top;
+            else if (cmd.int_val == 1) text_baseline = canvas::TextBaseline::middle;
+            else if (cmd.int_val == 2) text_baseline = canvas::TextBaseline::bottom;
+            else if (cmd.int_val == 4) text_baseline = canvas::TextBaseline::hanging;
+            else if (cmd.int_val == 5) text_baseline = canvas::TextBaseline::ideographic;
+            else text_baseline = canvas::TextBaseline::alphabetic;
+            break;
+
+        // Clear rect: replace pixels with transparent black, do
+        // not SrcOver-blend a transparent fill (which is a no-op). The
+        // canvas::Canvas API exposes clear_rect with a kClear-equivalent
+        // implementation per backend; this is what CanvasRenderingContext2D
+        // .clearRect must do per the HTML spec.
+        case CanvasDrawCmd::Type::clear_rect:
+            canvas.clear_rect(cmd.x, cmd.y, cmd.w, cmd.h);
+            break;
+
+        // Draw image.
+        // The bridge stores the image source in cmd.text (file path or
+        // "data:" URL) and the destination rect in cmd.{x,y,w,h}. We
+        // first try the real image decode path on the active canvas
+        // backend; if that fails (e.g. on RecordingCanvas, missing
+        // file, or encoded format Skia can't decode) we fall back to
+        // the labeled placeholder so the canvas still shows *something*
+        // and downstream layout/click code keeps working.
+        case CanvasDrawCmd::Type::draw_image: {
+            bool drawn = false;
+            const std::string& src = cmd.text;
+            // Data-URI image sources are not decoded on this replay path yet;
+            // they fall through to the placeholder below.
+            constexpr std::string_view kDataUriPrefix = "data:";
+            if (src.rfind(kDataUriPrefix, 0) == 0) {
+                auto comma = src.find(',');
+                if (comma != std::string::npos) {
+                    std::string b64 = src.substr(comma + 1);
+                    // Payload is parsed only far enough to recognize the data URI.
+                    (void)b64;
+                }
+            } else if (!src.empty()) {
+                // When the JS caller used the 9-arg form,
+                // the bridge stashed the source rect in x2/y2/x3/y3 and
+                // set has_source_rect. Route through the _rect overload
+                // so a sub-rectangle of the decoded image lands on the
+                // destination rect (sprite-sheet slicing).
+                if (cmd.has_source_rect) {
+                    drawn = canvas.draw_image_from_file_rect(
+                        src,
+                        cmd.x2, cmd.y2, cmd.x3, cmd.y3,
+                        cmd.x, cmd.y, cmd.w, cmd.h);
+                } else {
+                    drawn = canvas.draw_image_from_file(src, cmd.x, cmd.y, cmd.w, cmd.h);
+                }
+            }
+            if (!drawn) {
+                canvas.save();
+                canvas.set_fill_color({40, 40, 60, 200});
+                canvas.fill_rect(cmd.x, cmd.y, cmd.w, cmd.h);
+                canvas.set_fill_color({180, 180, 200, 255});
+                canvas.set_font("", 10);
+                canvas.fill_text(src.empty() ? "[image]" : src,
+                                 cmd.x + 4, cmd.y + cmd.h / 2);
+                canvas.restore();
+                // The placeholder drew with its own colour and font, which
+                // survive a backend restore() on Skia.
+                replay_state.reassert_fill_and_font(canvas);
+            }
+            break;
+        }
+
+        case CanvasDrawCmd::Type::draw_sdf: {
+            canvas::Canvas::ShaderGeometry geometry;
+            float gx = cmd.x, gy = cmd.y, gw = cmd.w, gh = cmd.h;
+            try {
+                const auto spec = choc::json::parse(cmd.text);
+                const auto shape = spec.hasObjectMember("shape")
+                                       ? spec["shape"].getWithDefault<std::string>("rect")
+                                       : "rect";
+                if (shape == "circle") geometry.shape = canvas::Canvas::SDFShape::circle;
+                else if (shape == "rounded_rect") geometry.shape = canvas::Canvas::SDFShape::rounded_rect;
+                else if (shape == "diamond") geometry.shape = canvas::Canvas::SDFShape::diamond;
+                else if (shape == "squircle") geometry.shape = canvas::Canvas::SDFShape::squircle;
+                else if (shape == "triangle") geometry.shape = canvas::Canvas::SDFShape::triangle;
+                else if (shape == "arc") geometry.shape = canvas::Canvas::SDFShape::arc;
+                else if (shape == "flat_arc") geometry.shape = canvas::Canvas::SDFShape::flat_arc;
+                else if (shape == "ring") geometry.shape = canvas::Canvas::SDFShape::ring;
+                else if (shape == "stadium") geometry.shape = canvas::Canvas::SDFShape::stadium;
+                else if (shape == "cross") geometry.shape = canvas::Canvas::SDFShape::cross;
+                else if (shape == "flat_segment") geometry.shape = canvas::Canvas::SDFShape::flat_segment;
+                else if (shape == "rounded_segment") geometry.shape = canvas::Canvas::SDFShape::rounded_segment;
+                else if (shape == "quadratic_bezier") geometry.shape = canvas::Canvas::SDFShape::quadratic_bezier;
+                gx = spec.hasObjectMember("x") ? static_cast<float>(spec["x"].getWithDefault<double>(gx)) : gx;
+                gy = spec.hasObjectMember("y") ? static_cast<float>(spec["y"].getWithDefault<double>(gy)) : gy;
+                gw = spec.hasObjectMember("w") ? static_cast<float>(spec["w"].getWithDefault<double>(gw)) : gw;
+                gh = spec.hasObjectMember("h") ? static_cast<float>(spec["h"].getWithDefault<double>(gh)) : gh;
+                geometry.style.stroke_width = spec.hasObjectMember("strokeWidth")
+                    ? static_cast<float>(spec["strokeWidth"].getWithDefault<double>(0.0)) : 0.0f;
+                geometry.style.corner_radius = spec.hasObjectMember("cornerRadius")
+                    ? static_cast<float>(spec["cornerRadius"].getWithDefault<double>(0.0)) : 0.0f;
+                geometry.style.inner_radius = spec.hasObjectMember("innerRadius")
+                    ? static_cast<float>(spec["innerRadius"].getWithDefault<double>(0.5)) : 0.5f;
+                geometry.style.arc_start = spec.hasObjectMember("arcStart")
+                    ? static_cast<float>(spec["arcStart"].getWithDefault<double>(0.0)) : 0.0f;
+                geometry.style.arc_sweep = spec.hasObjectMember("arcSweep")
+                    ? static_cast<float>(spec["arcSweep"].getWithDefault<double>(4.712)) : 4.712f;
+                geometry.style.squircle_power = spec.hasObjectMember("squirclePower")
+                    ? static_cast<float>(spec["squirclePower"].getWithDefault<double>(4.0)) : 4.0f;
+                geometry.style.arm_width = spec.hasObjectMember("armWidth")
+                    ? static_cast<float>(spec["armWidth"].getWithDefault<double>(0.3)) : 0.3f;
+                geometry.style.bezier_cx = spec.hasObjectMember("bezierCX")
+                    ? static_cast<float>(spec["bezierCX"].getWithDefault<double>(0.0)) : 0.0f;
+                geometry.style.bezier_cy = spec.hasObjectMember("bezierCY")
+                    ? static_cast<float>(spec["bezierCY"].getWithDefault<double>(-1.0)) : -1.0f;
+            } catch (...) {
+                // The bridge validates JSON before recording; a malformed
+                // retained command degrades to the normal rect fallback.
+            }
+            canvas::Canvas::ShaderDrawOptions options;
+            options.named_uniforms = cmd.shader_uniforms;
+            options.geometry = cmd.shader_geometry;
+            if (!cmd.shader_sksl.empty()) {
+                if (!options.geometry) options.geometry = geometry;
+                if (canvas.draw_with_sksl(cmd.shader_sksl, gx, gy, gw, gh, options))
+                    break;
+            }
+            canvas.draw_sdf_shape(geometry.shape, gx, gy, gw, gh, geometry.style);
+            break;
+        }
+
+        // putImageData. Pixels packed in cmd.text as
+        // raw RGBA bytes; int_val = width; x2 = height (as float, will round).
+        case CanvasDrawCmd::Type::put_image_data: {
+            int width  = cmd.int_val;
+            int height = static_cast<int>(cmd.x2);
+            const auto* px = reinterpret_cast<const uint8_t*>(cmd.text.data());
+            canvas.write_pixels(px, width, height,
+                                static_cast<int>(cmd.x),
+                                static_cast<int>(cmd.y));
+            break;
+        }
+        }
+    }
+
+    // Restore back to the depth captured at entry. This
+    // single call unconditionally pops:
+    //   * any leftover `ctx.save()` the JS draw script forgot to match
+    //     with `ctx.restore()`, AND
+    //   * the per-canvas `save_layer()` opened above, so the offscreen
+    //     layer is composited back into the parent surface via
+    //     SrcOver — matching HTML <canvas> per-element backing-store
+    //     semantics where one canvas's clearRect cannot affect any
+    //     sibling canvas. Without the layer the kClear blend in
+    //     clear_rect() (SkBlendMode::kClear / CGContextClearRect)
+    //     unconditionally zeros destination texels on the shared
+    //     parent surface, erasing pixels that sibling canvases just
+    //     painted. The single restore_to_count(N) handles both cases
+    //     uniformly: target N == the entry depth, so everything pushed
+    //     in this paint() — leftover JS saves + the save_layer — is
+    //     popped together.
+    //
+    // On backends without an introspectable save stack (default
+    // `restore_to_count` / `save_count() == 0` in the Canvas base) this
+    // is a no-op; the live SkiaCanvas / CoreGraphicsCanvas backends
+    // honor it. Tests use RecordingCanvas which models the same
+    // contract.
+    canvas.restore_to_count(saved_depth);
+}
+
+} // namespace pulp::view

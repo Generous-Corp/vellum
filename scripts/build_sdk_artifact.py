@@ -47,6 +47,8 @@ MIRROR_PACKAGE_FILES = (
 UI_PAYLOAD_ENTRIES = (
     "LICENSE.md", "README.md", "package.json", "package-lock.json", "scripts", "src", "test",
 )
+MACHO_TEMP_ROOT = b"vellum-sdk-artifact-00000000"
+MACHO_TEMP_ROOT_TOKEN = re.compile(rb"vellum-sdk-artifact-[A-Za-z0-9_]{8}")
 
 
 class ArtifactError(RuntimeError):
@@ -159,6 +161,8 @@ def derive_capabilities(payload: Path, install_tree: Path) -> dict[str, object]:
         "bin/vellum-app-host",
         "lib/libvellum-authoring.dylib",
         "lib/libvellum-gpu.dylib",
+        "lib/libvellum-skia-dawn-provider.dylib",
+        "mirror/lib/libvellum-mirror-foundation.dylib",
     ))
     node_runtime = (
         any((payload / name).is_file() for name in ("node/bin/node", "node/bin/node.exe"))
@@ -370,6 +374,25 @@ def rewrite_macho_uuid(path: Path, identity: bytes) -> None:
     path.write_bytes(data)
 
 
+def canonicalize_macho_temp_root(path: Path) -> None:
+    """Replace random SDK build-root suffixes without changing Mach-O size."""
+
+    original = path.read_bytes()
+    matches = list(MACHO_TEMP_ROOT_TOKEN.finditer(original))
+    if not matches:
+        return
+    data = bytearray(original)
+    for match in reversed(matches):
+        if len(MACHO_TEMP_ROOT) != match.end() - match.start():
+            raise ArtifactError(
+                f"canonical Mach-O temporary-root token does not fit: {path}"
+            )
+        data[match.start():match.end()] = MACHO_TEMP_ROOT
+    if len(data) != len(original):
+        raise ArtifactError(f"canonical Mach-O temporary-root rewrite changed size: {path}")
+    path.write_bytes(data)
+
+
 def normalize_macho_executable(path: Path, commit: str, target: str) -> None:
     """Give the installed host a deterministic launchable UUID and ad-hoc signature."""
 
@@ -382,11 +405,34 @@ def normalize_macho_executable(path: Path, commit: str, target: str) -> None:
     codesign = shutil.which("codesign")
     if codesign is None:
         raise ArtifactError("deterministic Darwin artifacts require codesign")
+    canonicalize_macho_temp_root(path)
     run([
         codesign, "--force", "--sign", "-", "--identifier",
         "org.generous.vellum.app-host", str(path),
     ])
     run([codesign, "--verify", "--strict", str(path)])
+
+
+def normalize_macho_dylibs(install_tree: Path, commit: str, target: str) -> None:
+    """Give every installed dylib stable UUID and ad-hoc signature identities."""
+
+    codesign = shutil.which("codesign")
+    if codesign is None:
+        raise ArtifactError("deterministic Darwin artifacts require codesign")
+    for path in sorted(install_tree.rglob("*.dylib")):
+        relative = path.relative_to(install_tree).as_posix()
+        identity = bytearray(hashlib.sha256(
+            f"vellum-dylib\0{relative}\0{commit}\0{target}".encode("utf-8")
+        ).digest()[:16])
+        identity[6] = (identity[6] & 0x0F) | 0x50
+        identity[8] = (identity[8] & 0x3F) | 0x80
+        canonicalize_macho_temp_root(path)
+        rewrite_macho_uuid(path, bytes(identity))
+        identifier = "org.generous.vellum.dylib." + hashlib.sha256(
+            relative.encode("utf-8")
+        ).hexdigest()[:16]
+        run([codesign, "--force", "--sign", "-", "--identifier", identifier, str(path)])
+        run([codesign, "--verify", "--strict", str(path)])
 
 
 def target_name() -> str:
@@ -620,6 +666,15 @@ def build(args: argparse.Namespace) -> dict[str, object]:
         install_tree = temporary / "install"
         payload = temporary / "payload"
         payload.mkdir()
+        # The artifact is built twice in the reproducibility gate. Remap the
+        # per-build temporary root in source, macro, and DWARF paths so the
+        # installed binaries do not retain a random TemporaryDirectory name.
+        canonical_root = "/vellum-sdk-artifact"
+        path_map_flags = " ".join((
+            f"-ffile-prefix-map={temporary}={canonical_root}",
+            f"-fmacro-prefix-map={temporary}={canonical_root}",
+            f"-fdebug-prefix-map={temporary}={canonical_root}",
+        ))
         configure = [
             "cmake", "-S", str(repo), "-B", str(build_dir),
             "-DCMAKE_BUILD_TYPE=Release",
@@ -627,6 +682,8 @@ def build(args: argparse.Namespace) -> dict[str, object]:
             "-DVELLUM_BUILD_SMOKE_NATIVE=OFF",
             f"-DVELLUM_ENABLE_GRAPHICS={'ON' if graphics else 'OFF'}",
         ]
+        for language in ("C", "CXX", "OBJC", "OBJCXX"):
+            configure.append(f"-DCMAKE_{language}_FLAGS={path_map_flags}")
         if skia_archive:
             configure.extend([
                 "-DVELLUM_ENABLE_GPU=ON",
@@ -653,13 +710,15 @@ def build(args: argparse.Namespace) -> dict[str, object]:
         for archive in sorted(install_tree.rglob("*.a")):
             normalize_static_archive(archive)
         if skia_archive and target == "darwin-arm64":
+            normalize_macho_dylibs(install_tree, commit, target)
             normalize_macho_executable(install_tree / "bin/vellum-app-host", commit, target)
         if skia_archive and not (
             installed_cmake_target(install_tree, "Gpu") and
             installed_cmake_target(install_tree, "Authoring") and
             (install_tree / "bin/vellum-app-host").is_file() and
             (install_tree / "lib/libvellum-authoring.dylib").is_file() and
-            (install_tree / "lib/libvellum-gpu.dylib").is_file()
+            (install_tree / "lib/libvellum-gpu.dylib").is_file() and
+            (install_tree / "lib/libvellum-skia-dawn-provider.dylib").is_file()
         ):
             raise ArtifactError(
                 "--skia-archive build did not install the complete native application runtime"

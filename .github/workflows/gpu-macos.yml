@@ -240,7 +240,8 @@ jobs:
 
       - name: Run native, capture, and sterile-consumer tests
         run: |
-          ctest --test-dir build-gpu --output-on-failure
+          VELLUM_MIRROR_LIVE_GPU=1 \
+            ctest --test-dir build-gpu --output-on-failure
           ./build-gpu/apps/gpu-native/vellum-gpu-native.app/Contents/MacOS/vellum-gpu-native \
             --self-test --capture "$RUNNER_TEMP/vellum-gpu-proof.png" \
             | tee "$RUNNER_TEMP/vellum-gpu-proof.txt"

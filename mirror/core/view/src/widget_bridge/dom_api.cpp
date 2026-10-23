@@ -1,0 +1,628 @@
+// widget_bridge/dom_api.cpp - DOM mutation registrations for WidgetBridge.
+
+#include <pulp/view/widget_bridge.hpp>
+#include <pulp/view/widgets.hpp>
+#include <pulp/view/pointer_dispatch.hpp>
+#include <pulp/view/text_editor.hpp>
+#include <pulp/view/view_lifecycle.hpp>
+#include <pulp/view/svg_path_widget.hpp>
+#include <pulp/view/ui_components.hpp>
+#include <pulp/view/widgets/svg_line.hpp>
+#include <pulp/view/widgets/svg_rect.hpp>
+#include "api_registry.hpp"
+
+#include <algorithm>
+#include <cstddef>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <utility>
+
+namespace pulp::view {
+
+namespace {
+
+struct InteractionSnapshot {
+    ViewCapture focused;
+    ViewCapture overlay;
+    ViewCapture popup;
+    bool had_focused = false;
+    bool had_overlay = false;
+    bool had_popup = false;
+
+    void capture(View* owner) {
+        if (!owner) return;
+        if (auto* state = owner->existing_interaction()) {
+            if (state->focused_input) {
+                focused.set(state->focused_input);
+                had_focused = true;
+            }
+            if (state->active_overlay) {
+                overlay.set(state->active_overlay);
+                had_overlay = true;
+            }
+            if (state->active_popup) {
+                popup.set(state->active_popup);
+                had_popup = true;
+            }
+        }
+    }
+
+    void restore(View* destination) noexcept {
+        if (!destination) return;
+        View* root = destination;
+        while (root->parent()) root = root->parent();
+        if (had_focused) {
+            if (auto* view = focused.live_in(*root)) {
+                auto* state = root->existing_interaction();
+                // Only restore into a slot nobody else has taken. Between
+                // capture and restore another view may legitimately have
+                // claimed focus; the reparented view must then NOT receive a
+                // gain callback at all, because a view that believes it has
+                // focus while the root points elsewhere is the split state
+                // this restore used to produce.
+                if (!state || !state->focused_input ||
+                    state->focused_input == view) {
+                    // Route through the established protocol rather than
+                    // re-implementing it: transfer_input_focus drains the
+                    // previous owner, delivers the gain hook, revalidates the
+                    // identity after every callback, and only then publishes
+                    // the root slot. Calling on_focus_changed() directly
+                    // skipped the drain and the ordering.
+                    try { transfer_input_focus(*root, view); }
+                    catch (...) {
+                        // Focus restoration is best effort, but a widget
+                        // callback must not prevent independent overlay/popup
+                        // restoration below.
+                    }
+                }
+            }
+        }
+        if (had_overlay) {
+            if (auto* view = overlay.live_in(*root)) {
+                auto* state = root->existing_interaction();
+                if (state && (!state->active_overlay ||
+                              state->active_overlay == view)) {
+                    // No lease here, deliberately: claim_overlay() is
+                    // non-virtual and its whole body assigns two slots. It
+                    // cannot reach author code, so there is nothing for a gate
+                    // to defend against. The popup branch below is the one that
+                    // needs one.
+                    try { view->claim_overlay(); }
+                    catch (...) {}
+                }
+            }
+        }
+        if (had_popup) {
+            if (auto* view = dynamic_cast<ComboBox*>(popup.live_in(*root));
+                view && !view->is_open()) {
+                auto* active = ComboBox::active_popup_in(*root);
+                if (!active || active == view) {
+                    // restore_open_state() reaches ComboBox::open_dropdown(),
+                    // which runs transfer_input_focus() — arbitrary blur/gain
+                    // callbacks — and then keeps writing open_/hover_index_/
+                    // dropdown_scroll_ on itself afterwards. The leases inside
+                    // transfer_input_focus close before that tail runs, so the
+                    // gate has to be held from out here.
+                    DispatchLease lease(*view);
+                    try { view->restore_open_state(); }
+                    catch (...) {}
+                }
+            }
+        }
+    }
+};
+
+} // namespace
+
+void BridgeRegistrars::register_dom_api(WidgetBridge& self) {
+    BridgeApiContext api{self.engine_};
+
+    // __domAppend(parentId, childId, tag) - native appendChild.
+    // Creates a native widget under parentId, purely in C++ - no re-entrant
+    // JS evaluation which causes stack overflow in QuickJS.
+    register_bridge_function(api, "__domAppend", [&self](choc::javascript::ArgumentList args) {
+        auto parentId = args.get<std::string>(0, "");
+        auto childId = args.get<std::string>(1, "");
+        auto tag = args.get<std::string>(2, "div");
+        auto hint = args.get<std::string>(3, "");
+        auto* existing = self.widget(childId);
+        // Move an already-upgraded retained wrapper as one transaction. The
+        // wrapper is the actual native owner; moving only its authored child
+        // strands the scroll container and invalidates the alias map. Keep the
+        // unique_ptr recoverable if destination attachment rejects the move.
+        const auto move_wrapper = [&self](ScrollView* wrapper, View* destination) {
+            if (!wrapper || !destination) return false;
+            if (wrapper->parent() == destination) return true;
+            auto* old_parent = wrapper->parent();
+            if (!old_parent) return false;
+            auto moved = old_parent->remove_child(wrapper);
+            // A reentrant lifecycle/drag callback may have removed the
+            // wrapper while remove_child was running. Never treat a null
+            // ownership result as a successful native move.
+            if (!moved) return false;
+            try {
+                destination->add_child_transactional(moved);
+            } catch (...) {
+                if (moved) {
+                    try {
+                        old_parent->add_child_transactional(moved);
+                    } catch (...) {
+                        // Neither parent will take it. Drop the non-owning
+                        // bridge records naming this wrapper before releasing
+                        // it, and retire rather than free: a callback above may
+                        // still be executing on it. The original exception is
+                        // the one that propagates.
+                        self.forget_widget_subtree(moved.get());
+                        self.root_.retire(std::move(moved));
+                    }
+                }
+                throw;
+            }
+            return true;
+        };
+        if (existing) {
+            auto* destination = self.resolve_parent(parentId);
+            // Refuse self/descendant reparenting before touching ownership;
+            // otherwise a retained scroll upgrade could create a View cycle.
+            bool cyclic = destination == existing;
+            for (auto* p = destination; !cyclic && p; p = p->parent())
+                cyclic = p == existing;
+            if (cyclic) return choc::value::Value();
+            if (hint == "scroll") {
+                // React may replay the same retained append more than once.
+                // If this content already belongs to our wrapper, keep the
+                // existing identity instead of nesting a second wrapper.
+                auto* wrapper = self.scroll_wrapper(childId);
+                const bool wrapper_live = wrapper && std::any_of(
+                    self.owned_widgets_.begin(), self.owned_widgets_.end(),
+                    [wrapper](const auto& state) { return state.view == wrapper; });
+                if (wrapper_live && wrapper->child_count() == 1 &&
+                    wrapper->child_at(0) == existing) {
+                    if (wrapper->parent() != destination) {
+                        InteractionSnapshot interaction;
+                        interaction.capture(wrapper);
+                        if (!move_wrapper(wrapper, destination))
+                            throw std::runtime_error("retained scroll wrapper is detached");
+                        interaction.restore(destination);
+                    }
+                    return choc::value::Value();
+                }
+            }
+            // document.createElement('button') may eagerly materialize a
+            // ToggleButton through _ensureNative before appendChild reaches
+            // this fast path. Preserve the HTML element's implicit semantics
+            // on that already-created widget too; otherwise the early
+            // reparent return below skips the new-widget button defaults.
+            if (tag == "button") {
+                existing->set_implicit_access_role(View::AccessRole::button);
+                // _ensureNative currently represents an HTML button with a
+                // ToggleButton, whose constructor supplies the stock Pulp
+                // `toggle` role. That is an implementation default, not an
+                // authored ARIA override. Replace it with the HTML role here;
+                // __replayAriaAttributes runs immediately after append and
+                // restores any real explicit role from the DOM attributes.
+                existing->restore_implicit_access_role();
+                existing->set_default_hover_feedback(true);
+            }
+            // Once a retained authored view has been upgraded, its native
+            // parent is the wrapper. A later ordinary DOM reparent must move
+            // that wrapper as a unit; moving only the content would strand an
+            // empty wrapper and leave the alias map pointing at it.
+            if (auto* wrapper = self.scroll_wrapper(childId);
+                wrapper && std::any_of(
+                    self.owned_widgets_.begin(), self.owned_widgets_.end(),
+                    [wrapper](const auto& state) { return state.view == wrapper; }) &&
+                wrapper->child_count() == 1 && wrapper->child_at(0) == existing) {
+                if (wrapper->parent() != destination) {
+                    InteractionSnapshot interaction;
+                    interaction.capture(wrapper);
+                    if (!move_wrapper(wrapper, destination))
+                        throw std::runtime_error("retained scroll wrapper is detached");
+                    interaction.restore(destination);
+                }
+                return choc::value::Value();
+            }
+            if (auto* p = existing->parent()) {
+                // A preserved DOM reparent can carry a stronger container
+                // hint than the widget's original materialization.  In
+                // particular, Settings upgrades a retained plain div to a
+                // real ScrollView after the portal is reopened.  Do not let
+                // the existing-widget fast path silently discard that hint.
+                if (hint == "scroll"
+                    && dynamic_cast<ScrollView*>(existing) == nullptr) {
+                    // Reserve every registry that is published after the
+                    // structural upgrade. If allocation is going to fail,
+                    // fail before detaching the authored view; never strand
+                    // an attached wrapper with no bridge alias/owner record.
+                    self.owned_widgets_.reserve(self.owned_widgets_.size() + 1);
+                    self.scroll_wrappers_.reserve(self.scroll_wrappers_.size() + 1);
+                    self.widgets_.reserve(self.widgets_.size() + 1);
+                    InteractionSnapshot interaction;
+                    interaction.capture(p);
+                    auto removed = p->remove_child(existing);
+                    // remove_child returns null whenever a reentrant gesture,
+                    // popup, focus, or on_detached callback removed the view
+                    // first. Fail closed instead of dereferencing that null
+                    // below: nothing has been mutated yet, so returning leaves
+                    // the tree exactly as the callback left it. The
+                    // ordinary-reparent path below has always checked this; the
+                    // upgrade path is the one a Settings-style portal reopen
+                    // goes through.
+                    //
+                    // A no-op rather than a throw, deliberately. There is
+                    // nothing left to upgrade — the element the caller named is
+                    // gone — which is the same situation the cycle guard above
+                    // returns empty for. It also keeps a C++ exception from
+                    // unwinding back into QuickJS, which leaks JS objects; see
+                    // the note on the ordinary-reparent path below.
+                    if (!removed)
+                        return choc::value::Value();
+                    std::unique_ptr<View> scroll = std::make_unique<ScrollView>();
+                    // Keep the authored View as the ScrollView's content
+                    // child instead of replacing/destroying it. This
+                    // preserves every callback, style, focus, gesture, and
+                    // DOM identity while the wrapper supplies native scroll
+                    // layout/hit-testing. The registry points at the wrapper
+                    // for scroll APIs; event delivery still reaches the
+                    // original child with its identity-safe closures.
+                    const auto content_bounds = removed->bounds();
+                    auto* content = removed.get();
+                    scroll->set_bounds(content_bounds);
+                    removed->set_bounds({0.0f, 0.0f,
+                                         content_bounds.width,
+                                         content_bounds.height});
+                    auto* wrapper = static_cast<ScrollView*>(scroll.get());
+                    // The wrapper takes the retained view's PLACE in the
+                    // parent's layout, so it must take its layout ROLE, not
+                    // just its pixel rectangle. Copying bounds alone silently
+                    // converts a flex-sized container into a fixed-size one:
+                    // an authored `flex: 1; min-height: 0` body — the standard
+                    // scrollable-panel idiom — freezes at whatever height it
+                    // happened to have when the upgrade ran, and never grows
+                    // again. Yoga is the layout engine here, so the flex style
+                    // IS the sizing contract; leaving it behind drops the
+                    // container out of the layout it was authored into.
+                    wrapper->flex() = removed->flex();
+                    // The authored style now describes TWO boxes, so it has to
+                    // be split rather than duplicated. The wrapper is the OUTER
+                    // box: it participates in the parent's flex line and owns
+                    // the authored margins. The retained view is the INNER box:
+                    // it owns the authored padding and sizes to its own content
+                    // so there is something to scroll.
+                    auto& outer = wrapper->flex();
+                    auto& inner = content->flex();
+
+                    // Padding belongs to the inner box only. Left on both, an
+                    // authored `padding-top` is applied twice — once by the
+                    // wrapper, once by the content it now contains — and the
+                    // content starts at double the authored inset.
+                    outer.padding = 0.0f;
+                    outer.padding_top = outer.padding_right =
+                        outer.padding_bottom = outer.padding_left = -1.0f;
+                    outer.dim_padding_top = outer.dim_padding_right =
+                        outer.dim_padding_bottom = outer.dim_padding_left = Dimension{};
+
+                    // Margins belong to the outer box only, for the same reason
+                    // in the other direction.
+                    inner.margin = 0.0f;
+                    inner.margin_top = inner.margin_right =
+                        inner.margin_bottom = inner.margin_left = -1.0f;
+                    inner.dim_margin_top = inner.dim_margin_right =
+                        inner.dim_margin_bottom = inner.dim_margin_left = Dimension{};
+
+                    // The content is no longer on the parent's flex line, so
+                    // EVERY flex-line knob must be cleared — the basis included.
+                    // The scrollable-panel idiom `flex: 1` expands to
+                    // `flex-grow: 1; flex-shrink: 1; flex-basis: 0%`, so
+                    // clearing only grow and shrink leaves a basis of zero
+                    // behind: the content's main size resolves to 0 + padding,
+                    // every in-flow descendant then shrinks to nothing against
+                    // that zero-height content box, and the panel paints blank
+                    // while intrinsic_height() still reports the full content
+                    // height. Basis unset (-1) restores Yoga's `auto`, which
+                    // sizes the box from its content.
+                    inner.flex_grow = 0.0f;
+                    inner.flex_shrink = 0.0f;
+                    inner.flex_basis = -1.0f;
+                    inner.dim_flex_basis = Dimension{};
+                    // Preflight alias publication while the authored subtree
+                    // is still attached. This forces all potentially-failing
+                    // allocations before structural mutation; the catch
+                    // paths below remove the provisional records.
+                    bool alias_published = false;
+                    // Allocate the map node first. If vector growth throws,
+                    // erase this provisional node before propagating.
+                    auto [alias_it, alias_inserted] =
+                        self.scroll_wrappers_.emplace(childId, wrapper);
+                    if (!alias_inserted)
+                        throw std::runtime_error("duplicate retained scroll wrapper id");
+                    try {
+                        self.owned_widgets_.emplace_back(wrapper);
+                        alias_published = true;
+                    } catch (...) {
+                        self.scroll_wrappers_.erase(alias_it);
+                        throw;
+                    }
+                    // The authored parent id is authoritative during portal
+                    // replay. The retained native parent can be the stale
+                    // root container even while the JS parent has recovered.
+                    try {
+                        destination->add_child_transactional(scroll);
+                    } catch (...) {
+                        if (alias_published) {
+                            self.scroll_wrappers_.erase(alias_it);
+                            self.owned_widgets_.erase(
+                                std::remove_if(self.owned_widgets_.begin(),
+                                               self.owned_widgets_.end(),
+                                               [wrapper](const auto& state) {
+                                                   return state.view == wrapper;
+                                               }),
+                                self.owned_widgets_.end());
+                        }
+                        // The retained content is still owned locally here;
+                        // put it back under its original parent before
+                        // propagating the attach failure.
+                        try { p->add_child_transactional(removed); }
+                        catch (...) { /* preserve the original exception */ }
+                        throw;
+                    }
+                    // Attach the retained content only after its new wrapper
+                    // is attached. This preserves host/frame-clock ordering:
+                    // on_attached() observes the real destination, not an
+                    // unattached intermediate wrapper.
+                    try {
+                        wrapper->add_child_transactional(removed);
+                    } catch (...) {
+                        // add_child_transactional restores `removed` on a
+                        // throwing hook. Remove the empty wrapper and restore
+                        // the original parent/identity before rethrowing.
+                        auto stranded = destination->remove_child(wrapper);
+                        (void)stranded;
+                        self.scroll_wrappers_.erase(childId);
+                        self.owned_widgets_.erase(
+                            std::remove_if(self.owned_widgets_.begin(),
+                                           self.owned_widgets_.end(),
+                                           [wrapper](const auto& state) {
+                                               return state.view == wrapper;
+                                           }),
+                            self.owned_widgets_.end());
+                        try { p->add_child_transactional(removed); }
+                        catch (...) { /* preserve the original exception */ }
+                        throw;
+                    }
+                    // Publish the wrapper alias only after both structural
+                    // operations succeed. This prevents a throwing attach
+                    // hook from exposing a half-built wrapper in the bridge
+                    // registries; the authored content remains the canonical
+                    // widget identity for ordinary DOM/value APIs.
+                    self.widgets_.cache(childId, content);
+                    // remove_child() intentionally retires root interaction
+                    // slots while detached. Restore slots that belonged to
+                    // this retained subtree after its new ancestry is live.
+                    // remove_child() deliberately retires root interaction
+                    // slots while detached. Resolve the captured identities
+                    // only after the new ancestry is live; destroyed or
+                    // replaced owners are ignored safely.
+                    interaction.restore(destination);
+                    return choc::value::Value();
+                }
+                // Move the existing subtree to the new parent - don't erase widgets.
+                auto* destination = self.resolve_parent(parentId);
+                InteractionSnapshot interaction;
+                interaction.capture(p);
+                // Force the map node to exist before any structural mutation so
+                // the post-commit refresh below cannot fail on allocation. The
+                // identity recorded is the one already there; publishing the
+                // new one waits until the move has actually committed.
+                self.widgets_.reserve(self.widgets_.size() + 1);
+                auto removed = p->remove_child(existing);
+                // Every throw in this file — this one included — arrived with
+                // the retained-reparent work; `origin/main`'s dom_api.cpp
+                // contains none. What is pre-existing is the ENGINE-side
+                // hazard they run into: a C++ exception raised inside a bridge
+                // function unwinds through QuickJS's C frames, which never
+                // release the JS objects they own. JS_CallInternal's cleanup
+                // and js_call_c_function's stack-frame restore are both skipped,
+                // so a Debug build aborts at teardown with
+                // `Assertion failed: (list_empty(&rt->gc_obj_list))` and a
+                // Release build leaks silently.
+                //
+                // The chokepoint that could fix it is the engine's native
+                // callback trampoline, NOT register_bridge_function — host
+                // objects and promise functions reach the same unguarded path
+                // without going through it. That belongs in its own change.
+                //
+                // Until then, prefer failing closed by returning (as the
+                // retained-upgrade path above does) over adding throws here.
+                // This one is left as-is rather than converted: a parent that
+                // will not yield ownership is a genuine invariant violation, and
+                // silently returning would hide it from the caller entirely.
+                if (!removed)
+                    throw std::runtime_error("native reparent lost widget ownership");
+                try {
+                    destination->add_child_transactional(removed);
+                } catch (...) {
+                    // First error wins. The destination rejected the attach and
+                    // `removed` still owns the view, so put it back where it
+                    // came from — but a restore that ALSO throws must not
+                    // replace the original exception, and must not let `removed`
+                    // die on unwind while widgets_/owned_widgets_ still name it.
+                    if (removed) {
+                        try {
+                            p->add_child_transactional(removed);
+                        } catch (...) {
+                            // Both parents refused it. Nothing owns it now
+                            // except this local, and the bridge registries are
+                            // non-owning, so drop the records first and hand the
+                            // view to the root rather than freeing it here mid
+                            // unwind — a callback above may still be running on
+                            // it. Then rethrow the ORIGINAL failure.
+                            self.forget_widget_subtree(removed.get());
+                            self.root_.retire(std::move(removed));
+                        }
+                    }
+                    throw;
+                }
+                // Publish the identity only after the move commits, so a
+                // rejected attach cannot leave the registry naming a view that
+                // is about to be destroyed.
+                self.widgets_.cache(childId, existing);
+                interaction.restore(destination);
+                return choc::value::Value();
+            }
+        }
+        // Create the appropriate widget type based on HTML tag.
+        //
+        // This fast-path bypasses the JS-side `_ensureNative` for performance
+        // and QuickJS stack reasons, but it MUST mirror the
+        // tag->widget mapping in `web-compat-element.js` or web-compat
+        // semantics drift between the createElement+appendChild path and
+        // the React-style commit path that goes through here.
+        std::unique_ptr<View> child;
+        if (hint == "scroll") {
+            auto scroll = std::make_unique<ScrollView>();
+            scroll->set_id(childId);
+            child = std::move(scroll);
+        } else if (tag == "span" || tag == "p" || tag == "label" ||
+            tag == "h1" || tag == "h2" || tag == "h3" ||
+            tag == "h4" || tag == "h5" || tag == "h6") {
+            auto lbl = std::make_unique<Label>();
+            lbl->set_id(childId);
+            child = std::move(lbl);
+        } else if (tag == "canvas") {
+            auto canvas = std::make_unique<CanvasWidget>();
+            canvas->set_id(childId);
+            canvas->set_native_gpu_texture_provider([&self, childId]() {
+                return self.describe_native_canvas_frame(childId);
+            });
+            child = std::move(canvas);
+        } else if (tag == "rect") {
+            // SVG primitives other than <path>. Spectr's bottom-toolbar
+            // mini-icons (segmented mode toggles, analyzer
+            // pills) emit lowercase <rect> / <line> / <circle> inside the
+            // parent <svg>. Without this routing they fall through to the
+            // unknown-tag default and paint nothing.
+            auto r = std::make_unique<SvgRectWidget>();
+            r->set_id(childId);
+            child = std::move(r);
+        } else if (tag == "line") {
+            auto l = std::make_unique<SvgLineWidget>();
+            l->set_id(childId);
+            child = std::move(l);
+        } else if (tag == "circle") {
+            // No dedicated SvgCircleWidget; map to SvgPath and synthesize a
+            // `d` arc in JS (web-compat-element.js
+            // __replaySvgCircleAttributes__) from cx/cy/r.
+            auto svg = std::make_unique<SvgPathWidget>();
+            svg->set_id(childId);
+            child = std::move(svg);
+        } else if (tag == "path") {
+            // Mirror the JS-side _ensureNative routing: `<path>` (typically
+            // inside an `<svg>`) materializes as the
+            // SvgPathWidget so the d / stroke / stroke-width / fill /
+            // viewBox attribute replay actually paints. Without this
+            // branch the React/JSX commit path (which goes through
+            // __domAppend, bypassing _ensureNative) would silently
+            // create a plain View and the SVG glyph never renders.
+            auto svg = std::make_unique<SvgPathWidget>();
+            svg->set_id(childId);
+            child = std::move(svg);
+        } else if (tag == "input") {
+            // `<input>` needs the JS-side `_type` to pick a widget.
+            // JS callers pass it through the optional 4th `hint`
+            // arg ("range:horizontal", "range:vertical", "checkbox", "text").
+            // Without a hint, fall back to a plain View so the element
+            // still receives child/style ops.
+            if (hint == "range:horizontal" || hint == "range:vertical") {
+                auto fader = std::make_unique<Fader>();
+                fader->set_id(childId);
+                if (hint == "range:horizontal") {
+                    fader->set_orientation(Fader::Orientation::horizontal);
+                }
+                child = std::move(fader);
+            } else if (hint == "checkbox") {
+                auto cb = std::make_unique<Checkbox>();
+                cb->set_id(childId);
+                child = std::move(cb);
+            } else if (hint == "text") {
+                // Plain text `<input>` (and text-like subtypes: search / email / url
+                // / tel / password) materialize as a TextEditor so they
+                // accept keyboard input instead of becoming a non-editable View.
+                auto te = std::make_unique<TextEditor>();
+                te->set_id(childId);
+                child = std::move(te);
+            } else {
+                auto v = std::make_unique<View>();
+                v->set_id(childId);
+                child = std::move(v);
+            }
+        } else if (tag == "textarea") {
+            // Mirror `_ensureNative`: a multi-line TextEditor. Without this
+            // branch an appended <textarea> became a plain View that could
+            // neither take keyboard focus nor accept text.
+            auto te = std::make_unique<TextEditor>();
+            te->set_id(childId);
+            te->multi_line = true;
+            child = std::move(te);
+        } else if (auto widget_for_tag = self.make_widget_for_tag(tag, childId)) {
+            // Route lowercase `@pulp/react` widget intrinsics
+            // (knob/fader/toggle/combo/
+            // checkbox/spectrum/waveform/meter/xypad/listbox/virtuallist/icon, plus the
+            // select/progress/img HTML aliases) to native widgets here in the
+            // React-commit fast path. `<Knob>` etc. lower to lowercase DOM
+            // tags in the live-JSX path (`pulp import-design --from jsx --mode
+            // live --emit js`, run via `Standalone --pulp-bundle`), and child
+            // widgets are created HERE rather than through JS `_ensureNative`
+            // or the `createX` factories. Before this they fell to the
+            // plain-View default below - no drag, no callbacks. The shared
+            // `make_widget_for_tag` table wires callbacks (the load-bearing
+            // `on_change -> __dispatch__`) and keeps this surface in lockstep
+            // with `_ensureNative` and the `@pulp/react` host-config map.
+            child = std::move(widget_for_tag);
+        } else {
+            auto v = std::make_unique<View>();
+            v->set_id(childId);
+            if (tag == "div" || tag == "section" || tag == "article" || tag == "aside" ||
+                tag == "header" || tag == "footer" || tag == "nav" || tag == "main")
+                v->flex().direction = FlexDirection::column;
+            // <svg> is a layout-leaf media element. Default direction stays
+            // column so child <path>/<g> attaches; the
+            // presentational width/height attributes are replayed via
+            // setFlex() on the JS side (see web-compat-element.js
+            // setAttribute() path).
+            child = std::move(v);
+        }
+        // Native/materialized HTML buttons may never receive an explicit ARIA
+        // role: the React-DOM commit fast path appends the lowercase tag
+        // directly through __domAppend. Give that semantic element the same
+        // built-in role and hover feedback as an explicitly-role'd button.
+        // A later explicit role remains authoritative; removing it restores
+        // this implicit HTML role and its default hover feedback.
+        if (tag == "button") {
+            child->set_implicit_access_role(View::AccessRole::button);
+            child->restore_implicit_access_role();
+            child->set_default_hover_feedback(true);
+        }
+        self.widgets_[childId] = child.get();
+        self.resolve_parent(parentId)->add_child(std::move(child));
+        return choc::value::Value();
+    });
+
+    // __domRemove(childId) - native removeChild implementation.
+    register_bridge_function(api, "__domRemove", [&self](choc::javascript::ArgumentList args) {
+        auto childId = args.get<std::string>(0, "");
+        const bool preserve_js_dom_state = args.get<int>(1, 0) != 0;
+        auto* w = self.widget(childId);
+        if (w) {
+            if (auto* p = w->parent()) {
+                auto removed = p->remove_child(w);
+                self.forget_widget_subtree(removed.get(), preserve_js_dom_state);
+                self.retire_removed_widget(std::move(removed));
+            }
+        }
+        return choc::value::Value();
+    });
+}
+
+} // namespace pulp::view
