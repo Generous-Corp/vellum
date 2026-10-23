@@ -566,7 +566,7 @@ def validate_receipt_shape(receipt: Any, label: str) -> list[str]:
             if not isinstance(unit["name"], str) or not unit["name"] or unit["name"] in names:
                 errors.append(f"{where} name is empty or duplicated")
             names.add(str(unit["name"]))
-            if unit["oracle_class"] not in {"identity", "divergent"}:
+            if not isinstance(unit["oracle_class"], str) or unit["oracle_class"] not in {"identity", "divergent"}:
                 errors.append(f"{where} oracle_class must be identity or divergent")
             manifest = unit["closure_manifest"]
             if (
@@ -591,7 +591,7 @@ def validate_receipt_shape(receipt: Any, label: str) -> list[str]:
                 errors.append(f"{where} pulp_path is not repository-relative")
             if row["mirror_path"] != f"mirror/{row['pulp_path']}":
                 errors.append(f"{where} mirror_path must be mirror/<pulp_path>")
-            if row["mode"] not in FILE_MODES:
+            if not isinstance(row["mode"], str) or row["mode"] not in FILE_MODES:
                 errors.append(f"{where} mode is not a file mode")
             if not SHA40.fullmatch(str(row["blob"])):
                 errors.append(f"{where} blob is not a full object ID")

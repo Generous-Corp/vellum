@@ -605,6 +605,43 @@ class VerifyMirrorExportTests(unittest.TestCase):
         ):
             self.assertTrue(verify_mirror_export.host_path_violations(value, "fixture"), value)
 
+    def test_malformed_receipts_yield_findings_not_tracebacks(self) -> None:
+        receipts = verify_mirror_export.landed_receipts(REPO)
+        if not receipts:
+            self.skipTest("no landed receipt to malform")
+        receipt_path = receipts[-1]
+        good = json.loads((REPO / receipt_path).read_text(encoding="utf-8"))
+        policy, _ = verify_mirror_export.load_policy(REPO)
+        origins = json.loads((REPO / verify_mirror_export.ORIGINS_PATH).read_text(encoding="utf-8"))["records"]
+        head = verify_mirror_export.git(REPO, "rev-parse", "HEAD")
+        wrong_types = (None, 7, "x", [], {}, [None], [7], [{}])
+
+        def malformed():
+            for key in sorted(good):
+                for value in wrong_types:
+                    yield f"{key}={value!r}", {**good, key: value}
+            for key in ("units", "files", "generated_inputs"):
+                for index in range(min(1, len(good[key]))):
+                    for field in sorted(good[key][index]):
+                        for value in wrong_types:
+                            rows = json.loads(json.dumps(good[key]))
+                            rows[index][field] = value
+                            yield f"{key}[{index}].{field}={value!r}", {**good, key: rows}
+
+        for name, receipt in malformed():
+            # A different string can be a legal value (a unit is free to be
+            # renamed); every other wrong type must be named as an error.
+            must_fail = not name.endswith("='x'")
+            with self.subTest(malformed=name):
+                try:
+                    errors = verify_mirror_export.verify_receipt(
+                        REPO, receipt_path, receipt, policy, origins, newest=True, head=head)
+                except Exception as exc:  # noqa: BLE001 - any traceback is the finding
+                    self.fail(f"{type(exc).__name__}: {exc}")
+                self.assertTrue(all(isinstance(e, str) for e in errors), errors)
+                if must_fail:
+                    self.assertTrue(errors, "accepted")
+
     def test_host_paths_are_refused_whatever_their_root(self) -> None:
         # The check is an allowlist: a path-bearing token must be cache- or
         # repository-relative, so a host root it has never heard of is refused.
