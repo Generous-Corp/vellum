@@ -74,8 +74,10 @@ afterwards invalidates the signature.
   object built against the attested SDK.
 - `--provenance-bundle <file>` runs `gh attestation verify --bundle
   --deny-self-hosted-runners` for the archive, manifest and receipt, accepting
-  only `danielraffel/skia-builder` on `refs/heads/main`: `build-skia.yml` for
-  records a build wrote, and `rebind-provenance.yml` for records rebound from a
+  only `danielraffel/skia-builder` workflows pinned at `refs/heads/main`:
+  `build-skia.yml` at the lock's builder commit (`--source-digest`) for records
+  a build wrote, and `rebind-provenance.yml` at the commit the signed record
+  names as `build_provenance.source_digest` for records rebound from a
   member-identical rebuild.
 - With `--archive`, the manifest's static-archive inventory is re-derived from
   the archive bytes: every member of every slice must be listed with its
@@ -91,8 +93,14 @@ afterwards invalidates the signature.
   Because the rebound records rest on the rebuild's own claims, the rebuild
   archive, manifest and receipt must each verify against the rebuild run's
   build-provenance bundle (named in the signed record's
-  `legal_inventory.derived_from.rebuild_bundle`) for `build-skia.yml` on
-  `refs/heads/main`, with `--deny-self-hosted-runners`. `--rebuild-archive`,
+  `legal_inventory.derived_from.rebuild_bundle`) for
+  `build-skia.yml@refs/heads/main`, with `--source-digest` set to the signed
+  record's `rebuild_run.head_sha` and `--deny-self-hosted-runners`. All three
+  certificates must name the run invocation of the signed record's
+  `rebuild_run` (repository, run, attempt); `rebuild_run` and `rebuild_bundle`
+  must equal the manifest's derivation; and the rebuild manifest and receipt
+  must describe the rebuild archive, with the manifest listing each of its
+  zip members (once) with its digest. `--rebuild-archive`,
   `--rebuild-receipt`, `--rebuild-manifest` and `--rebuild-provenance-bundle`
   are all required whenever the manifest is derived.
 - A record may not contain keys starting with `_`; the verifier reserves them

@@ -50,11 +50,18 @@ def bsd_ar(members: list[tuple[str, bytes]], date: int = 0) -> bytes:
     return bytes(out)
 
 
-def fake_gh(returncode: int = 0, calls: list | None = None):
+RUN_URI = "https://github.com/danielraffel/skia-builder/actions/runs/1/attempts/1"
+
+
+def fake_gh(returncode: int = 0, calls: list | None = None, invocations=None):
+    """A stand-in for gh attestation verify; ``invocations`` maps a subject's
+    file name to the run invocation its certificate names (default RUN_URI)."""
     def runner(args):
         if calls is not None:
             calls.append(args)
-        return subprocess.CompletedProcess(args, returncode, "[]", "" if returncode == 0 else "no match")
+        uri = (invocations or {}).get(Path(args[3]).name, RUN_URI)
+        out = json.dumps([{"verificationResult": {"signature": {"certificate": {"runInvocationURI": uri}}}}])
+        return subprocess.CompletedProcess(args, returncode, out, "" if returncode == 0 else "no match")
     return runner
 
 
@@ -252,7 +259,7 @@ class RendererEligibilityTests(unittest.TestCase):
             for flag, value in (("--bundle", str(self.bundle_path)),
                                 ("--repo", "danielraffel/skia-builder"),
                                 ("--signer-workflow",
-                                 "danielraffel/skia-builder/.github/workflows/build-skia.yml"),
+                                 "danielraffel/skia-builder/.github/workflows/build-skia.yml@refs/heads/main"),
                                 ("--source-ref", "refs/heads/main")):
                 self.assertEqual(args[args.index(flag) + 1], value)
             self.assertIn("--deny-self-hosted-runners", args)
@@ -261,7 +268,8 @@ class RendererEligibilityTests(unittest.TestCase):
         # The verifier's own results live under "_" keys and are not signed, so
         # a record must not carry any, at the top level or nested.
         for edit in (lambda r: r.update(_verified_signature={"principal": PRINCIPAL}),
-                     lambda r: r["build_identity"].update(_note="unsigned")):
+                     lambda r: r["build_identity"].update(_note="unsigned"),
+                     lambda r: r["legal_inventory"].update(gaps=[{"_x": "inside a list"}])):
             lock_path, record_path, signature = self.eligible()
             self.edit_record(record_path, edit)
             with self.assertRaisesRegex(VerificationError, "uses reserved keys"):
@@ -480,6 +488,33 @@ class RendererEligibilityTests(unittest.TestCase):
         self.assertEqual(renderer["_attestation"]["build_provenance"]["signer_workflow"],
                          verifier.REBIND_SIGNER_WORKFLOW)
 
+    def test_build_provenance_is_pinned_to_the_lock_builder_commit(self) -> None:
+        lock_path, record_path, signature = self.eligible()
+        _, renderer = self.load(lock_path, record_path, signature)
+        calls: list = []
+        verifier.verify_build_provenance(renderer["_attestation"], {"legal manifest": self.manifest_path},
+                                         self.bundle_path, runner=fake_gh(0, calls))
+        builder = renderer["_attestation"]["source_identities"]["builder"]["commit"]
+        self.assertEqual(calls[0][calls[0].index("--source-digest") + 1], builder)
+
+    def test_rebound_build_provenance_needs_the_rebind_commit(self) -> None:
+        def derive(lock, record, digest):
+            record["legal_inventory"]["derived_from"] = {"rebuild_archive": {"sha256": "8" * 64}}
+            record["build_provenance"]["signer_workflow"] = verifier.REBIND_SIGNER_WORKFLOW
+            if digest:
+                record["build_provenance"]["source_digest"] = digest
+        lock_path, record_path, signature = self.eligible(mutate=lambda lock, record: derive(lock, record, None))
+        _, renderer = self.load(lock_path, record_path, signature)
+        with self.assertRaisesRegex(VerificationError, "must name the rebind commit"):
+            verifier.verify_build_provenance(renderer["_attestation"], {}, self.bundle_path, runner=fake_gh(0))
+        lock_path, record_path, signature = self.eligible(
+            mutate=lambda lock, record: derive(lock, record, "a" * 40))
+        _, renderer = self.load(lock_path, record_path, signature)
+        calls: list = []
+        verifier.verify_build_provenance(renderer["_attestation"], {"x": self.manifest_path}, self.bundle_path,
+                                         runner=fake_gh(0, calls))
+        self.assertEqual(calls[0][calls[0].index("--source-digest") + 1], "a" * 40)
+
     def test_attestation_that_does_not_cover_a_subject_fails(self) -> None:
         lock_path, record_path, signature = self.eligible()
         _, renderer = self.load(lock_path, record_path, signature)
@@ -540,6 +575,15 @@ class RendererEligibilityTests(unittest.TestCase):
         _, renderer = self.load(lock_path, record_path, signature)
         with self.assertRaisesRegex(VerificationError, "does not cover every member"):
             verifier.verify_legal_manifest_file(renderer["_attestation"], self.manifest_path, self.archive)
+
+    def test_manifest_with_duplicate_zip_member_names_fails(self) -> None:
+        manifest = self.legal_manifest()
+        manifest["zip_members"].append(dict(manifest["zip_members"][0]))
+        self.write_manifest(manifest)
+        lock_path, record_path, signature = self.eligible()
+        _, renderer = self.load(lock_path, record_path, signature)
+        with self.assertRaisesRegex(VerificationError, "lists a zip member more than once"):
+            verifier.verify_legal_manifest_file(renderer["_attestation"], self.manifest_path)
 
     def test_manifest_symbol_table_differing_from_the_archive_fails(self) -> None:
         manifest = self.legal_manifest()
@@ -660,29 +704,55 @@ class RebindVerificationTests(unittest.TestCase):
                          "origin": "source:include/core.h", "licenses": ["source:LICENSE"]}],
     }
 
-    def records(self, rebuild: Path, receipt_fields=None, receipt_derived=None, rebound_changes=None):
+    ARTIFACT = "skia-build-mac-universal-gpu-release.zip"
+    HEAD = "c" * 40
+
+    def rebuild_manifest_for(self, rebuild: Path) -> dict:
+        """The rebuild's own manifest: bound to the rebuild archive, listing its members."""
+        manifest = json.loads(json.dumps(self.REBUILD_MANIFEST))
+        manifest["archive"] = {"name": self.ARTIFACT, "sha256": sha256(rebuild.read_bytes())}
+        with zipfile.ZipFile(rebuild) as handle:
+            manifest["zip_members"] = [
+                {"name": info.filename, "sha256": sha256(handle.read(info)),
+                 "kind": "static-archive" if info.filename.endswith(".a") else "packaged-file",
+                 "origin": None if info.filename.endswith(".a") else f"source:{info.filename}",
+                 "licenses": ["source:LICENSE"]}
+                for info in handle.infolist()]
+        return manifest
+
+    def records(self, rebuild: Path, receipt_fields=None, receipt_derived=None, rebound_changes=None,
+                rebuild_manifest_edit=None, rebuild_receipt_archive=None):
         """Rebuild records, rebound records, the rebuild bundle and the signed record."""
         rebuild_receipt = {"compiler": {"cxx": {"version": "Apple clang version 17.0.0"}},
-                           "sdk": {"version": "15.5"}, "runner": {"image_version": "20260907.0337.1"}}
+                           "sdk": {"version": "15.5"}, "runner": {"image_version": "20260907.0337.1"},
+                           "archive": rebuild_receipt_archive or {"name": self.ARTIFACT,
+                                                                  "sha256": sha256(rebuild.read_bytes())}}
         rebuild_receipt_path = self.tmp / "rebuild-receipt.json"
         rebuild_receipt_path.write_text(json.dumps(rebuild_receipt))
-        rebuild_manifest_path = self.tmp / "rebuild-manifest.json"
-        rebuild_manifest_path.write_text(json.dumps(self.REBUILD_MANIFEST))
         self.bundle = self.tmp / "rebuild.sigstore.json"
         self.bundle.write_text('{"mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json"}')
+        rebuild_manifest = self.rebuild_manifest_for(rebuild)
+        if rebuild_manifest_edit:
+            rebuild_manifest_edit(rebuild_manifest)
+        rebuild_manifest_path = self.tmp / "rebuild-manifest.json"
+        rebuild_manifest_path.write_text(json.dumps(rebuild_manifest))
         derived = {"method": verifier.REBIND_METHOD,
+                   "comparison": {"name": "c.json", "sha256": "d" * 64, "verdict": "metadata-only"},
                    "rebuild_archive": {"name": rebuild.name, "sha256": sha256(rebuild.read_bytes())},
                    "rebuild_receipt": {"name": "r.json", "sha256": sha256(rebuild_receipt_path.read_bytes())},
                    "rebuild_manifest": {"name": "m.json",
-                                        "sha256": sha256(rebuild_manifest_path.read_bytes())}}
-        rebound = json.loads(json.dumps(self.REBUILD_MANIFEST))
+                                        "sha256": sha256(rebuild_manifest_path.read_bytes())},
+                   "rebuild_bundle": {"name": self.bundle.name, "sha256": sha256(self.bundle.read_bytes())},
+                   "rebuild_run": {"repository": "danielraffel/skia-builder", "run_id": 1,
+                                   "run_attempt": 1, "ref": "refs/heads/main", "head_sha": self.HEAD}}
+        rebound = json.loads(json.dumps(rebuild_manifest))
         rebound.update(rebound_changes or {}, derived_from=derived)
         manifest_path, receipt_path = self.tmp / "manifest.json", self.tmp / "receipt.json"
         manifest_path.write_text(json.dumps(rebound))
         receipt = dict(rebuild_receipt, derived_from=receipt_derived or derived, **(receipt_fields or {}))
         receipt_path.write_text(json.dumps(receipt))
-        self.attestation = {"legal_inventory": {"derived_from": dict(
-            derived, rebuild_bundle={"name": self.bundle.name, "sha256": sha256(self.bundle.read_bytes())})}}
+        self.attestation = {"artifact": {"name": self.ARTIFACT},
+                            "legal_inventory": {"derived_from": json.loads(json.dumps(derived))}}
         return manifest_path, receipt_path, rebuild_receipt_path, rebuild_manifest_path
 
     def verify(self, rebuild: Path, gh=None, **kwargs):
@@ -696,10 +766,11 @@ class RebindVerificationTests(unittest.TestCase):
         self.assertEqual(result["rebind_archives_with_container_differences"], 1)
         self.assertEqual(result["rebuild_provenance_verified"],
                          ["archive", "legal manifest", "toolchain receipt"])
+        self.assertEqual(len(calls), 3)
         for args in calls:
             for flag, value in (("--bundle", str(self.bundle)), ("--repo", "danielraffel/skia-builder"),
                                 ("--signer-workflow",
-                                 "danielraffel/skia-builder/.github/workflows/build-skia.yml"),
+                                 "danielraffel/skia-builder/.github/workflows/build-skia.yml@refs/heads/main"),
                                 ("--source-ref", "refs/heads/main")):
                 self.assertEqual(args[args.index(flag) + 1], value)
             self.assertIn("--deny-self-hosted-runners", args)
@@ -719,7 +790,7 @@ class RebindVerificationTests(unittest.TestCase):
             verifier.verify_rebind(self.attestation, manifest_path, receipt_path, self.locked, rebuild,
                                    rebuild_receipt, rebuild_manifest, self.bundle, fake_gh(0))
         del self.attestation["legal_inventory"]["derived_from"]["rebuild_bundle"]
-        with self.assertRaisesRegex(VerificationError, "names no rebuild provenance bundle"):
+        with self.assertRaisesRegex(VerificationError, "attested derivation's rebuild_bundle differs"):
             verifier.verify_rebind(self.attestation, manifest_path, receipt_path, self.locked, rebuild,
                                    rebuild_receipt, rebuild_manifest, self.bundle, fake_gh(0))
 
@@ -731,6 +802,92 @@ class RebindVerificationTests(unittest.TestCase):
                                     "origin": "source:include/core.h", "licenses": []}]}
         with self.assertRaisesRegex(VerificationError, "license mapping differs.*zip_members"):
             self.verify(self.archive("rebuild2", date=2), rebound_changes=changed)
+
+    def test_rebuild_manifest_must_describe_the_rebuild_archive(self) -> None:
+        for edit in (lambda m: m.pop("archive"),
+                     lambda m: m.update(archive={"name": self.ARTIFACT, "sha256": "e" * 64}),
+                     lambda m: m.update(archive=dict(m["archive"], name="other.zip"))):
+            with self.assertRaisesRegex(VerificationError, "rebuild manifest does not describe the rebuild archive"):
+                self.verify(self.archive(f"rebuild-{id(edit)}", date=2), rebuild_manifest_edit=edit)
+
+    def test_rebuild_receipt_must_describe_the_rebuild_archive(self) -> None:
+        with self.assertRaisesRegex(VerificationError, "rebuild receipt does not describe the rebuild archive"):
+            self.verify(self.archive("rebuild", date=2),
+                        rebuild_receipt_archive={"name": self.ARTIFACT, "sha256": "e" * 64})
+
+    def test_rebuild_manifest_zip_members_must_match_the_rebuild_archive(self) -> None:
+        def flip(manifest):
+            manifest["zip_members"][0]["sha256"] = "f" * 64
+        with self.assertRaisesRegex(VerificationError, "zip members differ from the rebuild archive"):
+            self.verify(self.archive("rebuild", date=2), rebuild_manifest_edit=flip)
+
+    def test_duplicate_zip_member_rows_are_refused(self) -> None:
+        def duplicate(manifest):
+            manifest["zip_members"].append(dict(manifest["zip_members"][0]))
+        with self.assertRaisesRegex(VerificationError, "lists a zip member more than once"):
+            self.verify(self.archive("rebuild", date=2), rebuild_manifest_edit=duplicate)
+        # The rebound mapping is compared as a multiset: a duplicated row can't
+        # stand in for a different one.
+        row_a = {"name": "a", "kind": "packaged-file", "origin": "x", "licenses": ["L"]}
+        row_b = {"name": "b", "kind": "packaged-file", "origin": "y", "licenses": ["M"]}
+        rebound, rebuild = [row_a, row_a, row_b], [row_a, row_b, row_b]
+        self.assertIn("zip_members", verifier.manifest_inventory_problems(
+            {"zip_members": rebound}, {"zip_members": rebuild}))
+
+    def test_rebuild_records_attested_by_different_runs_are_refused(self) -> None:
+        other = "https://github.com/danielraffel/skia-builder/actions/runs/2/attempts/1"
+        with self.assertRaisesRegex(VerificationError, "attested by different runs"):
+            self.verify(self.archive("rebuild", date=2),
+                        gh=fake_gh(0, invocations={"rebuild-receipt.json": other}))
+
+    def test_rebuild_commit_is_required_and_bound(self) -> None:
+        calls: list = []
+        self.verify(self.archive("rebuild", date=2), gh=fake_gh(0, calls))
+        for args in calls:
+            self.assertEqual(args[args.index("--source-digest") + 1], self.HEAD)
+        rebuild = self.archive("rebuild-nohead", date=2)
+        manifest_path, receipt_path, rebuild_receipt, rebuild_manifest = self.records(rebuild)
+        del self.attestation["legal_inventory"]["derived_from"]["rebuild_run"]["head_sha"]
+        with self.assertRaisesRegex(VerificationError, "rebuild commit differs"):
+            verifier.verify_rebind(self.attestation, manifest_path, receipt_path, self.locked, rebuild,
+                                   rebuild_receipt, rebuild_manifest, self.bundle, fake_gh(0))
+        with self.assertRaisesRegex(VerificationError, "names no rebuild commit"):
+            verifier.verify_rebuild_provenance({"rebuild_bundle": {"sha256": "0" * 64}}, {}, self.bundle,
+                                               fake_gh(0))
+
+    def test_rebuild_attested_by_a_run_other_than_the_signed_records_is_refused(self) -> None:
+        # All three subjects agree with each other but name run 1 attempt 2,
+        # while the signed record names attempt 1.
+        other = "https://github.com/danielraffel/skia-builder/actions/runs/1/attempts/2"
+        everything = {name: other for name in ("skia-build-mac-universal-gpu-release.zip",
+                                               "rebuild-manifest.json", "rebuild-receipt.json")}
+        with self.assertRaisesRegex(VerificationError, "not the signed record's"):
+            self.verify(self.archive("rebuild", date=2), gh=fake_gh(0, invocations=everything))
+
+    def test_rebuild_run_fields_are_cross_checked(self) -> None:
+        for field, value in (("repository", "someone/fork"), ("run_id", 2), ("run_attempt", 2),
+                             ("ref", "refs/heads/probe")):
+            rebuild = self.archive(f"rebuild-{field}", date=2)
+            manifest_path, receipt_path, rebuild_receipt, rebuild_manifest = self.records(rebuild)
+            self.attestation["legal_inventory"]["derived_from"]["rebuild_run"][field] = value
+            with self.assertRaisesRegex(VerificationError, f"rebuild_run.{field} differs"):
+                verifier.verify_rebind(self.attestation, manifest_path, receipt_path, self.locked, rebuild,
+                                       rebuild_receipt, rebuild_manifest, self.bundle, fake_gh(0))
+
+    def test_rebuild_run_must_be_a_main_build_skia_run(self) -> None:
+        derived = {"rebuild_bundle": {"sha256": "0" * 64},
+                   "rebuild_run": {"repository": "danielraffel/skia-builder", "run_id": 1, "run_attempt": 1,
+                                   "ref": "refs/heads/probe", "head_sha": "c" * 40}}
+        with self.assertRaisesRegex(VerificationError, "not a build-skia.yml run on main"):
+            verifier.verify_rebuild_provenance(derived, {}, self.tmp / "unused.sigstore.json", fake_gh(0))
+
+    def test_attested_rebuild_bundle_must_match_the_manifests(self) -> None:
+        rebuild = self.archive("rebuild", date=2)
+        manifest_path, receipt_path, rebuild_receipt, rebuild_manifest = self.records(rebuild)
+        self.attestation["legal_inventory"]["derived_from"]["rebuild_bundle"]["sha256"] = "9" * 64
+        with self.assertRaisesRegex(VerificationError, "attested derivation's rebuild_bundle differs"):
+            verifier.verify_rebind(self.attestation, manifest_path, receipt_path, self.locked, rebuild,
+                                   rebuild_receipt, rebuild_manifest, self.bundle, fake_gh(0))
 
     def test_unsigned_derivation_is_refused(self) -> None:
         rebuild = self.archive("rebuild", date=2)
@@ -849,6 +1006,7 @@ class RealSigstoreBundleTests(unittest.TestCase):
     """
 
     BRANCH_REF = "refs/heads/provenance/apple-legal-manifest-20261022"
+    COMMIT = "0091d97f17ae716f2fd5968e37a903224cd32b49"  # the run's head commit
 
     def record(self, source_ref: str) -> dict:
         bundle = TESTDATA / "skia-builder-probe-provenance.sigstore.json"
@@ -856,7 +1014,9 @@ class RealSigstoreBundleTests(unittest.TestCase):
         artifact = {"repository": "https://github.com/danielraffel/skia-builder",
                     "release_tag": "chrome/m157", "name": "skia-build-mac-universal-gpu-release.zip"}
         name = f"skia-build-mac-universal-gpu-release.provenance-attestation.sha256-{digest}.sigstore.json"
-        return {"artifact": artifact, "build_provenance": {
+        return {"artifact": artifact,
+                "source_identities": {"builder": {"commit": self.COMMIT}},
+                "build_provenance": {
             "repository": verifier.BUILDER_REPOSITORY, "signer_workflow": verifier.BUILDER_SIGNER_WORKFLOW,
             "source_ref": source_ref,
             "bundle": {"name": name, "sha256": digest, "url": verifier.release_asset_url(artifact, name)}}}
@@ -885,13 +1045,15 @@ class RealSigstoreBundleTests(unittest.TestCase):
             with self.assertRaisesRegex(VerificationError, "does not cover.*verifying with issuer"):
                 self.verify(self.record(self.BRANCH_REF), other)
 
-    def rebuild_derivation(self) -> dict:
+    def rebuild_derivation(self, ref: str = "refs/heads/main") -> dict:
         bundle = TESTDATA / "skia-builder-probe-provenance.sigstore.json"
-        return {"rebuild_bundle": {"name": bundle.name, "sha256": sha256(bundle.read_bytes())}}
+        return {"rebuild_bundle": {"name": bundle.name, "sha256": sha256(bundle.read_bytes())},
+                "rebuild_run": {"repository": "danielraffel/skia-builder", "run_id": 39920192131,
+                                "run_attempt": 1, "ref": ref, "head_sha": self.COMMIT}}
 
-    def verify_rebuild(self):
+    def verify_rebuild(self, ref: str = "refs/heads/main"):
         return verifier.verify_rebuild_provenance(
-            self.rebuild_derivation(),
+            self.rebuild_derivation(ref),
             {"toolchain receipt": TESTDATA / "skia-builder-probe-apple-toolchain.json"},
             TESTDATA / "skia-builder-probe-provenance.sigstore.json",
             runner=lambda args: subprocess.run([shutil.which("gh"), *args[1:]], capture_output=True, text=True))
@@ -900,20 +1062,48 @@ class RealSigstoreBundleTests(unittest.TestCase):
         # The fixture rebuild ran on a branch; rebound records may only rest on
         # a rebuild attested by build-skia.yml on refs/heads/main.
         with self.assertRaisesRegex(VerificationError,
-                                    "not attested by build-skia.yml on main.*refs/heads/main"):
+                                    "not attested by build-skia.yml on main: Error: verifying"):
             self.verify_rebuild()
+
+    def test_rebuild_from_another_commit_is_refused(self) -> None:
+        # --source-digest binds the attestation to the rebuild commit the
+        # signed record names.
+        derivation = self.rebuild_derivation(self.BRANCH_REF)
+        derivation["rebuild_run"]["head_sha"] = "1" * 40
+        with unittest.mock.patch.object(verifier, "BUILDER_SOURCE_REF", self.BRANCH_REF):
+            with self.assertRaisesRegex(VerificationError, "not attested by build-skia.yml on main"):
+                verifier.verify_rebuild_provenance(
+                    derivation, {"toolchain receipt": TESTDATA / "skia-builder-probe-apple-toolchain.json"},
+                    TESTDATA / "skia-builder-probe-provenance.sigstore.json",
+                    runner=lambda args: subprocess.run([shutil.which("gh"), *args[1:]],
+                                                       capture_output=True, text=True))
 
     def test_rebuild_check_accepts_the_bundle_on_its_own_ref(self) -> None:
         # Control: the same bundle and subject verify when the pinned ref is the
         # one the fixture ran on, so the refusal above is the ref, not the bundle.
         with unittest.mock.patch.object(verifier, "BUILDER_SOURCE_REF", self.BRANCH_REF):
-            self.assertEqual(self.verify_rebuild(), ["toolchain receipt"])
+            self.assertEqual(self.verify_rebuild(self.BRANCH_REF), ["toolchain receipt"])
+
+    def test_rebuild_check_binds_the_real_run_invocation(self) -> None:
+        # The real certificate names run 39920192131 attempt 1; a record that
+        # names attempt 2 of the same run is refused.
+        derivation = self.rebuild_derivation(self.BRANCH_REF)
+        derivation["rebuild_run"]["run_attempt"] = 2
+        with unittest.mock.patch.object(verifier, "BUILDER_SOURCE_REF", self.BRANCH_REF):
+            with self.assertRaisesRegex(VerificationError, "not the signed record's"):
+                verifier.verify_rebuild_provenance(
+                    derivation, {"toolchain receipt": TESTDATA / "skia-builder-probe-apple-toolchain.json"},
+                    TESTDATA / "skia-builder-probe-provenance.sigstore.json",
+                    runner=lambda args: subprocess.run([shutil.which("gh"), *args[1:]],
+                                                       capture_output=True, text=True))
 
     def test_real_bundle_from_a_branch_is_not_main(self) -> None:
         # Production pins refs/heads/main; the branch-built bundle must not pass it.
         record = self.record(self.BRANCH_REF)
         record["build_provenance"]["source_ref"] = verifier.BUILDER_SOURCE_REF
-        with self.assertRaisesRegex(VerificationError, "expected SourceRepositoryRef to be refs/heads/main"):
+        # The signer workflow is pinned as build-skia.yml@refs/heads/main and the
+        # source ref as refs/heads/main; either refuses a branch-built bundle.
+        with self.assertRaisesRegex(VerificationError, "does not cover the toolchain receipt: Error: verifying"):
             self.verify(record, TESTDATA / "skia-builder-probe-apple-toolchain.json")
 
 

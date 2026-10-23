@@ -215,6 +215,14 @@ MANIFEST_INVENTORY_FIELDS = ("schema", "license_resolution", "cell", "source_rev
                              "exhaustive")
 
 
+def zip_member_rows(manifest: dict, label: str) -> dict[str, str]:
+    """zip member name -> sha256, refusing a manifest that lists a name twice."""
+    rows = manifest.get("zip_members") or []
+    names = [row.get("name") for row in rows]
+    require(len(names) == len(set(names)), f"the {label} lists a zip member more than once")
+    return {row.get("name"): row.get("sha256") for row in rows}
+
+
 def manifest_inventory_problems(rebound: dict, rebuild: dict) -> list[str]:
     """Where a rebound manifest's license mapping differs from the rebuild manifest's."""
     problems = [field for field in MANIFEST_INVENTORY_FIELDS if rebound.get(field) != rebuild.get(field)]
@@ -231,11 +239,11 @@ def manifest_inventory_problems(rebound: dict, rebuild: dict) -> list[str]:
                 problems.append(f"static_archives[{name}][{arch}].members")
     if set(rebound.get("static_archives") or {}) != set(rebuild.get("static_archives") or {}):
         problems.append("static_archives")
-    rebound_rows = {r.get("name"): (r.get("kind"), r.get("origin"), r.get("licenses"))
-                    for r in rebound.get("zip_members", [])}
-    rebuild_rows = {r.get("name"): (r.get("kind"), r.get("origin"), r.get("licenses"))
-                    for r in rebuild.get("zip_members", [])}
-    if rebound_rows != rebuild_rows:
+    # Compared as sorted lists, so a duplicated row cannot hide another.
+    def mapping(rows):
+        return sorted(json.dumps([r.get("name"), r.get("kind"), r.get("origin"), r.get("licenses")],
+                                 sort_keys=True) for r in rows or [])
+    if mapping(rebound.get("zip_members")) != mapping(rebuild.get("zip_members")):
         problems.append("zip_members")
     return problems
 
@@ -254,6 +262,15 @@ def verify_rebuild_provenance(
     runner. The bundle is the one the signed record names.
     """
     runner = runner or run_gh
+    run = attested_derived.get("rebuild_run") or {}
+    head_sha = run.get("head_sha")
+    require(isinstance(head_sha, str) and HEX_40.fullmatch(head_sha) is not None,
+            "the attested derivation names no rebuild commit (rebuild_run.head_sha)")
+    require(run.get("repository") == BUILDER_REPOSITORY and run.get("ref") == BUILDER_SOURCE_REF
+            and isinstance(run.get("run_id"), int) and isinstance(run.get("run_attempt"), int),
+            "the attested derivation's rebuild_run is not a build-skia.yml run on main")
+    expected_invocation = (f"https://github.com/{BUILDER_REPOSITORY}/actions/runs/"
+                           f"{run['run_id']}/attempts/{run['run_attempt']}")
     record = attested_derived.get("rebuild_bundle")
     require(isinstance(record, dict) and isinstance(record.get("sha256"), str)
             and HEX_64.fullmatch(record["sha256"]) is not None,
@@ -262,16 +279,34 @@ def verify_rebuild_provenance(
             "the rebuild provenance bundle is not the one the signed record names")
     require(shutil.which("gh") is not None or runner is not run_gh,
             "gh is required to verify the rebuild's build provenance")
-    verified = []
+    verified, invocations = [], set()
     for label, path in sorted(subjects.items()):
         result = runner(["gh", "attestation", "verify", str(path), "--bundle", str(bundle),
-                         "--repo", BUILDER_REPOSITORY, "--signer-workflow", BUILDER_SIGNER_WORKFLOW,
-                         "--source-ref", BUILDER_SOURCE_REF, "--deny-self-hosted-runners",
-                         "--format", "json"])
+                         "--repo", BUILDER_REPOSITORY,
+                         "--signer-workflow", f"{BUILDER_SIGNER_WORKFLOW}@{BUILDER_SOURCE_REF}",
+                         "--source-ref", BUILDER_SOURCE_REF, "--source-digest", head_sha,
+                         "--deny-self-hosted-runners", "--format", "json"])
         detail = ((result.stdout or "") + (result.stderr or "")).strip()
         require(result.returncode == 0,
                 f"the rebuild {label} is not attested by build-skia.yml on main: {detail[-400:]}")
+        try:
+            results = json.loads(result.stdout or "[]")
+        except ValueError:
+            results = []
+        found = {(((row or {}).get("verificationResult") or {}).get("signature") or {})
+                 .get("certificate", {}).get("runInvocationURI") for row in results}
+        require(results and None not in found,
+                f"the rebuild {label}'s attestation names no run invocation")
+        invocations |= found
         verified.append(label)
+    # One run built the archive and wrote the manifest and receipt: the one
+    # the signed record names.
+    require(len(invocations) == 1,
+            "the rebuild archive, manifest and receipt were attested by different runs: "
+            + ", ".join(sorted(invocations)))
+    require(invocations == {expected_invocation},
+            f"the rebuild was attested by {sorted(invocations)[0]}, not the signed record's "
+            f"{expected_invocation}")
     return verified
 
 
@@ -303,9 +338,15 @@ def verify_rebind(
     attested = (attestation.get("legal_inventory") or {}).get("derived_from")
     require(isinstance(attested, dict),
             "the signed record does not name the derivation its legal manifest records")
-    for key in ("rebuild_archive", "rebuild_receipt", "rebuild_manifest", "comparison"):
-        require((attested.get(key) or {}).get("sha256") == (derived.get(key) or {}).get("sha256"),
+    for key in ("rebuild_archive", "rebuild_receipt", "rebuild_manifest", "comparison", "rebuild_bundle"):
+        value = (attested.get(key) or {}).get("sha256")
+        require(isinstance(value, str) and value == (derived.get(key) or {}).get("sha256"),
                 f"the attested derivation's {key} differs from the legal manifest's")
+    for field in REBUILD_RUN_FIELDS:
+        require((attested.get("rebuild_run") or {}).get(field) == (derived.get("rebuild_run") or {}).get(field),
+                f"the attested derivation's rebuild_run.{field} differs from the legal manifest's"
+                if field != "head_sha" else
+                "the attested derivation's rebuild commit differs from the legal manifest's")
     require(sha256_bytes(rebuild_manifest.read_bytes())
             == (derived.get("rebuild_manifest") or {}).get("sha256"),
             "the rebuild manifest is not the one the records were derived from")
@@ -314,6 +355,19 @@ def verify_rebind(
     require(sha256_bytes(rebuild_receipt.read_bytes())
             == (derived.get("rebuild_receipt") or {}).get("sha256"),
             "the rebuild receipt is not the one the records were derived from")
+    # The rebuild manifest and receipt must describe the rebuild archive itself.
+    rebuild_sha = sha256_file(rebuild_archive)
+    artifact_name = (attestation.get("artifact") or {}).get("name")
+    rebuild_manifest_record = json.loads(rebuild_manifest.read_bytes())
+    for label, record in (("manifest", rebuild_manifest_record),
+                          ("receipt", json.loads(rebuild_receipt.read_bytes()))):
+        bound = record.get("archive")
+        require(isinstance(bound, dict) and bound.get("sha256") == rebuild_sha
+                and bound.get("name") == artifact_name,
+                f"the rebuild {label} does not describe the rebuild archive")
+    listed = zip_member_rows(rebuild_manifest_record, "rebuild manifest")
+    actual = {name: sha256_bytes(data) for name, data in zip_contents(rebuild_archive).items()}
+    require(listed == actual, "the rebuild manifest's zip members differ from the rebuild archive")
     provenance = verify_rebuild_provenance(
         attested, {"archive": rebuild_archive, "legal manifest": rebuild_manifest,
                    "toolchain receipt": rebuild_receipt}, rebuild_bundle, runner)
@@ -342,6 +396,9 @@ def verify_rebind(
                 f"rebound receipt {field} differs from the rebuild receipt that measured it")
     return {"rebind_verified": True, "rebind_archives_with_container_differences": compared,
             "rebind_zip_members_compared": len(locked), "rebuild_provenance_verified": provenance}
+
+
+REBUILD_RUN_FIELDS = ("repository", "run_id", "run_attempt", "ref", "head_sha")
 
 
 REBUILD_PROOF_FLAGS = ("--rebuild-archive", "--rebuild-receipt", "--rebuild-manifest",
@@ -410,6 +467,7 @@ def verify_legal_manifest_file(
                     f"legal manifest leaves {row.get('name')} without a license")
     require(isinstance(manifest.get("zip_members"), list) and manifest["zip_members"],
             "legal manifest inventories no zip member")
+    zip_member_rows(manifest, "legal manifest")
     static_archives = manifest.get("static_archives")
     require(isinstance(static_archives, dict) and static_archives,
             "legal manifest inventories no static archive")
@@ -431,7 +489,7 @@ def verify_legal_manifest_file(
                         and all(item in licenses for item in member["licenses"]),
                         f"legal manifest leaves {name}[{arch}] {member.get('name')} unresolved")
     if archive is not None:
-        listed = {row["name"]: row["sha256"] for row in manifest.get("zip_members", [])}
+        listed = zip_member_rows(manifest, "legal manifest")
         with zipfile.ZipFile(archive) as handle:
             members = safe_members(handle)
             actual = {name: sha256_bytes(handle.read(info))
@@ -520,6 +578,25 @@ def validate_build_identity(build_identity: dict[str, object], artifact: dict[st
                                   CONTENT_ADDRESSED_RECEIPT, "toolchain receipt")
 
 
+def build_provenance_source_digest(attestation: dict[str, object], record: dict[str, object]) -> str:
+    """The commit the build-provenance attestation must have been made at.
+
+    Records a build wrote are attested by build-skia.yml at the builder commit
+    the lock names, so no other main commit can attest the published archive.
+    Records rebound from a rebuild are attested by rebind-provenance.yml at a
+    later main commit, which the signed record names as source_digest.
+    """
+    if (attestation.get("legal_inventory") or {}).get("derived_from") is not None:
+        digest = record.get("source_digest")
+        require(isinstance(digest, str) and HEX_40.fullmatch(digest) is not None,
+                "build provenance for rebound records must name the rebind commit (source_digest)")
+        return digest
+    digest = ((attestation.get("source_identities") or {}).get("builder") or {}).get("commit")
+    require(isinstance(digest, str) and HEX_40.fullmatch(digest) is not None,
+            "build provenance needs the builder commit the lock names")
+    return digest
+
+
 def validate_build_provenance_record(attestation: dict[str, object]) -> dict[str, object]:
     record = attestation.get("build_provenance")
     require(isinstance(record, dict), "an owner-attested record must name its build provenance")
@@ -584,6 +661,7 @@ def verify_build_provenance(
 ) -> dict[str, object]:
     """Verify the builder's Sigstore attestation covers each subject, offline from the bundle."""
     record = validate_build_provenance_record(attestation)
+    source_digest = build_provenance_source_digest(attestation, record)
     data = bundle.read_bytes()
     require(sha256_bytes(data) == record["bundle"]["sha256"],
             "build provenance bundle SHA-256 differs from the attestation")
@@ -592,7 +670,9 @@ def verify_build_provenance(
     verified = []
     for label, path in sorted(subjects.items()):
         result = runner(["gh", "attestation", "verify", str(path), "--bundle", str(bundle),
-                         "--repo", record["repository"], "--signer-workflow", record["signer_workflow"],
+                         "--repo", record["repository"],
+                         "--signer-workflow", f"{record['signer_workflow']}@{record['source_ref']}",
+                         "--source-digest", source_digest,
                          "--source-ref", record["source_ref"], "--deny-self-hosted-runners",
                          "--format", "json"])
         detail = ((result.stdout or "") + (result.stderr or "")).strip()
