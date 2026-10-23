@@ -256,6 +256,16 @@ and unreported CPU fallback) and with a real second Dawn inserted into the
 process. Without `VELLUM_PARITY_SECOND_DAWN_DYLIB` that last control applies to
 no case, and calibration reports NOT CALIBRATED.
 
+## Pulp product validation (not Vellum gates)
+
+The artifact and platform lanes below, with their `pulp-artifact-*` and
+`pulp-platform-*` corpora and the `pulp-artifact-*` and `pulp-platform`
+implementations, validate built **Pulp** artifacts (Pulp-vs-Pulp calibration for
+the Pulp-to-Vellum migration matrix). They are not on any Vellum required check
+and must not be added to one: a Vellum change cannot fail them, and they need
+Pulp build outputs, simulators and emulators that Vellum CI does not provide. The
+lane code and corpora relocate to Pulp in Phase 5.
+
 ## Artifact lanes
 
 `lanes/artifact.py` checks the static shape of a built artifact without running

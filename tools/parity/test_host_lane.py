@@ -262,5 +262,52 @@ class HostLaneTest(unittest.TestCase):
         self.assertTrue(any("runs on a copy with different bytes" in r for r in reasons), reasons)
 
 
+
+class StandaloneBackingScaleTest(unittest.TestCase):
+    """compare_standalone accepts a frame at a whole multiple of the case size
+    (the display's backing scale) and nothing else."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        sys.path.insert(0, str(HERE.parents[1] / "cli"))
+        from vellum_png import RgbaImage, encode_png
+        self.image, self.encode = RgbaImage, encode_png
+        self.host = ph.load_lane_module(HERE / "lanes" / "host.py")
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def frame(self, side: str, width: int, height: int) -> Path:
+        # Sixteen colours, so the frame is not blank.
+        px = bytearray()
+        for y in range(height):
+            for x in range(width):
+                px += bytes(((x * 16) % 256, (y * 16) % 256, ((x + y) * 8) % 256, 255))
+        d = self.root / side
+        d.mkdir(exist_ok=True)
+        (d / "standalone.png").write_bytes(self.encode(self.image(width, height, bytes(px))))
+        return d
+
+    def compare(self, width: int, height: int) -> dict:
+        case = {"width": 40, "height": 30}
+        return self.host.compare_standalone(self.frame("reference", width, height),
+                                            self.frame("candidate", width, height), case)
+
+    def test_a_2x_backing_scale_is_accepted_and_recorded(self):
+        result = self.compare(80, 60)
+        self.assertEqual(result["status"], "pass", result.get("reasons"))
+        self.assertEqual(result["backing_scale"], {"reference": 2, "candidate": 2})
+
+    def test_a_non_integer_multiple_is_rejected(self):
+        result = self.compare(60, 45)  # 1.5x
+        self.assertEqual(result["status"], "fail")
+        self.assertTrue(any("not a whole multiple" in r for r in result["reasons"]), result["reasons"])
+
+    def test_an_aspect_mismatch_is_rejected(self):
+        result = self.compare(80, 30)  # 2x wide, 1x tall
+        self.assertEqual(result["status"], "fail")
+        self.assertTrue(any("not a whole multiple" in r for r in result["reasons"]), result["reasons"])
+
 if __name__ == "__main__":
     unittest.main()
