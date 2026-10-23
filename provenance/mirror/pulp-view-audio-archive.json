@@ -6,7 +6,29 @@
   "release_tag": "artifact/pulp-view-audio/52f028a9c6b6ee5ac1be1dfe073e515caa6be550",
   "workflow_run_id": null,
   "workflow_sha": null,
-  "archive": {"name": "libpulp-view-audio.a", "sha256": null, "size": null},
-  "manifest": {"name": "pulp-view-audio-archive.manifest.json", "sha256": null},
-  "attestation_bundle": {"name": "pulp-view-audio-archive.sigstore.json", "sha256": null}
+  "archive": {
+    "name": "libpulp-view-audio.a",
+    "sha256": null,
+    "size": null
+  },
+  "manifest": {
+    "name": "pulp-view-audio-archive.manifest.json",
+    "sha256": null
+  },
+  "symbol_floor": {
+    "name": "pulp-view-audio-symbol-floor.txt",
+    "sha256": null
+  },
+  "symbol_floor_gate": {
+    "name": "pulp-view-audio-symbol-floor-gate.txt",
+    "sha256": null
+  },
+  "checksums": {
+    "name": "SHA256SUMS",
+    "sha256": null
+  },
+  "attestation_bundle": {
+    "name": "pulp-view-audio-archive.sigstore.json",
+    "sha256": null
+  }
 }

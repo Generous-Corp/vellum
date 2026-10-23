@@ -8,6 +8,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 import stat
 import sys
 import tempfile
@@ -29,6 +30,8 @@ RECEIPT = "provenance/mirror/receipts/20990101-aaaaaaaaaaaa.json"
 TAG = f"artifact/pulp-view-audio/{PULP_SHA}"
 ARCHIVE = b"!<arch>\npublished pulp-view-audio\n"
 BUNDLE = b'{"mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json"}\n'
+FLOOR = b"pulp::view::Meter::set_level(float, float)\ntypeinfo for pulp::view::Meter\n"
+GATE = b"archive-symbol-closure: view-core: clean\n"
 
 
 def sha(data: bytes) -> str:
@@ -52,8 +55,11 @@ class FetchTest(unittest.TestCase):
             "target": "pulp-view-audio",
             "archive": {"name": "libpulp-view-audio.a", "sha256": sha(ARCHIVE), "size": len(ARCHIVE)},
             "workflow": {"run_id": "4242", "workflow_sha": WORKFLOW_SHA},
-            "symbol_floor_gate": {"exit_code": 0},
+            "symbol_floor": {"name": "pulp-view-audio-symbol-floor.txt", "sha256": sha(FLOOR), "symbols": 2},
+            "symbol_floor_gate": {"exit_code": 0, "sha256": sha(GATE)},
+            "rebuild": {"kind": "separate-build-dir", "identical": True},
         }
+        self.floor, self.gate = FLOOR, GATE
         self.assets: dict[str, bytes] = {}
         self.publish()
         self.out = Path(self.tmp.name) / "out"
@@ -63,7 +69,12 @@ class FetchTest(unittest.TestCase):
         self.gh = Path(self.tmp.name) / "gh"
         self.gh.write_text(
             f"#!{sys.executable}\nimport pathlib, sys\n"
-            f"pathlib.Path({str(self.gh_log)!r}).open('a').write(' '.join(sys.argv[1:]) + '\\n')\n"
+            "import os\n"
+            "token = 'token' if os.environ.get('GH_TOKEN') or os.environ.get('GITHUB_TOKEN') else 'no-token'\n"
+            f"pathlib.Path({str(self.gh_log)!r}).open('a').write(token + ' ' + ' '.join(sys.argv[1:]) + '\\n')\n"
+            "rejected = os.environ.get('FAKE_GH_REJECT')\n"
+            "if rejected and sys.argv[3].endswith(rejected):\n"
+            "    raise SystemExit(1)\n"
             f"raise SystemExit(int(pathlib.Path({str(self.gh_status)!r}).read_text()))\n",
             encoding="utf-8")
         self.gh.chmod(self.gh.stat().st_mode | stat.S_IXUSR)
@@ -74,9 +85,17 @@ class FetchTest(unittest.TestCase):
 
     def publish(self, **overrides: object) -> None:
         """Serve the release assets and pin them in the descriptor."""
+        floor = getattr(self, "floor", FLOOR)
+        gate = getattr(self, "gate", GATE)
         manifest_bytes = (json.dumps(self.manifest, sort_keys=True) + "\n").encode()
+        sums = "".join(f"{sha(data)}  {name}\n" for name, data in (
+            ("libpulp-view-audio.a", ARCHIVE), ("pulp-view-audio-archive.manifest.json", manifest_bytes),
+            ("pulp-view-audio-symbol-floor.txt", floor), ("pulp-view-audio-symbol-floor-gate.txt", gate))).encode()
         self.assets = {"libpulp-view-audio.a": ARCHIVE,
                        "pulp-view-audio-archive.manifest.json": manifest_bytes,
+                       "pulp-view-audio-symbol-floor.txt": floor,
+                       "pulp-view-audio-symbol-floor-gate.txt": gate,
+                       "SHA256SUMS": sums,
                        "pulp-view-audio-archive.sigstore.json": BUNDLE}
         descriptor = {
             "schema": fva.DESCRIPTOR_SCHEMA,
@@ -88,6 +107,9 @@ class FetchTest(unittest.TestCase):
             "workflow_sha": WORKFLOW_SHA,
             "archive": {"name": "libpulp-view-audio.a", "sha256": sha(ARCHIVE), "size": len(ARCHIVE)},
             "manifest": {"name": "pulp-view-audio-archive.manifest.json", "sha256": sha(manifest_bytes)},
+            "symbol_floor": {"name": "pulp-view-audio-symbol-floor.txt", "sha256": sha(floor)},
+            "symbol_floor_gate": {"name": "pulp-view-audio-symbol-floor-gate.txt", "sha256": sha(gate)},
+            "checksums": {"name": "SHA256SUMS", "sha256": sha(sums)},
             "attestation_bundle": {"name": "pulp-view-audio-archive.sigstore.json", "sha256": sha(BUNDLE)},
         }
         descriptor.update(overrides)
@@ -114,9 +136,21 @@ class FetchTest(unittest.TestCase):
         self.assertEqual(Path(result["archive"]).read_bytes(), ARCHIVE)
         self.assertTrue(all(url.startswith(f"https://github.com/{REPO}/releases/download/{TAG}/")
                             for url in self.urls))
+        os.environ["GH_TOKEN"] = "must-not-reach-gh"
+        try:
+            self.gh_log.unlink()
+            for path in self.out.iterdir():
+                path.unlink()
+            self.fetch()
+        finally:
+            del os.environ["GH_TOKEN"]
+        self.assertEqual(sorted(p.name for p in self.out.iterdir()), sorted(self.assets))
         calls = self.gh_log.read_text(encoding="utf-8").splitlines()
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(sorted(call.split()[3].rsplit("/", 1)[-1] for call in calls),
+                         sorted(name for name in self.assets if not name.endswith(".sigstore.json")))
         for call in calls:
+            self.assertTrue(call.startswith("no-token attestation verify "), call)
+            self.assertIn("--bundle ", call)
             self.assertIn(f"--signer-workflow {REPO}/.github/workflows/view-audio-archive.yml", call)
             self.assertIn("--source-ref refs/heads/main", call)
             self.assertIn(f"--source-digest {WORKFLOW_SHA}", call)
@@ -197,6 +231,103 @@ class FetchTest(unittest.TestCase):
         self.manifest["workflow"]["workflow_sha"] = "b" * 40
         self.publish(workflow_sha="b" * 40)
         with self.assertRaisesRegex(fva.Mismatch, "workflow_sha"):
+            self.fetch()
+        self.assertEqual(self.urls, [])
+
+    def test_a_rejected_attestation_on_any_attested_file_is_refused(self) -> None:
+        for name in ("libpulp-view-audio.a", "pulp-view-audio-archive.manifest.json",
+                     "pulp-view-audio-symbol-floor.txt", "pulp-view-audio-symbol-floor-gate.txt",
+                     "SHA256SUMS"):
+            with self.subTest(subject=name):
+                for path in (self.out.iterdir() if self.out.exists() else ()):
+                    path.unlink()
+                os.environ["FAKE_GH_REJECT"] = name
+                try:
+                    with self.assertRaisesRegex(fva.Mismatch, f"attestation rejected {name}"):
+                        self.fetch()
+                finally:
+                    del os.environ["FAKE_GH_REJECT"]
+
+    def test_each_pinned_asset_is_digest_checked(self) -> None:
+        for name in self.assets:
+            with self.subTest(asset=name):
+                for path in (self.out.iterdir() if self.out.exists() else ()):
+                    path.unlink()
+                saved = self.assets[name]
+                self.assets[name] = saved + b"tampered\n"
+                try:
+                    with self.assertRaisesRegex(fva.Mismatch, f"{name} sha256"):
+                        self.fetch()
+                finally:
+                    self.assets[name] = saved
+
+    def test_checksums_must_list_and_hold_for_the_four_files(self) -> None:
+        cases = {
+            "missing line": lambda sums: "".join(sums.splitlines(keepends=True)[1:]),
+            "wrong digest": lambda sums: sums.replace(sha(FLOOR), "0" * 64),
+            "extra line": lambda sums: sums + f"{'1' * 64}  extra.txt\n",
+        }
+        for label, edit in cases.items():
+            with self.subTest(case=label):
+                for path in (self.out.iterdir() if self.out.exists() else ()):
+                    path.unlink()
+                self.publish()
+                sums = edit(self.assets["SHA256SUMS"].decode()).encode()
+                self.assets["SHA256SUMS"] = sums
+                descriptor = self.descriptor()
+                descriptor["checksums"]["sha256"] = sha(sums)
+                self.write_descriptor(descriptor)
+                with self.assertRaisesRegex(fva.Mismatch, "SHA256SUMS"):
+                    self.fetch()
+
+    def test_the_floor_and_gate_must_match_the_manifest(self) -> None:
+        cases = {
+            "floor": ("floor", b"something else\n", "symbol floor sha256"),
+            "empty floor": ("floor", b"", "symbol floor"),
+            "gate": ("gate", b"archive-symbol-closure: view-core: 3 references\n", "gate output sha256"),
+        }
+        for label, (attr, data, message) in cases.items():
+            with self.subTest(case=label):
+                for path in (self.out.iterdir() if self.out.exists() else ()):
+                    path.unlink()
+                setattr(self, attr, data)
+                self.publish()
+                try:
+                    with self.assertRaisesRegex(fva.Mismatch, message):
+                        self.fetch()
+                finally:
+                    self.floor, self.gate = FLOOR, GATE
+
+    def test_a_manifest_without_an_identical_rebuild_is_refused(self) -> None:
+        for rebuild in (None, {"kind": "separate-build-dir", "identical": False},
+                        {"kind": "same-build-dir", "identical": True}):
+            with self.subTest(rebuild=rebuild):
+                for path in (self.out.iterdir() if self.out.exists() else ()):
+                    path.unlink()
+                self.manifest["rebuild"] = rebuild
+                self.publish()
+                with self.assertRaisesRegex(fva.Mismatch, "identical separate-build-dir rebuild"):
+                    self.fetch()
+
+    def test_an_empty_floor_the_manifest_agrees_with_is_still_refused(self) -> None:
+        self.floor = b""
+        self.manifest["symbol_floor"] = {"name": "pulp-view-audio-symbol-floor.txt",
+                                         "sha256": sha(b""), "symbols": 0}
+        self.publish()
+        with self.assertRaisesRegex(fva.Mismatch, "symbol floor has 0 symbols"):
+            self.fetch()
+
+    def test_a_stray_file_written_during_the_fetch_is_refused(self) -> None:
+        def fetcher(url: str, destination: Path) -> None:
+            self.fetcher(url, destination)
+            (destination.parent / "stray.a").write_bytes(b"x")
+        with self.assertRaisesRegex(fva.Mismatch, "not exactly the six assets"):
+            fva.fetch(self.root, REPO, self.out, str(self.gh), fetcher)
+
+    def test_a_dirty_output_directory_is_refused(self) -> None:
+        self.out.mkdir(parents=True)
+        (self.out / "stray.a").write_bytes(b"x")
+        with self.assertRaisesRegex(fva.Unusable, "not empty"):
             self.fetch()
         self.assertEqual(self.urls, [])
 
