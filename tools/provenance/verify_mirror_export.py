@@ -882,6 +882,64 @@ def verify_receipt(
     return errors
 
 
+D3_UNIT_MAP = "tools/scripts/vellum_d3_units.json"
+
+
+def d3_unit_targets(units: list[Any], name: str, stack: tuple[str, ...] = ()) -> tuple[set[str], set[str]] | None:
+    """(required, optional) CMake targets of one D3 unit, following
+    alias_of/carried_by, or None when the map does not name the unit."""
+    by_name = {u.get("name"): u for u in units if isinstance(u, dict)}
+    entry = by_name.get(name)
+    if entry is None or name in stack:
+        return None
+    other = entry.get("alias_of") or entry.get("carried_by")
+    if isinstance(other, str) and other:
+        return d3_unit_targets(units, other, (*stack, name))
+    required = {t for t in entry.get("targets") or [] if isinstance(t, str)}
+    optional = {t if isinstance(t, str) else t.get("name") for t in entry.get("optional_targets") or []
+                if isinstance(t, str) or isinstance(t, dict)}
+    return required, {t for t in optional if isinstance(t, str)}
+
+
+def d3_unit_binding_errors(root: Path, pulp_root: Path, receipt: dict[str, Any]) -> list[str]:
+    """Each unit's closure carries exactly its own D3 targets.
+
+    The D3 unit map at the exported Pulp commit names the CMake targets each
+    unit owns. A closure that drops one of its unit's required targets
+    without reporting it missing, or carries a target of another unit, is
+    refused, so the closure's content (not only its file name) belongs to
+    the unit the receipt names."""
+    pulp_sha = receipt["pulp_sha"]
+    text = git_try(pulp_root, "show", f"{pulp_sha}:{D3_UNIT_MAP}")
+    try:
+        units = json.loads(text)["units"] if text is not None else None
+    except (ValueError, KeyError, TypeError):
+        units = None
+    if not isinstance(units, list):
+        return [f"Pulp {pulp_sha} has no readable {D3_UNIT_MAP} to bind closures to units"]
+    errors: list[str] = []
+    for unit in receipt["units"]:
+        expected = d3_unit_targets(units, unit["name"])
+        if expected is None:
+            errors.append(f"unit {unit['name']} is not a D3 unit at Pulp {pulp_sha}")
+            continue
+        required, optional = expected
+        try:
+            closure = strict_json(root / unit["closure_manifest"])
+        except (OSError, ValueError) as exc:
+            errors.append(f"closure {unit['closure_manifest']} unreadable: {exc}")
+            continue
+        targets = closure.get("targets") if isinstance(closure, dict) else None
+        names = {t.get("name") for t in targets or [] if isinstance(t, dict)}
+        missing = {t for t in (closure.get("missing_targets") or []) if isinstance(t, str)} \
+            if isinstance(closure, dict) else set()
+        for name in sorted(names - required - optional, key=str):
+            errors.append(f"unit {unit['name']} closure carries {name}, which D3 assigns to no part of this unit")
+        for name in sorted(required - names - missing):
+            errors.append(f"unit {unit['name']} closure drops its D3 target {name} without reporting it missing")
+    return errors
+
+
 def verify_receipt_against_pulp(pulp_root: Path, receipt: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     pulp_sha = receipt["pulp_sha"]
@@ -967,6 +1025,7 @@ def verify(root: Path, pulp_root: Path | None = None) -> dict[str, Any]:
         errors.extend(receipt_errors)
         if pulp_root is not None and not receipt_errors:
             errors.extend(f"{receipt_path}: {e}" for e in verify_receipt_against_pulp(pulp_root, receipt))
+            errors.extend(f"{receipt_path}: {e}" for e in d3_unit_binding_errors(root, pulp_root, receipt))
             pulp_checked = True
     return {
         "status": "pass" if not errors else "fail",

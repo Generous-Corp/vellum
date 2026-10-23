@@ -35,6 +35,11 @@ PULP_FILES = {
     "core/canvas/include/pulp/canvas/canvas.hpp": b"#pragma once\n",
 }
 TOOL = b"#!/usr/bin/env python3\n"
+D3_UNITS = json.dumps({"schema": "pulp.vellum.d3-units.v1", "units": [
+    {"name": "foundation", "targets": ["pulp-runtime"]},
+    {"name": "canvas", "targets": ["pulp-canvas"], "optional_targets": ["pulp-bundled-noto-color-emoji"]},
+    {"name": "canvas-slice", "alias_of": "canvas"},
+]}).encode()
 SKIA_LINK = {"dependency": "skia", "source": "https://skia.googlesource.com/skia.git",
              "pin": "5" * 40, "asset_sha256": "6" * 64}
 PULP_DEPENDENCY_MANIFEST = {"dependencies": [{"name": "Skia", "repository": SKIA_LINK["source"], "determinism": {
@@ -78,6 +83,7 @@ class Fixture:
         for path, content in PULP_FILES.items():
             write(self.pulp, path, content)
         write(self.pulp, "tools/scripts/vellum_closure.py", TOOL)
+        write(self.pulp, "tools/scripts/vellum_d3_units.json", D3_UNITS)
         write(self.pulp, "core/audio/engine.cpp", b"int audio;\n")
         write(self.pulp, "tools/deps/manifest.json", dump(PULP_DEPENDENCY_MANIFEST))
         run(self.pulp, "add", "-A")
@@ -744,6 +750,49 @@ class VerifyMirrorExportTests(unittest.TestCase):
         fixture.receipt["units"][0]["name"] = "canvas/../canvas"
         fixture.reland()
         self.assertError(fixture.errors(), "name must be a plain unit name")
+
+    def test_closure_targets_are_bound_to_the_d3_unit_map(self) -> None:
+        fixture = Fixture(self.base)
+        self.assertEqual(verify_mirror_export.d3_unit_binding_errors(fixture.vellum, fixture.pulp, fixture.receipt), [])
+        closure = json.loads((fixture.vellum / fixture.closure_path).read_text())
+
+        def binding(edit) -> list[str]:
+            changed = json.loads(json.dumps(closure))
+            edit(changed)
+            write(fixture.vellum, fixture.closure_path, dump(changed))
+            try:
+                return verify_mirror_export.d3_unit_binding_errors(fixture.vellum, fixture.pulp, fixture.receipt)
+            finally:
+                write(fixture.vellum, fixture.closure_path, dump(closure))
+
+        foreign = dict(closure["targets"][0], name="pulp-runtime")
+        self.assertError(binding(lambda c: c["targets"].append(foreign)),
+                         "carries pulp-runtime, which D3 assigns to no part of this unit")
+        self.assertError(binding(lambda c: c.update(targets=[])),
+                         "drops its D3 target pulp-canvas without reporting it missing")
+        self.assertEqual(binding(lambda c: c.update(targets=[], missing_targets=["pulp-canvas"])), [])
+        optional = dict(closure["targets"][0], name="pulp-bundled-noto-color-emoji")
+        self.assertEqual(binding(lambda c: c["targets"].append(optional)), [])
+        # An alias unit owns the targets of the unit it aliases.
+        alias = json.loads(json.dumps(fixture.receipt))
+        alias["units"][0]["name"] = "canvas-slice"
+        self.assertEqual(verify_mirror_export.d3_unit_binding_errors(fixture.vellum, fixture.pulp, alias), [])
+        unknown = json.loads(json.dumps(fixture.receipt))
+        unknown["units"][0]["name"] = "audio"
+        self.assertError(verify_mirror_export.d3_unit_binding_errors(fixture.vellum, fixture.pulp, unknown),
+                         "unit audio is not a D3 unit")
+        no_map = dict(fixture.receipt, pulp_sha="0" * 40)
+        self.assertError(verify_mirror_export.d3_unit_binding_errors(fixture.vellum, fixture.pulp, no_map),
+                         "has no readable tools/scripts/vellum_d3_units.json")
+
+    def test_end_to_end_closure_bound_to_another_units_targets_fails_with_pulp(self) -> None:
+        fixture = Fixture(self.base)
+        closure = json.loads((fixture.vellum / fixture.closure_path).read_text())
+        closure["targets"].append(dict(closure["targets"][0], name="pulp-runtime"))
+        write(fixture.vellum, fixture.closure_path, dump(closure))
+        fixture.receipt["units"][0]["closure_sha256"] = fixture.sha(fixture.closure_path)
+        fixture.reland()
+        self.assertError(fixture.errors(pulp=True), "D3 assigns to no part of this unit")
 
     def test_end_to_end_receipt_host_path_guard_is_required(self) -> None:
         fixture = Fixture(self.base)
