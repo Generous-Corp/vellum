@@ -193,6 +193,7 @@ class RendererEligibilityTests(unittest.TestCase):
             "repository": verifier.BUILDER_REPOSITORY,
             "signer_workflow": verifier.BUILDER_SIGNER_WORKFLOW,
             "source_ref": verifier.BUILDER_SOURCE_REF,
+            "run": {"run_id": 1, "run_attempt": 1},
             "bundle": {"name": self.bundle_name, "sha256": self.bundle_sha,
                        "url": verifier.release_asset_url(artifact, self.bundle_name)}}
         record["legal_inventory"] = {
@@ -514,6 +515,59 @@ class RendererEligibilityTests(unittest.TestCase):
         verifier.verify_build_provenance(renderer["_attestation"], {"x": self.manifest_path}, self.bundle_path,
                                          runner=fake_gh(0, calls))
         self.assertEqual(calls[0][calls[0].index("--source-digest") + 1], "a" * 40)
+
+    def test_rebound_records_bind_the_archive_by_digest_not_as_a_rebind_subject(self) -> None:
+        # rebind-provenance.yml attests only the rebound manifest and receipt,
+        # so a rebind bundle never covers the published archive. A gh that
+        # refuses the archive (as the real one would) must not fail a derived
+        # record; the archive is bound by the rebound manifest's digest.
+        self.write_manifest(self.legal_manifest())
+        def derive(lock, record):
+            record["legal_inventory"]["derived_from"] = {"rebuild_archive": {"sha256": "8" * 64}}
+            record["build_provenance"]["signer_workflow"] = verifier.REBIND_SIGNER_WORKFLOW
+            record["build_provenance"]["source_digest"] = "a" * 40
+        lock_path, record_path, signature = self.eligible(mutate=derive)
+        _, renderer = self.load(lock_path, record_path, signature)
+        attestation = renderer["_attestation"]
+        subjects = verifier.build_provenance_subjects(attestation, self.manifest_path, self.receipt_path,
+                                                      self.archive)
+        self.assertEqual(sorted(subjects), ["legal manifest", "toolchain receipt"])
+
+        def gh(args):
+            refused = Path(args[3]) == self.archive
+            return fake_gh(1 if refused else 0)(args)
+        self.assertEqual(verifier.verify_build_provenance(attestation, subjects, self.bundle_path, runner=gh)[
+            "build_provenance_verified"], ["legal manifest", "toolchain receipt"])
+        other = self.tmp / "other.zip"
+        other.write_bytes(b"not the archive")
+        with self.assertRaisesRegex(VerificationError, "not the one the rebind-attested legal manifest describes"):
+            verifier.build_provenance_subjects(attestation, self.manifest_path, self.receipt_path, other)
+
+    def test_build_records_keep_the_archive_as_a_subject(self) -> None:
+        lock_path, record_path, signature = self.eligible()
+        _, renderer = self.load(lock_path, record_path, signature)
+        self.assertEqual(sorted(verifier.build_provenance_subjects(
+            renderer["_attestation"], self.manifest_path, self.receipt_path, self.archive)),
+            ["archive", "legal manifest", "toolchain receipt"])
+
+    def test_build_provenance_must_come_from_the_signed_records_run(self) -> None:
+        lock_path, record_path, signature = self.eligible()
+        _, renderer = self.load(lock_path, record_path, signature)
+        other = "https://github.com/danielraffel/skia-builder/actions/runs/1/attempts/2"
+        with self.assertRaisesRegex(VerificationError, "not the signed record's"):
+            verifier.verify_build_provenance(renderer["_attestation"], {"legal manifest": self.manifest_path},
+                                             self.bundle_path,
+                                             runner=fake_gh(0, invocations={self.manifest_path.name: other}))
+        mixed = {self.manifest_path.name: other}
+        with self.assertRaisesRegex(VerificationError, "attested by .*runs/1/attempts/1.*runs/1/attempts/2|attested by .*runs/1/attempts/2.*runs/1/attempts/1"):
+            verifier.verify_build_provenance(renderer["_attestation"],
+                                             {"legal manifest": self.manifest_path, "toolchain receipt": self.receipt_path},
+                                             self.bundle_path, runner=fake_gh(0, invocations=mixed))
+        lock_path, record_path, signature = self.eligible(
+            mutate=lambda lock, record: record["build_provenance"].pop("run"))
+        _, renderer = self.load(lock_path, record_path, signature)
+        with self.assertRaisesRegex(VerificationError, "must name the run that attested it"):
+            verifier.verify_build_provenance(renderer["_attestation"], {}, self.bundle_path, runner=fake_gh(0))
 
     def test_attestation_that_does_not_cover_a_subject_fails(self) -> None:
         lock_path, record_path, signature = self.eligible()
@@ -1018,7 +1072,7 @@ class RealSigstoreBundleTests(unittest.TestCase):
                 "source_identities": {"builder": {"commit": self.COMMIT}},
                 "build_provenance": {
             "repository": verifier.BUILDER_REPOSITORY, "signer_workflow": verifier.BUILDER_SIGNER_WORKFLOW,
-            "source_ref": source_ref,
+            "source_ref": source_ref, "run": {"run_id": 39920192131, "run_attempt": 1},
             "bundle": {"name": name, "sha256": digest, "url": verifier.release_asset_url(artifact, name)}}}
 
     def verify(self, record: dict, subject: Path):

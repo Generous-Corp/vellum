@@ -248,6 +248,22 @@ def manifest_inventory_problems(rebound: dict, rebuild: dict) -> list[str]:
     return problems
 
 
+def run_invocation_url(repository: str, run_id: object, run_attempt: object) -> str:
+    return f"https://github.com/{repository}/actions/runs/{run_id}/attempts/{run_attempt}"
+
+
+def result_invocations(stdout: str, label: str) -> set[str]:
+    """The run invocations a gh attestation verify --format json result names."""
+    try:
+        results = json.loads(stdout or "[]")
+    except ValueError:
+        results = []
+    found = {(((row or {}).get("verificationResult") or {}).get("signature") or {})
+             .get("certificate", {}).get("runInvocationURI") for row in results} if isinstance(results, list) else set()
+    require(found and None not in found, f"the {label}'s attestation names no run invocation")
+    return found
+
+
 def verify_rebuild_provenance(
     attested_derived: dict[str, object], subjects: dict[str, Path], bundle: Path,
     runner: "GhRunner" = None,
@@ -269,8 +285,7 @@ def verify_rebuild_provenance(
     require(run.get("repository") == BUILDER_REPOSITORY and run.get("ref") == BUILDER_SOURCE_REF
             and isinstance(run.get("run_id"), int) and isinstance(run.get("run_attempt"), int),
             "the attested derivation's rebuild_run is not a build-skia.yml run on main")
-    expected_invocation = (f"https://github.com/{BUILDER_REPOSITORY}/actions/runs/"
-                           f"{run['run_id']}/attempts/{run['run_attempt']}")
+    expected_invocation = run_invocation_url(BUILDER_REPOSITORY, run["run_id"], run["run_attempt"])
     record = attested_derived.get("rebuild_bundle")
     require(isinstance(record, dict) and isinstance(record.get("sha256"), str)
             and HEX_64.fullmatch(record["sha256"]) is not None,
@@ -289,15 +304,7 @@ def verify_rebuild_provenance(
         detail = ((result.stdout or "") + (result.stderr or "")).strip()
         require(result.returncode == 0,
                 f"the rebuild {label} is not attested by build-skia.yml on main: {detail[-400:]}")
-        try:
-            results = json.loads(result.stdout or "[]")
-        except ValueError:
-            results = []
-        found = {(((row or {}).get("verificationResult") or {}).get("signature") or {})
-                 .get("certificate", {}).get("runInvocationURI") for row in results}
-        require(results and None not in found,
-                f"the rebuild {label}'s attestation names no run invocation")
-        invocations |= found
+        invocations |= result_invocations(result.stdout, f"rebuild {label}")
         verified.append(label)
     # One run built the archive and wrote the manifest and receipt: the one
     # the signed record names.
@@ -667,7 +674,11 @@ def verify_build_provenance(
             "build provenance bundle SHA-256 differs from the attestation")
     require(shutil.which("gh") is not None or runner is not run_gh,
             "gh is required to verify the build provenance attestation")
-    verified = []
+    run = record.get("run") or {}
+    require(isinstance(run.get("run_id"), int) and isinstance(run.get("run_attempt"), int),
+            "build provenance must name the run that attested it (run.run_id, run.run_attempt)")
+    expected_invocation = run_invocation_url(record["repository"], run["run_id"], run["run_attempt"])
+    verified, invocations = [], set()
     for label, path in sorted(subjects.items()):
         result = runner(["gh", "attestation", "verify", str(path), "--bundle", str(bundle),
                          "--repo", record["repository"],
@@ -678,8 +689,34 @@ def verify_build_provenance(
         detail = ((result.stdout or "") + (result.stderr or "")).strip()
         require(result.returncode == 0,
                 f"build provenance attestation does not cover the {label}: {detail[-400:]}")
+        invocations |= result_invocations(result.stdout, label)
         verified.append(label)
+    require(invocations == {expected_invocation},
+            f"build provenance was attested by {', '.join(sorted(invocations))}, not the signed "
+            f"record's {expected_invocation}")
     return {"build_provenance_verified": verified}
+
+
+def build_provenance_subjects(
+    attestation: dict[str, object], legal_manifest: Path | None, toolchain_receipt: Path | None,
+    archive: Path | None,
+) -> dict[str, Path]:
+    """What the build-provenance bundle must cover.
+
+    A build's own records are attested together with the archive it built. A
+    rebound record's bundle is rebind-provenance.yml's, which attests only the
+    rebound manifest and receipt; the published archive is bound instead by
+    the rebound manifest's archive digest (and by the member comparison
+    against the rebuild-attested rebuild archive).
+    """
+    subjects = {"legal manifest": legal_manifest, "toolchain receipt": toolchain_receipt}
+    if (attestation.get("legal_inventory") or {}).get("derived_from") is None:
+        subjects["archive"] = archive
+    elif archive is not None and legal_manifest is not None:
+        described = (json.loads(legal_manifest.read_bytes()).get("archive") or {}).get("sha256")
+        require(described == sha256_file(archive),
+                "the archive is not the one the rebind-attested legal manifest describes")
+    return {label: path for label, path in subjects.items() if path is not None}
 
 
 FAT_CPU_NAMES = {0x01000007: "x86_64", 0x0100000C: "arm64", 7: "i386", 12: "arm"}
@@ -1170,10 +1207,9 @@ def main() -> int:
                                             args.archive, args.rebuild_archive, args.rebuild_receipt,
                                             args.rebuild_manifest, args.rebuild_provenance_bundle))
         if args.provenance_bundle:
-            subjects = {"legal manifest": args.legal_manifest, "toolchain receipt": args.toolchain_receipt,
-                        "archive": args.archive}
             result.update(verify_build_provenance(
-                attestation, {label: path for label, path in subjects.items() if path},
+                attestation, build_provenance_subjects(attestation, args.legal_manifest,
+                                                       args.toolchain_receipt, args.archive),
                 args.provenance_bundle))
         if args.release_json:
             result.update(verify_release_assets(attestation, args.release_json))
