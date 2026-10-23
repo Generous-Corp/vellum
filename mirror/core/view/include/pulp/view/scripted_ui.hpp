@@ -1,0 +1,394 @@
+#pragma once
+
+#include <pulp/state/store.hpp>
+#include <pulp/view/hot_reload.hpp>
+#include <pulp/view/script_engine.hpp>
+#include <pulp/view/script_inspector_port.hpp>
+#include <pulp/view/theme.hpp>
+#include <pulp/view/view.hpp>
+#include <pulp/view/widget_bridge.hpp>
+#include <cstdint>
+#include <filesystem>
+#include <functional>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <unordered_map>
+
+namespace pulp::render {
+class GpuSurface;
+}
+
+namespace pulp::view {
+
+class ValueChannelSet;
+
+struct ScriptedUiOptions {
+    std::filesystem::path script_path;
+    std::filesystem::path theme_path;
+    std::vector<std::filesystem::path> asset_roots;
+    bool enable_hot_reload = false;
+    bool enable_theme_reload = true;
+    /// Compatibility adapter for stable, non-reloadable processors. Converted
+    /// to ValueChannelAccess during construction and never retained directly.
+    ValueChannelSet* value_channels = nullptr;
+    /// Leased access to the hosting processor's named value channels. The
+    /// visitor must not retain a set or source after its callback returns.
+    ValueChannelAccess value_channel_access;
+    /// Native bridge APIs granted to this realm. Trusted/local scripted UIs
+    /// retain the historical all-capabilities default; protected hosts pass an
+    /// explicit empty or reviewed set. Appended to preserve the public
+    /// aggregate's legacy positional layout.
+    CapabilitySet granted_capabilities = CapabilitySet::all();
+    /// Install the native runtime-design import endpoint before evaluating the
+    /// session bundle. Opt-in keeps ordinary scripted UIs unchanged while
+    /// allowing a generated @pulp/react bundle to materialize a captured,
+    /// executable browser document in this exact live realm.
+    bool enable_runtime_import = false;
+};
+
+/// Present while the SDK has view-first document loading (ScopedDeferredDocumentLoad,
+/// ScriptedUiSession::set_document_loaded_callback). Downstream code that keeps
+/// its own deferral for older SDKs can key its removal on this.
+#define PULP_VIEW_HAS_DEFERRED_DOCUMENT_LOAD 1
+
+/// View-first editor opening.
+///
+/// A plug-in host creates the editor view synchronously and shows nothing of
+/// it -- in Logic, a header-only plug-in window -- until that call returns.
+/// While one of these is alive on the calling thread,
+/// ScriptedUiSession::load_deferrable() does not evaluate the document: it
+/// checks the script can be read, returns true, and evaluates it from the
+/// session's second poll(), so the host gets a correctly sized view at once and
+/// the first frame paints before the document mounts. ViewBridge::open() holds
+/// one for every host-embedded editor (ViewBridge::Options::hosted_editor()),
+/// around both create_view() and the default scripted editor. A plain load()
+/// inside one still evaluates immediately -- its caller may read bridge() next
+/// -- but warns once when that blocks the host. Standalone hosts and in-process
+/// harnesses never hold one, so their document is mounted when either returns.
+class ScopedDeferredDocumentLoad {
+public:
+    ScopedDeferredDocumentLoad();
+    ~ScopedDeferredDocumentLoad();
+    ScopedDeferredDocumentLoad(const ScopedDeferredDocumentLoad&) = delete;
+    ScopedDeferredDocumentLoad& operator=(const ScopedDeferredDocumentLoad&) = delete;
+    /// Whether a guard is alive on this thread.
+    static bool active() noexcept;
+
+private:
+    bool previous_ = false;
+};
+
+// Manages a JS-driven widget tree, optional theme.json overrides, and
+// standalone hot reload semantics with widget value preservation.
+class ScriptedUiSession {
+public:
+    using NativeMessageHandler =
+        std::function<std::string(std::string_view envelope_json)>;
+
+    ScriptedUiSession(View& root, state::StateStore& store, ScriptedUiOptions options);
+    ~ScriptedUiSession();
+
+    /// Tear down everything that borrows the root -- the realm, its engine and
+    /// bridge, and the accessibility handles over them -- now, while the root
+    /// still exists, and leave the session inert (loads are refused). The
+    /// session borrows its root, so a root destroyed first must be preceded by
+    /// this; ViewBridge::close() calls it for the processor's active session
+    /// before it destroys the editor root. Idempotent; the destructor runs it.
+    void release_root() noexcept;
+    /// True when `view` is this session's root.
+    bool borrows_root(const View& view) const noexcept { return &root_ == &view; }
+
+    ScriptedUiSession(const ScriptedUiSession&) = delete;
+    ScriptedUiSession& operator=(const ScriptedUiSession&) = delete;
+
+    /// Evaluate the script and mount it into the root now; bridge() is live
+    /// when it returns true. Inside a ScopedDeferredDocumentLoad (a host's
+    /// view-creation call) a slow one logs a one-time warning naming
+    /// load_deferrable(), because the host shows no editor until it returns.
+    bool load(std::string* error = nullptr);
+    /// View-first load. Outside a ScopedDeferredDocumentLoad this is load().
+    /// Inside one it only verifies the script can be read, returns true, and
+    /// evaluates the document from the session's second poll(); bridge()
+    /// stays null until then, so work that needs the mounted realm belongs in
+    /// set_document_loaded_callback(). The default scripted editor uses this;
+    /// a processor that builds its own session in create_view() should too.
+    bool load_deferrable(std::string* error = nullptr);
+    /// True between a deferred load() and the poll() that evaluates it.
+    bool document_load_pending() const noexcept { return document_load_pending_; }
+
+    /// True while the mounted document still owes host frames to settle its
+    /// commits (see WidgetBridge::pending_runtime_settle_rounds()). Each
+    /// poll() serves one. A content-first editor open pumps these before its
+    /// first frame so that frame is the settled document, not a partial one.
+    bool settling() const noexcept;
+    /// Evaluate a deferred document now (a harness that needs the mounted tree
+    /// without pumping frames). Returns whether the document is loaded.
+    bool complete_pending_load(std::string* error = nullptr);
+    /// Called when a load() -- immediate or deferred -- finishes, with whether
+    /// the document mounted and the error when it did not. Set it before load().
+    /// The place for work that needs the mounted realm: binding scripts,
+    /// native observers, a fallback editor when the document failed.
+    void set_document_loaded_callback(
+        std::function<void(bool loaded, const std::string& error)> cb) {
+        document_loaded_callback_ = std::move(cb);
+    }
+    /// Advance one frame: discharge the realm reset a completed
+    /// `Runtime.evaluate` owes, retire and destroy realms replaced since the
+    /// last frame, pump the bridge and one queued inspector request, then poll
+    /// the script and theme files. Returns whether anything changed; returns
+    /// false with `error` set when the owed realm reset (or the accessibility
+    /// retirement it defers) could not complete.
+    ///
+    /// A host MUST call this from its frame loop even when it drives the UI
+    /// itself: it is where an evaluated realm is discarded, so skipping it
+    /// leaves evaluated timers and callbacks live in the realm they were
+    /// created in.
+    bool poll(std::string* error = nullptr);
+
+    // Explicitly reload the current script in place: rebuilds the widget bridge
+    // under the SAME root + GPU surface, preserving widget state, and probes the
+    // new code first so a bad reload keeps the last-good UI. The on-demand
+    // counterpart to enable_hot_reload's file-watched poll() — for a host/editor
+    // that wants to reload a just-edited bundle without a file watcher.
+    bool reload(std::string* error = nullptr);
+    // Repoint at a different script file and reload it (e.g. swap to another
+    // design bundle's ui.js). Updates script_path()/theme_path(); same in-place,
+    // last-good semantics as reload(). Does not re-arm the hot-reload watcher.
+    bool reload_from(std::filesystem::path script_path, std::string* error = nullptr);
+
+    void set_repaint_callback(std::function<void()> cb);
+    /// Declare where this editor lives, as its scripts read it through
+    /// `hostKind()` ("plugin", "standalone", or the default "unknown"). Kept
+    /// by the session and re-applied to every realm a reload builds, so a hot
+    /// reload never forgets it. Set it before load() and the first render
+    /// already knows. See WidgetBridge::set_host_kind.
+    void set_host_kind(std::string kind);
+    const std::string& host_kind() const { return host_kind_; }
+    /// The clock script timers and performance.now() read (see
+    /// WidgetBridge::set_time_source). Kept by the session and applied to
+    /// every realm a load or reload builds, so a harness driving frames from
+    /// a fixed schedule keeps that clock across hot reloads. Empty restores
+    /// the steady clock.
+    void set_time_source(WidgetBridge::TimeSource source);
+    /// Install the host-owned rebind run after a successful deferred
+    /// Runtime.evaluate realm reset. The callback runs from poll(), after the
+    /// replacement bridge is live and before that bridge pumps a frame. Hosts
+    /// that attach native observers to script-owned Views must resolve those
+    /// Views again here; the reset deliberately discards every callback that
+    /// belonged to the evaluated realm.
+    ///
+    /// The callback must not retain pre-reset View pointers or perform another
+    /// inspector evaluation (which would immediately owe another reset).
+    void set_post_evaluation_reset_callback(std::function<void()> cb);
+    /// Attach a renderer-neutral native message endpoint to this session's JS
+    /// realm. The named global accepts one JSON envelope string and returns the
+    /// handler's JSON response string. The endpoint is installed immediately
+    /// when a realm is live and reinstalled on every successful realm rebuild.
+    ///
+    /// Attachments are session-owned so callers never borrow the replaceable
+    /// ScriptEngine. The handler and every object it captures must outlive the
+    /// attachment; call detach_native_message_handler() before either expires.
+    /// Owner/UI thread only. Throws std::invalid_argument for an empty name or
+    /// handler.
+    void attach_native_message_handler(std::string handler_name,
+                                       NativeMessageHandler handler);
+    /// Remove a named native message endpoint from this and future realms. A
+    /// live realm keeps the global symbol but replaces it with a fail-closed
+    /// detached response so cached JS call sites cannot reach an expired
+    /// handler. Owner/UI thread only.
+    void detach_native_message_handler(std::string_view handler_name);
+    /// Replace the live JS console sink and retain it across hot reloads.
+    /// This is the primary application-owned sink; secondary scoped observers
+    /// installed with add_log_callback() are preserved.
+    void set_log_callback(LogCallback callback);
+    /// Add a secondary console observer without replacing the primary sink.
+    /// The returned nonzero token remains valid until explicitly removed or
+    /// this session is destroyed, and survives engine hot reloads.
+    std::uint64_t add_log_callback(LogCallback callback);
+    void remove_log_callback(std::uint64_t token);
+    WidgetBridge* bridge() const {
+        return runtime_realm_quarantined_ ? nullptr : bridge_.get();
+    }
+    /// Actual effectful API grants installed in the live bridge, or the grants
+    /// that will be installed before the first successful load. Returned by
+    /// value so inspector policy cannot mutate the realm.
+    CapabilitySet granted_capabilities() const noexcept {
+        return bridge_ ? bridge_->granted_capabilities() : granted_capabilities_;
+    }
+
+    /// The runtime-inspector port for this session's JS engine, or nullptr. A
+    /// session carries one when a port factory was installed
+    /// (set_script_inspector_port_factory) before it was constructed; it then
+    /// tracks the live engine across hot reloads and is pumped once per poll().
+    /// Pulp's port is ScriptInspectorBridge: pulp::view::script_inspector()
+    /// returns it, and a host passes that to the separately linked
+    /// make_script_runtime_evaluator() adapter, retains the adapter, and lends
+    /// it to DomainHandler::set_runtime_evaluator() so the Runtime.* methods
+    /// reach the live UI.
+    ///
+    /// TEARDOWN CONTRACT: the port is owned by (and lives as long as) this
+    /// session, but its off-thread methods are called from a control router
+    /// reader thread. A host that wires it MUST, before destroying this session,
+    /// stop that reader thread, clear DomainHandler's evaluator pointer, and
+    /// destroy the retained evaluator before this session, so no background
+    /// call dereferences the port post-destruction.
+    ScriptInspectorPort* script_inspector_port() {
+        return inspector_port_.get();
+    }
+    /// Process-unique identity for borrowed-source lifetime/ABA checks.
+    std::uint64_t identity() const noexcept { return identity_; }
+
+    /// JS-axis reload timings, ms. Populated on every
+    /// rebuild_from_code() — full on success, partial (later phases 0) on an
+    /// early failure. The DSP-axis counterpart lives in reload_transaction.hpp's
+    /// ReloadMetrics; together they feed the `reloaded in NNN ms` diagnostic and
+    /// p50/p95 baselines.
+    struct ReloadMetrics {
+        double probe_ms = 0.0;     ///< parse + build a probe bridge to validate the code
+        double snapshot_ms = 0.0;  ///< snapshot the live widget values before the rebuild
+        double rebuild_ms = 0.0;   ///< build the live bridge from the new code + apply theme
+        double restore_ms = 0.0;   ///< restore preserved widget values into the new tree
+        double total_ms = 0.0;     ///< end-to-end
+    };
+    const ReloadMetrics& last_reload_metrics() const { return last_reload_metrics_; }
+    /// How many times this session evaluated a script on a throwaway probe
+    /// realm. A reload probes so a broken script cannot take down the live
+    /// editor; the first load has nothing to protect and never probes, so an
+    /// editor open evaluates its document exactly once. Exposed so tests and
+    /// editor-open budgets can assert that by count rather than by wall time.
+    std::uint64_t probe_realm_evaluations() const noexcept {
+        return probe_realm_evaluations_;
+    }
+    /// Convenience: total wall-clock of the last reload, ms.
+    double last_reload_ms() const { return last_reload_metrics_.total_ms; }
+
+    // Attach the host's GpuSurface so the JS-side navigator.gpu /
+    // canvas.getContext('webgpu') bridge routes through Pulp's live Dawn
+    // instance. The format adapters open this session
+    // BEFORE the PluginViewHost exists, so the surface arrives via this
+    // setter once the host is built (e.g. inside `au_view_controller_ios.mm`
+    // after `PluginViewHost::create`).
+    //
+    // Stored so that a hot-reload-triggered bridge rebuild reattaches the
+    // same surface to the new bridge. Pass `nullptr` to detach (called from
+    // the host's teardown before the bridge is destroyed).
+    void attach_gpu_surface(render::GpuSurface* gpu_surface);
+    render::GpuSurface* gpu_surface() const noexcept { return gpu_surface_; }
+
+    const std::filesystem::path& script_path() const { return script_path_; }
+    const std::filesystem::path& theme_path() const { return theme_path_; }
+    bool hot_reload_enabled() const { return hot_reload_enabled_; }
+    bool hot_reload_pending() const {
+        return reloader_ && reloader_->has_pending_reload();
+    }
+    bool theme_reload_enabled() const { return theme_reload_enabled_; }
+
+private:
+    struct NativeMessageAttachment {
+        NativeMessageHandler handler;
+    };
+
+    const std::uint64_t identity_;
+    View& root_;
+    state::StateStore& store_;
+    std::filesystem::path script_path_;
+    std::filesystem::path theme_path_;
+    std::string last_good_code_;
+    std::filesystem::path last_good_script_path_;
+    std::vector<std::filesystem::path> asset_roots_;
+    CapabilitySet granted_capabilities_ = CapabilitySet::all();
+    bool hot_reload_enabled_ = false;
+    bool theme_reload_enabled_ = false;
+    bool runtime_import_enabled_ = false;
+    ValueChannelAccess value_channel_access_;
+
+    std::unique_ptr<ScriptEngine> engine_;
+    std::unique_ptr<WidgetBridge> bridge_;
+    struct RetiredRuntimeRealm {
+        std::unique_ptr<ScriptEngine> engine;
+        std::unique_ptr<WidgetBridge> bridge;
+    };
+    struct RuntimeRealmTeardownOwner {
+        std::vector<RetiredRuntimeRealm> retired;
+        std::unique_ptr<ScriptEngine> current_engine;
+        std::unique_ptr<WidgetBridge> current_bridge;
+    };
+    // Owner-thread evaluate may run inline more than once between UI polls, so
+    // retain every old realm until the next poll rather than overwriting one
+    // slot inside a later response fence.
+    std::vector<RetiredRuntimeRealm> retired_runtime_realms_;
+    // Allocated with the session rather than during its noexcept destructor.
+    // A reentrant native accessibility callback may retain this owner after the
+    // ScriptedUiSession itself has gone away.
+    std::shared_ptr<RuntimeRealmTeardownOwner> runtime_realm_teardown_owner_ =
+        std::make_shared<RuntimeRealmTeardownOwner>();
+    // Marshals off-thread inspector evaluate/interrupt requests onto the engine
+    // thread. Re-attached to the live engine after every rebuild_from_code().
+    // Null when no port factory was installed at construction.
+    std::unique_ptr<ScriptInspectorPort> inspector_port_;
+    std::unique_ptr<HotReloader> reloader_;
+    bool root_released_ = false;
+    std::function<void()> repaint_callback_;
+    std::string host_kind_ = "unknown";
+    WidgetBridge::TimeSource time_source_;
+    std::function<void()> post_evaluation_reset_callback_;
+    bool post_evaluation_reset_callback_pending_ = false;
+    LogCallback log_callback_;
+    std::unordered_map<std::uint64_t, LogCallback> log_subscribers_;
+    std::unordered_map<std::string, std::shared_ptr<NativeMessageAttachment>>
+        native_message_handlers_;
+    std::uint64_t next_log_subscription_ = 0;
+    render::GpuSurface* gpu_surface_ = nullptr;
+
+    Theme base_theme_;
+    Theme last_good_effective_theme_;
+    bool runtime_realm_quarantined_ = false;
+    bool accessibility_retirement_pending_ = false;
+    ReloadMetrics last_reload_metrics_{};   // JS-axis reload timings (item 1.2)
+    std::uint64_t probe_realm_evaluations_ = 0;
+    bool document_load_pending_ = false;
+    int deferred_load_polls_ = 0;
+    std::function<void(bool, const std::string&)> document_loaded_callback_;
+    bool load_now(std::string* error);
+    static constexpr double kBlockingLoadWarningMs = 50.0;
+    bool last_theme_exists_ = false;
+    std::optional<std::filesystem::file_time_type> last_theme_write_time_;
+
+    bool rebuild_from_code(
+        const std::string& code, const std::filesystem::path& source_path, bool preserve_state,
+        std::string* error,
+        std::optional<ScriptInspectorPort::EvaluationDeadline> deadline = std::nullopt);
+    bool apply_theme_override(std::string* error);
+    // Read + parse the sibling theme override onto `base` WITHOUT mutating any
+    // live state — the FALLIBLE half of a theme apply, split out so a reload can
+    // validate the theme BEFORE the irreversible bridge commit (rollback-safety,
+    // item 1.5). Fills out_* and returns false (with `error`) on a bad theme file.
+    bool resolve_theme_override(const Theme& base, Theme& out_merged, bool& out_exists,
+                                std::optional<std::filesystem::file_time_type>& out_write_time,
+                                std::string* error) const;
+    bool poll_theme_reload(std::string* error);
+    void attach_inspector_port(ScriptEngine* engine) {
+        if (inspector_port_)
+            inspector_port_->attach(engine);
+    }
+    void detach_inspector_port() {
+        if (inspector_port_)
+            inspector_port_->detach();
+    }
+    std::string reset_after_runtime_evaluation(ScriptInspectorPort::EvaluationDeadline deadline);
+    LogCallback engine_log_callback();
+    void install_native_message_handlers(ScriptEngine& engine,
+                                         bool validation_realm) const;
+    static void install_native_message_handler(
+        ScriptEngine& engine, const std::string& name,
+        std::shared_ptr<NativeMessageAttachment> attachment,
+        bool validation_realm);
+    void dispatch_log(std::string_view level, std::string_view message);
+
+    static std::string read_text_file(const std::filesystem::path& path);
+    static std::string describe_exception();
+};
+
+} // namespace pulp::view

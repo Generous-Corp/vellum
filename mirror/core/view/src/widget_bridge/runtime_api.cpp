@@ -1,0 +1,369 @@
+// widget_bridge/runtime_api.cpp - frame, timer, and motion runtime registrations for WidgetBridge.
+
+#include <pulp/view/widget_bridge.hpp>
+#include "api_registry.hpp"
+#include "js_trace_scopes.hpp"
+
+#include <pulp/view/motion.hpp>
+
+#include <algorithm>
+#include <chrono>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace pulp::view {
+
+void BridgeRegistrars::register_runtime_api(WidgetBridge& self) {
+    // __requestFrame__ - requestAnimationFrame implementation.
+    // JS side stores callbacks in __frameCallbacks__ map, passes ID to C++.
+    // C++ stores pending IDs and invokes them on next frame via __invokeFrame__.
+    // Shared pending frame callback IDs.
+    if (!self.frame_preamble_loaded_) {
+        self.frame_preamble_loaded_ = true;
+        self.engine_.evaluate(
+            "var __frameCallbacks__ = {};"
+            "var __frameNextId__ = 1;"
+            "function __resolveFrameTimestamp__() {"
+            "  var nativeNow = (typeof __performanceNow__ === 'function')"
+            "    ? __performanceNow__()"
+            "    : ((typeof performance !== 'undefined' && performance"
+            "        && typeof performance.now === 'function')"
+            "      ? performance.now()"
+            "      : ((typeof Date !== 'undefined' && typeof Date.now === 'function')"
+            "          ? Date.now() : 0));"
+            "  var provider = (typeof globalThis !== 'undefined')"
+            "    ? globalThis.__pulpAnimationFrameTimestamp__ : undefined;"
+            "  var resolved = (typeof provider === 'function')"
+            "    ? provider(nativeNow) : nativeNow;"
+            "  return Number.isFinite(resolved) ? resolved : nativeNow;"
+            "}"
+            // A host-driven callback (animation frame, timer) runs through
+            // the UI framework's batching hook when one is installed, so the
+            // several state updates one callback makes commit ONCE when it
+            // returns. @pulp/react installs __pulpBatchUpdates__ (React's
+            // batchedUpdates); without it, its synchronous LegacyRoot commits
+            // every setState the moment it is called, and each commit
+            // re-applies captured import metadata. Absent a hook the callback
+            // runs exactly as before.
+            "function __pulpRunHostCallback__(fn, arg) {"
+            "  var batch = (typeof globalThis !== 'undefined')"
+            "    ? globalThis.__pulpBatchUpdates__ : undefined;"
+            "  return (typeof batch === 'function') ? batch(fn, arg) : fn(arg);"
+            "}"
+            // Each frame callback runs inside a `js` span named after the
+            // function, so a trace attributes the rAF flush to the callbacks
+            // that spent it (a Pro Tools capture showed 2 ms per flush with
+            // nothing below `raf_flush` to say where). `__traceBegin__` returns
+            // false when the span stack refused the open, and only an opened
+            // span is closed. With tracing off the hooks keep depth
+            // bookkeeping only.
+            "function __invokeFrame__(id, now) {"
+            "  var fn = __frameCallbacks__[id];"
+            "  if (fn) {"
+            "    delete __frameCallbacks__[id];"
+            "    var traced = (typeof __traceBegin__ === 'function')"
+            "      && __traceBegin__('raf:' + (fn.name || 'anonymous')) === true;"
+            "    try { __pulpRunHostCallback__(fn, now); }"
+            "    finally { if (traced) __traceEnd__(); }"
+            "  }"
+            "}"
+            // Timer registry for native setTimeout / setInterval. Callbacks
+            // live in JS (CHOC's NativeFunction can't carry JSValue
+            // arguments); native side tracks deadlines + repeat semantics
+            // and pings these helpers when a timer expires.
+            "var __timerCallbacks__ = Object.create(null);"
+            "var __timerNextId__ = 1;"
+            "function __invokeTimer__(id) {"
+            "  var entry = __timerCallbacks__[id];"
+            "  if (!entry) return;"
+            "  if (!entry.repeat) delete __timerCallbacks__[id];"
+            "  try { __pulpRunHostCallback__(function() { entry.fn(); }); } catch (e) {"
+            "    if (typeof console !== 'undefined' && console.error)"
+            "      console.error('timer:', e);"
+            "  }"
+            "}");
+    }
+
+    BridgeApiContext api{self.engine_};
+
+    register_bridge_function(api, "__requestFrame__", [&self](choc::javascript::ArgumentList args) {
+        auto id = args.get<int>(0, 0);
+        if (id > 0) {
+            self.pending_frame_ids_.push_back(id);
+            // Signal the host so the next paint runs and service_frame_callbacks()
+            // drains the queue. Without this,
+            // requestAnimationFrame queues a callback but never asks the
+            // host for a frame, so the canvas never repaints. Queuing a
+            // callback changes nothing on screen, so it asks for a frame, not
+            // for damage: whatever the callback draws marks its own.
+            self.request_frame();
+        }
+        return choc::value::createInt32(id);
+    });
+
+    register_bridge_function(api, "__cancelFrame__", [&self](choc::javascript::ArgumentList args) {
+        auto id = args.get<int>(0, 0);
+        auto it = std::find(self.pending_frame_ids_.begin(), self.pending_frame_ids_.end(), id);
+        if (it != self.pending_frame_ids_.end()) self.pending_frame_ids_.erase(it);
+        return choc::value::Value();
+    });
+
+    register_bridge_function(api, "__flushFrames__", [&self](choc::javascript::ArgumentList) {
+        auto ids = self.pending_frame_ids_;
+        self.pending_frame_ids_.clear();
+        if (ids.empty()) {
+            return choc::value::Value();
+        }
+        // Invoke each callback under its own ambient provenance. The script identity (set via
+        // `load_script(code, script_id)` / `set_active_script_id`) is
+        // prefixed onto the callback id so a published value emitted
+        // from inside an rAF body inherits source_id =
+        // "<script_id>:<callback_id>". One callback at a time so the
+        // ambient slot is correct per-invocation.
+        const bool stamp = !self.active_script_id_.empty();
+        // Browser requestAnimationFrame gives every callback in one rendered
+        // frame the same DOMHighResTimeStamp. Resolve it once per service pass
+        // so captured executable-canvas programs replay deterministically and
+        // ordinary runtimes retain browser-compatible callback semantics.
+        self.engine_.evaluate(
+            "var __pulpFrameTimestamp__ = __resolveFrameTimestamp__();void 0;");
+        const auto frame_timestamp =
+            self.engine_.evaluate("__pulpFrameTimestamp__").getWithDefault<double>(0.0);
+        // RAII guard so an exception in `__invokeFrame__` doesn't leave
+        // stale ambient provenance behind, corrupting attribution for
+        // every subsequent publish until something else clears it.
+        struct AmbientGuard {
+            bool active;
+            ~AmbientGuard() { if (active) motion::clear_ambient_provenance(); }
+        };
+        for (auto id : ids) {
+            AmbientGuard guard{stamp};
+            if (stamp) {
+                motion::Provenance p;
+                p.source_kind = "rAF";
+                p.source_id = self.active_script_id_ + ":" + std::to_string(id);
+                motion::set_ambient_provenance(std::move(p));
+            }
+            // Invoke the already-compiled callback directly. Building a fresh
+            // source string for every rAF callback forces the JS engine through
+            // its parser/compiler on the hottest editor path. Resolve the
+            // timestamp once per service pass above, then pass its numeric value
+            // through ScriptEngine::invoke so the callback body is the only JS
+            // work that runs here.
+            self.engine_.invoke("__invokeFrame__", id, frame_timestamp);
+            // guard's dtor runs on normal and exception paths.
+        }
+        return choc::value::Value();
+    });
+
+    // JS-side bridge for the motion publish channel and ambient provenance slot.
+    //
+    // Exposes:
+    //   motion.publishValue(viewName, metricName, value)
+    //   motion.setProvenance(kind, id)         // sticky
+    //   motion.clearProvenance()
+    //
+    // The C++ side already off-by-defaults when tracing is disabled, so
+    // calling these in production code is cheap. Design-import codegen
+    // can emit `motion.setProvenance("design-import", "figma:Card/Hover")`
+    // alongside its `view.animate({...})` so the emitted trace carries
+    // the vendor + node identity. rAF callbacks pick up
+    // `source_kind="rAF"` automatically via the ambient slot set by
+    // `__flushFrames__` when an active script id is configured.
+    register_bridge_function(api, "__motionPublishValue__",
+        [](choc::javascript::ArgumentList args) {
+            auto view = args.get<std::string>(0, "");
+            auto metric = args.get<std::string>(1, "");
+            auto value = args.get<double>(2, 0.0);
+            if (!view.empty() && !metric.empty()) {
+                motion::publish_value(std::move(view), std::move(metric), value);
+            }
+            return choc::value::Value();
+        });
+
+    register_bridge_function(api, "__motionSetProvenance__",
+        [](choc::javascript::ArgumentList args) {
+            motion::Provenance p;
+            p.source_kind = args.get<std::string>(0, "");
+            p.source_id = args.get<std::string>(1, "");
+            // Optional file + line for callers that want to point at a
+            // specific JSX/JS source line.
+            p.source_file = args.get<std::string>(2, "");
+            p.source_line = args.get<int>(3, 0);
+            motion::set_ambient_provenance(std::move(p));
+            return choc::value::Value();
+        });
+
+    register_bridge_function(api, "__motionClearProvenance__",
+        [](choc::javascript::ArgumentList) {
+            motion::clear_ambient_provenance();
+            return choc::value::Value();
+        });
+
+    // Install the JS-side `motion` global wrapping the natives.
+    // Idempotent - re-evaluating the same definition is a no-op.
+    self.engine_.evaluate(
+        "if (typeof globalThis.motion === 'undefined') {"
+        "  globalThis.motion = {"
+        "    publishValue: function(view, metric, value) {"
+        "      return __motionPublishValue__(String(view), String(metric), Number(value));"
+        "    },"
+        "    setProvenance: function(kind, id, file, line) {"
+        "      return __motionSetProvenance__(String(kind || ''), String(id || ''),"
+        "                                     String(file || ''), Number(line || 0));"
+        "    },"
+        "    set_provenance: function(kind, id, file, line) {"
+        "      return globalThis.motion.setProvenance(kind, id, file, line);"
+        "    },"
+        "    clearProvenance: function() { return __motionClearProvenance__(); },"
+        "  };"
+        "}"
+        "void 0;"
+    );
+
+    // Native setTimeout / setInterval scheduling. JS-side setTimeout/setInterval
+    // generate the id and stash the callback in
+    // __timerCallbacks__; native tracks (id, deadline, repeat, interval)
+    // so service_frame_callbacks() can fire expired timers without a
+    // consumer-side shim.
+    register_bridge_function(api, "__scheduleTimer__", [&self](choc::javascript::ArgumentList args) {
+        auto id = args.get<int>(0, 0);
+        auto delay = args.get<double>(1, 0.0);
+        auto repeat = args.get<bool>(2, false);
+        if (id <= 0) return choc::value::createInt32(0);
+        if (delay < 0.0) delay = 0.0;
+        auto delay_ms = std::chrono::milliseconds(static_cast<long long>(delay));
+        WidgetBridge::PendingTimer t;
+        t.id = id;
+        t.deadline = self.time_now() + delay_ms;
+        t.interval = delay_ms;
+        t.repeating = repeat;
+        // Replace any prior schedule for this id (shouldn't happen, but
+        // setInterval/setTimeout share the JS-side id allocator and a
+        // misbehaving consumer might double-schedule).
+        auto it = std::find_if(self.pending_timers_.begin(), self.pending_timers_.end(),
+            [id](const WidgetBridge::PendingTimer& p){ return p.id == id; });
+        if (it != self.pending_timers_.end()) *it = t;
+        else self.pending_timers_.push_back(t);
+        return choc::value::createInt32(id);
+    });
+
+    register_bridge_function(api, "__cancelTimer__", [&self](choc::javascript::ArgumentList args) {
+        auto id = args.get<int>(0, 0);
+        auto it = std::remove_if(self.pending_timers_.begin(), self.pending_timers_.end(),
+            [id](const WidgetBridge::PendingTimer& p){ return p.id == id; });
+        self.pending_timers_.erase(it, self.pending_timers_.end());
+        return choc::value::Value();
+    });
+
+    register_bridge_function(api, "__flushTimers__", [&self](choc::javascript::ArgumentList) {
+        if (self.pending_timers_.empty()) return choc::value::Value();
+        auto now = self.time_now();
+        std::vector<int> to_fire;
+        // Two-phase: first collect ids whose deadline has passed, then
+        // fire them. Mutating pending_timers_ while iterating would lose
+        // re-arms from setInterval (which reschedules its own deadline).
+        for (auto& t : self.pending_timers_) {
+            if (t.deadline <= now) to_fire.push_back(t.id);
+        }
+        if (to_fire.empty()) return choc::value::Value();
+        // Re-arm intervals before invocation so the JS callback can call
+        // clearInterval(id) and have it actually take effect (which the
+        // __cancelTimer__ binding it calls into respects).
+        for (auto& t : self.pending_timers_) {
+            if (t.deadline <= now && t.repeating) {
+                // Catch-up by interval - never schedule into the past.
+                while (t.deadline <= now) t.deadline += t.interval;
+            }
+        }
+        // Drop expired non-repeating timers from the queue. (Repeating
+        // ones already had their deadline advanced above.)
+        self.pending_timers_.erase(
+            std::remove_if(self.pending_timers_.begin(), self.pending_timers_.end(),
+                [now](const WidgetBridge::PendingTimer& p){
+                    return !p.repeating && p.deadline <= now;
+                }),
+            self.pending_timers_.end());
+        std::string batch;
+        batch.reserve(to_fire.size() * 24);
+        for (auto id : to_fire) {
+            batch += "__invokeTimer__(";
+            batch += std::to_string(id);
+            batch += ");";
+        }
+        self.engine_.evaluate(batch + "void 0;");
+        return choc::value::Value();
+    });
+
+    // Script-driven trace spans. A pointer handler is one opaque block in a
+    // capture: the dispatch boundary can time `dom_event_evaluate` but cannot
+    // see inside it. These name what is inside. The pair is balanced by the
+    // script, so safe_dispatch_eval force-closes whatever the handler leaves
+    // open and reports it rather than silently re-parenting later slices.
+    register_trace_seam_function(api, "__traceBegin__", [](choc::javascript::ArgumentList args) {
+        return choc::value::createBool(js_trace::begin(args.get<std::string>(0, "js_scope")));
+    });
+
+    register_trace_seam_function(api, "__traceEnd__", [](choc::javascript::ArgumentList) {
+        return choc::value::createBool(js_trace::end());
+    });
+
+    // Balance bookkeeping, readable from script and from a test. Kept in one
+    // native so the counters are always read from the same instant.
+    register_bridge_function(api, "__traceStats__", [](choc::javascript::ArgumentList) {
+        return choc::value::createObject(
+            "PulpTraceStats", "depth", static_cast<int64_t>(js_trace::open_depth()), "forceClosed",
+            static_cast<int64_t>(js_trace::force_closed_count()), "unmatchedEnd",
+            static_cast<int64_t>(js_trace::unmatched_end_count()), "refused",
+            static_cast<int64_t>(js_trace::refused_count()), "beginInsideNative",
+            static_cast<int64_t>(js_trace::begun_inside_native_count()));
+    });
+
+    // Install the JS-side `pulpTrace` global wrapping the natives.
+    // Idempotent - re-evaluating the same definition is a no-op.
+    self.engine_.evaluate(
+        "if (typeof globalThis.pulpTrace === 'undefined') {"
+        "  globalThis.pulpTrace = {"
+        "    begin: function(name) { return __traceBegin__(String(name)); },"
+        "    end: function() { return __traceEnd__(); },"
+        "    scope: function(name, fn) {"
+        "      var opened = __traceBegin__(String(name));"
+        "      try { return fn(); } finally { if (opened) __traceEnd__(); }"
+        "    },"
+        "    stats: function() { return __traceStats__(); },"
+        "  };"
+        "}"
+        "void 0;"
+    );
+
+    // performance.now() - high-resolution monotonic time in milliseconds.
+    register_bridge_function(api, "__performanceNow__", [&self](choc::javascript::ArgumentList) {
+        double ms =
+            std::chrono::duration<double, std::milli>(self.time_now() - self.performance_epoch_)
+                .count();
+        return choc::value::createFloat64(ms);
+    });
+
+    // hostKind() -> "plugin" | "standalone" | "unknown"; see
+    // WidgetBridge::set_host_kind. Read it when the decision is made (at
+    // keydown, at render) rather than caching it once at load: the format
+    // layer may declare it after the document's first script ran.
+    register_bridge_function(api, "hostKind", [&self](choc::javascript::ArgumentList) {
+        return choc::value::createString(self.host_kind());
+    });
+}
+
+// Script-visible time (timers, performance.now(), the rAF timestamp) reads
+// this clock; a harness on a fixed frame schedule installs its own source.
+// performance.now() restarts at zero for this bridge when the source changes.
+void WidgetBridge::set_time_source(TimeSource source) {
+    time_source_ = std::move(source);
+    performance_epoch_ = time_now();
+}
+
+std::chrono::steady_clock::time_point WidgetBridge::time_now() const {
+    return time_source_ ? time_source_() : std::chrono::steady_clock::now();
+}
+
+} // namespace pulp::view

@@ -1,0 +1,930 @@
+#pragma once
+
+// Windows: system headers before any namespace block, or CHOC/QuickJS
+// intrinsics (_InterlockedIncrement etc.) get declared in pulp::view:: and
+// conflict with winbase.h. win32_sane.hpp, never raw <windows.h> — it pre-sets
+// NOMINMAX, else min/max break widgets.hpp's std::max below (MSVC C2589).
+#if defined(_WIN32)
+#include <pulp/platform/win32_sane.hpp>
+#endif
+
+#include <pulp/view/script_engine.hpp>
+#include <pulp/view/canvas_widget.hpp>
+#include <pulp/view/view.hpp>
+#include <pulp/view/input_events.hpp>
+#include <pulp/view/theme.hpp>
+#include <pulp/view/binding_diagnostics.hpp>
+#include <pulp/view/param_subscription.hpp>
+#include <pulp/view/reload_capabilities.hpp>
+#include <pulp/view/value_channel_set.hpp>
+#include <pulp/state/store.hpp>
+
+namespace pulp::view { struct ClaudeBundle; }
+#include <algorithm>
+#include <chrono>
+#include <cstdint>
+#include <filesystem>
+#include <functional>
+#include <limits>
+#include <string>
+#include <string_view>
+#include <vector>
+#include <unordered_map>
+#include <unordered_set>
+#include <memory>
+#include <mutex>
+#include <atomic>
+
+namespace pulp::render {
+class GpuSurface;
+}
+
+#ifdef PULP_BENCHMARK
+namespace pulp::render::bench {
+struct PerfCounters;
+}
+#endif
+
+namespace pulp::view {
+
+class QueryService;
+struct BridgeCallbackState;
+// Widget value snapshot for hot reload preservation
+struct WidgetReloadSnapshot {
+    std::unordered_map<std::string, float> scalar_values;
+    struct XYValue { float x = 0; float y = 0; };
+    std::unordered_map<std::string, XYValue> xy_values;
+    // Custom widget-declared state (item 1.4b): opaque per-widget blobs from
+    // View::save_reload_state, keyed by script id, restored via restore_reload_state.
+    std::unordered_map<std::string, std::string> custom_state;
+    // Legacy compat
+    std::unordered_map<std::string, float> values;
+};
+// Bridges JS scripts to the Pulp widget system.
+// Registers native functions that JS code calls to create, configure,
+// layout, style, and interact with widgets.
+class WidgetBridge {
+public:
+    using DeadlineCheck = std::function<void()>;
+    // `granted_capabilities` scopes the EFFECTFUL bridge-API groups (exec,
+    // clipboard, filesystem, storage, ai, runtime_import). Ungranted groups are
+    // never registered — the JS symbol is absent. The default all() leaves every
+    // group present (the full-featured posture for trusted/local UIs); a host that
+    // runs untrusted UI constructs with only the declared set (empty = most
+    // restrictive). Pure-UI groups ignore this. See reload_capabilities.hpp.
+    WidgetBridge(ScriptEngine& engine, View& root, state::StateStore& store,
+                 render::GpuSurface* gpu_surface = nullptr,
+                 CapabilitySet granted_capabilities = CapabilitySet::all());
+    ~WidgetBridge();
+
+    // Attach (or replace) the GPU surface AFTER construction. Mirrors the
+    // 4th constructor argument but for the common case where the WidgetBridge
+    // is built before the host's GpuSurface exists (e.g. AUv3 editor lifecycle:
+    // the format adapter opens ViewBridge / ScriptedUiSession first, then
+    // builds the PluginViewHost — only THEN is `host->gpu_surface()` non-null).
+    //
+    // Without this attach call, the JS-side navigator.gpu / canvas.getContext
+    // ('webgpu') bridge falls through to mocks and Three.js renders black.
+    //
+    // Lifetime: the GpuSurface must outlive this WidgetBridge. Pass `nullptr`
+    // to detach (e.g. during host teardown). Idempotent — calling with the
+    // same surface twice is a no-op.
+    void attach_gpu_surface(render::GpuSurface* gpu_surface);
+
+    // Read-back accessor for diagnostics + tests.
+    render::GpuSurface* gpu_surface() const noexcept { return gpu_surface_; }
+
+    /// Attach stable channels, or leased access for a reloadable processor.
+    void set_value_channels(ValueChannelSet* channels);
+    void set_value_channel_access(ValueChannelAccess access);
+    /// The visitor must not retain a channel set or source after it returns.
+    void visit_value_channels(const ValueChannelVisitor& visitor) const;
+
+    /// Multiplies every font size an imported UI asks for through setFontSize.
+    ///
+    /// An imported design carries its type sizes as literals — a panel authored
+    /// at 9-11px is legible in a browser tab and small in a plugin window — and
+    /// they are scattered across the authored source, so there is no single
+    /// value a host can turn. This is that value. It is applied at the one
+    /// bridge funnel every styled text size passes through, so a host or plugin
+    /// can size an imported UI for its own context without editing (or
+    /// re-editing, after each reimport) any authored literal.
+    ///
+    /// Default 1.0 changes nothing. Values are clamped to a sane range so a bad
+    /// number cannot make text invisible or unbounded.
+    void set_imported_text_scale(float scale) noexcept {
+        if (!(scale > 0.0f)) return;  // NaN-safe: rejects 0, negatives and NaN
+        imported_text_scale_ = std::clamp(scale, 0.5f, 4.0f);
+    }
+    float imported_text_scale() const noexcept { return imported_text_scale_; }
+
+    CapabilitySet granted_capabilities() const noexcept { return granted_capabilities_; }
+    // True iff a GpuSurface is attached AND its adapter reports
+    // `native_bridge=true` (i.e. JS navigator.gpu / canvas.getContext('webgpu')
+    // will route through Pulp's Dawn).
+    bool has_native_gpu_bridge() const noexcept;
+
+    /// Load and execute a UI script. Pending rAF callbacks are flushed only
+    /// until the host first calls service_frame_callbacks(); after that they
+    /// wait for the next frame tick. Push per-tick data with
+    /// dispatch_native_message() instead.
+    void load_script(const std::string& code);
+    /// What load_script() evaluates for `code` -- what a prewarm must compile.
+    static std::string loaded_script_source(const std::string& code);
+    bool frame_pump_live() const noexcept { return frame_pump_live_; }
+
+    /// Deliver one typed host-owned message to a named receiver in this UI
+    /// realm. Arguments cross the engine binding directly; no JavaScript source
+    /// is generated or evaluated. This pumps microtasks and ensures the host
+    /// has one repaint request, without duplicating a request already made by
+    /// the receiver, but deliberately leaves requestAnimationFrame callbacks
+    /// for the host's next frame tick. The receiver must be a global function
+    /// with the shape `(type, payload, id)`.
+    void dispatch_native_message(
+        std::string_view receiver,
+        std::string_view type,
+        const choc::value::Value& payload,
+        std::string_view id = {},
+        std::string_view context = "native message dispatch");
+
+    /// Set reviewed local roots used by JS asset loading for relative URLs.
+    /// These are scoped to this bridge instance and are intended for
+    /// post-review UI-kit assets copied under `pulp-kits/<kit-id>/`.
+    void set_asset_roots(std::vector<std::filesystem::path> roots) {
+        asset_roots_.clear();
+        asset_roots_.reserve(roots.size());
+        for (auto& root : roots) {
+            if (root.empty()) continue;
+            std::error_code ec;
+            auto abs = std::filesystem::absolute(root, ec).lexically_normal();
+            if (ec) abs = root.lexically_normal();
+            asset_roots_.push_back(std::move(abs));
+        }
+    }
+    const std::vector<std::filesystem::path>& asset_roots() const noexcept { return asset_roots_; }
+
+    /// Preferred directory for resolving RELATIVE filesystem paths handed to
+    /// path-taking bridge APIs. Imported code emits `assets/<file>` beside its
+    /// generated script; a host may instead keep the script in a scratch file
+    /// and provide the durable artifact directory through set_asset_roots().
+    /// The script directory is tried first, followed by those reviewed roots.
+    void set_script_base_dir(std::filesystem::path dir) {
+        if (dir.empty()) { script_base_dir_.clear(); return; }
+        std::error_code ec;
+        auto abs = std::filesystem::absolute(dir, ec).lexically_normal();
+        script_base_dir_ = ec ? dir.lexically_normal() : abs;
+    }
+    const std::filesystem::path& script_base_dir() const noexcept { return script_base_dir_; }
+
+    /// Resolve an existing relative file against the script directory or a
+    /// reviewed asset root. Asset-root candidates are canonicalized and must
+    /// remain inside their root so symlinks and `..` cannot escape it.
+    /// Absolute paths, URIs, and misses pass through unchanged.
+    std::string resolve_script_relative(const std::string& path) const;
+
+    /// load_script overload that retains a script identifier. `script_id` is
+    /// recorded as `active_script_id_` and threaded into every rAF callback
+    /// registered while the script is active so `motion.publishValue(...)` calls
+    /// from inside an rAF body emit events tagged with `source_kind="rAF"`,
+    /// `source_id="<script_id>:<callback_id>"`. The legacy overload continues
+    /// to work unchanged.
+    void load_script(const std::string& code, const std::string& script_id);
+
+    /// Set the active script identifier without re-evaluating a script.
+    /// Useful when the same engine evaluates fragments from multiple
+    /// sources and the caller wants subsequent rAF/timer callbacks to
+    /// attribute to a different surface. Pass an empty string to clear.
+    void set_active_script_id(const std::string& script_id);
+
+    const std::string& active_script_id() const noexcept { return active_script_id_; }
+
+    // Get a widget by its JS-assigned ID
+    View* widget(const std::string& id);
+
+    // ScrollView wrappers created for retained DOM containers are kept
+    // separate from the authored widget registry so normal ID APIs continue
+    // to address the original content View.
+    ScrollView* scroll_wrapper(const std::string& id) const noexcept;
+
+    // Return the native style/hit-test surface for an authored id. Retained
+    // scroll containers use a wrapper for clipping and geometry; ordinary
+    // widgets continue to resolve through the authored registry.
+    View* style_target(const std::string& id) noexcept;
+
+    // Sync all widget values from the parameter store
+    void sync_from_store();
+
+    // Hot reload support: clear all JS-created widgets
+    void clear(const DeadlineCheck& deadline_check = {});
+    // Runtime.evaluate realm replacement must never execute cleanup code in the
+    // evaluated realm: user code can replace those helpers and wedge teardown.
+    void clear_for_realm_replacement(const DeadlineCheck& deadline_check = {});
+    /// Empty when the current tree can be retired by Runtime.evaluate's
+    /// bounded reset; otherwise describes the structural blocker.
+    std::string_view bounded_realm_retirement_denial() const noexcept;
+    // Owner-teardown cleanup for a quarantined realm. Removes only this
+    // bridge's root children so a replacement session already attached to the
+    // shared root remains intact.
+    void clear_quarantined_realm();
+    // Allocation-free destructor fallback when selective quarantined cleanup
+    // could not be prepared. Retires the complete attached root rather than
+    // leave any View callback borrowing a realm that is about to be destroyed.
+    void force_retire_root_for_owner_teardown() noexcept;
+    // Constant-work fail-close used when the realm-replacement deadline has
+    // already expired. The retained realm is hidden and removed from every
+    // host pump/fan-out path, then reclaimed with the owning session.
+    void quarantine_realm() noexcept;
+
+    // Forward a key event to JS (called by host for global shortcuts).
+    // Per-instance entry; usually invoked by `dispatch_global_key` below.
+    void forward_key_event(int key_code, uint16_t modifiers, bool is_down);
+
+    /// Deliver a key only to the live bridge attached to `root`.
+    /// Returns whether a shortcut or JS listener consumed the event. Plugin
+    /// hosts use this instead of process-wide dispatch so one editor can never
+    /// deliver navigation into another editor in the same host process.
+    static bool dispatch_key_for_root(View& root, int key_code,
+                                      uint16_t modifiers, bool is_down);
+
+    // Static fan-out: forward a key event to every live WidgetBridge.
+    //
+    // Platform hosts call this from their key-event paths so that any
+    // app using @pulp/react / WidgetBridge gets `window.addEventListener
+    // ('keydown', ...)` and `registerShortcut(...)` delivery without the
+    // app having to install its own `View::on_global_key` lambda.
+    // Bridges register themselves in the static `all_bridges_` set in
+    // their constructor and unregister in their destructor; the set is
+    // mutex-protected because bridge construction can happen off the
+    // platform main thread in some embedding contexts.
+    static void dispatch_global_key(int key_code, uint16_t modifiers, bool is_down);
+
+    // Static fan-out: fire a document-level event (`mousedown`,
+    // `pointerdown`, etc.) into every live WidgetBridge's JS document.
+    // Used by platform hosts to fire synthetic outside-click events on
+    // Esc so React popovers that use the
+    // `document.addEventListener('mousedown', onDoc)` click-outside
+    // idiom close automatically. `event_json_literal` is a JS object
+    // literal expression INCLUDING braces, e.g. `{clientX:-1,clientY:-1,target:null}`.
+    static void dispatch_document_event(const std::string& event_type,
+                                        const std::string& event_json_literal);
+
+    // Snapshot widget values for preservation across hot reload
+    void snapshot_values(WidgetReloadSnapshot& out,
+                         const DeadlineCheck& deadline_check = {},
+                         bool include_custom_state = true) const;
+    void snapshot_values(std::unordered_map<std::string, float>& out) const;
+
+    // Restore widget values after hot reload rebuild
+    void restore_values(const WidgetReloadSnapshot& snapshot,
+                        const DeadlineCheck& deadline_check = {},
+                        bool include_custom_state = true);
+    void restore_values(const std::unordered_map<std::string, float>& snapshot);
+
+    // Deliver any pending async shell results back onto the JS thread.
+    void poll_async_results();
+
+    // Flush requestAnimationFrame-style callbacks and pending microtasks from
+    // the host frame loop.
+    void service_frame_callbacks();
+
+    // Host frames a mounted runtime document still asked for to settle its
+    // commits (`__pulpRuntimeSettle__`). Each service_frame_callbacks() pass
+    // consumes one. Zero once the document has settled, or for a document that
+    // never asked.
+    int pending_runtime_settle_rounds() const noexcept {
+        return pending_runtime_settle_rounds_;
+    }
+
+    // ── Declarative native→widget bindings (params / meters) ──────────────
+    //
+    // A binding is registered ONCE from JS via `bindWidgetToParam(widgetId,
+    // paramName, transform?)` or `bindMeter(widgetId, paramName, transform?)`.
+    // Thereafter the widget's value is pushed from the atomic param store to
+    // the widget every frame in C++ — off the host FrameClock, with ZERO
+    // per-frame JS bridge crossing — by service_param_bindings(), which
+    // service_frame_callbacks() drives on the host idle cadence. For native
+    // gesture-capable value widgets, the binding also routes begin/end to the
+    // StateStore so a JS `change` handler's writes remain a balanced host
+    // automation gesture.
+    //
+    // This replaces the requestAnimationFrame loop a live-metering / param-
+    // following UI would otherwise run (the one thing that guarantees QuickJS
+    // executes every vsync). Precedence: a value widget (knob/fader/slider/
+    // toggle/progress) is re-asserted from the store EVERY frame, so a stray
+    // explicit setValue is corrected on the next frame; a bound Meter is updated
+    // whenever its source changes (Meter::set_level repaints unconditionally, so
+    // it is not touched on a static frame). Either way the binding yields while
+    // the user is dragging that widget — the gesture wins (View::is_gesture_active()).
+    // See bind_* in state_binding_api.cpp.
+    void service_param_bindings();
+    void service_shader_value_bindings();
+
+    // Number of live param/meter bindings (diagnostics + tests).
+    std::size_t param_binding_count() const noexcept { return param_bindings_.size(); }
+    // Exact live creation identities retained for scoped realm cleanup.
+    std::size_t owned_widget_identity_count() const noexcept {
+        return owned_widgets_.size();
+    }
+    std::size_t widget_cache_count() const noexcept {
+        return widgets_.size();
+    }
+
+    // Number of JS-to-native bridge dispatches since the last reset. This is
+    // per bridge so deterministic import benchmarks can measure mount and
+    // step work without a process-global counter.
+    std::uint64_t bridge_call_count() const noexcept {
+        return bridge_call_count_->load(std::memory_order_relaxed);
+    }
+    void reset_bridge_call_count() noexcept {
+        bridge_call_count_->store(0, std::memory_order_relaxed);
+    }
+
+    // Deliver `paramchange` to JS subscriptions whose param moved since the
+    // last frame. Polled, not pushed — see state_binding_api.cpp for why that
+    // is what makes delivery origin-blind, coalesced, and off the audio thread.
+    void service_param_subscriptions();
+
+    // Live paramchange subscriptions, excluding mid-dispatch tombstones.
+    std::size_t param_subscription_count() const noexcept;
+
+    // Deliver event-channel blocks to JS handlers on the frame tick.
+    void service_event_bindings();
+
+    // Live event-channel bindings, excluding mid-dispatch tombstones.
+    std::size_t event_binding_count() const noexcept;
+
+    // ── Runtime design import ─────────────────────────────────────
+    //
+    // Registers the `__pulpRuntimeImport__(html, source)` and
+    // `__pulpRuntimeSettle__(rounds)` native functions on the bridge's
+    // JS engine. These are the C++ side of `@pulp/react/runtime-import`'s
+    // `renderFromDesign()`: they evaluate a design bundle's HTML in
+    // the LIVE bridge engine (not a fresh sandbox) and pump the
+    // settle loop using this bridge's own service_frame_callbacks.
+    //
+    // Call ONCE after constructing the bridge, before consumer code
+    // calls renderFromDesign(). Subsequent calls are no-ops.
+    //
+    void install_runtime_import_handlers();
+
+private:
+    bool forward_key_event_handled(int key_code, uint16_t modifiers,
+                                   bool is_down, View* focus_root = nullptr);
+    // Internal helper used by __pulpRuntimeImport__. Forward-declared in
+    // the design_import unit so the implementation lives next to the
+    // related offline boot code. Installs navigator/HTML*Element/etc.
+    // sandbox shims on engine_ (idempotent), evaluates the bundle's
+    // asset payloads (React/ReactDOM/Babel) preserving any host React
+    // already installed on globalThis, evaluates inline text/javascript
+    // and text/babel scripts, dispatches DOMContentLoaded. Skips
+    // buildDom + walkDomJson — the runtime path is reconciler-owned.
+    void evaluate_claude_bundle_in_live_engine(const ClaudeBundle& bundle);
+public:
+
+    // Override the repaint invalidator used after JS-driven UI / style
+    // changes and to drain `requestAnimationFrame` callbacks.
+    //
+    // By default the bridge's constructor wires this to call
+    // `root.request_repaint()`, which walks up to the host's `repaint()`.
+    // Override only when the bridge is part of a larger composite UI whose
+    // top-level invalidator is not the same as the root view passed in
+    // (e.g. the standalone window's editor uses the WindowHost directly).
+    //
+    // Without a wired callback, JS `requestAnimationFrame` callbacks queue
+    // but never schedule a second paint.
+    void set_repaint_callback(std::function<void()> cb);
+
+    /// What the tree had marked when a batch of script work started, so the
+    /// bridge can tell whether that work already asked for exactly the
+    /// repaints it needs (see View::damage_request_count()).
+    struct DamageLedger {
+        std::uint64_t damage_requests = 0;
+        std::uint64_t unmarked_mutations = 0;
+        std::uint64_t layout_generation = 0;
+        bool self_damaged(const View& root) const;
+        bool untouched(const View& root) const;
+    };
+    DamageLedger damage_ledger() const;
+    /// The repaint owed after a batch of script work that requested none
+    /// itself, decided from what it marked (see DamageLedger).
+    void request_repaint_after(const DamageLedger& ledger);
+    /// Ask for a frame without marking damage (View::request_frame()).
+    void request_frame();
+
+    // Override the AI CLI command used by the design tool chat.
+    void set_ai_cli_command(std::string cmd);
+
+    // hostKind(): "plugin" | "standalone" | "unknown"; see ScriptedUiSession::set_host_kind.
+    void set_host_kind(std::string kind) { host_kind_ = std::move(kind); }
+    const std::string& host_kind() const { return host_kind_; }
+
+    /// Clock for script timers, performance.now() and the rAF timestamp
+    /// (default steady_clock::now; Date.now() never follows it).
+    using TimeSource = std::function<std::chrono::steady_clock::time_point()>;
+    void set_time_source(TimeSource source);
+    std::chrono::steady_clock::time_point time_now() const;
+
+    // Inspect the native texture backing a canvas element when the native GPU
+    // bridge is active. Used by low-level native WebGPU/Skia validation.
+    CanvasWidget::NativeGpuTextureFrame describe_native_canvas_frame(const std::string& canvas_id) const;
+
+    // Inspect a native texture allocated through the GPU bridge by texture id.
+    // Used by low-level native WebGPU/Skia validation when the source is not a
+    // canvas-backed presentation texture.
+    CanvasWidget::NativeGpuTextureFrame describe_native_texture_frame(const std::string& texture_id) const;
+
+#ifdef PULP_BENCHMARK
+    // Install (or clear) the zero-copy benchmark perf-counter sink. The
+    // counters are accumulated inline around WriteBuffer calls on the
+    // JS-driven GPU resource setup path in widget_bridge/gpu_api.cpp.
+    // Tooling-only; compiled out unless PULP_BENCHMARK is defined.
+    void set_bench_counters(render::bench::PerfCounters* counters);
+#endif
+
+private:
+    struct NativeGpuBridgeState;
+    // One capability-gated entry in register_api()'s registration table.
+    // Defined in widget_bridge.cpp — the table is an implementation detail.
+    struct ApiGroup;
+
+    ScriptEngine& engine_;
+    View& root_;
+    state::StateStore& store_;
+    // Effectful-API-group gate. See the constructor doc + reload_capabilities.hpp.
+    CapabilitySet granted_capabilities_;
+    render::GpuSurface* gpu_surface_ = nullptr;
+    std::unique_ptr<NativeGpuBridgeState> native_gpu_bridge_state_;
+    std::vector<std::filesystem::path> asset_roots_;
+    std::filesystem::path script_base_dir_;
+
+    // Per-id cache entry: the resolved View plus the tree structure generation
+    // at which that View was last CONFIRMED to live under `root_`. A fresh entry
+    // starts unvalidated (generation 0, the reserved sentinel), so the first
+    // widget() lookup always runs the authoritative subtree walk; once confirmed,
+    // repeat lookups short-circuit to O(1) while the root-local generation is
+    // unchanged (no remove_child has detached anything since). The implicit
+    // View* conversions keep this a drop-in for the former
+    // `unordered_map<string, View*>` at every call site; assignment resets the
+    // validation because a replacement pointer has not yet been confirmed.
+    struct BridgeWidgetState {
+        View* view = nullptr;
+        std::uint64_t validated_generation = 0;
+        std::uint64_t instance_id = 0;
+        BridgeWidgetState() = default;
+        BridgeWidgetState(View* v)                       // NOLINT: intentional implicit
+            : view(v),
+              instance_id(v ? v->import_binding_instance_id() : 0) {}
+        BridgeWidgetState& operator=(View* v) {
+            view = v;
+            validated_generation = 0;
+            instance_id = v ? v->import_binding_instance_id() : 0;
+            return *this;
+        }
+        operator View*() const { return view; }
+        View* operator->() const { return view; }
+        bool identifies(const View* candidate) const {
+            return view == candidate && candidate &&
+                   instance_id == candidate->import_binding_instance_id();
+        }
+    };
+
+    class WidgetRegistry
+        : public std::unordered_map<std::string, BridgeWidgetState> {
+        using Base = std::unordered_map<std::string, BridgeWidgetState>;
+
+    public:
+        explicit WidgetRegistry(std::vector<BridgeWidgetState>& owned_widgets)
+            : owned_widgets_(owned_widgets) {}
+
+        class AssignmentSlot {
+        public:
+            AssignmentSlot(BridgeWidgetState& state,
+                           std::vector<BridgeWidgetState>& owned_widgets)
+                : state_(state), owned_widgets_(owned_widgets) {}
+
+            AssignmentSlot& operator=(View* view) {
+                if (view)
+                    owned_widgets_.emplace_back(view);
+                state_ = view;
+                return *this;
+            }
+
+        private:
+            BridgeWidgetState& state_;
+            std::vector<BridgeWidgetState>& owned_widgets_;
+        };
+
+        AssignmentSlot operator[](const std::string& id) {
+            return AssignmentSlot(Base::operator[](id), owned_widgets_);
+        }
+
+        void cache(const std::string& id, View* view) {
+            Base::operator[](id) = view;
+        }
+
+    private:
+        std::vector<BridgeWidgetState>& owned_widgets_;
+    };
+
+    // Track widgets by ID for JS access
+    // Exact live creation identities, independent of the mutable ID registry,
+    // so duplicate IDs cannot lose delayed-quarantine ownership.
+    std::vector<BridgeWidgetState> owned_widgets_;
+    WidgetRegistry widgets_;
+    std::unordered_map<std::string, ScrollView*> scroll_wrappers_;
+
+    // Idempotency guards for native-event registrations, one record per widget
+    // id. Re-running a registrar on every React commit must not replace or stack
+    // its View callback. The claim_* helpers below gate registrations so each
+    // (widget id, channel) wires the native hook exactly once, and forgetting an
+    // id is a single erase.
+    //
+    // Keyed independently of `widgets_`: a registrar claims its channel BEFORE
+    // resolving the widget, so an id can carry registration state with no live
+    // widget behind it.
+    struct WidgetRegistrations {
+        bool pointer = false;
+        bool wheel = false;
+        // Recognizer keys already added to this widget (`tap`, `pinch`, …).
+        // A vector, not a set: a widget carries a handful of recognizers, so a
+        // linear scan beats hashing.
+        std::vector<std::string> gesture_recognizers;
+    };
+    std::unordered_map<std::string, WidgetRegistrations> registrations_;
+
+    // Claim a native-event channel for `id`. Returns true the first time the
+    // channel is claimed — the caller then wires the native hook — and false
+    // once it is already registered.
+    bool claim_pointer_registration(const std::string& id);
+    bool claim_wheel_registration(const std::string& id);
+    bool claim_gesture_registration(const std::string& id,
+                                    const std::string& recognizer_key);
+
+    // Registered keyboard shortcuts from JS
+    struct ShortcutBinding {
+        KeyCode key;
+        uint16_t modifiers;
+        std::string callback;
+    };
+    std::vector<ShortcutBinding> shortcuts_;
+
+    /// Application-wide @keyframes registry. `defineKeyframes(name, stops)`
+    /// populates this; `setAnimation` looks up by name when resolving
+    /// animation-name. Per-View playback state lives on
+    /// View::active_animations_.
+    CssKeyframesRegistry css_keyframes_registry_;
+public:
+    CssKeyframesRegistry& css_keyframes_registry() { return css_keyframes_registry_; }
+    const CssKeyframesRegistry& css_keyframes_registry() const { return css_keyframes_registry_; }
+private:
+
+    // Model-agnostic AI CLI command (default: Claude)
+    std::string ai_cli_command_ = "claude --print --model {model}";
+    std::string host_kind_ = "unknown";
+    TimeSource time_source_;
+    std::chrono::steady_clock::time_point performance_epoch_ = std::chrono::steady_clock::now();
+
+    struct AsyncExecResult {
+        std::string callback_id;
+        std::string output;
+    };
+    // Retirement of a view removed by a JS handler is owned by the tree root
+    // (View::retire), not by the bridge, so it obeys the same contract as a
+    // removal from a native lifecycle hook. callback_alive_ carries the root
+    // pointer because most callback closures capture only this state.
+    float imported_text_scale_ = 1.0f;
+    std::shared_ptr<BridgeCallbackState> callback_alive_;
+    std::shared_ptr<std::mutex> async_exec_mutex_ = std::make_shared<std::mutex>();
+    std::shared_ptr<std::vector<AsyncExecResult>> async_exec_results_ =
+        std::make_shared<std::vector<AsyncExecResult>>();
+
+    // Returns a thread-safe sink that a background worker calls with
+    // (callback_id, payload) to queue a result for delivery to JS via
+    // poll_async_results() → __dispatch__. Captures the async_exec_results_
+    // plumbing by shared_ptr (not `this`), so a worker that outlives the bridge
+    // safely no-ops via the callback_alive_ flag. Shared by execAsync and the
+    // query service.
+    std::function<void(const std::string& callback_id, std::string payload)>
+    make_async_result_sink();
+
+    // Off-UI-thread index/search service (R7). Lazily created on first use by
+    // register_query_service_api(); its worker delivers results through the same
+    // async_exec_results_ queue that poll_async_results() drains, so no extra
+    // per-frame pump is needed. Held by shared_ptr (not unique_ptr) so its
+    // type-erased deleter lets widget_bridge.cpp destroy it with only a forward
+    // declaration — avoiding a query_service.hpp include in that hotspot file.
+    std::shared_ptr<QueryService> query_service_;
+
+    std::vector<int> pending_frame_ids_;
+    // Single-slot handshake between the two frame-draining entry points.
+    // `service_frame_callbacks()` sets it when it drains pending_frame_ids_;
+    // `poll_async_results()` consumes it (exchange-to-false) and skips its own
+    // drain for that one pass. A rAF callback that re-arms itself refills the
+    // queue while it is being drained, so without this both entry points fire
+    // the same self-rearming callback in one host tick and the scene is drawn
+    // twice per display period. Browser semantics agree: a frame requested from
+    // inside a frame callback belongs to the NEXT frame, never the current one.
+    //
+    // Liveness is bounded by construction: every poll clears the slot, so two
+    // consecutive polls can never both skip, and a skip only ever follows a
+    // service pass that already drew. A host that drives poll alone therefore
+    // keeps drawing on every poll.
+    bool frames_drained_by_service_ = false;
+    bool frame_pump_live_ = false;  // set by the first host frame service
+    std::shared_ptr<std::atomic<std::uint64_t>> bridge_call_count_ =
+        std::make_shared<std::atomic<std::uint64_t>>(0);
+    // Requested by __pulpRuntimeSettle__ while QuickJS is inside a native
+    // callback. Drained only from the outer host-frame boundary; this is a
+    // budget, not a synchronous recursion request.
+    int pending_runtime_settle_rounds_ = 0;
+    bool frame_preamble_loaded_ = false;
+    // Identity of the most-recently loaded script (via
+    // `load_script(code, script_id)` or `set_active_script_id`). When
+    // non-empty, rAF callbacks and `motion.publishValue` bindings use
+    // it as the `source_id` prefix on emitted motion events.
+    std::string active_script_id_;
+    // install_runtime_import_handlers() is idempotent. Tracked per-bridge
+    // (not as a static thread_local on `this`, because heap reuse across tests
+    // gave duplicate addresses → spurious skip).
+    bool runtime_import_installed_ = false;
+    bool realm_quarantined_ = false;
+    bool realm_retired_ = false;
+    // Complete root-owned state transferred by the one retirement commit.
+    // The emergency instance is preconstructed so destructor fail-close does
+    // not allocate even when selective realm extraction could not be prepared.
+    struct RetiredRealmState {
+        std::vector<std::unique_ptr<View>> children;
+        std::unique_ptr<ActiveDrag> drag;
+        std::unique_ptr<View::RootInteractionState> interaction;
+        std::function<void(const std::string&, uint16_t)> root_click_callback;
+    };
+    RetiredRealmState retired_realm_;
+    RetiredRealmState emergency_retired_realm_;
+
+    // Native-side timer queue for setTimeout / setInterval. Callbacks
+    // themselves live in JS (`__timerCallbacks__`); native tracks (id,
+    // deadline, repeat, interval) so service_frame_callbacks() can fire expired
+    // timers regardless of which JS-side scheduler the consumer wants to
+    // feature-detect against.
+    struct PendingTimer {
+        int id;
+        std::chrono::steady_clock::time_point deadline;
+        std::chrono::milliseconds interval;
+        bool repeating;
+    };
+    std::vector<PendingTimer> pending_timers_;
+
+    // Declarative native→widget binding (see service_param_bindings()).
+    // Transform applied to the source before it reaches the widget, in order:
+    // optional dB→linear map → scale → offset → clamp. The default is the
+    // identity on the store's already-normalized [0,1] value, which is the
+    // common case (a knob/fader/meter tracking a normalized param 1:1).
+    struct BindingTransform {
+        bool db = false;        ///< read the RAW param value and map [db_min,db_max]→[0,1]
+        float db_min = -60.0f;
+        float db_max = 0.0f;
+        float scale = 1.0f;
+        float offset = 0.0f;
+        bool clamp = true;      ///< clamp the result to [clamp_min, clamp_max]
+        float clamp_min = 0.0f;
+        float clamp_max = 1.0f;
+        float apply(float v) const;
+    };
+    struct ParamBinding {
+        using Target = BindingTarget;
+        std::string widget_id;
+        state::ParamID param_id = 0;   ///< source param (resolved once at bind time)
+        /// Non-empty when bound to a named value channel instead of a param.
+        /// Resolve it anew during every leased read so a hot swap cannot leave
+        /// a source pointer from the retired processor generation cached here.
+        std::string value_channel;
+        /// Shader uniform destination when target == BindingTarget::uniform.
+        std::string uniform_name;
+        /// Staleness tracking. A channel that stops PUBLISHING decays to its
+        /// declared neutral; one that publishes the same number forever does
+        /// not. Comparing values cannot distinguish those, so watch the
+        /// publish sequence instead (see PublishCounter).
+        std::uint32_t last_publish_seq = 0;
+        std::uint64_t value_generation_identity = 0;
+        std::chrono::steady_clock::time_point last_publish_at{};
+        float neutral = 0.0f;
+        Target target = Target::value;
+        BindingTransform transform;
+        /// `{fromParam: true}`, not yet derived. Derivation needs the widget
+        /// type and a script may bind before creating the view, so it happens
+        /// on first apply — then clears. See derive_binding_transform.
+        bool derive_from_param = false;
+        float last_applied = std::numeric_limits<float>::quiet_NaN();  ///< skip repaint when unchanged
+    };
+    std::vector<ParamBinding> param_bindings_;
+    ValueChannelAccess value_channel_access_;
+    std::vector<ParamSubscription> param_subscriptions_;
+    std::uint32_t next_param_subscription_id_ = 1;  ///< monotonic; never reused
+    // True while service_param_subscriptions() is dispatching into JS, so an
+    // unsubscribe from inside a handler tombstones instead of erasing.
+    bool in_param_dispatch_ = false;
+    struct EventBinding {
+        std::uint32_t id = 0;
+        std::string channel_name;
+        std::uint32_t last_publication = 0;
+        std::uint64_t value_generation_identity = 0;
+    };
+    std::vector<EventBinding> event_bindings_;
+    std::uint32_t next_event_binding_id_ = 1;
+    bool in_event_dispatch_ = false;
+    struct ParamGestureRoute {
+        state::ParamID active_param_id = 0;
+        bool active = false;
+    };
+    std::unordered_map<std::string, std::shared_ptr<ParamGestureRoute>>
+        param_gesture_routes_;
+    // Register (or replace) a binding for `widget_id`. Resolves `param_name` to
+    // its id; returns false (no binding added) if the store has no such param.
+    // `transform` is the optional JS transform object (may be null → identity).
+    bool add_param_binding(const std::string& widget_id,
+                           const std::string& param_name,
+                           ParamBinding::Target target,
+                           const choc::value::Value* transform);
+    bool add_shader_uniform_binding(const std::string& widget_id,
+                                   const std::string& uniform_name,
+                                   const std::string& source,
+                                   const choc::value::Value* transform);
+    // Parse the optional JS transform object (`{db,dbMin,dbMax,scale,offset,
+    // min,max,clamp}`) into a BindingTransform. Null / non-object → identity.
+    static BindingTransform parse_transform(const choc::value::Value* v);
+    /// `{fromParam: true}` with no explicit db/dbMin/dbMax overriding it.
+    static bool transform_requests_derivation(const choc::value::Value* v);
+    // Resolve a param NAME to its id via the store. Returns false when the
+    // store has no param with that name (the binding is then not registered).
+    bool resolve_param_id(const std::string& name, state::ParamID& out) const;
+    // Drop bindings whose widget id no longer resolves in widgets_ (after a
+    // removeWidget subtree teardown) so a later widget reusing that id is not
+    // silently re-bound.
+    void prune_dangling_bindings();
+    // Route a gesture-capable widget through its CURRENT declarative binding.
+    // The route retains the parameter that began an active gesture so rebinding
+    // mid-drag still ends the original parameter exactly once.
+    void wire_parameter_gestures(const std::string& widget_id, View* widget);
+    /// Open / close the host parameter gesture for a widget wired by
+    /// wire_parameter_gestures(). Drag controls drive these from their own
+    /// begin/end callbacks; a click control (Toggle) has no drag lifecycle and
+    /// brackets its instantaneous edit with them instead.
+    void begin_param_gesture(const std::string& widget_id);
+    void end_param_gesture(const std::string& widget_id);
+    void finish_param_gesture_route(
+        const std::shared_ptr<ParamGestureRoute>& route);
+    void release_param_gesture_route(const std::string& widget_id) noexcept;
+    void release_all_param_gesture_routes() noexcept;
+    void defer_all_param_gesture_routes();
+    // Forget every native bridge reference to the removed subtree. This is
+    // stronger than erasing widgets_: native event-registration guards are also
+    // keyed by id and must be cleared before recycled ids can be rewired.
+    void forget_widget_subtree(View* node, bool preserve_js_dom_state = false,
+                               const DeadlineCheck& deadline_check = {},
+                               bool notify_js = true);
+    void retire_removed_widget(std::unique_ptr<View> widget);
+    void clear_realm(const DeadlineCheck& deadline_check);
+    void retire_realm(const DeadlineCheck& deadline_check);
+    void commit_realm_retirement(RetiredRealmState& destination) noexcept;
+    void unregister_global_dispatch() noexcept;
+    void unregister_global_dispatch(const DeadlineCheck& deadline_check);
+    std::vector<BridgeWidgetState> foreign_owned_widget_states() const;
+    void begin_root_quarantine() noexcept;
+    void end_root_quarantine();
+    void invalidate_cached_subtrees_everywhere(
+        const std::vector<View*>& nodes,
+        const DeadlineCheck& deadline_check = {});
+    // Clear event/callback state for a widget that remains alive, such as a
+    // recycled VirtualList row container before it is rebound to a new index.
+    void forget_widget_event_state(View& view);
+    // Push one binding's transformed source value onto the resolved widget.
+    // Writes the widget only when the transformed value changed since the last
+    // frame; returns true on a change so the caller schedules one repaint.
+    bool apply_param_binding(ParamBinding& binding, View* w,
+                             const MeterFrame* value_frame = nullptr,
+                             std::uint32_t publish_seq = 0);
+    /// Fill a `{fromParam: true}` transform from the param's declared range.
+    void derive_binding_transform(ParamBinding& binding, View* w);
+    /// Push a whole block to a SpectrumView / WaveformView.
+    bool apply_scope_binding(ParamBinding& binding, View* w,
+                             const VectorFrame* value_frame,
+                             std::uint32_t publish_seq);
+    /// True when the channel has not published for kValueChannelStaleAfter.
+    /// Updates the binding's sequence/timestamp as a side effect.
+    static bool value_channel_is_stale(ParamBinding& binding, std::uint32_t seq);
+
+public:
+    /// Binding attempts in call order, bound or not (binding_diagnostics.hpp).
+    /// Reset per bridge, so this is the log for the loaded script.
+    const std::vector<BindingAttempt>& binding_attempts() const noexcept {
+        return binding_attempts_;
+    }
+    /// Declared parameters no attempt reached — the UI cannot change them.
+    /// Excludes Bypass/Reset designations and triggers, which the host surfaces.
+    std::vector<std::string> unbound_params() const;
+
+    /// Record a binding attempt from an extension API such as shader uniforms.
+    /// Keeping it on the bridge preserves one diagnostic stream for all
+    /// declarative binding surfaces.
+    bool record_binding_attempt(const std::string& widget_id,
+                                const std::string& param_name,
+                                BindingTarget target,
+                                BindingOutcome outcome);
+    bool parameter_id_for_name(const std::string& name, state::ParamID& out) const;
+    void clear_shader_uniform_bindings(const std::string& widget_id);
+
+private:
+    std::vector<BindingAttempt> binding_attempts_;
+
+    std::function<void()> repaint_callback_;
+    /// The constructor's own callback (the root's host) is still installed,
+    /// so a frame without damage can be asked of that host directly.
+    bool default_repaint_callback_ = true;
+    std::uint64_t repaint_request_generation_ = 0;
+
+#ifdef PULP_BENCHMARK
+    render::bench::PerfCounters* bench_counters_ = nullptr;
+#endif
+
+    // Resolve parent: returns view for parentId, or &root_ if empty
+    View* resolve_parent(const std::string& parent_id);
+
+    // Install on_change/on_toggle callbacks that dispatch to JS
+    void wire_callbacks(const std::string& id, View* w);
+
+    // Remove native event registration guards so recycled ids wire fresh views.
+    void forget_widget_registrations(const std::string& id);
+
+    // Single source-of-truth table that maps a lowercase widget tag
+    // (`knob`/`fader`/`toggle`/`combo`/`checkbox`/`spectrum`/`waveform`/
+    // `meter`/`xypad`/`listbox`/`icon`, plus the `select`/`progress`/`img`
+    // HTML aliases) to a freshly constructed, id-set, callback-wired native
+    // widget. Returns nullptr for non-widget tags so callers fall through to
+    // their container default. Used by the `__domAppend` React-commit fast path;
+    // mirrors the `createX` factory functions and the JS `_ensureNative` /
+    // `@pulp/react` host-config maps so the four widget-routing surfaces can't
+    // drift again (asserted by the routing-parity test).
+    std::unique_ptr<View> make_widget_for_tag(const std::string& tag,
+                                              const std::string& id);
+
+    // Called by the JS `__requestFrame__` / async-result chain whenever
+    // pending work needs the surface to repaint. Routes through
+    // `repaint_callback_`, which is wired in the constructor to
+    // `root.request_repaint()` by default and may be replaced via
+    // `set_repaint_callback`.
+    void request_repaint();
+
+    // Temporarily lend this bridge's owning root to a materialized document
+    // interaction that handles only the host navigation-key allowlist. The
+    // implementation transfers/commits any prior text focus, records a single
+    // owner per root, and releases only its own claim.
+    bool claim_document_navigation_focus();
+    void release_document_navigation_focus() noexcept;
+
+    // The ~75 bridge sub-API registrars used to be private member
+    // declarations here. Every added API changed this PUBLIC header and forced
+    // a recompile of the whole view/render/host surface that includes it.
+    // They now live as static methods of BridgeRegistrars (an internal friend,
+    // declared in the src-only widget_bridge/registrars.hpp), each taking the
+    // owning WidgetBridge& — so adding or removing a bridge API touches only
+    // that internal header, the owning .cpp, and register_api()'s data table
+    // in widget_bridge.cpp, never this header. The friend grants those statics
+    // access to WidgetBridge's private state.
+    // ── Layout-pass elision ─────────────────────────────────────────────
+    //
+    // The geometry queries (getLayoutRect / getLayoutBoxMetrics /
+    // getLayoutAncestorRects) each used to force `root_.layout_children()`
+    // UNCONDITIONALLY. That is correct but quadratic in practice: a shipping
+    // scripted UI calls getBoundingClientRect and getLayoutBoxMetrics dozens of
+    // times per frame, and `valueFromEvent` calls one PER POINTER EVENT — so a
+    // drag paid a full tree layout per sample, on the UI thread, ahead of paint.
+    //
+    // `ensure_layout()` keeps the guarantee those call sites actually need —
+    // "the geometry you are about to read is current" — while paying for it
+    // only when something has changed since the last pass.
+    void ensure_layout();
+    std::uint64_t last_layout_generation_ = 0;  // 0 => always lay out once
+
+    // The press this bridge's script was offered through the navigation-claim
+    // hook, pending a match in the global fan-out. dispatch_global_key
+    // explains why the offer, and not the claim, is the discriminator.
+    struct NavigationOffer {
+        int key_code = 0;
+        std::uint16_t modifiers = 0;
+        bool is_down = false;
+        bool pending = false;
+    };
+    NavigationOffer last_navigation_offer_{};
+
+    friend struct BridgeRegistrars;
+    void register_api();
+
+    // Lazily creates the off-UI-thread query service (spawns its worker thread
+    // only on first use) with a deliver hook that funnels results into the
+    // async_exec_results_ queue drained by poll_async_results(). Stays a
+    // WidgetBridge member (not a registrar) — register_query_service_api()
+    // calls it through `self`.
+    QueryService& ensure_query_service();
+};
+
+} // namespace pulp::view

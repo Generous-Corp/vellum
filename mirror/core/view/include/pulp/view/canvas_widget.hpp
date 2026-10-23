@@ -1,0 +1,524 @@
+#pragma once
+
+/// @file canvas_widget.hpp
+/// A View that replays recorded draw commands in paint().
+/// Full Canvas 2D API equivalent — JS records commands, C++ replays through
+/// the active Canvas backend.
+
+#include <pulp/view/view.hpp>
+#include <pulp/canvas/canvas.hpp>
+#include <algorithm>
+#include <cmath>
+#include <functional>
+#include <memory>
+#include <optional>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+namespace pulp::view {
+
+/// Per-paint metadata for native, retained CanvasWidget content.
+struct NativeCanvasPaintContext {
+    canvas::Canvas& canvas;
+    Rect local_bounds;
+    float backing_scale = 1.0f;
+    std::uint64_t frame_id = 0;
+    canvas::RendererBackend backend = canvas::RendererBackend::unknown;
+};
+
+/// Retained native painter installed on a CanvasWidget.
+///
+/// Ownership is shared deliberately: CanvasWidget takes a strong snapshot at
+/// paint entry, so replacing/resetting the painter from a callback cannot
+/// destroy the object while its paint method is on the stack.
+class NativeCanvasPainter {
+public:
+    virtual ~NativeCanvasPainter() = default;
+    virtual void paint(const NativeCanvasPaintContext& context) = 0;
+};
+
+enum class NativeCanvasBackendRequirement {
+    any,
+    /// Production paints require Graphite-on-Dawn; RecordingCanvas remains
+    /// accepted so deterministic command fixtures can exercise the painter.
+    skia_dawn_allow_recording,
+    skia_dawn,
+};
+
+/// A draw command recorded from JS for replay in paint().
+/// Maps to CanvasRenderingContext2D methods.
+struct CanvasDrawCmd {
+    enum class Type {
+        // Shapes
+        fill_rect, stroke_rect, fill_rounded_rect, stroke_rounded_rect,
+        fill_circle, stroke_circle,
+        stroke_line, stroke_arc,
+        // Text
+        fill_text, set_font, set_text_align, set_text_baseline,
+        // Canvas2D `strokeText(text, x, y, maxWidth)` recorded
+        // as a distinct cmd so the paint loop can route it through the
+        // dedicated `Canvas::stroke_text` (true outlined glyphs) instead
+        // of the older fillText-with-stroke-color approximation.
+        // Layout: text in `text`, (x,y) in `x`/`y`, maxWidth in `w`
+        // (0 = no limit), font size in `extra`, color in `color`.
+        stroke_text,
+        // Canvas2D `ctx.font` full CSS font shorthand. The
+        // legacy `set_font` only carries family + size; the JS shim now
+        // parses `[<style>] [<variant>] [<weight>] <size>[/<lineHeight>]
+        // <family>`. `set_font_full` carries the parsed weight / slant
+        // through to `Canvas::set_font_full`, which Skia honours via
+        // `make_font(family, size, weight, slant)`. CG falls back to
+        // family+size (no slant override) — same as the base
+        // `set_font_full` default. Layout in CanvasDrawCmd:
+        //   text  = family
+        //   extra = size (px)
+        //   x     = weight (100..900, cast to int)
+        //   y     = slant (0=upright, 1=italic/oblique)
+        //   x2    = letter_spacing in px (0 when derived from `font`)
+        set_font_full,
+        // Style
+        set_fill_color, set_stroke_color, set_line_width,
+        set_line_cap, set_line_join,
+        set_global_alpha, set_blend_mode,
+        // Gradient
+        set_fill_gradient_linear, set_fill_gradient_radial, clear_fill_gradient,
+        /// Canvas2D `ctx.createRadialGradient(x0,y0,r0,x1,y1,r1)`
+        /// two-circle form. Inner circle (x0,y0,r0) packed as (x, y, extra),
+        /// outer circle (x1,y1,r1) packed as (x2, y2, w). Routes to
+        /// `set_fill_gradient_radial_two_circles` (Skia: MakeTwoPointConical;
+        /// CG: full CGContextDrawRadialGradient with both circles).
+        set_fill_gradient_radial_two_circles,
+        // Canvas2D ctx.createConicGradient.
+        // cx/cy in (x, y), start_angle in `extra`, stops in
+        // gradient_colors / gradient_positions (same shape as the
+        // linear / radial entries above).
+        set_fill_gradient_conic,
+        // Canvas2D `ctx.strokeStyle =
+        // createLinearGradient(...) | createRadialGradient(...) |
+        // createConicGradient(...)`. Field layout matches the fill
+        // counterparts:
+        //   set_stroke_gradient_linear:        x/y/x2/y2 = (x0,y0,x1,y1)
+        //   set_stroke_gradient_radial:        x/y/extra = (cx,cy,radius)
+        //   set_stroke_gradient_radial_two_circles:
+        //                                      x/y/extra = (x0,y0,r0)
+        //                                      x2/y2/w   = (x1,y1,r1)
+        //   set_stroke_gradient_conic:         x/y/extra = (cx,cy,startAngle)
+        // Stops live in gradient_colors / gradient_positions.
+        set_stroke_gradient_linear,
+        set_stroke_gradient_radial,
+        set_stroke_gradient_radial_two_circles,
+        set_stroke_gradient_conic,
+        clear_stroke_gradient,
+        // Canvas2D ctx.createPattern.
+        // Image source path / data URI in `text`, tile modes packed into
+        // `int_val` (bit 0 = x, bit 1 = y; 0 = repeat, 1 = no-repeat).
+        // Fill patterns route through the backend pattern implementation;
+        // stroke patterns fall back to solid stroke color on backends that
+        // do not support stroke-pattern shaders.
+        set_fill_pattern, set_stroke_pattern,
+        // Path
+        begin_path, move_to, line_to, quad_to, cubic_to, close_path,
+        fill_path, stroke_path, clip_path,
+        // Native arc subpaths.
+        // Layout in CanvasDrawCmd:
+        //   path_arc:        x=cx, y=cy, extra=radius,
+        //                    x2=startAngle, y2=endAngle,
+        //                    int_val=anticlockwise (0/1)
+        //   path_arc_to:     x=x1, y=y1, x2=x2, y2=y2, extra=radius
+        //   path_ellipse:    x=cx, y=cy, w=rx, h=ry, extra=rotation,
+        //                    x2=startAngle, y2=endAngle,
+        //                    int_val=anticlockwise (0/1)
+        //   path_round_rect: x=x, y=y, w=w, h=h,
+        //                    gradient_positions packed [tl_x,tl_y,
+        //                    tr_x,tr_y, br_x,br_y, bl_x,bl_y]
+        path_arc,
+        path_arc_to,
+        path_ellipse,
+        path_round_rect,
+        // State
+        save, restore,
+        // Transform
+        translate, scale, rotate, clip_rect,
+        set_transform,             // replace transform with affine matrix
+        clip,                      // intersect clip with current path
+        // Image
+        draw_image,
+        // SDF shader draw. `text` stores the geometry JSON and
+        // `shader_sksl` stores optional structured SkSL.
+        draw_sdf,
+        // Canvas2D API coverage
+        set_line_dash,             ///< pattern in `gradient_positions`, phase in `extra`
+        put_image_data,            ///< RGBA pixels in `text` (binary), int_val=width, x2=height (as int)
+        // Canvas2D shadow* sticky state setters
+        set_shadow_color,          ///< color in `color`
+        set_shadow_blur,           ///< blur (px) in `extra`
+        set_shadow_offset_x,       ///< dx (px) in `extra`
+        set_shadow_offset_y,       ///< dy (px) in `extra`
+        // ctx.miterLimit and
+        // ctx.imageSmoothingEnabled / Quality. Sticky state pushed by
+        // the JS shim before the next stroke / drawImage.
+        set_miter_limit,           ///< limit in `extra`
+        set_image_smoothing,       ///< enabled in `int_val` (0/1), quality in `extra` (0=low,1=med,2=high)
+        // Canvas2D ctx.direction / ctx.filter sticky state.
+        // direction enum (0=ltr, 1=rtl, 2=inherit) in `int_val`; filter
+        // raw CSS <filter-function-list> string in `text`. Pushed by
+        // the JS shim before fillText / strokeText / fill / stroke /
+        // drawImage so the backend can wrap the next paint.
+        set_direction,
+        set_filter,
+        // Clear
+        clear, clear_rect,
+        // Cached group: replays the commands stored under the key in `text`
+        // inside an implicit save/restore, under the transform in effect at
+        // this point of the stream (see CanvasWidget::end_group).
+        replay_group
+    };
+    Type type = Type::clear;
+    float x = 0, y = 0, w = 0, h = 0;
+    float x2 = 0, y2 = 0;      // extra coords (line end, control point 1)
+    float x3 = 0, y3 = 0;      // cubic control point 2
+    canvas::Color color{255, 255, 255, 255};
+    float extra = 0;            // radius, line width, font size, angle
+    std::string text;           // for fill_text, set_font family
+    std::string shader_sksl;
+    std::vector<canvas::Canvas::NamedUniform> shader_uniforms;
+    std::optional<canvas::Canvas::ShaderGeometry> shader_geometry;
+    int int_val = 0;            // for enum values (text align, baseline, blend mode, cap, join)
+    std::vector<canvas::Color> gradient_colors;    // for gradient stops
+    std::vector<float> gradient_positions;          // gradient stop positions
+    /// When true on a fill_rect / stroke_rect cmd, the paint
+    /// loop must NOT call set_fill_color / set_stroke_color from `color`
+    /// before drawing. The most recent set_fill_color, set_stroke_color,
+    /// or set_fill_gradient_* on the underlying canvas stays active.
+    /// Bridge sets this when the JS caller omitted the color arg
+    /// (e.g. `canvasRect(id, x, y, w, h)` — Canvas2D `ctx.fillRect()`
+    /// shim that relies on a previously-set `ctx.fillStyle`, including
+    /// gradients).
+    bool use_active_style = false;
+
+    /// When true on a `draw_image` cmd, x2/y2/x3/y3 carry
+    /// the source rect (sx, sy, sw, sh) for the 9-arg
+    /// `ctx.drawImage(img, sx,sy,sw,sh, dx,dy,dw,dh)` form. The renderer
+    /// routes through `Canvas::draw_image_from_*_rect` so the source
+    /// sub-rectangle of the decoded image maps onto the destination rect
+    /// (sprite-sheet slicing). Without the flag the dst-only path runs.
+    bool has_source_rect = false;
+};
+
+/// A View whose paint() replays a list of recorded draw commands.
+/// JS fills the command list via bridge functions, then the widget
+/// renders them each frame. Hot-reloadable — JS rebuilds commands on reload.
+class CanvasWidget : public View {
+private:
+    struct RecordedCommands;
+    struct RepaintObserver {
+        CanvasWidget* owner = nullptr;
+        RecordedCommands* stream = nullptr;
+    };
+
+public:
+    enum class ContentMode { recorded_commands, native_painter };
+    struct NativeGpuTextureFrame {
+        void* texture_handle = nullptr;
+        uint32_t width = 0;
+        uint32_t height = 0;
+        std::string format = "bgra8unorm";
+        bool available = false;
+    };
+    using NativeGpuTextureProvider = std::function<NativeGpuTextureFrame()>;
+
+    CanvasWidget()
+        : repaint_observer_(std::make_shared<RepaintObserver>()) {
+        repaint_observer_->owner = this;
+        observe_recorded_commands();
+    }
+    ~CanvasWidget() override {
+        repaint_observer_->owner = nullptr;
+        repaint_observer_->stream = nullptr;
+    }
+
+    void set_native_painter(
+        std::shared_ptr<NativeCanvasPainter> painter,
+        NativeCanvasBackendRequirement requirement =
+            NativeCanvasBackendRequirement::any) {
+        native_painter_ = std::move(painter);
+        native_backend_requirement_ = requirement;
+        content_mode_ = native_painter_ ? ContentMode::native_painter
+                                        : ContentMode::recorded_commands;
+        request_repaint();
+    }
+    void reset_native_painter() {
+        native_painter_.reset();
+        native_backend_requirement_ = NativeCanvasBackendRequirement::any;
+        content_mode_ = ContentMode::recorded_commands;
+        request_repaint();
+    }
+    ContentMode content_mode() const noexcept { return content_mode_; }
+    bool last_native_paint_succeeded() const noexcept {
+        return last_native_paint_succeeded_;
+    }
+    canvas::RendererBackend last_native_paint_backend() const noexcept {
+        return last_native_paint_backend_;
+    }
+
+    void clear_commands() {
+        recorded_commands_->commands.clear();
+        recorded_commands_->needs_backdrop_isolation = false;
+        recorded_commands_->has_group_replays = false;
+        // A recording still open at a frame clear was abandoned (its script
+        // was interrupted before end_group); keep it from swallowing the
+        // new frame.
+        abort_group_recording();
+        notify_recorded_command_consumers();
+    }
+    /// NaN / ±Infinity defense at the recording
+    /// boundary. JS callers can produce non-finite numerics from any
+    /// arithmetic mishap (divide-by-zero on a zero parent rect during a
+    /// transient layout, NaN bubbling through pointer-event coords, etc).
+    /// If a non-finite reaches Skia or CoreGraphics, it can taint the
+    /// entire CGContext / Skia surface for the rest of the frame —
+    /// Sanitize each cmd's numeric fields to 0 on non-finite. The fields
+    /// cover every coord path the dispatch table consumes (move_to, line_to, quad/cubic,
+    /// rects, circles, arcs, text, transforms, clip, image draw).
+    /// Color / int_val / text fields are unaffected. Sanitizing at the
+    /// recording boundary means every backend (Skia GPU, CG CPU,
+    /// RecordingCanvas, headless capture) gets clean numerics without
+    /// a per-backend retrofit.
+    void add_command(CanvasDrawCmd cmd) {
+        auto& stream = *recorded_commands_;
+        cmd.x       = sanitize_finite(cmd.x);
+        cmd.y       = sanitize_finite(cmd.y);
+        cmd.w       = sanitize_finite(cmd.w);
+        cmd.h       = sanitize_finite(cmd.h);
+        cmd.x2      = sanitize_finite(cmd.x2);
+        cmd.y2      = sanitize_finite(cmd.y2);
+        cmd.x3      = sanitize_finite(cmd.x3);
+        cmd.y3      = sanitize_finite(cmd.y3);
+        cmd.extra   = sanitize_finite(cmd.extra);
+        for (auto& p : cmd.gradient_positions) p = sanitize_finite(p);
+        if (stream.recording_group) {
+            if (reads_backdrop(cmd)) stream.recording.reads_backdrop = true;
+            stream.recording.commands.push_back(std::move(cmd));
+            return;
+        }
+        if (reads_backdrop(cmd)) stream.needs_backdrop_isolation = true;
+        stream.commands.push_back(std::move(cmd));
+    }
+
+    // ── Cached groups ──────────────────────────────────────────────────
+    //
+    // A cached group is a keyed command list recorded once and replayed by
+    // reference, so static content (grids, scales, labels) costs one bridge
+    // call per frame instead of one per draw. Groups live beside the frame's
+    // command stream, not in it: clear_commands() does not drop them, and a
+    // canvas sharing this stream (share_recorded_commands_from) shares them.
+    //
+    // A replay runs the stored commands in place, inside an implicit
+    // save/restore and under whatever transform the stream holds at that
+    // point, so its pixels and blend order are exactly those of drawing the
+    // same commands directly. State set inside a group never leaks out, and
+    // a restore() inside a group cannot pop state saved outside it.
+
+    /// Start recording the group `key`: every add_command until end_group()
+    /// goes into the group instead of the frame. Refuses (returns false) while
+    /// another group is recording; groups do not nest.
+    bool begin_group(std::string key) {
+        auto& stream = *recorded_commands_;
+        if (stream.recording_group) return false;
+        stream.recording_group = true;
+        stream.recording_key = std::move(key);
+        stream.recording = CachedGroup{};
+        return true;
+    }
+    /// Seal the recording group under its key, replacing any previous
+    /// content, and append a replay of it to the frame.
+    bool end_group() {
+        auto& stream = *recorded_commands_;
+        if (!stream.recording_group) return false;
+        stream.recording_group = false;
+        auto key = std::move(stream.recording_key);
+        stream.groups[key] = std::move(stream.recording);
+        stream.recording = CachedGroup{};
+        return replay_group(key);
+    }
+    /// Append a replay of the stored group `key` to the frame. Returns false,
+    /// appending nothing, when no such group is stored (never recorded, or
+    /// invalidated) or while a group is recording; the caller then records it.
+    bool replay_group(const std::string& key) {
+        auto& stream = *recorded_commands_;
+        if (stream.recording_group) return false;
+        const auto it = stream.groups.find(key);
+        if (it == stream.groups.end()) return false;
+        if (it->second.reads_backdrop) stream.needs_backdrop_isolation = true;
+        stream.has_group_replays = true;
+        CanvasDrawCmd cmd;
+        cmd.type = CanvasDrawCmd::Type::replay_group;
+        cmd.text = key;
+        stream.commands.push_back(std::move(cmd));
+        return true;
+    }
+    /// Drop the stored group `key`, so the next replay_group() reports it
+    /// missing and the script records it again.
+    void invalidate_group(const std::string& key) {
+        recorded_commands_->groups.erase(key);
+    }
+    void invalidate_all_groups() {
+        recorded_commands_->groups.clear();
+        abort_group_recording();
+    }
+    size_t group_count() const { return recorded_commands_->groups.size(); }
+    /// Stored commands of group `key`, or nullptr. Read-only accessor for
+    /// tests; invalidated by the next group mutation.
+    const std::vector<CanvasDrawCmd>* group_commands(const std::string& key) const {
+        const auto it = recorded_commands_->groups.find(key);
+        return it == recorded_commands_->groups.end() ? nullptr : &it->second.commands;
+    }
+    size_t command_count() const { return recorded_commands_->commands.size(); }
+
+    /// Whether the recorded stream contains a command whose result depends
+    /// on the pixels already under it: clearRect, putImageData, or a
+    /// composite operation other than source-over. Canvas2D gives every
+    /// canvas its own backing store, so such a command must see only this
+    /// canvas's pixels; paint() then replays into a per-canvas offscreen
+    /// layer. Every other stream composites identically straight onto the
+    /// parent surface, and skipping the layer saves a full-bounds offscreen
+    /// allocation, clear and composite per paint.
+    bool needs_backdrop_isolation() const {
+        return recorded_commands_->needs_backdrop_isolation;
+    }
+    /// Whether `cmd` depends on the pixels already under it (see
+    /// needs_backdrop_isolation()).
+    static bool reads_backdrop(const CanvasDrawCmd& cmd) {
+        using T = CanvasDrawCmd::Type;
+        if (cmd.type == T::clear_rect || cmd.type == T::put_image_data) return true;
+        if (cmd.type != T::set_blend_mode) return false;
+        const auto mode = static_cast<canvas::Canvas::BlendMode>(cmd.int_val);
+        return mode != canvas::Canvas::BlendMode::normal &&
+               mode != canvas::Canvas::BlendMode::source_over;
+    }
+    /// The commands paint() replays, in order: the recorded stream with each
+    /// cached-group replay expanded in place, bracketed by an implicit
+    /// save/restore. A restore inside a group that would pop state saved
+    /// outside it is omitted and saves the group leaves open are closed, so
+    /// a group is balanced by construction. A replay whose group is no longer
+    /// stored contributes nothing. Pointers are invalidated by the next
+    /// mutation of the stream or its groups.
+    std::vector<const CanvasDrawCmd*> replay_sequence() const;
+    /// Accessor for tests asserting on the recorded JS command
+    /// stream. Read-only; the bridge owns mutation via add_command /
+    /// clear_commands. Callers must not retain the reference past the next
+    /// add_command / clear_commands call.
+    const std::vector<CanvasDrawCmd>& commands() const {
+        return recorded_commands_->commands;
+    }
+    /// Make this canvas replay the same retained command stream as `source`.
+    /// The shared stream deliberately outlives either View so a materialized
+    /// DesignIR canvas can remain visible while the hidden React realm that
+    /// authors its Canvas2D program is replaced during reload.
+    void share_recorded_commands_from(CanvasWidget& source) {
+        if (recorded_commands_ == source.recorded_commands_) return;
+        recorded_commands_ = source.recorded_commands_;
+        observe_recorded_commands();
+        request_repaint();
+    }
+    bool last_native_gpu_texture_draw_succeeded() const { return last_native_gpu_texture_draw_succeeded_; }
+    void set_native_gpu_texture_provider(NativeGpuTextureProvider provider) {
+        native_gpu_texture_provider_ = std::move(provider);
+    }
+
+    /// Request a curated, named GPU post-effect over the whole canvas.
+    ///
+    /// This is the SAFE shader-effect surface for generated / scripted UIs
+    /// (Forge): `name` selects one of a small vetted set of SkSL effects
+    /// (`crt`, `grain`, `vignette`, `noise`, `brushed`, `bloom`) — never
+    /// arbitrary shader source. `intensity` is a single strength knob,
+    /// clamped to [0,1]. `"none"` / `""` clears the effect. The effect is
+    /// sticky (declarative): it persists across command-list rebuilds until
+    /// changed, so a static CRT/grain overlay needs no per-frame re-issue.
+    /// Applied at paint() time to the per-canvas compositing layer; unknown
+    /// names and non-Skia/CPU backends degrade to no effect (see
+    /// Canvas::save_layer_with_shader_effect).
+    void set_shader_effect(std::string name, float intensity = 1.0f) {
+        shader_effect_name_ = std::move(name);
+        shader_effect_intensity_ = std::clamp(intensity, 0.0f, 1.0f);
+    }
+    /// Active curated effect name (`"none"` / `""` when disabled). Read-only
+    /// accessor for tests; the bridge owns mutation via set_shader_effect.
+    const std::string& shader_effect() const { return shader_effect_name_; }
+    float shader_effect_intensity() const { return shader_effect_intensity_; }
+
+    void paint(canvas::Canvas& canvas) override;
+
+private:
+    /// Return 0 on NaN / ±Infinity, value otherwise.
+    /// Inlined helper kept in the header so the compiler folds it into
+    /// the move-constructor copy in add_command. <cmath>'s std::isfinite
+    /// is constexpr-safe and consteval-eligible on C++20 toolchains.
+    static float sanitize_finite(float v) noexcept {
+        return std::isfinite(v) ? v : 0.0f;
+    }
+
+    struct CachedGroup {
+        std::vector<CanvasDrawCmd> commands;
+        bool reads_backdrop = false;
+    };
+    struct RecordedCommands {
+        std::vector<CanvasDrawCmd> commands;
+        bool needs_backdrop_isolation = false;
+        bool has_group_replays = false;
+        std::unordered_map<std::string, CachedGroup> groups;
+        bool recording_group = false;
+        std::string recording_key;
+        CachedGroup recording;
+        std::vector<std::weak_ptr<RepaintObserver>> observers;
+    };
+    void abort_group_recording() {
+        auto& stream = *recorded_commands_;
+        stream.recording_group = false;
+        stream.recording_key.clear();
+        stream.recording = CachedGroup{};
+    }
+    static void append_replay_sequence(const RecordedCommands& stream,
+                                       std::vector<const CanvasDrawCmd*>& out);
+    void observe_recorded_commands() {
+        repaint_observer_->stream = recorded_commands_.get();
+        recorded_commands_->observers.emplace_back(repaint_observer_);
+    }
+    void notify_recorded_command_consumers() {
+        auto& observers = recorded_commands_->observers;
+        observers.erase(std::remove_if(observers.begin(), observers.end(),
+            [this](const std::weak_ptr<RepaintObserver>& weak) {
+                auto observer = weak.lock();
+                if (!observer) return true;
+                // Bounded to the canvas's own box: paint() clips every
+                // replay to the widget bounds (or a layer of the same size),
+                // so a redrawn canvas cannot touch a pixel outside them. A
+                // whole-surface request here made every animating canvas --
+                // an analyzer, a modulated plot -- repaint the editor's
+                // static chrome each frame on a partial-repaint host.
+                if (observer->owner && observer->stream == recorded_commands_.get())
+                    observer->owner->request_repaint_self(1.0f);
+                return false;
+            }), observers.end());
+    }
+    std::shared_ptr<RecordedCommands> recorded_commands_ =
+        std::make_shared<RecordedCommands>();
+    std::shared_ptr<RepaintObserver> repaint_observer_;
+    std::shared_ptr<NativeCanvasPainter> native_painter_;
+    NativeCanvasBackendRequirement native_backend_requirement_ =
+        NativeCanvasBackendRequirement::any;
+    ContentMode content_mode_ = ContentMode::recorded_commands;
+    std::uint64_t native_frame_id_ = 0;
+    bool last_native_paint_succeeded_ = false;
+    canvas::RendererBackend last_native_paint_backend_ =
+        canvas::RendererBackend::unknown;
+    NativeGpuTextureProvider native_gpu_texture_provider_;
+    bool last_native_gpu_texture_draw_succeeded_ = false;
+    // Curated named GPU post-effect state (see set_shader_effect). Sticky
+    // across command-list rebuilds; "none"/"" means no effect.
+    std::string shader_effect_name_ = "none";
+    float shader_effect_intensity_ = 1.0f;
+};
+
+} // namespace pulp::view
