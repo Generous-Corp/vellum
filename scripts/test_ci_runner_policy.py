@@ -714,17 +714,17 @@ class RunnerPolicyTests(unittest.TestCase):
         eligibility = finalizer.index(
             "- name: Require renderer release eligibility at the release source"
         )
-        self.assertLess(
-            eligibility,
-            finalizer.index("- name: Publish only through live no-bypass controls"),
-        )
-        self.assertIn(
-            "--require-release-eligible", finalizer[eligibility:eligibility + 1200]
-        )
+        publish = finalizer.index("- name: Publish only through live no-bypass controls")
+        self.assertLess(eligibility, publish)
+        # The whole eligibility step, up to the publish step that follows it.
+        eligibility_step = finalizer[eligibility:publish]
+        self.assertIn("--require-release-eligible", eligibility_step)
         self.assertIn(
             'git show "$SOURCE_COMMIT:provenance/third-party-lock.json"',
-            finalizer[eligibility:eligibility + 1200],
+            eligibility_step,
         )
+        self.assertIn("--legal-manifest", eligibility_step)
+        self.assertIn("--release-json", eligibility_step)
         self.assertIn('test "$(gh api "repos/$GITHUB_REPOSITORY/immutable-releases" --jq \'.enabled\')" = true', finalizer)
         self.assertIn('for row in page["jobs"]', finalizer)
         self.assertIn('"path": ".github/workflows/gpu-macos.yml"', finalizer)
