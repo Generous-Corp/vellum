@@ -77,7 +77,25 @@ class FindingTest(unittest.TestCase):
         planted = {"consumer": ["pulp::view::DesignHost::bind_meter(pulp::view::Meter&)"]}
         self.assertTrue(vi.symbol_findings(planted, view_unit_packaged=False)[1])
 
-    def test_floor_reads_archives_like_view_audio_symbol_floor(self) -> None:
+    def test_floor_counts_weak_definitions_and_no_references(self) -> None:
+        # A weak (W/V) view-audio definition is view-audio inline code, so it
+        # belongs to the floor; U, w and v are references, never definitions.
+        listing = (
+            "lib.a[a.o]: __ZN4pulp4view5MeterD1Ev T 0 0\n"
+            "lib.a[a.o]: __ZN4pulp4view5Meter5paintEv W 10 4\n"
+            "lib.a[b.o]: __ZN4pulp4view5Meter6layoutEv W 20 8\n"
+        )
+        self.assertEqual(vi.floor_defined(listing), {
+            "__ZN4pulp4view5MeterD1Ev", "__ZN4pulp4view5Meter5paintEv", "__ZN4pulp4view5Meter6layoutEv"})
+        references = (
+            "lib.a[a.o]: __ZN4pulp6canvas4PathD1Ev U\n"
+            "lib.a[a.o]: __ZN4pulp4view4WeakEv w\n"
+            "lib.a[b.o]: __ZTIN4pulp4view4WeakE v\n"
+        )
+        self.assertEqual(vi.floor_defined(references), set())
+        self.assertEqual(vi.floor_defined("lib.a[a.o]: __ZN4pulp6canvas4PathD1Ev U\n"), set())
+
+    def test_floor_reads_nm_posix_member_lines(self) -> None:
         listing = (
             "lib.a[a.o]: __ZN4pulp4view5MeterD1Ev T 0 0\n"
             "lib.a[a.o]: __ZN4pulp6canvas4PathD1Ev U\n"
@@ -165,7 +183,8 @@ class VerifyTest(unittest.TestCase):
         (mirror / "include/pulp/canvas/canvas.hpp").write_text("#pragma once\n")
         (mirror / "share/provenance").mkdir(parents=True)
         (mirror / "share/provenance/receipt.json").write_text(json.dumps({
-            "export_id": "x", "units": [{"name": "foundation"}, {"name": "canvas"}]}))
+            "export_id": "x", "units": [{"name": "foundation"}, {"name": "canvas"}],
+            "files": [{"pulp_path": "core/canvas/src/canvas.cpp"}, {"pulp_path": "core/runtime/src/log.cpp"}]}))
         self.build.mkdir()
         (self.build / "compile_commands.json").write_text(json.dumps([
             {"file": "main.cpp", "command": "c++ -DPULP_HAS_SKIA=1 -c main.cpp"}]))
@@ -217,6 +236,7 @@ class VerifyTest(unittest.TestCase):
         receipt = self.prefix / "mirror/share/provenance/receipt.json"
         data = json.loads(receipt.read_text())
         data["units"].append({"name": "view-core"})
+        data["files"].append({"pulp_path": "core/view/include/pulp/view/widgets.hpp"})
         receipt.write_text(json.dumps(data))
         return [widgets, design]
 
@@ -247,6 +267,46 @@ class VerifyTest(unittest.TestCase):
         self.assertEqual(included, sorted(vi.DEBTS.values()))
         for header in vi.DEBTS.values():
             self.assertIn(f"#include <{header}>", output.read_text())
+
+    def set_receipt(self, **fields) -> None:
+        receipt = self.prefix / "mirror/share/provenance/receipt.json"
+        data = json.loads(receipt.read_text())
+        data.update(fields)
+        receipt.write_text(json.dumps(data))
+
+    def test_view_source_is_read_from_file_rows_not_unit_names(self) -> None:
+        # A unit that ships core/view source needs the floor whatever it is called.
+        self.set_receipt(units=[{"name": "foundation"}, {"name": "ui-kit"}],
+                         files=[{"pulp_path": "core/canvas/src/canvas.cpp"},
+                                {"pulp_path": "core/view/src/view.cpp"}])
+        with self.assertRaises(vi.EvidenceError) as caught:
+            self.run_verify()
+        self.assertIn("needs the pulp-view-audio archive", str(caught.exception))
+        # A unit merely named for views, shipping no view source, does not.
+        self.set_receipt(units=[{"name": "view-free-canvas"}],
+                         files=[{"pulp_path": "core/canvas/src/canvas.cpp"}])
+        self.assertTrue(self.run_verify()["inert"])
+
+    def test_receipt_without_file_rows_is_refused(self) -> None:
+        self.set_receipt(files=[])
+        with self.assertRaises(vi.EvidenceError):
+            self.run_verify()
+
+    def test_shared_and_static_libraries_on_every_platform_are_read(self) -> None:
+        lib = self.prefix / "mirror/lib"
+        (lib / "libvellum-mirror-canvas.dylib").unlink()
+        del self.symbols[lib / "libvellum-mirror-canvas.dylib"]
+        for name in ("libvellum-mirror-canvas.so", "libvellum-mirror-runtime.a",
+                     "vellum-mirror-events.dll", "libvellum-mirror-text.so.1"):
+            (lib / name).write_bytes(b"\0")
+            self.symbols[lib / name] = CLEAN_SYMBOLS["libvellum-mirror-canvas.dylib"]
+        self.assertTrue(self.run_verify()["inert"])
+        for name in ("libvellum-mirror-runtime.a", "vellum-mirror-events.dll", "libvellum-mirror-text.so.1"):
+            with self.subTest(library=name):
+                saved = self.symbols[lib / name]
+                self.symbols[lib / name] = saved + ["pulp::view::Meter::paint()"]
+                self.assertFalse(self.run_verify()["checks"]["no-audio-symbols"])
+                self.symbols[lib / name] = saved
 
     def test_evidence_that_read_nothing_is_refused(self) -> None:
         (self.build / "main.cpp.o.d").unlink()

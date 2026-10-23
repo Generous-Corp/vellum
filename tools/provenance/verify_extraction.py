@@ -76,42 +76,24 @@ EXPECTED_RETIRED_PREFIXES = (
     "packages/pulp-import-ir/",
     "tools/figma-plugin/",
 )
-TEXT_SUFFIXES = {
-    "",
-    ".c",
-    ".cc",
-    ".cmake",
-    ".cpp",
-    ".cxx",
-    ".h",
-    ".hpp",
-    ".js",
-    ".json",
-    ".m",
-    ".md",
-    ".mm",
-    ".ps1",
-    ".sh",
-    ".ts",
-    ".tsx",
-    ".yaml",
-    ".yml",
-}
-FORBIDDEN_ACTIVE_PATTERNS = {
-    "pulp-public-namespace": re.compile(
-        r"(?:\bnamespace\s+pulp\b|\bpulp::|#\s*include\s*[<\"]pulp/)",
-        re.IGNORECASE,
-    ),
-    "pulp-package-or-target": re.compile(
-        r"(?:@pulp/|\bPULP_[A-Z0-9_]+|\bpulp[-_]"
-        r"(?:audio|canvas|format|gpu|graph|host|midi|plugin|render|runtime|signal|view)\b)",
-        re.IGNORECASE,
-    ),
-    "audio-plugin-sdk": re.compile(
-        r"\b(?:AudioUnit|VST3|CLAP|LV2|Oboe)\b",
-        re.IGNORECASE,
-    ),
-}
+# Which files are text, and the Pulp names native source refuses, are shared
+# with the SDK installer's payload scan (content_scan_policy.py).
+CONTENT_SCAN_POLICY_PATH = Path(__file__).with_name("content_scan_policy.py")
+_POLICY_SPEC = importlib.util.spec_from_file_location("content_scan_policy", CONTENT_SCAN_POLICY_PATH)
+assert _POLICY_SPEC and _POLICY_SPEC.loader
+content_scan_policy = importlib.util.module_from_spec(_POLICY_SPEC)
+_POLICY_SPEC.loader.exec_module(content_scan_policy)
+FORBIDDEN_ACTIVE_PATTERNS = content_scan_policy.compiled_text_patterns()
+
+
+def scans_active_content(relative: str) -> bool:
+    """Whether the native scan reads this checkout path as text."""
+    suffix = Path(relative).suffix.lower()
+    if suffix in content_scan_policy.NATIVE_SOURCE_EXCLUDED_SUFFIXES:
+        return False
+    return content_scan_policy.should_scan_content(relative, extensionless=True)
+
+
 # Forbidden mirror edges (Decision 0010 / D3): audio, DSP, MIDI, music theory,
 # plug-in formats, plug-in hosting, GPU audio and product content stay
 # Pulp-owned, and so do the Pulp-kept view and state files. The table is
@@ -232,9 +214,8 @@ def active_files(root: Path, roots: Iterable[str]) -> Iterable[Path]:
 def scan_active_surface(root: Path, roots: Iterable[str] = EXPECTED_ACTIVE_ROOTS) -> list[dict[str, object]]:
     findings: list[dict[str, object]] = []
     for path in active_files(root, roots):
-        if path.relative_to(root).as_posix() in POLICY_IMPLEMENTATION_PATHS:
-            continue
-        if path.suffix.lower() not in TEXT_SUFFIXES:
+        relative = path.relative_to(root).as_posix()
+        if relative in POLICY_IMPLEMENTATION_PATHS or not scans_active_content(relative):
             continue
         try:
             text = path.read_text(encoding="utf-8")
@@ -406,10 +387,6 @@ def mirror_edge_table_drift(
     if blob != git_blob_sha(vendored) or blob != pin.get("git_blob"):
         return [f"{differs}, and the pinned commit {pinned} does not hold the vendored table"]
     return []
-
-
-def git_blob_sha(data: bytes) -> str:
-    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
 
 
 def mirror_edge_table_pin_errors(
