@@ -1,0 +1,12 @@
+{
+  "schema": "vellum.pulp-view-audio-archive.v1",
+  "pulp_repository": "Generous-Corp/pulp",
+  "source_sha": "52f028a9c6b6ee5ac1be1dfe073e515caa6be550",
+  "export_receipt": "provenance/mirror/receipts/20261022-52f028a9c6b6.json",
+  "release_tag": "artifact/pulp-view-audio/52f028a9c6b6ee5ac1be1dfe073e515caa6be550",
+  "workflow_run_id": null,
+  "workflow_sha": null,
+  "archive": {"name": "libpulp-view-audio.a", "sha256": null, "size": null},
+  "manifest": {"name": "pulp-view-audio-archive.manifest.json", "sha256": null},
+  "attestation_bundle": {"name": "pulp-view-audio-archive.sigstore.json", "sha256": null}
+}
