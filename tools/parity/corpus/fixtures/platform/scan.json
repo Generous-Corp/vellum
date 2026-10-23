@@ -1,0 +1,14 @@
+{
+  "description": "Symbol families for the platform lanes: Python regular expressions over symbol names as each container stores them (ELF .symtab/.dynsym, PE export names, WebAssembly export names), so no leading Mach-O underscore is assumed. A Skia, Dawn or wgpu family counts definitions inside that library's own namespaces, not Pulp functions that merely take a Skia type as a parameter.",
+  "families": {
+    "pulp-format": "N4pulp6format",
+    "pulp-view": "N4pulp4view",
+    "pulp-canvas": "N4pulp6canvas",
+    "pulp-render": "N4pulp6render",
+    "gpu-host": "GpuWindowHost",
+    "skia": "^_?_ZN(K)?(8SkCanvas|9SkSurface|5skgpu)",
+    "wgpu": "^_?wgpu[A-Z]",
+    "dawn": "^_?_ZN(K)?4dawn|^_?dawn[A-Z]",
+    "vellum": "(?i)vellum"
+  }
+}
