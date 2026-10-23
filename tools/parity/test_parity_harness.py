@@ -19,6 +19,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -988,6 +989,54 @@ class HostRequestTests(HarnessFixture):
         self.assertEqual(subset["case_filter"], ["fake-controls"])
         self.assertTrue(any("--case subset" in e for e in ph.calibration_errors(subset, corpus())))
 
+
+    def test_calibration_acceptance_is_rederived_not_trusted(self) -> None:
+        import copy
+        record = ph.calibrate(self.corpus_path, self.root / "src", self.impl_path, self.root / "cal")
+        self.assertTrue(record["calibrated"])
+        self.assertEqual(ph.calibration_errors(record, corpus()), [])
+
+        def forged(edit) -> list[str]:
+            document = copy.deepcopy(record)
+            edit(document)
+            self.assertTrue(document["calibrated"])
+            return ph.calibration_errors(document, corpus())
+
+        def control_did_not_fail(document) -> None:
+            document["controls"][0]["outcome"] = "CONTROL DID NOT FAIL"
+
+        def not_applicable(document) -> None:
+            document["controls"][0]["outcome"] = "NOT APPLICABLE (no case exercises it)"
+
+        def failures_named(document) -> None:
+            document["control_failures"] = [document["controls"][0]["control"]]
+
+        def no_controls(document) -> None:
+            document["controls"] = []
+
+        def positive_rejected(document) -> None:
+            document["positive"]["verdict"]["accepting"] = False
+
+        def positive_without_verdict(document) -> None:
+            document["positive"]["verdict"] = None
+
+        for edit, expected in ((control_did_not_fail, "did not reject"), (not_applicable, "did not reject"),
+                               (failures_named, "names control failures"), (no_controls, "lists no controls"),
+                               (positive_rejected, "positive run did not accept"),
+                               (positive_without_verdict, "positive run did not accept")):
+            with self.subTest(edit=edit.__name__):
+                self.assertTrue(any(expected in e for e in forged(edit)), forged(edit))
+
+    def test_harness_fingerprint_covers_every_imported_repo_module(self) -> None:
+        files = ph.harness_fingerprint()["files"]
+        for name in ("parity_harness.py", "parity_policy.py", "vellum_image_compare.py", "vellum_png.py"):
+            self.assertIn(name, files)
+        # An edit to a comparator module alone changes the fingerprint.
+        real = ph.sha256_file
+        before = ph.harness_fingerprint()["sha256"]
+        with mock.patch.object(ph, "sha256_file", side_effect=lambda path: (
+                "0" * 64 if Path(path).name in ("vellum_image_compare.py", "vellum_png.py") else real(path))):
+            self.assertNotEqual(ph.harness_fingerprint()["sha256"], before)
 
 class ComparatorTests(unittest.TestCase):
     def test_geometry_requires_the_layout_schema_on_both_sides(self) -> None:

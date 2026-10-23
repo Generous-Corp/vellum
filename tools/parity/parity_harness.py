@@ -29,6 +29,7 @@ by the lane it targets. A harness whose controls do not fail proves nothing.
 from __future__ import annotations
 
 import argparse
+import ast
 from collections import Counter
 import copy
 import hashlib
@@ -393,10 +394,40 @@ def environment_identity() -> dict[str, Any]:
     }
 
 
+def imported_repo_modules(entry_points: list[Path]) -> list[Path]:
+    """Every source module the entry points import from the harness, lane and
+    cli directories, transitively. A comparator that changes how pixels are
+    judged changes the harness as surely as an edit to this file does."""
+    search = [Path(__file__).resolve().parent, Path(__file__).resolve().parents[2] / "cli"]
+    seen: set[Path] = set()
+    queue = [path.resolve() for path in entry_points]
+    while queue:
+        path = queue.pop()
+        if path in seen:
+            continue
+        seen.add(path)
+        names: set[str] = set()
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path))):
+            if isinstance(node, ast.Import):
+                names.update(alias.name.split(".")[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                names.add(node.module.split(".")[0])
+        for name in sorted(names - set(sys.stdlib_module_names)):
+            for directory in (path.parent, *search):
+                candidate = directory / f"{name}.py"
+                if candidate.is_file():
+                    queue.append(candidate.resolve())
+                    break
+    return sorted(seen)
+
+
 def harness_fingerprint() -> dict[str, Any]:
-    files = [Path(__file__).resolve(), Path(parity_policy.__file__).resolve(),
-             *sorted(p.resolve() for p in LANE_MODULES)]
-    hashes = {p.name: sha256_file(p) for p in files}
+    files = imported_repo_modules([Path(__file__), Path(parity_policy.__file__), *LANE_MODULES])
+    hashes: dict[str, str] = {}
+    for path in files:
+        if path.name in hashes:
+            raise HarnessError(f"harness modules share the name {path.name}; the fingerprint cannot tell them apart")
+        hashes[path.name] = sha256_file(path)
     return {"files": hashes, "sha256": sha256_bytes(json.dumps(hashes, sort_keys=True).encode())}
 
 
@@ -1058,9 +1089,27 @@ def calibration_errors(calibration: Any, corpus: dict[str, Any]) -> list[str]:
     errors = []
     if not calibration.get("calibrated"):
         errors.append("calibration record is not CALIBRATED")
+    # `calibrated` is the record's own claim; re-derive it from the evidence.
+    controls = calibration.get("controls")
+    if not isinstance(controls, list) or not controls:
+        errors.append("calibration record lists no controls")
+    else:
+        for index, control in enumerate(controls):
+            outcome = control.get("outcome") if isinstance(control, dict) else None
+            name = control.get("control", f"#{index}") if isinstance(control, dict) else f"#{index}"
+            if not isinstance(outcome, str) or not (
+                    outcome == "REJECTED as required" or outcome.startswith("OUT OF SCOPE")):
+                errors.append(f"control {name} did not reject: {outcome!r}")
+    if calibration.get("control_failures") != []:
+        errors.append(f"calibration record names control failures: {calibration.get('control_failures')!r}")
     if calibration.get("case_filter"):
         errors.append("calibration record covers a --case subset (debug only), not the corpus")
     positive = calibration.get("positive") or {}
+    if not isinstance(positive, dict):
+        positive = {}
+    verdict = positive.get("verdict")
+    if not isinstance(verdict, dict) or verdict.get("accepting") is not True:
+        errors.append("calibration positive run did not accept")
     if (positive.get("corpus") or {}).get("sha256") != corpus_sha256(corpus):
         errors.append("corpus differs from the calibrated corpus (re-run calibrate)")
     recorded = ((positive.get("environment") or {}).get("harness") or {}).get("sha256")
