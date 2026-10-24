@@ -1,10 +1,10 @@
 {
   "schema": "vellum.vendored-pulp-file-pin.v1",
   "pulp_repository": "Generous-Corp/pulp",
-  "pulp_commit": "aeea7c60fedd424adca17f7f703e56d2455d5d99",
+  "pulp_commit": "3ad76890c3a73043381cabf712e47c568b5086c7",
   "pulp_path": "tools/scripts/nm_symbols.py",
   "vendored_path": "tools/mirror/nm_symbols.py",
-  "git_blob": "7370d79efe28f4ddb4e449d99bb825bae4f49f29",
+  "git_blob": "cb01d9996ff4a0fa21403dd9a6cc54c557c0bb4c",
   "update_procedure": [
     "Land the change in Pulp first.",
     "Copy Pulp's tools/scripts/nm_symbols.py at that Pulp commit byte-for-byte to tools/mirror/nm_symbols.py.",
