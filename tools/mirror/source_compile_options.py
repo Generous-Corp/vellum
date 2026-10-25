@@ -352,25 +352,49 @@ def resolve(file: str, base: str, env: dict[str, object]) -> object:
     return UNKNOWN if normalized.startswith("..") else normalized
 
 
-def per_source_properties(cmd: Command) -> tuple[list[tuple[str, bool]], list[tuple[str, list[str]]]] | None:
-    """(files, [(property, values)]) of a per-source property call, or None."""
+@dataclass
+class SourceProperties:
+    """One per-source property call: its files, the directories and targets it
+    names with DIRECTORY / TARGET_DIRECTORY, and its (property, values)."""
+    files: list[tuple[str, bool]]
+    directories: list[str]
+    target_directories: list[str]
+    props: list[tuple[str, list[str]]]
+
+
+SCOPE_KEYWORDS = {"DIRECTORY", "TARGET_DIRECTORY"}
+
+
+def per_source_properties(cmd: Command) -> SourceProperties | None:
+    """The per-source property call `cmd` makes, or None."""
     words = [text for text, _ in cmd.args]
     if cmd.name == "set_source_files_properties":
         if "PROPERTIES" not in words:
             return None
         split = words.index("PROPERTIES")
-        files = [arg for arg in cmd.args[:split] if arg[0] not in {"DIRECTORY", "TARGET_DIRECTORY"}]
+        head = cmd.args[:split]
         pairs = cmd.args[split + 1:]
         props = [(pairs[k][0], [pairs[k + 1][0]]) for k in range(0, len(pairs) - 1, 2)]
-        return files, props
-    if cmd.name == "set_property" and words[:1] == ["SOURCE"]:
+    elif cmd.name == "set_property" and words[:1] == ["SOURCE"]:
         if "PROPERTY" not in words:
             return None
         split = words.index("PROPERTY")
-        files = [arg for arg in cmd.args[1:split] if arg[0] not in {"DIRECTORY", "TARGET_DIRECTORY", "APPEND", "APPEND_STRING"}]
+        head = [arg for arg in cmd.args[1:split] if arg[0] not in {"APPEND", "APPEND_STRING"}]
         rest = [text for text, _ in cmd.args[split + 1:]]
-        return files, [(rest[0], rest[1:])] if rest else []
-    return None
+        props = [(rest[0], rest[1:])] if rest else []
+    else:
+        return None
+    files: list[tuple[str, bool]] = []
+    scoped: dict[str, list[str]] = {"DIRECTORY": [], "TARGET_DIRECTORY": []}
+    current: str | None = None
+    for text, quoted in head:
+        if not quoted and text in SCOPE_KEYWORDS:
+            current = text
+        elif current is None:
+            files.append((text, quoted))
+        else:
+            scoped[current].append(text)
+    return SourceProperties(files, scoped["DIRECTORY"], scoped["TARGET_DIRECTORY"], props)
 
 
 def _sets_source_properties(cmd: Command) -> bool:
@@ -379,20 +403,70 @@ def _sets_source_properties(cmd: Command) -> bool:
 
 
 def function_index(files: dict[str, str]) -> dict[str, bool]:
-    """Every user function/macro (lower-cased) -> whether its body sets a per-source property."""
-    index: dict[str, bool] = {}
+    """Every user function/macro (lower-cased) -> whether calling it can set a
+    per-source property.
+
+    Taint is computed to a fixpoint. A body is tainted when it sets a
+    per-source property, uses cmake_language(), calls a tainted function, or
+    include()s a file that is tainted or cannot be found. A file is tainted
+    when its top-level code does any of those. Function names are global in
+    CMake, so a redefinition anywhere taints the name if any definition is.
+    """
+    bodies: dict[str, list[tuple[str, Command]]] = {}
+    top: dict[str, list[Command]] = {}
     for path in sorted(files):
         current: list[str] = []
+        top[path] = []
         for cmd in commands(files[path], path):
             if cmd.name in {"function", "macro"} and cmd.args:
                 current.append(cmd.args[0][0].lower())
-                index.setdefault(current[-1], False)
+                bodies.setdefault(current[-1], [])
             elif cmd.name in {"endfunction", "endmacro"}:
                 if current:
                     current.pop()
-            elif current and _sets_source_properties(cmd):
-                index[current[-1]] = True
-    return index
+            elif current:
+                bodies[current[-1]].append((path, cmd))
+            else:
+                top[path].append(cmd)
+
+    def include_file(cmd: Command, path: str) -> str | None:
+        """The file an include() names, as far as it can be read statically."""
+        words = [t for t, _ in cmd.args if t not in {"OPTIONAL", "NO_POLICY_SCOPE"}]
+        if not words:
+            return None
+        text = words[0].replace("${CMAKE_CURRENT_LIST_DIR}", posixpath.dirname(path) or ".")
+        if "${" in text:
+            return "<unresolvable>"
+        if "/" not in text and not text.endswith(".cmake"):
+            candidates = [f for f in files if posixpath.basename(f) == f"{text}.cmake"]
+            return candidates[0] if len(candidates) == 1 else (None if not candidates else "<ambiguous>")
+        return posixpath.normpath(posixpath.join(posixpath.dirname(path), text))
+
+    func_taint = {name: False for name in bodies}
+    file_taint = {path: False for path in files}
+
+    def tainted(cmds: Iterable[tuple[str, Command]]) -> bool:
+        for path, cmd in cmds:
+            if _sets_source_properties(cmd) or cmd.name == "cmake_language":
+                return True
+            if func_taint.get(cmd.name):
+                return True
+            if cmd.name == "include":
+                target = include_file(cmd, path)
+                if target is not None and (target not in files or file_taint.get(target)):
+                    return True
+        return False
+
+    changed = True
+    while changed:
+        changed = False
+        for name, cmds in bodies.items():
+            if not func_taint[name] and tainted(cmds):
+                func_taint[name] = changed = True
+        for path, cmds in top.items():
+            if not file_taint[path] and tainted((path, cmd) for cmd in cmds):
+                file_taint[path] = changed = True
+    return func_taint
 
 
 class _DirectoryScope:
@@ -413,9 +487,12 @@ class _DirectoryScope:
         self.base = posixpath.dirname(root)
         self.env = configure_environment(options)
         self.env["CMAKE_CURRENT_SOURCE_DIR"] = f"{SOURCE_ROOT}/{self.base}" if self.base else SOURCE_ROOT
+        self.root = root
         self.created: set[str] = set()
         self.result: dict[str, list[str]] = {}
         self.errors: list[str] = []
+        # DIRECTORY / TARGET_DIRECTORY calls: judged against every scope later.
+        self.redirected: list[tuple[str, object, list[object], list[object]]] = []
         self.stack: list[str] = []
         self.run(root, True)
 
@@ -429,9 +506,7 @@ class _DirectoryScope:
             return None
         text = str(name)
         if "/" not in text and not text.endswith(".cmake"):
-            module = f"tools/cmake/{text}.cmake"
-            # Not in the module path the source tree supplies: a CMake module.
-            return module if module in self.files else None
+            return self.module_target(text, where)
         resolved = resolve(text, self.base, self.env)
         if resolved is UNKNOWN:
             self.errors.append(f"{where}: include() of a file that cannot be resolved: {text}")
@@ -444,6 +519,34 @@ class _DirectoryScope:
                     self.unseen.add(str(resolved))
             return None
         return str(resolved)
+
+    def module_target(self, name: str, where: str) -> str | None:
+        """A bare include(<name>): CMAKE_MODULE_PATH in order (what this scope
+        appended, then the root's tools/cmake), else a CMake-shipped module."""
+        module_path = self.env.get("CMAKE_MODULE_PATH", "")
+        entries: list[object] = [] if module_path is UNKNOWN else [
+            resolve(entry, self.base, self.env) if entry.startswith(SOURCE_ROOT) or not entry.startswith("/")
+            else UNKNOWN
+            for entry in str(module_path).split(";") if entry]
+        entries.append("tools/cmake")
+        for entry in entries:
+            if entry is UNKNOWN:
+                self.errors.append(f"{where}: include({name}) searches a CMAKE_MODULE_PATH entry "
+                                   "that cannot be resolved")
+                return None
+            candidate = posixpath.normpath(posixpath.join(str(entry), f"{name}.cmake"))
+            if candidate in self.files:
+                if module_path is UNKNOWN and any(
+                        posixpath.basename(f) == f"{name}.cmake" and f != candidate for f in self.files):
+                    self.errors.append(f"{where}: include({name}) is ambiguous under an unknown CMAKE_MODULE_PATH")
+                    return None
+                return candidate
+        elsewhere = sorted(f for f in self.files if posixpath.basename(f) == f"{name}.cmake")
+        if elsewhere:
+            self.errors.append(f"{where}: include({name}) finds no module on the known CMAKE_MODULE_PATH, "
+                               f"but the tree has {elsewhere}")
+        # Otherwise a module CMake ships.
+        return None
 
     def run(self, path: str, outer: object) -> None:
         if path in self.stack:
@@ -502,8 +605,24 @@ class _DirectoryScope:
                         f"{SOURCE_ROOT}/{posixpath.dirname(path)}" if posixpath.dirname(path) else SOURCE_ROOT)
                 continue
             if self.functions.get(cmd.name):
-                self.errors.append(f"{where}: {cmd.name}() sets per-source properties from its "
-                                   "arguments, which cannot be evaluated here")
+                self.errors.append(f"{where}: {cmd.name}() can set per-source properties, "
+                                   "which cannot be evaluated here")
+                continue
+            if cmd.name == "cmake_language" and words[:1] and words[0] in {"CALL", "EVAL", "DEFER"}:
+                self.errors.append(f"{where}: cmake_language({words[0]}) cannot be evaluated here")
+                continue
+            if cmd.name == "list" and len(words) >= 2 and words[0] in {"APPEND", "PREPEND"}:
+                current = env.get(words[1], "")
+                added = expand(";".join(words[2:]), env)
+                if state is not True or current is UNKNOWN or added is UNKNOWN:
+                    env[words[1]] = UNKNOWN
+                else:
+                    parts = [str(current)] if current else []
+                    parts = parts + [str(added)] if words[0] == "APPEND" else [str(added)] + parts
+                    env[words[1]] = ";".join(p for p in parts if p)
+                continue
+            if cmd.name == "list" and len(words) >= 2 and words[1] == "CMAKE_MODULE_PATH":
+                env["CMAKE_MODULE_PATH"] = UNKNOWN
                 continue
             if cmd.name == "set" and words:
                 name = expand(words[0], env)
@@ -539,12 +658,17 @@ class _DirectoryScope:
             parsed = per_source_properties(cmd)
             if parsed is None:
                 continue
+            if parsed.directories or parsed.target_directories:
+                # Judged against the scopes it names, never this one.
+                directories = [resolve(d, self.base, env) for d in parsed.directories]
+                targets = [expand(t, env) for t in parsed.target_directories]
+                self.redirected.append((where, state, directories, targets))
+                continue
             self.apply(parsed, state, where)
         self.stack.pop()
 
-    def apply(self, parsed: tuple[list[tuple[str, bool]], list[tuple[str, list[str]]]],
-              state: object, where: str) -> None:
-        sources, props = parsed
+    def apply(self, parsed: SourceProperties, state: object, where: str) -> None:
+        sources, props = parsed.files, parsed.props
         relevant = [(prop, values) for prop, values in props if prop not in INERT_PROPERTIES]
         if not relevant:
             return
@@ -591,16 +715,34 @@ def evaluate(files: dict[str, str], options: dict[str, str], exported: Iterable[
     result: dict[str, list[str]] = {}
     errors: list[str] = []
     created: set[str] = set()
-    for root in sorted(p for p in files if posixpath.basename(p) == "CMakeLists.txt"):
-        scope = _DirectoryScope(files, options, exported, functions, root, complete)
-        if wanted is not None and not (scope.created & wanted):
-            continue
+    scopes = [_DirectoryScope(files, options, exported, functions, root, complete)
+              for root in sorted(p for p in files if posixpath.basename(p) == "CMakeLists.txt")]
+    judged = [scope for scope in scopes if wanted is None or scope.created & wanted]
+    judged_dirs = {scope.base for scope in judged}
+    for scope in judged:
         created |= scope.created
         errors.extend(scope.errors)
         for source, flat in scope.result.items():
             if source in result and result[source] != flat:
                 errors.append(f"{source} is given different COMPILE_OPTIONS in two directories")
             result[source] = flat
+    # A DIRECTORY / TARGET_DIRECTORY call reaches another scope's targets, so
+    # every scope's calls are judged: one naming a judged directory or an
+    # exported target, or naming one that cannot be resolved, fails.
+    reached_targets = wanted if wanted is not None else {t for scope in scopes for t in scope.created}
+    for scope in scopes:
+        for where, state, directories, targets in scope.redirected:
+            if state is False:
+                continue
+            for directory in directories:
+                if directory is UNKNOWN or directory in judged_dirs:
+                    errors.append(f"{where}: per-source property for directory "
+                                  f"{'(unresolved)' if directory is UNKNOWN else directory or '.'} "
+                                  "that creates an exported target")
+            for target in targets:
+                if target is UNKNOWN or target in reached_targets:
+                    errors.append(f"{where}: per-source property through TARGET_DIRECTORY "
+                                  f"{'(unresolved)' if target is UNKNOWN else target}")
     if complete and wanted is not None:
         missing = sorted(wanted - created)
         if missing:

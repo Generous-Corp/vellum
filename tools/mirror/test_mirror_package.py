@@ -396,6 +396,86 @@ class SourceCompileOptionsTest(unittest.TestCase):
                 self.evaluate(text)
 
 
+class SourceCompileOptionsBypassTest(unittest.TestCase):
+    """The ways CMake can set a per-source property from somewhere other than
+    the target's own directory, injected into a Pulp-shaped tree."""
+
+    RELEASE = {"CMAKE_SYSTEM_NAME": "Darwin", "CMAKE_BUILD_TYPE": "Release", "PULP_SANITIZER": ""}
+    EXPORTED = {"core/x/src/a.cpp", "core/x/src/b.cpp"}
+
+    def tree(self, **overrides: str) -> dict[str, str]:
+        files = {
+            "CMakeLists.txt": ('list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/tools/cmake")\n'
+                               "add_subdirectory(core/x)\nadd_subdirectory(test)\n"),
+            "core/x/CMakeLists.txt": ("add_library(x STATIC src/a.cpp src/b.cpp)\n"
+                                      "if(APPLE)\n  set_source_files_properties(src/a.cpp PROPERTIES COMPILE_OPTIONS -fno-rtti)\nendif()\n"),
+            "test/CMakeLists.txt": "add_executable(t t.cpp)\n",
+            "tools/cmake/Helpers.cmake": "function(noop)\nendfunction()\n",
+        }
+        files.update({path.replace("__", "/").replace("_DOT_", "."): text for path, text in overrides.items()})
+        return files
+
+    def evaluate(self, files: dict[str, str]) -> dict:
+        return mp.source_compile_options.evaluate(files, self.RELEASE, self.EXPORTED, {"x"}, complete=True)
+
+    def assertFailsClosed(self, files: dict[str, str], fragment: str) -> None:
+        with self.assertRaises(mp.source_compile_options.SourceOptionsError) as caught:
+            self.evaluate(files)
+        self.assertIn(fragment, str(caught.exception))
+
+    def test_baseline(self) -> None:
+        self.assertEqual(self.evaluate(self.tree()), {"core/x/src/a.cpp": ["-fno-rtti"]})
+
+    def test_directory_from_an_unjudged_scope_fails_closed(self) -> None:
+        for clause in ("DIRECTORY ${CMAKE_SOURCE_DIR}/core/x", "TARGET_DIRECTORY x", "DIRECTORY ${SOMEWHERE}"):
+            with self.subTest(clause=clause):
+                self.assertFailsClosed(self.tree(**{"test/CMakeLists.txt": (
+                    "add_executable(t t.cpp)\n"
+                    f"set_source_files_properties(${{CMAKE_SOURCE_DIR}}/core/x/src/b.cpp {clause} "
+                    "PROPERTIES COMPILE_OPTIONS -O0)\n")}), "per-source property")
+        # In the judged scope itself it is not attributed to that scope either.
+        self.assertFailsClosed(self.tree(**{"core/x/CMakeLists.txt": (
+            "add_library(x STATIC src/a.cpp src/b.cpp)\n"
+            "set_source_files_properties(src/b.cpp DIRECTORY ${CMAKE_SOURCE_DIR}/core/x PROPERTIES COMPILE_OPTIONS -O0)\n")}),
+            "per-source property for directory core/x")
+
+    def test_transitive_function_call_fails_closed(self) -> None:
+        helpers = ("function(inner f)\n  set_source_files_properties(${f} PROPERTIES COMPILE_OPTIONS -O0)\nendfunction()\n"
+                   "function(outer f)\n  inner(${f})\nendfunction()\n")
+        self.assertFailsClosed(self.tree(**{
+            "tools/cmake/Helpers.cmake": helpers,
+            "core/x/CMakeLists.txt": "include(Helpers)\nadd_library(x STATIC src/a.cpp src/b.cpp)\nouter(src/b.cpp)\n"}),
+            "outer() can set per-source properties")
+
+    def test_include_inside_a_function_fails_closed(self) -> None:
+        self.assertFailsClosed(self.tree(**{
+            "tools/cmake/Helpers.cmake": "function(loader)\n  include(${CMAKE_CURRENT_LIST_DIR}/Opts.cmake)\nendfunction()\n",
+            "tools/cmake/Opts.cmake": "set_source_files_properties(src/b.cpp PROPERTIES COMPILE_OPTIONS -O0)\n",
+            "core/x/CMakeLists.txt": "include(Helpers)\nadd_library(x STATIC src/a.cpp src/b.cpp)\nloader()\n"}),
+            "loader() can set per-source properties")
+
+    def test_cmake_language_fails_closed(self) -> None:
+        for call in ("cmake_language(CALL noop)", 'cmake_language(EVAL CODE "noop()")'):
+            with self.subTest(call=call):
+                self.assertFailsClosed(self.tree(**{
+                    "core/x/CMakeLists.txt": f"include(Helpers)\nadd_library(x STATIC src/a.cpp src/b.cpp)\n{call}\n"}),
+                    "cmake_language(")
+
+    def test_bare_include_follows_the_scope_module_path(self) -> None:
+        opts = "set_source_files_properties(src/b.cpp PROPERTIES COMPILE_OPTIONS -O0)\n"
+        appended = self.tree(**{
+            "core/x/cmake/Opts_DOT_cmake": opts,
+            "tools/cmake/Opts_DOT_cmake": "",
+            "core/x/CMakeLists.txt": ('add_library(x STATIC src/a.cpp src/b.cpp)\n'
+                                      'list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")\ninclude(Opts)\n')})
+        self.assertEqual(self.evaluate(appended), {"core/x/src/b.cpp": ["-O0"]})
+        # The same module off every known module path is not a CMake-shipped one.
+        self.assertFailsClosed(self.tree(**{
+            "core/x/cmake/Opts_DOT_cmake": opts,
+            "core/x/CMakeLists.txt": "add_library(x STATIC src/a.cpp src/b.cpp)\ninclude(Opts)\n"}),
+            "finds no module on the known CMAKE_MODULE_PATH")
+
+
 class CachedCheckoutTest(unittest.TestCase):
     def test_cache_is_reused_only_at_the_pin_without_foreign_edits(self) -> None:
         import subprocess
