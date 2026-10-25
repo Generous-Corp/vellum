@@ -20,11 +20,13 @@ against the installed package and built with depfiles, and asserts:
 2. ``no-audio-headers``: no consumer translation unit includes a view-audio
    header, and the package ships none;
 3. ``no-audio-symbols``: neither the consumer image nor any packaged library
-   defines or references a view-audio symbol. "View-audio symbol" is Pulp's
-   ``view_audio_symbol_floor`` definition: a symbol the ``pulp-view-audio``
-   archive defines (``--view-audio-archive``), restricted to the namespaces
-   that target owns, since the archive also carries inline definitions it
-   shares with every other user of canvas, runtime and the C++ library.
+   defines or references a view-audio symbol. "View-audio symbol" is a
+   symbol the ``pulp-view-audio`` archive (``--view-audio-archive``) defines
+   strongly, restricted to the namespaces that target owns, or the RTTI of a
+   class that archive owns. A weak-only archive definition is header-inline
+   code every translation unit of its header carries, so a copy elsewhere is
+   not view-audio code; weak RTTI of an owned class is, because emitting it
+   took that class's definition (Pulp's archive symbol closure rule).
    Without the archive, and only while the package carries no view unit, the
    stand-in is stricter: no ``pulp::view`` or Pulp product-namespace symbol
    may appear at all. A package with a view unit needs the archive;
@@ -85,17 +87,15 @@ VIEW_SYMBOL = re.compile(r"\bpulp::view::")
 # archive shares with any user of canvas, runtime or the C++ library.
 VIEW_AUDIO_OWNED = re.compile(
     r"\bpulp::(?:view|audio|signal|midi|music|format|host|gpu_audio|content)::")
-# The floor is read with nm_symbols.py, vendored byte for byte from Pulp
-# (nm_symbols.pin.json), using its contamination rule defined_any(). Every nm
-# type except U (undefined) and lowercase w/v (weak references) counts as
-# defined, weak definitions (W, V) included. This is a contamination check: a
-# weak view-audio definition is view-audio inline code, and finding one in a
-# Vellum consumer means that code was compiled into Vellum. Pulp's
-# tools/scripts/archive_symbol_closure_check.py deliberately counts strong
-# definitions only (TDBRSCG): it resolves dependencies between archives, where
-# an inline definition repeated in both is not a dependency.
+# The floor reads strength with nm_symbols.py and class ownership with
+# rtti_ownership.py, both vendored byte for byte from Pulp (*.pin.json). Apple's
+# nm prints a Mach-O weak definition with a strong letter, so weakness comes
+# from `nm -g -m` there and from the W/V letters on ELF (nm_symbols.strength).
+# A strong definition is every defined type except a weak-only one, so GNU
+# unique (u) and indirect (i) definitions stay in the floor.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import nm_symbols  # noqa: E402
+import rtti_ownership  # noqa: E402
 
 
 class EvidenceError(RuntimeError):
@@ -184,13 +184,45 @@ def header_findings(depfiles: dict[str, list[str]], package_headers: Iterable[st
     return findings
 
 
-def floor_defined(listing: str) -> set[str]:
-    """The symbols an archive defines, strongly or weakly (nm_symbols.defined_any)."""
-    return nm_symbols.defined_any(listing)
+def floor_strength(listing: str, darwin_listing: str | None = None) -> tuple[set[str], set[str]]:
+    """(strong, weak-only) mangled definitions of an archive.
+
+    `listing` is `nm -g -P` text and `darwin_listing` its `nm -g -m` text on
+    Mach-O. Strong is every defined symbol (nm_symbols.defined_any) that is not
+    weak-only (nm_symbols.strength).
+    """
+    _, weak = nm_symbols.strength(listing, darwin_listing)
+    return nm_symbols.defined_any(listing) - weak, weak
 
 
-def view_audio_floor(archive: Path) -> set[str]:
-    """Demangled view-audio-owned symbols the pulp-view-audio archive defines."""
+class ViewAudioFloor(frozenset):
+    """Demangled view-audio-owned symbols an archive defines strongly, plus the
+    classes it owns (rtti_ownership.owned_classes)."""
+
+    owned_classes: frozenset[str] = frozenset()
+
+
+def build_floor(listing: str, darwin_listing: str | None = None) -> ViewAudioFloor:
+    strong, _ = floor_strength(listing, darwin_listing)
+    try:
+        names = rtti_ownership.demangle(strong)
+    except rtti_ownership.DemangleError as error:
+        raise EvidenceError(str(error)) from error
+    floor = ViewAudioFloor(name for name in names.values() if VIEW_AUDIO_OWNED.search(name))
+    floor.owned_classes = frozenset(rtti_ownership.owned_classes(strong, names))
+    return floor
+
+
+def floor_hit(name: str, floor: set[str]) -> bool:
+    """Whether a demangled image symbol is view-audio code under `floor`."""
+    if name in floor:
+        return True
+    cls = rtti_ownership.rtti_class(name)
+    return bool(cls) and cls in getattr(floor, "owned_classes", ()) and not rtti_ownership.never_flagged(cls)
+
+
+def view_audio_floor(archive: Path) -> ViewAudioFloor:
+    """The floor of the pulp-view-audio archive (build_floor)."""
     nm = shutil.which("nm")
     if not nm:
         raise EvidenceError("nm is required")
@@ -198,13 +230,13 @@ def view_audio_floor(archive: Path) -> set[str]:
                             text=True, encoding="utf-8", errors="replace", check=False)
     if listed.returncode:
         raise EvidenceError(f"nm failed on {archive}: {listed.stderr.strip()}")
-    defined = sorted(floor_defined(listed.stdout))
-    names = demangle(defined)
-    owned = {name for name in names if VIEW_AUDIO_OWNED.search(name)}
-    if not owned:
+    darwin = subprocess.run([nm, "-g", "-m", str(archive)], capture_output=True,
+                            text=True, encoding="utf-8", errors="replace", check=False)
+    floor = build_floor(listed.stdout, darwin.stdout if darwin.returncode == 0 else None)
+    if not floor:
         # An empty floor would make the check pass vacuously.
         raise EvidenceError(f"{archive} defines no view-audio-owned symbol")
-    return owned
+    return floor
 
 
 def symbol_findings(symbols: dict[str, list[str]], *, view_unit_packaged: bool,
@@ -216,7 +248,7 @@ def symbol_findings(symbols: dict[str, list[str]], *, view_unit_packaged: bool,
     for image, names in sorted(symbols.items()):
         for name in names:
             if floor is not None:
-                hit = name in floor or AUDIO_SYMBOL.search(name)
+                hit = floor_hit(name, floor) or AUDIO_SYMBOL.search(name)
             else:
                 hit = VIEW_SYMBOL.search(name) or VIEW_AUDIO_OWNED.search(name)
             if hit:

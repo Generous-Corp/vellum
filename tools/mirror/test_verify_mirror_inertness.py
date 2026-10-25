@@ -88,7 +88,7 @@ class FindingTest(unittest.TestCase):
             "lib.a[b.o]: __ZTVN4pulp4view5MeterE S 10 8\n"
             "not a symbol line\n"
         )
-        self.assertEqual(vi.floor_defined(listing),
+        self.assertEqual(vi.floor_strength(listing)[0],
                          {"__ZN4pulp4view5MeterD1Ev", "__ZTVN4pulp4view5MeterE"})
 
 
@@ -116,7 +116,7 @@ class VendoredNmSymbolsTest(unittest.TestCase):
                               capture_output=True, check=True).stdout
         self.assertEqual(pulp, self.vendored.read_bytes())
 
-    def test_one_strong_and_two_weak_definitions_count_three(self) -> None:
+    def test_one_strong_and_two_weak_definitions_split_by_strength(self) -> None:
         listing = (
             "lib.a[m.o]: __ZN4pulp4view5Meter9set_levelEff T 20 0\n"
             "lib.a[m.o]: __ZTIN4pulp4view5MeterE W 0 0\n"
@@ -124,8 +124,9 @@ class VendoredNmSymbolsTest(unittest.TestCase):
             "lib.a[m.o]: __ZN4pulp4view4View5paintEv U 0 0\n"
             "lib.a[m.o]: __ZN4pulp4view4WeakEv w 0 0\n"
         )
-        self.assertEqual(len(vi.floor_defined(listing)), 3)
-        self.assertEqual(vi.floor_defined(listing), vi.nm_symbols.defined_any(listing))
+        strong, weak = vi.floor_strength(listing)
+        self.assertEqual(strong, {"__ZN4pulp4view5Meter9set_levelEff"})
+        self.assertEqual(weak, {"__ZTIN4pulp4view5MeterE", "__ZTVN4pulp4view5MeterE"})
 
 
 # GNU nm on an ELF archive: no leading underscore, `u` for a unique global
@@ -141,17 +142,18 @@ ELF_FLOOR_LISTING = (
     "libpulp-view-audio.a[meter.cpp.o]: _ZN4pulp4view4WeakEv w\n"
     "libpulp-view-audio.a[meter.cpp.o]: _ZN4pulp4view6WeakObjEv v\n"
 )
-ELF_FLOOR_DEFINED = {
-    "_ZN4pulp4view5Meter9set_levelEff", "_ZTIN4pulp4view5MeterE", "_ZTVN4pulp4view5MeterE",
+ELF_FLOOR_STRONG = {
+    "_ZN4pulp4view5Meter9set_levelEff",
     "_ZZN4pulp4view5Meter8instanceEvE1s", "_ZN4pulp4view13resolve_simdEv",
 }
+ELF_FLOOR_WEAK = {"_ZTIN4pulp4view5MeterE", "_ZTVN4pulp4view5MeterE"}
 
 
 class ElfFloorTest(unittest.TestCase):
-    """GNU unique (`u`) and indirect (`i`) definitions belong to the floor."""
+    """GNU unique (`u`) and indirect (`i`) definitions are strong; W/V are weak."""
 
     def test_vellum_counts_unique_and_indirect_definitions(self) -> None:
-        self.assertEqual(vi.floor_defined(ELF_FLOOR_LISTING), ELF_FLOOR_DEFINED)
+        self.assertEqual(vi.floor_strength(ELF_FLOOR_LISTING), (ELF_FLOOR_STRONG, ELF_FLOOR_WEAK))
 
     def test_pulp_reads_the_same_floor_when_a_checkout_is_given(self) -> None:
         root = os.environ.get("VELLUM_PULP_ROOT")
@@ -162,8 +164,78 @@ class ElfFloorTest(unittest.TestCase):
                                 capture_output=True, check=True, text=True).stdout
         pulp: dict = {}
         exec(compile(source, pin["pulp_path"], "exec"), pulp)
-        self.assertEqual(pulp["defined_any"](ELF_FLOOR_LISTING), vi.floor_defined(ELF_FLOOR_LISTING))
-        self.assertEqual(pulp["defined_any"](ELF_FLOOR_LISTING), ELF_FLOOR_DEFINED)
+        _, weak = pulp["strength"](ELF_FLOOR_LISTING)
+        self.assertEqual(weak, vi.floor_strength(ELF_FLOOR_LISTING)[1])
+        self.assertEqual(pulp["defined_any"](ELF_FLOOR_LISTING) - weak, ELF_FLOOR_STRONG)
+
+
+# `nm -g -P` and `nm -g -m` of one Mach-O archive. Apple's nm prints the weak
+# inline definition and the weak vtable with strong letters; only -m marks them.
+MACHO_P = (
+    "lib.a[engine.o]: __ZN4pulp5audio6Engine5startEv T 0 0\n"
+    "lib.a[engine.o]: __ZN4pulp4view4View11on_attachedEv T 10 0\n"
+    "lib.a[engine.o]: __ZTVN4pulp5audio6EngineE S 20 0\n"
+    "lib.a[engine.o]: __ZTIN4pulp6canvas4PathE S 30 0\n"
+    "lib.a[engine.o]: __ZN4pulp6canvas4PathD1Ev U\n"
+)
+MACHO_M = (
+    "lib.a(engine.o):\n"
+    "0000000000000000 (__TEXT,__text) external __ZN4pulp5audio6Engine5startEv\n"
+    "0000000000000010 (__TEXT,__text) weak external automatically hidden __ZN4pulp4view4View11on_attachedEv\n"
+    "0000000000000020 (__DATA,__const) weak external __ZTVN4pulp5audio6EngineE\n"
+    "0000000000000030 (__DATA,__const) weak external __ZTIN4pulp6canvas4PathE\n"
+    "                 (undefined) external __ZN4pulp6canvas4PathD1Ev\n"
+)
+
+
+class StrengthAwareFloorTest(unittest.TestCase):
+    """Only strong floor symbols and RTTI of an owned class are view-audio code."""
+
+    def setUp(self) -> None:
+        self.floor = vi.build_floor(MACHO_P, MACHO_M)
+
+    def findings(self, *names: str) -> list[str]:
+        return vi.symbol_findings({"provider": list(names)}, view_unit_packaged=True, floor=self.floor)[0]
+
+    def test_floor_reads_weakness_from_nm_m(self) -> None:
+        self.assertEqual(set(self.floor), {"pulp::audio::Engine::start()"})
+        self.assertEqual(self.floor.owned_classes, {"pulp::audio::Engine"})
+
+    def test_weak_shared_inline_passes(self) -> None:
+        self.assertEqual(self.findings("pulp::view::View::on_attached()"), [])
+
+    def test_strong_copy_fails(self) -> None:
+        self.assertEqual(self.findings("pulp::audio::Engine::start()"),
+                         ["provider: pulp::audio::Engine::start()"])
+
+    def test_weak_owned_rtti_fails(self) -> None:
+        self.assertEqual(self.findings("vtable for pulp::audio::Engine", "typeinfo for pulp::canvas::Path"),
+                         ["provider: vtable for pulp::audio::Engine"])
+
+
+class VendoredRttiOwnershipTest(unittest.TestCase):
+    """rtti_ownership.py is Pulp's file byte for byte."""
+
+    def setUp(self) -> None:
+        self.pin = json.loads((HERE / "rtti_ownership.pin.json").read_text(encoding="utf-8"))
+        self.vendored = HERE / "rtti_ownership.py"
+
+    def test_the_vendored_file_matches_its_pin(self) -> None:
+        data = self.vendored.read_bytes()
+        blob = hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+        self.assertEqual(blob, self.pin["git_blob"])
+        self.assertEqual(self.pin["vendored_path"], "tools/mirror/rtti_ownership.py")
+        self.assertEqual(self.pin["pulp_path"], "tools/scripts/rtti_ownership.py")
+        self.assertRegex(self.pin["pulp_commit"], r"^[0-9a-f]{40}$")
+
+    def test_the_vendored_file_matches_pulp_when_a_checkout_is_given(self) -> None:
+        root = os.environ.get("VELLUM_PULP_ROOT")
+        if not root:
+            self.skipTest("VELLUM_PULP_ROOT not set")
+        pulp = subprocess.run(["git", "-C", root, "show",
+                               f"{self.pin['pulp_commit']}:{self.pin['pulp_path']}"],
+                              capture_output=True, check=True).stdout
+        self.assertEqual(pulp, self.vendored.read_bytes())
 
 
 class FloorAgreementTest(unittest.TestCase):
