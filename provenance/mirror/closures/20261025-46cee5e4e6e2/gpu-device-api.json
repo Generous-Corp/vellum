@@ -1,0 +1,393 @@
+{
+  "build_dir": null,
+  "compile_definitions": [
+    "PULP_HAS_DAWN=1",
+    "PULP_HAS_SKIA=1",
+    "PULP_HAS_WEBGPU=1",
+    "PULP_RT_WORK_COUNTERS=1",
+    "PULP_SIMD_DEFAULT_BACKEND_ACCELERATE=1",
+    "PULP_SIMD_HAS_ACCELERATE=1",
+    "PULP_SIMD_HAS_HIGHWAY=1",
+    "SK_DAWN",
+    "SK_GRAPHITE",
+    "SK_RELEASE"
+  ],
+  "configuration": "Release",
+  "configure": {
+    "identity": {
+      "build_type": "Release",
+      "gpu": true,
+      "processor": "arm64",
+      "skia": true,
+      "system": "Darwin",
+      "text_shaping": true
+    },
+    "options": {
+      "CMAKE_BUILD_TYPE": "Release",
+      "CMAKE_SYSTEM_NAME": "Darwin",
+      "CMAKE_SYSTEM_PROCESSOR": "arm64",
+      "PULP_AUDIO_QUALITY_LAB_GATE": "OFF",
+      "PULP_BENCHMARK": "OFF",
+      "PULP_BUILD_EXAMPLES": "OFF",
+      "PULP_BUILD_NATIVE_COMPONENT_RUST_TESTS": "OFF",
+      "PULP_BUILD_NODEJS": "OFF",
+      "PULP_BUILD_PYTHON": "OFF",
+      "PULP_BUILD_RUST_CLI": "ON",
+      "PULP_BUILD_TESTS": "ON",
+      "PULP_BUILD_WASM_TESTS": "OFF",
+      "PULP_BUILD_WEBVIEW": "OFF",
+      "PULP_BUNDLE_NOTO_COLOR_EMOJI": "OFF",
+      "PULP_CHANGED_SURFACE_INVENTORY_TARGET": "OFF",
+      "PULP_CONFIGURE_CHECK_CACHE": "ON",
+      "PULP_D3D_AVAILABLE": "OFF",
+      "PULP_DAWN_PROCS_HOST_OWNED": "OFF",
+      "PULP_DEAD_STRIP_PLUGINS": "ON",
+      "PULP_ENABLE_AAX": "OFF",
+      "PULP_ENABLE_ABLETON_LINK": "OFF",
+      "PULP_ENABLE_ARA": "OFF",
+      "PULP_ENABLE_AUDIO_PROBES": "ON",
+      "PULP_ENABLE_AUTHORING_CAPSULE": "ON",
+      "PULP_ENABLE_COVERAGE": "OFF",
+      "PULP_ENABLE_DESIGN_IMPORT": "ON",
+      "PULP_ENABLE_DRACO": "OFF",
+      "PULP_ENABLE_FUZZING": "OFF",
+      "PULP_ENABLE_GPU": "ON",
+      "PULP_ENABLE_INSPECTOR": "ON",
+      "PULP_ENABLE_JS": "ON",
+      "PULP_ENABLE_MTS_ESP": "OFF",
+      "PULP_ENABLE_PROJECT_PACKAGE": "ON",
+      "PULP_ENABLE_RACK": "OFF",
+      "PULP_ENABLE_SCALA_TUNING": "OFF",
+      "PULP_ENABLE_SCENE3D": "OFF",
+      "PULP_ENABLE_SWIFT": "OFF",
+      "PULP_ENABLE_THREEJS_RUNTIME": "ON",
+      "PULP_FETCHCONTENT_UPDATES_DISCONNECTED": "ON",
+      "PULP_FUZZ_SANITIZERS": "fuzzer,address",
+      "PULP_GPU_AUDIO_ENABLE_EXPERIMENTAL_SHARED_IO_CONVOLVER": "OFF",
+      "PULP_GPU_AUDIO_EXACT_PROVIDER_PROOF": "OFF",
+      "PULP_GPU_AUDIO_WGPU_NATIVE_DIAGNOSTIC": "OFF",
+      "PULP_HAS_AUSDK": "TRUE",
+      "PULP_HAS_CLAP": "TRUE",
+      "PULP_HAS_JSC_ACTUAL": "OFF",
+      "PULP_HAS_LV2": "TRUE",
+      "PULP_HAS_MTS_ESP": "FALSE",
+      "PULP_HAS_SCALA_TUNING": "FALSE",
+      "PULP_HAS_SKIA": "TRUE",
+      "PULP_HAS_VST3": "TRUE",
+      "PULP_HAS_WEBGPU": "TRUE",
+      "PULP_HOST_ENABLE_GPU_CONVOLUTION": "OFF",
+      "PULP_HOST_QUIRKS_DEFAULT_POLICY": "validated_only",
+      "PULP_ICU_DATA_SUBSET": "ON",
+      "PULP_INTEL_CANARY": "OFF",
+      "PULP_JS_ENGINE": "auto",
+      "PULP_LINK_JOBS": "",
+      "PULP_LOTTIE": "OFF",
+      "PULP_MACOS_ARCH": "host",
+      "PULP_PLUGIN_PACKAGING": "single",
+      "PULP_REAL_PLUGIN_TESTS": "OFF",
+      "PULP_RECORD_LINK_MAPS": "OFF",
+      "PULP_REQUIRE_CHECKOUT_DEPENDENCIES": "ON",
+      "PULP_REQUIRE_GPU_FOR_SDK": "OFF",
+      "PULP_RT_WORK_COUNTERS": "ON",
+      "PULP_RUST_CLI_PROFILE": "release",
+      "PULP_RUST_CLI_TARGET": "",
+      "PULP_SANITIZER": "",
+      "PULP_SIMD_BACKEND": "auto",
+      "PULP_SKIA_AUTOFETCH": "ON",
+      "PULP_TEST_PCH": "ON",
+      "PULP_TEST_PCH_HEADERS": "<catch2/catch_test_macros.hpp>;<catch2/catch_approx.hpp>;<catch2/matchers/catch_matchers_floating_point.hpp>;<catch2/matchers/catch_matchers_string.hpp>;<algorithm>;<array>;<atomic>;<chrono>;<cmath>;<cstddef>;<cstdint>;<cstdio>;<cstdlib>;<cstring>;<filesystem>;<fstream>;<functional>;<limits>;<memory>;<numbers>;<optional>;<span>;<sstream>;<string>;<string_view>;<thread>;<type_traits>;<utility>;<vector>",
+      "PULP_TEST_TIMEOUT_CEILING": "3600",
+      "PULP_TEST_TIMEOUT_COVERAGE_SCALE": "4",
+      "PULP_TEST_TIMEOUT_SANITIZER_SCALE": "8",
+      "PULP_TEST_TIMEOUT_SCALE": "",
+      "PULP_TEXT_SHAPING": "ON",
+      "PULP_TRACING": "OFF",
+      "PULP_USE_CCACHE": "ON",
+      "PULP_USE_SHARED_FETCHCONTENT_SOURCES": "ON",
+      "PULP_VALIDATE_V8_PROVIDER_STRICT": "OFF",
+      "PULP_VULKAN_AVAILABLE": "OFF"
+    },
+    "options_sha256": "9480162a5e24220716e36c1dceaec4717a726d8154b5dd85a73df390837227db"
+  },
+  "external_inputs": [
+    {
+      "asset_sha256": "bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86",
+      "path": "@external/skia/b94213a11b3a2edadfae89f0c57a7f4ab72772c9/build/include/dawn/dawn_proc_table.h",
+      "pin": "b94213a11b3a2edadfae89f0c57a7f4ab72772c9",
+      "sha256": "00e7057898ce2e9f58e7452e3efbef18bd601173ffb9f965b6bbb41f61ac39c1",
+      "source": "https://skia.googlesource.com/skia.git"
+    },
+    {
+      "asset_sha256": "bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86",
+      "path": "@external/skia/b94213a11b3a2edadfae89f0c57a7f4ab72772c9/build/include/dawn/dawn_version.h",
+      "pin": "b94213a11b3a2edadfae89f0c57a7f4ab72772c9",
+      "sha256": "26e5c3a540d727bc35243c51937380b907bb87065cd745fe5c31d7ad8cec6fd4",
+      "source": "https://skia.googlesource.com/skia.git"
+    },
+    {
+      "asset_sha256": "bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86",
+      "path": "@external/skia/b94213a11b3a2edadfae89f0c57a7f4ab72772c9/build/include/dawn/webgpu.h",
+      "pin": "b94213a11b3a2edadfae89f0c57a7f4ab72772c9",
+      "sha256": "88216227a19607c0320c50ebba584da5055529b663606d46b1149b0c5591e315",
+      "source": "https://skia.googlesource.com/skia.git"
+    },
+    {
+      "asset_sha256": "bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86",
+      "path": "@external/skia/b94213a11b3a2edadfae89f0c57a7f4ab72772c9/build/include/dawn/webgpu_cpp.h",
+      "pin": "b94213a11b3a2edadfae89f0c57a7f4ab72772c9",
+      "sha256": "5056622517d2454dff3ccc3ac7a07e7808b8215ea18f1b903c363c4287447413",
+      "source": "https://skia.googlesource.com/skia.git"
+    },
+    {
+      "asset_sha256": "bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86",
+      "path": "@external/skia/b94213a11b3a2edadfae89f0c57a7f4ab72772c9/build/include/include/config/SkUserConfig.h",
+      "pin": "b94213a11b3a2edadfae89f0c57a7f4ab72772c9",
+      "sha256": "1a2c192891ad3a81338c031696fd0286666f4ab46d28e21f37df30ffc953cbc4",
+      "source": "https://skia.googlesource.com/skia.git"
+    },
+    {
+      "asset_sha256": "bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86",
+      "path": "@external/skia/b94213a11b3a2edadfae89f0c57a7f4ab72772c9/build/include/include/core/SkMilestone.h",
+      "pin": "b94213a11b3a2edadfae89f0c57a7f4ab72772c9",
+      "sha256": "f6ff28876852e46eec0db3c80b8bf364375754b6c80639acd9c5fdf393098df4",
+      "source": "https://skia.googlesource.com/skia.git"
+    },
+    {
+      "asset_sha256": "bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86",
+      "path": "@external/skia/b94213a11b3a2edadfae89f0c57a7f4ab72772c9/build/include/include/core/SkRefCnt.h",
+      "pin": "b94213a11b3a2edadfae89f0c57a7f4ab72772c9",
+      "sha256": "39f7cd9cd3806be6eef0533ec9bf13e0cdfcfc2ee2883e50ca8d36b9c86da85b",
+      "source": "https://skia.googlesource.com/skia.git"
+    },
+    {
+      "asset_sha256": "bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86",
+      "path": "@external/skia/b94213a11b3a2edadfae89f0c57a7f4ab72772c9/build/include/include/core/SkTypes.h",
+      "pin": "b94213a11b3a2edadfae89f0c57a7f4ab72772c9",
+      "sha256": "617107436969cdd06f50891b90163d4ce089ecfafabdef9179a1c1f8be645656",
+      "source": "https://skia.googlesource.com/skia.git"
+    },
+    {
+      "asset_sha256": "bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86",
+      "path": "@external/skia/b94213a11b3a2edadfae89f0c57a7f4ab72772c9/build/include/include/private/SkAPI.h",
+      "pin": "b94213a11b3a2edadfae89f0c57a7f4ab72772c9",
+      "sha256": "7fff0712d60946b882b0aa7a00185b4baf31b2659b65d67d92152b2218ae101f",
+      "source": "https://skia.googlesource.com/skia.git"
+    },
+    {
+      "asset_sha256": "bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86",
+      "path": "@external/skia/b94213a11b3a2edadfae89f0c57a7f4ab72772c9/build/include/include/private/SkAssert.h",
+      "pin": "b94213a11b3a2edadfae89f0c57a7f4ab72772c9",
+      "sha256": "1bf3b0f45731d1f38bc447407d845bb031dd4f372614c3ffddee07cf67750da8",
+      "source": "https://skia.googlesource.com/skia.git"
+    },
+    {
+      "asset_sha256": "bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86",
+      "path": "@external/skia/b94213a11b3a2edadfae89f0c57a7f4ab72772c9/build/include/include/private/SkAttributes.h",
+      "pin": "b94213a11b3a2edadfae89f0c57a7f4ab72772c9",
+      "sha256": "44baf23428b7e9eada7ca63913f90994d27ca34c414b362b75b97fc5968f6db6",
+      "source": "https://skia.googlesource.com/skia.git"
+    },
+    {
+      "asset_sha256": "bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86",
+      "path": "@external/skia/b94213a11b3a2edadfae89f0c57a7f4ab72772c9/build/include/include/private/SkDebug.h",
+      "pin": "b94213a11b3a2edadfae89f0c57a7f4ab72772c9",
+      "sha256": "e7425b888837a560cd005f2ce752979c0d646c663aef92c977d8aabaf676eb34",
+      "source": "https://skia.googlesource.com/skia.git"
+    },
+    {
+      "asset_sha256": "bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86",
+      "path": "@external/skia/b94213a11b3a2edadfae89f0c57a7f4ab72772c9/build/include/include/private/SkFeatures.h",
+      "pin": "b94213a11b3a2edadfae89f0c57a7f4ab72772c9",
+      "sha256": "d20d246f13400fe5a0e9f335611d825f936fa469e043e967849db673476196d1",
+      "source": "https://skia.googlesource.com/skia.git"
+    },
+    {
+      "asset_sha256": "bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86",
+      "path": "@external/skia/b94213a11b3a2edadfae89f0c57a7f4ab72772c9/build/include/include/private/SkLoadUserConfig.h",
+      "pin": "b94213a11b3a2edadfae89f0c57a7f4ab72772c9",
+      "sha256": "eb0fae79a274c5a8d089f7e14b0414fb6f2b55276f7f3ef9ce529a786acf8450",
+      "source": "https://skia.googlesource.com/skia.git"
+    },
+    {
+      "asset_sha256": "bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86",
+      "path": "@external/skia/b94213a11b3a2edadfae89f0c57a7f4ab72772c9/build/include/include/private/SkLog.h",
+      "pin": "b94213a11b3a2edadfae89f0c57a7f4ab72772c9",
+      "sha256": "7bdfc059f62ce5072db54f3c85a09cc5a149b240752dfa9053515fe25d32900d",
+      "source": "https://skia.googlesource.com/skia.git"
+    },
+    {
+      "asset_sha256": "bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86",
+      "path": "@external/skia/b94213a11b3a2edadfae89f0c57a7f4ab72772c9/build/include/include/private/SkLogPriority.h",
+      "pin": "b94213a11b3a2edadfae89f0c57a7f4ab72772c9",
+      "sha256": "6fcd70ad1a6228067396542a99000d32bc4ea1cc0b50d26694e07e36ffa60bfc",
+      "source": "https://skia.googlesource.com/skia.git"
+    },
+    {
+      "asset_sha256": "bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86",
+      "path": "@external/skia/b94213a11b3a2edadfae89f0c57a7f4ab72772c9/build/include/include/utils/SkLogHandler.h",
+      "pin": "b94213a11b3a2edadfae89f0c57a7f4ab72772c9",
+      "sha256": "746c39dc01f3a6ec320943ae31bba69e77ff0566d4bd68d45e774467894c2667",
+      "source": "https://skia.googlesource.com/skia.git"
+    },
+    {
+      "asset_sha256": "bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86",
+      "path": "@external/skia/b94213a11b3a2edadfae89f0c57a7f4ab72772c9/build/include/third_party/externals/dawn/include/dawn/dawn_proc.h",
+      "pin": "b94213a11b3a2edadfae89f0c57a7f4ab72772c9",
+      "sha256": "e071805b66e5702e298f6a3589a7fbf7b63805c11d52ada46caea21759acbbf9",
+      "source": "https://skia.googlesource.com/skia.git"
+    },
+    {
+      "asset_sha256": "bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86",
+      "path": "@external/skia/b94213a11b3a2edadfae89f0c57a7f4ab72772c9/build/include/third_party/externals/dawn/include/dawn/native/DawnNative.h",
+      "pin": "b94213a11b3a2edadfae89f0c57a7f4ab72772c9",
+      "sha256": "d291d33409a8b574b544d1649765584591ac51260e4f612ee83f005b3a5b396f",
+      "source": "https://skia.googlesource.com/skia.git"
+    },
+    {
+      "asset_sha256": "bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86",
+      "path": "@external/skia/b94213a11b3a2edadfae89f0c57a7f4ab72772c9/build/include/third_party/externals/dawn/include/dawn/native/dawn_native_export.h",
+      "pin": "b94213a11b3a2edadfae89f0c57a7f4ab72772c9",
+      "sha256": "c722ebaa9c0c9fda4d477bb8861cf60fdcbe225aa10ade9c523ee9456c5eb639",
+      "source": "https://skia.googlesource.com/skia.git"
+    },
+    {
+      "asset_sha256": "bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86",
+      "path": "@external/skia/b94213a11b3a2edadfae89f0c57a7f4ab72772c9/build/include/third_party/externals/dawn/include/webgpu/webgpu.h",
+      "pin": "b94213a11b3a2edadfae89f0c57a7f4ab72772c9",
+      "sha256": "5316d9fd241e604b3260fa8d4398a458a3dc88ee69c540ac959260b444bdfae3",
+      "source": "https://skia.googlesource.com/skia.git"
+    },
+    {
+      "asset_sha256": "bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86",
+      "path": "@external/skia/b94213a11b3a2edadfae89f0c57a7f4ab72772c9/build/include/third_party/externals/dawn/include/webgpu/webgpu_cpp.h",
+      "pin": "b94213a11b3a2edadfae89f0c57a7f4ab72772c9",
+      "sha256": "1166cea03743213cbd0a7fe04b01c8bcae8aa117d1370c124572c65b24f74aac",
+      "source": "https://skia.googlesource.com/skia.git"
+    },
+    {
+      "asset_sha256": "bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86",
+      "path": "@external/skia/b94213a11b3a2edadfae89f0c57a7f4ab72772c9/build/include/third_party/externals/dawn/include/webgpu/webgpu_enum_class_bitmasks.h",
+      "pin": "b94213a11b3a2edadfae89f0c57a7f4ab72772c9",
+      "sha256": "fd436dc17d050e156ac073b6148d90d388e2585de924ae0274b6aed3067c2a96",
+      "source": "https://skia.googlesource.com/skia.git"
+    },
+    {
+      "asset_sha256": "bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86",
+      "path": "@external/skia/b94213a11b3a2edadfae89f0c57a7f4ab72772c9/build/include/webgpu/webgpu_cpp_chained_struct.h",
+      "pin": "b94213a11b3a2edadfae89f0c57a7f4ab72772c9",
+      "sha256": "7329fc197c9047ce1c08c3294401836f7f7b24bdf07fbaf0a266253ffa1ac3b8",
+      "source": "https://skia.googlesource.com/skia.git"
+    }
+  ],
+  "files": [
+    "core/platform/include/pulp/platform/detect.hpp",
+    "core/platform/include/pulp/platform/win32_sane.hpp",
+    "core/render/include/pulp/render/bench/perf_counters.hpp",
+    "core/render/include/pulp/render/gpu_compute.hpp",
+    "core/render/include/pulp/render/gpu_diagnostics.hpp",
+    "core/render/include/pulp/render/gpu_proc_installer.hpp",
+    "core/render/include/pulp/render/gpu_render_time.hpp",
+    "core/render/include/pulp/render/gpu_startup_report.hpp",
+    "core/render/include/pulp/render/gpu_surface.hpp",
+    "core/render/src/gpu_compute.cpp",
+    "core/render/src/gpu_compute_pool.hpp",
+    "core/render/src/gpu_diagnostics.cpp",
+    "core/render/src/gpu_proc_installer.cpp",
+    "core/render/src/gpu_proc_installer_native.cpp",
+    "core/render/src/gpu_proc_installer_registry.hpp",
+    "core/render/src/gpu_startup_report.cpp",
+    "core/render/src/gpu_surface_dawn.cpp",
+    "core/render/src/metal_surface_mac.mm",
+    "core/render/src/pulp_render_objc_names.h",
+    "core/render/src/render_observer.cpp",
+    "core/render/src/render_observer_private.hpp",
+    "core/render/src/wavenet_layer_wgsl.hpp",
+    "core/runtime/include/pulp/runtime/log.hpp",
+    "core/runtime/include/pulp/runtime/trace.hpp"
+  ],
+  "generated_inputs": [],
+  "missing_targets": [],
+  "public_include_dirs": [
+    "@build/_deps/pulp-mutable-choc-src",
+    "@build/core/runtime/generated/Release",
+    "@external/skia/b94213a11b3a2edadfae89f0c57a7f4ab72772c9/build",
+    "@external/skia/b94213a11b3a2edadfae89f0c57a7f4ab72772c9/build/include",
+    "@external/skia/b94213a11b3a2edadfae89f0c57a7f4ab72772c9/build/include/third_party/externals/dawn/include",
+    "core/platform/include",
+    "core/render/include",
+    "core/runtime/include",
+    "core/simd/include"
+  ],
+  "resources": [],
+  "schema": "pulp.vellum.closure.v1",
+  "source_root": null,
+  "targets": [
+    {
+      "compile_definitions": [
+        "PULP_HAS_DAWN=1",
+        "PULP_HAS_SKIA=1",
+        "PULP_HAS_WEBGPU=1",
+        "PULP_RT_WORK_COUNTERS=1",
+        "PULP_SIMD_DEFAULT_BACKEND_ACCELERATE=1",
+        "PULP_SIMD_HAS_ACCELERATE=1",
+        "PULP_SIMD_HAS_HIGHWAY=1",
+        "SK_DAWN",
+        "SK_GRAPHITE",
+        "SK_RELEASE"
+      ],
+      "external_link_inputs": [
+        {
+          "asset_sha256": "bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86",
+          "dependency": "skia",
+          "pin": "b94213a11b3a2edadfae89f0c57a7f4ab72772c9",
+          "source": "https://skia.googlesource.com/skia.git"
+        }
+      ],
+      "include_dirs": [
+        "@build/_deps/pulp-mutable-choc-src",
+        "@build/core/runtime/generated/Release",
+        "@external/skia/b94213a11b3a2edadfae89f0c57a7f4ab72772c9/build",
+        "@external/skia/b94213a11b3a2edadfae89f0c57a7f4ab72772c9/build/include",
+        "@external/skia/b94213a11b3a2edadfae89f0c57a7f4ab72772c9/build/include/third_party/externals/dawn/include",
+        "core/platform/include",
+        "core/render/include",
+        "core/runtime/include",
+        "core/simd/include"
+      ],
+      "link_targets": [
+        "everest",
+        "hwy",
+        "mbedcrypto",
+        "mbedtls",
+        "mbedx509",
+        "p256m",
+        "pulp-platform",
+        "pulp-runtime",
+        "pulp-simd"
+      ],
+      "name": "pulp-gpu-device",
+      "sources": [
+        "core/render/src/gpu_compute.cpp",
+        "core/render/src/gpu_diagnostics.cpp",
+        "core/render/src/gpu_proc_installer.cpp",
+        "core/render/src/gpu_proc_installer_native.cpp",
+        "core/render/src/gpu_startup_report.cpp",
+        "core/render/src/gpu_surface_dawn.cpp",
+        "core/render/src/metal_surface_mac.mm",
+        "core/render/src/render_observer.cpp"
+      ],
+      "type": "STATIC_LIBRARY"
+    }
+  ],
+  "transitive_link_targets": [
+    "everest",
+    "hwy",
+    "mbedcrypto",
+    "mbedtls",
+    "mbedx509",
+    "p256m",
+    "pulp-platform",
+    "pulp-runtime",
+    "pulp-simd"
+  ]
+}

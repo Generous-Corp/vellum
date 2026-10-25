@@ -1,0 +1,938 @@
+#pragma once
+
+#include <algorithm>
+#include <atomic>
+#include <bit>
+#include <cctype>
+#include <cmath>
+#include <cstdint>
+#include <functional>
+#include <limits>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace pulp::state {
+
+/// Canonical automation value shared by graph, Processor, and timeline
+/// delivery. The host writes the base value; modulators contribute an
+/// additive offset. Keeping the pair explicit prevents a surface from
+/// replacing the authored value when it only meant to update modulation.
+struct BaseOffsetValue {
+    float base = 0.0f;
+    float offset = 0.0f;
+
+    constexpr float effective() const noexcept {
+        return base + offset;
+    }
+    constexpr BaseOffsetValue without_offset() const noexcept {
+        return {base, 0.0f};
+    }
+};
+
+enum class BaseOffsetRefusal : std::uint8_t {
+    None,
+    NonFiniteBase,
+    NonFiniteOffset,
+    OutOfRange,
+};
+
+inline BaseOffsetRefusal validate_base_offset(BaseOffsetValue value, float minimum,
+                                              float maximum) noexcept {
+    if (!std::isfinite(value.base))
+        return BaseOffsetRefusal::NonFiniteBase;
+    if (!std::isfinite(value.offset))
+        return BaseOffsetRefusal::NonFiniteOffset;
+    if (!std::isfinite(minimum) || !std::isfinite(maximum) || minimum > maximum ||
+        value.effective() < minimum || value.effective() > maximum)
+        return BaseOffsetRefusal::OutOfRange;
+    return BaseOffsetRefusal::None;
+}
+
+/// Unique parameter identifier, stable across plugin versions.
+/// Use a hash or manual assignment to keep IDs consistent between releases.
+using ParamID = uint32_t;
+
+/// Parameter update-rate classification.
+///
+/// ControlRate parameters are read as one coherent value per processing
+/// block. AudioRate parameters may accept dense per-sample modulation from
+/// host graph edges.
+enum class ParamRate {
+    ControlRate,
+    AudioRate,
+};
+
+/// Author-declared parameter semantics.
+///
+/// This is deliberately independent from ParamRange::step. A continuous
+/// parameter may still snap to a grid, while integer, toggle, and enum
+/// parameters must be advertised to hosts as discrete even if their range was
+/// assembled by compatibility code that omitted a step.
+enum class ParamKind {
+    Continuous,
+    Integer,
+    Toggle,
+    Enum,
+};
+
+/// Declared semantic role of a parameter.
+///
+/// A designation lets the Processor author state *what a parameter means*
+/// rather than leaving format adapters to guess from its name and range.
+/// Adapters consult the declared designation first and fall back to a
+/// name/range heuristic only for parameters that declare `None`, so existing
+/// plugins keep working unchanged.
+///
+/// - `None`   — an ordinary parameter (the default). Adapters apply their
+///              legacy name/range heuristic to decide whether it is a bypass.
+/// - `Bypass` — a host-visible bypass control. Interpreted as a toggle with
+///              the threshold convention **off < 0.5, on >= 0.5**, regardless
+///              of the declared range: adapters short-circuit to pass-through
+///              audio when the current value is >= 0.5. Because of this
+///              threshold, format adapters present a declared `Bypass`
+///              parameter to the host as a two-state/boolean control even if
+///              its `ParamRange` is continuous. Declare this independently of
+///              the parameter's name.
+/// - `Reset`  — a host-visible momentary "reset / panic" control. It behaves
+///              as a trigger parameter (see `ParamInfo::is_trigger`): the host
+///              sets it, the Processor observes it for one block, and the
+///              value auto-resets to its default after the block.
+enum class ParamDesignation {
+    None,
+    Bypass,
+    Reset,
+};
+
+/// Defines the numeric range of a parameter, including normalization.
+///
+/// Normalization maps the [min, max] range to [0, 1] for host automation.
+/// If @c step is non-zero, denormalized values snap to the nearest step.
+///
+/// ## Shaped (non-linear) ranges
+///
+/// `skew` and `symmetric_skew` give the range a non-linear curve between the
+/// [0, 1] host-automation domain and the [min, max] parameter domain:
+///
+/// - `skew == 1` (default) is **linear** — the conversion is bit-identical to
+///   a plain affine map, so existing linear parameters are unchanged.
+/// - `skew < 1` weights the curve toward `min` (small real values cover more
+///   of the [0, 1] domain — e.g. a frequency knob where the low end gets more
+///   resolution). `skew > 1` weights toward `max`.
+/// - `symmetric_skew == true` mirrors the curve around the center, so the
+///   midpoint of the normalized domain lands at the midpoint of [min, max] and
+///   both halves fan out symmetrically. Useful for bipolar parameters (pan,
+///   detune, balance).
+///
+/// The shaping convention matches `SkewedRange<T>` below, which shares
+/// the same math. Use `ParamRange::with_center()` to derive the skew that
+/// places a chosen real value at the normalized midpoint (0.5).
+struct ParamRange {
+    float min = 0.0f;
+    float max = 1.0f;
+    float default_value = 0.0f;
+    float step = 0.0f;           ///< Quantization step. 0 = continuous.
+    float skew = 1.0f;           ///< 1 = linear, <1 weights min, >1 weights max.
+    bool symmetric_skew = false; ///< Mirror the curve around the center (bipolar).
+
+    /// Build a linear range covering [lo, hi] with the given default and step.
+    /// Provided so call sites can be explicit about the linear case alongside
+    /// the shaped factories below.
+    static ParamRange linear(float lo, float hi, float def = 0.0f,
+                             float step_value = 0.0f) {
+        return ParamRange{lo, hi, def, step_value, 1.0f, false};
+    }
+
+    /// Build a shaped range whose normalized midpoint (0.5) maps to @p center.
+    /// Equivalent to choosing the skew that satisfies denormalize(0.5) == center.
+    /// Falls back to a linear range when @p center is not strictly inside the
+    /// open interval (min, max).
+    static ParamRange with_center(float lo, float hi, float center,
+                                  float def = 0.0f, float step_value = 0.0f) {
+        ParamRange r{lo, hi, def, step_value, 1.0f, false};
+        if (hi > lo && center > lo && center < hi) {
+            const float proportion = (center - lo) / (hi - lo);
+            r.skew = std::log(0.5f) / std::log(proportion);
+        }
+        return r;
+    }
+
+    /// True when this range is a plain affine (linear) map — the common case.
+    /// Used to take a bit-identical fast path that bypasses the skew math.
+    bool is_linear() const { return skew == 1.0f && !symmetric_skew; }
+
+    /// Map a real value to the normalized [0, 1] range.
+    /// @param value  Raw parameter value in [min, max].
+    /// @return Normalized value clamped to [0, 1].
+    float normalize(float value) const {
+        if (max == min) return 0.0f;
+        // Bit-identical linear fast path — preserves legacy behavior exactly.
+        if (is_linear()) {
+            return std::clamp((value - min) / (max - min), 0.0f, 1.0f);
+        }
+        float proportion = std::clamp((value - min) / (max - min), 0.0f, 1.0f);
+        if (symmetric_skew) {
+            const float centerd = (proportion * 2.0f) - 1.0f; // [-1, 1]
+            const float magnitude = std::pow(std::abs(centerd), skew);
+            const float signed_mag = centerd < 0.0f ? -magnitude : magnitude;
+            return (signed_mag + 1.0f) * 0.5f;
+        }
+        return std::pow(proportion, skew);
+    }
+
+    /// Map a normalized [0, 1] value back to the real range.
+    /// Applies step quantization if step > 0.
+    /// @param normalized  Value in [0, 1].
+    /// @return Real value clamped to [min, max], optionally quantized.
+    float denormalize(float normalized) const {
+        // Bit-identical linear fast path — preserves legacy behavior exactly.
+        if (is_linear()) {
+            auto value = min + normalized * (max - min);
+            if (step > 0.0f) {
+                value = min + std::round((value - min) / step) * step;
+            }
+            return std::clamp(value, min, max);
+        }
+        normalized = std::clamp(normalized, 0.0f, 1.0f);
+        float proportion;
+        if (symmetric_skew) {
+            const float centerd = (normalized * 2.0f) - 1.0f; // [-1, 1]
+            const float magnitude = std::pow(std::abs(centerd), 1.0f / skew);
+            const float signed_mag = centerd < 0.0f ? -magnitude : magnitude;
+            proportion = (signed_mag + 1.0f) * 0.5f;
+        } else {
+            proportion = std::pow(normalized, 1.0f / skew);
+        }
+        float value = min + proportion * (max - min);
+        if (step > 0.0f) {
+            value = min + std::round((value - min) / step) * step;
+        }
+        return std::clamp(value, min, max);
+    }
+};
+
+/// Skew-aware normalized range with optional symmetric center.
+///
+/// `SkewedRange<T>` extends `ParamRange` with a non-linear mapping
+/// between the [0, 1] host-automation domain and the [min, max] parameter
+/// domain. Two shape controls:
+///
+/// - `skew`: <1 weights toward `min`, >1 weights toward `max`, 1 = linear.
+///   Conventionally, a skew of `log(0.5) / log((mid - min) / (max - min))`
+///   places `mid` at the center (0.5) of the normalized range.
+/// - `symmetric_skew`: when true, the curve is mirrored around the center,
+///   so values near 0.5 in normalized space land near the midpoint and
+///   values near the edges fan out symmetrically. Useful for bipolar
+///   parameters like pan, balance, detune.
+///
+/// Step quantization is honored on denormalize (matches `ParamRange::step`).
+///
+/// @code
+/// // Frequency knob: 20 Hz at min, 20 kHz at max, 1 kHz at center.
+/// pulp::state::SkewedRange<float> freq{20.0f, 20000.0f, 1000.0f};
+/// float normalized = freq.normalize(1000.0f); // ~= 0.5
+/// float hz         = freq.denormalize(0.5f);  // ~= 1000.0f
+/// @endcode
+template<typename T = float>
+struct SkewedRange {
+    T min = T(0);
+    T max = T(1);
+    T interval = T(0);          ///< Step size. 0 = continuous.
+    T skew = T(1);              ///< 1 = linear, <1 weights min, >1 weights max.
+    bool symmetric_skew = false;
+
+    constexpr SkewedRange() = default;
+    constexpr SkewedRange(T lo, T hi, T step = T(0), T skew_value = T(1),
+                                bool symmetric = false)
+        : min(lo), max(hi), interval(step),
+          skew(skew_value), symmetric_skew(symmetric) {}
+
+    /// Build a SkewedRange whose normalized midpoint maps to the
+    /// supplied real-valued center. Equivalent to choosing the skew that
+    /// satisfies denormalize(0.5) == center.
+    static SkewedRange with_center(T lo, T hi, T center, T step = T(0)) {
+        SkewedRange r{lo, hi, step};
+        if (hi > lo && center > lo && center < hi) {
+            const T proportion = (center - lo) / (hi - lo);
+            // log(0.5) / log(proportion) gives the skew that lands `center` at 0.5.
+            r.skew = std::log(T(0.5)) / std::log(proportion);
+        }
+        return r;
+    }
+
+    /// Map a real value in [min, max] to a normalized value in [0, 1].
+    ///
+    /// Skew convention: with `skew < 1` the curve weights toward `min`
+    /// (small real values cover more of the [0, 1] domain); with
+    /// `skew > 1` the curve weights toward `max`. `skew == 1` is linear.
+    T normalize(T value) const {
+        if (max == min) return T(0);
+        T proportion = (value - min) / (max - min);
+        proportion = std::clamp(proportion, T(0), T(1));
+        if (symmetric_skew) {
+            const T centerd = (proportion * T(2)) - T(1); // [-1, 1]
+            const T magnitude = std::pow(std::abs(centerd), skew);
+            const T signed_mag = centerd < T(0) ? -magnitude : magnitude;
+            return (signed_mag + T(1)) * T(0.5);
+        }
+        return std::pow(proportion, skew);
+    }
+
+    /// Map a normalized [0, 1] value back to the real range. Applies
+    /// `interval` quantization when non-zero.
+    T denormalize(T normalized) const {
+        normalized = std::clamp(normalized, T(0), T(1));
+        T proportion;
+        if (symmetric_skew) {
+            const T centerd = (normalized * T(2)) - T(1); // [-1, 1]
+            const T magnitude = std::pow(std::abs(centerd), T(1) / skew);
+            const T signed_mag = centerd < T(0) ? -magnitude : magnitude;
+            proportion = (signed_mag + T(1)) * T(0.5);
+        } else {
+            proportion = std::pow(normalized, T(1) / skew);
+        }
+        T value = min + proportion * (max - min);
+        if (interval > T(0)) {
+            value = min + std::round((value - min) / interval) * interval;
+        }
+        return std::clamp(value, min, max);
+    }
+
+    /// Round a real value down to the nearest legal step.
+    T snap(T value) const {
+        if (interval <= T(0)) return std::clamp(value, min, max);
+        T snapped = min + std::round((value - min) / interval) * interval;
+        return std::clamp(snapped, min, max);
+    }
+};
+
+
+/// Immutable parameter metadata, registered once at plugin initialization.
+///
+/// Each parameter has a unique @c id, a human-readable @c name, an optional
+/// @c unit string for display, a @c range for normalization, and optional
+/// string conversion functions for host display.
+struct ParamInfo {
+    ParamID id = 0;
+    std::string name;
+    std::string unit;       ///< Display unit: "dB", "Hz", "%", etc.
+    ParamRange range;
+    int group_id = 0;       ///< Group for hierarchical organization. 0 = ungrouped.
+
+    /// Convert a raw value to a display string (e.g., "440.0 Hz").
+    std::function<std::string(float)> to_string;
+    /// Parse a display string back to a raw value.
+    std::function<float(const std::string&)> from_string;
+
+    ParamRate rate = ParamRate::ControlRate;
+    float smoothing_ramp_seconds = 0.0f; ///< 0 = off / immediate control-rate updates.
+
+    /// Declared semantic role. `None` (the default) preserves legacy behavior:
+    /// adapters fall back to their name/range bypass heuristic. Declaring
+    /// `Bypass` or `Reset` makes the role explicit and name-independent.
+    ParamDesignation designation = ParamDesignation::None;
+
+    /// Momentary "trigger" parameter. A trigger is a one-shot "do this now"
+    /// control (panic, reset, tap): the host or UI raises it, the Processor
+    /// observes it for exactly one process block, and the state plumbing
+    /// auto-resets it to its range default after the block
+    /// (see `StateStore::reset_triggers_rt`). A `Reset` designation implies a
+    /// trigger; an author may also set this directly for a custom one-shot.
+    ///
+    /// One-shot latch contract: a trigger value is **block-local**. Whatever
+    /// value is present during a process block — raised by the host/UI, or even
+    /// written by the Processor itself mid-block — is reset to the range default
+    /// at the END of that block. A trigger therefore never persists across
+    /// blocks; observe it within the block it fires. Format adapters reset
+    /// triggers on EVERY audio-callback exit, including bypass / pass-through
+    /// early-returns, so a panic/reset raised while bypassed still clears that
+    /// block rather than firing late on the next non-bypassed block.
+    bool is_trigger = false;
+
+    /// Semantic value kind. Existing declarations remain continuous until
+    /// they opt in; adapters must not infer this from the parameter name.
+    ParamKind kind = ParamKind::Continuous;
+
+    /// Ordered display/parse labels for Toggle and Enum parameters. Index zero
+    /// corresponds to range.min, index one to range.min + range.step (or +1
+    /// when the legacy range omitted a step), and so on.
+    std::vector<std::string> value_labels;
+
+    /// Whether a host may apply a modulation offset to this parameter.
+    ///
+    /// Modulation is an additive, host-owned offset on top of the automated
+    /// value (`StateStore::get_modulated()`), distinct from automation. It
+    /// defaults to true so an ordinary control is reachable by a host's
+    /// modulators without every author opting in; declare false for a control
+    /// where a continuously applied offset would be meaningless or unsafe.
+    ///
+    /// `is_modulatable_param()` additionally refuses modulation for a bypass
+    /// control, a discrete parameter, and one that auto-resets each block —
+    /// rules this field cannot override.
+    bool modulatable = true;
+
+    /// Hide this parameter from the host's generic parameter list.
+    ///
+    /// A hidden parameter still exists, still serializes, and is still
+    /// reachable from the plugin's own editor — it simply does not clutter the
+    /// host's automation lanes and generic UI. Use it for internal or
+    /// developer-facing controls.
+    ///
+    /// Opt-in: defaults false, so every existing parameter stays visible.
+    /// `is_hidden_param()` additionally refuses to hide a bypass control,
+    /// which hosts require to remain reachable.
+    bool hidden = false;
+
+    /// Advertise this parameter as readable but not host-writable.
+    ///
+    /// The canonical case is a meter-style value the Processor publishes for
+    /// display (output level, gain reduction, detected pitch): the host should
+    /// render it, never drive it. A read-only parameter is also not
+    /// automatable, because automation is a host write.
+    ///
+    /// Opt-in: defaults false, so every existing parameter stays writable.
+    /// `is_read_only_param()` additionally refuses a bypass control and a
+    /// trigger, both of which are defined by the host writing to them.
+    bool read_only = false;
+
+    /// Whether the host may record and play back automation for this
+    /// parameter.
+    ///
+    /// Unlike `hidden` and `read_only`, the *attribute* here is the negative
+    /// one — authors opt in to NON-automatable by declaring false — so the
+    /// default of true keeps every existing parameter automatable exactly as
+    /// it is today. `is_automatable_param()` additionally refuses automation
+    /// for a read-only parameter.
+    bool automatable = true;
+
+    /// True when this parameter should auto-reset to its default after each
+    /// process block — i.e. it is an explicit trigger or carries the `Reset`
+    /// designation (which is defined to behave as a trigger).
+    bool auto_resets() const {
+        return is_trigger || designation == ParamDesignation::Reset;
+    }
+};
+
+inline bool is_discrete_param(const ParamInfo& info) {
+    // Semantic kind is author-declared metadata. A continuous parameter may
+    // still use range.step to quantize its plain value without being exposed
+    // to hosts as an integer/indexed control.
+    return info.kind != ParamKind::Continuous;
+}
+
+/// The plain value a host means by a normalized write. A host sees a
+/// continuous parameter as continuous (no step count), so its value is kept
+/// exactly: `range.step` quantizes what a UI control emits, not host
+/// automation, and plain-value formats (AU, CLAP) store the same exact value.
+/// Discrete parameters still snap to their steps.
+///
+/// Hosts hand normalized values as doubles. A linear range is mapped in
+/// double precision and rounded once, so a host's own 0 dB on a -60..24 range
+/// lands on 0.0f rather than a single-precision (or fused multiply-add) residue
+/// such as 1.4e-6 dB -- which is a gain of 1 + 1 ulp, and a failed null test.
+inline float value_from_host_normalized(const ParamInfo& info, double normalized) {
+    const ParamRange& range = info.range;
+    if (is_discrete_param(info))
+        return range.denormalize(static_cast<float>(normalized));
+    if (!range.is_linear()) {
+        ParamRange exact = range;
+        exact.step = 0.0f;
+        return exact.denormalize(static_cast<float>(normalized));
+    }
+    const double n = std::clamp(normalized, 0.0, 1.0);
+    const double plain = static_cast<double>(range.min) +
+                         n * (static_cast<double>(range.max) - static_cast<double>(range.min));
+    return std::clamp(static_cast<float>(plain), range.min, range.max);
+}
+
+/// The normalized value to report to a host for @p value: the inverse of
+/// value_from_host_normalized(), in double precision for a linear range, so a
+/// value the host reads back (a default, an output parameter) maps to exactly
+/// the same plain value when the host writes it again.
+inline double host_normalized_from_value(const ParamInfo& info, float value) {
+    const ParamRange& range = info.range;
+    if (!range.is_linear() || range.max == range.min)
+        return static_cast<double>(range.normalize(value));
+    const double span = static_cast<double>(range.max) - static_cast<double>(range.min);
+    return std::clamp((static_cast<double>(value) - static_cast<double>(range.min)) / span, 0.0,
+                      1.0);
+}
+
+inline bool is_boolean_param(const ParamInfo& info) {
+    return info.kind == ParamKind::Toggle;
+}
+
+inline uint32_t param_value_count(const ParamInfo& info) {
+    if (!info.value_labels.empty())
+        return static_cast<uint32_t>(info.value_labels.size());
+    if (!is_discrete_param(info)) return 0;
+    const float step = info.range.step > 0.0f ? info.range.step : 1.0f;
+    const float span = std::max(0.0f, info.range.max - info.range.min);
+    return static_cast<uint32_t>(std::llround(span / step)) + 1u;
+}
+
+inline float constrain_param_value(const ParamInfo& info, float value) {
+    if (!std::isfinite(value)) return info.range.default_value;
+    value = std::clamp(value, info.range.min, info.range.max);
+    const float step = info.range.step > 0.0f
+        ? info.range.step
+        : (is_discrete_param(info) ? 1.0f : 0.0f);
+    if (step > 0.0f) {
+        value = info.range.min
+            + std::round((value - info.range.min) / step) * step;
+    }
+    return std::clamp(value, info.range.min, info.range.max);
+}
+
+inline std::optional<float> param_value_for_label(const ParamInfo& info,
+                                                   std::string_view text) {
+    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front())))
+        text.remove_prefix(1);
+    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back())))
+        text.remove_suffix(1);
+    const float step = info.range.step > 0.0f ? info.range.step : 1.0f;
+    for (std::size_t i = 0; i < info.value_labels.size(); ++i) {
+        if (text == info.value_labels[i]) {
+            return constrain_param_value(
+                info, info.range.min + static_cast<float>(i) * step);
+        }
+    }
+    return std::nullopt;
+}
+
+/// Decide whether @p info is a bypass control.
+///
+/// Designation-first, heuristic-fallback: a declared `Bypass` designation
+/// wins regardless of name or range. A parameter that declares `None` falls
+/// back to the legacy name/range heuristic (a boolean parameter named
+/// "Bypass": step >= 1, range exactly [0, 1]) so existing plugins are
+/// unchanged. A non-`None`, non-`Bypass` designation is never a bypass.
+///
+/// This is the single source of truth shared by every format adapter, so the
+/// bypass contract cannot drift between VST3 / AU / CLAP.
+inline bool is_bypass_param(const ParamInfo& info) {
+    if (info.designation == ParamDesignation::Bypass) return true;
+    if (info.designation != ParamDesignation::None) return false;
+    return info.name == "Bypass" && info.range.step >= 1.0f &&
+           info.range.min == 0.0f && info.range.max == 1.0f;
+}
+
+/// Decide whether a host may apply a modulation offset to @p info.
+///
+/// Author intent first (`ParamInfo::modulatable`, default true), then three
+/// rules an author cannot override:
+///   * a bypass control is a host-owned discrete switch, and an additive
+///     offset on it has no defined meaning;
+///   * an auto-resetting trigger is cleared at the end of every process block,
+///     so a persistent offset would hold it raised forever;
+///   * a discrete parameter is an indexed choice, not a magnitude; an additive
+///     offset between two indices names no value the author defined. Kind, not
+///     `range.step`: a continuous parameter may quantize its plain value for
+///     display and still be a magnitude a host can offset.
+///
+/// This is the single predicate both the host-facing advertisement and the
+/// inbound modulation decode consult, so a host can never be told a parameter
+/// accepts modulation that the adapter then silently drops.
+inline bool is_modulatable_param(const ParamInfo& info) {
+    if (!info.modulatable)
+        return false;
+    if (is_bypass_param(info))
+        return false;
+    if (is_discrete_param(info))
+        return false;
+    // A host may not offset a value it may not write. Without this the CLAP
+    // adapter would advertise READONLY and MODULATABLE on the same parameter.
+    if (info.read_only)
+        return false;
+    return !info.auto_resets();
+}
+
+/// Whether the host should omit this parameter from its generic parameter
+/// list and automation lanes.
+///
+/// Refuses to hide a bypass control: hosts surface bypass in their own chrome
+/// and a plugin that hides it becomes un-bypassable from the host.
+///
+/// This is the single predicate every format adapter consults, so one
+/// declaration projects identically to VST3 `kIsHidden`, CLAP
+/// `CLAP_PARAM_IS_HIDDEN` and the AU expert-mode hint.
+inline bool is_hidden_param(const ParamInfo& info) {
+    if (!info.hidden)
+        return false;
+    return !is_bypass_param(info);
+}
+
+/// Whether the host may read this parameter but must not write it.
+///
+/// Refuses a bypass control and a trigger: both are defined by the host
+/// writing to them, so a read-only one could never be operated.
+///
+/// This is the single predicate every format adapter consults, so one
+/// declaration projects identically to VST3 `kIsReadOnly`, CLAP
+/// `CLAP_PARAM_IS_READONLY` and AU's withheld `IsWritable`.
+inline bool is_read_only_param(const ParamInfo& info) {
+    if (!info.read_only)
+        return false;
+    if (is_bypass_param(info))
+        return false;
+    return !info.auto_resets();
+}
+
+/// Whether the host may record and play back automation for this parameter.
+///
+/// Automation is a host write, so a parameter the host must not write is not
+/// automatable regardless of how `automatable` was declared.
+///
+/// This is the single predicate every format adapter consults, so one
+/// declaration withholds VST3 `kCanAutomate`, CLAP
+/// `CLAP_PARAM_IS_AUTOMATABLE` and AU's writability together.
+inline bool is_automatable_param(const ParamInfo& info) {
+    if (!info.automatable)
+        return false;
+    return !is_read_only_param(info);
+}
+
+/// Thread-safe atomic parameter value for lock-free audio/UI communication.
+///
+/// The audio thread reads and the UI thread writes via relaxed atomics.
+/// No locks, no allocation. Each parameter is independent, so relaxed
+/// ordering is correct — there is no dependency between reading param A
+/// and param B. For coherent multi-field reads (e.g., transport state),
+/// use SeqLock<T> instead.
+///
+/// @note Relaxed atomics are safe on both x86 (TSO gives acquire/release
+/// for free) and ARM (each load/store is individually atomic; reordering
+/// between independent parameters is harmless).
+class ParamValue {
+  public:
+    /// Packed base identity: low 32 bits are float bits, high 32 bits are a
+    /// monotonic per-parameter revision. The revision is not StateStore's
+    /// global generation and never wraps.
+    using PackedIdentity = std::uint64_t;
+    using VersionedValue = PackedIdentity; // source compatibility alias
+
+    ParamValue() = default;
+
+    /// @param initial  Starting value for this parameter.
+    explicit ParamValue(float initial) : value_(pack(initial, 0)) {}
+
+    ParamValue(ParamValue&& other) noexcept
+        : value_(other.value_.load()),
+          committed_generation_(other.committed_generation_.load()) {}
+    ParamValue& operator=(ParamValue&& other) noexcept {
+        value_.store(other.value_.load());
+        committed_generation_.store(other.committed_generation_.load());
+        return *this;
+    }
+    ParamValue(const ParamValue& other)
+        : value_(other.value_.load()),
+          committed_generation_(other.committed_generation_.load()) {}
+    ParamValue& operator=(const ParamValue& other) {
+        value_.store(other.value_.load());
+        committed_generation_.store(other.committed_generation_.load());
+        return *this;
+    }
+
+    /// Read the current base value (lock-free, relaxed ordering).
+    float get() const { return unpack_value(value_.load(std::memory_order_relaxed)); }
+
+    /// Write a new base value through the same bounded revision CAS as every
+    /// other base-value writer. A saturated revision is a terminal no-op.
+    void set(float v) noexcept {
+        (void)set_revisioned(v, 0, 8);
+    }
+
+    VersionedValue versioned_value() const {
+        return value_.load(std::memory_order_relaxed);
+    }
+
+    /// Highest StateStore generation claimed or committed by a write to this
+    /// parameter. It only ever rises. Ordinary generation-ordered writers
+    /// claim it before publishing so an older paused writer cannot overwrite
+    /// a newer one; conditional writers authorize on the packed identity and
+    /// only raise it, so they never revoke a pending ordinary writer's claim.
+    std::uint64_t committed_generation() const {
+        return committed_generation_.load(std::memory_order_relaxed);
+    }
+
+    static VersionedValue make_versioned_value(float value, std::uint64_t revision) {
+        return pack(value, static_cast<std::uint32_t>(revision));
+    }
+
+    static float value_from_versioned(VersionedValue value) {
+        return unpack_value(value);
+    }
+
+    static std::uint32_t revision_from_versioned(VersionedValue value) {
+        return unpack_generation(value);
+    }
+
+    bool revision_available() const noexcept {
+        return revisions_available(1);
+    }
+
+    bool revisions_available(std::uint32_t writes) const noexcept {
+        const auto revision = revision_from_versioned(versioned_value());
+        return revision <= std::numeric_limits<std::uint32_t>::max() - writes;
+    }
+
+    /// Legacy generation-ordered writer retained for source compatibility.
+    /// StateStore uses set_packed_revisioned() instead; this split API is not
+    /// suitable for conditional authorization.
+    bool set_versioned_if_newer(float value, std::uint64_t generation,
+                                std::uint32_t max_attempts) {
+        auto committed = committed_generation_.load(std::memory_order_relaxed);
+        for (std::uint32_t attempt = 0; attempt < max_attempts; ++attempt) {
+            if (committed >= generation)
+                return false;
+            if (committed_generation_.compare_exchange_strong(
+                    committed, generation, std::memory_order_relaxed,
+                    std::memory_order_relaxed))
+                break;
+        }
+        if (committed_generation_.load(std::memory_order_relaxed) != generation)
+            return false;
+        auto current = value_.load(std::memory_order_acquire);
+        for (std::uint32_t attempt = 0; attempt < max_attempts; ++attempt) {
+            if (committed_generation_.load(std::memory_order_relaxed) != generation)
+                return false;
+            const auto revision = unpack_generation(current);
+            if (revision == std::numeric_limits<std::uint32_t>::max())
+                return false;
+            if (value_.compare_exchange_weak(current, pack(value, revision + 1),
+                                             std::memory_order_acq_rel, std::memory_order_acquire))
+                return true;
+        }
+        return false;
+    }
+
+    /// StateStore's ordinary base-value publication boundary.
+    ///
+    /// Ordinary writers are ordered by StateStore's global generation. Claim
+    /// that generation before publishing the packed value; a writer that was
+    /// paused after claiming an older generation must not overwrite a newer
+    /// writer that has already published. Conditional feedback deliberately
+    /// uses compare_exchange_packed() below instead, because its exact packed
+    /// identity is the authorization token and the global generation is only
+    /// diagnostic there.
+    bool set_packed_revisioned(float value, std::uint64_t generation,
+                               std::uint32_t max_attempts) noexcept {
+        if (!claim_generation(generation, max_attempts))
+            return false;
+        return publish_after_generation_claim(value, generation, max_attempts);
+    }
+
+    bool compare_exchange_versioned(VersionedValue& expected,
+                                    std::uint64_t expected_generation,
+                                    float desired, std::uint64_t generation) {
+        if (!committed_generation_.compare_exchange_strong(
+                expected_generation, generation, std::memory_order_relaxed,
+                std::memory_order_relaxed))
+            return false;
+        return value_.compare_exchange_strong(
+            expected, pack(desired, static_cast<std::uint32_t>(generation)),
+            std::memory_order_relaxed, std::memory_order_relaxed);
+    }
+
+    /// Conditional feedback publication boundary. Unlike the legacy
+    /// generation API above, this compares only the exact packed identity and
+    /// advances its per-parameter revision; the StateStore generation is
+    /// diagnostic metadata and cannot participate in a split check/write.
+    bool compare_exchange_packed(VersionedValue& expected, float desired,
+                                 std::uint64_t generation) {
+        const auto current_revision = unpack_generation(expected);
+        if (current_revision == std::numeric_limits<std::uint32_t>::max())
+            return false;
+        const auto replacement = pack(desired, current_revision + 1);
+        if (!value_.compare_exchange_strong(expected, replacement, std::memory_order_acq_rel,
+                                            std::memory_order_acquire))
+            return false;
+        expected = replacement;
+        raise_committed_generation(generation);
+        return true;
+    }
+
+    /// Read the modulated value: base + mod_offset.
+    /// Used by the audio thread to get the final value after CLAP per-voice modulation.
+    float get_modulated() const {
+        return unpack_value(value_.load(std::memory_order_relaxed))
+             + unpack_value(mod_offset_.load(std::memory_order_relaxed));
+    }
+
+    float get_mod_offset() const {
+        return unpack_value(mod_offset_.load(std::memory_order_relaxed));
+    }
+
+    /// Read the explicit base-vs-offset pair used by every automation route.
+    BaseOffsetValue get_base_offset() const noexcept {
+        return {get(), get_mod_offset()};
+    }
+
+    /// Set the absolute modulation offset (replaces any existing offset).
+    void set_mod_offset(float offset) {
+        const auto current = mod_offset_.load(std::memory_order_relaxed);
+        mod_offset_.store(pack(offset, unpack_generation(current)),
+                          std::memory_order_relaxed);
+    }
+
+    bool set_mod_versioned_if_newer(float offset, std::uint64_t generation,
+                                    std::uint32_t max_attempts) {
+        auto committed = committed_mod_generation_.load(std::memory_order_relaxed);
+        for (std::uint32_t attempt = 0; attempt < max_attempts; ++attempt) {
+            if (committed >= generation)
+                return false;
+            if (committed_mod_generation_.compare_exchange_strong(
+                    committed, generation, std::memory_order_relaxed,
+                    std::memory_order_relaxed))
+                break;
+        }
+        if (committed_mod_generation_.load(std::memory_order_relaxed) != generation)
+            return false;
+        auto current = mod_offset_.load(std::memory_order_relaxed);
+        const auto desired = pack(offset, static_cast<std::uint32_t>(generation));
+        for (std::uint32_t attempt = 0; attempt < max_attempts; ++attempt) {
+            if (committed_mod_generation_.load(std::memory_order_relaxed) != generation)
+                return false;
+            if (mod_offset_.compare_exchange_strong(current, desired,
+                                                    std::memory_order_relaxed,
+                                                    std::memory_order_relaxed))
+                return true;
+        }
+        return false;
+    }
+
+    /// Add a delta to the current modulation offset (for stacking modulators).
+    /// @note Not atomic with respect to concurrent add_mod_offset calls;
+    ///       assumes a single writer (the audio thread).
+    void add_mod_offset(float delta) {
+        set_mod_offset(get_mod_offset() + delta);
+    }
+
+    /// Clear the modulation offset to zero.
+    void reset_mod() { set_mod_offset(0.0f); }
+
+    /// The value a plugin's OWN modulator is playing for this parameter, in
+    /// plain units, published for display only (StateStore::
+    /// set_display_modulation()). NaN means nothing is published. Never read
+    /// by DSP and never written to the host. Real-time safe.
+    void set_display_modulation(float plain) noexcept {
+        display_mod_.store(plain, std::memory_order_relaxed);
+    }
+    void clear_display_modulation() noexcept {
+        display_mod_.store(std::numeric_limits<float>::quiet_NaN(), std::memory_order_relaxed);
+    }
+    float display_modulation() const noexcept {
+        return display_mod_.load(std::memory_order_relaxed);
+    }
+
+    /// Read the current value mapped to [0, 1] via the given range.
+    float get_normalized(const ParamRange& range) const {
+        return range.normalize(get());
+    }
+
+    /// Write a normalized [0, 1] value, denormalized via the given range.
+    void set_normalized(float n, const ParamRange& range) {
+        set(range.denormalize(n));
+    }
+
+  private:
+    friend class ParamValueTest;
+
+    bool claim_generation(std::uint64_t generation, std::uint32_t max_attempts) noexcept {
+        auto committed = committed_generation_.load(std::memory_order_relaxed);
+        for (std::uint32_t attempt = 0; attempt < max_attempts; ++attempt) {
+            if (committed >= generation)
+                return false;
+            if (committed_generation_.compare_exchange_strong(
+                    committed, generation, std::memory_order_acq_rel, std::memory_order_acquire))
+                return true;
+        }
+        return false;
+    }
+
+    bool publish_after_generation_claim(float value, std::uint64_t generation,
+                                        std::uint32_t max_attempts) noexcept {
+        if (committed_generation_.load(std::memory_order_acquire) != generation)
+            return false;
+        auto current = value_.load(std::memory_order_acquire);
+        for (std::uint32_t attempt = 0; attempt < max_attempts; ++attempt) {
+            if (committed_generation_.load(std::memory_order_acquire) != generation)
+                return false;
+            const auto revision = unpack_generation(current);
+            if (revision == std::numeric_limits<std::uint32_t>::max())
+                return false;
+            const auto replacement = pack(value, revision + 1);
+            if (value_.compare_exchange_weak(current, replacement, std::memory_order_acq_rel,
+                                             std::memory_order_acquire))
+                return true;
+        }
+        return false;
+    }
+
+    // Raise-only update. Lowering the mark would revoke the claim of an
+    // ordinary writer that claimed a newer generation and has not published
+    // yet, and would let an older writer claim past it.
+    void raise_committed_generation(std::uint64_t generation) noexcept {
+        auto committed = committed_generation_.load(std::memory_order_relaxed);
+        while (committed < generation &&
+               !committed_generation_.compare_exchange_weak(
+                   committed, generation, std::memory_order_acq_rel, std::memory_order_relaxed)) {
+        }
+    }
+
+    bool set_revisioned(float value, std::uint64_t generation,
+                        std::uint32_t max_attempts) noexcept {
+        auto current = value_.load(std::memory_order_acquire);
+        for (std::uint32_t attempt = 0; attempt < max_attempts; ++attempt) {
+            const auto revision = unpack_generation(current);
+            if (revision == std::numeric_limits<std::uint32_t>::max())
+                return false;
+            const auto replacement = pack(value, revision + 1);
+            if (value_.compare_exchange_weak(current, replacement, std::memory_order_acq_rel,
+                                             std::memory_order_acquire)) {
+                raise_committed_generation(generation);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    static VersionedValue pack(float value, std::uint32_t generation) {
+        return (static_cast<VersionedValue>(generation) << 32) |
+               std::bit_cast<std::uint32_t>(value);
+    }
+
+    static float unpack_value(VersionedValue value) {
+        return std::bit_cast<float>(static_cast<std::uint32_t>(value));
+    }
+
+    static std::uint32_t unpack_generation(VersionedValue value) {
+        return static_cast<std::uint32_t>(value >> 32);
+    }
+
+    std::atomic<VersionedValue> value_{pack(0.0f, 0)};
+    // Generation high-water mark. Ordinary writers claim it before publishing
+    // (claim_generation) and abort publication if a newer claim replaced
+    // theirs; every other writer may only raise it. The packed value CAS
+    // remains the publication boundary.
+    std::atomic<std::uint64_t> committed_generation_{0};
+    std::atomic<VersionedValue> mod_offset_{pack(0.0f, 0)};
+    std::atomic<std::uint64_t> committed_mod_generation_{0};
+    std::atomic<float> display_mod_{std::numeric_limits<float>::quiet_NaN()};
+
+    // The packed base value/revision identity and modulation offset are read
+    // and written on the audio thread through lock-free atomics. Fail the build if a
+    // target would implement either with a hidden mutex. See
+    // docs/guides/dsp-threading.md "The three rules".
+    static_assert(std::atomic<VersionedValue>::is_always_lock_free,
+                  "Pulp requires lock-free atomic<uint64_t> for versioned real-time "
+                  "parameter access");
+};
+
+/// Callback signature for parameter change notifications.
+/// @param id         The parameter that changed.
+/// @param new_value  The new raw value.
+using ParamChangeCallback = std::function<void(ParamID id, float new_value)>;
+
+} // namespace pulp::state

@@ -1,0 +1,34 @@
+{
+  "schema": "vellum.pulp-view-audio-archive.v1",
+  "pulp_repository": "Generous-Corp/pulp",
+  "source_sha": "46cee5e4e6e2984e407a402d89dffae5f4f56631",
+  "export_receipt": "provenance/mirror/receipts/20261025-46cee5e4e6e2.json",
+  "release_tag": "artifact/pulp-view-audio/46cee5e4e6e2984e407a402d89dffae5f4f56631",
+  "workflow_run_id": 40163492230,
+  "workflow_sha": "46cee5e4e6e2984e407a402d89dffae5f4f56631",
+  "archive": {
+    "name": "libpulp-view-audio.a",
+    "sha256": "03884b2472019ebbf5068a40fe2f82963b831abec7df31fbf3aefbd06709db35",
+    "size": 1749464
+  },
+  "manifest": {
+    "name": "pulp-view-audio-archive.manifest.json",
+    "sha256": "4234ca143239eaf0244428751fe41b3226cf0de490f6c92fdd8a05c5d2de91c2"
+  },
+  "symbol_floor": {
+    "name": "pulp-view-audio-symbol-floor.txt",
+    "sha256": "7d1388bd8eee0dab94bb5ebece2bd504f4f5748399dfc584fdf9adecb7b886a2"
+  },
+  "symbol_floor_gate": {
+    "name": "pulp-view-audio-symbol-floor-gate.txt",
+    "sha256": "5c322cbce8198c88f7145c46c1e2c51efe97683d2bdf026a2946257454b4f614"
+  },
+  "checksums": {
+    "name": "SHA256SUMS",
+    "sha256": "b080351d7ddcdecc2101d143d77d298624860b3f193a8714d083de027e1512e0"
+  },
+  "attestation_bundle": {
+    "name": "pulp-view-audio-archive.sigstore.json",
+    "sha256": "de394c0049684d97958aeb3006d4b1cda58362b24b08f16742f78769bc8cb08d"
+  }
+}

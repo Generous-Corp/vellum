@@ -876,6 +876,55 @@ class RendererPinTests(unittest.TestCase):
         self.assertEqual(rows, [])
         self.assertIn("cannot read Pulp's tools/deps/manifest.json", errors[0])
 
+    def commit_mirror(self, content: bytes) -> str:
+        """Commit a mirror/ tree in the Vellum root; return its tree id."""
+        git = ["git", "-C", str(self.root), "-c", "user.name=t", "-c", "user.email=t@t"]
+        if not (self.root / ".git").exists():
+            subprocess.run(git + ["init", "-q"], check=True)
+        (self.root / "mirror").mkdir(exist_ok=True)
+        (self.root / "mirror/a.cpp").write_bytes(content)
+        subprocess.run(git + ["add", "-A"], check=True)
+        subprocess.run(git + ["commit", "-q", "-m", "mirror"], check=True)
+        return subprocess.run(git + ["rev-parse", "HEAD:mirror"], check=True, capture_output=True,
+                              text=True).stdout.strip()
+
+    def landed(self, name: str, pulp_sha: str, mirror_tree: str) -> str:
+        path = f"provenance/mirror/receipts/{name}.json"
+        (self.root / path).write_text(json.dumps({"pulp_sha": pulp_sha, "mirror_tree": mirror_tree}))
+        return path
+
+    def other_milestone(self) -> dict:
+        pin = json.loads(json.dumps(self.matching_pin))
+        pin["skia_branch"] = "chrome/m999"
+        pin["release_assets"]["mac-universal"]["sha256"] = "3" * 64
+        return pin
+
+    def test_older_receipt_with_another_renderer_is_not_judged(self) -> None:
+        old_tree = self.commit_mirror(b"old\n")
+        older = self.landed("older", self.pulp_commit(self.other_milestone()), old_tree)
+        new_tree = self.commit_mirror(b"new\n")
+        newest = self.landed("newest", self.pulp_commit(self.matching_pin), new_tree)
+        errors, rows = verify_extraction.mirror_renderer_pin_check(self.root, self.pulp, [older, newest])
+        self.assertEqual(errors, [])
+        self.assertEqual({row["receipt"]: row["matches_lock"] for row in rows}, {newest: True, older: None})
+
+    def test_current_receipt_must_match_the_lock(self) -> None:
+        old_tree = self.commit_mirror(b"old\n")
+        older = self.landed("older", self.pulp_commit(self.matching_pin), old_tree)
+        new_tree = self.commit_mirror(b"new\n")
+        newest = self.landed("newest", self.pulp_commit(self.other_milestone()), new_tree)
+        errors, rows = verify_extraction.mirror_renderer_pin_check(self.root, self.pulp, [older, newest])
+        self.assertEqual(len(errors), 1)
+        self.assertIn("provenance/mirror/receipts/newest.json", errors[0])
+        self.assertIn("skia_branch", errors[0])
+
+    def test_no_receipt_naming_head_mirror_fails_closed(self) -> None:
+        self.commit_mirror(b"current\n")
+        stale = self.landed("stale", self.pulp_commit(self.matching_pin), "0" * 40)
+        errors, rows = verify_extraction.mirror_renderer_pin_check(self.root, self.pulp, [stale])
+        self.assertEqual(len(errors), 1)
+        self.assertIn("0 landed receipts name HEAD:mirror", errors[0])
+
 
 if __name__ == "__main__":
     unittest.main()

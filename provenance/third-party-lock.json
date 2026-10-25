@@ -7,7 +7,7 @@
       "version": "chrome/m157",
       "license": "multiple; see NOTICE.md and runtime_toolchain_dependencies",
       "sha256": "bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86",
-      "surface": "byte-locked build input statically linked into the optional installed vellum-gpu shared library; source association and exhaustive legal inventory remain release-blocked"
+      "surface": "byte-locked build input statically linked into the optional installed Vellum::SkiaDawnProvider shared library used by Vellum::Gpu and Vellum::MirrorCanvas; source association and exhaustive legal inventory remain release-blocked"
     },
     {
       "name": "Inter Regular",
@@ -104,7 +104,7 @@
           "detail": "The exact compiler build, linker identity, and C++ standard-library ABI are not recorded by the asset."
         }
       ],
-      "consumer_boundary": "selected static archive members are linked into the installed vellum-gpu shared library; the prebuilt archive is not installed",
+      "consumer_boundary": "selected static archive members are linked into the installed Vellum::SkiaDawnProvider shared library used by Vellum::Gpu and Vellum::MirrorCanvas; the prebuilt archive is not installed",
       "artifact": {
         "repository": "https://github.com/danielraffel/skia-builder",
         "release_tag": "chrome/m157",
@@ -324,7 +324,7 @@
         "The exact compiler build, C++ standard-library ABI, and linker identity are not recorded by the asset.",
         "The artifact is not claimed reproducible from source.",
         "The asset contains no upstream license bundle; Vellum's NOTICE is reconstructed from primary-source license files at the locked revisions.",
-        "Archive membership proves packaged object code, not that every member is retained by the static linker's dead-code selection in a particular vellum-gpu binary."
+        "Archive membership proves packaged object code, not that every member is retained by the static linker's dead-code selection in a particular provider or frontend binary."
       ]
     },
     "not_yet_required_by_the_active_slice": [

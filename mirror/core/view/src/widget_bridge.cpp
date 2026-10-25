@@ -1,0 +1,1259 @@
+#include <pulp/view/widget_bridge.hpp>
+#include <pulp/view/data_display.hpp>
+#include <pulp/view/widgets.hpp>
+#include <pulp/view/gap_widgets.hpp>
+#include "widget_bridge/registrars.hpp"
+#include "widget_bridge/gpu_common.hpp"
+#include "widget_bridge/bridge_dispatch.hpp"
+#include "widget_bridge/layout_baselines.hpp"
+#include <pulp/view/animation.hpp>
+#include <pulp/view/frame_clock.hpp>
+#include <pulp/view/motion.hpp>
+#include <pulp/view/ui_components.hpp>
+#include <pulp/view/text_editor.hpp>
+#include <pulp/view/canvas_widget.hpp>
+#include <pulp/view/css_gradient.hpp>
+#include <pulp/view/drag_drop.hpp>
+#include <pulp/view/native_view_host.hpp>
+#include <pulp/view/modal.hpp>
+#include <pulp/view/pointer_dispatch.hpp>
+#include <pulp/runtime/log.hpp>
+#include <pulp/runtime/trace.hpp>
+#include <pulp/view/virtual_list.hpp>
+#include <pulp/view/virtual_grid.hpp>
+#include <web_compat_preludes_gen.hpp>
+#include <thread>
+#include <chrono>
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <iostream>
+#include <optional>
+#include <sstream>
+#include <unordered_map>
+#include <unordered_set>
+
+namespace pulp::view {
+
+namespace {
+
+View* find_view_by_id(View& node, std::string_view id) {
+    if (!id.empty() && node.id() == id) {
+        return &node;
+    }
+
+    for (size_t i = 0; i < node.child_count(); ++i) {
+        if (auto* match = find_view_by_id(*node.child_at(i), id)) {
+            return match;
+        }
+    }
+
+    return nullptr;
+}
+
+bool subtree_contains_view(View& node, const View* target) {
+    if (&node == target) {
+        return true;
+    }
+
+    for (size_t i = 0; i < node.child_count(); ++i) {
+        if (subtree_contains_view(*node.child_at(i), target)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+} // namespace
+
+// `on(id, eventName, fn)` is the JS-side hook callers use to register event
+// callbacks. Storing the function in __callbacks__ is necessary but not
+// sufficient: events fired through View::on_click, on_hover_enter, or
+// on_pointer_event require an explicit `registerClick(id)`, `registerHover(id)`,
+// or `registerPointer(id)` to wire the native View callback. Without that
+// wiring, real platform clicks reach View::on_mouse_down/up but never trigger
+// __dispatch__('click'), so the JS handler never runs.
+//
+// The fix: when JS subscribes to a known event name, transparently
+// invoke the matching native registrar. The native side owns idempotency,
+// because recycled subtrees can legally reuse ids after removal. This mirrors what
+// Element.prototype._registerNativeEvent does for addEventListener
+// callers, but on the lower-level `on()` channel that @pulp/react and
+// other native bridges use directly.
+// The event-dispatch half of the preamble (__dispatch__ and its helpers) lives
+// in widget_bridge/bridge_dispatch.cpp beside the C++ that calls it, and is
+// joined with this half at the call site.
+static const char* kJSPreamblePart2 = R"(
+function __ensureNativeRegistered__(id, group) {
+    var key = id + ':' + group;
+    __nativeRegistered__[key] = true;
+    if (group === 'click' && typeof registerClick === 'function') {
+        registerClick(id);
+    } else if (group === 'hover' && typeof registerHover === 'function') {
+        registerHover(id);
+    } else if (group === 'pointer' && typeof registerPointer === 'function') {
+        registerPointer(id);
+    } else if (group === 'gesture' && typeof registerGesture === 'function') {
+        registerGesture(id);
+    } else if (group === 'wheel' && typeof registerWheel === 'function') {
+        registerWheel(id);
+    } else if (group === 'contextmenu' && typeof registerContextMenu === 'function') {
+        // registerContextMenu evaluates `<cb>(x, y)`, so `cb` has to be an
+        // EXPRESSION THAT YIELDS A FUNCTION. web-compat passes the call
+        // `__dispatch__('id', 'contextmenu', 0)` instead: its arguments are
+        // evaluated -- which dispatches, but with a literal 0 where the event
+        // belongs -- it returns undefined, and the appended (x, y) then throws
+        // a TypeError that safe_dispatch_eval swallows. The press coordinates
+        // were discarded on that path. The IIFE below receives them.
+        //
+        // The point arrives in the widget's LOCAL space. clientX/clientY are
+        // rebased through getLayoutRect so they land in whatever space
+        // getBoundingClientRect() reports, which makes the idiomatic
+        // `e.clientX - el.getBoundingClientRect().left` cancel exactly rather
+        // than depending on the two agreeing by luck. offsetX/offsetY keep the
+        // local point, matching pointer_payload's split.
+        registerContextMenu(id, '(function(x,y){'
+            + 'var r=(typeof getLayoutRect===\'function\')?getLayoutRect(\'' + id + '\'):null;'
+            + '__dispatch__(\'' + id + '\',\'contextmenu\',{'
+            + 'clientX:(r&&typeof r.left===\'number\'?r.left:0)+x,'
+            + 'clientY:(r&&typeof r.top===\'number\'?r.top:0)+y,'
+            + 'offsetX:x,offsetY:y,button:2,buttons:2,'
+            + 'pointerType:\'mouse\',isPrimary:true});})');
+    }
+}
+function on(id, eventName, fn) {
+    __callbacks__[id + ':' + eventName] = fn;
+    if (eventName === 'click' || eventName === 'mousedown' || eventName === 'mouseup') {
+        __ensureNativeRegistered__(id, 'click');
+    } else if (eventName === 'mouseenter' || eventName === 'mouseleave' ||
+               eventName === 'pointerenter' || eventName === 'pointerleave') {
+        __ensureNativeRegistered__(id, 'hover');
+    } else if (eventName === 'pointerdown' || eventName === 'pointermove' ||
+               eventName === 'pointerup' || eventName === 'pointercancel') {
+        __ensureNativeRegistered__(id, 'pointer');
+    } else if (eventName === 'gesturestart' || eventName === 'gesturechange' ||
+               eventName === 'gestureend') {
+        __ensureNativeRegistered__(id, 'gesture');
+    } else if (eventName === 'wheel') {
+        // Wheel subscriptions route through on(id, 'wheel', fn). Without this
+        // case the JS callback is stored but registerWheel(id) is never
+        // invoked, so wheel events never reach the JS handler. This is
+        // critical for trackpad zoom on any wrapper div that subscribes via
+        // 'wheel'.
+        __ensureNativeRegistered__(id, 'wheel');
+    } else if (eventName === 'contextmenu') {
+        // Context-menu subscriptions route through on(id, 'contextmenu', fn):
+        // React's onContextMenu prop reaches here via prop-applier, and
+        // web-compat's addEventListener('contextmenu') reaches here too.
+        // Without this case the callback is stored in __callbacks__ and
+        // registerContextMenu(id, ...) is never invoked, so
+        // View::on_context_menu stays null and the platform right-click
+        // (rightMouseDown: -> route_context_press -> dispatch_context_menu)
+        // finds no handler and returns false. Same shape, and the same class
+        // of defect, as the wheel case above.
+        __ensureNativeRegistered__(id, 'contextmenu');
+    }
+}
+
+// The level, series and bin display factories return a marker object, not a
+// thrown C++ exception, when no provider has registered the display: unwinding
+// C++ through the engine's frames leaks the objects it owns. The marker becomes
+// an ordinary JS Error here, so a script can catch it.
+(function() {
+    ['createMeter', 'createWaveform', 'createSpectrum'].forEach(function(name) {
+        var native = globalThis[name];
+        if (typeof native !== 'function') return;
+        globalThis[name] = function() {
+            var result = native.apply(null, arguments);
+            if (result && typeof result === 'object' && typeof result.pulpUnavailable === 'string')
+                throw new Error(result.pulpUnavailable);
+            return result;
+        };
+    });
+})();
+)";
+
+// Window event-listener shim installed after the web-compat-document.js prelude
+// because that prelude re-declares `var window = {...}` and would clobber any
+// listener hooks installed earlier. This is the minimal install needed for
+// `__dispatch__('__global__', 'keydown', ...)` fan-out to reach
+// `window.addEventListener('keydown', fn)` listeners. Idempotent via the
+// `__pulpListenerShim__` marker, so re-eval is safe.
+static const char* kWindowListenerShim = R"(
+if (typeof globalThis.window === 'undefined') globalThis.window = {};
+if (!globalThis.window.__pulpListenerShim__) {
+    globalThis.window.__pulpListenerShim__ = true;
+    if (!globalThis.window._listeners) globalThis.window._listeners = {};
+    globalThis.window.addEventListener = function(type, fn) {
+        if (!this._listeners[type]) this._listeners[type] = [];
+        this._listeners[type].push(fn);
+    };
+    globalThis.window.removeEventListener = function(type, fn) {
+        var list = this._listeners[type];
+        if (!list) return;
+        for (var i = list.length - 1; i >= 0; i--) if (list[i] === fn) list.splice(i, 1);
+    };
+    globalThis.window.dispatchEvent = function(ev) {
+        var list = this._listeners[ev && ev.type];
+        if (!list) return true;
+        for (var i = 0; i < list.length; i++) {
+            try { list[i](ev); }
+            catch (e) {
+                if (typeof __dispatchError__ === 'function') __dispatchError__('window', ev.type, String(e && e.stack ? e.stack : e));
+            }
+        }
+        return !(ev && ev.defaultPrevented);
+    };
+}
+)";
+
+// DOM mutation methods live in core/view/js/web-compat-dom-ops.js. That JS file
+// is the single source of truth and gets evaluated by the constructor along
+// with the rest of the prelude chain.
+
+static void eval_or_throw(ScriptEngine& engine, const char* name, const std::string& js) {
+    try {
+        engine.evaluate_script(js);  // whole script: reuses compiled bytecode
+    } catch (const choc::javascript::Error& e) {
+        runtime::log_error("PULP_EVAL_THROW: name={} js_len={} choc_error={}", name, js.size(), e.what());
+        throw std::runtime_error(std::string("failed to evaluate ") + name + ": " + e.what());
+    } catch (const std::exception& e) {
+        runtime::log_error("PULP_EVAL_THROW: name={} js_len={} std_error={}", name, js.size(), e.what());
+        throw std::runtime_error(std::string("failed to evaluate ") + name + ": " + e.what());
+    } catch (...) {
+        runtime::log_error("PULP_EVAL_THROW: name={} js_len={} unknown_exception", name, js.size());
+        throw std::runtime_error(std::string("failed to evaluate ") + name + ": unknown exception");
+    }
+}
+
+static void invoke_or_throw(ScriptEngine& engine,
+                            std::string_view receiver,
+                            std::string_view type,
+                            const choc::value::Value& payload,
+                            std::string_view id,
+                            std::string_view context) {
+    const std::string label = context.empty()
+        ? std::string{"native message dispatch"}
+        : std::string{context};
+    try {
+        engine.invoke(receiver, std::string{type}, payload, std::string{id});
+    } catch (const choc::javascript::Error& e) {
+        runtime::log_error(
+            "PULP_INVOKE_THROW: name={} receiver={} choc_error={}",
+            label, receiver, e.what());
+        throw std::runtime_error(
+            "failed to invoke " + label + ": " + e.what());
+    } catch (const std::exception& e) {
+        runtime::log_error(
+            "PULP_INVOKE_THROW: name={} receiver={} std_error={}",
+            label, receiver, e.what());
+        throw std::runtime_error(
+            "failed to invoke " + label + ": " + e.what());
+    } catch (...) {
+        runtime::log_error(
+            "PULP_INVOKE_THROW: name={} receiver={} unknown_exception",
+            label, receiver);
+        throw std::runtime_error(
+            "failed to invoke " + label + ": unknown exception");
+    }
+}
+
+// Static registry of live WidgetBridges. Platform hosts iterate this to
+// deliver key events and document-level events without each app needing
+// to wire its own `View::on_global_key` lambda.
+//
+// recursive_mutex (not plain mutex): the `dispatch_*` helpers below hold the
+// lock for the full fan-out, including the call into each bridge's
+// `forward_key_event` / JS evaluation. A snapshot-then-unlock pattern can UAF if
+// a bridge is destroyed on another thread mid-iteration. Holding during dispatch
+// is safe: the standard bridge ctor/dtor lifecycle is host-driven, and
+// recursive_mutex defensively tolerates same-thread reentry.
+namespace {
+class BridgeCallCounterGuard {
+  public:
+    BridgeCallCounterGuard(ScriptEngine& engine,
+                           const std::shared_ptr<std::atomic<std::uint64_t>>& counter)
+        : engine_(engine), counter_(counter), previous_(engine.bridge_call_counter()) {
+        engine_.set_bridge_call_counter(counter_);
+    }
+
+    BridgeCallCounterGuard(const BridgeCallCounterGuard&) = delete;
+    BridgeCallCounterGuard& operator=(const BridgeCallCounterGuard&) = delete;
+
+    ~BridgeCallCounterGuard() {
+        if (active_ && engine_.bridge_call_counter() == counter_)
+            engine_.set_bridge_call_counter(previous_);
+    }
+
+    void release() noexcept {
+        active_ = false;
+    }
+
+  private:
+    ScriptEngine& engine_;
+    std::shared_ptr<std::atomic<std::uint64_t>> counter_;
+    std::shared_ptr<std::atomic<std::uint64_t>> previous_;
+    bool active_ = true;
+};
+
+std::recursive_mutex& all_bridges_mutex() {
+    static std::recursive_mutex m;
+    return m;
+}
+std::unordered_set<WidgetBridge*>& all_bridges_set() {
+    static std::unordered_set<WidgetBridge*> set;
+    return set;
+}
+std::unordered_map<View*, WidgetBridge*>& document_navigation_owners() {
+    static std::unordered_map<View*, WidgetBridge*> owners;
+    return owners;
+}
+}  // namespace
+
+WidgetBridge::WidgetBridge(ScriptEngine& engine, View& root, state::StateStore& store,
+                           render::GpuSurface* gpu_surface,
+                           CapabilitySet granted_capabilities)
+    : engine_(engine), root_(root), store_(store),
+      granted_capabilities_(granted_capabilities), gpu_surface_(gpu_surface),
+      widgets_(owned_widgets_),
+      callback_alive_(std::make_shared<BridgeCallbackState>(&root_)) {
+    BridgeCallCounterGuard counter_guard(engine_, bridge_call_count_);
+    callback_alive_->track_engine(engine.liveness_token());
+    if (detail::widget_bridge_gpu_info(gpu_surface_).native_bridge) {
+        native_gpu_bridge_state_ = std::make_unique<NativeGpuBridgeState>();
+    }
+    // Default repaint wiring: route to the root view's host invalidator.
+    // Without this, JS `requestAnimationFrame` callbacks queue but never
+    // schedule a second paint, because the only way out of `request_repaint()`
+    // is `repaint_callback_`. Hosts that need a custom invalidator (the
+    // standalone window's top-level editor) replace this via
+    // `set_repaint_callback`.
+    //
+    // Capture-by-reference is sound: the bridge already holds `View& root_`
+    // as a member and cannot outlive `root` without UB. The lambda lives at
+    // most as long as the bridge.
+    repaint_callback_ = [&root] { root.request_repaint(); };
+    register_api();
+    eval_or_throw(engine_, "kJSPreamble", dispatch_prelude_js() + kJSPreamblePart2);
+    eval_or_throw(engine_, "css_colors", preludes::css_colors);
+    eval_or_throw(engine_, "css_parser", preludes::css_parser);
+    eval_or_throw(engine_, "web_compat_element", preludes::web_compat_element);
+    // Events + pointer-capture helpers must eval after web_compat_element so
+    // the Element constructor and prototype exist before overrides install.
+    eval_or_throw(engine_, "web_compat_element_events", preludes::web_compat_element_events);
+    eval_or_throw(engine_, "web_compat_canvas", preludes::web_compat_canvas);
+    // Native GPU canvas helpers must eval after the canvas core so
+    // CanvasRenderingContext2D and window.pulp.gpu are in scope when
+    // __ensurePulpGpuHelpers / getContext("webgpu") run.
+    eval_or_throw(engine_, "web_compat_canvas_gpu", preludes::web_compat_canvas_gpu);
+    // _PulpCanvasMatrix DOMMatrix-compat helper plus Canvas2D API closures
+    // must eval after web_compat_canvas so the CanvasRenderingContext2D
+    // constructor and prototype are in scope.
+    eval_or_throw(engine_, "web_compat_canvas_matrix", preludes::web_compat_canvas_matrix);
+    eval_or_throw(engine_, "web_compat_canvas_image", preludes::web_compat_canvas_image);
+    // Generated alias-group table read by _applyProperty's write-dedup
+    // guard. Plain data, no dependencies, so it evaluates before the
+    // declaration that consumes it.
+    eval_or_throw(engine_, "web_compat_style_dedup_table", preludes::web_compat_style_dedup_table);
+    eval_or_throw(engine_, "web_compat_style_decl", preludes::web_compat_style_decl);
+    // Per-domain `_applyProperty` handler modules. The property switch is split
+    // into layout / paint / typography / transform / misc handlers;
+    // web-compat-style-decl.js's `_applyProperty` is a thin dispatcher that
+    // resolves those function declarations at call time. Evaluate handlers
+    // after style_decl and before any consumer can trigger a style apply.
+    eval_or_throw(engine_, "web_compat_style_decl_layout", preludes::web_compat_style_decl_layout);
+    eval_or_throw(engine_, "web_compat_style_decl_paint", preludes::web_compat_style_decl_paint);
+    eval_or_throw(engine_, "web_compat_style_decl_typography", preludes::web_compat_style_decl_typography);
+    eval_or_throw(engine_, "web_compat_style_decl_transform", preludes::web_compat_style_decl_transform);
+    eval_or_throw(engine_, "web_compat_style_decl_misc", preludes::web_compat_style_decl_misc);
+    // CSSStyleDeclaration helper installation needs the style constructor and
+    // _applyProperty prototype before it walks __cssProperties__.
+    eval_or_throw(engine_, "web_compat_style_decl_helpers", preludes::web_compat_style_decl_helpers);
+    eval_or_throw(engine_, "web_compat_animation", preludes::web_compat_animation);
+    eval_or_throw(engine_, "web_compat_document", preludes::web_compat_document);
+    eval_or_throw(engine_, "web_compat_transient_interaction",
+                  preludes::web_compat_transient_interaction);
+    // CSS selector engine must eval after document and Element so the
+    // selector helpers are resolvable when document.querySelector /
+    // .querySelectorAll dispatch into them.
+    eval_or_throw(engine_, "web_compat_document_selectors", preludes::web_compat_document_selectors);
+    // WebGPU mock factories must eval after document so GPU* usage constants
+    // are in scope when factory bodies resolve them lazily at call time.
+    eval_or_throw(engine_, "web_compat_document_gpu_mock", preludes::web_compat_document_gpu_mock);
+    eval_or_throw(engine_, "web_compat_gpu_buffered", preludes::web_compat_gpu_buffered);
+    // DOM mutation methods (appendChild / removeChild / etc.). Single source
+    // of truth lives in core/view/js/web-compat-dom-ops.js.
+    // The JS file's idempotency guard (`__pulp_dom_ops__` marker on the
+    // prototype methods) makes a re-eval a no-op, which matters because
+    // load_script callers used to re-trigger this initialization manually
+    // before the consolidation.
+    eval_or_throw(engine_, "web_compat_dom_ops", preludes::web_compat_dom_ops);
+    // Observer no-ops and scheduler shims so React 18, and any other framework
+    // that feature-detects MutationObserver / MessageChannel / queueMicrotask,
+    // finds the constructors it expects on the global.
+    eval_or_throw(engine_, "web_compat_observers", preludes::web_compat_observers);
+    eval_or_throw(engine_, "web_compat_scheduler", preludes::web_compat_scheduler);
+    // DOM construction and walker for the Claude Design `--execute-bundle`
+    // import lane. Hides itself behind `globalThis.__pulpImportRuntime__` so
+    // non-import scripts do not see new globals.
+    eval_or_throw(engine_, "import_runtime", preludes::import_runtime);
+    // Install the window event-listener shim LAST so it survives any
+    // `var window = {...}` reassignment performed by the preludes above
+    // (notably web-compat-document.js). See kWindowListenerShim comment.
+    eval_or_throw(engine_, "kWindowListenerShim", kWindowListenerShim);
+    // Publish only after every fallible construction step succeeds. A throwing
+    // constructor does not run ~WidgetBridge(), so earlier registration would
+    // leave a dangling pointer in the process-global dispatch registry.
+    {
+        std::lock_guard<std::recursive_mutex> lock(all_bridges_mutex());
+        all_bridges_set().insert(this);
+    }
+    counter_guard.release();
+}
+
+WidgetBridge::~WidgetBridge() {
+    if (callback_alive_->engine_alive() && engine_.bridge_call_counter() == bridge_call_count_)
+        engine_.set_bridge_call_counter(nullptr);
+    release_document_navigation_focus();
+    unregister_global_dispatch();
+    if (callback_alive_) {
+        callback_alive_->retire_dispatch();
+    }
+    release_all_param_gesture_routes();
+    // Saved starting layouts belong to widgets this bridge no longer reaches.
+    {
+        std::vector<std::uint64_t> ids;
+        ids.reserve(owned_widgets_.size());
+        for (const auto& owned : owned_widgets_)
+            ids.push_back(owned.instance_id);
+        forget_layout_baselines(ids);
+    }
+    // quarantine_realm() already detached this bridge's callback. A replacement
+    // realm may have installed its own callback on the shared root while this
+    // bridge awaited owner teardown, so do not erase it here.
+    if (!realm_quarantined_ && !realm_retired_)
+        root_.on_global_click = {};
+    if (realm_quarantined_) {
+        try {
+            end_root_quarantine();
+        } catch (const std::exception& e) {
+            // Destructors cannot propagate safely during stack unwinding. The
+            // visibility state is already restored before repaint scheduling,
+            // so preserve teardown and make the host failure observable.
+            std::cerr << "WidgetBridge quarantine repaint error: " << e.what() << "\n";
+        } catch (...) {
+            std::cerr << "WidgetBridge quarantine repaint error: unknown exception\n";
+        }
+    }
+}
+
+bool WidgetBridge::claim_document_navigation_focus() {
+    std::lock_guard<std::recursive_mutex> lock(all_bridges_mutex());
+    auto& owners = document_navigation_owners();
+    if (auto it = owners.find(&root_);
+        it != owners.end() && it->second != this) {
+        // A replacement realm for the same root supersedes the old claim.
+        // Clear it before transferring focus so only one bridge can ever make
+        // this editor navigation-capable.
+        it->second->release_document_navigation_focus();
+    }
+
+    root_.scripted_navigation_input_ = true;
+    const bool was_focusable = root_.focusable();
+    root_.set_focusable(true);
+    const bool claimed = transfer_input_focus(root_, &root_);
+    root_.set_focusable(was_focusable);
+    if (!claimed) {
+        root_.scripted_navigation_input_ = false;
+        return false;
+    }
+    root_.on_navigation_key = [this](const KeyEvent& event) {
+        // Record that this exact press really reached script here, so the
+        // global fan-out can suppress its duplicate of THIS press without
+        // suppressing presses it was never offered.
+        last_navigation_offer_ = {static_cast<int>(event.key), event.modifiers,
+                                  event.is_down, /*pending=*/true};
+        return forward_key_event_handled(
+            static_cast<int>(event.key), event.modifiers, event.is_down,
+            &root_);
+    };
+    owners[&root_] = this;
+    return true;
+}
+
+void WidgetBridge::release_document_navigation_focus() noexcept {
+    std::lock_guard<std::recursive_mutex> lock(all_bridges_mutex());
+    auto& owners = document_navigation_owners();
+    const auto it = owners.find(&root_);
+    if (it == owners.end() || it->second != this) return;
+    owners.erase(it);
+    root_.scripted_navigation_input_ = false;
+    root_.on_navigation_key = {};
+    // Without the claim there is no path that offers a key here first, so any
+    // stamp left pending could only ever suppress a press that was never
+    // offered. Drop it with the claim.
+    last_navigation_offer_ = {};
+    if (focused_input_under_root(root_) == &root_) {
+        root_.release_input_focus();
+        root_.View::on_focus_changed(false);
+    }
+}
+
+void WidgetBridge::unregister_global_dispatch() noexcept {
+    std::lock_guard<std::recursive_mutex> lock(all_bridges_mutex());
+    all_bridges_set().erase(this);
+}
+
+void WidgetBridge::unregister_global_dispatch(
+    const DeadlineCheck& deadline_check) {
+    std::unique_lock<std::recursive_mutex> lock(
+        all_bridges_mutex(), std::defer_lock);
+    if (deadline_check) {
+        while (!lock.try_lock()) {
+            deadline_check();
+            std::this_thread::yield();
+        }
+    } else {
+        lock.lock();
+    }
+    all_bridges_set().erase(this);
+}
+
+std::vector<WidgetBridge::BridgeWidgetState>
+WidgetBridge::foreign_owned_widget_states() const {
+    std::lock_guard<std::recursive_mutex> lock(all_bridges_mutex());
+    std::size_t count = 0;
+    for (const auto* bridge : all_bridges_set()) {
+        // Only successive realms attached to this exact View tree can own
+        // descendants that must survive our retirement. Other roots may live
+        // on other UI threads; their containers are deliberately out of scope.
+        if (bridge != this && &bridge->root_ == &root_)
+            count += bridge->owned_widgets_.size();
+    }
+    std::vector<BridgeWidgetState> foreign;
+    foreign.reserve(count);
+    for (const auto* bridge : all_bridges_set()) {
+        if (bridge == this || &bridge->root_ != &root_)
+            continue;
+        foreign.insert(foreign.end(), bridge->owned_widgets_.begin(),
+                       bridge->owned_widgets_.end());
+    }
+    return foreign;
+}
+
+void WidgetBridge::begin_root_quarantine() noexcept {
+    if (realm_quarantined_)
+        root_.refresh_visibility_quarantine();
+    else
+        root_.begin_visibility_quarantine();
+    realm_quarantined_ = true;
+}
+
+void WidgetBridge::end_root_quarantine() {
+    root_.end_visibility_quarantine();
+}
+
+void WidgetBridge::invalidate_cached_subtrees_everywhere(
+    const std::vector<View*>& nodes,
+    const DeadlineCheck& deadline_check) {
+    std::unordered_set<std::uint64_t> removed_instance_ids;
+    const auto collect = [&](auto&& self, View* candidate) -> void {
+        if (deadline_check) deadline_check();
+        if (candidate == nullptr)
+            return;
+        removed_instance_ids.insert(candidate->import_binding_instance_id());
+        for (std::size_t index = 0; index < candidate->child_count(); ++index)
+            self(self, candidate->child_at(index));
+    };
+    for (auto* node : nodes)
+        collect(collect, node);
+
+    std::unique_lock<std::recursive_mutex> lock(
+        all_bridges_mutex(), std::defer_lock);
+    if (deadline_check) {
+        while (!lock.try_lock()) {
+            deadline_check();
+            std::this_thread::yield();
+        }
+    } else {
+        lock.lock();
+    }
+    std::vector<std::pair<WidgetBridge*, std::string>> removals;
+    for (auto* bridge : all_bridges_set()) {
+        // Cache entries can only refer to nodes in the bridge's own root.
+        // Restricting cleanup to that root also preserves the one-UI-thread
+        // ownership boundary for widgets_ and registrations_.
+        if (&bridge->root_ != &root_)
+            continue;
+        if (deadline_check) deadline_check();
+        for (const auto& [id, state] : bridge->widgets_) {
+            if (deadline_check) deadline_check();
+            const auto removed = removed_instance_ids.contains(
+                state.instance_id);
+            if (removed)
+                removals.emplace_back(bridge, id);
+        }
+    }
+    if (deadline_check) deadline_check();
+    for (const auto& [bridge, id] : removals) {
+        bridge->widgets_.erase(id);
+        bridge->forget_widget_registrations(id);
+    }
+}
+
+// Late-attach of the GpuSurface for the common case where ScriptedUiSession /
+// ViewBridge is constructed before the PluginViewHost and therefore before the
+// surface exists. Mirrors the fourth constructor argument and is idempotent.
+void WidgetBridge::attach_gpu_surface(render::GpuSurface* gpu_surface) {
+    if (realm_quarantined_) return;
+    if (gpu_surface_ == gpu_surface) return;
+    gpu_surface_ = gpu_surface;
+    const auto gpu_info = detail::widget_bridge_gpu_info(gpu_surface_);
+    if (gpu_surface_ != nullptr) {
+        if (gpu_info.native_bridge) {
+            if (!native_gpu_bridge_state_) {
+                native_gpu_bridge_state_ = std::make_unique<NativeGpuBridgeState>();
+            }
+        } else {
+            // Surface present but no native bridge available — release any
+            // stale state from a previous attach.
+            native_gpu_bridge_state_.reset();
+        }
+    } else {
+        // Explicit detach: drop the native bridge state so future per-frame
+        // canvas/draw calls fall back to mocks cleanly.
+        native_gpu_bridge_state_.reset();
+    }
+    safe_dispatch_eval(engine_, detail::gpu_host_object_update_script(gpu_info), "gpu surface attach");
+}
+
+bool WidgetBridge::has_native_gpu_bridge() const noexcept {
+    return gpu_surface_ != nullptr && native_gpu_bridge_state_ != nullptr;
+}
+
+void WidgetBridge::dispatch_global_key(int key_code, uint16_t modifiers, bool is_down) {
+    // Hold the registry lock for the entire fan-out. Copying raw pointers
+    // under lock and then iterating unlocked can UAF if a bridge is destroyed
+    // on another thread between snapshot and dispatch. recursive_mutex
+    // tolerates same-thread reentry.
+    std::lock_guard<std::recursive_mutex> lock(all_bridges_mutex());
+    for (auto* b : all_bridges_set()) {
+        // A bridge that was already offered THIS press through the
+        // navigation-claim hook must not receive it twice: an open listbox
+        // would advance two items per arrow and half its entries become
+        // unreachable. But the offer is what makes the delivery a duplicate,
+        // not the claim — the hook reports "handled" only when a JS listener
+        // called `preventDefault()`, and host key paths that return before
+        // reaching the hook arrive here having offered nothing. Suppressing on
+        // the claim alone drops those keys outright, so match and consume the
+        // recorded offer instead. Unmatched presses still deliver.
+        auto& offer = b->last_navigation_offer_;
+        if (offer.pending && offer.key_code == key_code
+            && offer.modifiers == modifiers && offer.is_down == is_down) {
+            offer.pending = false;
+            continue;
+        }
+        b->forward_key_event(key_code, modifiers, is_down);
+    }
+}
+
+bool WidgetBridge::dispatch_key_for_root(View& root, int key_code,
+                                         uint16_t modifiers, bool is_down) {
+    std::lock_guard<std::recursive_mutex> lock(all_bridges_mutex());
+    bool handled = false;
+    for (auto* bridge : all_bridges_set()) {
+        if (&bridge->root_ == &root)
+            handled = bridge->forward_key_event_handled(
+                          key_code, modifiers, is_down, &root) || handled;
+    }
+    // Escape dismissal is a framework default, not a platform-host detail.
+    // Script handlers run first so they can update product state themselves;
+    // the semantic overlay claim is then retired unconditionally. This also
+    // covers React state updates that do not commit until the next host pump,
+    // where relying on `defaultPrevented` alone would leave a stale native
+    // claim alive for another frame (or indefinitely in a quiescent host).
+    if (is_down && key_code == static_cast<int>(KeyCode::escape)) {
+        if (auto* overlay = root.interaction().active_overlay) {
+            overlay->dismiss_claimed_overlay();
+            handled = true;
+        }
+    }
+    return handled;
+}
+
+void WidgetBridge::dispatch_document_event(const std::string& event_type,
+                                           const std::string& event_json_literal) {
+    // FOOTGUN: both arguments are concatenated into a JS expression
+    // verbatim. Call sites MUST pass trusted literals only — never
+    // user-provided or untrusted strings. Current callers
+    // (window_host_mac.mm Esc handler) pass hardcoded "mousedown" /
+    // "pointerdown" + a hardcoded literal "{clientX:-1,clientY:-1,
+    // target:null}". If a future call site needs runtime values,
+    // build the JSON via a serializer and re-validate this contract.
+    //
+    // Same lifetime-safety rationale as dispatch_global_key above: hold the
+    // lock through iteration.
+    const std::string js =
+        "__dispatch__('document', '" + event_type + "', " + event_json_literal + ")";
+    std::lock_guard<std::recursive_mutex> lock(all_bridges_mutex());
+    for (auto* b : all_bridges_set()) {
+        b->engine_.evaluate(js);
+    }
+}
+
+void WidgetBridge::set_repaint_callback(std::function<void()> cb) {
+    default_repaint_callback_ = false;
+    repaint_callback_ = std::move(cb);
+}
+
+void WidgetBridge::set_ai_cli_command(std::string cmd) {
+    if (!cmd.empty()) ai_cli_command_ = std::move(cmd);
+}
+
+#ifdef PULP_BENCHMARK
+void WidgetBridge::set_bench_counters(render::bench::PerfCounters* counters) {
+    bench_counters_ = counters;
+}
+#endif
+
+void WidgetBridge::request_repaint() {
+    PULP_TRACE_SCOPE_NAMED("render", "repaint_request");
+    ++repaint_request_generation_;
+    if (repaint_callback_) repaint_callback_();
+}
+
+CanvasWidget::NativeGpuTextureFrame WidgetBridge::describe_native_canvas_frame(
+    const std::string& canvas_id) const {
+    CanvasWidget::NativeGpuTextureFrame frame;
+    if (native_gpu_bridge_state_ == nullptr || canvas_id.empty()) {
+        return frame;
+    }
+
+    auto it = native_gpu_bridge_state_->canvases.find(canvas_id);
+    if (it == native_gpu_bridge_state_->canvases.end() || !it->second.configured) {
+        return frame;
+    }
+
+    frame.width = it->second.width;
+    frame.height = it->second.height;
+    frame.format = it->second.format;
+    frame.available = true;
+#ifdef PULP_HAS_SKIA
+    frame.texture_handle = const_cast<wgpu::Texture*>(&it->second.texture);
+#endif
+    return frame;
+}
+
+CanvasWidget::NativeGpuTextureFrame WidgetBridge::describe_native_texture_frame(
+    const std::string& texture_id) const {
+    CanvasWidget::NativeGpuTextureFrame frame;
+    if (native_gpu_bridge_state_ == nullptr || texture_id.empty()) {
+        return frame;
+    }
+
+    auto it = native_gpu_bridge_state_->textures.find(texture_id);
+    if (it == native_gpu_bridge_state_->textures.end() || !it->second.configured) {
+        return frame;
+    }
+
+    frame.width = it->second.width;
+    frame.height = it->second.height;
+    frame.format = it->second.format;
+    frame.available = true;
+#ifdef PULP_HAS_SKIA
+    frame.texture_handle = const_cast<wgpu::Texture*>(&it->second.texture);
+#endif
+    return frame;
+}
+
+// ";void 0" makes the eval result undefined, not the last expression value:
+// elements reference each other (_parentElement <-> _children), which would
+// recurse forever in CHOC's toChocValue().
+std::string WidgetBridge::loaded_script_source(const std::string& code) { return code + "\n;void 0"; }
+
+void WidgetBridge::load_script(const std::string& code) {
+    // DOM mutation methods are installed by the constructor's prelude chain
+    // (`web_compat_dom_ops`); its JS-side idempotency guard makes re-eval a
+    // no-op, so callers loading several scripts need no "first time" state.
+    eval_or_throw(engine_, "user_script", loaded_script_source(code));
+    // __pulpRuntimeSettle__ may be called by runtime-import code during the
+    // evaluation above. Its native callback only records this budget; drain it
+    // now that the outer QuickJS evaluation has returned, so startup remains
+    // synchronously materialized without recursively entering QuickJS.
+    // Settle passes belong to this load, not to a host frame tick.
+    const bool pump_was_live = frame_pump_live_;
+    const int settle_rounds = std::exchange(pending_runtime_settle_rounds_, 0);
+    for (int round = 0; round < settle_rounds; ++round)
+        service_frame_callbacks();
+    frame_pump_live_ = pump_was_live;
+    // Without a frame pump, flush rAF so the load materializes synchronously.
+    // With one, a flush here would run a self-rearming callback an extra time
+    // outside the frame; leave it for the next tick and request that tick.
+    if (frame_pump_live_) {
+        if (!pending_frame_ids_.empty())
+            request_repaint();
+        return;
+    }
+    eval_or_throw(engine_, "flush_frames", "if (typeof __flushFrames__ === 'function') __flushFrames__();void 0");
+}
+
+void WidgetBridge::dispatch_native_message(
+    std::string_view receiver,
+    std::string_view type,
+    const choc::value::Value& payload,
+    std::string_view id,
+    std::string_view context) {
+    if (receiver.empty()) {
+        throw std::invalid_argument(
+            "native message receiver must not be empty");
+    }
+    const auto repaint_generation_before = repaint_request_generation_;
+    const DamageLedger ledger = damage_ledger();
+    invoke_or_throw(engine_, receiver, type, payload, id, context);
+    engine_.pump_message_loop();
+    if (repaint_request_generation_ == repaint_generation_before)
+        request_repaint_after(ledger);
+}
+
+void WidgetBridge::request_frame() {
+    // With the constructor's callback the root's host can schedule a frame
+    // without damage; a custom callback (a standalone window's own
+    // invalidator) is the only thing that knows how to wake its host.
+    ++repaint_request_generation_;
+    if (!default_repaint_callback_) {
+        if (repaint_callback_)
+            repaint_callback_();
+        return;
+    }
+    PULP_TRACE_SCOPE_NAMED("render", "repaint_frame_only");
+    root_.request_frame();
+}
+
+void WidgetBridge::request_repaint_after(const DamageLedger& ledger) {
+    // The work marked its own damage and nothing else: the marks scheduled
+    // the repaint. It changed nothing at all (a handler that only queued a
+    // requestAnimationFrame): ask for a frame and let that frame mark what it
+    // draws. Anything else keeps the whole-surface request.
+    if (ledger.self_damaged(root_))
+        return;
+    if (ledger.untouched(root_)) {
+        request_frame();
+        return;
+    }
+    request_repaint();
+}
+
+WidgetBridge::DamageLedger WidgetBridge::damage_ledger() const {
+    return {View::damage_request_count(), View::unmarked_paint_mutation_count(),
+            root_.tree_layout_generation()};
+}
+
+bool WidgetBridge::DamageLedger::untouched(const View& root) const {
+    return View::damage_request_count() == damage_requests &&
+           View::unmarked_paint_mutation_count() == unmarked_mutations &&
+           root.tree_layout_generation() == layout_generation;
+}
+
+bool WidgetBridge::DamageLedger::self_damaged(const View& root) const {
+    // The work since the ledger was taken asked for its own repaints (each
+    // mark scheduled one), changed nothing it did not mark, and moved no
+    // geometry. Then a blanket whole-surface request adds nothing but area:
+    // a knob's played-value marker repaints the knob, not the editor.
+    return View::damage_request_count() != damage_requests &&
+           View::unmarked_paint_mutation_count() == unmarked_mutations &&
+           root.tree_layout_generation() == layout_generation;
+}
+
+void WidgetBridge::load_script(const std::string& code,
+                               const std::string& script_id) {
+    // Record script identity before eval so requestAnimationFrame calls made
+    // during eval already see the new active script. Cleared by the caller, or
+    // by a subsequent load_script call, when the script's surface goes away.
+    active_script_id_ = script_id;
+    load_script(code);
+}
+
+void WidgetBridge::set_active_script_id(const std::string& script_id) {
+    active_script_id_ = script_id;
+}
+
+View* WidgetBridge::widget(const std::string& id) {
+    if (id.empty()) {
+        return nullptr;
+    }
+
+    auto it = widgets_.find(id);
+    if (it != widgets_.end()) {
+        View* cached = it->second.view;
+        if (cached != nullptr) {
+            // O(1) fast path: the generation is unchanged since we last confirmed
+            // `cached` lives under root_, and add_child never detaches, so it must
+            // still be there. Only remove_child bumps the generation (and a fresh
+            // entry carries the 0 sentinel), forcing the authoritative walk below.
+            const std::uint64_t gen = root_.root_structure_generation();
+            if (it->second.validated_generation == gen) {
+                return cached;
+            }
+            if (subtree_contains_view(root_, cached)) {
+                it->second.validated_generation = gen;
+                return cached;
+            }
+        }
+        widgets_.erase(it); forget_widget_registrations(id);
+    }
+
+    if (auto* live = find_view_by_id(root_, id)) {
+        widgets_.cache(id, live);
+        return live;
+    }
+
+    return nullptr;
+}
+
+void WidgetBridge::sync_from_store() {
+    for (auto& [id, state] : widgets_) {
+        View* view = state.view;
+        if (auto* knob = dynamic_cast<Knob*>(view)) {
+            // Try to find a parameter matching this widget's id
+            // Convention: widget id matches parameter name
+            for (size_t i = 0; i < store_.param_count(); ++i) {
+                auto* info = &store_.all_params()[i];
+                if (info && info->name == id) {
+                    knob->set_value(store_.get_normalized(info->id));
+                    break;
+                }
+            }
+        } else if (auto* fader = dynamic_cast<Fader*>(view)) {
+            for (size_t i = 0; i < store_.param_count(); ++i) {
+                auto* info = &store_.all_params()[i];
+                if (info && info->name == id) {
+                    fader->set_value(store_.get_normalized(info->id));
+                    break;
+                }
+            }
+        } else if (auto* toggle = dynamic_cast<Toggle*>(view)) {
+            for (size_t i = 0; i < store_.param_count(); ++i) {
+                auto* info = &store_.all_params()[i];
+                if (info && info->name == id) {
+                    toggle->set_on(store_.get_normalized(info->id) > 0.5f);
+                    break;
+                }
+            }
+        }
+    }
+}
+
+View* WidgetBridge::resolve_parent(const std::string& parent_id, const View* child) {
+    if (parent_id.empty()) return &root_;
+    auto it = widgets_.find(parent_id);
+    if (it == widgets_.end() || !it->second.view) return &root_;
+    View* parent = it->second.view;
+    if (child)
+        for (const View* ancestor = parent; ancestor; ancestor = ancestor->parent())
+            if (ancestor == child)
+                return &root_;
+    return parent;
+}
+
+bool WidgetBridge::attach_created(const std::string& id, const std::string& parent_id,
+                                  std::unique_ptr<View> view) {
+    auto* child = view.get();
+    auto refused = resolve_parent(parent_id, child)->add_child(std::move(view));
+    if (!refused)
+        return true;
+    widgets_.erase(id);
+    return false;
+}
+
+ScrollView* WidgetBridge::scroll_wrapper(const std::string& id) const noexcept {
+    auto it = scroll_wrappers_.find(id);
+    if (it == scroll_wrappers_.end() || !it->second) return nullptr;
+    // The alias map is deliberately non-owning. During realm replacement a
+    // wrapper can leave the owned identity vector before the map cleanup runs;
+    // fail closed here so every scroll-specific caller avoids a stale/ABA raw
+    // pointer rather than dereferencing it.
+    const auto live = std::any_of(owned_widgets_.begin(), owned_widgets_.end(),
+        [candidate = it->second](const auto& state) {
+            return state.view == candidate;
+        });
+    return live ? it->second : nullptr;
+}
+
+View* WidgetBridge::style_target(const std::string& id) noexcept {
+    if (auto* wrapper = scroll_wrapper(id)) {
+        const auto live = std::any_of(owned_widgets_.begin(), owned_widgets_.end(),
+            [wrapper](const auto& state) { return state.view == wrapper; });
+        if (live) return wrapper;
+    }
+    return widget(id);
+}
+
+std::unique_ptr<View> WidgetBridge::make_widget_for_tag(const std::string& tag,
+                                                        const std::string& id) {
+    // Shared lowercase widget-tag → native widget table. Keep in lockstep with
+    // the `createX` factory functions (factory_api.cpp), the JS `_ensureNative`
+    // map (web-compat-element.js), and the `@pulp/react` host-config lowercase
+    // aliases — the routing-parity sweep test asserts all four agree. Returns
+    // nullptr for any non-widget tag so __domAppend falls through to its
+    // container/HTML defaults (div/span/canvas/svg-prims/input are handled by
+    // their own branches before this is consulted).
+    // No widget gets a caption here: `id` is an addressing handle (`__el_N__`
+    // through the web-compat DOM) and widgets paint their label.
+    std::unique_ptr<View> w;
+    if (tag == "knob") {
+        w = std::make_unique<Knob>();
+    } else if (tag == "fader") {
+        w = std::make_unique<Fader>();
+    } else if (tag == "toggle") {
+        w = std::make_unique<Toggle>();
+    } else if (tag == "segmented") {
+        w = std::make_unique<SegmentedControl>();
+    } else if (tag == "stepper") {
+        w = std::make_unique<Stepper>();
+    } else if (tag == "combo" || tag == "select") {
+        w = std::make_unique<ComboBox>();
+    } else if (tag == "checkbox") {
+        w = std::make_unique<Checkbox>();
+    } else if (tag == "spectrum") {
+        w = make_data_display("pulp.bins");
+    } else if (tag == "waveform") {
+        w = make_data_display("pulp.series");
+    } else if (tag == "meter") {
+        w = make_data_display("pulp.level");
+    } else if (tag == "xypad") {
+        w = std::make_unique<XYPad>();
+    } else if (tag == "listbox") {
+        w = std::make_unique<ListBox>();
+    } else if (tag == "virtuallist" || tag == "virtual-list") {
+        w = std::make_unique<VirtualList>();
+    } else if (tag == "virtualgrid" || tag == "virtual-grid") {
+        w = std::make_unique<VirtualGrid>();
+    } else if (tag == "icon") {
+        w = std::make_unique<Icon>();
+    } else if (tag == "progress") {
+        w = std::make_unique<ProgressBar>();
+    } else if (tag == "img" || tag == "image") {
+        w = std::make_unique<ImageView>();
+    } else if (tag == "native-view") {
+        // Native child-view box; a C++ host binds the OS handle by id (js-bridge.md).
+        w = std::make_unique<NativeViewHost>();
+    }
+    if (w) {
+        w->set_id(id);
+        wire_callbacks(id, w.get());  // no-op for display-only widgets
+    }
+    return w;
+}
+
+void WidgetBridge::poll_async_results() {
+    std::vector<AsyncExecResult> pending;
+    {
+        std::lock_guard<std::mutex> lock(*async_exec_mutex_);
+        pending.swap(*async_exec_results_);
+    }
+    bool had_pending_frames = !pending_frame_ids_.empty();
+
+    for (const auto& result : pending) {
+        auto payload = choc::json::toString(choc::value::createString(result.output), false);
+        dispatch_event(engine_, result.callback_id, "result", payload);
+    }
+
+    // Skip this drain when the previous service pass already ran the frame
+    // callbacks: a self-rearming rAF refills pending_frame_ids_ from inside
+    // __flushFrames__, so draining here as well would run the same callback
+    // twice per host tick and draw the scene twice per display period. The
+    // exchange consumes the slot, so at most one poll can skip per service
+    // drain and a poll-only host still drains on every call.
+    const bool serviced = std::exchange(frames_drained_by_service_, false);
+    const DamageLedger ledger = damage_ledger();
+    bool flushed = false;
+    if (had_pending_frames && !serviced) {
+        engine_.evaluate("if (typeof __flushFrames__ === 'function') __flushFrames__();void 0");
+        flushed = true;
+    }
+
+    // Frames this poll drained that marked their own damage (and only that)
+    // already scheduled their repaint; anything else keeps the whole-surface
+    // request it always had.
+    if (!pending.empty() || had_pending_frames) {
+        if (flushed && pending.empty())
+            request_repaint_after(ledger);
+        else
+            request_repaint();
+    }
+}
+
+void WidgetBridge::service_frame_callbacks() {
+    PULP_TRACE_SCOPE_NAMED("js", "frame_callback_pump");
+    frame_pump_live_ = true;
+    if (pending_runtime_settle_rounds_ > 0)
+        --pending_runtime_settle_rounds_;
+    // Declarative bindings first: pure C++ store→widget push, no JS crossing.
+    service_param_bindings();
+    // Then paramchange subscriptions, so a handler that inspects a bound
+    // widget sees it already holding this frame's value.
+    service_param_subscriptions();
+    // Event-channel handlers also run on the frame tick, never on the writer's
+    // audio thread.
+    service_event_bindings();
+    engine_.pump_message_loop();
+    // Drain any expired native-tracked setTimeout/setInterval timers so
+    // consumers do not need a JS shim around the frame loop.
+    if (!pending_timers_.empty()) {
+        engine_.evaluate("if (typeof __flushTimers__ === 'function') __flushTimers__();void 0");
+        engine_.pump_message_loop();
+    }
+    if (!pending_frame_ids_.empty()) {
+        PULP_TRACE_SCOPE_NAMED_ARGS("js", "raf_flush", "callbacks",
+                                    pending_frame_ids_.size());
+        {
+            PULP_TRACE_SCOPE_NAMED("js", "raf_callbacks");
+            engine_.evaluate("if (typeof __flushFrames__ === 'function') __flushFrames__();void 0");
+        }
+        {
+            PULP_TRACE_SCOPE_NAMED("js", "raf_microtasks");
+            engine_.pump_message_loop();
+        }
+        // Tell the next poll this tick's frames are already drawn. Set only on
+        // an actual drain, so a service pass with nothing pending never
+        // suppresses a later poll.
+        frames_drained_by_service_ = true;
+    }
+    if (pending_runtime_settle_rounds_ > 0)
+        request_repaint();
+}
+
+#ifndef PULP_BRIDGE_EXEC_ENABLED
+// Shell exec/execAsync is a development-only affordance. Compiled out of shipping
+// builds via -DPULP_BRIDGE_EXEC_ENABLED=0, and even when compiled in it is ALSO
+// gated behind the `exec` capability, so a UI with no granted capabilities never
+// receives it. Two independent locks, because shelling out is the sharpest edge.
+#define PULP_BRIDGE_EXEC_ENABLED 1
+#endif
+
+// One bridge-API group. `gate` names the capability an EFFECTFUL group requires;
+// `std::nullopt` marks a pure-UI group, which is always registered.
+//
+// Making the gate DATA rather than a hand-written `if` around each call is what
+// lets the capability contract be read as a list — the enforcement seam the
+// capability model documents is now one table plus one loop, instead of ~75
+// call sites to audit by eye.
+struct WidgetBridge::ApiGroup {
+    std::optional<ReloadCapability> gate;
+    void (*install)(WidgetBridge&);
+};
+
+void WidgetBridge::register_api() {
+    // Registration ORDER is load-bearing: a later group may deliberately
+    // overwrite a JS name registered by an earlier one, and the JS preludes
+    // evaluated after this run against the resulting surface. Append; never sort.
+    static constexpr ApiGroup kGroups[] = {
+        {std::nullopt,                     &BridgeRegistrars::register_widget_factory_controls_api},
+        // Reads arbitrary file paths (image/sprite assets) → gated by Filesystem.
+        {ReloadCapability::Filesystem,     &BridgeRegistrars::register_widget_assets_api},
+        {std::nullopt,                     &BridgeRegistrars::register_widget_factory_form_api},
+        {std::nullopt,                     &BridgeRegistrars::register_widget_value_controls_api},
+        {std::nullopt,                     &BridgeRegistrars::register_state_binding_api},
+        {std::nullopt,                     &BridgeRegistrars::register_animation_api},
+        {std::nullopt,                     &BridgeRegistrars::register_widget_style_visibility_api},
+        {std::nullopt,                     &BridgeRegistrars::register_accessibility_api},
+        {std::nullopt,                     &BridgeRegistrars::register_hover_event_api},
+        {std::nullopt,                     &BridgeRegistrars::register_layout_grid_api},
+        {std::nullopt,                     &BridgeRegistrars::register_pointer_event_api},
+        {std::nullopt,                     &BridgeRegistrars::register_metadata_removal_api},
+
+        // Extended API: containers, layout, all widgets, themes, canvas.
+        {std::nullopt,                     &BridgeRegistrars::register_widget_factory_container_api},
+        {std::nullopt,                     &BridgeRegistrars::register_layout_flex_api},
+        {std::nullopt,                     &BridgeRegistrars::register_style_reset_api},
+        {std::nullopt,                     &BridgeRegistrars::register_dom_api},
+        {std::nullopt,                     &BridgeRegistrars::register_layout_query_api},
+        {std::nullopt,                     &BridgeRegistrars::register_widget_style_interaction_api},
+        {std::nullopt,                     &BridgeRegistrars::register_widget_factory_composite_api},
+        {std::nullopt,                     &BridgeRegistrars::register_widget_value_list_api},
+        {std::nullopt,                     &BridgeRegistrars::register_widget_factory_text_editor_api},
+        {std::nullopt,                     &BridgeRegistrars::register_widget_factory_design_system_api},
+        {std::nullopt,                     &BridgeRegistrars::register_widget_value_label_api},
+        {std::nullopt,                     &BridgeRegistrars::register_metadata_source_api},
+        {std::nullopt,                     &BridgeRegistrars::register_widget_value_basic_api},
+        {std::nullopt,                     &BridgeRegistrars::register_widget_typography_api},
+        {std::nullopt,                     &BridgeRegistrars::register_widget_value_content_api},
+
+        // Visual properties (CSS box model). CSS color parsing lives in
+        // css_color.cpp (parse_bridge_css_color); each color-consuming registrar
+        // calls it directly.
+        {std::nullopt,                     &BridgeRegistrars::register_tokens_api},
+        {std::nullopt,                     &BridgeRegistrars::register_widget_text_runs_api},
+        {std::nullopt,                     &BridgeRegistrars::register_widget_style_background_color_api},
+        {std::nullopt,                     &BridgeRegistrars::register_svg_api},
+        {std::nullopt,                     &BridgeRegistrars::register_widget_border_box_api},
+        {std::nullopt,                     &BridgeRegistrars::register_list_style_api},
+        {std::nullopt,                     &BridgeRegistrars::register_widget_outline_api},
+        {std::nullopt,                     &BridgeRegistrars::register_widget_border_radius_api},
+        {std::nullopt,                     &BridgeRegistrars::register_widget_border_side_api},
+        {std::nullopt,                     &BridgeRegistrars::register_widget_style_shadow_api},
+        {std::nullopt,                     &BridgeRegistrars::register_wheel_event_api},
+        {std::nullopt,                     &BridgeRegistrars::register_widget_style_opacity_api},
+        {std::nullopt,                     &BridgeRegistrars::register_widget_typography_color_api},
+        {std::nullopt,                     &BridgeRegistrars::register_widget_style_overflow_api},
+        {std::nullopt,                     &BridgeRegistrars::register_layout_box_model_api},
+        {std::nullopt,                     &BridgeRegistrars::register_canvas2d_api},
+        {std::nullopt,                     &BridgeRegistrars::register_widget_style_state_api},
+        {std::nullopt,                     &BridgeRegistrars::register_widget_typography_decoration_api},
+        {std::nullopt,                     &BridgeRegistrars::register_widget_style_background_repeat_api},
+        {std::nullopt,                     &BridgeRegistrars::register_layout_position_api},
+        {std::nullopt,                     &BridgeRegistrars::register_animation_style_api},
+        {std::nullopt,                     &BridgeRegistrars::register_widget_typography_overflow_api},
+        {std::nullopt,                     &BridgeRegistrars::register_widget_style_cursor_direction_api},
+        {std::nullopt,                     &BridgeRegistrars::register_widget_style_filter_clip_api},
+        {std::nullopt,                     &BridgeRegistrars::register_widget_style_mask_object_api},
+        {std::nullopt,                     &BridgeRegistrars::register_widget_style_blend_api},
+
+        // Storage-only setters for remaining CSS compatibility entries. Each
+        // handler records the value on the View's catalog slot so harness
+        // round-trip tests can verify the bridge accepts the keyword. Catalog
+        // status documents implementation depth: `partial` for storage-only with
+        // deferred paint, `noop` for accept-and-ignore, and `wontfix` for
+        // architectural out-of-scope.
+        {std::nullopt,                     &BridgeRegistrars::register_widget_typography_extended_api},
+        {std::nullopt,                     &BridgeRegistrars::register_widget_style_rn_compat_api},
+        {std::nullopt,                     &BridgeRegistrars::register_widget_typography_shadow_shorthand_api},
+        {std::nullopt,                     &BridgeRegistrars::register_widget_style_background_subproperty_api},
+        {std::nullopt,                     &BridgeRegistrars::register_widget_style_background_gradient_api},
+        {std::nullopt,                     &BridgeRegistrars::register_widget_style_box_shadow_api},
+        {std::nullopt,                     &BridgeRegistrars::register_shader_widget_api},
+
+        // Persists style presets to temp files → gated by Storage.
+        {ReloadCapability::Storage,        &BridgeRegistrars::register_widget_schema_api},
+        {std::nullopt,                     &BridgeRegistrars::register_theme_api},
+        {ReloadCapability::Ai,             &BridgeRegistrars::register_platform_services_ai_api},
+        {std::nullopt,                     &BridgeRegistrars::register_metadata_computed_api},
+#if PULP_BRIDGE_EXEC_ENABLED
+        // Shell exec — dev-only (compiled out of ship) AND gated by the exec cap.
+        {ReloadCapability::Exec,           &BridgeRegistrars::register_platform_services_exec_api},
+#endif
+        {std::nullopt,                     &BridgeRegistrars::register_context_menu_event_api},
+        // Native file dialogs read/choose arbitrary paths → gated by Filesystem.
+        {ReloadCapability::Filesystem,     &BridgeRegistrars::register_platform_services_dialog_api},
+        {std::nullopt,                     &BridgeRegistrars::register_runtime_api},
+        // Off-thread index/search — non-effectful, so no capability.
+        {std::nullopt,                     &BridgeRegistrars::register_query_service_api},
+        {ReloadCapability::Clipboard,      &BridgeRegistrars::register_platform_services_clipboard_api},
+        // Key/value persistence → Storage; asset loading reads file:// paths →
+        // Filesystem (granted independently).
+        {ReloadCapability::Storage,        &BridgeRegistrars::register_storage_key_value_api},
+        {ReloadCapability::Filesystem,     &BridgeRegistrars::register_asset_loading_api},
+        {std::nullopt,                     &BridgeRegistrars::register_drop_event_api},
+        {ReloadCapability::Filesystem,     &BridgeRegistrars::register_font_assets_api},
+        {std::nullopt,                     &BridgeRegistrars::register_shader_canvas_api},
+        {std::nullopt,                     &BridgeRegistrars::register_gpu_api},
+    };
+
+    for (const auto& group : kGroups) {
+        if (group.gate && !granted_capabilities_.has(*group.gate)) continue;
+        group.install(*this);
+    }
+}
+
+} // namespace pulp::view

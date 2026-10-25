@@ -93,11 +93,14 @@ DEPENDENCIES: dict[str, dict[str, Any]] = {
     },
     "choc": {
         "kind": "headers",
-        "patches": ["json-positive-exponent"],
+        "patches": ["v8-compatibility", "json-positive-exponent"],
     },
     "brotli": {"kind": "sources"},
     "woff2": {"kind": "sources"},
     "skia": {"kind": "archive"},
+    "sdl3": {"kind": "cmake", "provides": ["SDL3-static"], "options": {"SDL_SHARED": "OFF", "SDL_STATIC": "ON", "SDL_TEST": "OFF", "CMAKE_DISABLE_PRECOMPILE_HEADERS": "ON"}},
+    "yoga": {"kind": "cmake", "source_subdir": "yoga", "provides": ["yogacore"], "options": {}},
+    "yaml-cpp": {"kind": "cmake", "provides": ["yaml-cpp"], "options": {"YAML_CPP_BUILD_TESTS": "OFF", "YAML_CPP_BUILD_TOOLS": "OFF", "YAML_CPP_BUILD_CONTRIB": "OFF", "YAML_BUILD_SHARED_LIBS": "OFF", "YAML_CPP_INSTALL": "OFF", "CMAKE_POLICY_VERSION_MINIMUM": "3.5"}},
 }
 
 # The build-tree include directories a closure may name, by the generated
@@ -106,6 +109,8 @@ BUILD_INCLUDE_DIRS = {
     "@build/_deps/pulp-mutable-choc-src": "choc",
     "@build/core/runtime/generated/Release": "build-info",
     "@build/core/canvas": "binary-data",
+    "@build/core/view": "preludes",
+    "@build/_deps/sdl3-build/include-revision": "sdl3-generated",
 }
 BUILD_INFO_PATH = re.compile(
     r"@build/core/runtime/generated/(?P<config>[^/]+)/pulp/runtime/build_info\.hpp\Z"
@@ -113,17 +118,20 @@ BUILD_INFO_PATH = re.compile(
 BINARY_DATA_PATH = re.compile(
     r"@build/core/canvas/(?P<target>[A-Za-z0-9-]+?)_data(?:_(?P<var>[A-Za-z0-9_]+)\.cpp|\.hpp)\Z"
 )
+PRELUDE_PATH = re.compile(r"@build/core/view/web_compat_preludes_gen\.(?P<suffix>hpp|cpp)\Z")
 # Values the build-info template needs that the receipt does not record. Each
 # is proved by the closure's digest of the rendered header, so a wrong value
 # fails the plan instead of shipping a mislabelled build.
 BUILD_INFO_INPUTS = {
     "20261014-34d16417a460": {"version": "0.964.1"},
+    "20261025-46cee5e4e6e2": {"version": "1.11.0"},
 }
 
 # Pulp's CHOC standards patch, re-expressed: the JSON number parser accepts a
 # positive exponent sign. Proved by the closure digest of choc_JSON.h.
 CHOC_JSON_HEADER = "choc/text/choc_JSON.h"
-PATCHED_PATHS = {"json-positive-exponent": CHOC_JSON_HEADER}
+CHOC_V8_HEADER = "choc/javascript/choc_javascript_V8.h"
+PATCHED_PATHS = {"v8-compatibility": CHOC_V8_HEADER, "json-positive-exponent": CHOC_JSON_HEADER}
 CHOC_JSON_BEFORE = (
     "                    hadExponent = true;\n"
     "                    popIf ('-');\n"
@@ -305,9 +313,55 @@ def fetch_git(name: str, source: str, pin: str, destination: Path, *, submodules
         git("submodule", "update", "--init", "--recursive", "--depth", "1", cwd=destination)
 
 
+CHOC_V8_ITERATE_BEFORE = (
+    "                using IteratorType = decltype (iterator);\n"
+    "\n"
+    "                propNames.ToLocalChecked()->Iterate (c, +[] (uint32_t, v8::Local<v8::Value> key, void* i)\n"
+    "                {\n"
+    "                    (*static_cast<IteratorType*> (i)) (key);\n"
+    "                    return v8::Array::CallbackResult::kContinue;\n"
+    "                },\n"
+    "                std::addressof (iterator));"
+)
+CHOC_V8_ITERATE_AFTER = (
+    "                auto names = propNames.ToLocalChecked();\n"
+    "\n"
+    "                for (uint32_t i = 0; i < names->Length(); ++i)\n"
+    "                {\n"
+    "                    auto key = names->Get (c, i);\n"
+    "\n"
+    "                    if (! key.IsEmpty())\n"
+    "                        iterator (key.ToLocalChecked());\n"
+    "                }"
+)
+
+
+def apply_choc_v8_patch(root: Path) -> None:
+    header = root / CHOC_V8_HEADER
+    text = header.read_text(encoding="utf-8")
+    if "Utf8LengthV2 (isolate)" in text:
+        return
+    original = text
+    text = text.replace('#include "choc_javascript.h"', '#include "choc_javascript.h"\n#include <v8-version.h>', 1)
+    text = text.replace('c->GetIsolate()->GetData (0)', 'v8::Isolate::GetCurrent()->GetData (0)')
+    text = text.replace('v8::Local<v8::FixedArray> /*importAssertions*/)\n        {', 'v8::Local<v8::FixedArray> /*importAssertions*/)\n            -> v8::MaybeLocal<v8::Promise>\n        {', 1)
+    text = text.replace('v8::Local<v8::FixedArray>, v8::Local<v8::Module>)\n        {', 'v8::Local<v8::FixedArray>, v8::Local<v8::Module>)\n            -> v8::MaybeLocal<v8::Module>\n        {', 1)
+    text = text.replace('        auto len = s.Utf8Length (isolate);\n        result.resize (static_cast<std::string::size_type> (len));\n        s.WriteUtf8 (isolate, result.data(), len);', '       #if defined(V8_MAJOR_VERSION) && V8_MAJOR_VERSION >= 14\n        auto len = s.Utf8LengthV2 (isolate);\n        result.resize (static_cast<std::string::size_type> (len));\n        s.WriteUtf8V2 (isolate, result.data(), static_cast<size_t> (len), v8::String::WriteFlags::kNone);\n       #else\n        auto len = s.Utf8Length (isolate);\n        result.resize (static_cast<std::string::size_type> (len));\n        s.WriteUtf8 (isolate, result.data(), len);\n       #endif', 1)
+    text = text.replace('#if V8_MAJOR_VERSION >= 14', '#if defined(V8_MAJOR_VERSION) && V8_MAJOR_VERSION >= 14')
+    # Pulp's "V8 v8ToChoc property walk": walk property names by index rather
+    # than through Array::Iterate, whose callback runs in its own HandleScope.
+    text = text.replace(CHOC_V8_ITERATE_BEFORE, CHOC_V8_ITERATE_AFTER, 1)
+    if text == original or "Utf8LengthV2 (isolate)" not in text or CHOC_V8_ITERATE_AFTER not in text:
+        raise PlanError("choc V8 compatibility patch did not match reviewed source")
+    header.write_text(text, encoding="utf-8")
+
+
 def apply_patch(name: str, patch: str, root: Path) -> None:
-    if (name, patch) != ("choc", "json-positive-exponent"):
+    if name != "choc" or patch not in {"v8-compatibility", "json-positive-exponent"}:
         raise PlanError(f"unknown patch {patch!r} for {name}")
+    if patch == "v8-compatibility":
+        apply_choc_v8_patch(root)
+        return
     header = root / CHOC_JSON_HEADER
     text = header.read_text(encoding="utf-8")
     if CHOC_JSON_AFTER in text:
@@ -386,6 +440,7 @@ def prepare_generated(repo: Path, receipt: dict[str, Any], units: list[tuple[str
                       generated_dir: Path) -> dict[str, Any]:
     """Produce or prove every generated input the closures name."""
     build_info_dir = generated_dir / "build-info"
+    prelude_dir = generated_dir / "preludes"
     binary_targets = binary_data_targets(repo)
     used_binary: dict[str, dict[str, Any]] = {}
     seen: set[str] = set()
@@ -400,6 +455,7 @@ def prepare_generated(repo: Path, receipt: dict[str, Any], units: list[tuple[str
                 raise PlanError(f"{unit}: generated input {path} has no recorded digest")
             info = BUILD_INFO_PATH.match(path)
             data = BINARY_DATA_PATH.match(path)
+            prelude = PRELUDE_PATH.match(path)
             if info:
                 config = info.group("config")
                 inputs = BUILD_INFO_INPUTS.get(receipt["export_id"])
@@ -418,6 +474,21 @@ def prepare_generated(repo: Path, receipt: dict[str, Any], units: list[tuple[str
                 target.parent.mkdir(parents=True, exist_ok=True)
                 if not target.is_file() or target.read_text(encoding="utf-8") != rendered:
                     target.write_text(rendered, encoding="utf-8")
+            elif prelude:
+                cmake = (repo / MIRROR_DIR / "core/view/cmake/PulpViewJsPreludes.cmake").read_text(encoding="utf-8")
+                js_paths = re.findall(r"\$\{CMAKE_CURRENT_SOURCE_DIR\}/(js/[^\s)]+)", cmake)
+                js_paths = [js for js in js_paths if js != "js/embed_js.py"]
+                prelude_dir.mkdir(parents=True, exist_ok=True)
+                out = prelude_dir / f"web_compat_preludes_gen.{prelude.group('suffix')}"
+                if prelude.group("suffix") == "hpp":
+                    text = "#pragma once\n// Auto-generated from the JS prelude file list — do not edit\n\nnamespace pulp::view::preludes {\n\n" + "".join(f"extern const char* const {Path(js).stem.replace('-', '_')};\n" for js in js_paths) + "\n}  // namespace pulp::view::preludes\n"
+                    out.write_text(text, encoding="utf-8")
+                else:
+                    completed = subprocess.run([sys.executable, str(repo / MIRROR_DIR / "core/view/js/embed_js.py"), str(out), *(str(repo / MIRROR_DIR / "core/view" / js) for js in js_paths)], capture_output=True, text=True, check=False)
+                    if completed.returncode:
+                        raise PlanError(f"{unit}: prelude generator failed: {completed.stderr.strip()}")
+                if sha256_file(out) != digest:
+                    raise PlanError(f"{path} generated by the mirrored producer does not match the closure digest")
             elif data:
                 name = data.group("target")
                 if name not in binary_targets:
@@ -448,7 +519,7 @@ def prepare_generated(repo: Path, receipt: dict[str, Any], units: list[tuple[str
             raise PlanError(f"binary-data target {name} has no recorded header digest")
         if set(spec["sources_sha256"]) != {c_identifier(Path(s).name) for s in spec["sources"]}:
             raise PlanError(f"binary-data target {name}'s closure rows do not cover its declared sources")
-    return {"build_info_dir": build_info_dir, "binary_data": used_binary}
+    return {"build_info_dir": build_info_dir, "prelude_dir": prelude_dir, "binary_data": used_binary}
 
 
 def map_include(path: str, repo: Path, roots: dict[str, Path], generated: dict[str, Any],
@@ -459,6 +530,8 @@ def map_include(path: str, repo: Path, roots: dict[str, Path], generated: dict[s
             return str(roots["choc"])
         if kind == "build-info":
             return str(generated["build_info_dir"])
+        if kind == "preludes":
+            return str(generated["prelude_dir"])
         return generated_binary_dir
     if path.startswith("@build/"):
         raise PlanError(f"closure names an unmapped build-tree include directory: {path}")
@@ -504,6 +577,14 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
             sources = []
             for source in target.get("sources", []):
                 candidate = repo / MIRROR_DIR / source
+                generated_source = None
+                if source == "@build/core/view/web_compat_preludes_gen.cpp":
+                    generated_source = generated["prelude_dir"] / "web_compat_preludes_gen.cpp"
+                if generated_source is not None:
+                    if not generated_source.is_file():
+                        raise PlanError(f"{unit}/{name}: generated source {source} was not produced")
+                    sources.append(str(generated_source))
+                    continue
                 if not candidate.is_file():
                     raise PlanError(f"{unit}/{name}: source {source} is not in the landed mirror")
                 if candidate.suffix in SOURCE_SUFFIXES:

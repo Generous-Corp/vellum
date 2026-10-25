@@ -3,8 +3,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
+import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -89,6 +92,80 @@ class FindingTest(unittest.TestCase):
                          {"__ZN4pulp4view5MeterD1Ev", "__ZTVN4pulp4view5MeterE"})
 
 
+class VendoredNmSymbolsTest(unittest.TestCase):
+    """nm_symbols.py is Pulp's file byte for byte, and the floor uses its contamination rule."""
+
+    def setUp(self) -> None:
+        self.pin = json.loads((HERE / "nm_symbols.pin.json").read_text(encoding="utf-8"))
+        self.vendored = HERE / "nm_symbols.py"
+
+    def test_the_vendored_file_matches_its_pin(self) -> None:
+        data = self.vendored.read_bytes()
+        blob = hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+        self.assertEqual(blob, self.pin["git_blob"])
+        self.assertEqual(self.pin["vendored_path"], "tools/mirror/nm_symbols.py")
+        self.assertEqual(self.pin["pulp_path"], "tools/scripts/nm_symbols.py")
+        self.assertRegex(self.pin["pulp_commit"], r"^[0-9a-f]{40}$")
+
+    def test_the_vendored_file_matches_pulp_when_a_checkout_is_given(self) -> None:
+        root = os.environ.get("VELLUM_PULP_ROOT")
+        if not root:
+            self.skipTest("VELLUM_PULP_ROOT not set")
+        pulp = subprocess.run(["git", "-C", root, "show",
+                               f"{self.pin['pulp_commit']}:{self.pin['pulp_path']}"],
+                              capture_output=True, check=True).stdout
+        self.assertEqual(pulp, self.vendored.read_bytes())
+
+    def test_one_strong_and_two_weak_definitions_count_three(self) -> None:
+        listing = (
+            "lib.a[m.o]: __ZN4pulp4view5Meter9set_levelEff T 20 0\n"
+            "lib.a[m.o]: __ZTIN4pulp4view5MeterE W 0 0\n"
+            "lib.a[m.o]: __ZTVN4pulp4view5MeterE W 0 0\n"
+            "lib.a[m.o]: __ZN4pulp4view4View5paintEv U 0 0\n"
+            "lib.a[m.o]: __ZN4pulp4view4WeakEv w 0 0\n"
+        )
+        self.assertEqual(len(vi.floor_defined(listing)), 3)
+        self.assertEqual(vi.floor_defined(listing), vi.nm_symbols.defined_any(listing))
+
+
+# GNU nm on an ELF archive: no leading underscore, `u` for a unique global
+# (GNU extension, a definition the dynamic linker keeps one copy of) and `i`
+# for an indirect function, both definitions; `w`/`v` and `U` are references.
+ELF_FLOOR_LISTING = (
+    "libpulp-view-audio.a[meter.cpp.o]: _ZN4pulp4view5Meter9set_levelEff T 0000000000000040 0000000000000010\n"
+    "libpulp-view-audio.a[meter.cpp.o]: _ZTIN4pulp4view5MeterE V 0000000000000000 0000000000000018\n"
+    "libpulp-view-audio.a[meter.cpp.o]: _ZTVN4pulp4view5MeterE W 0000000000000000 0000000000000030\n"
+    "libpulp-view-audio.a[meter.cpp.o]: _ZZN4pulp4view5Meter8instanceEvE1s u 0000000000000000 0000000000000008\n"
+    "libpulp-view-audio.a[meter.cpp.o]: _ZN4pulp4view13resolve_simdEv i 0000000000000080 0000000000000004\n"
+    "libpulp-view-audio.a[meter.cpp.o]: _ZN4pulp4view4View5paintEv U\n"
+    "libpulp-view-audio.a[meter.cpp.o]: _ZN4pulp4view4WeakEv w\n"
+    "libpulp-view-audio.a[meter.cpp.o]: _ZN4pulp4view6WeakObjEv v\n"
+)
+ELF_FLOOR_DEFINED = {
+    "_ZN4pulp4view5Meter9set_levelEff", "_ZTIN4pulp4view5MeterE", "_ZTVN4pulp4view5MeterE",
+    "_ZZN4pulp4view5Meter8instanceEvE1s", "_ZN4pulp4view13resolve_simdEv",
+}
+
+
+class ElfFloorTest(unittest.TestCase):
+    """GNU unique (`u`) and indirect (`i`) definitions belong to the floor."""
+
+    def test_vellum_counts_unique_and_indirect_definitions(self) -> None:
+        self.assertEqual(vi.floor_defined(ELF_FLOOR_LISTING), ELF_FLOOR_DEFINED)
+
+    def test_pulp_reads_the_same_floor_when_a_checkout_is_given(self) -> None:
+        root = os.environ.get("VELLUM_PULP_ROOT")
+        if not root:
+            self.skipTest("VELLUM_PULP_ROOT not set")
+        pin = json.loads((HERE / "nm_symbols.pin.json").read_text(encoding="utf-8"))
+        source = subprocess.run(["git", "-C", root, "show", f"{pin['pulp_commit']}:{pin['pulp_path']}"],
+                                capture_output=True, check=True, text=True).stdout
+        pulp: dict = {}
+        exec(compile(source, pin["pulp_path"], "exec"), pulp)
+        self.assertEqual(pulp["defined_any"](ELF_FLOOR_LISTING), vi.floor_defined(ELF_FLOOR_LISTING))
+        self.assertEqual(pulp["defined_any"](ELF_FLOOR_LISTING), ELF_FLOOR_DEFINED)
+
+
 class FloorAgreementTest(unittest.TestCase):
     """The stand-in rule covers every symbol Pulp's floor attributes to view-audio.
 
@@ -161,6 +238,9 @@ class VerifyTest(unittest.TestCase):
         (mirror / "lib/cmake/VellumMirror/VellumMirrorTargets.cmake").write_text(
             'INTERFACE_COMPILE_DEFINITIONS "PULP_HAS_SKIA=1"\n')
         (mirror / "lib/libvellum-mirror-canvas.dylib").write_bytes(b"\0")
+        self.provider = self.prefix / "lib/libvellum-skia-dawn-provider.dylib"
+        self.provider.parent.mkdir(parents=True, exist_ok=True)
+        self.provider.write_bytes(b"\0")
         (mirror / "include/pulp/canvas").mkdir(parents=True)
         (mirror / "include/pulp/canvas/canvas.hpp").write_text("#pragma once\n")
         (mirror / "share/provenance").mkdir(parents=True)
@@ -174,16 +254,19 @@ class VerifyTest(unittest.TestCase):
         self.image = self.build / "consumer"
         self.image.write_bytes(b"\0")
         self.symbols = {self.image: CLEAN_SYMBOLS["consumer"],
-                        mirror / "lib/libvellum-mirror-canvas.dylib": CLEAN_SYMBOLS["libvellum-mirror-canvas.dylib"]}
+                        mirror / "lib/libvellum-mirror-canvas.dylib": CLEAN_SYMBOLS["libvellum-mirror-canvas.dylib"],
+                        self.provider: ["SkFont::setSize(float)"]}
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def run_verify(self, floor: set[str] | None = None) -> dict:
+    def run_verify(self, floor: set[str] | None = None,
+                   install_libdir: str = "lib") -> dict:
         with mock.patch.object(vi, "image_symbols", side_effect=lambda path: self.symbols[path]), \
                 mock.patch.object(vi, "view_audio_floor", side_effect=lambda archive: floor):
             return vi.verify(self.prefix, self.build, self.image,
-                             Path("libpulp-view-audio.a") if floor is not None else None)
+                             Path("libpulp-view-audio.a") if floor is not None else None,
+                             install_libdir)
 
     def test_clean_package_is_inert_and_records_debt_absence(self) -> None:
         proof = self.run_verify()
@@ -205,6 +288,21 @@ class VerifyTest(unittest.TestCase):
         proof = self.run_verify()
         self.assertFalse(proof["checks"]["no-audio-symbols"])
         self.assertFalse(proof["checks"]["name-only-forward-declarations"])
+
+    def test_provider_owned_audio_symbol_is_not_inert(self) -> None:
+        self.symbols[self.provider].append("pulp::view::WaveformView::paint()")
+        proof = self.run_verify()
+        self.assertFalse(proof["checks"]["no-audio-symbols"])
+        self.assertFalse(proof["checks"]["name-only-forward-declarations"])
+
+    def test_nested_install_library_directory_is_scanned(self) -> None:
+        nested_provider = self.prefix / "lib/vellum/libvellum-skia-dawn-provider.dylib"
+        nested_provider.parent.mkdir(parents=True)
+        nested_provider.write_bytes(b"\0")
+        self.provider.unlink()
+        self.symbols[nested_provider] = ["pulp::view::WaveformView::paint()"]
+        proof = self.run_verify(install_libdir="lib/vellum")
+        self.assertFalse(proof["checks"]["no-audio-symbols"])
 
     def plant_debt_headers(self) -> list[Path]:
         include = self.prefix / "mirror/include/pulp/view"

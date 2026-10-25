@@ -8,10 +8,9 @@
 # the `Vellum::MirrorFoundation` / `Vellum::MirrorCanvas` identities, installed
 # under the package's mirror/ subtree.
 #
-# The canvas closure links the locked Skia/Dawn archive. Like Vellum::Gpu, the
-# canvas library keeps those archives private and exports only the mirrored
-# namespace, and the two libraries declare different Skia/Dawn providers, so a
-# consumer that links both fails at generate time instead of loading two.
+# GPU and canvas resolve Skia/Dawn through the same installed provider. Mirror
+# libraries forward their public namespace, while the provider owns the
+# mirrored implementation objects and pinned Skia/Dawn definitions.
 
 if(NOT APPLE OR NOT VELLUM_HAS_SKIA_DAWN)
     message(FATAL_ERROR
@@ -139,15 +138,6 @@ foreach(_vellum_mirror_binary IN LISTS VELLUM_MIRROR_BINARY_DATA_TARGETS)
 endforeach()
 
 # Mirrored targets, exactly as the closures describe them.
-set(_vellum_mirror_skia_libraries
-    "${_vellum_skparagraph}"
-    "${_vellum_skshaper}"
-    "${_vellum_skunicode_icu}"
-    "${_vellum_skunicode_core}"
-    "${_vellum_skia_libdir}/libsvg.a"
-    "${_vellum_skia_libdir}/libskresources.a"
-    "${_vellum_skia_core}"
-    "${_vellum_dawn_core}")
 foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
     _vellum_mirror_key(_vellum_mirror_unit_key "${_vellum_mirror_unit}")
     foreach(_vellum_mirror_target IN LISTS VELLUM_MIRROR_UNIT_${_vellum_mirror_unit_key}_TARGETS)
@@ -166,6 +156,26 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
             ${VELLUM_MIRROR_TARGET_${_tkey}_INCLUDE_DIRS})
         target_compile_definitions("${_vellum_mirror_target}" PRIVATE
             ${VELLUM_MIRROR_TARGET_${_tkey}_DEFINITIONS})
+        # Vellum's host owns Dawn's process-global proc table. Pulp's
+        # PULP_DAWN_PROCS_HOST_OWNED switch compiles the device library with
+        # no native installer, so a mirrored GpuSurface or GpuCompute fails
+        # until the host registers one through
+        # pulp::render::set_dawn_proc_installer(). The sources are unchanged.
+        if(_vellum_mirror_target STREQUAL "pulp-gpu-device")
+            target_compile_definitions("${_vellum_mirror_target}" PRIVATE
+                PULP_DAWN_PROCS_HOST_OWNED=1)
+        endif()
+        # Apple libc++ annotates std::format's floating-point implementation
+        # as requiring macOS 13.3 even though the mirrored runtime's supported
+        # deployment boundary is 13.0.  The package already owns the runtime
+        # compatibility decision; suppress this header-only availability
+        # diagnostic for the mirrored targets while retaining the 13.0
+        # deployment target in the produced binaries.
+        if(APPLE AND CMAKE_OSX_DEPLOYMENT_TARGET AND
+           CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS "13.3")
+            target_compile_definitions("${_vellum_mirror_target}" PRIVATE
+                _LIBCPP_DISABLE_AVAILABILITY=1)
+        endif()
         target_compile_options("${_vellum_mirror_target}" PRIVATE
             ${_vellum_mirror_prefix_maps})
         # Link edges are resolved once, by the unit libraries below: a static
@@ -194,7 +204,7 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
         EXPORT_NAME "Mirror${_first}${_rest}"
         MACOSX_RPATH ON
         BUILD_WITH_INSTALL_RPATH ON
-        INSTALL_RPATH "@loader_path"
+        INSTALL_RPATH "@loader_path;@loader_path/../../${CMAKE_INSTALL_LIBDIR}"
         OSX_ARCHITECTURES arm64
         MACOSX_DEPLOYMENT_TARGET 13.0)
     set(_whole)
@@ -240,11 +250,69 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
             list(REMOVE_ITEM _third_party ${_carried})
         endif()
     endforeach()
-    target_link_libraries("${_library}" PRIVATE
-        "$<LINK_LIBRARY:WHOLE_ARCHIVE,${_whole}>"
-        ${_third_party})
-    if(_unit_links)
-        target_link_libraries("${_library}" PUBLIC ${_unit_links})
+    # Publish the closure shape before a later Skia unit resolves an internal
+    # dependency on this library.  The provider must consume the static
+    # objects of earlier Skia units, rather than their shared frontends: those
+    # frontends themselves link the provider and would create a shared-library
+    # cycle at CMake generate time.
+    set_target_properties("${_library}" PROPERTIES
+        VELLUM_MIRROR_WHOLE_TARGETS "${_whole}"
+        VELLUM_MIRROR_IS_SKIA "${_skia}")
+    if(_skia)
+        # The provider group owns every Skia-consuming mirror object. Keeping
+        # these objects beside the pinned archives prevents private Skia
+        # symbols from crossing a dylib boundary.
+        set(_provider_whole ${_whole})
+        set(_provider_unit_links)
+        foreach(_provider_link IN LISTS _unit_links)
+            get_target_property(_provider_link_is_skia
+                "${_provider_link}" VELLUM_MIRROR_IS_SKIA)
+            if(_provider_link_is_skia)
+                get_target_property(_provider_link_whole
+                    "${_provider_link}" VELLUM_MIRROR_WHOLE_TARGETS)
+                list(APPEND _provider_whole ${_provider_link_whole})
+            else()
+                list(APPEND _provider_unit_links "${_provider_link}")
+            endif()
+        endforeach()
+        list(REMOVE_DUPLICATES _provider_whole)
+        list(REMOVE_DUPLICATES _provider_unit_links)
+        target_link_libraries(vellum-skia-dawn-provider PRIVATE
+            "$<LINK_LIBRARY:WHOLE_ARCHIVE,${_provider_whole}>")
+        if(_provider_unit_links)
+            target_link_libraries(vellum-skia-dawn-provider PRIVATE
+                ${_provider_unit_links})
+        endif()
+        target_link_libraries(vellum-skia-dawn-provider PRIVATE
+            ${_third_party}
+            "-framework Accelerate"
+            "-framework AppKit"
+            "-framework CoreServices"
+            "-framework Security"
+            "-framework SystemConfiguration"
+            "-framework UniformTypeIdentifiers"
+            "-framework UserNotifications"
+            bsm)
+        # Retain a concrete provider binding in this otherwise empty frontend.
+        # Loading the frontend must also load its re-exported provider.
+        target_sources("${_library}" PRIVATE
+            "${PROJECT_SOURCE_DIR}/tools/mirror/canvas_provider_anchor.cpp")
+        target_include_directories("${_library}" PRIVATE
+            "${PROJECT_SOURCE_DIR}/mirror/core/canvas/include")
+        target_compile_features("${_library}" PRIVATE cxx_std_20)
+        # MirrorCanvas forwards its public mirrored symbols from the shared
+        # provider while retaining a standalone direct-link contract.
+        target_link_libraries("${_library}" PUBLIC
+            Vellum::SkiaDawnProvider ${_unit_links})
+        target_link_options("${_library}" PRIVATE
+            "LINKER:-reexport_library,$<TARGET_FILE:vellum-skia-dawn-provider>")
+    else()
+        target_link_libraries("${_library}" PRIVATE
+            "$<LINK_LIBRARY:WHOLE_ARCHIVE,${_whole}>"
+            ${_third_party})
+        if(_unit_links)
+            target_link_libraries("${_library}" PUBLIC ${_unit_links})
+        endif()
     endif()
     set_target_properties("${_library}" PROPERTIES
         VELLUM_MIRROR_CARRIED_ARCHIVES "${_third_party}")
@@ -263,16 +331,7 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
         "-framework UserNotifications"
         bsm)
     if(_skia)
-        target_link_libraries("${_library}" PRIVATE
-            ${_vellum_mirror_skia_libraries}
-            "-framework IOSurface"
-            "-framework Metal"
-            "-framework MetalKit"
-            "-framework QuartzCore"
-            "-framework ImageIO"
-            objc)
-        # Keep the private Skia/Dawn archives private: export only the
-        # mirrored namespaces this unit defines.
+        # Export only the mirrored namespaces this unit defines.
         set(_exports "${CMAKE_CURRENT_BINARY_DIR}/vellum-mirror-${_vellum_mirror_unit}.exports")
         file(WRITE "${_exports}"
             "__ZN4pulp*\n__ZNK4pulp*\n__ZTVN4pulp*\n__ZTIN4pulp*\n__ZTSN4pulp*\n"
@@ -286,11 +345,6 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
         target_link_options("${_library}" PRIVATE
             "LINKER:-exported_symbols_list,${_exports}")
         set_property(TARGET "${_library}" APPEND PROPERTY LINK_DEPENDS "${_exports}")
-        # Two Skia/Dawn providers in one image would be two WebGPU stacks.
-        set_property(TARGET "${_library}" PROPERTY
-            INTERFACE_VELLUM_SKIA_DAWN_PROVIDER "vellum-mirror-${_vellum_mirror_unit}")
-        set_property(TARGET "${_library}" APPEND PROPERTY
-            COMPATIBLE_INTERFACE_STRING VELLUM_SKIA_DAWN_PROVIDER)
     endif()
     target_link_options("${_library}" PRIVATE "LINKER:-dead_strip_dylibs")
     target_compile_definitions("${_library}" INTERFACE

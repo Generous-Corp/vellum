@@ -135,6 +135,20 @@ jobs:
           printf 'VELLUM_PHASE3_TEST_BUNDLE=%s\n' "$bundle" \
             >> "$GITHUB_ENV"
 
+      - name: Fetch and verify the pinned Pulp view-audio archive
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 tools/mirror/fetch_view_audio_archive.py \
+            --root "$GITHUB_WORKSPACE" \
+            --repository Generous-Corp/pulp \
+            --output-dir "$RUNNER_TEMP/pulp-view-audio" \
+            --json > "$RUNNER_TEMP/pulp-view-audio-archive.json"
+          printf 'VELLUM_VIEW_AUDIO_ARCHIVE=%s\n' \
+            "$RUNNER_TEMP/pulp-view-audio/libpulp-view-audio.a" >> "$GITHUB_ENV"
+
       - name: Build the release GPU slice
         run: |
           cmake -S . -B build-gpu \
@@ -145,7 +159,8 @@ jobs:
             -DVELLUM_PHASE3_TEST_BUNDLE="$VELLUM_PHASE3_TEST_BUNDLE" \
             -DVELLUM_SKIA_ARCHIVE="$VELLUM_SKIA_ARCHIVE" \
             -DVELLUM_ENABLE_MIRROR=ON \
-            -DVELLUM_MIRROR_DEPS_DIR="$VELLUM_MIRROR_DEPS_DIR"
+            -DVELLUM_MIRROR_DEPS_DIR="$VELLUM_MIRROR_DEPS_DIR" \
+            -DVELLUM_VIEW_AUDIO_ARCHIVE="$VELLUM_VIEW_AUDIO_ARCHIVE"
           cmake --build build-gpu --parallel
 
       - name: Stress parallel text shaping in Release
@@ -240,7 +255,8 @@ jobs:
 
       - name: Run native, capture, and sterile-consumer tests
         run: |
-          ctest --test-dir build-gpu --output-on-failure
+          VELLUM_MIRROR_LIVE_GPU=1 \
+            ctest --test-dir build-gpu --output-on-failure
           ./build-gpu/apps/gpu-native/vellum-gpu-native.app/Contents/MacOS/vellum-gpu-native \
             --self-test --capture "$RUNNER_TEMP/vellum-gpu-proof.png" \
             | tee "$RUNNER_TEMP/vellum-gpu-proof.txt"
@@ -566,6 +582,8 @@ jobs:
             ${{ runner.temp }}/phase3-browser-evidence.json
             ${{ runner.temp }}/release-trust.json
             ${{ runner.temp }}/immutable-release-preflight.json
+            ${{ runner.temp }}/pulp-view-audio/libpulp-view-audio.a
+            ${{ runner.temp }}/pulp-view-audio-archive.json
           if-no-files-found: warn
           retention-days: 90
   sterile-consumer:
@@ -625,6 +643,14 @@ jobs:
           )"
           actual="$(shasum -a 256 "$bundle" | awk '{print $1}')"
           test "$actual" = "$expected"
+          # The view-audio archive was fetched and attestation-verified by the
+          # proof job; hold this copy to the digest that job recorded.
+          view_audio_expected="$(
+            python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["archive_sha256"])' \
+              "$input/pulp-view-audio-archive.json"
+          )"
+          view_audio_actual="$(shasum -a 256 "$input/pulp-view-audio/libpulp-view-audio.a" | awk '{print $1}')"
+          test "$view_audio_actual" = "$view_audio_expected"
           mkdir -p "$RUNNER_TEMP/sterile"
           tar -xzf "$bundle" -C "$RUNNER_TEMP/sterile"
           printf 'VELLUM_STERILE_ROOT=%s\n' \
@@ -666,6 +692,7 @@ jobs:
             --checksums "$input/SHA256SUMS" \
             --forbid-path "$GITHUB_WORKSPACE" \
             --runner-search-root "$RUNNER_WORKSPACE" \
+            --view-audio-archive "$input/pulp-view-audio/libpulp-view-audio.a" \
             --output "$RUNNER_TEMP/sdk-installed-validation.json" \
             --json > "$RUNNER_TEMP/sdk-installed-validation.stdout.json"
 

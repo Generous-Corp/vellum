@@ -85,9 +85,17 @@ VIEW_SYMBOL = re.compile(r"\bpulp::view::")
 # archive shares with any user of canvas, runtime or the C++ library.
 VIEW_AUDIO_OWNED = re.compile(
     r"\bpulp::(?:view|audio|signal|midi|music|format|host|gpu_audio|content)::")
-# Pulp's tools/scripts/view_audio_symbol_floor.py reads `nm -A -P -g` output
-# with this line shape and treats every type but U, w and v as defined.
-FLOOR_LINE = re.compile(r"^(?P<archive>.*?)\[(?P<object>[^\]]+)\]: (?P<symbol>\S+) (?P<type>\S)")
+# The floor is read with nm_symbols.py, vendored byte for byte from Pulp
+# (nm_symbols.pin.json), using its contamination rule defined_any(). Every nm
+# type except U (undefined) and lowercase w/v (weak references) counts as
+# defined, weak definitions (W, V) included. This is a contamination check: a
+# weak view-audio definition is view-audio inline code, and finding one in a
+# Vellum consumer means that code was compiled into Vellum. Pulp's
+# tools/scripts/archive_symbol_closure_check.py deliberately counts strong
+# definitions only (TDBRSCG): it resolves dependencies between archives, where
+# an inline definition repeated in both is not a dependency.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import nm_symbols  # noqa: E402
 
 
 class EvidenceError(RuntimeError):
@@ -177,13 +185,8 @@ def header_findings(depfiles: dict[str, list[str]], package_headers: Iterable[st
 
 
 def floor_defined(listing: str) -> set[str]:
-    """The symbols an archive defines, exactly as view_audio_symbol_floor reads them."""
-    defined = set()
-    for line in listing.splitlines():
-        match = FLOOR_LINE.match(line)
-        if match and match["type"] not in ("U", "w", "v"):
-            defined.add(match["symbol"])
-    return defined
+    """The symbols an archive defines, strongly or weakly (nm_symbols.defined_any)."""
+    return nm_symbols.defined_any(listing)
 
 
 def view_audio_floor(archive: Path) -> set[str]:
@@ -308,7 +311,8 @@ def resolved(path: str, base: Path) -> Path:
 
 
 def verify(prefix: Path, consumer_build: Path, image: Path,
-           view_audio_archive: Path | None = None) -> dict[str, Any]:
+           view_audio_archive: Path | None = None,
+           install_libdir: str = "lib") -> dict[str, Any]:
     mirror = prefix / "mirror"
     if not (mirror / "lib/cmake/VellumMirror").is_dir():
         raise EvidenceError(f"{prefix} has no packaged mirror units")
@@ -343,6 +347,12 @@ def verify(prefix: Path, consumer_build: Path, image: Path,
     libraries = sorted((mirror / "lib").glob("*.dylib"))
     if not libraries:
         raise EvidenceError("the package carries no mirror libraries")
+    # MirrorCanvas and Vellum::Gpu forward through this installed provider.
+    # Include the provider image in the closure so provider-owned symbols are
+    # covered by the same inertness and negative-control rules.
+    provider = prefix / install_libdir / "libvellum-skia-dawn-provider.dylib"
+    if provider.is_file():
+        libraries.append(provider)
     symbols = {}
     for path in [image, *libraries]:
         names = image_symbols(path)
@@ -423,6 +433,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--image", type=Path, help="the linked consumer executable")
     parser.add_argument("--view-audio-archive", type=Path,
                         help="Pulp's pulp-view-audio archive; required once a view unit is packaged")
+    parser.add_argument("--install-libdir", default="lib",
+                        help="library directory relative to the installed prefix (default: lib)")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
     if args.write_debt_probe:
@@ -433,7 +445,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--consumer-build and --image are required to verify")
     try:
         proof = verify(args.prefix.resolve(), args.consumer_build.resolve(), args.image.resolve(),
-                       args.view_audio_archive.resolve() if args.view_audio_archive else None)
+                       args.view_audio_archive.resolve() if args.view_audio_archive else None,
+                       args.install_libdir)
     except (OSError, EvidenceError) as error:
         print(f"vellum-mirror-inertness: unusable evidence: {error}", file=sys.stderr)
         return 2

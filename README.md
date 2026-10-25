@@ -415,10 +415,10 @@ GPU surface creation requires a host-owned versioned `DawnBootstrap`. Register
 it with `register_dawn_bootstrap` before calling the unchanged
 `SkiaDawnSurface::create` ABI. Link `Vellum::DawnHeaders` when the host supplies
 that callback: it exports the matching Dawn declarations and revision header but
-no Dawn archives. The installed `Vellum::Gpu` dylib remains the sole owner of
-the static Dawn definitions, so a Pulp compute host can use the same provider
-without a second copy of Dawn in its executable. An unregistered legacy caller
-fails closed.
+no Dawn archives. The installed `Vellum::SkiaDawnProvider` dylib remains the
+sole owner of the static Dawn definitions, while `Vellum::Gpu` forwards through
+that provider. A Pulp compute host can use the same provider without a second
+copy of Dawn in its executable. An unregistered legacy caller fails closed.
 
 Verified installs are immutable and content-addressed under
 `PREFIX/lib/vellum-installs/<version>-<target>-<archive-sha256>`.

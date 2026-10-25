@@ -238,6 +238,40 @@ class ChocPatchTest(unittest.TestCase):
 
 
 
+class ChocV8PatchTest(unittest.TestCase):
+    UTF8 = (
+        "        auto len = s.Utf8Length (isolate);\n"
+        "        result.resize (static_cast<std::string::size_type> (len));\n"
+        "        s.WriteUtf8 (isolate, result.data(), len);"
+    )
+
+    def header(self, root: Path, *, iterate: bool) -> Path:
+        path = root / mp.CHOC_V8_HEADER
+        path.parent.mkdir(parents=True)
+        body = '#include "choc_javascript.h"\n' + self.UTF8 + "\n"
+        if iterate:
+            body += mp.CHOC_V8_ITERATE_BEFORE + "\n"
+        path.write_text(body, encoding="utf-8")
+        return path
+
+    def test_property_walk_is_rewritten_by_index(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = self.header(root, iterate=True)
+            mp.apply_choc_v8_patch(root)
+            text = path.read_text(encoding="utf-8")
+            self.assertIn(mp.CHOC_V8_ITERATE_AFTER, text)
+            self.assertNotIn("->Iterate (", text)
+            self.assertIn("Utf8LengthV2 (isolate)", text)
+
+    def test_header_without_the_property_walk_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.header(root, iterate=False)
+            with self.assertRaises(mp.PlanError):
+                mp.apply_choc_v8_patch(root)
+
+
 class CachedCheckoutTest(unittest.TestCase):
     def test_cache_is_reused_only_at_the_pin_without_foreign_edits(self) -> None:
         import subprocess
