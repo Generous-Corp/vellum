@@ -249,19 +249,19 @@ root:
 <!-- readme-exec: id=source-sdk-build manual=source-build-not-release-quick-start -->
 ```sh
 curl -fL \
-  https://github.com/danielraffel/skia-builder/releases/download/chrome/m153/skia-build-mac-universal-gpu-release.zip \
-  -o /tmp/vellum-skia-m153.zip
+  https://github.com/danielraffel/skia-builder/releases/download/chrome/m157/skia-build-mac-universal-gpu-release.zip \
+  -o /tmp/vellum-skia-m157.zip
 printf '%s  %s\n' \
-  0ebfe03a209ceefe47edfeae70c3cc6c499583b74f35a26140ea55bad7f1e5a9 \
-  /tmp/vellum-skia-m153.zip | shasum -a 256 -c -
+  bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86 \
+  /tmp/vellum-skia-m157.zip | shasum -a 256 -c -
 cmake -S . -B build-gpu \
   -DCMAKE_BUILD_TYPE=Release \
   -DVELLUM_REQUIRE_GPU=ON \
-  -DVELLUM_SKIA_ARCHIVE=/tmp/vellum-skia-m153.zip
+  -DVELLUM_SKIA_ARCHIVE=/tmp/vellum-skia-m157.zip
 cmake --build build-gpu --parallel
 ctest --test-dir build-gpu --output-on-failure
 python3 scripts/build_sdk_artifact.py \
-  --skia-archive /tmp/vellum-skia-m153.zip \
+  --skia-archive /tmp/vellum-skia-m157.zip \
   --node-binary "$(command -v node)" \
   --node-license /path/to/node-distribution/LICENSE \
   --node-provenance /path/to/node-provenance.json \
@@ -366,7 +366,7 @@ by the integration test.
 <!-- readme-exec: id=local-sdk-artifact manual=source-build-not-release-quick-start -->
 ```sh
 python3 scripts/build_sdk_artifact.py \
-  --skia-archive /tmp/vellum-skia-m153.zip \
+  --skia-archive /tmp/vellum-skia-m157.zip \
   --node-binary "$(command -v node)" \
   --node-license /path/to/node-distribution/LICENSE \
   --node-provenance /path/to/node-provenance.json \
@@ -385,7 +385,7 @@ archive verified in the preceding section:
 <!-- readme-exec: id=gpu-sdk-artifact manual=source-build-not-release-quick-start -->
 ```sh
 python3 scripts/build_sdk_artifact.py \
-  --skia-archive /tmp/vellum-skia-m153.zip \
+  --skia-archive /tmp/vellum-skia-m157.zip \
   --node-binary "$(command -v node)" \
   --node-license /path/to/node-distribution/LICENSE \
   --node-provenance /path/to/node-provenance.json \

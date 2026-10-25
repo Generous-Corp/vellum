@@ -4,9 +4,9 @@
   "dependencies": [
     {
       "name": "Skia Graphite and Dawn renderer toolchain",
-      "version": "chrome/m153",
+      "version": "chrome/m157",
       "license": "multiple; see NOTICE.md and runtime_toolchain_dependencies",
-      "sha256": "0ebfe03a209ceefe47edfeae70c3cc6c499583b74f35a26140ea55bad7f1e5a9",
+      "sha256": "bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86",
       "surface": "byte-locked build input statically linked into the optional installed vellum-gpu shared library; source association and exhaustive legal inventory remain release-blocked"
     },
     {
@@ -107,11 +107,11 @@
       "consumer_boundary": "selected static archive members are linked into the installed vellum-gpu shared library; the prebuilt archive is not installed",
       "artifact": {
         "repository": "https://github.com/danielraffel/skia-builder",
-        "release_tag": "chrome/m153",
+        "release_tag": "chrome/m157",
         "name": "skia-build-mac-universal-gpu-release.zip",
-        "url": "https://github.com/danielraffel/skia-builder/releases/download/chrome/m153/skia-build-mac-universal-gpu-release.zip",
-        "sha256": "0ebfe03a209ceefe47edfeae70c3cc6c499583b74f35a26140ea55bad7f1e5a9",
-        "builder_commit": "1f8c8d2c343f360a653bce92d11f8ded9a515208",
+        "url": "https://github.com/danielraffel/skia-builder/releases/download/chrome/m157/skia-build-mac-universal-gpu-release.zip",
+        "sha256": "bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86",
+        "builder_commit": "f710b2834eaf37dbf1bd39408f9361d10d85eda2",
         "target": "macos-arm64",
         "configuration": "Release",
         "archive_root": "build/mac-gpu/lib/Release",
@@ -140,74 +140,74 @@
       "source_identities": {
         "skia": {
           "repository": "https://skia.googlesource.com/skia",
-          "ref": "refs/heads/chrome/m153",
-          "commit": "8b8c3872fbc03f025855db96ce683f34ec98a815",
+          "ref": "refs/heads/chrome/m157",
+          "commit": "b94213a11b3a2edadfae89f0c57a7f4ab72772c9",
           "license": "BSD-3-Clause",
-          "evidence": "The branch tip and DEPS were resolved from the primary Skia repository. The asset identifies milestone m153 but does not embed this exact Skia commit."
+          "evidence": "The release's skia-release-lock.json (resolved before the build, source skia-branch-head) pins this commit, and skia-builder rebuild run 39903006566 checked it out and reproduced every member of the asset. The asset itself does not embed this exact Skia commit."
         },
         "dawn": {
           "repository": "https://dawn.googlesource.com/dawn",
-          "commit": "f91da75afe31d4d6f47a6da307e1fbabd1b1691a",
+          "commit": "ada567700e13aecf7989d78b21f7d330b522ea80",
           "license": "BSD-3-Clause",
           "evidence": "Skia DEPS pins this revision and build/include/dawn/dawn_version.h embeds the same 20-byte commit."
         },
         "builder": {
           "repository": "https://github.com/danielraffel/skia-builder",
-          "commit": "1f8c8d2c343f360a653bce92d11f8ded9a515208",
-          "evidence": "The release tag resolves to this commit. The commit is not embedded in the asset and GitHub provides no source-to-asset attestation for this release."
+          "commit": "f710b2834eaf37dbf1bd39408f9361d10d85eda2",
+          "evidence": "Pulp's tools/deps/manifest.json records this skia_builder_ref for chrome/m157; the release's mac-universal asset was built by skia-builder run 38756369724 (job 116495939151) at this commit. The commit is not embedded in the asset."
         }
       },
       "headers": {
         "root": "build/include",
         "file_count": 809,
-        "construction_specific_sha256": "1e3539ff1255fe9d5eca249501103bbf64ba5b9df741747c1357a10a28358f6b",
+        "construction_specific_sha256": "6da97bc5d94a09ac97b6dc36701a70df5942000d78c7f3c75edc06058134c851",
         "digest_command": "from build/include: find . -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256 | shasum -a 256",
         "canonical_tree_hash": false
       },
       "archives": [
         {
           "name": "libdawn_combined.a",
-          "sha256": "73727ddf86ffc34eea6fb6392d8d688f44e317ff37b3bb421f8223c8b8815dc9"
+          "sha256": "7f24a7c906a16d61e108ca7475494bf949cf288fa42b2b2c2811bf3d000a3602"
         },
         {
           "name": "libjsonreader.a",
-          "sha256": "3e40db9f677a6f42c431cf10d363a0711b123cd7e56e565fb3c7d51657e44f72"
+          "sha256": "e438aea5afdb82d28a53d0ab15799426e2cadd26c0a08f5a06f71bda06cf0074"
         },
         {
           "name": "libskia.a",
-          "sha256": "39f9b1e1c8663ded30afdccce47375e578696e5504c31c6ba1474f1dcddffcd9"
+          "sha256": "e6152842da957a8548a9931c8d7aade0475d6dce32c920d6fb2bc7a9eaa856e2"
         },
         {
           "name": "libskottie.a",
-          "sha256": "7f9e62bd9113555fcb8c4d5badbdfdc4d14b9c84d5800abe5ee8d8cb7e876f94"
+          "sha256": "2761e503a271a6aa0da7422c902f206bfb3e64e53452ac920dc85482ec6162e3"
         },
         {
           "name": "libskparagraph.a",
-          "sha256": "0f295b4262d0dd26dbf29e69fbe6696a278aa6ae8fec9a935555ec1058665274"
+          "sha256": "94ea982e976fa76e4e36dbbd828bb22c45a4884aa1eaa2c4fcc6daae77fe4da8"
         },
         {
           "name": "libskresources.a",
-          "sha256": "8312bf6dd24c2f3cf6f1aec35cbbfcf2163f4985de5935d0c133c4f43fc5085c"
+          "sha256": "9c3fb99e43180159bd7f7cd7d252872e9c523c40563b947195f77669698fb7f9"
         },
         {
           "name": "libsksg.a",
-          "sha256": "18bd00ba41778540fefd0accdd94f08dfd4a953d5ea8c0dbe6ae464113a3b92b"
+          "sha256": "c73b504a958de55eb11e008bbdcf5a5588558c8cd0c84586b24c42d0185fd2dc"
         },
         {
           "name": "libskshaper.a",
-          "sha256": "c4120a6149cc63054766e040f020f379ff3e2172b3887d88e8c5f15eb29667c3"
+          "sha256": "ca7df9d95609d0f11b98d3719b19140e9e98138689729266f992b639eace0fa9"
         },
         {
           "name": "libskunicode_core.a",
-          "sha256": "a79b68a3a5bb72b12de9b07b1f78b332eaa01c0de5eae0f8ff37c8c1fd57cbaa"
+          "sha256": "e0e46a61bd45fe1037babbf0607df1f42ec0b5acf1b61f2ec9b78e105ef10314"
         },
         {
           "name": "libskunicode_icu.a",
-          "sha256": "c4b68ea5b8a71740634c9d40b6f2fb4e91a5ac355ea2c5f7f19e5d2364b8f204"
+          "sha256": "e57859c9e6c238632067b3d6a4cafd014fc86af6fd91250d093da5796c42ea89"
         },
         {
           "name": "libsvg.a",
-          "sha256": "9e68e184ea0a685871e40d0a544f97e64cdc1f10c02a9cfb4a0e23070f769973"
+          "sha256": "2609b13b3349cfb1ee738b285a268fcca16e0e6e4f9a5da95995b1f5fe3b6d5b"
         }
       ],
       "observed_macho": {
@@ -299,7 +299,7 @@
         {
           "name": "Abseil",
           "parent_archive": "libdawn_combined.a",
-          "commit": "dd67f5ca84f65ebb88ac0ea0fe2c1d58663e519f",
+          "commit": "af5aede14a0b4013be6890148d34e0fd7b1fac69",
           "license": "Apache-2.0",
           "primary_source": "https://chromium.googlesource.com/chromium/src/third_party/abseil-cpp",
           "binary_evidence": "absl:: global symbols and Abseil implementation members such as raw_hash_set.cc.o and crc32c.cc.o"
