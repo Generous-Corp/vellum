@@ -156,11 +156,6 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
             ${VELLUM_MIRROR_TARGET_${_tkey}_INCLUDE_DIRS})
         target_compile_definitions("${_vellum_mirror_target}" PRIVATE
             ${VELLUM_MIRROR_TARGET_${_tkey}_DEFINITIONS})
-        # Vellum's host owns Dawn's process-global proc table. Pulp's
-        # PULP_DAWN_PROCS_HOST_OWNED switch compiles the device library with
-        # no native installer, so a mirrored GpuSurface or GpuCompute fails
-        # until the host registers one through
-        # pulp::render::set_dawn_proc_installer(). The sources are unchanged.
         # Per-source options Pulp's own CMake sets on these sources (the plan
         # reads them from the mirrored CMake; source_compile_options.py).
         if(VELLUM_MIRROR_TARGET_${_tkey}_OPTION_SOURCE_COUNT GREATER 0)
@@ -173,6 +168,11 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
                     "${VELLUM_MIRROR_TARGET_${_tkey}_OPTION_SOURCE_${_vellum_option_index}_OPTIONS}")
             endforeach()
         endif()
+        # Vellum's host owns Dawn's process-global proc table. Pulp's
+        # PULP_DAWN_PROCS_HOST_OWNED switch compiles the device library with
+        # no native installer, so a mirrored GpuSurface or GpuCompute fails
+        # until the host registers one through
+        # pulp::render::set_dawn_proc_installer(). The sources are unchanged.
         if(_vellum_mirror_target STREQUAL "pulp-gpu-device")
             target_compile_definitions("${_vellum_mirror_target}" PRIVATE
                 PULP_DAWN_PROCS_HOST_OWNED=1)

@@ -150,18 +150,18 @@ The following rows are the legal inventory for bytes that may arrive under
 `mirror/` from the D3 units and the foundation amendment. They are scoped to
 the mirror root and do not make the corresponding historical Pulp paths active
 Vellum dependencies. Versions and licenses were cross-checked against Pulp's
-`DEPENDENCIES.md`, `NOTICE.md`, and `tools/deps/manifest.json` on 2026-10-10.
+`DEPENDENCIES.md`, `NOTICE.md`, and `tools/deps/manifest.json` at the `46cee5e4e6e2` export.
 
 | Dependency | Version or source identity | License | Mirror scope | Compatibility / handling |
 |---|---|---|---|---|
 | Abseil | `af5aede14a0b4013be6890148d34e0fd7b1fac69` | Apache-2.0 | not mirrored; no landed unit consumes it yet (planned renderer and V8 units) | MIT-compatible; transitive notice |
-| Brotli | `v1.2.0` | MIT | `canvas` unit external input (`mirror/core/canvas/`, WOFF2 decoder); bytes not mirrored | MIT-compatible |
-| CHOC | `pulp-webview-dnd-poc1` (`df148a41`) | ISC | `foundation` unit external input, patched (`mirror/core/runtime/`, `mirror/core/events/`); bytes not mirrored | MIT-compatible; retain fork attribution |
+| Brotli | `v1.2.1` (`db24a98a`) | MIT | `canvas` unit external input (`mirror/core/canvas/`, WOFF2 decoder); bytes not mirrored | MIT-compatible |
+| CHOC | `pulp-webview-dnd-poc2` (`b586f33d`) | ISC | `foundation`, `state-core`, `view-core`, `design-import` and `view-script` unit external input, patched (JSON exponent, V8 compatibility); bytes not mirrored | MIT-compatible; retain fork attribution |
 | cpp-httplib | vendored snapshot | MIT | `mirror/external/cpp-httplib/` (`foundation` unit) | MIT-compatible |
 | Dawn and Tint | `ada567700e13aecf7989d78b21f7d330b522ea80` | BSD-3-Clause | `canvas` unit external input: headers inside the Skia build tree; bytes not mirrored | MIT-compatible; renderer notice exists |
 | Expat | `6154446fccefbf3ca644894f598969113b0c7bcd` | MIT | not mirrored; no landed unit consumes it yet (planned renderer units) | MIT-compatible; renderer notice exists |
 | HarfBuzz | `9cb1fee51069b206effb4736e443b038d230789d` | Old MIT | `canvas` unit external input through the Skia build (text shaping); bytes not mirrored | MIT-compatible; notice exists |
-| Highway | `1.2.0` | Apache-2.0 | `foundation` unit external input (`mirror/core/simd/`); bytes not mirrored | MIT-compatible |
+| Highway | `1.4.0` (`2607d3b5`) | Apache-2.0 | `foundation` unit external input (`mirror/core/simd/`); bytes not mirrored | MIT-compatible |
 | ICU | `d578f2e8b7bd5938e21cfb6bf15c079e0aa5b738` | Unicode-3.0 plus bundled notices | `canvas` unit external input through the Skia build (text shaping); bytes not mirrored | Permissive; notice exists |
 | Inter | `4.001; git-9221beed3` | SIL OFL 1.1 | `mirror/external/fonts/` (`canvas` unit) | Allowed font license |
 | JavaScriptCore | Apple system framework | LGPL-2.1+ components and Apple terms | Never mirrored; system framework only | **Not MIT-compatible**; system-only, never mirrored |
@@ -176,11 +176,13 @@ Vellum dependencies. Versions and licenses were cross-checked against Pulp's
 | Noto Sans Arabic | variable font | SIL OFL 1.1 | not mirrored; no landed unit consumes it yet | Allowed font license |
 | Noto Sans JP | variable font | SIL OFL 1.1 | not mirrored; no landed unit consumes it yet | Allowed font license |
 | PartitionAlloc | `03cc513177b4340bee3dbfd46f6dd5fdded43b79` | BSD-3-Clause | not mirrored; no landed unit consumes it yet (planned GPU and renderer units) | MIT-compatible; transitive notice |
-| QuickJS | `2024-02-14` | MIT | not mirrored; no landed unit consumes it yet (planned scripted-view unit) | MIT-compatible |
+| QuickJS | `2021-03-27`, bundled in CHOC (`choc_javascript_QuickJS.h`) | MIT | `view-script` unit external input through that CHOC header; bytes not mirrored. Its MIT notice is in the header, and CHOC's license ships under `sdk/mirror/share/licenses/choc/` | MIT-compatible |
+| SDL3 | `release-3.4.18` (`829a65d7`) | zlib | `render-2d` and `view-core` unit external input, built from source as the `SDL3-static` link target the link policy allows; bytes not mirrored; license ships under `sdk/mirror/share/licenses/sdl3/` | MIT-compatible |
 | SheenBidi | `v3.0.0` | Apache-2.0 | `canvas` unit external input (`mirror/core/canvas/`); bytes not mirrored | MIT-compatible |
 | Skia and skcms | `b94213a11b3a2edadfae89f0c57a7f4ab72772c9` | BSD-3-Clause | `canvas` unit external input (`mirror/core/canvas/`); bytes not mirrored | MIT-compatible; renderer notice exists |
 | V8 | `v8-m153-15.3.76.5-26cef0256b0e` | BSD-3-Clause | not mirrored; no landed unit consumes it yet (planned scripted-view unit, when selected) | MIT-compatible; sealed provider |
-| Yoga | `3.2.1` | MIT | not mirrored; no landed unit consumes it yet (planned view units) | MIT-compatible |
+| yaml-cpp | `0.9.0` (`56e3bb55`) | MIT | `design-import` unit external input, built from source as the `yaml-cpp` link target the link policy allows; bytes not mirrored; license ships under `sdk/mirror/share/licenses/yaml-cpp/` | MIT-compatible |
+| Yoga | `v3.2.1` (`042f5013`) | MIT | `view-core` unit external input, built from source as the `yogacore` link target the link policy allows; bytes not mirrored; license ships under `sdk/mirror/share/licenses/yoga/` | MIT-compatible |
 
 ### Units built into the native SDK
 
@@ -190,8 +192,8 @@ into `sdk/mirror/lib/libvellum-mirror-foundation.dylib` and
 (`tools/mirror/VellumMirror.cmake`). The units' external inputs above are
 fetched at the commits their closure manifests pin, and every file a closure
 lists is checked against its recorded SHA-256 before configure
-(`tools/mirror/mirror_package.py`). Highway, Mbed TLS, SheenBidi, Brotli, and
-WOFF2 objects are linked into those libraries; CHOC headers that the public
+(`tools/mirror/mirror_package.py`). Highway, Mbed TLS, SheenBidi, Brotli,
+WOFF2, SDL3, Yoga and yaml-cpp objects are linked into the mirror libraries; CHOC headers that the public
 headers include ship under `sdk/mirror/include/choc/`. Each fetched
 dependency's license file is installed under `sdk/mirror/share/licenses/`.
 The canvas library is an installed forwarding dylib: the shared

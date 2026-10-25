@@ -918,6 +918,15 @@ class RendererPinTests(unittest.TestCase):
         self.assertIn("provenance/mirror/receipts/newest.json", errors[0])
         self.assertIn("skia_branch", errors[0])
 
+    def test_two_receipts_naming_head_mirror_fail_closed(self) -> None:
+        tree = self.commit_mirror(b"current\n")
+        first = self.landed("first", self.pulp_commit(self.matching_pin), tree)
+        second = self.landed("second", self.pulp_commit(self.other_milestone()), tree)
+        errors, rows = verify_extraction.mirror_renderer_pin_check(self.root, self.pulp, [first, second])
+        self.assertEqual(rows, [])
+        self.assertEqual(len(errors), 1)
+        self.assertIn("2 landed receipts name HEAD:mirror", errors[0])
+
     def test_no_receipt_naming_head_mirror_fails_closed(self) -> None:
         self.commit_mirror(b"current\n")
         stale = self.landed("stale", self.pulp_commit(self.matching_pin), "0" * 40)
