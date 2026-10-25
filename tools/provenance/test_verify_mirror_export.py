@@ -283,6 +283,47 @@ class VerifyMirrorExportTests(unittest.TestCase):
                 receipt_path,
             )
 
+    def test_mirror_build_applies_pulp_per_source_compile_options(self) -> None:
+        # The package plan reads per-source COMPILE_OPTIONS from the mirrored
+        # CMake; Pulp's own CMake at the receipt's commit, all of it, must yield
+        # exactly the same set, so an option set from a file the export does
+        # not carry, or one the plan misreads, fails here.
+        receipts = verify_mirror_export.landed_receipts(REPO)
+        pulp_root_env = os.environ.get("MIRROR_PULP_ROOT")
+        if not receipts or not pulp_root_env:
+            self.skipTest("needs a landed receipt and MIRROR_PULP_ROOT naming a Pulp checkout")
+        spec = importlib.util.spec_from_file_location(
+            "mirror_package_for_options", REPO / "tools/mirror/mirror_package.py")
+        assert spec and spec.loader
+        mirror_package = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mirror_package)
+        _, receipt = mirror_package.newest_receipt(REPO)
+        units = mirror_package.load_closures(REPO, receipt)
+        applied = mirror_package.source_compile_options_for(REPO, receipt, units)
+
+        pulp_root, pulp_sha = Path(pulp_root_env).resolve(), receipt["pulp_sha"]
+        listing = subprocess.check_output(
+            ["git", "-C", str(pulp_root), "ls-tree", "-r", "--name-only", pulp_sha], text=True)
+        paths = [p for p in listing.splitlines() if p.endswith("/CMakeLists.txt") or p == "CMakeLists.txt"
+                 or p.endswith(".cmake")]
+        batch = subprocess.run(
+            ["git", "-C", str(pulp_root), "cat-file", "--batch"],
+            input="".join(f"{pulp_sha}:{p}\n" for p in paths).encode(), capture_output=True, check=True,
+        ).stdout
+        pulp_files, offset = {}, 0
+        for path in paths:
+            header_end = batch.index(b"\n", offset)
+            size = int(batch[offset:header_end].split()[2])
+            pulp_files[path] = batch[header_end + 1:header_end + 1 + size].decode("utf-8", "replace")
+            offset = header_end + 1 + size + 1
+        # Control: the instrument read Pulp's CMake and saw per-source options.
+        self.assertGreater(len(pulp_files), 100)
+        self.assertTrue(any("COMPILE_OPTIONS" in text for text in pulp_files.values()))
+        options = units[0][1]["configure"]["options"]
+        exported = {row["pulp_path"] for row in receipt["files"]}
+        expected = mirror_package.source_compile_options.evaluate(pulp_files, options, exported)
+        self.assertEqual(applied, expected)
+
     def test_valid_landing_passes_with_pulp_identity(self) -> None:
         fixture = Fixture(self.base)
         report = verify_mirror_export.verify(fixture.vellum, fixture.pulp)

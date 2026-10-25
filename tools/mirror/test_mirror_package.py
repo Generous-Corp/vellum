@@ -66,6 +66,7 @@ class Fixture:
         self.closure = {
             "schema": mp.CLOSURE_SCHEMA,
             "compile_definitions": ["X=1"],
+            "configure": {"options": {"CMAKE_SYSTEM_NAME": "Darwin", "CMAKE_BUILD_TYPE": "Release"}},
             "external_inputs": [{
                 "path": f"@external/skia/{'b' * 40}/build/include/core/SkCanvas.h",
                 "pin": "b" * 40, "source": "https://skia.googlesource.com/skia.git",
@@ -152,6 +153,34 @@ class MirrorPackagePlanTest(unittest.TestCase):
         text = output.read_text()
         self.assertIn("VELLUM_MIRROR_TARGET_PULP_RUNTIME_SOURCES", text)
         self.assertIn(f'set(VELLUM_MIRROR_ORIGIN_SHA "{PULP_SHA}")', text)
+
+    def add_mirror_file(self, path: str, data: bytes) -> None:
+        (self.fixture.repo / path).parent.mkdir(parents=True, exist_ok=True)
+        (self.fixture.repo / path).write_bytes(data)
+        self.fixture.files[path] = data
+        self.fixture.write_receipt()
+
+    def test_per_source_options_reach_the_target_and_the_cmake(self) -> None:
+        self.add_mirror_file("mirror/core/runtime/CMakeLists.txt", (
+            b'if(APPLE)\n'
+            b'    set_source_files_properties(src/a.cpp PROPERTIES COMPILE_OPTIONS "-fno-rtti")\n'
+            b'endif()\n'))
+        plan = self.fixture.plan()
+        self.assertEqual(plan["source_compile_options"], {"core/runtime/src/a.cpp": ["-fno-rtti"]})
+        target = plan["units"][0]["targets"][0]
+        self.assertEqual(target["source_compile_options"], [{
+            "source": str(self.fixture.repo.resolve() / "mirror/core/runtime/src/a.cpp"), "options": ["-fno-rtti"]}])
+        output = Path(self.temporary.name) / "plan.cmake"
+        mp.write_cmake(plan, output)
+        text = output.read_text()
+        self.assertIn("set(VELLUM_MIRROR_TARGET_PULP_RUNTIME_OPTION_SOURCE_COUNT 1)", text)
+        self.assertIn('set(VELLUM_MIRROR_TARGET_PULP_RUNTIME_OPTION_SOURCE_0_OPTIONS\n    "-fno-rtti"\n)', text)
+
+    def test_per_source_option_for_an_uncompiled_source_is_refused(self) -> None:
+        self.add_mirror_file("mirror/core/runtime/include/pulp/runtime/a.hpp", b"int a();\n")
+        self.add_mirror_file("mirror/core/runtime/CMakeLists.txt", (
+            b'set_source_files_properties(include/pulp/runtime/a.hpp PROPERTIES COMPILE_OPTIONS "-O2")\n'))
+        self.assertRefused("no mirrored target compiles")
 
     def test_edited_mirror_file_is_refused(self) -> None:
         (self.fixture.repo / "mirror/core/runtime/src/a.cpp").write_bytes(b"int a() { return 2; }\n")
@@ -270,6 +299,63 @@ class ChocV8PatchTest(unittest.TestCase):
             self.header(root, iterate=False)
             with self.assertRaises(mp.PlanError):
                 mp.apply_choc_v8_patch(root)
+
+
+class SourceCompileOptionsTest(unittest.TestCase):
+    """Per-source options are read from CMake under the closure's configure."""
+
+    RELEASE = {"CMAKE_SYSTEM_NAME": "Darwin", "CMAKE_BUILD_TYPE": "Release", "PULP_SANITIZER": ""}
+    EXPORTED = {"core/x/src/a.cpp", "core/x/src/b.cpp"}
+
+    def evaluate(self, text: str, options: dict | None = None, path: str = "core/x/CMakeLists.txt") -> dict:
+        return mp.source_compile_options.evaluate({path: text}, options or self.RELEASE, self.EXPORTED)
+
+    def test_apple_branch_applies(self) -> None:
+        self.assertEqual(self.evaluate(
+            'if(APPLE)\n  set_source_files_properties(src/a.cpp PROPERTIES COMPILE_OPTIONS "-fno-rtti")\nendif()\n'),
+            {"core/x/src/a.cpp": ["-fno-rtti"]})
+
+    def test_debug_only_option_follows_the_build_type(self) -> None:
+        text = ('get_property(_multi GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)\n'
+                'if(NOT _multi AND CMAKE_BUILD_TYPE STREQUAL "Debug" AND CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")\n'
+                '  set_source_files_properties(src/a.cpp PROPERTIES COMPILE_OPTIONS "-O2")\nendif()\n')
+        self.assertEqual(self.evaluate(text), {})
+        self.assertEqual(self.evaluate(text, dict(self.RELEASE, CMAKE_BUILD_TYPE="Debug")),
+                         {"core/x/src/a.cpp": ["-O2"]})
+
+    def test_local_flag_set_in_a_branch_is_tracked(self) -> None:
+        text = ('set(_ubsan OFF)\nif(PULP_SANITIZER STREQUAL "undefined")\n  set(_ubsan ON)\nendif()\n'
+                'if(_ubsan)\n  set_source_files_properties(src/b.cpp PROPERTIES COMPILE_OPTIONS "-fno-sanitize=undefined")\nendif()\n')
+        self.assertEqual(self.evaluate(text), {})
+        self.assertEqual(self.evaluate(text, dict(self.RELEASE, PULP_SANITIZER="undefined")),
+                         {"core/x/src/b.cpp": ["-fno-sanitize=undefined"]})
+
+    def test_elseif_and_else_take_one_branch(self) -> None:
+        text = ('if(WIN32)\n  set_source_files_properties(src/a.cpp PROPERTIES COMPILE_OPTIONS "/W4")\n'
+                'elseif(APPLE)\n  set_source_files_properties(src/a.cpp PROPERTIES COMPILE_OPTIONS "-Wall")\n'
+                'else()\n  set_source_files_properties(src/a.cpp PROPERTIES COMPILE_OPTIONS "-Wextra")\nendif()\n')
+        self.assertEqual(self.evaluate(text), {"core/x/src/a.cpp": ["-Wall"]})
+
+    def test_module_resolves_against_its_includer(self) -> None:
+        text = 'set_source_files_properties(src/b.cpp PROPERTIES COMPILE_OPTIONS -fno-exceptions)\n'
+        self.assertEqual(
+            mp.source_compile_options.evaluate(
+                {"core/x/CMakeLists.txt": "", "core/x/cmake/Mod.cmake": text}, self.RELEASE, self.EXPORTED),
+            {"core/x/src/b.cpp": ["-fno-exceptions"]})
+
+    def test_undecidable_condition_on_an_exported_source_fails_closed(self) -> None:
+        with self.assertRaises(mp.source_compile_options.SourceOptionsError):
+            self.evaluate('if(TARGET foo)\n  set_source_files_properties(src/a.cpp PROPERTIES COMPILE_OPTIONS "-O1")\nendif()\n')
+        # The same call on a source the export does not carry is not its business.
+        self.assertEqual(self.evaluate(
+            'if(TARGET foo)\n  set_source_files_properties(src/c.cpp PROPERTIES COMPILE_OPTIONS "-O1")\nendif()\n'), {})
+
+    def test_unresolvable_file_and_other_properties_fail_closed(self) -> None:
+        for text in ('set_source_files_properties(${UNKNOWN_DIR}/a.cpp PROPERTIES COMPILE_OPTIONS "-O1")\n',
+                     'set_source_files_properties(src/a.cpp PROPERTIES COMPILE_DEFINITIONS X=1)\n',
+                     'function(f)\n  set_source_files_properties(src/a.cpp PROPERTIES COMPILE_OPTIONS "-O1")\nendfunction()\n'):
+            with self.subTest(text=text), self.assertRaises(mp.source_compile_options.SourceOptionsError):
+                self.evaluate(text)
 
 
 class CachedCheckoutTest(unittest.TestCase):

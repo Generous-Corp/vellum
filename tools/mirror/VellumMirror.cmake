@@ -161,6 +161,18 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
         # no native installer, so a mirrored GpuSurface or GpuCompute fails
         # until the host registers one through
         # pulp::render::set_dawn_proc_installer(). The sources are unchanged.
+        # Per-source options Pulp's own CMake sets on these sources (the plan
+        # reads them from the mirrored CMake; source_compile_options.py).
+        if(VELLUM_MIRROR_TARGET_${_tkey}_OPTION_SOURCE_COUNT GREATER 0)
+            math(EXPR _vellum_option_last
+                "${VELLUM_MIRROR_TARGET_${_tkey}_OPTION_SOURCE_COUNT} - 1")
+            foreach(_vellum_option_index RANGE ${_vellum_option_last})
+                set_source_files_properties(
+                    "${VELLUM_MIRROR_TARGET_${_tkey}_OPTION_SOURCE_${_vellum_option_index}}"
+                    PROPERTIES COMPILE_OPTIONS
+                    "${VELLUM_MIRROR_TARGET_${_tkey}_OPTION_SOURCE_${_vellum_option_index}_OPTIONS}")
+            endforeach()
+        endif()
         if(_vellum_mirror_target STREQUAL "pulp-gpu-device")
             target_compile_definitions("${_vellum_mirror_target}" PRIVATE
                 PULP_DAWN_PROCS_HOST_OWNED=1)

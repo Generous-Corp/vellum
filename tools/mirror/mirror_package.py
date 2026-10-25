@@ -34,6 +34,9 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import source_compile_options  # noqa: E402
+
 
 RECEIPT_SCHEMA = "pulp.vellum.export-receipt.v2"
 CLOSURE_SCHEMA = "pulp.vellum.closure.v1"
@@ -233,6 +236,35 @@ def load_closures(repo: Path, receipt: dict[str, Any]) -> list[tuple[str, dict[s
     if not units:
         raise PlanError("the landed receipt names no units")
     return units
+
+
+def mirror_cmake_files(repo: Path) -> dict[str, str]:
+    """The landed mirror's CMake files, keyed by Pulp-relative path."""
+    root = repo / MIRROR_DIR
+    return {
+        path.relative_to(root).as_posix(): path.read_text(encoding="utf-8", errors="replace")
+        for path in sorted(root.rglob("*"))
+        if path.is_file() and (path.name == "CMakeLists.txt" or path.suffix == ".cmake")
+    }
+
+
+def source_compile_options_for(repo: Path, receipt: dict[str, Any],
+                               units: list[tuple[str, dict[str, Any]]]) -> dict[str, list[str]]:
+    """Exported source -> the per-source COMPILE_OPTIONS Pulp's CMake applies to it
+    under the closures' configure (tools/mirror/source_compile_options.py)."""
+    configures = {json.dumps((closure.get("configure") or {}).get("options"), sort_keys=True)
+                  for _, closure in units}
+    if len(configures) != 1:
+        raise PlanError("the landed closures were exported under different configures")
+    options = json.loads(configures.pop())
+    if not isinstance(options, dict):
+        raise PlanError("the landed closures record no configure options")
+    exported = {str(row.get("mirror_path", "")).removeprefix(f"{MIRROR_DIR}/")
+                for row in receipt.get("files", [])}
+    try:
+        return source_compile_options.evaluate(mirror_cmake_files(repo), options, exported)
+    except source_compile_options.SourceOptionsError as error:
+        raise PlanError(f"per-source compile options: {error}") from error
 
 
 def external_dependencies(units: list[tuple[str, dict[str, Any]]]) -> dict[str, dict[str, Any]]:
@@ -555,6 +587,8 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
     receipt_path, receipt = newest_receipt(repo)
     file_count = verify_mirror_identity(repo, receipt)
     units = load_closures(repo, receipt)
+    source_options = source_compile_options_for(repo, receipt, units)
+    attached: set[str] = set()
     deps = external_dependencies(units)
     roots = prepare_dependencies(deps, deps_dir, skia_dir, skia_asset_sha256)
     generated = prepare_generated(repo, receipt, units, generated_dir)
@@ -624,9 +658,16 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
             others = [row for row in target.get("external_link_inputs", []) if row.get("dependency") != "skia"]
             if others:
                 raise PlanError(f"{unit}/{name} has external link inputs with no recipe: {others}")
+            option_sources = []
+            for source in target.get("sources", []):
+                if source in source_options:
+                    option_sources.append({"source": str(repo / MIRROR_DIR / source),
+                                           "options": source_options[source]})
+                    attached.add(source)
             targets.append({
                 "name": name,
                 "sources": sources,
+                "source_compile_options": option_sources,
                 "include_dirs": include_dirs,
                 "compile_definitions": sorted(target.get("compile_definitions", [])),
                 "internal_links": internal,
@@ -639,6 +680,9 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
             "targets": targets,
             "compile_definitions": sorted(closure.get("compile_definitions", [])),
         })
+    unattached = sorted(set(source_options) - attached)
+    if unattached:
+        raise PlanError(f"per-source compile options name sources no mirrored target compiles: {unattached}")
     cmake_deps = {
         name: {"dir": str(roots[name]), "options": DEPENDENCIES[name].get("options", {}),
                "provides": DEPENDENCIES[name].get("provides", [])}
@@ -676,6 +720,7 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
         "choc_headers": choc_headers,
         "build_info_dir": str(generated["build_info_dir"]),
         "binary_data": generated["binary_data"],
+        "source_compile_options": source_options,
         "units": unit_rows,
     }
 
@@ -739,6 +784,11 @@ def write_cmake(build_plan: dict[str, Any], output: Path) -> None:
             lines += cmake_list(f"VELLUM_MIRROR_TARGET_{tkey}_INTERNAL_LINKS", target["internal_links"])
             lines += cmake_list(f"VELLUM_MIRROR_TARGET_{tkey}_EXTERNAL_LINKS", target["external_links"])
             lines.append(f"set(VELLUM_MIRROR_TARGET_{tkey}_SKIA {'ON' if target['skia'] else 'OFF'})")
+            option_sources = target.get("source_compile_options", [])
+            lines.append(f"set(VELLUM_MIRROR_TARGET_{tkey}_OPTION_SOURCE_COUNT {len(option_sources)})")
+            for index, entry in enumerate(option_sources):
+                lines.append(f"set(VELLUM_MIRROR_TARGET_{tkey}_OPTION_SOURCE_{index} {cmake_quote(entry['source'])})")
+                lines += cmake_list(f"VELLUM_MIRROR_TARGET_{tkey}_OPTION_SOURCE_{index}_OPTIONS", entry["options"])
             lines.append(f"set(VELLUM_MIRROR_TARGET_{tkey}_UNIT {cmake_quote(unit['name'])})")
     output.parent.mkdir(parents=True, exist_ok=True)
     text = "\n".join(lines) + "\n"
