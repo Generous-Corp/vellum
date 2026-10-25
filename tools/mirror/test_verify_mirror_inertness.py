@@ -213,6 +213,55 @@ class StrengthAwareFloorTest(unittest.TestCase):
                          ["provider: vtable for pulp::audio::Engine"])
 
 
+class NameDebtTest(unittest.TestCase):
+    """Audio-named view-core symbols pass only under a declared Phase-6 debt."""
+
+    def setUp(self) -> None:
+        self.floor = vi.build_floor(MACHO_P, MACHO_M)
+
+    def report(self, *names: str, floor: set[str] | None = None) -> dict:
+        return vi.symbol_report({"provider": list(names)}, view_unit_packaged=True,
+                                floor=self.floor if floor is None else floor, name_debts=vi.NAME_DEBTS)
+
+    def test_declared_debt_hit_passes_and_is_listed(self) -> None:
+        report = self.report("pulp::view::LevelDisplay::~LevelDisplay()",
+                             "vtable for pulp::view::WaveformRecorder")
+        self.assertEqual(report["audio"], [])
+        self.assertEqual(report["debts"]["view-core-level-display"],
+                         ["provider: pulp::view::LevelDisplay::~LevelDisplay()"])
+        self.assertEqual(report["debts"]["view-core-waveform-recorder"],
+                         ["provider: vtable for pulp::view::WaveformRecorder"])
+
+    def test_undeclared_audio_named_symbol_fails(self) -> None:
+        report = self.report("pulp::view::SpectrumAnalyzer::paint()",
+                             "pulp::view::WaveformRecorderPanel::paint()")
+        self.assertEqual(report["audio"], ["provider: pulp::view::SpectrumAnalyzer::paint()",
+                                           "provider: pulp::view::WaveformRecorderPanel::paint()"])
+        self.assertEqual(sum(len(hits) for hits in report["debts"].values()), 0)
+
+    def test_floor_symbol_fails_even_when_a_debt_names_it(self) -> None:
+        floor = vi.ViewAudioFloor({"pulp::view::LevelDisplay::~LevelDisplay()"})
+        report = self.report("pulp::view::LevelDisplay::~LevelDisplay()", floor=floor)
+        self.assertEqual(report["audio"], ["provider: pulp::view::LevelDisplay::~LevelDisplay()"])
+        self.assertEqual(report["debts"]["view-core-level-display"], [])
+
+    def test_forward_declaration_passes_only_under_its_debt(self) -> None:
+        bind = ("pulp::view::NativeImportBindingContext::bind_meter(pulp::view::Meter&, "
+                "pulp::view::NativeImportMeterBindingDescriptor const&)")
+        report = self.report(bind, "pulp::view::Meter::~Meter()")
+        self.assertEqual(report["forward"], ["provider: pulp::view::Meter::~Meter()"])
+        self.assertEqual(report["debts"]["design-import-deprecated-bind-virtuals"], [f"provider: {bind}"])
+
+    def test_every_debt_is_declared_for_phase_6_against_a_landed_file(self) -> None:
+        repo = HERE.parents[1]
+        for debt, entry in vi.NAME_DEBTS.items():
+            with self.subTest(debt=debt):
+                self.assertEqual(set(entry), {"rules", "pattern", "file", "owner"})
+                self.assertEqual(entry["owner"], "Phase 6")
+                self.assertTrue(set(entry["rules"]) <= {"no-audio-symbols", "name-only-forward-declarations"})
+                self.assertTrue((repo / "mirror" / entry["file"]).is_file(), entry["file"])
+
+
 class VendoredRttiOwnershipTest(unittest.TestCase):
     """rtti_ownership.py is Pulp's file byte for byte."""
 

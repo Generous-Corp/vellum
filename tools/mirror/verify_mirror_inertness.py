@@ -33,6 +33,15 @@ against the installed package and built with depfiles, and asserts:
 4. ``name-only-forward-declarations``: no symbol of the forward-declared
    classes or the deprecated bind virtuals appears anywhere.
 
+The floor is the contamination gate. A ``no-audio-symbols`` hit only the
+audio-name pattern makes (not in the floor, not owned RTTI) and a
+``name-only-forward-declarations`` hit are allowed only when a declared
+``NAME_DEBTS`` entry matches the symbol: Pulp's carve keeps these symbols in
+view-core, and each debt is resolved in Phase 6 by a carve or a rename (owner
+ruling 2026-10-25, "Audio-named view-core symbols in the Vellum mirror").
+Every matched symbol is listed under its debt in the proof, and a hit that no
+declared debt matches still fails.
+
 It records whether each debt's header ships in the package. A shipped debt
 header must have been compiled by a consumer translation unit (the sterile
 lane generates one from ``DEBTS`` with ``--write-debt-probe``); otherwise the
@@ -60,6 +69,43 @@ GUARD = "PULP_VIEW_HAS_AUDIO_WIDGETS"
 DEBTS = {
     "vellum-header-audio-widgets-include": "pulp/view/widgets.hpp",
     "design-import-audio-forward-decls": "pulp/view/design_import.hpp",
+}
+# Declared Phase-6 name debts (owner ruling 2026-10-25). Each matches the
+# demangled symbols of one Pulp view-core definition whose name reads as audio
+# but which no view-audio floor rule attributes to view-audio. `rules` names the
+# checks it may answer; `file` is the Pulp source that defines it.
+_RTTI_PREFIX = r"(?:(?:typeinfo name for|typeinfo for|vtable for) )?"
+NAME_DEBTS = {
+    "view-core-level-display": {
+        "rules": ["no-audio-symbols"],
+        "pattern": rf"^{_RTTI_PREFIX}pulp::view::LevelDisplay(?:::|$)",
+        "file": "core/view/src/data_display.cpp",
+        "owner": "Phase 6",
+    },
+    "view-core-waveform-recorder": {
+        "rules": ["no-audio-symbols"],
+        "pattern": rf"^{_RTTI_PREFIX}(?:std::__1::__function::__func<)?pulp::view::WaveformRecorder(?:::|$)",
+        "file": "core/view/src/widgets.cpp",
+        "owner": "Phase 6",
+    },
+    "view-core-paint-waveform": {
+        "rules": ["no-audio-symbols"],
+        "pattern": r"^pulp::view::painters::paint_waveform\(",
+        "file": "core/view/src/control_painters.cpp",
+        "owner": "Phase 6",
+    },
+    "design-import-level-display-binding": {
+        "rules": ["no-audio-symbols"],
+        "pattern": r"^pulp::view::(?:NativeImportBindingContext::bind_level_display|bind_imported_level_display)\(",
+        "file": "core/view/src/design_import_legacy_registry.cpp",
+        "owner": "Phase 6",
+    },
+    "design-import-deprecated-bind-virtuals": {
+        "rules": ["no-audio-symbols", "name-only-forward-declarations"],
+        "pattern": r"^pulp::view::NativeImportBindingContext::(?:bind_meter|bind_waveform_display)\(",
+        "file": "core/view/include/pulp/view/design_import.hpp",
+        "owner": "Phase 6",
+    },
 }
 # Headers of Pulp's view-audio target and its Pulp-kept siblings: the
 # audio/ subtree, the meter/waveform/spectrum family and the named widgets.
@@ -239,23 +285,57 @@ def view_audio_floor(archive: Path) -> ViewAudioFloor:
     return floor
 
 
-def symbol_findings(symbols: dict[str, list[str]], *, view_unit_packaged: bool,
-                    floor: set[str] | None = None) -> tuple[list[str], list[str]]:
+def matching_debt(name: str, rule: str, debts: dict[str, dict[str, Any]]) -> str | None:
+    """The declared debt that answers `rule` for `name`, if any."""
+    for debt, entry in sorted(debts.items()):
+        if rule in entry["rules"] and re.search(entry["pattern"], name):
+            return debt
+    return None
+
+
+def symbol_report(symbols: dict[str, list[str]], *, view_unit_packaged: bool,
+                  floor: set[str] | None = None,
+                  name_debts: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Failing audio and forward-declaration hits, and the hits declared debts answer.
+
+    A floor or owned-RTTI hit always fails. With a floor, a hit only the
+    audio-name pattern makes, and any forward-declaration hit, is moved under
+    the first declared debt whose pattern and rule match it.
+    """
     if floor is None and view_unit_packaged:
         raise EvidenceError(
             "a package with a view unit needs the pulp-view-audio archive (--view-audio-archive)")
-    audio, forward = [], []
+    debts = name_debts or {}
+    audio: list[str] = []
+    forward: list[str] = []
+    answered: dict[str, list[str]] = {debt: [] for debt in debts}
     for image, names in sorted(symbols.items()):
         for name in names:
+            label = f"{image}: {name}"
             if floor is not None:
-                hit = floor_hit(name, floor) or AUDIO_SYMBOL.search(name)
-            else:
-                hit = VIEW_SYMBOL.search(name) or VIEW_AUDIO_OWNED.search(name)
-            if hit:
-                audio.append(f"{image}: {name}")
+                if floor_hit(name, floor):
+                    audio.append(label)
+                elif AUDIO_SYMBOL.search(name):
+                    debt = matching_debt(name, "no-audio-symbols", debts)
+                    (answered[debt] if debt else audio).append(label)
+            elif VIEW_SYMBOL.search(name) or VIEW_AUDIO_OWNED.search(name):
+                audio.append(label)
             if FORWARD_DECLARED.search(name):
-                forward.append(f"{image}: {name}")
-    return audio, forward
+                debt = matching_debt(name, "name-only-forward-declarations", debts)
+                if debt:
+                    if label not in answered[debt]:
+                        answered[debt].append(label)
+                else:
+                    forward.append(label)
+    return {"audio": audio, "forward": forward, "debts": answered}
+
+
+def symbol_findings(symbols: dict[str, list[str]], *, view_unit_packaged: bool,
+                    floor: set[str] | None = None,
+                    name_debts: dict[str, dict[str, Any]] | None = None) -> tuple[list[str], list[str]]:
+    report = symbol_report(symbols, view_unit_packaged=view_unit_packaged, floor=floor,
+                           name_debts=name_debts)
+    return report["audio"], report["forward"]
 
 
 DEMANGLE_CONTROL = ("__ZN4pulp6canvas5Color8from_hsvENS0_3HSVEf", "pulp::canvas::Color::from_hsv(")
@@ -418,8 +498,9 @@ def verify(prefix: Path, consumer_build: Path, image: Path,
     floor = view_audio_floor(view_audio_archive) if view_audio_archive else None
     definition = compile_command_findings(commands) + package_definition_findings(package_files)
     headers = header_findings(depfiles, package_headers)
-    audio_symbols, forward_symbols = symbol_findings(
-        symbols, view_unit_packaged=view_unit_packaged, floor=floor)
+    report = symbol_report(symbols, view_unit_packaged=view_unit_packaged, floor=floor,
+                           name_debts=NAME_DEBTS)
+    audio_symbols, forward_symbols = report["audio"], report["forward"]
     checks = {
         "no-widgets-gate-definition": not definition,
         "no-audio-headers": not headers,
@@ -434,6 +515,10 @@ def verify(prefix: Path, consumer_build: Path, image: Path,
         "mirror_sha": receipt.get("mirror_sha"),
         "packaged_units": units,
         "debts": debt_records,
+        "name_debts": {
+            debt: dict(NAME_DEBTS[debt], matched=len(hits), symbols=hits)
+            for debt, hits in report["debts"].items()
+        },
         "symbol_rule": (
             "view_audio_symbol_floor" if floor is not None
             else "no pulp::view or product-namespace symbol (no view unit packaged)"
@@ -450,8 +535,8 @@ def verify(prefix: Path, consumer_build: Path, image: Path,
         "findings": {
             "no-widgets-gate-definition": definition,
             "no-audio-headers": headers,
-            "no-audio-symbols": audio_symbols[:50],
-            "name-only-forward-declarations": forward_symbols[:50],
+            "no-audio-symbols": audio_symbols,
+            "name-only-forward-declarations": forward_symbols,
         },
     }
 
