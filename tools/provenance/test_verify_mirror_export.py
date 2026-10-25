@@ -321,7 +321,9 @@ class VerifyMirrorExportTests(unittest.TestCase):
         self.assertTrue(any("COMPILE_OPTIONS" in text for text in pulp_files.values()))
         options = units[0][1]["configure"]["options"]
         exported = {row["pulp_path"] for row in receipt["files"]}
-        expected = mirror_package.source_compile_options.evaluate(pulp_files, options, exported)
+        targets = {target["name"] for _, closure in units for target in closure.get("targets", [])}
+        expected = mirror_package.source_compile_options.evaluate(
+            pulp_files, options, exported, targets, complete=True)
         self.assertEqual(applied, expected)
 
     def test_valid_landing_passes_with_pulp_identity(self) -> None:

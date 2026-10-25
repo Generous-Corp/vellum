@@ -10,13 +10,18 @@ info for it. A reconstruction that drops the option builds a different object
 and fails to link.
 
 This reads those calls from the CMake files themselves, so no list of files is
-kept by hand. It evaluates each call's enclosing if()/elseif()/else() chain
-against the configure the closure recorded (its Pulp options, the Darwin
-system, a single-config generator, AppleClang and no extra CMAKE_<LANG>_FLAGS)
-with three-valued logic: a branch that cannot be decided is "unknown". An
-option under an unknown branch, an option whose file cannot be resolved, a
-call inside a function or macro body, and any other per-source property
-(COMPILE_DEFINITIONS, COMPILE_FLAGS, INCLUDE_DIRECTORIES) set on an exported
+kept by hand. Source-file properties are directory-scoped in CMake, so each
+CMakeLists.txt is read as one scope with the modules it include()s inlined,
+and only a scope that creates an exported target is judged. Each call's
+enclosing if()/elseif()/else() chain is evaluated against the configure the
+closure recorded (its Pulp options, the Darwin system, a single-config
+generator, AppleClang and no extra CMAKE_<LANG>_FLAGS) with three-valued
+logic: a branch that cannot be decided, including one that reads a variable
+the configure does not record, is "unknown". In a judged scope, an option
+under an unknown branch, any property on a file that cannot be resolved, an
+include() that cannot be followed, a call to a function whose body sets
+per-source properties, and any property other than COMPILE_OPTIONS
+(COMPILE_DEFINITIONS, LANGUAGE, HEADER_FILE_ONLY, SKIP_* ...) on an exported
 source all fail closed instead of being guessed.
 
 The mirror package plan runs this over the landed mirror's CMake files; a
@@ -35,9 +40,11 @@ from typing import Iterable
 
 SOURCE_ROOT = "@src"
 OPTION_PROPERTIES = {"COMPILE_OPTIONS"}
-# Per-source properties that would change an exported object if set; none is
-# reconstructed, so setting one on an exported source fails closed.
-REFUSED_PROPERTIES = {"COMPILE_DEFINITIONS", "COMPILE_FLAGS", "INCLUDE_DIRECTORIES"}
+# Per-source properties known not to change what an exported source compiles
+# to. Every other property on an exported source, or on a file that cannot be
+# resolved, fails closed: COMPILE_DEFINITIONS, LANGUAGE, HEADER_FILE_ONLY,
+# SKIP_* and the rest are not reconstructed.
+INERT_PROPERTIES: frozenset[str] = frozenset()
 FALSE_CONSTANTS = {"", "0", "OFF", "NO", "FALSE", "N", "IGNORE", "NOTFOUND"}
 TRUE_CONSTANTS = {"1", "ON", "YES", "TRUE", "Y"}
 BINARY_OPS = {"STREQUAL", "MATCHES", "EQUAL", "LESS", "GREATER", "STRLESS", "STRGREATER",
@@ -243,7 +250,10 @@ class Condition:
         text, quoted = token
         if quoted:
             return text
-        return self.env.get(text, text) if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", text) else text
+        # A bare word CMake does not know as a variable reads as itself, but a
+        # variable the configure does not record (a parent scope's, a cache
+        # entry's) reads the same way, so it is undecidable here.
+        return self.env.get(text, UNKNOWN) if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", text) else text
 
     def primary(self) -> object:
         if self.keyword("("):
@@ -307,18 +317,24 @@ def configure_environment(options: dict[str, str]) -> dict[str, object]:
     return env
 
 
-def source_directory(path: str, cmake_files: set[str]) -> str:
-    """The CMAKE_CURRENT_SOURCE_DIR a file's top-level code runs with: its own
-    directory for a CMakeLists.txt, else the nearest enclosing directory that
-    has one (an included module runs in its includer's directory)."""
-    directory = posixpath.dirname(path)
-    if posixpath.basename(path) == "CMakeLists.txt":
-        return directory
-    while True:
-        candidate = posixpath.join(directory, "CMakeLists.txt") if directory else "CMakeLists.txt"
-        if candidate in cmake_files or not directory:
-            return directory
-        directory = posixpath.dirname(directory)
+def filename_component(path: str, mode: str, base: str, env: dict[str, object]) -> object:
+    """get_filename_component() for the modes a source path computation uses."""
+    expanded = expand(path, env)
+    if expanded is UNKNOWN:
+        return UNKNOWN
+    text = str(expanded)
+    if mode in {"ABSOLUTE", "REALPATH"}:
+        if not text.startswith(SOURCE_ROOT):
+            if text.startswith("/"):
+                return UNKNOWN
+            text = posixpath.join(f"{SOURCE_ROOT}/{base}" if base else SOURCE_ROOT, text)
+        normalized = posixpath.normpath(text)
+        return normalized if normalized.startswith(SOURCE_ROOT) else UNKNOWN
+    if mode in {"DIRECTORY", "PATH"}:
+        return posixpath.dirname(text)
+    if mode == "NAME":
+        return posixpath.basename(text)
+    return UNKNOWN
 
 
 def resolve(file: str, base: str, env: dict[str, object]) -> object:
@@ -357,38 +373,110 @@ def per_source_properties(cmd: Command) -> tuple[list[tuple[str, bool]], list[tu
     return None
 
 
-def evaluate(files: dict[str, str], options: dict[str, str], exported: Iterable[str]) -> dict[str, list[str]]:
-    """Pulp-relative exported source -> the COMPILE_OPTIONS Pulp's CMake applies to it."""
-    exported = set(exported)
-    cmake_files = set(files)
-    result: dict[str, list[str]] = {}
-    errors: list[str] = []
+def _sets_source_properties(cmd: Command) -> bool:
+    return cmd.name == "set_source_files_properties" or (
+        cmd.name == "set_property" and bool(cmd.args) and cmd.args[0][0] == "SOURCE")
+
+
+def function_index(files: dict[str, str]) -> dict[str, bool]:
+    """Every user function/macro (lower-cased) -> whether its body sets a per-source property."""
+    index: dict[str, bool] = {}
     for path in sorted(files):
-        env = configure_environment(options)
-        base = source_directory(path, cmake_files)
-        env["CMAKE_CURRENT_SOURCE_DIR"] = f"{SOURCE_ROOT}/{base}" if base else SOURCE_ROOT
-        env["CMAKE_CURRENT_LIST_DIR"] = f"{SOURCE_ROOT}/{posixpath.dirname(path)}" if posixpath.dirname(path) else SOURCE_ROOT
-        # Each frame: [active, decided]; active is True/False/UNKNOWN,
-        # decided says an earlier branch of the chain was (or may have been) taken.
+        current: list[str] = []
+        for cmd in commands(files[path], path):
+            if cmd.name in {"function", "macro"} and cmd.args:
+                current.append(cmd.args[0][0].lower())
+                index.setdefault(current[-1], False)
+            elif cmd.name in {"endfunction", "endmacro"}:
+                if current:
+                    current.pop()
+            elif current and _sets_source_properties(cmd):
+                index[current[-1]] = True
+    return index
+
+
+class _DirectoryScope:
+    """Top-level code of one CMakeLists.txt with its include()d modules inlined.
+
+    Source-file properties are directory-scoped in CMake: a call is seen only
+    by targets created in the same directory. So only a scope that creates an
+    exported target can change an exported object.
+    """
+
+    def __init__(self, files: dict[str, str], options: dict[str, str], exported: set[str],
+                 functions: dict[str, bool], root: str, complete: bool) -> None:
+        self.files = files
+        self.complete = complete
+        self.unseen: set[str] = set()
+        self.exported = exported
+        self.functions = functions
+        self.base = posixpath.dirname(root)
+        self.env = configure_environment(options)
+        self.env["CMAKE_CURRENT_SOURCE_DIR"] = f"{SOURCE_ROOT}/{self.base}" if self.base else SOURCE_ROOT
+        self.created: set[str] = set()
+        self.result: dict[str, list[str]] = {}
+        self.errors: list[str] = []
+        self.stack: list[str] = []
+        self.run(root, True)
+
+    def include_target(self, cmd: Command, where: str) -> str | None:
+        words = [text for text, _ in cmd.args if text not in {"OPTIONAL", "NO_POLICY_SCOPE"}]
+        if not words:
+            return None
+        name = expand(words[0], self.env)
+        if name is UNKNOWN:
+            self.errors.append(f"{where}: include() of a file that cannot be resolved: {words[0]}")
+            return None
+        text = str(name)
+        if "/" not in text and not text.endswith(".cmake"):
+            module = f"tools/cmake/{text}.cmake"
+            # Not in the module path the source tree supplies: a CMake module.
+            return module if module in self.files else None
+        resolved = resolve(text, self.base, self.env)
+        if resolved is UNKNOWN:
+            self.errors.append(f"{where}: include() of a file that cannot be resolved: {text}")
+            return None
+        if resolved not in self.files:
+            if "OPTIONAL" not in [t for t, _ in cmd.args]:
+                if self.complete:
+                    self.errors.append(f"{where}: include() of {text}, which is not in the scanned tree")
+                else:
+                    self.unseen.add(str(resolved))
+            return None
+        return str(resolved)
+
+    def run(self, path: str, outer: object) -> None:
+        if path in self.stack:
+            return
+        self.stack.append(path)
+        env = self.env
+        env["CMAKE_CURRENT_LIST_DIR"] = (
+            f"{SOURCE_ROOT}/{posixpath.dirname(path)}" if posixpath.dirname(path) else SOURCE_ROOT)
+        # Each frame: [active, decided]; decided says an earlier branch of the
+        # chain was (or may have been) taken.
         frames: list[list[object]] = []
         definition_depth = 0
 
         def effective() -> object:
-            value: object = True
+            value: object = outer
             for active, _ in frames:
                 value = kleene_and(value, active)
-            return UNKNOWN if definition_depth and value is not False else value
+            return value
 
-        for cmd in commands(files[path], path):
+        for cmd in commands(self.files[path], path):
+            where = f"{path}:{cmd.line}"
             if cmd.name in {"function", "macro"}:
                 definition_depth += 1
                 continue
             if cmd.name in {"endfunction", "endmacro"}:
                 definition_depth = max(0, definition_depth - 1)
                 continue
+            if definition_depth:
+                # A body runs only when called; calls are judged below.
+                continue
             if cmd.name == "if":
-                frames.append([Condition(cmd.args, env).evaluate(), None])
-                frames[-1][1] = frames[-1][0]
+                value = Condition(cmd.args, env).evaluate()
+                frames.append([value, value])
                 continue
             if cmd.name in {"elseif", "else"} and frames:
                 decided = frames[-1][1]
@@ -404,6 +492,19 @@ def evaluate(files: dict[str, str], options: dict[str, str], exported: Iterable[
             if state is False:
                 continue
             words = [text for text, _ in cmd.args]
+            if words and (cmd.name == "add_library" or cmd.name in self.functions):
+                self.created.add(words[0])
+            if cmd.name == "include":
+                target = self.include_target(cmd, where)
+                if target is not None:
+                    self.run(target, state)
+                    env["CMAKE_CURRENT_LIST_DIR"] = (
+                        f"{SOURCE_ROOT}/{posixpath.dirname(path)}" if posixpath.dirname(path) else SOURCE_ROOT)
+                continue
+            if self.functions.get(cmd.name):
+                self.errors.append(f"{where}: {cmd.name}() sets per-source properties from its "
+                                   "arguments, which cannot be evaluated here")
+                continue
             if cmd.name == "set" and words:
                 name = expand(words[0], env)
                 if name is UNKNOWN:
@@ -417,12 +518,19 @@ def evaluate(files: dict[str, str], options: dict[str, str], exported: Iterable[
                 env[str(name)] = joined if state is True else UNKNOWN
                 continue
             if cmd.name == "unset" and words:
-                env.pop(words[0], None) if state is True else env.__setitem__(words[0], UNKNOWN)
+                if state is True:
+                    env.pop(words[0], None)
+                else:
+                    env[words[0]] = UNKNOWN
                 continue
             if cmd.name == "option" and words:
                 if words[0] not in env:
                     default = words[2] if len(words) > 2 else "OFF"
                     env[words[0]] = default if state is True else UNKNOWN
+                continue
+            if cmd.name == "get_filename_component" and len(words) >= 3:
+                env[words[0]] = filename_component(words[1], words[2], self.base, env) \
+                    if state is True else UNKNOWN
                 continue
             if cmd.name == "get_property" and words:
                 generator = words[1:] == ["GLOBAL", "PROPERTY", "GENERATOR_IS_MULTI_CONFIG"]
@@ -431,36 +539,72 @@ def evaluate(files: dict[str, str], options: dict[str, str], exported: Iterable[
             parsed = per_source_properties(cmd)
             if parsed is None:
                 continue
-            sources, props = parsed
-            where = f"{path}:{cmd.line}"
-            relevant = [(prop, values) for prop, values in props
-                        if prop in OPTION_PROPERTIES or prop in REFUSED_PROPERTIES]
-            if not relevant:
+            self.apply(parsed, state, where)
+        self.stack.pop()
+
+    def apply(self, parsed: tuple[list[tuple[str, bool]], list[tuple[str, list[str]]]],
+              state: object, where: str) -> None:
+        sources, props = parsed
+        relevant = [(prop, values) for prop, values in props if prop not in INERT_PROPERTIES]
+        if not relevant:
+            return
+        for raw, _ in sources:
+            resolved = resolve(raw, self.base, self.env)
+            if resolved is not UNKNOWN and resolved not in self.exported:
                 continue
-            for raw, _ in sources:
-                resolved = resolve(raw, base, env)
-                if resolved is not UNKNOWN and resolved not in exported:
+            for prop, values in relevant:
+                if resolved is UNKNOWN:
+                    self.errors.append(f"{where}: {prop} on a file that cannot be resolved: {raw}")
                     continue
-                for prop, values in relevant:
-                    if resolved is UNKNOWN:
-                        if prop in OPTION_PROPERTIES:
-                            errors.append(f"{where}: {prop} on a file that cannot be resolved: {raw}")
-                        continue
-                    if prop in REFUSED_PROPERTIES:
-                        errors.append(f"{where}: {prop} on exported source {resolved} is not reconstructed")
-                        continue
-                    if state is UNKNOWN:
-                        errors.append(f"{where}: cannot decide whether {prop} applies to {resolved}")
-                        continue
-                    expanded = [expand(v, env) for v in values]
-                    if any(v is UNKNOWN for v in expanded):
-                        errors.append(f"{where}: {prop} for {resolved} names an unknown variable")
-                        continue
-                    flat = [part for v in expanded for part in str(v).split(";") if part]
-                    if resolved in result and result[resolved] != flat:
-                        errors.append(f"{where}: {resolved} is given {prop} twice")
-                        continue
-                    result[resolved] = flat
+                if prop not in OPTION_PROPERTIES:
+                    self.errors.append(f"{where}: {prop} on exported source {resolved} is not reconstructed")
+                    continue
+                if state is UNKNOWN:
+                    self.errors.append(f"{where}: cannot decide whether {prop} applies to {resolved}")
+                    continue
+                expanded = [expand(v, self.env) for v in values]
+                if any(v is UNKNOWN for v in expanded):
+                    self.errors.append(f"{where}: {prop} for {resolved} names an unknown variable")
+                    continue
+                flat = [part for v in expanded for part in str(v).split(";") if part]
+                if resolved in self.result and self.result[resolved] != flat:
+                    self.errors.append(f"{where}: {resolved} is given {prop} twice")
+                    continue
+                self.result[resolved] = flat
+
+
+def evaluate(files: dict[str, str], options: dict[str, str], exported: Iterable[str],
+             targets: Iterable[str] | None = None, *, complete: bool = False
+             ) -> dict[str, list[str]]:
+    """Pulp-relative exported source -> the COMPILE_OPTIONS Pulp's CMake applies to it.
+
+    Every CMakeLists.txt is a directory scope. Only the scopes that create one
+    of `targets` (None: every scope) are judged. `complete` says `files` is a
+    whole source tree (Pulp's): then every target must be created by a scanned
+    scope and every include() must be found. The landed mirror carries only
+    some of Pulp's CMake, so the package plan reads it with complete=False, and
+    the provenance test, reading all of Pulp, must reach the same answer.
+    """
+    exported = set(exported)
+    wanted = None if targets is None else set(targets)
+    functions = function_index(files)
+    result: dict[str, list[str]] = {}
+    errors: list[str] = []
+    created: set[str] = set()
+    for root in sorted(p for p in files if posixpath.basename(p) == "CMakeLists.txt"):
+        scope = _DirectoryScope(files, options, exported, functions, root, complete)
+        if wanted is not None and not (scope.created & wanted):
+            continue
+        created |= scope.created
+        errors.extend(scope.errors)
+        for source, flat in scope.result.items():
+            if source in result and result[source] != flat:
+                errors.append(f"{source} is given different COMPILE_OPTIONS in two directories")
+            result[source] = flat
+    if complete and wanted is not None:
+        missing = sorted(wanted - created)
+        if missing:
+            errors.append(f"no scanned directory creates {missing}")
     if errors:
         raise SourceOptionsError("; ".join(errors))
     return result

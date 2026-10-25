@@ -162,6 +162,7 @@ class MirrorPackagePlanTest(unittest.TestCase):
 
     def test_per_source_options_reach_the_target_and_the_cmake(self) -> None:
         self.add_mirror_file("mirror/core/runtime/CMakeLists.txt", (
+            b'add_library(pulp-runtime STATIC src/a.cpp)\n'
             b'if(APPLE)\n'
             b'    set_source_files_properties(src/a.cpp PROPERTIES COMPILE_OPTIONS "-fno-rtti")\n'
             b'endif()\n'))
@@ -179,6 +180,7 @@ class MirrorPackagePlanTest(unittest.TestCase):
     def test_per_source_option_for_an_uncompiled_source_is_refused(self) -> None:
         self.add_mirror_file("mirror/core/runtime/include/pulp/runtime/a.hpp", b"int a();\n")
         self.add_mirror_file("mirror/core/runtime/CMakeLists.txt", (
+            b'add_library(pulp-runtime STATIC src/a.cpp)\n'
             b'set_source_files_properties(include/pulp/runtime/a.hpp PROPERTIES COMPILE_OPTIONS "-O2")\n'))
         self.assertRefused("no mirrored target compiles")
 
@@ -338,10 +340,19 @@ class SourceCompileOptionsTest(unittest.TestCase):
 
     def test_module_resolves_against_its_includer(self) -> None:
         text = 'set_source_files_properties(src/b.cpp PROPERTIES COMPILE_OPTIONS -fno-exceptions)\n'
-        self.assertEqual(
-            mp.source_compile_options.evaluate(
-                {"core/x/CMakeLists.txt": "", "core/x/cmake/Mod.cmake": text}, self.RELEASE, self.EXPORTED),
-            {"core/x/src/b.cpp": ["-fno-exceptions"]})
+        files = {"core/x/CMakeLists.txt": 'add_library(x STATIC src/b.cpp)\ninclude(cmake/Mod.cmake)\n',
+                 "core/x/cmake/Mod.cmake": text}
+        self.assertEqual(mp.source_compile_options.evaluate(files, self.RELEASE, self.EXPORTED, {"x"}),
+                         {"core/x/src/b.cpp": ["-fno-exceptions"]})
+        # Only a directory that creates an exported target is judged.
+        self.assertEqual(mp.source_compile_options.evaluate(files, self.RELEASE, self.EXPORTED, {"y"}), {})
+
+    def test_complete_tree_requires_every_target_and_include(self) -> None:
+        files = {"core/x/CMakeLists.txt": 'add_library(x STATIC src/a.cpp)\ninclude(cmake/Missing.cmake)\n'}
+        self.assertEqual(mp.source_compile_options.evaluate(files, self.RELEASE, self.EXPORTED, {"x"}), {})
+        for targets in ({"x"}, {"x", "y"}):
+            with self.subTest(targets=targets), self.assertRaises(mp.source_compile_options.SourceOptionsError):
+                mp.source_compile_options.evaluate(files, self.RELEASE, self.EXPORTED, targets, complete=True)
 
     def test_undecidable_condition_on_an_exported_source_fails_closed(self) -> None:
         with self.assertRaises(mp.source_compile_options.SourceOptionsError):
@@ -350,10 +361,37 @@ class SourceCompileOptionsTest(unittest.TestCase):
         self.assertEqual(self.evaluate(
             'if(TARGET foo)\n  set_source_files_properties(src/c.cpp PROPERTIES COMPILE_OPTIONS "-O1")\nendif()\n'), {})
 
+    def assertFailsClosed(self, text: str, fragment: str) -> None:
+        with self.assertRaises(mp.source_compile_options.SourceOptionsError) as caught:
+            self.evaluate(text)
+        self.assertIn(fragment, str(caught.exception))
+
+    def test_variable_the_configure_does_not_record_is_undecidable(self) -> None:
+        # A parent scope's variable is not in the closure's configure; CMake
+        # would read the bare word as itself, which here would quietly be false.
+        self.assertFailsClosed(
+            'if(SOME_PARENT_VAR STREQUAL "ON")\n'
+            '  set_source_files_properties(src/a.cpp PROPERTIES COMPILE_OPTIONS "-O1")\nendif()\n',
+            "cannot decide whether COMPILE_OPTIONS applies to core/x/src/a.cpp")
+
+    def test_compile_definitions_on_an_unresolvable_file_fails_closed(self) -> None:
+        self.assertFailsClosed(
+            'set_source_files_properties(${GENERATED_SOURCE} PROPERTIES COMPILE_DEFINITIONS X=1)\n',
+            "COMPILE_DEFINITIONS on a file that cannot be resolved")
+
+    def test_any_other_property_on_an_exported_source_fails_closed(self) -> None:
+        for prop, value in (("LANGUAGE", "OBJCXX"), ("HEADER_FILE_ONLY", "ON"), ("SKIP_UNITY_BUILD_INCLUSION", "ON")):
+            with self.subTest(prop=prop):
+                self.assertFailsClosed(
+                    f'set_source_files_properties(src/a.cpp PROPERTIES {prop} {value})\n',
+                    f"{prop} on exported source core/x/src/a.cpp is not reconstructed")
+        # The same properties on a file the export does not carry are not its business.
+        self.assertEqual(self.evaluate('set_source_files_properties(src/c.cpp PROPERTIES LANGUAGE OBJCXX)\n'), {})
+
     def test_unresolvable_file_and_other_properties_fail_closed(self) -> None:
         for text in ('set_source_files_properties(${UNKNOWN_DIR}/a.cpp PROPERTIES COMPILE_OPTIONS "-O1")\n',
                      'set_source_files_properties(src/a.cpp PROPERTIES COMPILE_DEFINITIONS X=1)\n',
-                     'function(f)\n  set_source_files_properties(src/a.cpp PROPERTIES COMPILE_OPTIONS "-O1")\nendfunction()\n'):
+                     'function(f)\n  set_source_files_properties(${ARGV0} PROPERTIES COMPILE_OPTIONS "-O1")\nendfunction()\nf(src/a.cpp)\n'):
             with self.subTest(text=text), self.assertRaises(mp.source_compile_options.SourceOptionsError):
                 self.evaluate(text)
 

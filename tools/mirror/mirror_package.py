@@ -262,7 +262,8 @@ def source_compile_options_for(repo: Path, receipt: dict[str, Any],
     exported = {str(row.get("mirror_path", "")).removeprefix(f"{MIRROR_DIR}/")
                 for row in receipt.get("files", [])}
     try:
-        return source_compile_options.evaluate(mirror_cmake_files(repo), options, exported)
+        targets = {target["name"] for _, closure in units for target in closure.get("targets", [])}
+        return source_compile_options.evaluate(mirror_cmake_files(repo), options, exported, targets)
     except source_compile_options.SourceOptionsError as error:
         raise PlanError(f"per-source compile options: {error}") from error
 
