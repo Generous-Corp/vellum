@@ -59,6 +59,15 @@ def dump(value: object) -> str:
     return json.dumps(value, indent=2, sort_keys=True) + "\n"
 
 
+def isolate_git_base(case: unittest.TestCase) -> str | None:
+    """Hide the CI's VELLUM_GIT_BASE from fixture repositories, which do not
+    contain it; return it for the tests that verify this repository."""
+    patcher = mock.patch.dict(os.environ)
+    patcher.start()
+    case.addCleanup(patcher.stop)
+    return os.environ.pop("VELLUM_GIT_BASE", None)
+
+
 class Fixture:
     """A Pulp repository and a Vellum repository with one landed export."""
 
@@ -118,7 +127,14 @@ class Fixture:
         for path, content in mirrored.items():
             write(self.vellum, f"mirror/{path}", content)
         run(self.vellum, "add", "-A")
-        run(self.vellum, "commit", "-q", "-m", "mirror")
+        # git-filter-repo keeps the source commit's author, committer and
+        # message; the mirror commit stands for that rewrite of pulp_sha.
+        identity = run(self.pulp, "log", "-1", "--format=%aI%n%cI%n%B", self.pulp_sha).split("\n", 2)
+        subprocess.check_output(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+             "commit", "-q", "-m", identity[2].strip()],
+            cwd=self.vellum, text=True, stderr=subprocess.DEVNULL,
+            env=dict(os.environ, GIT_AUTHOR_DATE=identity[0], GIT_COMMITTER_DATE=identity[1]))
         self.mirror_sha = run(self.vellum, "rev-parse", "HEAD")
         run(self.vellum, "checkout", "-q", "-f", "main")
         run(self.vellum, "merge", "-q", "--no-edit", "--allow-unrelated-histories", self.mirror_sha)
@@ -245,6 +261,7 @@ class VerifyMirrorExportTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.base = Path(self.temporary.name)
+        self.ci_git_base = isolate_git_base(self)
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -256,7 +273,8 @@ class VerifyMirrorExportTests(unittest.TestCase):
         receipts = verify_mirror_export.landed_receipts(REPO)
         has_mirror = verify_mirror_export.git_ok(REPO, "cat-file", "-e", "HEAD:mirror")
         self.assertEqual(bool(receipts), has_mirror, "mirror/ and the receipt index disagree")
-        report = verify_mirror_export.verify(REPO)
+        with mock.patch.dict(os.environ, {"VELLUM_GIT_BASE": self.ci_git_base} if self.ci_git_base else {}):
+            report = verify_mirror_export.verify(REPO)
         self.assertEqual(report["status"], "pass", report["errors"])
         self.assertEqual(report["receipts"], receipts)
 
@@ -269,7 +287,8 @@ class VerifyMirrorExportTests(unittest.TestCase):
             # this proof is never skipped there.
             self.skipTest("Pulp identity is proved where MIRROR_PULP_ROOT names a Pulp checkout")
         pulp_root = Path(pulp_root_env).resolve() if pulp_root_env else None
-        report = verify_mirror_export.verify(REPO, pulp_root)
+        with mock.patch.dict(os.environ, {"VELLUM_GIT_BASE": self.ci_git_base} if self.ci_git_base else {}):
+            report = verify_mirror_export.verify(REPO, pulp_root)
         self.assertEqual(report["status"], "pass", report["errors"])
         self.assertEqual(report["receipts"], receipts)
         # The equivalent of `verify_mirror_export.py --require-pulp-identity`,
@@ -278,7 +297,7 @@ class VerifyMirrorExportTests(unittest.TestCase):
         for receipt_path in receipts:
             receipt = json.loads((REPO / receipt_path).read_text(encoding="utf-8"))
             self.assertEqual(
-                verify_mirror_export.verify_receipt_against_pulp(pulp_root, receipt),
+                verify_mirror_export.verify_receipt_against_pulp(pulp_root, receipt, REPO),
                 [],
                 receipt_path,
             )
@@ -1167,6 +1186,7 @@ class PrunedSourceReceiptTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.base = Path(self.temporary.name)
+        self.ci_git_base = isolate_git_base(self)
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -1196,12 +1216,44 @@ class PrunedSourceReceiptTests(unittest.TestCase):
         )
         self.assertEqual(fixture.errors(), [])
         receipt = json.loads((fixture.vellum / fixture.receipt_path).read_text())
-        errors = verify_mirror_export.verify_receipt_against_pulp(fixture.pulp, receipt)
-        self.assertEqual(
+        errors = verify_mirror_export.verify_receipt_against_pulp(fixture.pulp, receipt, fixture.vellum)
+        self.assertIn(
+            f"mirror/core/canvas/src/canvas.cpp differs between mirror_source {receipt['mirror_source']['sha']} "
+            f"and Pulp {fixture.pulp_sha}",
             errors,
-            [f"mirror/core/canvas/src/canvas.cpp differs between mirror_source {receipt['mirror_source']['sha']} "
-             f"and Pulp {fixture.pulp_sha}"],
         )
+
+    def test_forged_source_between_the_real_source_and_pulp_sha_fails(self) -> None:
+        # The mirror commit is the rewrite of the fixture's first Pulp commit A.
+        # Naming a later commit X (here R^1, which changes no exported path) as
+        # the source passes every content and map check; only the rewrite's
+        # identity can tell X from A.
+        fixture = Fixture(self.base)
+        real_source = fixture.pulp_sha
+        pulp_sha = prune_export(
+            fixture,
+            before={"core/audio/engine.cpp": b"int audio = 2;\n"},
+            after={"core/audio/engine.cpp": b"int audio = 3;\n"},
+        )
+        receipt = json.loads((fixture.vellum / fixture.receipt_path).read_text())
+        forged = receipt["mirror_source"]["sha"]
+        self.assertEqual(forged, run(fixture.pulp, "rev-parse", f"{pulp_sha}^1"))
+        self.assertNotEqual(forged, real_source)
+        self.assertEqual(fixture.errors(), [])
+        errors = verify_mirror_export.verify_receipt_against_pulp(fixture.pulp, receipt, fixture.vellum)
+        self.assertEqual(errors, [
+            f"mirror commit {fixture.mirror_sha} was not rewritten from mirror_source {forged}: "
+            "its author, committer or message differs"])
+        self.assertError(verify_mirror_export.verify(fixture.vellum, fixture.pulp)["errors"],
+                         "was not rewritten from mirror_source")
+
+    def test_binding_needs_the_vellum_repository(self) -> None:
+        fixture = Fixture(self.base)
+        prune_export(fixture, after={"core/audio/engine.cpp": b"int audio = 1;\n"})
+        receipt = json.loads((fixture.vellum / fixture.receipt_path).read_text())
+        self.assertEqual(verify_mirror_export.verify_receipt_against_pulp(fixture.pulp, receipt, fixture.vellum), [])
+        self.assertIn("cannot be bound", " ".join(
+            verify_mirror_export.verify_receipt_against_pulp(fixture.pulp, receipt)))
 
     def test_source_that_is_not_an_ancestor_fails(self) -> None:
         fixture = Fixture(self.base)
@@ -1275,6 +1327,7 @@ class ReceiptHistoryTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.base = Path(self.temporary.name)
+        self.ci_git_base = isolate_git_base(self)
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -1317,16 +1370,27 @@ class ReceiptHistoryTests(unittest.TestCase):
                 "receipt index may only append",
             )
 
-    def test_unresolvable_named_base_falls_back_to_main(self) -> None:
-        # A push's all-zero `before` names no commit; main still holds the line.
+    def test_unresolvable_named_base_falls_back_to_the_replaced_tip(self) -> None:
+        # A push's all-zero `before` names no commit. The merge base with main
+        # would be HEAD itself and compare nothing, so HEAD's first parent, the
+        # tip the push replaced, is the base.
         fixture = Fixture(self.base)
         with mock.patch.dict(os.environ, {"VELLUM_GIT_BASE": "0" * 40}):
             self.assertEqual(fixture.errors(), [])
-            run(fixture.vellum, "checkout", "-q", "-b", "topic")
             write(fixture.vellum, fixture.receipt_path, (fixture.vellum / fixture.receipt_path).read_bytes() + b"\n")
-            run(fixture.vellum, "commit", "-qam", "modify old receipt")
+            run(fixture.vellum, "commit", "-qam", "modify old receipt on main")
             self.assertError(fixture.errors(), f"receipt file changed from the merge base: {fixture.receipt_path}")
 
+    def test_unresolvable_named_base_on_a_root_commit_fails_closed(self) -> None:
+        repo = self.base / "lone"
+        repo.mkdir()
+        run(repo, "init", "-q", "-b", "main")
+        write(repo, "README.md", "x\n")
+        run(repo, "add", "-A")
+        run(repo, "commit", "-q", "-m", "root")
+        with mock.patch.dict(os.environ, {"VELLUM_GIT_BASE": "0" * 40}):
+            self.assertEqual(verify_mirror_export.receipt_history_errors(repo, [], []),
+                             [f"receipt history base is unavailable: {'0' * 40} names no commit and HEAD has no parent"])
 
 if __name__ == "__main__":
     unittest.main()

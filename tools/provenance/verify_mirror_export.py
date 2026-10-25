@@ -967,7 +967,8 @@ def verify_receipt(
     return errors
 
 
-def verify_receipt_against_pulp(pulp_root: Path, receipt: dict[str, Any]) -> list[str]:
+def verify_receipt_against_pulp(pulp_root: Path, receipt: dict[str, Any],
+                                root: Path | None = None) -> list[str]:
     errors: list[str] = []
     pulp_sha = receipt["pulp_sha"]
     if not git_ok(pulp_root, "cat-file", "-e", f"{pulp_sha}^{{commit}}"):
@@ -991,12 +992,43 @@ def verify_receipt_against_pulp(pulp_root: Path, receipt: dict[str, Any]) -> lis
         errors.append(f"tool blob differs from Pulp {pulp_sha}:{tool['path']}")
     source = receipt.get("mirror_source")
     if isinstance(source, dict):
-        errors.extend(mirror_source_against_pulp(pulp_root, receipt, source["sha"]))
+        errors.extend(mirror_source_against_pulp(pulp_root, receipt, source["sha"], root))
     return errors
 
 
-def mirror_source_against_pulp(pulp_root: Path, receipt: dict[str, Any], source: str) -> list[str]:
-    """mirror_source.sha is a strict Pulp ancestor of pulp_sha with every exported file unchanged."""
+def commit_identity(repo: Path, commit: str) -> tuple[str, str, bytes] | None:
+    """(author, committer, message) of a commit: the fields git-filter-repo keeps.
+
+    The rewrite drops signatures (gpgsig, mergetag) and changes tree and
+    parents; the author and committer lines, dates included, and the message
+    pass through.
+    """
+    raw = subprocess.run(["git", "cat-file", "commit", commit], cwd=repo,
+                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    if raw.returncode != 0:
+        return None
+    header, _, message = raw.stdout.partition(b"\n\n")
+    fields = {}
+    for line in header.split(b"\n"):
+        key, _, value = line.partition(b" ")
+        if key in (b"author", b"committer"):
+            fields[key] = value.decode("utf-8", "replace")
+    if set(fields) != {b"author", b"committer"}:
+        return None
+    return fields[b"author"], fields[b"committer"], message
+
+
+def mirror_source_against_pulp(pulp_root: Path, receipt: dict[str, Any], source: str,
+                               root: Path | None = None) -> list[str]:
+    """mirror_source.sha is a strict Pulp ancestor of pulp_sha with every exported file
+    unchanged, and the commit the mirror commit was rewritten from.
+
+    The commit map and ref map name the source but are files a lander writes,
+    so any commit between the real source and pulp_sha whose exported files
+    are unchanged could be named in its place. The mirror commit carries its
+    source's author, committer and message through the rewrite, which binds
+    it to exactly one Pulp commit.
+    """
     pulp_sha = receipt["pulp_sha"]
     if not git_ok(pulp_root, "cat-file", "-e", f"{source}^{{commit}}"):
         return [f"mirror_source {source} is not a commit in {pulp_root}"]
@@ -1012,6 +1044,15 @@ def mirror_source_against_pulp(pulp_root: Path, receipt: dict[str, Any], source:
     for row in receipt["files"]:
         if at_source.get(row["pulp_path"]) != (row["mode"], row["blob"]):
             errors.append(f"{row['mirror_path']} differs between mirror_source {source} and Pulp {pulp_sha}")
+    if root is None:
+        errors.append("mirror_source cannot be bound to the mirror commit without the Vellum repository")
+        return errors
+    mirrored = commit_identity(root, receipt["mirror_sha"])
+    original = commit_identity(pulp_root, source)
+    if mirrored is None or original is None or mirrored != original:
+        errors.append(
+            f"mirror commit {receipt['mirror_sha']} was not rewritten from mirror_source {source}: "
+            "its author, committer or message differs")
     return errors
 
 
@@ -1028,17 +1069,24 @@ def landed_receipts(root: Path) -> list[str]:
 def receipt_history_errors(root: Path, receipts: list[str], stored: list[str]) -> list[str]:
     """Reject removal or mutation of receipts present at the merge base.
 
-    The base is the merge base of HEAD with the first of VELLUM_GIT_BASE (the
-    CI base commit), main and origin/main that this repository resolves. A
-    named base it cannot resolve (a push's all-zero `before`, or a commit of
-    another repository) falls back to main. With none of them there is nothing
-    to compare against.
+    The base is the merge base of HEAD with VELLUM_GIT_BASE, the CI base
+    commit. When that names nothing this repository has (a push's all-zero
+    `before`), the base is HEAD's first parent, the tip the push replaced; a
+    root commit then has no base and fails closed. Without VELLUM_GIT_BASE
+    (a local run) the base is the merge base with main or origin/main,
+    whichever resolves first, and with neither there is nothing to compare.
     """
     configured = os.environ.get("VELLUM_GIT_BASE")
-    refs = [ref for ref in (configured, "main", "origin/main") if ref]
-    base = next((found for found in (git_try(root, "merge-base", "HEAD", ref) for ref in refs) if found), None)
-    if base is None:
-        return []
+    if configured:
+        base = git_try(root, "merge-base", "HEAD", configured) or git_try(
+            root, "rev-parse", "--verify", "--quiet", "HEAD^1")
+        if base is None:
+            return [f"receipt history base is unavailable: {configured} names no commit and HEAD has no parent"]
+    else:
+        base = next((found for found in (git_try(root, "merge-base", "HEAD", ref)
+                                         for ref in ("main", "origin/main")) if found), None)
+        if base is None:
+            return []
     base_index_text = git_try(root, "show", f"{base}:{INDEX_PATH}")
     if base_index_text is None:
         return [f"receipt history index is unavailable at {base}"]
@@ -1120,7 +1168,7 @@ def verify(root: Path, pulp_root: Path | None = None) -> dict[str, Any]:
         )
         errors.extend(receipt_errors)
         if pulp_root is not None and not receipt_errors:
-            errors.extend(f"{receipt_path}: {e}" for e in verify_receipt_against_pulp(pulp_root, receipt))
+            errors.extend(f"{receipt_path}: {e}" for e in verify_receipt_against_pulp(pulp_root, receipt, root))
             pulp_checked = True
     return {
         "status": "pass" if not errors else "fail",
