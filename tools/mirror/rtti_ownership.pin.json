@@ -1,10 +1,10 @@
 {
   "schema": "vellum.vendored-pulp-file-pin.v1",
   "pulp_repository": "Generous-Corp/pulp",
-  "pulp_commit": "3766cb2403cc5c0d0b9cdef28a9c879caf5a0be0",
+  "pulp_commit": "af45570bc975f9fcefa9e5068b4c5264d7dfb606",
   "pulp_path": "tools/scripts/rtti_ownership.py",
   "vendored_path": "tools/mirror/rtti_ownership.py",
-  "git_blob": "723036bf43c0f2c2eb5d0fb4af3d2099aa5f5796",
+  "git_blob": "c99a1c5a77b77420684c9c0f43a8cfb4e74299e0",
   "update_procedure": [
     "Land the change in Pulp first.",
     "Copy Pulp's tools/scripts/rtti_ownership.py at that Pulp commit byte-for-byte to tools/mirror/rtti_ownership.py.",
