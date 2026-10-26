@@ -255,3 +255,109 @@ with the observer's `--gpu-fault` (destroyed device, undrawn frame, reported
 and unreported CPU fallback) and with a real second Dawn inserted into the
 process. Without `VELLUM_PARITY_SECOND_DAWN_DYLIB` that last control applies to
 no case, and calibration reports NOT CALIBRATED.
+
+## Pulp product validation (not Vellum gates)
+
+The artifact and platform lanes below, with their `pulp-artifact-*` and
+`pulp-platform-*` corpora and the `pulp-artifact-*` and `pulp-platform`
+implementations, validate built **Pulp** artifacts (Pulp-vs-Pulp calibration for
+the Pulp-to-Vellum migration matrix). They are not on any Vellum required check
+and must not be added to one: a Vellum change cannot fail them, and they need
+Pulp build outputs, simulators and emulators that Vellum CI does not provide. The
+lane code and corpora relocate to Pulp in Phase 5.
+
+## Artifact lanes
+
+`lanes/artifact.py` checks the static shape of a built artifact without running
+it, for build modes no host on this machine can execute (a universal image's
+x86_64 slice, an iOS-simulator extension, an Android library). Each side runs
+`lanes/artifact_runner.py`, which records every file, the architectures and
+build platform of every Mach-O, the machine of every ELF image, Info.plist keys,
+codesign results, and, per architecture of the main image, symbol counts for the
+families named in `corpus/fixtures/artifact/scan.json`. A case selects only the
+lanes that apply to its artifact:
+
+- `artifact-slices`: every Mach-O carries exactly the case's architectures and
+  platform; every ELF image has the case's machine.
+- `artifact-runtimes`: each named bundled runtime is present, has the case's
+  architectures, and is loaded by every slice of the main image.
+- `artifact-bundle`: the Info.plist reads and matches, the main image exists, and
+  every required path is present.
+- `artifact-signature`: either the sealed bundle verifies, or each named slice of
+  the main image verifies on its own. A development build carries only the
+  linker's signature.
+- `artifact-linkfloor`: in each slice there is no forbidden symbol family and no
+  forbidden load command, every required family is present, and each
+  `require_load_once` load command appears exactly once.
+
+The controls fault a copy of the artifact:
+
+- a wrong-architecture slice;
+- a thinned bundled runtime;
+- a missing runtime or resource;
+- a flipped byte under the signature;
+- a differently linked image in place of this one.
+
+```sh
+python3 <vellum>/tools/parity/parity_harness.py calibrate \
+  --lane-module <vellum>/tools/parity/lanes/artifact.py \
+  --corpus <vellum>/tools/parity/corpus/pulp-artifact-macos-universal.json \
+  --implementation <vellum>/tools/parity/implementations/pulp-artifact-macos.json \
+  --source-root <checkout> --tool runner=<vellum>/tools/parity/lanes/artifact_runner.py \
+  --tool host-runner=<vellum>/tools/parity/lanes/host_runner.py --root checkout=<checkout> \
+  --root gain.clap=<build>/CLAP/<audio-only>.clap ... --root gpu.component=<build>/AU/<gpu>.component --out <dir>
+python3 <vellum>/tools/parity/test_artifact_lane.py   # universal fixture bundles built with clang
+```
+
+## Platform lanes
+
+`lanes/platforms.py` covers the platforms whose plug-ins and apps a Mac cannot
+host. A lane is named for what it actually observes. Only `web-wam-wclap` and
+`android-host-checks` run the artifact in a host; the static and install lanes
+do not stand in for a platform's host checks (validators, two plug-ins in one
+process, editor lifecycle, offline render).
+Each side runs `lanes/platform_runner.py`, which writes
+`platform-observation.json`:
+
+- `linux-elf-static`: every ELF image has the case's machine and type. Each named image
+  exports its format's entry points, needs the libraries the case requires and
+  none it forbids, and carries no symbol of a forbidden family. Optionally it
+  exports nothing that matches a forbidden pattern: internal symbols are
+  interposed between two plug-ins in one host process.
+- `windows-sdk-pe`: the same over PE images: machine, DLL or executable, subsystem,
+  imported and delay-imported DLLs, and exported names.
+- `web-wam-wclap`: each WebAssembly module has the exports its ABI needs and
+  imports only allowed modules. Pulp's own Node host checks for the module exit
+  0 and print PASS.
+- `ios-install-registration`: the host app and every embedded extension verify as sealed
+  bundles, and the app installs on the booted simulator. The installed app
+  carries each extension, with the case's extension point, and pluginkit lists
+  it. The simulator installs broken seals, so the seal is checked by codesign.
+- `android-host-checks`: the APK carries the required native libraries, and each
+  exports the JNI symbol of every native method the case lists. The APK
+  installs, its activity starts and the process is alive after the settle time.
+  No fatal exception is logged and every required log marker appears.
+
+Every control faults a copy of the artifact's bytes:
+
+- a swapped machine;
+- an export, import or DT_NEEDED renamed in place;
+- a dropped path;
+- a byte flipped under the old signature;
+- an extension point rewritten and re-sealed;
+- an APK library removed, or its `JNI_OnLoad` renamed, then the APK re-signed
+  with the debug key.
+
+A host mode with no booted simulator or attached device exits 77, so the lane
+reports blocked, never pass.
+
+```sh
+python3 <vellum>/tools/parity/parity_harness.py calibrate \
+  --lane-module <vellum>/tools/parity/lanes/platforms.py \
+  --corpus <vellum>/tools/parity/corpus/pulp-platform-linux-clap.json \
+  --implementation <vellum>/tools/parity/implementations/pulp-platform.json \
+  --source-root <checkout> --tool runner=<vellum>/tools/parity/lanes/platform_runner.py \
+  --tool host-runner=<vellum>/tools/parity/lanes/host_runner.py --root checkout=<checkout> \
+  --root artifact=<artifacts> --root other=<any second artifact> --out <dir>
+python3 <vellum>/tools/parity/test_platform_lane.py   # ELF, PE and wasm fixtures assembled in the test
+```
