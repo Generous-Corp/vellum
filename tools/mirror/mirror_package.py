@@ -404,6 +404,22 @@ def apply_patch(name: str, patch: str, root: Path) -> None:
     header.write_text(text.replace(CHOC_JSON_BEFORE, CHOC_JSON_AFTER), encoding="utf-8")
 
 
+def dependency_source_dir(name: str, root: Path) -> Path:
+    """The directory the mirror build adds for a fetched dependency.
+
+    A recipe's `source_subdir` names the project to build inside the fetched
+    tree, as FetchContent's SOURCE_SUBDIR does; Yoga's top level also adds its
+    own tests, which the mirror never builds.
+    """
+    subdir = DEPENDENCIES[name].get("source_subdir")
+    if not subdir:
+        return root
+    candidate = root / subdir
+    if not (candidate / "CMakeLists.txt").is_file():
+        raise PlanError(f"{name} has no {subdir}/CMakeLists.txt to build")
+    return candidate
+
+
 def prepare_dependencies(deps: dict[str, dict[str, Any]], deps_dir: Path, skia_dir: Path | None,
                          skia_asset_sha256: str | None) -> dict[str, Path]:
     roots: dict[str, Path] = {}
@@ -685,7 +701,8 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
     if unattached:
         raise PlanError(f"per-source compile options name sources no mirrored target compiles: {unattached}")
     cmake_deps = {
-        name: {"dir": str(roots[name]), "options": DEPENDENCIES[name].get("options", {}),
+        name: {"dir": str(dependency_source_dir(name, roots[name])),
+               "options": DEPENDENCIES[name].get("options", {}),
                "provides": DEPENDENCIES[name].get("provides", [])}
         for name in sorted(roots) if DEPENDENCIES[name]["kind"] == "cmake"
     }

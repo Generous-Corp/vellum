@@ -214,6 +214,18 @@ class MirrorPackagePlanTest(unittest.TestCase):
         self.fixture.write_receipt()
         self.assertRefused("links skia archive")
 
+    def test_dependency_source_subdir_is_the_built_project(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "CMakeLists.txt").write_text("add_subdirectory(yoga)\nadd_subdirectory(tests)\n")
+            (root / "yoga").mkdir()
+            (root / "yoga" / "CMakeLists.txt").write_text("add_library(yogacore STATIC x.cpp)\n")
+            self.assertEqual(mp.dependency_source_dir("yoga", root), root / "yoga")
+            self.assertEqual(mp.dependency_source_dir("sdl3", root), root)
+            (root / "yoga" / "CMakeLists.txt").unlink()
+            with self.assertRaisesRegex(mp.PlanError, "no yoga/CMakeLists.txt"):
+                mp.dependency_source_dir("yoga", root)
+
     def test_dependency_without_a_recipe_is_refused(self) -> None:
         self.fixture.closure["external_inputs"][0]["path"] = f"@external/unknown/{'b' * 40}/x.h"
         self.fixture.write_receipt()
