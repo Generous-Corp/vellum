@@ -572,6 +572,18 @@ def validate_node_runtime(
     return True
 
 
+# The native host and the libraries it loads at launch. The artifact builder
+# keeps the same list, without the payload's "sdk/" prefix.
+NATIVE_HOST_FILES = (
+    "sdk/bin/vellum-app-host",
+    "sdk/lib/libvellum-authoring.dylib",
+    "sdk/lib/libvellum-gpu.dylib",
+    "sdk/lib/libvellum-skia-dawn-provider.dylib",
+    "sdk/mirror/lib/libvellum-mirror-foundation.dylib",
+    "sdk/mirror/lib/libvellum-mirror-state-core.dylib",
+)
+
+
 def derived_capabilities(
     contents: dict[str, bytes],
     payload_records: dict[str, dict[str, object]],
@@ -591,17 +603,7 @@ def derived_capabilities(
         "vellum_png.py",
         "vellum_scenario.py",
     }.issubset(contents)
-    native_host = all(
-        path in contents
-        for path in (
-            "sdk/bin/vellum-app-host",
-            "sdk/lib/libvellum-authoring.dylib",
-            "sdk/lib/libvellum-gpu.dylib",
-            "sdk/lib/libvellum-skia-dawn-provider.dylib",
-            "sdk/mirror/lib/libvellum-mirror-foundation.dylib",
-            "sdk/mirror/lib/libvellum-mirror-state-core.dylib",
-        )
-    )
+    native_host = all(path in contents for path in NATIVE_HOST_FILES)
     node_runtime = validate_node_runtime(
         contents, payload_records, target
     )

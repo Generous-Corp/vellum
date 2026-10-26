@@ -45,6 +45,16 @@ MIRROR_PACKAGE_FILES = (
     "mirror/lib/libvellum-mirror-canvas.dylib",
     "mirror/lib/libvellum-mirror-state-core.dylib",
 )
+# The native host and the libraries it loads at launch. The installer keeps
+# the same list under the payload's "sdk/" prefix.
+NATIVE_HOST_FILES = (
+    "bin/vellum-app-host",
+    "lib/libvellum-authoring.dylib",
+    "lib/libvellum-gpu.dylib",
+    "lib/libvellum-skia-dawn-provider.dylib",
+    "mirror/lib/libvellum-mirror-foundation.dylib",
+    "mirror/lib/libvellum-mirror-state-core.dylib",
+)
 UI_PAYLOAD_ENTRIES = (
     "LICENSE.md", "README.md", "package.json", "package-lock.json", "scripts", "src", "test",
 )
@@ -158,14 +168,7 @@ def derive_capabilities(payload: Path, install_tree: Path) -> dict[str, object]:
     native_backend = all((payload / name).is_file() for name in (
         "vellum_native_backend.py", "vellum_png.py", "vellum_scenario.py",
     ))
-    native_host = all((install_tree / path).is_file() for path in (
-        "bin/vellum-app-host",
-        "lib/libvellum-authoring.dylib",
-        "lib/libvellum-gpu.dylib",
-        "lib/libvellum-skia-dawn-provider.dylib",
-        "mirror/lib/libvellum-mirror-foundation.dylib",
-        "mirror/lib/libvellum-mirror-state-core.dylib",
-    ))
+    native_host = all((install_tree / path).is_file() for path in NATIVE_HOST_FILES)
     node_runtime = (
         any((payload / name).is_file() for name in ("node/bin/node", "node/bin/node.exe"))
         and (payload / "node/LICENSE").is_file()

@@ -282,6 +282,12 @@ class SdkArtifactTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
         return completed
 
+    def test_installer_requires_the_native_host_files_the_builder_requires(self) -> None:
+        builder = runpy.run_path(str(BUILDER))["NATIVE_HOST_FILES"]
+        installer = runpy.run_path(str(REPO / "scripts/install_core.py"))["NATIVE_HOST_FILES"]
+        self.assertEqual(sorted(installer), sorted(f"sdk/{path}" for path in builder))
+        self.assertIn("mirror/lib/libvellum-mirror-state-core.dylib", builder)
+
     def test_native_command_claims_require_every_composed_payload(self) -> None:
         derive_capabilities = runpy.run_path(str(BUILDER))["derive_capabilities"]
         with tempfile.TemporaryDirectory() as temporary:

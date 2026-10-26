@@ -186,10 +186,12 @@ Vellum dependencies. Versions and licenses were cross-checked against Pulp's
 
 ### Units built into the native SDK
 
-The macOS arm64 GPU SDK compiles the landed `foundation` and `canvas` units
-into `sdk/mirror/lib/libvellum-mirror-foundation.dylib` and
-`sdk/mirror/lib/libvellum-mirror-canvas.dylib`
-(`tools/mirror/VellumMirror.cmake`). The units' external inputs above are
+The macOS arm64 GPU SDK compiles every unit of the current mirror receipt
+(`foundation`, `gpu-device-api`, `canvas`, `render-2d`, `state-core`,
+`view-core`, `design-import` and `view-script`) into one
+`sdk/mirror/lib/libvellum-mirror-<unit>.dylib` each
+(`tools/mirror/VellumMirror.cmake`). The provider loads the foundation and
+state-core libraries at launch. The units' external inputs above are
 fetched at the commits their closure manifests pin, and every file a closure
 lists is checked against its recorded SHA-256 before configure
 (`tools/mirror/mirror_package.py`). Highway, Mbed TLS, SheenBidi, Brotli,
