@@ -78,6 +78,21 @@ def require(condition: bool, message: str) -> None:
         raise VerificationError(message)
 
 
+def underscore_keys(value: object, where: str = "") -> list[str]:
+    """Every dict key starting with "_", anywhere in a JSON value."""
+    found: list[str] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            path = f"{where}.{key}" if where else str(key)
+            if str(key).startswith("_"):
+                found.append(path)
+            found.extend(underscore_keys(item, path))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            found.extend(underscore_keys(item, f"{where}[{index}]"))
+    return found
+
+
 def signing_payload(attestation: dict[str, object]) -> bytes:
     """The exact bytes the owner signs: the canonical record and artifact digest.
 
@@ -193,17 +208,130 @@ def zip_contents(path: Path) -> dict[str, bytes]:
         return {name: handle.read(info) for name, info in members.items() if not info.is_dir()}
 
 
+# Fields of a rebound manifest that carry the rebuild's license mapping and
+# source identity; they must be the rebuild manifest's, unchanged.
+MANIFEST_INVENTORY_FIELDS = ("schema", "license_resolution", "cell", "source_revisions", "repositories",
+                             "files", "licenses", "toolchain_inputs", "target_graph", "gaps",
+                             "exhaustive")
+
+
+def zip_member_rows(manifest: dict, label: str) -> dict[str, str]:
+    """zip member name -> sha256, refusing a manifest that lists a name twice."""
+    rows = manifest.get("zip_members") or []
+    names = [row.get("name") for row in rows]
+    require(len(names) == len(set(names)), f"the {label} lists a zip member more than once")
+    return {row.get("name"): row.get("sha256") for row in rows}
+
+
+def manifest_inventory_problems(rebound: dict, rebuild: dict) -> list[str]:
+    """Where a rebound manifest's license mapping differs from the rebuild manifest's."""
+    problems = [field for field in MANIFEST_INVENTORY_FIELDS if rebound.get(field) != rebuild.get(field)]
+    for name, row in (rebound.get("static_archives") or {}).items():
+        other = (rebuild.get("static_archives") or {}).get(name) or {}
+        if row.get("licenses") != other.get("licenses"):
+            problems.append(f"static_archives[{name}].licenses")
+        for arch, piece in (row.get("slices") or {}).items():
+            members = ((other.get("slices") or {}).get(arch) or {}).get("members") or []
+            mapped = [(m.get("name"), m.get("sha256"), m.get("objects"), m.get("licenses"))
+                      for m in piece.get("members", [])]
+            if mapped != [(m.get("name"), m.get("sha256"), m.get("objects"), m.get("licenses"))
+                          for m in members]:
+                problems.append(f"static_archives[{name}][{arch}].members")
+    if set(rebound.get("static_archives") or {}) != set(rebuild.get("static_archives") or {}):
+        problems.append("static_archives")
+    # Compared as sorted lists, so a duplicated row cannot hide another.
+    def mapping(rows):
+        return sorted(json.dumps([r.get("name"), r.get("kind"), r.get("origin"), r.get("licenses")],
+                                 sort_keys=True) for r in rows or [])
+    if mapping(rebound.get("zip_members")) != mapping(rebuild.get("zip_members")):
+        problems.append("zip_members")
+    return problems
+
+
+def run_invocation_url(repository: str, run_id: object, run_attempt: object) -> str:
+    return f"https://github.com/{repository}/actions/runs/{run_id}/attempts/{run_attempt}"
+
+
+def result_invocations(stdout: str, label: str) -> set[str]:
+    """The run invocations a gh attestation verify --format json result names."""
+    try:
+        results = json.loads(stdout or "[]")
+    except ValueError:
+        results = []
+    found = {(((row or {}).get("verificationResult") or {}).get("signature") or {})
+             .get("certificate", {}).get("runInvocationURI") for row in results} if isinstance(results, list) else set()
+    require(found and None not in found, f"the {label}'s attestation names no run invocation")
+    return found
+
+
+def verify_rebuild_provenance(
+    attested_derived: dict[str, object], subjects: dict[str, Path], bundle: Path,
+    runner: "GhRunner" = None,
+) -> list[str]:
+    """The rebuild itself must be attested by build-skia.yml on main.
+
+    The rebound records copy the rebuild's license mapping and toolchain
+    values; those are only as trustworthy as the run that produced them. A
+    branch run can carry edited tools, so the rebuild archive, manifest and
+    receipt must each verify against the rebuild's own build-provenance
+    bundle, signed by build-skia.yml on refs/heads/main on a GitHub-hosted
+    runner. The bundle is the one the signed record names.
+    """
+    runner = runner or run_gh
+    run = attested_derived.get("rebuild_run") or {}
+    head_sha = run.get("head_sha")
+    require(isinstance(head_sha, str) and HEX_40.fullmatch(head_sha) is not None,
+            "the attested derivation names no rebuild commit (rebuild_run.head_sha)")
+    require(run.get("repository") == BUILDER_REPOSITORY and run.get("ref") == BUILDER_SOURCE_REF
+            and isinstance(run.get("run_id"), int) and isinstance(run.get("run_attempt"), int),
+            "the attested derivation's rebuild_run is not a build-skia.yml run on main")
+    expected_invocation = run_invocation_url(BUILDER_REPOSITORY, run["run_id"], run["run_attempt"])
+    record = attested_derived.get("rebuild_bundle")
+    require(isinstance(record, dict) and isinstance(record.get("sha256"), str)
+            and HEX_64.fullmatch(record["sha256"]) is not None,
+            "the attested derivation names no rebuild provenance bundle")
+    require(sha256_bytes(bundle.read_bytes()) == record["sha256"],
+            "the rebuild provenance bundle is not the one the signed record names")
+    require(shutil.which("gh") is not None or runner is not run_gh,
+            "gh is required to verify the rebuild's build provenance")
+    verified, invocations = [], set()
+    for label, path in sorted(subjects.items()):
+        result = runner(["gh", "attestation", "verify", str(path), "--bundle", str(bundle),
+                         "--repo", BUILDER_REPOSITORY,
+                         "--signer-workflow", f"{BUILDER_SIGNER_WORKFLOW}@{BUILDER_SOURCE_REF}",
+                         "--source-ref", BUILDER_SOURCE_REF, "--source-digest", head_sha,
+                         "--deny-self-hosted-runners", "--format", "json"])
+        detail = ((result.stdout or "") + (result.stderr or "")).strip()
+        require(result.returncode == 0,
+                f"the rebuild {label} is not attested by build-skia.yml on main: {detail[-400:]}")
+        invocations |= result_invocations(result.stdout, f"rebuild {label}")
+        verified.append(label)
+    # One run built the archive and wrote the manifest and receipt: the one
+    # the signed record names.
+    require(len(invocations) == 1,
+            "the rebuild archive, manifest and receipt were attested by different runs: "
+            + ", ".join(sorted(invocations)))
+    require(invocations == {expected_invocation},
+            f"the rebuild was attested by {sorted(invocations)[0]}, not the signed record's "
+            f"{expected_invocation}")
+    return verified
+
+
 def verify_rebind(
     attestation: dict[str, object], manifest_path: Path, receipt_path: Path,
-    archive: Path, rebuild_archive: Path, rebuild_receipt: Path | None,
+    archive: Path, rebuild_archive: Path, rebuild_receipt: Path,
+    rebuild_manifest: Path, rebuild_bundle: Path, runner: "GhRunner" = None,
 ) -> dict[str, object]:
     """Re-run the member comparison behind records derived from a rebuild.
 
     The locked archive's manifest and receipt may be rebound from a rebuild
     that is member-identical to it. Both records must name the same
-    derivation; the rebuild archive given here must be the one they name; and
-    every zip member and every static-archive member of the two archives must
-    have the same content. Only archive container metadata may differ.
+    derivation, as must the signed record; the rebuild archive, manifest and
+    receipt given here must be the ones they name and must be attested by
+    build-skia.yml on main; every zip member and every static-archive member
+    of the two archives must have the same content (only archive container
+    metadata may differ); and the rebound records must carry the rebuild's
+    license mapping and toolchain values unchanged.
     """
     manifest = json.loads(manifest_path.read_bytes())
     receipt = json.loads(receipt_path.read_bytes())
@@ -215,12 +343,44 @@ def verify_rebind(
     # The signed record names the rebuild's evidence assets (with URLs); they
     # must be the ones the manifest was derived from.
     attested = (attestation.get("legal_inventory") or {}).get("derived_from")
-    if attested is not None:
-        for key in ("rebuild_archive", "rebuild_receipt", "rebuild_manifest", "comparison"):
-            require((attested.get(key) or {}).get("sha256") == (derived.get(key) or {}).get("sha256"),
-                    f"the attested derivation's {key} differs from the legal manifest's")
+    require(isinstance(attested, dict),
+            "the signed record does not name the derivation its legal manifest records")
+    for key in ("rebuild_archive", "rebuild_receipt", "rebuild_manifest", "comparison", "rebuild_bundle"):
+        value = (attested.get(key) or {}).get("sha256")
+        require(isinstance(value, str) and value == (derived.get(key) or {}).get("sha256"),
+                f"the attested derivation's {key} differs from the legal manifest's")
+    for field in REBUILD_RUN_FIELDS:
+        require((attested.get("rebuild_run") or {}).get(field) == (derived.get("rebuild_run") or {}).get(field),
+                f"the attested derivation's rebuild_run.{field} differs from the legal manifest's"
+                if field != "head_sha" else
+                "the attested derivation's rebuild commit differs from the legal manifest's")
+    require(sha256_bytes(rebuild_manifest.read_bytes())
+            == (derived.get("rebuild_manifest") or {}).get("sha256"),
+            "the rebuild manifest is not the one the records were derived from")
     require(sha256_file(rebuild_archive) == (derived.get("rebuild_archive") or {}).get("sha256"),
             "the rebuild archive is not the one the records were derived from")
+    require(sha256_bytes(rebuild_receipt.read_bytes())
+            == (derived.get("rebuild_receipt") or {}).get("sha256"),
+            "the rebuild receipt is not the one the records were derived from")
+    # The rebuild manifest and receipt must describe the rebuild archive itself.
+    rebuild_sha = sha256_file(rebuild_archive)
+    artifact_name = (attestation.get("artifact") or {}).get("name")
+    rebuild_manifest_record = json.loads(rebuild_manifest.read_bytes())
+    for label, record in (("manifest", rebuild_manifest_record),
+                          ("receipt", json.loads(rebuild_receipt.read_bytes()))):
+        bound = record.get("archive")
+        require(isinstance(bound, dict) and bound.get("sha256") == rebuild_sha
+                and bound.get("name") == artifact_name,
+                f"the rebuild {label} does not describe the rebuild archive")
+    listed = zip_member_rows(rebuild_manifest_record, "rebuild manifest")
+    actual = {name: sha256_bytes(data) for name, data in zip_contents(rebuild_archive).items()}
+    require(listed == actual, "the rebuild manifest's zip members differ from the rebuild archive")
+    provenance = verify_rebuild_provenance(
+        attested, {"archive": rebuild_archive, "legal manifest": rebuild_manifest,
+                   "toolchain receipt": rebuild_receipt}, rebuild_bundle, runner)
+    differing = manifest_inventory_problems(manifest, json.loads(rebuild_manifest.read_bytes()))
+    require(not differing, "the rebound manifest's license mapping differs from the rebuild "
+                           "manifest's: " + ", ".join(differing))
     locked, rebuilt = zip_contents(archive), zip_contents(rebuild_archive)
     require(set(locked) == set(rebuilt), "the rebuild's zip members differ from the locked archive's")
     compared = 0
@@ -234,27 +394,32 @@ def verify_rebind(
                 f"{name}: a static-archive member, symbol table or slice differs between the "
                 "locked archive and the rebuild")
         compared += 1
-    if rebuild_receipt is not None:
-        rebuild = json.loads(rebuild_receipt.read_bytes())
-        require(sha256_bytes(rebuild_receipt.read_bytes())
-                == (derived.get("rebuild_receipt") or {}).get("sha256"),
-                "the rebuild receipt is not the one the records were derived from")
-        for field in RECEIPT_TOOLCHAIN_FIELDS:
-            require(receipt.get(field) == rebuild.get(field),
-                    f"rebound receipt {field} differs from the rebuild receipt that measured it")
+    rebuild = json.loads(rebuild_receipt.read_bytes())
+    require(sha256_bytes(rebuild_receipt.read_bytes())
+            == (derived.get("rebuild_receipt") or {}).get("sha256"),
+            "the rebuild receipt is not the one the records were derived from")
+    for field in RECEIPT_TOOLCHAIN_FIELDS:
+        require(receipt.get(field) == rebuild.get(field),
+                f"rebound receipt {field} differs from the rebuild receipt that measured it")
     return {"rebind_verified": True, "rebind_archives_with_container_differences": compared,
-            "rebind_zip_members_compared": len(locked)}
+            "rebind_zip_members_compared": len(locked), "rebuild_provenance_verified": provenance}
 
 
-def rebuild_proofs_required(manifest_path: Path, rebuild_archive: Path | None,
-                            rebuild_receipt: Path | None) -> bool:
-    """Whether to re-run the rebind comparison; a derived manifest always needs both proofs."""
+REBUILD_RUN_FIELDS = ("repository", "run_id", "run_attempt", "ref", "head_sha")
+
+
+REBUILD_PROOF_FLAGS = ("--rebuild-archive", "--rebuild-receipt", "--rebuild-manifest",
+                       "--rebuild-provenance-bundle")
+
+
+def rebuild_proofs_required(manifest_path: Path, *proofs: Path | None) -> bool:
+    """Whether to re-run the rebind comparison; a derived manifest needs every rebuild proof."""
     derived = json.loads(manifest_path.read_bytes()).get("derived_from")
-    if derived is None and rebuild_archive is None and rebuild_receipt is None:
+    if derived is None and all(proof is None for proof in proofs):
         return False
-    require(rebuild_archive is not None and rebuild_receipt is not None,
-            "the legal manifest is derived from a rebuild; --rebuild-archive and "
-            "--rebuild-receipt are required")
+    require(len(proofs) == len(REBUILD_PROOF_FLAGS) and all(proof is not None for proof in proofs),
+            "the legal manifest is derived from a rebuild; " + ", ".join(REBUILD_PROOF_FLAGS)
+            + " are required")
     return True
 
 
@@ -309,6 +474,7 @@ def verify_legal_manifest_file(
                     f"legal manifest leaves {row.get('name')} without a license")
     require(isinstance(manifest.get("zip_members"), list) and manifest["zip_members"],
             "legal manifest inventories no zip member")
+    zip_member_rows(manifest, "legal manifest")
     static_archives = manifest.get("static_archives")
     require(isinstance(static_archives, dict) and static_archives,
             "legal manifest inventories no static archive")
@@ -330,7 +496,7 @@ def verify_legal_manifest_file(
                         and all(item in licenses for item in member["licenses"]),
                         f"legal manifest leaves {name}[{arch}] {member.get('name')} unresolved")
     if archive is not None:
-        listed = {row["name"]: row["sha256"] for row in manifest.get("zip_members", [])}
+        listed = zip_member_rows(manifest, "legal manifest")
         with zipfile.ZipFile(archive) as handle:
             members = safe_members(handle)
             actual = {name: sha256_bytes(handle.read(info))
@@ -419,6 +585,25 @@ def validate_build_identity(build_identity: dict[str, object], artifact: dict[st
                                   CONTENT_ADDRESSED_RECEIPT, "toolchain receipt")
 
 
+def build_provenance_source_digest(attestation: dict[str, object], record: dict[str, object]) -> str:
+    """The commit the build-provenance attestation must have been made at.
+
+    Records a build wrote are attested by build-skia.yml at the builder commit
+    the lock names, so no other main commit can attest the published archive.
+    Records rebound from a rebuild are attested by rebind-provenance.yml at a
+    later main commit, which the signed record names as source_digest.
+    """
+    if (attestation.get("legal_inventory") or {}).get("derived_from") is not None:
+        digest = record.get("source_digest")
+        require(isinstance(digest, str) and HEX_40.fullmatch(digest) is not None,
+                "build provenance for rebound records must name the rebind commit (source_digest)")
+        return digest
+    digest = ((attestation.get("source_identities") or {}).get("builder") or {}).get("commit")
+    require(isinstance(digest, str) and HEX_40.fullmatch(digest) is not None,
+            "build provenance needs the builder commit the lock names")
+    return digest
+
+
 def validate_build_provenance_record(attestation: dict[str, object]) -> dict[str, object]:
     record = attestation.get("build_provenance")
     require(isinstance(record, dict), "an owner-attested record must name its build provenance")
@@ -483,22 +668,63 @@ def verify_build_provenance(
 ) -> dict[str, object]:
     """Verify the builder's Sigstore attestation covers each subject, offline from the bundle."""
     record = validate_build_provenance_record(attestation)
+    source_digest = build_provenance_source_digest(attestation, record)
     data = bundle.read_bytes()
     require(sha256_bytes(data) == record["bundle"]["sha256"],
             "build provenance bundle SHA-256 differs from the attestation")
     require(shutil.which("gh") is not None or runner is not run_gh,
             "gh is required to verify the build provenance attestation")
-    verified = []
+    run = record.get("run") or {}
+    require(isinstance(run.get("run_id"), int) and isinstance(run.get("run_attempt"), int),
+            "build provenance must name the run that attested it (run.run_id, run.run_attempt)")
+    expected_invocation = run_invocation_url(record["repository"], run["run_id"], run["run_attempt"])
+    verified, invocations = [], set()
     for label, path in sorted(subjects.items()):
         result = runner(["gh", "attestation", "verify", str(path), "--bundle", str(bundle),
-                         "--repo", record["repository"], "--signer-workflow", record["signer_workflow"],
+                         "--repo", record["repository"],
+                         "--signer-workflow", f"{record['signer_workflow']}@{record['source_ref']}",
+                         "--source-digest", source_digest,
                          "--source-ref", record["source_ref"], "--deny-self-hosted-runners",
                          "--format", "json"])
         detail = ((result.stdout or "") + (result.stderr or "")).strip()
         require(result.returncode == 0,
                 f"build provenance attestation does not cover the {label}: {detail[-400:]}")
+        invocations |= result_invocations(result.stdout, label)
         verified.append(label)
+    require(invocations == {expected_invocation},
+            f"build provenance was attested by {', '.join(sorted(invocations))}, not the signed "
+            f"record's {expected_invocation}")
     return {"build_provenance_verified": verified}
+
+
+def build_provenance_subjects(
+    attestation: dict[str, object], legal_manifest: Path | None, toolchain_receipt: Path | None,
+    archive: Path | None,
+) -> dict[str, Path]:
+    """What the build-provenance bundle must cover.
+
+    A build's own records are attested together with the archive it built. A
+    rebound record's bundle is rebind-provenance.yml's, which attests the
+    rebound manifest, receipt and member-comparison report, never the
+    published archive; the archive is bound instead by the rebound manifest's
+    archive digest (and by the member comparison against the rebuild-attested
+    rebuild archive). The signed record and the manifest must agree on which
+    kind they are, so neither can pick the weaker subject set alone.
+    """
+    record_derived = (attestation.get("legal_inventory") or {}).get("derived_from") is not None
+    if legal_manifest is not None:
+        manifest_derived = json.loads(legal_manifest.read_bytes()).get("derived_from") is not None
+        require(record_derived == manifest_derived,
+                "the signed record and the legal manifest disagree on whether the records were "
+                "rebound from a rebuild")
+    subjects = {"legal manifest": legal_manifest, "toolchain receipt": toolchain_receipt}
+    if not record_derived:
+        subjects["archive"] = archive
+    elif archive is not None and legal_manifest is not None:
+        described = (json.loads(legal_manifest.read_bytes()).get("archive") or {}).get("sha256")
+        require(described == sha256_file(archive),
+                "the archive is not the one the rebind-attested legal manifest describes")
+    return {label: path for label, path in subjects.items() if path is not None}
 
 
 FAT_CPU_NAMES = {0x01000007: "x86_64", 0x0100000C: "arm64", 7: "i386", 12: "arm"}
@@ -595,6 +821,11 @@ def validate_renderer_attestation(
     """
     require(isinstance(attestation, dict),
             "renderer artifact digest has no provenance record")
+    # The verifier attaches its results under "_" keys and leaves them out of
+    # the signed payload; a record that already carries one would sign less
+    # than it shows.
+    reserved = sorted(underscore_keys(attestation))
+    require(not reserved, "renderer provenance record uses reserved keys: " + ", ".join(reserved))
     require(attestation.get("schema") == "vellum.renderer-provenance.v1",
             "renderer provenance schema is missing or unsupported")
     artifact = attestation.get("artifact")
@@ -934,6 +1165,10 @@ def main() -> int:
                         help="the rebuild a derived manifest and receipt name (derived_from)")
     parser.add_argument("--rebuild-receipt", type=Path,
                         help="the rebuild's own toolchain receipt, to re-check the rebound one")
+    parser.add_argument("--rebuild-manifest", type=Path,
+                        help="the rebuild's own legal manifest, whose license mapping the rebound one must carry")
+    parser.add_argument("--rebuild-provenance-bundle", type=Path,
+                        help="the rebuild run's build-provenance bundle (build-skia.yml on main)")
     parser.add_argument("--release-json", type=Path,
                         help="GitHub's release JSON for the locked tag (assets[].digest)")
     parser.add_argument("--require-release-eligible", action="store_true",
@@ -974,14 +1209,15 @@ def main() -> int:
         if args.toolchain_receipt:
             result.update(verify_toolchain_receipt_file(attestation, args.toolchain_receipt))
         if args.legal_manifest and args.toolchain_receipt and args.archive:
-            if rebuild_proofs_required(args.legal_manifest, args.rebuild_archive, args.rebuild_receipt):
+            if rebuild_proofs_required(args.legal_manifest, args.rebuild_archive, args.rebuild_receipt,
+                                       args.rebuild_manifest, args.rebuild_provenance_bundle):
                 result.update(verify_rebind(attestation, args.legal_manifest, args.toolchain_receipt,
-                                            args.archive, args.rebuild_archive, args.rebuild_receipt))
+                                            args.archive, args.rebuild_archive, args.rebuild_receipt,
+                                            args.rebuild_manifest, args.rebuild_provenance_bundle))
         if args.provenance_bundle:
-            subjects = {"legal manifest": args.legal_manifest, "toolchain receipt": args.toolchain_receipt,
-                        "archive": args.archive}
             result.update(verify_build_provenance(
-                attestation, {label: path for label, path in subjects.items() if path},
+                attestation, build_provenance_subjects(attestation, args.legal_manifest,
+                                                       args.toolchain_receipt, args.archive),
                 args.provenance_bundle))
         if args.release_json:
             result.update(verify_release_assets(attestation, args.release_json))

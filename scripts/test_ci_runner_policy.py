@@ -726,6 +726,11 @@ class RunnerPolicyTests(unittest.TestCase):
         for proof in ("archive", "legal-manifest", "toolchain-receipt",
                       "provenance-bundle", "release-json"):
             self.assertIn(f'("{proof}"', eligibility_step)
+        for proof in ("rebuild-archive", "rebuild-receipt", "rebuild-manifest",
+                      "rebuild-provenance-bundle"):
+            self.assertIn(f'("{proof}"', eligibility_step)
+        # The release JSON comes from the authenticated API, not plain curl.
+        self.assertIn('gh api "${url#api:}"', eligibility_step)
         # The pinned owner identity is never overridden in a release.
         self.assertNotIn("--owner-principal", eligibility_step)
         self.assertNotIn("--owner-fingerprint", eligibility_step)
