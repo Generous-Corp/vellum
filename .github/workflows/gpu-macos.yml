@@ -54,10 +54,10 @@ jobs:
           curl --fail --location --silent --show-error \
             --retry 5 --retry-delay 2 --retry-all-errors \
             --continue-at - \
-            https://github.com/danielraffel/skia-builder/releases/download/chrome/m153/skia-build-mac-universal-gpu-release.zip \
+            https://github.com/danielraffel/skia-builder/releases/download/chrome/m157/skia-build-mac-universal-gpu-release.zip \
             --output "$archive"
           printf '%s  %s\n' \
-            0ebfe03a209ceefe47edfeae70c3cc6c499583b74f35a26140ea55bad7f1e5a9 \
+            bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86 \
             "$archive" | shasum -a 256 -c -
           printf 'VELLUM_SKIA_ARCHIVE=%s\n' "$archive" >> "$GITHUB_ENV"
           # One digest-checked fetch of the mirror's pinned dependencies serves
@@ -135,6 +135,20 @@ jobs:
           printf 'VELLUM_PHASE3_TEST_BUNDLE=%s\n' "$bundle" \
             >> "$GITHUB_ENV"
 
+      - name: Fetch and verify the pinned Pulp view-audio archive
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 tools/mirror/fetch_view_audio_archive.py \
+            --root "$GITHUB_WORKSPACE" \
+            --repository Generous-Corp/pulp \
+            --output-dir "$RUNNER_TEMP/pulp-view-audio" \
+            --json > "$RUNNER_TEMP/pulp-view-audio-archive.json"
+          printf 'VELLUM_VIEW_AUDIO_ARCHIVE=%s\n' \
+            "$RUNNER_TEMP/pulp-view-audio/libpulp-view-audio.a" >> "$GITHUB_ENV"
+
       - name: Build the release GPU slice
         run: |
           cmake -S . -B build-gpu \
@@ -145,8 +159,9 @@ jobs:
             -DVELLUM_PHASE3_TEST_BUNDLE="$VELLUM_PHASE3_TEST_BUNDLE" \
             -DVELLUM_SKIA_ARCHIVE="$VELLUM_SKIA_ARCHIVE" \
             -DVELLUM_ENABLE_MIRROR=ON \
-            -DVELLUM_MIRROR_DEPS_DIR="$VELLUM_MIRROR_DEPS_DIR"
-          cmake --build build-gpu --parallel
+            -DVELLUM_MIRROR_DEPS_DIR="$VELLUM_MIRROR_DEPS_DIR" \
+            -DVELLUM_VIEW_AUDIO_ARCHIVE="$VELLUM_VIEW_AUDIO_ARCHIVE"
+          cmake --build build-gpu --parallel 3
 
       - name: Stress parallel text shaping in Release
         run: |
@@ -166,7 +181,7 @@ jobs:
             -DVELLUM_REQUIRE_GPU=ON \
             -DVELLUM_SKIA_ARCHIVE="$VELLUM_SKIA_ARCHIVE"
           cmake --build build-gpu-asan \
-            --target vellum-text-shaping-concurrency-test --parallel
+            --target vellum-text-shaping-concurrency-test --parallel 3
           ASAN_OPTIONS=abort_on_error=1:detect_leaks=0:halt_on_error=1 \
           VELLUM_TEXT_STRESS_ROUNDS=20 \
             ./build-gpu-asan/vellum-text-shaping-concurrency-test
@@ -240,7 +255,8 @@ jobs:
 
       - name: Run native, capture, and sterile-consumer tests
         run: |
-          ctest --test-dir build-gpu --output-on-failure
+          VELLUM_MIRROR_LIVE_GPU=1 \
+            ctest --test-dir build-gpu --output-on-failure
           ./build-gpu/apps/gpu-native/vellum-gpu-native.app/Contents/MacOS/vellum-gpu-native \
             --self-test --capture "$RUNNER_TEMP/vellum-gpu-proof.png" \
             | tee "$RUNNER_TEMP/vellum-gpu-proof.txt"
@@ -319,7 +335,24 @@ jobs:
           archive="$VELLUM_RELEASE_ARCHIVE"
           test "$archive" = \
             "vellum-sdk-$VELLUM_RELEASE_VERSION-darwin-arm64.tar.gz"
-          cmp "$first/$archive" "$second/$archive"
+          if ! cmp -s "$first/$archive" "$second/$archive"; then
+            echo "SDK archives differ; differing members:" >&2
+            python3 - "$first/$archive" "$second/$archive" <<'PY' >&2
+          import hashlib, sys, tarfile
+          def members(path):
+              rows = {}
+              with tarfile.open(path) as handle:
+                  for member in handle.getmembers():
+                      data = handle.extractfile(member).read() if member.isfile() else b""
+                      rows[member.name] = (member.mode, member.size, hashlib.sha256(data).hexdigest())
+              return rows
+          a, b = members(sys.argv[1]), members(sys.argv[2])
+          for name in sorted(set(a) | set(b)):
+              if a.get(name) != b.get(name):
+                  print(f"  {name}: {a.get(name)} != {b.get(name)}")
+          PY
+            exit 1
+          fi
           cmp "$first/SHA256SUMS" "$second/SHA256SUMS"
           (cd scripts && shasum -a 256 -c INSTALLER_SHA256SUMS)
           shasum -a 256 "$first/$archive" > "$RUNNER_TEMP/vellum-sdk.sha256"
@@ -566,6 +599,8 @@ jobs:
             ${{ runner.temp }}/phase3-browser-evidence.json
             ${{ runner.temp }}/release-trust.json
             ${{ runner.temp }}/immutable-release-preflight.json
+            ${{ runner.temp }}/pulp-view-audio/libpulp-view-audio.a
+            ${{ runner.temp }}/pulp-view-audio-archive.json
           if-no-files-found: warn
           retention-days: 90
   sterile-consumer:
@@ -625,6 +660,14 @@ jobs:
           )"
           actual="$(shasum -a 256 "$bundle" | awk '{print $1}')"
           test "$actual" = "$expected"
+          # The view-audio archive was fetched and attestation-verified by the
+          # proof job; hold this copy to the digest that job recorded.
+          view_audio_expected="$(
+            python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["archive_sha256"])' \
+              "$input/pulp-view-audio-archive.json"
+          )"
+          view_audio_actual="$(shasum -a 256 "$input/pulp-view-audio/libpulp-view-audio.a" | awk '{print $1}')"
+          test "$view_audio_actual" = "$view_audio_expected"
           mkdir -p "$RUNNER_TEMP/sterile"
           tar -xzf "$bundle" -C "$RUNNER_TEMP/sterile"
           printf 'VELLUM_STERILE_ROOT=%s\n' \
@@ -666,6 +709,7 @@ jobs:
             --checksums "$input/SHA256SUMS" \
             --forbid-path "$GITHUB_WORKSPACE" \
             --runner-search-root "$RUNNER_WORKSPACE" \
+            --view-audio-archive "$input/pulp-view-audio/libpulp-view-audio.a" \
             --output "$RUNNER_TEMP/sdk-installed-validation.json" \
             --json > "$RUNNER_TEMP/sdk-installed-validation.stdout.json"
 

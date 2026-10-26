@@ -92,6 +92,17 @@ class SdkArtifactTests(unittest.TestCase):
         finally:
             validate_browser.__globals__["run"] = original_run
 
+    def test_payload_inventory_is_in_the_installers_canonical_order(self) -> None:
+        module = runpy.run_path(str(BUILDER))
+        with tempfile.TemporaryDirectory() as tmp:
+            payload = Path(tmp)
+            for relative in ("include/pulp/view/x.h", "include/pulp/view-audio/y.h", "include/pulp/viewer.h"):
+                (payload / relative).parent.mkdir(parents=True, exist_ok=True)
+                (payload / relative).write_text(relative)
+            paths = [row["path"] for row in module["payload_files"](payload)]
+        self.assertEqual(paths, sorted(paths))
+        self.assertEqual(paths[0], "include/pulp/view-audio/y.h")
+
     def test_artifact_builder_rejects_cli_release_identity_drift(self) -> None:
         module = runpy.run_path(str(BUILDER))
         verify_cli_identity = module["verify_cli_identity"]
@@ -177,6 +188,31 @@ class SdkArtifactTests(unittest.TestCase):
             with self.assertRaises(artifact_error):
                 rewrite(path, b"short")
 
+    def test_macho_temp_root_normalization_makes_archives_equal(self) -> None:
+        module = runpy.run_path(str(BUILDER))
+        normalize = module["canonicalize_macho_temp_root"]
+        write_archive = module["write_archive"]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            first = root / "first"
+            second = root / "second"
+            first.mkdir()
+            second.mkdir()
+            first_payload = b"prefix/vellum-sdk-artifact-abc12345/build/path\0"
+            second_payload = b"prefix/vellum-sdk-artifact-zyx98765/build/path\0"
+            (first / "mirror.dylib").write_bytes(first_payload)
+            (second / "mirror.dylib").write_bytes(second_payload)
+            normalize(first / "mirror.dylib")
+            normalize(second / "mirror.dylib")
+            self.assertEqual((first / "mirror.dylib").read_bytes(),
+                             (second / "mirror.dylib").read_bytes())
+            self.assertEqual((first / "mirror.dylib").stat().st_size, len(first_payload))
+            first_archive = root / "first.tar.gz"
+            second_archive = root / "second.tar.gz"
+            write_archive(first, first_archive)
+            write_archive(second, second_archive)
+            self.assertEqual(first_archive.read_bytes(), second_archive.read_bytes())
+
     def test_node_license_and_provenance_match_exact_runtime(self) -> None:
         module = runpy.run_path(str(BUILDER))
         validate = module["validate_node_inputs"]
@@ -246,6 +282,12 @@ class SdkArtifactTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
         return completed
 
+    def test_installer_requires_the_native_host_files_the_builder_requires(self) -> None:
+        builder = runpy.run_path(str(BUILDER))["NATIVE_HOST_FILES"]
+        installer = runpy.run_path(str(REPO / "scripts/install_core.py"))["NATIVE_HOST_FILES"]
+        self.assertEqual(sorted(installer), sorted(f"sdk/{path}" for path in builder))
+        self.assertIn("mirror/lib/libvellum-mirror-state-core.dylib", builder)
+
     def test_native_command_claims_require_every_composed_payload(self) -> None:
         derive_capabilities = runpy.run_path(str(BUILDER))["derive_capabilities"]
         with tempfile.TemporaryDirectory() as temporary:
@@ -279,6 +321,9 @@ class SdkArtifactTests(unittest.TestCase):
                 "bin/vellum-app-host",
                 "lib/libvellum-authoring.dylib",
                 "lib/libvellum-gpu.dylib",
+                "lib/libvellum-skia-dawn-provider.dylib",
+                "mirror/lib/libvellum-mirror-foundation.dylib",
+                "mirror/lib/libvellum-mirror-state-core.dylib",
             ):
                 path = install_tree / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -312,6 +357,12 @@ class SdkArtifactTests(unittest.TestCase):
             self.assertTrue(authoring["text_input_v1"]["accessibility_text"])
             self.assertFalse(authoring["text_input_v1"]["clipboard_editing"])
             self.assertFalse(authoring["persistence"]["migration_api"])
+            (install_tree / "mirror/lib/libvellum-mirror-state-core.dylib").unlink()
+            without_state_core = derive_capabilities(payload, install_tree)
+            self.assertFalse(any(
+                without_state_core["commands"][command]
+                for command in ("build", "run", "test", "capture", "package")
+            ))
 
     def test_reproducible_archive_installs_into_sterile_consumer(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

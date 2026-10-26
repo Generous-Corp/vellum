@@ -1,0 +1,163 @@
+{
+  "schema": "vellum.parity.corpus.v1",
+  "corpus_id": "pulp-platform-web-v1",
+  "description": "G7 web, Pulp vs Pulp: the WebCLAP modules (wasi-sdk 25) and WAMv2 modules (emsdk 6.0.2) web-plugins.yml builds, read statically (exports the ABI host looks up, import modules) and run under the same Node host checks web-plugins.yml runs (wclap_probe, wclap_host_runner render with a +6 dB parameter change, wam_feature_runner effect/instrument, superconvolver_runner, wam_build_report).",
+  "declared_gaps": [
+    {
+      "row": "headless Chrome (AudioWorklet) fixtures",
+      "reason": "web-plugins.yml also runs the WAM and WebCLAP browser fixtures in headless Chrome with playwright-core; this lane runs the Node host checks only."
+    },
+    {
+      "row": "column B (Skia wasm UI)",
+      "reason": "the Skia/WebGL2 browser window host is not exercised; SuperConvolverGpu.wasm is recorded as the identity 'other' root only."
+    },
+    {
+      "row": "SuperConvolver real-time budget",
+      "reason": "superconvolver_runner.mjs asserts a wall-clock render budget (2.667 ms per quantum); on a loaded host it failed on both sides (worst 24-38 ms) while passing when the host was idle, so it measures host load, not the module. SuperConvolver is covered by its static exports and, for WebCLAP, wclap_probe."
+    }
+  ],
+  "declared_exceptions": [],
+  "cases": [
+    {
+      "source": "fixtures/platform/scan.json",
+      "source_base": "corpus",
+      "width": 1,
+      "height": 1,
+      "case_id": "wclap-modules",
+      "description": "WebCLAP: PulpGain and SuperConvolver modules",
+      "source_kind": "platform",
+      "lanes": [
+        "web-wam-wclap"
+      ],
+      "args": {
+        "mode": [
+          "node"
+        ],
+        "artifact": [
+          "--artifact",
+          "{root:artifact}/wclap"
+        ],
+        "host": [
+          "--check",
+          "PulpGain.wasm@probe={root:checkout}/core/format/src/wasm/wclap_probe.mjs\u001f@WASM@",
+          "--check",
+          "PulpGain.wasm@render={root:checkout}/core/format/src/wasm/wclap_host_runner.mjs\u001f@WASM@\u001f--gain-db\u001f6",
+          "--check",
+          "SuperConvolver.wasm@probe={root:checkout}/core/format/src/wasm/wclap_probe.mjs\u001f@WASM@"
+        ]
+      },
+      "expect": {
+        "images": {
+          "PulpGain.wasm": {
+            "require_exports": [
+              "global:clap_entry",
+              "memory:memory"
+            ],
+            "allowed_import_modules": [
+              "env",
+              "wasi_snapshot_preview1"
+            ]
+          },
+          "SuperConvolver.wasm": {
+            "require_exports": [
+              "global:clap_entry",
+              "memory:memory"
+            ],
+            "allowed_import_modules": [
+              "env",
+              "wasi_snapshot_preview1"
+            ]
+          }
+        },
+        "node_checks": [
+          "PulpGain.wasm@probe",
+          "PulpGain.wasm@render",
+          "SuperConvolver.wasm@probe"
+        ]
+      },
+      "controls": {
+        "rename_export": "wasm-rename-export:clap_entry=clap_entrz"
+      }
+    },
+    {
+      "source": "fixtures/platform/scan.json",
+      "source_base": "corpus",
+      "width": 1,
+      "height": 1,
+      "case_id": "wam-modules",
+      "description": "WAMv2: PulpGain (effect), PulpPluck (instrument), SuperConvolver",
+      "source_kind": "platform",
+      "lanes": [
+        "web-wam-wclap"
+      ],
+      "args": {
+        "mode": [
+          "node"
+        ],
+        "artifact": [
+          "--artifact",
+          "{root:artifact}/wam"
+        ],
+        "host": [
+          "--check",
+          "PulpGain.wasm@features={root:checkout}/examples/web-demos/wasm-build/wam_feature_runner.mjs\u001f@WASM@\u001feffect",
+          "--check",
+          "PulpPluck.wasm@features={root:checkout}/examples/web-demos/wasm-build/wam_feature_runner.mjs\u001f@WASM@\u001finstrument",
+          "--check",
+          "PulpGain.wasm@build-report={root:checkout}/core/format/src/wasm/wam_build_report.test.mjs\u001f--wasm\u001f@WASM@"
+        ]
+      },
+      "expect": {
+        "images": {
+          "PulpGain.wasm": {
+            "require_exports": [
+              "func:wam_init",
+              "func:wam_prepare",
+              "func:wam_process",
+              "func:wam_descriptor",
+              "memory:memory"
+            ],
+            "allowed_import_modules": [
+              "env",
+              "wasi_snapshot_preview1"
+            ]
+          },
+          "PulpPluck.wasm": {
+            "require_exports": [
+              "func:wam_init",
+              "func:wam_prepare",
+              "func:wam_process",
+              "func:wam_descriptor",
+              "memory:memory"
+            ],
+            "allowed_import_modules": [
+              "env",
+              "wasi_snapshot_preview1"
+            ]
+          },
+          "SuperConvolver.wasm": {
+            "require_exports": [
+              "func:wam_init",
+              "func:wam_prepare",
+              "func:wam_process",
+              "func:wam_descriptor",
+              "memory:memory"
+            ],
+            "allowed_import_modules": [
+              "env",
+              "wasi_snapshot_preview1"
+            ]
+          }
+        },
+        "node_checks": [
+          "PulpGain.wasm@features",
+          "PulpPluck.wasm@features",
+          "PulpGain.wasm@build-report"
+        ]
+      },
+      "controls": {
+        "rename_export": "wasm-rename-export:wam_process=wam_procesz"
+      }
+    }
+  ]
+}

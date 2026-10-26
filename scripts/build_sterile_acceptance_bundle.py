@@ -44,8 +44,12 @@ SUPPORT_FILES = (
     "web/tests/run_text_semantics_browser.py",
     "tools/mirror/consumer/CMakeLists.txt",
     "tools/mirror/consumer/main.cpp",
+    "tools/mirror/consumer/cross_image_main.cpp",
     "tools/mirror/provider-conflict/CMakeLists.txt",
+    "graphics/tests/test_dawn_provider_topology.py",
     "tools/mirror/verify_mirror_inertness.py",
+    "tools/mirror/nm_symbols.py",
+    "tools/mirror/rtti_ownership.py",
 )
 
 

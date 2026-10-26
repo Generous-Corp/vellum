@@ -27,12 +27,12 @@ The macOS arm64 GPU proof uses one byte-locked prebuilt renderer artifact:
 
 | Artifact | Locked identity | Use |
 |---|---|---|
-| `skia-build-mac-universal-gpu-release.zip` | `danielraffel/skia-builder` release `chrome/m153`; SHA-256 `0ebfe03a209ceefe47edfeae70c3cc6c499583b74f35a26140ea55bad7f1e5a9` | Build-time Skia Graphite and Dawn/Metal static libraries and headers |
+| `skia-build-mac-universal-gpu-release.zip` | `danielraffel/skia-builder` release `chrome/m157`; SHA-256 `bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86` | Build-time Skia Graphite and Dawn/Metal static libraries and headers |
 
 The artifact was produced from builder commit
-`1f8c8d2c343f360a653bce92d11f8ded9a515208`. Its declared source tuple is
-Skia commit `8b8c3872fbc03f025855db96ce683f34ec98a815` and Dawn commit
-`f91da75afe31d4d6f47a6da307e1fbabd1b1691a`. The Dawn commit is embedded in
+`f710b2834eaf37dbf1bd39408f9361d10d85eda2`. Its declared source tuple is
+Skia commit `b94213a11b3a2edadfae89f0c57a7f4ab72772c9` and Dawn commit
+`ada567700e13aecf7989d78b21f7d330b522ea80`. The Dawn commit is embedded in
 `build/include/dawn/dawn_version.h`; the exact Skia and builder commits are not
 embedded in the artifact.
 
@@ -42,9 +42,11 @@ construction-specific digest over all 809 header files are locked in
 construction must verify those bytes before configuring Vellum. An arbitrary
 local `VELLUM_SKIA_DIR` is a development convenience, not release provenance.
 
-Selected archive members are statically linked into Vellum's installed
-`vellum-gpu` shared library. Consumers do not need a Skia checkout or receive
-the prebuilt static archives.
+The locked archives are linked into the installed `Vellum::SkiaDawnProvider`
+shared library. `Vellum::Gpu` and `Vellum::MirrorCanvas` share that provider
+and its installed declaration roots. Consumers do not need a Skia checkout
+or receive the prebuilt static archives. A distinct provider is rejected by
+the `VELLUM_SKIA_DAWN_PROVIDER` compatible-interface requirement.
 
 ### Code packaged inside `libskia.a`
 
@@ -54,7 +56,7 @@ full DEPS file; each row has matching object members in the locked archive.
 
 | Name | Exact source identity | License | Binary evidence |
 |---|---|---|---|
-| Skia, including skcms | `8b8c3872fbc03f025855db96ce683f34ec98a815` | BSD-3-Clause | Skia/core/Graphite/skcms object members |
+| Skia, including skcms | `b94213a11b3a2edadfae89f0c57a7f4ab72772c9` | BSD-3-Clause | Skia/core/Graphite/skcms object members |
 | Expat | `6154446fccefbf3ca644894f598969113b0c7bcd` | MIT | `libexpat.*` members |
 | libjpeg-turbo | `e14cbfaa85529d47f9f55b0f104a579c1061f9ad` (Chromium's 3.1.0 snapshot) | IJG and zlib for the packaged libjpeg API/SIMD code | `libjpeg.*`, `libjpeg12.*`, and `libjpeg16.*` members; no TurboJPEG API member was identified |
 | libpng | `d5515b5b8be3901aac04e5bd8bd5c89f287bcd33` (1.6.56) | Libpng-2.0 | `libpng.*` members |
@@ -66,18 +68,21 @@ full DEPS file; each row has matching object members in the locked archive.
 
 | Name | Exact source identity | License | Binary evidence |
 |---|---|---|---|
-| Dawn and Tint | `f91da75afe31d4d6f47a6da307e1fbabd1b1691a` | BSD-3-Clause | Dawn/Tint objects and symbol namespaces; exact revision embedded in `dawn_version.h` |
-| Abseil | `dd67f5ca84f65ebb88ac0ea0fe2c1d58663e519f` | Apache-2.0 | `absl::` symbols and implementation members including `raw_hash_set.cc.o` and `crc32c.cc.o` |
+| Dawn and Tint | `ada567700e13aecf7989d78b21f7d330b522ea80` | BSD-3-Clause | Dawn/Tint objects and symbol namespaces; exact revision embedded in `dawn_version.h` |
+| Abseil | `af5aede14a0b4013be6890148d34e0fd7b1fac69` | Apache-2.0 | `absl::` symbols and implementation members including `raw_hash_set.cc.o` and `crc32c.cc.o` |
 | PartitionAlloc | `03cc513177b4340bee3dbfd46f6dd5fdded43b79` | BSD-3-Clause | `partition_alloc::` symbols and allocator implementation members including `low_level_alloc.cc.o` |
 
 Vellum also links the byte-locked `libskparagraph.a`, `libskshaper.a`,
-`libskunicode_core.a`, and `libskunicode_icu.a` archives into `vellum-gpu` to
+`libskunicode_core.a`, and `libskunicode_icu.a` archives into the provider to
 provide paragraph-level attributed text, shaping, bidi, and Unicode fallback.
 The CMake integration checks each archive against the digest already recorded
 in the lock before linking it. HarfBuzz and ICU implementation objects are
 packaged in these separate archives rather than `libskia.a` or
-`libdawn_combined.a`; archive membership does not prove that every member
-survives the static linker's dead-code selection in a particular binary.
+`libdawn_combined.a`. The provider also carries the locked `libsvg.a` and
+`libskresources.a` used by the mirror. Whole-archive linking keeps the core definitions
+available to either frontend and to consumers of the installed declarations.
+The SVG factory anchor uses ordinary archive selection because `libsvg.a`
+also embeds duplicate Skia/resource objects.
 
 The linked `libskshaper.a` contains HarfBuzz objects from commit
 `9cb1fee51069b206effb4736e443b038d230789d`. The linked
@@ -145,18 +150,18 @@ The following rows are the legal inventory for bytes that may arrive under
 `mirror/` from the D3 units and the foundation amendment. They are scoped to
 the mirror root and do not make the corresponding historical Pulp paths active
 Vellum dependencies. Versions and licenses were cross-checked against Pulp's
-`DEPENDENCIES.md`, `NOTICE.md`, and `tools/deps/manifest.json` on 2026-10-10.
+`DEPENDENCIES.md`, `NOTICE.md`, and `tools/deps/manifest.json` at the `46cee5e4e6e2` export.
 
 | Dependency | Version or source identity | License | Mirror scope | Compatibility / handling |
 |---|---|---|---|---|
-| Abseil | `dd67f5ca84f65ebb88ac0ea0fe2c1d58663e519f` | Apache-2.0 | not mirrored; no landed unit consumes it yet (planned renderer and V8 units) | MIT-compatible; transitive notice |
-| Brotli | `v1.2.0` | MIT | `canvas` unit external input (`mirror/core/canvas/`, WOFF2 decoder); bytes not mirrored | MIT-compatible |
-| CHOC | `pulp-webview-dnd-poc1` (`df148a41`) | ISC | `foundation` unit external input, patched (`mirror/core/runtime/`, `mirror/core/events/`); bytes not mirrored | MIT-compatible; retain fork attribution |
+| Abseil | `af5aede14a0b4013be6890148d34e0fd7b1fac69` | Apache-2.0 | not mirrored; no landed unit consumes it yet (planned renderer and V8 units) | MIT-compatible; transitive notice |
+| Brotli | `v1.2.1` (`db24a98a`) | MIT | `canvas` unit external input (`mirror/core/canvas/`, WOFF2 decoder); bytes not mirrored | MIT-compatible |
+| CHOC | `pulp-webview-dnd-poc2` (`b586f33d`) | ISC | `foundation`, `state-core`, `view-core`, `design-import` and `view-script` unit external input, patched (JSON exponent, V8 compatibility); bytes not mirrored | MIT-compatible; retain fork attribution |
 | cpp-httplib | vendored snapshot | MIT | `mirror/external/cpp-httplib/` (`foundation` unit) | MIT-compatible |
-| Dawn and Tint | `f91da75afe31d4d6f47a6da307e1fbabd1b1691a` | BSD-3-Clause | `canvas` unit external input: headers inside the Skia build tree; bytes not mirrored | MIT-compatible; renderer notice exists |
+| Dawn and Tint | `ada567700e13aecf7989d78b21f7d330b522ea80` | BSD-3-Clause | `canvas` unit external input: headers inside the Skia build tree; bytes not mirrored | MIT-compatible; renderer notice exists |
 | Expat | `6154446fccefbf3ca644894f598969113b0c7bcd` | MIT | not mirrored; no landed unit consumes it yet (planned renderer units) | MIT-compatible; renderer notice exists |
 | HarfBuzz | `9cb1fee51069b206effb4736e443b038d230789d` | Old MIT | `canvas` unit external input through the Skia build (text shaping); bytes not mirrored | MIT-compatible; notice exists |
-| Highway | `1.2.0` | Apache-2.0 | `foundation` unit external input (`mirror/core/simd/`); bytes not mirrored | MIT-compatible |
+| Highway | `1.4.0` (`2607d3b5`) | Apache-2.0 | `foundation` unit external input (`mirror/core/simd/`); bytes not mirrored | MIT-compatible |
 | ICU | `d578f2e8b7bd5938e21cfb6bf15c079e0aa5b738` | Unicode-3.0 plus bundled notices | `canvas` unit external input through the Skia build (text shaping); bytes not mirrored | Permissive; notice exists |
 | Inter | `4.001; git-9221beed3` | SIL OFL 1.1 | `mirror/external/fonts/` (`canvas` unit) | Allowed font license |
 | JavaScriptCore | Apple system framework | LGPL-2.1+ components and Apple terms | Never mirrored; system framework only | **Not MIT-compatible**; system-only, never mirrored |
@@ -171,27 +176,35 @@ Vellum dependencies. Versions and licenses were cross-checked against Pulp's
 | Noto Sans Arabic | variable font | SIL OFL 1.1 | not mirrored; no landed unit consumes it yet | Allowed font license |
 | Noto Sans JP | variable font | SIL OFL 1.1 | not mirrored; no landed unit consumes it yet | Allowed font license |
 | PartitionAlloc | `03cc513177b4340bee3dbfd46f6dd5fdded43b79` | BSD-3-Clause | not mirrored; no landed unit consumes it yet (planned GPU and renderer units) | MIT-compatible; transitive notice |
-| QuickJS | `2024-02-14` | MIT | not mirrored; no landed unit consumes it yet (planned scripted-view unit) | MIT-compatible |
+| QuickJS | `2021-03-27`, bundled in CHOC (`choc_javascript_QuickJS.h`) | MIT | `view-script` unit external input through that CHOC header; bytes not mirrored. Its MIT notice is in the header, and CHOC's license ships under `sdk/mirror/share/licenses/choc/` | MIT-compatible |
+| SDL3 | `release-3.4.18` (`829a65d7`) | zlib | `render-2d` and `view-core` unit external input, built from source as the `SDL3-static` link target the link policy allows; bytes not mirrored; license ships under `sdk/mirror/share/licenses/sdl3/` | MIT-compatible |
 | SheenBidi | `v3.0.0` | Apache-2.0 | `canvas` unit external input (`mirror/core/canvas/`); bytes not mirrored | MIT-compatible |
-| Skia and skcms | `8b8c3872fbc03f025855db96ce683f34ec98a815` | BSD-3-Clause | `canvas` unit external input (`mirror/core/canvas/`); bytes not mirrored | MIT-compatible; renderer notice exists |
+| Skia and skcms | `b94213a11b3a2edadfae89f0c57a7f4ab72772c9` | BSD-3-Clause | `canvas` unit external input (`mirror/core/canvas/`); bytes not mirrored | MIT-compatible; renderer notice exists |
 | V8 | `v8-m153-15.3.76.5-26cef0256b0e` | BSD-3-Clause | not mirrored; no landed unit consumes it yet (planned scripted-view unit, when selected) | MIT-compatible; sealed provider |
-| Yoga | `3.2.1` | MIT | not mirrored; no landed unit consumes it yet (planned view units) | MIT-compatible |
+| yaml-cpp | `0.9.0` (`56e3bb55`) | MIT | `design-import` unit external input, built from source as the `yaml-cpp` link target the link policy allows; bytes not mirrored; license ships under `sdk/mirror/share/licenses/yaml-cpp/` | MIT-compatible |
+| Yoga | `v3.2.1` (`042f5013`) | MIT | `view-core` unit external input, built from source as the `yogacore` link target the link policy allows; bytes not mirrored; license ships under `sdk/mirror/share/licenses/yoga/` | MIT-compatible |
 
 ### Units built into the native SDK
 
-The macOS arm64 GPU SDK compiles the landed `foundation` and `canvas` units
-into `sdk/mirror/lib/libvellum-mirror-foundation.dylib` and
-`sdk/mirror/lib/libvellum-mirror-canvas.dylib`
-(`tools/mirror/VellumMirror.cmake`). The units' external inputs above are
-fetched at the commits their closure manifests pin, and every file a closure
-lists is checked against its recorded SHA-256 before configure
-(`tools/mirror/mirror_package.py`). Highway, Mbed TLS, SheenBidi, Brotli, and
-WOFF2 objects are linked into those libraries; CHOC headers that the public
-headers include ship under `sdk/mirror/include/choc/`. Each fetched
-dependency's license file is installed under `sdk/mirror/share/licenses/`. The
-canvas library links the locked Skia/Dawn archive above privately, exports only
-the mirrored namespace, and declares itself a Skia/Dawn provider, so a consumer
-cannot link it and `Vellum::Gpu` into one image.
+The macOS arm64 GPU SDK installs one `sdk/mirror/lib/libvellum-mirror-<unit>.dylib`
+for every unit of the current mirror receipt (`foundation`, `gpu-device-api`,
+`canvas`, `render-2d`, `state-core`, `view-core`, `design-import` and
+`view-script`; `tools/mirror/VellumMirror.cmake`). The units' external inputs
+above are fetched at the commits their closure manifests pin, and every file a
+closure lists is checked against its recorded SHA-256 before configure
+(`tools/mirror/mirror_package.py`). Only the foundation and state-core
+libraries carry code of their own, and the provider loads both at launch;
+Highway and Mbed TLS objects are linked into the foundation library. The other
+six are installed forwarding dylibs that re-export the shared
+`Vellum::SkiaDawnProvider`, which owns their objects, the SheenBidi, Brotli,
+WOFF2, SDL3, Yoga and yaml-cpp objects, and the locked Skia/Dawn archives.
+CHOC headers that the public headers include ship under
+`sdk/mirror/include/choc/`. Each fetched dependency's license file is
+installed under `sdk/mirror/share/licenses/`.
+`Vellum::MirrorCanvas` exports only the mirrored namespace
+and links that provider transitively, so a consumer can link it and
+`Vellum::Gpu` into one image; a distinct provider is rejected by
+`VELLUM_SKIA_DAWN_PROVIDER`.
 
 Pulp's external contributor `matthewfudge` authored four mirrored view files:
 `core/view/src/design_frame_view.cpp`,

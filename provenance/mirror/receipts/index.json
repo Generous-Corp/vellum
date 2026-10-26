@@ -1,6 +1,7 @@
 {
   "schema": "vellum.mirror-receipt-index.v1",
   "receipts": [
-    "provenance/mirror/receipts/20261014-34d16417a460.json"
+    "provenance/mirror/receipts/20261014-34d16417a460.json",
+    "provenance/mirror/receipts/20261025-46cee5e4e6e2.json"
   ]
 }

@@ -53,6 +53,16 @@ class SdkMirrorScopeTests(unittest.TestCase):
                 name,
             )
 
+    def test_skia_vendor_core_headers_are_not_retired_projections(self) -> None:
+        self.assertEqual(
+            rules("sdk/include/vellum/skia/include/core/RasterContext.h", b""),
+            set(),
+        )
+        self.assertIn(
+            "retired-projection-path",
+            rules("sdk/core/RasterContext.h", b""),
+        )
+
     def test_mirror_scope_rejects_product_edges(self) -> None:
         cases = {
             b"#include <pulp/audio/buffer.hpp>\n": "mirror-product-include",

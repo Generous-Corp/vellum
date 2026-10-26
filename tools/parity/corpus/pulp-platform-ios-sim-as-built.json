@@ -1,0 +1,61 @@
+{
+  "schema": "vellum.parity.corpus.v1",
+  "corpus_id": "pulp-platform-ios-sim-as-built-v1",
+  "description": "G7 iOS AUv3, column A (PULP_ENABLE_GPU=OFF), iOS 27.0 simulator (arm64): PulpSineSynth.app (PulpSineSynth_HostApp, Xcode build with code signing allowed, the simulator's ad-hoc 'Sign to Run Locally' identity) with PulpSineSynth.appex embedded by the PulpSineSynth_HostApp_Embed target. Read exactly as the build leaves it.",
+  "declared_gaps": [
+    {
+      "row": "host checks 3-5 inside the simulator",
+      "reason": "this lane proves the extension is sealed, installs on a booted simulator and is registered with pluginkit; it does not instantiate the AUv3, open its editor or render. Pulp has no in-simulator AUv3 host probe (an AVAudioEngine manual-rendering harness would render offline without an audio device)."
+    },
+    {
+      "row": "device install",
+      "reason": "the simulator installs and registers bundles whose seal does not verify; a device does not. The seal is therefore checked by codesign here, not by the install."
+    },
+    {
+      "row": "column B",
+      "reason": "GPU-off (column A) build only."
+    }
+  ],
+  "declared_exceptions": [],
+  "cases": [
+    {
+      "source": "fixtures/platform/scan.json",
+      "source_base": "corpus",
+      "width": 1,
+      "height": 1,
+      "case_id": "ios-sim-sinesynth-install",
+      "source_kind": "platform",
+      "lanes": [
+        "ios-install-registration"
+      ],
+      "args": {
+        "mode": [
+          "ios-sim"
+        ],
+        "artifact": [
+          "--artifact",
+          "{root:artifact}/PulpSineSynth.app"
+        ],
+        "host": [
+          "--device",
+          "booted"
+        ]
+      },
+      "expect": {
+        "extensions": [
+          "PulpSineSynth.appex"
+        ],
+        "extension_point": "com.apple.AudioUnit-UI",
+        "audio_component": true
+      },
+      "controls": {
+        "unsigned_edit": "unsigned-edit:PlugIns/PulpSineSynth.appex/PulpSineSynth",
+        "extension_point": [
+          "plist-set:PlugIns/PulpSineSynth.appex/Info.plist:NSExtension.NSExtensionPointIdentifier=com.apple.widgetkit-extension",
+          "resign-ad-hoc:"
+        ],
+        "drop_extension": "drop:PlugIns/PulpSineSynth.appex"
+      }
+    }
+  ]
+}

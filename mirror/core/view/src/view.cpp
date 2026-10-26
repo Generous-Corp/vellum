@@ -1,0 +1,2908 @@
+#include <pulp/view/view.hpp>
+#include <pulp/view/view_lifecycle.hpp>
+#include <pulp/view/widget_painter.hpp>
+#include <pulp/view/widget_metrics.hpp>
+#include <pulp/view/tracing_badge.hpp>
+#include <pulp/runtime/trace.hpp>
+#include <pulp/view/motion.hpp>
+#include <pulp/view/gesture.hpp>
+#include <pulp/view/overlay_dismissal.hpp>
+#include <pulp/view/pointer_dispatch.hpp>
+#include <pulp/view/ui_components.hpp>
+#include <pulp/view/window_host.hpp>
+#include <pulp/view/plugin_view_host.hpp>
+#include <pulp/view/drag_drop.hpp>
+#include <pulp/view/animation.hpp>
+#include <pulp/view/frame_clock.hpp>
+#include <pulp/view/value_source_binding.hpp>
+#include <pulp/runtime/scoped_no_alloc.hpp>
+#include <pulp/canvas/canvas.hpp>
+#include <pulp/view/capability_fallback.hpp>
+#include <memory>
+#include <algorithm>
+#include <atomic>
+#include <cassert>
+#include <cctype>
+#include <chrono>
+#include <cmath>
+#include <limits>
+#include <numeric>
+#include <sstream>
+#include <stdexcept>
+#include <utility>
+
+namespace pulp::view {
+
+// Holds a view's value-source bindings behind one lazily allocated pointer, so
+// the common view (no live value) pays a single null pointer rather than two
+// bindings' worth of members. Defined before ~View so the unique_ptr member has
+// a complete type to destroy.
+struct ViewValueBindings {
+    explicit ViewValueBindings(View& owner) : meter(owner), scalar(owner) {}
+    MeterSourceBinding meter;
+    ScalarSourceBinding scalar;
+};
+
+namespace {
+
+std::uint64_t next_import_binding_instance_id() {
+    static std::atomic<std::uint64_t> next{1};
+    return next.fetch_add(1, std::memory_order_relaxed);
+}
+
+View* root_for_gesture_relationship_cleanup(View* view) {
+    if (!view) return nullptr;
+    while (view->parent())
+        view = view->parent();
+    return view;
+}
+
+// Public compatibility generation. Internal capture/cache paths use each
+// root's generation so unrelated editors remain isolated.
+std::atomic<std::uint64_t> g_view_structure_generation{1};
+
+// Process-global count of views with subtree caching enabled (FU-3). The vast
+// majority of trees never cache, and invalidate_subtree_caches_up() runs on
+// EVERY request_repaint()/set_bounds()/child-mutation — a hot mutation path.
+// This counter lets that walk early-out with a single relaxed load when no
+// view anywhere has opted in, so the feature adds no measurable cost to trees
+// that don't use it. Touched only by set_subtree_cached() and ~View(). Relaxed
+// is sufficient: the flag only gates an optimization, and the mutations that
+// matter are already ordered by the single-threaded UI paint/mutation model.
+std::atomic<int>& subtree_cache_enabled_count() {
+    static std::atomic<int> count{0};
+    return count;
+}
+
+// How many follow-up frame-clock passes a single notify_frame_clock_changed()
+// will run to service work its own hooks generated. Real trees settle in one;
+// the cap exists so a hook that attaches a clock-aware node every time it is
+// notified degrades to dropped notifications rather than a hung UI thread.
+constexpr int kMaxClockWalkPasses = 8;
+
+// Frame-clock walk tokens. PROCESS-GLOBAL and monotonic, never per-root.
+//
+// The stamps these produce are written onto individual views but compared
+// against a walk in progress, and a view does not stay under one root: a
+// subtree detached by remove_child becomes its own root and is notified
+// immediately. With per-root counters those two number lines alias — a detached
+// root's first walk is epoch 1, and every descendant stamped by its previous
+// root's first walk already reads 1, so the whole subtree is skipped as
+// "already visited" and never told its clock went away. A self-subscribing
+// descendant (Meter, TextEditor's caret blink, LottieView) then keeps a
+// subscription to a clock it can no longer reach. One global sequence makes a
+// stamp mean the same thing in every tree, so the collision cannot arise.
+std::uint64_t next_clock_walk_token() noexcept {
+    static std::atomic<std::uint64_t> next{1};
+    return next.fetch_add(1, std::memory_order_relaxed);
+}
+
+} // namespace
+
+View::View()
+    : import_binding_instance_id_(next_import_binding_instance_id()),
+      import_binding_lifetime_token_(
+          std::make_shared<const std::uint64_t>(import_binding_instance_id_)) {
+    constructed_count_.fetch_add(1, std::memory_order_relaxed);
+}
+
+void ViewCapture::set(View* view) noexcept {
+    view_ = view;
+    instance_id_ = view ? view->import_binding_instance_id() : 0;
+    validated_root_ = view;
+    while (validated_root_ && validated_root_->parent())
+        validated_root_ = validated_root_->parent();
+    validated_root_instance_id_ =
+        validated_root_ ? validated_root_->import_binding_instance_id() : 0;
+    validated_generation_ =
+        validated_root_ ? validated_root_->root_structure_generation() : 0;
+}
+
+void ViewCapture::reset() noexcept {
+    view_ = nullptr;
+    instance_id_ = 0;
+    validated_root_ = nullptr;
+    validated_root_instance_id_ = 0;
+    validated_generation_ = 0;
+}
+
+View* ViewCapture::live_in(View& root) const noexcept {
+    if (!view_) return nullptr;
+    const auto generation = root.root_structure_generation();
+    if (validated_root_ == &root &&
+        validated_root_instance_id_ == root.import_binding_instance_id() &&
+        validated_generation_ == generation &&
+        !view_->detaching_.load(std::memory_order_acquire))
+        return view_;
+    const auto find = [&](auto&& self, View* candidate) noexcept -> View* {
+        if (candidate->detaching_.load(std::memory_order_acquire))
+            return nullptr;
+        if (candidate == view_)
+            return candidate->import_binding_instance_id() == instance_id_
+                       ? candidate
+                       : nullptr;
+        for (std::size_t i = 0; i < candidate->child_count(); ++i) {
+            if (View* found = self(self, candidate->child_at(i))) return found;
+        }
+        return nullptr;
+    };
+    View* found = find(find, &root);
+    if (found) {
+        validated_root_ = &root;
+        validated_root_instance_id_ = root.import_binding_instance_id();
+        validated_generation_ = generation;
+    }
+    return found;
+}
+
+// View destructor stays out-of-line while remaining virtual + public so vtable
+// layout + SDK contract are unchanged.
+View::~View() {
+    // Destroying a View that is still attached, or that has a callback of its
+    // own executing, frees a frame that is still running above us. Both are
+    // contract violations with a supported alternative — remove_child() first,
+    // or hand ownership to View::retire() — so fail loudly in debug rather than
+    // corrupting memory quietly. A child destroyed as part of its parent's
+    // teardown is legitimate and exempted via the parent's destroying_ flag.
+    // Release builds are unchanged. Contract: view_lifecycle.hpp.
+    //
+    // The test is whether the parent still OWNS this view, not merely whether
+    // parent_ is set. Several deliberate ownership transfers hand a subtree to a
+    // deferred-destruction queue and leave parent_ intact on purpose — realm
+    // retirement does, so a draining native accessibility provider can still
+    // navigate the retired graph (retire_children_for_realm_reset), and the
+    // emergency owner-teardown path never clears it at all. Those are safe: the
+    // parent no longer lists the view, so nothing can route to it. Asserting on
+    // parent_ alone would red the Debug lane on a path that is working
+    // correctly.
+#ifndef NDEBUG
+    const bool parent_still_owns_this = [this] {
+        if (parent_ == nullptr || parent_->destroying_) return false;
+        for (const auto& sibling : parent_->children_)
+            if (sibling.get() == this) return true;
+        return false;
+    }();
+    assert(!parent_still_owns_this &&
+           "View destroyed while its parent still owns it; "
+           "call parent->remove_child() first");
+#endif
+    assert(dispatch_depth_ == 0 &&
+           "View destroyed while one of its callbacks is executing; "
+           "route ownership through View::retire()");
+    destroyed_count_.fetch_add(1, std::memory_order_relaxed);
+    destroying_ = true;
+    // Anything still parked on this root's retirement chain dies with it. Drain
+    // iteratively so a long chain cannot recurse the stack through member
+    // destructors.
+    drain_retired();
+    if (gesture_arbiter_)
+        gesture_arbiter_->reset();
+    // Clear the overlay + focus slots if this dying View holds them. Without
+    // this, an unmounted React popover / focused widget leaves a dangling
+    // pointer that the platform window host would dereference on the next click
+    // or keypress (crash via dynamic_cast<TextEditor*> on freed memory in
+    // -[PulpView focusedTextEditor]). Clear BOTH the root-owned slot (S11) and
+    // the process-global shim mirror. Uses existing_interaction() so a tree that
+    // never allocated a state block is not forced to allocate one during
+    // teardown. (~ComboBox does the same for active_popup.)
+    if (RootInteractionState* s = existing_interaction()) {
+        if (s->focused_input == this) s->focused_input = nullptr;
+        // Stack-aware: a dying overlay may sit UNDER an open submenu, in which
+        // case clearing only the active slot would leave a freed pointer on
+        // the stack for the next press to walk.
+        detach_overlay(*s, this);
+    }
+    if (active_overlay_ == this) active_overlay_ = nullptr;
+    if (focused_input_ == this) focused_input_ = nullptr;
+    // Cancel any running animate() tweens so their FrameClock callbacks (which
+    // capture `this`) can't fire after this View is gone.
+    // Unsubscribe against the CACHED clock (not frame_clock()): a child detached
+    // via remove_child has parent_==null, so frame_clock() would return null and
+    // leave the root's still-live subscription firing on freed memory.
+    for (const auto& a : animations_) {
+        if (a.clock) a.clock->unsubscribe(a.clock_id);
+    }
+    animations_.clear();
+    // Keep the process-global "any view caching?" counter balanced. Uses the
+    // member directly (not set_subtree_cached, which would request a repaint on
+    // a dying view). Parent-cache invalidation for a removed subtree is handled
+    // in remove_child while parent_ is still live.
+    if (subtree_cached_)
+        subtree_cache_enabled_count().fetch_sub(1, std::memory_order_relaxed);
+}
+
+int View::animate(std::function<void(float)> apply, float from, float to,
+                  float duration_s, std::function<float(float)> ease,
+                  std::function<void()> on_done, const std::string& tag) {
+    FrameClock* fc = frame_clock();
+    if (!fc || !apply) return -1;
+    if (!ease) ease = easing::linear;
+    if (!tag.empty()) {
+        // Self-cancelling: drop any prior animation sharing this tag.
+        for (int i = static_cast<int>(animations_.size()) - 1; i >= 0; --i) {
+            if (animations_[i].tag == tag) {
+                fc->unsubscribe(animations_[i].clock_id);
+                animations_.erase(animations_.begin() + i);
+            }
+        }
+    }
+    apply(from);  // seed the start value so there's no one-frame delay
+    auto elapsed = std::make_shared<float>(0.0f);
+    auto id_slot = std::make_shared<int>(-1);
+    const int cid = fc->subscribe(
+        [this, apply, from, to, duration_s, ease, on_done, elapsed, id_slot](float dt) -> bool {
+            *elapsed += dt;
+            const float t = duration_s > 0.0f
+                                ? std::clamp(*elapsed / duration_s, 0.0f, 1.0f)
+                                : 1.0f;
+            apply(from + (to - from) * ease(t));
+            request_repaint();
+            if (t >= 1.0f) {
+                // Reached the target: forget the record and fire on_done. Return
+                // false so the FrameClock auto-unsubscribes this callback.
+                for (int i = static_cast<int>(animations_.size()) - 1; i >= 0; --i) {
+                    if (animations_[i].clock_id == *id_slot) {
+                        animations_.erase(animations_.begin() + i);
+                        break;
+                    }
+                }
+                if (on_done) on_done();
+                return false;
+            }
+            return true;
+        });
+    *id_slot = cid;
+    animations_.push_back({cid, tag, fc});
+    return cid;
+}
+
+void View::cancel_animation(int id) {
+    if (id < 0) return;
+    for (int i = static_cast<int>(animations_.size()) - 1; i >= 0; --i) {
+        if (animations_[i].clock_id == id) {
+            if (animations_[i].clock) animations_[i].clock->unsubscribe(id);
+            animations_.erase(animations_.begin() + i);
+            return;
+        }
+    }
+}
+
+// ── Tracing badge ────────────────────────────────────────────────────────
+// Process-global visibility flag for the "◉ TRACING" reminder painted by the
+// root View in a PULP_TRACING=ON build. Default visible; a golden-screenshot
+// harness can suppress it. Stored in a function-local static so the flag has no
+// static-init ordering dependency.
+namespace {
+std::atomic<bool>& tracing_badge_visible_flag() {
+    static std::atomic<bool> visible{true};
+    return visible;
+}
+}  // namespace
+// warn_capability_fallback_once lives in <pulp/view/capability_fallback.hpp>
+// (the one shared warn-once vocabulary, also used by ImageView).
+
+bool tracing_badge_should_paint() {
+    return pulp::runtime::kTracingEnabled
+           && tracing_badge_visible_flag().load(std::memory_order_relaxed);
+}
+
+void set_tracing_badge_visible(bool visible) {
+    tracing_badge_visible_flag().store(visible, std::memory_order_relaxed);
+}
+
+namespace {
+// Each field is its own atomic so the paint path reads the placement without a
+// lock; a placement written mid-frame can mix old and new fields for that one
+// frame, which only moves a diagnostic pill.
+struct TracingBadgePlacementStore {
+    std::atomic<float> right{8.0f};
+    std::atomic<float> top{8.0f};
+    std::atomic<float> height{0.0f};
+    std::atomic<float> font_px{11.0f};
+};
+TracingBadgePlacementStore& tracing_badge_placement_store() {
+    static TracingBadgePlacementStore store;
+    return store;
+}
+}  // namespace
+
+void set_tracing_badge_placement(const TracingBadgePlacement& placement) {
+    auto& store = tracing_badge_placement_store();
+    store.right.store(placement.right, std::memory_order_relaxed);
+    store.top.store(placement.top, std::memory_order_relaxed);
+    store.height.store(placement.height, std::memory_order_relaxed);
+    store.font_px.store(placement.font_px, std::memory_order_relaxed);
+}
+
+TracingBadgePlacement tracing_badge_placement() {
+    auto& store = tracing_badge_placement_store();
+    TracingBadgePlacement placement;
+    placement.right = store.right.load(std::memory_order_relaxed);
+    placement.top = store.top.load(std::memory_order_relaxed);
+    placement.height = store.height.load(std::memory_order_relaxed);
+    placement.font_px = store.font_px.load(std::memory_order_relaxed);
+    return placement;
+}
+
+TracingBadgeLayout tracing_badge_layout(float root_width, float text_width,
+                                        float ascent, float descent,
+                                        const TracingBadgePlacement& placement) {
+    constexpr float kPadX = 8.0f;
+    constexpr float kPadY = 4.0f;
+    TracingBadgeLayout layout;
+    layout.pill_width = text_width + 2.0f * kPadX;
+    layout.pill_height = placement.height > 0.0f
+        ? placement.height : placement.font_px + 2.0f * kPadY;
+    layout.pill_x = root_width - layout.pill_width - placement.right;
+    layout.pill_y = placement.top;
+    layout.text_x = layout.pill_x + kPadX;
+    // Centre the ink: the line's ascent + descent sits in the middle of the
+    // pill, so the space above the ascent equals the space below the descent.
+    layout.baseline_y = layout.pill_y
+        + (layout.pill_height - (ascent + descent)) * 0.5f + ascent;
+    return layout;
+}
+
+// ── Subtree scene cache (FU-3) ───────────────────────────────────────────
+void View::set_subtree_cached(bool v) {
+    if (subtree_cached_ == v) return;
+    subtree_cached_ = v;
+    if (v) {
+        subtree_cache_enabled_count().fetch_add(1, std::memory_order_relaxed);
+    } else {
+        subtree_cache_enabled_count().fetch_sub(1, std::memory_order_relaxed);
+        // Drop any recorded scene so re-enabling later starts fresh, and so the
+        // shared_ptr does not pin a stale recording.
+        scene_cache_.reset();
+        scene_cache_valid_ = false;
+    }
+    // Turning caching on or off changes what the next frame must do; make sure
+    // a repaint is on the way.
+    request_repaint();
+}
+
+void View::invalidate_subtree_caches_up() {
+    // A paint mutation that is not, by itself, a repaint request: whoever
+    // owes the host a repaint for it must not assume someone else marked it.
+    unmarked_paint_mutation_count_.fetch_add(1, std::memory_order_relaxed);
+    stale_subtree_caches_up();
+}
+
+void View::stale_subtree_caches_up() {
+    // Fast path: nobody caches anywhere → nothing to invalidate. One relaxed
+    // load, no tree walk.
+    if (subtree_cache_enabled_count().load(std::memory_order_relaxed) == 0)
+        return;
+    // A mutation at THIS view stales the recording of every cached ancestor
+    // (their pictures include this view's content) and of this view itself if
+    // it caches. Walk up parent_ links clearing validity; O(depth).
+    for (View* v = this; v; v = v->parent_) {
+        if (v->subtree_cached_)
+            v->scene_cache_valid_ = false;
+    }
+}
+
+namespace {
+
+// The simulate_* device description in the form the delivery verbs take. The
+// two structs stay separate because SimulatedPointer also carries the event
+// fields (`modifiers`, `button`) the verbs already take positionally, while
+// PointerAttributes is strictly the device.
+PointerAttributes to_attributes(const View::SimulatedPointer& p) {
+    return PointerAttributes{p.type, p.pressure, p.pointer_id};
+}
+
+// Stamp the device onto a MouseEvent bound for the gesture arbiter. The arbiter
+// is fed directly (not through the delivery verbs), so this is the only place
+// the recognizers' view of the pointer is set.
+void apply_pointer(MouseEvent& e, const View::SimulatedPointer& p) {
+    e.button = p.button;
+    e.modifiers = p.modifiers;
+    e.pointer_type = p.type;
+    e.pressure = p.pressure;
+    e.pointer_id = p.pointer_id;
+}
+
+}  // namespace
+
+void View::simulate_click(Point root_pos) {
+    simulate_click(root_pos, SimulatedPointer{});
+}
+
+void View::simulate_click(Point root_pos, const SimulatedPointer& pointer) {
+    View* routed = nullptr;
+    if (parent_ == nullptr) {
+        // A click on a tree root is the press a platform host would route, so
+        // it goes through the same policy the hosts call: inside presses reach
+        // the overlay's own subtree, a press on a different trigger switches
+        // menus, and a press on the trigger that opened the overlay toggles it
+        // shut without reopening it. A headless test therefore exercises the
+        // dismissal behaviour users actually get.
+        const auto overlay_press = route_press_to_active_overlay(*this, root_pos);
+        if (overlay_press.consume_press) return;
+        if (overlay_press.routing == OverlayPressRouting::routed)
+            routed = overlay_press.target;
+    } else if (auto* overlay = interaction().active_overlay;
+               overlay && !overlay->overlay_contains(root_pos)) {
+        // A click on a subtree: `root_pos` is in this subtree's space, which
+        // the root-space policy cannot interpret, so only the outside-press
+        // rule applies.
+        const bool consume = overlay->overlay_consumes_outside_click();
+        overlay->dismiss_claimed_overlay();
+        if (consume) return;
+    }
+    auto* target = routed != nullptr ? routed : hit_test(root_pos);
+    // Record the synthetic input into the active motion fixture before
+    // dispatch so replay sees the same target lookup the original recording
+    // captured: target id is what we resolve, not "wherever this click would
+    // land at replay time".
+    if (pulp::view::motion::input_recording_enabled()) {
+        const std::string id = target ? target->id() : std::string();
+        std::vector<std::pair<std::string, double>> coords;
+        coords.emplace_back("button", static_cast<double>(pointer.button));
+        coords.emplace_back("modifiers", static_cast<double>(pointer.modifiers));
+        coords.emplace_back("pointer_id", static_cast<double>(pointer.pointer_id));
+        coords.emplace_back("pointer_type", static_cast<double>(pointer.type));
+        coords.emplace_back("pressure", static_cast<double>(pointer.pressure));
+        coords.emplace_back("x", static_cast<double>(root_pos.x));
+        coords.emplace_back("y", static_cast<double>(root_pos.y));
+        pulp::view::motion::record_simulated_input("click", id, std::move(coords));
+    }
+    if (!target) return;
+
+    MouseEvent down;
+    down.position = root_pos;
+    down.window_position = root_pos;
+    down.is_down = true;
+    down.phase = MousePhase::press;
+    apply_pointer(down, pointer);
+    const bool gesture_down = dispatch_gesture_pointer_event(down);
+
+    MouseEvent up = down;
+    up.is_down = false;
+    up.phase = MousePhase::release;
+    const bool gesture_up = dispatch_gesture_pointer_event(up);
+    // Only a real CLAIM takes the pointer. These returns are true whenever a
+    // recognizer is merely a candidate here, so bailing on them made every
+    // widget that registers a gesture unclickable in headless tests — the same
+    // defect the plugin host had.
+    const bool claimed = (gesture_down || gesture_up) && gesture_claimed_pointer();
+    if (claimed) return;
+
+    // DOM-style click bubbling. `hit_test` returns the deepest
+    // hit-testable view, which for `<button onClick=...>Label</button>` is
+    // the inner Label child. Walk up the parent chain to find the nearest
+    // ancestor with a registered handler.
+    //
+    // Bound the bubble walk to `this` (inclusive). Walking past the receiver
+    // into ancestors outside its subtree leaks synthetic clicks across
+    // component boundaries, a false-positive hazard for tests / tooling that
+    // simulate interaction on isolated subtrees. `deliver_mouse_up` resolves
+    // the same handler with an UNbounded walk (the hosts always dispatch from
+    // the window root, where there is nothing above to leak into), so resolve
+    // ours here and have the fire-click hook use it instead.
+    View* click_target = target;
+    while (click_target && !click_target->on_click) {
+        if (click_target == this) break;  // stop at receiver, even if no handler
+        click_target = click_target->parent();
+    }
+    auto bounded_click = click_target ? click_target->on_click : std::function<void()>{};
+
+    const PointerAttributes attrs = to_attributes(pointer);
+    if (!deliver_mouse_down(*this, target, root_pos, pointer.modifiers,
+                            /*click_count=*/1, /*bubble=*/true, pointer.button,
+                            MouseDownHost{}, attrs))
+        return;
+    MouseUpHost up_host;
+    up_host.fire_click = [&bounded_click](const std::function<void()>&,
+                                          const std::string&, uint16_t) {
+        if (bounded_click) bounded_click();
+    };
+    deliver_mouse_up(*this, target, root_pos, pointer.modifiers,
+                     /*click_count=*/1, up_host, pointer.button, attrs);
+}
+
+void View::simulate_drag(Point start, Point end, int steps) {
+    simulate_drag(start, end, steps, SimulatedPointer{});
+}
+
+void View::simulate_drag(Point start, Point end, int steps,
+                         const SimulatedPointer& pointer) {
+    auto* target = hit_test(start);
+    if (pulp::view::motion::input_recording_enabled()) {
+        const std::string id = target ? target->id() : std::string();
+        std::vector<std::pair<std::string, double>> coords;
+        // Keep the stable component order documented by the v2 fixture contract.
+        coords.emplace_back("button", static_cast<double>(pointer.button));
+        coords.emplace_back("end_x",   static_cast<double>(end.x));
+        coords.emplace_back("end_y",   static_cast<double>(end.y));
+        coords.emplace_back("modifiers", static_cast<double>(pointer.modifiers));
+        coords.emplace_back("pointer_id", static_cast<double>(pointer.pointer_id));
+        coords.emplace_back("pointer_type", static_cast<double>(pointer.type));
+        coords.emplace_back("pressure", static_cast<double>(pointer.pressure));
+        coords.emplace_back("start_x", static_cast<double>(start.x));
+        coords.emplace_back("start_y", static_cast<double>(start.y));
+        coords.emplace_back("steps",   static_cast<double>(steps));
+        pulp::view::motion::record_simulated_input("drag", id, std::move(coords));
+    }
+    if (!target) return;
+
+    const PointerAttributes attrs = to_attributes(pointer);
+
+    MouseEvent down;
+    down.position = start;
+    down.window_position = start;
+    down.is_down = true;
+    down.phase = MousePhase::press;
+    apply_pointer(down, pointer);
+    bool gesture_consumed =
+        dispatch_gesture_pointer_event(down) && gesture_claimed_pointer();
+
+    if (gesture_consumed) {
+        for (int i = 1; i <= steps; ++i) {
+            float t = static_cast<float>(i) / steps;
+            Point p = {start.x + (end.x - start.x) * t,
+                       start.y + (end.y - start.y) * t};
+            MouseEvent move;
+            move.position = p;
+            move.window_position = p;
+            move.is_down = true;
+            move.phase = MousePhase::drag;
+            apply_pointer(move, pointer);
+            dispatch_gesture_pointer_event(move);
+        }
+        MouseEvent up;
+        up.position = end;
+        up.window_position = end;
+        up.is_down = false;
+        up.phase = MousePhase::release;
+        apply_pointer(up, pointer);
+        dispatch_gesture_pointer_event(up);
+        return;
+    }
+
+    // Each phase goes through the same pointer_dispatch verb the platform hosts
+    // call, so a simulated drag and a real one deliver the identical channels in
+    // the identical order. Calling the point-only virtuals directly (as this
+    // did) reached on_mouse_down / on_mouse_drag / on_mouse_up but never the
+    // modern on_mouse_event channel or the on_drag bubble — which is precisely
+    // what registerPointer installs, so every scripted widget saw nothing. A
+    // headless drag test could assert its callbacks were installed and still
+    // never exercise them.
+    //
+    // The verbs also fix the local point. The lambda this replaces peeled
+    // ancestor bounds offsets only, while hit_test — which picked `target` a few
+    // lines above — is scale- and scroll-aware, so a drag inside a scaled or
+    // scrolled container found the right widget and handed it the wrong
+    // coordinates. point_to_local divides out the scale chain and ScrollView
+    // offsets, so both halves agree.
+    //
+    // Empty fire_click throughout: a release landing back on the press target
+    // would otherwise read as a click, and a drag has never synthesized one.
+    deliver_mouse_down(*this, target, start, pointer.modifiers, /*click_count=*/1,
+                       /*bubble=*/true, pointer.button, MouseDownHost{}, attrs);
+    for (int i = 1; i <= steps; ++i) {
+        float t = static_cast<float>(i) / steps;
+        Point p = {start.x + (end.x - start.x) * t,
+                   start.y + (end.y - start.y) * t};
+        MouseEvent move;
+        move.position = p;
+        move.window_position = p;
+        move.is_down = true;
+        move.phase = MousePhase::drag;
+        apply_pointer(move, pointer);
+        if (dispatch_gesture_pointer_event(move) && gesture_claimed_pointer()) {
+            // A recognizer took the pointer partway through. The press was
+            // already delivered, so stop the raw drag but CLOSE the bracket —
+            // a control that opened a parameter gesture on press must see its
+            // release or the host holds an automation touch open.
+            deliver_mouse_up(*this, target, p, pointer.modifiers,
+                             /*click_count=*/1, MouseUpHost{}, pointer.button,
+                             attrs);
+            return;
+        }
+        deliver_mouse_drag(*this, target, p, pointer.modifiers,
+                           /*click_count=*/1, pointer.button, attrs);
+    }
+    MouseEvent up;
+    up.position = end;
+    up.window_position = end;
+    up.is_down = false;
+    up.phase = MousePhase::release;
+    apply_pointer(up, pointer);
+    // The release is delivered unconditionally. Whether a recognizer claims on
+    // this edge or was merely a candidate throughout, the press was delivered
+    // and its bracket has to close exactly once. OR-ing a candidacy result into
+    // the bail is what leaked it: a widget carrying a recognizer that never
+    // recognized got its press and its drags and then no release at all.
+    dispatch_gesture_pointer_event(up);
+    deliver_mouse_up(*this, target, end, pointer.modifiers, /*click_count=*/1,
+                     MouseUpHost{}, pointer.button, attrs);
+}
+
+static void collect_focusable(View& root, std::vector<View*>& out) {
+    if (root.focusable()) out.push_back(&root);
+    for (size_t i = 0; i < root.child_count(); ++i)
+        collect_focusable(*root.child_at(i), out);
+}
+
+View* View::focus_next(View& root, View* current) {
+    std::vector<View*> focusable;
+    collect_focusable(root, focusable);
+    if (focusable.empty()) return nullptr;
+
+    if (!current) {
+        focusable[0]->set_focus(true);
+        return focusable[0];
+    }
+
+    current->set_focus(false);
+    for (size_t i = 0; i < focusable.size(); ++i) {
+        if (focusable[i] == current) {
+            auto* next = focusable[(i + 1) % focusable.size()];
+            next->set_focus(true);
+            return next;
+        }
+    }
+    focusable[0]->set_focus(true);
+    return focusable[0];
+}
+
+View* View::focus_prev(View& root, View* current) {
+    std::vector<View*> focusable;
+    collect_focusable(root, focusable);
+    if (focusable.empty()) return nullptr;
+
+    if (!current) {
+        focusable.back()->set_focus(true);
+        return focusable.back();
+    }
+
+    current->set_focus(false);
+    for (size_t i = 0; i < focusable.size(); ++i) {
+        if (focusable[i] == current) {
+            auto* prev = focusable[(i + focusable.size() - 1) % focusable.size()];
+            prev->set_focus(true);
+            return prev;
+        }
+    }
+    focusable.back()->set_focus(true);
+    return focusable.back();
+}
+
+std::atomic<std::uint64_t> View::layout_generation_{1};
+std::atomic<std::uint64_t> View::layout_pass_count_{0};
+std::atomic<std::uint64_t> View::damage_request_count_{0};
+std::atomic<std::uint64_t> View::unmarked_paint_mutation_count_{0};
+std::atomic<std::uint64_t> View::constructed_count_{0};
+std::atomic<std::uint64_t> View::destroyed_count_{0};
+
+std::uint64_t View::tree_layout_generation() const noexcept {
+    auto* root = this;
+    while (root->parent_) root = root->parent_;
+    return root->tree_layout_generation_;
+}
+
+void View::note_layout_mutation() noexcept {
+    auto* root = this;
+    while (root->parent_) root = root->parent_;
+    ++root->tree_layout_generation_;
+    bump_layout_generation();
+}
+
+void View::set_bounds(Rect r) {
+    if (bounds_ == r) return;
+    bounds_ = r;
+    // Geometry changed without necessarily going through invalidate_layout() —
+    // a host resize, a widget positioning itself, or the layout pass placing a
+    // child. Every one of those changes what a geometry query would return, so
+    // the generation moves. This is also why a reader must record the
+    // generation AFTER its layout pass: the pass itself sets child bounds and
+    // therefore bumps this counter.
+    note_layout_mutation();
+    // Resize/move re-records: the recording was captured at the old size (and a
+    // parent's recording placed this view at its old box). Stale this view and
+    // its cached ancestors before on_resized() drives the repaint.
+    invalidate_subtree_caches_up();
+    on_resized();
+}
+
+void View::prepare_for_reuse() {
+    // A pooled view is never attached to a live tree. Firing this on a parented
+    // view would mean the pool is recycling something still wired into a paint /
+    // hit-test path — a logic error, not a recoverable state.
+    assert(parent_ == nullptr && "prepare_for_reuse() on a view that still has a parent");
+
+    // The allocation and its descendants are reused, but the logical row/cell
+    // is not. Rotate every identity so a capture of a nested widget from the
+    // previous occupant cannot resolve after the same subtree is reattached.
+    const auto rotate_identity = [&](auto&& self, View& view) -> void {
+        view.import_binding_instance_id_ = next_import_binding_instance_id();
+        view.import_binding_lifetime_token_ =
+            std::make_shared<const std::uint64_t>(
+                view.import_binding_instance_id_);
+        for (auto& child : view.children_)
+            self(self, *child);
+    };
+    rotate_identity(rotate_identity, *this);
+
+    // Geometry / visibility / compositing — reset directly (not via setters) to
+    // avoid on_resized()/request_repaint() side effects on a detached view.
+    bounds_ = Rect{};
+    visible_ = true;
+    opacity_ = 1.0f;
+    subpixel_layout_ = false;
+
+    // Accessibility identity from the previous binding must not leak into the
+    // next occupant of this slot.
+    access_role_ = AccessRole::none;
+    access_label_.clear();
+    derived_access_label_.clear();
+    access_value_.clear();
+    access_pressed_.clear();
+    access_checked_.clear();
+    access_disabled_.clear();
+    access_hidden_.clear();
+
+    // Pointer / hover / focus interaction state.
+    hovered_ = false;
+    has_focus_ = false;
+    captured_pointers_.clear();
+
+    // A recycled view must not remain the process-global overlay owner; the
+    // static back-pointer would otherwise dangle at a parked instance.
+    release_overlay();
+    // Nor keep the opener of the popover it used to be.
+    overlay_anchor_id_ = 0;
+    overlay_anchor_explicit_ = false;
+
+    // Clear EVERY base-class callback. A recycled view that keeps a stale
+    // std::function fires it into freed/torn-down closure state on the next
+    // interaction — the exact use-after-free this reset exists to prevent
+    // (Codex must-fix #5). Subclass callbacks are the subclass override's job.
+    on_click = nullptr;
+    on_pointer_event = nullptr;
+    on_dom_pointer_event = nullptr;
+    on_dom_pointer_move_event = nullptr;
+    on_drag = nullptr;
+    on_pointer_move = nullptr;
+    on_gesture_cb = nullptr;
+    on_context_menu = nullptr;
+    on_drop = nullptr;
+    on_hover_enter = nullptr;
+    on_hover_leave = nullptr;
+    on_overlay_dismissed = nullptr;
+    on_global_click = nullptr;
+    on_global_key = nullptr;
+}
+
+void View::set_window_host(WindowHost* host) {
+    window_host_ = host;
+    for (auto& child : children_) {
+        child->set_window_host(host);
+    }
+}
+
+void View::set_plugin_view_host(PluginViewHost* host) {
+    plugin_view_host_ = host;
+    for (auto& child : children_) {
+        child->set_plugin_view_host(host);
+    }
+}
+
+void View::set_host_params(HostParamSurface* surface) {
+    host_params_ = surface;
+    for (auto& child : children_) {
+        child->set_host_params(surface);
+    }
+}
+
+void View::set_host_actions(HostActionSurface* surface) {
+    host_actions_ = surface;
+    for (auto& child : children_) {
+        child->set_host_actions(surface);
+    }
+}
+
+void View::set_subtree_detaching(View& view, bool detaching) noexcept {
+    view.detaching_.store(detaching, std::memory_order_release);
+    for (auto& descendant : view.children_)
+        set_subtree_detaching(*descendant, detaching);
+}
+
+void View::publish_structure_change() noexcept {
+    View* root = this;
+    while (root->parent_) root = root->parent_;
+    root->structure_generation_.fetch_add(1, std::memory_order_relaxed);
+    g_view_structure_generation.fetch_add(1, std::memory_order_relaxed);
+    // A different child set solves to a different set of boxes, so the last
+    // completed pass no longer describes this tree. Both layout gates
+    // (View::layout_children_if_needed and WidgetBridge::ensure_layout) elide
+    // the pass while the tree generation matches the applied one, so without
+    // this the elision serves the PREVIOUS structure's geometry: survivors of a
+    // removal keep the slots the old child set was solved into, a reordered
+    // child keeps its pre-rotation box, and a reparented child keeps the box
+    // its former parent gave it.
+    note_layout_mutation();
+    invalidate_subtree_caches_up();
+}
+
+std::unique_ptr<View> View::add_child(std::unique_ptr<View> child) {
+    if (add_child_transactional(child))
+        return nullptr;
+    return child;
+}
+
+bool View::add_child_transactional(std::unique_ptr<View>& child) {
+    if (!child)
+        return false;
+    // A view cannot become its own ancestor: linking one turns every walk to
+    // the root into an endless loop. The caller keeps the child and learns
+    // of the refusal from the result.
+    for (const View* ancestor = this; ancestor; ancestor = ancestor->parent_)
+        if (ancestor == child.get())
+            return false;
+    auto* inserted = child.get();
+    // Address alone cannot identify the child across a callback: a hook may
+    // destroy it and the allocator may hand the same address to a replacement
+    // inserted under this same parent. Every re-find below compares address
+    // AND instance id, so an ABA replacement is never mistaken for our child.
+    const auto inserted_id = inserted->import_binding_instance_id();
+    const auto is_inserted = [inserted, inserted_id](const auto& candidate) {
+        return candidate.get() == inserted &&
+               candidate->import_binding_instance_id() == inserted_id;
+    };
+    set_subtree_detaching(*child, false);
+    child->parent_ = this;
+    children_.push_back(std::move(child));
+    // If a frame-clock walk is in flight on this tree, stamp the whole incoming
+    // subtree as already-visited for the current pass. Without this the walk's
+    // restart scan would pick the new nodes up immediately, so a hook that
+    // attaches a clock-aware view every time it is notified could extend the
+    // walk without end. The root records that work is pending and runs one more
+    // bounded pass instead, so nothing is dropped.
+    {
+        View* root = this;
+        while (root->parent_) root = root->parent_;
+        if (root->clock_walk_active_) {
+            const auto epoch = root->clock_epoch_;
+            const auto stamp = [epoch](auto&& self, View& node) noexcept -> void {
+                // Traversal stamp only. Leaving the delivery stamp untouched is
+                // what makes the follow-up pass notify this subtree exactly once.
+                node.clock_walk_epoch_ = epoch;
+                for (auto& descendant : node.children_) self(self, *descendant);
+            };
+            stamp(stamp, *inserted);
+            root->clock_walk_pending_ = true;
+        }
+    }
+    try {
+        // Host propagation runs through virtual setters, so it is user code and
+        // it belongs INSIDE the transaction. Outside it, a throwing override
+        // left the caller holding a child whose parent_ already pointed here
+        // and whose detaching_ had been cleared — a half-linked tree with no
+        // unwind. Insertion is complete before any of it runs, so the catch
+        // below can restore ownership whichever setter rejects the attach.
+        inserted->set_window_host(window_host_);
+        inserted->set_plugin_view_host(plugin_view_host_);
+        inserted->set_host_params(host_params_);
+        inserted->set_host_actions(host_actions_);
+        auto attached_it = std::find_if(children_.begin(), children_.end(), is_inserted);
+        if (attached_it == children_.end())
+            return true;
+        {
+            // on_attached() may remove and try to destroy the very child it is
+            // running on. The lease keeps its storage alive until this scope
+            // exits, so the re-find below reads live memory either way.
+            DispatchLease lease(**attached_it);
+            (*attached_it)->on_attached();
+        }
+        // A newly attached subtree may contain clock-aware descendants. Keep
+        // this notification inside the same ownership transaction: a throwing
+        // descendant hook must not leave an inserted child with its caller's
+        // unique_ptr already consumed.
+        attached_it = std::find_if(children_.begin(), children_.end(), is_inserted);
+        if (attached_it != children_.end() && frame_clock())
+            (*attached_it)->notify_frame_clock_changed();
+    } catch (...) {
+        // `on_attached()` is user/framework code and may reject an attach.
+        // Do not leave a half-attached child in the native tree: unwind the
+        // ownership insertion and restore the detached state before propagating
+        // the exception to the caller's transaction boundary.
+        auto it = std::find_if(children_.begin(), children_.end(), is_inserted);
+        if (it == children_.end()) {
+            // A reentrant attach hook may have removed the child before
+            // throwing. Never assume children_.back() is still ours.
+            publish_structure_change();
+            invalidate_subtree_caches_up();
+            throw;
+        }
+        auto failed = std::move(*it);
+        children_.erase(it);
+        child = std::move(failed);
+        auto* restored = child.get();
+        {
+            DispatchLease lease(*restored);
+            try { restored->on_detached(); }
+            catch (...) { /* preserve the original attach/clock exception */ }
+        }
+        restored->parent_ = nullptr;
+        // Every setter below is virtual, i.e. user code, and we are unwinding:
+        // letting one throw out of a catch block calls std::terminate. The
+        // first exception wins, so contain each one and finish the rollback.
+        try { restored->set_window_host(nullptr); } catch (...) {}
+        try { restored->set_plugin_view_host(nullptr); } catch (...) {}
+        try { restored->set_host_params(nullptr); } catch (...) {}
+        try { restored->set_host_actions(nullptr); } catch (...) {}
+        set_subtree_detaching(*restored, true);
+        publish_structure_change();
+        invalidate_subtree_caches_up();
+        throw;
+    }
+    // Structural change: this view's (and its cached ancestors') recording no
+    // longer includes the new child. Stale them so the next frame re-records.
+    invalidate_subtree_caches_up();
+    // The solved geometry no longer covers the child set either. A successful
+    // attach does not route through publish_structure_change(), so the layout
+    // generation moves here; otherwise the gate elides the very pass that would
+    // give the new child a box and reflow its siblings around it, and the child
+    // paints at whatever rect it arrived with — the default zero rect for a
+    // fresh view, its previous parent's slot when it is being reparented.
+    note_layout_mutation();
+    return true;
+}
+
+bool View::move_child_to_index(View* child, size_t index) {
+    if (!child) return false;
+    // Identity is address AND instance id, matching add_child / remove_child: a
+    // freed child's address can be reused by a replacement under this same
+    // parent, and moving that innocent replacement would be silent corruption.
+    const auto child_id = child->import_binding_instance_id();
+    auto it = std::find_if(children_.begin(), children_.end(),
+                           [child, child_id](const auto& candidate) {
+                               return candidate.get() == child &&
+                                      candidate->import_binding_instance_id() == child_id;
+                           });
+    if (it == children_.end()) return false;
+
+    const auto from = static_cast<size_t>(std::distance(children_.begin(), it));
+    const auto to = std::min(index, children_.size() - 1);
+    if (from == to) return true;
+    // Rotate rather than erase + insert so the other children keep their
+    // relative order, and so no unique_ptr is ever momentarily unowned.
+    if (from < to) {
+        std::rotate(children_.begin() + static_cast<std::ptrdiff_t>(from),
+                    children_.begin() + static_cast<std::ptrdiff_t>(from) + 1,
+                    children_.begin() + static_cast<std::ptrdiff_t>(to) + 1);
+    } else {
+        std::rotate(children_.begin() + static_cast<std::ptrdiff_t>(to),
+                    children_.begin() + static_cast<std::ptrdiff_t>(from),
+                    children_.begin() + static_cast<std::ptrdiff_t>(from) + 1);
+    }
+    // No lifecycle hook runs above, so nothing can re-enter and invalidate the
+    // vector mid-move. Publishing afterwards is what makes the next layout pass
+    // rebuild the Yoga tree in the new order and the next frame re-record the
+    // cached display list.
+    publish_structure_change();
+    return true;
+}
+
+std::unique_ptr<View> View::remove_child(View* child) {
+    if (!child) return nullptr;
+    // Identity is address AND instance id. The gesture, popup, focus, and
+    // detach callbacks below are all re-entrant: one of them may destroy
+    // `child`, and the allocator may then place a NEW view at the same address
+    // under this same parent. An address-only re-find would sever and return
+    // that innocent replacement. The id makes every re-find below ABA-proof.
+    const auto child_id = child->import_binding_instance_id();
+    const auto is_child = [child, child_id](const auto& candidate) {
+        return candidate.get() == child &&
+               candidate->import_binding_instance_id() == child_id;
+    };
+    auto it = std::find_if(children_.begin(), children_.end(), is_child);
+    if (it == children_.end()) return nullptr;
+
+    std::vector<GestureRecognizer*> removed_recognizers;
+    auto collect_removed = [&](auto&& self, View& node) -> void {
+        for (auto& recognizer : node.gesture_recognizers_) {
+            if (recognizer)
+                removed_recognizers.push_back(recognizer.get());
+        }
+        for (auto& descendant : node.children_)
+            self(self, *descendant);
+    };
+    collect_removed(collect_removed, *child);
+
+    for (View* root = this; root; root = root->parent_) {
+        if (root->gesture_arbiter_)
+            root->gesture_arbiter_->reset();
+    }
+    auto scrub_relationships = [&](auto&& self, View& node) -> void {
+        for (auto& recognizer : node.gesture_recognizers_) {
+            if (!recognizer) continue;
+            for (auto* removed : removed_recognizers) {
+                if (removed && removed != recognizer.get())
+                    recognizer->remove_relationships_to(*removed);
+            }
+        }
+        for (auto& descendant : node.children_)
+            self(self, *descendant);
+    };
+    scrub_relationships(scrub_relationships, *this);
+
+    View* structure_root = this;
+    while (structure_root->parent_) structure_root = structure_root->parent_;
+
+    // An open navigation control temporarily owns the root focus slot. Retire
+    // that state while the subtree is still attached: after parent_ is severed,
+    // existing_interaction() resolves to the detached fallback and neither the
+    // control destructor nor the host can safely clear the old root pointer.
+    auto belongs_to_removed_subtree = [child](View* candidate) {
+        for (View* view = candidate; view; view = view->parent_)
+            if (view == child) return true;
+        return false;
+    };
+    // An in-tree drag is owned by the old root. Once the source leaves that
+    // realm there is no valid target coordinate space or arbiter to continue
+    // dispatching into, so terminate it before severing parent links rather
+    // than leaving a root record pointing at a foreign subtree.
+    if (structure_root->active_drag_ &&
+        belongs_to_removed_subtree(structure_root->active_drag_->source)) {
+        structure_root->cancel_drag();
+    }
+    if (ComboBox* popup = ComboBox::active_popup_in(*structure_root);
+        popup && belongs_to_removed_subtree(popup)) {
+        ComboBox::close_active_popup(*structure_root);
+    }
+    if (RootInteractionState* state = structure_root->interaction_state_.get();
+        state && belongs_to_removed_subtree(state->focused_input)) {
+        View* focused = state->focused_input;
+        state->focused_input = nullptr;
+        if (focused_input_ == focused) focused_input_ = nullptr;
+        // The subtree is leaving this interaction realm, so its base visual
+        // focus must leave with it. Qualify the base implementation: invoking
+        // an arbitrary derived blur/commit callback while remove_child still
+        // owns the subtree would permit re-entrant structural mutation.
+        focused->View::on_focus_changed(false);
+    }
+    if (RootInteractionState* state = structure_root->interaction_state_.get();
+        state != nullptr) {
+        // Top-down over the whole stack, not just the active slot: a nest of
+        // menus can be removed as one subtree, and an entry left behind under
+        // a retired one is a dangling pointer the next press would walk.
+        for (std::size_t i = state->overlay_stack.size(); i > 0; --i) {
+            View* overlay = state->overlay_stack[i - 1];
+            if (belongs_to_removed_subtree(overlay)) detach_overlay(*state, overlay);
+        }
+        // Structural removal is already the dismissal outcome. Do not invoke
+        // on_overlay_dismissed here: that callback may synchronously mutate the
+        // same tree while remove_child owns its iterators. Clearing the root
+        // slot while parent links are still valid is the lifecycle operation;
+        // it also prevents a callback-retired overlay from being reused by the
+        // next synthetic or platform click.
+    }
+    // The gesture, popup, and focus callbacks above are re-entrant.  A
+    // callback may have removed (and destroyed) this child, so do not
+    // dereference the original raw pointer until its ownership is confirmed
+    // again in the live children vector.
+    it = std::find_if(children_.begin(), children_.end(), is_child);
+    if (it == children_.end()) return nullptr;
+    // on_detached() intentionally runs while the old parent/clock is still
+    // reachable, but routing must already consider the whole subtree absent.
+    set_subtree_detaching(*child, true);
+    try {
+        // on_detached() may remove and try to destroy the child it runs on.
+        // Under the lease that destruction is deferred to the outermost lease
+        // exit, so every re-find below reads live memory.
+        DispatchLease lease(*child);
+        child->on_detached();
+    } catch (...) {
+        auto live_it = std::find_if(children_.begin(), children_.end(), is_child);
+        if (live_it != children_.end())
+            set_subtree_detaching(**live_it, false);
+        throw;
+    }
+    it = std::find_if(children_.begin(), children_.end(), is_child);
+    if (it == children_.end()) return nullptr;
+    child->set_window_host(nullptr);
+    child->set_plugin_view_host(nullptr);
+    child->set_host_params(nullptr);
+    child->set_host_actions(nullptr);
+    // Release root-owned overlay identity while the removed subtree still has
+    // its old ancestry. Once parent_ is severed, its destructor resolves the
+    // detached fallback state and cannot clear the former root's slot.
+    if (RootInteractionState* state = structure_root->existing_interaction();
+        state != nullptr) {
+        for (std::size_t i = state->overlay_stack.size(); i > 0; --i) {
+            View* overlay = state->overlay_stack[i - 1];
+            bool overlay_is_removed = false;
+            for (View* current = overlay; current; current = current->parent_) {
+                if (current == child) {
+                    overlay_is_removed = true;
+                    break;
+                }
+            }
+            if (overlay_is_removed) detach_overlay(*state, overlay);
+        }
+    }
+    // Any lifecycle/drag callback above may mutate this parent's children.
+    // Re-find by identity (address + instance id) before extracting ownership
+    // instead of dereferencing the iterator captured before those callbacks ran.
+    it = std::find_if(children_.begin(), children_.end(), is_child);
+    if (it == children_.end()) return nullptr;
+    child->parent_ = nullptr;
+    auto owned = std::move(*it);
+    children_.erase(it);
+    // Publish detachment before any hook can re-enter routing. In particular,
+    // notify_frame_clock_changed() invokes a virtual callback; a capture that
+    // was validated before removal must take its tree-walk path there rather
+    // than returning this now-detached child from the generation fast path.
+    structure_root->publish_structure_change();
+    // The removed subtree can no longer reach this parent's clock. Notify it so
+    // self-subscribing descendants (a live Meter that never got its own
+    // on_detached — remove_child only fires that on the removed root) drop their
+    // subscription now instead of lingering until the next tick.
+    try {
+        owned->notify_frame_clock_changed();
+    } catch (...) {
+        // The structural detach has already committed and ownership is now
+        // local to this return value. A best-effort clock refresh must not turn
+        // a successful removal into a half-moved subtree.
+    }
+    // Structural change: this view's (and its cached ancestors') recording still
+    // includes the now-removed child. Stale them so the next frame re-records.
+    invalidate_subtree_caches_up();
+    return owned;
+}
+
+std::vector<GestureRecognizer*> View::collect_realm_reset_gestures() const {
+    std::vector<GestureRecognizer*> removed_recognizers;
+    const auto collect = [&](auto&& self, const View& node) -> void {
+        for (auto& recognizer : node.gesture_recognizers_) {
+            if (recognizer)
+                removed_recognizers.push_back(recognizer.get());
+        }
+        for (auto& child : node.children_)
+            self(self, *child);
+    };
+    for (auto& child : children_)
+        collect(collect, *child);
+    return removed_recognizers;
+}
+
+void View::prepare_children_for_realm_reset(
+    const std::vector<GestureRecognizer*>& removed_recognizers) noexcept {
+    // Gesture abandonment and relationship scrubbing are non-throwing. No
+    // virtual lifecycle callback runs while children_ is still the live owner;
+    // callbacks may mutate the root reentrantly after the ownership swap.
+    const auto abandon = [&](auto&& self, View& node) -> void {
+        if (node.gesture_arbiter_)
+            node.gesture_arbiter_->abandon();
+        for (auto& child : node.children_)
+            self(self, *child);
+    };
+    for (auto& child : children_)
+        abandon(abandon, *child);
+    if (gesture_arbiter_)
+        gesture_arbiter_->abandon();
+
+    const auto scrub = [&](auto&& self, View& node) -> void {
+        for (auto& recognizer : node.gesture_recognizers_) {
+            if (!recognizer) continue;
+            for (auto* removed : removed_recognizers) {
+                if (removed && removed != recognizer.get())
+                    recognizer->remove_relationships_to(*removed);
+            }
+        }
+        for (auto& child : node.children_)
+            self(self, *child);
+    };
+    scrub(scrub, *this);
+
+    for (auto& child : children_)
+        set_subtree_detaching(*child, true);
+}
+
+void View::finish_realm_reset_detach() noexcept {
+    // The bridge already owns this retired component, so arbitrary user/native
+    // code cannot invalidate the vector being traversed. Parent and clock stay
+    // reachable during the hook, matching remove_child()'s lifecycle contract;
+    // the bridge severs them immediately after all hooks return.
+    try {
+        on_detached();
+    } catch (...) {
+    }
+    try {
+        set_window_host(nullptr);
+    } catch (...) {
+    }
+    try {
+        set_plugin_view_host(nullptr);
+    } catch (...) {
+    }
+    try {
+        set_host_params(nullptr);
+    } catch (...) {
+    }
+    try {
+        set_host_actions(nullptr);
+    } catch (...) {
+    }
+}
+
+void View::disconnect_frame_clock_for_realm_reset() noexcept {
+    // Realm retirement can outlive replacement while a native accessibility
+    // provider drains. Make the old graph inert now rather than letting its
+    // animation callbacks continue to execute against the replacement root.
+    parent_ = nullptr;
+    const auto disconnect = [&](auto&& self, View& node) noexcept -> void {
+        // Preserve parent links inside the retired graph: an in-flight native
+        // accessibility call may still need its geometry and navigation. Only
+        // the top-level edge back into the live root is severed.
+        node.frame_clock_ = nullptr;
+        for (const auto& animation : node.animations_) {
+            if (animation.clock)
+                animation.clock->unsubscribe(animation.clock_id);
+        }
+        node.animations_.clear();
+
+        // Frame-clock hooks are native extension points and may throw.
+        // Retirement has already committed ownership, so contain each hook
+        // independently and continue through the complete subtree.
+        try {
+            node.sync_value_bindings();
+        } catch (...) {
+        }
+        try {
+            node.on_frame_clock_changed();
+        } catch (...) {
+        }
+        for (auto& child : node.children_) {
+            if (child) self(self, *child);
+        }
+    };
+    disconnect(disconnect, *this);
+}
+
+void View::retire_interaction_state_for_realm_reset(
+    std::unique_ptr<ActiveDrag>& retired_drag,
+    std::unique_ptr<RootInteractionState>& retired_interaction) noexcept {
+    assert(retired_drag == nullptr);
+    assert(retired_interaction == nullptr);
+    retired_drag = std::move(active_drag_);
+    if (interaction_state_) {
+        if (focused_input_ == interaction_state_->focused_input)
+            focused_input_ = nullptr;
+        if (active_overlay_ == interaction_state_->active_overlay)
+            active_overlay_ = nullptr;
+        // The whole realm leaves with the state block, so its claims are no
+        // longer live. Leaving them counted would only cost the paint path its
+        // slower branch, but an honest count is what keeps that branch rare.
+        const std::size_t retired = interaction_state_->overlay_stack.size();
+        overlay_claims_live_ -= static_cast<std::uint32_t>(
+            std::min<std::size_t>(retired, overlay_claims_live_));
+        retired_interaction = std::move(interaction_state_);
+    }
+}
+
+std::unique_ptr<View> View::extract_child_for_realm_reset(
+    View* child) noexcept {
+    auto it = std::find_if(children_.begin(), children_.end(),
+        [child](const auto& candidate) { return candidate.get() == child; });
+    assert(it != children_.end());
+
+    set_subtree_detaching(**it, true);
+    (*it)->parent_ = nullptr;
+    auto extracted = std::move(*it);
+    children_.erase(it);
+
+    publish_structure_change();
+    return extracted;
+}
+
+void View::adopt_child_for_realm_reset(std::unique_ptr<View> child) noexcept {
+    assert(child != nullptr);
+    assert(children_.size() < children_.capacity());
+    set_subtree_detaching(*child, false);
+    child->parent_ = this;
+    children_.push_back(std::move(child));
+
+    publish_structure_change();
+}
+
+void View::retire_children_for_realm_reset(
+    std::vector<std::unique_ptr<View>>& retired) noexcept {
+    // The deadline path owns one empty retirement slot. Swapping the vector is
+    // constant-work and cannot enter a widget destructor or host callback.
+    // Keep parent_ intact until deferred destruction. The root interaction
+    // record was retired alongside this tree, so no live platform route keeps
+    // pointers into it.
+    assert(retired.empty());
+    retired.swap(children_);
+    publish_structure_change();
+}
+
+std::uint64_t View::structure_generation() noexcept {
+    return g_view_structure_generation.load(std::memory_order_relaxed);
+}
+
+std::uint64_t View::root_structure_generation() const noexcept {
+    const View* root = this;
+    while (root->parent_)
+        root = root->parent_;
+    return root->structure_generation_.load(std::memory_order_relaxed);
+}
+
+bool View::children_in_z_order() const {
+    // True when children_ is already non-decreasing in z_index(), i.e. a
+    // stable_sort by z would be the identity and paint/hit-test can iterate
+    // children_ directly without allocating a sorted copy. A single linear
+    // scan, no allocation.
+    for (std::size_t i = 1; i < children_.size(); ++i) {
+        if (children_[i]->z_index() < children_[i - 1]->z_index()) return false;
+    }
+    return true;
+}
+
+std::vector<View*> View::sorted_children_by_z_index() const {
+    std::vector<View*> result;
+    result.reserve(children_.size());
+    for (const auto& child : children_) result.push_back(child.get());
+    // Stable sort so siblings with equal z_index() retain insertion order
+    // (CSS painting-order rule).
+    std::stable_sort(result.begin(), result.end(),
+        [](const View* a, const View* b) {
+            return a->z_index() < b->z_index();
+        });
+    return result;
+}
+
+View* View::hit_test(Point local_point) {
+    if (!visible_ || !enabled_ || !hit_testable_) return nullptr;
+    if (!parent_ && !inverse_scale_transform(local_point)) return nullptr;
+
+    // React Native pointerEvents:
+    //   none      — neither this view nor children intercept events.
+    //   box_none  — this view is invisible to hit-testing but children
+    //               can still receive events (descend, but never return self).
+    //   box_only  — this view receives events; children do NOT
+    //               (skip the descent below, then check own bounds).
+    //   auto_     — default behavior.
+    if (pointer_events_ == PointerEvents::none) return nullptr;
+
+    // Check children topmost-first. With z-index honored,
+    // "topmost" means highest z_index — and at equal z, latest insertion
+    // — so iterate the z-sorted paint order in reverse. Without this,
+    // a high-z popover could render on top yet have clicks fall through
+    // to siblings beneath it.
+    if (pointer_events_ != PointerEvents::box_only) {
+        // Test one child; returns the hit (or nullptr to keep looking).
+        // An `overflow: scroll` container offsets its children's paint; the
+        // hit-test must undo the SAME offset, read from the SAME function
+        // paint_children_in_order() uses, or a scrolled row responds where it
+        // used to be rather than where it is drawn.
+        const bool offsets_children = applies_child_paint_offset();
+        auto try_child = [&](View* child) -> View* {
+            if (!child->visible_) return nullptr;
+
+            const Point offset = offsets_children ? child_paint_offset(*child) : Point{0.0f, 0.0f};
+            Point child_point = {local_point.x - offset.x - child->bounds_.x,
+                                 local_point.y - offset.y - child->bounds_.y};
+
+            // Paint scales a child around its transform origin. Hit testing
+            // must apply the inverse before descending, or a fitted subtree
+            // paints at one location while its descendants remain interactive
+            // at their authored, unscaled coordinates.
+            if (!child->inverse_scale_transform(child_point)) return nullptr;
+
+            // For overflow:visible, expand the hit area on all four sides
+            // to include content that extends beyond the child's bounds
+            // (e.g. dropdowns/popovers that grow downward, leftward, etc.).
+            // The 500px slack is symmetric so popovers that extend in any
+            // direction get hit-tested correctly.
+            bool in_bounds = child->local_bounds().contains(child_point);
+
+            // hitSlop: a child may accept pointers outside its painted box.
+            // The parent must consult the CHILD's slop here, because a point
+            // that misses the child's bounds never reaches the child's own
+            // hit_test() to be forgiven there.
+            if (!in_bounds && !child->hit_slop().empty())
+                in_bounds = child->hit_bounds().contains(child_point);
+
+            if (!in_bounds && child->overflow() == Overflow::visible) {
+                auto lb = child->local_bounds();
+                in_bounds = child_point.x >= lb.x - 500 &&
+                            child_point.x <= lb.x + lb.width + 500 &&
+                            child_point.y >= lb.y - 500 &&
+                            child_point.y <= lb.y + lb.height + 500;
+            }
+
+            if (in_bounds) {
+                if (auto* hit = child->hit_test(child_point)) return hit;
+            }
+            return nullptr;
+        };
+
+        // Topmost-first = highest z, latest insertion at equal z → reverse of
+        // the z-sorted order. When children are already in z-order (the common
+        // case), reverse-walking children_ is identical to reversing the
+        // stable-sorted copy, so skip the per-hit-test allocation — mirrors
+        // paint_all's fast path (children_in_z_order()).
+        if (children_in_z_order()) {
+            for (auto it = children_.rbegin(); it != children_.rend(); ++it) {
+                if (auto* hit = try_child(it->get())) return hit;
+            }
+        } else {
+            auto paint_order = sorted_children_by_z_index();
+            for (auto it = paint_order.rbegin(); it != paint_order.rend(); ++it) {
+                if (auto* hit = try_child(*it)) return hit;
+            }
+        }
+    }
+
+    // No child was hit — return this view if the point is within bounds.
+    // box_none suppresses self-targeting even when a child miss falls back
+    // here, matching RN's "container is just a layout pass-through" mode.
+    if (pointer_events_ == PointerEvents::box_none) return nullptr;
+
+    // hit_bounds() is local_bounds() grown by hit_slop(); with no slop set the
+    // two are identical, so this is the historical bounds check unchanged.
+    if (hit_bounds().contains(local_point))
+        return this;
+
+    return nullptr;
+}
+
+bool View::inverse_scale_transform(Point& point) const noexcept {
+    // Paint composes the scalar transform first and the explicit affine matrix
+    // second (CTM = scalar * matrix). Invert in reverse application order so
+    // imported CSS surfaces use one coordinate contract for paint and input.
+    if (scale_ == 0.0f) return false;
+    if (scale_ != 1.0f) {
+        const float ox = bounds_.width * origin_x_;
+        const float oy = bounds_.height * origin_y_;
+        point.x = ox + (point.x - ox) / scale_;
+        point.y = oy + (point.y - oy) / scale_;
+    }
+    if (has_transform_matrix_) {
+        const float determinant =
+            transform_matrix_a_ * transform_matrix_d_ -
+            transform_matrix_b_ * transform_matrix_c_;
+        if (!std::isfinite(determinant) || std::abs(determinant) < 1.0e-9f)
+            return false;
+        const float ox = origin_explicit_ ? bounds_.width * origin_x_ : 0.0f;
+        const float oy = origin_explicit_ ? bounds_.height * origin_y_ : 0.0f;
+        const float x = point.x - ox - transform_matrix_e_;
+        const float y = point.y - oy - transform_matrix_f_;
+        point.x = ox + (transform_matrix_d_ * x - transform_matrix_c_ * y) /
+                           determinant;
+        point.y = oy + (-transform_matrix_b_ * x + transform_matrix_a_ * y) /
+                           determinant;
+    }
+    return true;
+}
+
+// ── Overlay paint queue ──────────────────────────────────────────────────────
+
+namespace {
+// True when `v` is not part of a multi-node tree and therefore has no root of
+// its own to own the interaction state. Such a widget shares the process-global
+// fallback with every other detached widget (see interaction() below).
+bool is_detached_widget(const View* v) {
+    return v->parent() == nullptr && v->child_count() == 0;
+}
+
+// The single process-global fallback interaction block — used by detached
+// widgets and, for the overlay paint queue, by legacy `overlay_queue()` callers.
+View::RootInteractionState& fallback_interaction() {
+    static View::RootInteractionState state;
+    return state;
+}
+} // namespace
+
+std::vector<View::OverlayRequest>& View::overlay_queue() {
+    // Legacy process-global entry point. Now backed by the fallback interaction
+    // block so a detached widget that enqueues via interaction().overlay_queue
+    // and a legacy overlay_queue() caller share ONE queue. Root-aware code
+    // (parented ComboBox paint, the standalone inspector idle) enqueues onto the
+    // owning root's queue via interaction() instead; paint_overlays drains the
+    // painting root's queue.
+    return fallback_interaction().overlay_queue;
+}
+
+// Inspector hooks — set by the inspector module via function pointers
+// to avoid circular dependency (view → inspect).
+static std::function<void(canvas::Canvas&, View*)> s_inspector_paint_hook;
+static std::function<bool(const KeyEvent&)> s_inspector_key_hook;
+// Mouse/text/cursor hooks carry the event's root View, mirroring the paint
+// hook's painting_root, so the installed hook can gate to the inspected canvas
+// root and ignore a secondary window's events.
+static std::function<bool(const MouseEvent&, View*)> s_inspector_mouse_hook;
+static std::function<bool(const TextInputEvent&, View*)> s_inspector_text_hook;
+
+void View::set_inspector_paint_hook(
+    std::function<void(canvas::Canvas&, View*)> hook) {
+    s_inspector_paint_hook = std::move(hook);
+}
+void View::set_inspector_key_hook(std::function<bool(const KeyEvent&)> hook) {
+    s_inspector_key_hook = std::move(hook);
+}
+void View::set_inspector_mouse_hook(
+    std::function<bool(const MouseEvent&, View*)> hook) {
+    s_inspector_mouse_hook = std::move(hook);
+}
+bool View::call_inspector_key_hook(const KeyEvent& e) {
+    return s_inspector_key_hook ? s_inspector_key_hook(e) : false;
+}
+bool View::call_inspector_mouse_hook(const MouseEvent& e, View* event_root) {
+    return s_inspector_mouse_hook ? s_inspector_mouse_hook(e, event_root)
+                                  : false;
+}
+void View::set_inspector_text_hook(
+    std::function<bool(const TextInputEvent&, View*)> hook) {
+    s_inspector_text_hook = std::move(hook);
+}
+bool View::call_inspector_text_hook(const TextInputEvent& e, View* event_root) {
+    return s_inspector_text_hook ? s_inspector_text_hook(e, event_root) : false;
+}
+
+static std::function<int(const MouseEvent&, View*)> s_inspector_cursor_hook;
+void View::set_inspector_cursor_hook(
+    std::function<int(const MouseEvent&, View*)> hook) {
+    s_inspector_cursor_hook = std::move(hook);
+}
+int View::call_inspector_cursor_hook(const MouseEvent& e, View* event_root) {
+    return s_inspector_cursor_hook ? s_inspector_cursor_hook(e, event_root)
+                                   : -1;
+}
+
+// Generalized overlay-click routing.
+View* View::active_overlay_ = nullptr;
+
+// Global input-focus slot. Auto-cleared by ~View() when the focused widget is
+// destroyed, preventing use-after-free in the platform window host's keyDown
+// handler.
+View* View::focused_input_ = nullptr;
+
+// Dismiss-path release. Pulls the slot, then fires the dismissed View's
+// `on_overlay_dismissed` callback so React state can sync. Order matters:
+// clear the slot first so a callback that calls claim_overlay() on a
+// replacement popover doesn't immediately get nulled out by our subsequent
+// clear.
+void View::dismiss_active_overlay() {
+    View* victim = active_overlay_;
+    if (!victim) return;
+    victim->dismiss_claimed_overlay();
+}
+
+void View::dismiss_claimed_overlay() {
+    // Clear ownership before invoking user code. The callback may synchronously
+    // destroy this view or claim a replacement overlay.
+    RootInteractionState* state = existing_interaction();
+    if (!state || state->active_overlay != this) return;
+    // Pops exactly one level: the overlay below (a parent menu, when this is a
+    // submenu) becomes active again, so the next Escape or outside press acts
+    // on it instead of finding nothing open.
+    detach_overlay(*state, this);
+    auto dismissed = on_overlay_dismissed;
+    if (dismissed) dismissed();
+}
+
+void View::dismiss_active_overlay(View& scope) {
+    RootInteractionState* state = scope.existing_interaction();
+    View* victim = state ? state->active_overlay : nullptr;
+    if (!victim) return;
+    detach_overlay(*state, victim);
+    // Copy the callback before invoking it, matching dismiss_claimed_overlay().
+    // `on_overlay_dismissed` is a std::function whose storage lives inside the
+    // victim View, and the callback may synchronously destroy that view (a
+    // React consumer flipping setOpen(false) unmounts the popover). Calling
+    // operator() on the member in place leaves std::function's own `this`
+    // dangling for the remainder of the call.
+    auto dismissed = victim->on_overlay_dismissed;
+    if (dismissed) dismissed();
+}
+
+// Recursively expand a child's painted-bounds contribution
+// up through any `overflow:visible` descendants. Returns the bounding
+// rect (in window coords) of `v` and every transitive descendant whose
+// chain back to `v` is entirely overflow:visible. A descendant inside
+// an `overflow:hidden` ancestor is clipped, so it stops contributing.
+//
+// `parent_abs_x` / `parent_abs_y` are the absolute window-coord origin
+// of `v->parent()`. The function consumes those, applies `v`'s own
+// `bounds().x/y`, and recurses. Declared in view.hpp so ScrollView::hit_test
+// (a separate TU) can share the exact same extent math.
+void accumulate_overflow_extent(const View* v,
+                                float parent_abs_x,
+                                float parent_abs_y,
+                                float& min_x,
+                                float& min_y,
+                                float& max_x,
+                                float& max_y) {
+    if (!v) return;
+    const float abs_x = parent_abs_x + v->bounds().x;
+    const float abs_y = parent_abs_y + v->bounds().y;
+    const auto lb = v->local_bounds();
+    if (abs_x < min_x) min_x = abs_x;
+    if (abs_y < min_y) min_y = abs_y;
+    if (abs_x + lb.width > max_x) max_x = abs_x + lb.width;
+    if (abs_y + lb.height > max_y) max_y = abs_y + lb.height;
+    // Only recurse through children whose own overflow is visible —
+    // that's the CSS rule. An `overflow:hidden` child clips its own
+    // descendants, so they don't contribute painted pixels above us.
+    if (v->overflow() != View::Overflow::visible) return;
+    for (size_t i = 0; i < v->child_count(); ++i) {
+        accumulate_overflow_extent(v->child_at(i), abs_x, abs_y,
+                                   min_x, min_y, max_x, max_y);
+    }
+}
+
+// ── Scrollable overflow ──────────────────────────────────────────────────────
+//
+// See view.hpp's "Scrollable overflow" block. The paint/hit-test pair routes
+// through View::child_paint_offset(), so everything here is range arithmetic:
+// measure the content, clamp the offset into it.
+
+void accumulate_scroll_content_extent(const View& parent, float parent_x, float parent_y,
+                                      float& right, float& bottom, bool& found) {
+    for (size_t i = 0; i < parent.child_count(); ++i) {
+        const auto* child = parent.child_at(i);
+        if (!child || !child->visible())
+            continue;
+
+        const auto bounds = child->bounds();
+        const float child_x = parent_x + bounds.x;
+        const float child_y = parent_y + bounds.y;
+        right = std::max(right, child_x + std::max(0.0f, bounds.width));
+        bottom = std::max(bottom, child_y + std::max(0.0f, bounds.height));
+        found = true;
+        // A nested scroll container owns its private overflow extent. The
+        // outer container measures the nested viewport box, not descendants
+        // that the nested container clips and scrolls independently.
+        if (child->is_scroll_container())
+            continue;
+        accumulate_scroll_content_extent(*child, child_x, child_y, right, bottom, found);
+    }
+}
+
+namespace {
+/// Content is only "overflowing" past a 1px slack, so a viewport and a content
+/// box that differ by a rounding crumb do not advertise a scrollable range
+/// nobody can use. Matches ScrollView::kOverflowEpsilon.
+constexpr float kScrollOverflowEpsilon = 1.0f;
+} // namespace
+
+Size View::scroll_content_size() const {
+    const auto viewport = local_bounds();
+    // Only a scroll container pays for the walk; every other view answers
+    // from its own box with a single enum compare.
+    if (!is_scroll_container())
+        return Size{viewport.width, viewport.height};
+
+    float right = 0.0f;
+    float bottom = 0.0f;
+    bool found = false;
+    accumulate_scroll_content_extent(*this, 0.0f, 0.0f, right, bottom, found);
+
+    if (found) {
+        // The container's own bottom/right padding is part of the scrollable
+        // content in CSS — without it the last row butts against the edge.
+        const auto& style = flex();
+        right += style.padding_right >= 0.0f ? style.padding_right : style.padding;
+        bottom += style.padding_bottom >= 0.0f ? style.padding_bottom : style.padding;
+    }
+
+    Size derived{std::max(viewport.width, right), std::max(viewport.height, bottom)};
+    if (derived.width - viewport.width <= kScrollOverflowEpsilon)
+        derived.width = viewport.width;
+    if (derived.height - viewport.height <= kScrollOverflowEpsilon)
+        derived.height = viewport.height;
+    return derived;
+}
+
+float View::max_scroll_offset_x() const {
+    const float overflow = scroll_content_size().width - local_bounds().width;
+    return overflow > kScrollOverflowEpsilon ? overflow : 0.0f;
+}
+
+float View::max_scroll_offset_y() const {
+    const float overflow = scroll_content_size().height - local_bounds().height;
+    return overflow > kScrollOverflowEpsilon ? overflow : 0.0f;
+}
+
+bool View::set_scroll_offset(float x, float y) {
+    // Clamping is the whole contract: a container that fits has a max of 0, so
+    // it pins to 0 and cannot scroll, and a wheel past either end stops at the
+    // edge instead of running the content off into empty space.
+    const float clamped_x = std::clamp(x, 0.0f, max_scroll_offset_x());
+    const float clamped_y = std::clamp(y, 0.0f, max_scroll_offset_y());
+    if (clamped_x == scroll_offset_x_ && clamped_y == scroll_offset_y_)
+        return false;
+    scroll_offset_x_ = clamped_x;
+    scroll_offset_y_ = clamped_y;
+    // The subtree now paints somewhere else; a bounded invalidation keyed off
+    // the old position would repaint the wrong rect.
+    invalidate_subtree_caches_up();
+    request_repaint();
+    return true;
+}
+
+bool View::wants_wheel_scroll() const {
+    if (!is_scroll_container())
+        return false;
+    return max_scroll_offset_x() > 0.0f || max_scroll_offset_y() > 0.0f;
+}
+
+bool View::handle_scroll_wheel(const MouseEvent& event) {
+    // A scroll container with nothing to scroll is not a wheel boundary: it
+    // must let the tick reach its own pointer callback (and bubble on) exactly
+    // like any other box. Only a container with real range consumes.
+    if (!wants_wheel_scroll())
+        return false;
+    // Having range, it consumes the tick even when the offset is already
+    // clamped at an edge — letting an edge tick fall through would scroll an
+    // ancestor instead, which is not what a browser does here.
+    scroll_offset_by(event.scroll_delta_x, event.scroll_delta_y);
+    return true;
+}
+
+bool View::overlay_contains(Point window_pt) const {
+    // Walk up to compute absolute origin in window/root coords. Same
+    // arithmetic the mac window-host uses for ComboBox::active_popup_.
+    float abs_x = 0.0f, abs_y = 0.0f;
+    const View* v = this;
+    while (v) {
+        abs_x += v->bounds().x;
+        abs_y += v->bounds().y;
+        v = v->parent();
+    }
+    const float w = local_bounds().width;
+    const float h = local_bounds().height;
+    // Fast-path: own painted rect contains the point.
+    if (window_pt.x >= abs_x && window_pt.x <= abs_x + w &&
+        window_pt.y >= abs_y && window_pt.y <= abs_y + h) {
+        return true;
+    }
+
+    // Extend the hit area to include the painted bounding box of any
+    // `overflow:visible` descendants. CSS `overflow:visible`
+    // semantics: a child painting outside the parent is still
+    // visible/clickable. Without this, a popover positioned via
+    // `position:absolute; top: 28; right: 0` extends LEFTWARD beyond
+    // its short trigger button — clicks on the leftward cells then
+    // miss `overlay_contains` and fall through to whatever sibling
+    // happens to occupy that pixel.
+    //
+    // Only meaningful when this overlay itself has overflow:visible
+    // (otherwise its own clip rect bounds the painted pixels).
+    if (overflow() != Overflow::visible) return false;
+
+    // Compute parent_abs_{x,y}: this->bounds().x/y were already added
+    // by the walk above, so subtract them to get the parent origin.
+    const float parent_abs_x = abs_x - bounds().x;
+    const float parent_abs_y = abs_y - bounds().y;
+    float min_x = abs_x, min_y = abs_y;
+    float max_x = abs_x + w, max_y = abs_y + h;
+    accumulate_overflow_extent(this, parent_abs_x, parent_abs_y,
+                               min_x, min_y, max_x, max_y);
+    return window_pt.x >= min_x && window_pt.x <= max_x &&
+           window_pt.y >= min_y && window_pt.y <= max_y;
+}
+
+void View::paint_overlays(canvas::Canvas& canvas, View* painting_root) {
+    // Drain the queue owned by the root being painted (S11): a parented
+    // ComboBox enqueues its dropdown onto its own root's queue, so a second
+    // hosted editor's paint pass never draws editor A's overlays. When the root
+    // is unknown (nullptr — legacy/headless callers) fall back to the shared
+    // process-global queue. `overlay_queue()` is that same fallback block, so a
+    // detached widget's enqueue is drained here too.
+    auto& queue = painting_root ? painting_root->interaction().overlay_queue
+                                : overlay_queue();
+    for (auto& req : queue) {
+        if (req.paint_fn) req.paint_fn(canvas);
+    }
+    queue.clear();
+
+    // Inspector paint hook — called after all overlays, topmost layer.
+    // `painting_root` is forwarded so the hook can gate to the inspected root:
+    // the in-canvas overlay must paint its selection box / handles / drop
+    // indicators only on that root, never into the floating InspectorWindow's
+    // own root at the overlay's root coordinates.
+    if (s_inspector_paint_hook) {
+        s_inspector_paint_hook(canvas, painting_root);
+    }
+}
+
+// ── In-tree drag source ──────────────────────────────────────────────────────
+//
+// The drag record lives on the ROOT so every view in the tree agrees on which
+// drag is in flight, and so a second tree in the same process cannot see it.
+
+namespace {
+View* tree_root(View* v) {
+    while (v != nullptr && v->parent() != nullptr) v = v->parent();
+    return v;
+}
+} // namespace
+
+bool View::start_drag(DropData data) {
+    View* root = tree_root(this);
+    if (root == nullptr) return false;
+    // An empty payload is a no-op, not a drag: a receiver that gets handed
+    // nothing has no way to decline meaningfully.
+    if (data.file_paths.empty() && data.text.empty() && data.custom_data.empty())
+        return false;
+    root->active_drag_ = std::make_unique<ActiveDrag>();
+    root->active_drag_->data = std::move(data);
+    root->active_drag_->source = this;
+    root->active_drag_->active = true;
+    return true;
+}
+
+void View::drag_to(Point root_pos) {
+    View* root = tree_root(this);
+    if (root == nullptr || !root->active_drag_ || !root->active_drag_->active) return;
+    auto& d = *root->active_drag_;
+    // enter and move share one entry point: dispatch_drag_enter is documented as
+    // idempotent, and it is what maintains the hover/leave transitions.
+    dispatch_drag_enter(*root, d.session, d.data, root_pos);
+}
+
+bool View::drop_here(Point root_pos) {
+    View* root = tree_root(this);
+    if (root == nullptr || !root->active_drag_ || !root->active_drag_->active) return false;
+    auto d = std::move(root->active_drag_);
+    root->active_drag_.reset();          // the drag is over before the receiver runs,
+                                         // so a receiver may start a new one
+    return dispatch_drop(*root, d->session, d->data, root_pos);
+}
+
+void View::cancel_drag() {
+    View* root = tree_root(this);
+    if (root == nullptr || !root->active_drag_) return;
+    dispatch_drag_exit(*root, root->active_drag_->session);
+    root->active_drag_.reset();
+}
+
+bool View::drag_active() const {
+    const View* root = this;
+    while (root->parent_ != nullptr) root = root->parent_;
+    return root->active_drag_ != nullptr && root->active_drag_->active;
+}
+
+// ── Per-root interaction state (S11) ─────────────────────────────────────────
+//
+// See the RootInteractionState comment in view.hpp. The state lives on the tree
+// root (like `active_drag_`) so two hosted editors never share focus / overlay /
+// popup slots. A DETACHED widget — one with no parent AND no children, so it is
+// not part of any tree that could own the state — resolves to a single
+// process-global fallback. That fallback preserves the pre-S11 single-focus /
+// single-popup behavior for unhosted widgets and is what the headless
+// characterization smoke (unparented widgets) observes through the shim mirrors.
+// (is_detached_widget / fallback_interaction are defined above, next to
+// overlay_queue() which shares the fallback block's queue.)
+
+View::RootInteractionState& View::interaction() {
+    if (is_detached_widget(this)) return fallback_interaction();
+    View* root = tree_root(this);
+    if (!root->interaction_state_)
+        root->interaction_state_ = std::make_unique<RootInteractionState>();
+    return *root->interaction_state_;
+}
+
+const View::RootInteractionState& View::interaction() const {
+    return const_cast<View*>(this)->interaction();
+}
+
+View::RootInteractionState* View::existing_interaction() {
+    if (is_detached_widget(this)) return &fallback_interaction();
+    View* root = tree_root(this);
+    return root->interaction_state_.get();  // nullptr if never allocated
+}
+
+void View::claim_input_focus() {
+    interaction().focused_input = this;
+    focused_input_ = this;  // process-global shim mirror
+}
+
+void View::release_input_focus() {
+    if (RootInteractionState* s = existing_interaction();
+        s && s->focused_input == this)
+        s->focused_input = nullptr;
+    if (focused_input_ == this) focused_input_ = nullptr;  // shim mirror
+}
+
+std::uint32_t View::overlay_claims_live_ = 0;
+
+bool View::detach_overlay(RootInteractionState& state, View* victim) {
+    auto& stack = state.overlay_stack;
+    auto it = std::find(stack.begin(), stack.end(), victim);
+    if (it == stack.end()) return false;
+    stack.erase(it);
+    victim->overlay_nested_on_ = nullptr;
+    if (overlay_claims_live_ > 0) --overlay_claims_live_;
+    republish_overlay(state);
+    return true;
+}
+
+void View::republish_overlay(RootInteractionState& state) {
+    View* const previous = state.active_overlay;
+    View* const top =
+        state.overlay_stack.empty() ? nullptr : state.overlay_stack.back();
+    state.active_overlay = top;
+    // Only follow the shim when it was already tracking THIS root's overlay.
+    // Two editors in one host process each own their stack, and re-pointing a
+    // shim that belongs to the other editor is exactly the cross-editor bleed
+    // the per-root state exists to prevent.
+    if (active_overlay_ == previous) active_overlay_ = top;
+}
+
+bool View::is_overlay_descendant_of(const View* ancestor) const {
+    for (const View* v = parent_; v != nullptr; v = v->parent_)
+        if (v == ancestor) return true;
+    return false;
+}
+
+std::size_t View::overlay_depth() const {
+    RootInteractionState* s = const_cast<View*>(this)->existing_interaction();
+    return s ? s->overlay_stack.size() : 0;
+}
+
+void View::claim_overlay(const View* stacks_on) {
+    // Close every overlay this claim is not allowed to sit on top of.
+    //
+    // A claim that DESCENDS from the open overlay is a submenu and stacks on
+    // it, which is what makes dismissing the submenu restore its parent. Any
+    // other claim is a different menu, so the open one closes — the reported
+    // "open submenu B and submenu A stays on screen". Re-claiming a view that
+    // is already open closes only the submenus above it.
+    //
+    // `stacks_on` is the second way to nest, for a submenu whose position
+    // lifts it out of its menu's subtree: a `position: fixed` panel is a
+    // SIBLING of the menu it belongs to, so no parent-chain walk can ever
+    // recognise it and the menu underneath is dismissed as a rival. Naming the
+    // overlay states the relationship the tree cannot.
+    //
+    // The name is checked against `overlay_stack.back()`, which is why it
+    // cannot become a way around the descendant rule: the only thing a claim
+    // can stop the sweep at is an overlay that is ALREADY THE TOP of its own
+    // root's stack. A name that is closed, that names a view in another hosted
+    // editor's root, or that names this view is simply never that top — the
+    // sweep runs to completion and the rival is dismissed, exactly as it is
+    // for an undeclared claim.
+    //
+    // Re-resolves the state block every pass because `on_overlay_dismissed` is
+    // author code: it may unmount the popover it is closing, open a
+    // replacement, or tear down the whole editor realm.
+    for (;;) {
+        RootInteractionState* s = existing_interaction();
+        if (s == nullptr || s->overlay_stack.empty()) break;
+        View* const top = s->overlay_stack.back();
+        if (top == this || top == stacks_on || is_overlay_descendant_of(top))
+            break;
+        if (!detach_overlay(*s, top)) break;
+        // Fired AFTER the pop, matching dismiss_claimed_overlay(), so a
+        // callback that claims a replacement is not immediately undone.
+        auto dismissed = top->on_overlay_dismissed;
+        if (dismissed) dismissed();
+    }
+
+    RootInteractionState& s = interaction();
+    if (std::find(s.overlay_stack.begin(), s.overlay_stack.end(), this) ==
+        s.overlay_stack.end()) {
+        // Whatever the sweep above left on top is what this claim nests on:
+        // it stopped only at an overlay this one descends from or named. The
+        // outside-press walk reads it (`overlay_nests_on`) so a press outside
+        // a whole nest of menus closes every level, not only the top. It is
+        // compared, never dereferenced, and cleared when the claim leaves.
+        overlay_nested_on_ = s.overlay_stack.empty() ? nullptr : s.overlay_stack.back();
+        // A claim that follows a press on an overlay trigger was opened by
+        // that trigger, so a later press on the same trigger closes it instead
+        // of reopening it (see `set_overlay_anchor`). The record is left in
+        // place rather than spent: a popover and the menu nested in it are
+        // often claimed by one press, and each needs to know its opener. The
+        // next press replaces it.
+        if (!overlay_anchor_explicit_ && s.pending_overlay_opener != 0 &&
+            s.pending_overlay_opener != import_binding_instance_id())
+            overlay_anchor_id_ = s.pending_overlay_opener;
+        s.overlay_stack.push_back(this);
+        ++overlay_claims_live_;
+    }
+    // Already present means the loop above left it on top; re-claiming an open
+    // overlay is idempotent rather than a second copy of the same view.
+    republish_overlay(s);
+    active_overlay_ = this;  // process-global shim mirror
+}
+
+void View::set_overlay_anchor(const View* anchor) {
+    // Held as the anchor's instance id, so a destroyed anchor can never match
+    // a new view that happens to reuse its address.
+    overlay_anchor_id_ = anchor ? anchor->import_binding_instance_id() : 0;
+    overlay_anchor_explicit_ = anchor != nullptr;
+}
+
+bool View::overlay_anchored_at(const View* candidate) const {
+    return candidate != nullptr && overlay_anchor_id_ != 0 &&
+           candidate->import_binding_instance_id() == overlay_anchor_id_;
+}
+
+void View::release_overlay() {
+    if (RootInteractionState* s = existing_interaction()) detach_overlay(*s, this);
+    if (active_overlay_ == this) active_overlay_ = nullptr;  // shim mirror
+    overlay_consumes_outside_click_ = false;
+}
+
+void View::set_painter(std::shared_ptr<WidgetPainter> p) {
+    painter_ = std::move(p);
+    request_repaint();
+}
+
+WidgetPainter* View::effective_painter() const {
+    for (const View* v = this; v != nullptr; v = v->parent_)
+        if (v->painter_) return v->painter_.get();
+    return nullptr;
+}
+
+namespace {
+void invalidate_layout_subtree(View& v) {
+    v.invalidate_layout();
+    for (size_t i = 0; i < v.child_count(); ++i) invalidate_layout_subtree(*v.child_at(i));
+}
+}  // namespace
+
+void View::set_metrics(std::shared_ptr<WidgetMetrics> m) {
+    metrics_ = std::move(m);
+    // A metric change is a SIZE change, so the subtree must re-measure, not
+    // just repaint. This is the whole reason metrics and painters are separate
+    // objects: installing a painter is a paint invalidation, installing metrics
+    // is a layout invalidation.
+    invalidate_layout_subtree(*this);
+    request_repaint();
+}
+
+WidgetMetrics* View::effective_metrics() const {
+    for (const View* v = this; v != nullptr; v = v->parent_)
+        if (v->metrics_) return v->metrics_.get();
+    return nullptr;
+}
+
+Color View::resolve_color(const std::string& name, Color fallback) const {
+    auto c = theme_.color(name);
+    if (c.has_value()) return c.value();
+    if (parent_) return parent_->resolve_color(name, fallback);
+    return fallback;
+}
+
+float View::resolve_dimension(const std::string& name, float fallback) const {
+    auto d = theme_.dimension(name);
+    if (d.has_value()) return d.value();
+    if (parent_) return parent_->resolve_dimension(name, fallback);
+    return fallback;
+}
+
+// ── CSS-style typography inheritance ─────────────────────────────────────
+//
+// Each inheritable_*() walks the chain own → parent → … → root, returning
+// the first ancestor that has a value. nullopt means no one in the chain
+// set the field, so the caller falls back to the theme/widget default.
+
+std::optional<Color> View::inheritable_text_color() const {
+    if (inh_text_color_.has_value()) return inh_text_color_;
+    if (parent_) return parent_->inheritable_text_color();
+    return std::nullopt;
+}
+
+std::optional<float> View::inheritable_font_size() const {
+    if (inh_font_size_.has_value()) return inh_font_size_;
+    if (parent_) return parent_->inheritable_font_size();
+    return std::nullopt;
+}
+
+std::optional<float> View::inheritable_letter_spacing() const {
+    if (inh_letter_spacing_.has_value()) return inh_letter_spacing_;
+    if (parent_) return parent_->inheritable_letter_spacing();
+    return std::nullopt;
+}
+
+std::optional<int> View::inheritable_font_weight() const {
+    if (inh_font_weight_.has_value()) return inh_font_weight_;
+    if (parent_) return parent_->inheritable_font_weight();
+    return std::nullopt;
+}
+
+std::optional<std::string> View::inheritable_font_family() const {
+    if (inh_font_family_.has_value()) return inh_font_family_;
+    if (parent_) return parent_->inheritable_font_family();
+    return std::nullopt;
+}
+
+std::optional<int> View::inheritable_text_align() const {
+    if (inh_text_align_.has_value()) return inh_text_align_;
+    if (parent_) return parent_->inheritable_text_align();
+    return std::nullopt;
+}
+
+// ── Pointer capture ─────────────────────────────────────────────────────
+
+GestureRecognizer& View::add_gesture_recognizer(
+        std::unique_ptr<GestureRecognizer> recognizer) {
+    if (!recognizer)
+        throw std::invalid_argument("add_gesture_recognizer requires a recognizer");
+    recognizer->set_owner(this);
+    gesture_recognizers_.push_back(std::move(recognizer));
+    return *gesture_recognizers_.back();
+}
+
+void View::clear_gesture_recognizers() {
+    std::vector<GestureRecognizer*> removed_recognizers;
+    removed_recognizers.reserve(gesture_recognizers_.size());
+    for (auto& recognizer : gesture_recognizers_) {
+        if (recognizer)
+            removed_recognizers.push_back(recognizer.get());
+    }
+
+    for (View* root = this; root; root = root->parent_) {
+        if (root->gesture_arbiter_)
+            root->gesture_arbiter_->reset();
+    }
+
+    if (auto* root = root_for_gesture_relationship_cleanup(this)) {
+        auto scrub_relationships = [&](auto&& self, View& node) -> void {
+            for (auto& recognizer : node.gesture_recognizers_) {
+                if (!recognizer) continue;
+                for (auto* removed : removed_recognizers) {
+                    if (removed && removed != recognizer.get())
+                        recognizer->remove_relationships_to(*removed);
+                }
+            }
+            for (auto& descendant : node.children_)
+                self(self, *descendant);
+        };
+        scrub_relationships(scrub_relationships, *root);
+    }
+
+    gesture_recognizers_.clear();
+}
+
+GestureRecognizer* View::gesture_recognizer_at(size_t index) {
+    if (index >= gesture_recognizers_.size()) return nullptr;
+    return gesture_recognizers_[index].get();
+}
+
+const GestureRecognizer* View::gesture_recognizer_at(size_t index) const {
+    if (index >= gesture_recognizers_.size()) return nullptr;
+    return gesture_recognizers_[index].get();
+}
+
+bool View::dispatch_gesture_pointer_event(const MouseEvent& root_event,
+                                          double timestamp_seconds) {
+    if (!gesture_arbiter_)
+        gesture_arbiter_ = std::make_unique<GestureArbiter>();
+    return gesture_arbiter_->handle_pointer_event(*this, root_event,
+                                                  timestamp_seconds);
+}
+
+void View::advance_gesture_recognizers(double timestamp_seconds) {
+    if (gesture_arbiter_)
+        gesture_arbiter_->advance_time(*this, timestamp_seconds);
+}
+
+bool View::gesture_claimed_pointer() const {
+    return gesture_arbiter_ && gesture_arbiter_->claimed_pointer();
+}
+
+bool View::has_time_driven_gestures() const {
+    return gesture_arbiter_ && gesture_arbiter_->wants_time_updates();
+}
+
+void View::set_pointer_capture(int pointer_id) {
+    if (!has_pointer_capture(pointer_id))
+        captured_pointers_.push_back(pointer_id);
+}
+
+void View::release_pointer_capture(int pointer_id) {
+    auto it = std::find(captured_pointers_.begin(), captured_pointers_.end(), pointer_id);
+    if (it != captured_pointers_.end())
+        captured_pointers_.erase(it);
+}
+
+bool View::has_pointer_capture(int pointer_id) const {
+    return std::find(captured_pointers_.begin(), captured_pointers_.end(), pointer_id)
+           != captured_pointers_.end();
+}
+
+// ── Hover ───────────────────────────────────────────────────────────────
+
+void View::set_hovered(bool h) {
+    if (hovered_ == h) return;
+    hovered_ = h;
+    if (h) {
+        on_mouse_enter();
+        if (on_hover_enter) on_hover_enter();
+    } else {
+        on_mouse_leave();
+        if (on_hover_leave) on_hover_leave();
+    }
+}
+
+FrameClock* View::frame_clock() const {
+    if (frame_clock_) return frame_clock_;
+    if (parent_) return parent_->frame_clock();
+    return nullptr;
+}
+
+void View::set_frame_clock(FrameClock* clock) {
+    frame_clock_ = clock;
+    // Hosts build the tree first and install the clock afterward, so any
+    // descendant that self-subscribes on a reachable clock must be told the
+    // clock is now available — otherwise a Meter built before hosting would
+    // silently never subscribe.
+    notify_frame_clock_changed();
+}
+
+void View::deliver_frame_clock_hooks() noexcept {
+    // Both are extension points and may throw. Isolate each so one misbehaving
+    // widget cannot stop the rest of the tree from re-resolving its clock.
+    try { sync_value_bindings(); }
+    catch (...) {}
+    try { on_frame_clock_changed(); }
+    catch (...) {}
+}
+
+void View::walk_frame_clock(std::uint64_t epoch, std::uint64_t sequence) noexcept {
+    // The lease spans the whole function, not just the hooks: this frame keeps
+    // touching `this` (children_, the rescan) after the callbacks return, so
+    // the storage must outlive them even when a hook removes and retires us.
+    DispatchLease lease(*this);
+    // Stamp BEFORE delivering. A hook that reparents this node under a sibling
+    // we have not reached yet must not cause a second visit.
+    clock_walk_epoch_ = epoch;
+    if (clock_delivery_sequence_ != sequence) {
+        clock_delivery_sequence_ = sequence;
+        deliver_frame_clock_hooks();
+    }
+    // Scan children for the next unstamped one, resuming where the last scan
+    // stopped. An index cannot simply be incremented across a callback — a hook
+    // may have removed, added, reordered, or same-slot-replaced siblings, so the
+    // same index now names a different node, which is exactly how the earlier
+    // bounded-index walk skipped originals. But re-deriving the cursor from
+    // scratch after EVERY child is O(K^2) in the sibling count, and the
+    // no-mutation case is the quadratic one: 8000 flat siblings cost ~226 ms per
+    // propagation, measured, against ~0.4 ms with the cursor below.
+    //
+    // So: advance the cursor when the structure did not move, and only fall back
+    // to a full restart when it did. Correctness comes from the stamp, which
+    // makes revisiting impossible; the cursor is purely an optimisation, and a
+    // final rescan from zero catches anything a mutation shifted behind it.
+    std::size_t cursor = 0;
+    for (;;) {
+        View* next = nullptr;
+        std::size_t found_at = 0;
+        for (std::size_t i = cursor; i < children_.size(); ++i) {
+            View* view = children_[i].get();
+            if (view && view->clock_walk_epoch_ != epoch) {
+                next = view;
+                found_at = i;
+                break;
+            }
+        }
+        if (!next) {
+            // Nothing ahead of the cursor. If the cursor had moved, a mutation
+            // may have left an unstamped node behind it, so sweep once from the
+            // top before concluding the subtree is done.
+            if (cursor == 0) return;
+            cursor = 0;
+            continue;
+        }
+        const auto generation_before =
+            g_view_structure_generation.load(std::memory_order_relaxed);
+        next->walk_frame_clock(epoch, sequence);
+        const bool structure_moved =
+            g_view_structure_generation.load(std::memory_order_relaxed) !=
+            generation_before;
+        cursor = structure_moved ? 0 : found_at + 1;
+    }
+}
+
+void View::notify_frame_clock_changed() noexcept {
+    // Clock propagation is a structural safety funnel: it must visit every
+    // node that was attached under this one when the pass began exactly once,
+    // it must survive arbitrary mutation from the hooks it invokes, and it is
+    // noexcept, so it must not allocate. An epoch stamp per view plus the
+    // root-owned retirement gate gives all three without scratch storage.
+    View* root = this;
+    while (root->parent_) root = root->parent_;
+    if (root->clock_walk_active_) {
+        // A hook asked for another propagation while one is in flight. Do not
+        // recurse: the running pass may already be walking part of this
+        // subtree, and re-entering it would deliver twice. Coalesce instead —
+        // record that new work exists and let the outermost call run one more
+        // pass once the current one has unwound.
+        root->clock_walk_pending_ = true;
+        return;
+    }
+    root->clock_walk_active_ = true;
+    // Tokens are drawn from one process-global monotonic sequence, never from a
+    // per-root counter — a view's stamp has to mean the same thing after the
+    // view changes roots. See next_clock_walk_token().
+    const auto sequence = next_clock_walk_token();
+    // A node attached during a pass is stamped with that pass's traversal
+    // epoch, so the pass in flight skips it and a hook that attaches on every
+    // visit cannot extend the walk without end. Its DELIVERY stamp is left
+    // alone, so the follow-up pass below still notifies it — once. Bounded on
+    // purpose: a hook that keeps generating work loses the remaining
+    // notifications rather than spinning the UI thread forever.
+    for (int pass = 0; pass < kMaxClockWalkPasses; ++pass) {
+        root->clock_walk_pending_ = false;
+        // Published on the root so add_child_transactional can stamp anything
+        // attached mid-pass as belonging to the pass already in flight.
+        root->clock_epoch_ = next_clock_walk_token();
+        walk_frame_clock(root->clock_epoch_, sequence);
+        if (!root->clock_walk_pending_) break;
+    }
+    root->clock_walk_pending_ = false;
+    root->clock_walk_active_ = false;
+}
+
+// ── Live host→view value sources ────────────────────────────────────────────
+
+void View::sync_value_bindings() {
+    for (FrameClockBinding* b = value_binding_head_; b; b = b->next_) b->refresh();
+}
+
+void View::register_value_binding(FrameClockBinding* b) {
+    b->next_ = value_binding_head_;
+    value_binding_head_ = b;
+}
+
+void View::unregister_value_binding(FrameClockBinding* b) {
+    for (FrameClockBinding** slot = &value_binding_head_; *slot; slot = &(*slot)->next_) {
+        if (*slot != b) continue;
+        *slot = b->next_;
+        b->next_ = nullptr;
+        return;
+    }
+}
+
+void View::set_meter_source(std::shared_ptr<MeterSource> source, int channel) {
+    // Unbinding a view that never bound anything: nothing to allocate or drop.
+    if (!source && !value_bindings_) return;
+    if (!value_bindings_) value_bindings_ = std::make_unique<ViewValueBindings>(*this);
+    value_bindings_->meter.set_source(std::move(source), channel);
+}
+
+bool View::has_meter_source() const {
+    return value_bindings_ && value_bindings_->meter.has_source();
+}
+
+int View::meter_source_channel() const {
+    return value_bindings_ ? value_bindings_->meter.channel() : 0;
+}
+
+const MeterFrame& View::meter_frame() const {
+    // Paint-safe: a cached copy, or a shared all-zero frame when nothing is
+    // bound. Constant-initialized, so reading it costs no thread-safe-static
+    // guard (which would be a lock on the paint path).
+    static constexpr MeterFrame kNoFrame{};
+    return value_bindings_ ? value_bindings_->meter.frame() : kNoFrame;
+}
+
+void View::set_scalar_source(std::shared_ptr<ScalarSource> source) {
+    if (!source && !value_bindings_) return;
+    if (!value_bindings_) value_bindings_ = std::make_unique<ViewValueBindings>(*this);
+    value_bindings_->scalar.set_source(std::move(source));
+}
+
+bool View::has_scalar_source() const {
+    return value_bindings_ && value_bindings_->scalar.has_source();
+}
+
+float View::scalar_value() const {
+    return value_bindings_ ? value_bindings_->scalar.value() : 0.0f;
+}
+
+void View::request_repaint() {
+    PULP_TRACE_SCOPE_NAMED("render", "view_repaint_request");
+    damage_request_count_.fetch_add(1, std::memory_order_relaxed);
+    // A repaint request is the canonical "my content changed" signal, so it is
+    // also where the subtree scene cache stales: clear this view and every
+    // cached ancestor (their recordings include this view). Cheap no-op when no
+    // view anywhere caches. Covers widget mutations, set_theme(), and JS-bridge
+    // setters, all of which funnel through here.
+    stale_subtree_caches_up();
+    // set_window_host / set_plugin_view_host propagate to children on
+    // add_child, so any attached view sees its own host pointer and we
+    // never need to walk the parent chain. No host attached: silent
+    // no-op — paint is already on the way for the initial mount, or
+    // there's no surface to paint to yet.
+    //
+    // Route through WindowHost::mark_dirty(), the canonical "set a dirty flag,
+    // repaint on the next vblank" path. When a RenderLoop is attached this
+    // coalesces N change notifications in one frame into a single vsync-paced
+    // repaint; otherwise mark_dirty() degrades to a direct repaint().
+    if (window_host_) {
+        window_host_->mark_dirty();
+    } else if (plugin_view_host_) {
+        // Whole-surface damage, as WindowHost::mark_dirty() records it. A bare
+        // repaint() left the pending damage untouched, so a frame that also
+        // carried a bounded mark reported only that rect and a partial-repaint
+        // host would clip away this request's change.
+        plugin_view_host_->mark_dirty_full();
+    }
+}
+
+void View::request_frame() {
+    if (window_host_) {
+        window_host_->request_frame();
+    } else if (plugin_view_host_) {
+        plugin_view_host_->request_frame();
+    }
+}
+
+void View::request_repaint_self(float halo) {
+    // Bounded invalidation for a widget's own repaint. The rect-less
+    // request_repaint() marks the WHOLE surface dirty by design, which is right
+    // for a structural change and wrong for a value tick: a knob drag would
+    // re-composite a plug-in's entire static chrome on every mouse move, and a
+    // partial-repaint host could never engage because the damage is never
+    // bounded.
+    //
+    // The halo is a correctness requirement, not padding. A bounded repaint is
+    // only legal if it is pixel-identical to a full one, so the rect must cover
+    // every pixel the widget can touch — glow, focus ring, modulation arc.
+    // Mirrors the meter peak-overscan idiom in widgets/visualizers.cpp.
+    const auto b = local_bounds();
+    request_repaint(Rect{b.x - halo, b.y - halo,
+                         b.width + 2 * halo, b.height + 2 * halo});
+}
+
+void View::request_repaint(const Rect& local_dirty) {
+    // Stale the subtree scene cache up the ancestor chain (see request_repaint()
+    // above). Done here too because the bounded-success path below calls
+    // mark_dirty() directly rather than request_repaint(), so it would not
+    // otherwise reach the invalidation.
+    stale_subtree_caches_up();
+    // Bounded invalidation needs a host that can accumulate a sub-region.
+    // Both hosts can now: WindowHost via mark_dirty(Rect), PluginViewHost via
+    // mark_dirty_region(Rect) (both back onto PendingDamage). With no host at
+    // all there is nowhere to put the rect, so fall back to a full repaint.
+    //
+    // The plug-in path used to fall through here unconditionally, which is why
+    // partial repaint was unreachable for every plug-in editor on every
+    // platform however the host was wired.
+    if (!window_host_ && !plugin_view_host_) {
+        request_repaint();
+        return;
+    }
+    // Map local_dirty (this view's local space) to root/window space the way
+    // paint does going down the tree: each view's own render transforms
+    // (mapped exactly, as the axis-aligned bounds of the transformed rect),
+    // then its bounds origin, then the parent's per-child paint offset (a
+    // scrolled ScrollView's -scroll, a sticky child's pin). Only a
+    // pixel-spreading filter on the chain escalates to a full repaint: its
+    // output reaches past any mapped box. Mapping instead of escalating is
+    // what keeps a control under a design-viewport scale -- or inside a
+    // scroller -- from repainting the whole surface on every value tick.
+    Rect mapped = local_dirty;
+    damage_request_count_.fetch_add(1, std::memory_order_relaxed);
+    for (const View* v = this; v; v = v->parent()) {
+        if (v->has_filter_effect()) {
+            request_repaint();
+            return;
+        }
+        if (v->has_render_transform())
+            mapped = v->map_rect_through_own_transform(mapped);
+        mapped.x += v->bounds_.x;
+        mapped.y += v->bounds_.y;
+        if (const View* parent = v->parent();
+            parent != nullptr && parent->applies_child_paint_offset()) {
+            const Point offset = parent->child_paint_offset(*v);
+            mapped.x += offset.x;
+            mapped.y += offset.y;
+        }
+    }
+    if (!std::isfinite(mapped.x) || !std::isfinite(mapped.y) || !std::isfinite(mapped.width) ||
+        !std::isfinite(mapped.height)) {
+        request_repaint();
+        return;
+    }
+    const Rect root_rect = mapped;
+    PULP_TRACE_SCOPE_NAMED_ARGS("render", "view_repaint_bounded", "w",
+                                static_cast<int64_t>(std::ceil(root_rect.width)), "h",
+                                static_cast<int64_t>(std::ceil(root_rect.height)));
+    if (window_host_) {
+        window_host_->mark_dirty(root_rect);
+    } else {
+        plugin_view_host_->mark_dirty_region(root_rect);
+    }
+}
+
+Rect View::map_rect_through_own_transform(const Rect& local) const {
+    // Paint applies the scalar transform first and the affine matrix second
+    // (apply_canvas_transforms), so a point in this view's painted space maps
+    // to its box space as scalar(matrix(p)).
+    const float corners[4][2] = {{local.x, local.y},
+                                 {local.x + local.width, local.y},
+                                 {local.x, local.y + local.height},
+                                 {local.x + local.width, local.y + local.height}};
+    const bool scalar =
+        scale_ != 1.0f || rotation_deg_ != 0.0f || translate_x_ != 0.0f || translate_y_ != 0.0f;
+    const float sox = bounds_.width * origin_x_;
+    const float soy = bounds_.height * origin_y_;
+    const float mox = origin_explicit_ ? sox : 0.0f;
+    const float moy = origin_explicit_ ? soy : 0.0f;
+    const float radians = rotation_deg_ * 3.14159265f / 180.0f;
+    const float cs = std::cos(radians), sn = std::sin(radians);
+    float x0 = std::numeric_limits<float>::max(), y0 = x0;
+    float x1 = std::numeric_limits<float>::lowest(), y1 = x1;
+    for (const auto& c : corners) {
+        float x = c[0], y = c[1];
+        if (has_transform_matrix_) {
+            const float px = x - mox, py = y - moy;
+            x = mox + transform_matrix_a_ * px + transform_matrix_c_ * py + transform_matrix_e_;
+            y = moy + transform_matrix_b_ * px + transform_matrix_d_ * py + transform_matrix_f_;
+        }
+        if (scalar) {
+            const float px = (x - sox) * scale_, py = (y - soy) * scale_;
+            x = sox + translate_x_ + cs * px - sn * py;
+            y = soy + translate_y_ + sn * px + cs * py;
+        }
+        x0 = std::min(x0, x);
+        y0 = std::min(y0, y);
+        x1 = std::max(x1, x);
+        y1 = std::max(y1, y);
+    }
+    // One pixel more on every side: a scaled or rotated edge anti-aliases
+    // into the pixel past its exact bound.
+    return {x0 - 1.0f, y0 - 1.0f, (x1 - x0) + 2.0f, (y1 - y0) + 2.0f};
+}
+
+bool View::start_file_drag(const FileDragRequest& request) {
+    if (request.file_paths.empty()) return false;
+
+    // Prefer the plugin host's own outbound-drag backend when it has one. The
+    // Windows (OLE) and Linux (XDND) hosts implement start_file_drag() because
+    // the drag needs host-owned native state (HWND, or Display* + Xdnd atoms)
+    // that the free begin_file_drag(native_view, …) function below cannot see.
+    // macOS leaves the host method at its default (false) and is served by the
+    // free NSDraggingSession backend, so this falls through there.
+    if (plugin_view_host_ && plugin_view_host_->start_file_drag(request))
+        return true;
+
+    // Reach the native view of whichever host this tree is attached to (host
+    // pointers propagate on add_child, same as request_repaint). The window
+    // host exposes its content NSView; the plugin view host's handle IS its
+    // NSView. No host attached, or a platform whose host has no native view →
+    // no drag. macOS plugin + standalone window hosts land here.
+    void* native_view = nullptr;
+    if (window_host_) {
+        native_view = window_host_->native_content_view_handle();
+    } else if (plugin_view_host_) {
+        native_view = plugin_view_host_->native_handle();
+    }
+    if (native_view) return begin_file_drag(native_view, request);
+
+    // Hostless platforms (Android: the tree is a bare root View with no
+    // Window/PluginViewHost) fall back to the process-global drag backend the
+    // platform layer registered — Android's is a JNI up-call into Kotlin's
+    // View.startDragAndDrop. Returns false when no backend is registered.
+    return invoke_file_drag_backend(request);
+}
+
+void View::simulate_hover(Point root_pos) {
+    // An open overlay owns the pixels it paints over, so it takes the hover
+    // before the ordinary tree does -- the same order a press is routed in.
+    auto* target = hover_target_at(*this, root_pos);
+    std::vector<View*> hover_path;
+    for (auto* view = target; view; view = view->parent()) {
+        hover_path.push_back(view);
+        if (view == this) break;
+    }
+
+    std::function<void(View*)> clear_stale_hover = [&](View* view) {
+        for (size_t i = 0; i < view->child_count(); ++i)
+            clear_stale_hover(view->child_at(i));
+        if (view->hovered_
+            && std::find(hover_path.begin(), hover_path.end(), view)
+                == hover_path.end())
+            view->set_hovered(false);
+    };
+    clear_stale_hover(this);
+
+    for (auto it = hover_path.rbegin(); it != hover_path.rend(); ++it)
+        (*it)->set_hovered(true);
+
+    if (pulp::view::motion::input_recording_enabled()) {
+        const std::string id = target ? target->id() : std::string();
+        std::vector<std::pair<std::string, double>> coords;
+        coords.emplace_back("x", static_cast<double>(root_pos.x));
+        coords.emplace_back("y", static_cast<double>(root_pos.y));
+        pulp::view::motion::record_simulated_input("hover", id, std::move(coords));
+    }
+    if (target) {
+        // Also deliver a positioned hover sample so a widget can track which
+        // sub-region of itself the pointer is over (e.g. the
+        // inspector ToolStrip's per-button tooltip, which set_hovered() alone
+        // can't drive because on_mouse_enter carries no coordinate). Convert
+        // the root-space point into the target's local space by subtracting
+        // its accumulated bounds origin up the parent chain.
+        float ox = 0.0f, oy = 0.0f;
+        for (View* v = target; v; v = v->parent()) {
+            ox += v->bounds().x;
+            oy += v->bounds().y;
+        }
+        target->on_hover_move(Point{root_pos.x - ox, root_pos.y - oy});
+    }
+}
+
+float View::intrinsic_height() const {
+    // Containers: sum visible children's heights + gaps (CSS auto height behavior)
+    if (children_.empty()) return 0;
+
+    // column_reverse is still a column-axis container for the auto-height
+    // calculation; only true row containers skip child-summed height.
+    bool is_col = (flex_.direction == FlexDirection::column ||
+                   flex_.direction == FlexDirection::column_reverse);
+    if (!is_col) return 0;  // Row containers don't auto-height from children
+
+    float total = 0;
+    float gap = flex_.effective_gap(flex_.direction);
+    int count = 0;
+    for (auto& child : children_) {
+        if (!child->visible_) continue;
+        auto& cf = child->flex();
+        float h = cf.preferred_height;
+        if (h <= 0) h = child->intrinsic_height();
+        total += h + cf.margin_t() + cf.margin_b();
+        if (count > 0) total += gap;
+        ++count;
+    }
+
+    // Add padding
+    float pt = flex_.padding_top >= 0 ? flex_.padding_top : flex_.padding;
+    float pb = flex_.padding_bottom >= 0 ? flex_.padding_bottom : flex_.padding;
+    return total + pt + pb;
+}
+
+#ifdef PULP_HAS_YOGA
+void yoga_layout(View& root); // implemented in yoga_layout.cpp
+#endif
+
+void layout_grid(View& parent); // implemented in grid_layout.cpp
+
+void View::layout_children() {
+    // Frame-pipeline layout pass. With Yoga the root call lays out the whole
+    // subtree in one shot, so this reads as one span per frame; grid / custom
+    // subtrees that recurse show as nested layout spans.
+    PULP_TRACE_SCOPE_NAMED("layout", "layout_children");
+
+    // Counted before the early-outs: the quantity under test is how many times
+    // a caller ASKED for a layout, which is the cost being eliminated.
+    layout_pass_count_.fetch_add(1, std::memory_order_relaxed);
+
+    if (children_.empty()) return;
+
+    // Dispatch to grid layout if layout mode is grid
+    if (layout_mode_ == LayoutMode::grid) {
+        layout_grid(*this);
+        return;
+    }
+
+#ifdef PULP_HAS_YOGA
+    // Use Yoga for flexbox layout (correct margin:auto, flex-wrap, absolute positioning)
+    yoga_layout(*this);
+    return;
+#endif
+
+    auto area = local_bounds();
+
+    // Per-side padding
+    float pt = flex_.padding_top >= 0 ? flex_.padding_top : flex_.padding;
+    float pr = flex_.padding_right >= 0 ? flex_.padding_right : flex_.padding;
+    float pb = flex_.padding_bottom >= 0 ? flex_.padding_bottom : flex_.padding;
+    float pl = flex_.padding_left >= 0 ? flex_.padding_left : flex_.padding;
+    area = {area.x + pl, area.y + pt, area.width - pl - pr, area.height - pt - pb};
+
+    // row_reverse is still a row-axis container; only the visual order of
+    // children is reversed.
+    bool is_row = (flex_.direction == FlexDirection::row ||
+                   flex_.direction == FlexDirection::row_reverse);
+    float main_size = is_row ? area.width : area.height;
+    float cross_size = is_row ? area.height : area.width;
+    float gap = flex_.effective_gap(flex_.direction);
+
+    // ── Collect visible children, sorted by order ────────────────────
+    struct ChildEntry { View* view; int order; };
+    std::vector<ChildEntry> ordered;
+    for (auto& child : children_) {
+        if (!child->visible_) continue;
+        ordered.push_back({child.get(), child->flex().order});
+    }
+    // Stable sort by order (preserves source order for equal values)
+    std::stable_sort(ordered.begin(), ordered.end(),
+        [](const ChildEntry& a, const ChildEntry& b) { return a.order < b.order; });
+
+    int visible_count = static_cast<int>(ordered.size());
+    if (visible_count == 0) return;
+
+    // ── Pass 1: Measure children (flex_basis → preferred → intrinsic) ──
+    float total_fixed = 0;
+    float total_flex_grow = 0;
+    float total_flex_shrink = 0;
+    float total_margins = 0;
+
+    for (auto& entry : ordered) {
+        auto& cf = entry.view->flex();
+        // Main-axis margins
+        float margin_before = is_row ? cf.margin_l() : cf.margin_t();
+        float margin_after = is_row ? cf.margin_r() : cf.margin_b();
+        total_margins += margin_before + margin_after;
+
+        if (cf.flex_grow > 0) {
+            total_flex_grow += cf.flex_grow;
+        } else {
+            float basis = cf.basis_or_preferred(is_row);
+            if (basis <= 0) basis = is_row ? entry.view->intrinsic_width() : entry.view->intrinsic_height();
+            float min_val = is_row ? cf.min_width : cf.min_height;
+            float max_val = is_row ? cf.max_width : cf.max_height;
+            float size = std::max(basis, min_val);
+            if (max_val > 0) size = std::min(size, max_val);
+            total_fixed += size;
+            total_flex_shrink += cf.flex_shrink;
+        }
+    }
+
+    float total_gaps = visible_count > 1 ? gap * (visible_count - 1) : 0;
+    float remaining = main_size - total_fixed - total_gaps - total_margins;
+
+    // ── Pass 2: Compute child sizes ───────────────────────────────────
+    struct ChildLayout { View* view; float main_size; float cross_size;
+                         float margin_before; float margin_after;
+                         float cross_margin_before; float cross_margin_after; };
+    std::vector<ChildLayout> layouts;
+    layouts.reserve(static_cast<size_t>(visible_count));
+
+    for (auto& entry : ordered) {
+        auto& cf = entry.view->flex();
+        float child_main;
+        float mb = is_row ? cf.margin_l() : cf.margin_t();
+        float ma = is_row ? cf.margin_r() : cf.margin_b();
+        float cmb = is_row ? cf.margin_t() : cf.margin_l();
+        float cma = is_row ? cf.margin_b() : cf.margin_r();
+
+        if (cf.flex_grow > 0 && remaining > 0) {
+            child_main = total_flex_grow > 0 ? remaining * (cf.flex_grow / total_flex_grow) : 0;
+        } else if (cf.flex_grow == 0 && remaining < 0 && cf.flex_shrink > 0 && total_flex_shrink > 0) {
+            float basis = cf.basis_or_preferred(is_row);
+            if (basis <= 0) basis = is_row ? entry.view->intrinsic_width() : entry.view->intrinsic_height();
+            float min_val = is_row ? cf.min_width : cf.min_height;
+            float base = std::max(basis, min_val);
+            float shrink_amount = (-remaining) * (cf.flex_shrink / total_flex_shrink);
+            child_main = std::max(min_val, base - shrink_amount);
+        } else {
+            float basis = cf.basis_or_preferred(is_row);
+            if (basis <= 0) basis = is_row ? entry.view->intrinsic_width() : entry.view->intrinsic_height();
+            float min_val = is_row ? cf.min_width : cf.min_height;
+            child_main = std::max(basis, min_val);
+        }
+
+        float max_main = is_row ? cf.max_width : cf.max_height;
+        if (max_main > 0) child_main = std::min(child_main, max_main);
+
+        // Cross-axis sizing — respect align_self override
+        FlexAlign align = (cf.align_self != FlexAlign::auto_) ? cf.align_self : flex_.align_items;
+        float cross_min = is_row ? cf.min_height : cf.min_width;
+        float cross_preferred = is_row ? cf.preferred_height : cf.preferred_width;
+        float cross_intrinsic = is_row ? entry.view->intrinsic_height() : entry.view->intrinsic_width();
+        float cross_max = is_row ? cf.max_height : cf.max_width;
+        float avail_cross = cross_size - cmb - cma;
+        float child_cross;
+
+        if (align == FlexAlign::stretch) {
+            child_cross = avail_cross;
+        } else {
+            child_cross = cross_preferred > 0 ? cross_preferred : cross_intrinsic;
+            child_cross = std::max(child_cross, cross_min);
+            if (child_cross <= 0) child_cross = avail_cross;
+        }
+        if (cross_max > 0) child_cross = std::min(child_cross, cross_max);
+
+        layouts.push_back({entry.view, child_main, child_cross, mb, ma, cmb, cma});
+    }
+
+    // ── Pass 3: Justify content ──────────────────────────────────────
+    float total_content = 0;
+    for (auto& l : layouts)
+        total_content += l.main_size + l.margin_before + l.margin_after;
+
+    float free_space = std::max(0.0f, main_size - total_content - total_gaps);
+    float pos = is_row ? area.x : area.y;
+    float extra_gap = 0;
+
+    switch (flex_.justify_content) {
+        case FlexJustify::start: break;
+        case FlexJustify::center: pos += free_space * 0.5f; break;
+        case FlexJustify::end_: pos += free_space; break;
+        case FlexJustify::space_between:
+            if (visible_count > 1) extra_gap = free_space / (visible_count - 1);
+            break;
+        case FlexJustify::space_around:
+            if (visible_count > 0) {
+                float around = free_space / visible_count;
+                pos += around * 0.5f; extra_gap = around;
+            }
+            break;
+        case FlexJustify::space_evenly:
+            if (visible_count > 0) {
+                float even = free_space / (visible_count + 1);
+                pos += even; extra_gap = even;
+            }
+            break;
+    }
+
+    // ── Pass 4: Position children ────────────────────────────────────
+    for (size_t i = 0; i < layouts.size(); ++i) {
+        auto& l = layouts[i];
+        auto& cf = l.view->flex();
+
+        pos += l.margin_before;
+
+        // Cross-axis position — respect align_self
+        FlexAlign align = (cf.align_self != FlexAlign::auto_) ? cf.align_self : flex_.align_items;
+        float cross_pos = (is_row ? area.y : area.x) + l.cross_margin_before;
+        float avail_cross = cross_size - l.cross_margin_before - l.cross_margin_after;
+
+        switch (align) {
+            case FlexAlign::start:
+            case FlexAlign::stretch:
+            case FlexAlign::auto_:
+                break;
+            case FlexAlign::center:
+                cross_pos += (avail_cross - l.cross_size) * 0.5f;
+                break;
+            case FlexAlign::end:
+                cross_pos += avail_cross - l.cross_size;
+                break;
+            // Baseline alignment in the manual (non-Yoga) layout fallback
+            // approximates as start since glyph baseline metrics aren't
+            // surfaced here. Yoga's YGAlignBaseline path is the correct
+            // rendering when PULP_HAS_YOGA is on (the default).
+            case FlexAlign::baseline:
+                break;
+        }
+
+        Rect child_bounds;
+        if (is_row) {
+            child_bounds = {pos, cross_pos, l.main_size, l.cross_size};
+        } else {
+            child_bounds = {cross_pos, pos, l.cross_size, l.main_size};
+        }
+
+        l.view->set_bounds(child_bounds);
+        l.view->layout_children();
+        pos += l.main_size + l.margin_after + gap + extra_gap;
+    }
+}
+
+} // namespace pulp::view

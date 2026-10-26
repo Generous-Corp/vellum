@@ -432,6 +432,9 @@ jobs:
             --source-commit "$SOURCE_COMMIT" --tag-object-sha "$TAG_OBJECT_SHA"
 
       - name: Require renderer release eligibility at the release source
+        env:
+          # gh attestation verify reads the bundle offline but still wants a token.
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           # A release stays blocked until the renderer lock at the exact source
@@ -442,9 +445,59 @@ jobs:
             > "$lock_root/third-party-lock.json"
           git show "$SOURCE_COMMIT:provenance/renderer-attestation.json" \
             > "$lock_root/renderer-attestation.json"
+          # An eligible renderer must also prove its signature and that the
+          # attested legal manifest is the published release asset, by
+          # GitHub's own asset digests. A blocked lock fails without them.
+          proof=()
+          if git cat-file -e "$SOURCE_COMMIT:provenance/renderer-attestation.json.sig" 2>/dev/null; then
+            git show "$SOURCE_COMMIT:provenance/renderer-attestation.json.sig" \
+              > "$lock_root/renderer-attestation.json.sig"
+            proof+=(--signature "$lock_root/renderer-attestation.json.sig")
+          fi
+          # Every attested asset is fetched from the locked release: the
+          # archive, its legal manifest, toolchain receipt and provenance
+          # bundle, plus GitHub's release JSON for their asset digests.
+          python3 - "$lock_root" <<'PY' > "$lock_root/renderer-assets.tsv"
+          import json, sys
+          root = sys.argv[1]
+          record = json.load(open(f"{root}/renderer-attestation.json"))
+          artifact = record["artifact"]
+          rows = [("archive", f"{artifact['repository']}/releases/download/{artifact['release_tag']}/{artifact['name']}")]
+          for flag, asset in (("legal-manifest", (record.get("legal_inventory") or {}).get("manifest")),
+                              ("toolchain-receipt", (record.get("build_identity") or {}).get("toolchain_receipt")),
+                              ("provenance-bundle", ((record.get("build_provenance") or {}).get("bundle")))):
+              if isinstance(asset, dict) and asset.get("url"):
+                  rows.append((flag, asset["url"]))
+          # Records rebound from a member-identical rebuild name that rebuild's
+          # durable evidence assets; the verifier re-runs the comparison.
+          derived = (record.get("legal_inventory") or {}).get("derived_from") or {}
+          for flag, key in (("rebuild-archive", "rebuild_archive"), ("rebuild-receipt", "rebuild_receipt"),
+                            ("rebuild-manifest", "rebuild_manifest"),
+                            ("rebuild-provenance-bundle", "rebuild_bundle")):
+              if (derived.get(key) or {}).get("url"):
+                  rows.append((flag, derived[key]["url"]))
+          # GitHub's release JSON is read through the authenticated API (gh api),
+          # not an unauthenticated request that a rate limit can fail or a proxy
+          # can serve.
+          repo = artifact["repository"].removeprefix("https://github.com/")
+          rows.append(("release-json", f"api:repos/{repo}/releases/tags/{artifact['release_tag']}"))
+          for flag, url in rows:
+              print(f"{flag}\t{url}")
+          PY
+          if [ -n "${proof[*]:-}" ]; then
+            while IFS=$'\t' read -r flag url; do
+              if [[ "$url" == api:* ]]; then
+                gh api "${url#api:}" > "$lock_root/renderer-$flag"
+              else
+                curl -fsSL "$url" -o "$lock_root/renderer-$flag"
+              fi
+              proof+=("--$flag" "$lock_root/renderer-$flag")
+            done < "$lock_root/renderer-assets.tsv"
+          fi
           python3 tools/provenance/verify_renderer_dependency.py \
             --lock "$lock_root/third-party-lock.json" \
             --attestation "$lock_root/renderer-attestation.json" \
+            ${proof[@]+"${proof[@]}"} \
             --require-release-eligible --json \
             > "$RUNNER_TEMP/release-renderer-eligibility.json"
 

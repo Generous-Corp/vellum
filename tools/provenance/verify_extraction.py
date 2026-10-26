@@ -468,6 +468,107 @@ def mirror_edge_findings(root: Path, table: dict | None = None) -> list[dict[str
     return findings
 
 
+PULP_DEPENDENCY_MANIFEST = "tools/deps/manifest.json"
+RENDERER_ASSET_KEY = "mac-universal"
+
+
+def current_mirror_receipts(
+    root: Path, receipts: Iterable[str]
+) -> tuple[list[str], list[str], list[str]]:
+    """Split landed receipts into the current one and the older ones.
+
+    The current receipt is the one whose mirror_tree is HEAD:mirror: the
+    mirror Vellum builds today. Returns (current, older, errors); exactly one
+    receipt may be current.
+    """
+    receipts = list(receipts)
+    if not receipts:
+        return [], [], []
+    try:
+        head_tree = git(root, "rev-parse", "HEAD:mirror")
+    except subprocess.CalledProcessError:
+        return [], [], ["HEAD has no mirror/ tree to name the current export receipt"]
+    current: list[str] = []
+    older: list[str] = []
+    for receipt_path in receipts:
+        try:
+            receipt = json.loads((root / receipt_path).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            receipt = {}
+        tree = receipt.get("mirror_tree") if isinstance(receipt, dict) else None
+        (current if tree == head_tree else older).append(receipt_path)
+    if len(current) != 1:
+        return current, older, [
+            f"{len(current)} landed receipts name HEAD:mirror ({head_tree}); exactly one must"]
+    return current, older, []
+
+
+def renderer_pin_errors(
+    root: Path, pulp_root: Path, receipts: Iterable[str]
+) -> tuple[list[str], list[dict[str, object]]]:
+    """The current mirror export must come from a Pulp commit pinning the locked renderer.
+
+    A mirror export copies Pulp sources that compile against Pulp's Skia/Dawn
+    pin. If that pin is not the archive and source tuple Vellum's lock names,
+    the export and the renderer it links disagree, and the dependency checksums
+    alone would not notice. Callers pass the current receipt only (see
+    current_mirror_receipts): the pin is a property of the mirror Vellum builds
+    today, so an older receipt is never judged against a lock it was not
+    exported under; it keeps its identity, origin and blob checks.
+    """
+    lock = json.loads((root / "provenance/third-party-lock.json").read_text(encoding="utf-8"))
+    renderer = lock["runtime_toolchain_dependencies"]["renderer"]
+    artifact = renderer["artifact"]
+    identities = renderer["source_identities"]
+    expected = {
+        "skia_branch": artifact["release_tag"],
+        "skia_commit": identities["skia"]["commit"],
+        "built_dawn": identities["dawn"]["commit"],
+        "skia_builder_ref": identities["builder"]["commit"],
+        "archive_url": artifact["url"],
+        "archive_sha256": artifact["sha256"],
+    }
+    errors: list[str] = []
+    rows: list[dict[str, object]] = []
+    for receipt_path in receipts:
+        receipt = json.loads((root / receipt_path).read_text(encoding="utf-8"))
+        pulp_sha = receipt.get("pulp_sha")
+        label = f"{receipt_path} (Pulp {pulp_sha})"
+        try:
+            manifest = json.loads(git(pulp_root, "show", f"{pulp_sha}:{PULP_DEPENDENCY_MANIFEST}"))
+        except (subprocess.CalledProcessError, ValueError) as exc:
+            errors.append(f"{label}: cannot read Pulp's {PULP_DEPENDENCY_MANIFEST}: {exc}")
+            continue
+        pins = [d.get("determinism") for d in manifest.get("dependencies", [])
+                if isinstance(d, dict) and isinstance(d.get("determinism"), dict)
+                and d["determinism"].get("skia_branch")]
+        if len(pins) != 1:
+            errors.append(f"{label}: expected one Skia determinism pin, found {len(pins)}")
+            continue
+        pin = pins[0]
+        asset = (pin.get("release_assets") or {}).get(RENDERER_ASSET_KEY) or {}
+        actual = {key: pin.get(key) for key in ("skia_branch", "skia_commit", "built_dawn", "skia_builder_ref")}
+        actual.update(archive_url=asset.get("url"), archive_sha256=asset.get("sha256"))
+        mismatched = sorted(key for key in expected if actual[key] != expected[key])
+        rows.append({"receipt": receipt_path, "pulp_sha": pulp_sha, "matches_lock": not mismatched})
+        if mismatched:
+            errors.append(
+                f"{label}: Pulp's renderer pin differs from third-party-lock.json in "
+                + ", ".join(f"{key} ({actual[key]} != {expected[key]})" for key in mismatched))
+    return errors, rows
+
+
+def mirror_renderer_pin_check(
+    root: Path, pulp_root: Path, receipts: Iterable[str]
+) -> tuple[list[str], list[dict[str, object]]]:
+    """Check the current receipt's renderer pin; report older receipts as unchecked."""
+    current, older, errors = current_mirror_receipts(root, receipts)
+    pin_errors, rows = renderer_pin_errors(root, pulp_root, current) if not errors else ([], [])
+    rows += [{"receipt": path, "matches_lock": None, "checked": "older export, not HEAD:mirror"}
+             for path in older]
+    return errors + pin_errors, rows
+
+
 def verify_origins_against_pulp(
     pulp_root: Path, records: Iterable[dict[str, str]]
 ) -> list[str]:
@@ -713,6 +814,13 @@ def verify(
         )
     export_report = export_verifier.verify(root, pulp_root)
     checks["mirror_export_receipts"] = export_report["receipts"]
+    if pulp_root is not None:
+        pin_errors, pin_rows = mirror_renderer_pin_check(
+            root, pulp_root, export_verifier.landed_receipts(root))
+        checks["mirror_renderer_pin_matches_lock"] = pin_rows
+        errors.extend(pin_errors)
+    else:
+        checks["mirror_renderer_pin_matches_lock"] = "deferred: no Pulp checkout"
     checks["mirror_export_pulp_identity_checked"] = export_report["pulp_identity_checked"]
     errors.extend(f"mirror export: {error}" for error in export_report["errors"])
     edge_findings = mirror_edge_findings(root)

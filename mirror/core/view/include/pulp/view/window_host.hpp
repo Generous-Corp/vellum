@@ -1,0 +1,737 @@
+#pragma once
+
+#include <pulp/view/pending_damage.hpp>
+#include <pulp/view/view.hpp>
+#include <algorithm>
+#include <cstdint>
+#include <set>
+#include <string>
+#include <memory>
+#include <functional>
+#include <vector>
+
+namespace pulp::render {
+class GpuSurface;
+class RenderLoop;
+}
+
+namespace pulp::canvas {
+class Canvas;
+}
+
+namespace pulp::view {
+
+class NativeViewHost;
+
+enum class WindowType;  // Forward-declared from window_manager.hpp
+
+struct WindowOptions {
+    struct MenuCommand {
+        /// Top-level menu to place this command under. Leave EMPTY to place it
+        /// in the application menu — the one titled after the app itself,
+        /// laid out About, [after_about], Settings…/app commands, Services,
+        /// Hide…, Quit. Any other value names (and creates on
+        /// first use) a menu-bar submenu such as "Window" or "View".
+        std::string menu;
+        std::string title;
+        KeyCode key = KeyCode::unknown;
+        std::uint16_t modifiers = kModNone;
+        std::function<void()> action;
+        /// Where an application-menu command (empty `menu`) sits. `commands`
+        /// is the app's own group (Settings…, …) between the About block and
+        /// Services; `after_about` places it directly under "About <App>",
+        /// where macOS apps put "Check for Updates…". Ignored for named menus.
+        enum class AppMenuSection : std::uint8_t { commands, after_about };
+        AppMenuSection app_menu_section = AppMenuSection::commands;
+    };
+
+    std::string title = "Pulp";
+    float width = 400;
+    float height = 300;
+    float min_width = 0;   ///< Minimum window width (0 = no minimum)
+    float min_height = 0;  ///< Minimum window height (0 = no minimum)
+    bool resizable = true;
+    bool use_gpu = false;  ///< Use GPU rendering (Dawn/Skia Graphite) instead of CoreGraphics
+
+    /// The window's own background, 0xRRGGBB. It is what the window shows
+    /// wherever no frame of the tree has landed yet: the window's backing
+    /// colour, the content layer's colour before the first GPU present (and
+    /// after a resize empties the drawable), the fill under the tree, and the
+    /// letterbox bars around a pinned design viewport. A standalone editor
+    /// sets it from `ViewBridge::editor_background_rgb()` so the app opens on
+    /// the editor's own colour, the same contract a plug-in editor host
+    /// follows. The default is `kEditorHostClearRgb` (plugin_view_host.hpp).
+    std::uint32_t background_rgb = 0x1E1E2E;
+
+    /// When true, the window is created and the run loop drives the bridge
+    /// per-vsync as usual, but the window
+    /// is never made visible / brought to front / activated. The app also
+    /// skips the Dock-icon and focus-stealing activation steps. Intended
+    /// for headless smoke tests (live-host-pump-smoke.sh) and any
+    /// validation flow that wants the full live-host code path without a
+    /// GUI window flashing on screen. Backends that don't honor the
+    /// flag fall back to normal behavior.
+    bool initially_hidden = false;
+
+    /// Explicit window role for the close policy. A PRIMARY
+    /// window (default) is the app's main window: closing it stops/tears down
+    /// the app. A SECONDARY window (e.g. the floating InspectorWindow) only
+    /// orders itself out on close and never stops the app, so closing the
+    /// inspector while the main canvas is open leaves the app running, and
+    /// closing the main canvas while the inspector is open still quits.
+    /// Replaces the previous "stop the app when no other visible window
+    /// remains" heuristic, which left the app alive with only the inspector
+    /// after the main window closed.
+    bool secondary_window = false;
+
+    // ── Multi-window hints ──────────────────────────────────────────────
+    // These are used by WindowManager to configure platform-specific
+    // window behavior. Callers creating standalone windows can ignore them.
+
+    WindowType* window_type = nullptr;  ///< Optional type hint for platform styling
+    void* parent_native_handle = nullptr; ///< Parent window handle (HWND, NSWindow*)
+    void* shared_gpu_device = nullptr;  ///< Shared Dawn device for multi-window GPU
+
+    /// Commands exposed through the platform's native application menu bar.
+    /// Backends that do not provide a native menu may ignore this list; the
+    /// command's keyboard route remains the caller's responsibility.
+    std::vector<MenuCommand> menu_commands;
+};
+
+// Native window that hosts a View tree and renders it.
+//
+// Platform support:
+//   - macOS: native NSWindow-backed impl in window_host_mac.mm, including
+//     native content handles and child-view attach/bounds/detach.
+//   - iOS: native UIWindow-backed impl in window_host_ios.mm. The standalone
+//     iOS host does not currently expose native child-view embedding.
+//   - Windows/Linux/Android: no built-in impl — the host app or a future
+//     platform module registers a factory via set_factory(). Without a
+//     factory, create() returns nullptr so callers can surface "platform
+//     unsupported" through has_factory() rather than a silent null.
+class WindowHost {
+public:
+    struct ContentSize {
+        uint32_t width = 0;
+        uint32_t height = 0;
+    };
+
+    using ResizeCallback = std::function<void(uint32_t width, uint32_t height)>;
+
+    // Create a window hosting the given view tree
+    static std::unique_ptr<WindowHost> create(View& root, const WindowOptions& options);
+
+    // Host-registered factory. Installed by the platform layer of a host app
+    // on non-Apple targets. Apple targets use the built-in native impl and
+    // ignore the factory.
+    using Factory = std::function<std::unique_ptr<WindowHost>(
+        View& root, const WindowOptions& options)>;
+    static void set_factory(Factory factory);
+    static void clear_factory();
+    static bool has_factory();
+
+    /// Out-of-line, and NOT trivial: it clears the back-pointer of every
+    /// NativeViewHost still attached to this host. See the registry at the
+    /// bottom of this class.
+    virtual ~WindowHost();
+
+    // Show/hide the window
+    virtual void show() = 0;
+    virtual void hide() = 0;
+    virtual bool is_visible() const = 0;
+
+    // Request a repaint immediately. Platform impls translate this to the
+    // native invalidation call (setNeedsDisplay, InvalidateRect, …).
+    virtual void repaint() = 0;
+
+    // ── VBlank-locked safe-repaint ──────────────────────────────────────
+    //
+    // The canonical pattern for "something changed, the UI needs to redraw"
+    // is *"set a dirty flag, repaint on the next frame"* rather than the
+    // legacy periodic-polling pattern (Binding::poll() on a timer).
+    //
+    // mark_dirty() is the consumer entry point. When a RenderLoop has been
+    // attached via attach_render_loop(), it coalesces every call between
+    // two vblanks into exactly one request_frame() — so N state changes in
+    // one frame cost one repaint, locked to the display refresh. When no
+    // RenderLoop is attached it falls through to repaint() so existing
+    // callers keep working unchanged.
+    //
+    // Non-virtual on purpose: the coalescing policy is platform-agnostic
+    // and lives here so every platform host shares one implementation.
+    void mark_dirty();
+
+    // Bounded variant: accumulate a dirty region (in root/window coordinates)
+    // so a host's paint path can invalidate + composite only the changed area
+    // instead of the whole surface — the "static chrome doesn't re-composite"
+    // win when a single live sub-view (meter, grid, custom overlay) updates.
+    // Schedules a repaint exactly like the no-arg mark_dirty(). A zero/negative
+    // rect, or any call after a full mark_dirty() in the same frame, escalates
+    // to a full repaint. A host that never consults pending_dirty_bounds()
+    // simply repaints in full, so bounded marks are always safe to ignore.
+    void mark_dirty(const Rect& root_rect);
+
+    // Schedule a frame WITHOUT adding damage: for work that changed nothing
+    // yet needs a frame to run (a requestAnimationFrame callback queued by a
+    // message handler). Whatever that frame changes marks its own damage; a
+    // frame that marks nothing repaints in full, as an unbounded one always
+    // has.
+    void request_frame() {
+        schedule_repaint();
+    }
+
+    // True when the pending repaint covers the whole surface. Defaults true
+    // (the first frame is always full) and after any no-arg mark_dirty();
+    // becomes false once clear_pending_dirty() runs and only bounded
+    // mark_dirty(rect) calls have arrived since.
+    bool pending_repaint_is_full() const { return damage_.is_full(); }
+
+    // Bounding box (root coords) of the bounded mark_dirty(rect) calls since the
+    // last clear_pending_dirty(). Only meaningful when pending_repaint_is_full()
+    // is false and has_pending_dirty_bounds() is true.
+    bool has_pending_dirty_bounds() const { return damage_.has_bounds(); }
+    Rect pending_dirty_bounds() const { return damage_.bounds(); }
+
+    // Reset the accumulated dirty region. A host calls this after it has
+    // painted and submitted the frame (mirrors DirtyTracker::clear()).
+    void clear_pending_dirty() { damage_.clear(); }
+
+    // Read this frame's damage and clear it in one step, so a host cannot
+    // consult the accessors above and then clear a different logical state.
+    // A frame that does NOT reach its intended output hands the snapshot back
+    // with restore_pending_dirty(). Same contract as PluginViewHost — both
+    // hosts share one PendingDamage.
+    PendingDamage::Snapshot take_pending_dirty() { return damage_.take(); }
+    void restore_pending_dirty(const PendingDamage::Snapshot& snapshot) {
+        damage_.restore(snapshot);
+    }
+
+    // Consume the accumulated dirty region and paint `root`, then clear the
+    // pending region. This is the reference consumer for the bounded-invalidation
+    // path (invalidate → accumulate → consume).
+    //
+    // SAFE BY DEFAULT: with `surface_preserves_outside_clip == false` (the
+    // default) this always paints the whole tree — identical to
+    // `root.paint_all(canvas)` plus the clear. Only when the caller AFFIRMS that
+    // its surface preserves the previous frame's content outside the clip does a
+    // bounded (non-full) pending region clip the canvas to pending_dirty_bounds()
+    // so a clip-honoring backend (Skia) skips re-rasterizing static chrome. The
+    // opt-in is a hard requirement, not just advice: clipping a frame whose
+    // surface does NOT preserve outside content (a swapchain that clears each
+    // frame, or any frame invalidated with a full `setNeedsDisplay:YES`) would
+    // leave the static chrome blank. A host earns `true` by invalidating only the
+    // dirty region through the platform's native damage path (AppKit
+    // `setNeedsDisplayInRect:`, an X/Win damage rect, a content-preserving
+    // swapchain) — and by escalating any relayout that MOVES a live sub-view to a
+    // full repaint, so the accumulated bounds can't clip away the sub-view's new
+    // position. `root`'s own background/border fill happens inside paint_all(),
+    // so it is clipped too. Backends that ignore clips still paint correctly.
+    void paint_root(canvas::Canvas& canvas, View& root,
+                    bool surface_preserves_outside_clip = false);
+
+    // Attach (or detach, with nullptr) a vblank-paced RenderLoop that
+    // mark_dirty() should drive. Ownership stays with the caller; the loop
+    // must outlive the host or be detached first. Optional — hosts that
+    // already run their own native display-link loop can leave this unset
+    // and mark_dirty() degrades to a direct repaint().
+    void attach_render_loop(render::RenderLoop* loop) { render_loop_ = loop; }
+
+    // The attached RenderLoop, or nullptr.
+    render::RenderLoop* render_loop() const { return render_loop_; }
+
+    // Native host/window handles for embedding child platform views such as
+    // WebViews. These are instance capabilities, not platform guarantees:
+    // callers must check for non-null handles before attempting native child
+    // embedding. Default implementations return nullptr on hosts that do not
+    // expose native handles.
+    /// Position this window alongside another window.
+    /// Places to the right if there's screen space, otherwise to the left.
+    virtual void position_beside(WindowHost* other) { (void)other; }
+
+    virtual void* native_window_handle() const { return nullptr; }
+    virtual void* native_content_view_handle() const { return nullptr; }
+    virtual void* dawn_device_handle() const { return nullptr; }
+    virtual void* dawn_queue_handle() const { return nullptr; }
+    virtual void* dawn_instance_handle() const { return nullptr; }
+    virtual render::GpuSurface* gpu_surface() const { return nullptr; }
+
+    /// Most recent whole-recording GPU *render* time in milliseconds for the
+    /// last presented frame, or 0 when GPU timing is unavailable (CPU host,
+    /// adapter without `timestamp-query`, or no sample landed yet).
+    ///
+    /// This is render-recording time (Skia Graphite's whole-recording
+    /// GpuStats elapsed time as exposed by `SkiaSurface::gpu_render_time_ms()`),
+    /// NOT total frame time and NOT a per-pass number. GPU-backed platform
+    /// hosts forward this from their `SkiaSurface`; the base and CPU/non-GPU
+    /// hosts return 0.
+    virtual double gpu_render_time_ms() const { return 0.0; }
+
+    /// Whether whole-recording GPU render timing is available this run — the
+    /// host owns a `SkiaSurface` whose
+    /// `SkiaSurface::gpu_render_timing_available()` is true. When false the
+    /// inspector should show the honest "GPU timing unavailable" rather than 0.
+    virtual bool gpu_render_timing_available() const { return false; }
+
+    virtual ContentSize get_content_size() const;
+
+    // Attach/detach a platform-native child view inside this host. Coordinates
+    // use Pulp's top-left origin convention. Returning false is the canonical
+    // unsupported/rejected signal. Non-Apple factory-backed hosts that support
+    // native child embedding must override all three methods and should keep
+    // attachment state in the concrete host.
+    virtual bool attach_native_child_view(void* child_view,
+                                          float x,
+                                          float y,
+                                          float width,
+                                          float height) {
+        (void) child_view;
+        (void) x;
+        (void) y;
+        (void) width;
+        (void) height;
+        return false;
+    }
+    virtual bool set_native_child_view_bounds(void* child_view,
+                                              float x,
+                                              float y,
+                                              float width,
+                                              float height) {
+        (void) child_view;
+        (void) x;
+        (void) y;
+        (void) width;
+        (void) height;
+        return false;
+    }
+    virtual void detach_native_child_view(void* child_view) { (void) child_view; }
+
+    // Clip an attached native child to `(x, y, width, height)` — the visible
+    // sub-rectangle expressed in the child's OWN [0,0,frame_w,frame_h] box, in
+    // Pulp's top-left origin convention (same units as
+    // set_native_child_view_bounds). The host masks the native view to that rect
+    // (e.g. a CALayer mask on Apple) so a child inside a scroll region does not
+    // spill past the viewport; masking preserves the child's content size rather
+    // than reflowing it by resizing the frame. When has_clip is false, any
+    // existing clip is removed. Returns false when unsupported or when the child
+    // is not attached to this host. Default: no-op unsupported.
+    virtual bool set_native_child_view_clip(void* child_view,
+                                            bool has_clip,
+                                            float x,
+                                            float y,
+                                            float width,
+                                            float height) {
+        (void) child_view;
+        (void) has_clip;
+        (void) x;
+        (void) y;
+        (void) width;
+        (void) height;
+        return false;
+    }
+
+    // Capture the current visible content as a PNG image.
+    //
+    // Semantics: "whatever the compositor sees" — on macOS this prefers
+    // `screencapture` and the content-view cache before falling back to a
+    // direct GPU-backbuffer readback. Suitable for live screenshots of a
+    // visible window.
+    virtual std::vector<uint8_t> capture_png() { return {}; }
+
+    // Capture the host's own back-buffer as a PNG image (issue #2001).
+    //
+    // Semantics: "host-managed pixels, deterministically." Implementations
+    // MUST NOT call show()/makeKeyAndOrderFront/etc., and MUST bypass any
+    // compositor-side capture path (`screencapture`, content-view caching).
+    // For GPU-backed hosts, this reads the actual rendered back-buffer; for
+    // non-GPU hosts, it can fall back to the rasterized content view.
+    //
+    // Default delegates to capture_png() so non-overriding hosts keep their
+    // current behavior. Test harnesses (`test/mac_window_harness.{hpp,mm}`)
+    // depend on the override existing on macOS GPU hosts so hidden-window
+    // tests get reproducible bytes.
+    virtual std::vector<uint8_t> capture_back_buffer_png() {
+        return capture_png();
+    }
+
+    // Clear any cached host-side input targets before the view tree is rebuilt.
+    virtual void invalidate_input_state() {}
+
+    // Request the host to close and exit its event loop.
+    virtual void request_close() {}
+
+    // Called periodically while the host event loop is running.
+    // Used for editor-side polling such as hot reload.
+    virtual void set_idle_callback(std::function<void()> cb) { (void)cb; }
+    virtual void set_resize_callback(ResizeCallback cb);
+
+    // Install an APP-LEVEL key monitor: keyDown/keyUp events anywhere in the app
+    // are forwarded to `handler` before the focused window's responder chain sees
+    // them; return true to CONSUME (the event then doesn't reach any window). Use
+    // it to route keyboard input to a popout window (e.g. a Musical Typing
+    // keyboard) regardless of WHICH window is currently key — so typing keeps
+    // working after the user clicks a control in another window. Pass `{}` to
+    // remove. No-op on platforms without an app-global key hook.
+    virtual void set_app_key_monitor(std::function<bool(const KeyEvent&)> handler) {
+        (void)handler;
+        note_unsupported_feature("set_app_key_monitor");
+    }
+
+    // Install a handler for files the OS asks this app to open: a double-click
+    // in Finder, a drag onto the app icon or Dock tile, or `open -a`. Paths are
+    // delivered on the main thread.
+    //
+    // Install it BEFORE run_event_loop(). A launch-time open arrives while the
+    // app is still finishing launch — before the loop starts — so a handler set
+    // afterwards would miss the very file that caused the launch. Any paths that
+    // arrive before a handler exists are held and delivered as soon as one is
+    // installed; passing `{}` removes the handler without discarding them.
+    //
+    // Declaring the document type is the other half of this: without a
+    // CFBundleDocumentTypes entry (pulp_declare_standalone_document_type() in
+    // CMake) the OS never routes the file here at all.
+    virtual void set_open_files_handler(
+        std::function<void(const std::vector<std::string>&)> handler) {
+        (void)handler;
+        note_unsupported_feature("set_open_files_handler");
+    }
+
+    // Set a callback for when the window is closed
+    virtual void set_close_callback(std::function<void()> cb) = 0;
+
+    // Run the event loop (blocks until the window is closed)
+    // Call this for standalone UI preview mode
+    virtual void run_event_loop() = 0;
+
+    // ── D.1 Client-side window decoration ───────────────────────────────
+    /// Remove native title bar and let the app draw its own.
+    virtual void set_client_decoration(bool enabled) {
+        (void)enabled;
+        note_unsupported_feature("set_client_decoration");
+    }
+
+    /// Hit-test region types for client-decorated windows.
+    enum class HitTestRegion {
+        none, client, caption,
+        resize_n, resize_s, resize_e, resize_w,
+        resize_ne, resize_nw, resize_se, resize_sw,
+        close, minimize, maximize
+    };
+
+    // ── D.2 Window features ─────────────────────────────────────────────
+    /// Constrain window resize to maintain aspect ratio.
+    virtual void set_fixed_aspect_ratio(float ratio) {
+        (void)ratio;
+        note_unsupported_feature("set_fixed_aspect_ratio");
+    }
+
+    /// Keep window above all others.
+    virtual void set_always_on_top(bool on_top) {
+        (void)on_top;
+        note_unsupported_feature("set_always_on_top");
+    }
+
+    /// Request the native window resize so its CONTENT area becomes (w × h),
+    /// keeping the window's TOP-LEFT corner fixed (so a pinned toolbar / toggle
+    /// row doesn't jump). For content whose intrinsic size changes at runtime —
+    /// e.g. the Musical Typing Keyboard's piano⇄typing toggle (piano is shorter):
+    /// the window shrinks/grows in height, top-aligned, while the top-left
+    /// controls stay put. No-op on hosts that don't override (the content just
+    /// letterboxes within the current window). Callers that also use a design
+    /// viewport should update set_design_viewport()/set_fixed_aspect_ratio() to
+    /// the same (w, h) so paint scale and the OS aspect lock track the resize.
+    virtual void request_content_size(float w, float h) {
+        (void)w; (void)h;
+        note_unsupported_feature("request_content_size");
+    }
+
+    /// Set a fixed "design viewport". When set, the root view's bounds are
+    /// pinned to (design_w x design_h) and paint applies an aspect-correct
+    /// scale + letterbox translate to fit the current window size. Input
+    /// coordinates receive the inverse transform before hit-testing.
+    /// Pass (0, 0) to disable.
+    ///
+    /// Use this for content authored at a known fixed size (e.g. an editor
+    /// imported from Figma / Stitch / v0 / Pencil) that must resize
+    /// proportionally without re-layout. Combine with
+    /// set_fixed_aspect_ratio(design_w / design_h) so the OS enforces the
+    /// aspect on user drag and letterbox bars only appear as a backstop
+    /// during in-flight drag.
+    ///
+    /// Why this exists (pulp #59 / #63 / #64 / #65 — 2026-05-14):
+    /// the "obvious" alternatives all failed for native-react renderers
+    /// like Spectr:
+    ///   * Per-child set_scale() on root children scales chrome but
+    ///     canvas widgets record their draw commands at the original
+    ///     size, so contents clip on shrink.
+    ///   * Yoga absolute+inset:0 propagation: chains of position:absolute
+    ///     + inset:0 collapse to 0×0 in Pulp's runtime-import because
+    ///     Yoga only fills a containing block when the parent has a
+    ///     definite POINTS size — the cascade root→body→wrap→canvas
+    ///     never satisfies that.
+    ///   * JS-driven canvas refit via React refs: even with refs wired
+    ///     correctly through getPublicInstance, Spectr's resize() bails
+    ///     on wrapRef.current/canvasRef.current existence checks and
+    ///     never runs.
+    /// The design-viewport approach sidesteps all of these by doing the
+    /// resize at the renderer (paint-time scale of the design surface),
+    /// which is what a browser webview effectively does at the layer
+    /// level. The root view always thinks it's at design size; canvases
+    /// record commands at design size; chrome lays out at design size.
+    /// The WindowHost does the fitting on paint, and inverse-maps mouse
+    /// coords so hit-test still works.
+    virtual void set_design_viewport(float design_w, float design_h) {
+        (void)design_w; (void)design_h;
+        note_unsupported_feature("set_design_viewport");
+    }
+
+    /// Pure math behind set_design_viewport — used both by the platform
+    /// host's paint_scene and by tests. Returns false (and leaves outputs
+    /// untouched) when the inputs don't define a valid transform.
+    ///
+    /// `top_align`: when true, anchor the scaled design to the TOP of the window
+    /// (vertical slack falls below it) instead of centering it vertically.
+    /// Horizontal centering is unchanged. Used by the AU v3 editor so a
+    /// fixed-aspect design embedded in a taller host pane (e.g. REAPER's FX-chain
+    /// pane — AU can't negotiate the pane aspect the way CLAP's gui_adjust_size /
+    /// VST3's checkSizeConstraint do) reads like CLAP/VST3 (content at the top)
+    /// instead of floating centered between two bands. Default false = centered
+    /// (every other caller). Must be passed identically at the paint AND
+    /// input-mapping call sites, or clicks misalign.
+    static bool compute_design_viewport_transform(
+        float window_w, float window_h,
+        float design_w, float design_h,
+        float& sx, float& sy, float& tx, float& ty,
+        bool top_align = false) {
+        if (design_w <= 0.0f || design_h <= 0.0f ||
+            window_w <= 0.0f || window_h <= 0.0f) {
+            return false;
+        }
+        const float s = std::min(window_w / design_w, window_h / design_h);
+        sx = s;
+        sy = s;
+        tx = (window_w - design_w * s) * 0.5f;
+        ty = top_align ? 0.0f : (window_h - design_h * s) * 0.5f;
+        return true;
+    }
+
+    /// Inverse of compute_design_viewport_transform: map a HOST/window-space
+    /// point back into ROOT (design) space.
+    ///
+    /// Every plug-in editor host needs this to hit-test a click against the
+    /// widget the user visually pointed at, and every one of them had its own
+    /// byte-identical copy — the macOS GPU and CPU plug-in hosts, the iOS host,
+    /// and the Windows host (WAH-10). Four copies of an inverse letterbox
+    /// transform is four chances for one of them to drift from the paint-side
+    /// transform, and the symptom of that drift is clicks landing on the wrong
+    /// control, which is not obviously a coordinate bug when you hit it.
+    ///
+    /// Returns `pt` unchanged when no design viewport is active, which is the
+    /// identity every caller wants for the un-pinned case.
+    ///
+    /// `top_align` MUST match the value used at paint, or input misaligns
+    /// vertically — the same coupling documented on the forward transform.
+    static Point design_viewport_window_to_root(Point pt,
+                                                float window_w, float window_h,
+                                                float design_w, float design_h,
+                                                bool top_align = false) {
+        float sx, sy, tx, ty;
+        if (!compute_design_viewport_transform(window_w, window_h,
+                                               design_w, design_h,
+                                               sx, sy, tx, ty, top_align)) {
+            return pt;
+        }
+        if (sx <= 0.0f || sy <= 0.0f) return pt;
+        return {(pt.x - tx) / sx, (pt.y - ty) / sy};
+    }
+
+    // Report the active design-viewport transform that maps ROOT (design-space)
+    // coordinates to HOST (window-space) coordinates:
+    //   x' = x*sx + tx,  y' = y*sy + ty,  w' = w*sx,  h' = h*sy
+    // Returns true and fills the outputs when a design viewport is active;
+    // returns false (identity — outputs untouched) when no viewport is set.
+    //
+    // Mirrors `PluginViewHost::design_viewport_transform`. `NativeViewHost`
+    // uses it to place an embedded native child at the same letterbox-scaled
+    // position as the surrounding Pulp widgets. Default: no viewport → false.
+    // Only the GPU window host (which actually scales paint) overrides it; the
+    // CPU window host does not implement a design viewport at all, so the
+    // false default is correct there.
+    virtual bool design_viewport_transform(float& sx, float& sy,
+                                           float& tx, float& ty) const {
+        (void)sx; (void)sy; (void)tx; (void)ty;
+        return false;
+    }
+
+    // ── D.3 DPI / Monitor utilities ─────────────────────────────────────
+    /// Get the DPI scale factor for this window.
+    virtual float dpi_scale() const { return 1.0f; }
+
+    /// Get the maximum available dimensions for this window's screen.
+    virtual Size max_dimensions() const { return {1920, 1080}; }
+
+    /// Convert physical pixels to logical coordinates.
+    float convert_to_logical(float px) const { return px / dpi_scale(); }
+
+    /// Convert logical coordinates to physical pixels.
+    float convert_to_native(float logical) const { return logical * dpi_scale(); }
+
+    /// Monitor information.
+    struct MonitorInfo {
+        Rect bounds;
+        float dpi_scale = 1.0f;
+        std::string name;
+    };
+
+    /// Get list of connected monitors. Default returns one virtual monitor.
+    virtual std::vector<MonitorInfo> get_monitors() const {
+        return {{{{0, 0, 1920, 1080}, 1.0f, "Default"}}};
+    }
+
+    // ── D.4 Mouse relative mode ─────────────────────────────────────────
+    /// Hide cursor and report relative deltas (infinite drag for knobs).
+    virtual void set_mouse_relative_mode(bool enabled) {
+        (void)enabled;
+        note_unsupported_feature("set_mouse_relative_mode");
+    }
+
+    // Keep new virtuals at the tail of the public vtable. WindowHost is an SDK
+    // extension surface (set_factory accepts downstream subclasses), so
+    // inserting a virtual among existing methods would shift every later slot.
+    virtual bool is_gpu_backed() const { return gpu_surface() != nullptr; }
+
+    /// True only when request_close_deferred() schedules close handling for a
+    /// later native event-loop turn. External standalone hosts must override
+    /// both methods when inspector startup can occur from an idle callback.
+    virtual bool supports_deferred_close() const {
+        return false;
+    }
+
+    /// Schedule request_close() for a later native event-loop turn. The base
+    /// implementation deliberately does not close synchronously.
+    virtual void request_close_deferred() {
+        note_unsupported_feature("request_close_deferred");
+    }
+
+    /// True when capture_png() returns pixels from the visible compositor
+    /// rather than a deterministic host-managed back buffer.
+    virtual bool supports_compositor_capture() const { return false; }
+
+    /// Browser hosts override this query because their page-owned loop returns
+    /// immediately. Stack-owned runtime state may use it to fail closed.
+    virtual bool event_loop_blocks_until_close() const { return true; }
+
+    /// True only when run_event_loop_until() continues dispatching accepted
+    /// main-thread work after the native loop receives its stop signal.
+    virtual bool event_loop_supports_exit_drain() const {
+        return false;
+    }
+
+    /// Run the event loop, then keep dispatching main-thread work until
+    /// `ready_to_return` reports that stack-borrowed state may be destroyed.
+    /// Hosts advertising exit-drain support must override this fallback.
+    virtual void run_event_loop_until(std::function<bool()> ready_to_return) {
+        run_event_loop();
+        if (ready_to_return)
+            (void)ready_to_return();
+    }
+
+    /// True when capture_back_buffer_png() is implemented by this host.
+    /// Kept independent from compositor capture: an SSH-safe back-buffer path
+    /// must not be inferred from the ability to capture a visible window.
+    /// Appended at the public vtable tail for downstream WindowHost ABI safety.
+    virtual bool supports_back_buffer_capture() const { return false; }
+
+    /// True when this host can report whether the last rendered frame's GPU
+    /// work was submitted toward its intended output. Appended at the public
+    /// vtable tail for downstream WindowHost ABI safety.
+    virtual bool supports_gpu_submission_evidence() const {
+        return false;
+    }
+
+    /// True when the most recent frame rendered by this host was submitted
+    /// toward its intended output (a presentable drawable, or the offscreen
+    /// target when that IS the output). Hosts that cannot observe submission
+    /// keep the `false` default, so an absent producer is never read as
+    /// evidence.
+    ///
+    /// Submitted is not displayed, and the name is the honest bound: it means
+    /// the recording was accepted and the queue submit was issued, NOT that the
+    /// GPU executed the command buffer or that a viewer saw the pixels. A
+    /// backend can still reject the buffer at its queue after a successful
+    /// insert. Display evidence needs a presented-drawable producer, which no
+    /// Pulp backend has.
+    virtual bool last_frame_gpu_submission_observed() const {
+        return false;
+    }
+
+    /// Main-thread milliseconds spent on each host frame dispatched so far
+    /// (idle pump + layout + paint + submit + present), oldest first and
+    /// bounded, so a finite run (a headless screenshot) can report how its
+    /// frames performed. Hosts that do not measure return an empty vector.
+    /// Appended at the public vtable tail for downstream WindowHost ABI safety.
+    virtual std::vector<double> frame_time_samples_ms() const { return {}; }
+
+    /// Log this host's GPU-diagnostics summary line(s) — whether the Skia log
+    /// bridge is wired and what reached it — at info level. For the end of a
+    /// bounded run, never per frame. No-op for hosts without a GPU stack.
+    /// Appended at the public vtable tail for downstream WindowHost ABI safety.
+    virtual void log_gpu_diagnostics_summary() {}
+
+    /// True once `note_unsupported_feature(method)` has fired for `method` on
+    /// this host — i.e. a window feature was requested that this host silently
+    /// no-ops (the base-class default ran because the host did not override it).
+    /// Diagnostic surface for the "CPU host silently degrades" gotcha; also the
+    /// test seam for the one-time logging.
+    bool feature_marked_unsupported(const char* method) const {
+        return unsupported_features_logged_.count(method) > 0;
+    }
+
+protected:
+    /// Log ONCE (per method, per host instance) that a window feature is a
+    /// base-class no-op on this host, so a silently-degraded CPU / headless host
+    /// is self-diagnosing instead of a multi-hour debug (see the CLAUDE.md
+    /// GPU-host gotcha). A host that really implements the feature overrides the
+    /// method and never calls this.
+    void note_unsupported_feature(const char* method);
+
+private:
+    // Method names already logged by note_unsupported_feature(), so each
+    // unsupported feature diagnoses exactly once per host instead of once per
+    // call.
+    std::set<std::string> unsupported_features_logged_;
+
+    // Shared vblank-paced-or-direct repaint scheduling for mark_dirty() and
+    // mark_dirty(Rect).
+    void schedule_repaint();
+
+    // Optional vblank-paced RenderLoop driven by mark_dirty().
+    render::RenderLoop* render_loop_ = nullptr;
+
+    // Accumulated dirty region for the pending frame (root/window coords).
+    // The SAME abstraction the plug-in host uses (PluginViewHost::damage_) —
+    // this used to be three hand-rolled fields plus a copy of the union logic,
+    // which is how the two hosts drifted apart on what "damage" even means.
+    PendingDamage damage_;
+
+private:
+    // ── Attached-view registry ──────────────────────────────────────────────
+    //
+    // See the equivalent block in PluginViewHost. A NativeViewHost holds a RAW,
+    // non-owning pointer back here and dereferences it in its destructor; if the
+    // host dies first, that is a use-after-free. Every built-in host nulls the
+    // back-reference in its own destructor, but that is a per-subclass
+    // convention, and `set_factory` is public API.
+    //
+    // The BASE destructor clears every still-attached view's pointer. It does
+    // NOT call detach_native_child_view() — the derived object is already gone,
+    // so that would dispatch to the base default and the real OS detach would
+    // silently not happen. Derived destructors keep doing the OS detach through
+    // their live vtable; this only makes the pointer invariant structural.
+    friend class NativeViewHost;
+    void register_native_view(NativeViewHost* view);
+    void unregister_native_view(NativeViewHost* view);
+
+    std::vector<NativeViewHost*> attached_native_views_;
+};
+
+} // namespace pulp::view

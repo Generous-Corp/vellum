@@ -259,13 +259,15 @@ def validate_installed_phase3_browser(prefix: Path, root: Path,
     return True
 
 
-def validate_installed_mirror(sdk_prefix: Path, root: Path) -> dict[str, object]:
+def validate_installed_mirror(
+    sdk_prefix: Path, root: Path, view_audio_archive: Path | None = None
+) -> dict[str, object]:
     """Build and run a consumer of the landed mirror's units from the package alone.
 
     The package carries the export receipt it was built from. The consumer
     must report that receipt's origin commit, the Phase-6 view-audio debts
-    must be inert in it, and one image must not be able to take both Skia/Dawn
-    providers the package offers.
+    must be inert in it, both frontends must use the shared provider, and an
+    alternate Skia/Dawn provider must be rejected.
     """
     mirror = sdk_prefix / "mirror"
     receipts = sorted((mirror / "share/provenance").glob("*.json"))
@@ -292,6 +294,8 @@ def validate_installed_mirror(sdk_prefix: Path, root: Path) -> dict[str, object]
     debt_probe = root / "mirror-debt-probe.cpp"
     debt_probe_includes = json.loads(run([
         sys.executable, str(inertness_tool), "--prefix", str(sdk_prefix),
+        *(('--view-audio-archive', str(view_audio_archive))
+          if view_audio_archive is not None else ()),
         "--write-debt-probe", str(debt_probe),
     ], cwd=root).stdout)["includes"]
     build = root / "mirror-consumer-build"
@@ -301,11 +305,20 @@ def validate_installed_mirror(sdk_prefix: Path, root: Path) -> dict[str, object]
     consumer = build / "vellum-mirror-consumer"
     consumer_output = run([str(consumer), origin], cwd=root).stdout.strip()
 
+    run([
+        sys.executable, str(SUPPORT_ROOT / "graphics/tests/test_dawn_provider_topology.py"),
+        str(consumer), str(sdk_prefix / "lib/libvellum-gpu.dylib"),
+        str(sdk_prefix / "lib/libvellum-skia-dawn-provider.dylib"),
+        str(mirror / "lib/libvellum-mirror-canvas.dylib"),
+    ], cwd=root)
+
     inertness_path = root / "mirror-inertness.json"
     completed = subprocess.run([
         sys.executable, str(inertness_tool),
         "--prefix", str(sdk_prefix), "--consumer-build", str(build),
         "--image", str(consumer), "--output", str(inertness_path),
+        *(('--view-audio-archive', str(view_audio_archive))
+          if view_audio_archive is not None else ()),
     ], text=True, capture_output=True, check=False)
     if completed.returncode not in (0, 1) or not inertness_path.is_file():
         raise ValidationError(
@@ -339,6 +352,7 @@ def validate(
     checksums: Path,
     forbid_path: Path | None,
     runner_search_roots: Iterable[Path] = (),
+    view_audio_archive: Path | None = None,
 ) -> dict[str, object]:
     runner_roots = [path.resolve() for path in runner_search_roots]
     checkout_findings = checkout_contamination_findings(runner_roots)
@@ -464,7 +478,8 @@ def validate(
         if native_claimed and not native_present:
             raise ValidationError("native command claims have no installed native backend")
         mirror_evidence = (
-            validate_installed_mirror(sdk_prefix, root) if gpu_claimed else None
+            validate_installed_mirror(sdk_prefix, root, view_audio_archive)
+            if gpu_claimed else None
         )
         installed_phase3_scenario = (
             validate_installed_phase3(prefix, root, journey_env)
@@ -884,6 +899,10 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--archive", type=Path, required=True)
     parser.add_argument("--checksums", type=Path, required=True)
+    parser.add_argument(
+        "--view-audio-archive", type=Path,
+        help="provenance-pinned Pulp libpulp-view-audio.a for mirror inertness proof",
+    )
     parser.add_argument("--forbid-path", type=Path, default=REPO)
     parser.add_argument(
         "--runner-search-root",
@@ -901,6 +920,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             args.checksums.resolve(),
             args.forbid_path,
             args.runner_search_root,
+            args.view_audio_archive.resolve() if args.view_audio_archive else None,
         )
     except (OSError, json.JSONDecodeError, ValidationError) as error:
         print(f"vellum-installed-sdk-validation: {error}", file=sys.stderr)
