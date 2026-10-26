@@ -282,6 +282,24 @@ class PlatformComparatorTest(unittest.TestCase):
         self.assertEqual(len(reasons), 1)
         self.assertIn("codesign (host app)", reasons[0])
 
+    def test_ios_extension_whose_seal_does_not_verify_fails(self):
+        case = {"expect": {"extensions": ["X.appex"], "extension_point": "com.apple.AudioUnit-UI"}}
+        obs = {"app": {"codesign": {"exit": 0}},
+               "extensions": {"X.appex": {"codesign": {"exit": 1, "stderr_tail": "code object is not signed at all"},
+                                          "extension_point": "com.apple.AudioUnit-UI"}},
+               "install": {"exit": 0}, "installed_app_plugins": ["X.appex"], "pluginkit": {"X.appex": {"listed": True}}}
+        reasons = platforms.ios_side(case, obs, "candidate")
+        self.assertEqual(len(reasons), 1)
+        self.assertIn("codesign (X.appex) verification exited 1", reasons[0])
+
+    def test_a_static_artifact_with_no_image_of_the_lane_kind_is_vacuous(self):
+        # The other platform's image must not stand in for the lane's own.
+        for kind, other in (("elf", {"Gain.dll": {"kind": "pe"}}), ("pe", {"Gain.so": {"kind": "elf"}})):
+            with self.subTest(kind=kind):
+                obs = {"images": other, "files": []}
+                reasons = platforms.image_side({"expect": {}}, obs, "candidate", kind)
+                self.assertEqual(reasons, [f"candidate: no {kind.upper()} image in the artifact (vacuous)"])
+
 
 class PlatformCalibrationTest(unittest.TestCase):
     def setUp(self) -> None:

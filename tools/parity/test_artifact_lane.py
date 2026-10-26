@@ -23,7 +23,7 @@ sys.path.insert(0, str(HERE))
 
 import parity_harness as ph  # noqa: E402
 
-ph.load_lane_module(HERE / "lanes" / "artifact.py")
+artifact = ph.load_lane_module(HERE / "lanes" / "artifact.py")
 HAVE_TOOLCHAIN = sys.platform == "darwin" and all(shutil.which(t) for t in ("clang", "lipo", "otool", "nm", "codesign"))
 ARCHS = ["arm64", "x86_64"]
 required_paths = ["Contents/Resources/pulp-build-info.json", "Contents/Info.plist"]
@@ -119,6 +119,25 @@ def fixture(root: Path, gpu_expect: dict | None = None) -> tuple[Path, Path, dic
     corpus_path = corpus_dir / "corpus.json"
     corpus_path.write_text(json.dumps(corpus), encoding="utf-8")
     return corpus_path, impl_path, roots
+
+
+class ArtifactComparatorTest(unittest.TestCase):
+    # Synthetic observations, so these run without a toolchain and pin the
+    # guards that only the corpus's fault controls would otherwise exercise.
+
+    def test_an_artifact_with_no_binary_image_is_vacuous(self):
+        case = {"expect": {"archs": ARCHS, "main_image": False}}
+        obs = {"files": [{"path": "Contents/Info.plist", "kind": "other"}], "main_image": None}
+        reasons = artifact.slices_side(case, obs, "candidate")[0]
+        self.assertEqual(reasons, ["candidate: no binary image in the artifact (vacuous)"])
+
+    def test_a_bundle_whose_seal_does_not_verify_fails_the_signature_lane(self):
+        case = {"expect": {"signed": "bundle"}}
+        obs = {"codesign": {"exit": 1, "stderr_tail": "a sealed resource is missing or invalid"},
+               "codesign_image": {arch: {"exit": 0} for arch in ARCHS}}
+        reasons = artifact.signature_side(case, obs, "candidate")
+        self.assertEqual(len(reasons), 1)
+        self.assertIn("codesign (bundle) verification exited 1", reasons[0])
 
 
 @unittest.skipUnless(HAVE_TOOLCHAIN, "needs macOS with clang, lipo, otool, nm and codesign")
