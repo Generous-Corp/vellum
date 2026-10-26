@@ -1356,7 +1356,7 @@ here and must travel with the mirrored files.
 |---|---|---|---|
 | Abseil | Apache-2.0 | not mirrored; no landed unit consumes it yet (planned renderer and V8 units) | Retain transitive renderer/V8 notice |
 | Brotli | MIT | `canvas` unit external input (`mirror/core/canvas/`, WOFF2 decoder); bytes not mirrored | Carry upstream MIT text |
-| CHOC | ISC | `foundation` unit external input, patched (`mirror/core/runtime/`, `mirror/core/events/`); bytes not mirrored | Retain fork and upstream attribution |
+| CHOC | ISC | `foundation`, `state-core`, `view-core`, `design-import` and `view-script` unit external input, patched (JSON exponent, V8 compatibility); bytes not mirrored | Retain fork and upstream attribution; license ships under `sdk/mirror/share/licenses/choc/` |
 | cpp-httplib | MIT | `mirror/external/cpp-httplib/` (`foundation` unit) | Text above |
 | Dawn and Tint | BSD-3-Clause | `canvas` unit external input: headers inside the Skia build tree; bytes not mirrored | Text above |
 | Expat | MIT | not mirrored; no landed unit consumes it yet (planned renderer units) | Text above |
@@ -1376,11 +1376,13 @@ here and must travel with the mirrored files.
 | Noto Sans Arabic | SIL OFL 1.1 | not mirrored; no landed unit consumes it yet | Text above |
 | Noto Sans JP | SIL OFL 1.1 | not mirrored; no landed unit consumes it yet | Text above |
 | PartitionAlloc | BSD-3-Clause | not mirrored; no landed unit consumes it yet (planned GPU and renderer units) | Text above |
-| QuickJS | MIT | not mirrored; no landed unit consumes it yet (planned scripted-view unit) | Carry upstream MIT text |
+| QuickJS | MIT | `view-script` unit external input through CHOC's bundled `choc_javascript_QuickJS.h`; bytes not mirrored | Its MIT notice travels in that header; CHOC's license ships under `sdk/mirror/share/licenses/choc/` |
+| SDL3 | zlib | `render-2d` and `view-core` unit external input, built from source as `SDL3-static`; bytes not mirrored | Carry zlib notice; license ships under `sdk/mirror/share/licenses/sdl3/` |
 | SheenBidi | Apache-2.0 | `canvas` unit external input (`mirror/core/canvas/`); bytes not mirrored | Carry Apache-2.0 text |
 | Skia and skcms | BSD-3-Clause | `canvas` unit external input (`mirror/core/canvas/`); bytes not mirrored | Text above |
 | V8 | BSD-3-Clause | not mirrored; no landed unit consumes it yet (planned scripted-view unit, when selected) | Text above plus ICU/zlib/Abseil |
-| Yoga | MIT | not mirrored; no landed unit consumes it yet (planned view units) | Carry upstream MIT text |
+| yaml-cpp | MIT | `design-import` unit external input, built from source as `yaml-cpp`; bytes not mirrored | Carry upstream MIT text; license ships under `sdk/mirror/share/licenses/yaml-cpp/` |
+| Yoga | MIT | `view-core` unit external input, built from source as `yogacore`; bytes not mirrored | Carry upstream MIT text; license ships under `sdk/mirror/share/licenses/yoga/` |
 
 The history-preserving mirror retains `matthewfudge` as contributor on four
 view files (design frame view, widget bridge header, state-binding API, and
