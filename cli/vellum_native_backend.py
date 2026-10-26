@@ -196,6 +196,7 @@ def copy_frameworks(sdk: Path, destination: Path) -> list[str]:
         ("libvellum-gpu.dylib", source / "libvellum-gpu.dylib"),
         ("libvellum-skia-dawn-provider.dylib", source / "libvellum-skia-dawn-provider.dylib"),
         ("libvellum-mirror-foundation.dylib", mirror / "libvellum-mirror-foundation.dylib"),
+        ("libvellum-mirror-state-core.dylib", mirror / "libvellum-mirror-state-core.dylib"),
     ]
     # The provider links the mirrored unit libraries it needs by @rpath, and
     # that set grows as units land. Every installed unit library ships so the
@@ -203,7 +204,7 @@ def copy_frameworks(sdk: Path, destination: Path) -> list[str]:
     if mirror.is_dir():
         files += [
             (path.name, path) for path in sorted(mirror.glob("libvellum-mirror-*.dylib"))
-            if path.name != "libvellum-mirror-foundation.dylib"
+            if path.name not in {"libvellum-mirror-foundation.dylib", "libvellum-mirror-state-core.dylib"}
         ]
     destination.mkdir(parents=True)
     for name, candidate in files:

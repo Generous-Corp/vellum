@@ -43,6 +43,7 @@ MIRROR_PACKAGE_FILES = (
     "mirror/lib/cmake/VellumMirror/VellumMirrorTargets.cmake",
     "mirror/lib/libvellum-mirror-foundation.dylib",
     "mirror/lib/libvellum-mirror-canvas.dylib",
+    "mirror/lib/libvellum-mirror-state-core.dylib",
 )
 UI_PAYLOAD_ENTRIES = (
     "LICENSE.md", "README.md", "package.json", "package-lock.json", "scripts", "src", "test",
@@ -163,6 +164,7 @@ def derive_capabilities(payload: Path, install_tree: Path) -> dict[str, object]:
         "lib/libvellum-gpu.dylib",
         "lib/libvellum-skia-dawn-provider.dylib",
         "mirror/lib/libvellum-mirror-foundation.dylib",
+        "mirror/lib/libvellum-mirror-state-core.dylib",
     ))
     node_runtime = (
         any((payload / name).is_file() for name in ("node/bin/node", "node/bin/node.exe"))

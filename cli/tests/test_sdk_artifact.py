@@ -317,6 +317,7 @@ class SdkArtifactTests(unittest.TestCase):
                 "lib/libvellum-gpu.dylib",
                 "lib/libvellum-skia-dawn-provider.dylib",
                 "mirror/lib/libvellum-mirror-foundation.dylib",
+                "mirror/lib/libvellum-mirror-state-core.dylib",
             ):
                 path = install_tree / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -350,6 +351,12 @@ class SdkArtifactTests(unittest.TestCase):
             self.assertTrue(authoring["text_input_v1"]["accessibility_text"])
             self.assertFalse(authoring["text_input_v1"]["clipboard_editing"])
             self.assertFalse(authoring["persistence"]["migration_api"])
+            (install_tree / "mirror/lib/libvellum-mirror-state-core.dylib").unlink()
+            without_state_core = derive_capabilities(payload, install_tree)
+            self.assertFalse(any(
+                without_state_core["commands"][command]
+                for command in ("build", "run", "test", "capture", "package")
+            ))
 
     def test_reproducible_archive_installs_into_sterile_consumer(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

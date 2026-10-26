@@ -599,6 +599,7 @@ def derived_capabilities(
             "sdk/lib/libvellum-gpu.dylib",
             "sdk/lib/libvellum-skia-dawn-provider.dylib",
             "sdk/mirror/lib/libvellum-mirror-foundation.dylib",
+            "sdk/mirror/lib/libvellum-mirror-state-core.dylib",
         )
     )
     node_runtime = validate_node_runtime(

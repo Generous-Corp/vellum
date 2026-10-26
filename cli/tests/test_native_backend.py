@@ -81,9 +81,10 @@ def fake_build_sdk(root: Path) -> Path:
         "libvellum-skia-dawn-provider.dylib",
     ):
         (libraries / name).write_bytes(b"test")
-    mirror_foundation = sdk / "sdk/mirror/lib/libvellum-mirror-foundation.dylib"
-    mirror_foundation.parent.mkdir(parents=True)
-    mirror_foundation.write_bytes(b"test")
+    mirror_libraries = sdk / "sdk/mirror/lib"
+    mirror_libraries.mkdir(parents=True)
+    for name in ("libvellum-mirror-foundation.dylib", "libvellum-mirror-state-core.dylib"):
+        (mirror_libraries / name).write_bytes(b"test")
     fonts = sdk / "sdk/share/vellum/fonts"
     fonts.mkdir(parents=True)
     for name in PACKAGED_FONT_NAMES:
@@ -350,7 +351,6 @@ class NativeBackendTests(unittest.TestCase):
             root = Path(temporary)
             project = self.create_project(root)
             sdk = fake_build_sdk(root)
-            (sdk / "sdk/mirror/lib/libvellum-mirror-state-core.dylib").write_bytes(b"test")
             (sdk / "sdk/mirror/lib/libvellum-mirror-canvas.dylib").write_bytes(b"test")
             (sdk / "sdk/mirror/lib/libvellum-mirror-canvas.a").write_bytes(b"test")
             built = run([
@@ -369,6 +369,21 @@ class NativeBackendTests(unittest.TestCase):
                     "libvellum-mirror-state-core.dylib",
                 ]),
             )
+
+    def test_build_rejects_an_sdk_without_the_state_core_unit_library(self) -> None:
+        if not shutil.which("node"):
+            self.skipTest("node is unavailable")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = self.create_project(root)
+            sdk = fake_build_sdk(root)
+            (sdk / "sdk/mirror/lib/libvellum-mirror-state-core.dylib").unlink()
+            rejected = run([
+                sys.executable, str(BACKEND), "build", "--project", str(project), "--json",
+            ], env={"VELLUM_SDK_ROOT": str(sdk)})
+            result = json.loads(rejected.stdout)
+            self.assertEqual(result["status"], "invalid_sdk")
+            self.assertIn("libvellum-mirror-state-core.dylib", rejected.stdout)
 
     def test_build_bundles_all_packaged_fonts_and_rejects_incomplete_sdk(self) -> None:
         if not shutil.which("node"):
@@ -389,6 +404,7 @@ class NativeBackendTests(unittest.TestCase):
                     "libvellum-gpu.dylib",
                     "libvellum-skia-dawn-provider.dylib",
                     "libvellum-mirror-foundation.dylib",
+                    "libvellum-mirror-state-core.dylib",
                 ]),
             )
             bundled_fonts = app / "Contents/Resources/vellum/fonts"
