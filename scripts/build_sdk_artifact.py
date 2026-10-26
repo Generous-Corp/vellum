@@ -484,7 +484,11 @@ def source_identity(repo: Path, override: str | None, allow_dirty: bool) -> tupl
 
 def payload_files(payload: Path) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
-    for path in sorted(item for item in payload.rglob("*") if item.is_file()):
+    # Canonical order is the relative POSIX path string, the order the installer
+    # verifies. Sorting Path objects compares components, which puts `view/x`
+    # before `view-audio/y`; as strings `-` sorts before `/`.
+    files = (item for item in payload.rglob("*") if item.is_file())
+    for path in sorted(files, key=lambda item: item.relative_to(payload).as_posix()):
         relative = path.relative_to(payload).as_posix()
         rows.append(
             {

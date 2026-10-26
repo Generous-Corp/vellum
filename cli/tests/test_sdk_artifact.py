@@ -92,6 +92,17 @@ class SdkArtifactTests(unittest.TestCase):
         finally:
             validate_browser.__globals__["run"] = original_run
 
+    def test_payload_inventory_is_in_the_installers_canonical_order(self) -> None:
+        module = runpy.run_path(str(BUILDER))
+        with tempfile.TemporaryDirectory() as tmp:
+            payload = Path(tmp)
+            for relative in ("include/pulp/view/x.h", "include/pulp/view-audio/y.h", "include/pulp/viewer.h"):
+                (payload / relative).parent.mkdir(parents=True, exist_ok=True)
+                (payload / relative).write_text(relative)
+            paths = [row["path"] for row in module["payload_files"](payload)]
+        self.assertEqual(paths, sorted(paths))
+        self.assertEqual(paths[0], "include/pulp/view-audio/y.h")
+
     def test_artifact_builder_rejects_cli_release_identity_drift(self) -> None:
         module = runpy.run_path(str(BUILDER))
         verify_cli_identity = module["verify_cli_identity"]
