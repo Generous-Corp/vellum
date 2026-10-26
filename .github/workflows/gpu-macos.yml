@@ -161,7 +161,7 @@ jobs:
             -DVELLUM_ENABLE_MIRROR=ON \
             -DVELLUM_MIRROR_DEPS_DIR="$VELLUM_MIRROR_DEPS_DIR" \
             -DVELLUM_VIEW_AUDIO_ARCHIVE="$VELLUM_VIEW_AUDIO_ARCHIVE"
-          cmake --build build-gpu --parallel
+          cmake --build build-gpu --parallel 3
 
       - name: Stress parallel text shaping in Release
         run: |
@@ -181,7 +181,7 @@ jobs:
             -DVELLUM_REQUIRE_GPU=ON \
             -DVELLUM_SKIA_ARCHIVE="$VELLUM_SKIA_ARCHIVE"
           cmake --build build-gpu-asan \
-            --target vellum-text-shaping-concurrency-test --parallel
+            --target vellum-text-shaping-concurrency-test --parallel 3
           ASAN_OPTIONS=abort_on_error=1:detect_leaks=0:halt_on_error=1 \
           VELLUM_TEXT_STRESS_ROUNDS=20 \
             ./build-gpu-asan/vellum-text-shaping-concurrency-test
