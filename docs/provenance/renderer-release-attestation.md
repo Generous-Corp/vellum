@@ -1,6 +1,6 @@
 # Renderer release attestation plan
 
-The `chrome/m153` Skia/Dawn archive is byte locked in
+The `chrome/m157` Skia/Dawn archive is byte locked in
 [`provenance/third-party-lock.json`](../../provenance/third-party-lock.json),
 but it is not release eligible until the builder produces one signed record
 that binds the archive digest to its complete build inputs.

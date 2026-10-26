@@ -144,6 +144,27 @@ PINNED_PULP_FETCH = """      - name: Fetch the pinned Pulp mirror-edge table com
           git -C "$pulp_git" fetch -q --depth 1 --filter=blob:none --no-tags origin "$pin_commit"
           git -C "$pulp_git" update-ref --no-deref HEAD "$pin_commit"
           test "$(git -C "$pulp_git" rev-parse HEAD)" = "$pin_commit\""""
+# The only step allowed to fetch Pulp release assets, byte for byte, and only
+# in gpu-macos.yml: it downloads the pulp-view-audio archive the committed
+# descriptor pins (provenance/mirror/pulp-view-audio-archive.json), and the
+# script it runs holds every asset to that descriptor's digests, the export
+# receipt's commit and Pulp's build-provenance attestation before exporting
+# the archive path.
+PULP_VIEW_AUDIO_FETCH_NAME = "Fetch and verify the pinned Pulp view-audio archive"
+PULP_VIEW_AUDIO_FETCH_WORKFLOW = "gpu-macos.yml"
+PULP_VIEW_AUDIO_FETCH = """      - name: Fetch and verify the pinned Pulp view-audio archive
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 tools/mirror/fetch_view_audio_archive.py \\
+            --root "$GITHUB_WORKSPACE" \\
+            --repository Generous-Corp/pulp \\
+            --output-dir "$RUNNER_TEMP/pulp-view-audio" \\
+            --json > "$RUNNER_TEMP/pulp-view-audio-archive.json"
+          printf 'VELLUM_VIEW_AUDIO_ARCHIVE=%s\\n' \\
+            "$RUNNER_TEMP/pulp-view-audio/libpulp-view-audio.a" >> "$GITHUB_ENV\""""
 # The single use of the pinned repository outside the fetch step.
 PINNED_PULP_GIT_DIR_USE = f"            --mirror-edge-pulp-root {PINNED_PULP_GIT_DIR} \\"
 # The one step that names Pulp only to read GitHub metadata and the
@@ -423,6 +444,7 @@ def pulp_reach_problems(workflow: str, text: str) -> tuple[list[str], int]:
         if re.search(r"mirror-edge-pulp", line, re.I):
             problems.append(f"line {number} uses the pinned Pulp repository outside a step")
     pulp_checkout_steps = 0
+    archive_fetches = 0
     for step in steps:
         code = "\n".join(line for line in step["lines"] if line.strip())
         name = step["name"]
@@ -432,6 +454,12 @@ def pulp_reach_problems(workflow: str, text: str) -> tuple[list[str], int]:
             reaching += 1
             if step_text(step) != PINNED_PULP_FETCH:
                 problems.append(f"{label} is not the canonical pinned Pulp fetch")
+            continue
+        if name == PULP_VIEW_AUDIO_FETCH_NAME:
+            archive_fetches += 1
+            reaching += 1
+            if workflow != PULP_VIEW_AUDIO_FETCH_WORKFLOW or step_text(step) != PULP_VIEW_AUDIO_FETCH:
+                problems.append(f"{label} is not the canonical view-audio archive fetch")
             continue
         uses = [line for line in step["lines"] if re.search(r"mirror-edge-pulp", line, re.I)]
         if uses and uses != [PINNED_PULP_GIT_DIR_USE]:
@@ -474,6 +502,8 @@ def pulp_reach_problems(workflow: str, text: str) -> tuple[list[str], int]:
         problems.append(f"{label} reaches Pulp outside actions/checkout or the pinned fetch")
     if fetches > 1:
         problems.append("more than one pinned Pulp fetch step")
+    if archive_fetches > 1:
+        problems.append("more than one view-audio archive fetch step")
     if pulp_checkout_steps != len(pulp_checkouts(text)):
         problems.append("a Pulp checkout is not visible to the checkout pin rule")
     return problems, reaching
@@ -803,7 +833,7 @@ class RunnerPolicyTests(unittest.TestCase):
         self.assertIn("--retry 5 --retry-delay 2 --retry-all-errors", gpu)
         self.assertIn("--continue-at -", gpu)
         self.assertIn(
-            "0ebfe03a209ceefe47edfeae70c3cc6c499583b74f35a26140ea55bad7f1e5a9",
+            "bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86",
             gpu,
         )
 
@@ -1170,6 +1200,36 @@ class RunnerPolicyTests(unittest.TestCase):
             with self.subTest(mutation=name):
                 self.assertNotEqual(mutated, workflow)
                 self.assertTrue(pulp_reach_problems("provenance.yml", mutated)[0])
+
+    def test_view_audio_archive_fetch_bypasses_fail_closed(self) -> None:
+        workflow = (WORKFLOWS / PULP_VIEW_AUDIO_FETCH_WORKFLOW).read_text(encoding="utf-8")
+        self.assertEqual(workflow.count(PULP_VIEW_AUDIO_FETCH + "\n"), 1)
+        problems, reaching = pulp_reach_problems(PULP_VIEW_AUDIO_FETCH_WORKFLOW, workflow)
+        self.assertEqual(problems, [])
+        self.assertGreaterEqual(reaching, 1)
+        fetch = PULP_VIEW_AUDIO_FETCH
+        tail = '"$RUNNER_TEMP/pulp-view-audio/libpulp-view-audio.a" >> "$GITHUB_ENV"'
+
+        def in_fetch(extra: str) -> str:
+            return workflow.replace(fetch, fetch.replace(tail, tail + "\n" + extra), 1)
+
+        mutations = {
+            "raw download": in_fetch(
+                "          curl -fsSL https://github.com/Generous-Corp/pulp/releases/download/x/y -o a"),
+            "local archive substitution": in_fetch(
+                "          printf 'VELLUM_VIEW_AUDIO_ARCHIVE=%s\\n' /tmp/libpulp-view-audio.a >> \"$GITHUB_ENV\""),
+            "another repository": workflow.replace(fetch, fetch.replace(
+                "--repository Generous-Corp/pulp", "--repository someone/pulp", 1), 1),
+            "check-only": workflow.replace(fetch, fetch.replace(
+                "--output-dir \"$RUNNER_TEMP/pulp-view-audio\"", "--check", 1), 1),
+            "second fetch": workflow.replace(fetch + "\n", fetch + "\n\n" + fetch + "\n", 1),
+        }
+        for label, mutated in mutations.items():
+            with self.subTest(mutation=label):
+                self.assertNotEqual(mutated, workflow)
+                self.assertNotEqual(pulp_reach_problems(PULP_VIEW_AUDIO_FETCH_WORKFLOW, mutated)[0], [])
+        # The form is reviewed for the GPU proof job only.
+        self.assertNotEqual(pulp_reach_problems("provenance.yml", workflow)[0], [])
 
     def test_queue_gated_scope_reads_every_on_form(self) -> None:
         self.assertTrue(queue_gated("on: [pull_request, merge_group]\n"))

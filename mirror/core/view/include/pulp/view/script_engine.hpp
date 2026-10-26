@@ -1,0 +1,148 @@
+#pragma once
+
+#include <pulp/view/js_engine.hpp>
+#include <string>
+#include <string_view>
+#include <functional>
+#include <optional>
+#include <memory>
+#include <choc/javascript/choc_javascript.h>
+#include <atomic>
+#include <cstdint>
+
+namespace pulp::view {
+
+// JS scripting engine for plugin UIs.
+// Wraps a JsEngine backend (QuickJS, JSC, or V8).
+// Not thread-safe — all calls must happen on the same thread.
+//
+// This class preserves the original ScriptEngine API for backward compatibility
+// with WidgetBridge and all existing callers. Internally it delegates to the
+// selected JsEngine backend.
+class ScriptEngine {
+public:
+    // Create with the build default engine.
+    ScriptEngine();
+
+    // Create with a specific engine type
+    explicit ScriptEngine(JsEngineType engine_type);
+
+    ~ScriptEngine();
+
+    ScriptEngine(ScriptEngine&&) noexcept;
+    ScriptEngine& operator=(ScriptEngine&&) noexcept;
+
+    ScriptEngine(const ScriptEngine&) = delete;
+    ScriptEngine& operator=(const ScriptEngine&) = delete;
+
+    // Evaluate JS code synchronously, returns the result as a choc::value::Value
+    // Throws on parse/runtime errors
+    choc::value::Value evaluate(const std::string& code);
+    // Evaluate a whole script (see JsEngine::evaluate_script): a large script
+    // seen before in this process reuses its compiled bytecode.
+    choc::value::Value evaluate_script(const std::string& code);
+
+    bool supports_bounded_json_evaluation() const;
+    std::string evaluate_bounded_json(const std::string& code,
+                                      std::size_t max_bytes);
+
+    // Run JS code asynchronously (for module-style code with imports)
+    void run_module(const std::string& code,
+                    ModuleResolver resolver,
+                    ModuleCompletionHandler completion = {});
+
+    // Register a C++ function callable from JS.
+    // Accepts both the new NativeFunction signature and CHOC's ArgumentList signature.
+    void register_function(const std::string& name, NativeFunction fn);
+    void register_function(const std::string& name, choc::javascript::Context::NativeFunction fn);
+    void register_promise_function(const std::string& name, NativePromiseFunction fn);
+
+    // Internal WidgetBridge instrumentation seam. Registered functions retain
+    // this state because their engine may outlive the owning bridge.
+    void
+    set_bridge_call_counter(const std::shared_ptr<std::atomic<std::uint64_t>>& counter) noexcept {
+        bridge_call_counter_ = counter;
+    }
+    std::shared_ptr<std::atomic<std::uint64_t>> bridge_call_counter() const noexcept {
+        return bridge_call_counter_;
+    }
+
+    // Register a native-backed global object with snapshot properties and
+    // native methods.
+    void register_host_object(const std::string& name, HostObjectDescriptor descriptor);
+
+    // Invoke a global JS function by name with no arguments
+    choc::value::Value invoke(std::string_view name);
+
+    // Invoke a global JS function with arguments
+    template<typename... Args>
+    choc::value::Value invoke(std::string_view name, Args&&... args);
+
+    // Set a log callback for console.log/warn/error from JS
+    void set_log_callback(LogCallback callback);
+
+    // Pump any engine-specific message loop / microtask queue.
+    void pump_message_loop();
+
+    // Cap the realm's heap in bytes (0 = unlimited); false when the active
+    // backend cannot enforce one. Every backend starts at
+    // kDefaultJsMemoryLimitBytes where it can enforce a cap at all.
+    bool set_memory_limit(std::size_t bytes);
+
+    // Whether the active backend can cooperatively abort a running evaluation
+    // from another thread (QuickJS can; see JsEngine::request_interrupt).
+    bool supports_interrupt() const;
+
+    // Ask the active backend to abort its in-flight evaluation at the next
+    // interrupt check. Thread-safe on supporting backends; no-op otherwise.
+    void request_interrupt();
+
+    // [engine thread] Consume a late interrupt after evaluation quiesces.
+    // Returns true when the request was still pending rather than consumed by
+    // the evaluation.
+    bool clear_pending_interrupt();
+
+    // Check if the engine is valid
+    explicit operator bool() const;
+
+    // Query which engine backend is active
+    JsEngineType engine_type() const;
+
+    // Runtime / provider identity (forwarded to the active backend).
+    std::string runtime_version() const;
+    std::string provider_kind() const;
+    std::string provider_path() const;
+    std::string expected_runtime_version() const;
+
+    // Access the underlying engine (for advanced use / testing)
+    JsEngine& engine();
+    const JsEngine& engine() const;
+
+    // Weak observation token for deferred callbacks which borrow this object.
+    // It tracks this ScriptEngine object's storage and deliberately does not
+    // move with the backend.
+    std::weak_ptr<const void> liveness_token() const noexcept { return alive_; }
+
+private:
+    std::unique_ptr<JsEngine> engine_;
+    std::shared_ptr<const void> alive_ = std::make_shared<const char>('\0');
+    std::shared_ptr<std::atomic<std::uint64_t>> bridge_call_counter_;
+
+    // For QuickJS backward compatibility: WidgetBridge uses CHOC's Context directly
+    // for the stack size hack and pimpl access. We keep a reference to the CHOC
+    // context when the backend is QuickJS.
+    choc::javascript::Context* choc_context_ = nullptr;
+
+    void init_choc_compat();
+};
+
+// ── Template implementations ────────────────────────────────────────────────
+
+template<typename... Args>
+choc::value::Value ScriptEngine::invoke(std::string_view name, Args&&... args) {
+    // Convert variadic args to choc::value::Value array
+    choc::value::Value arg_values[] = { choc::value::Value(std::forward<Args>(args))... };
+    return engine_->invoke(name, arg_values, sizeof...(args));
+}
+
+} // namespace pulp::view

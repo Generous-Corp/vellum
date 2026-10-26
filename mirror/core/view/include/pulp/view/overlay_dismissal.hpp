@@ -1,0 +1,318 @@
+#pragma once
+
+/// @file overlay_dismissal.hpp
+/// The one implementation of Pulp's overlay-dismissal policy.
+///
+/// Pulp has two independent popup mechanisms that a platform host must keep in
+/// step:
+///
+///   A. `ComboBox`'s open native dropdown, a paint-only overlay with no view
+///      backing, reached through `ComboBox::active_popup_in` /
+///      `close_active_popup` / `notify_global_click`.
+///   B. The generalized overlay slot (`RootInteractionState::active_overlay`),
+///      which `@pulp/react`'s `<View overlay>` prop — and therefore every
+///      imported or materialized design's popover — claims via
+///      `View::claim_overlay()`.
+///
+/// Deciding what a press or an Escape means for those two lives HERE, not in
+/// each host. Hosts own only the native event plumbing and call one verb.
+///
+/// That split is not cosmetic. The policy was previously hand-rolled once per
+/// host, and every copy drifted differently: one dismissed another editor's
+/// popover because it read the process-global shim mirror instead of the
+/// root-owned slot, one never honoured an overlay's outside-click consumption,
+/// and the two DAW plugin hosts had no Escape path at all, so a popover opened
+/// inside a plugin editor could not be closed from the keyboard. A single
+/// implementation is also the only version that is headlessly testable —
+/// per-host copies can only be exercised by running a real NSView / HWND /
+/// browser.
+///
+/// `tools/scripts/overlay_dismissal_wiring_guard.py` enforces the arrangement:
+/// a host that routes presses must call these verbs, and no host may reach
+/// past them to the slot itself.
+
+#include <pulp/view/view.hpp>
+
+#include <cstdint>
+
+namespace pulp::view {
+
+// ── An overlay's anchor: the trigger that opened it ─────────────────────────
+//
+// A press on an overlay's own anchor while it is open means "close it", exactly
+// like a press outside it or Escape: the overlay is dismissed and the press is
+// spent on the close, so the trigger's handler cannot run on the same press and
+// open it again. That is what makes a dropdown button TOGGLE. A press on a
+// DIFFERENT trigger still switches menus in one press
+// (`OverlayDismissalPolicy::trigger_press_passes_through`).
+//
+// Most overlays never declare one. `route_press_to_active_overlay` records the
+// `View::overlay_trigger()` each press is delivered to
+// (`RootInteractionState::pending_overlay_opener`), and a claim that follows
+// adopts it, which covers every press-opened `@pulp/react`, web-compat, and
+// imported popover. Declare it with `View::set_overlay_anchor` when the
+// overlay opens some other way — from the keyboard, from a timer — or when its
+// opener is not marked as a trigger; an explicit anchor is never replaced by
+// the recorded one. The press's NEAREST trigger decides: a trigger between the
+// hit view and the anchor means that nearer trigger, not the anchor.
+
+/// What consulting the generalized overlay slot decided about a press.
+enum class OverlayPressRouting {
+    /// Nothing claimed the root's overlay slot; the caller proceeds normally.
+    no_overlay,
+    /// The press landed inside the overlay and resolved to a view in its
+    /// subtree. Deliver to `OverlayPressTarget::target` and stop; the regular
+    /// tree `hit_test` must not run, or an absolutely-positioned popover child
+    /// loses the click to whatever sibling occupies that pixel.
+    routed,
+    /// The press landed inside the overlay's rect, but the overlay's own
+    /// visible / enabled / hit-testable / pointer-events guards rejected it.
+    /// The overlay stays claimed (it is still mounted, just not interactive
+    /// here) and the caller falls through to the regular hit test.
+    not_hittable,
+    /// The press landed outside the overlay, so it was dismissed. The caller
+    /// still falls through to the regular hit test, matching WebView's
+    /// outside-click closes-and-clicks-through behavior.
+    dismissed,
+};
+
+struct OverlayPressTarget {
+    OverlayPressRouting routing = OverlayPressRouting::no_overlay;
+    /// Non-null only when `routing == OverlayPressRouting::routed`.
+    View* target = nullptr;
+    /// True when an outside press dismissed an overlay that opted to consume
+    /// that initiating pointer sequence. Hosts must stop before gesture and
+    /// ordinary hit-test routing so the same press cannot mutate the underlay.
+    ///
+    /// False even for such an overlay when the press landed on an overlay
+    /// TRIGGER and `OverlayDismissalPolicy::trigger_press_passes_through` is
+    /// set: switching dropdowns is one press, not two.
+    ///
+    /// Always true when the press landed on the trigger that OPENED a dismissed
+    /// overlay (`trigger_closed`), whatever that overlay's own setting.
+    bool consume_press = false;
+    /// The press landed on the anchor of an overlay it dismissed — the button
+    /// that opened that dropdown — so it was a TOGGLE: the overlay closed, and
+    /// the press is consumed so the trigger cannot reopen it on the same
+    /// gesture. The third dismissal reason alongside an outside press and
+    /// Escape; see the anchor section above.
+    bool trigger_closed = false;
+};
+
+/// Tunable defaults for the dismissal policy. One configuration for the
+/// process, deliberately: this is a framework default, not per-editor state,
+/// and it is read-only on the press path.
+struct OverlayDismissalPolicy {
+    /// A press that dismisses an open overlay is delivered to the control
+    /// under it when that control is a DIFFERENT overlay TRIGGER
+    /// (`View::overlay_trigger()`), so switching from one dropdown to a
+    /// sibling costs one press rather than two — the behaviour of the macOS
+    /// menu bar and of every multi-menu toolbar.
+    ///
+    /// Scoped to triggers on purpose. Passing every dismissing press through
+    /// would mean clicking away from a menu also operates whatever control
+    /// happens to sit under the click, which is a real hazard rather than a
+    /// hypothetical one; an overlay that asked to consume its outside click
+    /// still consumes it everywhere else.
+    ///
+    /// A press on the trigger that opened the overlay is never passed
+    /// through: that press is a toggle, and delivering it would reopen the
+    /// menu it closed. See the anchor section above.
+    ///
+    /// Set false to restore strict consume-everywhere dismissal.
+    bool trigger_press_passes_through = true;
+
+    /// While any shown overlay is open, a PASSIVE pointer input — a wheel or
+    /// two-finger scroll, a trackpad magnify or rotate — at a point outside
+    /// every shown overlay is dropped (`PassivePointerRoute::blocked`), the
+    /// way scrolling elsewhere does nothing while a macOS menu is open. A
+    /// non-modal popover therefore no longer leaves the content behind it
+    /// scrollable or zoomable: a user scrolling a menu who drifts off its edge
+    /// must not zoom the plot underneath. Passive input still never dismisses.
+    ///
+    /// Set false to restore the earlier rule, under which only a MODAL overlay
+    /// blocked passive input outside it and a non-modal popover let it through
+    /// to the tree.
+    bool passive_input_outside_overlay_blocked = true;
+};
+
+/// The active policy. Reading is cheap and allocation-free.
+const OverlayDismissalPolicy& overlay_dismissal_policy();
+/// Replace the active policy. Call from application setup, not mid-gesture.
+void set_overlay_dismissal_policy(const OverlayDismissalPolicy& policy);
+
+/// Consult `root`'s generalized overlay slot for a press at `root_pt`.
+///
+/// Scoped to `root`'s own interaction state, never the process-global shim
+/// mirror: two Pulp editors in one host process (the documented shared
+/// `AUHostingService` case) each own their overlay, and a press in one must
+/// not dismiss the other's popover.
+///
+/// Call this AFTER the ComboBox popup routing — which stays exact-as-was, per
+/// the regression in `test_combo_dropdown.cpp` — and BEFORE the regular tree
+/// `hit_test`.
+///
+/// Call it for EVERY press, including one with nothing open: it also records
+/// which overlay trigger the press is about to reach, so a popover that
+/// trigger's handler opens learns its anchor, and a second press on the same
+/// trigger closes it (`OverlayPressTarget::trigger_closed`) rather than
+/// closing and reopening it.
+OverlayPressTarget route_press_to_active_overlay(View& root, Point root_pt);
+
+/// The view a HOVER at `root_pt` lands on: the deepest hit inside the topmost
+/// open overlay that contains the point, otherwise `root.hit_test(root_pt)`.
+///
+/// An open overlay paints above everything else in its root, and a press over
+/// it is routed into it by `route_press_to_active_overlay`. A hover has to
+/// resolve the same way, or the cursor and the hover highlight report the
+/// content painted UNDER the menu: an overlay that reaches far outside the view
+/// it is mounted in (a dropdown that opens upward from a bottom rail) escapes
+/// the tree hit test, so the pointer over its rows shows the cursor of whatever
+/// the menu covers while a click on the same pixel operates the row.
+///
+/// Read-only: unlike a press, a hover never dismisses anything. An overlay whose
+/// own guards reject the point (for example `pointerEvents: none`) is skipped,
+/// so the one beneath it, or the ordinary tree, answers instead.
+View* hover_target_at(View& root, Point root_pt);
+
+/// Where a PASSIVE pointer input — a wheel / two-finger scroll, a trackpad
+/// magnify or rotate — at `root_pt` goes while overlays may be open.
+struct PassivePointerRoute {
+    /// The view to deliver to, or nullptr when nothing is under the point.
+    /// Always nullptr when `blocked` is set.
+    View* target = nullptr;
+    /// The input must be dropped: an open overlay owns the screen and the
+    /// point is outside every overlay that could take it. The host must not
+    /// fall back to any hit test or scroll-pane search.
+    bool blocked = false;
+    /// The open overlay `target` was resolved inside, or nullptr when the
+    /// ordinary tree answered. It is the CONTAINMENT boundary for the input:
+    /// a wheel that lands in an overlay is delivered to `target` and its
+    /// ancestors up to and including this view, and never chains past it to
+    /// a listener outside the overlay — even when nothing inside consumes it
+    /// (the end of a list, a fixed header, a horizontal-only delta). This is
+    /// `overscroll-behavior: contain` at every overlay root; a submenu stacked
+    /// on a menu is its own boundary.
+    View* overlay = nullptr;
+};
+
+/// Resolve a passive pointer input through the root's open overlays.
+///
+/// Presses and hovers already resolve through the overlay stack
+/// (`route_press_to_active_overlay`, `hover_target_at`). A wheel or a pinch
+/// that used the plain tree `hit_test` instead reached the content painted
+/// UNDER an open dialog: an overlay painted through the overlay queue can sit
+/// earlier in tree order than the plot it covers, so the tree hit test lands
+/// on the plot and a scroll over a dialog's backdrop zooms the content
+/// behind it.
+///
+/// Rules, top of the stack first; like a hover, nothing is ever dismissed:
+///   1. The point lies inside a shown overlay that resolves it to a view: that
+///      view is the target (a scroll inside a dialog scrolls the dialog) and
+///      that overlay is `PassivePointerRoute::overlay`, the boundary the input
+///      may not chain past.
+///   2. The point lies outside every shown overlay, and one of them is MODAL —
+///      a `ModalOverlay`, or an overlay whose accessible role is `dialog`
+///      (`role="dialog"` / `role="alertdialog"`): the input is `blocked`.
+///      A modal dialog makes the content behind it inert, and inert content
+///      receives no scroll or zoom.
+///   3. The point lies outside every shown overlay and the open ones are all
+///      non-modal popovers (menus, dropdowns, submenus): the input is
+///      `blocked` too, while
+///      `OverlayDismissalPolicy::passive_input_outside_overlay_blocked` is set
+///      (the default) — scrolling elsewhere while a menu is open does nothing,
+///      as on macOS. An overlay with `pointer-events: none` takes no input and
+///      blocks none. With the policy off, the ordinary tree answers here.
+///   4. Otherwise — no overlay open — the ordinary tree `hit_test` answers.
+///
+/// Hidden overlays and overlays detached from `root` are ignored. Read-only.
+PassivePointerRoute route_passive_pointer(View& root, Point root_pt);
+
+/// What a context (right-button) press resolved to.
+struct ContextPressResult {
+    /// A view claimed the context menu, so the host must not fall through to
+    /// the platform's own menu.
+    bool handled = false;
+    /// The press dismissed an open overlay, so the host must repaint even when
+    /// nothing claimed a context menu.
+    bool overlay_dismissed = false;
+};
+
+/// Route a context (right-button) press at `root_pt`, consulting the
+/// generalized overlay slot first.
+///
+/// This is the right-button counterpart of the left-button overlay routing a
+/// host performs around `route_press_to_active_overlay`, and it exists because
+/// honoring `OverlayPressTarget::consume_press` is easy to omit: a host that
+/// forgets it dismisses the overlay and THEN hit-tests the underlay, so one
+/// right-click both closes the popover and opens a context menu on the control
+/// underneath it. Keeping the decision here rather than in each host makes it
+/// headlessly testable and gives every host one call to make.
+ContextPressResult route_context_press(View& root, Point root_pt);
+
+/// What an Escape keypress dismissed, in the order the policy tries them.
+enum class OverlayEscapeResult {
+    /// Nothing was open under `root`. The caller must handle Escape itself
+    /// (blur a text field, hand the key back to the DAW, …).
+    none,
+    /// A `ModalOverlay` in the tree consumed Escape through its own handler.
+    modal,
+    /// An open native `ComboBox` dropdown was closed.
+    combo_popup,
+    /// The generalized overlay slot was dismissed, firing
+    /// `on_overlay_dismissed` so React state can flip `setOpen(false)`.
+    overlay,
+};
+
+/// Dismiss the topmost thing Escape should close under `root`.
+///
+/// Order, and why it is this order:
+///
+///   1. A `ModalOverlay` — it traps interaction, so nothing behind it may act
+///      on the key. Found by tree walk rather than by focus, because a modal
+///      that never took focus still owns the screen, and because in a plugin
+///      host the DAW may hold focus entirely.
+///   2. An open `ComboBox` dropdown. `ComboBox::on_key_event` fires only while
+///      the combo owns focus, which a sibling React popover routinely steals;
+///      without a host-level fallback the still-visible dropdown wedges open
+///      with no keyboard escape route.
+///   3. The generalized overlay slot. `ModalOverlay`, `ComboBox`, and
+///      `CallOutBox` each own their Escape; a bare `<View overlay>` popover has
+///      no widget-specific owner, so this is the only path that closes it.
+///
+/// `modifiers` and `is_repeat` shape the `KeyEvent` handed to a modal, so an
+/// Escape chord a modal declines still falls through to the rest of the policy.
+///
+/// Every host must call this BEFORE any focus-gated key dispatch. A plugin host
+/// returns early when nothing in its tree holds focus — which is exactly the
+/// state an open popover leaves behind — so an Escape path placed after that
+/// check can never run.
+OverlayEscapeResult route_escape_to_active_overlay(View& root,
+                                                   std::uint16_t modifiers = 0,
+                                                   bool is_repeat = false);
+
+/// Whether an overlay under `root` is the kind that should own the keyboard.
+///
+/// A plugin host needs this before the key ever arrives. An embedded editor
+/// borrows the DAW keyboard only for an active bounded interaction, so with
+/// nothing focused it is not first responder and never receives Escape at all
+/// — which is precisely the state an open popover leaves behind.
+///
+/// Deliberately NARROWER than what `route_escape_to_active_overlay` acts on,
+/// because holding a DAW's keyboard when nothing needs it is the more
+/// expensive mistake: the user experiences it as transport and Musical Typing
+/// going dead. Three things qualify, and a bare claim does not:
+///
+///   - A visible `ModalOverlay`. It traps interaction by definition.
+///   - An open `ComboBox` dropdown. An open menu owns arrows, Enter, Escape.
+///   - A claimed overlay that consumes its outside click. That flag is the
+///     author's STATEMENT that the view is a popover — `@pulp/react`'s
+///     `<View overlay>` prop and `data-overlay="true"` both set it. The
+///     web-compat CSS-shape heuristic (`position:absolute` + a high
+///     `z-index`) deliberately does not, because it is an INFERENCE that can
+///     fire on a decorative absolutely-positioned box; such a box can hold
+///     the slot for an editor's whole lifetime, and keeping the keyboard that
+///     long would be indistinguishable from the plug-in stealing it.
+bool root_overlay_owns_keyboard(View& root);
+
+}  // namespace pulp::view

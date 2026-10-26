@@ -4,9 +4,12 @@
 // linker could satisfy without the unit: SheenBidi through the bidi
 // analyzer, Skia text shaping through the bundled Inter face, CHOC through the
 // runtime queue, and the rendered build info that names the export's origin.
+// font_resolver.hpp exercises the provider-owned text path without making
+// private Skia/Dawn definitions part of the consumer ABI.
 
 #include <pulp/canvas/bidi.hpp>
 #include <pulp/canvas/canvas.hpp>
+#include <pulp/canvas/font_resolver.hpp>
 #include <pulp/canvas/text_shaper.hpp>
 #include <pulp/runtime/base64.hpp>
 #include <pulp/runtime/build_info.hpp>
@@ -45,6 +48,12 @@ int main(int argc, char** argv) {
     const auto wide = shaper.layout(prepared, 1000.0f);
     if (wide.lines.size() != 1 || narrow.lines.size() < 2 || wide.total_width <= 60.0f)
         return fail("text shaping through the bundled face");
+
+    pulp::canvas::FontOptions options;
+    options.family_stack = {"Inter"};
+    const auto resolved = pulp::canvas::FontResolver::instance().resolve_family_list(options);
+    if (!resolved.has_typeface() || resolved.actual_family != "Inter")
+        return fail("font resolution through the package's Skia declarations");
 
     pulp::runtime::SpscQueue<int, 8> queue;
     int value = 0;

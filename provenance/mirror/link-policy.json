@@ -1,6 +1,6 @@
 {
   "schema": "vellum.mirror-link-policy.v1",
-  "allowed_external_targets": ["SheenBidi", "everest", "hwy", "mbedcrypto", "mbedtls", "mbedx509", "p256m"],
+  "allowed_external_targets": ["SheenBidi", "everest", "hwy", "mbedcrypto", "mbedtls", "mbedx509", "p256m", "SDL3-static", "yaml-cpp", "yogacore"],
   "approved_unmirrored_edges": [
     {
       "id": "P4-edge-view-native-timebase",

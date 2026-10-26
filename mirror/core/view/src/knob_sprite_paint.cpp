@@ -1,0 +1,110 @@
+#include "knob_sprite_paint.hpp"
+
+#include <pulp/view/sprite_strip.hpp>
+
+#include <algorithm>
+#include <cmath>
+#include <limits>
+
+namespace pulp::view {
+
+// Rotating indicator notch, shared by the silver vector knob and the
+// single-frame sprite-body knob. Draws a short radial line at the value's
+// angle (value 0..1 → [-135°, +135°], the analog-synth convention), centered
+// at (cx, cy): a dark backing stroke for contrast plus the bright pointer on
+// top. `notch_r` is the extent — the line runs from 35% to 95% of it; the two
+// stroke widths scale from `width_ref`. Factored out of the silver path so an
+// imported sprite knob (a captured static disc + a separate pointer) can still
+// show a turning pointer drawn natively over the disc.
+void draw_knob_indicator_notch(canvas::Canvas& canvas,
+                               float cx, float cy,
+                               float notch_r, float width_ref,
+                               float value) {
+    const canvas::Color kBacking   = canvas::Color::rgba(0.10f, 0.11f, 0.13f, 0.85f);
+    const canvas::Color kIndicator = canvas::Color::rgba(0.97f, 0.97f, 0.97f, 1.0f);
+    float angle = -1.5707963f /* -90° */
+                  + (value - 0.5f) * 4.7123890f /* 270° total range */;
+    float outer_x = cx + notch_r * 0.95f * std::cos(angle);
+    float outer_y = cy + notch_r * 0.95f * std::sin(angle);
+    float inner_x = cx + notch_r * 0.35f * std::cos(angle);
+    float inner_y = cy + notch_r * 0.35f * std::sin(angle);
+    // Subtle dark backing line for contrast on the bright top arc.
+    canvas.set_stroke_color(kBacking);
+    canvas.set_line_width(std::max(2.5f, width_ref * 0.10f));
+    canvas.stroke_line(inner_x, inner_y, outer_x, outer_y);
+    // Bright top line — the actual indicator.
+    canvas.set_stroke_color(kIndicator);
+    canvas.set_line_width(std::max(1.5f, width_ref * 0.07f));
+    canvas.stroke_line(inner_x, inner_y, outer_x, outer_y);
+}
+
+// Pointer reproduced from the design's OWN indicator node (set_captured_indicator).
+// Same [-135°,+135°] value→angle arc as the synthetic notch, but the radii, width
+// and color come from the imported art, and it pivots at the disc core center
+// (cx, cy) — so the line rides the disc's baked min/center/max reference ticks
+// instead of a guessed sweep. Captured HTML borders are reproduced as an
+// optional outer stroke; pointers without one retain the legacy dark backing.
+void draw_knob_captured_pointer(canvas::Canvas& canvas,
+                                float cx, float cy,
+                                float r_in, float r_out, float width,
+                                canvas::Color color, float value,
+                                float phase_rad,
+                                canvas::Color outline_color,
+                                float outline_width) {
+    float angle = -1.5707963f + (value - 0.5f) * 4.7123890f + phase_rad;
+    float ox = cx + r_out * std::cos(angle);
+    float oy = cy + r_out * std::sin(angle);
+    float ix = cx + r_in  * std::cos(angle);
+    float iy = cy + r_in  * std::sin(angle);
+    if (outline_width > 0.0f) {
+        // `width` is the captured CSS border-box extent. Paint its authored
+        // outline at that extent, then inset the fill from both sides. This is
+        // materially different from the historical synthetic shadow: a white
+        // 4px pointer with a 1px black CSS border is a black 4px stroke with a
+        // white 2px core, not a white 4px stroke over a translucent backing.
+        canvas.set_stroke_color(outline_color);
+        canvas.set_line_width(width);
+        canvas.stroke_line(ix, iy, ox, oy);
+        const float fill_width = std::max(0.0f, width - 2.0f * outline_width);
+        if (fill_width > 0.0f) {
+            canvas.set_stroke_color(color);
+            canvas.set_line_width(fill_width);
+            canvas.stroke_line(ix, iy, ox, oy);
+        }
+        return;
+    }
+    canvas.set_stroke_color(canvas::Color::rgba(0.10f, 0.11f, 0.13f, 0.45f));
+    canvas.set_line_width(width + 1.25f);
+    canvas.stroke_line(ix, iy, ox, oy);
+    canvas.set_stroke_color(color);
+    canvas.set_line_width(width);
+    canvas.stroke_line(ix, iy, ox, oy);
+}
+
+// Whether the frame at (fx, fy) of a byte-backed strip can be drawn. The draw
+// scales the whole decoded image to the strip's declared size, so once the
+// bytes are known to decode, every frame inside the declared size draws,
+// whatever the encoded byte count or decoded pixel size. Bytes no decoder has
+// recognised are treated as raw RGBA and bounded by their byte count. Only a
+// successful measure is recorded on the (possibly shared) strip: a canvas that
+// cannot decode the format must not stop a later decoding canvas from drawing.
+bool byte_strip_frame_in_bounds(canvas::Canvas& canvas, SpriteStrip& strip, int fx, int fy) {
+    if (!strip.decoded_size_known()) {
+        float w = 0.0f, h = 0.0f;
+        if (canvas.measure_image_from_data(strip.data(), strip.data_size(), w, h) && w >= 1.0f &&
+            h >= 1.0f && w <= static_cast<float>(std::numeric_limits<int>::max()) &&
+            h <= static_cast<float>(std::numeric_limits<int>::max()))
+            strip.set_decoded_size(static_cast<int>(w), static_cast<int>(h));
+    }
+    const int fw = strip.frame_width();
+    const int fh = strip.frame_height();
+    if (strip.decoded_size_known())
+        return fx >= 0 && fy >= 0 && fx + fw <= strip.total_width() &&
+               fy + fh <= strip.total_height();
+    const size_t frame_bytes = static_cast<size_t>(fw) * static_cast<size_t>(fh) * 4u;
+    const size_t offset = static_cast<size_t>(fy) * static_cast<size_t>(strip.total_width()) * 4u +
+                          static_cast<size_t>(fx) * 4u;
+    return offset + frame_bytes <= strip.data_size();
+}
+
+}  // namespace pulp::view

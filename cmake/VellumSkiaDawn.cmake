@@ -4,19 +4,23 @@ set(VELLUM_SKIA_DIR "" CACHE PATH
     "Development-only path to the extracted pinned Skia/Dawn archive")
 
 set(_vellum_expected_archive_sha256
-    "0ebfe03a209ceefe47edfeae70c3cc6c499583b74f35a26140ea55bad7f1e5a9")
+    "bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86")
 set(_vellum_expected_skia_sha256
-    "39f9b1e1c8663ded30afdccce47375e578696e5504c31c6ba1474f1dcddffcd9")
+    "e6152842da957a8548a9931c8d7aade0475d6dce32c920d6fb2bc7a9eaa856e2")
 set(_vellum_expected_dawn_sha256
-    "73727ddf86ffc34eea6fb6392d8d688f44e317ff37b3bb421f8223c8b8815dc9")
+    "7f24a7c906a16d61e108ca7475494bf949cf288fa42b2b2c2811bf3d000a3602")
+set(_vellum_expected_svg_sha256
+    "2609b13b3349cfb1ee738b285a268fcca16e0e6e4f9a5da95995b1f5fe3b6d5b")
+set(_vellum_expected_skresources_sha256
+    "9c3fb99e43180159bd7f7cd7d252872e9c523c40563b947195f77669698fb7f9")
 set(_vellum_expected_skshaper_sha256
-    "c4120a6149cc63054766e040f020f379ff3e2172b3887d88e8c5f15eb29667c3")
+    "ca7df9d95609d0f11b98d3719b19140e9e98138689729266f992b639eace0fa9")
 set(_vellum_expected_skparagraph_sha256
-    "0f295b4262d0dd26dbf29e69fbe6696a278aa6ae8fec9a935555ec1058665274")
+    "94ea982e976fa76e4e36dbbd828bb22c45a4884aa1eaa2c4fcc6daae77fe4da8")
 set(_vellum_expected_skunicode_core_sha256
-    "a79b68a3a5bb72b12de9b07b1f78b332eaa01c0de5eae0f8ff37c8c1fd57cbaa")
+    "e0e46a61bd45fe1037babbf0607df1f42ec0b5acf1b61f2ec9b78e105ef10314")
 set(_vellum_expected_skunicode_icu_sha256
-    "c4b68ea5b8a71740634c9d40b6f2fb4e91a5ac355ea2c5f7f19e5d2364b8f204")
+    "e57859c9e6c238632067b3d6a4cafd014fc86af6fd91250d093da5796c42ea89")
 
 if(VELLUM_SKIA_ARCHIVE)
     if(NOT EXISTS "${VELLUM_SKIA_ARCHIVE}")
@@ -87,6 +91,8 @@ foreach(_vellum_candidate IN ITEMS
 endforeach()
 set(_vellum_skia_core "${_vellum_skia_libdir}/libskia.a")
 set(_vellum_dawn_core "${_vellum_skia_libdir}/libdawn_combined.a")
+set(_vellum_svg "${_vellum_skia_libdir}/libsvg.a")
+set(_vellum_skresources "${_vellum_skia_libdir}/libskresources.a")
 set(_vellum_skshaper "${_vellum_skia_libdir}/libskshaper.a")
 set(_vellum_skparagraph "${_vellum_skia_libdir}/libskparagraph.a")
 set(_vellum_skunicode_core "${_vellum_skia_libdir}/libskunicode_core.a")
@@ -95,6 +101,8 @@ set(_vellum_skunicode_icu "${_vellum_skia_libdir}/libskunicode_icu.a")
 if(NOT _vellum_skia_libdir OR
    NOT EXISTS "${_vellum_skia_core}" OR
    NOT EXISTS "${_vellum_dawn_core}" OR
+   NOT EXISTS "${_vellum_svg}" OR
+   NOT EXISTS "${_vellum_skresources}" OR
    NOT EXISTS "${_vellum_skshaper}" OR
    NOT EXISTS "${_vellum_skparagraph}" OR
    NOT EXISTS "${_vellum_skunicode_core}" OR
@@ -115,24 +123,28 @@ endif()
 
 file(SHA256 "${_vellum_skia_core}" _vellum_skia_sha256)
 file(SHA256 "${_vellum_dawn_core}" _vellum_dawn_sha256)
+file(SHA256 "${_vellum_svg}" _vellum_svg_sha256)
+file(SHA256 "${_vellum_skresources}" _vellum_skresources_sha256)
 file(SHA256 "${_vellum_skshaper}" _vellum_skshaper_sha256)
 file(SHA256 "${_vellum_skparagraph}" _vellum_skparagraph_sha256)
 file(SHA256 "${_vellum_skunicode_core}" _vellum_skunicode_core_sha256)
 file(SHA256 "${_vellum_skunicode_icu}" _vellum_skunicode_icu_sha256)
 if(NOT _vellum_skia_sha256 STREQUAL _vellum_expected_skia_sha256 OR
    NOT _vellum_dawn_sha256 STREQUAL _vellum_expected_dawn_sha256 OR
+   NOT _vellum_svg_sha256 STREQUAL _vellum_expected_svg_sha256 OR
+   NOT _vellum_skresources_sha256 STREQUAL _vellum_expected_skresources_sha256 OR
    NOT _vellum_skshaper_sha256 STREQUAL _vellum_expected_skshaper_sha256 OR
    NOT _vellum_skparagraph_sha256 STREQUAL _vellum_expected_skparagraph_sha256 OR
    NOT _vellum_skunicode_core_sha256 STREQUAL _vellum_expected_skunicode_core_sha256 OR
    NOT _vellum_skunicode_icu_sha256 STREQUAL _vellum_expected_skunicode_icu_sha256)
     message(FATAL_ERROR
         "Vellum: extracted Skia/Dawn libraries do not match the locked "
-        "chrome/m153 macOS universal tuple")
+        "chrome/m157 macOS universal tuple")
 endif()
 
 # This public headers-only target lets an embedding host compile its Dawn
 # bootstrap and compute code. It intentionally supplies declarations only: the
-# sole archive definitions remain private to the Vellum GPU dylib.
+# sole archive definitions live in Vellum::SkiaDawnProvider.
 add_library(vellum-dawn-headers INTERFACE)
 add_library(Vellum::DawnHeaders ALIAS vellum-dawn-headers)
 set_target_properties(vellum-dawn-headers PROPERTIES EXPORT_NAME DawnHeaders)
@@ -148,22 +160,54 @@ install(DIRECTORY "${_vellum_skia_include}/dawn/"
 install(DIRECTORY "${_vellum_skia_include}/webgpu/"
     DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/vellum/dawn/webgpu")
 
-add_library(VellumSkiaDawnHeaders INTERFACE)
-target_link_libraries(VellumSkiaDawnHeaders INTERFACE Vellum::DawnHeaders)
-
-# Keep static archives private to vellum-gpu. Hosts need Dawn declarations to
-# supply the explicit bootstrap callback, but must resolve those calls through
-# the selected Vellum provider rather than link another Dawn copy.
-add_library(VellumSkiaDawn INTERFACE)
-target_include_directories(VellumSkiaDawn INTERFACE "${_vellum_skia_include}")
-target_link_libraries(VellumSkiaDawn INTERFACE VellumSkiaDawnHeaders)
-target_link_libraries(VellumSkiaDawn INTERFACE
+# One installed dylib owns the locked archives for both GPU and mirror users.
+# Whole-archive linking makes the public Skia/Dawn API available independently
+# of which entry points either Vellum client happens to use today.
+add_library(vellum-skia-dawn-provider SHARED
+    "${CMAKE_CURRENT_LIST_DIR}/skia_dawn_provider.cpp")
+add_library(Vellum::SkiaDawnProvider ALIAS vellum-skia-dawn-provider)
+file(RELATIVE_PATH _vellum_provider_to_mirror_lib
+    "${CMAKE_INSTALL_FULL_LIBDIR}"
+    "${CMAKE_INSTALL_PREFIX}/mirror/lib")
+set(_vellum_provider_install_rpath "@loader_path")
+if(NOT _vellum_provider_to_mirror_lib STREQUAL ".")
+    list(APPEND _vellum_provider_install_rpath
+        "@loader_path/${_vellum_provider_to_mirror_lib}")
+endif()
+set_target_properties(vellum-skia-dawn-provider PROPERTIES
+    EXPORT_NAME SkiaDawnProvider
+    MACOSX_RPATH ON
+    INSTALL_RPATH "${_vellum_provider_install_rpath}"
+    OSX_ARCHITECTURES arm64
+    MACOSX_DEPLOYMENT_TARGET 13.0
+    INTERFACE_VELLUM_SKIA_DAWN_PROVIDER vellum-skia-dawn-provider)
+set_property(TARGET vellum-skia-dawn-provider APPEND PROPERTY
+    COMPATIBLE_INTERFACE_STRING VELLUM_SKIA_DAWN_PROVIDER)
+target_include_directories(vellum-skia-dawn-provider PUBLIC
+    $<BUILD_INTERFACE:${_vellum_skia_include}>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/vellum/skia>)
+target_link_libraries(vellum-skia-dawn-provider PUBLIC Vellum::DawnHeaders)
+install(DIRECTORY "${_vellum_skia_include}/include/"
+    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/vellum/skia/include"
+    FILES_MATCHING PATTERN "*.h")
+install(DIRECTORY "${_vellum_skia_include}/modules/"
+    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/vellum/skia/modules"
+    FILES_MATCHING PATTERN "*.h")
+set(_vellum_provider_archives
     "${_vellum_skparagraph}"
     "${_vellum_skshaper}"
     "${_vellum_skunicode_icu}"
     "${_vellum_skunicode_core}"
+    "${_vellum_skresources}"
     "${_vellum_skia_core}"
-    "${_vellum_dawn_core}"
+    "${_vellum_dawn_core}")
+target_link_libraries(vellum-skia-dawn-provider PRIVATE
+    "$<LINK_LIBRARY:WHOLE_ARCHIVE,${_vellum_provider_archives}>"
+    # libsvg.a bundles copies of Skia/resource objects. Its factory anchor
+    # selects SVG objects normally, resolving dependencies through the owners
+    # above instead of force-loading the embedded duplicate implementations.
+    "${_vellum_svg}"
+    "-framework ImageIO"
     "-framework Cocoa"
     "-framework CoreFoundation"
     "-framework CoreGraphics"

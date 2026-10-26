@@ -49,7 +49,7 @@ def receipt(**changes) -> dict:
     base = {
         "schema": gpu.RECEIPT_SCHEMA, "backend_requested": "gpu", "backend_used": "gpu", "ok": True,
         "error": "", "seeded_fault": "none", "skia_milestone": 153,
-        "dawn_version": "f91da75afe31d4d6f47a6da307e1fbabd1b1691a",
+        "dawn_version": "ada567700e13aecf7989d78b21f7d330b522ea80",
         "gpu": {"surface_created": True, "frame_outcome": "offscreen", "readback_completed": True,
                 "device_lost": False, "pixel_width": 8, "pixel_height": 6,
                 "adapter": {"available": True, "null_backend": False, "type": "integrated-gpu",

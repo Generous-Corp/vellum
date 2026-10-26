@@ -7,7 +7,7 @@ build tools are not redistributed.
 
 The observed renderer inventory was derived from the exact revisions in
 Skia's and Dawn's primary-source `DEPS` files and checked against the member
-and symbol tables of the byte-locked `chrome/m153` macOS arm64 artifact. The
+and symbol tables of the byte-locked `chrome/m157` macOS arm64 artifact. The
 artifact itself contains no license bundle, SBOM, build graph, or
 source-to-object map. Inspection positively identifies the components below
 but cannot prove the inventory exhaustive; GPU release eligibility remains
@@ -26,7 +26,7 @@ particular `vellum-gpu` binary.
 
 ### Dawn and Tint
 
-Revision: `f91da75afe31d4d6f47a6da307e1fbabd1b1691a`
+Revision: `ada567700e13aecf7989d78b21f7d330b522ea80`
 
 Copyright 2017-2023 The Dawn & Tint Authors
 
@@ -57,7 +57,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ### Skia and skcms
 
-Revision: `8b8c3872fbc03f025855db96ce683f34ec98a815`
+Revision: `b94213a11b3a2edadfae89f0c57a7f4ab72772c9`
 
 Copyright (c) 2011 Google Inc. All rights reserved.
 
@@ -88,6 +88,38 @@ DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
 THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+skcms carries its own notice at this revision (`modules/skcms/LICENSE`):
+
+Copyright (c) 2018 Google Inc. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+   * Redistributions of source code must retain the above copyright
+notice, this list of conditions and the following disclaimer.
+   * Redistributions in binary form must reproduce the above
+copyright notice, this list of conditions and the following disclaimer
+in the documentation and/or other materials provided with the
+distribution.
+   * Neither the name of Google Inc. nor the names of its
+contributors may be used to endorse or promote products derived from
+this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+--------------------------------------------------------------------------------
 
 ### libwebp
 
@@ -259,7 +291,7 @@ subject to the following restrictions:
 
 Copyright 2017 The Abseil Authors.
 
-Revision: `dd67f5ca84f65ebb88ac0ea0fe2c1d58663e519f`
+Revision: `af5aede14a0b4013be6890148d34e0fd7b1fac69`
 
 Licensed under the Apache License, Version 2.0, reproduced below.
 
@@ -1324,7 +1356,7 @@ here and must travel with the mirrored files.
 |---|---|---|---|
 | Abseil | Apache-2.0 | not mirrored; no landed unit consumes it yet (planned renderer and V8 units) | Retain transitive renderer/V8 notice |
 | Brotli | MIT | `canvas` unit external input (`mirror/core/canvas/`, WOFF2 decoder); bytes not mirrored | Carry upstream MIT text |
-| CHOC | ISC | `foundation` unit external input, patched (`mirror/core/runtime/`, `mirror/core/events/`); bytes not mirrored | Retain fork and upstream attribution |
+| CHOC | ISC | `foundation`, `state-core`, `view-core`, `design-import` and `view-script` unit external input, patched (JSON exponent, V8 compatibility); bytes not mirrored | Retain fork and upstream attribution; license ships under `sdk/mirror/share/licenses/choc/` |
 | cpp-httplib | MIT | `mirror/external/cpp-httplib/` (`foundation` unit) | Text above |
 | Dawn and Tint | BSD-3-Clause | `canvas` unit external input: headers inside the Skia build tree; bytes not mirrored | Text above |
 | Expat | MIT | not mirrored; no landed unit consumes it yet (planned renderer units) | Text above |
@@ -1344,11 +1376,13 @@ here and must travel with the mirrored files.
 | Noto Sans Arabic | SIL OFL 1.1 | not mirrored; no landed unit consumes it yet | Text above |
 | Noto Sans JP | SIL OFL 1.1 | not mirrored; no landed unit consumes it yet | Text above |
 | PartitionAlloc | BSD-3-Clause | not mirrored; no landed unit consumes it yet (planned GPU and renderer units) | Text above |
-| QuickJS | MIT | not mirrored; no landed unit consumes it yet (planned scripted-view unit) | Carry upstream MIT text |
+| QuickJS | MIT | `view-script` unit external input through CHOC's bundled `choc_javascript_QuickJS.h`; bytes not mirrored | Its MIT notice travels in that header; CHOC's license ships under `sdk/mirror/share/licenses/choc/` |
+| SDL3 | zlib | `render-2d` and `view-core` unit external input, built from source as `SDL3-static`; bytes not mirrored | Carry zlib notice; license ships under `sdk/mirror/share/licenses/sdl3/` |
 | SheenBidi | Apache-2.0 | `canvas` unit external input (`mirror/core/canvas/`); bytes not mirrored | Carry Apache-2.0 text |
 | Skia and skcms | BSD-3-Clause | `canvas` unit external input (`mirror/core/canvas/`); bytes not mirrored | Text above |
 | V8 | BSD-3-Clause | not mirrored; no landed unit consumes it yet (planned scripted-view unit, when selected) | Text above plus ICU/zlib/Abseil |
-| Yoga | MIT | not mirrored; no landed unit consumes it yet (planned view units) | Carry upstream MIT text |
+| yaml-cpp | MIT | `design-import` unit external input, built from source as `yaml-cpp`; bytes not mirrored | Carry upstream MIT text; license ships under `sdk/mirror/share/licenses/yaml-cpp/` |
+| Yoga | MIT | `view-core` unit external input, built from source as `yogacore`; bytes not mirrored | Carry upstream MIT text; license ships under `sdk/mirror/share/licenses/yoga/` |
 
 The history-preserving mirror retains `matthewfudge` as contributor on four
 view files (design frame view, widget bridge header, state-binding API, and

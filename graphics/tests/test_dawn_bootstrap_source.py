@@ -9,7 +9,13 @@ import sys
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-ALLOWED = {ROOT / "graphics" / "include" / "vellum" / "graphics" / "dawn_native_bootstrap.hpp"}
+ALLOWED = {
+    ROOT / "graphics" / "include" / "vellum" / "graphics" / "dawn_native_bootstrap.hpp",
+    # Pulp's default installer, mirrored byte for byte. Vellum's mirror build
+    # turns on Pulp's host-owned proc-table switch, which compiles no setter
+    # into it (tools/mirror/VellumMirror.cmake).
+    ROOT / "mirror" / "core" / "render" / "src" / "gpu_proc_installer_native.cpp",
+}
 
 
 def main() -> int:
