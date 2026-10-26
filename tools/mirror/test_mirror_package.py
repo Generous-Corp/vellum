@@ -9,6 +9,7 @@ import json
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -225,6 +226,21 @@ class MirrorPackagePlanTest(unittest.TestCase):
             (root / "yoga" / "CMakeLists.txt").unlink()
             with self.assertRaisesRegex(mp.PlanError, "no yoga/CMakeLists.txt"):
                 mp.dependency_source_dir("yoga", root)
+
+    def test_plan_builds_a_cmake_dependency_from_its_source_subdir(self) -> None:
+        yoga = Path(self.temporary.name) / "yoga-checkout"
+        (yoga / "yoga").mkdir(parents=True)
+        (yoga / "CMakeLists.txt").write_text("add_subdirectory(yoga)\nadd_subdirectory(tests)\n")
+        (yoga / "yoga" / "CMakeLists.txt").write_text("add_library(yogacore STATIC x.cpp)\n")
+        (yoga / "LICENSE").write_text("MIT\n")
+        prepare = mp.prepare_dependencies
+
+        def with_yoga(*args, **kwargs):
+            return {**prepare(*args, **kwargs), "yoga": yoga}
+
+        with mock.patch.object(mp, "prepare_dependencies", with_yoga):
+            plan = self.fixture.plan()
+        self.assertEqual(plan["cmake_dependencies"]["yoga"]["dir"], str(yoga / "yoga"))
 
     def test_dependency_without_a_recipe_is_refused(self) -> None:
         self.fixture.closure["external_inputs"][0]["path"] = f"@external/unknown/{'b' * 40}/x.h"
