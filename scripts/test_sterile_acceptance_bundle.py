@@ -26,6 +26,29 @@ validator = load("validate_installed_sdk", SCRIPT_DIR / "validate_installed_sdk.
 
 
 class SterileAcceptanceBundleTest(unittest.TestCase):
+    def test_bundled_python_support_carries_its_sibling_imports(self) -> None:
+        import ast
+        root = SCRIPT_DIR.parent
+        bundled = set(bundle.SUPPORT_FILES)
+        missing = []
+        for relative in sorted(bundled):
+            if not relative.endswith(".py"):
+                continue
+            path = root / relative
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                names = []
+                if isinstance(node, ast.Import):
+                    names = [alias.name.split(".")[0] for alias in node.names]
+                elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                    names = [node.module.split(".")[0]]
+                for name in names:
+                    sibling = path.parent / f"{name}.py"
+                    if sibling.is_file():
+                        relative_sibling = sibling.relative_to(root).as_posix()
+                        if relative_sibling not in bundled:
+                            missing.append(f"{relative} imports {relative_sibling}")
+        self.assertEqual(missing, [])
+
     def test_bundle_is_reproducible_and_source_free(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

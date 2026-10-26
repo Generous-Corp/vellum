@@ -48,6 +48,8 @@ SUPPORT_FILES = (
     "tools/mirror/provider-conflict/CMakeLists.txt",
     "graphics/tests/test_dawn_provider_topology.py",
     "tools/mirror/verify_mirror_inertness.py",
+    "tools/mirror/nm_symbols.py",
+    "tools/mirror/rtti_ownership.py",
 )
 
 
