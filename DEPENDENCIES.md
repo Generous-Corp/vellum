@@ -186,21 +186,22 @@ Vellum dependencies. Versions and licenses were cross-checked against Pulp's
 
 ### Units built into the native SDK
 
-The macOS arm64 GPU SDK compiles every unit of the current mirror receipt
-(`foundation`, `gpu-device-api`, `canvas`, `render-2d`, `state-core`,
-`view-core`, `design-import` and `view-script`) into one
-`sdk/mirror/lib/libvellum-mirror-<unit>.dylib` each
-(`tools/mirror/VellumMirror.cmake`). The provider loads the foundation and
-state-core libraries at launch. The units' external inputs above are
-fetched at the commits their closure manifests pin, and every file a closure
-lists is checked against its recorded SHA-256 before configure
-(`tools/mirror/mirror_package.py`). Highway, Mbed TLS, SheenBidi, Brotli,
-WOFF2, SDL3, Yoga and yaml-cpp objects are linked into the mirror libraries; CHOC headers that the public
-headers include ship under `sdk/mirror/include/choc/`. Each fetched
-dependency's license file is installed under `sdk/mirror/share/licenses/`.
-The canvas library is an installed forwarding dylib: the shared
-`Vellum::SkiaDawnProvider` owns its Skia-consuming objects and the locked
-Skia/Dawn archives. `Vellum::MirrorCanvas` exports only the mirrored namespace
+The macOS arm64 GPU SDK installs one `sdk/mirror/lib/libvellum-mirror-<unit>.dylib`
+for every unit of the current mirror receipt (`foundation`, `gpu-device-api`,
+`canvas`, `render-2d`, `state-core`, `view-core`, `design-import` and
+`view-script`; `tools/mirror/VellumMirror.cmake`). The units' external inputs
+above are fetched at the commits their closure manifests pin, and every file a
+closure lists is checked against its recorded SHA-256 before configure
+(`tools/mirror/mirror_package.py`). Only the foundation and state-core
+libraries carry code of their own, and the provider loads both at launch;
+Highway and Mbed TLS objects are linked into the foundation library. The other
+six are installed forwarding dylibs that re-export the shared
+`Vellum::SkiaDawnProvider`, which owns their objects, the SheenBidi, Brotli,
+WOFF2, SDL3, Yoga and yaml-cpp objects, and the locked Skia/Dawn archives.
+CHOC headers that the public headers include ship under
+`sdk/mirror/include/choc/`. Each fetched dependency's license file is
+installed under `sdk/mirror/share/licenses/`.
+`Vellum::MirrorCanvas` exports only the mirrored namespace
 and links that provider transitively, so a consumer can link it and
 `Vellum::Gpu` into one image; a distinct provider is rejected by
 `VELLUM_SKIA_DAWN_PROVIDER`.
