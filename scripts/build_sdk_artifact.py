@@ -709,7 +709,10 @@ def build(args: argparse.Namespace) -> dict[str, object]:
             raise ArtifactError(
                 "artifact framework version does not match the configured CMake project version"
             )
-        run(["cmake", "--build", str(build_dir), "--config", "Release", "--parallel"])
+        # A bare --parallel is unbounded with the Makefiles generator; take the
+        # caller's level, else three jobs (the hosted macOS runner's cores).
+        jobs = os.environ.get("CMAKE_BUILD_PARALLEL_LEVEL", "").strip() or "3"
+        run(["cmake", "--build", str(build_dir), "--config", "Release", "--parallel", jobs])
         run(["cmake", "--install", str(build_dir), "--config", "Release", "--prefix", str(install_tree)])
         for archive in sorted(install_tree.rglob("*.a")):
             normalize_static_archive(archive)
