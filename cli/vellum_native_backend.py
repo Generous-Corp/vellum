@@ -190,13 +190,21 @@ def sdk_node(sdk: Path) -> Path:
 
 def copy_frameworks(sdk: Path, destination: Path) -> list[str]:
     source = sdk / "sdk/lib"
+    mirror = sdk / "sdk/mirror/lib"
     files = [
         ("libvellum-authoring.dylib", source / "libvellum-authoring.dylib"),
         ("libvellum-gpu.dylib", source / "libvellum-gpu.dylib"),
         ("libvellum-skia-dawn-provider.dylib", source / "libvellum-skia-dawn-provider.dylib"),
-        ("libvellum-mirror-foundation.dylib",
-         sdk / "sdk/mirror/lib/libvellum-mirror-foundation.dylib"),
+        ("libvellum-mirror-foundation.dylib", mirror / "libvellum-mirror-foundation.dylib"),
     ]
+    # The provider links the mirrored unit libraries it needs by @rpath, and
+    # that set grows as units land. Every installed unit library ships so the
+    # app never names one the bundle lacks.
+    if mirror.is_dir():
+        files += [
+            (path.name, path) for path in sorted(mirror.glob("libvellum-mirror-*.dylib"))
+            if path.name != "libvellum-mirror-foundation.dylib"
+        ]
     destination.mkdir(parents=True)
     for name, candidate in files:
         if not candidate.is_file():
