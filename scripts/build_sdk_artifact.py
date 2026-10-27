@@ -57,7 +57,8 @@ NATIVE_HOST_FILES = (
 )
 # The runtime check skips NATIVE_HOST_FILES' mirror entries because the mirror
 # check covers them; that holds only while they are a subset of its list.
-assert {path for path in NATIVE_HOST_FILES if path.startswith("mirror/")} <= set(MIRROR_PACKAGE_FILES)
+if not {path for path in NATIVE_HOST_FILES if path.startswith("mirror/")} <= set(MIRROR_PACKAGE_FILES):
+    raise RuntimeError("NATIVE_HOST_FILES names a mirror library MIRROR_PACKAGE_FILES does not")
 UI_PAYLOAD_ENTRIES = (
     "LICENSE.md", "README.md", "package.json", "package-lock.json", "scripts", "src", "test",
 )

@@ -40,9 +40,21 @@ class SharedExceptionTypeinfoTest(unittest.TestCase):
     def test_references_pass(self) -> None:
         self.assertEqual(check.darwin_definitions(WITH_RTTI), [])
 
-    def test_libcxx_bad_function_call_is_not_counted(self) -> None:
+    def test_libcxx_header_artifacts_are_not_counted(self) -> None:
         self.assertEqual(check.darwin_definitions(
-            "0000000000001300 (__DATA,__const) weak private external __ZTINSt3__117bad_function_callE\n"), [])
+            "0000000000001300 (__DATA,__const) weak private external __ZTINSt3__117bad_function_callE\n"
+            "0000000000002a79 (__DATA_CONST,__const) non-external (was a private external) "
+            "__ZTINSt3__112format_errorE\n"), [])
+
+    def test_any_std_class_counts_not_only_the_exception_family(self) -> None:
+        for name in ("__ZTISt19bad_optional_access", "__ZTINSt3__112system_errorE", "__ZTSSt11range_error"):
+            with self.subTest(name=name):
+                self.assertTrue(check.is_local_std_typeinfo(name))
+        # Template instantiations and non-std classes are not this check's concern.
+        for name in ("__ZTINSt3__110__function6__funcIZ1fvE3$_0NS_9allocatorIS2_EEFvvEEE", "__ZTIN8facebook4yoga4NodeE",
+                     "__ZTINSt3__110__back_refIcEE", "__ZTINSt3__110__function6__baseIFvvEEE"):
+            with self.subTest(name=name):
+                self.assertFalse(check.is_local_std_typeinfo(name))
 
     def test_posix_listing(self) -> None:
         listing = "_ZTISt9exception V 12d8 10\n_ZTISt11logic_error U\n_ZTSSt9bad_alloc R f10 12\n"

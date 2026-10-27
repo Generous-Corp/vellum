@@ -14,6 +14,7 @@ import gzip
 import hashlib
 import sys
 import tarfile
+import zlib
 from pathlib import Path
 
 # Every tar header field a reproducible build must pin, plus the content digest.
@@ -52,7 +53,7 @@ def differences(first: Path, second: Path) -> list[str]:
         found.append(f"gzip header: {header_a} != {header_b}")
     try:
         rows_a, rows_b = member_rows(first), member_rows(second)
-    except (tarfile.TarError, OSError, EOFError) as error:
+    except (tarfile.TarError, OSError, EOFError, zlib.error) as error:
         found.append(f"cannot read both archives as gzip tar: {error}")
         return found
     names_a, names_b = [name for name, _ in rows_a], [name for name, _ in rows_b]
@@ -72,7 +73,7 @@ def differences(first: Path, second: Path) -> list[str]:
         try:
             with gzip.open(first) as one, gzip.open(second) as two:
                 tar_equal = one.read() == two.read()
-        except (OSError, EOFError) as error:
+        except (OSError, EOFError, zlib.error) as error:
             return [f"cannot decompress both archives: {error}"]
         found.append(
             "every tar header and member is equal; the uncompressed tar streams differ"

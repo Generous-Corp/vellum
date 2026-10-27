@@ -338,6 +338,7 @@ if(VELLUM_BUILD_TESTS)
             add_test(NAME vellum.mirror-yoga-shared-exception-typeinfo
                 COMMAND "${Python3_EXECUTABLE}"
                     tools/mirror/check_shared_exception_typeinfo.py "$<TARGET_FILE:yogacore>"
+                    "$<TARGET_FILE:vellum-skia-dawn-provider>"
                 WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
         endif()
     endif()
