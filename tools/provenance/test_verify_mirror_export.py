@@ -288,11 +288,13 @@ class VerifyMirrorExportTests(unittest.TestCase):
         receipts = verify_mirror_export.landed_receipts(REPO)
         pulp_root_env = os.environ.get("MIRROR_PULP_ROOT")
         if receipts and not pulp_root_env:
-            # The required provenance lanes check out the newest receipt's Pulp
-            # commit and set MIRROR_PULP_ROOT whenever a receipt is landed. In
-            # CI a missing checkout is a broken lane, not a reason to skip.
-            if os.environ.get("CI", "").lower() == "true":
-                self.fail("CI is set but MIRROR_PULP_ROOT names no Pulp checkout; the Pulp identity proof did not run")
+            # The provenance lanes check out the newest receipt's Pulp commit,
+            # set MIRROR_PULP_ROOT, and set VELLUM_REQUIRE_PULP_IDENTITY so a
+            # missing checkout fails rather than skips. Other lanes (the GPU
+            # ctest run) have no Pulp checkout and skip.
+            if os.environ.get("VELLUM_REQUIRE_PULP_IDENTITY") == "1":
+                self.fail("VELLUM_REQUIRE_PULP_IDENTITY is set but MIRROR_PULP_ROOT names no Pulp checkout; "
+                          "the Pulp identity proof did not run")
             self.skipTest("Pulp identity is proved where MIRROR_PULP_ROOT names a Pulp checkout")
         pulp_root = Path(pulp_root_env).resolve() if pulp_root_env else None
         with mock.patch.dict(os.environ, {"VELLUM_GIT_BASE": self.ci_git_base} if self.ci_git_base else {}):
@@ -835,6 +837,13 @@ class VerifyMirrorExportTests(unittest.TestCase):
         self.assertEqual(binding(lambda c: c.update(targets=[], missing_targets=["pulp-canvas"])), [])
         optional = dict(closure["targets"][0], name="pulp-bundled-noto-color-emoji")
         self.assertEqual(binding(lambda c: c["targets"].append(optional)), [])
+        # A malformed target name is reported, never raised.
+        for bad in (["x"], {"a": 1}, None, 7):
+            with self.subTest(name=bad):
+                malformed = dict(closure["targets"][0], name=bad)
+                self.assertError(binding(lambda c, m=malformed: c["targets"].append(m)),
+                                 "has a target without a string name")
+        self.assertError(binding(lambda c: c.update(targets="pulp-canvas")), "closure has no target list")
         # An alias unit owns the targets of the unit it aliases.
         alias = json.loads(json.dumps(fixture.receipt))
         alias["units"][0]["name"] = "canvas-slice"

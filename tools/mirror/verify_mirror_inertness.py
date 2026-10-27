@@ -319,7 +319,7 @@ def symbol_report(symbols: dict[str, list[str]], *, view_unit_packaged: bool,
     """
     if floor is None and view_unit_packaged:
         raise EvidenceError(
-            "a package with a view unit needs the pulp-view-audio archive (--view-audio-archive)")
+            "a package with view source needs the pulp-view-audio archive (--view-audio-archive)")
     debts = name_debts or {}
     audio: list[str] = []
     forward: list[str] = []
@@ -477,9 +477,10 @@ def verify(prefix: Path, consumer_build: Path, image: Path,
     # MirrorCanvas and Vellum::Gpu forward through this installed provider.
     # Include the provider image in the closure so provider-owned symbols are
     # covered by the same inertness and negative-control rules.
-    provider = prefix / install_libdir / "libvellum-skia-dawn-provider.dylib"
-    if provider.is_file():
-        libraries.append(provider)
+    libraries += sorted(
+        path for name in ("libvellum-skia-dawn-provider.dylib", "libvellum-skia-dawn-provider.so")
+        if (path := prefix / install_libdir / name).is_file()
+    )
     symbols = {}
     for path in [image, *libraries]:
         names = image_symbols(path)
@@ -536,7 +537,7 @@ def verify(prefix: Path, consumer_build: Path, image: Path,
         },
         "symbol_rule": (
             "view_audio_symbol_floor" if floor is not None
-            else "no pulp::view or product-namespace symbol (no view unit packaged)"
+            else "no pulp::view or product-namespace symbol (no view source packaged)"
         ),
         "checks": checks,
         "evidence": {
@@ -564,7 +565,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--consumer-build", type=Path)
     parser.add_argument("--image", type=Path, help="the linked consumer executable")
     parser.add_argument("--view-audio-archive", type=Path,
-                        help="Pulp's pulp-view-audio archive; required once a view unit is packaged")
+                        help="Pulp's pulp-view-audio archive; required once view source is packaged")
     parser.add_argument("--install-libdir", default="lib",
                         help="library directory relative to the installed prefix (default: lib)")
     parser.add_argument("--output", type=Path)

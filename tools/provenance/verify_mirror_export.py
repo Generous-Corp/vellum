@@ -1010,10 +1010,15 @@ def d3_unit_targets(units: list[Any], name: str, stack: tuple[str, ...] = ()) ->
     other = entry.get("alias_of") or entry.get("carried_by")
     if isinstance(other, str) and other:
         return d3_unit_targets(units, other, (*stack, name))
-    required = {t for t in entry.get("targets") or [] if isinstance(t, str)}
-    optional = {t if isinstance(t, str) else t.get("name") for t in entry.get("optional_targets") or []
-                if isinstance(t, str) or isinstance(t, dict)}
-    return required, {t for t in optional if isinstance(t, str)}
+    listed = entry.get("targets")
+    required = {t for t in listed if isinstance(t, str)} if isinstance(listed, list) else set()
+    optional_rows = entry.get("optional_targets")
+    optional = {
+        t if isinstance(t, str) else t.get("name")
+        for t in (optional_rows if isinstance(optional_rows, list) else [])
+        if isinstance(t, str) or (isinstance(t, dict) and isinstance(t.get("name"), str))
+    }
+    return required, optional
 
 
 def d3_unit_binding_errors(root: Path, pulp_root: Path, receipt: dict[str, Any]) -> list[str]:
@@ -1045,9 +1050,18 @@ def d3_unit_binding_errors(root: Path, pulp_root: Path, receipt: dict[str, Any])
             errors.append(f"closure {unit['closure_manifest']} unreadable: {exc}")
             continue
         targets = closure.get("targets") if isinstance(closure, dict) else None
-        names = {t.get("name") for t in targets or [] if isinstance(t, dict)}
-        missing = {t for t in (closure.get("missing_targets") or []) if isinstance(t, str)} \
-            if isinstance(closure, dict) else set()
+        if not isinstance(targets, list):
+            errors.append(f"unit {unit['name']} closure has no target list")
+            continue
+        names = set()
+        for target in targets:
+            name = target.get("name") if isinstance(target, dict) else None
+            if isinstance(name, str):
+                names.add(name)
+            else:
+                errors.append(f"unit {unit['name']} closure has a target without a string name: {name!r}")
+        missing_rows = closure.get("missing_targets") or []
+        missing = {t for t in missing_rows if isinstance(t, str)} if isinstance(missing_rows, list) else set()
         for name in sorted(names - required - optional, key=str):
             errors.append(f"unit {unit['name']} closure carries {name}, which D3 assigns to no part of this unit")
         for name in sorted(required - names - missing):
