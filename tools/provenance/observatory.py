@@ -9,6 +9,7 @@ modules and remain re-exported here for compatibility with existing callers.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 import sys
@@ -894,7 +895,16 @@ def verify(
     pulp_target: str | None = None, vellum_target: str | None = None,
     vellum_tail_policy: str = "reconciled",
     vellum_pr_main: str | None = None,
+    check_now: datetime | None = None,
 ) -> dict[str, object]:
+    """Verify the ledger; with `check_now`, judge the health budgets at that time.
+
+    The committed report is always rebuilt at the cursor's `reconciled_at`, the
+    time it describes, to prove it is not stale. Overdue events are a property
+    of the present, so the CLI passes the current time as `check_now`: a ledger
+    whose events fell overdue after the last reconcile fails here rather than
+    passing on the clock of its last reconcile.
+    """
     lock, mapping, cursor, budgets = validate_lock_map_cursor(root)
     verify_active_cursor_ancestry(lock, cursor, pulp_repo, vellum_repo)
     events = load_events(root)
@@ -968,6 +978,9 @@ def verify(
     committed_md = (root / REPORT_MD_PATH).read_text(encoding="utf-8")
     if committed_md != render_markdown(committed_expected):
         raise ObservatoryError("reports/current.md is stale; run observatory reconcile")
+    if check_now is not None:
+        report = build_report(root=root, lock=lock, cursor=cursor, events=events, budgets=budgets,
+                              now=check_now, coverage_gaps=gaps)
     if report["health"] != "pass":
         raise ObservatoryError("observatory health budgets failed: " + ", ".join(report["budget_violations"]))
     return report
@@ -1083,6 +1096,10 @@ def main(argv: list[str] | None = None) -> int:
             "its own event (the receiver advances the cursor after the merge)"
         ),
     )
+    verify_parser.add_argument(
+        "--now",
+        help="UTC time at which to judge overdue events (default: the current time)",
+    )
     verify_parser.add_argument("--output", type=Path)
     reconcile_parser = subparsers.add_parser("reconcile")
     reconcile_parser.add_argument("--pulp-repo", type=Path, required=True)
@@ -1111,6 +1128,10 @@ def main(argv: list[str] | None = None) -> int:
                 vellum_target=args.vellum_target,
                 vellum_tail_policy=args.vellum_tail_policy,
                 vellum_pr_main=args.vellum_pr_main,
+                check_now=(
+                    parse_utc(args.now, "--now") if args.now
+                    else datetime.now(timezone.utc).replace(microsecond=0)
+                ),
             )
         else:
             if args.events_only and not args.write:

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -1289,7 +1291,7 @@ class ObservatoryTests(unittest.TestCase):
             common = [
                 "--root", str(root), "verify", "--pulp-repo", str(pulp),
                 "--vellum-repo", str(vellum), "--pulp-target", pulp_head,
-                "--vellum-target", feature,
+                "--vellum-target", feature, "--now", "2026-10-11T00:05:00Z",
             ]
             self.assertEqual(observatory.main(common), 1)
             self.assertEqual(observatory.main(common + ["--vellum-tail-policy", "coverage"]), 0)
@@ -1450,6 +1452,34 @@ class ObservatoryTests(unittest.TestCase):
             self.assertEqual(report["health"], "pass")
             self.assertEqual(report["pending"], 2)
             self.assertEqual(report["coverage_gaps"], [])
+
+    def test_verify_judges_overdue_events_at_the_time_it_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            top = Path(temporary)
+            pulp = top / "pulp"
+            vellum = top / "vellum-source"
+            root = top / "state"
+            pulp_base, pulp_head = init_repo(pulp, "core/render/render.cpp")
+            vellum_base, vellum_head = init_repo(vellum, "graphics/render.cpp")
+            make_state(root, pulp_base, vellum_base)
+            observatory.reconcile(
+                root=root, pulp_repo=pulp, vellum_repo=vellum,
+                pulp_target=pulp_head, vellum_target=vellum_head,
+                now_text="2026-07-22T20:00:00Z", write=True,
+            )
+            arguments = dict(root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None)
+            at_reconcile = observatory.parse_utc("2026-07-22T20:00:00Z", "now")
+            self.assertEqual(observatory.verify(**arguments, check_now=at_reconcile)["health"], "pass")
+            # Without check_now the budgets are judged at reconciled_at, as before.
+            self.assertEqual(observatory.verify(**arguments)["health"], "pass")
+            # A year on, both pending observations are long past their deadline.
+            later = observatory.parse_utc("2027-07-22T20:00:00Z", "now")
+            with self.assertRaisesRegex(observatory.ObservatoryError, "overdue-event-count-exceeded"):
+                observatory.verify(**arguments, check_now=later)
+            cli = ["--root", str(root), "verify", "--pulp-repo", str(pulp), "--vellum-repo", str(vellum)]
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(observatory.main([*cli, "--now", "2026-07-22T20:00:00Z"]), 0)
+                self.assertNotEqual(observatory.main([*cli, "--now", "2027-07-22T20:00:00Z"]), 0)
 
     def test_incremental_reconcile_preserves_full_verify_gate(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
