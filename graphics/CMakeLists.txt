@@ -54,7 +54,7 @@ if(VELLUM_HAS_SKIA_DAWN)
         MACOSX_RPATH ON
         INSTALL_RPATH "@loader_path"
         OSX_ARCHITECTURES arm64
-        MACOSX_DEPLOYMENT_TARGET 13.0)
+        MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET})
 
     target_include_directories(vellum-gpu
         PUBLIC

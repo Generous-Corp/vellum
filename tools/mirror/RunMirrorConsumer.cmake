@@ -63,6 +63,12 @@ foreach(_library IN LISTS _libraries)
 endforeach()
 message(STATUS "mirror libraries carry no build-host path: ok")
 
+# Every installed library must load on the minimum macOS it declares.
+file(GLOB _installed_libraries "${_prefix}/${VELLUM_INSTALL_LIBDIR}/*.dylib")
+_run("libc++ availability" "${Python3_EXECUTABLE}"
+    "${VELLUM_SOURCE_DIR}/tools/mirror/check_libcxx_availability.py"
+    ${_libraries} ${_installed_libraries})
+
 set(_generator)
 find_program(_ninja ninja)
 if(_ninja)

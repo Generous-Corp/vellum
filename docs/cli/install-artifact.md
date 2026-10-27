@@ -11,7 +11,7 @@ records why, and `scripts/verify_release_tag.py` refuses any retired tag.
 ## Tagged-release installation
 
 The application SDK requires
-macOS 13.0 or newer on arm64 plus Python 3.9 or newer. Install
+macOS 13.3 or newer on arm64 plus Python 3.9 or newer. Install
 [GitHub CLI 2.75.0 or newer](https://cli.github.com/) and authenticate with
 `gh auth login`, or provide `GH_TOKEN`/`GITHUB_TOKEN` for unattended use. The
 minimum version provides the immutable-release verification commands required
