@@ -55,6 +55,9 @@ NATIVE_HOST_FILES = (
     "mirror/lib/libvellum-mirror-foundation.dylib",
     "mirror/lib/libvellum-mirror-state-core.dylib",
 )
+# The runtime check skips NATIVE_HOST_FILES' mirror entries because the mirror
+# check covers them; that holds only while they are a subset of its list.
+assert {path for path in NATIVE_HOST_FILES if path.startswith("mirror/")} <= set(MIRROR_PACKAGE_FILES)
 UI_PAYLOAD_ENTRIES = (
     "LICENSE.md", "README.md", "package.json", "package-lock.json", "scripts", "src", "test",
 )

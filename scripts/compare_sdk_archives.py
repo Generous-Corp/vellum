@@ -50,7 +50,11 @@ def differences(first: Path, second: Path) -> list[str]:
     header_a, header_b = gzip_header(first), gzip_header(second)
     if header_a != header_b:
         found.append(f"gzip header: {header_a} != {header_b}")
-    rows_a, rows_b = member_rows(first), member_rows(second)
+    try:
+        rows_a, rows_b = member_rows(first), member_rows(second)
+    except (tarfile.TarError, OSError, EOFError) as error:
+        found.append(f"cannot read both archives as gzip tar: {error}")
+        return found
     names_a, names_b = [name for name, _ in rows_a], [name for name, _ in rows_b]
     if names_a != names_b and sorted(names_a) == sorted(names_b):
         found.append("member order differs")
@@ -65,8 +69,11 @@ def differences(first: Path, second: Path) -> list[str]:
             detail = ", ".join(f"{field} {a[name].get(field)!r} != {b[name].get(field)!r}" for field in changed)
             found.append(f"{name}: {detail}")
     if not found:
-        with gzip.open(first) as one, gzip.open(second) as two:
-            tar_equal = one.read() == two.read()
+        try:
+            with gzip.open(first) as one, gzip.open(second) as two:
+                tar_equal = one.read() == two.read()
+        except (OSError, EOFError) as error:
+            return [f"cannot decompress both archives: {error}"]
         found.append(
             "every tar header and member is equal; the uncompressed tar streams differ"
             if not tar_equal

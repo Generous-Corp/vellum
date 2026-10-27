@@ -332,6 +332,14 @@ if(VELLUM_BUILD_TESTS)
                 "-DPython3_EXECUTABLE=${Python3_EXECUTABLE}"
                 ${_vellum_view_audio_archive_arg}
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tools/mirror/RunMirrorConsumer.cmake")
+        if(TARGET yogacore)
+            # The mirror recipe builds yogacore with RTTI (as Pulp does); prove
+            # it took effect in the built archive, not only in the plan.
+            add_test(NAME vellum.mirror-yoga-shared-exception-typeinfo
+                COMMAND "${Python3_EXECUTABLE}"
+                    tools/mirror/check_shared_exception_typeinfo.py "$<TARGET_FILE:yogacore>"
+                WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+        endif()
     endif()
 endif()
 
