@@ -1320,6 +1320,38 @@ class ObservatoryTests(unittest.TestCase):
                 self.assertEqual(out, expected)
         self.assertIn('--vellum-tail-policy "$observatory_tail_policy"', workflow)
 
+    def test_ci_judges_a_tag_at_its_commit_time_and_everything_else_now(self) -> None:
+        # A tag's tree is frozen, so its health is judged at the tagged commit's
+        # committer time; a re-run after a deadline must not start failing.
+        workflow = (
+            observatory.ROOT / ".github/workflows/provenance.yml"
+        ).read_text(encoding="utf-8")
+        start = workflow.index("observatory_now_args=()")
+        end = workflow.index("fi", start) + 2
+        fragment = "\n".join(line.strip() for line in workflow[start:end].splitlines())
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary)
+            run(repo, "git", "init", "-q")
+            env = {"PATH": "/usr/bin:/bin", "HOME": temporary, "GIT_CONFIG_NOSYSTEM": "1",
+                   "GIT_COMMITTER_DATE": "2026-07-22T20:00:00+02:00", "GIT_AUTHOR_DATE": "2026-07-22T20:00:00+02:00"}
+            subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q",
+                            "--allow-empty", "-m", "tagged"], cwd=repo, env=env, check=True)
+            head = run(repo, "git", "rev-parse", "HEAD")
+            for ref, expected in (
+                ("refs/tags/v0.1.8", "--now 2026-07-22T18:00:00Z"),
+                ("refs/tags/authority/x", "--now 2026-07-22T18:00:00Z"),
+                ("refs/pull/7/merge", ""),
+                ("refs/heads/main", ""),
+            ):
+                with self.subTest(ref=ref):
+                    out = subprocess.run(
+                        ["bash", "-c", fragment + '\necho "${observatory_now_args[*]}"'],
+                        env={"GITHUB_REF": ref, "PATH": "/usr/bin:/bin", "observatory_vellum_target": head},
+                        cwd=repo, capture_output=True, text=True, check=True,
+                    ).stdout.strip()
+                    self.assertEqual(out, expected)
+        self.assertIn('"${observatory_now_args[@]}"', workflow)
+
     def test_events_only_requires_write_on_the_command_line(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             top = Path(temporary)
