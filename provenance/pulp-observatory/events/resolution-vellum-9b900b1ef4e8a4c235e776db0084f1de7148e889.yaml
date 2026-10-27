@@ -1,0 +1,21 @@
+{
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-10-27T01:07:00Z",
+  "disposition": "framework-only",
+  "effort_minutes": 0,
+  "event_id": "resolution-vellum-9b900b1ef4e8a4c235e776db0084f1de7148e889",
+  "kind": "resolution",
+  "linked_commits": [
+    "843fcf84eb68d1b5c081452b3221d650773fc5d8",
+    "9b900b1ef4e8a4c235e776db0084f1de7148e889"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Merge commit that brings Vellum main (108a70959d) into a feature branch. On every mapped path its tree equals that main parent, so it adds no change of its own; the mapped content comes from 843fcf84eb, each already resolved framework-only (Vellum-owned graphics/GPU work; Pulp carries its own malformed-UTF-8 repair under change event 20260830-malformed-utf8-text-shaping). Same disposition as the precedent resolution for merge d216ad1732.",
+  "resolves": "vellum-9b900b1ef4e8a4c235e776db0084f1de7148e889",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}
