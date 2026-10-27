@@ -102,7 +102,12 @@ DEPENDENCIES: dict[str, dict[str, Any]] = {
     "woff2": {"kind": "sources"},
     "skia": {"kind": "archive"},
     "sdl3": {"kind": "cmake", "provides": ["SDL3-static"], "options": {"SDL_SHARED": "OFF", "SDL_STATIC": "ON", "SDL_TEST": "OFF", "CMAKE_DISABLE_PRECOMPILE_HEADERS": "ON"}},
-    "yoga": {"kind": "cmake", "source_subdir": "yoga", "provides": ["yogacore"], "options": {}},
+    # Yoga's project defaults compile with -fno-rtti, which gives yogacore its
+    # own hidden copy of std::exception's typeinfo; a catch elsewhere in the
+    # image can then miss an exception thrown through it. Pulp re-enables RTTI
+    # on yogacore (PulpDependencies.cmake), and the mirror build does the same.
+    "yoga": {"kind": "cmake", "source_subdir": "yoga", "provides": ["yogacore"], "options": {},
+             "cxx_options": ["-frtti"]},
     "yaml-cpp": {"kind": "cmake", "provides": ["yaml-cpp"], "options": {"YAML_CPP_BUILD_TESTS": "OFF", "YAML_CPP_BUILD_TOOLS": "OFF", "YAML_CPP_BUILD_CONTRIB": "OFF", "YAML_BUILD_SHARED_LIBS": "OFF", "YAML_CPP_INSTALL": "OFF", "CMAKE_POLICY_VERSION_MINIMUM": "3.5"}},
 }
 
@@ -415,6 +420,8 @@ def dependency_source_dir(name: str, root: Path) -> Path:
     if not subdir:
         return root
     candidate = root / subdir
+    if not candidate.resolve().is_relative_to(root.resolve()):
+        raise PlanError(f"{name} source_subdir {subdir} leaves the fetched checkout")
     if not (candidate / "CMakeLists.txt").is_file():
         raise PlanError(f"{name} has no {subdir}/CMakeLists.txt to build")
     return candidate
@@ -703,7 +710,8 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
     cmake_deps = {
         name: {"dir": str(dependency_source_dir(name, roots[name])),
                "options": DEPENDENCIES[name].get("options", {}),
-               "provides": DEPENDENCIES[name].get("provides", [])}
+               "provides": DEPENDENCIES[name].get("provides", []),
+               "cxx_options": DEPENDENCIES[name].get("cxx_options", [])}
         for name in sorted(roots) if DEPENDENCIES[name]["kind"] == "cmake"
     }
     choc_headers = sorted(rel for rel in deps.get("choc", {}).get("files", {}))
@@ -771,6 +779,7 @@ def write_cmake(build_plan: dict[str, Any], output: Path) -> None:
         lines.append(f"set(VELLUM_MIRROR_DEP_{key}_DIR {cmake_quote(dep['dir'])})")
         lines += cmake_list(f"VELLUM_MIRROR_DEP_{key}_OPTIONS", [f"{k}={v}" for k, v in sorted(dep["options"].items())])
         lines += cmake_list(f"VELLUM_MIRROR_DEP_{key}_PROVIDES", dep["provides"])
+        lines += cmake_list(f"VELLUM_MIRROR_DEP_{key}_CXX_OPTIONS", dep["cxx_options"])
     lines += cmake_list("VELLUM_MIRROR_BINARY_DATA_TARGETS", sorted(build_plan["binary_data"]))
     for name, spec in sorted(build_plan["binary_data"].items()):
         key = re.sub(r"[^A-Za-z0-9]", "_", name).upper()
