@@ -258,3 +258,26 @@ export class DesignIRValidationError extends Error {
 export class DesignIRConflictError extends Error {
     conflicts: ReimportConflict[];
 }
+
+export const AUDIO_CONTROL_MAP_SCHEMA: 'https://vellum.dev/schemas/audio-control-map/v1';
+export const AUDIO_CONTROL_MAP_VERSION: 1;
+export type AudioControlRole = 'knob' | 'button' | 'toggle' | 'meter' | 'picker';
+export type AudioInputKind = 'main' | 'sidechain' | 'physical-input' | 'project-track' | 'project-bus';
+export interface AudioControlRange { min: number; max: number; step: number; }
+export interface AudioControlLfo { rateMin: number; rateMax: number; depthMin: number; depthMax: number; }
+export interface AudioControl {
+  id: string;
+  role: AudioControlRole;
+  parameterId?: string;
+  range?: AudioControlRange;
+  lfo?: AudioControlLfo;
+}
+export interface AudioInput { id: string; label: string; kind: AudioInputKind; channels?: number; }
+export interface AudioControlMap {
+  $schema: typeof AUDIO_CONTROL_MAP_SCHEMA;
+  schemaVersion: typeof AUDIO_CONTROL_MAP_VERSION;
+  controls: AudioControl[];
+  audioInputs: AudioInput[];
+}
+/** Validate an audio control map strictly; returns a copy of only the validated fields, or throws a TypeError. */
+export function validateAudioControlMap(value: unknown): AudioControlMap;

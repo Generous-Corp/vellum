@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vellum.dev/schemas/audio-control-map/v1",
+  "title": "Vellum audio control map v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "schemaVersion", "controls", "audioInputs"],
+  "properties": {
+    "$schema": { "const": "https://vellum.dev/schemas/audio-control-map/v1" },
+    "schemaVersion": { "const": 1 },
+    "controls": { "type": "array", "items": { "$ref": "#/$defs/control" } },
+    "audioInputs": { "type": "array", "items": { "$ref": "#/$defs/input" } }
+  },
+  "$defs": {
+    "control": { "type": "object", "required": ["id", "role"], "properties": { "id": { "type": "string", "minLength": 1 }, "role": { "enum": ["knob", "button", "toggle", "meter", "picker"] }, "parameterId": { "type": "string", "minLength": 1 }, "range": { "type": "object", "required": ["min", "max", "step"], "properties": { "min": { "type": "number" }, "max": { "type": "number" }, "step": { "type": "number", "exclusiveMinimum": 0 } }, "additionalProperties": false }, "lfo": { "type": "object", "required": ["rateMin", "rateMax", "depthMin", "depthMax"], "additionalProperties": false, "properties": { "rateMin": { "type": "number", "minimum": 0 }, "rateMax": { "type": "number", "exclusiveMinimum": 0 }, "depthMin": { "type": "number", "minimum": 0, "maximum": 1 }, "depthMax": { "type": "number", "minimum": 0, "maximum": 1 } } } }, "additionalProperties": false },
+    "input": { "type": "object", "required": ["id", "label", "kind"], "properties": { "id": { "type": "string", "minLength": 1 }, "label": { "type": "string", "minLength": 1 }, "kind": { "enum": ["main", "sidechain", "physical-input", "project-track", "project-bus"] }, "channels": { "type": "integer", "minimum": 1 } }, "additionalProperties": false }
+  }
+}
