@@ -35,6 +35,11 @@ PULP_FILES = {
     "core/canvas/include/pulp/canvas/canvas.hpp": b"#pragma once\n",
 }
 TOOL = b"#!/usr/bin/env python3\n"
+D3_UNITS = json.dumps({"schema": "pulp.vellum.d3-units.v1", "units": [
+    {"name": "foundation", "targets": ["pulp-runtime"]},
+    {"name": "canvas", "targets": ["pulp-canvas"], "optional_targets": ["pulp-bundled-noto-color-emoji"]},
+    {"name": "canvas-slice", "alias_of": "canvas"},
+]}).encode()
 SKIA_LINK = {"dependency": "skia", "source": "https://skia.googlesource.com/skia.git",
              "pin": "5" * 40, "asset_sha256": "6" * 64}
 PULP_DEPENDENCY_MANIFEST = {"dependencies": [{"name": "Skia", "repository": SKIA_LINK["source"], "determinism": {
@@ -87,6 +92,7 @@ class Fixture:
         for path, content in PULP_FILES.items():
             write(self.pulp, path, content)
         write(self.pulp, "tools/scripts/vellum_closure.py", TOOL)
+        write(self.pulp, "tools/scripts/vellum_d3_units.json", D3_UNITS)
         write(self.pulp, "core/audio/engine.cpp", b"int audio;\n")
         write(self.pulp, "tools/deps/manifest.json", dump(PULP_DEPENDENCY_MANIFEST))
         run(self.pulp, "add", "-A")
@@ -282,9 +288,13 @@ class VerifyMirrorExportTests(unittest.TestCase):
         receipts = verify_mirror_export.landed_receipts(REPO)
         pulp_root_env = os.environ.get("MIRROR_PULP_ROOT")
         if receipts and not pulp_root_env:
-            # The required provenance lanes check out the newest receipt's Pulp
-            # commit and set MIRROR_PULP_ROOT whenever a receipt is landed, so
-            # this proof is never skipped there.
+            # The provenance lanes check out the newest receipt's Pulp commit,
+            # set MIRROR_PULP_ROOT, and set VELLUM_REQUIRE_PULP_IDENTITY so a
+            # missing checkout fails rather than skips. Other lanes (the GPU
+            # ctest run) have no Pulp checkout and skip.
+            if os.environ.get("VELLUM_REQUIRE_PULP_IDENTITY") == "1":
+                self.fail("VELLUM_REQUIRE_PULP_IDENTITY is set but MIRROR_PULP_ROOT names no Pulp checkout; "
+                          "the Pulp identity proof did not run")
             self.skipTest("Pulp identity is proved where MIRROR_PULP_ROOT names a Pulp checkout")
         pulp_root = Path(pulp_root_env).resolve() if pulp_root_env else None
         with mock.patch.dict(os.environ, {"VELLUM_GIT_BASE": self.ci_git_base} if self.ci_git_base else {}):
@@ -667,6 +677,67 @@ class VerifyMirrorExportTests(unittest.TestCase):
         ):
             self.assertTrue(verify_mirror_export.host_path_violations(value, "fixture"), value)
 
+    def test_malformed_receipts_yield_findings_not_tracebacks(self) -> None:
+        receipts = verify_mirror_export.landed_receipts(REPO)
+        if not receipts:
+            self.skipTest("no landed receipt to malform")
+        receipt_path = receipts[-1]
+        good = json.loads((REPO / receipt_path).read_text(encoding="utf-8"))
+        policy, _ = verify_mirror_export.load_policy(REPO)
+        origins = json.loads((REPO / verify_mirror_export.ORIGINS_PATH).read_text(encoding="utf-8"))["records"]
+        head = verify_mirror_export.git(REPO, "rev-parse", "HEAD")
+        wrong_types = (None, 7, "x", [], {}, [None], [7], [{}])
+
+        def malformed():
+            for key in sorted(good):
+                for value in wrong_types:
+                    yield f"{key}={value!r}", {**good, key: value}
+            for key in ("units", "files", "generated_inputs"):
+                for index in range(min(1, len(good[key]))):
+                    for field in sorted(good[key][index]):
+                        for value in wrong_types:
+                            rows = json.loads(json.dumps(good[key]))
+                            rows[index][field] = value
+                            yield f"{key}[{index}].{field}={value!r}", {**good, key: rows}
+
+        for name, receipt in malformed():
+            # A different string can be a legal value (a unit is free to be
+            # renamed); every other wrong type must be named as an error.
+            must_fail = not name.endswith("='x'")
+            with self.subTest(malformed=name):
+                try:
+                    errors = verify_mirror_export.verify_receipt(
+                        REPO, receipt_path, receipt, policy, origins, newest=True, head=head)
+                except Exception as exc:  # noqa: BLE001 - any traceback is the finding
+                    self.fail(f"{type(exc).__name__}: {exc}")
+                self.assertTrue(all(isinstance(e, str) for e in errors), errors)
+                if must_fail:
+                    self.assertTrue(errors, "accepted")
+
+    def test_host_paths_are_refused_whatever_their_root(self) -> None:
+        # The check is an allowlist: a path-bearing token must be cache- or
+        # repository-relative, so a host root it has never heard of is refused.
+        for value in (
+            "/opt/homebrew/include", "-I/opt/homebrew/include", "-isystem/usr/local/include",
+            "/tmp/vellum-build/x.hpp", "FOO=/var/folders/kb/T/x", "/__w/vellum/vellum/x",
+            "-F/Library/Frameworks", "-Wl,-rpath,/usr/local/lib", "--sysroot=/opt/sdk",
+            "@build/../../../../etc/x", "-I@build/../../../../etc/x", "core/../../etc/x",
+            "~/cache", "@/x", "C:/x", "file:///etc/x", "@../Users/me/x", "@./x", "-I@../Users/me/include",
+            "@attacker-cache/x",
+        ):
+            with self.subTest(value=value):
+                self.assertError(verify_mirror_export.host_path_violations(value, "fixture"),
+                                 "contains an absolute host path")
+        for value in (
+            "@external/skia/" + "a" * 40 + "/build/include/include/private/SkAPI.h",
+            "@build/core/runtime/generated/Release/pulp/runtime/build_info.hpp",
+            "-Icore/canvas/include", "-isystem@external/mbed-tls/" + "a" * 40 + "/include",
+            "PULP_HAS_SKIA=1", "https://github.com/google/skia", "mirror/", "<catch2/catch_test_macros.hpp>",
+            "@system/sdl3/3.2.0/include",
+        ):
+            with self.subTest(value=value):
+                self.assertEqual(verify_mirror_export.host_path_violations(value, "fixture"), [])
+
     def test_embedded_host_paths_in_dict_keys_are_rejected(self) -> None:
         self.assertTrue(verify_mirror_export.host_path_violations({"/Users/attacker/key": "ok"}, "fixture"))
 
@@ -725,6 +796,74 @@ class VerifyMirrorExportTests(unittest.TestCase):
         self.assertError(fixture.errors(), "absolute host path")
         with mock.patch.object(verify_mirror_export, "validate_closure_manifest", return_value=[]):
             self.assertEqual(fixture.errors(), [])
+
+    def test_unit_name_is_bound_to_its_closure_manifest(self) -> None:
+        # Renaming the canvas unit would otherwise keep its closure and skip
+        # the canvas-only configure contract, which keys on the unit name.
+        for name in ("x", "foundation", "canvas.."):
+            with self.subTest(name=name):
+                base = self.base / f"renamed-{len(name)}-{name.strip('.')}"
+                base.mkdir()
+                fixture = Fixture(base)
+                fixture.receipt["units"][0]["name"] = name
+                fixture.reland()
+                self.assertError(fixture.errors(), "closure_manifest must be")
+        base = self.base / "path-name"
+        base.mkdir()
+        fixture = Fixture(base)
+        fixture.receipt["units"][0]["name"] = "canvas/../canvas"
+        fixture.reland()
+        self.assertError(fixture.errors(), "name must be a plain unit name")
+
+    def test_closure_targets_are_bound_to_the_d3_unit_map(self) -> None:
+        fixture = Fixture(self.base)
+        self.assertEqual(verify_mirror_export.d3_unit_binding_errors(fixture.vellum, fixture.pulp, fixture.receipt), [])
+        closure = json.loads((fixture.vellum / fixture.closure_path).read_text())
+
+        def binding(edit) -> list[str]:
+            changed = json.loads(json.dumps(closure))
+            edit(changed)
+            write(fixture.vellum, fixture.closure_path, dump(changed))
+            try:
+                return verify_mirror_export.d3_unit_binding_errors(fixture.vellum, fixture.pulp, fixture.receipt)
+            finally:
+                write(fixture.vellum, fixture.closure_path, dump(closure))
+
+        foreign = dict(closure["targets"][0], name="pulp-runtime")
+        self.assertError(binding(lambda c: c["targets"].append(foreign)),
+                         "carries pulp-runtime, which D3 assigns to no part of this unit")
+        self.assertError(binding(lambda c: c.update(targets=[])),
+                         "drops its D3 target pulp-canvas without reporting it missing")
+        self.assertEqual(binding(lambda c: c.update(targets=[], missing_targets=["pulp-canvas"])), [])
+        optional = dict(closure["targets"][0], name="pulp-bundled-noto-color-emoji")
+        self.assertEqual(binding(lambda c: c["targets"].append(optional)), [])
+        # A malformed target name is reported, never raised.
+        for bad in (["x"], {"a": 1}, None, 7):
+            with self.subTest(name=bad):
+                malformed = dict(closure["targets"][0], name=bad)
+                self.assertError(binding(lambda c, m=malformed: c["targets"].append(m)),
+                                 "has a target without a string name")
+        self.assertError(binding(lambda c: c.update(targets="pulp-canvas")), "closure has no target list")
+        # An alias unit owns the targets of the unit it aliases.
+        alias = json.loads(json.dumps(fixture.receipt))
+        alias["units"][0]["name"] = "canvas-slice"
+        self.assertEqual(verify_mirror_export.d3_unit_binding_errors(fixture.vellum, fixture.pulp, alias), [])
+        unknown = json.loads(json.dumps(fixture.receipt))
+        unknown["units"][0]["name"] = "audio"
+        self.assertError(verify_mirror_export.d3_unit_binding_errors(fixture.vellum, fixture.pulp, unknown),
+                         "unit audio is not a D3 unit")
+        no_map = dict(fixture.receipt, pulp_sha="0" * 40)
+        self.assertError(verify_mirror_export.d3_unit_binding_errors(fixture.vellum, fixture.pulp, no_map),
+                         "has no readable tools/scripts/vellum_d3_units.json")
+
+    def test_end_to_end_closure_bound_to_another_units_targets_fails_with_pulp(self) -> None:
+        fixture = Fixture(self.base)
+        closure = json.loads((fixture.vellum / fixture.closure_path).read_text())
+        closure["targets"].append(dict(closure["targets"][0], name="pulp-runtime"))
+        write(fixture.vellum, fixture.closure_path, dump(closure))
+        fixture.receipt["units"][0]["closure_sha256"] = fixture.sha(fixture.closure_path)
+        fixture.reland()
+        self.assertError(fixture.errors(pulp=True), "D3 assigns to no part of this unit")
 
     def test_end_to_end_receipt_host_path_guard_is_required(self) -> None:
         fixture = Fixture(self.base)
@@ -995,8 +1134,13 @@ class VerifyMirrorExportTests(unittest.TestCase):
         fixture = Fixture(self.base)
         closure = json.loads((fixture.vellum / fixture.closure_path).read_text())
         write(fixture.vellum, fixture.closure_path, dump(closure))
+        # The canvas closure filed under another unit's name, as the exporter would.
+        renamed = fixture.closure_path.replace("/canvas.json", "/foundation.json")
+        write(fixture.vellum, renamed, dump(closure))
+        (fixture.vellum / fixture.closure_path).unlink()
         fixture.receipt["units"][0]["name"] = "foundation"
-        fixture.receipt["units"][0]["closure_sha256"] = fixture.sha(fixture.closure_path)
+        fixture.receipt["units"][0]["closure_manifest"] = renamed
+        fixture.receipt["units"][0]["closure_sha256"] = fixture.sha(renamed)
         fixture.reland()
         self.assertError(fixture.errors(), "pulp-canvas may only appear in the canvas D3 unit")
 

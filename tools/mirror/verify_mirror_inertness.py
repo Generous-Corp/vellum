@@ -27,9 +27,10 @@ against the installed package and built with depfiles, and asserts:
    code every translation unit of its header carries, so a copy elsewhere is
    not view-audio code; weak RTTI of an owned class is, because emitting it
    took that class's definition (Pulp's archive symbol closure rule).
-   Without the archive, and only while the package carries no view unit, the
-   stand-in is stricter: no ``pulp::view`` or Pulp product-namespace symbol
-   may appear at all. A package with a view unit needs the archive;
+   Without the archive, and only while the package carries no view source (no
+   receipt file row under ``core/view/``), the stand-in is stricter: no
+   ``pulp::view`` or Pulp product-namespace symbol may appear at all. A
+   package with view source needs the archive;
 4. ``name-only-forward-declarations``: no symbol of the forward-declared
    classes or the deprecated bind virtuals appears anywhere.
 
@@ -144,8 +145,22 @@ import nm_symbols  # noqa: E402
 import rtti_ownership  # noqa: E402
 
 
+# Packaged mirror libraries on every platform, shared and static.
+LIBRARY_GLOBS = ("*.dylib", "*.so", "*.so.*", "*.a", "*.dll")
+
+
 class EvidenceError(RuntimeError):
     pass
+
+
+def packages_view_source(receipt: dict[str, Any]) -> bool:
+    """Whether the package carries Pulp view source, read from the receipt's
+    file rows rather than from unit names, which are free text."""
+    files = receipt.get("files")
+    if not isinstance(files, list) or not files or not all(
+            isinstance(row, dict) and isinstance(row.get("pulp_path"), str) for row in files):
+        raise EvidenceError("the export receipt lists no file rows with a pulp_path")
+    return any(row["pulp_path"].startswith("core/view/") for row in files)
 
 
 def compile_command_findings(commands: list[dict[str, Any]]) -> list[str]:
@@ -304,7 +319,7 @@ def symbol_report(symbols: dict[str, list[str]], *, view_unit_packaged: bool,
     """
     if floor is None and view_unit_packaged:
         raise EvidenceError(
-            "a package with a view unit needs the pulp-view-audio archive (--view-audio-archive)")
+            "a package with view source needs the pulp-view-audio archive (--view-audio-archive)")
     debts = name_debts or {}
     audio: list[str] = []
     forward: list[str] = []
@@ -433,7 +448,7 @@ def verify(prefix: Path, consumer_build: Path, image: Path,
         raise EvidenceError("the package must carry exactly one export receipt")
     receipt = json.loads(receipts[0].read_text(encoding="utf-8"))
     units = sorted(unit["name"] for unit in receipt.get("units", []))
-    view_unit_packaged = any(name.startswith("view") for name in units)
+    view_unit_packaged = packages_view_source(receipt)
 
     commands_path = consumer_build / "compile_commands.json"
     try:
@@ -456,15 +471,16 @@ def verify(prefix: Path, consumer_build: Path, image: Path,
             package_files.append((relative, path.read_text(encoding="utf-8", errors="replace")))
         if path.suffix in {".h", ".hh", ".hpp", ".hxx"}:
             package_headers.append(relative)
-    libraries = sorted((mirror / "lib").glob("*.dylib"))
+    libraries = sorted({path for pattern in LIBRARY_GLOBS for path in (mirror / "lib").glob(pattern)})
     if not libraries:
         raise EvidenceError("the package carries no mirror libraries")
     # MirrorCanvas and Vellum::Gpu forward through this installed provider.
     # Include the provider image in the closure so provider-owned symbols are
     # covered by the same inertness and negative-control rules.
-    provider = prefix / install_libdir / "libvellum-skia-dawn-provider.dylib"
-    if provider.is_file():
-        libraries.append(provider)
+    libraries += sorted(
+        path for name in ("libvellum-skia-dawn-provider.dylib", "libvellum-skia-dawn-provider.so")
+        if (path := prefix / install_libdir / name).is_file()
+    )
     symbols = {}
     for path in [image, *libraries]:
         names = image_symbols(path)
@@ -521,7 +537,7 @@ def verify(prefix: Path, consumer_build: Path, image: Path,
         },
         "symbol_rule": (
             "view_audio_symbol_floor" if floor is not None
-            else "no pulp::view or product-namespace symbol (no view unit packaged)"
+            else "no pulp::view or product-namespace symbol (no view source packaged)"
         ),
         "checks": checks,
         "evidence": {
@@ -549,7 +565,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--consumer-build", type=Path)
     parser.add_argument("--image", type=Path, help="the linked consumer executable")
     parser.add_argument("--view-audio-archive", type=Path,
-                        help="Pulp's pulp-view-audio archive; required once a view unit is packaged")
+                        help="Pulp's pulp-view-audio archive; required once view source is packaged")
     parser.add_argument("--install-libdir", default="lib",
                         help="library directory relative to the installed prefix (default: lib)")
     parser.add_argument("--output", type=Path)

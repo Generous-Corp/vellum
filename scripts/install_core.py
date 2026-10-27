@@ -95,6 +95,11 @@ FORBIDDEN_PAYLOAD_PATH_PATTERNS = {
     ),
 }
 VELLUM_SKIA_PAYLOAD_SCOPE = re.compile(r"\Asdk/include/vellum/skia/")
+# The Pulp names native payload refuses, CONTENT_SCAN_SUFFIXES,
+# CONTENT_SCAN_BASENAMES and should_scan_payload_content are the shared
+# contamination-scan policy (tools/provenance/content_scan_policy.py), carried
+# here as literals because this installer ships as one checksummed file.
+# cli/tests/test_sdk_mirror_scope.py holds them equal to it.
 FORBIDDEN_PAYLOAD_CONTENT_PATTERNS = {
     "pulp-public-namespace": re.compile(
         rb"(?:\bnamespace\s+pulp\b|\bpulp::|#\s*include\s*[<\"]pulp/)",

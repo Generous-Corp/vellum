@@ -21,6 +21,7 @@ EXTRACTION_SPEC = importlib.util.spec_from_file_location(
 assert EXTRACTION_SPEC and EXTRACTION_SPEC.loader
 verify_extraction = importlib.util.module_from_spec(EXTRACTION_SPEC)
 EXTRACTION_SPEC.loader.exec_module(verify_extraction)
+content_scan_policy = verify_extraction.content_scan_policy
 
 MIRRORED_HEADER = b"#pragma once\n#include <pulp/canvas/canvas.hpp>\nnamespace pulp::view { int PULP_X; }\n"
 
@@ -192,6 +193,33 @@ class SdkMirrorScopeTests(unittest.TestCase):
             self.assertEqual(payload[name].pattern.decode(), source[name].pattern, name)
             self.assertEqual(
                 payload[name].flags & re.IGNORECASE, source[name].flags & re.IGNORECASE, name
+            )
+
+
+    def test_installer_scan_policy_is_the_shared_policy(self) -> None:
+        self.assertEqual(install_core.CONTENT_SCAN_SUFFIXES, content_scan_policy.CONTENT_SCAN_SUFFIXES)
+        self.assertEqual(install_core.CONTENT_SCAN_BASENAMES, content_scan_policy.CONTENT_SCAN_BASENAMES)
+        payload = install_core.FORBIDDEN_PAYLOAD_CONTENT_PATTERNS
+        shared = content_scan_policy.FORBIDDEN_NATIVE_CONTENT_PATTERNS
+        self.assertEqual(set(payload), set(shared))
+        for name, (pattern, flags) in shared.items():
+            self.assertEqual(payload[name].pattern.decode("utf-8"), pattern, name)
+            self.assertEqual(payload[name].flags, flags, name)
+        # The repository verifier compiles the same rules from the same source.
+        self.assertEqual(
+            {name: rule.pattern for name, rule in verify_extraction.FORBIDDEN_ACTIVE_PATTERNS.items()},
+            {name: pattern for name, (pattern, _flags) in shared.items()},
+        )
+        # Same decision for every path in this checkout, plus the build inputs
+        # the native scan once skipped.
+        names = [path.relative_to(REPO).as_posix() for path in REPO.rglob("*")
+                 if path.is_file() and ".git" not in path.parts]
+        names += ["apps/demo/CMakeLists.txt", "apps/demo/config.hpp.in", "templates/x.cpp.template"]
+        for name in names:
+            self.assertEqual(
+                install_core.should_scan_payload_content(name),
+                content_scan_policy.should_scan_content(name),
+                name,
             )
 
 

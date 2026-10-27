@@ -67,6 +67,7 @@ PRUNED_SHA = "0" * 40
 # The ref the exporter rewrites; its ref-map row binds pulp_sha to mirror_sha.
 EXPORT_SOURCE_REF = "refs/heads/export-source"
 UNIT_KEYS = {"name", "closure_manifest", "closure_sha256", "oracle_class", "configure"}
+UNIT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 FILE_KEYS = {"mirror_path", "pulp_path", "mode", "blob"}
 GENERATED_KEYS = {"path", "sha256", "producer_paths"}
 GENERATED_OPTIONAL_KEYS = {"producer_dependency", "normalization"}
@@ -235,35 +236,55 @@ def configure_violations(closure: dict[str, Any], label: str, *, is_canvas: bool
     return errors
 
 
+# Flags whose argument may be glued to them (`-I/x`, `-isystem/x`), longest first.
+PATH_FLAG_PREFIX = re.compile(
+    r"\A-(?:idirafter|iframework|imacros|include|isysroot|isystem|iquote|I|L|F|D|U|o)"
+)
+# Separators between the flags, defines, list items and quoted values a stored
+# string can carry.
+PATH_TOKEN_SEPARATORS = re.compile(r"[\s;,=()<>\"'`]+")
+# The cache roots Pulp's closure exporter writes (vellum_closure.py): the
+# configured build tree, pinned external sources and system packages.
+CACHE_PREFIX = re.compile(r"\A@(?:build|external|system)/")
+# Fixed recipe text whose exact value is checked where it is used.
+HOST_PATH_EXEMPT_LITERALS = frozenset({
+    REPLAY_METHOD,
+    "sha256(utf8('patch-set:' + patch_set.key + '\\nbase-modification:' + base_modification"
+    " + '\\ncopy-tree:' + copy_tree + '\\n'))",
+})
+
+
+def path_token_allowed(token: str) -> bool:
+    """A token that names a path must be cache-relative (`@cache/...`),
+    repository-relative, or an https URL; nothing that resolves on a host."""
+    if "\\" in token:
+        return False
+    if token.startswith("https://"):
+        return ".." not in token[len("https://"):].split("/")
+    cache = CACHE_PREFIX.match(token)
+    body = token[cache.end():] if cache else token
+    if not cache and (token.startswith(("/", "~", "@")) or ":" in token.split("/", 1)[0]):
+        return False
+    segments = body.split("/")
+    if segments[-1] == "":
+        segments.pop()
+    return bool(segments) and all(segment not in {"", ".", ".."} for segment in segments)
+
+
 def host_path_violations(value: Any, label: str) -> list[str]:
-    """Reject host-absolute strings anywhere in a stored manifest/receipt."""
+    """Allow only cache- or repository-relative paths anywhere in a stored
+    manifest or receipt. Each string is split into its flags, defines and
+    list items, and every token that names a path must pass
+    path_token_allowed; a host path is refused whatever its root is."""
     errors: list[str] = []
     if isinstance(value, str):
-        windows_absolute = bool(re.match(r"^[A-Za-z]:[\\/]", value))
-        # Skia's generated include/private segment is the one intentional
-        # exemption.  Match only ordinary relative path segments so an
-        # embedded host path cannot hide inside the exemption span.
-        skia_match = re.search(
-            r"@external/skia/[0-9a-f]{40}/(?:[A-Za-z0-9._+-]+/)*include/private/",
-            value,
-            re.IGNORECASE,
-        )
-        host_scan_value = value
-        if skia_match:
-            host_scan_value = value[:skia_match.start()] + value[skia_match.end():]
-        embedded_unix = any(
-            (
-                re.search(rf"(?:^|//){root}(?:/|$)", host_scan_value, re.IGNORECASE)
-                or re.search(rf"(?:^|[=:\s,(;\"'])/{root}(?:/|$)", host_scan_value, re.IGNORECASE)
-                or re.search(rf"(?:^|[-=:\s;\"'])-[Ii](?:system)?/{root}(?:/|$)", host_scan_value, re.IGNORECASE)
-            )
-            for root in ("Users", "Volumes", "home", "private")
-        )
-        embedded_windows = bool(re.search(r"(?i)(?:^|[^A-Za-z0-9])[A-Z]:[\\/]", value))
-        unc = bool(re.search(r"\\\\[^\\/\s]+[\\/]", value))
-        file_url = "file://" in value.lower()
-        if Path(value).is_absolute() or value.startswith("~") or windows_absolute or embedded_unix or embedded_windows or unc or file_url:
-            errors.append(f"{label} contains an absolute host path: {value}")
+        if value in HOST_PATH_EXEMPT_LITERALS:
+            return errors
+        for piece in PATH_TOKEN_SEPARATORS.split(value):
+            token = PATH_FLAG_PREFIX.sub("", piece, count=1) if piece.startswith("-") else piece
+            if ("/" in token or "\\" in token or token.startswith("~")) and not path_token_allowed(token):
+                errors.append(f"{label} contains an absolute host path: {value}")
+                break
     elif isinstance(value, dict):
         for key, child in value.items():
             if isinstance(key, str):
@@ -570,8 +591,10 @@ def validate_receipt_shape(receipt: Any, label: str) -> list[str]:
                 errors.append(f"{where} configure identity is malformed")
             if not isinstance(unit["name"], str) or not unit["name"] or unit["name"] in names:
                 errors.append(f"{where} name is empty or duplicated")
+            elif not UNIT_NAME.fullmatch(unit["name"]):
+                errors.append(f"{where} name must be a plain unit name")
             names.add(str(unit["name"]))
-            if unit["oracle_class"] not in {"identity", "divergent"}:
+            if not isinstance(unit["oracle_class"], str) or unit["oracle_class"] not in {"identity", "divergent"}:
                 errors.append(f"{where} oracle_class must be identity or divergent")
             manifest = unit["closure_manifest"]
             if (
@@ -580,6 +603,11 @@ def validate_receipt_shape(receipt: Any, label: str) -> list[str]:
                 or not manifest.endswith(".json")
             ):
                 errors.append(f"{where} closure_manifest must live under {CLOSURE_DIR}<export_id>/")
+            elif isinstance(unit["name"], str) and manifest != f"{CLOSURE_DIR}{export_id}/{unit['name']}.json":
+                # The exporter names each closure after its unit, and per-unit
+                # rules (the canvas configure contract) key on the name, so a
+                # renamed unit must not keep another unit's closure.
+                errors.append(f"{where} closure_manifest must be {CLOSURE_DIR}<export_id>/<name>.json")
             if not SHA256.fullmatch(str(unit["closure_sha256"])):
                 errors.append(f"{where} closure_sha256 is not a SHA-256")
     files = receipt["files"]
@@ -596,7 +624,7 @@ def validate_receipt_shape(receipt: Any, label: str) -> list[str]:
                 errors.append(f"{where} pulp_path is not repository-relative")
             if row["mirror_path"] != f"mirror/{row['pulp_path']}":
                 errors.append(f"{where} mirror_path must be mirror/<pulp_path>")
-            if row["mode"] not in FILE_MODES:
+            if not isinstance(row["mode"], str) or row["mode"] not in FILE_MODES:
                 errors.append(f"{where} mode is not a file mode")
             if not SHA40.fullmatch(str(row["blob"])):
                 errors.append(f"{where} blob is not a full object ID")
@@ -655,7 +683,9 @@ def validate_mirror_source_shape(receipt: dict[str, Any], label: str, export_id:
     if proof["source_is_ancestor"] is not True or proof["exported_paths_equal"] is not True:
         errors.append(f"{where}.proof must record source_is_ancestor and exported_paths_equal as true")
     files = receipt["files"]
-    if isinstance(files, list) and all(isinstance(row, dict) and FILE_KEYS <= set(row) for row in files):
+    if isinstance(files, list) and all(
+        isinstance(row, dict) and FILE_KEYS <= set(row) and isinstance(row["pulp_path"], str) for row in files
+    ):
         if proof["exported_path_count"] != len(files):
             errors.append(f"{where}.proof.exported_path_count differs from the receipt's file rows")
         if proof["exported_blobs_sha256"] != exported_blobs_digest(files):
@@ -967,6 +997,78 @@ def verify_receipt(
     return errors
 
 
+D3_UNIT_MAP = "tools/scripts/vellum_d3_units.json"
+
+
+def d3_unit_targets(units: list[Any], name: str, stack: tuple[str, ...] = ()) -> tuple[set[str], set[str]] | None:
+    """(required, optional) CMake targets of one D3 unit, following
+    alias_of/carried_by, or None when the map does not name the unit."""
+    by_name = {u.get("name"): u for u in units if isinstance(u, dict)}
+    entry = by_name.get(name)
+    if entry is None or name in stack:
+        return None
+    other = entry.get("alias_of") or entry.get("carried_by")
+    if isinstance(other, str) and other:
+        return d3_unit_targets(units, other, (*stack, name))
+    listed = entry.get("targets")
+    required = {t for t in listed if isinstance(t, str)} if isinstance(listed, list) else set()
+    optional_rows = entry.get("optional_targets")
+    optional = {
+        t if isinstance(t, str) else t.get("name")
+        for t in (optional_rows if isinstance(optional_rows, list) else [])
+        if isinstance(t, str) or (isinstance(t, dict) and isinstance(t.get("name"), str))
+    }
+    return required, optional
+
+
+def d3_unit_binding_errors(root: Path, pulp_root: Path, receipt: dict[str, Any]) -> list[str]:
+    """Each unit's closure carries exactly its own D3 targets.
+
+    The D3 unit map at the exported Pulp commit names the CMake targets each
+    unit owns. A closure that drops one of its unit's required targets
+    without reporting it missing, or carries a target of another unit, is
+    refused, so the closure's content (not only its file name) belongs to
+    the unit the receipt names."""
+    pulp_sha = receipt["pulp_sha"]
+    text = git_try(pulp_root, "show", f"{pulp_sha}:{D3_UNIT_MAP}")
+    try:
+        units = json.loads(text)["units"] if text is not None else None
+    except (ValueError, KeyError, TypeError):
+        units = None
+    if not isinstance(units, list):
+        return [f"Pulp {pulp_sha} has no readable {D3_UNIT_MAP} to bind closures to units"]
+    errors: list[str] = []
+    for unit in receipt["units"]:
+        expected = d3_unit_targets(units, unit["name"])
+        if expected is None:
+            errors.append(f"unit {unit['name']} is not a D3 unit at Pulp {pulp_sha}")
+            continue
+        required, optional = expected
+        try:
+            closure = strict_json(root / unit["closure_manifest"])
+        except (OSError, ValueError) as exc:
+            errors.append(f"closure {unit['closure_manifest']} unreadable: {exc}")
+            continue
+        targets = closure.get("targets") if isinstance(closure, dict) else None
+        if not isinstance(targets, list):
+            errors.append(f"unit {unit['name']} closure has no target list")
+            continue
+        names = set()
+        for target in targets:
+            name = target.get("name") if isinstance(target, dict) else None
+            if isinstance(name, str):
+                names.add(name)
+            else:
+                errors.append(f"unit {unit['name']} closure has a target without a string name: {name!r}")
+        missing_rows = closure.get("missing_targets") or []
+        missing = {t for t in missing_rows if isinstance(t, str)} if isinstance(missing_rows, list) else set()
+        for name in sorted(names - required - optional, key=str):
+            errors.append(f"unit {unit['name']} closure carries {name}, which D3 assigns to no part of this unit")
+        for name in sorted(required - names - missing):
+            errors.append(f"unit {unit['name']} closure drops its D3 target {name} without reporting it missing")
+    return errors
+
+
 def verify_receipt_against_pulp(pulp_root: Path, receipt: dict[str, Any],
                                 root: Path | None = None) -> list[str]:
     errors: list[str] = []
@@ -1169,6 +1271,7 @@ def verify(root: Path, pulp_root: Path | None = None) -> dict[str, Any]:
         errors.extend(receipt_errors)
         if pulp_root is not None and not receipt_errors:
             errors.extend(f"{receipt_path}: {e}" for e in verify_receipt_against_pulp(pulp_root, receipt, root))
+            errors.extend(f"{receipt_path}: {e}" for e in d3_unit_binding_errors(root, pulp_root, receipt))
             pulp_checked = True
     return {
         "status": "pass" if not errors else "fail",
