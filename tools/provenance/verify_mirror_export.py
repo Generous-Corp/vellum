@@ -242,13 +242,17 @@ PATH_FLAG_PREFIX = re.compile(
 )
 # Separators between the flags, defines, list items and quoted values a stored
 # string can carry.
-PATH_TOKEN_SEPARATORS = re.compile(r"[\s;,=()<>\"'`\[\]{}|]+")
+PATH_TOKEN_SEPARATORS = re.compile(r"[\s\x00;,=()<>\"'`|]+")
 # Any other flag glued to its argument (-B/x, -MF/x, -iwithprefix/x,
 # -Xlinker/x, -cxx-isystem/x) is stripped the same way, so the path it carries
-# is judged rather than hidden behind an unknown flag name. A leading * (a
-# glob's first segment) is stripped too.
-GENERIC_FLAG_PREFIX = re.compile(r"\A-+(?:[A-Za-z][A-Za-z0-9_+]*(?:-[A-Za-z][A-Za-z0-9_+]*)*)?")
-LEADING_GLOB = re.compile(r"\A\*+")
+# is judged rather than hidden behind an unknown flag name. A leading [ or {
+# (an opened list or set around the path) is stripped too; globs and brace
+# patterns inside a relative path are left alone.
+GENERIC_FLAG_PREFIX = re.compile(r"\A-+(?:[A-Za-z0-9_][A-Za-z0-9_+.]*(?:-[A-Za-z0-9_][A-Za-z0-9_+.]*)*)?")
+LEADING_OPENER = re.compile(r"\A[\[{]+")
+# Host-specific variables expand to an absolute path on whatever host reads
+# them, as Pulp's exporter refuses them too.
+HOST_VARIABLE = re.compile(r"\A\$(?:\{|\()?(?:HOME|TMPDIR|TMP|TEMP|USER|USERPROFILE|PWD)\b")
 # The cache roots Pulp's closure exporter writes (vellum_closure.py): the
 # configured build tree, pinned external sources and system packages.
 CACHE_PREFIX = re.compile(r"\A@(?:build|external|system)/")
@@ -290,7 +294,10 @@ def host_path_violations(value: Any, label: str) -> list[str]:
             token = PATH_FLAG_PREFIX.sub("", piece, count=1) if piece.startswith("-") else piece
             if token.startswith("-"):
                 token = GENERIC_FLAG_PREFIX.sub("", token, count=1)
-            token = LEADING_GLOB.sub("", token, count=1)
+            token = LEADING_OPENER.sub("", token, count=1)
+            if HOST_VARIABLE.match(token):
+                errors.append(f"{label} contains an absolute host path: {value}")
+                break
             if ("/" in token or "\\" in token or token.startswith("~")) and not path_token_allowed(token):
                 errors.append(f"{label} contains an absolute host path: {value}")
                 break

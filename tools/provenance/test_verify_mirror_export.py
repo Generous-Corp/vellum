@@ -726,7 +726,8 @@ class VerifyMirrorExportTests(unittest.TestCase):
             "@attacker-cache/x",
             "-B/opt/homebrew/bin", "-MF/Users/me/x.d", "-iprefix/usr/include", "-iwithprefix/Volumes/x",
             "-cxx-isystem/usr/include", "-Xlinker/usr/lib", "-include-pch/Users/x.pch", "-/Users/me",
-            "[/Users/me]", "{/Users/me}", "a|/Users/me", "*/Users/me",
+            "[/Users/me]", "{/Users/me}", "a|/Users/me", "-I\x00/Users/me", "-9/Users/me", "-_/Users",
+            "-a.b/Users/me", "$HOME/x", "-I$HOME/x", "${HOME}/x", "$(TMPDIR)/x",
         ):
             with self.subTest(value=value):
                 self.assertError(verify_mirror_export.host_path_violations(value, "fixture"),
@@ -737,6 +738,8 @@ class VerifyMirrorExportTests(unittest.TestCase):
             "-Icore/canvas/include", "-isystem@external/mbed-tls/" + "a" * 40 + "/include",
             "PULP_HAS_SKIA=1", "https://github.com/google/skia", "mirror/", "<catch2/catch_test_macros.hpp>",
             "@system/sdl3/3.2.0/include", "core/**/x.cpp", "*.hpp", "-std=c++20", "-O2", "-Wno-unused",
+            "**/*.h", "**/foo.cmake", "*/include", "core/{a,b}/x.cpp", "core/[ab]/x",
+            "${CMAKE_CURRENT_SOURCE_DIR}/x",
         ):
             with self.subTest(value=value):
                 self.assertEqual(verify_mirror_export.host_path_violations(value, "fixture"), [])
