@@ -444,6 +444,14 @@ class VerifyTest(unittest.TestCase):
         proof = self.run_verify(install_libdir="lib/vellum")
         self.assertFalse(proof["checks"]["no-audio-symbols"])
 
+    def test_a_so_provider_is_scanned(self) -> None:
+        so_provider = self.provider.with_suffix(".so")
+        so_provider.write_bytes(b"\0")
+        self.provider.unlink()
+        self.symbols[so_provider] = ["pulp::view::WaveformView::paint()"]
+        proof = self.run_verify()
+        self.assertFalse(proof["checks"]["no-audio-symbols"])
+
     def plant_debt_headers(self) -> list[Path]:
         include = self.prefix / "mirror/include/pulp/view"
         include.mkdir(parents=True)

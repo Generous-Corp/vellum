@@ -242,7 +242,13 @@ PATH_FLAG_PREFIX = re.compile(
 )
 # Separators between the flags, defines, list items and quoted values a stored
 # string can carry.
-PATH_TOKEN_SEPARATORS = re.compile(r"[\s;,=()<>\"'`]+")
+PATH_TOKEN_SEPARATORS = re.compile(r"[\s;,=()<>\"'`\[\]{}|]+")
+# Any other flag glued to its argument (-B/x, -MF/x, -iwithprefix/x,
+# -Xlinker/x, -cxx-isystem/x) is stripped the same way, so the path it carries
+# is judged rather than hidden behind an unknown flag name. A leading * (a
+# glob's first segment) is stripped too.
+GENERIC_FLAG_PREFIX = re.compile(r"\A-+(?:[A-Za-z][A-Za-z0-9_+]*(?:-[A-Za-z][A-Za-z0-9_+]*)*)?")
+LEADING_GLOB = re.compile(r"\A\*+")
 # The cache roots Pulp's closure exporter writes (vellum_closure.py): the
 # configured build tree, pinned external sources and system packages.
 CACHE_PREFIX = re.compile(r"\A@(?:build|external|system)/")
@@ -282,6 +288,9 @@ def host_path_violations(value: Any, label: str) -> list[str]:
             return errors
         for piece in PATH_TOKEN_SEPARATORS.split(value):
             token = PATH_FLAG_PREFIX.sub("", piece, count=1) if piece.startswith("-") else piece
+            if token.startswith("-"):
+                token = GENERIC_FLAG_PREFIX.sub("", token, count=1)
+            token = LEADING_GLOB.sub("", token, count=1)
             if ("/" in token or "\\" in token or token.startswith("~")) and not path_token_allowed(token):
                 errors.append(f"{label} contains an absolute host path: {value}")
                 break
@@ -1003,7 +1012,7 @@ D3_UNIT_MAP = "tools/scripts/vellum_d3_units.json"
 def d3_unit_targets(units: list[Any], name: str, stack: tuple[str, ...] = ()) -> tuple[set[str], set[str]] | None:
     """(required, optional) CMake targets of one D3 unit, following
     alias_of/carried_by, or None when the map does not name the unit."""
-    by_name = {u.get("name"): u for u in units if isinstance(u, dict)}
+    by_name = {u["name"]: u for u in units if isinstance(u, dict) and isinstance(u.get("name"), str)}
     entry = by_name.get(name)
     if entry is None or name in stack:
         return None
