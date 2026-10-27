@@ -336,6 +336,40 @@ class Tests(unittest.TestCase):
         self.assertIn("checks: read", workflow)
         self.assertIn("gh api --method GET --paginate --slurp", workflow)
         self.assertIn("-f filter=all -F per_page=100", workflow)
+        self.assertIn('"repos/$repository/pulls?state=open&per_page=100"', workflow)
+        # The release-readiness evidence is collated by a tested script, not
+        # inline Python, and the verifier reads exactly the files it writes.
+        step = workflow[
+            workflow.index("- name: Test authority protocol and negative controls"):
+            workflow.index("- name: Resolve the exact authority lifecycle phase")
+        ]
+        self.assertNotIn("<<'PY'", step)
+        self.assertNotIn("python3 -c", step)
+        self.assertNotIn("for repository in Generous-Corp/", step)
+        self.assertIn("python3 tools/provenance/test_collect_release_evidence.py", step)
+        collect = "python3 tools/provenance/collect_release_evidence.py"
+        for invocation in (
+            f'open_pr_repositories_text="$({collect} repositories)"',
+            f"{collect} merge-check-runs",
+            '--pages "$RUNNER_TEMP/parity-check-run-pages.json"',
+            '--pages "$RUNNER_TEMP/pulp-router-check-run-pages.json"',
+            f"{collect} parity-run-ids",
+            f"{collect} check-runs",
+            '--output "$RUNNER_TEMP/parity-check-runs.json"',
+            '--check-runs-json "$RUNNER_TEMP/parity-check-runs.json"',
+            f"{collect} open-pr-numbers",
+            f"{collect} pull-coordinates",
+            f"{collect} merge-base-commit",
+            f"{collect} commit-tree",
+            f"{collect} open-pr-snapshot",
+            '--output "$RUNNER_TEMP/open-pr-snapshot.json"',
+            '--cursor-output "$RUNNER_TEMP/open-pr-cursor.json"',
+            '--open-pr-snapshot-json "$RUNNER_TEMP/open-pr-snapshot.json"',
+            f"{collect} live-cursor",
+            'cmp "$RUNNER_TEMP/open-pr-cursor.json" "$RUNNER_TEMP/open-pr-cursor-before.json"',
+            'cmp "$RUNNER_TEMP/open-pr-cursor.json" "$RUNNER_TEMP/open-pr-cursor-after.json"',
+        ):
+            self.assertIn(invocation, step)
         clean_workflow = (ROOT / ".github/workflows/readme-quick-start.yml").read_text()
         self.assertIn("push:\n    branches: [main]", clean_workflow)
         self.assertNotIn("VELLUM_DELIVERY_READER_TOKEN", workflow)
@@ -1649,11 +1683,24 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
 
     def test_provenance_workflow_collects_live_open_prs_and_changed_files(self) -> None:
         workflow = (ROOT / ".github/workflows/provenance.yml").read_text()
+        collector_source = (ROOT / "tools/provenance/collect_release_evidence.py").read_text()
+        # The snapshot fetch and the live cursor fetch walk the repository
+        # list the collector prints, and the collector reads the same list
+        # when it builds the snapshot and the cursor.
+        self.assertIn(
+            'open_pr_repositories_text="$(python3 tools/provenance/collect_release_evidence.py repositories)"',
+            workflow,
+        )
+        self.assertIn('test "${#open_pr_repositories[@]}" -gt 0', workflow)
         self.assertEqual(
-            workflow.count('for repository in Generous-Corp/pulp Generous-Corp/vellum; do'), 2
+            workflow.count('for repository in "${open_pr_repositories[@]}"; do'), 2
         )
         self.assertEqual(
-            workflow.count('for repository in ("Generous-Corp/pulp", "Generous-Corp/vellum"):'), 2
+            collector_source.count("for repository in OPEN_PR_REPOSITORIES:"), 3
+        )
+        self.assertIn(
+            "OPEN_PR_REPOSITORIES = tuple(sorted(RETIRED_OPEN_PR_REPOSITORIES))",
+            collector_source,
         )
         self.assertIn('pulls?state=open&per_page=100', workflow)
         # Merge-queue runs stay on the pull-request side of every trust gate.
@@ -1678,7 +1725,7 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
         self.assertIn('git/commits/$head_commit', workflow)
         self.assertIn('git/trees/$merge_base_tree?recursive=1', workflow)
         self.assertIn('git/trees/$head_tree?recursive=1', workflow)
-        self.assertIn('get("truncated") is not False', workflow)
+        self.assertIn('get("truncated") is not False', collector_source)
         self.assertIn('--open-pr-snapshot-json "$RUNNER_TEMP/open-pr-snapshot.json"', workflow)
         self.assertIn('${{ runner.temp }}/open-pr-snapshot.json', workflow)
         self.assertIn('write_live_open_pr_cursor "$RUNNER_TEMP/open-pr-cursor-before.json"', workflow)
