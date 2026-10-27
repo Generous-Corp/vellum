@@ -106,7 +106,7 @@ std::filesystem::path font_directory(std::string_view requested) {
             VELLUM_DATADIR_FROM_LIBDIR / "vellum" / "fonts";
         if (std::filesystem::is_directory(installed)) return installed;
         const auto build_tree = library_directory /
-            VELLUM_BUILD_DATADIR_FROM_GPU_DIR / "vellum" / "fonts";
+            VELLUM_BUILD_DATADIR_FROM_PROVIDER_DIR / "vellum" / "fonts";
         if (std::filesystem::is_directory(build_tree)) return build_tree;
     }
     return {};

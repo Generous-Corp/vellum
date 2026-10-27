@@ -1,0 +1,1541 @@
+// web-compat-element.js — Element prelude for Pulp's web-native authoring layer
+// Loaded as a prelude after css-colors.js and css-parser.js
+// Depends on: bridge functions (createRow, createCol, createLabel, setFlex, etc.)
+//             css-parser.js (parseCSSLength, parseCSSColor, expandShorthand, parseTransform, parseTransition)
+//             css-colors.js (__cssColors__)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Internal state
+// ═══════════════════════════════════════════════════════════════════════════════
+
+var __nextId__ = 1;
+var __elements__ = {};          // id -> Element
+var __classIndex__ = {};        // className -> Set of element ids
+var __stylesheets__ = [];       // attached StyleSheet instances
+var __eventListeners__ = {};    // id -> { eventType -> [{fn, capture}] }
+
+function __genId__() { return "__el_" + (__nextId__++) + "__"; }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Element class
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Map from native _id → Element instance. Populated by every Element
+// constructor below. Used by __dispatch__ (in the kJSPreamble installed
+// by widget_bridge.cpp) to look up the JS Element for a native pointer
+// event and call dispatchEvent on it — bypassing the single-slot
+// __callbacks__[id:event] table that React-DOM's _registerNativeEvent
+// clobbers.
+var __nativeElements__ = (typeof globalThis !== "undefined" && globalThis.__nativeElements__)
+    ? globalThis.__nativeElements__ : {};
+if (typeof globalThis !== "undefined") globalThis.__nativeElements__ = __nativeElements__;
+
+function Element(tagName, nativeId) {
+    this.tagName = (tagName || "div").toUpperCase();
+    this._id = nativeId || __genId__();
+    this._userIdSet = false;
+    this._className = "";
+    this._classList = new ClassList(this);
+    this._children = [];
+    this._parentElement = null;
+    this._textContent = "";
+    this._value = "";
+    this._hidden = false;
+    this._disabled = false;
+    this._type = "";           // for input elements
+    this._min = 0;
+    this._max = 100;
+    this._checked = false;
+    this._placeholder = "";
+    this._nativeCreated = false;
+    this._attributes = {};
+    this._dataset = {};
+    this.style = new CSSStyleDeclaration(this);
+    // Register in the native-id map so __dispatch__ can look us up
+    // when a native pointer/click event fires.
+    __nativeElements__[this._id] = this;
+}
+
+// Shared lowercase widget-tag → native-widget factory.
+// `@pulp/react`'s capitalized widget intrinsics
+// (<Knob>, <Fader>, …) lower to lowercase DOM tags (knob, fader, …) on the
+// live-JSX / web-compat path; this table routes each to the new-API
+// createX(id, …) bridge call that constructs the native widget AND wires its
+// callbacks. Single source of truth for `_ensureNative` (below); kept in
+// lockstep with the C++ `__domAppend` table (widget_bridge.cpp
+// make_widget_for_tag) and the `@pulp/react` host-config lowercase aliases —
+// the routing-parity test asserts the surfaces agree. Closures (not
+// eager calls) so the bridge globals only need to exist at call time.
+var __widgetTagFactory__ = {
+    knob:     function(id) { createKnob(id, ""); },
+    fader:    function(id) { createFader(id, "vertical", ""); },
+    toggle:   function(id) { createToggle(id, ""); },
+    segmented: function(id) { createSegmented(id, ""); },
+    stepper:  function(id) { createStepper(id, ""); },
+    combo:    function(id) { createCombo(id, ""); },
+    checkbox: function(id) { createCheckbox(id, ""); },
+    spectrum: function(id) { createSpectrum(id, ""); },
+    waveform: function(id) { createWaveform(id, ""); },
+    meter:    function(id) { createMeter(id, "vertical", ""); },
+    xypad:    function(id) { createXYPad(id, ""); },
+    listbox:  function(id) { createListBox(id, ""); },
+    virtuallist: function(id) { createVirtualList(id, ""); },
+    "virtual-list": function(id) { createVirtualList(id, ""); },
+    virtualgrid: function(id) { createVirtualGrid(id, ""); },
+    "virtual-grid": function(id) { createVirtualGrid(id, ""); },
+    icon:     function(id) { createIcon(id, "image_upload", ""); },
+    'native-view': function(id) { createNativeView(id, ""); }
+};
+
+// Container kind is fixed when the native widget is materialized. React sets
+// initial style props before appendChild, so honor overflow:auto/scroll here
+// and create a real ScrollView instead of a clipped, non-scrollable View.
+// Keep this predicate shared by _ensureNative, _reparentNative, and the
+// __domAppend hint path in web-compat-dom-ops.js.
+function __pulpElementWantsScrollView__(element) {
+    if (!element || !element.style || !element.style._props) return false;
+    var props = element.style._props;
+    var overflow = String(props.overflow || "").toLowerCase();
+    var overflowX = String(props.overflowX || "").toLowerCase();
+    var overflowY = String(props.overflowY || "").toLowerCase();
+    return overflow === "auto" || overflow === "scroll" ||
+           overflowX === "auto" || overflowX === "scroll" ||
+           overflowY === "auto" || overflowY === "scroll";
+}
+
+// Create the native widget based on tag + type
+Element.prototype._ensureNative = function() {
+    if (this._nativeCreated) return;
+    this._nativeCreated = true;
+    // Tag defaults below write widget state directly; drop any applied-value
+    // record so a later style write for the same property is not deduped
+    // against a widget that has since been (re)created.
+    __invalidateStyleCache__(this);
+
+    var tag = this.tagName.toLowerCase();
+    var id = this._id;
+
+    if (tag === "div" || tag === "section" || tag === "article" || tag === "aside" ||
+        tag === "header" || tag === "footer" || tag === "nav" || tag === "main") {
+        if (__pulpElementWantsScrollView__(this)) createScrollView(id, "");
+        else createCol(id, "");
+    } else if (tag === "span" || tag === "p" || tag === "label") {
+        createLabel(id, "", "");
+        if (tag === "label") {
+            // Wire `<label for="x">` click routing to focus / toggle the
+            // labeled input. Note: this
+            // branch only runs in the createElement+later-mount path;
+            // the appendChild fast path goes through __domAppend on the
+            // C++ side and never re-enters JS, so we ALSO install the
+            // routing in `setAttribute("for", ...)` below. Idempotent.
+            this._installLabelForRouting();
+        }
+    } else if (tag === "svg") {
+        // Inline SVGs in web-compat code (Spectr's mode-icon popover rows,
+        // React-rendered icons) are leaf containers. We
+        // don't ship an SVG renderer, but we MUST honor the HTML
+        // `width`/`height` attributes so the flex parent reserves layout
+        // space. Without this the row collapses to height:0 and the
+        // sibling text paints over a blank gutter. Width/height attribute
+        // replay happens in the shared block below.
+        createCol(id, "");
+    } else if (tag === "rect") {
+        // SVG <rect> primitive. Spectr emits these for toggle-pill
+        // backgrounds and segmented-control fills.
+        // Geometry (x/y/width/height) + fill/stroke replayed below
+        // through __replaySvgRectAttributes__.
+        if (typeof createSvgRect === "function") {
+            createSvgRect(id, "");
+        } else {
+            createCol(id, "");
+        }
+    } else if (tag === "line") {
+        // SVG <line> primitive. Spectr uses these for analyzer-line
+        // indicators next to PEAK/AVG/BOTH/OFF and as
+        // ruler ticks. Endpoints (x1/y1/x2/y2) + stroke replayed below.
+        if (typeof createSvgLine === "function") {
+            createSvgLine(id, "");
+        } else {
+            createCol(id, "");
+        }
+    } else if (tag === "circle") {
+        // SVG <circle> maps to SvgPath with a synthesized `d` path.
+        // The path is computed in __replaySvgCircleAttributes__
+        // from cx/cy/r attributes after mount.
+        if (typeof createSvgPath === "function") {
+            createSvgPath(id, "");
+        } else {
+            createCol(id, "");
+        }
+    } else if (tag === "path") {
+        // Spectr's React-rendered icon glyphs emit raw
+        // `<svg><path d="..." stroke="currentColor" .../></svg>` JSX. The
+        // SvgPath native widget + bridge surface (createSvgPath /
+        // setSvgPath / setSvgStroke / setSvgFill / setSvgStrokeWidth)
+        // already exist, but routing `<path>` into the unknown-tag default
+        // (createCol) produces an empty box. Wire <path> directly to createSvgPath
+        // and replay `d` / `stroke` / `stroke-width` / `fill` /
+        // `viewBox` (inherited from the parent <svg>) through
+        // __replaySvgPathAttributes__ at the end of this function.
+        if (typeof createSvgPath === "function") {
+            createSvgPath(id, "");
+        } else {
+            createCol(id, "");
+        }
+    } else if (tag === "h1") {
+        createLabel(id, "", "");
+        setFontSize(id, 32); setFontWeight(id, 700);
+    } else if (tag === "h2") {
+        createLabel(id, "", "");
+        setFontSize(id, 24); setFontWeight(id, 700);
+    } else if (tag === "h3") {
+        createLabel(id, "", "");
+        setFontSize(id, 20); setFontWeight(id, 600);
+    } else if (tag === "h4") {
+        createLabel(id, "", "");
+        setFontSize(id, 16); setFontWeight(id, 600);
+    } else if (tag === "h5") {
+        createLabel(id, "", "");
+        setFontSize(id, 14); setFontWeight(id, 600);
+    } else if (tag === "h6") {
+        createLabel(id, "", "");
+        setFontSize(id, 12); setFontWeight(id, 600);
+    } else if (tag === "button") {
+        createToggleButton(id, "");
+    } else if (tag === "input") {
+        var t = this._type || "text";
+        if (t === "range") {
+            // `<input type="range">` defaults to horizontal. HTML semantics
+            // (and Spectr's MorphSlider, Web Audio demos,
+            // CSS-Tricks / MDN examples) treat the range slider as
+            // horizontal unless an explicit hint says otherwise.
+            //
+            // Heuristic (in priority order):
+            //   1. `aria-orientation="vertical"` → vertical
+            //   2. inline `style.height > style.width` → vertical
+            //   3. otherwise → horizontal (HTML default)
+            createFader(id, __resolveRangeOrientation__(this), "");
+        } else if (t === "checkbox") {
+            createCheckbox(id, "");
+        } else {
+            createTextEditor(id, "");
+            if (this._placeholder) setPlaceholder(id, this._placeholder);
+        }
+    } else if (tag === "textarea") {
+        createTextEditor(id, "");
+        setMultiLine(id, 1);
+    } else if (tag === "select") {
+        createCombo(id, "");
+    } else if (Object.prototype.hasOwnProperty.call(__widgetTagFactory__, tag)) {
+        // Lowercase `@pulp/react` widget intrinsics
+        // (<Knob>/<Fader>/<Toggle>/<Combo>/<Checkbox>/
+        // <Spectrum>/<Waveform>/<Meter>/<XYPad>/<ListBox>/<VirtualList>/<Icon>) lower to
+        // lowercase DOM tags in the live-JSX path. Route them to native
+        // widgets via the shared __widgetTagFactory__ table (defined above),
+        // whose new-API createX(id, …) forms wire callbacks. Routing through
+        // createCol would lose drag and on_change wiring, so e.g. a knob would
+        // never fire onChange. Keeps this surface
+        // in lockstep with __domAppend (widget_bridge.cpp) and the
+        // @pulp/react host-config lowercase map.
+        __widgetTagFactory__[tag](id);
+    } else if (tag === "canvas") {
+        createCanvas(id, "");
+    } else if (tag === "progress") {
+        createProgress(id, "");
+    } else if (tag === "hr") {
+        createCol(id, "");
+        setFlex(id, "height", 1);
+        setBackground(id, "#666666");
+    } else if (tag === "img") {
+        // Wire <img> to ImageView via createImage. ImageView::paint shows an
+        // "IMG" placeholder when path
+        // is empty, then decodes via Skia draw_image_from_file once
+        // setImageSource is called from setAttribute('src', …).
+        createImage(id, "");
+    } else if (tag === "details") {
+        createCol(id, "");
+    } else if (tag === "dialog") {
+        createPanel(id, "");
+        setVisible(id, false);
+    } else if (tag === "style") {
+        // `<style>` is a non-rendered CSS source. We still create a hidden
+        // native shell so DOM ops (appendChild,
+        // textContent flush, removeChild) keep working uniformly, but
+        // mark the element so its textContent / appended Text-node
+        // children are routed through the CSS-rule translator instead
+        // of `setText()`. The element itself never paints.
+        this._isStyleElement = true;
+        this._appliedSheet = null;
+        createCol(id, "");
+        setVisible(id, false);
+    } else {
+        // Unknown tag — create as container
+        createCol(id, "");
+    }
+
+    // Presentational `width`/`height` HTML attributes are replayed via
+    // __replayMediaAttributes__ once the native widget is
+    // mounted (called from appendChild / insertBefore / _ensureNative).
+    if (typeof __replayMediaAttributes__ === "function") {
+        __replayMediaAttributes__(this);
+    }
+    // Replay any ARIA attributes that were set on this element before the
+    // native widget existed.
+    if (typeof __replayAriaAttributes__ === "function") {
+        __replayAriaAttributes__(this);
+    }
+    // Replay rect / line / circle SVG attributes captured pre-mount.
+    // React/JSX commits attributes before appendChild
+    // materializes the node, so by the time setAttribute('x', ...) /
+    // ('x1', ...) / ('cx', ...) lands the bridge has no native id yet.
+    // The replay functions flush geometry + fill / stroke / stroke-width
+    // from _attributes once `_nativeCreated` flips true.
+    if (typeof __replaySvgRectAttributes__ === "function") {
+        __replaySvgRectAttributes__(this);
+    }
+    if (typeof __replaySvgLineAttributes__ === "function") {
+        __replaySvgLineAttributes__(this);
+    }
+    if (typeof __replaySvgCircleAttributes__ === "function") {
+        __replaySvgCircleAttributes__(this);
+    }
+    // Replay <path> SVG attributes captured pre-mount.
+    // React/JSX commits attributes before appendChild materializes the
+    // node, so by the time setAttribute('d', ...) lands the bridge has
+    // no native id yet. __replaySvgPathAttributes__ flushes d / stroke
+    // / stroke-width / fill from _attributes and inherits viewBox from
+    // the parent <svg>.
+    if (typeof __replaySvgPathAttributes__ === "function") {
+        __replaySvgPathAttributes__(this);
+    }
+};
+
+// Orientation heuristic for <input type="range">. Returns "horizontal" (HTML
+// default) or "vertical". Priority:
+//   1. aria-orientation attribute explicitly says "vertical" (or "horizontal")
+//   2. inline style.height > inline style.width — BOTH must be inline-set;
+//      otherwise width may come from a flex parent (not visible here) and
+//      the comparison is meaningless.
+//   3. otherwise horizontal (the HTML / Web-Audio convention).
+function __resolveRangeOrientation__(el) {
+    if (!el) return "horizontal";
+    var aria = el._attributes && el._attributes["aria-orientation"];
+    if (aria === "vertical") return "vertical";
+    if (aria === "horizontal") return "horizontal";
+    // Read pre-mount inline-style props captured on the CSSStyleDeclaration.
+    // Both width AND height must be inline-explicit before we trust the
+    // comparison — see header comment for the flex-width regression.
+    var s = el.style && el.style._props;
+    if (s) {
+        var w = parseFloat(s.width);
+        var h = parseFloat(s.height);
+        var hasW = w === w && w > 0;          // NaN-safe
+        var hasH = h === h && h > 0;
+        if (hasH && hasW && h > w) return "vertical";
+    }
+    return "horizontal";
+}
+
+// SVG `currentColor` resolution.
+//
+// The SVG spec resolves `stroke="currentColor"` / `fill="currentColor"`
+// to the element's CSS `color` property at render time. The C++
+// SvgPathWidget bridge does not parse the literal token, so without
+// resolution the stroke renders transparent/black/garbage depending on
+// the backend. Walk up the parent chain looking for an inline
+// `style.color` (color is inherited per CSS); fall back to "black" per
+// SVG spec when nothing is set anywhere on the chain.
+function __resolveCurrentColor__(el) {
+    var anc = el;
+    while (anc) {
+        var col = anc.style && anc.style._props && anc.style._props.color;
+        if (typeof col === "string" && col.length > 0 && col !== "inherit") {
+            return col;
+        }
+        anc = anc._parentElement;
+    }
+    return "black"; // SVG spec default
+}
+
+// Shared helper that maps presentational HTML attributes (width, height) on
+// layout-leaf media tags (<svg>, <img>, <canvas>,
+// <video>) to flex preferred sizing. Idempotent — safe to call from
+// _ensureNative (createElement-then-flushAll path) AND from appendChild
+// (React/JSX setAttribute-before-mount path). Inline `style.width` still
+// wins because `_flushAll()` runs AFTER this replay in dom-ops.
+function __replayMediaAttributes__(el) {
+    if (!el || !el._nativeCreated || !el._attributes) return;
+    var tag = el.tagName.toLowerCase();
+    if (tag !== "svg" && tag !== "img" && tag !== "canvas" && tag !== "video") return;
+    // Writes width/height straight to the widget, bypassing el.style.
+    __invalidateStyleCache__(el);
+    if (typeof setFlex === "function") {
+        var w = el._attributes.width;
+        var h = el._attributes.height;
+        if (w !== undefined) {
+            var pw = parseFloat(w); if (pw === pw) setFlex(el._id, "width", pw);
+        }
+        if (h !== undefined) {
+            var ph = parseFloat(h); if (ph === ph) setFlex(el._id, "height", ph);
+        }
+    }
+    // Replay src for <img> elements through to setImageSource so the React/JSX
+    // setAttribute-before-mount path works (attributes
+    // captured pre-mount in _attributes, flushed once the native widget
+    // is created via _ensureNative or a later appendChild).
+    if (tag === "img" && typeof setImageSource === "function") {
+        var src = el._attributes.src;
+        if (src !== undefined) setImageSource(el._id, String(src));
+    }
+}
+
+// Replay ARIA attributes (`aria-label` / `role`) when the native widget comes
+// online. React/JSX commits
+// attributes before `appendChild` mounts the node, so by the time
+// `setAttribute('aria-label', ...)` runs the bridge has no native id
+// yet; we capture the value in `_attributes` (the existing path) and
+// flush it through the bridge once `_nativeCreated` is true.
+// Idempotent: safe to call from `_ensureNative` and from any later
+// mount path (`appendChild`, `insertBefore`, etc.).
+function __replayAriaAttributes__(el) {
+    if (!el || !el._nativeCreated || !el._attributes) return;
+    var label = el._attributes["aria-label"];
+    if (label !== undefined && typeof setAccessibilityLabel === "function") {
+        setAccessibilityLabel(el._id, String(label));
+    }
+    var role = el._attributes["role"];
+    if (role !== undefined && typeof setAccessibilityRole === "function") {
+        setAccessibilityRole(el._id, String(role));
+    }
+    // Replay ARIA state attributes via setAccessibilityState. React commits
+    // attributes before mount, so we have to defer the
+    // bridge call until _nativeCreated. Each state attribute routes
+    // through one bridge fn; the C++ side dispatches by attr name.
+    if (typeof setAccessibilityState === "function") {
+        var states = ["pressed", "checked", "disabled", "hidden"];
+        for (var si = 0; si < states.length; si++) {
+            var key = "aria-" + states[si];
+            var val = el._attributes[key];
+            if (val !== undefined) {
+                setAccessibilityState(el._id, states[si], String(val));
+            }
+        }
+    }
+    // `aria-haspopup` marks an overlay TRIGGER rather than an access state, so
+    // it goes through the overlay heuristic instead of setAccessibilityState —
+    // but it needs the same pre-mount replay. `setAttribute` re-evaluates
+    // immediately, and that call is a no-op while `_nativeCreated` is false,
+    // which is exactly the state React's commit order (setAttribute, THEN
+    // appendChild) leaves every freshly mounted button in. Without this the
+    // mark would only ever land on an element whose author happened to write
+    // the attribute after mounting it.
+    //
+    // `role` and `aria-modal` are the OVERLAY half of the same pair —
+    // `aria-haspopup` says "I OPEN an overlay", `role=menu|listbox|tree|grid|
+    // dialog|alertdialog` and `aria-modal="true"` say "I AM one" — and they
+    // need the replay for the identical reason. A React-materialized menu
+    // writes its role before the node is mounted, so without this the claim
+    // never happens and the panel is left to the CSS-shape inference, which
+    // claims click-through by design.
+    //
+    // `data-overlay-parent` and `aria-owns` join them because they qualify that
+    // same claim: they name the overlay a lifted submenu stacks on. A claim
+    // replayed without the declaration it was written with dismisses the menu
+    // the submenu belongs to, which is exactly the shape the declaration
+    // exists to prevent — so the name has to be readable by the time the
+    // replayed claim happens, not one mutation later.
+    if ((el._attributes["aria-haspopup"] !== undefined
+         || el._attributes["role"] !== undefined
+         || el._attributes["aria-modal"] !== undefined
+         || el._attributes["data-overlay-parent"] !== undefined
+         || el._attributes["aria-owns"] !== undefined)
+        && el.style && el.style._reevaluateOverlay) {
+        el.style._reevaluateOverlay();
+    }
+    // A menu mounted AFTER the submenu it owns: the submenu already claimed,
+    // reading no declaration, so its claim has to be re-evaluated now.
+    __pulpReevaluateOwnedOverlays__(el);
+}
+
+// Re-evaluate the overlay claim of every element an `aria-owns` names.
+//
+// `aria-owns` is written on the MENU and names its lifted submenu, so the
+// element whose CLAIM the declaration changes is not the element the attribute
+// landed on. Re-evaluating only the owner would leave the submenu claiming as a
+// rival menu, which is the whole defect the declaration exists to fix. Cheap
+// and idempotent: `_reevaluateOverlay` skips the bridge entirely when nothing
+// it reads has moved.
+function __pulpReevaluateOwnedOverlays__(el) {
+    if (!el || !el.getAttribute) return;
+    var owns = el.getAttribute("aria-owns");
+    if (owns == null || owns === "") return;
+    if (typeof document === "undefined" || !document.getElementById) return;
+    var tokens = String(owns).trim().split(/\s+/);
+    for (var i = 0; i < tokens.length; ++i) {
+        if (!tokens[i]) continue;
+        var owned = document.getElementById(tokens[i]);
+        if (owned && owned !== el && owned.style && owned.style._reevaluateOverlay)
+            owned.style._reevaluateOverlay();
+    }
+}
+
+// Replay <rect> SVG attributes through the SvgRectWidget bridge. Mirrors the
+// pre-mount-replay pattern used for ARIA + media:
+// React/JSX commits setAttribute() before appendChild materializes the
+// node, so the bridge has no native id when the attributes land. We
+// stash them in _attributes (the existing path) and flush them once
+// _nativeCreated flips true. Idempotent — safe to call from
+// _ensureNative AND from the appendChild fast path.
+function __replaySvgRectAttributes__(el) {
+    if (!el || !el._nativeCreated || !el._attributes) return;
+    if (el.tagName !== "RECT") return;
+    var a = el._attributes;
+    if (typeof setSvgRect === "function") {
+        var x  = parseFloat(a.x  || "0");
+        var y  = parseFloat(a.y  || "0");
+        var w  = parseFloat(a.width  || "0");
+        var h  = parseFloat(a.height || "0");
+        if (x === x && y === y && w === w && h === h) {
+            setSvgRect(el._id, x, y, w, h);
+        }
+    }
+    if (a.fill !== undefined && typeof setSvgFill === "function") {
+        setSvgFill(el._id, String(a.fill));
+    }
+    if (a.stroke !== undefined && typeof setSvgStroke === "function") {
+        setSvgStroke(el._id, String(a.stroke));
+    }
+    var sw = a["stroke-width"];
+    if (sw === undefined) sw = a.strokeWidth;
+    if (sw !== undefined && typeof setSvgStrokeWidth === "function") {
+        var psw = parseFloat(sw);
+        if (psw === psw) setSvgStrokeWidth(el._id, psw);
+    }
+}
+
+// Replay <line> SVG attributes through the SvgLineWidget bridge. SvgLineWidget
+// has no fill semantics — only stroke /
+// stroke-width matter alongside the (x1,y1,x2,y2) endpoints.
+function __replaySvgLineAttributes__(el) {
+    if (!el || !el._nativeCreated || !el._attributes) return;
+    if (el.tagName !== "LINE") return;
+    var a = el._attributes;
+    if (typeof setSvgLine === "function") {
+        var x1 = parseFloat(a.x1 || "0");
+        var y1 = parseFloat(a.y1 || "0");
+        var x2 = parseFloat(a.x2 || "0");
+        var y2 = parseFloat(a.y2 || "0");
+        if (x1 === x1 && y1 === y1 && x2 === x2 && y2 === y2) {
+            setSvgLine(el._id, x1, y1, x2, y2);
+        }
+    }
+    if (typeof setSvgStroke === "function") {
+        // SvgLineWidget's C++ default is has_stroke_=true (opaque
+        // black, 1px), but SVG spec says <line> defaults to
+        // stroke="none". Without explicit clearing, a JSX <line> that
+        // omits `stroke` would paint an unwanted opaque-black stroke.
+        // Explicitly drive the widget to the spec default when the
+        // attribute is absent or empty.
+        if (a.stroke !== undefined && String(a.stroke).length > 0) {
+            setSvgStroke(el._id, String(a.stroke));
+        } else {
+            setSvgStroke(el._id, "none");
+        }
+    }
+    var sw = a["stroke-width"];
+    if (sw === undefined) sw = a.strokeWidth;
+    if (sw !== undefined && typeof setSvgStrokeWidth === "function") {
+        var psw = parseFloat(sw);
+        if (psw === psw) setSvgStrokeWidth(el._id, psw);
+    }
+}
+
+// Replay <circle> attributes by synthesizing a `d` path from cx/cy/r and
+// feeding through the SvgPathWidget bridge. Two SVG
+// arc commands (each a half-circle, sweep flag = 0) draw the full
+// circumference and Z closes the loop:
+//   M (cx-r) cy
+//   a r r 0 1 0 ( 2r) 0
+//   a r r 0 1 0 (-2r) 0
+//   Z
+function __replaySvgCircleAttributes__(el) {
+    if (!el || !el._nativeCreated || !el._attributes) return;
+    if (el.tagName !== "CIRCLE") return;
+    var a = el._attributes;
+    var cx = parseFloat(a.cx || "0");
+    var cy = parseFloat(a.cy || "0");
+    var r  = parseFloat(a.r  || "0");
+    if (cx !== cx || cy !== cy || r !== r || r <= 0) return;
+    if (typeof setSvgPath === "function") {
+        var d = "M " + (cx - r) + " " + cy +
+                " a " + r + " " + r + " 0 1 0 " + (2 * r) + " 0" +
+                " a " + r + " " + r + " 0 1 0 " + (-2 * r) + " 0 Z";
+        setSvgPath(el._id, d);
+    }
+    if (a.fill !== undefined && typeof setSvgFill === "function") {
+        setSvgFill(el._id, String(a.fill));
+    }
+    if (a.stroke !== undefined && typeof setSvgStroke === "function") {
+        setSvgStroke(el._id, String(a.stroke));
+    }
+    var sw = a["stroke-width"];
+    if (sw === undefined) sw = a.strokeWidth;
+    if (sw !== undefined && typeof setSvgStrokeWidth === "function") {
+        var psw = parseFloat(sw);
+        if (psw === psw) setSvgStrokeWidth(el._id, psw);
+    }
+}
+
+// Replay <path> SVG attributes captured pre-mount through the SvgPathWidget
+// bridge surface. React/JSX commits attributes before
+// `appendChild` materializes the node, mirroring the aria / media-attr
+// patterns above. Idempotent — safe to call from _ensureNative AND from
+// the appendChild fast path. Also inherits the parent <svg>'s viewBox
+// when set, matching the SVG spec (path coordinates live in the parent
+// viewBox's coordinate space).
+//
+// Attribute name handling: the DOM path lowercases HTML attribute names, while
+// the React host-config often emits camelCase such as strokeWidth / fillRule.
+// Accept either spelling so the host-config and raw HTML/JSX paths both work.
+function __replaySvgPathAttributes__(el) {
+    if (!el || !el._nativeCreated || !el._attributes) return;
+    if (el.tagName !== "PATH") return;
+    var a = el._attributes;
+
+    // d — required for the path to paint at all.
+    if (a.d !== undefined && typeof setSvgPath === "function") {
+        setSvgPath(el._id, String(a.d));
+    }
+    // stroke — color string. "none" / "" clears the stroke.
+    // Resolve `currentColor` against the CSS color cascade before dispatch;
+    // the C++ widget doesn't parse the
+    // literal token. Fallback is "black" per SVG spec.
+    if (a.stroke !== undefined && typeof setSvgStroke === "function") {
+        var strokeVal = String(a.stroke);
+        if (strokeVal === "currentColor") {
+            strokeVal = __resolveCurrentColor__(el);
+        }
+        setSvgStroke(el._id, strokeVal);
+    }
+    // stroke-width / strokeWidth — width in viewBox units.
+    var sw = a["stroke-width"];
+    if (sw === undefined) sw = a.strokeWidth;
+    if (sw !== undefined && typeof setSvgStrokeWidth === "function") {
+        var psw = parseFloat(sw);
+        if (psw === psw) setSvgStrokeWidth(el._id, psw);
+    }
+    // fill — color string. "none" clears. Same currentColor handling as stroke.
+    if (a.fill !== undefined && typeof setSvgFill === "function") {
+        var fillVal = String(a.fill);
+        if (fillVal === "currentColor") {
+            fillVal = __resolveCurrentColor__(el);
+        }
+        setSvgFill(el._id, fillVal);
+    }
+    // fill-rule / fillRule — winding rule ("nonzero" | "evenodd").
+    // Load-bearing for annular (ring) shapes. A ring arrives as ONE path
+    // with two closed subpaths — `M…Z M…Z`, outer then inner — which is
+    // how vector exporters emit a stroked ellipse. Under "nonzero" the
+    // inner subpath adds to the winding count and the hole fills in, so
+    // the ring paints as a solid disc; only "evenodd" cancels it and
+    // leaves the hole. Accept either the HTML hyphen spelling or the JSX
+    // camelCase spelling, mirroring stroke-width / strokeWidth above.
+    var fr = a["fill-rule"];
+    if (fr === undefined) fr = a.fillRule;
+    if (fr !== undefined && typeof setSvgFillRule === "function") {
+        setSvgFillRule(el._id, String(fr));
+    }
+    // viewBox — inherited from the parent <svg>. The SVG spec attaches
+    // viewBox to the outer <svg>, but the SvgPathWidget needs the (w,h)
+    // pair to scale path coordinates into widget bounds. Walk up until
+    // we hit an <svg> ancestor (or the root) and lift its viewBox.
+    if (typeof setSvgViewBox === "function") {
+        var anc = el._parentElement;
+        while (anc) {
+            if (anc.tagName === "SVG") break;
+            anc = anc._parentElement;
+        }
+        if (anc && anc._attributes) {
+            var vb = anc._attributes.viewBox;
+            if (typeof vb === "string") {
+                var toks = vb.trim().split(/[\s,]+/).map(parseFloat);
+                var clean = [];
+                for (var ti = 0; ti < toks.length; ti++) {
+                    if (toks[ti] === toks[ti]) clean.push(toks[ti]);
+                }
+                if (clean.length === 4) {
+                    // SVG-spec form `min-x min-y w h` — bridge consumes w + h.
+                    setSvgViewBox(el._id, clean[2], clean[3]);
+                } else if (clean.length === 2) {
+                    setSvgViewBox(el._id, clean[0], clean[1]);
+                }
+            }
+        }
+    }
+}
+
+// ── nodeType / nodeName (DOM Level 1 reconciler hooks) ──────────────────────
+//
+// React 18's reconciler reads `node.nodeType` (~55 call sites in
+// react-dom.development.js) and `node.nodeName` (~15 sites) on every DOM
+// mutation. Without these, the reconciler bails out before its first
+// commit.
+//
+// Constants per the DOM Level 1 spec:
+//   ELEMENT_NODE = 1, TEXT_NODE = 3, COMMENT_NODE = 8.
+// We omit the rarely-used node types (DOCUMENT_NODE = 9 etc.) — react-dom
+// only checks 1/3/8 in its hot paths.
+
+Object.defineProperty(Element.prototype, "nodeType", {
+    get: function() { return 1; }, // ELEMENT_NODE
+    configurable: true
+});
+
+Object.defineProperty(Element.prototype, "nodeName", {
+    // DOM spec: nodeName for Element is the upper-case tag name.
+    // tagName is already upper-cased in the Element constructor.
+    get: function() { return this.tagName; },
+    configurable: true
+});
+
+// Attach the same numeric constants to the Element constructor so
+// `node.ELEMENT_NODE === 1` style checks (also used by React) succeed.
+Element.ELEMENT_NODE = 1;
+Element.TEXT_NODE = 3;
+Element.COMMENT_NODE = 8;
+Element.prototype.ELEMENT_NODE = 1;
+Element.prototype.TEXT_NODE = 3;
+Element.prototype.COMMENT_NODE = 8;
+
+// ── ID property ──────────────────────────────────────────────────────────────
+
+Object.defineProperty(Element.prototype, "id", {
+    get: function() { return this._userIdSet ? this._attributes["id"] || "" : ""; },
+    set: function(v) {
+        this._userIdSet = true;
+        this._attributes["id"] = v;
+        // Register for getElementById lookup
+        __elements__["#" + v] = this;
+    }
+});
+
+// ── className / classList ────────────────────────────────────────────────────
+
+Object.defineProperty(Element.prototype, "className", {
+    get: function() { return this._className; },
+    set: function(v) {
+        var old = this._className;
+        this._className = v || "";
+        this._updateClassIndex(old, this._className);
+        this._reapplyStylesheets();
+    }
+});
+
+Object.defineProperty(Element.prototype, "classList", {
+    get: function() { return this._classList; }
+});
+
+Element.prototype._updateClassIndex = function(oldStr, newStr) {
+    var oldClasses = oldStr ? oldStr.split(/\s+/).filter(Boolean) : [];
+    var newClasses = newStr ? newStr.split(/\s+/).filter(Boolean) : [];
+    var id = this._id;
+    for (var i = 0; i < oldClasses.length; i++) {
+        var c = oldClasses[i];
+        if (__classIndex__[c]) __classIndex__[c].delete(id);
+    }
+    for (var j = 0; j < newClasses.length; j++) {
+        var c2 = newClasses[j];
+        if (!__classIndex__[c2]) __classIndex__[c2] = new Set();
+        __classIndex__[c2].add(id);
+    }
+};
+
+// ── ClassList ────────────────────────────────────────────────────────────────
+
+function ClassList(el) { this._el = el; }
+
+ClassList.prototype.add = function() {
+    var classes = this._el._className ? this._el._className.split(/\s+/) : [];
+    for (var i = 0; i < arguments.length; i++) {
+        if (classes.indexOf(arguments[i]) < 0) classes.push(arguments[i]);
+    }
+    this._el.className = classes.join(" ");
+};
+
+ClassList.prototype.remove = function() {
+    var classes = this._el._className ? this._el._className.split(/\s+/) : [];
+    for (var i = 0; i < arguments.length; i++) {
+        var idx = classes.indexOf(arguments[i]);
+        if (idx >= 0) classes.splice(idx, 1);
+    }
+    this._el.className = classes.join(" ");
+};
+
+ClassList.prototype.toggle = function(c, force) {
+    if (force !== undefined) {
+        if (force) this.add(c); else this.remove(c);
+        return force;
+    }
+    if (this.contains(c)) { this.remove(c); return false; }
+    this.add(c); return true;
+};
+
+ClassList.prototype.contains = function(c) {
+    return (" " + this._el._className + " ").indexOf(" " + c + " ") >= 0;
+};
+
+ClassList.prototype.toString = function() { return this._el._className; };
+
+Object.defineProperty(ClassList.prototype, "length", {
+    get: function() {
+        return this._el._className ? this._el._className.split(/\s+/).filter(Boolean).length : 0;
+    }
+});
+
+ClassList.prototype.item = function(i) {
+    var classes = this._el._className ? this._el._className.split(/\s+/).filter(Boolean) : [];
+    return classes[i] || null;
+};
+
+// ── textContent / value / hidden / disabled ──────────────────────────────────
+
+Object.defineProperty(Element.prototype, "textContent", {
+    get: function() { return this._textContent; },
+    set: function(v) {
+        this._textContent = v || "";
+        // `<style>` element textContent is CSS source, not a label. Route it
+        // through the rule translator. We deliberately
+        // skip `setText()` so the element stays invisible in the layout.
+        if (this.tagName === "STYLE" || this._isStyleElement) {
+            if (typeof _processStyleElement === "function") {
+                _processStyleElement(this);
+            }
+            return;
+        }
+        if (this._nativeCreated) {
+            setText(this._id, this._textContent);
+        }
+    }
+});
+
+Object.defineProperty(Element.prototype, "value", {
+    get: function() { return this._value; },
+    set: function(v) {
+        this._value = v;
+        if (!this._nativeCreated) return;
+        var tag = this.tagName.toLowerCase();
+        if (tag === "input" && this._type === "range") {
+            var norm = (parseFloat(v) - this._min) / (this._max - this._min);
+            setValue(this._id, Math.max(0, Math.min(1, norm)));
+        } else if (tag === "input" && this._type === "checkbox") {
+            setValue(this._id, v ? 1 : 0);
+        } else if (tag === "progress") {
+            setProgress(this._id, parseFloat(v) || 0);
+        } else {
+            setText(this._id, String(v));
+        }
+    }
+});
+
+Object.defineProperty(Element.prototype, "hidden", {
+    get: function() { return this._hidden; },
+    set: function(v) {
+        this._hidden = !!v;
+        // Shares the widget's visibility slot with CSS `display`.
+        __invalidateStyleCache__(this);
+        if (this._nativeCreated) setVisible(this._id, !this._hidden);
+    }
+});
+
+Object.defineProperty(Element.prototype, "disabled", {
+    get: function() { return this._disabled; },
+    set: function(v) {
+        // Wire the actual native widget disabled-state through `setEnabled`
+        // so the View::enabled_
+        // flag flips. The stylesheet flag alone lets `:disabled` selectors
+        // match but does not stop the underlying widget from handling pointer
+        // events / dispatching change.
+        this._disabled = !!v;
+        if (this._nativeCreated && typeof setEnabled === "function") {
+            setEnabled(this._id, this._disabled ? 0 : 1);
+        }
+        this._reapplyStylesheets();
+    }
+});
+
+// ── <dialog> showModal / close / show ─────────────────────────────────────
+// `<dialog>` creates a hidden Panel and exposes the JS surface for opening /
+// closing. The DOM
+// `HTMLDialogElement` interface defines:
+//   show()      — non-modal open (no backdrop, no input trap)
+//   showModal() — modal open (backdrop, input trap, focus pull)
+//   close()     — close the dialog and dispatch 'close'
+// Pulp doesn't have a native modal-input-trap layer yet, so showModal
+// degrades to show() + the open attribute. The `::backdrop` pseudo-
+// element remains a separate paint-side concern. The methods let consumers
+// using `addEventListener('close', ...)` drive the open state and round-trip the
+// open attribute.
+
+Element.prototype.show = function() {
+    if (this.tagName !== "DIALOG") return;
+    this._dialogOpen = true;
+    this.setAttribute("open", "");
+    if (this._nativeCreated && typeof setVisible === "function") {
+        __invalidateStyleCache__(this);
+        setVisible(this._id, true);
+    }
+    // Dialog focusing: the first autofocus descendant, else the first text
+    // field (opt out with data-pulp-autofocus="off").
+    if (typeof __pulpFocusOpenedDialog__ === "function")
+        __pulpFocusOpenedDialog__(this);
+};
+Element.prototype.showModal = function() {
+    if (this.tagName !== "DIALOG") return;
+    // No native modal-input-trap yet — same effect as show() plus a
+    // `_dialogModal` flag so consumers / future paint code can read
+    // back whether modal semantics were requested.
+    this._dialogModal = true;
+    this.show();
+};
+Element.prototype.close = function(returnValue) {
+    if (this.tagName !== "DIALOG") return;
+    this._dialogOpen = false;
+    this._dialogModal = false;
+    this._dialogReturnValue = (returnValue !== undefined) ? String(returnValue) : "";
+    this.removeAttribute("open");
+    if (this._nativeCreated && typeof setVisible === "function") {
+        __invalidateStyleCache__(this);
+        setVisible(this._id, false);
+    }
+    var evt = (typeof Event === "function")
+        ? new Event("close", { bubbles: false, cancelable: false })
+        : { type: "close", target: this, bubbles: false, cancelable: false,
+            _stopped: false, _defaultPrevented: false, _noBubble: true,
+            stopPropagation: function() { this._stopped = true; },
+            preventDefault: function() {} };
+    this.dispatchEvent(evt);
+};
+Object.defineProperty(Element.prototype, "open", {
+    // Reflects the `open` attribute for <dialog> AND <details>.
+    get: function() {
+        if (this.tagName === "DIALOG") return !!this._dialogOpen;
+        if (this.tagName === "DETAILS") return !!this._detailsOpen;
+        return this._attributes && (this._attributes.open !== undefined);
+    },
+    set: function(v) {
+        var willOpen = !!v;
+        if (this.tagName === "DIALOG") {
+            if (willOpen) this.show(); else this.close();
+            return;
+        }
+        if (this.tagName === "DETAILS") {
+            this._detailsOpen = willOpen;
+            if (willOpen) this.setAttribute("open", "");
+            else this.removeAttribute("open");
+            // Child visibility toggling is not yet wired. For now, re-run
+            // stylesheet matching so `details[open]` selectors update.
+            this._reapplyStylesheets();
+            var tevt = (typeof Event === "function")
+                ? new Event("toggle", { bubbles: false, cancelable: false })
+                : { type: "toggle", target: this, _stopped: false,
+                    _defaultPrevented: false, _noBubble: true,
+                    stopPropagation: function() { this._stopped = true; },
+                    preventDefault: function() {} };
+            this.dispatchEvent(tevt);
+            return;
+        }
+    }
+});
+Object.defineProperty(Element.prototype, "returnValue", {
+    get: function() { return this._dialogReturnValue || ""; },
+    set: function(v) { this._dialogReturnValue = String(v || ""); }
+});
+
+// ── <label> for-attribute focus routing ─────────────────────────────────
+// Clicking a <label> with a `for` attribute transfers focus / activation to
+// the labeled element through Element.focus(), which moves native keyboard
+// focus (setFocus) and keeps activeElement and the focus event in step.
+
+Element.prototype._labelForRoutingInstalled = false;
+Element.prototype._installLabelForRouting = function() {
+    if (this.tagName !== "LABEL") return;
+    if (this._labelForRoutingInstalled) return;
+    this._labelForRoutingInstalled = true;
+    var self = this;
+    this.addEventListener("click", function(evt) {
+        var forId = self.getAttribute("for");
+        if (!forId || typeof document === "undefined") return;
+        var target = document.getElementById(forId);
+        if (!target) return;
+        // Focus the labeled element. For checkbox/radio inputs the
+        // standard behavior is to also toggle/activate.
+        if (typeof target.focus === "function") target.focus();
+        if (target.tagName === "INPUT" &&
+            (target._type === "checkbox" || target._type === "radio")) {
+            target.checked = !target._checked;
+            var ievt = (typeof Event === "function")
+                ? new Event("input", { bubbles: true })
+                : { type: "input", target: target, _stopped: false,
+                    _defaultPrevented: false, _noBubble: false,
+                    stopPropagation: function() { this._stopped = true; },
+                    preventDefault: function() {} };
+            target.dispatchEvent(ievt);
+        }
+    });
+};
+
+// ── Input-specific properties ────────────────────────────────────────────────
+
+// Reflects the `autofocus` content attribute. Honoured once, when the element
+// is first connected to the document (see __pulpApplyMountFocus__).
+Object.defineProperty(Element.prototype, "autofocus", {
+    get: function() { return this.hasAttribute("autofocus"); },
+    set: function(v) {
+        if (v) this.setAttribute("autofocus", "");
+        else this.removeAttribute("autofocus");
+    }
+});
+
+Object.defineProperty(Element.prototype, "type", {
+    get: function() { return this._type; },
+    set: function(v) { this._type = v || "text"; }
+});
+
+Object.defineProperty(Element.prototype, "min", {
+    get: function() { return this._min; },
+    set: function(v) { this._min = parseFloat(v) || 0; }
+});
+
+Object.defineProperty(Element.prototype, "max", {
+    get: function() { return this._max; },
+    set: function(v) { this._max = parseFloat(v) || 100; }
+});
+
+Object.defineProperty(Element.prototype, "checked", {
+    get: function() { return this._checked; },
+    set: function(v) {
+        this._checked = !!v;
+        if (this._nativeCreated) setValue(this._id, v ? 1 : 0);
+    }
+});
+
+Object.defineProperty(Element.prototype, "placeholder", {
+    get: function() { return this._placeholder; },
+    set: function(v) {
+        this._placeholder = v || "";
+        if (this._nativeCreated) setPlaceholder(this._id, this._placeholder);
+    }
+});
+
+// ── DOM manipulation ─────────────────────────────────────────────────────────
+
+// `src` reflects to the attribute, like the other reflected properties above.
+// Delegate to setAttribute so property and attribute writes share the existing
+// ImageView replay path, including assignments made before appendChild.
+Object.defineProperty(Element.prototype, "src", {
+    get: function() {
+        var v = this._attributes ? this._attributes.src : undefined;
+        return v === undefined ? "" : String(v);
+    },
+    set: function(v) { this.setAttribute("src", v == null ? "" : String(v)); }
+});
+
+Object.defineProperty(Element.prototype, "children", {
+    get: function() { return this._children.slice(); }
+});
+
+Object.defineProperty(Element.prototype, "childNodes", {
+    get: function() { return this._children.slice(); }
+});
+
+Object.defineProperty(Element.prototype, "firstChild", {
+    get: function() { return this._children[0] || null; }
+});
+
+Object.defineProperty(Element.prototype, "lastChild", {
+    get: function() { return this._children[this._children.length - 1] || null; }
+});
+
+Object.defineProperty(Element.prototype, "parentElement", {
+    get: function() { return this._parentElement; }
+});
+
+Object.defineProperty(Element.prototype, "parentNode", {
+    get: function() { return this._parentElement; }
+});
+
+Object.defineProperty(Element.prototype, "nextSibling", {
+    get: function() {
+        if (!this._parentElement) return null;
+        var siblings = this._parentElement._children;
+        var idx = siblings.indexOf(this);
+        return idx >= 0 && idx < siblings.length - 1 ? siblings[idx + 1] : null;
+    }
+});
+
+Object.defineProperty(Element.prototype, "previousSibling", {
+    get: function() {
+        if (!this._parentElement) return null;
+        var siblings = this._parentElement._children;
+        var idx = siblings.indexOf(this);
+        return idx > 0 ? siblings[idx - 1] : null;
+    }
+});
+
+// appendChild, removeChild, insertBefore, replaceChild, remove are bound
+// in web-compat-dom-ops.js (a small file that stays under QuickJS's
+// compilation stack limit)
+
+Element.prototype.cloneNode = function(deep) {
+    var clone = new Element(this.tagName.toLowerCase());
+    clone._className = this._className;
+    clone._textContent = this._textContent;
+    clone._type = this._type;
+    clone._value = this._value;
+    // Copy style declarations
+    for (var k in this.style._props) {
+        clone.style._props[k] = this.style._props[k];
+    }
+    if (deep) {
+        for (var i = 0; i < this._children.length; i++) {
+            clone.appendChild(this._children[i].cloneNode(true));
+        }
+    }
+    return clone;
+};
+
+// ── Attributes ───────────────────────────────────────────────────────────────
+
+Element.prototype.setAttribute = function(name, value) {
+    this._attributes[name] = String(value);
+    // Deliberately NOT part of the exclusive chain below: `role` already has a
+    // branch there that resets View::access_role_, and folding the overlay
+    // re-evaluation into an `else if` on the same name silently shadows it —
+    // the accessibility slot then stops tracking the attribute, with nothing
+    // in the overlay behaviour looking wrong.
+    if ((name === "role" || name === "aria-modal") && this.style
+        && this.style._reevaluateOverlay) {
+        this.style._reevaluateOverlay();
+    }
+    // `aria-owns` declares which lifted submenu belongs to this overlay, so the
+    // claim it changes is the OWNED element's, not this one's. It also has no
+    // branch in the exclusive chain below, so it is handled here for the same
+    // reason `role` is.
+    if (name === "aria-owns") __pulpReevaluateOwnedOverlays__(this);
+    if (name === "id") this.id = value;
+    else if (name === "class") this.className = value;
+    else if (name.indexOf("data-") === 0) {
+        this._dataset[_camelCase(name.slice(5))] = value;
+        // `data-overlay="true"` is the explicit author hint for the
+        // auto-overlay heuristic. Re-evaluate now
+        // so the bridge sees the claim/release immediately rather than
+        // waiting for an unrelated style mutation to drive it.
+        // `data-overlay-parent` names the overlay a lifted submenu stacks on.
+        // It is not itself a claim, but it qualifies one, and a claim that
+        // lands before the name is readable has already dismissed the menu the
+        // submenu belongs to.
+        if ((name === "data-overlay" || name === "data-overlay-trigger" ||
+             name === "data-overlay-parent") &&
+            this.style && this.style._reevaluateOverlay) {
+            this.style._reevaluateOverlay();
+        }
+    }
+    // The split element prelude is the runtime path for
+    // document.createElement(); keep it in lockstep
+    // with the legacy web-compat.js bundle so HTML `dir` attributes
+    // reach the same View::WritingDirection slot as CSS `direction`.
+    // `aria-haspopup` marks an overlay TRIGGER (see _reevaluateOverlay). It is
+    // not a data-* attribute, so it needs its own branch: without it the mark
+    // would only land if some unrelated style write happened to drive the
+    // heuristic later, which for a static toolbar button never happens.
+    else if (name === "aria-haspopup" && this.style
+             && this.style._reevaluateOverlay) {
+        this.style._reevaluateOverlay();
+    }
+    else if (name === "dir" && typeof setDirection !== "undefined") {
+        var dv = String(value).toLowerCase();
+        if (dv === "rtl" || dv === "ltr" || dv === "auto") {
+            setDirection(this._id, dv);
+        }
+    }
+    // HTML `width`/`height` attributes on layout-leaf elements
+    // (<svg>, <img>, <canvas>, <video>) are presentational
+    // dimensions per the HTML spec. JSX/React encodes inline SVG sizes
+    // this way (`<svg width="28" height="20">`), so we MUST translate
+    // these to flex preferred sizing or the element collapses to 0
+    // and its row siblings have no anchor. The shared helper handles
+    // both paths (createElement-then-mount and setAttribute-before-mount)
+    // and is a no-op when the widget isn't created yet — appendChild
+    // re-runs the replay once the native node exists.
+    else if (name === "width" || name === "height") {
+        // <rect> uses width/height as geometry — route those to the
+        // SvgRect replay so post-mount resizes reach the native widget.
+        // Other tags (img/video/svg) keep the media-attr reservation path.
+        if (this.tagName === "RECT" &&
+            typeof __replaySvgRectAttributes__ === "function") {
+            __replaySvgRectAttributes__(this);
+        } else if (typeof __replayMediaAttributes__ === "function") {
+            __replayMediaAttributes__(this);
+        }
+    }
+    // `<label for="x">` click routing. The appendChild fast path goes through
+    // C++ `__domAppend` and skips
+    // JS-side `_ensureNative`, so the install hook in _ensureNative
+    // alone misses the React-style commit path. Install when the
+    // `for` attribute lands on a LABEL element — idempotent because
+    // `_installLabelForRouting` early-returns if already installed.
+    else if (name === "for" && this.tagName === "LABEL") {
+        this._installLabelForRouting();
+    }
+    // `<img src="...">` routes to setImageSource on the ImageView native
+    // widget. ImageView::paint then decodes via
+    // SkData::MakeFromFileName + SkImages::DeferredFromEncodedData
+    // (Skia draw_image_from_file path). Idempotent: also replayed by
+    // __replayMediaAttributes__ in the appendChild-after-setAttribute
+    // path. File paths and self-contained data: image URLs are supported;
+    // http(s) fetching remains unsupported.
+    else if (name === "src" && this.tagName === "IMG") {
+        if (this._nativeCreated && typeof setImageSource === "function") {
+            setImageSource(this._id, String(value));
+        }
+    }
+    // ARIA accessibility setters. `aria-label` / `role` round-trip through
+    // native View::access_label_
+    // and View::access_role_ so the macOS NSAccessibility bridge (and
+    // the cross-platform AccessibilityTree snapshot) can read them.
+    // Other ARIA attributes still store via _attributes for getAttribute
+    // round-tripping; only label/role and the state attributes below have
+    // native Pulp storage slots. The bridge is a no-op when the widget hasn't been
+    // created yet; the appendChild path replays the
+    // attribute through the same code path.
+    else if (name === "aria-label") {
+        if (this._nativeCreated && typeof setAccessibilityLabel === "function") {
+            setAccessibilityLabel(this._id, String(value));
+        }
+    }
+    else if (name === "role") {
+        if (this._nativeCreated && typeof setAccessibilityRole === "function") {
+            setAccessibilityRole(this._id, String(value));
+        }
+    }
+    // ARIA state attributes (aria-pressed/checked/disabled/hidden) route
+    // through setAccessibilityState. Same pre-mount
+    // capture pattern as aria-label / role above; __replayAriaAttributes__
+    // flushes from _attributes when _nativeCreated flips. Other ARIA
+    // attributes still store via _attributes for getAttribute round-trip only.
+    else if (name === "aria-pressed" || name === "aria-checked" ||
+             name === "aria-disabled" || name === "aria-hidden") {
+        if (this._nativeCreated && typeof setAccessibilityState === "function") {
+            setAccessibilityState(this._id, name.slice(5), String(value));
+        }
+    }
+    // `<path d=... stroke=... stroke-width=... fill=...>` routes through the
+    // SvgPathWidget bridge. Idempotent: also replayed
+    // by __replaySvgPathAttributes__ in the appendChild-after-setAttribute
+    // path. We forward immediately if the widget already exists, and let
+    // the replay flush from _attributes for the pre-mount case.
+    else if (this.tagName === "PATH" &&
+             (name === "d" || name === "stroke" || name === "fill" ||
+              name === "fill-rule" || name === "fillRule" ||
+              name === "stroke-width" || name === "strokeWidth")) {
+        if (this._nativeCreated) {
+            if (name === "d" && typeof setSvgPath === "function") {
+                setSvgPath(this._id, String(value));
+            } else if (name === "stroke" && typeof setSvgStroke === "function") {
+                setSvgStroke(this._id, String(value));
+            } else if (name === "fill" && typeof setSvgFill === "function") {
+                setSvgFill(this._id, String(value));
+            } else if ((name === "fill-rule" || name === "fillRule") &&
+                       typeof setSvgFillRule === "function") {
+                // Live winding-rule update on an existing path.
+                setSvgFillRule(this._id, String(value));
+            } else if ((name === "stroke-width" || name === "strokeWidth") &&
+                       typeof setSvgStrokeWidth === "function") {
+                var p = parseFloat(value);
+                if (p === p) setSvgStrokeWidth(this._id, p);
+            }
+        }
+    }
+    // Raw <rect> / <line> live setAttribute parity with <path>: mount-time
+    // replay already runs from appendChild, but post-mount attribute
+    // mutations (x/y/fill/stroke/... ) were dropped for rect/line because
+    // only PATH was wired here. Re-run the replay helper, which reads the
+    // now-current this._attributes (setAttribute stores it above before
+    // dispatch). width/height for <rect> are handled in the media-attr
+    // branch above.
+    else if (this.tagName === "RECT" &&
+             (name === "x" || name === "y" || name === "fill" ||
+              name === "stroke" || name === "stroke-width" ||
+              name === "strokeWidth")) {
+        if (this._nativeCreated &&
+            typeof __replaySvgRectAttributes__ === "function") {
+            __replaySvgRectAttributes__(this);
+        }
+    }
+    else if (this.tagName === "LINE" &&
+             (name === "x1" || name === "y1" || name === "x2" ||
+              name === "y2" || name === "stroke" ||
+              name === "stroke-width" || name === "strokeWidth")) {
+        if (this._nativeCreated &&
+            typeof __replaySvgLineAttributes__ === "function") {
+            __replaySvgLineAttributes__(this);
+        }
+    }
+};
+
+Element.prototype.getAttribute = function(name) {
+    if (name === "id") return this.id;
+    if (name === "class") return this.className;
+    return this._attributes[name] !== undefined ? this._attributes[name] : null;
+};
+
+Element.prototype.removeAttribute = function(name) {
+    var was = this._attributes[name];
+    delete this._attributes[name];
+    // Separate pass, for the same reason as in setAttribute: `role` also owns
+    // a branch in the exclusive chain below.
+    if ((name === "role" || name === "aria-modal") && was !== undefined
+        && this.style && this.style._reevaluateOverlay) {
+        this.style._reevaluateOverlay();
+    }
+    // Withdrawing `aria-owns` withdraws the declaration, so the panel it named
+    // goes back to claiming as an ordinary overlay. Read from `was`, because
+    // the attribute is already gone from this element.
+    if (name === "aria-owns" && was !== undefined
+        && typeof document !== "undefined" && document.getElementById) {
+        var ownedTokens = String(was).trim().split(/\s+/);
+        for (var oi = 0; oi < ownedTokens.length; ++oi) {
+            if (!ownedTokens[oi]) continue;
+            var formerlyOwned = document.getElementById(ownedTokens[oi]);
+            if (formerlyOwned && formerlyOwned !== this && formerlyOwned.style
+                && formerlyOwned.style._reevaluateOverlay)
+                formerlyOwned.style._reevaluateOverlay();
+        }
+    }
+    if (name.indexOf("data-") === 0) {
+        delete this._dataset[_camelCase(name.slice(5))];
+        // Clearing `data-overlay` may release the auto-claim if no CSS shape
+        // still satisfies the heuristic.
+        if ((name === "data-overlay" || name === "data-overlay-trigger" ||
+             name === "data-overlay-parent") &&
+            was !== undefined && this.style && this.style._reevaluateOverlay) {
+            this.style._reevaluateOverlay();
+        }
+    }
+    // A control that stops offering a popup stops being an overlay trigger,
+    // so the mark has to come off with the attribute.
+    else if (name === "aria-haspopup" && was !== undefined && this.style
+             && this.style._reevaluateOverlay) {
+        this.style._reevaluateOverlay();
+    }
+    // Reset View::access_role_ / access_label_ when role / aria-label are
+    // removed, otherwise assistive tech can read stale native state after the
+    // author detaches the attribute.
+    else if (name === "role" && this._nativeCreated &&
+             typeof setAccessibilityRole === "function") {
+        setAccessibilityRole(this._id, "");
+    }
+    else if (name === "aria-label" && this._nativeCreated &&
+             typeof setAccessibilityLabel === "function") {
+        setAccessibilityLabel(this._id, "");
+    }
+    // Same reset semantics for ARIA state attributes.
+    // Empty string clears the View::access_*_ slot.
+    else if ((name === "aria-pressed" || name === "aria-checked" ||
+              name === "aria-disabled" || name === "aria-hidden") &&
+             this._nativeCreated &&
+             typeof setAccessibilityState === "function") {
+        setAccessibilityState(this._id, name.slice(5), "");
+    }
+};
+
+Element.prototype.hasAttribute = function(name) {
+    return this._attributes[name] !== undefined;
+};
+
+Object.defineProperty(Element.prototype, "dataset", {
+    get: function() { return this._dataset; }
+});
+
+function _camelCase(str) {
+    return str.replace(/-([a-z])/g, function(_, c) { return c.toUpperCase(); });
+}
+
+// ── getBoundingClientRect ────────────────────────────────────────────────────
+
+Element.prototype.getBoundingClientRect = function() {
+    if (!this._nativeCreated) return { x: 0, y: 0, width: 0, height: 0, top: 0, right: 0, bottom: 0, left: 0 };
+    // Use native bridge if available, otherwise return zeros
+    if (typeof getLayoutRect === "function") {
+        var r = getLayoutRect(this._id);
+        if (r) return r;
+    }
+    return { x: 0, y: 0, width: 0, height: 0, top: 0, right: 0, bottom: 0, left: 0 };
+};
+
+// ── offsetWidth / offsetHeight ───────────────────────────────────────────────
+
+Object.defineProperty(Element.prototype, "offsetWidth", {
+    get: function() {
+        var m = typeof getLayoutBoxMetrics === "function" ? getLayoutBoxMetrics(this._id) : null;
+        return m ? m.offsetWidth : this.getBoundingClientRect().width;
+    }
+});
+
+Object.defineProperty(Element.prototype, "offsetHeight", {
+    get: function() {
+        var m = typeof getLayoutBoxMetrics === "function" ? getLayoutBoxMetrics(this._id) : null;
+        return m ? m.offsetHeight : this.getBoundingClientRect().height;
+    }
+});
+
+Object.defineProperty(Element.prototype, "clientWidth", {
+    get: function() {
+        var m = typeof getLayoutBoxMetrics === "function" ? getLayoutBoxMetrics(this._id) : null;
+        return m ? m.clientWidth : this.offsetWidth;
+    }
+});
+
+Object.defineProperty(Element.prototype, "clientHeight", {
+    get: function() {
+        var m = typeof getLayoutBoxMetrics === "function" ? getLayoutBoxMetrics(this._id) : null;
+        return m ? m.clientHeight : this.offsetHeight;
+    }
+});
+
+Object.defineProperty(Element.prototype, "ownerDocument", {
+    get: function() {
+        return typeof document !== "undefined" ? document : null;
+    }
+});
+
+Element.prototype.getRootNode = function() {
+    if (typeof document !== "undefined") return document;
+    return this;
+};
+
+// Standard DOM `Node.contains(other)` — returns true if `other` is this
+// element OR a descendant. Walks `_parentElement` upward from `other`
+// until we hit `this`, the root, or a cycle. Required for click-outside
+// detection (the `ref.current.contains(e.target)` pattern in React
+// portals / ContextMenus). Without this, the modular Element shim would throw
+// `TypeError: ref.current.contains is not a function` on ContextMenu dismiss.
+//
+// Treats non-Element arguments (text nodes, null, etc.) as `false` —
+// the contract is loose because most consumers feed e.target which is
+// always an Element in our event system.
+Element.prototype.contains = function(other) {
+    if (other == null) return false;
+    if (other === this) return true;
+    // Guard against pathological cycles even though _parentElement
+    // walks should be acyclic in practice.
+    var seen = 0;
+    var node = other._parentElement;
+    while (node) {
+        if (node === this) return true;
+        if (++seen > 4096) return false;
+        node = node._parentElement;
+    }
+    return false;
+};
+
+// ── Stylesheet re-application ────────────────────────────────────────────────
+
+Element.prototype._reapplyStylesheets = function() {
+    for (var i = 0; i < __stylesheets__.length; i++) {
+        __stylesheets__[i]._applyTo(this);
+    }
+};
+
+// ── Native reparenting helper ────────────────────────────────────────────────
+
+function _reparentNative(child, parentId) {
+    var tag = child.tagName.toLowerCase();
+    var id = child._id;
+
+    // Re-create the widget under the new parent
+    if (tag === "div" || tag === "section" || tag === "article" || tag === "aside" ||
+        tag === "header" || tag === "footer" || tag === "nav" || tag === "main") {
+        if (__pulpElementWantsScrollView__(child)) createScrollView(id, parentId);
+        else createCol(id, parentId);
+    } else if (tag === "span" || tag === "p" || tag === "label" ||
+               tag === "h1" || tag === "h2" || tag === "h3" ||
+               tag === "h4" || tag === "h5" || tag === "h6") {
+        createLabel(id, child._textContent || "", parentId);
+    } else if (tag === "svg") {
+        // Same reasoning as _ensureNative: keep the SVG node as a layout
+        // container so child elements still
+        // attach. The width/height attributes are replayed by the
+        // shared helper at the end of this function.
+        createCol(id, parentId);
+    } else if (tag === "path") {
+        // `<path>` reparent path mirrors _ensureNative.
+        // SvgPath attribute replay runs at the end of this function.
+        if (typeof createSvgPath === "function") {
+            createSvgPath(id, parentId);
+        } else {
+            createCol(id, parentId);
+        }
+    } else if (tag === "button") {
+        createToggleButton(id, parentId);
+    } else if (tag === "input") {
+        var t = child._type || "text";
+        // Horizontal-by-default range slider. See __resolveRangeOrientation__
+        // in _ensureNative.
+        if (t === "range") createFader(id, __resolveRangeOrientation__(child), parentId);
+        else if (t === "checkbox") createCheckbox(id, parentId);
+        else createTextEditor(id, parentId);
+    } else if (tag === "textarea") {
+        createTextEditor(id, parentId);
+        setMultiLine(id, 1);
+    } else if (tag === "select") {
+        createCombo(id, parentId);
+    } else if (tag === "canvas") {
+        createCanvas(id, parentId);
+    } else if (tag === "progress") {
+        createProgress(id, parentId);
+    } else if (tag === "hr") {
+        createCol(id, parentId);
+        setFlex(id, "height", 1);
+        setBackground(id, "#666666");
+    } else if (tag === "img") {
+        // See initial-mount img branch above. _reparentNative here covers the
+        // late-mount case (e.g. detached DOM that's later
+        // appended); same createImage routing so the bridge fn matches
+        // the harness oracle's `expected_bridge_calls: ["createImage"]`.
+        createImage(id, parentId);
+    } else if (tag === "dialog") {
+        createPanel(id, parentId);
+        setVisible(id, false);
+    } else {
+        createCol(id, parentId);
+    }
+
+    child._nativeCreated = true;
+    __invalidateStyleCache__(child);
+
+    // Replay presentational attributes after the native node is recreated so
+    // the new flex sizing matches the original.
+    if (typeof __replayMediaAttributes__ === "function") {
+        __replayMediaAttributes__(child);
+    }
+    // Replay ARIA attributes after reparent.
+    if (typeof __replayAriaAttributes__ === "function") {
+        __replayAriaAttributes__(child);
+    }
+    // Replay SvgPath attributes after reparent so the SvgPathWidget bridge
+    // sees d / stroke / stroke-width / fill /
+    // viewBox even if the path was constructed before mount.
+    if (typeof __replaySvgPathAttributes__ === "function") {
+        __replaySvgPathAttributes__(child);
+    }
+
+    // Recursively reparent children
+    for (var i = 0; i < child._children.length; i++) {
+        var c = child._children[i];
+        if (c._nativeCreated) removeWidget(c._id);
+        _reparentNative(c, id);
+        if (c._textContent) setText(c._id, c._textContent);
+        c.style._flushAll();
+    }
+}

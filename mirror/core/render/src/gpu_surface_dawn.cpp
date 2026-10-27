@@ -1,0 +1,870 @@
+#include <array>
+#include <chrono>
+#include <pulp/render/gpu_render_time.hpp>
+#include <pulp/render/gpu_startup_report.hpp>
+#include <pulp/render/gpu_surface.hpp>
+#include <pulp/runtime/log.hpp>
+#include <string>
+#include <vector>
+
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
+#ifdef PULP_HAS_SKIA
+// When Skia is available, we use Dawn's C++ API (which Skia requires).
+// This ensures a single Dawn device can be shared with SkiaSurface.
+
+#include "dawn/native/DawnNative.h"
+#include "webgpu/webgpu_cpp.h"
+#include <pulp/render/gpu_diagnostics.hpp>
+#include <pulp/render/gpu_proc_installer.hpp>
+#include <pulp/runtime/log.hpp>
+#include <pulp/runtime/trace.hpp>
+
+namespace pulp::render {
+
+namespace {
+
+double elapsed_ms(std::chrono::steady_clock::time_point since) {
+    return std::chrono::duration<double, std::milli>(
+               std::chrono::steady_clock::now() - since)
+        .count();
+}
+
+const char* dawn_present_mode_name(wgpu::PresentMode m) {
+    switch (m) {
+        case wgpu::PresentMode::Fifo:      return "Fifo(vsync-blocking)";
+        case wgpu::PresentMode::FifoRelaxed: return "FifoRelaxed";
+        case wgpu::PresentMode::Immediate: return "Immediate";
+        case wgpu::PresentMode::Mailbox:   return "Mailbox";
+        default:                           return "unknown";
+    }
+}
+
+std::string dawn_backend_type_name(wgpu::BackendType type) {
+    switch (type) {
+        case wgpu::BackendType::Metal: return "Metal";
+        case wgpu::BackendType::D3D12: return "D3D12";
+        case wgpu::BackendType::Vulkan: return "Vulkan";
+        case wgpu::BackendType::OpenGL: return "OpenGL";
+        case wgpu::BackendType::OpenGLES: return "OpenGLES";
+        case wgpu::BackendType::Null: return "Null";
+        case wgpu::BackendType::WebGPU: return "WebGPU";
+        default: return "Unknown";
+    }
+}
+
+GpuSurface::AdapterType dawn_adapter_type(wgpu::AdapterType type) {
+    switch (type) {
+        case wgpu::AdapterType::IntegratedGPU:
+            return GpuSurface::AdapterType::integrated_gpu;
+        case wgpu::AdapterType::DiscreteGPU:
+            return GpuSurface::AdapterType::discrete_gpu;
+        case wgpu::AdapterType::CPU:
+            return GpuSurface::AdapterType::cpu;
+        default:
+            return GpuSurface::AdapterType::unknown;
+    }
+}
+
+std::string dawn_texture_format_name(wgpu::TextureFormat format) {
+    switch (format) {
+        case wgpu::TextureFormat::BGRA8Unorm: return "bgra8unorm";
+        case wgpu::TextureFormat::RGBA8Unorm: return "rgba8unorm";
+        case wgpu::TextureFormat::BGRA8UnormSrgb: return "bgra8unorm-srgb";
+        case wgpu::TextureFormat::RGBA8UnormSrgb: return "rgba8unorm-srgb";
+        default: return "bgra8unorm";
+    }
+}
+
+std::string dawn_string_view_to_string(wgpu::StringView view) {
+    if (view.data == nullptr || view.length == 0) {
+        return {};
+    }
+    return std::string(view.data, view.length);
+}
+
+wgpu::BackendType dawn_backend_preference(
+    GpuSurface::AdapterBackendPreference preference) {
+    switch (preference) {
+        case GpuSurface::AdapterBackendPreference::null_backend:
+            return wgpu::BackendType::Null;
+        case GpuSurface::AdapterBackendPreference::vulkan:
+            return wgpu::BackendType::Vulkan;
+        case GpuSurface::AdapterBackendPreference::d3d12:
+            return wgpu::BackendType::D3D12;
+        case GpuSurface::AdapterBackendPreference::default_backend:
+            return wgpu::BackendType::Undefined;
+    }
+    return wgpu::BackendType::Undefined;
+}
+
+} // namespace
+
+class DawnGpuSurface : public GpuSurface {
+public:
+    ~DawnGpuSurface() override {
+        // Release in reverse order — native instance last (owns the backend)
+        current_texture_ = nullptr;
+        surface_ = nullptr;
+        queue_ = nullptr;
+        device_ = nullptr;
+        adapter_ = nullptr;
+        instance_ = nullptr;
+        native_instance_.reset();
+    }
+
+    bool initialize(const Config& config) override {
+        width_ = config.width;
+        height_ = config.height;
+        timings_ = {};
+        auto stage_start = std::chrono::steady_clock::now();
+
+        // Dawn's proc table is process-global; the process's installer (Pulp's
+        // native default unless a host registered its own) owns it.
+        std::string proc_error;
+        if (!ensure_dawn_procs(&proc_error)) {
+            runtime::log_error("GpuSurface: Dawn proc table unavailable: {}", proc_error);
+            return false;
+        }
+
+        // Create Dawn native instance — must stay alive for the lifetime of
+        // all adapters and devices created from it. The wgpu::Instance wrapper
+        // does not retain ownership of the native instance.
+        //
+        // Enable TimedWaitAny so Skia Graphite's timed waits work correctly.
+        wgpu::InstanceDescriptor inst_desc{};
+        wgpu::InstanceFeatureName required_features[] = {
+            wgpu::InstanceFeatureName::TimedWaitAny,
+        };
+        inst_desc.requiredFeatureCount = 1;
+        inst_desc.requiredFeatures = required_features;
+
+        native_instance_ = std::make_unique<dawn::native::Instance>(
+            reinterpret_cast<const WGPUInstanceDescriptor*>(&inst_desc));
+        instance_ = wgpu::Instance(native_instance_->Get());
+        if (!instance_) {
+            runtime::log_error("GpuSurface: failed to create Dawn instance");
+            return false;
+        }
+        timings_.instance_ms = elapsed_ms(stage_start);
+
+        // Create native surface from platform layer (if provided)
+        double surface_ms = 0.0;
+        if (config.native_surface_handle) {
+            stage_start = std::chrono::steady_clock::now();
+            create_native_surface(config.native_surface_handle);
+            surface_ms += elapsed_ms(stage_start);
+        }
+        stage_start = std::chrono::steady_clock::now();
+
+        // Request adapter (compatible with surface if we have one). The
+        // software proof lane selects a concrete backend and enumerates CPU
+        // adapters. Dawn's forceFallbackAdapter hint asks for SwiftShader on
+        // some builds, which is not the hosted Linux/Windows software path
+        // (lavapipe/WARP) and can therefore return no adapter at all.
+        wgpu::RequestAdapterOptions adapter_opts{};
+        adapter_opts.powerPreference = wgpu::PowerPreference::HighPerformance;
+        adapter_opts.forceFallbackAdapter = config.force_fallback_adapter;
+        adapter_opts.backendType = dawn_backend_preference(
+            config.backend_preference);
+        if (surface_) {
+            adapter_opts.compatibleSurface = surface_;
+        }
+
+        const bool explicit_software_backend =
+            config.backend_preference == AdapterBackendPreference::vulkan ||
+            config.backend_preference == AdapterBackendPreference::d3d12;
+        if (explicit_software_backend) {
+            // Enumerate instead of relying on RequestAdapter's power
+            // preference. The hosted proof must reject a hardware adapter if
+            // one is present and bind to the CPU adapter from the requested
+            // backend (lavapipe on Vulkan, WARP on D3D12).
+            adapter_opts.forceFallbackAdapter = false;
+            const auto candidates = native_instance_->EnumerateAdapters(&adapter_opts);
+            for (const auto& candidate : candidates) {
+                wgpu::Adapter selected(candidate.Get());
+                wgpu::AdapterInfo info{};
+                if (selected.GetInfo(&info) == wgpu::Status::Success &&
+                    info.adapterType == wgpu::AdapterType::CPU) {
+                    adapter_ = std::move(selected);
+                    break;
+                }
+            }
+        } else {
+            instance_.RequestAdapter(
+                &adapter_opts, wgpu::CallbackMode::AllowProcessEvents,
+                [this](wgpu::RequestAdapterStatus status, wgpu::Adapter result, wgpu::StringView) {
+                    if (status == wgpu::RequestAdapterStatus::Success) {
+                        adapter_ = std::move(result);
+                    }
+                });
+            instance_.ProcessEvents();
+        }
+
+        if (!adapter_) {
+            runtime::log_error("GpuSurface: no suitable GPU adapter found");
+            return false;
+        }
+        timings_.adapter_ms = elapsed_ms(stage_start);
+        stage_start = std::chrono::steady_clock::now();
+
+        // Request device
+        wgpu::DeviceDescriptor device_desc{};
+        device_desc.label = "Pulp GPU Device";
+
+        // Opt the device into useful features when the adapter advertises
+        // them. Strictly gated: requesting a feature the adapter lacks
+        // fails RequestDevice, so only add it when advertised. Feature
+        // array must outlive the synchronous RequestDevice call below —
+        // it does (same scope).
+        //
+        // - TimestampQuery: lets Skia Graphite report per-recording GPU
+        //   render time via GpuStats(kElapsedTime).
+        // - IndirectFirstInstance: lets WebGPU consumers (notably
+        //   Three.js's WebGPURenderer) issue drawIndexed / draw calls
+        //   with non-zero firstInstance. Without this the Three.js
+        //   render path validates as "First instance must be zero" and
+        //   every command buffer is dropped — every frame paints nothing.
+        //   Apple Metal supports the feature; iOS Sim with the Metal backend
+        //   typically advertises it.
+        std::vector<wgpu::FeatureName> required_device_features;
+        bool timestamp_query_requested = false;
+        // Adapter SUPPORT is not consent. Requesting this feature forces the
+        // `allow_unsafe_apis` toggle on below, which changes the device's
+        // validation posture for ordinary rendering — so it is gated on the
+        // caller explicitly asking for timing, not on the adapter offering it.
+        if (config.enable_gpu_timing &&
+            adapter_.HasFeature(wgpu::FeatureName::TimestampQuery)) {
+            required_device_features.push_back(wgpu::FeatureName::TimestampQuery);
+            timestamp_query_requested = true;
+            runtime::log_info("GpuSurface: enabling timestamp-query (GPU render time gated on Graphite supportedGpuStats)");
+        } else if (adapter_.HasFeature(wgpu::FeatureName::TimestampQuery)) {
+            runtime::log_info(
+                "GpuSurface: adapter offers timestamp-query but GPU timing was "
+                "not requested — keeping full device validation");
+        }
+        if (adapter_.HasFeature(wgpu::FeatureName::IndirectFirstInstance)) {
+            required_device_features.push_back(wgpu::FeatureName::IndirectFirstInstance);
+            runtime::log_info("GpuSurface: enabling indirect-first-instance (Three.js / non-zero firstInstance draws)");
+        }
+        if (!required_device_features.empty()) {
+            device_desc.requiredFeatureCount = required_device_features.size();
+            device_desc.requiredFeatures = required_device_features.data();
+        }
+
+        // Enable Dawn's `skip_validation` + `allow_unsafe_apis` toggles on iOS
+        // Simulator only. The Sim's Metal SoftwareRenderer advertises
+        // IndirectFirstInstance but Dawn's spec validator still rejects
+        // Skia/Graphite's per-frame instanced draws every frame; the rejected
+        // CommandBuffer poisons the queue and the visible CAMetalLayer never
+        // gets painted. The toggle bypasses the spec validator so the actual
+        // Metal draw runs. Production iPad keeps validation on because Apple
+        // GPU honors the feature natively.
+        std::vector<const char*> enabled_toggles;
+        wgpu::DawnTogglesDescriptor toggles_desc{};
+        bool needs_unsafe_apis = false;
+#if defined(TARGET_OS_SIMULATOR) && TARGET_OS_SIMULATOR
+        enabled_toggles.push_back("skip_validation");
+        needs_unsafe_apis = true;
+        runtime::log_info("GpuSurface: iOS Sim — enabling skip_validation + allow_unsafe_apis Dawn toggles");
+#endif
+        // TimestampQuery is only half the story: Skia Graphite records GPU
+        // elapsed time with writeTimestamp, and Dawn gates writeTimestamp
+        // behind allow_unsafe_apis on every backend. Requesting the FEATURE
+        // without the TOGGLE makes Dawn reject the timestamp write — and, with
+        // it, the entire command buffer — on EVERY frame. Nothing is ever
+        // presented, so the editor stays black while rendering itself looks
+        // healthy: offscreen readback still shows a correct frame, which is
+        // exactly how this hid behind a "first-frame readback" probe that
+        // appeared to fix it.
+        //
+        // Observed on the D3D12 adapter an x64 plug-in gets when hosted under
+        // Windows-on-ARM emulation, whose uncaptured-error callback repeats:
+        //   "writeTimestamp requires enabling toggle allow_unsafe_apis"
+        //
+        // Same failure shape as the iOS Simulator case above — an advertised
+        // feature that Dawn's validator then refuses to let Skia use.
+        if (timestamp_query_requested) needs_unsafe_apis = true;
+        if (needs_unsafe_apis) enabled_toggles.push_back("allow_unsafe_apis");
+
+        // Dawn quantizes timestamp-query results to 65536 ns unless this
+        // toggle is disabled, which leaves the GPU render-time metric with
+        // about four distinct values and an upward bias. See
+        // gpu_render_time.hpp for the full contract.
+        std::vector<const char*> disabled_toggles =
+            gpu_surface_disabled_toggles(timestamp_query_requested);
+
+        if (!enabled_toggles.empty() || !disabled_toggles.empty()) {
+            toggles_desc.enabledToggleCount = enabled_toggles.size();
+            toggles_desc.enabledToggles = enabled_toggles.data();
+            toggles_desc.disabledToggleCount = disabled_toggles.size();
+            toggles_desc.disabledToggles = disabled_toggles.data();
+            device_desc.nextInChain = &toggles_desc;
+        }
+
+        device_desc.SetUncapturedErrorCallback(
+            [](const wgpu::Device&, wgpu::ErrorType type, wgpu::StringView message) {
+                std::string msg(message.data, message.length);
+                // These two are benign ONLY on the iOS Simulator, where Skia
+                // Graphite's firstInstance>0 instanced draws validate as a
+                // warning but the underlying Metal draw still runs. Everywhere
+                // else a rejected command buffer means the frame was DROPPED,
+                // and silencing it hides a permanently black editor behind a
+                // clean log — so the filter is scoped to the Simulator rather
+                // than applied globally.
+#if defined(TARGET_OS_SIMULATOR) && TARGET_OS_SIMULATOR
+                if (msg.find("First instance") != std::string::npos &&
+                    msg.find("must be zero") != std::string::npos) {
+                    return;
+                }
+                if (msg.find("Invalid CommandBuffer") != std::string::npos) {
+                    return;
+                }
+#endif
+                runtime::log_error("GpuSurface: WebGPU error ({}): {}",
+                    static_cast<int>(type), msg);
+                emit_gpu_diagnostic(GpuDiagnosticSeverity::error, "dawn.uncaptured_error", msg);
+            });
+
+        adapter_.RequestDevice(
+            &device_desc,
+            wgpu::CallbackMode::AllowProcessEvents,
+            [this](wgpu::RequestDeviceStatus status, wgpu::Device result, wgpu::StringView) {
+                if (status == wgpu::RequestDeviceStatus::Success) {
+                    device_ = std::move(result);
+                }
+            });
+        instance_.ProcessEvents();
+
+        if (!device_) {
+            runtime::log_error("GpuSurface: failed to create GPU device");
+            return false;
+        }
+
+        queue_ = device_.GetQueue();
+        timings_.device_ms = elapsed_ms(stage_start);
+
+        // Configure the surface for presentation
+        if (surface_) {
+            stage_start = std::chrono::steady_clock::now();
+            configure_surface(config);
+            surface_ms += elapsed_ms(stage_start);
+        }
+        timings_.surface_ms = surface_ms;
+
+        initialized_ = true;
+        runtime::log_info("GpuSurface: Dawn initialized (surface: {})",
+            surface_ ? "presentable" : "offscreen-only");
+
+        // Log the Dawn backend type that actually came up. Tests / CI scrape
+        // this line to assert `backend_type=Metal` on Apple platforms; a
+        // missing or unexpected backend means GPU init silently fell back to a
+        // different adapter (Null, OpenGL emulation, etc.) and the editor is
+        // rendering through CPU. The adapter info is queried after device
+        // creation so the result reflects the real selection.
+        if (adapter_) {
+            wgpu::AdapterInfo dawn_info{};
+            adapter_.GetInfo(&dawn_info);
+            runtime::log_info("GpuSurface: backend_type={}",
+                dawn_backend_type_name(dawn_info.backendType));
+        } else {
+            runtime::log_warn(
+                "GpuSurface: backend_type=unknown (adapter unset after init)");
+        }
+        // The adapter identity a remote support read needs: which GPU, which
+        // driver, and whether this is real hardware or the Null backend.
+        runtime::log_info("{}", format_gpu_adapter_line(adapter_info()));
+        return true;
+    }
+
+    StartupTimings startup_timings() const override { return timings_; }
+
+    void resize(uint32_t width, uint32_t height) override {
+        reconfigure(width, height);
+    }
+
+    bool begin_frame() override {
+        if (!initialized_) return false;
+
+        if (surface_) {
+            wgpu::SurfaceTexture surface_texture;
+            surface_.GetCurrentTexture(&surface_texture);
+
+            // SuccessSuboptimal means the swapchain still yields a usable texture
+            // but no longer optimally matches the surface — the window was
+            // resized (e.g. a DAW dragged the editor container; see the Windows
+            // WM_SIZE reconcile path) or the DPI/format changed under us.
+            // Reconfigure to the current size and re-acquire the texture EXACTLY
+            // ONCE. If it is still merely suboptimal we render with this texture
+            // for the frame rather than dropping it — we must never loop, or a
+            // surface that stays suboptimal (a format Dawn can only approximate)
+            // would spin begin_frame() forever.
+            if (surface_texture.status ==
+                wgpu::SurfaceGetCurrentTextureStatus::SuccessSuboptimal) {
+                // Release the stale texture's ref before re-acquiring. Dawn's
+                // C++ GetCurrentTexture reinterpret-casts to the C struct and
+                // overwrites the .texture handle in place (bypassing C++
+                // move-assignment), so a second acquire into the same struct
+                // would otherwise leak the first texture's reference each frame.
+                surface_texture.texture = nullptr;
+                reconfigure(width_, height_);
+                surface_.GetCurrentTexture(&surface_texture);
+            }
+
+            if (surface_texture.status != wgpu::SurfaceGetCurrentTextureStatus::SuccessOptimal &&
+                surface_texture.status != wgpu::SurfaceGetCurrentTextureStatus::SuccessSuboptimal) {
+                current_texture_ = nullptr;
+                return false;
+            }
+
+            current_texture_ = std::move(surface_texture.texture);
+            return current_texture_ != nullptr;
+        }
+
+        return true;  // offscreen always ready
+    }
+
+    void end_frame() override {
+        // Present the acquired surface texture — the GPU-present stage of the
+        // frame pipeline.
+        PULP_TRACE_SCOPE_NAMED("gpu", "gpu_present");
+        if (surface_ && current_texture_) {
+            surface_.Present();
+            current_texture_ = nullptr;  // texture invalid after present
+        }
+        if (instance_) {
+            instance_.ProcessEvents();
+        }
+    }
+
+    bool is_initialized() const override { return initialized_; }
+    bool has_surface() const override { return surface_ != nullptr; }
+    uint32_t width() const override { return width_; }
+    uint32_t height() const override { return height_; }
+
+    // Dawn handle accessors — SkiaSurface casts these back to Dawn C++ types
+    void* dawn_device_handle() const override {
+        return const_cast<wgpu::Device*>(&device_);
+    }
+    void* dawn_queue_handle() const override {
+        return const_cast<wgpu::Queue*>(&queue_);
+    }
+    void* dawn_instance_handle() const override {
+        return const_cast<wgpu::Instance*>(&instance_);
+    }
+    void* current_texture_handle() const override {
+        return const_cast<wgpu::Texture*>(&current_texture_);
+    }
+
+    AdapterInfo adapter_info() const override {
+        AdapterInfo info{};
+        info.available = initialized_ && (device_ != nullptr);
+        info.native_bridge = info.available;
+        info.backend = "Dawn/WebGPU";
+        info.preferred_canvas_format = dawn_texture_format_name(preferred_format_);
+
+        if (!adapter_) {
+            return info;
+        }
+
+        wgpu::AdapterInfo dawn_info{};
+        adapter_.GetInfo(&dawn_info);
+        info.adapter_type = dawn_adapter_type(dawn_info.adapterType);
+        info.null_backend = dawn_info.backendType == wgpu::BackendType::Null;
+        info.backend_type = dawn_backend_type_name(dawn_info.backendType);
+        const auto architecture = dawn_string_view_to_string(dawn_info.architecture);
+        info.architecture = architecture.empty() ? info.backend_type : architecture;
+        // Report the driver's own identity. Android's Vulkan driver blocklist
+        // matches on these strings, so a synthesized placeholder would make
+        // every entry in it unmatchable. Each field falls back to a generic
+        // label when the adapter leaves it empty.
+        const auto device = dawn_string_view_to_string(dawn_info.device);
+        const auto description = dawn_string_view_to_string(dawn_info.description);
+        const auto vendor = dawn_string_view_to_string(dawn_info.vendor);
+        info.name = device.empty() ? "Native Dawn Adapter (" + info.backend_type + ")" : device;
+        info.description = description.empty() ? info.name : description;
+        info.vendor = vendor.empty() ? "Dawn" : vendor;
+        return info;
+    }
+
+private:
+    // Reconfigure the surface's swapchain to (width, height) using the format /
+    // present mode chosen at initial configure. Shared by resize() (host-driven)
+    // and the begin_frame() suboptimal-recovery path, so both go through one
+    // definition of the SurfaceConfiguration.
+    void reconfigure(uint32_t width, uint32_t height) {
+        width_ = width;
+        height_ = height;
+        if (surface_ && device_) {
+            wgpu::SurfaceConfiguration surface_config{};
+            surface_config.device = device_;
+            surface_config.format = preferred_format_;
+            surface_config.width = width_;
+            surface_config.height = height_;
+            surface_config.presentMode = preferred_mode_;
+            surface_config.usage = wgpu::TextureUsage::RenderAttachment
+                | wgpu::TextureUsage::TextureBinding;
+            surface_.Configure(&surface_config);
+        }
+    }
+
+    // ── Texture lifetime contract ──────────────────────────────────────
+    //
+    // The current surface texture acquired in begin_frame() is per-frame only.
+    // It MUST remain alive through:
+    //   1. SkiaSurface::begin_frame() — wraps it as a Graphite BackendTexture
+    //   2. Skia drawing commands recorded into it
+    //   3. SkiaSurface::end_frame() — context->submit() flushes work to the GPU
+    //   4. GpuSurface::end_frame() — surface_.Present() presents to screen
+    //
+    // After present, current_texture_ is set to nullptr. It must NOT be:
+    //   - cached across frames
+    //   - used after end_frame()
+    //   - stored in any long-lived data structure
+    //
+    // Skia's WrapBackendTexture retains the WGPUTexture for the duration
+    // of the SkSurface, and the per-frame SkSurface (frame_surface_) is
+    // released in SkiaSurface::end_frame() before present.
+
+    void create_native_surface(void* native_handle) {
+#ifdef __APPLE__
+        // macOS/iOS: CAMetalLayer* → Metal surface via Dawn
+        wgpu::SurfaceDescriptor surface_desc{};
+        wgpu::SurfaceSourceMetalLayer metal_source{};
+        metal_source.layer = native_handle;
+        surface_desc.nextInChain = &metal_source;
+
+        surface_ = instance_.CreateSurface(&surface_desc);
+        if (surface_) {
+            runtime::log_info("GpuSurface: created Metal surface from CAMetalLayer");
+        } else {
+            runtime::log_warn("GpuSurface: failed to create Metal surface");
+        }
+#elif defined(_WIN32)
+        // Windows: HWND → D3D12/Vulkan surface via Dawn
+        wgpu::SurfaceDescriptor surface_desc{};
+        wgpu::SurfaceSourceWindowsHWND hwnd_source{};
+        hwnd_source.hinstance = GetModuleHandle(nullptr);
+        hwnd_source.hwnd = native_handle;  // caller passes HWND as void*
+        surface_desc.nextInChain = &hwnd_source;
+
+        surface_ = instance_.CreateSurface(&surface_desc);
+        if (surface_) {
+            runtime::log_info("GpuSurface: created D3D12 surface from HWND");
+        } else {
+            runtime::log_warn("GpuSurface: failed to create Windows surface");
+        }
+#elif defined(__ANDROID__)
+        // Android: ANativeWindow* → Vulkan surface via Dawn
+        wgpu::SurfaceDescriptor surface_desc{};
+        wgpu::SurfaceSourceAndroidNativeWindow android_source{};
+        android_source.window = native_handle;  // caller passes ANativeWindow* as void*
+        surface_desc.nextInChain = &android_source;
+
+        surface_ = instance_.CreateSurface(&surface_desc);
+        if (surface_) {
+            runtime::log_info("GpuSurface: created Vulkan surface from ANativeWindow");
+        } else {
+            runtime::log_warn("GpuSurface: failed to create Android Vulkan surface");
+        }
+#elif defined(__linux__)
+        // Linux: native_handle is a pointer to a GpuSurface::X11NativeHandle
+        // (Display* + Window). A bare Window id is not enough — Dawn's Xlib
+        // surface source needs both. Wayland is not wired yet.
+        if (auto* x11 = static_cast<X11NativeHandle*>(native_handle);
+            x11 && x11->display && x11->window) {
+            wgpu::SurfaceDescriptor surface_desc{};
+            wgpu::SurfaceSourceXlibWindow xlib_source{};
+            xlib_source.display = x11->display;
+            xlib_source.window = static_cast<uint64_t>(x11->window);
+            surface_desc.nextInChain = &xlib_source;
+
+            surface_ = instance_.CreateSurface(&surface_desc);
+            if (surface_) {
+                runtime::log_info("GpuSurface: created Vulkan surface from X11 window");
+            } else {
+                runtime::log_warn("GpuSurface: failed to create X11 surface");
+            }
+        } else {
+            runtime::log_warn("GpuSurface: Linux surface needs an X11NativeHandle "
+                              "(Display* + Window); got null/incomplete handle");
+        }
+#else
+        (void)native_handle;
+#endif
+    }
+
+    void configure_surface(const Config& config) {
+        // Query surface capabilities — do not assume format or present mode
+        wgpu::SurfaceCapabilities caps;
+        surface_.GetCapabilities(adapter_, &caps);
+
+        // Select preferred format (BGRA8Unorm if available, else first supported)
+        preferred_format_ = wgpu::TextureFormat::BGRA8Unorm;
+        if (caps.formatCount > 0) {
+            preferred_format_ = caps.formats[0]; // first is preferred
+            for (size_t i = 0; i < caps.formatCount; ++i) {
+                if (caps.formats[i] == wgpu::TextureFormat::BGRA8Unorm) {
+                    preferred_format_ = wgpu::TextureFormat::BGRA8Unorm;
+                    break;
+                }
+            }
+        }
+
+        // Select the present mode.
+        //
+        // vsync=true wants Fifo (block until the next refresh). vsync=false is
+        // asking NOT to block — which matters for an embedded plug-in editor
+        // that renders synchronously on the host's UI thread, where a blocking
+        // acquire stalls the message pump that delivers further input.
+        //
+        // Order matters when the request cannot be honoured exactly. Mailbox is
+        // preferred over Immediate for the non-blocking case: both return a
+        // texture without waiting, but Mailbox does not tear. Falling back to
+        // caps.presentModes[0] is the LAST resort, because on this adapter that
+        // first entry is Fifo — i.e. the naive fallback silently reinstates the
+        // very blocking the caller asked to avoid.
+        const std::array<wgpu::PresentMode, 3> wanted =
+            config.vsync
+                ? std::array<wgpu::PresentMode, 3>{wgpu::PresentMode::Fifo,
+                                                   wgpu::PresentMode::Mailbox,
+                                                   wgpu::PresentMode::Immediate}
+                : std::array<wgpu::PresentMode, 3>{wgpu::PresentMode::Mailbox,
+                                                   wgpu::PresentMode::Immediate,
+                                                   wgpu::PresentMode::Fifo};
+        wgpu::PresentMode preferred_mode = wanted[0];
+        bool mode_found = false;
+        for (auto want : wanted) {
+            for (size_t i = 0; i < caps.presentModeCount && !mode_found; ++i) {
+                if (caps.presentModes[i] == want) {
+                    preferred_mode = want;
+                    mode_found = true;
+                }
+            }
+            if (mode_found) break;
+        }
+        if (!mode_found && caps.presentModeCount > 0) {
+            preferred_mode = caps.presentModes[0];
+        }
+        preferred_mode_ = preferred_mode;
+        runtime::log_info("GpuSurface: present mode {} (vsync requested: {})",
+                          dawn_present_mode_name(preferred_mode), config.vsync);
+
+        wgpu::SurfaceConfiguration surface_config{};
+        surface_config.device = device_;
+        surface_config.format = preferred_format_;
+        surface_config.width = config.width;
+        surface_config.height = config.height;
+        surface_config.presentMode = preferred_mode_;
+        surface_config.usage = wgpu::TextureUsage::RenderAttachment
+            | wgpu::TextureUsage::TextureBinding;
+        surface_.Configure(&surface_config);
+
+        runtime::log_info("GpuSurface: configured surface (format: {}, mode: {})",
+            static_cast<int>(preferred_format_), static_cast<int>(preferred_mode));
+    }
+
+    // Native instance must outlive all adapters/devices created from it
+    std::unique_ptr<dawn::native::Instance> native_instance_;
+    wgpu::Instance instance_;
+    wgpu::Adapter adapter_;
+    wgpu::Device device_;
+    wgpu::Queue queue_;
+    wgpu::Surface surface_;
+    wgpu::Texture current_texture_;
+
+    wgpu::TextureFormat preferred_format_ = wgpu::TextureFormat::BGRA8Unorm;
+    wgpu::PresentMode preferred_mode_ = wgpu::PresentMode::Fifo;
+    uint32_t width_ = 0, height_ = 0;
+    bool initialized_ = false;
+    StartupTimings timings_{};
+};
+
+std::unique_ptr<GpuSurface> GpuSurface::create_dawn() {
+    return std::make_unique<DawnGpuSurface>();
+}
+
+} // namespace pulp::render
+
+#elif defined(PULP_HAS_WEBGPU)
+// Fallback: wgpu-native C API (offscreen only, no Skia integration)
+
+#include <webgpu/webgpu.h>
+#include <pulp/runtime/log.hpp>
+#include <cstring>
+
+namespace pulp::render {
+
+namespace {
+
+std::string wgpu_backend_type_name(WGPUBackendType type) {
+    switch (type) {
+        case WGPUBackendType_Metal: return "Metal";
+        case WGPUBackendType_D3D12: return "D3D12";
+        case WGPUBackendType_Vulkan: return "Vulkan";
+        case WGPUBackendType_OpenGL: return "OpenGL";
+        case WGPUBackendType_OpenGLES: return "OpenGLES";
+        case WGPUBackendType_Null: return "Null";
+        case WGPUBackendType_WebGPU: return "WebGPU";
+        default: return "Unknown";
+    }
+}
+
+GpuSurface::AdapterType wgpu_adapter_type(WGPUAdapterType type) {
+    switch (type) {
+        case WGPUAdapterType_IntegratedGPU:
+            return GpuSurface::AdapterType::integrated_gpu;
+        case WGPUAdapterType_DiscreteGPU:
+            return GpuSurface::AdapterType::discrete_gpu;
+        case WGPUAdapterType_CPU:
+            return GpuSurface::AdapterType::cpu;
+        default:
+            return GpuSurface::AdapterType::unknown;
+    }
+}
+
+std::string wgpu_string_view_to_string(WGPUStringView view) {
+    if (view.data == nullptr || view.length == 0) {
+        return {};
+    }
+    return std::string(view.data, view.length);
+}
+
+} // namespace
+
+class WgpuGpuSurface : public GpuSurface {
+public:
+    ~WgpuGpuSurface() override {
+        if (device_) wgpuDeviceRelease(device_);
+        if (adapter_) wgpuAdapterRelease(adapter_);
+        if (instance_) wgpuInstanceRelease(instance_);
+    }
+
+    bool initialize(const Config& config) override {
+        width_ = config.width;
+        height_ = config.height;
+
+        WGPUInstanceDescriptor instance_desc{};
+        instance_ = wgpuCreateInstance(&instance_desc);
+        if (!instance_) return false;
+
+        WGPURequestAdapterOptions adapter_opts{};
+        adapter_opts.powerPreference = WGPUPowerPreference_HighPerformance;
+        adapter_opts.forceFallbackAdapter = config.force_fallback_adapter;
+        switch (config.backend_preference) {
+        case GpuSurface::AdapterBackendPreference::null_backend:
+            adapter_opts.backendType = WGPUBackendType_Null;
+            break;
+        case GpuSurface::AdapterBackendPreference::vulkan:
+            adapter_opts.backendType = WGPUBackendType_Vulkan;
+            break;
+        case GpuSurface::AdapterBackendPreference::d3d12:
+            adapter_opts.backendType = WGPUBackendType_D3D12;
+            break;
+        case GpuSurface::AdapterBackendPreference::default_backend:
+            adapter_opts.backendType = WGPUBackendType_Undefined;
+            break;
+        }
+        if (config.backend_preference == GpuSurface::AdapterBackendPreference::vulkan ||
+            config.backend_preference == GpuSurface::AdapterBackendPreference::d3d12) {
+            adapter_opts.forceFallbackAdapter = false;
+        }
+
+        WGPURequestAdapterCallbackInfo adapter_cb{};
+        adapter_cb.mode = WGPUCallbackMode_AllowSpontaneous;
+        adapter_cb.callback = [](WGPURequestAdapterStatus status, WGPUAdapter adapter,
+                                 WGPUStringView, void* ud1, void*) {
+            if (status == WGPURequestAdapterStatus_Success)
+                static_cast<WgpuGpuSurface*>(ud1)->adapter_ = adapter;
+        };
+        adapter_cb.userdata1 = this;
+        wgpuInstanceRequestAdapter(instance_, &adapter_opts, adapter_cb);
+        wgpuInstanceProcessEvents(instance_);
+        if (!adapter_) return false;
+
+        WGPUDeviceDescriptor device_desc{};
+        WGPURequestDeviceCallbackInfo device_cb{};
+        device_cb.mode = WGPUCallbackMode_AllowSpontaneous;
+        device_cb.callback = [](WGPURequestDeviceStatus status, WGPUDevice device,
+                                WGPUStringView, void* ud1, void*) {
+            if (status == WGPURequestDeviceStatus_Success)
+                static_cast<WgpuGpuSurface*>(ud1)->device_ = device;
+        };
+        device_cb.userdata1 = this;
+        wgpuAdapterRequestDevice(adapter_, &device_desc, device_cb);
+        wgpuInstanceProcessEvents(instance_);
+        if (!device_) return false;
+
+        initialized_ = true;
+        runtime::log_info("{}", format_gpu_adapter_line(adapter_info()));
+        return true;
+    }
+
+    void resize(uint32_t w, uint32_t h) override { width_ = w; height_ = h; }
+    bool begin_frame() override { return initialized_; }
+    void end_frame() override { if (instance_) wgpuInstanceProcessEvents(instance_); }
+    bool is_initialized() const override { return initialized_; }
+    bool has_surface() const override { return false; }
+    uint32_t width() const override { return width_; }
+    uint32_t height() const override { return height_; }
+    void* dawn_device_handle() const override { return nullptr; }
+    void* dawn_queue_handle() const override { return nullptr; }
+    void* dawn_instance_handle() const override { return nullptr; }
+    void* current_texture_handle() const override { return nullptr; }
+    AdapterInfo adapter_info() const override {
+        AdapterInfo info{};
+        info.available = initialized_ && device_ != nullptr;
+        info.native_bridge = info.available;
+        info.backend = "WebGPU";
+        info.backend_type = info.available ? "wgpu-native" : "Unknown";
+        info.name = info.available ? "Native WebGPU Adapter" : "Mock Dawn Adapter";
+        info.vendor = info.available ? "wgpu-native" : "Pulp";
+        info.architecture = info.backend_type;
+        info.description = info.name;
+        if (adapter_) {
+            WGPUAdapterInfo adapter_info{};
+            if (wgpuAdapterGetInfo(adapter_, &adapter_info) == WGPUStatus_Success) {
+                info.adapter_type = wgpu_adapter_type(adapter_info.adapterType);
+                info.null_backend = adapter_info.backendType == WGPUBackendType_Null;
+                info.backend_type = wgpu_backend_type_name(adapter_info.backendType);
+                info.architecture = info.backend_type;
+                const auto device = wgpu_string_view_to_string(adapter_info.device);
+                const auto description =
+                    wgpu_string_view_to_string(adapter_info.description);
+                const auto vendor = wgpu_string_view_to_string(adapter_info.vendor);
+                info.name = device.empty()
+                    ? "Native WebGPU Adapter (" + info.backend_type + ")"
+                    : device;
+                info.description = description.empty()
+                    ? info.name
+                    : description;
+                info.vendor = vendor.empty() ? "wgpu-native" : vendor;
+                wgpuAdapterInfoFreeMembers(adapter_info);
+            }
+        }
+        return info;
+    }
+
+private:
+    WGPUInstance instance_ = nullptr;
+    WGPUAdapter adapter_ = nullptr;
+    WGPUDevice device_ = nullptr;
+    uint32_t width_ = 0, height_ = 0;
+    bool initialized_ = false;
+};
+
+std::unique_ptr<GpuSurface> GpuSurface::create_dawn() {
+    return std::make_unique<WgpuGpuSurface>();
+}
+
+} // namespace pulp::render
+
+#else // No GPU
+
+namespace pulp::render {
+std::unique_ptr<GpuSurface> GpuSurface::create_dawn() { return nullptr; }
+} // namespace pulp::render
+
+#endif

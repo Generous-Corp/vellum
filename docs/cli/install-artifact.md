@@ -99,6 +99,10 @@ sdk/lib/libvellum-*.a
 sdk/bin/vellum-app-host             # pinned-Skia mode
 sdk/lib/libvellum-authoring.dylib   # pinned-Skia mode
 sdk/lib/libvellum-gpu.dylib         # pinned-Skia mode
+sdk/lib/libvellum-skia-dawn-provider.dylib # pinned-Skia provider closure
+sdk/mirror/lib/libvellum-mirror-foundation.dylib # provider runtime dependency
+sdk/mirror/lib/libvellum-mirror-canvas.dylib # mirrored canvas runtime
+sdk/mirror/lib/libvellum-mirror-state-core.dylib # provider runtime dependency
 design-ir/bin/vellum-backend.js
 design-ir/src/...
 design-ir/schema/...
@@ -131,7 +135,7 @@ esbuild/TypeScript dependencies:
 
 ```sh
 python3 scripts/build_sdk_artifact.py \
-  --skia-archive /tmp/vellum-skia-m153.zip \
+  --skia-archive /tmp/vellum-skia-m157.zip \
   --node-binary "$(command -v node)" \
   --node-license /path/to/node-distribution/LICENSE \
   --node-provenance /path/to/node-provenance.json \

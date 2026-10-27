@@ -59,6 +59,15 @@ def dump(value: object) -> str:
     return json.dumps(value, indent=2, sort_keys=True) + "\n"
 
 
+def isolate_git_base(case: unittest.TestCase) -> str | None:
+    """Hide the CI's VELLUM_GIT_BASE from fixture repositories, which do not
+    contain it; return it for the tests that verify this repository."""
+    patcher = mock.patch.dict(os.environ)
+    patcher.start()
+    case.addCleanup(patcher.stop)
+    return os.environ.pop("VELLUM_GIT_BASE", None)
+
+
 class Fixture:
     """A Pulp repository and a Vellum repository with one landed export."""
 
@@ -118,7 +127,14 @@ class Fixture:
         for path, content in mirrored.items():
             write(self.vellum, f"mirror/{path}", content)
         run(self.vellum, "add", "-A")
-        run(self.vellum, "commit", "-q", "-m", "mirror")
+        # git-filter-repo keeps the source commit's author, committer and
+        # message; the mirror commit stands for that rewrite of pulp_sha.
+        identity = run(self.pulp, "log", "-1", "--format=%aI%n%cI%n%B", self.pulp_sha).split("\n", 2)
+        subprocess.check_output(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+             "commit", "-q", "-m", identity[2].strip()],
+            cwd=self.vellum, text=True, stderr=subprocess.DEVNULL,
+            env=dict(os.environ, GIT_AUTHOR_DATE=identity[0], GIT_COMMITTER_DATE=identity[1]))
         self.mirror_sha = run(self.vellum, "rev-parse", "HEAD")
         run(self.vellum, "checkout", "-q", "-f", "main")
         run(self.vellum, "merge", "-q", "--no-edit", "--allow-unrelated-histories", self.mirror_sha)
@@ -245,6 +261,7 @@ class VerifyMirrorExportTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.base = Path(self.temporary.name)
+        self.ci_git_base = isolate_git_base(self)
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -256,7 +273,8 @@ class VerifyMirrorExportTests(unittest.TestCase):
         receipts = verify_mirror_export.landed_receipts(REPO)
         has_mirror = verify_mirror_export.git_ok(REPO, "cat-file", "-e", "HEAD:mirror")
         self.assertEqual(bool(receipts), has_mirror, "mirror/ and the receipt index disagree")
-        report = verify_mirror_export.verify(REPO)
+        with mock.patch.dict(os.environ, {"VELLUM_GIT_BASE": self.ci_git_base} if self.ci_git_base else {}):
+            report = verify_mirror_export.verify(REPO)
         self.assertEqual(report["status"], "pass", report["errors"])
         self.assertEqual(report["receipts"], receipts)
 
@@ -269,7 +287,8 @@ class VerifyMirrorExportTests(unittest.TestCase):
             # this proof is never skipped there.
             self.skipTest("Pulp identity is proved where MIRROR_PULP_ROOT names a Pulp checkout")
         pulp_root = Path(pulp_root_env).resolve() if pulp_root_env else None
-        report = verify_mirror_export.verify(REPO, pulp_root)
+        with mock.patch.dict(os.environ, {"VELLUM_GIT_BASE": self.ci_git_base} if self.ci_git_base else {}):
+            report = verify_mirror_export.verify(REPO, pulp_root)
         self.assertEqual(report["status"], "pass", report["errors"])
         self.assertEqual(report["receipts"], receipts)
         # The equivalent of `verify_mirror_export.py --require-pulp-identity`,
@@ -278,10 +297,53 @@ class VerifyMirrorExportTests(unittest.TestCase):
         for receipt_path in receipts:
             receipt = json.loads((REPO / receipt_path).read_text(encoding="utf-8"))
             self.assertEqual(
-                verify_mirror_export.verify_receipt_against_pulp(pulp_root, receipt),
+                verify_mirror_export.verify_receipt_against_pulp(pulp_root, receipt, REPO),
                 [],
                 receipt_path,
             )
+
+    def test_mirror_build_applies_pulp_per_source_compile_options(self) -> None:
+        # The package plan reads per-source COMPILE_OPTIONS from the mirrored
+        # CMake; Pulp's own CMake at the receipt's commit, all of it, must yield
+        # exactly the same set, so an option set from a file the export does
+        # not carry, or one the plan misreads, fails here.
+        receipts = verify_mirror_export.landed_receipts(REPO)
+        pulp_root_env = os.environ.get("MIRROR_PULP_ROOT")
+        if not receipts or not pulp_root_env:
+            self.skipTest("needs a landed receipt and MIRROR_PULP_ROOT naming a Pulp checkout")
+        spec = importlib.util.spec_from_file_location(
+            "mirror_package_for_options", REPO / "tools/mirror/mirror_package.py")
+        assert spec and spec.loader
+        mirror_package = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mirror_package)
+        _, receipt = mirror_package.newest_receipt(REPO)
+        units = mirror_package.load_closures(REPO, receipt)
+        applied = mirror_package.source_compile_options_for(REPO, receipt, units)
+
+        pulp_root, pulp_sha = Path(pulp_root_env).resolve(), receipt["pulp_sha"]
+        listing = subprocess.check_output(
+            ["git", "-C", str(pulp_root), "ls-tree", "-r", "--name-only", pulp_sha], text=True)
+        paths = [p for p in listing.splitlines() if p.endswith("/CMakeLists.txt") or p == "CMakeLists.txt"
+                 or p.endswith(".cmake")]
+        batch = subprocess.run(
+            ["git", "-C", str(pulp_root), "cat-file", "--batch"],
+            input="".join(f"{pulp_sha}:{p}\n" for p in paths).encode(), capture_output=True, check=True,
+        ).stdout
+        pulp_files, offset = {}, 0
+        for path in paths:
+            header_end = batch.index(b"\n", offset)
+            size = int(batch[offset:header_end].split()[2])
+            pulp_files[path] = batch[header_end + 1:header_end + 1 + size].decode("utf-8", "replace")
+            offset = header_end + 1 + size + 1
+        # Control: the instrument read Pulp's CMake and saw per-source options.
+        self.assertGreater(len(pulp_files), 100)
+        self.assertTrue(any("COMPILE_OPTIONS" in text for text in pulp_files.values()))
+        options = units[0][1]["configure"]["options"]
+        exported = {row["pulp_path"] for row in receipt["files"]}
+        targets = {target["name"] for _, closure in units for target in closure.get("targets", [])}
+        expected = mirror_package.source_compile_options.evaluate(
+            pulp_files, options, exported, targets, complete=True)
+        self.assertEqual(applied, expected)
 
     def test_valid_landing_passes_with_pulp_identity(self) -> None:
         fixture = Fixture(self.base)
@@ -1050,6 +1112,285 @@ class VerifyMirrorExportTests(unittest.TestCase):
         formula = f"sha256(utf8('patch-set:' + patch_set.key + '\\nbase-modification:' + base_modification + '\\ncopy-tree:' + copy_tree + '\\n'))"
         return {"path": "@external/choc/" + "a" * 40 + "+patch-" + "b" * 16 + "/choc.h", "source": "https://github.com/danielraffel/choc.git", "pin": "a" * 40, "sha256": "e" * 64, "patched": True, "patch": "f" * 64, "patch_set": {"pulp_path": "tools/cmake/PulpPatchChoc.cmake", "pulp_blob": "a" * 40, "key": key}, "base_modification": "", "copy_tree": copy_tree, "patch_recipe": {"id": "pulp.vellum.patch-id.v1", "formula": formula, "replay": {"method": verify_mirror_export.REPLAY_METHOD, "patch_set_blob": "a" * 40, "functions": ["pulp_patch_choc_v8"]}}}
 
+
+PRUNED = "0" * 40
+
+
+def prune_export(
+    fixture: Fixture, *, after: dict[str, bytes], before: dict[str, bytes] | None = None
+) -> str:
+    """Re-land the fixture's export as git-filter-repo records a pruned commit.
+
+    The fixture's Pulp commit becomes the source A that the mirror commit
+    rewrites. `before` (optional) commits between A and the commit the
+    fixture claims as the source; `after` is the pruned export commit R.
+    Returns R. The commit map and ref map carry filter-repo's own rows.
+    """
+    source = fixture.pulp_sha
+    if before is not None:
+        for path, content in before.items():
+            write(fixture.pulp, path, content)
+        run(fixture.pulp, "commit", "-qam", "between")
+        source = run(fixture.pulp, "rev-parse", "HEAD")
+    for path, content in after.items():
+        write(fixture.pulp, path, content)
+    run(fixture.pulp, "commit", "-qam", "pruned")
+    pulp_sha = run(fixture.pulp, "rev-parse", "HEAD")
+    run(fixture.pulp, "update-ref", "refs/remotes/origin/main", pulp_sha)
+
+    for relative in (fixture.receipt_path, fixture.closure_path, fixture.receipt["commit_map"]["path"]):
+        run(fixture.vellum, "rm", "-q", relative)
+    fixture.pulp_sha = pulp_sha
+    fixture.export_id = f"20261010-{pulp_sha[:12]}"
+    fixture.receipt_path = f"provenance/mirror/receipts/{fixture.export_id}.json"
+    closure_bytes = run(fixture.vellum, "show", f"HEAD:{fixture.receipt['units'][0]['closure_manifest']}")
+    fixture.closure_path = f"provenance/mirror/closures/{fixture.export_id}/canvas.json"
+    write(fixture.vellum, fixture.closure_path, closure_bytes + "\n")
+    commit_map = f"provenance/mirror/commit-maps/{fixture.export_id}.txt"
+    write(fixture.vellum, commit_map,
+          f"old new\n{pulp_sha} {PRUNED}\n{source} {fixture.mirror_sha}\n")
+    ref_map = f"provenance/mirror/ref-maps/{fixture.export_id}.txt"
+    write(fixture.vellum, ref_map,
+          f"old new ref\n{pulp_sha} {fixture.mirror_sha} refs/heads/export-source\n")
+    files = fixture.receipt["files"]
+    fixture.receipt.update(
+        export_id=fixture.export_id,
+        pulp_sha=pulp_sha,
+        commit_map={"path": commit_map, "sha256": fixture.sha(commit_map)},
+        units=[dict(fixture.receipt["units"][0], closure_manifest=fixture.closure_path,
+                    closure_sha256=fixture.sha(fixture.closure_path))],
+        tool={"path": "tools/scripts/vellum_closure.py",
+              "pulp_blob": run(fixture.pulp, "rev-parse", f"{pulp_sha}:tools/scripts/vellum_closure.py")},
+        mirror_source={
+            "sha": source,
+            "ref_map": {"path": ref_map, "sha256": fixture.sha(ref_map)},
+            "proof": {
+                "commit_map_rows": [f"{pulp_sha} {PRUNED}", f"{source} {fixture.mirror_sha}"],
+                "ref_map_row": f"{pulp_sha} {fixture.mirror_sha} refs/heads/export-source",
+                "source_is_ancestor": True,
+                "exported_paths_equal": True,
+                "exported_path_count": len(files),
+                "exported_blobs_sha256": verify_mirror_export.exported_blobs_digest(files),
+            },
+        },
+    )
+    for record in fixture.origins["records"]:
+        record.update(pulp_commit=pulp_sha, export_receipt=fixture.receipt_path)
+    fixture.land()
+    return pulp_sha
+
+
+class PrunedSourceReceiptTests(unittest.TestCase):
+    """A receipt for a Pulp commit git-filter-repo pruned (DECISIONS 0704f9360d)."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.base = Path(self.temporary.name)
+        self.ci_git_base = isolate_git_base(self)
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def assertError(self, errors: list[str], fragment: str) -> None:
+        self.assertTrue(any(fragment in e for e in errors), f"{fragment!r} not in {errors}")
+
+    def test_pruned_source_passes_with_pulp_identity(self) -> None:
+        fixture = Fixture(self.base)
+        source = fixture.pulp_sha
+        pulp_sha = prune_export(fixture, after={"core/audio/engine.cpp": b"int audio = 1;\n"})
+        self.assertNotEqual(source, pulp_sha)
+        report = verify_mirror_export.verify(fixture.vellum, fixture.pulp)
+        self.assertEqual(report["errors"], [])
+        self.assertTrue(report["pulp_identity_checked"])
+
+    def test_exported_file_differing_between_source_and_pulp_sha_fails(self) -> None:
+        # The claimed source's canvas.cpp differs from R's (R restores it), so
+        # every receipt row still equals Pulp at R and only the source proof can
+        # see it. Without Pulp the recorded claims are self-consistent.
+        fixture = Fixture(self.base)
+        original = PULP_FILES["core/canvas/src/canvas.cpp"]
+        prune_export(
+            fixture,
+            before={"core/canvas/src/canvas.cpp": b"namespace pulp::canvas { int other(); }\n"},
+            after={"core/canvas/src/canvas.cpp": original},
+        )
+        self.assertEqual(fixture.errors(), [])
+        receipt = json.loads((fixture.vellum / fixture.receipt_path).read_text())
+        errors = verify_mirror_export.verify_receipt_against_pulp(fixture.pulp, receipt, fixture.vellum)
+        self.assertIn(
+            f"mirror/core/canvas/src/canvas.cpp differs between mirror_source {receipt['mirror_source']['sha']} "
+            f"and Pulp {fixture.pulp_sha}",
+            errors,
+        )
+
+    def test_forged_source_between_the_real_source_and_pulp_sha_fails(self) -> None:
+        # The mirror commit is the rewrite of the fixture's first Pulp commit A.
+        # Naming a later commit X (here R^1, which changes no exported path) as
+        # the source passes every content and map check; only the rewrite's
+        # identity can tell X from A.
+        fixture = Fixture(self.base)
+        real_source = fixture.pulp_sha
+        pulp_sha = prune_export(
+            fixture,
+            before={"core/audio/engine.cpp": b"int audio = 2;\n"},
+            after={"core/audio/engine.cpp": b"int audio = 3;\n"},
+        )
+        receipt = json.loads((fixture.vellum / fixture.receipt_path).read_text())
+        forged = receipt["mirror_source"]["sha"]
+        self.assertEqual(forged, run(fixture.pulp, "rev-parse", f"{pulp_sha}^1"))
+        self.assertNotEqual(forged, real_source)
+        self.assertEqual(fixture.errors(), [])
+        errors = verify_mirror_export.verify_receipt_against_pulp(fixture.pulp, receipt, fixture.vellum)
+        self.assertEqual(errors, [
+            f"mirror commit {fixture.mirror_sha} was not rewritten from mirror_source {forged}: "
+            "its author, committer or message differs"])
+        self.assertError(verify_mirror_export.verify(fixture.vellum, fixture.pulp)["errors"],
+                         "was not rewritten from mirror_source")
+
+    def test_binding_needs_the_vellum_repository(self) -> None:
+        fixture = Fixture(self.base)
+        prune_export(fixture, after={"core/audio/engine.cpp": b"int audio = 1;\n"})
+        receipt = json.loads((fixture.vellum / fixture.receipt_path).read_text())
+        self.assertEqual(verify_mirror_export.verify_receipt_against_pulp(fixture.pulp, receipt, fixture.vellum), [])
+        self.assertIn("cannot be bound", " ".join(
+            verify_mirror_export.verify_receipt_against_pulp(fixture.pulp, receipt)))
+
+    def test_source_that_is_not_an_ancestor_fails(self) -> None:
+        fixture = Fixture(self.base)
+        prune_export(fixture, after={"core/audio/engine.cpp": b"int audio = 1;\n"})
+        run(fixture.pulp, "checkout", "-q", "--orphan", "elsewhere")
+        run(fixture.pulp, "commit", "-q", "-m", "unrelated")
+        unrelated = run(fixture.pulp, "rev-parse", "HEAD")
+        receipt = json.loads((fixture.vellum / fixture.receipt_path).read_text())
+        receipt["mirror_source"]["sha"] = unrelated
+        self.assertError(
+            verify_mirror_export.mirror_source_against_pulp(fixture.pulp, receipt, unrelated),
+            "is not a strict ancestor of Pulp",
+        )
+
+    def test_pruned_commit_map_without_mirror_source_fails(self) -> None:
+        fixture = Fixture(self.base)
+        prune_export(fixture, after={"core/audio/engine.cpp": b"int audio = 1;\n"})
+        receipt = dict(fixture.receipt)
+        del receipt["mirror_source"]
+        fixture.receipt = receipt
+        fixture.land()
+        self.assertError(fixture.errors(), "commit map lacks the row '<pulp_sha> <mirror_sha>'")
+
+    def test_mirror_source_beside_a_direct_row_fails(self) -> None:
+        fixture = Fixture(self.base)
+        pulp_sha = prune_export(fixture, after={"core/audio/engine.cpp": b"int audio = 1;\n"})
+        commit_map = fixture.receipt["commit_map"]["path"]
+        text = (fixture.vellum / commit_map).read_text() + f"{pulp_sha} {fixture.mirror_sha}\n"
+        write(fixture.vellum, commit_map, text)
+        fixture.reland(commit_map={"path": commit_map, "sha256": fixture.sha(commit_map)})
+        errors = fixture.errors()
+        self.assertError(errors, "mirror_source must be absent")
+
+    def test_ref_map_must_attest_the_export(self) -> None:
+        fixture = Fixture(self.base)
+        pulp_sha = prune_export(fixture, after={"core/audio/engine.cpp": b"int audio = 1;\n"})
+        ref_map = fixture.receipt["mirror_source"]["ref_map"]["path"]
+        write(fixture.vellum, ref_map, f"old new ref\n{pulp_sha} {fixture.mirror_sha} refs/heads/other\n")
+        fixture.land()
+        self.assertError(fixture.errors(), "ref map is missing or its sha256 differs")
+        source = dict(fixture.receipt["mirror_source"], ref_map={"path": ref_map, "sha256": fixture.sha(ref_map)})
+        fixture.reland(mirror_source=source)
+        self.assertError(fixture.errors(), "ref map lacks the row")
+
+    def test_recorded_proof_must_match_the_receipt(self) -> None:
+        fixture = Fixture(self.base)
+        prune_export(fixture, after={"core/audio/engine.cpp": b"int audio = 1;\n"})
+        source = fixture.receipt["mirror_source"]
+        proof = dict(source["proof"], exported_blobs_sha256="0" * 64, exported_path_count=1,
+                     source_is_ancestor=False)
+        fixture.reland(mirror_source=dict(source, proof=proof))
+        errors = fixture.errors()
+        for fragment in ("exported_blobs_sha256 differs", "exported_path_count differs",
+                         "source_is_ancestor and exported_paths_equal"):
+            self.assertError(errors, fragment)
+        fixture.reland(mirror_source=dict(source, extra=True))
+        self.assertError(fixture.errors(), "mirror_source must contain exactly")
+
+    def test_commit_map_must_name_the_source(self) -> None:
+        fixture = Fixture(self.base)
+        pulp_sha = prune_export(fixture, after={"core/audio/engine.cpp": b"int audio = 1;\n"})
+        commit_map = fixture.receipt["commit_map"]["path"]
+        write(fixture.vellum, commit_map, f"old new\n{pulp_sha} {PRUNED}\n{'1' * 40} {fixture.mirror_sha}\n")
+        fixture.reland(commit_map={"path": commit_map, "sha256": fixture.sha(commit_map)})
+        self.assertError(fixture.errors(), "does not name mirror_source.sha as the only source")
+
+
+class ReceiptHistoryTests(unittest.TestCase):
+    """Receipts present at the merge base are append-only."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.base = Path(self.temporary.name)
+        self.ci_git_base = isolate_git_base(self)
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def assertError(self, errors: list[str], fragment: str) -> None:
+        self.assertTrue(any(fragment in e for e in errors), f"{fragment!r} not in {errors}")
+
+    def test_deleting_old_receipt_fails(self) -> None:
+        fixture = Fixture(self.base)
+        base = run(fixture.vellum, "rev-parse", "HEAD")
+        with mock.patch.dict(os.environ, {"VELLUM_GIT_BASE": base}):
+            self.assertEqual(fixture.errors(), [])
+            (fixture.vellum / fixture.receipt_path).unlink()
+            write(fixture.vellum, "provenance/mirror/receipts/index.json",
+                  dump({"schema": "vellum.mirror-receipt-index.v1", "receipts": []}))
+            run(fixture.vellum, "commit", "-qam", "drop old receipt")
+            errors = fixture.errors()
+            self.assertError(errors, "receipt files present at the merge base may not be removed")
+            self.assertError(errors, "receipt index may only append")
+
+    def test_modifying_old_receipt_fails(self) -> None:
+        fixture = Fixture(self.base)
+        base = run(fixture.vellum, "rev-parse", "HEAD")
+        with mock.patch.dict(os.environ, {"VELLUM_GIT_BASE": base}):
+            write(fixture.vellum, fixture.receipt_path, (fixture.vellum / fixture.receipt_path).read_bytes() + b"\n")
+            run(fixture.vellum, "commit", "-qam", "modify old receipt")
+            self.assertError(fixture.errors(), f"receipt file changed from the merge base: {fixture.receipt_path}")
+
+    def test_adding_receipt_is_allowed(self) -> None:
+        fixture = Fixture(self.base)
+        base = run(fixture.vellum, "rev-parse", "HEAD")
+        added = "provenance/mirror/receipts/20261011-added.json"
+        with mock.patch.dict(os.environ, {"VELLUM_GIT_BASE": base}):
+            write(fixture.vellum, added, b"{}\n")
+            receipts = [fixture.receipt_path, added]
+            stored = sorted([fixture.receipt_path, added])
+            self.assertEqual(verify_mirror_export.receipt_history_errors(fixture.vellum, receipts, stored), [])
+            self.assertError(
+                verify_mirror_export.receipt_history_errors(fixture.vellum, [added, fixture.receipt_path], stored),
+                "receipt index may only append",
+            )
+
+    def test_unresolvable_named_base_falls_back_to_the_replaced_tip(self) -> None:
+        # A push's all-zero `before` names no commit. The merge base with main
+        # would be HEAD itself and compare nothing, so HEAD's first parent, the
+        # tip the push replaced, is the base.
+        fixture = Fixture(self.base)
+        with mock.patch.dict(os.environ, {"VELLUM_GIT_BASE": "0" * 40}):
+            self.assertEqual(fixture.errors(), [])
+            write(fixture.vellum, fixture.receipt_path, (fixture.vellum / fixture.receipt_path).read_bytes() + b"\n")
+            run(fixture.vellum, "commit", "-qam", "modify old receipt on main")
+            self.assertError(fixture.errors(), f"receipt file changed from the merge base: {fixture.receipt_path}")
+
+    def test_unresolvable_named_base_on_a_root_commit_fails_closed(self) -> None:
+        repo = self.base / "lone"
+        repo.mkdir()
+        run(repo, "init", "-q", "-b", "main")
+        write(repo, "README.md", "x\n")
+        run(repo, "add", "-A")
+        run(repo, "commit", "-q", "-m", "root")
+        with mock.patch.dict(os.environ, {"VELLUM_GIT_BASE": "0" * 40}):
+            self.assertEqual(verify_mirror_export.receipt_history_errors(repo, [], []),
+                             [f"receipt history base is unavailable: {'0' * 40} names no commit and HEAD has no parent"])
 
 if __name__ == "__main__":
     unittest.main()

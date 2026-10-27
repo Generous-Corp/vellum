@@ -9,6 +9,11 @@ closures, and commit map under `provenance/mirror/`. This verifier proves:
 - the newest receipt's mirror tree is exactly `HEAD:mirror` (tree equality);
 - every receipt agrees with its projected commit, closures, commit map, and
   blob-origin records;
+- a receipt whose Pulp commit git-filter-repo pruned (it changed no exported
+  path) names the ancestor the mirror commit rewrites (`mirror_source`), and
+  the commit map, the shipped ref map and, with a Pulp checkout, Pulp itself
+  attest that ancestor;
+- receipts landed at the merge base are neither removed nor changed;
 - every closure passes the Vellum link-closure policy; and, with a Pulp
   checkout, every mirrored blob is the Pulp blob at the exported commit.
 
@@ -21,6 +26,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -41,11 +47,25 @@ ORIGINS_PATH = "provenance/mirror/blob-origins.json"
 RECEIPT_DIR = "provenance/mirror/receipts/"
 CLOSURE_DIR = "provenance/mirror/closures/"
 COMMIT_MAP_DIR = "provenance/mirror/commit-maps/"
+REF_MAP_DIR = "provenance/mirror/ref-maps/"
 RECEIPT_KEYS = {
     "schema", "export_id", "pulp_repository", "pulp_sha", "mirror_ref",
     "mirror_sha", "mirror_tree", "rename", "commit_map", "units", "files",
     "generated_inputs", "tool", "created_at",
 }
+# Present only when git-filter-repo pruned pulp_sha: the export ref then lands
+# on the rewrite of mirror_source.sha, its nearest ancestor that changes an
+# exported path.
+RECEIPT_OPTIONAL_KEYS = {"mirror_source"}
+MIRROR_SOURCE_KEYS = {"sha", "ref_map", "proof"}
+MIRROR_SOURCE_PROOF_KEYS = {
+    "commit_map_rows", "ref_map_row", "source_is_ancestor", "exported_paths_equal",
+    "exported_path_count", "exported_blobs_sha256",
+}
+# git-filter-repo's commit-map value for a commit it pruned.
+PRUNED_SHA = "0" * 40
+# The ref the exporter rewrites; its ref-map row binds pulp_sha to mirror_sha.
+EXPORT_SOURCE_REF = "refs/heads/export-source"
 UNIT_KEYS = {"name", "closure_manifest", "closure_sha256", "oracle_class", "configure"}
 FILE_KEYS = {"mirror_path", "pulp_path", "mode", "blob"}
 GENERATED_KEYS = {"path", "sha256", "producer_paths"}
@@ -489,8 +509,11 @@ def tree_entries(root: Path, commit: str) -> list[dict[str, str]] | None:
 
 
 def validate_receipt_shape(receipt: Any, label: str) -> list[str]:
-    if not isinstance(receipt, dict) or set(receipt) != RECEIPT_KEYS:
-        return [f"{label}: receipt keys must be exactly {sorted(RECEIPT_KEYS)}"]
+    if not isinstance(receipt, dict) or not RECEIPT_KEYS <= set(receipt) <= RECEIPT_KEYS | RECEIPT_OPTIONAL_KEYS:
+        return [
+            f"{label}: receipt keys must be exactly {sorted(RECEIPT_KEYS)}, "
+            f"plus optionally {sorted(RECEIPT_OPTIONAL_KEYS)}"
+        ]
     errors: list[str] = []
     errors.extend(host_path_violations(receipt, label))
     expected = {
@@ -587,6 +610,100 @@ def validate_receipt_shape(receipt: Any, label: str) -> list[str]:
         for index, row in enumerate(generated):
             where = f"{label}: generated_inputs[{index}]"
             errors.extend(validate_generated_input(row, where))
+    if "mirror_source" in receipt:
+        errors.extend(validate_mirror_source_shape(receipt, label, export_id))
+    return errors
+
+
+def exported_blobs_digest(files: list[dict[str, Any]]) -> str:
+    """sha256 of the `<pulp_path> <mode> <blob>` listing Pulp's exporter hashes."""
+    listing = "".join(
+        f"{row['pulp_path']} {row['mode']} {row['blob']}\n"
+        for row in sorted(files, key=lambda row: row["pulp_path"])
+    )
+    return hashlib.sha256(listing.encode()).hexdigest()
+
+
+def validate_mirror_source_shape(receipt: dict[str, Any], label: str, export_id: str) -> list[str]:
+    """The recorded claims of a pruned-source receipt, checked against its own fields."""
+    where = f"{label}: mirror_source"
+    source = receipt["mirror_source"]
+    if not isinstance(source, dict) or set(source) != MIRROR_SOURCE_KEYS:
+        return [f"{where} must contain exactly {sorted(MIRROR_SOURCE_KEYS)}"]
+    errors: list[str] = []
+    pulp_sha, mirror_sha = receipt["pulp_sha"], receipt["mirror_sha"]
+    sha = source["sha"]
+    if not isinstance(sha, str) or not SHA40.fullmatch(sha):
+        errors.append(f"{where}.sha is not a full object ID")
+    elif sha == pulp_sha:
+        errors.append(f"{where}.sha must be a strict ancestor of pulp_sha, not pulp_sha itself")
+    ref_map = source["ref_map"]
+    if (
+        not isinstance(ref_map, dict)
+        or set(ref_map) != {"path", "sha256"}
+        or ref_map.get("path") != f"{REF_MAP_DIR}{export_id}.txt"
+        or not SHA256.fullmatch(str(ref_map.get("sha256")))
+    ):
+        errors.append(f"{where}.ref_map must name {REF_MAP_DIR}<export_id>.txt and its sha256")
+    proof = source["proof"]
+    if not isinstance(proof, dict) or set(proof) != MIRROR_SOURCE_PROOF_KEYS:
+        return errors + [f"{where}.proof must contain exactly {sorted(MIRROR_SOURCE_PROOF_KEYS)}"]
+    if proof["commit_map_rows"] != [f"{pulp_sha} {PRUNED_SHA}", f"{sha} {mirror_sha}"]:
+        errors.append(f"{where}.proof.commit_map_rows must be '<pulp_sha> {PRUNED_SHA}' and '<sha> <mirror_sha>'")
+    if proof["ref_map_row"] != f"{pulp_sha} {mirror_sha} {EXPORT_SOURCE_REF}":
+        errors.append(f"{where}.proof.ref_map_row must be '<pulp_sha> <mirror_sha> {EXPORT_SOURCE_REF}'")
+    if proof["source_is_ancestor"] is not True or proof["exported_paths_equal"] is not True:
+        errors.append(f"{where}.proof must record source_is_ancestor and exported_paths_equal as true")
+    files = receipt["files"]
+    if isinstance(files, list) and all(isinstance(row, dict) and FILE_KEYS <= set(row) for row in files):
+        if proof["exported_path_count"] != len(files):
+            errors.append(f"{where}.proof.exported_path_count differs from the receipt's file rows")
+        if proof["exported_blobs_sha256"] != exported_blobs_digest(files):
+            errors.append(f"{where}.proof.exported_blobs_sha256 differs from the receipt's file rows")
+    return errors
+
+
+def map_rows(text: str, width: int) -> set[tuple[str, ...]]:
+    """Rows of a git-filter-repo map whose first two fields are object IDs."""
+    rows = set()
+    for line in text.splitlines():
+        fields = tuple(line.split())
+        if len(fields) == width and SHA40.fullmatch(fields[0]) and SHA40.fullmatch(fields[1]):
+            rows.add(fields)
+    return rows
+
+
+def commit_map_errors(root: Path, receipt: dict[str, Any], label: str) -> list[str]:
+    """The commit map (and, for a pruned source, the ref map) attest the export.
+
+    Unpruned: the commit map carries `<pulp_sha> <mirror_sha>`. Pruned: it
+    carries `<pulp_sha> 0000...` and `<mirror_source.sha> <mirror_sha>` instead,
+    names no other source for mirror_sha, and the shipped ref map moves
+    refs/heads/export-source from pulp_sha to mirror_sha. No row is ever
+    synthesized, so each claim is git-filter-repo's own record.
+    """
+    commit_map = root / receipt["commit_map"]["path"]
+    if not commit_map.is_file() or sha256_file(commit_map) != receipt["commit_map"]["sha256"]:
+        return [f"{label}: commit map is missing or its sha256 differs"]
+    rows = map_rows(commit_map.read_text(encoding="utf-8"), 2)
+    pulp_sha, mirror_sha = receipt["pulp_sha"], receipt["mirror_sha"]
+    source = receipt.get("mirror_source")
+    if source is None:
+        if (pulp_sha, mirror_sha) not in rows:
+            return [f"{label}: commit map lacks the row '<pulp_sha> <mirror_sha>'"]
+        return []
+    errors: list[str] = []
+    if (pulp_sha, mirror_sha) in rows:
+        errors.append(f"{label}: commit map maps pulp_sha to mirror_sha, so mirror_source must be absent")
+    if (pulp_sha, PRUNED_SHA) not in rows:
+        errors.append(f"{label}: commit map lacks the pruned row '<pulp_sha> {PRUNED_SHA}'")
+    if {old for old, new in rows if new == mirror_sha} != {source["sha"]}:
+        errors.append(f"{label}: commit map does not name mirror_source.sha as the only source of mirror_sha")
+    ref_map = root / source["ref_map"]["path"]
+    if not ref_map.is_file() or sha256_file(ref_map) != source["ref_map"]["sha256"]:
+        errors.append(f"{label}: ref map is missing or its sha256 differs")
+    elif (pulp_sha, mirror_sha, EXPORT_SOURCE_REF) not in map_rows(ref_map.read_text(encoding="utf-8"), 3):
+        errors.append(f"{label}: ref map lacks the row '<pulp_sha> <mirror_sha> {EXPORT_SOURCE_REF}'")
     return errors
 
 
@@ -758,11 +875,7 @@ def verify_receipt(
     if projected != recorded:
         errors.append(f"{label}: files differ from the projected tree of mirror_sha")
 
-    commit_map = root / receipt["commit_map"]["path"]
-    if not commit_map.is_file() or sha256_file(commit_map) != receipt["commit_map"]["sha256"]:
-        errors.append(f"{label}: commit map is missing or its sha256 differs")
-    elif f"{receipt['pulp_sha']} {mirror_sha}" not in commit_map.read_text(encoding="utf-8").splitlines():
-        errors.append(f"{label}: commit map lacks the row '<pulp_sha> <mirror_sha>'")
+    errors.extend(commit_map_errors(root, receipt, label))
 
     closures: dict[str, dict[str, Any]] = {}
     for unit in receipt["units"]:
@@ -854,7 +967,8 @@ def verify_receipt(
     return errors
 
 
-def verify_receipt_against_pulp(pulp_root: Path, receipt: dict[str, Any]) -> list[str]:
+def verify_receipt_against_pulp(pulp_root: Path, receipt: dict[str, Any],
+                                root: Path | None = None) -> list[str]:
     errors: list[str] = []
     pulp_sha = receipt["pulp_sha"]
     if not git_ok(pulp_root, "cat-file", "-e", f"{pulp_sha}^{{commit}}"):
@@ -876,6 +990,69 @@ def verify_receipt_against_pulp(pulp_root: Path, receipt: dict[str, Any]) -> lis
     tool = receipt["tool"]
     if origin.get(tool["path"], ("", ""))[1] != tool["pulp_blob"]:
         errors.append(f"tool blob differs from Pulp {pulp_sha}:{tool['path']}")
+    source = receipt.get("mirror_source")
+    if isinstance(source, dict):
+        errors.extend(mirror_source_against_pulp(pulp_root, receipt, source["sha"], root))
+    return errors
+
+
+def commit_identity(repo: Path, commit: str) -> tuple[str, str, bytes] | None:
+    """(author, committer, message) of a commit: the fields git-filter-repo keeps.
+
+    The rewrite drops signatures (gpgsig, mergetag) and changes tree and
+    parents; the author and committer lines, dates included, and the message
+    pass through.
+    """
+    raw = subprocess.run(["git", "cat-file", "commit", commit], cwd=repo,
+                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    if raw.returncode != 0:
+        return None
+    header, _, message = raw.stdout.partition(b"\n\n")
+    fields = {}
+    for line in header.split(b"\n"):
+        key, _, value = line.partition(b" ")
+        if key in (b"author", b"committer"):
+            fields[key] = value.decode("utf-8", "replace")
+    if set(fields) != {b"author", b"committer"}:
+        return None
+    return fields[b"author"], fields[b"committer"], message
+
+
+def mirror_source_against_pulp(pulp_root: Path, receipt: dict[str, Any], source: str,
+                               root: Path | None = None) -> list[str]:
+    """mirror_source.sha is a strict Pulp ancestor of pulp_sha with every exported file
+    unchanged, and the commit the mirror commit was rewritten from.
+
+    The commit map and ref map name the source but are files a lander writes,
+    so any commit between the real source and pulp_sha whose exported files
+    are unchanged could be named in its place. The mirror commit carries its
+    source's author, committer and message through the rewrite, which binds
+    it to exactly one Pulp commit.
+    """
+    pulp_sha = receipt["pulp_sha"]
+    if not git_ok(pulp_root, "cat-file", "-e", f"{source}^{{commit}}"):
+        return [f"mirror_source {source} is not a commit in {pulp_root}"]
+    errors: list[str] = []
+    if source == pulp_sha or not git_ok(pulp_root, "merge-base", "--is-ancestor", source, pulp_sha):
+        errors.append(f"mirror_source {source} is not a strict ancestor of Pulp {pulp_sha}")
+    listing = git_try(pulp_root, "ls-tree", "-r", "--full-tree", source) or ""
+    at_source: dict[str, tuple[str, str]] = {}
+    for line in listing.splitlines():
+        metadata, path = line.split("\t", 1)
+        mode, _kind, blob = metadata.split(" ")
+        at_source[path] = (mode, blob)
+    for row in receipt["files"]:
+        if at_source.get(row["pulp_path"]) != (row["mode"], row["blob"]):
+            errors.append(f"{row['mirror_path']} differs between mirror_source {source} and Pulp {pulp_sha}")
+    if root is None:
+        errors.append("mirror_source cannot be bound to the mirror commit without the Vellum repository")
+        return errors
+    mirrored = commit_identity(root, receipt["mirror_sha"])
+    original = commit_identity(pulp_root, source)
+    if mirrored is None or original is None or mirrored != original:
+        errors.append(
+            f"mirror commit {receipt['mirror_sha']} was not rewritten from mirror_source {source}: "
+            "its author, committer or message differs")
     return errors
 
 
@@ -887,6 +1064,58 @@ def landed_receipts(root: Path) -> list[str]:
         return []
     receipts = index.get("receipts") if isinstance(index, dict) else None
     return [r for r in receipts if isinstance(r, str)] if isinstance(receipts, list) else []
+
+
+def receipt_history_errors(root: Path, receipts: list[str], stored: list[str]) -> list[str]:
+    """Reject removal or mutation of receipts present at the merge base.
+
+    The base is the merge base of HEAD with VELLUM_GIT_BASE, the CI base
+    commit. When that names nothing this repository has (a push's all-zero
+    `before`), the base is HEAD's first parent, the tip the push replaced; a
+    root commit then has no base and fails closed. Without VELLUM_GIT_BASE
+    (a local run) the base is the merge base with main or origin/main,
+    whichever resolves first, and with neither there is nothing to compare.
+    """
+    configured = os.environ.get("VELLUM_GIT_BASE")
+    if configured:
+        base = git_try(root, "merge-base", "HEAD", configured) or git_try(
+            root, "rev-parse", "--verify", "--quiet", "HEAD^1")
+        if base is None:
+            return [f"receipt history base is unavailable: {configured} names no commit and HEAD has no parent"]
+    else:
+        base = next((found for found in (git_try(root, "merge-base", "HEAD", ref)
+                                         for ref in ("main", "origin/main")) if found), None)
+        if base is None:
+            return []
+    base_index_text = git_try(root, "show", f"{base}:{INDEX_PATH}")
+    if base_index_text is None:
+        return [f"receipt history index is unavailable at {base}"]
+    try:
+        base_index = json.loads(base_index_text)
+    except ValueError as exc:
+        return [f"receipt history index is unreadable at {base}: {exc}"]
+    base_receipts = base_index.get("receipts") if isinstance(base_index, dict) else None
+    if not isinstance(base_receipts, list) or not all(isinstance(path, str) for path in base_receipts):
+        return [f"receipt history index is malformed at {base}"]
+    errors: list[str] = []
+    if receipts[:len(base_receipts)] != base_receipts:
+        errors.append("receipt index may only append entries present after the merge base")
+    base_stored = {
+        entry["mirror_path"]
+        for entry in tree_entries(root, base) or []
+        if entry["mirror_path"].startswith(RECEIPT_DIR) and entry["mirror_path"] != INDEX_PATH
+    }
+    if not base_stored <= set(stored):
+        errors.append("receipt files present at the merge base may not be removed")
+    for path in sorted(base_stored):
+        before = subprocess.run(
+            ["git", "show", f"{base}:{path}"], cwd=root,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False,
+        )
+        current = root / path
+        if before.returncode != 0 or not current.is_file() or current.read_bytes() != before.stdout:
+            errors.append(f"receipt file changed from the merge base: {path}")
+    return errors
 
 
 def verify(root: Path, pulp_root: Path | None = None) -> dict[str, Any]:
@@ -921,6 +1150,7 @@ def verify(root: Path, pulp_root: Path | None = None) -> dict[str, Any]:
     )
     if stored != sorted(receipts):
         errors.append("receipt files on disk differ from the receipt index")
+    errors.extend(receipt_history_errors(root, receipts, stored))
     has_mirror = git_ok(root, "cat-file", "-e", f"{head}:{MIRROR_DIR}")
     if not receipts and has_mirror:
         errors.append("mirror/ exists at HEAD without an export receipt")
@@ -938,7 +1168,7 @@ def verify(root: Path, pulp_root: Path | None = None) -> dict[str, Any]:
         )
         errors.extend(receipt_errors)
         if pulp_root is not None and not receipt_errors:
-            errors.extend(f"{receipt_path}: {e}" for e in verify_receipt_against_pulp(pulp_root, receipt))
+            errors.extend(f"{receipt_path}: {e}" for e in verify_receipt_against_pulp(pulp_root, receipt, root))
             pulp_checked = True
     return {
         "status": "pass" if not errors else "fail",

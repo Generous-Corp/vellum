@@ -1,0 +1,168 @@
+// widget_bridge/widget_value_content_api.cpp - content value registrations for WidgetBridge.
+
+#include <pulp/view/widget_bridge.hpp>
+#include <pulp/view/widgets.hpp>
+#include <pulp/view/data_display.hpp>
+#include "api_registry.hpp"
+
+#include <pulp/view/gap_widgets.hpp>
+#include <pulp/view/text_editor.hpp>
+#include <pulp/view/ui_components.hpp>
+#include <pulp/runtime/trace.hpp>
+
+#include <cstdint>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace pulp::view {
+
+void BridgeRegistrars::register_widget_value_content_api(WidgetBridge& self) {
+    BridgeApiContext api{self.engine_};
+
+    register_bridge_function(api, "setProgress", [&self](choc::javascript::ArgumentList args) {
+        if (auto* p = dynamic_cast<ProgressBar*>(self.widget(args.get<std::string>(0, ""))))
+            p->set_progress(static_cast<float>(args.get<double>(1, 0)));
+        return choc::value::Value();
+    });
+
+    register_bridge_function(api, "setMeterLevel", [&self](choc::javascript::ArgumentList args) {
+        if (auto* m = dynamic_cast<LevelDisplay*>(self.widget(args.get<std::string>(0, ""))))
+            m->set_levels(static_cast<float>(args.get<double>(1, 0)),
+                          static_cast<float>(args.get<double>(2, 0)));
+        return choc::value::Value();
+    });
+
+    register_bridge_function(api, "setXY", [&self](choc::javascript::ArgumentList args) {
+        if (auto* p = dynamic_cast<XYPad*>(self.widget(args.get<std::string>(0, "")))) {
+            p->set_x(static_cast<float>(args.get<double>(1, .5)));
+            p->set_y(static_cast<float>(args.get<double>(2, .5)));
+        }
+        return choc::value::Value();
+    });
+
+    register_bridge_function(api, "setWaveformData", [&self](choc::javascript::ArgumentList args) {
+        if (auto* w = dynamic_cast<SeriesDisplay*>(self.widget(args.get<std::string>(0, "")))) {
+            if (args.numArgs > 1 && args[1]) {
+                auto& a = *args[1];
+                std::vector<float> d(a.size());
+                for (uint32_t i = 0; i < a.size(); ++i)
+                    d[i] = static_cast<float>(a[i].getWithDefault<double>(0));
+                w->set_series(d.data(), d.size());
+            }
+        }
+        return choc::value::Value();
+    });
+
+    register_bridge_function(api, "setSpectrumData", [&self](choc::javascript::ArgumentList args) {
+        if (auto* s = dynamic_cast<BinDisplay*>(self.widget(args.get<std::string>(0, "")))) {
+            if (args.numArgs > 1 && args[1]) {
+                auto& a = *args[1];
+                std::vector<float> d(a.size());
+                for (uint32_t i = 0; i < a.size(); ++i)
+                    d[i] = static_cast<float>(a[i].getWithDefault<double>(0));
+                s->set_bins(d.data(), d.size());
+            }
+        }
+        return choc::value::Value();
+    });
+
+    register_bridge_function(api, "setPlaceholder", [&self](choc::javascript::ArgumentList args) {
+        if (auto* e = dynamic_cast<TextEditor*>(self.widget(args.get<std::string>(0, ""))))
+            e->placeholder = args.get<std::string>(1, "");
+        return choc::value::Value();
+    });
+
+    register_bridge_function(api, "setText", [&self](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, ""); auto t = args.get<std::string>(1, "");
+        PULP_TRACE_SCOPE_NAMED_ARGS(
+            "js", "setText_target",
+            "widget_id", ::perfetto::DynamicString{id},
+            "text_length", static_cast<std::int64_t>(t.size()));
+        auto* v = self.widget(id);
+        if (auto* e = dynamic_cast<TextEditor*>(v)) e->set_text(t);
+        else if (auto* l = dynamic_cast<Label*>(v)) {
+            const auto& style = l->flex();
+            PULP_TRACE_SCOPE_NAMED_ARGS(
+                "js", "setText_label_state",
+                "widget_id", ::perfetto::DynamicString{id},
+                "preferred_width", style.preferred_width,
+                "preferred_height", style.preferred_height,
+                "dim_width", style.dim_width.value,
+                "dim_height", style.dim_height.value,
+                "dim_width_unit", static_cast<std::int64_t>(style.dim_width.unit),
+                "dim_height_unit", static_cast<std::int64_t>(style.dim_height.unit),
+                "multi_line", l->multi_line(),
+                "captured_wrap", l->captured_wrap_fallback(),
+                "attributed", l->has_attributed_string());
+            l->set_text(t);
+        }
+        else if (auto* b = dynamic_cast<Badge*>(v)) b->set_text(t);
+        return choc::value::Value();
+    });
+
+    register_bridge_function(api, "getText", [&self](choc::javascript::ArgumentList args) {
+        auto* v = self.widget(args.get<std::string>(0, ""));
+        if (auto* e = dynamic_cast<TextEditor*>(v)) return choc::value::createString(e->text());
+        if (auto* l = dynamic_cast<Label*>(v)) return choc::value::createString(l->text());
+        return choc::value::createString("");
+    });
+
+    register_bridge_function(api, "setPanelStyle", [&self](choc::javascript::ArgumentList args) {
+        if (auto* p = dynamic_cast<Panel*>(self.widget(args.get<std::string>(0, "")))) {
+            if (args.numArgs > 1) p->set_background_token(args.get<std::string>(1, "bg.surface"));
+            if (args.numArgs > 2) p->set_border_token(args.get<std::string>(2, "control.border"));
+            if (args.numArgs > 3) p->set_corner_radius(static_cast<float>(args.get<double>(3, 8)));
+            if (args.numArgs > 4) p->set_border_width(static_cast<float>(args.get<double>(4, 1)));
+        }
+        return choc::value::Value();
+    });
+
+    // A SCROLLVIEW'S OFFSET, SETTABLE FROM SCRIPT.
+    //
+    // Wheel, trackpad and scrollbar drag are handled natively and need nothing
+    // here. What had no route at all was PROGRAMMATIC scrolling: a scripted UI
+    // could create a ScrollView and size its content, but could not move it, so
+    // any surface wanting keyboard scrolling (Arrow / Page / Home / End over a
+    // long document) had to hand-roll the whole thing in React instead -- which
+    // is exactly the workaround this closes, because moving the offset through
+    // React re-renders and re-applies the document on every input sample.
+    //
+    // `animate` defaults TRUE here, the opposite of the wheel path: these are
+    // programmatic jumps, where easing reads as intent rather than lag. A caller
+    // replaying an input stream should pass false.
+    auto scroll_target = [&self](const std::string& id) -> ScrollView* {
+        if (auto* wrapper = self.scroll_wrapper(id)) return wrapper;
+        return dynamic_cast<ScrollView*>(self.widget(id));
+    };
+
+    register_bridge_function(api, "scrollTo", [scroll_target](choc::javascript::ArgumentList args) {
+        if (auto* s = scroll_target(args.get<std::string>(0, "")))
+            s->set_scroll(static_cast<float>(args.get<double>(1, 0)),
+                          static_cast<float>(args.get<double>(2, 0)));
+        return choc::value::Value();
+    });
+
+    register_bridge_function(api, "scrollBy", [scroll_target](choc::javascript::ArgumentList args) {
+        if (auto* s = scroll_target(args.get<std::string>(0, ""))) {
+            const bool animate = args.numArgs > 3 ? args.get<bool>(3, true) : true;
+            s->scroll_by(static_cast<float>(args.get<double>(1, 0)),
+                         static_cast<float>(args.get<double>(2, 0)), animate);
+        }
+        return choc::value::Value();
+    });
+
+    register_bridge_function(api, "setScrollContentSize", [&self](choc::javascript::ArgumentList args) {
+        auto id = args.get<std::string>(0, "");
+        auto* s = self.scroll_wrapper(id);
+        if (!s) s = dynamic_cast<ScrollView*>(self.widget(id));
+        if (s) {
+            if (args.numArgs == 1) s->use_automatic_content_size();
+            else s->set_content_size({static_cast<float>(args.get<double>(1,0)),
+                                      static_cast<float>(args.get<double>(2,0))});
+        }
+        return choc::value::Value();
+    });
+}
+
+} // namespace pulp::view

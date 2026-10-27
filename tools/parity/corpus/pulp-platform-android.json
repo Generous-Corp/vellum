@@ -1,0 +1,132 @@
+{
+  "schema": "vellum.parity.corpus.v1",
+  "corpus_id": "pulp-platform-android-emulator-v1",
+  "description": "G7 Android, Pulp vs Pulp: the debug APK `./gradlew assembleDebug` builds (android.yml android-build; arm64-v8a, PULP_ENABLE_GPU=ON without an Android Skia slice, so the CPU canvas) installed on an API 35 google_apis arm64-v8a emulator started with -no-audio -read-only, its PulpActivity launched, and the app's log read after a settle time. This is the android.yml android-emulator-test recipe, which also requires the process to stay up and no fatal exception to be logged. The JNI contract is static: every Kotlin `external fun` and Java `native` method under android/app/src/main (65, listed by evidence/G5-G7/jni_natives.py from the same checkout) plus JNI_OnLoad must be a dynamic export of libpulp.so; Pulp registers no natives at run time (no RegisterNatives call).",
+  "declared_gaps": [
+    {
+      "row": "host checks 3-5 (render, editor lifecycle, two instances)",
+      "reason": "Android has no plug-in format; the app is the product. This lane proves load, JNI bridge, activity start and survival; it does not drive the UI or render audio offline."
+    },
+    {
+      "row": "column B",
+      "reason": "Android Skia has no prebuilt slice; the APK falls back to the CPU canvas."
+    }
+  ],
+  "declared_exceptions": [],
+  "cases": [
+    {
+      "source": "fixtures/platform/scan.json",
+      "source_base": "corpus",
+      "width": 1,
+      "height": 1,
+      "case_id": "android-app-launch",
+      "source_kind": "platform",
+      "lanes": [
+        "android-host-checks"
+      ],
+      "args": {
+        "mode": [
+          "android"
+        ],
+        "artifact": [
+          "--artifact",
+          "{root:artifact}/app-debug.apk"
+        ],
+        "host": [
+          "--device",
+          "emulator-5584",
+          "--activity",
+          "com.pulp.app/com.pulp.PulpActivity",
+          "--settle",
+          "8"
+        ]
+      },
+      "expect": {
+        "native_libs": [
+          "lib/arm64-v8a/libpulp.so",
+          "lib/arm64-v8a/libc++_shared.so"
+        ],
+        "abi": "arm64-v8a",
+        "markers": [
+          "JNI_OnLoad: Pulp native bridge initialized",
+          "PulpActivity\\.onCreate",
+          "nativeOnForeground"
+        ],
+        "jni_exports": {
+          "lib/arm64-v8a/libpulp.so": [
+            "JNI_OnLoad",
+            "Java_com_pulp_PulpActivity_nativeOnBackground",
+            "Java_com_pulp_PulpActivity_nativeOnDisplayChanged",
+            "Java_com_pulp_PulpActivity_nativeOnForeground",
+            "Java_com_pulp_PulpActivity_nativeOnKeyboardChanged",
+            "Java_com_pulp_PulpActivity_nativeOnMemoryPressure",
+            "Java_com_pulp_PulpActivity_nativeOnOrientationChanged",
+            "Java_com_pulp_PulpActivity_nativeOnPermissionResult",
+            "Java_com_pulp_PulpActivity_nativeOnSafeAreaChanged",
+            "Java_com_pulp_PulpActivity_nativeOnShutdown",
+            "Java_com_pulp_PulpFileProvider_nativeInitAssets",
+            "Java_com_pulp_PulpFileProvider_nativeSetAppDataDir",
+            "Java_com_pulp_accessibility_PulpAccessibilityDelegate_nativeGetAccessibilityNodeCount",
+            "Java_com_pulp_accessibility_PulpAccessibilityDelegate_nativeGetNodeColumnCount",
+            "Java_com_pulp_accessibility_PulpAccessibilityDelegate_nativeGetNodeLabel",
+            "Java_com_pulp_accessibility_PulpAccessibilityDelegate_nativeGetNodeRangeMax",
+            "Java_com_pulp_accessibility_PulpAccessibilityDelegate_nativeGetNodeRangeMin",
+            "Java_com_pulp_accessibility_PulpAccessibilityDelegate_nativeGetNodeRole",
+            "Java_com_pulp_accessibility_PulpAccessibilityDelegate_nativeGetNodeRowCount",
+            "Java_com_pulp_accessibility_PulpAccessibilityDelegate_nativeGetNodeValue",
+            "Java_com_pulp_accessibility_PulpAccessibilityDelegate_nativePerformAction",
+            "Java_com_pulp_audio_PulpAudioFocus_nativeOnAudioFocusDuck",
+            "Java_com_pulp_audio_PulpAudioFocus_nativeOnAudioFocusGained",
+            "Java_com_pulp_audio_PulpAudioFocus_nativeOnAudioFocusLost",
+            "Java_com_pulp_audio_PulpAudioFocus_nativeOnAudioFocusLostTransient",
+            "Java_com_pulp_bridge_PulpBridge_nativeInit",
+            "Java_com_pulp_midi_PulpBluetoothMidi_nativeAttachRegistryValidationInput",
+            "Java_com_pulp_midi_PulpBluetoothMidi_nativeBeginRegistryValidation",
+            "Java_com_pulp_midi_PulpBluetoothMidi_nativeConnectRegistryValidation",
+            "Java_com_pulp_midi_PulpBluetoothMidi_nativeDisconnectRegistryValidation",
+            "Java_com_pulp_midi_PulpBluetoothMidi_nativeInstallBridge",
+            "Java_com_pulp_midi_PulpBluetoothMidi_nativeOnConnected",
+            "Java_com_pulp_midi_PulpBluetoothMidi_nativeOnConnectionFailed",
+            "Java_com_pulp_midi_PulpBluetoothMidi_nativeOnDisconnected",
+            "Java_com_pulp_midi_PulpBluetoothMidi_nativeOnMidiReceived",
+            "Java_com_pulp_midi_PulpBluetoothMidi_nativeOnPeripheralFound",
+            "Java_com_pulp_midi_PulpBluetoothMidi_nativeOnScanStopped",
+            "Java_com_pulp_midi_PulpBluetoothMidi_nativeRegistryEventCounts",
+            "Java_com_pulp_midi_PulpBluetoothMidi_nativeRegistryFlags",
+            "Java_com_pulp_midi_PulpBluetoothMidi_nativeRegistryValidationIsScanning",
+            "Java_com_pulp_midi_PulpBluetoothMidi_nativeRegistryValidationReceived",
+            "Java_com_pulp_midi_PulpBluetoothMidi_nativeRegistryValidationReceivedAt",
+            "Java_com_pulp_midi_PulpBluetoothMidi_nativeSendRegistryValidationOutput",
+            "Java_com_pulp_midi_PulpMidiManager_nativeOnDeviceAdded",
+            "Java_com_pulp_midi_PulpMidiManager_nativeOnDeviceRemoved",
+            "Java_com_pulp_midi_PulpMidiManager_nativeOnMidiReceived",
+            "Java_com_pulp_midi_PulpMidiService_nativeOnVirtualMidiReceived",
+            "Java_com_pulp_motion_PulpMotionNative_nativeClearAmbientProvenance",
+            "Java_com_pulp_motion_PulpMotionNative_nativeDetachTrace",
+            "Java_com_pulp_motion_PulpMotionNative_nativePublishComponents",
+            "Java_com_pulp_motion_PulpMotionNative_nativePublishValue",
+            "Java_com_pulp_motion_PulpMotionNative_nativeRegisterGeometryTrace",
+            "Java_com_pulp_motion_PulpMotionNative_nativeSetAmbientProvenance",
+            "Java_com_pulp_motion_PulpMotionNative_nativeTracingEnabled",
+            "Java_com_pulp_motion_PulpMotionNative_nativeUpdateGeometry",
+            "Java_com_pulp_render_PulpSurfaceView_nativeGetGpuAdapterInfo",
+            "Java_com_pulp_render_PulpSurfaceView_nativeOnDrop",
+            "Java_com_pulp_render_PulpSurfaceView_nativeOnSurfaceCreated",
+            "Java_com_pulp_render_PulpSurfaceView_nativeOnSurfaceDestroyed",
+            "Java_com_pulp_render_PulpSurfaceView_nativeOnSurfaceResized",
+            "Java_com_pulp_render_PulpSurfaceView_nativeOnTouchCancel",
+            "Java_com_pulp_render_PulpSurfaceView_nativeOnTouchDown",
+            "Java_com_pulp_render_PulpSurfaceView_nativeOnTouchMove",
+            "Java_com_pulp_render_PulpSurfaceView_nativeOnTouchUp",
+            "Java_com_pulp_render_PulpSurfaceView_nativeSetDisplayDensity",
+            "Java_com_pulp_render_PulpSurfaceView_nativeSetSafeAreaInsets"
+          ]
+        }
+      },
+      "controls": {
+        "drop_native_lib": "apk-drop:lib/arm64-v8a/libpulp.so",
+        "rename_jni_export": "apk-rename-export:lib/arm64-v8a/libpulp.so:JNI_OnLoad=JNI_OnLoaX"
+      }
+    }
+  ]
+}

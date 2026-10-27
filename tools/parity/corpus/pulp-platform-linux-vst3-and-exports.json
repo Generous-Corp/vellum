@@ -1,0 +1,153 @@
+{
+  "schema": "vellum.parity.corpus.v1",
+  "corpus_id": "pulp-platform-linux-vst3-and-exports-v1",
+  "description": "G7 Linux aarch64, column A (PULP_ENABLE_GPU=OFF, Release, Ninja, GCC 13.3, Ubuntu 24.04 arm64 VM cloned from tartci's pulp-linux-build image) built at Pulp main 9510a222 with pulp_add_plugin's PulpGain targets. Case linux-vst3: a Linux VST3 host loads PulpGain.vst3/Contents/aarch64-linux/PulpGain.so (VST3 SDK module layout). Case linux-clap-export-hygiene: the CLAP image exports only what a host looks up; pulp:: and Yoga symbols with default visibility are interposed across two Pulp plug-ins in one host process.",
+  "declared_gaps": [
+    {
+      "row": "x86_64 Linux",
+      "reason": "no x86_64 Linux host was reachable for a build (the macpro x86_64 VMs are CI runners); cross-platform-check.yml linux builds x86_64 but uploads logs only."
+    },
+    {
+      "row": "host checks 3-5 on Linux",
+      "reason": "no Linux plug-in host is run: clap-validator / pluginval on Linux and a headless render are not exercised; this lane reads the images statically."
+    },
+    {
+      "row": "column B",
+      "reason": "PULP_ENABLE_GPU=OFF build only."
+    }
+  ],
+  "declared_exceptions": [],
+  "cases": [
+    {
+      "source": "fixtures/platform/scan.json",
+      "source_base": "corpus",
+      "width": 1,
+      "height": 1,
+      "case_id": "linux-vst3",
+      "description": "PulpGain VST3",
+      "source_kind": "platform",
+      "lanes": [
+        "linux-elf-static"
+      ],
+      "args": {
+        "mode": [
+          "static"
+        ],
+        "artifact": [
+          "--artifact",
+          "{root:artifact}/VST3"
+        ]
+      },
+      "expect": {
+        "machine": "aarch64",
+        "required": [
+          "PulpGain.vst3/Contents/aarch64-linux/PulpGain.so",
+          "PulpGain.vst3/Contents/Resources/moduleinfo.json"
+        ],
+        "images": {
+          "PulpGain.vst3/Contents/aarch64-linux/PulpGain.so": {
+            "type": "dyn",
+            "require_exports": [
+              "GetPluginFactory",
+              "ModuleEntry",
+              "ModuleExit"
+            ],
+            "require_linked": [
+              "libc.so.6"
+            ],
+            "forbid_linked": [
+              "vulkan",
+              "wgpu",
+              "dawn",
+              "libGL",
+              "X11",
+              "vellum"
+            ],
+            "forbid_families": [
+              "gpu-host",
+              "skia",
+              "wgpu",
+              "dawn",
+              "vellum"
+            ],
+            "require_families": [
+              "pulp-format"
+            ]
+          }
+        }
+      },
+      "controls": {
+        "machine": "elf-machine",
+        "rename_export": "elf-rename-export:GetPluginFactory=GetPluginFactorz",
+        "rename_needed": "elf-rename-needed:libstdc++.so.6=libvulkan.so.1",
+        "drop": "drop:PulpGain.vst3/Contents/Resources/moduleinfo.json"
+      }
+    },
+    {
+      "source": "fixtures/platform/scan.json",
+      "source_base": "corpus",
+      "width": 1,
+      "height": 1,
+      "case_id": "linux-clap-export-hygiene",
+      "description": "PulpGain CLAP exports",
+      "source_kind": "platform",
+      "lanes": [
+        "linux-elf-static"
+      ],
+      "args": {
+        "mode": [
+          "static"
+        ],
+        "artifact": [
+          "--artifact",
+          "{root:artifact}/CLAP"
+        ]
+      },
+      "expect": {
+        "machine": "aarch64",
+        "required": [
+          "PulpGain.clap"
+        ],
+        "images": {
+          "PulpGain.clap": {
+            "type": "dyn",
+            "require_exports": [
+              "clap_entry"
+            ],
+            "require_linked": [
+              "libc.so.6"
+            ],
+            "forbid_linked": [
+              "vulkan",
+              "wgpu",
+              "dawn",
+              "libGL",
+              "X11",
+              "vellum"
+            ],
+            "forbid_families": [
+              "gpu-host",
+              "skia",
+              "wgpu",
+              "dawn",
+              "vellum"
+            ],
+            "require_families": [
+              "pulp-format"
+            ],
+            "forbid_exports": [
+              "^_ZN4pulp",
+              "^YG"
+            ]
+          }
+        }
+      },
+      "controls": {
+        "machine": "elf-machine",
+        "rename_export": "elf-rename-export:clap_entry=clap_entrz",
+        "rename_needed": "elf-rename-needed:libstdc++.so.6=libvulkan.so.1",
+        "drop": "drop:PulpGain.pulp-build-info.json"
+      }
+    }
+  ]
+}

@@ -1,0 +1,824 @@
+#pragma once
+
+/// @file design_ir.hpp
+/// Normalized intermediate representation (IR) for imported designs: the IR
+/// value model (style, layout, nodes, tokens, asset manifest, diagnostics).
+///
+/// This header is the `pulp-design-ir` unit. It sits below view-core and
+/// includes only the standard library, so generic view code can carry IR
+/// values without reaching the importer. The canonical JSON serialize/parse,
+/// asset collection, and interactive-frame promotion entry points are importer
+/// operations and live in design_ir_io.hpp (`pulp-design-import`).
+
+#include <pulp/view/design_line_metrics.hpp>
+
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <filesystem>
+#include <memory>
+#include <string>
+#include <string_view>
+#include <vector>
+#include <optional>
+#include <map>
+#include <unordered_map>
+#include <variant>
+
+namespace pulp::view {
+
+// ── Design source types ─────────────────────────────────────────────────
+//
+// DesignSource is part of the IR model: DesignIR::source is a DesignSource
+// by value, so the enum must be defined here (foundational) to keep the
+// header dependency graph acyclic. The string<->enum helper functions live
+// in design_sources.hpp alongside the source adapters.
+
+enum class DesignSource {
+    figma,
+    stitch,
+    v0,
+    pencil,
+    claude,   // Anthropic Claude Design — manual HTML/zip export, no Anthropic API
+    designmd, // Google DESIGN.md (Apache-2.0) — YAML frontmatter + Markdown body
+    jsx,      // Single-file React JSX instrument — compiled via esbuild + bundled React/ReactDOM
+    figma_plugin,    // Pulp's "Design for Pulp" Figma plugin export envelope
+    html,            // Generic runnable HTML evaluated by the isolated browser lane
+    preconverted_svg // Validated SVG + control-map sidecar; no source conversion
+};
+
+// ── Normalized Intermediate Representation ──────────────────────────────
+
+/// Layout direction for flex containers.
+enum class LayoutDirection { row, column };
+
+/// Alignment values for flex containers.
+enum class LayoutAlign {
+    flex_start, flex_end, center, stretch, space_between, space_around
+};
+
+/// Sizing mode for an IR node dimension.
+enum class SizingMode { fixed, hug, fill };
+
+/// A single CSS `box-shadow` layer. CSS `box-shadow` is a comma-separated
+/// list of these layers (painted first-to-last, so the first sits on top);
+/// `IRStyle::box_shadow` keeps them in author order; collapsing the declaration
+/// into one opaque string would drop every layer past the first, losing the
+/// multi-shadow stack.
+struct IRBoxShadow {
+    float offset_x = 0.0f;
+    float offset_y = 0.0f;
+    float blur = 0.0f;
+    float spread = 0.0f;
+    std::string color;            ///< raw CSS color token ("#rrggbbaa" or "rgba(...)")
+    bool inset = false;
+    std::string raw;              ///< original layer text, for lossless round-trip
+};
+
+/// Style properties for an IR node.
+struct IRStyle {
+    std::optional<std::string> background_color;
+    std::optional<std::string> background_gradient;   // linear-gradient(...)
+    std::optional<std::string> background_image;      // url(...), data:..., or none
+    std::optional<std::string> background_repeat;
+    std::optional<std::string> background_position;
+    // CSS background-size keyword ("cover", "contain", "auto"). Figma IMAGE
+    // fill scale modes lower here on frame-shaped nodes (FILL → cover,
+    // FIT → contain, TILE → auto + background_repeat: repeat). Stored on the
+    // View via set_background_size and emitted by every codegen; raster
+    // background-image paint honoring is the same deferred slot as
+    // background_repeat (View::style_extras).
+    std::optional<std::string> background_size;
+    // CSS background-origin ("padding-box", "border-box", "content-box"),
+    // possibly a per-layer list. It decides the box a repeating background
+    // tile is sized and positioned in; absent means the CSS initial value,
+    // padding-box.
+    std::optional<std::string> background_origin;
+    // CSS object-fit for image-shaped nodes ("fill", "contain", "cover",
+    // "none", "scale-down"). Figma IMAGE fill scale modes lower here when the
+    // fill becomes a dedicated image node (FILL → cover, FIT → contain);
+    // ImageView::paint honors it, so this is a rendered property, not a
+    // storage-only slot.
+    std::optional<std::string> object_fit;
+    std::optional<std::string> color;                  // text color
+    std::optional<float> opacity;
+    // CSS mix-blend-mode keyword (e.g. "multiply", "screen", "color-dodge").
+    // Normalized to the lowercase-hyphen CSS spelling at parse time; the
+    // engine's View::set_mix_blend_mode + setMixBlendMode bridge consume it.
+    std::optional<std::string> mix_blend_mode;
+    std::optional<float> border_radius;
+    std::optional<std::string> border;                 // e.g. "1px solid #333"
+    std::optional<std::string> border_color;
+    std::optional<float> border_width;
+    std::optional<std::string> border_style;
+    std::optional<std::string> border_top_color;
+    std::optional<std::string> border_right_color;
+    std::optional<std::string> border_bottom_color;
+    std::optional<std::string> border_left_color;
+    std::optional<float> border_top_width;
+    std::optional<float> border_right_width;
+    std::optional<float> border_bottom_width;
+    std::optional<float> border_left_width;
+    std::optional<float> border_top_left_radius;
+    std::optional<float> border_top_right_radius;
+    std::optional<float> border_bottom_right_radius;
+    std::optional<float> border_bottom_left_radius;
+    std::vector<IRBoxShadow> box_shadow;               // ordered CSS shadow layers
+    std::optional<std::string> filter;                 // e.g. "blur(4px)"
+    std::optional<std::string> backdrop_filter;
+    // CSS clip-path / mask. The engine (View::set_clip_path / set_mask /
+    // set_mask_image / set_mask_size) + the setClipPath/setMask* bridge
+    // consume these; sources that carry them — and Figma mask
+    // layers once the extractor emits a clip-path — survive the IR.
+    std::optional<std::string> clip_path;
+    // The clip an importer resolved for THIS node, in the node's own
+    // coordinate space (origin at its top-left, same space as `clip_path`).
+    //
+    // Carried per node rather than inherited from a clipping parent, because
+    // CSS clips along the containing-block chain while a tree clips by
+    // parentage, and the two disagree in both directions: an absolutely
+    // positioned node can escape an `overflow: hidden` ancestor it sits inside,
+    // and a node moved to a new parent must keep the clip its old one gave it.
+    // A rectangle attached to the node travels with the node, so re-parenting
+    // cannot change what it clips. The engine (View::set_ancestor_clip_rect)
+    // applies it to the node's OWN ink only — every descendant carries its own.
+    //
+    // The corner radii belong to the clip, not to the node: CSS clips overflow
+    // to the clipper's ROUNDED padding box, so a square-cornered child inside a
+    // rounded card is cut to the card's curve. Without them a rounded card whose
+    // media area is a plain rectangle paints that rectangle square into the
+    // corner, and the card reads as unrounded even though its own border curves.
+    // A radius applies only where the clip's corner is still the clipper's own —
+    // a corner cut by a second, tighter clipper is square, so the resolver drops
+    // the radius there rather than rounding a corner nothing rounded.
+    struct ClipRect {
+        float x = 0, y = 0, width = 0, height = 0;
+        float radius_tl = 0, radius_tr = 0, radius_br = 0, radius_bl = 0;
+    };
+    std::optional<ClipRect> clip_rect;
+    std::optional<std::string> mask;                   // `mask` shorthand
+    std::optional<std::string> mask_image;
+    std::optional<std::string> mask_size;
+    std::optional<std::string> font_family;
+    std::optional<float> font_size;
+    std::optional<int> font_weight;
+    std::optional<std::string> font_style;             // normal, italic
+    std::optional<std::string> text_align;
+    // Vertical alignment of text within its design-reserved slot: "top",
+    // "middle", "bottom" (Figma textAlignVertical, normalized). When set it is
+    // design authority: codegen honors it instead of the tall-slot centering
+    // heuristic (which remains the fallback for sources that never say).
+    std::optional<std::string> vertical_align;
+    std::optional<float> letter_spacing;
+    std::optional<float> line_height;
+    std::optional<std::string> text_transform;
+    std::optional<std::string> text_decoration;
+    std::optional<std::string> white_space;
+    std::optional<std::string> text_overflow;
+    std::optional<std::string> overflow;               // hidden, scroll, auto
+    std::optional<std::string> cursor;
+    /// CSS `pointer-events`. Captured alongside `cursor` and lowered onto
+    /// View::PointerEvents.
+    ///
+    /// It is load-bearing on a designed panel, which is not obvious: a design
+    /// stacks decorative bands (glows, gradient washes, vignettes) over its
+    /// controls and opts them out of hit-testing. Drop this and every one of
+    /// those bands eats the presses meant for the control beneath it, so the
+    /// panel renders correctly and responds to nothing — and the author has no
+    /// escape hatch, because saying `pointer-events: none` does nothing.
+    std::optional<std::string> pointer_events;         // auto, none
+    std::optional<std::string> position;               // absolute, relative
+    std::optional<float> top, left, right, bottom;
+    std::optional<int> z_index;
+    std::optional<std::string> transform;              // rotate, scale, etc.
+    std::optional<float> width, height;
+    std::optional<float> min_width, min_height;
+    std::optional<float> max_width, max_height;
+    // The asset's true visual extent in logical px when it bleeds past the
+    // layout box (figma-plugin `render_bounds`: drop shadows, glow, oversized
+    // chrome like the silver-knob graphic). w/h = rendered size, dx/dy = offset
+    // of the render origin relative to the layout box (negative = extends
+    // left/up). When present + larger than width/height, the importer sizes the
+    // image to render_bounds and offsets by dx/dy instead of squashing it.
+    struct RenderBounds { float w = 0, h = 0, dx = 0, dy = 0; };
+    std::optional<RenderBounds> render_bounds;
+};
+
+/// Layout properties for an IR container node.
+struct IRLayout {
+    std::optional<std::string> display;  // flex, grid, none
+    LayoutDirection direction = LayoutDirection::column;
+    float gap = 0.0f;
+    std::optional<float> row_gap;
+    std::optional<float> column_gap;
+    float padding_top = 0.0f;
+    float padding_right = 0.0f;
+    float padding_bottom = 0.0f;
+    float padding_left = 0.0f;
+    std::optional<float> margin_top;
+    std::optional<float> margin_right;
+    std::optional<float> margin_bottom;
+    std::optional<float> margin_left;
+    LayoutAlign justify = LayoutAlign::flex_start;
+    LayoutAlign align = LayoutAlign::stretch;
+    std::optional<std::string> align_self;
+    std::optional<std::string> align_content;
+    bool wrap = false;
+    std::optional<float> flex_grow;
+    std::optional<float> flex_shrink;
+    std::optional<std::string> flex_basis;
+    std::optional<int> order;
+    std::optional<float> aspect_ratio;
+    std::optional<std::string> overflow_x;
+    std::optional<std::string> overflow_y;
+    SizingMode width_mode = SizingMode::fixed;
+    SizingMode height_mode = SizingMode::fixed;
+    // Figma-style resize CONSTRAINTS, normalized to a small token set and mapped
+    // onto flex/position at codegen (margin:auto / flex-grow / align-self), never
+    // a new layout primitive. Horizontal: left | right | center | scale |
+    // stretch (pin both edges). Vertical: top | bottom | center | scale |
+    // stretch. Empty = unconstrained (the flex default, anchored start).
+    std::optional<std::string> h_constraint;
+    std::optional<std::string> v_constraint;
+    // CSS Grid. Pulp's engine has a native grid layout (LayoutMode::grid via the
+    // createGrid/setGrid bridge); design-import lowers a grid container here
+    // instead of flattening it to flex. Container tracks are raw CSS track lists
+    // ("1fr 1fr", "100px auto"); auto_flow is "row"/"column"(+ " dense").
+    // grid_column/grid_row are per-item placements ("1 / 3", "2"); span/named
+    // lines are deferred (left to the flex fallback). display=="grid" OR a
+    // template present is the grid signal.
+    std::optional<std::string> grid_template_columns;
+    std::optional<std::string> grid_template_rows;
+    std::optional<std::string> grid_auto_flow;
+    std::optional<std::string> grid_column;   // item placement (column line/span)
+    std::optional<std::string> grid_row;      // item placement (row line/span)
+};
+
+/// Audio widget type detected from naming conventions or annotations.
+enum class AudioWidgetType {
+    none,       // Not an audio widget
+    knob,
+    fader,
+    meter,
+    xy_pad,
+    waveform,
+    spectrum,
+    // An on/off. It is a member of THIS enum rather than a node type because
+    // this enum is what both consumers of a lowered control key off: the native
+    // materializer reaches its widget kind through kind_from_audio(), and the
+    // script emitter reaches its factory and its parameter binding through
+    // widget_type_name(). A toggle expressed any other way binds on one path
+    // and renders inert on the other.
+    toggle,
+    // A choice between named alternatives, drawn as ONE control: a shared
+    // track with N labelled segments and exactly one lit. Not N adjacent
+    // toggles — a row of independent switches can show two lit at once and
+    // reads as several controls that happen to touch.
+    selector,
+    // A count the player reads as a number — voices, octaves, retrigger. A
+    // knob can carry one, and reads badly doing it: the value that matters is
+    // the integer, and a dial asks the eye to infer it from an angle.
+    stepper
+};
+
+/// The value a segmented selector writes for segment `index` of `count`, and
+/// the segment a parameter value selects. Stated once, here, because BOTH
+/// script emitters and every native host binder have to agree on it: a panel
+/// whose segments write one mapping while the host reads another lights the
+/// wrong segment for the value it just wrote, and looks like a rendering bug.
+///
+/// A single-segment selector is degenerate and pinned at 0 rather than
+/// dividing by zero.
+inline float selector_segment_value(int index, int count) {
+    if (count <= 1) return 0.0f;
+    const int clamped = index < 0 ? 0 : (index >= count ? count - 1 : index);
+    return static_cast<float>(clamped) / static_cast<float>(count - 1);
+}
+
+/// A stepper's plain value (voices, octaves) against the normalized parameter
+/// behind it. Stated here for the same reason the selector's mapping is: the
+/// script emitter, the bridge's host-to-widget push and every native host
+/// binder have to agree, and a stepper that reads one mapping while the store
+/// writes another shows a number nobody chose.
+inline float stepper_normalized_value(double plain, double min, double max) {
+    if (max <= min) return 0.0f;
+    const double span = max - min;
+    const double clamped = plain < min ? min : (plain > max ? max : plain);
+    return static_cast<float>((clamped - min) / span);
+}
+
+inline double stepper_plain_value(float normalized, double min, double max,
+                                  double step) {
+    if (max <= min) return min;
+    const double raw = min + static_cast<double>(normalized) * (max - min);
+    if (step <= 0.0) return raw;
+    // Snap to the step GRID measured from `min`, so a range that does not start
+    // at zero still lands on the values the author declared.
+    const double snapped = min + std::round((raw - min) / step) * step;
+    return snapped < min ? min : (snapped > max ? max : snapped);
+}
+
+inline int selector_segment_index(float value, int count) {
+    if (count <= 1) return 0;
+    if (!std::isfinite(value)) return 0;
+    const float scaled = value * static_cast<float>(count - 1);
+    const int nearest = static_cast<int>(scaled + 0.5f);
+    return nearest < 0 ? 0 : (nearest >= count ? count - 1 : nearest);
+}
+
+/// The single threshold used by every toggle import/binding path. Invalid
+/// host values fail closed instead of changing UI state unpredictably.
+inline bool toggle_on_from_normalized(double value) {
+    return std::isfinite(value) && value >= 0.5;
+}
+
+struct IRNode;
+
+/// Heuristic signals that a parsed frame is interactive enough to promote
+/// from a static frame to a button widget.
+enum class WidgetPromotionSignal {
+    none,
+    onclick_attribute,
+    aria_role_button,
+    cursor_pointer
+};
+
+// ── Additive identity fields on IRNode ────────────────────────────────────
+// The TS-side @pulp/import-ir package already defines the canonical shape.
+// These fields are deliberately additive; IRStyle/IRLayout migration to
+// TS-style paint/text/layout is tracked separately.
+//
+// stable_anchor_id is the key the tweaks layer (pulp-tweaks.json) uses to
+// match user edits back to nodes across re-imports. Computed by the
+// anchor strategies in <pulp/view/anchor_strategy.hpp> (mirror of
+// packages/pulp-import-ir/src/anchors.ts).
+//
+// provenance + confidence let the inspector (and downstream tooling) know
+// where a node came from and how confident the adapter was — critical
+// for surfacing "this was sampled from an image, not a literal" in the
+// future Lock-to-source UI.
+
+/// Confidence the adapter has that a node was lowered correctly. Maps to
+/// the TS Confidence enum (`PASS` | `DIVERGE` | `NOT_IMPL`). Drives the
+/// `pulp ui validate` exit code in CI.
+enum class IRConfidence {
+    pass,        // Adapter fully understood the source node
+    diverge,     // Adapter produced something close-but-not-equivalent
+    not_impl     // Adapter does not know how to lower this node yet
+};
+
+/// Adapter-side provenance: who lowered this node, from what source.
+struct IRProvenance {
+    std::string adapter;     // e.g. "figma", "stitch-html", "claude-design-html"
+    std::string version;     // adapter version string ("1.0.0" or schema rev)
+    std::string source_uri;  // source identifier (file path, URL, MCP handle)
+};
+
+/// One styled character range inside a text node. Offsets are [start, end)
+/// UTF-8 BYTE offsets into `IRNode::text_content` (the Figma exporter converts
+/// its per-character indices to byte offsets; codegen slices by byte and snaps
+/// to codepoint boundaries defensively). Only the fields a run actually overrides
+/// are set; everything else inherits the node's dominant style. Mixed-style text
+/// (a bold word, a colored span, a different size mid-string) becomes an ordered
+/// list of these so codegen can emit per-range <span>s instead of collapsing to
+/// the first-char dominant style.
+/// One line box Chrome laid a text run out on, kept as CACHED LAYOUT beside the
+/// paragraph rather than in place of it.
+///
+/// The node stays one semantic paragraph — full text, one style, one container
+/// box — and these describe how the browser broke it. A renderer that finds the
+/// cache valid draws these verbatim, so no disagreement between our advances
+/// and Blink's can move a line; a renderer that finds it stale reflows and the
+/// paragraph behaves like any other text.
+///
+/// `rect` is relative to the node's own box. `start` / `length` are UTF-16 code
+/// units into `text_content`, because that is how the capture protocol indexes
+/// strings — see `utf16_slice` in the importer.
+struct IRTextLineBox {
+    float left = 0.0f;
+    float top = 0.0f;
+    float width = 0.0f;
+    float height = 0.0f;
+    int start = 0;
+    int length = 0;
+};
+
+/// What the cached line boxes above were laid out AGAINST.
+///
+/// The cache is only usable if the conditions that produced it still hold, and
+/// this records them so the check is against captured fact rather than against
+/// an assumption. Deliberately conservative: any difference reflows, because a
+/// wrongly-reused cache is the bug this exists to prevent while a wrongly-
+/// discarded one costs only a reflow.
+struct IRTextLayoutBasis {
+    /// The container width Chrome broke the text at.
+    float width = 0.0f;
+    /// The face Blink actually shaped with — a PostScript name, not the
+    /// requested family. Empty when the capture recorded no platform font,
+    /// which makes the cache unusable rather than usable-on-trust.
+    std::string resolved_face;
+    /// The primary font's line metrics Chrome laid the lines out with, when
+    /// the capture measured them (see design_line_metrics.hpp).
+    std::optional<LineMetrics> line_metrics;
+};
+
+struct IRTextRun {
+    int start = 0;
+    int end = 0;
+    std::optional<float> font_size;
+    std::optional<int> font_weight;
+    std::optional<std::string> font_family;
+    std::optional<std::string> font_style;       // "italic" / "oblique ..." / "normal"
+    std::optional<std::string> color;
+    std::optional<float> letter_spacing;
+    std::optional<std::string> text_decoration;  // "underline" / "line-through"
+};
+
+/// A single node in the normalized design IR.
+// ── Faithful-vector import (Plan B) ──────────────────────────────────────────
+// How a node should be rendered. `normal` is the existing widget/sprite
+// materialization. `faithful_svg` means: render this node's own SVG export
+// (svg_asset_id) pixel-faithfully via DesignFrameView, and overlay native
+// interaction from `interactive_elements` (source-side semantics — NOT guessed
+// from the SVG). `faithful_capture` is the browser-evaluated HTML lane: render
+// the captured raster named by capture_asset_id while separately carrying the
+// browser's evidence-ranked semantic report. Keeping it distinct from a normal
+// image makes the fidelity/interaction boundary explicit and prevents a
+// screenshot-backed import from masquerading as a fully-native reconstruction.
+// Per-node so faithful-vector, browser-capture, and native nodes can coexist.
+enum class NodeRenderMode {
+    normal,
+    faithful_svg,
+    faithful_capture,
+};
+
+// The kind of an interactive overlay on a faithful_svg node. Deliberately
+// separate from AudioWidgetType (which is audio-parameter specific); this models
+// design-interaction semantics.
+//
+// Two materialization mechanisms (see DesignFrameView):
+//   - `knob` is SVG-PATCH: its needle path is rotated in the SVG and re-rendered
+//     (pixel-perfect, uses cx/cy/hit_radius/svg_patch_d/default_value).
+//   - `fader` is SVG-PATCH like `knob` but TRANSLATES its thumb (svg_patch_d) by
+//     value along the track box [x,y,w,h] (orientation follows the track shape).
+//   - `toggle` is a click-to-flip control over the box [x,y,w,h]; with
+//     svg_patch_d set it is a SWITCH whose moving dot is that path.
+//   - `dropdown` / `text_field` / `tab_group` / `stepper` are NATIVE-OVERLAY: an
+//     opaque child widget (ComboBox / TextEditor / tab group / < > stepper) is
+//     positioned over the element's `rect` and replaces that baked SVG region
+//     with a live control.
+// Every value here maps 1:1 to a DesignFrameElement::Kind in to_frame_elements()
+// (design_import_native_common.cpp); the runtime already backs all of them.
+enum class InteractiveElementKind {
+    knob,
+    fader,
+    toggle,
+    dropdown,
+    text_field,
+    tab_group,
+    // A `< >` stepper: a header value cycled by prev/next chevrons (the design's
+    // section-header preset selectors — named "Dropdown" but carrying a `< >`
+    // pair, not a down-chevron). Uses `options` + `selected_index` like a
+    // dropdown, but steps through them in place instead of opening a popup.
+    stepper,
+    // `swap` is a swap-link button: clicking its rect activates `target_frame`
+    // (a mode/page switch the design wires up).
+    swap,
+    // `action` is a command button: clicking its rect fires the named `action`
+    // (e.g. "octave_up") — the consumer maps the id to its own state. It does not
+    // light, emit notes, or swap frames.
+    action,
+    // `xy_pad` is SVG-patch like `fader` but 2D: dragging in its rect [x,y,w,h]
+    // moves the puck (svg_patch_d). `default_value` is the X (0→left, 1→right),
+    // `default_value_y` the Y (0→top, 1→bottom).
+    xy_pad,
+    // `value_label` is a live read-only text overlay painted over its rect (the
+    // design's baked readout). `text` is the initial string; `value_left_align`
+    // left-aligns it (for a "LABEL <value>" readout that grows rightward).
+    value_label,
+    // `custom` is a registered native control: the materializer maps
+    // it to DesignFrameElement::Kind::custom, whose overlay is built by the
+    // factory registered under `factory_id` (+ opaque `custom_props`). Unmapped
+    // factory → inert render + an import diagnostic (never a silent knob).
+    custom,
+};
+
+// One source-identified interactive element overlaid on a faithful_svg render.
+// Coordinates are in the SVG's own space. The importer fills this from the
+// source (Figma node ids/names/properties), so behavior is real, not inferred.
+struct IRInteractiveElement {
+    InteractiveElementKind kind = InteractiveElementKind::knob;
+
+    // ── knob (SVG-patch) ────────────────────────────────────────────────
+    float cx = 0.0f;                 ///< pivot / hit center, SVG coords
+    float cy = 0.0f;
+    float hit_radius = 0.0f;         ///< click-target radius, SVG coords
+    /// Knob: the `d` of its needle path in the SVG (the patch target a drag
+    /// rotates around (cx, cy)). fader/switch reuse this as the translated thumb.
+    std::string svg_patch_d;
+    float default_value = 0.5f;      ///< 0..1
+
+    /// toggle only: press-flash command button (sample next/prev/random, dice) —
+    /// lights on press, clears on release, instead of the sticky on/off flip.
+    /// Maps 1:1 to DesignFrameElement::flash. Defaults false (sticky toggle).
+    bool flash = false;
+
+    // ── overlay controls (dropdown / text_field / tab_group) ─────────────
+    /// Element bounding box in SVG coords — where the native overlay widget is
+    /// positioned (via DesignFrameView's panel transform). Zero for knobs.
+    float x = 0.0f;
+    float y = 0.0f;
+    float w = 0.0f;
+    float h = 0.0f;
+    /// dropdown: the selectable options. tab_group: the tab labels. The first
+    /// entry is also the design's currently-shown value when selected_index is 0.
+    std::vector<std::string> options;
+    /// dropdown / tab_group: which option/tab is selected initially.
+    int selected_index = 0;
+    /// text_field: placeholder text shown until focused/typed.
+    std::string placeholder;
+    /// text_field: the design's own field background ("#RRGGBB"), so the overlay
+    /// matches it exactly and the inset-past-the-icon edge is seamless. Empty →
+    /// the default dark field color.
+    std::string bg_color;
+
+    // ── swap / action / xy_pad / value_label ─────────────────────────────
+    /// swap only: the frame index to activate when clicked (-1 = unset).
+    /// Maps 1:1 to DesignFrameElement::target_frame.
+    int target_frame = -1;
+    /// action only: the command id fired on click (e.g. "octave_up"). Empty =
+    /// unset. Maps 1:1 to DesignFrameElement::action.
+    std::string action;
+    /// value_label only: the initial readout string painted over the rect.
+    /// Maps 1:1 to DesignFrameElement::text.
+    std::string text;
+    /// value_label only: left-align the readout (for a "LABEL <value>" overlay
+    /// whose value grows rightward). Maps 1:1 to DesignFrameElement::value_left_align.
+    bool value_left_align = false;
+    /// xy_pad only: initial normalized Y (0=top, 1=bottom). The X axis reuses
+    /// `default_value`. Maps to DesignFrameElement::value_y.
+    float default_value_y = 0.5f;
+
+    /// Human-readable name for the control, taken from the design's own caption
+    /// text (e.g. the "DEPTH" label under a knob). Empty when the importer found
+    /// no confident caption — consumers then fall back to the binding key. This is
+    /// the name a host surfaces for the generated parameter (embed ABI v5
+    /// PulpEmbedParamInfo.name); unit/range are not carried here yet.
+    std::string label;
+
+    /// Host-parameter binding key for this control, e.g. "filter.cutoff". Empty
+    /// when the importer found no binding hint (a geometry-detected knob with a
+    /// bare layer name) — the control still renders and drags, but drives nothing
+    /// until a key is supplied. Maps 1:1 to DesignFrameElement::param_key, which
+    /// DesignFrameView resolves against the framework-agnostic HostParamSurface
+    /// (an embedding plug-in framework's parameter tree, or Pulp's own
+    /// StateStore) when route_changes_to_host_params is on.
+    /// This is the binding channel for geometry-detected interactive elements —
+    /// the recognized-widget path lowers its binding through IRNode instead.
+    std::string param_key;
+
+    // ── Import report (resolution provenance) ────────────────────────────
+    // Carried from the importer (where all three signals — geometry/affordance,
+    // name/token, component identity — exist) THROUGH to the host materialize
+    // boundary, so a low-confidence or conflicted control is SEEN ("this might be
+    // wrong") instead of discovered in the DAW. The resolution LOGIC that fills
+    // these lives in the importer; this struct carries it to materialization.
+    /// Which ladder rung resolved this control's interaction. 0 = not run through
+    /// the resolver ladder (legacy/unset); 1 = explicit identity (component/Code-Connect);
+    /// 2 = Tier-1 affordance-inferred primitive; 3 = name/token (whole-word);
+    /// 4 = registered custom factory; 5 = inert render + diagnostic (the warn).
+    int resolution_rung = 0;
+    /// Confidence the resolved kind is correct, 0..1. 1.0 = unset/legacy path.
+    float confidence_score = 1.0f;
+    /// Cross-signal conflicts detected at import (e.g. "name=knob but geometry is
+    /// a wide track+thumb"). Empty = no conflict. A non-empty list means the
+    /// control still materializes with the best candidate but is flagged for review.
+    std::vector<std::string> conflict_signals;
+    /// Whether render-level verification (overlay covers its node region, type
+    /// doesn't visually contradict the skin) passed. true = passed/unchecked.
+    bool verification_pass = true;
+
+    // ── custom (registered control) ──────────────────────────────────────
+    /// kind==custom only: the id the native overlay factory is registered under
+    /// (register_design_control_factory). Maps 1:1 to DesignFrameElement::factory_id.
+    std::string factory_id;
+    /// kind==custom only: opaque props handed to the factory (typically JSON).
+    /// Maps 1:1 to DesignFrameElement::custom_props.
+    std::string custom_props;
+
+    /// Figma node id — provenance for the inspector's Wiring lens (maps a live
+    /// control back to its source node). NOT the host-param key; that is param_key.
+    std::optional<std::string> source_node_id;
+};
+
+struct IRNode {
+    std::string type;   // "frame", "text", "image", "button", "input", "slider"
+    std::string name;
+    std::string text_content;            // For text nodes
+    std::vector<IRTextRun> text_runs;    // Per-range style overrides (mixed text)
+    /// Chrome's own line breaking for `text_content`, cached. Empty when the
+    /// capture carried none or the run fit on one line.
+    std::vector<IRTextLineBox> text_line_boxes;
+    /// The conditions `text_line_boxes` was captured under. Absent means the
+    /// cache cannot be validated and must not be used.
+    std::optional<IRTextLayoutBasis> text_layout_basis;
+    IRStyle style;
+    IRLayout layout;
+    AudioWidgetType audio_widget = AudioWidgetType::none;
+    std::string audio_label;             // Label for audio widgets (e.g. "Gain")
+    float audio_min = 0.0f;
+    float audio_max = 1.0f;
+    float audio_default = 0.5f;
+    // True when the source explicitly carried a min/max range (vs the 0..1
+    // defaults). Lets the codegen reconstruct the value/range display stack only
+    // for widgets that actually declared a range.
+    bool has_audio_range = false;
+    std::vector<IRNode> children;
+    std::unordered_map<std::string, std::string> attributes;  // Extra metadata
+
+    // ── Additive identity fields ─────────────────────────────────────────
+    /// Stable anchor for the tweaks layer. Empty until an anchor strategy
+    /// has populated it (call assign_anchors() in anchor_strategy.hpp).
+    std::optional<std::string> stable_anchor_id;
+    /// Strategy used to produce stable_anchor_id:
+    /// "adapter", "content-hash", or "path".
+    std::optional<std::string> anchor_strategy;
+    /// Source-side native ID (e.g. Figma layer UUID, Pencil node ID).
+    /// Only populated for sources that have native IDs.
+    std::optional<std::string> source_node_id;
+    /// Canonical adapter provenance fields. Kept alongside IRProvenance
+    /// for compatibility with older call sites.
+    std::optional<std::string> source_adapter;
+    std::optional<std::string> source_version;
+    /// Adapter provenance — typically set on the root node by each parser.
+    std::optional<IRProvenance> provenance;
+    /// Adapter's confidence in this node's lowering.
+    std::optional<IRConfidence> confidence;
+    /// Verbatim source slice for this node (debugging + AST-patch fallback).
+    /// Optional; adapters may leave empty when the source is binary or large.
+    std::optional<std::string> raw_source;
+
+    // ── Faithful-vector import ───────────────────────────────────────────
+    /// How this node materializes. `faithful_svg` renders `svg_asset_id` via
+    /// DesignFrameView and overlays `interactive_elements`; `faithful_capture`
+    /// renders `capture_asset_id` as browser-solved visual backing; `normal`
+    /// keeps the existing widget/sprite path. Per-node so the lanes coexist.
+    NodeRenderMode render_mode = NodeRenderMode::normal;
+    /// Asset id (into IRAssetManifest) of this node's SVG export, when
+    /// render_mode == faithful_svg. The asset's mime is image/svg+xml.
+    std::optional<std::string> svg_asset_id;
+    /// Asset id (into IRAssetManifest) of the browser screenshot backing when
+    /// render_mode == faithful_capture. Kept separate from svg_asset_id so
+    /// consumers never infer the payload type from a generic render-mode flag.
+    std::optional<std::string> capture_asset_id;
+    /// Source-identified interactive overlays for a faithful_svg render.
+    /// Empty for `normal` nodes.
+    std::vector<IRInteractiveElement> interactive_elements;
+    /// Alternate states of a faithful_svg node (multi-state capture). Each entry
+    /// is itself a faithful_svg node carrying its own svg_asset_id and
+    /// interactive_elements, materialized via DesignFrameView::add_frame — one
+    /// DesignFrameView holding N frames, not N views.
+    ///
+    /// Frame indices are POSITIONAL and are what a `swap` element's target_frame
+    /// names: THIS node is frame 0, alternate_frames[i] is frame i+1. Order is
+    /// therefore load-bearing — it is the capture order the author chose (the
+    /// CLI's repeated --frame order), never sorted or deduplicated.
+    ///
+    /// Alternates are frames of the same view, not descendants: they are a
+    /// SIBLING axis to `children`, so a walk that must visit every node has to
+    /// descend both. Empty for a single-state import (the common path), which
+    /// keeps that path byte-identical to a capture that predates this field.
+    std::vector<IRNode> alternate_frames;
+};
+
+enum class ImportDiagnosticSeverity {
+    info,
+    warning,
+    error
+};
+
+enum class ImportDiagnosticKind {
+    unknown,
+    unsupported_property,
+    /// A whole node family the producer could not represent — skipped
+    /// (SLICE, FigJam/Slides families) or emitted as a diagnosed generic
+    /// fallback (SLOT placeholder, unrecognized new node types).
+    unsupported_node,
+    unresolved_asset,
+    snapshot_semantics_warning,
+    legacy_field_shortcut,
+    capture_partial,
+    fallback_used
+};
+
+struct ImportDiagnostic {
+    ImportDiagnosticSeverity severity = ImportDiagnosticSeverity::warning;
+    std::string code;
+    std::string path;
+    std::string message;
+    ImportDiagnosticKind kind = ImportDiagnosticKind::unknown;
+    std::optional<std::string> anchor_id;
+    std::optional<std::string> property;
+};
+
+struct IRAssetRef {
+    std::string asset_id;       // stable handle used by nodes
+    std::string original_uri;   // as authored
+    std::vector<std::string> original_uri_aliases; // equivalent authored refs
+    std::optional<std::string> local_path;
+    std::string content_hash;   // sha256 of resolved bytes; empty if unresolved
+    std::string mime;
+    std::optional<int> width;
+    std::optional<int> height;
+    std::optional<std::string> font_family;
+    std::optional<std::string> license;
+    std::optional<std::string> source_url;
+    std::vector<ImportDiagnostic> diagnostics;
+};
+
+struct IRAssetManifest {
+    std::vector<IRAssetRef> assets;
+    int version = 1;
+
+    const IRAssetRef* resolve(std::string_view asset_id) const {
+        if (asset_id.empty())
+            return nullptr;
+        for (const auto& asset : assets) {
+            if (asset.asset_id == asset_id)
+                return &asset;
+        }
+        return nullptr;
+    }
+};
+
+/// A bundled (non-system) font shipped with the design (figma-plugin #43a:
+/// envelope `font_family_assets[]`). The importer registers each one with the
+/// text renderer (#43b) so `setFontFamily(family)` resolves to the bundled
+/// face instead of silently falling back to a system font of the same name.
+///
+/// A browser capture adds one entry per captured `@font-face` rule, in the
+/// order the page defined them, carrying the rule's CSS descriptors. Several
+/// rules may share one asset (a variable font bound at several weights), and
+/// one family may span several assets split by `unicode_range`.
+struct IRFontAsset {
+    std::string family;          // CSS family name nodes reference via font_family
+    std::string style;           // "Regular", "Italic", … (informational)
+    int weight = 400;            // 100–900; the lower bound of a weight range
+    std::string asset_id;        // → asset_manifest entry holding the .ttf/.otf/.woff2
+    std::string resolved_path;   // absolute fs path, stamped by the CLI asset-resolution pass
+    std::string font_style;      // CSS font-style descriptor; empty when not captured
+    int weight_max = 0;          // upper bound of a font-weight range; 0 for one weight
+    std::string unicode_range;   // CSS unicode-range descriptor, verbatim; empty = every code point
+};
+
+struct IRTokenIdentity {
+    std::string source_id;
+    std::string source_collection;
+    std::string source_mode;
+    std::string source_adapter;
+};
+
+/// Design token collection (W3C-compatible).
+struct IRTokens {
+    std::unordered_map<std::string, std::string> colors;       // name → "#hex"
+    std::unordered_map<std::string, float> dimensions;         // name → px value
+    std::unordered_map<std::string, std::string> strings;      // name → string
+    // Keyed by canonical token path (for example "colors.primary").
+    std::unordered_map<std::string, IRTokenIdentity> source_identity;
+};
+
+/// Complete design IR document.
+struct DesignIR {
+    int version = 1;
+    IRNode root;
+    IRTokens tokens;
+    IRAssetManifest asset_manifest;
+    std::vector<IRFontAsset> font_family_assets;   // bundled fonts (#43a/#43b)
+    std::vector<ImportDiagnostic> diagnostics;
+    DesignSource source = DesignSource::figma;
+    std::string source_file;
+    std::string capture_method;
+    int settle_rounds = 0;
+    std::string fallback_reason;
+    std::string source_adapter;
+    std::string source_version;
+    std::string imported_at;
+};
+
+struct DesignIrJsonOptions {
+    int version = 0; // 0 preserves DesignIR::version
+    bool include_tokens = true;
+    bool include_source_metadata = true;
+    bool include_asset_manifest = true;
+};
+
+struct DesignIrAssetOptions {
+    bool allow_network_fetch = false;
+    int network_timeout_ms = 30000;
+    std::filesystem::path cache_directory;
+    std::filesystem::path base_directory;
+    std::string base_url;
+    std::unordered_map<std::string, std::string> expected_hash_by_uri;
+};
+
+} // namespace pulp::view
