@@ -108,6 +108,19 @@ NAME_DEBTS = {
         "owner": "Phase 6",
     },
 }
+# Declared Phase-6 reference debts (owner ruling 2026-10-14 item 1). The
+# declaration ships in a mirrored header, but its definition lives only in a
+# Pulp-kept target, so no packaged library may reference it, defined or not.
+# A consumer image may: it is the consumer's own link, not the package.
+REFERENCE_DEBTS = {
+    "view-core-plugin-view-host-declarations": {
+        "rules": ["no-pulp-kept-references"],
+        "pattern": r"^pulp::view::(?:PluginViewHost::(?:create|set_factory|clear_factory|has_factory)"
+                   r"|register_platform_plugin_view_host)\(",
+        "file": "core/view/include/pulp/view/plugin_view_host.hpp",
+        "owner": "Phase 6",
+    },
+}
 # Headers of Pulp's view-audio target and its Pulp-kept siblings: the
 # audio/ subtree, the meter/waveform/spectrum family and the named widgets.
 AUDIO_HEADER = re.compile(
@@ -517,11 +530,18 @@ def verify(prefix: Path, consumer_build: Path, image: Path,
     report = symbol_report(symbols, view_unit_packaged=view_unit_packaged, floor=floor,
                            name_debts=NAME_DEBTS)
     audio_symbols, forward_symbols = report["audio"], report["forward"]
+    referenced = {
+        debt: [f"{name}: {symbol}" for name, names in sorted(symbols.items()) if name != image.name
+               for symbol in names if re.search(entry["pattern"], symbol)]
+        for debt, entry in REFERENCE_DEBTS.items()
+    }
+    pulp_kept_references = [hit for hits in referenced.values() for hit in hits]
     checks = {
         "no-widgets-gate-definition": not definition,
         "no-audio-headers": not headers,
         "no-audio-symbols": not audio_symbols,
         "name-only-forward-declarations": not forward_symbols,
+        "no-pulp-kept-references": not pulp_kept_references,
     }
     return {
         "schema": SCHEMA,
@@ -534,6 +554,9 @@ def verify(prefix: Path, consumer_build: Path, image: Path,
         "name_debts": {
             debt: dict(NAME_DEBTS[debt], matched=len(hits), symbols=hits)
             for debt, hits in report["debts"].items()
+        } | {
+            debt: dict(REFERENCE_DEBTS[debt], matched=len(hits), symbols=hits)
+            for debt, hits in referenced.items()
         },
         "symbol_rule": (
             "view_audio_symbol_floor" if floor is not None
@@ -553,6 +576,7 @@ def verify(prefix: Path, consumer_build: Path, image: Path,
             "no-audio-headers": headers,
             "no-audio-symbols": audio_symbols,
             "name-only-forward-declarations": forward_symbols,
+            "no-pulp-kept-references": pulp_kept_references,
         },
     }
 
