@@ -710,6 +710,7 @@ jobs:
             --forbid-path "$GITHUB_WORKSPACE" \
             --runner-search-root "$RUNNER_WORKSPACE" \
             --view-audio-archive "$input/pulp-view-audio/libpulp-view-audio.a" \
+            --require-gpu-claims \
             --output "$RUNNER_TEMP/sdk-installed-validation.json" \
             --json > "$RUNNER_TEMP/sdk-installed-validation.stdout.json"
 

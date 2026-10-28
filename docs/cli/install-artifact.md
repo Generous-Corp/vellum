@@ -276,6 +276,12 @@ two fixture revisions, verifies that the accepted active revision advances,
 embeds the materialized imported design in a real `.app`, and exercises the
 installed build/run/test/capture/package journey.
 
+The mirror, inertness and native-journey checks each run only when the
+artifact claims the capability they cover. The release lanes therefore pass
+`--require-gpu-claims`, which fails unless the artifact claims the GPU
+renderer and every native macOS command, together with the provenance-pinned
+`--view-audio-archive` the mirror inertness proof needs.
+
 The template gate uses only the installed launcher and SDK bytes:
 
 ```sh
