@@ -347,12 +347,39 @@ def validate_installed_mirror(
     }
 
 
+RELEASE_NATIVE_COMMANDS = ("build", "run", "test", "capture", "package")
+
+
+def missing_release_claims(claims: object) -> list[str]:
+    """Release claims a darwin-arm64 GPU artifact must make, but does not.
+
+    Every mirror, inertness and native-journey check is skipped when the
+    artifact does not claim the capability it covers, and the claims come
+    from the artifact itself. A release path therefore asserts the claims
+    instead of reading them, so an artifact that claims no GPU renderer or no
+    native commands cannot skip the checks those claims gate.
+    """
+    if not isinstance(claims, dict):
+        return ["claims"]
+    missing = []
+    if claims.get("gpu_renderer") is not True:
+        missing.append("gpu_renderer")
+    targets = claims.get("targets")
+    macos = targets.get("macos") if isinstance(targets, dict) else None
+    commands = macos.get("commands") if isinstance(macos, dict) else None
+    for command in RELEASE_NATIVE_COMMANDS:
+        if not isinstance(commands, dict) or commands.get(command) is not True:
+            missing.append(f"targets.macos.commands.{command}")
+    return missing
+
+
 def validate(
     archive: Path,
     checksums: Path,
     forbid_path: Path | None,
     runner_search_roots: Iterable[Path] = (),
     view_audio_archive: Path | None = None,
+    require_gpu_claims: bool = False,
 ) -> dict[str, object]:
     runner_roots = [path.resolve() for path in runner_search_roots]
     checkout_findings = checkout_contamination_findings(runner_roots)
@@ -367,6 +394,13 @@ def validate(
             "--archive", str(archive), "--checksums", str(checksums), "--json",
         ]).stdout
     )
+    if require_gpu_claims:
+        missing = missing_release_claims(verification.get("claims"))
+        if missing:
+            raise ValidationError(
+                "release artifact does not claim the GPU renderer and native "
+                f"commands its checks require: {missing}"
+            )
     with tempfile.TemporaryDirectory(prefix="vellum-sterile-consumer-") as temporary_text:
         root = Path(temporary_text)
         prefix = root / "prefix"
@@ -890,6 +924,7 @@ def validate(
         "source_tree_clean": verification["source_tree_clean"],
         "target": verification["target"],
         "claims": verification["claims"],
+        "gpu_claims_required": require_gpu_claims,
         "checks": checks,
         "mirror": mirror_evidence,
     }
@@ -902,6 +937,11 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument(
         "--view-audio-archive", type=Path,
         help="provenance-pinned Pulp libpulp-view-audio.a for mirror inertness proof",
+    )
+    parser.add_argument(
+        "--require-gpu-claims", action="store_true",
+        help="fail unless the artifact claims the GPU renderer and every native "
+        "macOS command, so the checks those claims gate cannot be skipped",
     )
     parser.add_argument("--forbid-path", type=Path, default=REPO)
     parser.add_argument(
@@ -921,6 +961,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             args.forbid_path,
             args.runner_search_root,
             args.view_audio_archive.resolve() if args.view_audio_archive else None,
+            require_gpu_claims=args.require_gpu_claims,
         )
     except (OSError, json.JSONDecodeError, ValidationError) as error:
         print(f"vellum-installed-sdk-validation: {error}", file=sys.stderr)
