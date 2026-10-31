@@ -1,0 +1,20 @@
+{
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer"
+  ],
+  "created_at": "2026-10-27T01:09:00Z",
+  "disposition": "framework-only",
+  "effort_minutes": 0,
+  "event_id": "resolution-vellum-f183b4b8b9148023234004edd206bdd192fb133e",
+  "kind": "resolution",
+  "linked_commits": [
+    "f183b4b8b9148023234004edd206bdd192fb133e"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Hardens Vellum's packages/vellum-design-ir overlay setOwnedProperty against inherited-property writes (prototype pollution through path segments): it reads only own properties and defines own properties on null-prototype objects. Pulp's counterpart for ir.reimport-overlays-stable-identity is TypeScript types only, and Pulp's one dotted-path setter (packages/pulp-import-ir/src/tweaks.ts setByDottedPath) clones a single section into a fresh object and never walks into or writes an inherited object, so the global-pollution class this fixes does not exist there. No Pulp port is required.",
+  "resolves": "vellum-f183b4b8b9148023234004edd206bdd192fb133e",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

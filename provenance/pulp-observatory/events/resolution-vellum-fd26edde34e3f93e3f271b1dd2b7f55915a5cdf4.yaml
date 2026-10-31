@@ -1,0 +1,23 @@
+{
+  "contract_tests": [
+    "vellum.capture-stats",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-10-31T11:00:00Z",
+  "disposition": "framework-only",
+  "effort_minutes": 0,
+  "event_id": "resolution-vellum-fd26edde34e3f93e3f271b1dd2b7f55915a5cdf4",
+  "kind": "resolution",
+  "linked_commits": [
+    "fd26edde34e3f93e3f271b1dd2b7f55915a5cdf4"
+  ],
+  "linked_pull_requests": [
+    "Generous-Corp/vellum#102"
+  ],
+  "owner": "@danielraffel",
+  "rationale": "Merge of main into the verifier hardening branch (vellum#102): mirror re-export and renderer-dependency verifier work. Vellum-owned verification and packaging tooling; the contributing commits carry their own dispositions and the merge adds no Pulp obligation. Same disposition as the earlier merges of main resolved as framework-only.",
+  "resolves": "vellum-fd26edde34e3f93e3f271b1dd2b7f55915a5cdf4",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

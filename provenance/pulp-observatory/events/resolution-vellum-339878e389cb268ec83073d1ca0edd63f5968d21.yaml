@@ -1,0 +1,23 @@
+{
+  "contract_tests": [
+    "vellum.capture-stats",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-10-31T11:00:00Z",
+  "disposition": "framework-only",
+  "effort_minutes": 0,
+  "event_id": "resolution-vellum-339878e389cb268ec83073d1ca0edd63f5968d21",
+  "kind": "resolution",
+  "linked_commits": [
+    "339878e389cb268ec83073d1ca0edd63f5968d21"
+  ],
+  "linked_pull_requests": [
+    "Generous-Corp/vellum#103"
+  ],
+  "owner": "@danielraffel",
+  "rationale": "Merge of origin/main into the #103 carry branch. Its mapped paths equal the merged-in main parent, and the contributing commits carry their own dispositions, so the merge adds no Pulp obligation. Same disposition as the earlier merges of main resolved as framework-only.",
+  "resolves": "vellum-339878e389cb268ec83073d1ca0edd63f5968d21",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}
