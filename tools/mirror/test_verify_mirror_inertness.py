@@ -406,6 +406,22 @@ class VerifyTest(unittest.TestCase):
                              Path("libpulp-view-audio.a") if floor is not None else None,
                              install_libdir)
 
+    def test_a_packaged_plugin_view_host_reference_is_not_inert(self) -> None:
+        clean = self.run_verify()
+        self.assertTrue(clean["checks"]["no-pulp-kept-references"])
+        self.assertEqual(clean["name_debts"]["view-core-plugin-view-host-declarations"]["matched"], 0)
+        reference = "pulp::view::PluginViewHost::create(pulp::view::View&, pulp::view::Size)"
+        self.symbols[self.provider] = [*self.symbols[self.provider], reference]
+        proof = self.run_verify()
+        self.assertFalse(proof["inert"])
+        self.assertFalse(proof["checks"]["no-pulp-kept-references"])
+        self.assertEqual(proof["name_debts"]["view-core-plugin-view-host-declarations"]["matched"], 1)
+
+    def test_the_consumer_may_reference_plugin_view_host(self) -> None:
+        reference = "pulp::view::register_platform_plugin_view_host()"
+        self.symbols[self.image] = [*self.symbols[self.image], reference]
+        self.assertTrue(self.run_verify()["checks"]["no-pulp-kept-references"])
+
     def test_clean_package_is_inert_and_records_debt_absence(self) -> None:
         proof = self.run_verify()
         self.assertTrue(proof["inert"], proof["findings"])
