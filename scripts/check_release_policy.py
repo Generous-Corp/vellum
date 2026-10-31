@@ -43,6 +43,7 @@ POLICY_FILES = (
     "/scripts/check_release_policy.py",
     "/scripts/release_request.py",
     "/scripts/verify_release_tag.py",
+    "/tools/provenance/verify_authority_expansion.py",
 )
 ENVIRONMENT = re.compile(r"^\s*environment:\s*(?:\{[^}]*\bname:\s*)?['\"]?([A-Za-z0-9_-]+)", re.MULTILINE)
 RELEASE_WORKFLOWS = (SIGNING_WORKFLOW, "release-policy.yml")
@@ -50,7 +51,7 @@ PYTHON_CALL = re.compile(r"\bpython3?\b(?P<flags>(?:\s+-[A-Za-z]+)*)")
 SECRET = re.compile(r"\$\{\{\s*(?:secrets\.|steps\.app-token\.outputs\.token)")
 # Directories a release workflow runs Python from: the script's own directory
 # and the working directory would be first on sys.path without -I.
-PYTHON_DIRS = (".", "scripts")
+PYTHON_DIRS = (".", "scripts", "tools/provenance")
 PIN = re.compile(r"--expected-(principal|fingerprint)(?:\s*\\?\s*\n\s*|\s+)(\S+)")
 
 

@@ -11,14 +11,27 @@ workflow has already fetched, so it needs no network:
           main branch rules require concluded success on the commit.
   freeze  the per-tag ruleset that verify_release_tag_ruleset.py requires
           before an immutable release is finalized.
+  attestation
+          the authority promotion attestation the tag carries as its signed
+          message, attested by the release pipeline itself (owner decision
+          2026-10-31), checked with the release-readiness verifier's own
+          validators before anything is signed.
+
+The immutable-release preflight is committed with the request and is only
+accepted for a few hours; `check` refuses to tag unless enough of that window
+remains for the tagged run to reach its trust step, so a stale record never
+spends a version number.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
+import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +40,14 @@ REQUEST_SCHEMA = "vellum.release-request.v1"
 VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 SHA = re.compile(r"^[0-9a-f]{40}$")
 PROJECT_VERSION = re.compile(r"project\(\s*vellum\b[^)]*\bVERSION\s+([0-9.]+)", re.IGNORECASE | re.DOTALL)
+
+
+PREFLIGHT = Path("provenance/immutable-release-preflight.json")
+# The tagged gpu-macos run reaches its trust step about 20 minutes after the
+# tag, and sdk-release re-checks the preflight when it finalizes, after the
+# whole gpu-macos run; tag only with at least this much of the window left.
+PREFLIGHT_MARGIN = timedelta(hours=2)
+EXPANSION = Path("provenance/authority/expansions/full-design-import-render-v1")
 
 
 class ReleaseRequestError(RuntimeError):
@@ -121,8 +142,23 @@ def unmet(contexts: list[str], runs: list[dict[str, Any]], commit: str) -> list[
     return missing
 
 
+def preflight_remaining(preflight: Any, tag: str, now: datetime) -> timedelta:
+    """How much of the preflight's acceptance window is left; raises when it cannot be used."""
+    if not isinstance(preflight, dict) or preflight.get("release_tag") != tag:
+        raise ReleaseRequestError(f"the immutable-release preflight is not for {tag}; refresh it with the request")
+    admin = preflight.get("administrator_check")
+    if not isinstance(admin, dict) or admin.get("enabled") is not True:
+        raise ReleaseRequestError("the immutable-release preflight does not show immutable releases enabled")
+    try:
+        checked = datetime.fromisoformat(str(admin["checked_at"]).replace("Z", "+00:00"))
+        window = timedelta(seconds=int(preflight["maximum_age_seconds"]))
+    except (KeyError, TypeError, ValueError) as error:
+        raise ReleaseRequestError(f"the immutable-release preflight is malformed: {error}") from error
+    return checked + window - now
+
+
 def check(*, request: Any, cmakelists: str, retired_tags: Any, commit: str, tag_exists: bool,
-          branch_rules: Any, pages: Any) -> str:
+          branch_rules: Any, pages: Any, preflight: Any = None, now: datetime | None = None) -> str:
     """The tag to create; raises ReleaseRequestError when the request may not be tagged."""
     if not SHA.fullmatch(commit):
         raise ReleaseRequestError("the commit must be a full SHA")
@@ -137,6 +173,12 @@ def check(*, request: Any, cmakelists: str, retired_tags: Any, commit: str, tag_
     missing = unmet(required_contexts(branch_rules), check_runs(pages), commit)
     if missing:
         raise ReleaseRequestError("required checks have not passed: " + "; ".join(missing))
+    remaining = preflight_remaining(preflight, tag, now or datetime.now(timezone.utc))
+    if remaining < PREFLIGHT_MARGIN:
+        raise ReleaseRequestError(
+            f"the immutable-release preflight has {remaining} of its window left, under {PREFLIGHT_MARGIN}; "
+            "refresh it (scripts/refresh_immutable_release_preflight.py) and land it again, and the tag "
+            "is made then")
     return tag
 
 
@@ -157,6 +199,60 @@ def freeze_ruleset(tag: str) -> dict[str, Any]:
     }
 
 
+def git(root: Path, *args: str) -> str:
+    return subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True,
+                          check=True).stdout.strip()
+
+
+def attestation(root: Path, commit: str, attested_at: str) -> dict[str, Any]:
+    """The promotion attestation for `commit`, validated as the release-readiness gate will."""
+    sys.path.insert(0, str(root / "tools/provenance"))
+    import verify_authority_expansion as vae  # noqa: PLC0415
+
+    if not SHA.fullmatch(commit):
+        raise ReleaseRequestError("the commit must be a full SHA")
+    tree = git(root, "rev-parse", f"{commit}^{{tree}}")
+    try:
+        acknowledgement = (root / EXPANSION / "exact-boundary-acknowledgement-1.json").read_bytes()
+        completion = git_show(root, commit, vae.PARITY_COMPLETION_PATH.as_posix())
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise ReleaseRequestError(f"a promotion record is missing at {commit}: {error}") from error
+    amendment = json.loads((root / EXPANSION / "exact-boundary-amendment-1.json").read_text(encoding="utf-8"))
+    data = {
+        "schema_version": 1,
+        "kind": "vellum-authority-promotion-attestation",
+        "attestation_id": "full-design-import-render-v1-authority-promotion-1",
+        "state": "attested",
+        "attested_at": attested_at,
+        "attested_by": vae.RELEASE_PIPELINE_ATTESTER,
+        "authority_repository": "Generous-Corp/vellum",
+        "delivery_repository": "danielraffel/vellum",
+        "promotion_mode": "repository-transfer",
+        "authority_commit": commit,
+        "delivery_commit": commit,
+        "authority_tree": tree,
+        "delivery_tree": tree,
+        "exact_boundary_amendment_id": "full-design-import-render-v1-exact-boundary-amendment-1",
+        "exact_boundary_amendment_sha256": vae.EXPECTED_BOUNDARY_AMENDMENT_SHA256,
+        "exact_boundary_acknowledgement_id": "full-design-import-render-v1-exact-boundary-acknowledgement-1",
+        "exact_boundary_acknowledgement_sha256": hashlib.sha256(acknowledgement).hexdigest(),
+        "parity_completion_id": "full-design-import-render-v1-parity-completion-1",
+        "parity_completion_sha256": hashlib.sha256(completion).hexdigest(),
+        "parity_release_source_commit": commit,
+    }
+    errors = (vae.validate_authority_promotion_attestation(data, amendment, delivery_retired=True)
+              + vae.validate_promotion_acknowledgement_digest(root, data)
+              + vae.validate_promotion_completion_digest(root, data, commit))
+    if errors:
+        raise ReleaseRequestError("the promotion attestation would not verify: " + "; ".join(errors))
+    return data
+
+
+def git_show(root: Path, commit: str, path: str) -> bytes:
+    return subprocess.run(["git", "-C", str(root), "show", f"{commit}:{path}"], capture_output=True,
+                          check=True).stdout
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -168,6 +264,10 @@ def main(argv: list[str]) -> int:
     one.add_argument("--tag-exists", choices=("true", "false"), required=True)
     one.add_argument("--branch-rules", type=Path, required=True)
     one.add_argument("--check-runs", type=Path, required=True)
+    one.add_argument("--preflight", type=Path, default=ROOT / PREFLIGHT)
+    attest = sub.add_parser("attestation")
+    attest.add_argument("--commit", required=True)
+    attest.add_argument("--attested-at", required=True)
     freeze = sub.add_parser("freeze")
     freeze.add_argument("--tag", required=True)
     args = parser.parse_args(argv)
@@ -175,10 +275,13 @@ def main(argv: list[str]) -> int:
         if args.command == "freeze":
             print(json.dumps(freeze_ruleset(args.tag), indent=2, sort_keys=True))
             return 0
+        if args.command == "attestation":
+            print(json.dumps(attestation(ROOT, args.commit, args.attested_at), indent=2, sort_keys=True))
+            return 0
         tag = check(request=load(args.request), cmakelists=args.cmakelists.read_text(encoding="utf-8"),
                     retired_tags=load(args.retired_tags), commit=args.commit,
                     tag_exists=args.tag_exists == "true", branch_rules=load(args.branch_rules),
-                    pages=load(args.check_runs))
+                    pages=load(args.check_runs), preflight=load(args.preflight))
     except (OSError, ReleaseRequestError) as error:
         print(f"release request refused: {error}", file=sys.stderr)
         return 1

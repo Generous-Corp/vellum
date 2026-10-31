@@ -8,7 +8,7 @@ name: Sign the requested release tag
 on:
   push:
     branches: [main]
-    paths: [provenance/release-request.json]
+    paths: [provenance/release-request.json, provenance/immutable-release-preflight.json]
 
 permissions:
   contents: read
@@ -58,6 +58,8 @@ jobs:
           python3 -I scripts/check_release_policy.py check
           python3 -I scripts/check_release_policy.py signer >> "$GITHUB_OUTPUT"
           python3 -I scripts/release_request.py freeze --tag "$tag" > "$RUNNER_TEMP/freeze.json"
+          python3 -I scripts/release_request.py attestation --commit "$GITHUB_SHA" \
+            --attested-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$RUNNER_TEMP/promotion-attestation.json"
           printf 'tag=%s\nversion=%s\n' "$tag" "$version" >> "$GITHUB_OUTPUT"
 
       - name: Sign the tag
@@ -65,7 +67,6 @@ jobs:
         env:
           RELEASE_TAG_SIGNING_KEY: ${{ secrets.RELEASE_TAG_SIGNING_KEY }}
           TAG: ${{ steps.request.outputs.tag }}
-          VERSION: ${{ steps.request.outputs.version }}
           PRINCIPAL: ${{ steps.request.outputs.principal }}
         run: |
           set -euo pipefail
@@ -73,9 +74,11 @@ jobs:
           key="$RUNNER_TEMP/release-signing-key"
           trap 'rm -f "$key"' EXIT
           (umask 077 && printf '%s\n' "$RELEASE_TAG_SIGNING_KEY" > "$key")
+          # The signed message is the promotion attestation: provenance.yml
+          # parses it from the tag and the release-readiness gate verifies it.
           git -c gpg.format=ssh -c user.signingkey="$key" \
             -c user.name="Vellum release" -c user.email="$PRINCIPAL" \
-            tag -s -m "Vellum $VERSION" "$TAG" "$GITHUB_SHA"
+            tag -s -F "$RUNNER_TEMP/promotion-attestation.json" "$TAG" "$GITHUB_SHA"
           printf 'object=%s\n' "$(git rev-parse "refs/tags/$TAG")" >> "$GITHUB_OUTPUT"
 
       - name: Verify the tag against the policy

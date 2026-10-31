@@ -153,6 +153,12 @@ EXPECTED_ACKNOWLEDGED_AT = "2026-08-11T20:54:33Z"
 EXPECTED_BOUNDARY_PROPOSED_AT = "2026-08-12T02:08:00Z"
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
 OWNER = re.compile(r"^@[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
+# The CI release pipeline (.github/workflows/release-tag.yml) attests routine
+# releases itself (owner decision 2026-10-31): it builds the promotion
+# attestation from the landed commit and signs it with the key that exists only
+# in the main-only `release` environment. The owner's authorization is the
+# reviewed release request and their code-owner review of the release policy.
+RELEASE_PIPELINE_ATTESTER = "release-pipeline:Generous-Corp/vellum"
 EXPECTED_COORDINATES = {
     "pulp_repository": "Generous-Corp/pulp",
     "pulp_baseline_commit": "190c463a0b320f28420c9af177244af04ef84233",
@@ -725,8 +731,9 @@ def validate_authority_promotion_attestation(
             "authority_promotion.promotion_mode: retired delivery repository requires "
             "'repository-transfer'"
         )
-    if not OWNER.fullmatch(str(data["attested_by"])):
-        errors.append("authority_promotion.attested_by: expected individual GitHub handle")
+    if not OWNER.fullmatch(str(data["attested_by"])) and data["attested_by"] != RELEASE_PIPELINE_ATTESTER:
+        errors.append("authority_promotion.attested_by: expected individual GitHub handle "
+                      f"or {RELEASE_PIPELINE_ATTESTER!r}")
     try:
         stamp = data["attested_at"]
         parsed = dt.datetime.fromisoformat(stamp.replace("Z", "+00:00"))

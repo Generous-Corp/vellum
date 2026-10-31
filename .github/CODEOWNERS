@@ -9,3 +9,4 @@
 /scripts/check_release_policy.py @danielraffel
 /scripts/release_request.py @danielraffel
 /scripts/verify_release_tag.py @danielraffel
+/tools/provenance/verify_authority_expansion.py @danielraffel
