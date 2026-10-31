@@ -17,6 +17,7 @@ ACTIVE_REQUIRED = {
         "Source authority for the selected mapped framework slices is active",
         "published, immutable `v0.1.6`",
         "`v0.1.7` is retired",
+        "`v0.1.8` is retired too",
     ),
     "docs/ownership.md": (
         "Source authority for the selected mapped framework slices is active",
@@ -41,6 +42,7 @@ ACTIVE_REQUIRED = {
     "docs/cli/install-artifact.md": (
         "published, immutable `v0.1.6`",
         "name `v0.1.7` is retired",
+        "`v0.1.8` is retired too",
         "Tagged-release installation",
     ),
 }
@@ -55,6 +57,9 @@ ACTIVE_FORBIDDEN = (
     "published, immutable `v0.1.7`",
     "temporarily hosted in the private",
     "--repo danielraffel/vellum",
+    "identifies as `0.1.8`",
+    "Once `v0.1.8` is published",
+    "install.sh --version 0.1.8",
 )
 
 
