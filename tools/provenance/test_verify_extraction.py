@@ -89,6 +89,44 @@ class VerifyExtractionTests(unittest.TestCase):
                 "pulp-public-namespace", "audio-plugin-sdk"
             })
 
+    def test_active_scan_reads_build_inputs_and_configure_templates(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            demo = root / "apps/demo"
+            demo.mkdir(parents=True)
+            (demo / "CMakeLists.txt").write_text(
+                "target_link_libraries(demo PRIVATE pulp-audio)\n", encoding="utf-8"
+            )
+            (demo / "config.hpp.in").write_text(
+                "#include <pulp/audio/engine.hpp>\n", encoding="utf-8"
+            )
+            (demo / "main.cpp.template").write_text(
+                "auto* x = pulp::audio::engine();\n", encoding="utf-8"
+            )
+            # Python is the contamination tooling itself, so the native scan
+            # does not read it (content_scan_policy.NATIVE_SOURCE_EXCLUDED_SUFFIXES).
+            (demo / "policy.py").write_text("FORBIDDEN = 'pulp::'\n", encoding="utf-8")
+            findings = verify_extraction.scan_active_surface(root, ("apps",))
+            self.assertEqual(
+                {(finding["path"], finding["rule"]) for finding in findings},
+                {
+                    ("apps/demo/CMakeLists.txt", "pulp-package-or-target"),
+                    ("apps/demo/config.hpp.in", "pulp-public-namespace"),
+                    ("apps/demo/main.cpp.template", "pulp-public-namespace"),
+                },
+            )
+
+    def test_module_defines_each_top_level_name_once(self) -> None:
+        import ast
+
+        tree = ast.parse(MODULE_PATH.read_text(encoding="utf-8"))
+        names = [
+            node.name
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+        ]
+        self.assertEqual(sorted({n for n in names if names.count(n) > 1}), [])
+
     def test_default_inventory_scans_authoring_and_ui_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -29,6 +29,7 @@ by the lane it targets. A harness whose controls do not fail proves nothing.
 from __future__ import annotations
 
 import argparse
+import ast
 from collections import Counter
 import copy
 import hashlib
@@ -393,10 +394,40 @@ def environment_identity() -> dict[str, Any]:
     }
 
 
+def imported_repo_modules(entry_points: list[Path]) -> list[Path]:
+    """Every source module the entry points import from the harness, lane and
+    cli directories, transitively. A comparator that changes how pixels are
+    judged changes the harness as surely as an edit to this file does."""
+    search = [Path(__file__).resolve().parent, Path(__file__).resolve().parents[2] / "cli"]
+    seen: set[Path] = set()
+    queue = [path.resolve() for path in entry_points]
+    while queue:
+        path = queue.pop()
+        if path in seen:
+            continue
+        seen.add(path)
+        names: set[str] = set()
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path))):
+            if isinstance(node, ast.Import):
+                names.update(alias.name.split(".")[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                names.add(node.module.split(".")[0])
+        for name in sorted(names - set(sys.stdlib_module_names)):
+            for directory in (path.parent, *search):
+                candidate = directory / f"{name}.py"
+                if candidate.is_file():
+                    queue.append(candidate.resolve())
+                    break
+    return sorted(seen)
+
+
 def harness_fingerprint() -> dict[str, Any]:
-    files = [Path(__file__).resolve(), Path(parity_policy.__file__).resolve(),
-             *sorted(p.resolve() for p in LANE_MODULES)]
-    hashes = {p.name: sha256_file(p) for p in files}
+    files = imported_repo_modules([Path(__file__), Path(parity_policy.__file__), *LANE_MODULES])
+    hashes: dict[str, str] = {}
+    for path in files:
+        if path.name in hashes:
+            raise HarnessError(f"harness modules share the name {path.name}; the fingerprint cannot tell them apart")
+        hashes[path.name] = sha256_file(path)
     return {"files": hashes, "sha256": sha256_bytes(json.dumps(hashes, sort_keys=True).encode())}
 
 
@@ -1049,6 +1080,61 @@ def corpus_sha256(corpus: dict[str, Any]) -> str:
     return sha256_bytes(json.dumps(corpus, sort_keys=True).encode())
 
 
+REJECTED_OUTCOME = "REJECTED as required"
+# The one receipt-wide control that may make no claim: it applies only where a
+# selected lane declares a nested artifact.
+OPTIONAL_RECEIPT_CONTROLS = frozenset({"provenance-undeclared-nested-binary"})
+
+
+def control_evidence_errors(calibration: dict[str, Any]) -> list[str]:
+    """Every control's outcome must agree with its own evidence, every lane the
+    positive run selected must have a control that bit, and so must the
+    receipt-wide (lane `*`) controls. Out of scope is a claim about a lane the
+    corpus never selects, so it cannot stand in for a rejection."""
+    errors: list[str] = []
+    positive = calibration.get("positive")
+    cases = positive.get("cases") if isinstance(positive, dict) else None
+    selected: set[str] = set()
+    for case in cases if isinstance(cases, list) else []:
+        lanes = case.get("lanes") if isinstance(case, dict) else None
+        for lane, result in (lanes.items() if isinstance(lanes, dict) else ()):
+            if not isinstance(result, dict) or result.get("status") != "not_selected":
+                selected.add(lane)
+    if not selected:
+        errors.append("calibration positive run selected no lane")
+    declared = calibration.get("lanes_in_scope")
+    if declared is not None and (not isinstance(declared, list) or set(map(str, declared)) != selected):
+        errors.append(f"lanes_in_scope {declared!r} differs from the lanes the positive run selected {sorted(selected)}")
+    controls = calibration.get("controls")
+    if not isinstance(controls, list) or not controls:
+        return errors + ["calibration record lists no controls"]
+    bitten: set[str] = set()
+    for index, control in enumerate(controls):
+        if not isinstance(control, dict):
+            errors.append(f"control #{index} is not an object")
+            continue
+        name, lane, outcome = control.get("control", f"#{index}"), control.get("lane"), control.get("outcome")
+        if outcome == REJECTED_OUTCOME:
+            if control.get("rejected") is not True or control.get("lane_hit") is not True:
+                errors.append(f"control {name} is marked rejected but its evidence says otherwise")
+            else:
+                bitten.add(str(lane))
+        elif isinstance(outcome, str) and outcome.startswith("OUT OF SCOPE"):
+            if control.get("rejected") is not None or control.get("applied_cases"):
+                errors.append(f"control {name} is out of scope but records an application")
+            elif lane == "*" and name not in OPTIONAL_RECEIPT_CONTROLS:
+                errors.append(f"receipt control {name} cannot be out of scope")
+            elif lane != "*" and lane in selected:
+                errors.append(f"control {name} is out of scope for lane {lane}, which the positive run selected")
+        else:
+            errors.append(f"control {name} did not reject: {outcome!r}")
+    for lane in sorted(selected - bitten):
+        errors.append(f"no control rejected anything in selected lane {lane}")
+    if "*" not in bitten:
+        errors.append("no receipt-wide control rejected anything")
+    return errors
+
+
 def calibration_errors(calibration: Any, corpus: dict[str, Any]) -> list[str]:
     """A parity run is only as good as the controls that proved its corpus and
     harness can fail. Refuse a run whose corpus or harness code was not the
@@ -1058,9 +1144,18 @@ def calibration_errors(calibration: Any, corpus: dict[str, Any]) -> list[str]:
     errors = []
     if not calibration.get("calibrated"):
         errors.append("calibration record is not CALIBRATED")
+    # `calibrated` is the record's own claim; re-derive it from the evidence.
+    errors.extend(control_evidence_errors(calibration))
+    if calibration.get("control_failures") != []:
+        errors.append(f"calibration record names control failures: {calibration.get('control_failures')!r}")
     if calibration.get("case_filter"):
         errors.append("calibration record covers a --case subset (debug only), not the corpus")
     positive = calibration.get("positive") or {}
+    if not isinstance(positive, dict):
+        positive = {}
+    verdict = positive.get("verdict")
+    if not isinstance(verdict, dict) or verdict.get("accepting") is not True:
+        errors.append("calibration positive run did not accept")
     if (positive.get("corpus") or {}).get("sha256") != corpus_sha256(corpus):
         errors.append("corpus differs from the calibrated corpus (re-run calibrate)")
     recorded = ((positive.get("environment") or {}).get("harness") or {}).get("sha256")

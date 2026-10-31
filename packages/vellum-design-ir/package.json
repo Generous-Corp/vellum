@@ -14,7 +14,8 @@
     },
     "./schema/design-ir-v1": "./schema/design-ir-v1.schema.json",
     "./schema/authored-overlay-v1": "./schema/authored-overlay-v1.schema.json",
-    "./schema/reimport-report-v1": "./schema/reimport-report-v1.schema.json"
+    "./schema/reimport-report-v1": "./schema/reimport-report-v1.schema.json",
+    "./schema/audio-control-map-v1": "./schema/audio-control-map-v1.schema.json"
   },
   "bin": {
     "vellum-import-backend": "./bin/vellum-backend.js",
