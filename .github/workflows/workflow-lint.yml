@@ -1,0 +1,34 @@
+name: Workflow lint
+on:
+  pull_request:
+    paths: ['.github/workflows/**']
+  merge_group:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the workflows
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install the pinned actionlint
+        run: |
+          set -euo pipefail
+          version=1.7.12
+          archive="$RUNNER_TEMP/actionlint.tar.gz"
+          curl --fail --location --silent --show-error --retry 3 \
+            "https://github.com/rhysd/actionlint/releases/download/v${version}/actionlint_${version}_linux_amd64.tar.gz" \
+            --output "$archive"
+          printf '%s  %s\n' \
+            8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8 \
+            "$archive" | sha256sum -c -
+          tar -xzf "$archive" -C "$RUNNER_TEMP" actionlint
+      - name: Lint every workflow
+        run: |
+          set -euo pipefail
+          # SC2034 in provenance.yml predates this check.
+          "$RUNNER_TEMP/actionlint" -ignore 'SC2034' .github/workflows/*.yml

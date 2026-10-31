@@ -62,19 +62,20 @@ class RefreshTests(unittest.TestCase):
 
 
 class SdkReleaseDerivationTests(unittest.TestCase):
-    def test_sdk_release_derives_archive_and_name_from_tag(self) -> None:
+    def test_sdk_release_derives_archive_and_name_from_validated_tag(self) -> None:
         text = (REPO / ".github/workflows/sdk-release.yml").read_text()
         self.assertIsNone(re.search(r"\b0\.1\.8\b", text))
-        self.assertIn(
-            "vellum-sdk-${{ substr(github.event.workflow_run.head_branch, 1) }}"
-            "-darwin-arm64.tar.gz",
-            text,
+        self.assertNotIn("substr(", text)
+        self.assertEqual(text.count('version="${RELEASE_TAG#v}"'), 2)
+        self.assertEqual(text.count('echo "RELEASE_ARCHIVE=vellum-sdk-$version'), 2)
+        self.assertEqual(text.count('echo "RELEASE_NAME=Vellum $version'), 1)
+        self.assertEqual(
+            text.count('[[ "$RELEASE_TAG" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]'), 5
         )
-        self.assertIn(
-            "Vellum ${{ substr(github.event.workflow_run.head_branch, 1) }}"
-            " experimental SDK",
-            text,
-        )
+
+    def test_workflows_use_only_real_expression_functions(self) -> None:
+        for path in (REPO / ".github/workflows").glob("*.yml"):
+            self.assertNotRegex(path.read_text(), r"\$\{\{[^}]*\b(substr|substring)\(")
 
     def test_no_workflow_carries_a_literal_release_version(self) -> None:
         for path in sorted((REPO / ".github/workflows").glob("*.yml")):
