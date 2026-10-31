@@ -712,6 +712,15 @@ jobs:
             observatory_tail_policy=reconciled
           fi
           vellum_tail_args=(--vellum-tail-policy "$observatory_tail_policy")
+          # A tag's tree is frozen: no resolution can be added to it, so judging
+          # its overdue events at the time the job runs would make a re-run fail
+          # forever once any deadline passed. A tag is judged at its commit's
+          # committer time; every other ref at the current time.
+          observatory_now_args=()
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            observatory_now_args=(--now "$(TZ=UTC0 git show -s --format=%cd \
+              --date=format-local:%Y-%m-%dT%H:%M:%SZ "$observatory_vellum_target")")
+          fi
           if [[ "$GITHUB_EVENT_NAME" == merge_group ]]; then
             test "$VELLUM_GIT_BASE" != ""
           fi
@@ -738,6 +747,7 @@ jobs:
             --pulp-target "${{ steps.observatory-cursor.outputs.pulp-sha }}" \
             --vellum-target "$observatory_vellum_target" \
             --vellum-tail-policy "$observatory_tail_policy" \
+            "${observatory_now_args[@]}" \
             --output "$RUNNER_TEMP/observatory-health-report.json"
           python3 tools/provenance/test_verify_pulp_observation_scope.py
           python3 tools/provenance/verify_pulp_observation_scope.py \

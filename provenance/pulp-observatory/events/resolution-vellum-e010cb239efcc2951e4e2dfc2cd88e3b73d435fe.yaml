@@ -1,0 +1,27 @@
+{
+  "contract_tests": [
+    "vellum.capture-stats",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-10-27T03:13:00Z",
+  "disposition": "framework-only",
+  "effort_minutes": 0,
+  "event_id": "resolution-vellum-e010cb239efcc2951e4e2dfc2cd88e3b73d435fe",
+  "kind": "resolution",
+  "linked_commits": [
+    "00b71144e2fd00cefbb64372b71121a2aa3455b4",
+    "03b401be4e8e6cd16fad5dc7a89a28c0cb218e23",
+    "068e2bde8fe6b55d7e86a64e482b676b7c0a5ba5",
+    "229e65a719e944f3a57df040f5988f4a370c5f6e",
+    "e010cb239efcc2951e4e2dfc2cd88e3b73d435fe"
+  ],
+  "linked_pull_requests": [
+    "Generous-Corp/vellum#102"
+  ],
+  "owner": "@danielraffel",
+  "rationale": "Merge of vellum#102 into main. On every mapped path the merge tree equals its second parent 65f81f1e, and the mapped content comes only from 03b401be, 229e65a7 and 068e2bde (each resolved framework-only) plus the mirror-import merge 00b71144, which carries no Vellum-authored change. No Pulp change follows.",
+  "resolves": "vellum-e010cb239efcc2951e4e2dfc2cd88e3b73d435fe",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

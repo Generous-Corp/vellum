@@ -1,0 +1,24 @@
+{
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "created_at": "2026-10-27T01:11:00Z",
+  "disposition": "framework-only",
+  "effort_minutes": 0,
+  "event_id": "resolution-vellum-f7717bad1d4079331ba6e0e600b9cf3158a5ca42",
+  "kind": "resolution",
+  "linked_commits": [
+    "2cfb7250a49182d84bf2f753dba481cca2a58d7e",
+    "31ad0a1cfd8d1e4a38309e019765a77326b7a3c0",
+    "f7717bad1d4079331ba6e0e600b9cf3158a5ca42"
+  ],
+  "linked_pull_requests": [
+    "Generous-Corp/vellum#88"
+  ],
+  "owner": "@danielraffel",
+  "rationale": "Merge of vellum#88 (fix/restore-effect-lifecycle-75), landing 2cfb7250a4 and 31ad0a1cfd. Vellum-owned retained-ui-kernel effect lifecycle (packages/vellum-ui): state restore now transplants live effect instances and cleanups instead of rebuilding hooks blank (issue #75, vellum#88). Pulp has no hook runtime of its own: @pulp/react delegates effects to React through react-reconciler, so the defect and its fix have no Pulp counterpart. Same disposition as the precedent for the effect-lifecycle refactor 304795e8b4.",
+  "resolves": "vellum-f7717bad1d4079331ba6e0e600b9cf3158a5ca42",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}
