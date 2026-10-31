@@ -41,6 +41,7 @@ EXPECTED_RUNNERS = {
         '["macos-15"]',
     ),
     "sdk-release.yml": ("__mixed__", ""),
+    "workflow-lint.yml": ("__hosted__", "ubuntu-latest"),
 }
 
 HOSTED_LABELS = (

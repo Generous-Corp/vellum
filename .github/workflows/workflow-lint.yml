@@ -2,8 +2,6 @@ name: Workflow lint
 on:
   pull_request:
     paths: ['.github/workflows/**']
-  merge_group:
-    branches: [main]
 permissions:
   contents: read
 jobs:
