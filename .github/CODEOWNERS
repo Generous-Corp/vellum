@@ -1,0 +1,11 @@
+# The release-signing policy and the code that enforces it. A change to any of
+# these needs the owner's review; nothing else in the repository does.
+# scripts/check_release_policy.py (the required `release-policy` check) keeps
+# this list complete.
+/.github/CODEOWNERS @danielraffel
+/.github/workflows/release-tag.yml @danielraffel
+/.github/workflows/release-policy.yml @danielraffel
+/provenance/release-signers.allowed_signers @danielraffel
+/scripts/check_release_policy.py @danielraffel
+/scripts/release_request.py @danielraffel
+/scripts/verify_release_tag.py @danielraffel

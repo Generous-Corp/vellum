@@ -7,6 +7,7 @@ on:
       - Product contract
       - Provenance and forbidden dependencies
       - README clean release proof
+      - Release policy
     types: [completed]
 
 permissions:
