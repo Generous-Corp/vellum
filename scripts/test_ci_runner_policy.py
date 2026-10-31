@@ -206,15 +206,17 @@ PULP_API_READER_GIT_CALLS = {"git -C .exact-boundary-pulp rev-parse HEAD"}
 # backslash continuation inside a word, a glued `os.system` argument, a
 # value written to a file for a later step), so any change to the reader is
 # a reviewed change to this digest. The checks below only explain a failure.
-PULP_API_READER_SHA256 = "65cd477615301089437089e468cfcf61a4a41dbf7c5c3175550770903b9b20d1"
+PULP_API_READER_SHA256 = "0d05a1cefb10fd0a08b7a9225b82fb262139738da5f8dd09bb2ba0613e419600"
+# The reader reshapes the GitHub responses it fetched through this script, so
+# the script is part of the reader: it is pinned byte for byte like the step
+# and must carry no transport of its own (every read stays a gh call above).
+PULP_API_READER_COLLECTOR = ROOT / "tools" / "provenance" / "collect_release_evidence.py"
+PULP_API_READER_COLLECTOR_SHA256 = "5f91b99e0ef420761716675fd801b6d0ef7b1c009dfc9540add403afd542d592"
 # Every reader line that names Pulp, stripped, verbatim. A new line naming
 # Pulp (an anchor, an env export, a command through a variable) fails.
 PULP_API_READER_PULP_LINES = {
     '"repos/Generous-Corp/pulp/commits/$PULP_ACCEPTANCE_SHA/check-runs?per_page=100" \\',
-    'repository == "Generous-Corp/pulp"',
     'if [[ "$repository" == "Generous-Corp/pulp" ]]; then',
-    "for repository in Generous-Corp/pulp Generous-Corp/vellum; do",
-    'for repository in ("Generous-Corp/pulp", "Generous-Corp/vellum"):',
     'live_pulp_main="$(gh api repos/Generous-Corp/pulp/git/ref/heads/main --jq .object.sha)"',
     '"$(gh api repos/Generous-Corp/pulp/git/ref/heads/main --jq .object.sha)"',
 }
@@ -508,6 +510,15 @@ def pulp_reach_problems(workflow: str, text: str) -> tuple[list[str], int]:
                 problems.append(f"{label} names Pulp on an unreviewed line: {sorted(naming - PULP_API_READER_PULP_LINES)}")
             if STEP_STATE_EXPORT.search(code):
                 problems.append(f"{label} writes step state another step could read")
+            collector = PULP_API_READER_COLLECTOR.read_bytes()
+            if hashlib.sha256(collector).hexdigest() != PULP_API_READER_COLLECTOR_SHA256:
+                problems.append(f"{label} runs a collector that is not the reviewed one")
+            collector_text = collector.decode("utf-8")
+            if PULP_API_READER_FORBIDDEN.search(collector_text) or re.search(
+                r"\bos\.(?:system|popen|exec|spawn|posix_spawn)|\bpty\b|\bctypes\b|\b__import__\b",
+                collector_text,
+            ):
+                problems.append(f"{label} runs a collector with its own transport")
             if COMMAND_INDIRECTION.search(code):
                 problems.append(f"{label} runs a command through a variable")
             continue
@@ -1244,6 +1255,40 @@ class RunnerPolicyTests(unittest.TestCase):
             with self.subTest(mutation=name):
                 self.assertNotEqual(mutated, workflow)
                 self.assertTrue(pulp_reach_problems("provenance.yml", mutated)[0])
+
+    def test_api_reader_collector_mutations_fail_closed(self) -> None:
+        import tempfile
+        from unittest import mock
+
+        workflow = (WORKFLOWS / "provenance.yml").read_text(encoding="utf-8")
+        self.assertIn(
+            "python3 tools/provenance/collect_release_evidence.py open-pr-snapshot", workflow
+        )
+        self.assertEqual(pulp_reach_problems("provenance.yml", workflow)[0], [])
+        reviewed = PULP_API_READER_COLLECTOR.read_text(encoding="utf-8")
+        transports = {
+            "edited": reviewed + "\n",
+            "subprocess": reviewed + "\nimport subprocess\n",
+            "urllib": reviewed + "\nimport urllib.request\n",
+            "os.system": reviewed + "\nos.system('gh api repos/Generous-Corp/pulp/contents')\n",
+        }
+        reviewed_digest = PULP_API_READER_COLLECTOR_SHA256
+        with tempfile.TemporaryDirectory() as directory:
+            for label, text in transports.items():
+                collector = Path(directory) / f"{label}.py"
+                collector.write_text(text, encoding="utf-8")
+                for repinned in (False, True):
+                    pinned = (hashlib.sha256(text.encode("utf-8")).hexdigest()
+                              if repinned else reviewed_digest)
+                    with self.subTest(mutation=label, repinned=repinned), \
+                            mock.patch(f"{__name__}.PULP_API_READER_COLLECTOR", collector), \
+                            mock.patch(f"{__name__}.PULP_API_READER_COLLECTOR_SHA256", pinned):
+                        problems = pulp_reach_problems("provenance.yml", workflow)[0]
+                        if label == "edited" and repinned:
+                            # A reviewed re-pin of a transport-free edit passes.
+                            self.assertEqual(problems, [])
+                        else:
+                            self.assertTrue(problems)
 
     def test_view_audio_archive_fetch_bypasses_fail_closed(self) -> None:
         self.assertNotEqual(PULP_VIEW_AUDIO_RELEASE_FETCH, PULP_VIEW_AUDIO_FETCH)
