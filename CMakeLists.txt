@@ -43,13 +43,21 @@ if(VELLUM_ENABLE_ADDRESS_SANITIZER)
     add_link_options(-fsanitize=address)
 endif()
 
-# The locked Dawn archive contains macOS 13.0 objects. Set the deployment
-# target before creating any Vellum target so static objects later linked into
-# the GPU application cannot silently raise the finished binary's minimum OS.
+# The minimum macOS every Vellum binary declares. It is 13.3, not the 13.0 the
+# locked Dawn archive's objects need, because the mirrored runtime formats
+# floating-point values with std::format, and libc++.dylib exports the
+# floating-point std::to_chars it binds to only from macOS 13.3. A lower
+# target loads on 13.0-13.2 only to fail with "Symbol not found";
+# tools/mirror/check_libcxx_availability.py checks the built libraries.
+set(VELLUM_MACOS_DEPLOYMENT_TARGET "13.3")
+
+# Set the deployment target before creating any Vellum target so static
+# objects later linked into the GPU application cannot silently raise the
+# finished binary's minimum OS.
 if(APPLE AND VELLUM_ENABLE_GPU AND
    (VELLUM_SKIA_ARCHIVE OR VELLUM_SKIA_DIR) AND
    NOT CMAKE_OSX_DEPLOYMENT_TARGET)
-    set(CMAKE_OSX_DEPLOYMENT_TARGET "13.0" CACHE STRING
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "${VELLUM_MACOS_DEPLOYMENT_TARGET}" CACHE STRING
         "Minimum macOS version for the locked Vellum GPU artifact" FORCE)
 endif()
 
@@ -181,7 +189,7 @@ if(VELLUM_BUILD_TESTS)
             Vellum::Gpu Vellum::DawnHeaders)
         set_target_properties(vellum-dawn-provider-topology-test PROPERTIES
             OSX_ARCHITECTURES arm64
-            MACOSX_DEPLOYMENT_TARGET 13.0
+            MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
             BUILD_RPATH "$<TARGET_FILE_DIR:vellum-gpu>")
         add_test(NAME vellum.dawn-provider-bootstrap
             COMMAND vellum-dawn-provider-topology-test)
@@ -199,7 +207,7 @@ if(VELLUM_BUILD_TESTS)
         target_link_libraries(vellum-legacy-config-caller-test PRIVATE Vellum::Gpu)
         set_target_properties(vellum-legacy-config-caller-test PROPERTIES
             OSX_ARCHITECTURES arm64
-            MACOSX_DEPLOYMENT_TARGET 13.0
+            MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
             BUILD_RPATH "$<TARGET_FILE_DIR:vellum-gpu>")
         add_test(NAME vellum.legacy-config-caller
             COMMAND vellum-legacy-config-caller-test)

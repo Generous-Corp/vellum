@@ -18,7 +18,7 @@ The project CLI and repository shape are usable. An audio-free native C++
 kernel, deterministic DesignIR import/reimport, hardened JS/TS/JSX retained-tree
 runtime, JavaScriptCore host, installable CMake SDK, and a retained scene
 rendered through Skia Graphite, Dawn, and Metal are executable in-tree. A
-macOS 13.0+ arm64 SDK artifact built with the pinned renderer also provides the
+macOS 13.3+ arm64 SDK artifact built with the pinned renderer also provides the
 first installed native backend: it bundles authored TS/JS/JSX and optional imported
 DesignIR, builds and runs a real `.app`, executes finite scenarios, captures a
 GPU PNG, and emits an ad-hoc-signed application package using installed bytes
@@ -78,7 +78,7 @@ bundles its exact Node runtime and application build tools; system Node, npm,
 CMake, and Ninja are not prerequisites for this release path.
 
 The fastest authenticated path downloads the version-pinned bootstrap and lets
-it acquire and verify the matching installer core and macOS 13.0+ arm64 SDK:
+it acquire and verify the matching installer core and macOS 13.3+ arm64 SDK:
 
 <!-- readme-exec: id=release-install-create-run profile=clean-release -->
 ```sh
@@ -169,7 +169,7 @@ installed native journey.
 
 ## Requirements
 
-The release quick start supports macOS 13.0 or newer on Apple silicon.
+The release quick start supports macOS 13.3 or newer on Apple silicon.
 It requires Python 3.9 or newer and an authenticated GitHub CLI 2.75.0 or newer. The SDK bundles its exact Node runtime,
 application build tools, and pinned framework dependencies. Chrome is required
 only for browser scenarios. Source SDK development additionally requires the
@@ -217,7 +217,7 @@ commit.
 <!-- docs-sync: capabilities:start -->
 | Capability or target | Status | Evidence check | Honest boundary |
 | --- | --- | --- | --- |
-| macOS native application | experimental | `gpu-macos-arm64` | macOS 13.0+ arm64; exact-pin SDK; ad-hoc package |
+| macOS native application | experimental | `gpu-macos-arm64` | macOS 13.3+ arm64; exact-pin SDK; ad-hoc package |
 | Figma plugin export import/reimport | experimental | `product-quality`, `gpu-macos-arm64` | bounded single-root Pulp plugin JSON or `.pulp.zip`; not `.fig` or live REST |
 | Browser JavaScript plus shared C++ Wasm core | partial | `gpu-macos-arm64` | Canvas2D presentation shell; no browser GPU-backend claim |
 | Windows native application | planned | none | local-development CLI bootstrap only; no native product evidence |
