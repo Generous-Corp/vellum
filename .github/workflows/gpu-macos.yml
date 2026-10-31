@@ -33,6 +33,10 @@ jobs:
     # intentionally skipped while the local selector is enabled.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON == ''
     runs-on: ${{ fromJSON(vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON || '["macos-15"]') }}
+    # $GITHUB_ENV does not cross jobs; dependent jobs read the validated
+    # release identity through these outputs.
+    outputs:
+      release_archive: ${{ steps.release-identity.outputs.archive }}
     steps:
       - name: Check out full preserved Vellum history without credentials
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -41,6 +45,7 @@ jobs:
           persist-credentials: false
 
       - name: Derive the release identity from CMakeLists.txt
+        id: release-identity
         shell: bash
         run: |
           set -euo pipefail
@@ -56,6 +61,7 @@ jobs:
             echo "VELLUM_RELEASE_ARCHIVE=vellum-sdk-$version-darwin-arm64.tar.gz"
             echo "VELLUM_RELEASE_NAME=Vellum $version experimental SDK"
           } >> "$GITHUB_ENV"
+          echo "archive=vellum-sdk-$version-darwin-arm64.tar.gz" >> "$GITHUB_OUTPUT"
 
       - name: Download and verify the locked Skia and Dawn archive
         shell: bash
@@ -604,6 +610,8 @@ jobs:
     # Keep the dependent job on the same first-party-only policy.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON == ''
     runs-on: ${{ fromJSON(vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON || '["macos-15"]') }}
+    env:
+      VELLUM_RELEASE_ARCHIVE: ${{ needs.gpu-macos-arm64.outputs.release_archive }}
     steps:
       # The sterile journey drives a browser fixture, and job environments do
       # not inherit. Provision the same pinned browser the proof job uses, so
