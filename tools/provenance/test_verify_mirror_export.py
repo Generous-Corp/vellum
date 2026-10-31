@@ -292,7 +292,7 @@ class VerifyMirrorExportTests(unittest.TestCase):
             # set MIRROR_PULP_ROOT, and set VELLUM_REQUIRE_PULP_IDENTITY so a
             # missing checkout fails rather than skips. Other lanes (the GPU
             # ctest run) have no Pulp checkout and skip.
-            if os.environ.get("VELLUM_REQUIRE_PULP_IDENTITY") == "1":
+            if os.environ.get("VELLUM_REQUIRE_PULP_IDENTITY", "").strip().lower() in {"1", "true", "yes", "on"}:
                 self.fail("VELLUM_REQUIRE_PULP_IDENTITY is set but MIRROR_PULP_ROOT names no Pulp checkout; "
                           "the Pulp identity proof did not run")
             self.skipTest("Pulp identity is proved where MIRROR_PULP_ROOT names a Pulp checkout")
@@ -724,6 +724,10 @@ class VerifyMirrorExportTests(unittest.TestCase):
             "@build/../../../../etc/x", "-I@build/../../../../etc/x", "core/../../etc/x",
             "~/cache", "@/x", "C:/x", "file:///etc/x", "@../Users/me/x", "@./x", "-I@../Users/me/include",
             "@attacker-cache/x",
+            "-B/opt/homebrew/bin", "-MF/Users/me/x.d", "-iprefix/usr/include", "-iwithprefix/Volumes/x",
+            "-cxx-isystem/usr/include", "-Xlinker/usr/lib", "-include-pch/Users/x.pch", "-/Users/me",
+            "[/Users/me]", "{/Users/me}", "a|/Users/me", "-I\x00/Users/me", "-9/Users/me", "-_/Users",
+            "-a.b/Users/me", "$HOME/x", "-I$HOME/x", "${HOME}/x", "$(TMPDIR)/x",
         ):
             with self.subTest(value=value):
                 self.assertError(verify_mirror_export.host_path_violations(value, "fixture"),
@@ -733,7 +737,9 @@ class VerifyMirrorExportTests(unittest.TestCase):
             "@build/core/runtime/generated/Release/pulp/runtime/build_info.hpp",
             "-Icore/canvas/include", "-isystem@external/mbed-tls/" + "a" * 40 + "/include",
             "PULP_HAS_SKIA=1", "https://github.com/google/skia", "mirror/", "<catch2/catch_test_macros.hpp>",
-            "@system/sdl3/3.2.0/include",
+            "@system/sdl3/3.2.0/include", "core/**/x.cpp", "*.hpp", "-std=c++20", "-O2", "-Wno-unused",
+            "**/*.h", "**/foo.cmake", "*/include", "core/{a,b}/x.cpp", "core/[ab]/x",
+            "${CMAKE_CURRENT_SOURCE_DIR}/x",
         ):
             with self.subTest(value=value):
                 self.assertEqual(verify_mirror_export.host_path_violations(value, "fixture"), [])

@@ -62,9 +62,9 @@ if(NOT CMAKE_OSX_ARCHITECTURES AND
         "Vellum: the locked first GPU artifact supports only macOS arm64")
 endif()
 if(CMAKE_OSX_DEPLOYMENT_TARGET AND
-   CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS "13.0")
+   CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS VELLUM_MACOS_DEPLOYMENT_TARGET)
     message(FATAL_ERROR
-        "Vellum: the locked Dawn archive requires macOS 13.0 or newer")
+        "Vellum: the GPU artifact requires macOS ${VELLUM_MACOS_DEPLOYMENT_TARGET} or newer")
 endif()
 
 if(NOT VELLUM_SKIA_DIR)
@@ -179,7 +179,7 @@ set_target_properties(vellum-skia-dawn-provider PROPERTIES
     MACOSX_RPATH ON
     INSTALL_RPATH "${_vellum_provider_install_rpath}"
     OSX_ARCHITECTURES arm64
-    MACOSX_DEPLOYMENT_TARGET 13.0
+    MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
     INTERFACE_VELLUM_SKIA_DAWN_PROVIDER vellum-skia-dawn-provider)
 set_property(TARGET vellum-skia-dawn-provider APPEND PROPERTY
     COMPATIBLE_INTERFACE_STRING VELLUM_SKIA_DAWN_PROVIDER)
@@ -223,4 +223,4 @@ target_link_libraries(vellum-skia-dawn-provider PRIVATE
 set(VELLUM_HAS_SKIA_DAWN ON)
 message(STATUS
     "Vellum: locked Skia Graphite + Dawn found at ${VELLUM_SKIA_DIR} "
-    "(macOS universal GPU host enabled; minimum macOS 13.0)")
+    "(macOS universal GPU host enabled; minimum macOS ${VELLUM_MACOS_DEPLOYMENT_TARGET})")

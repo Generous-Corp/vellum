@@ -11,7 +11,7 @@ records why, and `scripts/verify_release_tag.py` refuses any retired tag.
 ## Tagged-release installation
 
 The application SDK requires
-macOS 13.0 or newer on arm64 plus Python 3.9 or newer. Install
+macOS 13.3 or newer on arm64 plus Python 3.9 or newer. Install
 [GitHub CLI 2.75.0 or newer](https://cli.github.com/) and authenticate with
 `gh auth login`, or provide `GH_TOKEN`/`GITHUB_TOKEN` for unattended use. The
 minimum version provides the immutable-release verification commands required
@@ -275,6 +275,12 @@ installed CLI import and reimport from
 two fixture revisions, verifies that the accepted active revision advances,
 embeds the materialized imported design in a real `.app`, and exercises the
 installed build/run/test/capture/package journey.
+
+The mirror, inertness and native-journey checks each run only when the
+artifact claims the capability they cover. The release lanes therefore pass
+`--require-gpu-claims`, which fails unless the artifact claims the GPU
+renderer and every native macOS command, together with the provenance-pinned
+`--view-audio-archive` the mirror inertness proof needs.
 
 The template gate uses only the installed launcher and SDK bytes:
 

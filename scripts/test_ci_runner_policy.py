@@ -165,6 +165,17 @@ PULP_VIEW_AUDIO_FETCH = """      - name: Fetch and verify the pinned Pulp view-a
             --json > "$RUNNER_TEMP/pulp-view-audio-archive.json"
           printf 'VELLUM_VIEW_AUDIO_ARCHIVE=%s\\n' \\
             "$RUNNER_TEMP/pulp-view-audio/libpulp-view-audio.a" >> "$GITHUB_ENV\""""
+# The release finalizer runs the same fetch from its trusted main checkout,
+# rooted at the view-audio pin its preceding step materializes from the
+# release source commit, so the archive matches the receipt the SDK was built
+# from. Only --root differs.
+PULP_VIEW_AUDIO_RELEASE_FETCH = PULP_VIEW_AUDIO_FETCH.replace(
+    '--root "$GITHUB_WORKSPACE"', '--root "$RUNNER_TEMP/release-source-pin"', 1
+)
+PULP_VIEW_AUDIO_FETCHES = {
+    PULP_VIEW_AUDIO_FETCH_WORKFLOW: PULP_VIEW_AUDIO_FETCH,
+    "sdk-release.yml": PULP_VIEW_AUDIO_RELEASE_FETCH,
+}
 # The single use of the pinned repository outside the fetch step.
 PINNED_PULP_GIT_DIR_USE = f"            --mirror-edge-pulp-root {PINNED_PULP_GIT_DIR} \\"
 # The one step that names Pulp only to read GitHub metadata and the
@@ -460,7 +471,7 @@ def pulp_reach_problems(workflow: str, text: str) -> tuple[list[str], int]:
         if name == PULP_VIEW_AUDIO_FETCH_NAME:
             archive_fetches += 1
             reaching += 1
-            if workflow != PULP_VIEW_AUDIO_FETCH_WORKFLOW or step_text(step) != PULP_VIEW_AUDIO_FETCH:
+            if step_text(step) != PULP_VIEW_AUDIO_FETCHES.get(workflow):
                 problems.append(f"{label} is not the canonical view-audio archive fetch")
             continue
         uses = [line for line in step["lines"] if re.search(r"mirror-edge-pulp", line, re.I)]
@@ -1247,12 +1258,52 @@ class RunnerPolicyTests(unittest.TestCase):
                             self.assertTrue(problems)
 
     def test_view_audio_archive_fetch_bypasses_fail_closed(self) -> None:
-        workflow = (WORKFLOWS / PULP_VIEW_AUDIO_FETCH_WORKFLOW).read_text(encoding="utf-8")
-        self.assertEqual(workflow.count(PULP_VIEW_AUDIO_FETCH + "\n"), 1)
-        problems, reaching = pulp_reach_problems(PULP_VIEW_AUDIO_FETCH_WORKFLOW, workflow)
+        self.assertNotEqual(PULP_VIEW_AUDIO_RELEASE_FETCH, PULP_VIEW_AUDIO_FETCH)
+        for filename, fetch in PULP_VIEW_AUDIO_FETCHES.items():
+            with self.subTest(workflow=filename):
+                self.check_view_audio_fetch_bypasses(filename, fetch)
+        # Each workflow's reviewed form is its own: neither is accepted in the other.
+        gpu = (WORKFLOWS / PULP_VIEW_AUDIO_FETCH_WORKFLOW).read_text(encoding="utf-8")
+        release = (WORKFLOWS / "sdk-release.yml").read_text(encoding="utf-8")
+        self.assertNotEqual(pulp_reach_problems("sdk-release.yml", gpu)[0], [])
+        self.assertNotEqual(pulp_reach_problems(PULP_VIEW_AUDIO_FETCH_WORKFLOW, release)[0], [])
+        # The release must not fetch against main's pin instead of the source's.
+        main_rooted = release.replace(
+            PULP_VIEW_AUDIO_RELEASE_FETCH, PULP_VIEW_AUDIO_FETCH, 1)
+        self.assertNotEqual(main_rooted, release)
+        self.assertNotEqual(pulp_reach_problems("sdk-release.yml", main_rooted)[0], [])
+
+    def test_release_validates_against_the_attested_view_audio_archive(self) -> None:
+        release = (WORKFLOWS / "sdk-release.yml").read_text(encoding="utf-8")
+        job = workflow_jobs(release)["validate-sdk-artifacts"]
+        materialize = job.index("- name: Materialize the release source's view-audio pin")
+        fetch = job.index(f"- name: {PULP_VIEW_AUDIO_FETCH_NAME}")
+        journey = job.index("- name: Rebuild trusted controls and run the complete installed journey")
+        self.assertLess(materialize, fetch)
+        self.assertLess(fetch, journey)
+        pin = job[materialize:fetch]
+        for path in ("provenance/mirror/pulp-view-audio-archive.json",
+                     "provenance/mirror/receipts/index.json"):
+            self.assertIn(f'git show "$SOURCE_COMMIT:{path}"', pin)
+        validation = job[journey:]
+        self.assertIn('--view-audio-archive "$view_audio"', validation)
+        self.assertIn("--require-gpu-claims", validation)
+        self.assertIn('"gpu_claims_required": True', validation)
+        self.assertIn('cmp "$view_audio" "$input/pulp-view-audio/libpulp-view-audio.a"', validation)
+
+    def test_release_names_follow_the_validated_tag(self) -> None:
+        release = (WORKFLOWS / "sdk-release.yml").read_text(encoding="utf-8")
+        self.assertIsNone(re.search(r"\b\d+\.\d+\.\d+-darwin-arm64", release))
+        self.assertIsNone(re.search(r"Vellum \d+\.\d+\.\d+ experimental", release))
+        self.assertNotIn("RELEASE_ARCHIVE:", release)
+        self.assertNotIn("RELEASE_NAME:", release)
+
+    def check_view_audio_fetch_bypasses(self, filename: str, fetch: str) -> None:
+        workflow = (WORKFLOWS / filename).read_text(encoding="utf-8")
+        self.assertEqual(workflow.count(fetch + "\n"), 1)
+        problems, reaching = pulp_reach_problems(filename, workflow)
         self.assertEqual(problems, [])
         self.assertGreaterEqual(reaching, 1)
-        fetch = PULP_VIEW_AUDIO_FETCH
         tail = '"$RUNNER_TEMP/pulp-view-audio/libpulp-view-audio.a" >> "$GITHUB_ENV"'
 
         def in_fetch(extra: str) -> str:
@@ -1272,8 +1323,8 @@ class RunnerPolicyTests(unittest.TestCase):
         for label, mutated in mutations.items():
             with self.subTest(mutation=label):
                 self.assertNotEqual(mutated, workflow)
-                self.assertNotEqual(pulp_reach_problems(PULP_VIEW_AUDIO_FETCH_WORKFLOW, mutated)[0], [])
-        # The form is reviewed for the GPU proof job only.
+                self.assertNotEqual(pulp_reach_problems(filename, mutated)[0], [])
+        # The form is reviewed only for the workflows that fetch the archive.
         self.assertNotEqual(pulp_reach_problems("provenance.yml", workflow)[0], [])
 
     def test_queue_gated_scope_reads_every_on_form(self) -> None:
