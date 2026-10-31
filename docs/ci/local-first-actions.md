@@ -44,8 +44,9 @@ the hosted value rather than leaving jobs queued indefinitely.
   canceled by PR concurrency.
 - Required check names and merge-queue semantics remain unchanged.
 - Every workflow that produces a required check also runs on `merge_group`,
-  so a merge queue on `main` can admit entries; the steward arms auto-merge
-  (`MERGE`) and never merges directly once a queue exists.
+  so a merge queue on `main` can admit entries. Admission is the job of the
+  Shipyard steward tick only (exact-head approval plus green, then enqueue);
+  no workflow in this repository arms auto-merge or merges.
 - Pull requests record their own observatory events and leave the cursor to
   the receiver (Decision 0012), so queue entries no longer serialize on
   `provenance/pulp-observatory/cursor.json`.

@@ -1,8 +1,7 @@
 # Posts the `review-verdict` commit status on each pull request's head: the
 # repository-side twin of Shipyard's review-before-arm guard, which only sees
-# landings sent through ghapp. merge-on-green.yml arms auto-merge, or merges,
-# with its own token and reads no reviewer verdict; a required review-verdict
-# status would stop a held or unreviewed head there too.
+# landings sent through ghapp. The only admission writer is the Shipyard
+# steward tick, which requires an exact-head approval.
 #
 # Report-only: branch protection does not require this status. The rule runs
 # from a pinned Shipyard commit, never from the pull request's code, on

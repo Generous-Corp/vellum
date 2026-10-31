@@ -26,12 +26,6 @@ concurrency:
   # commits should not consume another full macOS GPU run.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-env:
-  VELLUM_RELEASE_VERSION: 0.1.8
-  VELLUM_RELEASE_TAG: v0.1.8
-  VELLUM_RELEASE_ARCHIVE: vellum-sdk-0.1.8-darwin-arm64.tar.gz
-  VELLUM_RELEASE_NAME: Vellum 0.1.8 experimental SDK
-
 jobs:
   gpu-macos-arm64:
     name: gpu-macos-arm64
@@ -39,12 +33,35 @@ jobs:
     # intentionally skipped while the local selector is enabled.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON == ''
     runs-on: ${{ fromJSON(vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON || '["macos-15"]') }}
+    # $GITHUB_ENV does not cross jobs; dependent jobs read the validated
+    # release identity through these outputs.
+    outputs:
+      release_archive: ${{ steps.release-identity.outputs.archive }}
     steps:
       - name: Check out full preserved Vellum history without credentials
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Derive the release identity from CMakeLists.txt
+        id: release-identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(sed -n '/^project(Vellum/,/LANGUAGES/s/^ *VERSION \([0-9][0-9.]*\)$/\1/p' CMakeLists.txt)"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          if [[ "$GITHUB_REF" == refs/tags/v* && "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match CMakeLists version v$version"
+            exit 1
+          fi
+          {
+            echo "VELLUM_RELEASE_VERSION=$version"
+            echo "VELLUM_RELEASE_TAG=v$version"
+            echo "VELLUM_RELEASE_ARCHIVE=vellum-sdk-$version-darwin-arm64.tar.gz"
+            echo "VELLUM_RELEASE_NAME=Vellum $version experimental SDK"
+          } >> "$GITHUB_ENV"
+          echo "archive=vellum-sdk-$version-darwin-arm64.tar.gz" >> "$GITHUB_OUTPUT"
 
       - name: Download and verify the locked Skia and Dawn archive
         shell: bash
@@ -84,6 +101,7 @@ jobs:
           python3 scripts/template_guard.py
           python3 scripts/test_templates_smoke.py
           python3 scripts/test_sterile_acceptance_bundle.py
+          python3 scripts/test_compare_sdk_archives.py
           python3 -m unittest discover -s tools/mirror -p 'test_*.py'
           python3 scripts/test_select_exact_provenance_run.py
           python3 scripts/test_verify_exact_provenance_artifact.py
@@ -335,24 +353,7 @@ jobs:
           archive="$VELLUM_RELEASE_ARCHIVE"
           test "$archive" = \
             "vellum-sdk-$VELLUM_RELEASE_VERSION-darwin-arm64.tar.gz"
-          if ! cmp -s "$first/$archive" "$second/$archive"; then
-            echo "SDK archives differ; differing members:" >&2
-            python3 - "$first/$archive" "$second/$archive" <<'PY' >&2
-          import hashlib, sys, tarfile
-          def members(path):
-              rows = {}
-              with tarfile.open(path) as handle:
-                  for member in handle.getmembers():
-                      data = handle.extractfile(member).read() if member.isfile() else b""
-                      rows[member.name] = (member.mode, member.size, hashlib.sha256(data).hexdigest())
-              return rows
-          a, b = members(sys.argv[1]), members(sys.argv[2])
-          for name in sorted(set(a) | set(b)):
-              if a.get(name) != b.get(name):
-                  print(f"  {name}: {a.get(name)} != {b.get(name)}")
-          PY
-            exit 1
-          fi
+          python3 scripts/compare_sdk_archives.py "$first/$archive" "$second/$archive"
           cmp "$first/SHA256SUMS" "$second/SHA256SUMS"
           (cd scripts && shasum -a 256 -c INSTALLER_SHA256SUMS)
           shasum -a 256 "$first/$archive" > "$RUNNER_TEMP/vellum-sdk.sha256"
@@ -384,8 +385,8 @@ jobs:
           app=build-gpu/apps/gpu-native/vellum-gpu-native.app/Contents/MacOS/vellum-gpu-native
           otool -l "$dylib" > "$RUNNER_TEMP/vellum-gpu-dylib-load-commands.txt"
           otool -l "$app" > "$RUNNER_TEMP/vellum-gpu-app-load-commands.txt"
-          /usr/bin/grep -Eq 'minos 13\.0' "$RUNNER_TEMP/vellum-gpu-dylib-load-commands.txt"
-          /usr/bin/grep -Eq 'minos 13\.0' "$RUNNER_TEMP/vellum-gpu-app-load-commands.txt"
+          /usr/bin/grep -Eq 'minos 13\.3' "$RUNNER_TEMP/vellum-gpu-dylib-load-commands.txt"
+          /usr/bin/grep -Eq 'minos 13\.3' "$RUNNER_TEMP/vellum-gpu-app-load-commands.txt"
 
       - name: Smoke every public template through the installed SDK
         shell: bash
@@ -609,6 +610,8 @@ jobs:
     # Keep the dependent job on the same first-party-only policy.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON == ''
     runs-on: ${{ fromJSON(vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON || '["macos-15"]') }}
+    env:
+      VELLUM_RELEASE_ARCHIVE: ${{ needs.gpu-macos-arm64.outputs.release_archive }}
     steps:
       # The sterile journey drives a browser fixture, and job environments do
       # not inherit. Provision the same pinned browser the proof job uses, so
@@ -710,6 +713,7 @@ jobs:
             --forbid-path "$GITHUB_WORKSPACE" \
             --runner-search-root "$RUNNER_WORKSPACE" \
             --view-audio-archive "$input/pulp-view-audio/libpulp-view-audio.a" \
+            --require-gpu-claims \
             --output "$RUNNER_TEMP/sdk-installed-validation.json" \
             --json > "$RUNNER_TEMP/sdk-installed-validation.stdout.json"
 

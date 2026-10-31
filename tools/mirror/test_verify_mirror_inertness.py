@@ -344,24 +344,22 @@ class FloorAgreementTest(unittest.TestCase):
 
 
 class DemanglerTest(unittest.TestCase):
-    def fake_filt(self, working_flags):
-        def run(arguments, **kwargs):
-            flags = arguments[1:]
-            mangled, expected = vi.DEMANGLE_CONTROL
-            output = expected + "pulp::canvas::HSV, float)\n" if flags == working_flags else mangled + "\n"
-            return mock.Mock(returncode=0, stdout=output)
-        return run
+    """Image symbols go through the vendored rtti_ownership demangler."""
 
-    def test_only_an_invocation_that_demangles_the_control_is_used(self) -> None:
-        with mock.patch.object(vi.shutil, "which", return_value="/usr/bin/c++filt"), \
-                mock.patch.object(vi.subprocess, "run", side_effect=self.fake_filt(["-_"])):
-            self.assertEqual(vi.demangler(), ["/usr/bin/c++filt", "-_"])
+    def test_mach_o_and_elf_spellings_both_demangle(self) -> None:
+        if not (vi.shutil.which("c++filt") or vi.shutil.which("llvm-cxxfilt")):
+            self.skipTest("needs c++filt")
+        mach_o, elf = "__ZN4pulp6canvas5Color8from_hsvENS0_3HSVEf", "_ZN4pulp6canvas5Color8from_hsvENS0_3HSVEf"
+        out = vi.demangle([mach_o, elf, "_main"])
+        self.assertTrue(out[0].startswith("pulp::canvas::Color::from_hsv("), out)
+        self.assertTrue(out[1].startswith("pulp::canvas::Color::from_hsv("), out)
+        self.assertEqual(len(out), 3)
 
-    def test_a_demangler_that_demangles_nothing_is_refused(self) -> None:
-        with mock.patch.object(vi.shutil, "which", return_value="/usr/bin/c++filt"), \
-                mock.patch.object(vi.subprocess, "run", side_effect=self.fake_filt(["--never"])):
-            with self.assertRaises(vi.EvidenceError):
-                vi.demangler()
+    def test_a_demangler_that_fails_its_control_is_refused(self) -> None:
+        with mock.patch.object(vi.rtti_ownership, "demangle",
+                               side_effect=vi.rtti_ownership.DemangleError("control not demangled")):
+            with self.assertRaisesRegex(vi.EvidenceError, "cannot demangle"):
+                vi.demangle(["__ZN4pulp1xEv"])
 
 
 class VerifyTest(unittest.TestCase):
@@ -458,6 +456,14 @@ class VerifyTest(unittest.TestCase):
         self.provider.unlink()
         self.symbols[nested_provider] = ["pulp::view::WaveformView::paint()"]
         proof = self.run_verify(install_libdir="lib/vellum")
+        self.assertFalse(proof["checks"]["no-audio-symbols"])
+
+    def test_a_so_provider_is_scanned(self) -> None:
+        so_provider = self.provider.with_suffix(".so")
+        so_provider.write_bytes(b"\0")
+        self.provider.unlink()
+        self.symbols[so_provider] = ["pulp::view::WaveformView::paint()"]
+        proof = self.run_verify()
         self.assertFalse(proof["checks"]["no-audio-symbols"])
 
     def plant_debt_headers(self) -> list[Path]:

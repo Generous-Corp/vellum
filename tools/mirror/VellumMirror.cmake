@@ -104,6 +104,13 @@ function(_vellum_mirror_add_dependency name)
             message(FATAL_ERROR
                 "Vellum: the ${name} recipe did not produce link target ${_provided}")
         endif()
+        # Appended after the dependency's directory-level flags, so a recipe
+        # option such as -frtti overrides the project's own -fno-rtti.
+        if(NOT MSVC)
+            foreach(_option IN LISTS VELLUM_MIRROR_DEP_${_key}_CXX_OPTIONS)
+                target_compile_options("${_provided}" PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:${_option}>")
+            endforeach()
+        endif()
     endforeach()
 endfunction()
 
@@ -177,17 +184,6 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
             target_compile_definitions("${_vellum_mirror_target}" PRIVATE
                 PULP_DAWN_PROCS_HOST_OWNED=1)
         endif()
-        # Apple libc++ annotates std::format's floating-point implementation
-        # as requiring macOS 13.3 even though the mirrored runtime's supported
-        # deployment boundary is 13.0.  The package already owns the runtime
-        # compatibility decision; suppress this header-only availability
-        # diagnostic for the mirrored targets while retaining the 13.0
-        # deployment target in the produced binaries.
-        if(APPLE AND CMAKE_OSX_DEPLOYMENT_TARGET AND
-           CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS "13.3")
-            target_compile_definitions("${_vellum_mirror_target}" PRIVATE
-                _LIBCPP_DISABLE_AVAILABILITY=1)
-        endif()
         target_compile_options("${_vellum_mirror_target}" PRIVATE
             ${_vellum_mirror_prefix_maps})
         # Link edges are resolved once, by the unit libraries below: a static
@@ -218,7 +214,7 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
         BUILD_WITH_INSTALL_RPATH ON
         INSTALL_RPATH "@loader_path;@loader_path/../../${CMAKE_INSTALL_LIBDIR}"
         OSX_ARCHITECTURES arm64
-        MACOSX_DEPLOYMENT_TARGET 13.0)
+        MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET})
     set(_whole)
     set(_external)
     set(_skia OFF)

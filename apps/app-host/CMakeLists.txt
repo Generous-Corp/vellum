@@ -19,7 +19,7 @@ target_link_libraries(vellum-app-host PRIVATE
 
 set_target_properties(vellum-app-host PROPERTIES
     OSX_ARCHITECTURES arm64
-    MACOSX_DEPLOYMENT_TARGET 13.0
+    MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
     BUILD_RPATH "$<TARGET_FILE_DIR:vellum-authoring>;$<TARGET_FILE_DIR:vellum-gpu>"
     INSTALL_RPATH "@executable_path/../lib;@executable_path/../Frameworks")
 

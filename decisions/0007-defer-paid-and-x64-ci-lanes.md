@@ -29,7 +29,7 @@ Three layers agree, so a lane cannot drift back to a paid runner by accident:
 
    | Variable | Fallback labels | Workflows |
    |---|---|---|
-   | `VELLUM_LINUX_RUNS_ON_JSON` | `["self-hosted","Linux","ARM64","vellum-build-linux"]` | `product-quality.yml`, `provenance.yml`, `merge-on-green.yml` |
+   | `VELLUM_LINUX_RUNS_ON_JSON` | `["self-hosted","Linux","ARM64","vellum-build-linux"]` | `product-quality.yml`, `provenance.yml` |
    | `VELLUM_MACOS_RUNS_ON_JSON` | `["self-hosted","macOS","ARM64","vellum-build-macos"]` | `gpu-macos.yml`, `readme-quick-start.yml` |
    | `VELLUM_AUTHORITY_RUNS_ON_JSON` | `["self-hosted","Linux","ARM64","vellum-authority-linux"]` | `authority-activation.yml`, `authority-release.yml` |
 

@@ -86,7 +86,7 @@ jobs:
       - name: Verify active-source quarantine and forbidden dependencies
         env:
           MIRROR_PULP_ROOT: ${{ steps.mirror-receipts.outputs.present == 'true' && '.mirror-pulp' || '' }}
-          VELLUM_REQUIRE_PULP_IDENTITY: ${{ steps.mirror-receipts.outputs.present == 'true' && '1' || '' }}
+          VELLUM_REQUIRE_PULP_IDENTITY: '1'
         run: |
           python3 tools/provenance/test_verify_extraction.py
           python3 tools/provenance/test_verify_mirror_export.py
@@ -191,7 +191,7 @@ jobs:
       - name: Verify extraction and active-source quarantine
         env:
           MIRROR_PULP_ROOT: ${{ steps.mirror-receipts.outputs.present == 'true' && '.mirror-pulp' || '' }}
-          VELLUM_REQUIRE_PULP_IDENTITY: ${{ steps.mirror-receipts.outputs.present == 'true' && '1' || '' }}
+          VELLUM_REQUIRE_PULP_IDENTITY: '1'
         run: |
           python3 tools/provenance/test_verify_extraction.py
           python3 tools/provenance/test_verify_mirror_export.py
@@ -365,6 +365,7 @@ jobs:
           python3 tools/provenance/test_finalize_authority_reconciliation.py
           python3 tools/provenance/test_verify_current_state_docs.py
           python3 tools/provenance/test_verify_authority_expansion.py
+          python3 tools/provenance/test_collect_release_evidence.py
           python3 scripts/test_select_exact_provenance_run.py
           python3 scripts/test_verify_exact_provenance_artifact.py
           release_readiness=()
@@ -388,63 +389,13 @@ jobs:
               "repos/Generous-Corp/pulp/commits/$PULP_ACCEPTANCE_SHA/check-runs?per_page=100" \
               -f filter=all -F per_page=100 \
               > "$RUNNER_TEMP/pulp-router-check-run-pages.json"
-            python3 - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          temporary = Path(os.environ["RUNNER_TEMP"])
-          pages = json.loads(
-              temporary.joinpath("parity-check-run-pages.json").read_text(encoding="utf-8")
-          )
-          pulp_pages = json.loads(
-              temporary.joinpath("pulp-router-check-run-pages.json").read_text(
-                  encoding="utf-8"
-              )
-          )
-          checks = [row for page in pages + pulp_pages for row in page.get("check_runs", [])]
-          temporary.joinpath("parity-check-runs-raw.json").write_text(
-              json.dumps({"check_runs": checks}, sort_keys=True) + "\n",
-              encoding="utf-8",
-          )
-          PY
-            python3 - <<'PY' > "$RUNNER_TEMP/parity-run-ids.txt"
-          import json
-          import os
-          import re
-          from pathlib import Path
-
-          rows = json.loads(
-              Path(os.environ["RUNNER_TEMP"])
-              .joinpath("parity-check-runs-raw.json")
-              .read_text(encoding="utf-8")
-          )["check_runs"]
-          ids = set()
-          required_vellum = {
-              "clean-release", "forbidden-deps", "gpu-macos-arm64",
-              "product-quality", "sterile-consumer",
-          }
-          for row in rows:
-              match = re.fullmatch(
-                  r"https://github\.com/(Generous-Corp/(?:vellum|pulp))/actions/runs/([0-9]+)/job/[0-9]+",
-                  row.get("details_url", ""),
-              )
-              if match:
-                  repository = match.group(1)
-                  name = row.get("name")
-                  if (
-                      (
-                          repository == "Generous-Corp/pulp"
-                          and name == "vellum-routing-contract"
-                          and row.get("status") == "completed"
-                          and row.get("conclusion") == "success"
-                      )
-                      or (repository == "Generous-Corp/vellum" and name in required_vellum)
-                  ):
-                      ids.add((repository, int(match.group(2)), name))
-          for repository, run_id, name in sorted(ids):
-              print(repository, run_id, name)
-          PY
+            python3 tools/provenance/collect_release_evidence.py merge-check-runs \
+              --pages "$RUNNER_TEMP/parity-check-run-pages.json" \
+              --pages "$RUNNER_TEMP/pulp-router-check-run-pages.json" \
+              --output "$RUNNER_TEMP/parity-check-runs-raw.json"
+            python3 tools/provenance/collect_release_evidence.py parity-run-ids \
+              --check-runs "$RUNNER_TEMP/parity-check-runs-raw.json" \
+              > "$RUNNER_TEMP/parity-run-ids.txt"
             mkdir "$RUNNER_TEMP/parity-workflow-runs"
             while read -r repository run_id check_name; do
               output_name="${repository//\//__}-$run_id-$check_name.json"
@@ -465,41 +416,11 @@ jobs:
                   --dir "$destination" 2>/dev/null || true
               fi
             done < "$RUNNER_TEMP/parity-run-ids.txt"
-            python3 - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          temporary = Path(os.environ["RUNNER_TEMP"])
-          checks = json.loads(
-              temporary.joinpath("parity-check-runs-raw.json").read_text(encoding="utf-8")
-          )["check_runs"]
-          runs = [
-              json.loads(path.read_text(encoding="utf-8"))
-              for path in sorted(temporary.joinpath("parity-workflow-runs").glob("*.json"))
-          ]
-          receipts = [
-              json.loads(path.read_text(encoding="utf-8"))
-              for path in sorted(
-                  temporary.joinpath("execution-attestations").rglob("*.json")
-              )
-          ]
-          temporary.joinpath("parity-check-runs.json").write_text(
-              json.dumps({
-                  "check_runs": checks,
-                  "workflow_runs": runs,
-                  "parity_proof_execution_receipts": [
-                      row for row in receipts
-                      if row.get("kind") == "vellum-parity-proof-execution"
-                  ],
-                  "pulp_router_contract_receipts": [
-                      row for row in receipts
-                      if row.get("kind") == "pulp-vellum-routing-contract-execution"
-                  ],
-              }, sort_keys=True) + "\n",
-              encoding="utf-8",
-          )
-          PY
+            python3 tools/provenance/collect_release_evidence.py check-runs \
+              --check-runs "$RUNNER_TEMP/parity-check-runs-raw.json" \
+              --workflow-runs "$RUNNER_TEMP/parity-workflow-runs" \
+              --execution-attestations "$RUNNER_TEMP/execution-attestations" \
+              --output "$RUNNER_TEMP/parity-check-runs.json"
             repository_evidence+=(
               --delivery-root "$GITHUB_WORKSPACE"
               --promotion-attestation "$PROMOTION_ATTESTATION_PATH"
@@ -507,182 +428,61 @@ jobs:
             )
           fi
           if [[ -n "$PULP_ACCEPTANCE_SHA" && "$GITHUB_EVENT_NAME" != pull_request && "$GITHUB_EVENT_NAME" != merge_group ]]; then
+            open_pr_repositories_text="$(python3 tools/provenance/collect_release_evidence.py repositories)"
+            mapfile -t open_pr_repositories <<<"$open_pr_repositories_text"
+            test "${#open_pr_repositories[@]}" -gt 0
             snapshot_root="$RUNNER_TEMP/open-pr-snapshot-input"
             mkdir "$snapshot_root"
-            for repository in Generous-Corp/pulp Generous-Corp/vellum; do
+            for repository in "${open_pr_repositories[@]}"; do
               slug="${repository//\//__}"
               repository_root="$snapshot_root/$slug"
               mkdir -p "$repository_root/details" "$repository_root/trees"
               gh api --method GET --paginate --slurp \
                 "repos/$repository/pulls?state=open&per_page=100" \
                 > "$repository_root/pulls.json"
-              REPOSITORY_ROOT="$repository_root" python3 - <<'PY' \
+              python3 tools/provenance/collect_release_evidence.py open-pr-numbers \
+                --pulls "$repository_root/pulls.json" \
                 > "$repository_root/numbers.txt"
-          import json
-          import os
-          from pathlib import Path
-
-          root = Path(os.environ["REPOSITORY_ROOT"])
-          pages = json.loads(root.joinpath("pulls.json").read_text(encoding="utf-8"))
-          pulls = [pull for page in pages for pull in page]
-          numbers = sorted(pull["number"] for pull in pulls)
-          if len(numbers) != len(set(numbers)):
-              raise SystemExit("open PR API returned duplicate pull request numbers")
-          for number in numbers:
-              print(number)
-          PY
               while read -r pull_number; do
                 gh api "repos/$repository/pulls/$pull_number" \
                   > "$repository_root/details/$pull_number.json"
-                REPOSITORY_ROOT="$repository_root" PULL_NUMBER="$pull_number" \
-                  python3 - <<'PY' > "$repository_root/trees/$pull_number-coordinates.txt"
-          import json, os
-          from pathlib import Path
-          detail = json.loads(Path(os.environ["REPOSITORY_ROOT"]).joinpath(
-              "details", f"{os.environ['PULL_NUMBER']}.json").read_text())
-          print(detail["base"]["sha"], detail["head"]["sha"])
-          PY
+                python3 tools/provenance/collect_release_evidence.py pull-coordinates \
+                  --detail "$repository_root/details/$pull_number.json" \
+                  > "$repository_root/trees/$pull_number-coordinates.txt"
                 read -r base_commit head_commit \
                   < "$repository_root/trees/$pull_number-coordinates.txt"
                 gh api "repos/$repository/compare/$base_commit...$head_commit" \
                   > "$repository_root/trees/$pull_number-compare.json"
-                merge_base_commit="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["merge_base_commit"]["sha"])' "$repository_root/trees/$pull_number-compare.json")"
+                merge_base_commit="$(python3 tools/provenance/collect_release_evidence.py merge-base-commit --compare "$repository_root/trees/$pull_number-compare.json")"
                 gh api "repos/$repository/git/commits/$merge_base_commit" \
                   > "$repository_root/trees/$pull_number-merge-base-commit.json"
                 gh api "repos/$repository/git/commits/$head_commit" \
                   > "$repository_root/trees/$pull_number-head-commit.json"
-                merge_base_tree="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["tree"]["sha"])' "$repository_root/trees/$pull_number-merge-base-commit.json")"
-                head_tree="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["tree"]["sha"])' "$repository_root/trees/$pull_number-head-commit.json")"
+                merge_base_tree="$(python3 tools/provenance/collect_release_evidence.py commit-tree --commit "$repository_root/trees/$pull_number-merge-base-commit.json")"
+                head_tree="$(python3 tools/provenance/collect_release_evidence.py commit-tree --commit "$repository_root/trees/$pull_number-head-commit.json")"
                 gh api "repos/$repository/git/trees/$merge_base_tree?recursive=1" \
                   > "$repository_root/trees/$pull_number-merge-base-tree.json"
                 gh api "repos/$repository/git/trees/$head_tree?recursive=1" \
                   > "$repository_root/trees/$pull_number-head-tree.json"
               done < "$repository_root/numbers.txt"
             done
-            SNAPSHOT_ROOT="$snapshot_root" python3 - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          root = Path(os.environ["SNAPSHOT_ROOT"])
-          repositories = []
-          for repository in ("Generous-Corp/pulp", "Generous-Corp/vellum"):
-              repository_root = root / repository.replace("/", "__")
-              pages = json.loads(
-                  repository_root.joinpath("pulls.json").read_text(encoding="utf-8")
-              )
-              pulls = [pull for page in pages for pull in page]
-              rows = []
-              for pull in sorted(pulls, key=lambda row: row["number"]):
-                  detail = json.loads(
-                      repository_root.joinpath(
-                          "details", f"{pull['number']}.json"
-                      ).read_text(encoding="utf-8")
-                  )
-                  if (
-                      detail.get("number") != pull["number"]
-                      or detail.get("head", {}).get("sha") != pull["head"]["sha"]
-                      or detail.get("base", {}).get("sha") != pull["base"]["sha"]
-                  ):
-                      raise SystemExit(
-                          f"{repository}#{pull['number']}: list/detail head changed"
-                      )
-                  trees = repository_root / "trees"
-                  comparison = json.loads(trees.joinpath(
-                      f"{pull['number']}-compare.json").read_text())
-                  merge_base_commit = json.loads(trees.joinpath(
-                      f"{pull['number']}-merge-base-commit.json").read_text())
-                  head_commit = json.loads(trees.joinpath(
-                      f"{pull['number']}-head-commit.json").read_text())
-                  merge_base_sha = comparison.get("merge_base_commit", {}).get("sha")
-                  if merge_base_commit.get("sha") != merge_base_sha or head_commit.get("sha") != detail["head"]["sha"]:
-                      raise SystemExit(f"{repository}#{pull['number']}: commit lookup differs")
-                  merge_base_tree = json.loads(trees.joinpath(
-                      f"{pull['number']}-merge-base-tree.json").read_text())
-                  head_tree = json.loads(trees.joinpath(
-                      f"{pull['number']}-head-tree.json").read_text())
-                  if merge_base_tree.get("truncated") is not False or head_tree.get("truncated") is not False:
-                      raise SystemExit(f"{repository}#{pull['number']}: recursive tree is truncated")
-                  def leaves(tree):
-                      return {
-                          row["path"]: (row.get("mode"), row.get("type"), row.get("sha"))
-                          for row in tree.get("tree", [])
-                          if isinstance(row, dict) and row.get("type") != "tree"
-                      }
-                  before, after = leaves(merge_base_tree), leaves(head_tree)
-                  paths = sorted(
-                      path for path in set(before) | set(after)
-                      if before.get(path) != after.get(path)
-                  )
-                  rows.append({
-                      "number": pull["number"],
-                      "base_commit": detail["base"]["sha"],
-                      "merge_base_commit": merge_base_sha,
-                      "head_commit": detail["head"]["sha"],
-                      "paths": paths,
-                      "diff_path_count": len(paths),
-                  })
-              repositories.append({"repository": repository, "pulls": rows})
-          output = {
-              "schema_version": 2,
-              "kind": "github-open-pull-request-snapshot",
-              "repositories": repositories,
-          }
-          Path(os.environ["RUNNER_TEMP"]).joinpath("open-pr-snapshot.json").write_text(
-              json.dumps(output, sort_keys=True) + "\n", encoding="utf-8"
-          )
-          cursor = [
-              {
-                  "repository": row["repository"],
-                  "pulls": [
-                      {"number": pull["number"], "base_commit": pull["base_commit"],
-                       "head_commit": pull["head_commit"]}
-                      for pull in row["pulls"]
-                  ],
-              }
-              for row in repositories
-          ]
-          Path(os.environ["RUNNER_TEMP"]).joinpath("open-pr-cursor.json").write_text(
-              json.dumps(cursor, sort_keys=True) + "\n", encoding="utf-8"
-          )
-          PY
+            python3 tools/provenance/collect_release_evidence.py open-pr-snapshot \
+              --snapshot-root "$snapshot_root" \
+              --output "$RUNNER_TEMP/open-pr-snapshot.json" \
+              --cursor-output "$RUNNER_TEMP/open-pr-cursor.json"
             write_live_open_pr_cursor() {
               local destination="$1"
               local cursor_root
               cursor_root="$(mktemp -d "$RUNNER_TEMP/open-pr-cursor-live.XXXXXX")"
-              for repository in Generous-Corp/pulp Generous-Corp/vellum; do
+              for repository in "${open_pr_repositories[@]}"; do
                 slug="${repository//\//__}"
                 gh api --method GET --paginate --slurp \
                   "repos/$repository/pulls?state=open&per_page=100" \
                   > "$cursor_root/$slug.json"
               done
-              CURSOR_ROOT="$cursor_root" CURSOR_DESTINATION="$destination" python3 - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          root = Path(os.environ["CURSOR_ROOT"])
-          repositories = []
-          for repository in ("Generous-Corp/pulp", "Generous-Corp/vellum"):
-              pages = json.loads(
-                  root.joinpath(repository.replace("/", "__") + ".json").read_text(
-                      encoding="utf-8"
-                  )
-              )
-              pulls = [pull for page in pages for pull in page]
-              rows = sorted(
-                  ({"number": pull["number"], "base_commit": pull["base"]["sha"],
-                    "head_commit": pull["head"]["sha"]}
-                   for pull in pulls),
-                  key=lambda row: row["number"],
-              )
-              if len(rows) != len({row["number"] for row in rows}):
-                  raise SystemExit(f"{repository}: duplicate open PR numbers")
-              repositories.append({"repository": repository, "pulls": rows})
-          Path(os.environ["CURSOR_DESTINATION"]).write_text(
-              json.dumps(repositories, sort_keys=True) + "\n", encoding="utf-8"
-          )
-          PY
+              python3 tools/provenance/collect_release_evidence.py live-cursor \
+                --cursor-root "$cursor_root" \
+                --output "$destination"
             }
             write_live_open_pr_cursor "$RUNNER_TEMP/open-pr-cursor-before.json"
             cmp "$RUNNER_TEMP/open-pr-cursor.json" "$RUNNER_TEMP/open-pr-cursor-before.json"
@@ -912,6 +712,15 @@ jobs:
             observatory_tail_policy=reconciled
           fi
           vellum_tail_args=(--vellum-tail-policy "$observatory_tail_policy")
+          # A tag's tree is frozen: no resolution can be added to it, so judging
+          # its overdue events at the time the job runs would make a re-run fail
+          # forever once any deadline passed. A tag is judged at its commit's
+          # committer time; every other ref at the current time.
+          observatory_now_args=()
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            observatory_now_args=(--now "$(TZ=UTC0 git show -s --format=%cd \
+              --date=format-local:%Y-%m-%dT%H:%M:%SZ "$observatory_vellum_target")")
+          fi
           if [[ "$GITHUB_EVENT_NAME" == merge_group ]]; then
             test "$VELLUM_GIT_BASE" != ""
           fi
@@ -938,6 +747,7 @@ jobs:
             --pulp-target "${{ steps.observatory-cursor.outputs.pulp-sha }}" \
             --vellum-target "$observatory_vellum_target" \
             --vellum-tail-policy "$observatory_tail_policy" \
+            "${observatory_now_args[@]}" \
             --output "$RUNNER_TEMP/observatory-health-report.json"
           python3 tools/provenance/test_verify_pulp_observation_scope.py
           python3 tools/provenance/verify_pulp_observation_scope.py \

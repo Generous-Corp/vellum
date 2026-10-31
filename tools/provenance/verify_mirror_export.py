@@ -242,7 +242,17 @@ PATH_FLAG_PREFIX = re.compile(
 )
 # Separators between the flags, defines, list items and quoted values a stored
 # string can carry.
-PATH_TOKEN_SEPARATORS = re.compile(r"[\s;,=()<>\"'`]+")
+PATH_TOKEN_SEPARATORS = re.compile(r"[\s\x00;,=()<>\"'`|]+")
+# Any other flag glued to its argument (-B/x, -MF/x, -iwithprefix/x,
+# -Xlinker/x, -cxx-isystem/x) is stripped the same way, so the path it carries
+# is judged rather than hidden behind an unknown flag name. A leading [ or {
+# (an opened list or set around the path) is stripped too; globs and brace
+# patterns inside a relative path are left alone.
+GENERIC_FLAG_PREFIX = re.compile(r"\A-+(?:[A-Za-z0-9_][A-Za-z0-9_+.]*(?:-[A-Za-z0-9_][A-Za-z0-9_+.]*)*)?")
+LEADING_OPENER = re.compile(r"\A[\[{]+")
+# Host-specific variables expand to an absolute path on whatever host reads
+# them, as Pulp's exporter refuses them too.
+HOST_VARIABLE = re.compile(r"\A\$(?:\{|\()?(?:HOME|TMPDIR|TMP|TEMP|USER|USERPROFILE|PWD)\b")
 # The cache roots Pulp's closure exporter writes (vellum_closure.py): the
 # configured build tree, pinned external sources and system packages.
 CACHE_PREFIX = re.compile(r"\A@(?:build|external|system)/")
@@ -282,6 +292,12 @@ def host_path_violations(value: Any, label: str) -> list[str]:
             return errors
         for piece in PATH_TOKEN_SEPARATORS.split(value):
             token = PATH_FLAG_PREFIX.sub("", piece, count=1) if piece.startswith("-") else piece
+            if token.startswith("-"):
+                token = GENERIC_FLAG_PREFIX.sub("", token, count=1)
+            token = LEADING_OPENER.sub("", token, count=1)
+            if HOST_VARIABLE.match(token):
+                errors.append(f"{label} contains an absolute host path: {value}")
+                break
             if ("/" in token or "\\" in token or token.startswith("~")) and not path_token_allowed(token):
                 errors.append(f"{label} contains an absolute host path: {value}")
                 break
@@ -1003,7 +1019,7 @@ D3_UNIT_MAP = "tools/scripts/vellum_d3_units.json"
 def d3_unit_targets(units: list[Any], name: str, stack: tuple[str, ...] = ()) -> tuple[set[str], set[str]] | None:
     """(required, optional) CMake targets of one D3 unit, following
     alias_of/carried_by, or None when the map does not name the unit."""
-    by_name = {u.get("name"): u for u in units if isinstance(u, dict)}
+    by_name = {u["name"]: u for u in units if isinstance(u, dict) and isinstance(u.get("name"), str)}
     entry = by_name.get(name)
     if entry is None or name in stack:
         return None
