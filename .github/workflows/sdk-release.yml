@@ -25,7 +25,6 @@ jobs:
       SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
       RELEASE_TAG: ${{ github.event.workflow_run.head_branch }}
       SOURCE_COMMIT: ${{ github.event.workflow_run.head_sha }}
-      RELEASE_ARCHIVE: vellum-sdk-0.1.8-darwin-arm64.tar.gz
     steps:
       - name: Check out trusted artifact validators
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -57,6 +56,10 @@ jobs:
           [[ "$SOURCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          # The archive name follows from the validated tag, so a release of
+          # any version validates its own archive rather than a fixed one.
+          printf 'RELEASE_ARCHIVE=vellum-sdk-%s-darwin-arm64.tar.gz\n' \
+            "${RELEASE_TAG#v}" >> "$GITHUB_ENV"
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID" \
             > "$RUNNER_TEMP/validation-source-run.json"
           python3 - <<'PY'
@@ -117,6 +120,39 @@ jobs:
           run-id: ${{ env.SOURCE_RUN_ID }}
           github-token: ${{ github.token }}
 
+      # The fetch below runs the trusted main checkout's verifier against the
+      # view-audio pin the release source commit carries: that commit's mirror
+      # receipt is the one the SDK archive was built from, and main may since
+      # have re-pinned Pulp.
+      - name: Materialize the release source's view-audio pin
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          pin_root="$RUNNER_TEMP/release-source-pin"
+          mkdir -p "$pin_root/provenance/mirror/receipts"
+          git show "$SOURCE_COMMIT:provenance/mirror/pulp-view-audio-archive.json" \
+            > "$pin_root/provenance/mirror/pulp-view-audio-archive.json"
+          git show "$SOURCE_COMMIT:provenance/mirror/receipts/index.json" \
+            > "$pin_root/provenance/mirror/receipts/index.json"
+          receipt="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["receipts"][-1])' \
+            "$pin_root/provenance/mirror/receipts/index.json")"
+          [[ "$receipt" =~ ^provenance/mirror/receipts/[A-Za-z0-9._-]+\.json$ ]]
+          git show "$SOURCE_COMMIT:$receipt" > "$pin_root/$receipt"
+
+      - name: Fetch and verify the pinned Pulp view-audio archive
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 tools/mirror/fetch_view_audio_archive.py \
+            --root "$RUNNER_TEMP/release-source-pin" \
+            --repository Generous-Corp/pulp \
+            --output-dir "$RUNNER_TEMP/pulp-view-audio" \
+            --json > "$RUNNER_TEMP/pulp-view-audio-archive.json"
+          printf 'VELLUM_VIEW_AUDIO_ARCHIVE=%s\n' \
+            "$RUNNER_TEMP/pulp-view-audio/libpulp-view-audio.a" >> "$GITHUB_ENV"
+
       - name: Rebuild trusted controls and run the complete installed journey
         run: |
           set -euo pipefail
@@ -157,12 +193,29 @@ jobs:
           mkdir "$RUNNER_TEMP/trusted-sterile"
           tar -xzf "$RUNNER_TEMP/trusted-sterile-acceptance.tar.gz" \
             -C "$RUNNER_TEMP/trusted-sterile"
+          # The source run validated against the archive its proof job fetched;
+          # the release must have independently fetched the same bytes.
+          view_audio="$RUNNER_TEMP/pulp-view-audio/libpulp-view-audio.a"
+          test "$VELLUM_VIEW_AUDIO_ARCHIVE" = "$view_audio"
+          view_audio_expected="$(
+            python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["archive_sha256"])' \
+              "$RUNNER_TEMP/pulp-view-audio-archive.json"
+          )"
+          view_audio_source="$(
+            python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["archive_sha256"])' \
+              "$input/pulp-view-audio-archive.json"
+          )"
+          test "$(shasum -a 256 "$view_audio" | awk '{print $1}')" = "$view_audio_expected"
+          test "$view_audio_source" = "$view_audio_expected"
+          cmp "$view_audio" "$input/pulp-view-audio/libpulp-view-audio.a"
           validator="$RUNNER_TEMP/trusted-sterile/vellum-sterile-acceptance/validate_installed_sdk.py"
           python3 "$validator" \
             --archive "$input/$RELEASE_ARCHIVE" \
             --checksums "$input/SHA256SUMS" \
             --forbid-path "$GITHUB_WORKSPACE" \
             --runner-search-root "$RUNNER_TEMP/trusted-sterile" \
+            --view-audio-archive "$view_audio" \
+            --require-gpu-claims \
             --output "$RUNNER_TEMP/trusted-sdk-installed-validation.json" \
             --json > "$RUNNER_TEMP/trusted-sdk-installed-validation.stdout.json"
           python3 - <<'PY'
@@ -181,12 +234,15 @@ jobs:
               "source_commit": artifact["source_commit"],
               "source_tree_clean": True,
               "target": artifact["target"],
+              "gpu_claims_required": True,
           }
           for key, expected_value in expected.items():
               if value.get(key) != expected_value:
                   raise SystemExit(f"trusted installed SDK {key} differs")
           if not value.get("checks") or not all(value["checks"].values()):
               raise SystemExit("trusted installed SDK checks are incomplete")
+          if not value.get("mirror") or value["mirror"]["inertness"].get("inert") is not True:
+              raise SystemExit("trusted installed SDK has no mirror inertness proof")
           PY
 
       - name: Retain trusted SDK validation
@@ -200,6 +256,7 @@ jobs:
             ${{ runner.temp }}/trusted-sterile-bundle.json
             ${{ runner.temp }}/validation-release-trust.json
             ${{ runner.temp }}/trusted-release-source.json
+            ${{ runner.temp }}/pulp-view-audio-archive.json
           if-no-files-found: error
           retention-days: 90
 
@@ -211,9 +268,6 @@ jobs:
       startsWith(github.event.workflow_run.head_branch, 'v') &&
       github.event.workflow_run.conclusion == 'success'
     runs-on: ${{ fromJSON(vars.VELLUM_AUTHORITY_RUNS_ON_JSON || '["ubuntu-latest"]') }}
-    env:
-      RELEASE_NAME: Vellum 0.1.8 experimental SDK
-      RELEASE_ARCHIVE: vellum-sdk-0.1.8-darwin-arm64.tar.gz
     steps:
       - name: Check out trusted finalizer controls
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -254,9 +308,13 @@ jobs:
               r"v[0-9]+\.[0-9]+\.[0-9]+", release_tag
           ):
               raise SystemExit("trusted release tag is invalid")
+          version = release_tag.removeprefix("v")
           coordinates = {
               "SOURCE_RUN_ID": str(source_run_id),
               "RELEASE_TAG": release_tag,
+              # The release name and archive follow from the validated tag.
+              "RELEASE_NAME": f"Vellum {version} experimental SDK",
+              "RELEASE_ARCHIVE": f"vellum-sdk-{version}-darwin-arm64.tar.gz",
               "SOURCE_COMMIT": value["source_commit"],
               "VALIDATED_TAG_OBJECT_SHA": value["tag_object_sha"],
           }
