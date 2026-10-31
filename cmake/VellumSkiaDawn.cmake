@@ -220,6 +220,56 @@ target_link_libraries(vellum-skia-dawn-provider PRIVATE
     "-framework QuartzCore"
     objc)
 
+# The provider must link to the same bytes every time: the SDK artifact is
+# built twice and compared. Some macOS SDKs (the macOS 15 SDK in Xcode 16) give
+# the CoreServices umbrella symbol-level re-exports of libm entry points that
+# libSystem also exports (_exp2, _log2, _nan, _nanf, _modff, _nextafterf, the
+# fenv functions). The provider links CoreServices for FSEvents and
+# LaunchServices, so both dylibs offer those names, and Apple's parallel linker
+# (ld-prime) picks either owner from one link to the next: identical inputs
+# bound them to libSystem in about five links of six and to CoreServices in
+# the rest, changing the stubs, fixups and symbol table. The classic linker
+# resolves the duplicate by command-line order (libSystem, which -lpthread
+# names first), so the binding and the bytes stay fixed. Use it only when the
+# SDK carries the duplicate; newer SDKs dropped those re-exports and newer
+# linkers ignore -ld_classic.
+set(_vellum_sdk_path "${CMAKE_OSX_SYSROOT}")
+if(NOT IS_DIRECTORY "${_vellum_sdk_path}")
+    execute_process(
+        COMMAND xcrun --sdk macosx --show-sdk-path
+        OUTPUT_VARIABLE _vellum_sdk_path
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE _vellum_sdk_path_result)
+    if(NOT _vellum_sdk_path_result EQUAL 0)
+        set(_vellum_sdk_path "")
+    endif()
+endif()
+set(_vellum_coreservices_tbd
+    "${_vellum_sdk_path}/System/Library/Frameworks/CoreServices.framework/Versions/A/CoreServices.tbd")
+set(_vellum_coreservices_reexports_libm OFF)
+if(_vellum_sdk_path AND EXISTS "${_vellum_coreservices_tbd}")
+    file(STRINGS "${_vellum_coreservices_tbd}" _vellum_coreservices_libm
+        REGEX "_(feholdexcept|nextafterf)[^A-Za-z0-9_]")
+    if(_vellum_coreservices_libm)
+        set(_vellum_coreservices_reexports_libm ON)
+    endif()
+endif()
+if(_vellum_coreservices_reexports_libm)
+    include(CheckLinkerFlag)
+    check_linker_flag(CXX "LINKER:-ld_classic" VELLUM_LINKER_ACCEPTS_LD_CLASSIC)
+    if(VELLUM_LINKER_ACCEPTS_LD_CLASSIC)
+        target_link_options(vellum-skia-dawn-provider PRIVATE "LINKER:-ld_classic")
+        message(STATUS
+            "Vellum: the SDK's CoreServices re-exports libm symbols; linking the "
+            "Skia/Dawn provider with the classic linker for a deterministic binding")
+    else()
+        message(WARNING
+            "Vellum: ${_vellum_coreservices_tbd} re-exports libm symbols that "
+            "libSystem also exports, and the linker does not accept -ld_classic; "
+            "the Skia/Dawn provider dylib may not link reproducibly")
+    endif()
+endif()
+
 set(VELLUM_HAS_SKIA_DAWN ON)
 message(STATUS
     "Vellum: locked Skia Graphite + Dawn found at ${VELLUM_SKIA_DIR} "
