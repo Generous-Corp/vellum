@@ -353,35 +353,20 @@ def symbol_findings(symbols: dict[str, list[str]], *, view_unit_packaged: bool,
     return report["audio"], report["forward"]
 
 
-DEMANGLE_CONTROL = ("__ZN4pulp6canvas5Color8from_hsvENS0_3HSVEf", "pulp::canvas::Color::from_hsv(")
-
-
-def demangler() -> list[str]:
-    """A c++filt invocation proved to demangle this platform's symbol names.
-
-    c++filt flags differ between toolchains: `-n` keeps the Mach-O leading
-    underscore on some releases, which leaves every symbol mangled. Each
-    candidate must demangle a known symbol before it is trusted.
-    """
-    tool = shutil.which("c++filt")
-    if not tool:
-        raise EvidenceError("c++filt is required")
-    mangled, expected = DEMANGLE_CONTROL
-    for flags in ([], ["-_"], ["-n"]):
-        probe = subprocess.run([tool, *flags], input=mangled + "\n", capture_output=True, text=True, check=False)
-        if probe.returncode == 0 and probe.stdout.startswith(expected):
-            return [tool, *flags]
-    raise EvidenceError("no c++filt invocation demangles a known symbol")
-
-
 def demangle(names: list[str]) -> list[str]:
+    """Demangled `names`, in order, through the one vendored demangler.
+
+    rtti_ownership.demangle normalises Mach-O `__Z` names, always passes `-n`,
+    and proves the read with a control in the same batch, so it works on ELF
+    and on every Apple c++filt release alike.
+    """
     if not names:
         return []
-    demangled = subprocess.run(demangler(), input="\n".join(names), capture_output=True, text=True, check=False)
-    lines = demangled.stdout.splitlines()
-    if demangled.returncode or len(lines) != len(names):
-        raise EvidenceError("c++filt failed")
-    return lines
+    try:
+        mapping = rtti_ownership.demangle(set(names))
+    except rtti_ownership.DemangleError as error:
+        raise EvidenceError(f"cannot demangle image symbols: {error}") from error
+    return [mapping[name] for name in names]
 
 
 def image_symbols(path: Path) -> list[str]:

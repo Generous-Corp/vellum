@@ -86,7 +86,7 @@ jobs:
       - name: Verify active-source quarantine and forbidden dependencies
         env:
           MIRROR_PULP_ROOT: ${{ steps.mirror-receipts.outputs.present == 'true' && '.mirror-pulp' || '' }}
-          VELLUM_REQUIRE_PULP_IDENTITY: ${{ steps.mirror-receipts.outputs.present == 'true' && '1' || '' }}
+          VELLUM_REQUIRE_PULP_IDENTITY: '1'
         run: |
           python3 tools/provenance/test_verify_extraction.py
           python3 tools/provenance/test_verify_mirror_export.py
@@ -191,7 +191,7 @@ jobs:
       - name: Verify extraction and active-source quarantine
         env:
           MIRROR_PULP_ROOT: ${{ steps.mirror-receipts.outputs.present == 'true' && '.mirror-pulp' || '' }}
-          VELLUM_REQUIRE_PULP_IDENTITY: ${{ steps.mirror-receipts.outputs.present == 'true' && '1' || '' }}
+          VELLUM_REQUIRE_PULP_IDENTITY: '1'
         run: |
           python3 tools/provenance/test_verify_extraction.py
           python3 tools/provenance/test_verify_mirror_export.py
