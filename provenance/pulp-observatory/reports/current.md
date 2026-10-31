@@ -2,7 +2,7 @@
 
 - State: `active`
 - Health: `pass`
-- Pending events: 4
+- Pending events: 5
 - Overdue events: 0
 - Release blockers: 0
 - Observatory effort: 0.0% of framework effort
@@ -641,6 +641,7 @@
 | `vellum-6451f8660de6e35ede8cc064e95a58c5a7af0e1c` | framework-to-Pulp | rendering | pending | 2026-11-04T13:35:18Z |
 | `vellum-c48794c0207ec7fbe8cc06957c7f7206147df5e9` | framework-to-Pulp | schema | pending | 2026-11-04T13:35:18Z |
 | `vellum-fa3d531fb54d293095badcd0c45ac907305a176e` | framework-to-Pulp | rendering | pending | 2026-11-04T13:35:18Z |
+| `vellum-2d637d6b45ae602dfebdaca8f3f6efa306fbd02b` | framework-to-Pulp | rendering | pending | 2026-11-04T16:42:03Z |
 
 ## Release blockers
 
