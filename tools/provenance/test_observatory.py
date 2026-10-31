@@ -698,6 +698,43 @@ class ObservatoryTests(unittest.TestCase):
                     pulp_target=pulp_head, vellum_target=feature,
                 )
 
+    def test_coverage_policy_accepts_a_resolution_of_an_unreconciled_observation(
+        self,
+    ) -> None:
+        # A pull request may classify the observation it records before the
+        # receiver advances the cursor; the committed report excludes the
+        # resolution together with the observation it resolves.
+        with tempfile.TemporaryDirectory() as temporary:
+            pulp, vellum, root, pulp_head, main, feature = self._coverage_state(Path(temporary))
+            observatory.reconcile(
+                root=root, pulp_repo=pulp, vellum_repo=vellum,
+                pulp_target=pulp_head, vellum_target=feature,
+                now_text="2026-10-11T00:05:00Z", write=True, events_only=True,
+            )
+            observation = observatory.load_json(
+                root / observatory.EVENTS_PATH / f"vellum-{feature}.yaml"
+            )
+            resolution = {
+                "schema_version": 1, "event_id": f"resolution-vellum-{feature}",
+                "kind": "resolution", "created_at": "2026-10-11T00:10:00Z",
+                "resolves": observation["event_id"], "disposition": "framework-only",
+                "rationale": "Vellum-owned change with no Pulp counterpart.",
+                "owner": "@danielraffel", "linked_commits": [feature],
+                "linked_pull_requests": [], "contract_tests": observation["contract_tests"],
+                "shared_contract_release_blocker": False, "effort_minutes": 0,
+            }
+            observatory.write_json_atomic(
+                root / observatory.EVENTS_PATH / f"resolution-vellum-{feature}.yaml",
+                resolution,
+            )
+            report = observatory.verify(
+                root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                pulp_target=pulp_head, vellum_target=feature,
+                vellum_tail_policy="coverage",
+            )
+            self.assertEqual(report["health"], "pass")
+            self.assertEqual(report["coverage_gaps"], [])
+
     def test_coverage_policy_exempts_a_clean_queue_merge_but_not_a_resolved_one(
         self,
     ) -> None:

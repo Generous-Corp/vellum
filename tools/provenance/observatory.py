@@ -948,13 +948,23 @@ def verify(
             )
         )
         vellum_repository = str(vellum_cursor["repository"])
+        tail_observation_ids = {
+            str(event["event_id"])
+            for _, event in events
+            if event["kind"] == "observation"
+            and str(event["source_repository"]) == vellum_repository
+            and str(event["source_commit"]) in tail
+        }
+        # A resolution of an unreconciled observation belongs to the same
+        # not-yet-reconciled set: the committed report cannot project it
+        # without the observation it resolves.
         committed_events = [
             (path, event)
             for path, event in events
-            if not (
-                event["kind"] == "observation"
-                and str(event["source_repository"]) == vellum_repository
-                and str(event["source_commit"]) in tail
+            if str(event["event_id"]) not in tail_observation_ids
+            and not (
+                event["kind"] == "resolution"
+                and str(event["resolves"]) in tail_observation_ids
             )
         ]
         committed_gaps = [
