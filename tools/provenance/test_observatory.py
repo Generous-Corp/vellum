@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -696,6 +698,43 @@ class ObservatoryTests(unittest.TestCase):
                     pulp_target=pulp_head, vellum_target=feature,
                 )
 
+    def test_coverage_policy_accepts_a_resolution_of_an_unreconciled_observation(
+        self,
+    ) -> None:
+        # A pull request may classify the observation it records before the
+        # receiver advances the cursor; the committed report excludes the
+        # resolution together with the observation it resolves.
+        with tempfile.TemporaryDirectory() as temporary:
+            pulp, vellum, root, pulp_head, main, feature = self._coverage_state(Path(temporary))
+            observatory.reconcile(
+                root=root, pulp_repo=pulp, vellum_repo=vellum,
+                pulp_target=pulp_head, vellum_target=feature,
+                now_text="2026-10-11T00:05:00Z", write=True, events_only=True,
+            )
+            observation = observatory.load_json(
+                root / observatory.EVENTS_PATH / f"vellum-{feature}.yaml"
+            )
+            resolution = {
+                "schema_version": 1, "event_id": f"resolution-vellum-{feature}",
+                "kind": "resolution", "created_at": "2026-10-11T00:10:00Z",
+                "resolves": observation["event_id"], "disposition": "framework-only",
+                "rationale": "Vellum-owned change with no Pulp counterpart.",
+                "owner": "@danielraffel", "linked_commits": [feature],
+                "linked_pull_requests": [], "contract_tests": observation["contract_tests"],
+                "shared_contract_release_blocker": False, "effort_minutes": 0,
+            }
+            observatory.write_json_atomic(
+                root / observatory.EVENTS_PATH / f"resolution-vellum-{feature}.yaml",
+                resolution,
+            )
+            report = observatory.verify(
+                root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                pulp_target=pulp_head, vellum_target=feature,
+                vellum_tail_policy="coverage",
+            )
+            self.assertEqual(report["health"], "pass")
+            self.assertEqual(report["coverage_gaps"], [])
+
     def test_coverage_policy_exempts_a_clean_queue_merge_but_not_a_resolved_one(
         self,
     ) -> None:
@@ -1289,7 +1328,7 @@ class ObservatoryTests(unittest.TestCase):
             common = [
                 "--root", str(root), "verify", "--pulp-repo", str(pulp),
                 "--vellum-repo", str(vellum), "--pulp-target", pulp_head,
-                "--vellum-target", feature,
+                "--vellum-target", feature, "--now", "2026-10-11T00:05:00Z",
             ]
             self.assertEqual(observatory.main(common), 1)
             self.assertEqual(observatory.main(common + ["--vellum-tail-policy", "coverage"]), 0)
@@ -1317,6 +1356,38 @@ class ObservatoryTests(unittest.TestCase):
                 ).stdout.strip()
                 self.assertEqual(out, expected)
         self.assertIn('--vellum-tail-policy "$observatory_tail_policy"', workflow)
+
+    def test_ci_judges_a_tag_at_its_commit_time_and_everything_else_now(self) -> None:
+        # A tag's tree is frozen, so its health is judged at the tagged commit's
+        # committer time; a re-run after a deadline must not start failing.
+        workflow = (
+            observatory.ROOT / ".github/workflows/provenance.yml"
+        ).read_text(encoding="utf-8")
+        start = workflow.index("observatory_now_args=()")
+        end = workflow.index("fi", start) + 2
+        fragment = "\n".join(line.strip() for line in workflow[start:end].splitlines())
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary)
+            run(repo, "git", "init", "-q")
+            env = {"PATH": "/usr/bin:/bin", "HOME": temporary, "GIT_CONFIG_NOSYSTEM": "1",
+                   "GIT_COMMITTER_DATE": "2026-07-22T20:00:00+02:00", "GIT_AUTHOR_DATE": "2026-07-22T20:00:00+02:00"}
+            subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q",
+                            "--allow-empty", "-m", "tagged"], cwd=repo, env=env, check=True)
+            head = run(repo, "git", "rev-parse", "HEAD")
+            for ref, expected in (
+                ("refs/tags/v0.1.8", "--now 2026-07-22T18:00:00Z"),
+                ("refs/tags/authority/x", "--now 2026-07-22T18:00:00Z"),
+                ("refs/pull/7/merge", ""),
+                ("refs/heads/main", ""),
+            ):
+                with self.subTest(ref=ref):
+                    out = subprocess.run(
+                        ["bash", "-c", fragment + '\necho "${observatory_now_args[*]}"'],
+                        env={"GITHUB_REF": ref, "PATH": "/usr/bin:/bin", "observatory_vellum_target": head},
+                        cwd=repo, capture_output=True, text=True, check=True,
+                    ).stdout.strip()
+                    self.assertEqual(out, expected)
+        self.assertIn('"${observatory_now_args[@]}"', workflow)
 
     def test_events_only_requires_write_on_the_command_line(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1450,6 +1521,34 @@ class ObservatoryTests(unittest.TestCase):
             self.assertEqual(report["health"], "pass")
             self.assertEqual(report["pending"], 2)
             self.assertEqual(report["coverage_gaps"], [])
+
+    def test_verify_judges_overdue_events_at_the_time_it_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            top = Path(temporary)
+            pulp = top / "pulp"
+            vellum = top / "vellum-source"
+            root = top / "state"
+            pulp_base, pulp_head = init_repo(pulp, "core/render/render.cpp")
+            vellum_base, vellum_head = init_repo(vellum, "graphics/render.cpp")
+            make_state(root, pulp_base, vellum_base)
+            observatory.reconcile(
+                root=root, pulp_repo=pulp, vellum_repo=vellum,
+                pulp_target=pulp_head, vellum_target=vellum_head,
+                now_text="2026-07-22T20:00:00Z", write=True,
+            )
+            arguments = dict(root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None)
+            at_reconcile = observatory.parse_utc("2026-07-22T20:00:00Z", "now")
+            self.assertEqual(observatory.verify(**arguments, check_now=at_reconcile)["health"], "pass")
+            # Without check_now the budgets are judged at reconciled_at, as before.
+            self.assertEqual(observatory.verify(**arguments)["health"], "pass")
+            # A year on, both pending observations are long past their deadline.
+            later = observatory.parse_utc("2027-07-22T20:00:00Z", "now")
+            with self.assertRaisesRegex(observatory.ObservatoryError, "overdue-event-count-exceeded"):
+                observatory.verify(**arguments, check_now=later)
+            cli = ["--root", str(root), "verify", "--pulp-repo", str(pulp), "--vellum-repo", str(vellum)]
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(observatory.main([*cli, "--now", "2026-07-22T20:00:00Z"]), 0)
+                self.assertNotEqual(observatory.main([*cli, "--now", "2027-07-22T20:00:00Z"]), 0)
 
     def test_incremental_reconcile_preserves_full_verify_gate(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

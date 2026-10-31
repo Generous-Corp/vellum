@@ -16,6 +16,33 @@ def defined_symbols(path: Path, *, exported: bool = False) -> set[str]:
     return {line.split()[-1] for line in output.splitlines() if line.split()}
 
 
+# libm entry points that the macOS 15 SDK's CoreServices umbrella re-exports
+# beside libSystem. Two owners for one name let the linker bind either, which
+# made the provider's bytes differ between identical builds; the provider is
+# linked so that libSystem always owns them.
+CORESERVICES_LIBM_REEXPORTS = frozenset({
+    "__FE_DFL_ENV", "_exp2", "_fdim", "_feclearexcept", "_fegetenv", "_fegetround",
+    "_feholdexcept", "_feraiseexcept", "_fesetenv", "_fesetround", "_fetestexcept",
+    "_feupdateenv", "_fmax", "_fmin", "_log2", "_modff", "_nan", "_nanf",
+    "_nextafterf", "_remquo",
+})
+
+
+def import_owners(path: Path) -> dict[str, str]:
+    """Map each two-level-namespace import to the dylib it is bound to."""
+
+    output = subprocess.run(
+        ["nm", "-m", "-u", str(path)], check=True, capture_output=True, text=True
+    ).stdout
+    owners: dict[str, str] = {}
+    for line in output.splitlines():
+        fields = line.split()
+        if "(from" in fields:
+            index = fields.index("(from")
+            owners[fields[index - 1]] = fields[index + 1].rstrip(")")
+    return owners
+
+
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise SystemExit(message)
@@ -42,6 +69,12 @@ def main() -> int:
         owns_bootstrap = any("register_dawn_bootstrap" in symbol for symbol in definitions)
         require(owns_bootstrap == (path == provider),
                 f"{path.name} has incorrect Dawn bootstrap coordinator ownership")
+    owners = import_owners(provider)
+    require(bool(owners), f"{provider.name} reports no bound imports")
+    for symbol, owner in sorted(owners.items()):
+        if symbol in CORESERVICES_LIBM_REEXPORTS:
+            require(owner == "libSystem",
+                    f"{provider.name} binds {symbol} to {owner}, not libSystem")
     return 0
 
 

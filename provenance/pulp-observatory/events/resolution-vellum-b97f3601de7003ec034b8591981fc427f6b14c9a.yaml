@@ -1,0 +1,24 @@
+{
+  "contract_tests": [
+    "vellum.authoring",
+    "vellum.capture-stats",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-10-31T11:00:00Z",
+  "disposition": "framework-only",
+  "effort_minutes": 0,
+  "event_id": "resolution-vellum-b97f3601de7003ec034b8591981fc427f6b14c9a",
+  "kind": "resolution",
+  "linked_commits": [
+    "b97f3601de7003ec034b8591981fc427f6b14c9a"
+  ],
+  "linked_pull_requests": [
+    "Generous-Corp/vellum#116"
+  ],
+  "owner": "@danielraffel",
+  "rationale": "Vellum#116 raises the deployment floor of Vellum's mirrored runtime build to macOS 13.3 (VELLUM_MACOS_DEPLOYMENT_TARGET), drops the libc++ availability suppression, and adds a libc++ availability check for the mirrored libraries and Skia/Dawn provider. This is Vellum-owned mirror build and packaging configuration with no counterpart in Pulp's own build at the frozen observation boundary, so nothing is ported. Same disposition as the earlier mirror-unit packaging work (vellum#92).",
+  "resolves": "vellum-b97f3601de7003ec034b8591981fc427f6b14c9a",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

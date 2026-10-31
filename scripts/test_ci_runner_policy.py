@@ -17,10 +17,6 @@ EXPECTED_RUNNERS = {
         "VELLUM_LOCAL_MACOS_RUNS_ON_JSON",
         '["macos-15"]',
     ),
-    "merge-on-green.yml": (
-        "VELLUM_LINUX_RUNS_ON_JSON",
-        '["ubuntu-latest"]',
-    ),
     "product-quality.yml": (
         "VELLUM_LINUX_RUNS_ON_JSON",
         '["ubuntu-latest"]',
@@ -43,6 +39,7 @@ EXPECTED_RUNNERS = {
         '["macos-15"]',
     ),
     "sdk-release.yml": ("__mixed__", ""),
+    "workflow-lint.yml": ("__hosted__", "ubuntu-latest"),
 }
 
 HOSTED_LABELS = (
@@ -167,6 +164,17 @@ PULP_VIEW_AUDIO_FETCH = """      - name: Fetch and verify the pinned Pulp view-a
             --json > "$RUNNER_TEMP/pulp-view-audio-archive.json"
           printf 'VELLUM_VIEW_AUDIO_ARCHIVE=%s\\n' \\
             "$RUNNER_TEMP/pulp-view-audio/libpulp-view-audio.a" >> "$GITHUB_ENV\""""
+# The release finalizer runs the same fetch from its trusted main checkout,
+# rooted at the view-audio pin its preceding step materializes from the
+# release source commit, so the archive matches the receipt the SDK was built
+# from. Only --root differs.
+PULP_VIEW_AUDIO_RELEASE_FETCH = PULP_VIEW_AUDIO_FETCH.replace(
+    '--root "$GITHUB_WORKSPACE"', '--root "$RUNNER_TEMP/release-source-pin"', 1
+)
+PULP_VIEW_AUDIO_FETCHES = {
+    PULP_VIEW_AUDIO_FETCH_WORKFLOW: PULP_VIEW_AUDIO_FETCH,
+    "sdk-release.yml": PULP_VIEW_AUDIO_RELEASE_FETCH,
+}
 # The single use of the pinned repository outside the fetch step.
 PINNED_PULP_GIT_DIR_USE = f"            --mirror-edge-pulp-root {PINNED_PULP_GIT_DIR} \\"
 # The one step that names Pulp only to read GitHub metadata and the
@@ -196,15 +204,17 @@ PULP_API_READER_GIT_CALLS = {"git -C .exact-boundary-pulp rev-parse HEAD"}
 # backslash continuation inside a word, a glued `os.system` argument, a
 # value written to a file for a later step), so any change to the reader is
 # a reviewed change to this digest. The checks below only explain a failure.
-PULP_API_READER_SHA256 = "65cd477615301089437089e468cfcf61a4a41dbf7c5c3175550770903b9b20d1"
+PULP_API_READER_SHA256 = "0d05a1cefb10fd0a08b7a9225b82fb262139738da5f8dd09bb2ba0613e419600"
+# The reader reshapes the GitHub responses it fetched through this script, so
+# the script is part of the reader: it is pinned byte for byte like the step
+# and must carry no transport of its own (every read stays a gh call above).
+PULP_API_READER_COLLECTOR = ROOT / "tools" / "provenance" / "collect_release_evidence.py"
+PULP_API_READER_COLLECTOR_SHA256 = "5f91b99e0ef420761716675fd801b6d0ef7b1c009dfc9540add403afd542d592"
 # Every reader line that names Pulp, stripped, verbatim. A new line naming
 # Pulp (an anchor, an env export, a command through a variable) fails.
 PULP_API_READER_PULP_LINES = {
     '"repos/Generous-Corp/pulp/commits/$PULP_ACCEPTANCE_SHA/check-runs?per_page=100" \\',
-    'repository == "Generous-Corp/pulp"',
     'if [[ "$repository" == "Generous-Corp/pulp" ]]; then',
-    "for repository in Generous-Corp/pulp Generous-Corp/vellum; do",
-    'for repository in ("Generous-Corp/pulp", "Generous-Corp/vellum"):',
     'live_pulp_main="$(gh api repos/Generous-Corp/pulp/git/ref/heads/main --jq .object.sha)"',
     '"$(gh api repos/Generous-Corp/pulp/git/ref/heads/main --jq .object.sha)"',
 }
@@ -460,7 +470,7 @@ def pulp_reach_problems(workflow: str, text: str) -> tuple[list[str], int]:
         if name == PULP_VIEW_AUDIO_FETCH_NAME:
             archive_fetches += 1
             reaching += 1
-            if workflow != PULP_VIEW_AUDIO_FETCH_WORKFLOW or step_text(step) != PULP_VIEW_AUDIO_FETCH:
+            if step_text(step) != PULP_VIEW_AUDIO_FETCHES.get(workflow):
                 problems.append(f"{label} is not the canonical view-audio archive fetch")
             continue
         uses = [line for line in step["lines"] if re.search(r"mirror-edge-pulp", line, re.I)]
@@ -498,6 +508,15 @@ def pulp_reach_problems(workflow: str, text: str) -> tuple[list[str], int]:
                 problems.append(f"{label} names Pulp on an unreviewed line: {sorted(naming - PULP_API_READER_PULP_LINES)}")
             if STEP_STATE_EXPORT.search(code):
                 problems.append(f"{label} writes step state another step could read")
+            collector = PULP_API_READER_COLLECTOR.read_bytes()
+            if hashlib.sha256(collector).hexdigest() != PULP_API_READER_COLLECTOR_SHA256:
+                problems.append(f"{label} runs a collector that is not the reviewed one")
+            collector_text = collector.decode("utf-8")
+            if PULP_API_READER_FORBIDDEN.search(collector_text) or re.search(
+                r"\bos\.(?:system|popen|exec|spawn|posix_spawn)|\bpty\b|\bctypes\b|\b__import__\b",
+                collector_text,
+            ):
+                problems.append(f"{label} runs a collector with its own transport")
             if COMMAND_INDIRECTION.search(code):
                 problems.append(f"{label} runs a command through a variable")
             continue
@@ -703,6 +722,38 @@ def assert_gpu_local_runner_policy(text: str) -> None:
             raise AssertionError(
                 f"gpu-macos.yml: {job_name} must have exactly the reviewed guard"
             )
+
+
+def release_identity_problems(text: str) -> list[str]:
+    """Jobs reading VELLUM_RELEASE_* must derive it or take it from needs outputs.
+
+    $GITHUB_ENV is job-scoped, so a job that only reads the variable sees it
+    unbound unless it writes it itself or maps it from a needed job's outputs.
+    """
+    head, _, body = text.partition("\njobs:\n")
+    if not body:
+        return []
+    parts = re.split(r"(?m)^  ([A-Za-z0-9_-]+):\s*$", body)
+    jobs = {parts[i]: parts[i + 1] for i in range(1, len(parts) - 1, 2)}
+    problems: list[str] = []
+    if re.search(r"VELLUM_RELEASE_", head):
+        problems.append("workflow-level VELLUM_RELEASE_* env")
+    for name, job in jobs.items():
+        for var in sorted(set(re.findall(r"VELLUM_RELEASE_[A-Z_]+", job))):
+            if re.search(rf"{var}=", job):
+                continue
+            mapped = re.search(
+                rf"(?m)^\s+{var}:\s*\$\{{\{{\s*needs\.([A-Za-z0-9_-]+)\.outputs\.(\w+)\s*\}}\}}\s*$",
+                job)
+            if not mapped:
+                problems.append(f"{name}: {var} is neither derived nor mapped from needs outputs")
+                continue
+            producer, output = mapped.groups()
+            if not re.search(rf"(?m)^\s+needs:.*\b{re.escape(producer)}\b", job):
+                problems.append(f"{name}: does not need {producer}")
+            if not re.search(rf"(?m)^      {output}:", jobs.get(producer, "")):
+                problems.append(f"{producer}: no output {output}")
+    return problems
 
 
 class RunnerPolicyTests(unittest.TestCase):
@@ -1204,13 +1255,102 @@ class RunnerPolicyTests(unittest.TestCase):
                 self.assertNotEqual(mutated, workflow)
                 self.assertTrue(pulp_reach_problems("provenance.yml", mutated)[0])
 
+    def test_api_reader_collector_mutations_fail_closed(self) -> None:
+        import tempfile
+        from unittest import mock
+
+        workflow = (WORKFLOWS / "provenance.yml").read_text(encoding="utf-8")
+        self.assertIn(
+            "python3 tools/provenance/collect_release_evidence.py open-pr-snapshot", workflow
+        )
+        self.assertEqual(pulp_reach_problems("provenance.yml", workflow)[0], [])
+        reviewed = PULP_API_READER_COLLECTOR.read_text(encoding="utf-8")
+        transports = {
+            "edited": reviewed + "\n",
+            "subprocess": reviewed + "\nimport subprocess\n",
+            "urllib": reviewed + "\nimport urllib.request\n",
+            "os.system": reviewed + "\nos.system('gh api repos/Generous-Corp/pulp/contents')\n",
+        }
+        reviewed_digest = PULP_API_READER_COLLECTOR_SHA256
+        with tempfile.TemporaryDirectory() as directory:
+            for label, text in transports.items():
+                collector = Path(directory) / f"{label}.py"
+                collector.write_text(text, encoding="utf-8")
+                for repinned in (False, True):
+                    pinned = (hashlib.sha256(text.encode("utf-8")).hexdigest()
+                              if repinned else reviewed_digest)
+                    with self.subTest(mutation=label, repinned=repinned), \
+                            mock.patch(f"{__name__}.PULP_API_READER_COLLECTOR", collector), \
+                            mock.patch(f"{__name__}.PULP_API_READER_COLLECTOR_SHA256", pinned):
+                        problems = pulp_reach_problems("provenance.yml", workflow)[0]
+                        if label == "edited" and repinned:
+                            # A reviewed re-pin of a transport-free edit passes.
+                            self.assertEqual(problems, [])
+                        else:
+                            self.assertTrue(problems)
+
     def test_view_audio_archive_fetch_bypasses_fail_closed(self) -> None:
-        workflow = (WORKFLOWS / PULP_VIEW_AUDIO_FETCH_WORKFLOW).read_text(encoding="utf-8")
-        self.assertEqual(workflow.count(PULP_VIEW_AUDIO_FETCH + "\n"), 1)
-        problems, reaching = pulp_reach_problems(PULP_VIEW_AUDIO_FETCH_WORKFLOW, workflow)
+        self.assertNotEqual(PULP_VIEW_AUDIO_RELEASE_FETCH, PULP_VIEW_AUDIO_FETCH)
+        for filename, fetch in PULP_VIEW_AUDIO_FETCHES.items():
+            with self.subTest(workflow=filename):
+                self.check_view_audio_fetch_bypasses(filename, fetch)
+        # Each workflow's reviewed form is its own: neither is accepted in the other.
+        gpu = (WORKFLOWS / PULP_VIEW_AUDIO_FETCH_WORKFLOW).read_text(encoding="utf-8")
+        release = (WORKFLOWS / "sdk-release.yml").read_text(encoding="utf-8")
+        self.assertNotEqual(pulp_reach_problems("sdk-release.yml", gpu)[0], [])
+        self.assertNotEqual(pulp_reach_problems(PULP_VIEW_AUDIO_FETCH_WORKFLOW, release)[0], [])
+        # The release must not fetch against main's pin instead of the source's.
+        main_rooted = release.replace(
+            PULP_VIEW_AUDIO_RELEASE_FETCH, PULP_VIEW_AUDIO_FETCH, 1)
+        self.assertNotEqual(main_rooted, release)
+        self.assertNotEqual(pulp_reach_problems("sdk-release.yml", main_rooted)[0], [])
+
+    def test_release_validates_against_the_attested_view_audio_archive(self) -> None:
+        release = (WORKFLOWS / "sdk-release.yml").read_text(encoding="utf-8")
+        job = workflow_jobs(release)["validate-sdk-artifacts"]
+        materialize = job.index("- name: Materialize the release source's view-audio pin")
+        fetch = job.index(f"- name: {PULP_VIEW_AUDIO_FETCH_NAME}")
+        journey = job.index("- name: Rebuild trusted controls and run the complete installed journey")
+        self.assertLess(materialize, fetch)
+        self.assertLess(fetch, journey)
+        pin = job[materialize:fetch]
+        for path in ("provenance/mirror/pulp-view-audio-archive.json",
+                     "provenance/mirror/receipts/index.json"):
+            self.assertIn(f'git show "$SOURCE_COMMIT:{path}"', pin)
+        validation = job[journey:]
+        self.assertIn('--view-audio-archive "$view_audio"', validation)
+        self.assertIn("--require-gpu-claims", validation)
+        self.assertIn('"gpu_claims_required": True', validation)
+        self.assertIn('cmp "$view_audio" "$input/pulp-view-audio/libpulp-view-audio.a"', validation)
+
+    def test_release_names_follow_the_validated_tag(self) -> None:
+        release = (WORKFLOWS / "sdk-release.yml").read_text(encoding="utf-8")
+        self.assertIsNone(re.search(r"\b\d+\.\d+\.\d+-darwin-arm64", release))
+        self.assertIsNone(re.search(r"Vellum \d+\.\d+\.\d+ experimental", release))
+        self.assertNotIn("RELEASE_ARCHIVE:", release)
+        self.assertNotIn("RELEASE_NAME:", release)
+
+    def test_release_identity_reaches_every_job_that_reads_it(self) -> None:
+        for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]):
+            with self.subTest(workflow=path.name):
+                self.assertEqual(
+                    release_identity_problems(path.read_text(encoding="utf-8")), [])
+        workflow = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
+        # Negative control: dropping the hand-off must be detected.
+        broken = workflow.replace(
+            "      VELLUM_RELEASE_ARCHIVE: ${{ needs.gpu-macos-arm64.outputs.release_archive }}\n",
+            "", 1)
+        self.assertNotEqual(broken, workflow)
+        self.assertNotEqual(release_identity_problems(broken), [])
+        dangling = workflow.replace("      release_archive:", "      other:", 1)
+        self.assertNotEqual(release_identity_problems(dangling), [])
+
+    def check_view_audio_fetch_bypasses(self, filename: str, fetch: str) -> None:
+        workflow = (WORKFLOWS / filename).read_text(encoding="utf-8")
+        self.assertEqual(workflow.count(fetch + "\n"), 1)
+        problems, reaching = pulp_reach_problems(filename, workflow)
         self.assertEqual(problems, [])
         self.assertGreaterEqual(reaching, 1)
-        fetch = PULP_VIEW_AUDIO_FETCH
         tail = '"$RUNNER_TEMP/pulp-view-audio/libpulp-view-audio.a" >> "$GITHUB_ENV"'
 
         def in_fetch(extra: str) -> str:
@@ -1230,8 +1370,8 @@ class RunnerPolicyTests(unittest.TestCase):
         for label, mutated in mutations.items():
             with self.subTest(mutation=label):
                 self.assertNotEqual(mutated, workflow)
-                self.assertNotEqual(pulp_reach_problems(PULP_VIEW_AUDIO_FETCH_WORKFLOW, mutated)[0], [])
-        # The form is reviewed for the GPU proof job only.
+                self.assertNotEqual(pulp_reach_problems(filename, mutated)[0], [])
+        # The form is reviewed only for the workflows that fetch the archive.
         self.assertNotEqual(pulp_reach_problems("provenance.yml", workflow)[0], [])
 
     def test_queue_gated_scope_reads_every_on_form(self) -> None:

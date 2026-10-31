@@ -89,8 +89,19 @@ Classification deadlines and stop thresholds come from
 correctness, schema, importer, rendering, and platform events within three
 business days; other events within seven days. Overdue events, excess backlog,
 repeated generic fixes, cursor gaps, and excessive observatory effort fail
-health. A release is blocked only by an overdue security event or an event
-explicitly marked as a shared-contract release blocker.
+health. The report's `release_blockers` list names only overdue security
+events and events explicitly marked as a shared-contract release blocker; any
+health failure, an overdue event of any class included, still fails
+`provenance-verify` on the commit it judges.
+
+`verify` judges health at a point in time. The committed report is rebuilt at
+the cursor's `reconciled_at`, the time it describes, to prove it is not stale;
+the health budgets are judged at `--now`, which defaults to the current time,
+so an event that fell overdue after the last reconcile fails a pull request,
+the merge queue and `main` alike. A tag's tree is frozen and cannot gain a
+resolution, so `provenance-verify` judges a tag at its commit's committer time;
+re-running a tag's job later gives the same answer. `--now` is for that and for
+tests; nothing else should pass it.
 
 The active cursor's `pulp.last_scanned_commit` began at the exact landed Pulp
 activation boundary and advanced through reviewed reconciliation until

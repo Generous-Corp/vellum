@@ -1,0 +1,22 @@
+{
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer"
+  ],
+  "created_at": "2026-10-31T11:00:00Z",
+  "disposition": "framework-only",
+  "effort_minutes": 0,
+  "event_id": "resolution-vellum-58a34f161aee3e237a26c3fa0eecc714e1112807",
+  "kind": "resolution",
+  "linked_commits": [
+    "58a34f161aee3e237a26c3fa0eecc714e1112807"
+  ],
+  "linked_pull_requests": [
+    "Generous-Corp/vellum#103"
+  ],
+  "owner": "@danielraffel",
+  "rationale": "Merge of vellum#103 (feature/beadsy-design-ir-contract-20261019), landing 9ed3709635 and 5a89fe9636. DesignIR host audio control map contract (packages/vellum-design-ir: audio-control-map schema, validator and tests), merged by vellum#103. Vellum-owned design-schema-compiler work; a search of Pulp at the frozen observation boundary aa630815 finds no audio-control-map counterpart, so there is nothing to port. Any future Pulp use adopts a pinned Vellum SDK through an adapter rather than copying framework source. Same disposition as the two contributing commits.",
+  "resolves": "vellum-58a34f161aee3e237a26c3fa0eecc714e1112807",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

@@ -227,6 +227,20 @@ class MirrorPackagePlanTest(unittest.TestCase):
             with self.assertRaisesRegex(mp.PlanError, "no yoga/CMakeLists.txt"):
                 mp.dependency_source_dir("yoga", root)
 
+    def test_dependency_source_subdir_must_stay_inside_the_checkout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "yoga-checkout"
+            root.mkdir()
+            (base / "outside").mkdir()
+            (base / "outside" / "CMakeLists.txt").write_text("project(outside)\n")
+            (root / "yoga").symlink_to(base / "outside")
+            with self.assertRaisesRegex(mp.PlanError, "leaves the fetched checkout"):
+                mp.dependency_source_dir("yoga", root)
+            with mock.patch.dict(mp.DEPENDENCIES["yoga"], {"source_subdir": "../outside"}):
+                with self.assertRaisesRegex(mp.PlanError, "leaves the fetched checkout"):
+                    mp.dependency_source_dir("yoga", root)
+
     def test_plan_builds_a_cmake_dependency_from_its_source_subdir(self) -> None:
         yoga = Path(self.temporary.name) / "yoga-checkout"
         (yoga / "yoga").mkdir(parents=True)
@@ -241,6 +255,11 @@ class MirrorPackagePlanTest(unittest.TestCase):
         with mock.patch.object(mp, "prepare_dependencies", with_yoga):
             plan = self.fixture.plan()
         self.assertEqual(plan["cmake_dependencies"]["yoga"]["dir"], str(yoga / "yoga"))
+        # Pulp builds yogacore with RTTI on; the mirror build must too.
+        self.assertEqual(plan["cmake_dependencies"]["yoga"]["cxx_options"], ["-frtti"])
+        output = Path(self.temporary.name) / "plan.cmake"
+        mp.write_cmake(plan, output)
+        self.assertIn('set(VELLUM_MIRROR_DEP_YOGA_CXX_OPTIONS\n    "-frtti"\n)', output.read_text())
 
     def test_dependency_without_a_recipe_is_refused(self) -> None:
         self.fixture.closure["external_inputs"][0]["path"] = f"@external/unknown/{'b' * 40}/x.h"
