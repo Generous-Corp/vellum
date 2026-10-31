@@ -96,6 +96,17 @@ The package includes three public JSON Schemas:
 - `@vellum/design-ir/schema/authored-overlay-v1`
 - `@vellum/design-ir/schema/reimport-report-v1`
 
+## Audio/control import contract
+
+The package exports `validateAudioControlMap()` and the public schema
+`@vellum/design-ir/schema/audio-control-map-v1`. Importers may attach this
+renderer-neutral document to a product handoff. It describes stable control IDs,
+parameter ranges, optional LFO ranges, and host-owned audio input kinds
+(`main`, `sidechain`, `physical-input`, `project-track`, and `project-bus`).
+Vellum owns materialization and host catalog resolution; product code owns DSP
+behavior. The contract does not enumerate DAW tracks itself and rejects duplicate
+IDs or invalid ranges before rendering.
+
 ## Current limits
 
 - This is an overlay-aware reimport engine, not a general source-code three-way merger.
