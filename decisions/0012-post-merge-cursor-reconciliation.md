@@ -34,8 +34,8 @@ queue's merge commit contains the other entries.
    `main`, reconciles it when the cursor lags behind ordinary commits (an
    evidence-only tail is not lag), and lands cursor and report through the
    existing evidence branch and pull request. That pull request is gated by
-   the required checks and auto-merged by the merge steward on green; no
-   human reviews it. The watchdog reports
+   the required checks and admitted by the Shipyard steward tick like any
+   other pull request. The watchdog reports
    `vellum-cursor-lag` and breaches `cursor_lag_sla_minutes` the same way it
    does for the Pulp cursor, and asks the receiver to run.
 4. Tags keep the exact `reconciled` policy: a release or authority tag must be
