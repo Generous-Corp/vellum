@@ -379,8 +379,8 @@ jobs:
           app=build-gpu/apps/gpu-native/vellum-gpu-native.app/Contents/MacOS/vellum-gpu-native
           otool -l "$dylib" > "$RUNNER_TEMP/vellum-gpu-dylib-load-commands.txt"
           otool -l "$app" > "$RUNNER_TEMP/vellum-gpu-app-load-commands.txt"
-          /usr/bin/grep -Eq 'minos 13\.0' "$RUNNER_TEMP/vellum-gpu-dylib-load-commands.txt"
-          /usr/bin/grep -Eq 'minos 13\.0' "$RUNNER_TEMP/vellum-gpu-app-load-commands.txt"
+          /usr/bin/grep -Eq 'minos 13\.3' "$RUNNER_TEMP/vellum-gpu-dylib-load-commands.txt"
+          /usr/bin/grep -Eq 'minos 13\.3' "$RUNNER_TEMP/vellum-gpu-app-load-commands.txt"
 
       - name: Smoke every public template through the installed SDK
         shell: bash
@@ -705,6 +705,7 @@ jobs:
             --forbid-path "$GITHUB_WORKSPACE" \
             --runner-search-root "$RUNNER_WORKSPACE" \
             --view-audio-archive "$input/pulp-view-audio/libpulp-view-audio.a" \
+            --require-gpu-claims \
             --output "$RUNNER_TEMP/sdk-installed-validation.json" \
             --json > "$RUNNER_TEMP/sdk-installed-validation.stdout.json"
 

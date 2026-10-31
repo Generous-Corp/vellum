@@ -1,0 +1,56 @@
+{
+  "class": "schema",
+  "contract_keys": [
+    "design-schema-compiler"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-10-27T08:45:23Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-58a34f161aee3e237a26c3fa0eecc714e1112807",
+  "include_dependency_deltas": [
+    "packages/vellum-design-ir/package.json"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "design-schema-compiler"
+  ],
+  "mapped_paths": [
+    "packages/vellum-design-ir/README.md",
+    "packages/vellum-design-ir/package.json",
+    "packages/vellum-design-ir/schema/audio-control-map-v1.schema.json",
+    "packages/vellum-design-ir/src/audio-control-map.js",
+    "packages/vellum-design-ir/src/index.d.ts",
+    "packages/vellum-design-ir/src/index.js",
+    "packages/vellum-design-ir/test/audio-control-map.test.js"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": null,
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "0875c4a5a879e553121deafd074b51735ae593a4",
+    "to_commit": "95767d89431487af29736f36cd296352369e451c"
+  },
+  "schema_api_deltas": [
+    "packages/vellum-design-ir/README.md",
+    "packages/vellum-design-ir/package.json",
+    "packages/vellum-design-ir/schema/audio-control-map-v1.schema.json",
+    "packages/vellum-design-ir/src/audio-control-map.js",
+    "packages/vellum-design-ir/src/index.d.ts",
+    "packages/vellum-design-ir/src/index.js",
+    "packages/vellum-design-ir/test/audio-control-map.test.js"
+  ],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "58a34f161aee3e237a26c3fa0eecc714e1112807",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}
