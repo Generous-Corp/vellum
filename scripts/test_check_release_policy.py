@@ -71,6 +71,42 @@ class Policy(unittest.TestCase):
         self.assertTrue(any("does not run in" in p for p in policy.problems(self.tmp)))
 
 
+class Isolation(unittest.TestCase):
+    """Checked-out code never runs where the signing key or App token is in reach."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="release-isolation-"))
+        (self.tmp / "scripts").mkdir()
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.tmp)
+
+    def found(self, signing: str) -> list[str]:
+        return policy.isolation_problems({policy.SIGNING_WORKFLOW: signing}, self.tmp)
+
+    def test_python_without_isolation_fails(self) -> None:
+        self.assertEqual(self.found("    steps:\n      - name: a\n        run: python3 -I scripts/x.py\n"), [])
+        self.assertTrue(self.found("    steps:\n      - name: a\n        run: python3 scripts/x.py\n"))
+        self.assertTrue(self.found("    steps:\n      - name: a\n        run: python3 -c 'print(1)'\n"))
+
+    def test_a_step_holding_a_secret_runs_no_python(self) -> None:
+        key = ("      - name: sign\n        env:\n          K: ${{ secrets.RELEASE_TAG_SIGNING_KEY }}\n"
+               "        run: python3 -I scripts/verify_release_tag.py\n")
+        token = ("      - name: push\n        env:\n          GH_TOKEN: ${{ steps.app-token.outputs.token }}\n"
+                 "        run: python3 -I scripts/release_request.py freeze\n")
+        clean = "      - name: sign\n        env:\n          K: ${{ secrets.RELEASE_TAG_SIGNING_KEY }}\n        run: git tag -s v1\n"
+        self.assertTrue(any("holds a secret" in p for p in self.found("    steps:\n" + key)))
+        self.assertTrue(any("holds a secret" in p for p in self.found("    steps:\n" + token)))
+        self.assertEqual(self.found("    steps:\n" + clean), [])
+
+    def test_a_file_shadowing_the_standard_library_fails(self) -> None:
+        (self.tmp / "scripts" / "json.py").write_text("")
+        self.assertTrue(any("json" in p for p in self.found("")))
+        (self.tmp / "scripts" / "json.py").unlink()
+        (self.tmp / "re.py").write_text("")
+        self.assertTrue(any("`re`" in p for p in self.found("")))
+
+
 class Repository(unittest.TestCase):
     def test_the_repository_holds_its_policy(self) -> None:
         self.assertEqual(policy.problems(ROOT), [])

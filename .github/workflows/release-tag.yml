@@ -31,6 +31,10 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # Every repository script runs with `python3 -I`: isolated mode keeps the
+      # script's own directory and the working directory off sys.path, so no
+      # file in the checkout can shadow a standard-library module. Each secret
+      # lives only in a step that runs no repository Python.
       - name: Decide whether the request may be tagged
         id: request
         env:
@@ -43,43 +47,50 @@ jobs:
           gh api --method GET --paginate --slurp \
             "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?per_page=100" \
             -f filter=all > "$RUNNER_TEMP/check-runs.json"
-          version="$(python3 -c 'import json; print(json.load(open("provenance/release-request.json"))["version"])')"
+          version="$(python3 -I -c 'import json; print(json.load(open("provenance/release-request.json"))["version"])')"
           if git ls-remote --exit-code --tags origin "refs/tags/v$version" > /dev/null; then
             exists=true
           else
             exists=false
           fi
-          tag="$(python3 scripts/release_request.py check --commit "$GITHUB_SHA" --tag-exists "$exists" \
+          tag="$(python3 -I scripts/release_request.py check --commit "$GITHUB_SHA" --tag-exists "$exists" \
             --branch-rules "$RUNNER_TEMP/branch-rules.json" --check-runs "$RUNNER_TEMP/check-runs.json")"
-          python3 scripts/check_release_policy.py check
-          python3 scripts/check_release_policy.py signer >> "$GITHUB_OUTPUT"
+          python3 -I scripts/check_release_policy.py check
+          python3 -I scripts/check_release_policy.py signer >> "$GITHUB_OUTPUT"
+          python3 -I scripts/release_request.py freeze --tag "$tag" > "$RUNNER_TEMP/freeze.json"
           printf 'tag=%s\nversion=%s\n' "$tag" "$version" >> "$GITHUB_OUTPUT"
 
-      - name: Sign the tag and verify it against the policy
+      - name: Sign the tag
         id: sign
         env:
           RELEASE_TAG_SIGNING_KEY: ${{ secrets.RELEASE_TAG_SIGNING_KEY }}
           TAG: ${{ steps.request.outputs.tag }}
           VERSION: ${{ steps.request.outputs.version }}
           PRINCIPAL: ${{ steps.request.outputs.principal }}
-          FINGERPRINT: ${{ steps.request.outputs.fingerprint }}
         run: |
           set -euo pipefail
           test -n "$RELEASE_TAG_SIGNING_KEY"
           key="$RUNNER_TEMP/release-signing-key"
+          trap 'rm -f "$key"' EXIT
           (umask 077 && printf '%s\n' "$RELEASE_TAG_SIGNING_KEY" > "$key")
-          GIT_COMMITTER_NAME="Vellum release" GIT_COMMITTER_EMAIL="$PRINCIPAL" \
-            git -c gpg.format=ssh -c user.signingkey="$key" \
-              -c user.name="Vellum release" -c user.email="$PRINCIPAL" \
-              tag -s -m "Vellum $VERSION" "$TAG" "$GITHUB_SHA"
-          rm -f "$key"
-          object="$(git rev-parse "refs/tags/$TAG")"
-          python3 scripts/verify_release_tag.py --repo . --repository "$GITHUB_REPOSITORY" \
-            --tag-name "$TAG" --tag-object-sha "$object" --source-commit "$GITHUB_SHA" \
+          git -c gpg.format=ssh -c user.signingkey="$key" \
+            -c user.name="Vellum release" -c user.email="$PRINCIPAL" \
+            tag -s -m "Vellum $VERSION" "$TAG" "$GITHUB_SHA"
+          printf 'object=%s\n' "$(git rev-parse "refs/tags/$TAG")" >> "$GITHUB_OUTPUT"
+
+      - name: Verify the tag against the policy
+        env:
+          TAG: ${{ steps.request.outputs.tag }}
+          OBJECT: ${{ steps.sign.outputs.object }}
+          PRINCIPAL: ${{ steps.request.outputs.principal }}
+          FINGERPRINT: ${{ steps.request.outputs.fingerprint }}
+        run: |
+          set -euo pipefail
+          python3 -I scripts/verify_release_tag.py --repo . --repository "$GITHUB_REPOSITORY" \
+            --tag-name "$TAG" --tag-object-sha "$OBJECT" --source-commit "$GITHUB_SHA" \
             --allowed-signers provenance/release-signers.allowed_signers \
             --expected-principal "$PRINCIPAL" --expected-fingerprint "$FINGERPRINT" \
             --output "$RUNNER_TEMP/release-trust.json"
-          printf 'object=%s\n' "$object" >> "$GITHUB_OUTPUT"
 
       - name: Mint the release App token
         id: app-token
@@ -98,6 +109,5 @@ jobs:
           git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" \
             push "https://github.com/$GITHUB_REPOSITORY" "refs/tags/$TAG:refs/tags/$TAG"
           test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.sha)" = "$OBJECT"
-          python3 scripts/release_request.py freeze --tag "$TAG" > "$RUNNER_TEMP/freeze.json"
           gh api --method POST "repos/$GITHUB_REPOSITORY/rulesets" --input "$RUNNER_TEMP/freeze.json" > /dev/null
           echo "signed, pushed and froze $TAG at $OBJECT" >> "$GITHUB_STEP_SUMMARY"

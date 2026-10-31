@@ -10,7 +10,10 @@ fails when:
 - an --expected-principal or --expected-fingerprint pin in any workflow
   differs from provenance/release-signers.allowed_signers, so the verifiers
   and the signer agree on one key;
-- CODEOWNERS does not give every policy file to the owner.
+- CODEOWNERS does not give every policy file to the owner;
+- a release workflow runs Python without `-I`, a step that holds a secret runs
+  Python at all, or a repository Python file is named like a standard-library
+  module, so checked-out code cannot run with the signing key or App token.
 
 `signer` prints the principal and fingerprint the policy names, for the
 release job to verify the tag it just signed.
@@ -42,6 +45,12 @@ POLICY_FILES = (
     "/scripts/verify_release_tag.py",
 )
 ENVIRONMENT = re.compile(r"^\s*environment:\s*(?:\{[^}]*\bname:\s*)?['\"]?([A-Za-z0-9_-]+)", re.MULTILINE)
+RELEASE_WORKFLOWS = (SIGNING_WORKFLOW, "release-policy.yml")
+PYTHON_CALL = re.compile(r"\bpython3?\b(?P<flags>(?:\s+-[A-Za-z]+)*)")
+SECRET = re.compile(r"\$\{\{\s*(?:secrets\.|steps\.app-token\.outputs\.token)")
+# Directories a release workflow runs Python from: the script's own directory
+# and the working directory would be first on sys.path without -I.
+PYTHON_DIRS = (".", "scripts")
 PIN = re.compile(r"--expected-(principal|fingerprint)(?:\s*\\?\s*\n\s*|\s+)(\S+)")
 
 
@@ -91,13 +100,36 @@ def codeowner_problems(codeowners: str | None) -> list[str]:
             if owned.get(path) != [OWNER]]
 
 
+def steps(workflow: str) -> list[str]:
+    """The workflow's steps, as text blocks starting at `- name:`."""
+    return [block for block in re.split(r"\n(?=\s+- name:)", workflow)[1:] if block.strip()]
+
+
+def isolation_problems(workflows: dict[str, str], root: Path) -> list[str]:
+    found = []
+    for name in RELEASE_WORKFLOWS:
+        for step in steps(workflows.get(name, "")):
+            title = step.strip().splitlines()[0]
+            for call in PYTHON_CALL.finditer(step):
+                if "I" not in call["flags"].replace("-", ""):
+                    found.append(f"{name}: {title} runs `{call.group(0).strip()}` without -I")
+            if name == SIGNING_WORKFLOW and SECRET.search(step) and PYTHON_CALL.search(step):
+                found.append(f"{name}: {title} holds a secret and runs Python")
+    stdlib = set(sys.stdlib_module_names)
+    for directory in PYTHON_DIRS:
+        for path in sorted((root / directory).glob("*.py")):
+            if path.stem in stdlib:
+                found.append(f"{path.relative_to(root)} is named like the standard-library module `{path.stem}`")
+    return found
+
+
 def problems(root: Path) -> list[str]:
     workflows = {path.name: path.read_text(encoding="utf-8") for path in sorted((root / WORKFLOWS).glob("*.yml"))}
     if SIGNING_WORKFLOW not in workflows:
         return [f"{WORKFLOWS / SIGNING_WORKFLOW} is missing"]
     codeowners_path = root / CODEOWNERS
     codeowners = codeowners_path.read_text(encoding="utf-8") if codeowners_path.is_file() else None
-    found = environment_problems(workflows) + codeowner_problems(codeowners)
+    found = environment_problems(workflows) + codeowner_problems(codeowners) + isolation_problems(workflows, root)
     if RELEASE_ENVIRONMENT not in ENVIRONMENT.findall(workflows[SIGNING_WORKFLOW]):
         found.append(f"{SIGNING_WORKFLOW} does not run in the `{RELEASE_ENVIRONMENT}` environment")
     principal, fingerprint = signer(root)

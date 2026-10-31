@@ -40,6 +40,13 @@ Nobody approves a routine release by hand. Authorization is the reviewed pull re
   - the verifier;
   - CODEOWNERS itself.
   `release-policy` keeps that list complete.
+- **Checked-out code never runs next to a secret.** Each secret lives in a step that runs no repository Python:
+  - signing runs only `git tag`;
+  - verifying runs without the key;
+  - the freeze ruleset is computed before the App token is minted.
+  Every release script runs as `python3 -I`, so no file in the checkout can shadow a standard-library module.
+  `release-policy` enforces all of this, and it also refuses a repository Python file named like a
+  standard-library module.
 - **Every verifier pins the same key.** `release-policy` fails when an `--expected-principal` or
   `--expected-fingerprint` pin in any workflow differs from the allowed-signers file.
 - **Only the release App can create a release tag.** It is the only bypass actor on `protect-release-tags`. Its key
