@@ -55,6 +55,10 @@ NATIVE_HOST_FILES = (
     "mirror/lib/libvellum-mirror-foundation.dylib",
     "mirror/lib/libvellum-mirror-state-core.dylib",
 )
+# The runtime check skips NATIVE_HOST_FILES' mirror entries because the mirror
+# check covers them; that holds only while they are a subset of its list.
+if not {path for path in NATIVE_HOST_FILES if path.startswith("mirror/")} <= set(MIRROR_PACKAGE_FILES):
+    raise RuntimeError("NATIVE_HOST_FILES names a mirror library MIRROR_PACKAGE_FILES does not")
 UI_PAYLOAD_ENTRIES = (
     "LICENSE.md", "README.md", "package.json", "package-lock.json", "scripts", "src", "test",
 )
@@ -727,10 +731,8 @@ def build(args: argparse.Namespace) -> dict[str, object]:
         if skia_archive and not (
             installed_cmake_target(install_tree, "Gpu") and
             installed_cmake_target(install_tree, "Authoring") and
-            (install_tree / "bin/vellum-app-host").is_file() and
-            (install_tree / "lib/libvellum-authoring.dylib").is_file() and
-            (install_tree / "lib/libvellum-gpu.dylib").is_file() and
-            (install_tree / "lib/libvellum-skia-dawn-provider.dylib").is_file()
+            # The mirror libraries are checked against MIRROR_PACKAGE_FILES below.
+            all((install_tree / path).is_file() for path in NATIVE_HOST_FILES if not path.startswith("mirror/"))
         ):
             raise ArtifactError(
                 "--skia-archive build did not install the complete native application runtime"

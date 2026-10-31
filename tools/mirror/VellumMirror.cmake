@@ -104,6 +104,13 @@ function(_vellum_mirror_add_dependency name)
             message(FATAL_ERROR
                 "Vellum: the ${name} recipe did not produce link target ${_provided}")
         endif()
+        # Appended after the dependency's directory-level flags, so a recipe
+        # option such as -frtti overrides the project's own -fno-rtti.
+        if(NOT MSVC)
+            foreach(_option IN LISTS VELLUM_MIRROR_DEP_${_key}_CXX_OPTIONS)
+                target_compile_options("${_provided}" PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:${_option}>")
+            endforeach()
+        endif()
     endforeach()
 endfunction()
 
