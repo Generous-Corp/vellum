@@ -76,6 +76,20 @@ class SdkReleaseDerivationTests(unittest.TestCase):
             text,
         )
 
+    def test_no_workflow_carries_a_literal_release_version(self) -> None:
+        for path in sorted((REPO / ".github/workflows").glob("*.yml")):
+            for number, line in enumerate(path.read_text().splitlines(), 1):
+                if re.search(
+                    r"VELLUM_RELEASE_\w+:|RELEASE_(ARCHIVE|NAME):|vellum-sdk-\d",
+                    line,
+                ) and re.search(r"\b\d+\.\d+\.\d+\b", line):
+                    self.fail(f"{path.name}:{number} hard-codes a version")
+
+    def test_gpu_workflow_derives_identity_and_checks_tag(self) -> None:
+        text = (REPO / ".github/workflows/gpu-macos.yml").read_text()
+        self.assertIn("VELLUM_RELEASE_VERSION=$version", text)
+        self.assertIn('"$GITHUB_REF_NAME" != "v$version"', text)
+
 
 if __name__ == "__main__":
     unittest.main()

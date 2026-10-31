@@ -26,12 +26,6 @@ concurrency:
   # commits should not consume another full macOS GPU run.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-env:
-  VELLUM_RELEASE_VERSION: 0.1.8
-  VELLUM_RELEASE_TAG: v0.1.8
-  VELLUM_RELEASE_ARCHIVE: vellum-sdk-0.1.8-darwin-arm64.tar.gz
-  VELLUM_RELEASE_NAME: Vellum 0.1.8 experimental SDK
-
 jobs:
   gpu-macos-arm64:
     name: gpu-macos-arm64
@@ -45,6 +39,23 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Derive the release identity from CMakeLists.txt
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(sed -n '/^project(Vellum/,/LANGUAGES/s/^ *VERSION \([0-9][0-9.]*\)$/\1/p' CMakeLists.txt)"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          if [[ "$GITHUB_REF" == refs/tags/v* && "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match CMakeLists version v$version"
+            exit 1
+          fi
+          {
+            echo "VELLUM_RELEASE_VERSION=$version"
+            echo "VELLUM_RELEASE_TAG=v$version"
+            echo "VELLUM_RELEASE_ARCHIVE=vellum-sdk-$version-darwin-arm64.tar.gz"
+            echo "VELLUM_RELEASE_NAME=Vellum $version experimental SDK"
+          } >> "$GITHUB_ENV"
 
       - name: Download and verify the locked Skia and Dawn archive
         shell: bash
