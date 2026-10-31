@@ -25,7 +25,7 @@ jobs:
       SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
       RELEASE_TAG: ${{ github.event.workflow_run.head_branch }}
       SOURCE_COMMIT: ${{ github.event.workflow_run.head_sha }}
-      RELEASE_ARCHIVE: vellum-sdk-0.1.8-darwin-arm64.tar.gz
+      RELEASE_ARCHIVE: vellum-sdk-${{ substr(github.event.workflow_run.head_branch, 1) }}-darwin-arm64.tar.gz
     steps:
       - name: Check out trusted artifact validators
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -212,8 +212,8 @@ jobs:
       github.event.workflow_run.conclusion == 'success'
     runs-on: ${{ fromJSON(vars.VELLUM_AUTHORITY_RUNS_ON_JSON || '["ubuntu-latest"]') }}
     env:
-      RELEASE_NAME: Vellum 0.1.8 experimental SDK
-      RELEASE_ARCHIVE: vellum-sdk-0.1.8-darwin-arm64.tar.gz
+      RELEASE_NAME: Vellum ${{ substr(github.event.workflow_run.head_branch, 1) }} experimental SDK
+      RELEASE_ARCHIVE: vellum-sdk-${{ substr(github.event.workflow_run.head_branch, 1) }}-darwin-arm64.tar.gz
     steps:
       - name: Check out trusted finalizer controls
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
