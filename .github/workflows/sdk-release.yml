@@ -33,6 +33,15 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Derive the release archive from the tag
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          version="${RELEASE_TAG#v}"
+          {
+            echo "RELEASE_ARCHIVE=vellum-sdk-$version-darwin-arm64.tar.gz"
+          } >> "$GITHUB_ENV"
+
       - name: Install the pinned Chrome browser
         id: setup-chrome
         uses: browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd
@@ -327,6 +336,16 @@ jobs:
               for name, coordinate in coordinates.items():
                   output.write(f"{name}={coordinate}\n")
           PY
+
+      - name: Derive the release name and archive from the tag
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          version="${RELEASE_TAG#v}"
+          {
+            echo "RELEASE_ARCHIVE=vellum-sdk-$version-darwin-arm64.tar.gz"
+            echo "RELEASE_NAME=Vellum $version experimental SDK"
+          } >> "$GITHUB_ENV"
 
       - name: Mint one-repository finalizer token
         id: finalizer-token

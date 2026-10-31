@@ -41,6 +41,7 @@ EXPECTED_RUNNERS = {
         '["macos-15"]',
     ),
     "sdk-release.yml": ("__mixed__", ""),
+    "workflow-lint.yml": ("__hosted__", "ubuntu-latest"),
 }
 
 HOSTED_LABELS = (
@@ -714,6 +715,38 @@ def assert_gpu_local_runner_policy(text: str) -> None:
             )
 
 
+def release_identity_problems(text: str) -> list[str]:
+    """Jobs reading VELLUM_RELEASE_* must derive it or take it from needs outputs.
+
+    $GITHUB_ENV is job-scoped, so a job that only reads the variable sees it
+    unbound unless it writes it itself or maps it from a needed job's outputs.
+    """
+    head, _, body = text.partition("\njobs:\n")
+    if not body:
+        return []
+    parts = re.split(r"(?m)^  ([A-Za-z0-9_-]+):\s*$", body)
+    jobs = {parts[i]: parts[i + 1] for i in range(1, len(parts) - 1, 2)}
+    problems: list[str] = []
+    if re.search(r"VELLUM_RELEASE_", head):
+        problems.append("workflow-level VELLUM_RELEASE_* env")
+    for name, job in jobs.items():
+        for var in sorted(set(re.findall(r"VELLUM_RELEASE_[A-Z_]+", job))):
+            if re.search(rf"{var}=", job):
+                continue
+            mapped = re.search(
+                rf"(?m)^\s+{var}:\s*\$\{{\{{\s*needs\.([A-Za-z0-9_-]+)\.outputs\.(\w+)\s*\}}\}}\s*$",
+                job)
+            if not mapped:
+                problems.append(f"{name}: {var} is neither derived nor mapped from needs outputs")
+                continue
+            producer, output = mapped.groups()
+            if not re.search(rf"(?m)^\s+needs:.*\b{re.escape(producer)}\b", job):
+                problems.append(f"{name}: does not need {producer}")
+            if not re.search(rf"(?m)^      {output}:", jobs.get(producer, "")):
+                problems.append(f"{producer}: no output {output}")
+    return problems
+
+
 class RunnerPolicyTests(unittest.TestCase):
     def test_only_trusted_default_branch_code_can_publish_sdk_releases(self) -> None:
         gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
@@ -1252,6 +1285,21 @@ class RunnerPolicyTests(unittest.TestCase):
         self.assertIsNone(re.search(r"Vellum \d+\.\d+\.\d+ experimental", release))
         self.assertNotIn("RELEASE_ARCHIVE:", release)
         self.assertNotIn("RELEASE_NAME:", release)
+
+    def test_release_identity_reaches_every_job_that_reads_it(self) -> None:
+        for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]):
+            with self.subTest(workflow=path.name):
+                self.assertEqual(
+                    release_identity_problems(path.read_text(encoding="utf-8")), [])
+        workflow = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
+        # Negative control: dropping the hand-off must be detected.
+        broken = workflow.replace(
+            "      VELLUM_RELEASE_ARCHIVE: ${{ needs.gpu-macos-arm64.outputs.release_archive }}\n",
+            "", 1)
+        self.assertNotEqual(broken, workflow)
+        self.assertNotEqual(release_identity_problems(broken), [])
+        dangling = workflow.replace("      release_archive:", "      other:", 1)
+        self.assertNotEqual(release_identity_problems(dangling), [])
 
     def check_view_audio_fetch_bypasses(self, filename: str, fetch: str) -> None:
         workflow = (WORKFLOWS / filename).read_text(encoding="utf-8")
