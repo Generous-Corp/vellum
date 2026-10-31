@@ -3,7 +3,12 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import shutil
+import subprocess
 import sys
+import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -119,13 +124,103 @@ class Preflight(unittest.TestCase):
 
 
 class Attestation(unittest.TestCase):
-    def test_missing_promotion_records_refuse_before_signing(self) -> None:
-        head = rr.git(rr.ROOT, "rev-parse", "HEAD")
-        record = rr.ROOT / rr.EXPANSION / "exact-boundary-acknowledgement-1.json"
-        if record.is_file():
-            self.skipTest("the promotion records exist in this tree")
+    def fixture(self, *, parity: bool = False) -> tuple[Path, str]:
+        """A committed checkout holding the promotion records the attestation reads."""
+        sys.path.insert(0, str(rr.ROOT / "tools/provenance"))
+        import verify_authority_expansion as vae
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        expansion = root / rr.EXPANSION
+        expansion.mkdir(parents=True)
+        shutil.copy2(rr.ROOT / rr.EXPANSION / "exact-boundary-amendment-1.json", expansion)
+        (expansion / "exact-boundary-acknowledgement-1.json").write_text(json.dumps({
+            "schema_version": 1,
+            "kind": "full-design-import-render-exact-boundary-acknowledgement",
+            "acknowledgement_id": "full-design-import-render-v1-exact-boundary-acknowledgement-1",
+            "amendment_id": "full-design-import-render-v1-exact-boundary-amendment-1",
+            "state": "acknowledged", "acknowledged_at": "2026-10-31T00:00:00Z",
+            "acknowledged_by": "@danielraffel",
+            "authority_effect": "exact-path-implementation-authority-activated",
+            "implementation_authority": "authorized-for-matrix-exact-routes",
+            "coordinates": {
+                "pulp_repository": "Generous-Corp/pulp", "pulp_acceptance_merge_commit": "4" * 40,
+                "pulp_acceptance_path": ".github/vellum-expansion-watch/full-design-import-render-v1/"
+                                        "exact-boundary-acceptance-1.json",
+                "pulp_acceptance_sha256": "5" * 64, "vellum_delivery_repository": "danielraffel/vellum",
+                "vellum_amendment_merge_commit": "6" * 40,
+                "amendment_path": vae.BOUNDARY_AMENDMENT_PATH.as_posix(),
+                "amendment_sha256": vae.EXPECTED_BOUNDARY_AMENDMENT_SHA256,
+                "matrix_merge_commit": "bbe187d581f3f021a25b3ebd01332f89bbde142e",
+                "matrix_path": vae.MATRIX_PATH.as_posix(), "matrix_sha256": vae.EXPECTED_MATRIX_SHA256,
+            },
+            "repository_roles": {
+                "authority_repository": "Generous-Corp/vellum",
+                "temporary_private_delivery_repository": "danielraffel/vellum",
+                "delivery_repository_is_authority": False,
+            },
+            "gates": {
+                "only_matrix_exact_routes_authorized": True,
+                "unlisted_pulp_paths_remain_pulp_owned": True,
+                "retained_boundary_cells_remain_pulp_owned": True,
+                "promotion_attestation_required_before_parity_release": True,
+                "pulp_consumption_authorized": False,
+            },
+        }) + "\n")
+        receipts = root / "provenance/mirror/receipts"
+        receipts.mkdir(parents=True)
+        names = ["provenance/mirror/receipts/20261014-a.json", "provenance/mirror/receipts/20261025-b.json"]
+        for name in names:
+            (root / name).write_text(json.dumps({"export_id": name}) + "\n")
+        (root / vae.MIRROR_RECEIPT_INDEX_PATH).write_text(
+            json.dumps({"schema": vae.MIRROR_RECEIPT_INDEX_SCHEMA, "receipts": names}) + "\n")
+        if parity:
+            (root / vae.PARITY_COMPLETION_PATH).write_text(
+                '{"completion_id": "full-design-import-render-v1-parity-completion-1"}\n')
+        for command in (["init", "-q"], ["config", "user.name", "Test"],
+                        ["config", "user.email", "test@example.com"], ["add", "."],
+                        ["commit", "-qm", "fixture"]):
+            subprocess.run(["git", "-C", str(root), *command], check=True, capture_output=True)
+        return root, rr.git(root, "rev-parse", "HEAD")
+
+    def test_a_missing_acknowledgement_refuses_before_signing(self) -> None:
+        root, head = self.fixture()
+        (root / rr.EXPANSION / "exact-boundary-acknowledgement-1.json").unlink()
         with self.assertRaisesRegex(rr.ReleaseRequestError, "promotion record is missing"):
-            rr.attestation(rr.ROOT, head, "2026-10-31T12:00:00Z")
+            rr.attestation(root, head, "2026-10-31T12:00:00Z", "v0.1.9")
+
+    def test_without_parity_the_promotion_tag_carries_the_mirror_attestation(self) -> None:
+        root, head = self.fixture()
+        data = rr.attestation(root, head, "2026-10-31T12:00:00Z", "v0.1.9")
+        self.assertEqual(data["kind"], "vellum-mirror-promotion-attestation")
+        self.assertEqual(data["parity"], "not-proven-deferred-to-matrix-refreeze")
+        self.assertEqual(data["mirror_receipt"], "provenance/mirror/receipts/20261025-b.json")
+        self.assertEqual(data["mirror_receipt_sha256"], hashlib.sha256(
+            (root / data["mirror_receipt"]).read_bytes()).hexdigest())
+        self.assertEqual(data["release_source_commit"], head)
+        self.assertNotIn("parity_completion_sha256", data)
+
+    def test_without_parity_a_later_tag_refuses_before_signing(self) -> None:
+        root, head = self.fixture()
+        for tag in ("v0.1.10", "v0.2.0"):
+            with self.assertRaisesRegex(rr.ReleaseRequestError, "needs a parity completion record"):
+                rr.attestation(root, head, "2026-10-31T12:00:00Z", tag)
+
+    def test_without_a_mirror_receipt_the_attestation_refuses(self) -> None:
+        root, _ = self.fixture()
+        subprocess.run(["git", "-C", str(root), "rm", "-q", "-r", "provenance/mirror"], check=True)
+        subprocess.run(["git", "-C", str(root), "commit", "-qm", "drop receipts"], check=True)
+        head = rr.git(root, "rev-parse", "HEAD")
+        with self.assertRaisesRegex(rr.ReleaseRequestError, "no mirror export receipt"):
+            rr.attestation(root, head, "2026-10-31T12:00:00Z", "v0.1.9")
+
+    def test_with_parity_the_attestation_binds_the_completion(self) -> None:
+        root, head = self.fixture(parity=True)
+        data = rr.attestation(root, head, "2026-10-31T12:00:00Z", "v0.1.10")
+        self.assertEqual(data["kind"], "vellum-authority-promotion-attestation")
+        self.assertEqual(data["parity_release_source_commit"], head)
+        self.assertNotIn("parity", data)
+        self.assertNotIn("mirror_receipt", data)
 
     def test_the_pipeline_attester_is_accepted_and_a_bot_name_is_not(self) -> None:
         sys.path.insert(0, str(rr.ROOT / "tools/provenance"))

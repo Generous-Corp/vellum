@@ -26,6 +26,36 @@ A Vellum release tag is signed by CI, never by a person or an agent's host key.
 
 Nobody approves a routine release by hand. Authorization is the reviewed pull request plus the required checks.
 
+## What the tag message attests
+
+The signed tag message is a promotion attestation that `release_request.py attestation` builds and checks with the
+verifier's own validators before anything is signed. Its `attested_by` is `release-pipeline:Generous-Corp/vellum`.
+`provenance.yml` reads it from the tag, and `tools/provenance/verify_authority_expansion.py --release-readiness`
+accepts exactly one of two closed shapes:
+
+- **Authority promotion** (`vellum-authority-promotion-attestation`). It binds:
+  - the promoted commit and tree;
+  - the exact-boundary acknowledgement;
+  - `parity-completion-1.json` at the release commit.
+
+  The release must also show the required parity check runs and their `vellum-parity-proof-execution` receipts.
+- **Mirror promotion** (`vellum-mirror-promotion-attestation`). This is the Phase 4 promotion release, `v0.1.9` only
+  (owner decision 2026-10-31, third sitting). It binds:
+  - the promoted commit and tree;
+  - the exact-boundary acknowledgement;
+  - the newest export receipt in `provenance/mirror/receipts/index.json` at the release commit, by SHA-256.
+
+  It states `"parity": "not-proven-deferred-to-matrix-refreeze"`. Parity completion, parity check runs and proof
+  receipts are not required. Every other release-readiness check still applies.
+
+  The verifier refuses this shape in three cases:
+  - for any other tag;
+  - when a parity completion record exists at the release commit;
+  - when the receipt is not the newest one in the index.
+
+The parity re-freeze to the mirror is the next milestone. Every release after `v0.1.9` must carry the authority
+promotion attestation and prove full-matrix parity.
+
 ## Who can do what
 
 - **The key** exists only as a secret of the `release` environment, whose deployment policy allows only `main`. Pull

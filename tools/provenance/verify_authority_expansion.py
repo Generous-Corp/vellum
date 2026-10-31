@@ -159,6 +159,22 @@ OWNER = re.compile(r"^@[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
 # in the main-only `release` environment. The owner's authorization is the
 # reviewed release request and their code-owner review of the release policy.
 RELEASE_PIPELINE_ATTESTER = "release-pipeline:Generous-Corp/vellum"
+# A release attests one of two closed shapes. The authority promotion
+# attestation binds the parity completion record and its executed proofs. The
+# mirror-promotion attestation (owner decision 2026-10-31, third sitting) is
+# for the Phase 4 promotion release only: it binds the promoted commit, the
+# exact-boundary acknowledgement and the newest mirror export receipt, and
+# states that full-matrix parity is not yet proven. The parity re-freeze gates
+# every later release, so the mirror shape is accepted only for the tags listed
+# here and only while no parity completion record exists at the release commit.
+AUTHORITY_PROMOTION_KIND = "vellum-authority-promotion-attestation"
+MIRROR_PROMOTION_KIND = "vellum-mirror-promotion-attestation"
+MIRROR_PROMOTION_ATTESTATION_ID = "full-design-import-render-v1-mirror-promotion-1"
+MIRROR_PROMOTION_PARITY = "not-proven-deferred-to-matrix-refreeze"
+MIRROR_PROMOTION_RELEASE_TAGS = frozenset({"v0.1.9"})
+MIRROR_RECEIPT_INDEX_PATH = "provenance/mirror/receipts/index.json"
+MIRROR_RECEIPT_INDEX_SCHEMA = "vellum.mirror-receipt-index.v1"
+MIRROR_RECEIPT_PATH = re.compile(r"^provenance/mirror/receipts/[A-Za-z0-9][A-Za-z0-9._-]*\.json$")
 EXPECTED_COORDINATES = {
     "pulp_repository": "Generous-Corp/pulp",
     "pulp_baseline_commit": "190c463a0b320f28420c9af177244af04ef84233",
@@ -688,51 +704,66 @@ def exact_scalar_tree(value: Any, expected: Any) -> bool:
     return exact_scalar(value, expected)
 
 
-def validate_authority_promotion_attestation(
-    data: Any, amendment: Any, *, delivery_retired: bool = False
+PROMOTION_COMMON_KEYS = frozenset({
+    "schema_version", "kind", "attestation_id", "state", "attested_at",
+    "attested_by", "authority_repository", "delivery_repository", "promotion_mode",
+    "authority_commit", "delivery_commit", "authority_tree", "delivery_tree",
+    "exact_boundary_amendment_id", "exact_boundary_amendment_sha256",
+    "exact_boundary_acknowledgement_id", "exact_boundary_acknowledgement_sha256",
+})
+PROMOTION_COMMON_SCALARS = {
+    "schema_version": 1,
+    "state": "attested",
+    "authority_repository": "Generous-Corp/vellum",
+    "delivery_repository": "danielraffel/vellum",
+    "exact_boundary_amendment_id": "full-design-import-render-v1-exact-boundary-amendment-1",
+    "exact_boundary_amendment_sha256": EXPECTED_BOUNDARY_AMENDMENT_SHA256,
+    "exact_boundary_acknowledgement_id": (
+        "full-design-import-render-v1-exact-boundary-acknowledgement-1"
+    ),
+}
+
+
+def release_source_key(data: Any) -> str:
+    """The attestation key naming the release source commit for its kind."""
+    if isinstance(data, dict) and data.get("kind") == MIRROR_PROMOTION_KIND:
+        return "release_source_commit"
+    return "parity_release_source_commit"
+
+
+def validate_promotion_shape(
+    data: Any,
+    amendment: Any,
+    *,
+    delivery_retired: bool,
+    where: str,
+    extra_keys: set[str],
+    extra_scalars: dict[str, Any],
+    digest_keys: tuple[str, ...],
 ) -> list[str]:
+    """Checks every promotion attestation kind shares: closed keys, exact
+    coordinates, one promoted commit and tree, and the required acknowledgement."""
     errors: list[str] = []
-    top = {
-        "schema_version", "kind", "attestation_id", "state", "attested_at",
-        "attested_by", "authority_repository", "delivery_repository", "promotion_mode",
-        "authority_commit", "delivery_commit", "authority_tree", "delivery_tree",
-        "exact_boundary_amendment_id", "exact_boundary_amendment_sha256",
-        "exact_boundary_acknowledgement_id", "exact_boundary_acknowledgement_sha256",
-        "parity_completion_id", "parity_completion_sha256",
-        "parity_release_source_commit",
-    }
-    if not exact_keys(data, top, "authority_promotion", errors):
+    source_key = (
+        "release_source_commit" if "release_source_commit" in extra_keys
+        else "parity_release_source_commit"
+    )
+    if not exact_keys(data, set(PROMOTION_COMMON_KEYS) | extra_keys, where, errors):
         return errors
-    scalars = {
-        "schema_version": 1,
-        "kind": "vellum-authority-promotion-attestation",
-        "attestation_id": "full-design-import-render-v1-authority-promotion-1",
-        "state": "attested",
-        "authority_repository": "Generous-Corp/vellum",
-        "delivery_repository": "danielraffel/vellum",
-        "exact_boundary_amendment_id": (
-            "full-design-import-render-v1-exact-boundary-amendment-1"
-        ),
-        "exact_boundary_amendment_sha256": EXPECTED_BOUNDARY_AMENDMENT_SHA256,
-        "exact_boundary_acknowledgement_id": (
-            "full-design-import-render-v1-exact-boundary-acknowledgement-1"
-        ),
-        "parity_completion_id": "full-design-import-render-v1-parity-completion-1",
-    }
-    for key, expected in scalars.items():
+    for key, expected in {**PROMOTION_COMMON_SCALARS, **extra_scalars}.items():
         if not exact_scalar(data[key], expected):
-            errors.append(f"authority_promotion.{key}: expected {expected!r}")
+            errors.append(f"{where}.{key}: expected {expected!r}")
     if not isinstance(data["promotion_mode"], str) or data["promotion_mode"] not in {
         "repository-transfer", "exact-mirror"
     }:
-        errors.append("authority_promotion.promotion_mode: expected closed promotion mode")
+        errors.append(f"{where}.promotion_mode: expected closed promotion mode")
     elif delivery_retired and data["promotion_mode"] != "repository-transfer":
         errors.append(
-            "authority_promotion.promotion_mode: retired delivery repository requires "
+            f"{where}.promotion_mode: retired delivery repository requires "
             "'repository-transfer'"
         )
     if not OWNER.fullmatch(str(data["attested_by"])) and data["attested_by"] != RELEASE_PIPELINE_ATTESTER:
-        errors.append("authority_promotion.attested_by: expected individual GitHub handle "
+        errors.append(f"{where}.attested_by: expected individual GitHub handle "
                       f"or {RELEASE_PIPELINE_ATTESTER!r}")
     try:
         stamp = data["attested_at"]
@@ -740,27 +771,25 @@ def validate_authority_promotion_attestation(
         if not stamp.endswith("Z") or parsed.utcoffset() != dt.timedelta(0):
             raise ValueError
     except (AttributeError, TypeError, ValueError):
-        errors.append("authority_promotion.attested_at: expected UTC timestamp ending in Z")
+        errors.append(f"{where}.attested_at: expected UTC timestamp ending in Z")
     sha_fields = (
         "authority_commit", "delivery_commit", "authority_tree", "delivery_tree",
-        "parity_release_source_commit",
+        source_key,
     )
     for key in sha_fields:
         value = data[key]
         if not isinstance(value, str) or not SHA40.fullmatch(value):
-            errors.append(f"authority_promotion.{key}: expected full commit or tree SHA")
-    for key in (
-        "exact_boundary_acknowledgement_sha256", "parity_completion_sha256"
-    ):
+            errors.append(f"{where}.{key}: expected full commit or tree SHA")
+    for key in ("exact_boundary_acknowledgement_sha256", *digest_keys):
         digest = data[key]
         if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
-            errors.append(f"authority_promotion.{key}: expected SHA-256")
+            errors.append(f"{where}.{key}: expected SHA-256")
     if data["authority_commit"] != data["delivery_commit"]:
-        errors.append("authority_promotion: authority and delivery commits must match exactly")
+        errors.append(f"{where}: authority and delivery commits must match exactly")
     if data["authority_tree"] != data["delivery_tree"]:
-        errors.append("authority_promotion: authority and delivery trees must match exactly")
-    if data["parity_release_source_commit"] != data["authority_commit"]:
-        errors.append("authority_promotion: release source must be the promoted authority commit")
+        errors.append(f"{where}: authority and delivery trees must match exactly")
+    if data[source_key] != data["authority_commit"]:
+        errors.append(f"{where}: release source must be the promoted authority commit")
     required_ack = (
         amendment.get("repository_roles", {}).get(
             "required_exact_boundary_acknowledgement_id"
@@ -769,7 +798,116 @@ def validate_authority_promotion_attestation(
         else None
     )
     if data["exact_boundary_acknowledgement_id"] != required_ack:
-        errors.append("authority_promotion: acknowledgement differs from amendment requirement")
+        errors.append(f"{where}: acknowledgement differs from amendment requirement")
+    return errors
+
+
+def validate_authority_promotion_attestation(
+    data: Any, amendment: Any, *, delivery_retired: bool = False
+) -> list[str]:
+    return validate_promotion_shape(
+        data, amendment, delivery_retired=delivery_retired,
+        where="authority_promotion",
+        extra_keys={
+            "parity_completion_id", "parity_completion_sha256",
+            "parity_release_source_commit",
+        },
+        extra_scalars={
+            "kind": AUTHORITY_PROMOTION_KIND,
+            "attestation_id": "full-design-import-render-v1-authority-promotion-1",
+            "parity_completion_id": "full-design-import-render-v1-parity-completion-1",
+        },
+        digest_keys=("parity_completion_sha256",),
+    )
+
+
+def validate_mirror_promotion_attestation(
+    data: Any, amendment: Any, *, delivery_retired: bool = False
+) -> list[str]:
+    errors = validate_promotion_shape(
+        data, amendment, delivery_retired=delivery_retired,
+        where="mirror_promotion",
+        extra_keys={
+            "mirror_receipt", "mirror_receipt_sha256", "release_source_commit", "parity",
+        },
+        extra_scalars={
+            "kind": MIRROR_PROMOTION_KIND,
+            "attestation_id": MIRROR_PROMOTION_ATTESTATION_ID,
+            "parity": MIRROR_PROMOTION_PARITY,
+        },
+        digest_keys=("mirror_receipt_sha256",),
+    )
+    if isinstance(data, dict) and "mirror_receipt" in data and (
+        not isinstance(data["mirror_receipt"], str)
+        or not MIRROR_RECEIPT_PATH.fullmatch(data["mirror_receipt"])
+        or data["mirror_receipt"] == MIRROR_RECEIPT_INDEX_PATH
+    ):
+        errors.append("mirror_promotion.mirror_receipt: expected a mirror export receipt path")
+    return errors
+
+
+def validate_mirror_promotion_release(
+    root: Path, data: Any, release_source_commit: str | None, release_tag: str | None
+) -> list[str]:
+    """The mirror-promotion release binds the newest landed export receipt and is
+    refused for any tag but the Phase 4 promotion, or once parity is recorded."""
+    if not isinstance(data, dict):
+        return ["mirror_promotion: expected attestation object"]
+    errors: list[str] = []
+    if release_tag not in MIRROR_PROMOTION_RELEASE_TAGS:
+        errors.append(
+            f"mirror_promotion: release tag {release_tag!r} is not a mirror-promotion "
+            "release; it must prove full-matrix parity"
+        )
+    if release_source_commit is None or not SHA40.fullmatch(release_source_commit):
+        return errors + ["mirror_promotion: release source commit unavailable"]
+    if git_output(
+        root, "cat-file", "-e", f"{release_source_commit}:{PARITY_COMPLETION_PATH.as_posix()}"
+    ) is not None:
+        errors.append(
+            "mirror_promotion: a parity completion record exists at the release commit; "
+            "the release must carry the authority promotion attestation that proves it"
+        )
+    if not git_regular_blob(root, release_source_commit, MIRROR_RECEIPT_INDEX_PATH):
+        return errors + ["mirror_promotion: mirror receipt index is missing at the release commit"]
+    try:
+        index = load_json_bytes(
+            git_blob(root, release_source_commit, MIRROR_RECEIPT_INDEX_PATH) or b"",
+            "tagged mirror receipt index",
+        )
+    except ValueError as exc:
+        return errors + [f"mirror_promotion: cannot read mirror receipt index: {exc}"]
+    receipts = index.get("receipts") if isinstance(index, dict) else None
+    if (
+        not isinstance(index, dict)
+        or set(index) != {"schema", "receipts"}
+        or index.get("schema") != MIRROR_RECEIPT_INDEX_SCHEMA
+        or not isinstance(receipts, list)
+        or not receipts
+        or not all(isinstance(item, str) for item in receipts)
+    ):
+        return errors + ["mirror_promotion: mirror receipt index is malformed or empty"]
+    newest = receipts[-1]
+    if not MIRROR_RECEIPT_PATH.fullmatch(newest):
+        return errors + ["mirror_promotion: newest mirror receipt path is malformed"]
+    if data.get("mirror_receipt") != newest:
+        errors.append(
+            "mirror_promotion: mirror receipt is not the newest receipt in the index "
+            f"at the release commit ({newest})"
+        )
+        return errors
+    if not git_regular_blob(root, release_source_commit, newest):
+        return errors + ["mirror_promotion: mirror receipt is missing at the release commit"]
+    receipt = git_blob(root, release_source_commit, newest)
+    if receipt is None:
+        return errors + ["mirror_promotion: mirror receipt is missing at the release commit"]
+    try:
+        if not isinstance(load_json_bytes(receipt, "tagged mirror receipt"), dict):
+            errors.append("mirror_promotion: mirror receipt is not a JSON object")
+    except ValueError as exc:
+        errors.append(f"mirror_promotion: cannot read mirror receipt: {exc}")
+    if data.get("mirror_receipt_sha256") != hashlib.sha256(receipt).hexdigest():
+        errors.append("mirror_promotion: mirror receipt digest does not match the release commit")
     return errors
 
 
@@ -853,7 +991,7 @@ def validate_promotion_repository_evidence(
     authority_head = git_output(authority_root, "rev-parse", "HEAD")
     authority_head_sha = authority_head.decode().strip() if authority_head is not None else None
     expected_release = release_source_commit or authority_head_sha
-    if expected_release != data.get("parity_release_source_commit"):
+    if expected_release != data.get(release_source_key(data)):
         errors.append("authority_promotion evidence: checked release source differs from attestation")
     if authority_head_sha != expected_release:
         errors.append("authority_promotion evidence: authority checkout HEAD differs from release source")
@@ -2938,35 +3076,54 @@ def validate_release_readiness(
     release_source_commit: str | None = None,
     check_runs: Any = None,
     delivery_retired: bool = False,
+    release_tag: str | None = None,
 ) -> list[str]:
     errors: list[str] = []
     if not isinstance(data, dict) or not isinstance(data.get("cells"), list):
         return ["release readiness: compatibility matrix cells are unavailable"]
     if check_runs is None:
         errors.append("release readiness: missing exact workflow-run evidence")
-    completion_blob = (
-        git_blob(root, release_source_commit, PARITY_COMPLETION_PATH.as_posix())
-        if release_source_commit is not None
-        and git_regular_blob(root, release_source_commit, PARITY_COMPLETION_PATH.as_posix())
-        else None
-    )
-    if completion_blob is None:
-        errors.append("release readiness: missing versioned parity completion evidence")
+    promotion_data: Any = None
+    promotion_error: str | None = None
+    if promotion_attestation is None or not promotion_attestation.is_file():
+        promotion_error = "release readiness: missing signed-tag authority promotion attestation"
     else:
         try:
-            completion_data = load_json_bytes(
-                completion_blob, "tagged parity completion"
-            )
-            errors.extend(
-                "release readiness: " + error
-                for error in validate_parity_completion(
-                    root, completion_data, data, amendment,
-                    release_source_commit=release_source_commit,
-                    check_runs=check_runs,
-                )
-            )
+            promotion_data = load_json(promotion_attestation)
         except ValueError as exc:
-            errors.append(f"release readiness: invalid parity completion evidence: {exc}")
+            promotion_error = (
+                f"release readiness: invalid authority promotion attestation: {exc}"
+            )
+    # Only a well-formed mirror-promotion attestation selects the mirror path;
+    # anything else, including a missing or unreadable one, must prove parity.
+    mirror_promotion = (
+        isinstance(promotion_data, dict)
+        and promotion_data.get("kind") == MIRROR_PROMOTION_KIND
+    )
+    if not mirror_promotion:
+        completion_blob = (
+            git_blob(root, release_source_commit, PARITY_COMPLETION_PATH.as_posix())
+            if release_source_commit is not None
+            and git_regular_blob(root, release_source_commit, PARITY_COMPLETION_PATH.as_posix())
+            else None
+        )
+        if completion_blob is None:
+            errors.append("release readiness: missing versioned parity completion evidence")
+        else:
+            try:
+                completion_data = load_json_bytes(
+                    completion_blob, "tagged parity completion"
+                )
+                errors.extend(
+                    "release readiness: " + error
+                    for error in validate_parity_completion(
+                        root, completion_data, data, amendment,
+                        release_source_commit=release_source_commit,
+                        check_runs=check_runs,
+                    )
+                )
+            except ValueError as exc:
+                errors.append(f"release readiness: invalid parity completion evidence: {exc}")
     promotion_required = (
         isinstance(amendment, dict)
         and isinstance(amendment.get("gates"), dict)
@@ -2978,44 +3135,50 @@ def validate_release_readiness(
         errors.append(
             "release readiness: exact-boundary amendment does not require authority promotion"
         )
-    if promotion_attestation is None or not promotion_attestation.is_file():
-        errors.append(
-            "release readiness: missing signed-tag authority promotion attestation"
+    if promotion_error is not None:
+        errors.append(promotion_error)
+        return errors
+    if mirror_promotion:
+        errors.extend(
+            "release readiness: " + error
+            for error in validate_mirror_promotion_attestation(
+                promotion_data, amendment, delivery_retired=delivery_retired
+            )
+        )
+        errors.extend(
+            "release readiness: " + error
+            for error in validate_mirror_promotion_release(
+                root, promotion_data, release_source_commit, release_tag
+            )
         )
     else:
-        try:
-            promotion_data = load_json(promotion_attestation)
-            errors.extend(
-                "release readiness: " + error
-                for error in validate_authority_promotion_attestation(
-                    promotion_data, amendment, delivery_retired=delivery_retired
-                )
+        errors.extend(
+            "release readiness: " + error
+            for error in validate_authority_promotion_attestation(
+                promotion_data, amendment, delivery_retired=delivery_retired
             )
-            errors.extend(
-                "release readiness: " + error
-                for error in validate_promotion_acknowledgement_digest(
-                    root, promotion_data
-                )
+        )
+        errors.extend(
+            "release readiness: " + error
+            for error in validate_promotion_completion_digest(
+                root, promotion_data, release_source_commit
             )
-            errors.extend(
-                "release readiness: " + error
-                for error in validate_promotion_completion_digest(
-                    root, promotion_data, release_source_commit
-                )
-            )
-            errors.extend(
-                "release readiness: " + error
-                for error in validate_promotion_repository_evidence(
-                    root,
-                    delivery_root,
-                    promotion_data,
-                    repository=repository,
-                    release_source_commit=release_source_commit,
-                    delivery_retired=delivery_retired,
-                )
-            )
-        except ValueError as exc:
-            errors.append(f"release readiness: invalid authority promotion attestation: {exc}")
+        )
+    errors.extend(
+        "release readiness: " + error
+        for error in validate_promotion_acknowledgement_digest(root, promotion_data)
+    )
+    errors.extend(
+        "release readiness: " + error
+        for error in validate_promotion_repository_evidence(
+            root,
+            delivery_root,
+            promotion_data,
+            repository=repository,
+            release_source_commit=release_source_commit,
+            delivery_retired=delivery_retired,
+        )
+    )
     return errors
 
 
@@ -3032,6 +3195,7 @@ def verify(
     check_runs: Any = None,
     open_pr_snapshot: Any = None,
     defer_live_open_pr_audit: bool = False,
+    release_tag: str | None = None,
 ) -> dict[str, Any]:
     closure_errors = []
     try:
@@ -3152,6 +3316,7 @@ def verify(
                     release_source_commit=release_source_commit,
                     check_runs=check_runs,
                     delivery_retired=delivery_retired,
+                    release_tag=release_tag,
                 )
                 if release_readiness
                 else []
@@ -3205,6 +3370,14 @@ def verify(
     }
 
 
+def default_release_tag(environ: Any) -> str | None:
+    """The tag a tag-push run releases; None for any other ref, so a branch run
+    can never select the mirror-promotion path by its branch name."""
+    if environ.get("GITHUB_REF_TYPE") != "tag":
+        return None
+    return environ.get("GITHUB_REF_NAME") or None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2])
@@ -3215,6 +3388,7 @@ def main() -> int:
     parser.add_argument(
         "--release-source-commit", default=os.environ.get("GITHUB_SHA")
     )
+    parser.add_argument("--release-tag", default=default_release_tag(os.environ))
     parser.add_argument("--check-runs-json", type=Path)
     parser.add_argument("--open-pr-snapshot-json", type=Path)
     parser.add_argument("--defer-live-open-pr-audit", action="store_true")
@@ -3237,6 +3411,7 @@ def main() -> int:
             if args.open_pr_snapshot_json else None
         ),
         defer_live_open_pr_audit=args.defer_live_open_pr_audit,
+        release_tag=args.release_tag,
     )
     rendered = json.dumps(report, indent=2, sort_keys=True) + "\n"
     if args.output:

@@ -59,7 +59,7 @@ jobs:
           python3 -I scripts/check_release_policy.py signer >> "$GITHUB_OUTPUT"
           python3 -I scripts/release_request.py freeze --tag "$tag" > "$RUNNER_TEMP/freeze.json"
           python3 -I scripts/release_request.py attestation --commit "$GITHUB_SHA" \
-            --attested-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$RUNNER_TEMP/promotion-attestation.json"
+            --attested-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --tag "$tag" > "$RUNNER_TEMP/promotion-attestation.json"
           printf 'tag=%s\nversion=%s\n' "$tag" "$version" >> "$GITHUB_OUTPUT"
 
       - name: Sign the tag

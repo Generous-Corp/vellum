@@ -12,10 +12,12 @@ workflow has already fetched, so it needs no network:
   freeze  the per-tag ruleset that verify_release_tag_ruleset.py requires
           before an immutable release is finalized.
   attestation
-          the authority promotion attestation the tag carries as its signed
-          message, attested by the release pipeline itself (owner decision
-          2026-10-31), checked with the release-readiness verifier's own
-          validators before anything is signed.
+          the promotion attestation the tag carries as its signed message,
+          attested by the release pipeline itself (owner decision 2026-10-31),
+          checked with the release-readiness verifier's own validators before
+          anything is signed. It binds the parity completion record when one
+          exists at the commit, and otherwise is the mirror-promotion
+          attestation that only the Phase 4 promotion tag may carry.
 
 The immutable-release preflight is committed with the request and is only
 accepted for a few hours; `check` refuses to tag unless enough of that window
@@ -204,9 +206,16 @@ def git(root: Path, *args: str) -> str:
                           check=True).stdout.strip()
 
 
-def attestation(root: Path, commit: str, attested_at: str) -> dict[str, Any]:
-    """The promotion attestation for `commit`, validated as the release-readiness gate will."""
-    sys.path.insert(0, str(root / "tools/provenance"))
+def attestation(root: Path, commit: str, attested_at: str, tag: str) -> dict[str, Any]:
+    """The promotion attestation for `commit`, validated as the release-readiness gate will.
+
+    With a parity completion record at `commit` it is the authority promotion
+    attestation that binds it. Without one it is the mirror-promotion
+    attestation (owner decision 2026-10-31, third sitting), which binds the
+    newest mirror export receipt instead and states that parity is not yet
+    proven; the verifier accepts that shape only for the Phase 4 promotion tag.
+    """
+    sys.path.insert(0, str(ROOT / "tools/provenance"))
     import verify_authority_expansion as vae  # noqa: PLC0415
 
     if not SHA.fullmatch(commit):
@@ -214,14 +223,11 @@ def attestation(root: Path, commit: str, attested_at: str) -> dict[str, Any]:
     tree = git(root, "rev-parse", f"{commit}^{{tree}}")
     try:
         acknowledgement = (root / EXPANSION / "exact-boundary-acknowledgement-1.json").read_bytes()
-        completion = git_show(root, commit, vae.PARITY_COMPLETION_PATH.as_posix())
-    except (OSError, subprocess.CalledProcessError) as error:
+    except OSError as error:
         raise ReleaseRequestError(f"a promotion record is missing at {commit}: {error}") from error
     amendment = json.loads((root / EXPANSION / "exact-boundary-amendment-1.json").read_text(encoding="utf-8"))
-    data = {
+    data: dict[str, Any] = {
         "schema_version": 1,
-        "kind": "vellum-authority-promotion-attestation",
-        "attestation_id": "full-design-import-render-v1-authority-promotion-1",
         "state": "attested",
         "attested_at": attested_at,
         "attested_by": vae.RELEASE_PIPELINE_ATTESTER,
@@ -236,16 +242,48 @@ def attestation(root: Path, commit: str, attested_at: str) -> dict[str, Any]:
         "exact_boundary_amendment_sha256": vae.EXPECTED_BOUNDARY_AMENDMENT_SHA256,
         "exact_boundary_acknowledgement_id": "full-design-import-render-v1-exact-boundary-acknowledgement-1",
         "exact_boundary_acknowledgement_sha256": hashlib.sha256(acknowledgement).hexdigest(),
-        "parity_completion_id": "full-design-import-render-v1-parity-completion-1",
-        "parity_completion_sha256": hashlib.sha256(completion).hexdigest(),
-        "parity_release_source_commit": commit,
     }
-    errors = (vae.validate_authority_promotion_attestation(data, amendment, delivery_retired=True)
-              + vae.validate_promotion_acknowledgement_digest(root, data)
-              + vae.validate_promotion_completion_digest(root, data, commit))
+    if git_exists(root, commit, vae.PARITY_COMPLETION_PATH.as_posix()):
+        completion = git_show(root, commit, vae.PARITY_COMPLETION_PATH.as_posix())
+        data.update({
+            "kind": vae.AUTHORITY_PROMOTION_KIND,
+            "attestation_id": "full-design-import-render-v1-authority-promotion-1",
+            "parity_completion_id": "full-design-import-render-v1-parity-completion-1",
+            "parity_completion_sha256": hashlib.sha256(completion).hexdigest(),
+            "parity_release_source_commit": commit,
+        })
+        errors = (vae.validate_authority_promotion_attestation(data, amendment, delivery_retired=True)
+                  + vae.validate_promotion_completion_digest(root, data, commit))
+    else:
+        if tag not in vae.MIRROR_PROMOTION_RELEASE_TAGS:
+            raise ReleaseRequestError(
+                f"{tag} needs a parity completion record at {commit}; only "
+                f"{', '.join(sorted(vae.MIRROR_PROMOTION_RELEASE_TAGS))} may ship as a mirror promotion")
+        try:
+            index = json.loads(git_show(root, commit, vae.MIRROR_RECEIPT_INDEX_PATH))
+            receipt = index["receipts"][-1]
+            receipt_bytes = git_show(root, commit, receipt)
+        except (subprocess.CalledProcessError, ValueError, KeyError, IndexError, TypeError) as error:
+            raise ReleaseRequestError(f"no mirror export receipt is recorded at {commit}: {error}") from error
+        data.update({
+            "kind": vae.MIRROR_PROMOTION_KIND,
+            "attestation_id": vae.MIRROR_PROMOTION_ATTESTATION_ID,
+            "mirror_receipt": receipt,
+            "mirror_receipt_sha256": hashlib.sha256(receipt_bytes).hexdigest(),
+            "release_source_commit": commit,
+            "parity": vae.MIRROR_PROMOTION_PARITY,
+        })
+        errors = (vae.validate_mirror_promotion_attestation(data, amendment, delivery_retired=True)
+                  + vae.validate_mirror_promotion_release(root, data, commit, tag))
+    errors += vae.validate_promotion_acknowledgement_digest(root, data)
     if errors:
         raise ReleaseRequestError("the promotion attestation would not verify: " + "; ".join(errors))
     return data
+
+
+def git_exists(root: Path, commit: str, path: str) -> bool:
+    return subprocess.run(["git", "-C", str(root), "cat-file", "-e", f"{commit}:{path}"],
+                          capture_output=True).returncode == 0
 
 
 def git_show(root: Path, commit: str, path: str) -> bytes:
@@ -268,6 +306,7 @@ def main(argv: list[str]) -> int:
     attest = sub.add_parser("attestation")
     attest.add_argument("--commit", required=True)
     attest.add_argument("--attested-at", required=True)
+    attest.add_argument("--tag", required=True)
     freeze = sub.add_parser("freeze")
     freeze.add_argument("--tag", required=True)
     args = parser.parse_args(argv)
@@ -276,7 +315,7 @@ def main(argv: list[str]) -> int:
             print(json.dumps(freeze_ruleset(args.tag), indent=2, sort_keys=True))
             return 0
         if args.command == "attestation":
-            print(json.dumps(attestation(ROOT, args.commit, args.attested_at), indent=2, sort_keys=True))
+            print(json.dumps(attestation(ROOT, args.commit, args.attested_at, args.tag), indent=2, sort_keys=True))
             return 0
         tag = check(request=load(args.request), cmakelists=args.cmakelists.read_text(encoding="utf-8"),
                     retired_tags=load(args.retired_tags), commit=args.commit,
