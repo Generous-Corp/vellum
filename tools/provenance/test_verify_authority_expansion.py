@@ -494,6 +494,18 @@ class Tests(unittest.TestCase):
 
     def test_committed_proposal_passes_without_authority(self) -> None:
         report = verifier.verify(ROOT)
+        acknowledgement = (ROOT / verifier.EXPANSIONS_ROOT
+                           / "full-design-import-render-v1/exact-boundary-acknowledgement-1.json")
+        if acknowledgement.is_file():
+            # Once the exact-boundary acknowledgement has landed, the committed
+            # tree no longer verifies on its own: binding the Pulp acceptance
+            # needs Pulp's repository evidence, and that is the only error.
+            self.assertEqual(report["status"], "fail")
+            self.assertEqual(
+                report["errors"],
+                ["exact boundary acknowledgement: --pulp-root is required to verify acceptance"],
+            )
+            return
         self.assertEqual(report["status"], "pass", report["errors"])
         self.assertEqual(report["authority_effect"], "none")
         self.assertEqual(
