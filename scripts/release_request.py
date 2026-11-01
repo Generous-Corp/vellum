@@ -39,7 +39,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUEST_SCHEMA = "vellum.release-request.v1"
-VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 SHA = re.compile(r"^[0-9a-f]{40}$")
 PROJECT_VERSION = re.compile(r"project\(\s*vellum\b[^)]*\bVERSION\s+([0-9.]+)", re.IGNORECASE | re.DOTALL)
 
@@ -183,8 +183,9 @@ def pending(required: list[tuple[str, int | None]], runs: list[dict[str, Any]], 
     """Required checks whose newest run on `commit` has not finished.
 
     The push that lands a request starts main's checks again on the same
-    commit, so the release job waits for those runs instead of reading them
-    mid-flight as unmet.
+    commit. While the newest run of a required check is still running, the
+    release job waits instead of reading it as unmet. A run not yet created
+    is not waited for: the merge-queue run on the same commit decides.
     """
     return [context for context, app_id in required
             if (run := newest_run(context, app_id, runs, commit)) is not None
@@ -384,7 +385,6 @@ def main(argv: list[str]) -> int:
     one = sub.add_parser("check")
     one.add_argument("--request", type=Path, default=ROOT / "provenance/release-request.json")
     one.add_argument("--cmakelists", type=Path, default=ROOT / "CMakeLists.txt")
-    one.add_argument("--retired-tags", type=Path, default=ROOT / "provenance/retired-release-tags.json")
     one.add_argument("--commit", required=True)
     one.add_argument("--remote", default="origin",
                      help="looked up for the tag; only git's no-match answer reads as absent")
@@ -420,7 +420,7 @@ def main(argv: list[str]) -> int:
         request = load(args.request)
         exists = remote_tag_exists(ROOT, f"v{request_version(request)}", args.remote)
         tag = check(request=request, cmakelists=args.cmakelists.read_text(encoding="utf-8"),
-                    retired_tags=load(args.retired_tags), commit=args.commit,
+                    retired_tags=load(ROOT / "provenance/retired-release-tags.json"), commit=args.commit,
                     tag_exists=exists, branch_rules=load(args.branch_rules),
                     pages=load(args.check_runs), preflight=load(args.preflight),
                     protection=load(args.protection),

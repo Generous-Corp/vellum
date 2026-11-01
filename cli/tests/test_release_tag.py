@@ -199,6 +199,18 @@ class ReleaseTagTests(unittest.TestCase):
         with self.assertRaisesRegex(ReleaseTagVerificationError, "in no signed namespace"):
             self.verify(tag_name="release-0.1.0")
 
+    def test_flags_cannot_be_abbreviated_or_repeated(self) -> None:
+        base = ["--repo", ".", "--repository", "r", "--tag-name", "v0.1.0", "--tag-object-sha", "a",
+                "--source-commit", "b", "--allowed-signers", "s", "--expected-principal", "p",
+                "--expected-fingerprint", "f", "--output", "o"]
+        for extra in (["--expected-princ", "other"], ["--expected-principal", "other"]):
+            with self.subTest(extra), self.assertRaises(SystemExit):
+                MODULE["parse_args"](base + extra)
+        abbreviated = [("--expected-princ" if arg == "--expected-principal" else arg) for arg in base]
+        with self.assertRaises(SystemExit):
+            MODULE["parse_args"](abbreviated)
+        self.assertEqual(MODULE["parse_args"](base).expected_principal, "p")
+
     def write_retired(self, tags: list[str]) -> Path:
         path = self.root / "retired-release-tags.json"
         path.write_text(

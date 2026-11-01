@@ -276,21 +276,28 @@ def verify(
     }
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--repo", type=Path, required=True)
-    parser.add_argument("--repository", required=True)
-    parser.add_argument("--tag-name", required=True)
-    parser.add_argument("--tag-object-sha", required=True)
-    parser.add_argument("--source-commit", required=True)
-    parser.add_argument("--allowed-signers", type=Path, required=True)
-    parser.add_argument("--expected-principal", required=True)
-    parser.add_argument("--expected-fingerprint", required=True)
-    parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument(
-        "--retired-tags", type=Path, default=RETIRED_RELEASE_TAGS
-    )
-    return parser.parse_args()
+class Once(argparse.Action):
+    """Refuse a flag given twice: with argparse the last value would silently win."""
+
+    def __call__(self, parser, namespace, values, option_string=None):  # type: ignore[override]
+        if getattr(namespace, self.dest, None) is not None:
+            parser.error(f"{option_string} given more than once")
+        setattr(namespace, self.dest, values)
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    # No abbreviations: `--expected-princ` must not reach --expected-principal.
+    parser = argparse.ArgumentParser(allow_abbrev=False)
+    parser.add_argument("--repo", type=Path, required=True, action=Once)
+    parser.add_argument("--repository", required=True, action=Once)
+    parser.add_argument("--tag-name", required=True, action=Once)
+    parser.add_argument("--tag-object-sha", required=True, action=Once)
+    parser.add_argument("--source-commit", required=True, action=Once)
+    parser.add_argument("--allowed-signers", type=Path, required=True, action=Once)
+    parser.add_argument("--expected-principal", required=True, action=Once)
+    parser.add_argument("--expected-fingerprint", required=True, action=Once)
+    parser.add_argument("--output", type=Path, required=True, action=Once)
+    return parser.parse_args(argv)
 
 
 def main() -> int:
@@ -305,7 +312,6 @@ def main() -> int:
             allowed_signers=args.allowed_signers.resolve(),
             expected_principal=args.expected_principal,
             expected_fingerprint=args.expected_fingerprint,
-            retired_tags=args.retired_tags.resolve(),
         )
     except (OSError, ReleaseTagVerificationError) as error:
         print(f"release tag verification failed: {error}", file=sys.stderr)

@@ -64,13 +64,20 @@ jobs:
           test "$GITHUB_REPOSITORY" = Generous-Corp/vellum
           test "$GITHUB_REF" = refs/heads/main
           # The push that landed the request starts main's required checks again
-          # on this commit. Wait for them to finish (about 45 minutes for
-          # gpu-macos) rather than reading a run still in progress as unmet.
+          # on this commit. While the newest run of any required check is still
+          # running (gpu-macos takes about 45 minutes), wait rather than read it
+          # as unmet. A transient API failure is retried, not fatal.
           deadline=$((SECONDS + 6000))
           while :; do
-            gh api --method GET --paginate --slurp \
-              "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?per_page=100" \
-              -f filter=all > "$RUNNER_TEMP/check-runs.json"
+            for attempt in 1 2 3; do
+              if gh api --method GET --paginate --slurp \
+                "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?per_page=100" \
+                -f filter=all > "$RUNNER_TEMP/check-runs.json"; then
+                break
+              fi
+              [ "$attempt" = 3 ] && exit 1
+              sleep $((attempt * 20))
+            done
             running="$(python3 -I scripts/release_request.py pending --commit "$GITHUB_SHA" \
               --branch-rules "$RUNNER_TEMP/branch-rules.json" --check-runs "$RUNNER_TEMP/check-runs.json" \
               --protection "$RUNNER_TEMP/required-checks.json")"

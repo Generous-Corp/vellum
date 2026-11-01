@@ -66,6 +66,10 @@ class Check(unittest.TestCase):
         self.assertEqual(self.check(), "v0.1.9")
         self.assertEqual(self.check(existing_tags=["v0.1.6", "v0.1.8", "not-a-version"]), "v0.1.9")
 
+    def test_a_version_has_one_spelling(self) -> None:
+        self.refused("MAJOR.MINOR.PATCH", request={"schema": rr.REQUEST_SCHEMA, "version": "0.1.09"},
+                     cmakelists=CMAKE.replace("0.1.9", "0.1.09"))
+
     def test_a_release_only_moves_forward(self) -> None:
         self.refused("not newer than v0.2.0", existing_tags=["v0.1.8", "v0.2.0"])
         self.refused("not newer than v0.1.9", existing_tags=["v0.1.9"], tag_exists=False)

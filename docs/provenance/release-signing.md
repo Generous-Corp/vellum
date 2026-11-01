@@ -24,6 +24,10 @@ A Vellum release tag is signed by CI, never by a person or an agent's host key.
 
    The push that lands the request starts those checks again on the same commit, so the job first waits, up to
    100 minutes, until none of them is still running (`release_request.py pending`).
+
+   Timing: the preflight is valid for six hours and the decision needs two of them left, after the merge queue
+   and that wait. Refresh it (`scripts/refresh_immutable_release_preflight.py`) when the release pull request is
+   ready to land, not earlier.
 3. The job signs an annotated tag on that commit with the key in the environment's `RELEASE_TAG_SIGNING_KEY` secret.
    It verifies the tag with `scripts/verify_release_tag.py` against `provenance/release-signers.allowed_signers`
    before pushing anything.
@@ -91,8 +95,9 @@ promotion attestation and prove full-matrix parity.
   standard-library module.
 - **One key per tag namespace.** `v*` release tags are verified against `release-signers.allowed_signers` (the
   pipeline's key); `authority/*` tags against `authority-signers.allowed_signers` (the owner key that signed them).
-  `verify_release_tag.py` picks the file from the tag name itself, so a caller cannot verify a release tag against
-  the other key. The renderer attestation has its own `renderer-signers.allowed_signers`, pinned in its verifier.
+  `verify_release_tag.py` picks the file from the tag name itself, refuses abbreviated or repeated flags, so a
+  caller cannot verify a release tag against the other key. Tags `v0.1.0`–`v0.1.8` were signed by the owner key,
+  so re-running a release workflow on one of them now fails verification by design. The renderer attestation has its own `renderer-signers.allowed_signers`, pinned in its verifier.
 - **Every verifier call pins its file's key.** `release-policy` reads each `verify_release_tag.py` call and fails
   when it names another signer file, pins a principal or fingerprint other than that file's (in either `--flag value`
   or `--flag=value` form), pins through a variable outside `release-tag.yml`, or when a workflow that verifies tags

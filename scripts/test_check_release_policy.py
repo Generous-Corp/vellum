@@ -149,6 +149,22 @@ class Policy(unittest.TestCase):
                 self.assertTrue(any(p.startswith("verify.yml") for p in policy.problems(self.tmp)),
                                 policy.problems(self.tmp))
 
+    def test_a_call_cannot_override_or_skip_its_pins(self) -> None:
+        call = self.call("release-signers.allowed_signers", *self.release).rstrip("\n")
+        cases = {
+            "abbreviated duplicate": call.replace(" --output x", " --expected-princ someone@else --output x"),
+            "repeated flag": call.replace(" --output x", " --expected-principal release@ci --output x"),
+            "extra argument": call.replace(" --output x", " --output x $EXTRA_ARGS"),
+            "ignored failure": call + " || true",
+            "commented out": call.replace("python3 scripts", "true # python3 scripts"),
+            "echoed": call.replace("python3 scripts", "echo python3 scripts"),
+        }
+        for label, text in cases.items():
+            with self.subTest(label):
+                self.workflow("verify.yml", text + "\n")
+                self.assertTrue(any(p.startswith("verify.yml") for p in policy.problems(self.tmp)),
+                                policy.problems(self.tmp))
+
     def test_the_signing_workflow_verifies_with_its_signer_step_pins(self) -> None:
         self.assertEqual(policy.problems(self.tmp), [])
         self.workflow("release-tag.yml", self.SIGNING.replace("release-signers", "authority-signers"))
@@ -161,10 +177,17 @@ class Policy(unittest.TestCase):
     def test_a_reusable_workflow_from_another_repository_fails(self) -> None:
         self.workflow("local.yml", "jobs:\n  x:\n    uses: ./.github/workflows/verify.yml\n")
         self.assertEqual(policy.problems(self.tmp), [])
-        for ref in ("evil/repo/.github/workflows/x.yml@0123", "'evil/repo/.github/workflows/x.yml@main'"):
-            with self.subTest(ref):
-                self.workflow("remote.yml", f"jobs:\n  x:\n    uses: {ref}\n")
-                self.assertTrue(any("remote.yml calls a reusable workflow" in p for p in policy.problems(self.tmp)))
+        for text in ("jobs:\n  x:\n    uses: evil/repo/.github/workflows/x.yml@0123\n",
+                     "jobs:\n  x:\n    uses: 'evil/repo/.github/workflows/x.yml@main'\n",
+                     "jobs:\n  x:\n    uses: >-\n      evil/repo/.github/workflows/x.yml@main\n",
+                     "jobs:\n  x:\n    uses:\n      evil/repo/.github/workflows/x.yml@main\n",
+                     "jobs:\n  b: {uses: evil/repo/.github/workflows/y.yml@main}\n",
+                     'jobs:\n  x:\n    uses: "evil/repo/\\x2egithub/workflows/x.yml@main"\n',
+                     "jobs:\n  x:\n    USES: evil/repo/.github/workflows/x.yml@main\n"):
+            with self.subTest(text):
+                self.workflow("remote.yml", text)
+                self.assertTrue(any(p.startswith("remote.yml") for p in policy.problems(self.tmp)),
+                                policy.problems(self.tmp))
 
     def test_a_second_key_fails(self) -> None:
         signers = self.tmp / policy.ALLOWED_SIGNERS
