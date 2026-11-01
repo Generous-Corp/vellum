@@ -53,6 +53,13 @@ class Policy(unittest.TestCase):
         self.workflow("exfiltrate.yml", "jobs:\n  x:\n    environment:\n      url: https://example.test\n      name: release\n")
         self.assertTrue(any("exfiltrate.yml" in p for p in policy.problems(self.tmp)))
 
+    def test_environment_key_whitespace_and_quotes_are_scanned(self) -> None:
+        for key in ("environment : release", '"environment": release'):
+            with self.subTest(key=key):
+                self.workflow("exfiltrate.yml", f"jobs:\n  x:\n    {key}\n")
+                self.assertTrue(any("exfiltrate.yml" in p for p in policy.problems(self.tmp)),
+                                policy.problems(self.tmp))
+
     def test_a_yaml_extension_workflow_is_scanned(self) -> None:
         # GitHub Actions runs .yaml as well as .yml workflows.
         for text in ("jobs:\n  x:\n    environment: release\n",

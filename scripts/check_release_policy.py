@@ -45,7 +45,13 @@ POLICY_FILES = (
     "/scripts/verify_release_tag.py",
     "/tools/provenance/verify_authority_expansion.py",
 )
-ENVIRONMENT_KEY = re.compile(r"^(?P<indent>[ \t]*)environment:[ \t]*(?P<value>.*)$", re.MULTILINE)
+# GitHub Actions accepts quoted YAML keys and optional whitespace before the
+# colon. Keep both spellings in the structural scanner so a release
+# environment cannot hide behind valid YAML formatting.
+ENVIRONMENT_KEY = re.compile(
+    r"^(?P<indent>[ \t]*)(?:environment|['\"]environment['\"])[ \t]*:[ \t]*(?P<value>.*)$",
+    re.MULTILINE,
+)
 ENVIRONMENT_NAME = re.compile(r"\bname:\s*['\"]?(?P<name>[A-Za-z0-9_-]+)")
 RELEASE_WORKFLOWS = (SIGNING_WORKFLOW, "release-policy.yml")
 # Endpoints only an Administration-read token may call; the Actions token gets 403.
@@ -117,7 +123,7 @@ def unreadable_environments(workflow: str) -> list[str]:
     for number, line in enumerate(lines):
         if YAML_INDIRECTION.search(line.split(" #", 1)[0]):
             found.append(f"uses a YAML anchor, alias or merge key: `{line.strip()}`")
-        match = re.match(r"^(?P<indent>[ \t]*)environment:\s*(?P<value>.*)$", line)
+        match = ENVIRONMENT_KEY.match(line)
         if not match:
             continue
         value = match.group("value").split(" #", 1)[0].strip()
