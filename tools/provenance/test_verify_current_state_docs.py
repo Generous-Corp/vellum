@@ -77,6 +77,9 @@ class Tests(unittest.TestCase):
         for stale in (
             "The following is the exact published, immutable `v0.1.7` release.",
             "gh release download v0.1.6 --repo danielraffel/vellum",
+            "The source tree identifies as `0.1.8` and is unreleased.",
+            "Once `v0.1.8` is published, the checkout installer installs it.",
+            "./scripts/install.sh --version 0.1.8",
         ):
             with self.subTest(stale=stale), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
@@ -107,6 +110,24 @@ class Tests(unittest.TestCase):
                 verifier.VerificationError, "missing active-state claim"
             ):
                 verifier.verify_documents(root)
+
+    def test_missing_superseded_release_statement_is_rejected(self) -> None:
+        for relative in ("README.md", "docs/cli/install-artifact.md"):
+            with self.subTest(relative=relative), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                self.copy_document_set(root)
+                verifier.verify_documents(root)
+                document = root / relative
+                text = document.read_text(encoding="utf-8")
+                self.assertIn("`v0.1.8` is retired too", text)
+                document.write_text(
+                    text.replace("`v0.1.8` is retired too", "`v0.1.8` is pending", 1),
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(
+                    verifier.VerificationError, "missing active-state claim"
+                ):
+                    verifier.verify_documents(root)
 
     def test_coordinate_disagreement_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
