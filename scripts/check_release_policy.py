@@ -95,6 +95,13 @@ BLOCK_SCALAR = re.compile(r":\s*[|>][-+0-9]*\s*(?:#.*)?$")
 YAML_INDIRECTION = re.compile(r"(?:^|[\s\[{,])(?:&[A-Za-z0-9_-]+|\*[A-Za-z0-9_-]+)(?=[\s,\]}]|$)|^\s*<<\s*:")
 
 
+# Key spellings the scanner cannot decode to a plain name: explicit `?` keys,
+# tagged keys, and double-quoted keys holding escapes ("\x65nvironment").
+UNDECODABLE_KEY = re.compile(r"^[ \t]*(?:-[ \t]+)?(?:\?(?:[ \t]|$)|!)|\"[^\"\n]*\\[^\"\n]*\"[ \t]*:")
+# Any environment-shaped key, in any case, quoted or not, block or flow.
+ANY_ENVIRONMENT_KEY = re.compile(r"(?i)(?:^|[\s{,\-])['\"]?environment['\"]?[ \t]*:")
+
+
 def load_workflows(root: Path) -> dict[str, str]:
     return {path.name: path.read_text(encoding="utf-8")
             for pattern in WORKFLOW_PATTERNS for path in sorted((root / WORKFLOWS).glob(pattern))}
@@ -123,8 +130,13 @@ def unreadable_environments(workflow: str) -> list[str]:
     for number, line in enumerate(lines):
         if YAML_INDIRECTION.search(line.split(" #", 1)[0]):
             found.append(f"uses a YAML anchor, alias or merge key: `{line.strip()}`")
+        code = line.split(" #", 1)[0]
+        if UNDECODABLE_KEY.search(code):
+            found.append(f"has a YAML key it cannot decode: `{line.strip()}`")
         match = ENVIRONMENT_KEY.match(line)
         if not match:
+            if ANY_ENVIRONMENT_KEY.search(code):
+                found.append(f"has an environment key it cannot read: `{line.strip()}`")
             continue
         value = match.group("value").split(" #", 1)[0].strip()
         if value.startswith("{"):
