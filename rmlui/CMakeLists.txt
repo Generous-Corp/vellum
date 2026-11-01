@@ -12,6 +12,8 @@ cmake_minimum_required(VERSION 3.24)
 #                              when fonts are on) are linked privately.
 #   VellumRmlUi::SoftRenderer  CPU rasteriser writing PNGs, for headless and CI.
 #   VellumRmlUi::DevAssets     development-only hot-reload asset provider.
+#   VellumRmlUi::Lua           sandboxed per-instance Lua 5.4 host for skins
+#                              (VELLUM_RMLUI_LUA=ON).
 #
 # A renderer that draws through Vellum's canvas implements
 # vellum::rmlui::RenderInterface in its own target linking Core; Core itself
@@ -32,6 +34,8 @@ include(CMakePackageConfigHelpers)
 
 option(VELLUM_RMLUI_FONTS
     "Build RmlUi's FreeType font engine from the pinned FreeType source" OFF)
+option(VELLUM_RMLUI_LUA
+    "Build the sandboxed Lua host (VellumRmlUi::Lua) from the pinned Lua source" OFF)
 option(VELLUM_RMLUI_BUILD_TESTS "Build the RmlUi module tests" ${BUILD_TESTING})
 option(VELLUM_RMLUI_INSTALL "Install the VellumRmlUi CMake package" ON)
 
@@ -97,6 +101,20 @@ target_link_libraries(vellum-rmlui-dev-assets PUBLIC vellum-rmlui-core)
 set(VELLUM_RMLUI_COMPONENTS Core SoftRenderer DevAssets)
 set(_vellum_rmlui_install_targets
     vellum-rmlui-core vellum-rmlui-soft-renderer vellum-rmlui-dev-assets)
+
+if(VELLUM_RMLUI_LUA)
+    add_library(vellum-rmlui-lua STATIC
+        src/lua_host.cpp)
+    add_library(VellumRmlUi::Lua ALIAS vellum-rmlui-lua)
+    set_target_properties(vellum-rmlui-lua PROPERTIES
+        EXPORT_NAME Lua
+        POSITION_INDEPENDENT_CODE ON)
+    target_link_libraries(vellum-rmlui-lua
+        PUBLIC vellum-rmlui-core
+        PRIVATE vellum-rmlui-lua54)
+    list(APPEND VELLUM_RMLUI_COMPONENTS Lua)
+    list(APPEND _vellum_rmlui_install_targets vellum-rmlui-lua vellum-rmlui-lua54)
+endif()
 
 if(VELLUM_RMLUI_INSTALL)
     set(_vellum_rmlui_cmake_dir "${CMAKE_INSTALL_LIBDIR}/cmake/VellumRmlUi")

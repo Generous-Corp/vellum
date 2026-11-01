@@ -30,6 +30,18 @@ add_test(NAME vellum.rmlui.soft-render-golden COMMAND vellum-rmlui-soft-render-g
 set_tests_properties(vellum.rmlui.soft-render-golden PROPERTIES
     WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 
+if(VELLUM_RMLUI_LUA)
+    vellum_rmlui_add_test(vellum-rmlui-lua-test lua_test.cpp VellumRmlUi::Lua)
+    # The sandbox's internal guards are tested directly, against the same
+    # pinned Lua the host links.
+    target_include_directories(vellum-rmlui-lua-test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_link_libraries(vellum-rmlui-lua-test PRIVATE vellum-rmlui-lua54)
+    add_test(NAME vellum.rmlui.lua COMMAND vellum-rmlui-lua-test)
+    # An unbounded script must end in a budget error; the timeout is an
+    # independent outer bound should a guard ever fail to fire.
+    set_tests_properties(vellum.rmlui.lua PROPERTIES TIMEOUT 30)
+endif()
+
 if(VELLUM_RMLUI_INSTALL AND NOT CMAKE_CROSSCOMPILING)
     add_test(NAME vellum.rmlui.install-consumer
         COMMAND "${CMAKE_COMMAND}"

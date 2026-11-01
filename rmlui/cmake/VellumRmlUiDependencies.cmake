@@ -15,6 +15,9 @@ set(VELLUM_RMLUI_FREETYPE_URL
     https://download.savannah.gnu.org/releases/freetype/freetype-2.13.3.tar.gz)
 set(VELLUM_RMLUI_FREETYPE_SHA256
     5c3a8e78f7b24c20b25b54ee575d6daa40007a5f4eea2845861c3409b3021747)
+set(VELLUM_RMLUI_LUA_URL https://www.lua.org/ftp/lua-5.4.7.tar.gz)
+set(VELLUM_RMLUI_LUA_SHA256
+    9fbf5e28ef86c69858f6d3d34eccc32e911c1a28b4120ff3e84aaa70cfbf1e30)
 set(VELLUM_RMLUI_STB_COMMIT d14d46f6b44456eb88beac58cba833a4135d4c89)
 set(VELLUM_RMLUI_STB_IMAGE_WRITE_SHA256
     cbd5f0ad7a9cf4468affb36354a1d2338034f2c12473cf1a8e32053cb6914a05)
@@ -63,6 +66,8 @@ function(vellum_rmlui_fetch_dependencies)
     set(RMLUI_HARFBUZZ_SAMPLE OFF CACHE BOOL "" FORCE)
     set(RMLUI_TRACY_PROFILING OFF CACHE BOOL "" FORCE)
     set(RMLUI_INSTALL_LICENSES_AND_BUILD_INFO OFF CACHE BOOL "" FORCE)
+    # RmlUi's Lua plugin keeps one process-wide lua_State, so it is not built;
+    # VellumRmlUi::Lua drives its own per-instance sandboxed state instead.
     set(RMLUI_LUA_BINDINGS OFF CACHE BOOL "" FORCE)
     FetchContent_Declare(vellum_rmlui_rmlui
         GIT_REPOSITORY https://github.com/mikke89/RmlUi.git
@@ -74,6 +79,31 @@ function(vellum_rmlui_fetch_dependencies)
     get_target_property(_rmlui_type rmlui_core TYPE)
     if(NOT _rmlui_type STREQUAL "STATIC_LIBRARY")
         message(FATAL_ERROR "RmlUi must build as a static library here, got ${_rmlui_type}")
+    endif()
+
+    if(VELLUM_RMLUI_LUA)
+        # Lua 5.4.7 from the official source archive. Only the library is
+        # built; the lua and luac front ends are not.
+        FetchContent_Declare(vellum_rmlui_lua
+            URL "${VELLUM_RMLUI_LUA_URL}"
+            URL_HASH "SHA256=${VELLUM_RMLUI_LUA_SHA256}")
+        FetchContent_MakeAvailable(vellum_rmlui_lua)
+        file(GLOB _lua_sources "${vellum_rmlui_lua_SOURCE_DIR}/src/*.c")
+        list(REMOVE_ITEM _lua_sources
+            "${vellum_rmlui_lua_SOURCE_DIR}/src/lua.c"
+            "${vellum_rmlui_lua_SOURCE_DIR}/src/luac.c")
+        add_library(vellum-rmlui-lua54 STATIC ${_lua_sources})
+        set_target_properties(vellum-rmlui-lua54 PROPERTIES
+            C_VISIBILITY_PRESET hidden
+            POSITION_INDEPENDENT_CODE ON)
+        if(NOT WIN32)
+            target_compile_definitions(vellum-rmlui-lua54 PRIVATE LUA_USE_POSIX)
+        endif()
+        target_include_directories(vellum-rmlui-lua54 PUBLIC
+            $<BUILD_INTERFACE:${vellum_rmlui_lua_SOURCE_DIR}/src>)
+        if(UNIX AND NOT APPLE)
+            target_link_libraries(vellum-rmlui-lua54 PRIVATE m)
+        endif()
     endif()
 
     # stb_image_write, used only by the soft renderer's PNG encoder.
