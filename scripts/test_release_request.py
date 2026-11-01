@@ -31,8 +31,12 @@ NOW = datetime(2026, 10, 31, 12, 0, tzinfo=timezone.utc)
 
 def preflight(tag: str = "v0.1.9", age: timedelta = timedelta(minutes=10), enabled: bool = True) -> dict:
     stamp = (NOW - age).strftime("%Y-%m-%dT%H:%M:%SZ")
-    return {"release_tag": tag, "maximum_age_seconds": 21600,
-            "administrator_check": {"checked_at": stamp, "enabled": enabled}}
+    return {"schema": "vellum.immutable-release-preflight.v1", "repository": "Generous-Corp/vellum",
+            "release_tag": tag, "integrity_model": "covered-by-exact-signed-annotated-release-tag",
+            "maximum_age_seconds": 21600,
+            "administrator_check": {"checked_at": stamp, "enabled": enabled, "enforced_by_owner": False,
+                                    "endpoint": "GET /repos/Generous-Corp/vellum/immutable-releases",
+                                    "required_permission": "Administration: read"}}
 
 
 def run(name: str, conclusion: str = "success", sha: str = COMMIT, completed: str = "2026-10-27T01:00:00Z",
@@ -170,6 +174,62 @@ class Preflight(unittest.TestCase):
             self.check(preflight(enabled=False))
         with self.assertRaisesRegex(rr.ReleaseRequestError, "not for"):
             self.check(None)
+
+    def forged(self, change) -> dict:
+        record = preflight()
+        change(record)
+        return record
+
+    def test_the_strict_verifier_runs_before_tagging(self) -> None:
+        cases = {
+            "schema": lambda r: r.update(schema="vellum.immutable-release-preflight.v0"),
+            "repository": lambda r: r.update(repository="someone/vellum"),
+            "integrity": lambda r: r.update(integrity_model="trust-me"),
+            "maximum_age_seconds": lambda r: r.update(maximum_age_seconds=10 ** 9),
+            "endpoint": lambda r: r["administrator_check"].update(endpoint="GET /repos/someone/vellum/immutable-releases"),
+            "Administration: read": lambda r: r["administrator_check"].update(required_permission="none"),
+            "enforced_by_owner": lambda r: r["administrator_check"].update(enforced_by_owner="yes"),
+            "future": lambda r: r["administrator_check"].update(checked_at="2026-11-30T12:00:00Z"),
+            "UTC": lambda r: r["administrator_check"].update(checked_at="2026-10-31T11:50:00+00:00"),
+        }
+        for message, change in cases.items():
+            with self.subTest(message), self.assertRaisesRegex(rr.ReleaseRequestError, message):
+                self.check(self.forged(change))
+
+    def test_a_far_future_preflight_cannot_buy_window(self) -> None:
+        with self.assertRaisesRegex(rr.ReleaseRequestError, "future"):
+            self.check(preflight(age=-timedelta(days=30)))
+
+
+def git(*args: str, cwd: Path | None = None) -> None:
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+
+
+class RemoteTag(unittest.TestCase):
+    def setUp(self) -> None:
+        self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir)
+        self.remote = self.dir / "remote.git"
+        self.work = self.dir / "work"
+        git("init", "-q", "--bare", str(self.remote))
+        git("init", "-q", str(self.work))
+        git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "c", cwd=self.work)
+        git("tag", "v0.1.8", cwd=self.work)
+        git("remote", "add", "origin", str(self.remote), cwd=self.work)
+        git("push", "-q", "origin", "HEAD:refs/heads/main", "refs/tags/v0.1.8", cwd=self.work)
+
+    def test_a_present_tag_reads_as_present(self) -> None:
+        self.assertTrue(rr.remote_tag_exists(self.work, "v0.1.8"))
+
+    def test_only_a_no_match_answer_reads_as_absent(self) -> None:
+        self.assertFalse(rr.remote_tag_exists(self.work, "v0.1.9"))
+
+    def test_a_failed_lookup_refuses_instead_of_reading_as_absent(self) -> None:
+        git("remote", "set-url", "origin", str(self.dir / "missing.git"), cwd=self.work)
+        with self.assertRaisesRegex(rr.ReleaseRequestError, "could not look up v0.1.9"):
+            rr.remote_tag_exists(self.work, "v0.1.9")
+        with self.assertRaisesRegex(rr.ReleaseRequestError, "could not look up"):
+            rr.remote_tag_exists(self.work, "v0.1.9", "no-such-remote")
 
 
 class Attestation(unittest.TestCase):

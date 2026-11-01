@@ -44,6 +44,7 @@ SHA = re.compile(r"^[0-9a-f]{40}$")
 PROJECT_VERSION = re.compile(r"project\(\s*vellum\b[^)]*\bVERSION\s+([0-9.]+)", re.IGNORECASE | re.DOTALL)
 
 
+REPOSITORY = "Generous-Corp/vellum"
 PREFLIGHT = Path("provenance/immutable-release-preflight.json")
 # The tagged gpu-macos run reaches its trust step about 20 minutes after the
 # tag, and sdk-release re-checks the preflight when it finalizes, after the
@@ -173,19 +174,39 @@ def unmet(required: list[tuple[str, int | None]], runs: list[dict[str, Any]], co
     return missing
 
 
-def preflight_remaining(preflight: Any, tag: str, now: datetime) -> timedelta:
-    """How much of the preflight's acceptance window is left; raises when it cannot be used."""
+def preflight_remaining(preflight: Any, tag: str, now: datetime, repository: str = REPOSITORY) -> timedelta:
+    """How much of the preflight's acceptance window is left; raises when it cannot be used.
+
+    The record must first pass the same strict verifier sdk-release runs
+    (schema, repository, tag, endpoint, permission, integrity model, owner
+    field, six-hour maximum, future-clock bound), so nothing it would reject
+    can be tagged.
+    """
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import verify_immutable_release_preflight as vip  # noqa: PLC0415
+
     if not isinstance(preflight, dict) or preflight.get("release_tag") != tag:
         raise ReleaseRequestError(f"the immutable-release preflight is not for {tag}; refresh it with the request")
-    admin = preflight.get("administrator_check")
-    if not isinstance(admin, dict) or admin.get("enabled") is not True:
-        raise ReleaseRequestError("the immutable-release preflight does not show immutable releases enabled")
     try:
-        checked = datetime.fromisoformat(str(admin["checked_at"]).replace("Z", "+00:00"))
-        window = timedelta(seconds=int(preflight["maximum_age_seconds"]))
-    except (KeyError, TypeError, ValueError) as error:
-        raise ReleaseRequestError(f"the immutable-release preflight is malformed: {error}") from error
-    return checked + window - now
+        verified = vip.verify(preflight, repository=repository, release_tag=tag, now=now)
+    except vip.ImmutableReleasePreflightError as error:
+        raise ReleaseRequestError(f"the immutable-release preflight is not valid: {error}") from error
+    checked = vip.parse_utc(verified["administrator_check"]["checked_at"], "administrator_check.checked_at")
+    return checked + timedelta(seconds=verified["maximum_age_seconds"]) - now
+
+
+def remote_tag_exists(root: Path, tag: str, remote: str = "origin") -> bool:
+    """Whether `tag` exists on `remote`; any lookup failure raises rather than reading as absent."""
+    if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag):
+        raise ReleaseRequestError("the tag must be vMAJOR.MINOR.PATCH")
+    result = subprocess.run(["git", "-C", str(root), "ls-remote", "--exit-code", "--tags", remote,
+                             f"refs/tags/{tag}"], capture_output=True, text=True, check=False)
+    if result.returncode == 0:
+        return True
+    if result.returncode == 2:  # git: the remote answered and has no matching ref
+        return False
+    raise ReleaseRequestError(f"could not look up {tag} on {remote} (git exit {result.returncode}): "
+                              f"{result.stderr.strip()}")
 
 
 def check(*, request: Any, cmakelists: str, retired_tags: Any, commit: str, tag_exists: bool,
@@ -329,7 +350,8 @@ def main(argv: list[str]) -> int:
     one.add_argument("--cmakelists", type=Path, default=ROOT / "CMakeLists.txt")
     one.add_argument("--retired-tags", type=Path, default=ROOT / "provenance/retired-release-tags.json")
     one.add_argument("--commit", required=True)
-    one.add_argument("--tag-exists", choices=("true", "false"), required=True)
+    one.add_argument("--remote", default="origin",
+                     help="looked up for the tag; only git's no-match answer reads as absent")
     one.add_argument("--branch-rules", type=Path, required=True)
     one.add_argument("--check-runs", type=Path, required=True)
     one.add_argument("--protection", type=Path, required=True,
@@ -349,9 +371,11 @@ def main(argv: list[str]) -> int:
         if args.command == "attestation":
             print(json.dumps(attestation(ROOT, args.commit, args.attested_at, args.tag), indent=2, sort_keys=True))
             return 0
-        tag = check(request=load(args.request), cmakelists=args.cmakelists.read_text(encoding="utf-8"),
+        request = load(args.request)
+        exists = remote_tag_exists(ROOT, f"v{request_version(request)}", args.remote)
+        tag = check(request=request, cmakelists=args.cmakelists.read_text(encoding="utf-8"),
                     retired_tags=load(args.retired_tags), commit=args.commit,
-                    tag_exists=args.tag_exists == "true", branch_rules=load(args.branch_rules),
+                    tag_exists=exists, branch_rules=load(args.branch_rules),
                     pages=load(args.check_runs), preflight=load(args.preflight),
                     protection=load(args.protection))
     except (OSError, ReleaseRequestError) as error:

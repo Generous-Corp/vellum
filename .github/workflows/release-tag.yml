@@ -67,12 +67,7 @@ jobs:
             "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?per_page=100" \
             -f filter=all > "$RUNNER_TEMP/check-runs.json"
           version="$(python3 -I -c 'import json; print(json.load(open("provenance/release-request.json"))["version"])')"
-          if git ls-remote --exit-code --tags origin "refs/tags/v$version" > /dev/null; then
-            exists=true
-          else
-            exists=false
-          fi
-          tag="$(python3 -I scripts/release_request.py check --commit "$GITHUB_SHA" --tag-exists "$exists" \
+          tag="$(python3 -I scripts/release_request.py check --commit "$GITHUB_SHA" --remote origin \
             --branch-rules "$RUNNER_TEMP/branch-rules.json" --check-runs "$RUNNER_TEMP/check-runs.json" \
             --protection "$RUNNER_TEMP/required-checks.json")"
           python3 -I scripts/check_release_policy.py check
