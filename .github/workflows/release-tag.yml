@@ -35,6 +35,24 @@ jobs:
       # script's own directory and the working directory off sys.path, so no
       # file in the checkout can shadow a standard-library module. Each secret
       # lives only in a step that runs no repository Python.
+      - name: Mint the release App token
+        id: app-token
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      # Main's required checks live in classic branch protection, which only a
+      # token with Administration read may see. This step holds that token, so
+      # it runs no repository code: it only writes the API answer to a file.
+      - name: Read main's required checks
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/branches/main/protection/required_status_checks" \
+            > "$RUNNER_TEMP/required-checks.json"
+
       - name: Decide whether the request may be tagged
         id: request
         env:
@@ -54,7 +72,8 @@ jobs:
             exists=false
           fi
           tag="$(python3 -I scripts/release_request.py check --commit "$GITHUB_SHA" --tag-exists "$exists" \
-            --branch-rules "$RUNNER_TEMP/branch-rules.json" --check-runs "$RUNNER_TEMP/check-runs.json")"
+            --branch-rules "$RUNNER_TEMP/branch-rules.json" --check-runs "$RUNNER_TEMP/check-runs.json" \
+            --protection "$RUNNER_TEMP/required-checks.json")"
           python3 -I scripts/check_release_policy.py check
           python3 -I scripts/check_release_policy.py signer >> "$GITHUB_OUTPUT"
           python3 -I scripts/release_request.py freeze --tag "$tag" > "$RUNNER_TEMP/freeze.json"
@@ -94,13 +113,6 @@ jobs:
             --allowed-signers provenance/release-signers.allowed_signers \
             --expected-principal "$PRINCIPAL" --expected-fingerprint "$FINGERPRINT" \
             --output "$RUNNER_TEMP/release-trust.json"
-
-      - name: Mint the release App token
-        id: app-token
-        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3
-        with:
-          app-id: ${{ vars.RELEASE_APP_ID }}
-          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
 
       - name: Push the tag and freeze it
         env:

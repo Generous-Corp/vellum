@@ -95,10 +95,59 @@ class Check(unittest.TestCase):
         self.assertEqual(self.check(pages=later_success), "v0.1.9")
 
     def test_rules_that_require_nothing_refuse(self) -> None:
-        self.refused("require no status check", branch_rules=[{"type": "pull_request"}])
+        self.refused("requires no status check", branch_rules=[{"type": "pull_request"}])
 
     def test_a_short_commit_refuses(self) -> None:
         self.refused("full SHA", commit="abc")
+
+
+# The live shapes (2026-11-01): Vellum's required checks come from classic branch
+# protection, each bound to GitHub Actions (app 15368); its rulesets add only the
+# merge queue.
+LIVE_RULES = [{"type": "merge_queue", "parameters": {"merge_method": "MERGE"}}]
+LIVE_PROTECTION = {"strict": False, "contexts": ["gpu-macos-arm64", "provenance-verify"],
+                   "checks": [{"context": "gpu-macos-arm64", "app_id": 15368},
+                              {"context": "provenance-verify", "app_id": 15368}]}
+
+
+def app_run(name: str, run_id: int, app: int = 15368, status: str = "completed",
+            conclusion: str | None = "success") -> dict:
+    return {"name": name, "head_sha": COMMIT, "status": status, "conclusion": conclusion,
+            "completed_at": None if status != "completed" else "2026-11-01T01:00:00Z",
+            "id": run_id, "app": {"id": app}}
+
+
+class RequiredChecksFromProtection(unittest.TestCase):
+    def check(self, runs: list) -> str:
+        return rr.check(request={"schema": rr.REQUEST_SCHEMA, "version": "0.1.9"}, cmakelists=CMAKE,
+                        retired_tags=RETIRED, commit=COMMIT, tag_exists=False, branch_rules=LIVE_RULES,
+                        pages=[{"check_runs": runs}], preflight=preflight(), now=NOW,
+                        protection=LIVE_PROTECTION)
+
+    def test_the_live_api_shapes_are_read(self) -> None:
+        self.assertEqual(rr.required_checks(LIVE_RULES, LIVE_PROTECTION),
+                         [("gpu-macos-arm64", 15368), ("provenance-verify", 15368)])
+        self.assertEqual(self.check([app_run("gpu-macos-arm64", 1), app_run("provenance-verify", 2)]), "v0.1.9")
+
+    def test_rules_alone_cannot_hide_protection_checks(self) -> None:
+        with self.assertRaisesRegex(rr.ReleaseRequestError, "provenance-verify: no run"):
+            self.check([app_run("gpu-macos-arm64", 1)])
+
+    def test_a_newer_run_in_progress_outranks_an_older_success(self) -> None:
+        runs = [app_run("gpu-macos-arm64", 1), app_run("provenance-verify", 2),
+                app_run("gpu-macos-arm64", 9, status="in_progress", conclusion=None)]
+        with self.assertRaisesRegex(rr.ReleaseRequestError, "gpu-macos-arm64: in_progress/None"):
+            self.check(runs)
+
+    def test_a_same_named_check_from_another_app_does_not_count(self) -> None:
+        runs = [app_run("gpu-macos-arm64", 1, app=999), app_run("provenance-verify", 2)]
+        with self.assertRaisesRegex(rr.ReleaseRequestError, "gpu-macos-arm64: no run from app 15368"):
+            self.check(runs)
+        # ... and a newer success from the wrong app cannot override a failure from the right one
+        runs = [app_run("gpu-macos-arm64", 1, conclusion="failure"), app_run("gpu-macos-arm64", 5, app=999),
+                app_run("provenance-verify", 2)]
+        with self.assertRaisesRegex(rr.ReleaseRequestError, "gpu-macos-arm64: completed/failure"):
+            self.check(runs)
 
 
 class Preflight(unittest.TestCase):

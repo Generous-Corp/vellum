@@ -97,19 +97,46 @@ def retired(retired_tags: Any) -> set[str]:
     return {row["tag"] for row in rows if isinstance(row, dict) and isinstance(row.get("tag"), str)}
 
 
-def required_contexts(branch_rules: Any) -> list[str]:
-    """Contexts the branch's rulesets require, from GET /rules/branches/main."""
+def required_checks(branch_rules: Any, protection: Any) -> list[tuple[str, int | None]]:
+    """Every check main requires, as (context, app id or None for any app).
+
+    Required checks can come from classic branch protection (Vellum's do,
+    GET /branches/main/protection/required_status_checks) or from a ruleset's
+    required_status_checks rule (GET /rules/branches/main). Both are read, and
+    each check keeps the app it is bound to.
+    """
     if not isinstance(branch_rules, list):
         raise ReleaseRequestError("branch rules must be a list")
-    contexts = []
+    found: dict[str, int | None] = {}
+
+    def add(context: Any, app: Any) -> None:
+        if not isinstance(context, str) or not context:
+            raise ReleaseRequestError("a required check has no context")
+        app_id = app if isinstance(app, int) and app > 0 else None
+        if context in found and found[context] not in (None, app_id) and app_id is not None:
+            raise ReleaseRequestError(f"required check {context} is bound to two different apps")
+        if found.get(context) is None:
+            found[context] = app_id
+
     for rule in branch_rules:
         if isinstance(rule, dict) and rule.get("type") == "required_status_checks":
-            for row in rule.get("parameters", {}).get("required_status_checks", []):
-                if isinstance(row, dict) and isinstance(row.get("context"), str):
-                    contexts.append(row["context"])
-    if not contexts:
-        raise ReleaseRequestError("the main branch rules require no status check; refusing to tag unchecked")
-    return sorted(set(contexts))
+            for row in (rule.get("parameters") or {}).get("required_status_checks", []):
+                if isinstance(row, dict):
+                    add(row.get("context"), row.get("integration_id"))
+    if protection is not None:
+        if not isinstance(protection, dict):
+            raise ReleaseRequestError("branch protection required checks must be an object")
+        checks = protection.get("checks")
+        if isinstance(checks, list) and checks:
+            for row in checks:
+                if isinstance(row, dict):
+                    add(row.get("context"), row.get("app_id"))
+        else:
+            for context in protection.get("contexts") or []:
+                add(context, None)
+    if not found:
+        raise ReleaseRequestError("main requires no status check; refusing to tag unchecked")
+    return sorted(found.items())
 
 
 def check_runs(pages: Any) -> list[dict[str, Any]]:
@@ -124,22 +151,24 @@ def check_runs(pages: Any) -> list[dict[str, Any]]:
     return runs
 
 
-def unmet(contexts: list[str], runs: list[dict[str, Any]], commit: str) -> list[str]:
-    """Required contexts whose latest run on `commit` did not conclude success."""
-    latest: dict[str, dict[str, Any]] = {}
-    for run in runs:
-        if run.get("head_sha") != commit or not isinstance(run.get("name"), str):
-            continue
-        key = (run.get("completed_at") or "", run.get("id") or 0)
-        current = latest.get(run["name"])
-        if current is None or key > ((current.get("completed_at") or ""), current.get("id") or 0):
-            latest[run["name"]] = run
+def unmet(required: list[tuple[str, int | None]], runs: list[dict[str, Any]], commit: str) -> list[str]:
+    """Required checks whose newest run on `commit`, from the bound app, did not conclude success.
+
+    The newest run is the one with the highest id, which GitHub assigns at
+    creation, so a re-run still in progress outranks an older success.
+    """
     missing = []
-    for context in contexts:
-        run = latest.get(context)
-        if run is None:
-            missing.append(f"{context}: no run on {commit}")
-        elif run.get("status") != "completed" or run.get("conclusion") != "success":
+    for context, app_id in required:
+        candidates = [run for run in runs
+                      if run.get("head_sha") == commit and run.get("name") == context
+                      and isinstance(run.get("id"), int)
+                      and (app_id is None or (run.get("app") or {}).get("id") == app_id)]
+        if not candidates:
+            source = f" from app {app_id}" if app_id is not None else ""
+            missing.append(f"{context}: no run{source} on {commit}")
+            continue
+        run = max(candidates, key=lambda row: row["id"])
+        if run.get("status") != "completed" or run.get("conclusion") != "success":
             missing.append(f"{context}: {run.get('status')}/{run.get('conclusion')}")
     return missing
 
@@ -160,7 +189,8 @@ def preflight_remaining(preflight: Any, tag: str, now: datetime) -> timedelta:
 
 
 def check(*, request: Any, cmakelists: str, retired_tags: Any, commit: str, tag_exists: bool,
-          branch_rules: Any, pages: Any, preflight: Any = None, now: datetime | None = None) -> str:
+          branch_rules: Any, pages: Any, preflight: Any = None, now: datetime | None = None,
+          protection: Any = None) -> str:
     """The tag to create; raises ReleaseRequestError when the request may not be tagged."""
     if not SHA.fullmatch(commit):
         raise ReleaseRequestError("the commit must be a full SHA")
@@ -172,7 +202,7 @@ def check(*, request: Any, cmakelists: str, retired_tags: Any, commit: str, tag_
         raise ReleaseRequestError(f"{tag} is retired and is never reused")
     if tag_exists:
         raise ReleaseRequestError(f"{tag} already exists; a release tag is never moved")
-    missing = unmet(required_contexts(branch_rules), check_runs(pages), commit)
+    missing = unmet(required_checks(branch_rules, protection), check_runs(pages), commit)
     if missing:
         raise ReleaseRequestError("required checks have not passed: " + "; ".join(missing))
     remaining = preflight_remaining(preflight, tag, now or datetime.now(timezone.utc))
@@ -302,6 +332,8 @@ def main(argv: list[str]) -> int:
     one.add_argument("--tag-exists", choices=("true", "false"), required=True)
     one.add_argument("--branch-rules", type=Path, required=True)
     one.add_argument("--check-runs", type=Path, required=True)
+    one.add_argument("--protection", type=Path, required=True,
+                     help="GET /branches/main/protection/required_status_checks")
     one.add_argument("--preflight", type=Path, default=ROOT / PREFLIGHT)
     attest = sub.add_parser("attestation")
     attest.add_argument("--commit", required=True)
@@ -320,7 +352,8 @@ def main(argv: list[str]) -> int:
         tag = check(request=load(args.request), cmakelists=args.cmakelists.read_text(encoding="utf-8"),
                     retired_tags=load(args.retired_tags), commit=args.commit,
                     tag_exists=args.tag_exists == "true", branch_rules=load(args.branch_rules),
-                    pages=load(args.check_runs), preflight=load(args.preflight))
+                    pages=load(args.check_runs), preflight=load(args.preflight),
+                    protection=load(args.protection))
     except (OSError, ReleaseRequestError) as error:
         print(f"release request refused: {error}", file=sys.stderr)
         return 1
