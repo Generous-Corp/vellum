@@ -45,7 +45,8 @@ POLICY_FILES = (
     "/scripts/verify_release_tag.py",
     "/tools/provenance/verify_authority_expansion.py",
 )
-ENVIRONMENT = re.compile(r"^\s*environment:\s*(?:\{[^}]*\bname:\s*)?['\"]?([A-Za-z0-9_-]+)", re.MULTILINE)
+ENVIRONMENT_KEY = re.compile(r"^(?P<indent>[ \t]*)environment:[ \t]*(?P<value>.*)$", re.MULTILINE)
+ENVIRONMENT_NAME = re.compile(r"\bname:\s*['\"]?(?P<name>[A-Za-z0-9_-]+)")
 RELEASE_WORKFLOWS = (SIGNING_WORKFLOW, "release-policy.yml")
 PYTHON_CALL = re.compile(r"\bpython3?\b(?P<flags>(?:\s+-[A-Za-z]+)*)")
 SECRET = re.compile(r"\$\{\{\s*(?:secrets\.|steps\.app-token\.outputs\.token)")
@@ -78,7 +79,49 @@ def signer(root: Path) -> tuple[str, str]:
 def environment_problems(workflows: dict[str, str]) -> list[str]:
     return [f"{name} names the `{RELEASE_ENVIRONMENT}` environment; only {SIGNING_WORKFLOW} may"
             for name, text in sorted(workflows.items())
-            if name != SIGNING_WORKFLOW and RELEASE_ENVIRONMENT in ENVIRONMENT.findall(text)]
+            if name != SIGNING_WORKFLOW and RELEASE_ENVIRONMENT in environment_names(text)]
+
+
+def environment_names(workflow: str) -> list[str]:
+    """Return scalar and mapping-form environment names from a workflow.
+
+    GitHub Actions accepts both ``environment: release`` and a mapping such as
+    ``environment:\n  name: release`` (with optional keys before ``name``).
+    Keep this small parser fail-closed: an indented ``name`` under an
+    environment mapping is treated as its name, while a dedented key ends the
+    mapping.
+    """
+    lines = workflow.splitlines()
+    names: list[str] = []
+    for match in ENVIRONMENT_KEY.finditer(workflow):
+        value = match.group("value").split("#", 1)[0].strip()
+        if value:
+            if value.startswith("{"):
+                inline = ENVIRONMENT_NAME.search(value)
+                if inline:
+                    names.append(inline.group("name"))
+            else:
+                scalar = re.fullmatch(r"['\"]?([A-Za-z0-9_-]+)['\"]?", value)
+                if scalar:
+                    names.append(scalar.group(1))
+            continue
+
+        line_number = workflow.count("\n", 0, match.start())
+        environment_indent = len(match.group("indent").expandtabs(8))
+        for line in lines[line_number + 1:]:
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            indent = len(line) - len(line.lstrip(" \t"))
+            if indent <= environment_indent:
+                break
+            mapping_name = re.match(r"[ \t]+name:\s*(.*)$", line)
+            if mapping_name:
+                candidate = mapping_name.group(1).split("#", 1)[0].strip()
+                scalar = re.fullmatch(r"['\"]?([A-Za-z0-9_-]+)['\"]?", candidate)
+                if scalar:
+                    names.append(scalar.group(1))
+                break
+    return names
 
 
 def pin_problems(workflows: dict[str, str], principal: str, fingerprint: str) -> list[str]:
@@ -131,7 +174,7 @@ def problems(root: Path) -> list[str]:
     codeowners_path = root / CODEOWNERS
     codeowners = codeowners_path.read_text(encoding="utf-8") if codeowners_path.is_file() else None
     found = environment_problems(workflows) + codeowner_problems(codeowners) + isolation_problems(workflows, root)
-    if RELEASE_ENVIRONMENT not in ENVIRONMENT.findall(workflows[SIGNING_WORKFLOW]):
+    if RELEASE_ENVIRONMENT not in environment_names(workflows[SIGNING_WORKFLOW]):
         found.append(f"{SIGNING_WORKFLOW} does not run in the `{RELEASE_ENVIRONMENT}` environment")
     principal, fingerprint = signer(root)
     return found + pin_problems(workflows, principal, fingerprint)

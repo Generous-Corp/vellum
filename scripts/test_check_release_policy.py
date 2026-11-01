@@ -47,6 +47,12 @@ class Policy(unittest.TestCase):
         self.workflow("exfiltrate.yml", "jobs:\n  x:\n    environment: { name: release }\n")
         self.assertTrue(any("exfiltrate.yml" in p for p in policy.problems(self.tmp)))
 
+    def test_multiline_environment_mapping_fails(self) -> None:
+        self.workflow("exfiltrate.yml", "jobs:\n  x:\n    environment:\n      name: release\n")
+        self.assertTrue(any("exfiltrate.yml" in p for p in policy.problems(self.tmp)))
+        self.workflow("exfiltrate.yml", "jobs:\n  x:\n    environment:\n      url: https://example.test\n      name: release\n")
+        self.assertTrue(any("exfiltrate.yml" in p for p in policy.problems(self.tmp)))
+
     def test_a_stale_fingerprint_pin_fails(self) -> None:
         self.workflow("verify.yml", "verify --expected-fingerprint SHA256:old-key\n")
         self.assertTrue(any("SHA256:old-key" in p for p in policy.problems(self.tmp)))
