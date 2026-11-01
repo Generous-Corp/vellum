@@ -8298,14 +8298,66 @@
       ],
       "source_commit": "2d637d6b45ae602dfebdaca8f3f6efa306fbd02b",
       "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "rendering",
+      "deadline": "2026-11-04T18:52:50Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "pending",
+      "event_id": "vellum-7b3a243f8e444eb6e45d09dc7a1354dba57f7cdb",
+      "mapped_contracts": [
+        "canvas-kernel"
+      ],
+      "source_commit": "7b3a243f8e444eb6e45d09dc7a1354dba57f7cdb",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "rendering",
+      "deadline": "2026-11-04T20:31:30Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "pending",
+      "event_id": "vellum-bdb2682532556911c7a331058382a5e4f08f80b1",
+      "mapped_contracts": [
+        "canvas-kernel"
+      ],
+      "source_commit": "bdb2682532556911c7a331058382a5e4f08f80b1",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "rendering",
+      "deadline": "2026-11-04T20:31:30Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "pending",
+      "event_id": "vellum-cbeee475eab2f572e58130d6cca70469d00f3587",
+      "mapped_contracts": [
+        "canvas-kernel",
+        "capture-primitives",
+        "macos-shell"
+      ],
+      "source_commit": "cbeee475eab2f572e58130d6cca70469d00f3587",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "rendering",
+      "deadline": "2026-11-04T23:51:05Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "pending",
+      "event_id": "vellum-aeb418a6900ea459a765a39a157b84a7e6554aac",
+      "mapped_contracts": [
+        "canvas-kernel",
+        "capture-primitives",
+        "macos-shell"
+      ],
+      "source_commit": "aeb418a6900ea459a765a39a157b84a7e6554aac",
+      "source_repository": "Generous-Corp/vellum"
     }
   ],
-  "generated_at": "2026-10-31T16:42:03Z",
+  "generated_at": "2026-10-31T23:51:05Z",
   "health": "pass",
-  "maximum_pending_age_days": 0.13,
+  "maximum_pending_age_days": 0.428,
   "observatory_effort_percent": 0.0,
   "overdue": 0,
-  "pending": 5,
+  "pending": 9,
   "release_blockers": [],
   "repeated_generic_fixes": {
     "canvas-kernel": 2,
