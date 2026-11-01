@@ -42,9 +42,10 @@ jobs:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
 
-      # Main's required checks live in classic branch protection, which only a
-      # token with Administration read may see. This step holds that token, so
-      # it runs no repository code: it only writes the API answer to a file.
+      # Main's required checks live in classic branch protection and in rulesets;
+      # reading either needs Administration read, which only the App token has.
+      # This step holds that token, so it runs no repository code: it only
+      # writes the API answers to files.
       - name: Read main's required checks
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -52,6 +53,7 @@ jobs:
           set -euo pipefail
           gh api "repos/$GITHUB_REPOSITORY/branches/main/protection/required_status_checks" \
             > "$RUNNER_TEMP/required-checks.json"
+          gh api "repos/$GITHUB_REPOSITORY/rules/branches/main" > "$RUNNER_TEMP/branch-rules.json"
 
       - name: Decide whether the request may be tagged
         id: request
@@ -61,7 +63,6 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REPOSITORY" = Generous-Corp/vellum
           test "$GITHUB_REF" = refs/heads/main
-          gh api "repos/$GITHUB_REPOSITORY/rules/branches/main" > "$RUNNER_TEMP/branch-rules.json"
           gh api --method GET --paginate --slurp \
             "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?per_page=100" \
             -f filter=all > "$RUNNER_TEMP/check-runs.json"

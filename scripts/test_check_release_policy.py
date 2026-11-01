@@ -140,6 +140,16 @@ class Isolation(unittest.TestCase):
         self.assertTrue(any("holds a secret" in p for p in self.found("    steps:\n" + token)))
         self.assertEqual(self.found("    steps:\n" + clean), [])
 
+    def test_admin_only_reads_need_the_app_token(self) -> None:
+        for endpoint in ("rules/branches/main", "branches/main/protection/required_status_checks"):
+            with self.subTest(endpoint=endpoint):
+                actions = ("      - name: read\n        env:\n          GH_TOKEN: ${{ github.token }}\n"
+                           f"        run: gh api \"repos/$R/{endpoint}\" > out.json\n")
+                app = ("      - name: read\n        env:\n          GH_TOKEN: ${{ steps.app-token.outputs.token }}\n"
+                       f"        run: gh api \"repos/$R/{endpoint}\" > out.json\n")
+                self.assertTrue(any("Administration-only" in p for p in self.found("    steps:\n" + actions)))
+                self.assertEqual(self.found("    steps:\n" + app), [])
+
     def test_a_file_shadowing_the_standard_library_fails(self) -> None:
         (self.tmp / "scripts" / "json.py").write_text("")
         self.assertTrue(any("json" in p for p in self.found("")))

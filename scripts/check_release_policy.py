@@ -48,6 +48,9 @@ POLICY_FILES = (
 ENVIRONMENT_KEY = re.compile(r"^(?P<indent>[ \t]*)environment:[ \t]*(?P<value>.*)$", re.MULTILINE)
 ENVIRONMENT_NAME = re.compile(r"\bname:\s*['\"]?(?P<name>[A-Za-z0-9_-]+)")
 RELEASE_WORKFLOWS = (SIGNING_WORKFLOW, "release-policy.yml")
+# Endpoints only an Administration-read token may call; the Actions token gets 403.
+ADMIN_READ = re.compile(r"gh api [^\n]*(?:branches/main/protection|rules/branches/|/rulesets|immutable-releases)")
+APP_TOKEN = re.compile(r"GH_TOKEN:\s*\$\{\{\s*steps\.app-token\.outputs\.token\s*\}\}")
 PYTHON_CALL = re.compile(r"\bpython3?\b(?P<flags>(?:\s+-[A-Za-z]+)*)")
 SECRET = re.compile(r"\$\{\{\s*(?:secrets\.|steps\.app-token\.outputs\.token)")
 # Directories a release workflow runs Python from: the script's own directory
@@ -227,6 +230,8 @@ def isolation_problems(workflows: dict[str, str], root: Path) -> list[str]:
                     found.append(f"{name}: {title} runs `{call.group(0).strip()}` without -I")
             if name == SIGNING_WORKFLOW and SECRET.search(step) and PYTHON_CALL.search(step):
                 found.append(f"{name}: {title} holds a secret and runs Python")
+            if name == SIGNING_WORKFLOW and ADMIN_READ.search(step) and not APP_TOKEN.search(step):
+                found.append(f"{name}: {title} reads an Administration-only endpoint without the App token")
     stdlib = set(sys.stdlib_module_names)
     for directory in PYTHON_DIRS:
         for path in sorted((root / directory).glob("*.py")):
