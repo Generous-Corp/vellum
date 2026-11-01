@@ -102,9 +102,9 @@ jobs:
             --tag-name "$RELEASE_TAG" --tag-object-sha "$tag_object_sha" \
             --source-commit "$SOURCE_COMMIT" \
             --allowed-signers provenance/release-signers.allowed_signers \
-            --expected-principal daniel.raffel@gmail.com \
+            --expected-principal vellum-release-ci \
             --expected-fingerprint \
-              SHA256:eMlEuZcnW6NJDrKQBuN5EX1q69bOlIRPl6XmutVTgcs \
+              SHA256:yPC5V994gP+0WBk2haLnDFFr6b4pNRcWIB3GbBv34k8 \
             --output "$RUNNER_TEMP/validation-release-trust.json"
           TAG_OBJECT_SHA="$tag_object_sha" python3 - <<'PY'
           import json, os
@@ -425,9 +425,9 @@ jobs:
             --tag-object-sha "$tag_object_sha" \
             --source-commit "$SOURCE_COMMIT" \
             --allowed-signers provenance/release-signers.allowed_signers \
-            --expected-principal daniel.raffel@gmail.com \
+            --expected-principal vellum-release-ci \
             --expected-fingerprint \
-              SHA256:eMlEuZcnW6NJDrKQBuN5EX1q69bOlIRPl6XmutVTgcs \
+              SHA256:yPC5V994gP+0WBk2haLnDFFr6b4pNRcWIB3GbBv34k8 \
             --output "$RUNNER_TEMP/release-trust.json"
           printf 'tag-object=%s\n' "$tag_object_sha" >> "$GITHUB_OUTPUT"
 

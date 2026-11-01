@@ -72,9 +72,9 @@ jobs:
             --source-commit "$record_commit" \
             --allowed-signers \
               "$GITHUB_WORKSPACE/provenance/release-signers.allowed_signers" \
-            --expected-principal daniel.raffel@gmail.com \
+            --expected-principal vellum-release-ci \
             --expected-fingerprint \
-              SHA256:eMlEuZcnW6NJDrKQBuN5EX1q69bOlIRPl6XmutVTgcs \
+              SHA256:yPC5V994gP+0WBk2haLnDFFr6b4pNRcWIB3GbBv34k8 \
             --output "$RUNNER_TEMP/authority-tag-trust.json"
           {
             printf 'tag=%s\n' "$AUTHORITY_TAG"
