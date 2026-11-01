@@ -1,6 +1,6 @@
 {
   "administrator_check": {
-    "checked_at": "2026-08-12T04:18:15Z",
+    "checked_at": "2026-11-01T22:24:00Z",
     "enabled": true,
     "endpoint": "GET /repos/Generous-Corp/vellum/immutable-releases",
     "enforced_by_owner": false,
