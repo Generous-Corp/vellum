@@ -76,10 +76,78 @@ def signer(root: Path) -> tuple[str, str]:
     return principal, fields[1]
 
 
+# GitHub Actions runs both extensions.
+WORKFLOW_PATTERNS = ("*.yml", "*.yaml")
+SIMPLE_NAME = re.compile(r"['\"]?([A-Za-z0-9_-]+)['\"]?")
+BLOCK_SCALAR = re.compile(r":\s*[|>][-+0-9]*\s*(?:#.*)?$")
+# YAML anchors, aliases and merge keys can carry an `environment` into a job
+# where a line-based reader never sees it, so their use outside block text is
+# refused rather than read.
+YAML_INDIRECTION = re.compile(r"(?:^|[\s\[{,])(?:&[A-Za-z0-9_-]+|\*[A-Za-z0-9_-]+)(?=[\s,\]}]|$)|^\s*<<\s*:")
+
+
+def load_workflows(root: Path) -> dict[str, str]:
+    return {path.name: path.read_text(encoding="utf-8")
+            for pattern in WORKFLOW_PATTERNS for path in sorted((root / WORKFLOWS).glob(pattern))}
+
+
+def structural_lines(workflow: str) -> list[str]:
+    """The workflow's lines outside block scalars (`run: |` text and the like)."""
+    kept: list[str] = []
+    block_indent: int | None = None
+    for line in workflow.splitlines():
+        indent = len(line) - len(line.lstrip(" "))
+        if block_indent is not None:
+            if not line.strip() or indent > block_indent:
+                continue
+            block_indent = None
+        kept.append(line)
+        if BLOCK_SCALAR.search(line.split(" #", 1)[0].rstrip()):
+            block_indent = indent
+    return kept
+
+
+def unreadable_environments(workflow: str) -> list[str]:
+    """Environment settings this reader cannot resolve exactly; each is a violation."""
+    found = []
+    lines = structural_lines(workflow)
+    for number, line in enumerate(lines):
+        if YAML_INDIRECTION.search(line.split(" #", 1)[0]):
+            found.append(f"uses a YAML anchor, alias or merge key: `{line.strip()}`")
+        match = re.match(r"^(?P<indent>[ \t]*)environment:\s*(?P<value>.*)$", line)
+        if not match:
+            continue
+        value = match.group("value").split(" #", 1)[0].strip()
+        if value.startswith("{"):
+            if not ENVIRONMENT_NAME.search(value) or "${{" in value:
+                found.append(f"has an environment it cannot read: `{line.strip()}`")
+        elif value:
+            if not SIMPLE_NAME.fullmatch(value):
+                found.append(f"has an environment it cannot read: `{line.strip()}`")
+        else:
+            indent = len(match.group("indent"))
+            name = None
+            for following in lines[number + 1:]:
+                if not following.strip() or following.lstrip().startswith("#"):
+                    continue
+                if len(following) - len(following.lstrip(" \t")) <= indent:
+                    break
+                named = re.match(r"[ \t]+name:\s*(.*)$", following)
+                if named:
+                    name = named.group(1).split(" #", 1)[0].strip()
+                    break
+            if name is None or not SIMPLE_NAME.fullmatch(name):
+                found.append(f"has an environment mapping without a plain name: `{line.strip()}`")
+    return found
+
+
 def environment_problems(workflows: dict[str, str]) -> list[str]:
-    return [f"{name} names the `{RELEASE_ENVIRONMENT}` environment; only {SIGNING_WORKFLOW} may"
-            for name, text in sorted(workflows.items())
-            if name != SIGNING_WORKFLOW and RELEASE_ENVIRONMENT in environment_names(text)]
+    found = [f"{name} names the `{RELEASE_ENVIRONMENT}` environment; only {SIGNING_WORKFLOW} may"
+             for name, text in sorted(workflows.items())
+             if name != SIGNING_WORKFLOW and RELEASE_ENVIRONMENT in environment_names(text)]
+    found += [f"{name} {problem}" for name, text in sorted(workflows.items())
+              for problem in unreadable_environments(text)]
+    return found
 
 
 def environment_names(workflow: str) -> list[str]:
@@ -168,7 +236,7 @@ def isolation_problems(workflows: dict[str, str], root: Path) -> list[str]:
 
 
 def problems(root: Path) -> list[str]:
-    workflows = {path.name: path.read_text(encoding="utf-8") for path in sorted((root / WORKFLOWS).glob("*.yml"))}
+    workflows = load_workflows(root)
     if SIGNING_WORKFLOW not in workflows:
         return [f"{WORKFLOWS / SIGNING_WORKFLOW} is missing"]
     codeowners_path = root / CODEOWNERS

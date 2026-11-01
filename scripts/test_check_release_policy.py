@@ -53,6 +53,41 @@ class Policy(unittest.TestCase):
         self.workflow("exfiltrate.yml", "jobs:\n  x:\n    environment:\n      url: https://example.test\n      name: release\n")
         self.assertTrue(any("exfiltrate.yml" in p for p in policy.problems(self.tmp)))
 
+    def test_a_yaml_extension_workflow_is_scanned(self) -> None:
+        # GitHub Actions runs .yaml as well as .yml workflows.
+        for text in ("jobs:\n  x:\n    environment: release\n",
+                     "jobs:\n  x:\n    environment:\n      url: https://x\n      name: release\n"):
+            with self.subTest(text=text):
+                self.workflow("exfiltrate.yaml", text)
+                self.assertTrue(any("exfiltrate.yaml" in p for p in policy.problems(self.tmp)))
+        (self.tmp / ".github/workflows/exfiltrate.yaml").unlink()
+        self.assertEqual(policy.problems(self.tmp), [])
+
+    def test_an_environment_it_cannot_read_fails_closed(self) -> None:
+        for text in ("jobs:\n  x:\n    environment: ${{ inputs.env }}\n",
+                     "jobs:\n  x:\n    environment: *rel\n",
+                     "jobs:\n  x:\n    environment: !!str release\n",
+                     "jobs:\n  x:\n    environment: { name: ${{ inputs.env }} }\n",
+                     "jobs:\n  x:\n    environment:\n      name: ${{ inputs.env }}\n",
+                     "jobs:\n  x:\n    environment:\n      url: https://x\n"):
+            with self.subTest(text=text):
+                self.workflow("sneaky.yml", text)
+                self.assertTrue(any("sneaky.yml" in p for p in policy.problems(self.tmp)), policy.problems(self.tmp))
+
+    def test_yaml_anchors_aliases_and_merges_fail_closed(self) -> None:
+        for text in ("defaults: &job\n  environment: release\njobs:\n  x: *job\n",
+                     "jobs:\n  x:\n    <<: *job\n",
+                     "jobs:\n  x: &copy\n    runs-on: ubuntu-latest\n"):
+            with self.subTest(text=text):
+                self.workflow("anchors.yml", text)
+                self.assertTrue(any("anchor" in p for p in policy.problems(self.tmp)), policy.problems(self.tmp))
+
+    def test_shell_text_in_run_blocks_is_not_yaml(self) -> None:
+        self.workflow("shell.yml", "jobs:\n  x:\n    steps:\n      - name: s\n        run: |\n"
+                                    "          rm -f *.json && cp -r src/* out/\n          echo &bg\n"
+                                    "          python3 -c 'print(*args)'\n")
+        self.assertEqual(policy.problems(self.tmp), [])
+
     def test_a_stale_fingerprint_pin_fails(self) -> None:
         self.workflow("verify.yml", "verify --expected-fingerprint SHA256:old-key\n")
         self.assertTrue(any("SHA256:old-key" in p for p in policy.problems(self.tmp)))
