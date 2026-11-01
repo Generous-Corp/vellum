@@ -32,6 +32,8 @@ EXPECTED_RUNNERS = {
     "pulp-observatory-watchdog.yml": ("__hosted__", "ubuntu-latest"),
     "review-verdict.yml": ("__hosted__", "ubuntu-24.04"),
     "review-verdict-trigger.yml": ("__hosted__", "ubuntu-24.04"),
+    "release-policy.yml": ("__hosted__", "ubuntu-latest"),
+    "release-tag.yml": ("__hosted__", "ubuntu-latest"),
     "readme-quick-start.yml": (
         "VELLUM_MACOS_RUNS_ON_JSON",
         '["macos-15"]',
@@ -993,6 +995,7 @@ class RunnerPolicyTests(unittest.TestCase):
             "product-quality.yml",
             "provenance.yml",
             "readme-quick-start.yml",
+            "release-policy.yml",
         }
         for path in sorted(WORKFLOWS.glob("*.yml")):
             text = path.read_text(encoding="utf-8")
