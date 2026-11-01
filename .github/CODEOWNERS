@@ -5,8 +5,11 @@
 /.github/CODEOWNERS @danielraffel
 /.github/workflows/release-tag.yml @danielraffel
 /.github/workflows/release-policy.yml @danielraffel
+/provenance/authority-signers.allowed_signers @danielraffel
 /provenance/immutable-release-preflight.json @danielraffel
+/provenance/release-request.json @danielraffel
 /provenance/release-signers.allowed_signers @danielraffel
+/provenance/renderer-signers.allowed_signers @danielraffel
 /provenance/retired-release-tags.json @danielraffel
 /scripts/check_release_policy.py @danielraffel
 /scripts/release_request.py @danielraffel

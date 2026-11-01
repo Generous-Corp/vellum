@@ -97,11 +97,16 @@ jobs:
           test "$remote_type" = tag
           git fetch --no-tags origin "refs/tags/$RELEASE_TAG"
           test "$(git rev-parse "$tag_object_sha^{commit}")" = "$SOURCE_COMMIT"
+          # Trust inputs come from the tagged commit, not from main: a change that
+          # lands on main while a release is in flight must not change its answer.
+          mkdir -p "$RUNNER_TEMP/source-trust"
+          git show "$SOURCE_COMMIT:provenance/release-signers.allowed_signers" \
+            > "$RUNNER_TEMP/source-trust/release-signers.allowed_signers"
           python3 scripts/verify_release_tag.py \
             --repo "$GITHUB_WORKSPACE" --repository "$GITHUB_REPOSITORY" \
             --tag-name "$RELEASE_TAG" --tag-object-sha "$tag_object_sha" \
             --source-commit "$SOURCE_COMMIT" \
-            --allowed-signers provenance/release-signers.allowed_signers \
+            --allowed-signers "$RUNNER_TEMP/source-trust/release-signers.allowed_signers" \
             --expected-principal vellum-release-ci \
             --expected-fingerprint \
               SHA256:yPC5V994gP+0WBk2haLnDFFr6b4pNRcWIB3GbBv34k8 \
@@ -418,13 +423,18 @@ jobs:
           test "$tag_object_sha" = "$VALIDATED_TAG_OBJECT_SHA"
           git fetch --no-tags origin "refs/tags/$RELEASE_TAG"
           test "$(git rev-parse "$tag_object_sha^{commit}")" = "$SOURCE_COMMIT"
+          # Trust inputs come from the tagged commit, not from main: a change that
+          # lands on main while a release is in flight must not change its answer.
+          mkdir -p "$RUNNER_TEMP/source-trust"
+          git show "$SOURCE_COMMIT:provenance/release-signers.allowed_signers" \
+            > "$RUNNER_TEMP/source-trust/release-signers.allowed_signers"
           python3 scripts/verify_release_tag.py \
             --repo "$GITHUB_WORKSPACE" \
             --repository "$GITHUB_REPOSITORY" \
             --tag-name "$RELEASE_TAG" \
             --tag-object-sha "$tag_object_sha" \
             --source-commit "$SOURCE_COMMIT" \
-            --allowed-signers provenance/release-signers.allowed_signers \
+            --allowed-signers "$RUNNER_TEMP/source-trust/release-signers.allowed_signers" \
             --expected-principal vellum-release-ci \
             --expected-fingerprint \
               SHA256:yPC5V994gP+0WBk2haLnDFFr6b4pNRcWIB3GbBv34k8 \
@@ -477,8 +487,10 @@ jobs:
               json.dumps(evidence, sort_keys=True, separators=(",", ":")) + "\n"
           )
           PY
+          git show "$SOURCE_COMMIT:provenance/immutable-release-preflight.json" \
+            > "$RUNNER_TEMP/source-preflight.json"
           python3 scripts/verify_immutable_release_preflight.py \
-            --input provenance/immutable-release-preflight.json \
+            --input "$RUNNER_TEMP/source-preflight.json" \
             --repository "$GITHUB_REPOSITORY" \
             --release-tag "$RELEASE_TAG" \
             --output "$RUNNER_TEMP/immutable-release-preflight.json"

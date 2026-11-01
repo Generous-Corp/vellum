@@ -49,7 +49,7 @@ class ReleaseTagTests(unittest.TestCase):
             str(self.key),
             cwd=self.root,
         )
-        self.allowed_signers = self.root / "allowed_signers"
+        self.allowed_signers = self.root / "release-signers.allowed_signers"
         public_key = (self.key.with_suffix(".pub")).read_text(
             encoding="utf-8"
         ).strip()
@@ -170,7 +170,8 @@ class ReleaseTagTests(unittest.TestCase):
             str(other_key),
             cwd=self.root,
         )
-        other_allowed_signers = self.root / "other_allowed_signers"
+        (self.root / "other").mkdir()
+        other_allowed_signers = self.root / "other" / "release-signers.allowed_signers"
         other_public_key = other_key.with_suffix(".pub").read_text(
             encoding="utf-8"
         ).strip()
@@ -187,6 +188,16 @@ class ReleaseTagTests(unittest.TestCase):
                 allowed_signers=other_allowed_signers,
                 expected_fingerprint=other_fingerprint,
             )
+
+    def test_each_tag_namespace_needs_its_own_signer_file(self) -> None:
+        authority = self.root / "authority-signers.allowed_signers"
+        authority.write_text(self.allowed_signers.read_text(encoding="utf-8"), encoding="utf-8")
+        with self.assertRaisesRegex(ReleaseTagVerificationError, "must be verified against release-signers"):
+            self.verify(allowed_signers=authority)
+        with self.assertRaisesRegex(ReleaseTagVerificationError, "must be verified against authority-signers"):
+            self.verify(tag_name="authority/example-v1")
+        with self.assertRaisesRegex(ReleaseTagVerificationError, "in no signed namespace"):
+            self.verify(tag_name="release-0.1.0")
 
     def write_retired(self, tags: list[str]) -> Path:
         path = self.root / "retired-release-tags.json"

@@ -124,6 +124,23 @@ def allowed_signer_principals(path: Path) -> list[str]:
     return principals
 
 
+# Each tag namespace has exactly one signer file. Release tags are signed by
+# the release pipeline's key; authority tags were signed by the owner's key.
+# The verifier picks the file by namespace itself, so no caller can verify a
+# release tag against the other key.
+SIGNERS_BY_NAMESPACE = (
+    ("authority/", "authority-signers.allowed_signers"),
+    ("v", "release-signers.allowed_signers"),
+)
+
+
+def required_signers_file(tag_name: str) -> str:
+    for prefix, name in SIGNERS_BY_NAMESPACE:
+        if tag_name.startswith(prefix):
+            return name
+    raise ReleaseTagVerificationError(f"tag {tag_name!r} is in no signed namespace")
+
+
 def verify(
     *,
     repo: Path,
@@ -142,6 +159,11 @@ def verify(
     if not allowed_signers.is_file():
         raise ReleaseTagVerificationError(
             f"allowed-signers file does not exist: {allowed_signers}"
+        )
+    if allowed_signers.name != required_signers_file(tag_name):
+        raise ReleaseTagVerificationError(
+            f"{tag_name!r} must be verified against "
+            f"{required_signers_file(tag_name)}, not {allowed_signers.name}"
         )
 
     object_type = run(

@@ -32,6 +32,7 @@ NOW = datetime(2026, 10, 31, 12, 0, tzinfo=timezone.utc)
 def preflight(tag: str = "v0.1.9", age: timedelta = timedelta(minutes=10), enabled: bool = True) -> dict:
     stamp = (NOW - age).strftime("%Y-%m-%dT%H:%M:%SZ")
     return {"schema": "vellum.immutable-release-preflight.v1", "repository": "Generous-Corp/vellum",
+            "documentation": "https://docs.github.com/",
             "release_tag": tag, "integrity_model": "covered-by-exact-signed-annotated-release-tag",
             "maximum_age_seconds": 21600,
             "administrator_check": {"checked_at": stamp, "enabled": enabled, "enforced_by_owner": False,
@@ -63,6 +64,12 @@ class Check(unittest.TestCase):
 
     def test_positive_control(self) -> None:
         self.assertEqual(self.check(), "v0.1.9")
+        self.assertEqual(self.check(existing_tags=["v0.1.6", "v0.1.8", "not-a-version"]), "v0.1.9")
+
+    def test_a_release_only_moves_forward(self) -> None:
+        self.refused("not newer than v0.2.0", existing_tags=["v0.1.8", "v0.2.0"])
+        self.refused("not newer than v0.1.9", existing_tags=["v0.1.9"], tag_exists=False)
+        self.refused("not newer than v0.3.0", retired_tags={"tags": [{"tag": "v0.3.0"}]})
 
     def test_an_existing_tag_is_never_moved(self) -> None:
         self.refused("already exists", tag_exists=True)
@@ -127,6 +134,15 @@ class RequiredChecksFromProtection(unittest.TestCase):
                         retired_tags=RETIRED, commit=COMMIT, tag_exists=False, branch_rules=LIVE_RULES,
                         pages=[{"check_runs": runs}], preflight=preflight(), now=NOW,
                         protection=LIVE_PROTECTION)
+
+    def test_pending_lists_only_checks_whose_newest_run_is_unfinished(self) -> None:
+        runs = [app_run("gpu-macos-arm64", 1), app_run("gpu-macos-arm64", 3, status="in_progress", conclusion=None),
+                app_run("provenance-verify", 2)]
+        required = rr.required_checks(LIVE_RULES, LIVE_PROTECTION)
+        self.assertEqual(rr.pending(required, runs, COMMIT), ["gpu-macos-arm64"])
+        self.assertEqual(rr.pending(required, runs[:1] + runs[2:], COMMIT), [])
+        # A failed or missing run is not pending: the check that follows refuses it.
+        self.assertEqual(rr.pending(required, [app_run("gpu-macos-arm64", 1, conclusion="failure")], COMMIT), [])
 
     def test_the_live_api_shapes_are_read(self) -> None:
         self.assertEqual(rr.required_checks(LIVE_RULES, LIVE_PROTECTION),
@@ -230,6 +246,18 @@ class RemoteTag(unittest.TestCase):
             rr.remote_tag_exists(self.work, "v0.1.9")
         with self.assertRaisesRegex(rr.ReleaseRequestError, "could not look up"):
             rr.remote_tag_exists(self.work, "v0.1.9", "no-such-remote")
+
+
+class RemoteReleaseTags(RemoteTag):
+    def test_release_tags_are_listed(self) -> None:
+        git("tag", "authority/x", cwd=self.work)
+        git("push", "-q", "origin", "refs/tags/authority/x", cwd=self.work)
+        self.assertEqual(rr.remote_release_tags(self.work), ["v0.1.8"])
+
+    def test_a_failed_listing_refuses(self) -> None:
+        git("remote", "set-url", "origin", str(self.dir / "missing.git"), cwd=self.work)
+        with self.assertRaisesRegex(rr.ReleaseRequestError, "could not list release tags"):
+            rr.remote_release_tags(self.work)
 
 
 class Attestation(unittest.TestCase):

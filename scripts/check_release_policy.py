@@ -7,9 +7,13 @@ fails when:
 
 - a workflow other than release-tag.yml names the `release` environment, so
   nothing else can read the key;
-- an --expected-principal or --expected-fingerprint pin in any workflow
-  differs from provenance/release-signers.allowed_signers, so the verifiers
-  and the signer agree on one key;
+- a call to verify_release_tag.py names a signer file other than the release
+  or authority file, pins a principal or fingerprint other than that file's,
+  pins through a variable outside release-tag.yml, or a workflow that must
+  verify release tags has fewer calls than it should, so the verifiers and
+  the signer agree on one key per tag namespace;
+- a job calls a reusable workflow from another repository, which could name
+  the `release` environment where this check cannot read it;
 - CODEOWNERS does not give every policy file to the owner, or owns a file
   the policy list does not name, so the two lists stay one inventory;
 - a policy script imports a repository module that is not itself a policy
@@ -43,8 +47,11 @@ POLICY_FILES = (
     "/.github/CODEOWNERS",
     "/.github/workflows/release-tag.yml",
     "/.github/workflows/release-policy.yml",
+    "/provenance/authority-signers.allowed_signers",
     "/provenance/immutable-release-preflight.json",
+    "/provenance/release-request.json",
     "/provenance/release-signers.allowed_signers",
+    "/provenance/renderer-signers.allowed_signers",
     "/provenance/retired-release-tags.json",
     "/scripts/check_release_policy.py",
     "/scripts/release_request.py",
@@ -70,26 +77,42 @@ SECRET = re.compile(r"\$\{\{\s*(?:secrets\.|steps\.app-token\.outputs\.token)")
 # and the working directory would be first on sys.path without -I.
 PYTHON_DIRS = (".", "scripts", "tools/provenance")
 LOCAL_IMPORT = re.compile(r"^[ \t]*(?:from|import)[ \t]+(?P<module>[A-Za-z_][A-Za-z0-9_]*)", re.MULTILINE)
-PIN = re.compile(r"--expected-(principal|fingerprint)(?:\s*\\?\s*\n\s*|\s+)(\S+)")
+# One signer file per tag namespace; verify_release_tag.py enforces which.
+SIGNER_FILES = {
+    "release-signers.allowed_signers": ALLOWED_SIGNERS,
+    "authority-signers.allowed_signers": Path("provenance/authority-signers.allowed_signers"),
+}
+VERIFIER = "verify_release_tag.py"
+TRUST_FLAG = re.compile(r"--(allowed-signers|expected-principal|expected-fingerprint)(?:=|\s+)(\"[^\"]*\"|'[^']*'|\S+)")
+TRUST_FLAG_NAME = re.compile(r"--(?:allowed-signers|expected-principal|expected-fingerprint)\b")
+# The workflows that verify signed tags, and how many calls each must keep.
+REQUIRED_VERIFIER_CALLS = {
+    "authority-release.yml": 1,
+    "gpu-macos.yml": 2,
+    "provenance.yml": 2,
+    "release-tag.yml": 1,
+    "sdk-release.yml": 2,
+}
+REMOTE_REUSABLE = re.compile(r"""^[ \t]*(?:-[ \t]+)?uses:[ \t]*['"]?(?!\./)[^'"\s]*\.github/workflows/""")
 
 
 class PolicyError(RuntimeError):
     pass
 
 
-def signer(root: Path) -> tuple[str, str]:
-    """The single (principal, fingerprint) the allowed-signers file names."""
-    path = root / ALLOWED_SIGNERS
+def signer(root: Path, relative: Path = ALLOWED_SIGNERS) -> tuple[str, str]:
+    """The single (principal, fingerprint) an allowed-signers file names."""
+    path = root / relative
     rows = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip() and not line.startswith("#")]
     if len(rows) != 1:
-        raise PolicyError(f"{ALLOWED_SIGNERS} must name exactly one release key, not {len(rows)}")
+        raise PolicyError(f"{relative} must name exactly one release key, not {len(rows)}")
     principal = rows[0].split()[0]
     if "," in principal:
-        raise PolicyError(f"{ALLOWED_SIGNERS} must name exactly one principal")
+        raise PolicyError(f"{relative} must name exactly one principal")
     listing = subprocess.run(["ssh-keygen", "-lf", str(path)], capture_output=True, text=True, check=False)
     fields = listing.stdout.split()
     if listing.returncode != 0 or len(fields) < 2:
-        raise PolicyError(f"ssh-keygen cannot read {ALLOWED_SIGNERS}: {listing.stderr.strip()}")
+        raise PolicyError(f"ssh-keygen cannot read {relative}: {listing.stderr.strip()}")
     return principal, fields[1]
 
 
@@ -221,12 +244,57 @@ def environment_names(workflow: str) -> list[str]:
     return names
 
 
-def pin_problems(workflows: dict[str, str], principal: str, fingerprint: str) -> list[str]:
-    expected = {"principal": principal, "fingerprint": fingerprint}
-    return [f"{name}: --expected-{kind} {value} differs from {ALLOWED_SIGNERS} ({expected[kind]})"
+def verifier_calls(workflow: str) -> tuple[list[dict[str, list[str]]], int]:
+    """Each verify_release_tag.py call's trust flags, and the flags seen anywhere."""
+    joined = re.sub(r"\\\n\s*", " ", workflow)
+    calls = []
+    for line in joined.splitlines():
+        if VERIFIER not in line:
+            continue
+        flags: dict[str, list[str]] = {}
+        for name, value in TRUST_FLAG.findall(line):
+            flags.setdefault(name, []).append(value.strip("\"'"))
+        calls.append(flags)
+    return calls, len(TRUST_FLAG_NAME.findall(joined))
+
+
+def pin_problems(workflows: dict[str, str], root: Path) -> list[str]:
+    found = []
+    signers = {name: signer(root, path) for name, path in SIGNER_FILES.items()}
+    for name, text in sorted(workflows.items()):
+        calls, seen = verifier_calls(text)
+        if seen != sum(len(values) for flags in calls for values in flags.values()):
+            found.append(f"{name}: a signer flag appears outside a {VERIFIER} call")
+        if len(calls) < REQUIRED_VERIFIER_CALLS.get(name, 0):
+            found.append(f"{name}: has {len(calls)} {VERIFIER} calls; it must keep "
+                         f"{REQUIRED_VERIFIER_CALLS[name]}")
+        for flags in calls:
+            values = {key: flags.get(key, []) for key in ("allowed-signers", "expected-principal",
+                                                          "expected-fingerprint")}
+            if any(len(found_values) != 1 for found_values in values.values()):
+                found.append(f"{name}: a {VERIFIER} call must pass each signer flag exactly once")
+                continue
+            path = values["allowed-signers"][0]
+            principal, fingerprint = values["expected-principal"][0], values["expected-fingerprint"][0]
+            file_name = path.rsplit("/", 1)[-1]
+            if file_name not in SIGNER_FILES or "${{" in path:
+                found.append(f"{name}: {VERIFIER} reads {path}, not a policy signer file")
+                continue
+            if name == SIGNING_WORKFLOW:
+                if (file_name, principal, fingerprint) != (ALLOWED_SIGNERS.name, "$PRINCIPAL", "$FINGERPRINT"):
+                    found.append(f"{name}: must verify against {ALLOWED_SIGNERS} with the signer step's pins")
+                continue
+            expected = signers[file_name]
+            if (principal, fingerprint) != expected:
+                found.append(f"{name}: pins {principal} {fingerprint}, but {SIGNER_FILES[file_name]} "
+                             f"names {expected[0]} {expected[1]}")
+    return found
+
+
+def reusable_problems(workflows: dict[str, str]) -> list[str]:
+    return [f"{name} calls a reusable workflow from another repository: `{line.strip()}`"
             for name, text in sorted(workflows.items())
-            for kind, value in PIN.findall(text)
-            if value.strip("\"'") != expected[kind] and not value.strip("\"'").startswith("$")]
+            for line in structural_lines(text) if REMOTE_REUSABLE.search(line)]
 
 
 def codeowner_problems(codeowners: str | None) -> list[str]:
@@ -293,8 +361,7 @@ def problems(root: Path) -> list[str]:
     found += isolation_problems(workflows, root)
     if RELEASE_ENVIRONMENT not in environment_names(workflows[SIGNING_WORKFLOW]):
         found.append(f"{SIGNING_WORKFLOW} does not run in the `{RELEASE_ENVIRONMENT}` environment")
-    principal, fingerprint = signer(root)
-    return found + pin_problems(workflows, principal, fingerprint)
+    return found + pin_problems(workflows, root) + reusable_problems(workflows)
 
 
 def main(argv: list[str]) -> int:

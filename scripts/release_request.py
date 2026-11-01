@@ -152,26 +152,58 @@ def check_runs(pages: Any) -> list[dict[str, Any]]:
     return runs
 
 
-def unmet(required: list[tuple[str, int | None]], runs: list[dict[str, Any]], commit: str) -> list[str]:
-    """Required checks whose newest run on `commit`, from the bound app, did not conclude success.
+def newest_run(context: str, app_id: int | None, runs: list[dict[str, Any]],
+               commit: str) -> dict[str, Any] | None:
+    """The newest run of `context` on `commit` from the bound app, by id.
 
-    The newest run is the one with the highest id, which GitHub assigns at
-    creation, so a re-run still in progress outranks an older success.
+    GitHub assigns ids at creation, so a re-run still in progress outranks an
+    older success.
     """
+    candidates = [run for run in runs
+                  if run.get("head_sha") == commit and run.get("name") == context
+                  and isinstance(run.get("id"), int)
+                  and (app_id is None or (run.get("app") or {}).get("id") == app_id)]
+    return max(candidates, key=lambda row: row["id"]) if candidates else None
+
+
+def unmet(required: list[tuple[str, int | None]], runs: list[dict[str, Any]], commit: str) -> list[str]:
+    """Required checks whose newest run on `commit`, from the bound app, did not conclude success."""
     missing = []
     for context, app_id in required:
-        candidates = [run for run in runs
-                      if run.get("head_sha") == commit and run.get("name") == context
-                      and isinstance(run.get("id"), int)
-                      and (app_id is None or (run.get("app") or {}).get("id") == app_id)]
-        if not candidates:
+        run = newest_run(context, app_id, runs, commit)
+        if run is None:
             source = f" from app {app_id}" if app_id is not None else ""
             missing.append(f"{context}: no run{source} on {commit}")
-            continue
-        run = max(candidates, key=lambda row: row["id"])
-        if run.get("status") != "completed" or run.get("conclusion") != "success":
+        elif run.get("status") != "completed" or run.get("conclusion") != "success":
             missing.append(f"{context}: {run.get('status')}/{run.get('conclusion')}")
     return missing
+
+
+def pending(required: list[tuple[str, int | None]], runs: list[dict[str, Any]], commit: str) -> list[str]:
+    """Required checks whose newest run on `commit` has not finished.
+
+    The push that lands a request starts main's checks again on the same
+    commit, so the release job waits for those runs instead of reading them
+    mid-flight as unmet.
+    """
+    return [context for context, app_id in required
+            if (run := newest_run(context, app_id, runs, commit)) is not None
+            and run.get("status") != "completed"]
+
+
+def version_key(tag: str) -> tuple[int, int, int] | None:
+    match = re.fullmatch(r"v([0-9]+)\.([0-9]+)\.([0-9]+)", tag)
+    return tuple(int(part) for part in match.groups()) if match else None  # type: ignore[return-value]
+
+
+def remote_release_tags(root: Path, remote: str = "origin") -> list[str]:
+    """Every vMAJOR.MINOR.PATCH tag on `remote`; any lookup failure raises."""
+    result = subprocess.run(["git", "-C", str(root), "ls-remote", "--exit-code", "--tags", "--refs", remote,
+                             "refs/tags/v*"], capture_output=True, text=True, check=False)
+    if result.returncode not in (0, 2):
+        raise ReleaseRequestError(f"could not list release tags on {remote} (git exit {result.returncode}): "
+                                  f"{result.stderr.strip()}")
+    return [line.split("refs/tags/", 1)[1] for line in result.stdout.splitlines() if "refs/tags/" in line]
 
 
 def preflight_remaining(preflight: Any, tag: str, now: datetime, repository: str = REPOSITORY) -> timedelta:
@@ -211,7 +243,7 @@ def remote_tag_exists(root: Path, tag: str, remote: str = "origin") -> bool:
 
 def check(*, request: Any, cmakelists: str, retired_tags: Any, commit: str, tag_exists: bool,
           branch_rules: Any, pages: Any, preflight: Any = None, now: datetime | None = None,
-          protection: Any = None) -> str:
+          protection: Any = None, existing_tags: list[str] | None = None) -> str:
     """The tag to create; raises ReleaseRequestError when the request may not be tagged."""
     if not SHA.fullmatch(commit):
         raise ReleaseRequestError("the commit must be a full SHA")
@@ -223,6 +255,10 @@ def check(*, request: Any, cmakelists: str, retired_tags: Any, commit: str, tag_
         raise ReleaseRequestError(f"{tag} is retired and is never reused")
     if tag_exists:
         raise ReleaseRequestError(f"{tag} already exists; a release tag is never moved")
+    known = [key for name in [*(existing_tags or []), *retired(retired_tags)] if (key := version_key(name))]
+    if known and version_key(tag) <= max(known):  # type: ignore[operator]
+        newest = "v" + ".".join(map(str, max(known)))
+        raise ReleaseRequestError(f"{tag} is not newer than {newest}; a release only moves forward")
     missing = unmet(required_checks(branch_rules, protection), check_runs(pages), commit)
     if missing:
         raise ReleaseRequestError("required checks have not passed: " + "; ".join(missing))
@@ -357,6 +393,11 @@ def main(argv: list[str]) -> int:
     one.add_argument("--protection", type=Path, required=True,
                      help="GET /branches/main/protection/required_status_checks")
     one.add_argument("--preflight", type=Path, default=ROOT / PREFLIGHT)
+    wait = sub.add_parser("pending", help="print required checks still running on the commit, one per line")
+    wait.add_argument("--commit", required=True)
+    wait.add_argument("--branch-rules", type=Path, required=True)
+    wait.add_argument("--check-runs", type=Path, required=True)
+    wait.add_argument("--protection", type=Path, required=True)
     attest = sub.add_parser("attestation")
     attest.add_argument("--commit", required=True)
     attest.add_argument("--attested-at", required=True)
@@ -371,13 +412,19 @@ def main(argv: list[str]) -> int:
         if args.command == "attestation":
             print(json.dumps(attestation(ROOT, args.commit, args.attested_at, args.tag), indent=2, sort_keys=True))
             return 0
+        if args.command == "pending":
+            running = pending(required_checks(load(args.branch_rules), load(args.protection)),
+                              check_runs(load(args.check_runs)), args.commit)
+            print("\n".join(running))
+            return 0
         request = load(args.request)
         exists = remote_tag_exists(ROOT, f"v{request_version(request)}", args.remote)
         tag = check(request=request, cmakelists=args.cmakelists.read_text(encoding="utf-8"),
                     retired_tags=load(args.retired_tags), commit=args.commit,
                     tag_exists=exists, branch_rules=load(args.branch_rules),
                     pages=load(args.check_runs), preflight=load(args.preflight),
-                    protection=load(args.protection))
+                    protection=load(args.protection),
+                    existing_tags=remote_release_tags(ROOT, args.remote))
     except (OSError, ReleaseRequestError) as error:
         print(f"release request refused: {error}", file=sys.stderr)
         return 1

@@ -14,6 +14,22 @@ from typing import Any
 SCHEMA = "vellum.immutable-release-preflight.v1"
 MAXIMUM_ALLOWED_AGE_SECONDS = 21600
 FUTURE_CLOCK_SKEW_SECONDS = 300
+# The record's exact shape: an unknown key is refused rather than ignored.
+TOP_LEVEL_KEYS = frozenset({
+    "administrator_check", "documentation", "integrity_model", "maximum_age_seconds",
+    "release_tag", "repository", "schema",
+})
+ADMINISTRATOR_KEYS = frozenset({
+    "checked_at", "enabled", "endpoint", "enforced_by_owner", "required_permission",
+})
+
+
+def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    keys = [key for key, _ in pairs]
+    duplicates = sorted({key for key in keys if keys.count(key) > 1})
+    if duplicates:
+        raise ImmutableReleasePreflightError(f"duplicate keys: {', '.join(duplicates)}")
+    return dict(pairs)
 
 
 class ImmutableReleasePreflightError(RuntimeError):
@@ -41,6 +57,10 @@ def verify(
     release_tag: str,
     now: datetime,
 ) -> dict[str, Any]:
+    if not isinstance(payload, dict) or set(payload) != TOP_LEVEL_KEYS:
+        raise ImmutableReleasePreflightError(
+            "preflight keys must be exactly " + ", ".join(sorted(TOP_LEVEL_KEYS))
+        )
     if payload.get("schema") != SCHEMA:
         raise ImmutableReleasePreflightError("unexpected preflight schema")
     if payload.get("repository") != repository:
@@ -61,14 +81,14 @@ def verify(
             "preflight integrity model must inherit from the exact signed tag"
         )
     maximum_age = payload.get("maximum_age_seconds")
-    if maximum_age != MAXIMUM_ALLOWED_AGE_SECONDS:
+    if type(maximum_age) is not int or maximum_age != MAXIMUM_ALLOWED_AGE_SECONDS:
         raise ImmutableReleasePreflightError(
             f"maximum_age_seconds must equal {MAXIMUM_ALLOWED_AGE_SECONDS}"
         )
     administrator_check = payload.get("administrator_check")
-    if not isinstance(administrator_check, dict):
+    if not isinstance(administrator_check, dict) or set(administrator_check) != ADMINISTRATOR_KEYS:
         raise ImmutableReleasePreflightError(
-            "administrator_check must be an object"
+            "administrator_check keys must be exactly " + ", ".join(sorted(ADMINISTRATOR_KEYS))
         )
     expected_endpoint = f"GET /repos/{repository}/immutable-releases"
     if administrator_check.get("endpoint") != expected_endpoint:
@@ -116,7 +136,9 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     try:
-        payload = json.loads(args.input.read_text(encoding="utf-8"))
+        payload = json.loads(
+            args.input.read_text(encoding="utf-8"), object_pairs_hook=reject_duplicate_keys
+        )
         if not isinstance(payload, dict):
             raise ImmutableReleasePreflightError(
                 "preflight root must be an object"

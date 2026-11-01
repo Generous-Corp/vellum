@@ -63,9 +63,25 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REPOSITORY" = Generous-Corp/vellum
           test "$GITHUB_REF" = refs/heads/main
-          gh api --method GET --paginate --slurp \
-            "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?per_page=100" \
-            -f filter=all > "$RUNNER_TEMP/check-runs.json"
+          # The push that landed the request starts main's required checks again
+          # on this commit. Wait for them to finish (about 45 minutes for
+          # gpu-macos) rather than reading a run still in progress as unmet.
+          deadline=$((SECONDS + 6000))
+          while :; do
+            gh api --method GET --paginate --slurp \
+              "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?per_page=100" \
+              -f filter=all > "$RUNNER_TEMP/check-runs.json"
+            running="$(python3 -I scripts/release_request.py pending --commit "$GITHUB_SHA" \
+              --branch-rules "$RUNNER_TEMP/branch-rules.json" --check-runs "$RUNNER_TEMP/check-runs.json" \
+              --protection "$RUNNER_TEMP/required-checks.json")"
+            [ -z "$running" ] && break
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::required checks still running after 100 minutes: $running"
+              exit 1
+            fi
+            echo "waiting for: $(printf '%s' "$running" | paste -sd, -)"
+            sleep 60
+          done
           version="$(python3 -I -c 'import json; print(json.load(open("provenance/release-request.json"))["version"])')"
           tag="$(python3 -I scripts/release_request.py check --commit "$GITHUB_SHA" --remote origin \
             --branch-rules "$RUNNER_TEMP/branch-rules.json" --check-runs "$RUNNER_TEMP/check-runs.json" \
@@ -120,5 +136,18 @@ jobs:
           git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" \
             push "https://github.com/$GITHUB_REPOSITORY" "refs/tags/$TAG:refs/tags/$TAG"
           test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.sha)" = "$OBJECT"
-          gh api --method POST "repos/$GITHUB_REPOSITORY/rulesets" --input "$RUNNER_TEMP/freeze.json" > /dev/null
+          # The tag is already pushed, so a transient API failure here must not
+          # leave it unfrozen: retry, and if every attempt fails, say exactly how
+          # to apply the same ruleset by hand.
+          for attempt in 1 2 3 4 5; do
+            if gh api --method POST "repos/$GITHUB_REPOSITORY/rulesets" --input "$RUNNER_TEMP/freeze.json" > /dev/null; then
+              break
+            fi
+            if [ "$attempt" = 5 ]; then
+              echo "::error::$TAG is pushed but not frozen. Apply this ruleset as the owner:"
+              cat "$RUNNER_TEMP/freeze.json"
+              exit 1
+            fi
+            sleep $((attempt * 20))
+          done
           echo "signed, pushed and froze $TAG at $OBJECT" >> "$GITHUB_STEP_SUMMARY"
