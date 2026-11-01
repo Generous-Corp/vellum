@@ -1,0 +1,160 @@
+name: Sign the requested release tag
+
+# A release is a reviewed pull request that changes
+# provenance/release-request.json. When it lands, this job tags the commit
+# that landed it, signed with the key that exists only in the `release`
+# environment, and freezes the tag. Pushing the tag starts the release
+# pipeline (gpu-macos, then sdk-release).
+on:
+  push:
+    branches: [main]
+    paths: [provenance/release-request.json, provenance/immutable-release-preflight.json]
+
+permissions:
+  contents: read
+  checks: read
+
+concurrency:
+  group: release-tag
+  cancel-in-progress: false
+
+jobs:
+  sign-release-tag:
+    name: sign-release-tag
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - name: Check out the commit that landed the request
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Every repository script runs with `python3 -I`: isolated mode keeps the
+      # script's own directory and the working directory off sys.path, so no
+      # file in the checkout can shadow a standard-library module. Each secret
+      # lives only in a step that runs no repository Python.
+      - name: Mint the release App token
+        id: app-token
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      # Main's required checks live in classic branch protection and in rulesets;
+      # reading either needs Administration read, which only the App token has.
+      # This step holds that token, so it runs no repository code: it only
+      # writes the API answers to files.
+      - name: Read main's required checks
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/branches/main/protection/required_status_checks" \
+            > "$RUNNER_TEMP/required-checks.json"
+          gh api "repos/$GITHUB_REPOSITORY/rules/branches/main" > "$RUNNER_TEMP/branch-rules.json"
+
+      - name: Decide whether the request may be tagged
+        id: request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = Generous-Corp/vellum
+          test "$GITHUB_REF" = refs/heads/main
+          # The push that landed the request starts main's required checks again
+          # on this commit. While the newest run of any required check is still
+          # running (gpu-macos takes about 45 minutes), wait rather than read it
+          # as unmet. A transient API failure is retried, not fatal.
+          deadline=$((SECONDS + 6000))
+          while :; do
+            for attempt in 1 2 3; do
+              if gh api --method GET --paginate --slurp \
+                "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?per_page=100" \
+                -f filter=all > "$RUNNER_TEMP/check-runs.json"; then
+                break
+              fi
+              [ "$attempt" = 3 ] && exit 1
+              sleep $((attempt * 20))
+            done
+            running="$(python3 -I scripts/release_request.py pending --commit "$GITHUB_SHA" \
+              --branch-rules "$RUNNER_TEMP/branch-rules.json" --check-runs "$RUNNER_TEMP/check-runs.json" \
+              --protection "$RUNNER_TEMP/required-checks.json")"
+            [ -z "$running" ] && break
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::required checks still running after 100 minutes: $running"
+              exit 1
+            fi
+            echo "waiting for: $(printf '%s' "$running" | paste -sd, -)"
+            sleep 60
+          done
+          version="$(python3 -I -c 'import json; print(json.load(open("provenance/release-request.json"))["version"])')"
+          tag="$(python3 -I scripts/release_request.py check --commit "$GITHUB_SHA" --remote origin \
+            --branch-rules "$RUNNER_TEMP/branch-rules.json" --check-runs "$RUNNER_TEMP/check-runs.json" \
+            --protection "$RUNNER_TEMP/required-checks.json")"
+          python3 -I scripts/check_release_policy.py check
+          python3 -I scripts/check_release_policy.py signer >> "$GITHUB_OUTPUT"
+          python3 -I scripts/release_request.py freeze --tag "$tag" > "$RUNNER_TEMP/freeze.json"
+          python3 -I scripts/release_request.py attestation --commit "$GITHUB_SHA" \
+            --attested-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --tag "$tag" > "$RUNNER_TEMP/promotion-attestation.json"
+          printf 'tag=%s\nversion=%s\n' "$tag" "$version" >> "$GITHUB_OUTPUT"
+
+      - name: Sign the tag
+        id: sign
+        env:
+          RELEASE_TAG_SIGNING_KEY: ${{ secrets.RELEASE_TAG_SIGNING_KEY }}
+          TAG: ${{ steps.request.outputs.tag }}
+          PRINCIPAL: ${{ steps.request.outputs.principal }}
+        run: |
+          set -euo pipefail
+          test -n "$RELEASE_TAG_SIGNING_KEY"
+          key="$RUNNER_TEMP/release-signing-key"
+          trap 'rm -f "$key"' EXIT
+          (umask 077 && printf '%s\n' "$RELEASE_TAG_SIGNING_KEY" > "$key")
+          # The signed message is the promotion attestation: provenance.yml
+          # parses it from the tag and the release-readiness gate verifies it.
+          git -c gpg.format=ssh -c user.signingkey="$key" \
+            -c user.name="Vellum release" -c user.email="$PRINCIPAL" \
+            tag -s -F "$RUNNER_TEMP/promotion-attestation.json" "$TAG" "$GITHUB_SHA"
+          printf 'object=%s\n' "$(git rev-parse "refs/tags/$TAG")" >> "$GITHUB_OUTPUT"
+
+      - name: Verify the tag against the policy
+        env:
+          TAG: ${{ steps.request.outputs.tag }}
+          OBJECT: ${{ steps.sign.outputs.object }}
+          PRINCIPAL: ${{ steps.request.outputs.principal }}
+          FINGERPRINT: ${{ steps.request.outputs.fingerprint }}
+        run: |
+          set -euo pipefail
+          python3 -I scripts/verify_release_tag.py --repo . --repository "$GITHUB_REPOSITORY" \
+            --tag-name "$TAG" --tag-object-sha "$OBJECT" --source-commit "$GITHUB_SHA" \
+            --allowed-signers provenance/release-signers.allowed_signers \
+            --expected-principal "$PRINCIPAL" --expected-fingerprint "$FINGERPRINT" \
+            --output "$RUNNER_TEMP/release-trust.json"
+
+      - name: Push the tag and freeze it
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          TAG: ${{ steps.request.outputs.tag }}
+          OBJECT: ${{ steps.sign.outputs.object }}
+        run: |
+          set -euo pipefail
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" \
+            push "https://github.com/$GITHUB_REPOSITORY" "refs/tags/$TAG:refs/tags/$TAG"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.sha)" = "$OBJECT"
+          # The tag is already pushed, so a transient API failure here must not
+          # leave it unfrozen: retry, and if every attempt fails, say exactly how
+          # to apply the same ruleset by hand.
+          for attempt in 1 2 3 4 5; do
+            if gh api --method POST "repos/$GITHUB_REPOSITORY/rulesets" --input "$RUNNER_TEMP/freeze.json" > /dev/null; then
+              break
+            fi
+            if [ "$attempt" = 5 ]; then
+              echo "::error::$TAG is pushed but not frozen. Apply this ruleset as the owner:"
+              cat "$RUNNER_TEMP/freeze.json"
+              exit 1
+            fi
+            sleep $((attempt * 20))
+          done
+          echo "signed, pushed and froze $TAG at $OBJECT" >> "$GITHUB_STEP_SUMMARY"

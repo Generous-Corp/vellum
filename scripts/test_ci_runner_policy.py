@@ -32,6 +32,8 @@ EXPECTED_RUNNERS = {
     "pulp-observatory-watchdog.yml": ("__hosted__", "ubuntu-latest"),
     "review-verdict.yml": ("__hosted__", "ubuntu-24.04"),
     "review-verdict-trigger.yml": ("__hosted__", "ubuntu-24.04"),
+    "release-policy.yml": ("__hosted__", "ubuntu-latest"),
+    "release-tag.yml": ("__hosted__", "ubuntu-latest"),
     "readme-quick-start.yml": (
         "VELLUM_MACOS_RUNS_ON_JSON",
         '["macos-15"]',
@@ -606,6 +608,10 @@ def assert_exact_boundary_pulp_pin(text: str) -> None:
             )
     if "last_scanned_commit" not in pin:
         raise AssertionError("exact-boundary pin must derive its SHA from committed cursor evidence")
+    if "exact-boundary-acknowledgement-1.json" in pin and (
+        'git -C .exact-boundary-pulp merge-base --is-ancestor "$pulp_ref" HEAD' not in pin
+    ):
+        raise AssertionError("an acknowledgement-pinned Pulp commit must be proved on Pulp main")
     if "git -C .exact-boundary-pulp checkout --detach \"$pulp_ref\"" not in pin:
         raise AssertionError("exact-boundary pin must detach the checkout to the committed SHA")
     if 'test "$(git -C .exact-boundary-pulp rev-parse HEAD)" = "$pulp_ref"' not in pin:
@@ -989,6 +995,7 @@ class RunnerPolicyTests(unittest.TestCase):
             "product-quality.yml",
             "provenance.yml",
             "readme-quick-start.yml",
+            "release-policy.yml",
         }
         for path in sorted(WORKFLOWS.glob("*.yml")):
             text = path.read_text(encoding="utf-8")

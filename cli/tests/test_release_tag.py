@@ -49,7 +49,7 @@ class ReleaseTagTests(unittest.TestCase):
             str(self.key),
             cwd=self.root,
         )
-        self.allowed_signers = self.root / "allowed_signers"
+        self.allowed_signers = self.root / "release-signers.allowed_signers"
         public_key = (self.key.with_suffix(".pub")).read_text(
             encoding="utf-8"
         ).strip()
@@ -170,7 +170,8 @@ class ReleaseTagTests(unittest.TestCase):
             str(other_key),
             cwd=self.root,
         )
-        other_allowed_signers = self.root / "other_allowed_signers"
+        (self.root / "other").mkdir()
+        other_allowed_signers = self.root / "other" / "release-signers.allowed_signers"
         other_public_key = other_key.with_suffix(".pub").read_text(
             encoding="utf-8"
         ).strip()
@@ -187,6 +188,28 @@ class ReleaseTagTests(unittest.TestCase):
                 allowed_signers=other_allowed_signers,
                 expected_fingerprint=other_fingerprint,
             )
+
+    def test_each_tag_namespace_needs_its_own_signer_file(self) -> None:
+        authority = self.root / "authority-signers.allowed_signers"
+        authority.write_text(self.allowed_signers.read_text(encoding="utf-8"), encoding="utf-8")
+        with self.assertRaisesRegex(ReleaseTagVerificationError, "must be verified against release-signers"):
+            self.verify(allowed_signers=authority)
+        with self.assertRaisesRegex(ReleaseTagVerificationError, "must be verified against authority-signers"):
+            self.verify(tag_name="authority/example-v1")
+        with self.assertRaisesRegex(ReleaseTagVerificationError, "in no signed namespace"):
+            self.verify(tag_name="release-0.1.0")
+
+    def test_flags_cannot_be_abbreviated_or_repeated(self) -> None:
+        base = ["--repo", ".", "--repository", "r", "--tag-name", "v0.1.0", "--tag-object-sha", "a",
+                "--source-commit", "b", "--allowed-signers", "s", "--expected-principal", "p",
+                "--expected-fingerprint", "f", "--output", "o"]
+        for extra in (["--expected-princ", "other"], ["--expected-principal", "other"]):
+            with self.subTest(extra), self.assertRaises(SystemExit):
+                MODULE["parse_args"](base + extra)
+        abbreviated = [("--expected-princ" if arg == "--expected-principal" else arg) for arg in base]
+        with self.assertRaises(SystemExit):
+            MODULE["parse_args"](abbreviated)
+        self.assertEqual(MODULE["parse_args"](base).expected_principal, "p")
 
     def write_retired(self, tags: list[str]) -> Path:
         path = self.root / "retired-release-tags.json"

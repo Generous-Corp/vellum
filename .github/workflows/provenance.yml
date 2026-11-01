@@ -315,9 +315,9 @@ jobs:
             --source-commit "$GITHUB_SHA" \
             --allowed-signers \
               "$GITHUB_WORKSPACE/provenance/release-signers.allowed_signers" \
-            --expected-principal daniel.raffel@gmail.com \
+            --expected-principal vellum-release-ci \
             --expected-fingerprint \
-              SHA256:eMlEuZcnW6NJDrKQBuN5EX1q69bOlIRPl6XmutVTgcs \
+              SHA256:yPC5V994gP+0WBk2haLnDFFr6b4pNRcWIB3GbBv34k8 \
             --output "$RUNNER_TEMP/promotion-release-tag-trust.json"
 
       - name: Check out authoritative Pulp with full history
@@ -338,18 +338,35 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Committed evidence picks the Pulp commit. Once the exact-boundary
+          # acknowledgement exists, that is the acceptance merge it binds:
+          # Decision 0011 freezes the observatory cursor before that merge,
+          # so the cursor could never show it on Pulp main. Being on Pulp main
+          # is monotone, so requiring it below cannot differ between a pull
+          # request run and its queue run. Without an acknowledgement, the
+          # committed cursor is used as before.
           pulp_ref="$(python3 - <<'PY'
           import json
           import re
           from pathlib import Path
-          cursor = json.loads(Path("provenance/pulp-observatory/cursor.json").read_text(encoding="utf-8"))
-          ref = cursor["pulp"]["last_scanned_commit"]
+          acknowledgement = Path(
+              "provenance/authority/expansions/full-design-import-render-v1/"
+              "exact-boundary-acknowledgement-1.json"
+          )
+          if acknowledgement.is_file():
+              ref = json.loads(acknowledgement.read_text(encoding="utf-8"))["coordinates"][
+                  "pulp_acceptance_merge_commit"
+              ]
+          else:
+              cursor = json.loads(Path("provenance/pulp-observatory/cursor.json").read_text(encoding="utf-8"))
+              ref = cursor["pulp"]["last_scanned_commit"]
           if re.fullmatch(r"[0-9a-f]{40}", ref) is None:
-              raise SystemExit("observatory Pulp cursor is not a full commit SHA")
+              raise SystemExit("committed Pulp evidence is not a full commit SHA")
           print(ref)
           PY
           )"
           git -C .exact-boundary-pulp fetch --no-tags origin "$pulp_ref"
+          git -C .exact-boundary-pulp merge-base --is-ancestor "$pulp_ref" HEAD
           git -C .exact-boundary-pulp checkout --detach "$pulp_ref"
           test "$(git -C .exact-boundary-pulp rev-parse HEAD)" = "$pulp_ref"
 
@@ -624,7 +641,7 @@ jobs:
             --tag-object-sha "$tag_object_sha" \
             --source-commit "$GITHUB_SHA" \
             --allowed-signers \
-              "$GITHUB_WORKSPACE/provenance/release-signers.allowed_signers" \
+              "$GITHUB_WORKSPACE/provenance/authority-signers.allowed_signers" \
             --expected-principal daniel.raffel@gmail.com \
             --expected-fingerprint \
               SHA256:eMlEuZcnW6NJDrKQBuN5EX1q69bOlIRPl6XmutVTgcs \

@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "kind": "full-design-import-render-exact-boundary-acknowledgement",
+  "acknowledgement_id": "full-design-import-render-v1-exact-boundary-acknowledgement-1",
+  "amendment_id": "full-design-import-render-v1-exact-boundary-amendment-1",
+  "state": "acknowledged",
+  "acknowledged_at": "2026-11-01T02:40:01Z",
+  "acknowledged_by": "@danielraffel",
+  "authority_effect": "exact-path-implementation-authority-activated",
+  "implementation_authority": "authorized-for-matrix-exact-routes",
+  "coordinates": {
+    "pulp_repository": "Generous-Corp/pulp",
+    "pulp_acceptance_merge_commit": "1cda31453d1c3b724931c9107ddfcf52edc49b82",
+    "pulp_acceptance_path": ".github/vellum-expansion-watch/full-design-import-render-v1/exact-boundary-acceptance-1.json",
+    "pulp_acceptance_sha256": "aac2fb408d900697cb6017c623d0958c1711451410ffc6923347692f288deab5",
+    "vellum_delivery_repository": "danielraffel/vellum",
+    "vellum_amendment_merge_commit": "66e3ec523fabaa8b1f33fd0b69660232ba0e898a",
+    "amendment_path": "provenance/authority/expansions/full-design-import-render-v1/exact-boundary-amendment-1.json",
+    "amendment_sha256": "cf9b07233e9c66763e1f68391d2df4252dca01bbc7de5acac10dca006fbf5287",
+    "matrix_merge_commit": "bbe187d581f3f021a25b3ebd01332f89bbde142e",
+    "matrix_path": "provenance/authority/expansions/full-design-import-render-v1/compatibility-matrix.json",
+    "matrix_sha256": "1792666eb1dd7d3f46dc607f4ee3dccbbc1232a6c2e6ab2331507c4b87122e1c"
+  },
+  "repository_roles": {
+    "authority_repository": "Generous-Corp/vellum",
+    "temporary_private_delivery_repository": "danielraffel/vellum",
+    "delivery_repository_is_authority": false
+  },
+  "gates": {
+    "only_matrix_exact_routes_authorized": true,
+    "unlisted_pulp_paths_remain_pulp_owned": true,
+    "retained_boundary_cells_remain_pulp_owned": true,
+    "promotion_attestation_required_before_parity_release": true,
+    "pulp_consumption_authorized": false
+  }
+}

@@ -34,6 +34,26 @@ def payload() -> dict[str, object]:
 
 
 class ImmutableReleasePreflightTests(unittest.TestCase):
+    NOW = datetime(2026, 7, 23, 13, tzinfo=timezone.utc)
+
+    def test_the_record_shape_is_closed(self) -> None:
+        def extra_top(value): value["note"] = "x"
+        def extra_admin(value): value["administrator_check"]["note"] = "x"
+        def missing(value): del value["documentation"]
+        def float_age(value): value["maximum_age_seconds"] = 21600.0
+        def bool_age(value): value["maximum_age_seconds"] = True
+        for change in (extra_top, extra_admin, missing, float_age, bool_age):
+            with self.subTest(change.__name__):
+                value = payload()
+                change(value)
+                with self.assertRaises(ImmutableReleasePreflightError):
+                    verify(value, repository="Generous-Corp/vellum", release_tag="v0.1.0", now=self.NOW)
+
+    def test_duplicate_keys_are_refused(self) -> None:
+        with self.assertRaisesRegex(ImmutableReleasePreflightError, "duplicate keys: release_tag"):
+            json.loads('{"release_tag": "v0.1.0", "release_tag": "v9.9.9"}',
+                       object_pairs_hook=MODULE["reject_duplicate_keys"])
+
     def test_recent_enabled_admin_check_passes(self) -> None:
         value = payload()
         verified = verify(

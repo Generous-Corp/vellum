@@ -494,6 +494,18 @@ class Tests(unittest.TestCase):
 
     def test_committed_proposal_passes_without_authority(self) -> None:
         report = verifier.verify(ROOT)
+        acknowledgement = (ROOT / verifier.EXPANSIONS_ROOT
+                           / "full-design-import-render-v1/exact-boundary-acknowledgement-1.json")
+        if acknowledgement.is_file():
+            # Once the exact-boundary acknowledgement has landed, the committed
+            # tree no longer verifies on its own: binding the Pulp acceptance
+            # needs Pulp's repository evidence, and that is the only error.
+            self.assertEqual(report["status"], "fail")
+            self.assertEqual(
+                report["errors"],
+                ["exact boundary acknowledgement: --pulp-root is required to verify acceptance"],
+            )
+            return
         self.assertEqual(report["status"], "pass", report["errors"])
         self.assertEqual(report["authority_effect"], "none")
         self.assertEqual(
@@ -817,6 +829,246 @@ class Tests(unittest.TestCase):
             ),
             [],
         )
+
+    def mirror_promotion_attestation(
+        self, acknowledgement_sha256: str, *, commit: str, tree: str,
+        receipt: str, receipt_sha256: str,
+    ) -> dict:
+        return {
+            "schema_version": 1,
+            "kind": "vellum-mirror-promotion-attestation",
+            "attestation_id": "full-design-import-render-v1-mirror-promotion-1",
+            "state": "attested",
+            "attested_at": "2026-10-31T12:00:00Z",
+            "attested_by": verifier.RELEASE_PIPELINE_ATTESTER,
+            "authority_repository": "Generous-Corp/vellum",
+            "delivery_repository": "danielraffel/vellum",
+            "promotion_mode": "repository-transfer",
+            "authority_commit": commit,
+            "delivery_commit": commit,
+            "authority_tree": tree,
+            "delivery_tree": tree,
+            "exact_boundary_amendment_id": "full-design-import-render-v1-exact-boundary-amendment-1",
+            "exact_boundary_amendment_sha256": verifier.EXPECTED_BOUNDARY_AMENDMENT_SHA256,
+            "exact_boundary_acknowledgement_id": "full-design-import-render-v1-exact-boundary-acknowledgement-1",
+            "exact_boundary_acknowledgement_sha256": acknowledgement_sha256,
+            "mirror_receipt": receipt,
+            "mirror_receipt_sha256": receipt_sha256,
+            "release_source_commit": commit,
+            "parity": "not-proven-deferred-to-matrix-refreeze",
+        }
+
+    def mirror_promotion_fixture(self) -> dict:
+        """A committed authority checkout with an acknowledgement and two mirror
+        export receipts, its delivery clone, and a valid mirror-promotion
+        attestation for its HEAD."""
+        temporary, root, _ = self.copy()
+        self.addCleanup(temporary.cleanup)
+        acknowledgement = root / verifier.EXPANSIONS_ROOT / (
+            "full-design-import-render-v1/exact-boundary-acknowledgement-1.json"
+        )
+        acknowledgement.write_text(json.dumps(self.exact_boundary_acknowledgement()) + "\n")
+        receipts_root = root / "provenance/mirror/receipts"
+        receipts_root.mkdir(parents=True)
+        older = "provenance/mirror/receipts/20261014-34d16417a460.json"
+        newest = "provenance/mirror/receipts/20261025-46cee5e4e6e2.json"
+        (root / older).write_text('{"export_id": "20261014-34d16417a460"}\n')
+        (root / newest).write_text('{"export_id": "20261025-46cee5e4e6e2"}\n')
+        (root / verifier.MIRROR_RECEIPT_INDEX_PATH).write_text(json.dumps({
+            "schema": "vellum.mirror-receipt-index.v1", "receipts": [older, newest],
+        }) + "\n")
+        commit, tree = self.init_git_repo(
+            root, remote="https://github.com/Generous-Corp/vellum.git"
+        )
+        delivery_temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(delivery_temporary.cleanup)
+        delivery_root = Path(delivery_temporary.name) / "vellum"
+        subprocess.run(["git", "clone", "-q", str(root), str(delivery_root)], check=True)
+        data = self.mirror_promotion_attestation(
+            hashlib.sha256(acknowledgement.read_bytes()).hexdigest(),
+            commit=commit, tree=tree, receipt=newest,
+            receipt_sha256=hashlib.sha256((root / newest).read_bytes()).hexdigest(),
+        )
+        return {
+            "temporary": Path(temporary.name), "root": root, "commit": commit,
+            "tree": tree, "delivery_root": delivery_root, "data": data,
+            "older": older, "newest": newest,
+        }
+
+    def mirror_release_errors(
+        self, fixture: dict, data: dict, *, release_tag: str | None = "v0.1.9",
+        check_runs=None, root: Path | None = None, commit: str | None = None,
+    ) -> list[str]:
+        promotion = fixture["temporary"] / "signed-tag-promotion.json"
+        promotion.write_text(json.dumps(data) + "\n")
+        matrix = json.loads((ROOT / verifier.MATRIX_PATH).read_text())
+        amendment = json.loads((ROOT / verifier.BOUNDARY_AMENDMENT_PATH).read_text())
+        return verifier.validate_release_readiness(
+            root or fixture["root"],
+            matrix,
+            amendment,
+            promotion_attestation=promotion,
+            delivery_root=fixture["delivery_root"],
+            repository="Generous-Corp/vellum",
+            release_source_commit=commit or fixture["commit"],
+            check_runs={} if check_runs is None else check_runs,
+            release_tag=release_tag,
+        )
+
+    def test_mirror_promotion_release_needs_no_parity_completion(self) -> None:
+        fixture = self.mirror_promotion_fixture()
+        self.assertFalse((fixture["root"] / verifier.PARITY_COMPLETION_PATH).exists())
+        self.assertEqual(self.mirror_release_errors(fixture, fixture["data"]), [])
+        # The same release without the mirror shape still demands parity.
+        full = self.promotion_attestation(
+            fixture["data"]["exact_boundary_acknowledgement_sha256"],
+            commit=fixture["commit"], tree=fixture["tree"],
+        )
+        full["promotion_mode"] = "repository-transfer"
+        errors = self.mirror_release_errors(fixture, full)
+        self.assertTrue(any("versioned parity completion" in e for e in errors), errors)
+        self.assertTrue(any("parity completion artifact is missing" in e for e in errors), errors)
+
+    def test_mirror_promotion_binds_only_the_newest_receipt_by_digest(self) -> None:
+        fixture = self.mirror_promotion_fixture()
+        data = fixture["data"]
+        root = fixture["root"]
+        older = dict(
+            data, mirror_receipt=fixture["older"],
+            mirror_receipt_sha256=hashlib.sha256((root / fixture["older"]).read_bytes()).hexdigest(),
+        )
+        errors = self.mirror_release_errors(fixture, older)
+        self.assertTrue(any("not the newest receipt" in e for e in errors), errors)
+        missing = dict(data, mirror_receipt="provenance/mirror/receipts/20261099-000000000000.json")
+        errors = self.mirror_release_errors(fixture, missing)
+        self.assertTrue(any("not the newest receipt" in e for e in errors), errors)
+        for bad_path in ("provenance/mirror/receipts/index.json", "../receipt.json", 7):
+            errors = self.mirror_release_errors(fixture, dict(data, mirror_receipt=bad_path))
+            self.assertTrue(
+                any("expected a mirror export receipt path" in e for e in errors), (bad_path, errors)
+            )
+        errors = self.mirror_release_errors(fixture, dict(data, mirror_receipt_sha256="0" * 64))
+        self.assertTrue(any("mirror receipt digest does not match" in e for e in errors), errors)
+        # Only the committed receipt counts: a worktree edit does not move the digest.
+        (root / fixture["newest"]).write_text('{"export_id": "forged"}\n')
+        self.assertEqual(self.mirror_release_errors(fixture, data), [])
+
+    def test_mirror_promotion_still_verifies_the_acknowledgement_and_commit(self) -> None:
+        fixture = self.mirror_promotion_fixture()
+        data = fixture["data"]
+        errors = self.mirror_release_errors(
+            fixture, dict(data, exact_boundary_acknowledgement_sha256="0" * 64)
+        )
+        self.assertTrue(any("acknowledgement digest does not match" in e for e in errors), errors)
+        other = "f" * 40
+        errors = self.mirror_release_errors(fixture, dict(data, release_source_commit=other))
+        self.assertTrue(any("release source must be the promoted authority commit" in e
+                            for e in errors), errors)
+        errors = self.mirror_release_errors(
+            fixture, dict(data, authority_commit=other, delivery_commit=other,
+                          release_source_commit=other)
+        )
+        self.assertTrue(any("commit is unavailable" in e for e in errors), errors)
+        errors = self.mirror_release_errors(fixture, dict(data, delivery_tree="e" * 40))
+        self.assertTrue(any("trees must match exactly" in e for e in errors), errors)
+        errors = self.mirror_release_errors(fixture, dict(data, attested_by="vellum-release[bot]"))
+        self.assertTrue(any("attested_by" in e for e in errors), errors)
+        promotion = fixture["temporary"] / "signed-tag-promotion.json"
+        promotion.write_text(json.dumps(data) + "\n")
+        matrix = json.loads((ROOT / verifier.MATRIX_PATH).read_text())
+        amendment = json.loads((ROOT / verifier.BOUNDARY_AMENDMENT_PATH).read_text())
+        errors = verifier.validate_release_readiness(
+            fixture["root"], matrix, amendment, promotion_attestation=promotion,
+            delivery_root=fixture["delivery_root"], repository="Generous-Corp/vellum",
+            release_source_commit=fixture["commit"], check_runs=None, release_tag="v0.1.9",
+        )
+        self.assertTrue(any("workflow-run evidence" in e for e in errors), errors)
+
+    def test_mirror_promotion_shape_is_closed(self) -> None:
+        fixture = self.mirror_promotion_fixture()
+        data = fixture["data"]
+        errors = self.mirror_release_errors(fixture, dict(data, extra="x"))
+        self.assertTrue(any("keys differ" in e and "extra" in e for e in errors), errors)
+        trimmed = dict(data)
+        trimmed.pop("parity")
+        errors = self.mirror_release_errors(fixture, trimmed)
+        self.assertTrue(any("keys differ" in e and "parity" in e for e in errors), errors)
+        smuggled = dict(data, parity_completion_sha256="0" * 64)
+        errors = self.mirror_release_errors(fixture, smuggled)
+        self.assertTrue(any("keys differ" in e for e in errors), errors)
+        errors = self.mirror_release_errors(fixture, dict(data, parity="proven"))
+        self.assertTrue(any("mirror_promotion.parity" in e for e in errors), errors)
+        errors = self.mirror_release_errors(
+            fixture, dict(data, attestation_id="full-design-import-render-v1-authority-promotion-1")
+        )
+        self.assertTrue(any("mirror_promotion.attestation_id" in e for e in errors), errors)
+        # An unknown kind is not the mirror shape, so it must prove parity.
+        errors = self.mirror_release_errors(fixture, dict(data, kind="vellum-other-attestation"))
+        self.assertTrue(any("versioned parity completion" in e for e in errors), errors)
+        self.assertTrue(any("authority_promotion: keys differ" in e for e in errors), errors)
+
+    def test_mirror_promotion_is_refused_once_parity_is_recorded(self) -> None:
+        fixture = self.mirror_promotion_fixture()
+        root = fixture["root"]
+        completion = root / verifier.PARITY_COMPLETION_PATH
+        completion.write_text('{"completion_id": "full-design-import-render-v1-parity-completion-1"}\n')
+        subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(root), "commit", "-qm", "parity"], check=True)
+        commit = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
+        tree = subprocess.check_output(
+            ["git", "-C", str(root), "show", "-s", "--format=%T", "HEAD"], text=True
+        ).strip()
+        subprocess.run(["git", "-C", str(fixture["delivery_root"]), "pull", "-q"], check=True)
+        data = dict(
+            fixture["data"], authority_commit=commit, delivery_commit=commit,
+            authority_tree=tree, delivery_tree=tree, release_source_commit=commit,
+        )
+        errors = self.mirror_release_errors(fixture, data, commit=commit)
+        self.assertTrue(any("parity completion record exists at the release commit" in e
+                            for e in errors), errors)
+        self.assertEqual(
+            [e for e in errors if "parity completion record exists" not in e], [], errors
+        )
+
+    def test_mirror_promotion_is_only_for_the_phase_four_tag(self) -> None:
+        fixture = self.mirror_promotion_fixture()
+        for tag in ("v0.1.10", "v0.2.0", None):
+            errors = self.mirror_release_errors(fixture, fixture["data"], release_tag=tag)
+            self.assertTrue(any("is not a mirror-promotion release" in e for e in errors),
+                            (tag, errors))
+
+    def test_release_tag_defaults_only_from_a_tag_ref(self) -> None:
+        self.assertEqual(
+            verifier.default_release_tag({"GITHUB_REF_TYPE": "tag", "GITHUB_REF_NAME": "v0.1.9"}),
+            "v0.1.9",
+        )
+        for environ in (
+            {"GITHUB_REF_TYPE": "branch", "GITHUB_REF_NAME": "v0.1.9"},
+            {"GITHUB_REF_NAME": "v0.1.9"},
+            {"GITHUB_REF_TYPE": "tag", "GITHUB_REF_NAME": ""},
+        ):
+            self.assertIsNone(verifier.default_release_tag(environ), environ)
+
+    def test_mirror_promotion_rejects_a_tampered_receipt_index(self) -> None:
+        fixture = self.mirror_promotion_fixture()
+        root = fixture["root"]
+        index = root / verifier.MIRROR_RECEIPT_INDEX_PATH
+        for content in (
+            '{"schema": "vellum.mirror-receipt-index.v1", "receipts": []}\n',
+            '{"schema": "other", "receipts": ["%s"]}\n' % fixture["newest"],
+            '{"schema": "vellum.mirror-receipt-index.v1", "schema": "x", "receipts": []}\n',
+        ):
+            index.write_text(content)
+            subprocess.run(["git", "-C", str(root), "commit", "-qam", "index"], check=True)
+            commit = subprocess.check_output(
+                ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+            ).strip()
+            errors = verifier.validate_mirror_promotion_release(
+                root, dict(fixture["data"], release_source_commit=commit), commit, "v0.1.9"
+            )
+            self.assertTrue(
+                any("receipt index" in e for e in errors), (content, errors)
+            )
 
     def test_parity_completion_is_a_versioned_successor_to_frozen_matrix(self) -> None:
         temporary, root, _ = self.copy()
