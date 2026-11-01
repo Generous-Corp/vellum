@@ -1,0 +1,28 @@
+@PACKAGE_INIT@
+
+# find_package(VellumRmlUi [COMPONENTS Core SoftRenderer DevAssets])
+#
+# RmlUi and its font engine are linked privately into the VellumRmlUi::Core
+# shared library, so this package needs no further dependency. Core is always
+# provided; naming no components selects Core.
+
+set(_vellum_rmlui_supported_components @VELLUM_RMLUI_COMPONENTS@)
+include("${CMAKE_CURRENT_LIST_DIR}/VellumRmlUiTargets.cmake")
+
+if(NOT VellumRmlUi_FIND_COMPONENTS)
+    set(VellumRmlUi_FIND_COMPONENTS Core)
+endif()
+foreach(_vellum_rmlui_component IN LISTS VellumRmlUi_FIND_COMPONENTS)
+    if(_vellum_rmlui_component IN_LIST _vellum_rmlui_supported_components AND
+       TARGET VellumRmlUi::${_vellum_rmlui_component})
+        set(VellumRmlUi_${_vellum_rmlui_component}_FOUND TRUE)
+    else()
+        set(VellumRmlUi_${_vellum_rmlui_component}_FOUND FALSE)
+    endif()
+endforeach()
+unset(_vellum_rmlui_component)
+unset(_vellum_rmlui_supported_components)
+
+set(VellumRmlUi_FONTS_ENABLED @VELLUM_RMLUI_FONTS@)
+
+check_required_components(VellumRmlUi)
