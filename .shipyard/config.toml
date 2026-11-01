@@ -7,3 +7,10 @@
 # the `review-verdict` status read only this list, never a host file, and
 # refuse every App approval in a review-required repository that has none.
 reviewer_signers = ["pulp-review", "infra-review2"]
+
+[queue.environment_requeue]
+# Re-enqueue an approved head once when its merge-queue ejection was not the
+# head's fault (runner/infra failure, a check also failing on main, or a check
+# that passed on the PR head). Counted from GitHub's timeline; a HOLD or a
+# missing approval still blocks. Read from the base branch.
+enabled = true
