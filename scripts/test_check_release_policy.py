@@ -123,6 +123,51 @@ class Policy(unittest.TestCase):
         owners.write_text("\n".join(l for l in owners.read_text().splitlines() if "verify_release_tag" not in l))
         self.assertTrue(any("verify_release_tag.py" in p for p in policy.problems(self.tmp)))
 
+    def test_release_decision_inputs_missing_from_codeowners_fail(self) -> None:
+        # A forged preflight, a dropped retired tag, or a weakened preflight
+        # verifier must not land without the owner's review.
+        for path in ("/scripts/verify_immutable_release_preflight.py",
+                     "/provenance/immutable-release-preflight.json",
+                     "/provenance/retired-release-tags.json"):
+            with self.subTest(path=path):
+                shutil.copy(ROOT / policy.CODEOWNERS, self.tmp / policy.CODEOWNERS)
+                owners = self.tmp / policy.CODEOWNERS
+                owners.write_text("\n".join(l for l in owners.read_text().splitlines()
+                                            if not l.startswith(path + " ")))
+                self.assertIn(f"{policy.CODEOWNERS} does not give {path} to {policy.OWNER}",
+                              policy.problems(self.tmp))
+
+    def test_release_decision_inputs_missing_from_policy_files_fail(self) -> None:
+        for path in ("/scripts/verify_immutable_release_preflight.py",
+                     "/provenance/immutable-release-preflight.json",
+                     "/provenance/retired-release-tags.json"):
+            with self.subTest(path=path):
+                self.assertIn(path, policy.POLICY_FILES)
+                kept = tuple(p for p in policy.POLICY_FILES if p != path)
+                original, policy.POLICY_FILES = policy.POLICY_FILES, kept
+                try:
+                    self.assertIn(f"{policy.CODEOWNERS} owns {path}, which POLICY_FILES does not name",
+                                  policy.problems(self.tmp))
+                finally:
+                    policy.POLICY_FILES = original
+
+    def test_a_policy_script_importing_an_unowned_module_fails(self) -> None:
+        (self.tmp / "scripts").mkdir()
+        (self.tmp / "scripts/release_request.py").write_text(
+            "def f():\n    import verify_immutable_release_preflight as vip\n")
+        (self.tmp / "scripts/verify_immutable_release_preflight.py").write_text("")
+        self.assertEqual(policy.problems(self.tmp), [])
+        kept = tuple(p for p in policy.POLICY_FILES if p != "/scripts/verify_immutable_release_preflight.py")
+        original, policy.POLICY_FILES = policy.POLICY_FILES, kept
+        try:
+            owners = self.tmp / policy.CODEOWNERS
+            owners.write_text("\n".join(l for l in owners.read_text().splitlines()
+                                        if "verify_immutable_release_preflight" not in l))
+            self.assertIn("scripts/release_request.py imports scripts/verify_immutable_release_preflight.py, "
+                          "which is not a policy file", policy.problems(self.tmp))
+        finally:
+            policy.POLICY_FILES = original
+
     def test_the_signing_workflow_must_use_the_environment(self) -> None:
         self.workflow("release-tag.yml", "jobs:\n  sign:\n    runs-on: x\n")
         self.assertTrue(any("does not run in" in p for p in policy.problems(self.tmp)))
@@ -177,6 +222,15 @@ class Isolation(unittest.TestCase):
 class Repository(unittest.TestCase):
     def test_the_repository_holds_its_policy(self) -> None:
         self.assertEqual(policy.problems(ROOT), [])
+
+    def test_the_release_decision_inputs_are_policy_files(self) -> None:
+        # Dropping one from both lists at once needs an owner-reviewed change
+        # to check_release_policy.py; this names the omission in that review.
+        for path in ("/scripts/verify_immutable_release_preflight.py",
+                     "/provenance/immutable-release-preflight.json",
+                     "/provenance/retired-release-tags.json"):
+            with self.subTest(path=path):
+                self.assertIn(path, policy.POLICY_FILES)
 
 
 if __name__ == "__main__":

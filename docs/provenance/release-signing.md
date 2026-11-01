@@ -67,9 +67,11 @@ promotion attestation and prove full-matrix parity.
   - the allowed-signers file;
   - the two release workflows;
   - the release scripts;
-  - the verifier;
+  - the verifiers, including the immutable-release preflight verifier;
+  - the committed records the release decision trusts: the immutable-release preflight and the retired tags;
   - CODEOWNERS itself.
-  `release-policy` keeps that list complete.
+  `release-policy` keeps that list complete: CODEOWNERS and the check's own list must name the same files, and a
+  policy script may import only modules that are themselves on the list.
 - **Checked-out code never runs next to a secret.** Each secret lives in a step that runs no repository Python:
   - signing runs only `git tag`;
   - verifying runs without the key;

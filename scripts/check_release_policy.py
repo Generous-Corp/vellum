@@ -10,7 +10,10 @@ fails when:
 - an --expected-principal or --expected-fingerprint pin in any workflow
   differs from provenance/release-signers.allowed_signers, so the verifiers
   and the signer agree on one key;
-- CODEOWNERS does not give every policy file to the owner;
+- CODEOWNERS does not give every policy file to the owner, or owns a file
+  the policy list does not name, so the two lists stay one inventory;
+- a policy script imports a repository module that is not itself a policy
+  file, so the release decision never runs code the owner does not own;
 - a release workflow runs Python without `-I`, a step that holds a secret runs
   Python at all, or a repository Python file is named like a standard-library
   module, so checked-out code cannot run with the signing key or App token.
@@ -34,14 +37,18 @@ CODEOWNERS = Path(".github/CODEOWNERS")
 RELEASE_ENVIRONMENT = "release"
 SIGNING_WORKFLOW = "release-tag.yml"
 OWNER = "@danielraffel"
-# The signing policy and the code that enforces it.
+# The signing policy, the code that enforces it, and the committed records the
+# release decision trusts (the immutable-release preflight and the retired tags).
 POLICY_FILES = (
     "/.github/CODEOWNERS",
     "/.github/workflows/release-tag.yml",
     "/.github/workflows/release-policy.yml",
+    "/provenance/immutable-release-preflight.json",
     "/provenance/release-signers.allowed_signers",
+    "/provenance/retired-release-tags.json",
     "/scripts/check_release_policy.py",
     "/scripts/release_request.py",
+    "/scripts/verify_immutable_release_preflight.py",
     "/scripts/verify_release_tag.py",
     "/tools/provenance/verify_authority_expansion.py",
 )
@@ -62,6 +69,7 @@ SECRET = re.compile(r"\$\{\{\s*(?:secrets\.|steps\.app-token\.outputs\.token)")
 # Directories a release workflow runs Python from: the script's own directory
 # and the working directory would be first on sys.path without -I.
 PYTHON_DIRS = (".", "scripts", "tools/provenance")
+LOCAL_IMPORT = re.compile(r"^[ \t]*(?:from|import)[ \t]+(?P<module>[A-Za-z_][A-Za-z0-9_]*)", re.MULTILINE)
 PIN = re.compile(r"--expected-(principal|fingerprint)(?:\s*\\?\s*\n\s*|\s+)(\S+)")
 
 
@@ -229,8 +237,25 @@ def codeowner_problems(codeowners: str | None) -> list[str]:
         fields = line.split("#", 1)[0].split()
         if fields:
             owned[fields[0]] = fields[1:]
-    return [f"{CODEOWNERS} does not give {path} to {OWNER}" for path in POLICY_FILES
-            if owned.get(path) != [OWNER]]
+    found = [f"{CODEOWNERS} does not give {path} to {OWNER}" for path in POLICY_FILES
+             if owned.get(path) != [OWNER]]
+    return found + [f"{CODEOWNERS} owns {path}, which POLICY_FILES does not name" for path in owned
+                    if path not in POLICY_FILES]
+
+
+def import_problems(root: Path) -> list[str]:
+    """Repository modules a policy script imports must themselves be policy files."""
+    found = []
+    for path in POLICY_FILES:
+        source = root / path.lstrip("/")
+        if not path.endswith(".py") or not source.is_file():
+            continue
+        for module in sorted(set(LOCAL_IMPORT.findall(source.read_text(encoding="utf-8")))):
+            for directory in PYTHON_DIRS:
+                target = f"/{directory}/{module}.py".replace("/./", "/")
+                if (root / target.lstrip("/")).is_file() and target not in POLICY_FILES:
+                    found.append(f"{path.lstrip('/')} imports {target.lstrip('/')}, which is not a policy file")
+    return found
 
 
 def steps(workflow: str) -> list[str]:
@@ -264,7 +289,8 @@ def problems(root: Path) -> list[str]:
         return [f"{WORKFLOWS / SIGNING_WORKFLOW} is missing"]
     codeowners_path = root / CODEOWNERS
     codeowners = codeowners_path.read_text(encoding="utf-8") if codeowners_path.is_file() else None
-    found = environment_problems(workflows) + codeowner_problems(codeowners) + isolation_problems(workflows, root)
+    found = environment_problems(workflows) + codeowner_problems(codeowners) + import_problems(root)
+    found += isolation_problems(workflows, root)
     if RELEASE_ENVIRONMENT not in environment_names(workflows[SIGNING_WORKFLOW]):
         found.append(f"{SIGNING_WORKFLOW} does not run in the `{RELEASE_ENVIRONMENT}` environment")
     principal, fingerprint = signer(root)
