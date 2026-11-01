@@ -1341,6 +1341,102 @@ which draws from its Mbed TLS CTR-DRBG instance.
 
 ---
 
+## Optional RmlUi module
+
+The components below are fetched at pinned identities and built from source
+only when the optional `rmlui/` module is built (`VELLUM_ENABLE_RMLUI=ON`, or
+a standalone `cmake -S rmlui` build). They are linked privately into the
+`VellumRmlUi::Core` shared library or the `VellumRmlUi::SoftRenderer` and
+`VellumRmlUi::Lua` archives. The default Vellum build and the Vellum SDK artifact contain none of
+them. Exact identities are recorded in `DEPENDENCIES.md` and
+`provenance/third-party-lock.json`.
+
+### FreeType
+
+Portions of this software are copyright © 2024 The FreeType Project
+(https://freetype.org). All rights reserved.
+
+FreeType 2.13.3 is built only when `VELLUM_RMLUI_FONTS=ON`, as RmlUi's font
+engine. Vellum uses it under the FreeType License (FTL), `docs/FTL.TXT` in the
+pinned source archive, and not under the GPLv2 alternative. Its optional PNG,
+zlib, bzip2, Brotli and HarfBuzz integrations are disabled.
+
+### Lua
+
+Copyright (C) 1994-2024 Lua.org, PUC-Rio.
+
+MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+### RmlUi
+
+Copyright (c) 2008-2014 CodePoint Ltd, Shift Technology Ltd, and contributors
+Copyright (c) 2019-2025 The RmlUi Team, and contributors
+
+MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+### stb_image_write
+
+Copyright (c) 2017 Sean Barrett
+
+stb_image_write is offered under a choice of the MIT License or public
+domain (Unlicense). Vellum uses it under the MIT License.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
 ## Mirrored Pulp framework legal index
 
 This index applies only to third-party bytes admitted below `mirror/` by
