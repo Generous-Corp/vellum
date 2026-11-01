@@ -17,20 +17,37 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class Policy(unittest.TestCase):
+    SIGNING = ("jobs:\n  sign:\n    environment: release\n    steps:\n      - name: v\n        run: |\n"
+               "          python3 -I scripts/verify_release_tag.py \\\n"
+               "            --allowed-signers provenance/release-signers.allowed_signers \\\n"
+               "            --expected-principal \"$PRINCIPAL\" --expected-fingerprint \"$FINGERPRINT\"\n")
+
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp(prefix="release-policy-"))
         (self.tmp / ".github/workflows").mkdir(parents=True)
         (self.tmp / "provenance").mkdir()
-        key = self.tmp / "release"
+        self.release = self.make_signer("release@ci", policy.ALLOWED_SIGNERS)
+        self.authority = self.make_signer("owner@example", policy.SIGNER_FILES["authority-signers.allowed_signers"])
+        self.fingerprint = self.release[1]
+        shutil.copy(ROOT / policy.CODEOWNERS, self.tmp / policy.CODEOWNERS)
+        self.workflow("release-tag.yml", self.SIGNING)
+        self.workflow("verify.yml", self.call("release-signers.allowed_signers", *self.release))
+
+    def make_signer(self, principal: str, relative: Path) -> tuple[str, str]:
+        key = self.tmp / relative.name.split(".")[0]
         subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)], check=True)
         pub = key.with_suffix(".pub").read_text().split()
-        (self.tmp / policy.ALLOWED_SIGNERS).write_text(f"release@ci {pub[0]} {pub[1]}\n")
-        self.fingerprint = subprocess.run(["ssh-keygen", "-lf", f"{key}.pub"], capture_output=True, text=True,
-                                          check=True).stdout.split()[1]
-        shutil.copy(ROOT / policy.CODEOWNERS, self.tmp / policy.CODEOWNERS)
-        self.workflow("release-tag.yml", "jobs:\n  sign:\n    environment: release\n")
-        self.workflow("verify.yml", "run: |\n  verify \\\n    --expected-principal release@ci \\\n"
-                                    f"    --expected-fingerprint \\\n      {self.fingerprint} \\\n")
+        (self.tmp / relative).write_text(f"{principal} {pub[0]} {pub[1]}\n")
+        fingerprint = subprocess.run(["ssh-keygen", "-lf", f"{key}.pub"], capture_output=True, text=True,
+                                     check=True).stdout.split()[1]
+        return principal, fingerprint
+
+    @staticmethod
+    def call(signers: str, principal: str, fingerprint: str, separator: str = " ") -> str:
+        return ("run: |\n  python3 scripts/verify_release_tag.py \\\n"
+                f"    --allowed-signers{separator}\"$GITHUB_WORKSPACE/provenance/{signers}\" \\\n"
+                f"    --expected-principal{separator}{principal} \\\n"
+                f"    --expected-fingerprint \\\n      {fingerprint} \\\n    --output x\n")
 
     def tearDown(self) -> None:
         shutil.rmtree(self.tmp)
@@ -105,12 +122,72 @@ class Policy(unittest.TestCase):
         self.assertEqual(policy.problems(self.tmp), [])
 
     def test_a_stale_fingerprint_pin_fails(self) -> None:
-        self.workflow("verify.yml", "verify --expected-fingerprint SHA256:old-key\n")
+        self.workflow("verify.yml", self.call("release-signers.allowed_signers", "release@ci", "SHA256:old-key"))
         self.assertTrue(any("SHA256:old-key" in p for p in policy.problems(self.tmp)))
 
     def test_a_stale_principal_pin_fails(self) -> None:
-        self.workflow("verify.yml", "verify --expected-principal someone@else\n")
+        self.workflow("verify.yml", self.call("release-signers.allowed_signers", "someone@else", self.fingerprint))
         self.assertTrue(any("someone@else" in p for p in policy.problems(self.tmp)))
+
+    def test_each_signer_file_takes_its_own_pins(self) -> None:
+        self.workflow("authority.yml", self.call("authority-signers.allowed_signers", *self.authority))
+        self.assertEqual(policy.problems(self.tmp), [])
+        self.workflow("authority.yml", self.call("authority-signers.allowed_signers", *self.release))
+        self.assertTrue(any("authority.yml: pins release@ci" in p for p in policy.problems(self.tmp)))
+
+    def test_pins_cannot_hide_behind_equals_variables_or_other_files(self) -> None:
+        cases = {
+            "equals": self.call("release-signers.allowed_signers", "someone@else", self.fingerprint, "="),
+            "variable": self.call("release-signers.allowed_signers", "$PRINCIPAL", self.fingerprint),
+            "other file": self.call("my-signers.allowed_signers", *self.release),
+            "loose flag": "run: verify --expected-principal release@ci\n",
+            "missing flag": "run: python3 scripts/verify_release_tag.py --allowed-signers x/release-signers.allowed_signers\n",
+        }
+        for label, text in cases.items():
+            with self.subTest(label):
+                self.workflow("verify.yml", text)
+                self.assertTrue(any(p.startswith("verify.yml") for p in policy.problems(self.tmp)),
+                                policy.problems(self.tmp))
+
+    def test_a_call_cannot_override_or_skip_its_pins(self) -> None:
+        call = self.call("release-signers.allowed_signers", *self.release).rstrip("\n")
+        cases = {
+            "abbreviated duplicate": call.replace(" --output x", " --expected-princ someone@else --output x"),
+            "repeated flag": call.replace(" --output x", " --expected-principal release@ci --output x"),
+            "extra argument": call.replace(" --output x", " --output x $EXTRA_ARGS"),
+            "ignored failure": call + " || true",
+            "commented out": call.replace("python3 scripts", "true # python3 scripts"),
+            "echoed": call.replace("python3 scripts", "echo python3 scripts"),
+        }
+        for label, text in cases.items():
+            with self.subTest(label):
+                self.workflow("verify.yml", text + "\n")
+                self.assertTrue(any(p.startswith("verify.yml") for p in policy.problems(self.tmp)),
+                                policy.problems(self.tmp))
+
+    def test_the_signing_workflow_verifies_with_its_signer_step_pins(self) -> None:
+        self.assertEqual(policy.problems(self.tmp), [])
+        self.workflow("release-tag.yml", self.SIGNING.replace("release-signers", "authority-signers"))
+        self.assertTrue(any("release-tag.yml: must verify" in p for p in policy.problems(self.tmp)))
+
+    def test_a_tag_verifying_workflow_keeps_its_calls(self) -> None:
+        self.workflow("gpu-macos.yml", self.call("release-signers.allowed_signers", *self.release))
+        self.assertTrue(any("gpu-macos.yml: has 1" in p for p in policy.problems(self.tmp)))
+
+    def test_a_reusable_workflow_from_another_repository_fails(self) -> None:
+        self.workflow("local.yml", "jobs:\n  x:\n    uses: ./.github/workflows/verify.yml\n")
+        self.assertEqual(policy.problems(self.tmp), [])
+        for text in ("jobs:\n  x:\n    uses: evil/repo/.github/workflows/x.yml@0123\n",
+                     "jobs:\n  x:\n    uses: 'evil/repo/.github/workflows/x.yml@main'\n",
+                     "jobs:\n  x:\n    uses: >-\n      evil/repo/.github/workflows/x.yml@main\n",
+                     "jobs:\n  x:\n    uses:\n      evil/repo/.github/workflows/x.yml@main\n",
+                     "jobs:\n  b: {uses: evil/repo/.github/workflows/y.yml@main}\n",
+                     'jobs:\n  x:\n    uses: "evil/repo/\\x2egithub/workflows/x.yml@main"\n',
+                     "jobs:\n  x:\n    USES: evil/repo/.github/workflows/x.yml@main\n"):
+            with self.subTest(text):
+                self.workflow("remote.yml", text)
+                self.assertTrue(any(p.startswith("remote.yml") for p in policy.problems(self.tmp)),
+                                policy.problems(self.tmp))
 
     def test_a_second_key_fails(self) -> None:
         signers = self.tmp / policy.ALLOWED_SIGNERS
@@ -128,7 +205,10 @@ class Policy(unittest.TestCase):
         # verifier must not land without the owner's review.
         for path in ("/scripts/verify_immutable_release_preflight.py",
                      "/provenance/immutable-release-preflight.json",
-                     "/provenance/retired-release-tags.json"):
+                     "/provenance/retired-release-tags.json",
+                     "/provenance/release-request.json",
+                     "/provenance/authority-signers.allowed_signers",
+                     "/provenance/renderer-signers.allowed_signers"):
             with self.subTest(path=path):
                 shutil.copy(ROOT / policy.CODEOWNERS, self.tmp / policy.CODEOWNERS)
                 owners = self.tmp / policy.CODEOWNERS
@@ -140,7 +220,10 @@ class Policy(unittest.TestCase):
     def test_release_decision_inputs_missing_from_policy_files_fail(self) -> None:
         for path in ("/scripts/verify_immutable_release_preflight.py",
                      "/provenance/immutable-release-preflight.json",
-                     "/provenance/retired-release-tags.json"):
+                     "/provenance/retired-release-tags.json",
+                     "/provenance/release-request.json",
+                     "/provenance/authority-signers.allowed_signers",
+                     "/provenance/renderer-signers.allowed_signers"):
             with self.subTest(path=path):
                 self.assertIn(path, policy.POLICY_FILES)
                 kept = tuple(p for p in policy.POLICY_FILES if p != path)
@@ -228,7 +311,10 @@ class Repository(unittest.TestCase):
         # to check_release_policy.py; this names the omission in that review.
         for path in ("/scripts/verify_immutable_release_preflight.py",
                      "/provenance/immutable-release-preflight.json",
-                     "/provenance/retired-release-tags.json"):
+                     "/provenance/retired-release-tags.json",
+                     "/provenance/release-request.json",
+                     "/provenance/authority-signers.allowed_signers",
+                     "/provenance/renderer-signers.allowed_signers"):
             with self.subTest(path=path):
                 self.assertIn(path, policy.POLICY_FILES)
 

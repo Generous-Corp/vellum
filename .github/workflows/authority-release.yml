@@ -71,7 +71,7 @@ jobs:
             --tag-object-sha "$tag_object_sha" \
             --source-commit "$record_commit" \
             --allowed-signers \
-              "$GITHUB_WORKSPACE/provenance/release-signers.allowed_signers" \
+              "$GITHUB_WORKSPACE/provenance/authority-signers.allowed_signers" \
             --expected-principal daniel.raffel@gmail.com \
             --expected-fingerprint \
               SHA256:eMlEuZcnW6NJDrKQBuN5EX1q69bOlIRPl6XmutVTgcs \

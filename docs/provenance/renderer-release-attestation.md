@@ -54,7 +54,7 @@ afterwards invalidates the signature.
 `tools/provenance/verify_renderer_dependency.py` never trusts a state string:
 
 - A record that says `signed` is verified with `ssh-keygen -Y verify` against
-  `provenance/release-signers.allowed_signers`. That file must name exactly
+  `provenance/renderer-signers.allowed_signers`. That file must name exactly
   the owner principal, and its key fingerprint must equal the one pinned in
   the verifier, so editing the file alone cannot admit another issuer.
 - A record that says `exhaustive` must name a content-addressed manifest on
