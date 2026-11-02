@@ -37,6 +37,49 @@ CANVAS_CMAKE = (
 )
 
 
+# The two declaration formats PulpViewJsPreludes.cmake has shipped: plain
+# string pointers, and the zlib-compressed EmbeddedPrelude records.
+LEGACY_PRELUDES_CMAKE = r"""set(PULP_JS_PRELUDES
+    ${CMAKE_CURRENT_SOURCE_DIR}/js/web-compat.js
+    ${CMAKE_CURRENT_SOURCE_DIR}/js/react-shim.js
+)
+set(_pulp_prelude_decls
+    "#pragma once\n// Auto-generated from the JS prelude file list — do not edit\n\nnamespace pulp::view::preludes {\n\n")
+foreach(_prelude ${PULP_JS_PRELUDES})
+    string(APPEND _pulp_prelude_decls "extern const char* const ${_prelude_var};\n")
+endforeach()
+string(APPEND _pulp_prelude_decls "\n}  // namespace pulp::view::preludes\n")
+add_custom_command(COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/js/embed_js.py)
+"""
+LEGACY_PRELUDES_HEADER = (
+    "#pragma once\n// Auto-generated from the JS prelude file list — do not edit\n\n"
+    "namespace pulp::view::preludes {\n\n"
+    "extern const char* const web_compat;\nextern const char* const react_shim;\n"
+    "\n}  // namespace pulp::view::preludes\n"
+)
+COMPRESSED_PRELUDES_CMAKE = r"""set(PULP_JS_PRELUDES
+    ${CMAKE_CURRENT_SOURCE_DIR}/js/web-compat.js
+    ${CMAKE_CURRENT_SOURCE_DIR}/js/react-shim.js
+)
+set(_pulp_prelude_decls
+    "#pragma once\n// Auto-generated\n\n#include <cstddef>\n\nnamespace pulp::view::preludes {\n\nstruct EmbeddedPrelude {\n    const char* file_name;\n};\n\n")
+foreach(_prelude ${PULP_JS_PRELUDES})
+    string(APPEND _pulp_prelude_decls "extern const EmbeddedPrelude ${_prelude_var};\n")
+endforeach()
+string(APPEND _pulp_prelude_decls
+    "\nextern const EmbeddedPrelude* const kAll[];\nextern const std::size_t kAllCount;\n\n}  // namespace pulp::view::preludes\n")
+add_custom_command(COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/js/embed_js.py)
+"""
+COMPRESSED_PRELUDES_HEADER = (
+    "#pragma once\n// Auto-generated\n\n#include <cstddef>\n\nnamespace pulp::view::preludes {\n\n"
+    "struct EmbeddedPrelude {\n    const char* file_name;\n};\n\n"
+    "extern const EmbeddedPrelude web_compat;\nextern const EmbeddedPrelude react_shim;\n"
+    "\nextern const EmbeddedPrelude* const kAll[];\nextern const std::size_t kAllCount;\n\n"
+    "}  // namespace pulp::view::preludes\n"
+)
+PRELUDE_HEADER_PATH = "@build/core/view/web_compat_preludes_gen.hpp"
+
+
 def sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -118,6 +161,17 @@ class Fixture:
             "receipts": [f"provenance/mirror/receipts/{EXPORT_ID}.json"],
         }), encoding="utf-8")
 
+    def add_prelude_header(self, cmake: str, header_sha256: str) -> None:
+        """Land a prelude producer and record its generated header in the closure."""
+        self.files["mirror/core/view/cmake/PulpViewJsPreludes.cmake"] = cmake.encode()
+        for path, data in self.files.items():
+            (self.repo / path).parent.mkdir(parents=True, exist_ok=True)
+            (self.repo / path).write_bytes(data)
+        self.closure["generated_inputs"].append({
+            "path": PRELUDE_HEADER_PATH, "sha256": header_sha256, "producer_paths": [],
+        })
+        self.write_receipt()
+
     def plan(self) -> dict:
         return mp.plan(self.repo, self.deps, self.generated, self.skia, self.skia_asset)
 
@@ -136,6 +190,29 @@ class MirrorPackagePlanTest(unittest.TestCase):
         with self.assertRaises(mp.PlanError) as caught:
             self.fixture.plan()
         self.assertIn(fragment, str(caught.exception))
+
+    def test_compressed_prelude_header_follows_the_mirrored_producer(self) -> None:
+        self.fixture.add_prelude_header(COMPRESSED_PRELUDES_CMAKE, sha(COMPRESSED_PRELUDES_HEADER.encode()))
+        self.fixture.plan()
+        out = self.fixture.generated / "preludes/web_compat_preludes_gen.hpp"
+        self.assertEqual(out.read_text(encoding="utf-8"), COMPRESSED_PRELUDES_HEADER)
+
+    def test_legacy_prelude_header_still_renders_for_an_older_export(self) -> None:
+        self.fixture.add_prelude_header(LEGACY_PRELUDES_CMAKE, sha(LEGACY_PRELUDES_HEADER.encode()))
+        self.fixture.plan()
+        out = self.fixture.generated / "preludes/web_compat_preludes_gen.hpp"
+        self.assertEqual(out.read_text(encoding="utf-8"), LEGACY_PRELUDES_HEADER)
+
+    def test_prelude_header_in_the_other_format_is_refused(self) -> None:
+        # The closure recorded the compressed header, but the landed producer
+        # still declares string pointers: the digest must not match.
+        self.fixture.add_prelude_header(LEGACY_PRELUDES_CMAKE, sha(COMPRESSED_PRELUDES_HEADER.encode()))
+        self.assertRefused("does not match the closure digest")
+
+    def test_prelude_producer_without_a_closing_declaration_is_refused(self) -> None:
+        cmake = COMPRESSED_PRELUDES_CMAKE.replace("string(APPEND _pulp_prelude_decls\n", "set(_unrelated\n")
+        self.fixture.add_prelude_header(cmake, sha(COMPRESSED_PRELUDES_HEADER.encode()))
+        self.assertRefused("does not have exactly one leading, one per-prelude and one closing")
 
     def test_landed_export_plans_and_renders_its_origin(self) -> None:
         plan = self.fixture.plan()
@@ -296,6 +373,25 @@ class MirrorPackagePlanTest(unittest.TestCase):
     def test_empty_index_is_refused(self) -> None:
         (self.fixture.repo / mp.INDEX_PATH).write_text(json.dumps({"schema": mp.INDEX_SCHEMA, "receipts": []}))
         self.assertRefused("no landed export receipt")
+
+
+class PreludeHeaderTest(unittest.TestCase):
+    def js_paths(self, cmake: str) -> list[str]:
+        return ["js/web-compat.js", "js/react-shim.js"]
+
+    def test_each_format_renders_its_own_declarations(self) -> None:
+        for cmake, header in ((LEGACY_PRELUDES_CMAKE, LEGACY_PRELUDES_HEADER),
+                              (COMPRESSED_PRELUDES_CMAKE, COMPRESSED_PRELUDES_HEADER)):
+            self.assertEqual(mp.render_prelude_header(cmake, self.js_paths(cmake)), header)
+
+    def test_unsupported_escape_is_refused(self) -> None:
+        cmake = COMPRESSED_PRELUDES_CMAKE.replace("// Auto-generated", "// Auto\\qgenerated")
+        with self.assertRaises(mp.PlanError) as caught:
+            mp.render_prelude_header(cmake, self.js_paths(cmake))
+        self.assertIn("unsupported CMake escape", str(caught.exception))
+
+    def test_quoted_quote_and_backslash_are_unescaped(self) -> None:
+        self.assertEqual(mp.cmake_unquote(r'a\"b\\c\nd'), 'a"b\\c\nd')
 
 
 class ChocPatchTest(unittest.TestCase):

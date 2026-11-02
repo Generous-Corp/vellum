@@ -492,6 +492,52 @@ def c_identifier(name: str) -> str:
     return f"_{ident}" if ident[:1].isdigit() else ident
 
 
+CMAKE_ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "\\": "\\", '"': '"', "$": "$"}
+PRELUDE_DECLS_SET = re.compile(r'set\(_pulp_prelude_decls\s+"((?:[^"\\]|\\.)*)"\s*\)')
+PRELUDE_DECLS_APPEND = re.compile(r'string\(APPEND _pulp_prelude_decls\s+"((?:[^"\\]|\\.)*)"\s*\)')
+PRELUDE_VAR = "${_prelude_var}"
+
+
+def cmake_unquote(text: str) -> str:
+    """The value of a CMake quoted argument, for the escapes the prelude list uses."""
+    out: list[str] = []
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char != "\\":
+            out.append(char)
+            index += 1
+            continue
+        escape = text[index + 1:index + 2]
+        if escape not in CMAKE_ESCAPES:
+            raise PlanError(f"unsupported CMake escape \\{escape} in the prelude declarations")
+        out.append(CMAKE_ESCAPES[escape])
+        index += 2
+    return "".join(out)
+
+
+def render_prelude_header(cmake: str, js_paths: list[str]) -> str:
+    """Render web_compat_preludes_gen.hpp the way the mirrored PulpViewJsPreludes.cmake does.
+
+    The header text is read from the mirrored producer itself: its leading
+    set(), the one per-prelude APPEND inside the foreach, and the closing
+    APPEND after it. So the header follows whatever declaration format the
+    landed export carries, and the closure digest proves the result.
+    """
+    head = PRELUDE_DECLS_SET.findall(cmake)
+    appends = PRELUDE_DECLS_APPEND.findall(cmake)
+    per_prelude = [item for item in appends if PRELUDE_VAR in item]
+    closing = [item for item in appends if PRELUDE_VAR not in item]
+    if len(head) != 1 or len(per_prelude) != 1 or len(closing) != 1:
+        raise PlanError(
+            "the mirrored PulpViewJsPreludes.cmake does not have exactly one leading, one per-prelude "
+            f"and one closing _pulp_prelude_decls string (found {len(head)}, {len(per_prelude)}, {len(closing)})"
+        )
+    line = cmake_unquote(per_prelude[0])
+    names = [Path(js).stem.replace("-", "_") for js in js_paths]
+    return cmake_unquote(head[0]) + "".join(line.replace(PRELUDE_VAR, name) for name in names) + cmake_unquote(closing[0])
+
+
 def prepare_generated(repo: Path, receipt: dict[str, Any], units: list[tuple[str, dict[str, Any]]],
                       generated_dir: Path) -> dict[str, Any]:
     """Produce or prove every generated input the closures name."""
@@ -537,8 +583,7 @@ def prepare_generated(repo: Path, receipt: dict[str, Any], units: list[tuple[str
                 prelude_dir.mkdir(parents=True, exist_ok=True)
                 out = prelude_dir / f"web_compat_preludes_gen.{prelude.group('suffix')}"
                 if prelude.group("suffix") == "hpp":
-                    text = "#pragma once\n// Auto-generated from the JS prelude file list — do not edit\n\nnamespace pulp::view::preludes {\n\n" + "".join(f"extern const char* const {Path(js).stem.replace('-', '_')};\n" for js in js_paths) + "\n}  // namespace pulp::view::preludes\n"
-                    out.write_text(text, encoding="utf-8")
+                    out.write_text(render_prelude_header(cmake, js_paths), encoding="utf-8")
                 else:
                     completed = subprocess.run([sys.executable, str(repo / MIRROR_DIR / "core/view/js/embed_js.py"), str(out), *(str(repo / MIRROR_DIR / "core/view" / js) for js in js_paths)], capture_output=True, text=True, check=False)
                     if completed.returncode:
