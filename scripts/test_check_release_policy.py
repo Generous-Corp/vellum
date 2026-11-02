@@ -286,6 +286,12 @@ class Isolation(unittest.TestCase):
             with self.subTest(step_id=step_id):
                 minted = token.replace("steps.app-token", f"steps.{step_id}")
                 self.assertTrue(any("holds a secret" in p for p in self.found("    steps:\n" + minted)))
+        # Other spellings of the same expressions are secrets too.
+        for spelling in ("${{ secrets['RELEASE_TAG_SIGNING_KEY'] }}", "${{ toJSON(secrets) }}",
+                         "${{ steps['push-token'].outputs.token }}", "${{ steps.x.outputs['token'] }}"):
+            with self.subTest(spelling=spelling):
+                held = token.replace("${{ steps.app-token.outputs.token }}", spelling)
+                self.assertTrue(any("holds a secret" in p for p in self.found("    steps:\n" + held)))
         # A step output that is not a token is not a secret.
         output = token.replace("GH_TOKEN: ${{ steps.app-token.outputs.token }}", "T: ${{ steps.request.outputs.tag }}")
         self.assertEqual(self.found("    steps:\n" + output), [])

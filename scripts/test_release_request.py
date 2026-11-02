@@ -196,6 +196,12 @@ class LiveImmutableReleases(unittest.TestCase):
             with self.subTest(answer=answer), self.assertRaisesRegex(rr.ReleaseRequestError, "immutable-release"):
                 self.check(answer)
 
+    def test_the_read_time_is_a_past_utc_time(self) -> None:
+        self.assertEqual(rr.read_time("2026-11-02T01:02:03Z"), datetime(2026, 11, 2, 1, 2, 3, tzinfo=timezone.utc))
+        for text in ("2026-11-02T01:02:03+00:00", "yesterday", "", "2999-01-01T00:00:00Z"):
+            with self.subTest(text=text), self.assertRaises(rr.ReleaseRequestError):
+                rr.read_time(text)
+
     def test_the_cli_requires_the_live_answer(self) -> None:
         completed = subprocess.run([sys.executable, "-I", str(rr.ROOT / "scripts/release_request.py"), "check",
                                     "--commit", COMMIT, "--branch-rules", "r", "--check-runs", "c",
@@ -587,6 +593,28 @@ class TagTargetSelection(unittest.TestCase):
         self.assertIsNone(chosen.tag)
         self.assertIn("not a strict ancestor", chosen.reason)
 
+    def test_a_deleted_report_or_a_retyped_cursor_is_refused(self) -> None:
+        landed = self.history.request()
+        evidence = self.history.reconcile(landed)
+        self.history.branch(evidence)
+        self.history.git("rm", "-q", f"{rr.OBSERVATORY}/reports/current.md")
+        deleted = self.history.commit("delete a report")
+        self.assertIn("not observatory evidence: D", self.select(deleted).reason)
+        # A report replaced by a symlink is a type change (T), not evidence.
+        self.history.branch(evidence)
+        report = self.history.root / rr.OBSERVATORY / "reports/current.json"
+        report.unlink()
+        report.symlink_to("current.md")
+        retyped = self.history.commit("report becomes a symlink")
+        self.assertIn("not observatory evidence: T", self.select(retyped).reason)
+        # A cursor replaced by a symlink is not readable as a cursor at all, which refuses loudly.
+        self.history.branch(evidence)
+        cursor = self.history.root / rr.CURSOR
+        cursor.unlink()
+        cursor.symlink_to("reports/current.json")
+        with self.assertRaisesRegex(rr.ReleaseRequestError, "not JSON"):
+            self.select(self.history.commit("cursor becomes a symlink"))
+
     def test_a_deleted_or_renamed_evidence_file_is_refused(self) -> None:
         landed = self.history.request()
         evidence = self.history.reconcile(landed)
@@ -595,6 +623,16 @@ class TagTargetSelection(unittest.TestCase):
         self.history.git("mv", str(event), str(event.with_name("renamed.yaml")))
         renamed = self.history.commit("rename an event")
         self.assertIn("not observatory evidence: D", self.select(renamed).reason)
+
+    def test_a_path_cannot_inject_a_workflow_command_through_the_reason(self) -> None:
+        landed = self.history.request()
+        self.history.branch(self.history.reconcile(landed))
+        self.history.write("src/x\n::error::injected", "x\n")
+        hostile = self.history.commit("hostile path")
+        reason = self.select(hostile).reason
+        self.assertIn("\n", reason)
+        self.assertNotIn("\n", rr.one_line(reason))
+        self.assertIn("src/x\\n::error::injected", rr.one_line(reason))
 
     def test_an_existing_tag_is_never_reselected(self) -> None:
         landed = self.history.request()
@@ -672,7 +710,7 @@ class TagTargetSelection(unittest.TestCase):
         chosen = run(merged)
         self.assertEqual(chosen.returncode, 0, chosen.stderr)
         self.assertEqual(chosen.stdout.splitlines(), ["tag=v0.1.10", f"request-commit={landed}",
-                                                      f"cursor={landed}"])
+                                                      f"cursor={landed}", f"pulp-cursor={'1' * 40}"])
         refused = run(landed)
         self.assertEqual(refused.returncode, 0, refused.stderr)
         self.assertEqual(refused.stdout.splitlines()[0], "tag=")
@@ -789,6 +827,16 @@ class ReleaseTagWorkflow(unittest.TestCase):
         push = self.step("Push the tag and freeze it")
         self.assertIn("GH_TOKEN: ${{ steps.push-token.outputs.token }}", push)
         self.assertNotIn("python", push)
+
+    def test_the_tag_observatory_check_runs_before_anything_is_signed(self) -> None:
+        start = self.select_job.index("- name: Run the tag's reconciled observatory check before tagging")
+        step = self.select_job[start:]
+        for text in ("if: steps.select.outputs.tag != ''", "import observatory", "--vellum-tail-policy reconciled",
+                     '--vellum-target "$GITHUB_SHA"', '--now "$now"', 'git rev-parse "$GITHUB_SHA^"',
+                     '--pulp-target "$PULP_CURSOR"'):
+            self.assertIn(text, step)
+        self.assertIn("ref: ${{ steps.select.outputs.pulp-cursor }}", self.select_job)
+        self.assertIn("python3 -I -c", step)
 
     def test_the_tag_and_attestation_bind_the_pushed_commit(self) -> None:
         self.assertIn('attestation --commit "$GITHUB_SHA"', self.sign_job)

@@ -231,6 +231,17 @@ def immutable_release_record(answer: Any, tag: str, now: datetime,
         raise ReleaseRequestError(f"the live immutable-release answer refuses the release: {error}") from error
 
 
+def read_time(text: str) -> datetime:
+    """An RFC 3339 UTC time such as `date -u +%Y-%m-%dT%H:%M:%SZ` prints, no later than now."""
+    try:
+        when = datetime.strptime(text, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except ValueError as error:
+        raise ReleaseRequestError(f"not an RFC 3339 UTC time: {text!r}") from error
+    if when > datetime.now(timezone.utc):
+        raise ReleaseRequestError(f"the immutable-release read time {text} is in the future")
+    return when
+
+
 def remote_tag_exists(root: Path, tag: str, remote: str = "origin") -> bool:
     """Whether `tag` exists on `remote`; any lookup failure raises rather than reading as absent."""
     if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag):
@@ -348,6 +359,16 @@ def observatory_cursor(root: Path, commit: str) -> str:
     return scanned
 
 
+def observatory_pulp_cursor(root: Path, commit: str) -> str:
+    """The Pulp commit the observatory cursor at `commit` names, which the tag's check reads."""
+    cursor = json.loads(blob_at(root, commit, CURSOR), object_pairs_hook=strict_object)
+    pulp = cursor.get("pulp") if isinstance(cursor, dict) else None
+    scanned = pulp.get("last_scanned_commit") if isinstance(pulp, dict) else None
+    if not isinstance(scanned, str) or not SHA.fullmatch(scanned):
+        raise ReleaseRequestError(f"{CURSOR} at {commit} names no full Pulp commit")
+    return scanned
+
+
 def require_evidence_tail(root: Path, cursor: str, commit: str) -> None:
     """Raise unless every commit after `cursor` up to `commit` is observatory evidence.
 
@@ -381,6 +402,12 @@ def require_evidence_tail(root: Path, cursor: str, commit: str) -> None:
                 continue
             raise ReleaseRequestError(f"{entry} is not observatory evidence: {status} {path}")
         previous = entry
+
+
+def one_line(text: str) -> str:
+    """`text` as one printable line: the workflow logs it as a ::notice:: command, and a
+    newline in a path from a commit must not start a workflow command of its own."""
+    return "".join(ch if ch.isprintable() else ascii(ch)[1:-1] for ch in text)
 
 
 @dataclass(frozen=True)
@@ -527,6 +554,8 @@ def main(argv: list[str]) -> int:
                      help="GET /branches/main/protection/required_status_checks")
     one.add_argument("--immutable-releases", type=Path, required=True,
                      help="GET /repos/{repo}/immutable-releases, read live in this run")
+    one.add_argument("--immutable-read-at", required=True,
+                     help="when that answer was read, as an RFC 3339 UTC time")
     pick = sub.add_parser("select", help="print `tag=` (empty when this push is not a release) and its reason")
     pick.add_argument("--commit", required=True)
     pick.add_argument("--remote", default="origin")
@@ -556,7 +585,8 @@ def main(argv: list[str]) -> int:
             print(f"tag={chosen.tag or ''}")
             print(f"request-commit={chosen.request_commit or ''}")
             print(f"cursor={chosen.cursor or ''}")
-            print(chosen.reason, file=sys.stderr)
+            print(f"pulp-cursor={observatory_pulp_cursor(ROOT, args.commit) if chosen.tag else ''}")
+            print(one_line(chosen.reason), file=sys.stderr)
             return 0
         if args.command == "pending":
             running = pending(required_checks(load(args.branch_rules), load(args.protection)),
@@ -570,9 +600,9 @@ def main(argv: list[str]) -> int:
                     tag_exists=exists, branch_rules=load(args.branch_rules),
                     pages=load(args.check_runs), immutable=load(args.immutable_releases),
                     protection=load(args.protection),
-                    existing_tags=remote_release_tags(ROOT, args.remote))
-    except (OSError, ValueError, ReleaseRequestError) as error:
-        print(f"release request refused: {error}", file=sys.stderr)
+                    existing_tags=remote_release_tags(ROOT, args.remote), now=read_time(args.immutable_read_at))
+    except (OSError, ValueError, subprocess.CalledProcessError, ReleaseRequestError) as error:
+        print(one_line(f"release request refused: {error}"), file=sys.stderr)
         return 1
     print(tag)
     return 0

@@ -73,7 +73,7 @@ ADMIN_READ = re.compile(r"gh api [^\n]*(?:branches/main/protection|rules/branche
 APP_TOKEN = re.compile(r"GH_TOKEN:\s*\$\{\{\s*steps\.(?:app-token|push-token)\.outputs\.token\s*\}\}")
 PYTHON_CALL = re.compile(r"\bpython3?\b(?P<flags>(?:\s+-[A-Za-z]+)*)")
 # Any step output named `token` is a minted credential, whatever the step id.
-SECRET = re.compile(r"\$\{\{\s*(?:secrets\.|steps\.[A-Za-z0-9_-]+\.outputs\.token\b)")
+SECRET = re.compile(r"\$\{\{[^}]*(?:\bsecrets\b|\boutputs\s*(?:\.\s*token\b|\[\s*['\"]token['\"]\s*\]))")
 # Directories a release workflow runs Python from: the script's own directory
 # and the working directory would be first on sys.path without -I.
 PYTHON_DIRS = (".", "scripts", "tools/provenance")

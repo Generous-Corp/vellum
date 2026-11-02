@@ -54,6 +54,31 @@ jobs:
           echo "::notice::$reason"
           printf '%s\n' "$reason" >> "$GITHUB_STEP_SUMMARY"
 
+      # The tag is frozen once pushed, so the check its provenance run applies
+      # to the observatory (the one v0.1.8 and v0.1.9 could never pass) runs
+      # here first, exactly as provenance.yml runs it on refs/tags/*.
+      - name: Check out the Pulp commit the observatory cursor names
+        if: steps.select.outputs.tag != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: Generous-Corp/pulp
+          ref: ${{ steps.select.outputs.pulp-cursor }}
+          path: .observatory-pulp
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Run the tag's reconciled observatory check before tagging
+        if: steps.select.outputs.tag != ''
+        env:
+          PULP_CURSOR: ${{ steps.select.outputs.pulp-cursor }}
+        run: |
+          set -euo pipefail
+          now="$(TZ=UTC0 git show -s --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ "$GITHUB_SHA")"
+          python3 -I -c 'import sys; sys.path.insert(0, "tools/provenance"); import observatory; raise SystemExit(observatory.main(sys.argv[1:]))' \
+            verify --pulp-repo .observatory-pulp --vellum-repo . --git-base "$(git rev-parse "$GITHUB_SHA^")" \
+            --pulp-target "$PULP_CURSOR" --vellum-target "$GITHUB_SHA" --vellum-tail-policy reconciled \
+            --now "$now" --output "$RUNNER_TEMP/observatory-health-report.json" > /dev/null
+
   sign-release-tag:
     name: sign-release-tag
     needs: select-release-commit
@@ -93,6 +118,7 @@ jobs:
             > "$RUNNER_TEMP/required-checks.json"
           gh api "repos/$GITHUB_REPOSITORY/rules/branches/main" > "$RUNNER_TEMP/branch-rules.json"
           gh api "repos/$GITHUB_REPOSITORY/immutable-releases" > "$RUNNER_TEMP/immutable-releases.json"
+          date -u +%Y-%m-%dT%H:%M:%SZ > "$RUNNER_TEMP/immutable-releases-read-at.txt"
 
       - name: Decide whether the request may be tagged
         id: request
@@ -138,7 +164,8 @@ jobs:
           tag="$(python3 -I scripts/release_request.py check --commit "$GITHUB_SHA" --remote origin \
             --branch-rules "$RUNNER_TEMP/branch-rules.json" --check-runs "$RUNNER_TEMP/check-runs.json" \
             --protection "$RUNNER_TEMP/required-checks.json" \
-            --immutable-releases "$RUNNER_TEMP/immutable-releases.json")"
+            --immutable-releases "$RUNNER_TEMP/immutable-releases.json" \
+            --immutable-read-at "$(cat "$RUNNER_TEMP/immutable-releases-read-at.txt")")"
           test "$tag" = "$SELECTED_TAG"
           python3 -I scripts/check_release_policy.py check
           python3 -I scripts/check_release_policy.py signer >> "$GITHUB_OUTPUT"
