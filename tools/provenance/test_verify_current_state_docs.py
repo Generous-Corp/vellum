@@ -80,6 +80,9 @@ class Tests(unittest.TestCase):
             "The source tree identifies as `0.1.8` and is unreleased.",
             "Once `v0.1.8` is published, the checkout installer installs it.",
             "./scripts/install.sh --version 0.1.8",
+            "The source tree identifies as `0.1.9` and is unreleased.",
+            "Once `v0.1.9` is published, the checkout installer installs it.",
+            "./scripts/install.sh --version 0.1.9",
         ):
             with self.subTest(stale=stale), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
@@ -119,9 +122,9 @@ class Tests(unittest.TestCase):
                 verifier.verify_documents(root)
                 document = root / relative
                 text = document.read_text(encoding="utf-8")
-                self.assertIn("`v0.1.8` is retired too", text)
+                self.assertIn("`v0.1.8` and `v0.1.9` are retired too", text)
                 document.write_text(
-                    text.replace("`v0.1.8` is retired too", "`v0.1.8` is pending", 1),
+                    text.replace("`v0.1.8` and `v0.1.9` are retired too", "`v0.1.9` is pending", 1),
                     encoding="utf-8",
                 )
                 with self.assertRaisesRegex(
