@@ -133,7 +133,6 @@ PRELUDE_PATH = re.compile(r"@build/core/view/web_compat_preludes_gen\.(?P<suffix
 BUILD_INFO_INPUTS = {
     "20261014-34d16417a460": {"version": "0.964.1"},
     "20261025-46cee5e4e6e2": {"version": "1.11.0"},
-    "20261102-c35c0f1dafef": {"version": "1.45.0"},
 }
 
 # Pulp's CHOC standards patch, re-expressed: the JSON number parser accepts a
