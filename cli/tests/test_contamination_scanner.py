@@ -119,11 +119,11 @@ class ContaminationScannerTests(unittest.TestCase):
         scan = validator["installed_contamination_findings"]
         with tempfile.TemporaryDirectory() as temporary:
             prefix = Path(temporary)
-            install = prefix / "lib/vellum-installs/0.1.8-darwin-arm64-abc/sdk/mirror"
+            install = prefix / "lib/vellum-installs/0.1.9-darwin-arm64-abc/sdk/mirror"
             header = install / "include/pulp/canvas/canvas.hpp"
             header.parent.mkdir(parents=True)
             header.write_text("namespace pulp::canvas { struct Canvas; }\n", encoding="utf-8")
-            (prefix / "lib/vellum").symlink_to("vellum-installs/0.1.8-darwin-arm64-abc")
+            (prefix / "lib/vellum").symlink_to("vellum-installs/0.1.9-darwin-arm64-abc")
             # Mirrored source keeps its origin names inside the mirror scope.
             self.assertEqual(scan(prefix), [])
             # The mirror edge rules still apply there.
@@ -135,7 +135,7 @@ class ContaminationScannerTests(unittest.TestCase):
             )
             product.unlink()
             # A Pulp-named file outside the mirror scope is still refused.
-            stray = prefix / "lib/vellum-installs/0.1.8-darwin-arm64-abc/sdk/include/pulp/x.hpp"
+            stray = prefix / "lib/vellum-installs/0.1.9-darwin-arm64-abc/sdk/include/pulp/x.hpp"
             stray.parent.mkdir(parents=True)
             stray.write_text("int x;\n", encoding="utf-8")
             self.assertIn(
