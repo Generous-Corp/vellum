@@ -11,6 +11,14 @@
       "sdk_archive": "vellum-sdk-0.1.7-darwin-arm64.tar.gz",
       "sdk_archive_sha256": "ccfb8d77e195b8efa742f5bb8204ad20670a5effcb912a469340d3f6c7ccc56d",
       "reason": "Published only on the private incubation repository, which was deleted after the public consolidation onto Generous-Corp/vellum. The tag object, release, attestation, and assets no longer exist. Re-creating the name would give a second immutable v0.1.7 with different bytes, so the name is never reused. The target commit remains in this repository's history."
+    },
+    {
+      "tag": "v0.1.9",
+      "status": "retired-unpublished",
+      "original_repository": "Generous-Corp/vellum",
+      "tag_object": "a3ce268d0770e1fb3b34130cd0eed4471ea1ce5d",
+      "target_commit": "5f847399829f2d55cd0f540019ee591bd78d8fb5",
+      "reason": "Tagged and frozen by release-tag.yml on the commit that landed the v0.1.9 release request (#137's merge), but never published: its provenance run (41368275724) failed the reconciled observatory tail check, because a commit that lands a release request can never name itself as the observatory cursor, and every input to a re-run is fixed by the frozen tag. The tag stays in place and frozen; no release is published from it, and the name is never reused. The same content ships as v0.1.10 from an observatory-reconciled commit (owner decision 2026-11-02)."
     }
   ]
 }

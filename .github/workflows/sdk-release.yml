@@ -487,10 +487,13 @@ jobs:
               json.dumps(evidence, sort_keys=True, separators=(",", ":")) + "\n"
           )
           PY
-          git show "$SOURCE_COMMIT:provenance/immutable-release-preflight.json" \
-            > "$RUNNER_TEMP/source-preflight.json"
-          python3 scripts/verify_immutable_release_preflight.py \
-            --input "$RUNNER_TEMP/source-preflight.json" \
+          # Whether releases are immutable is read live now, with the finalizer
+          # token's Administration access, and recorded for the release evidence;
+          # the publish step below reads it live again before every mutation.
+          gh api "repos/$GITHUB_REPOSITORY/immutable-releases" \
+            > "$RUNNER_TEMP/immutable-releases.json"
+          python3 -I scripts/verify_immutable_release_preflight.py \
+            --input "$RUNNER_TEMP/immutable-releases.json" \
             --repository "$GITHUB_REPOSITORY" \
             --release-tag "$RELEASE_TAG" \
             --output "$RUNNER_TEMP/immutable-release-preflight.json"

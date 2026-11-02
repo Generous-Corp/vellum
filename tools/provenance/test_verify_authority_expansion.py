@@ -393,14 +393,11 @@ class Tests(unittest.TestCase):
         self.assertIn(
             'test "$GITHUB_REPOSITORY" = Generous-Corp/vellum', workflow
         )
-        preflight = json.loads(
-            (ROOT / "provenance/immutable-release-preflight.json").read_text()
-        )
-        self.assertEqual(preflight["repository"], "Generous-Corp/vellum")
-        self.assertEqual(
-            preflight["administrator_check"]["endpoint"],
-            "GET /repos/Generous-Corp/vellum/immutable-releases",
-        )
+        # Immutable releases are read live at finalization; no committed
+        # record stands in for that read.
+        self.assertFalse((ROOT / "provenance/immutable-release-preflight.json").exists())
+        self.assertIn('gh api "repos/$GITHUB_REPOSITORY/immutable-releases"', workflow)
+        self.assertNotIn("provenance/immutable-release-preflight.json", workflow + gpu)
         self.assertIn("scripts/select_exact_provenance_run.py", workflow)
         self.assertIn("scripts/verify_exact_provenance_artifact.py", workflow)
         self.assertIn("promotion-release-tag-trust.json", workflow)
@@ -896,7 +893,7 @@ class Tests(unittest.TestCase):
         }
 
     def mirror_release_errors(
-        self, fixture: dict, data: dict, *, release_tag: str | None = "v0.1.9",
+        self, fixture: dict, data: dict, *, release_tag: str | None = "v0.1.10",
         check_runs=None, root: Path | None = None, commit: str | None = None,
     ) -> list[str]:
         promotion = fixture["temporary"] / "signed-tag-promotion.json"
@@ -980,7 +977,7 @@ class Tests(unittest.TestCase):
         errors = verifier.validate_release_readiness(
             fixture["root"], matrix, amendment, promotion_attestation=promotion,
             delivery_root=fixture["delivery_root"], repository="Generous-Corp/vellum",
-            release_source_commit=fixture["commit"], check_runs=None, release_tag="v0.1.9",
+            release_source_commit=fixture["commit"], check_runs=None, release_tag="v0.1.10",
         )
         self.assertTrue(any("workflow-run evidence" in e for e in errors), errors)
 
@@ -1030,9 +1027,14 @@ class Tests(unittest.TestCase):
             [e for e in errors if "parity completion record exists" not in e], [], errors
         )
 
-    def test_mirror_promotion_is_only_for_the_phase_four_tag(self) -> None:
+    def test_mirror_promotion_is_only_for_the_listed_tags(self) -> None:
+        # v0.1.10 is the Phase 4 promotion and v0.1.11 rides the same parity
+        # waiver; v0.1.9 is retired, and anything later must prove parity.
+        self.assertEqual(verifier.MIRROR_PROMOTION_RELEASE_TAGS, {"v0.1.10", "v0.1.11"})
         fixture = self.mirror_promotion_fixture()
-        for tag in ("v0.1.10", "v0.2.0", None):
+        for tag in ("v0.1.10", "v0.1.11"):
+            self.assertEqual(self.mirror_release_errors(fixture, fixture["data"], release_tag=tag), [], tag)
+        for tag in ("v0.1.9", "v0.1.12", "v0.2.0", None):
             errors = self.mirror_release_errors(fixture, fixture["data"], release_tag=tag)
             self.assertTrue(any("is not a mirror-promotion release" in e for e in errors),
                             (tag, errors))
@@ -1064,7 +1066,7 @@ class Tests(unittest.TestCase):
                 ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
             ).strip()
             errors = verifier.validate_mirror_promotion_release(
-                root, dict(fixture["data"], release_source_commit=commit), commit, "v0.1.9"
+                root, dict(fixture["data"], release_source_commit=commit), commit, "v0.1.10"
             )
             self.assertTrue(
                 any("receipt index" in e for e in errors), (content, errors)
