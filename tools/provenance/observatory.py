@@ -682,11 +682,25 @@ def imported_mirror_commits(
 
     A side history qualifies only when its tip is the mirror_sha of an accepted
     export receipt and every one of its commits has a tree holding nothing but
-    the mirror directory. Anything else stays on the ordinary checks, which
-    reject a history edge that lacks the observatory cursor.
+    the mirror directory. Its commits may descend only from each other or from
+    the history of an earlier import already landed at the base: a re-export's
+    git-filter-repo history continues the previous export's, so its first new
+    commit's parent is that export's mirror commit. Anything else stays on the
+    ordinary checks, which reject a history edge that lacks the observatory
+    cursor.
     """
     range_commits = set(git(root, "rev-list", f"{git_base}..{head}").splitlines())
     approved, verification_errors = approved_mirror_shas(root)
+    landed_tips = [
+        tip for tip in sorted(approved - range_commits)
+        if is_ancestor(root, tip, git_base)
+    ]
+
+    def in_landed_import(commit: str) -> bool:
+        if tuple(git(root, "ls-tree", "--name-only", commit).splitlines()) != MIRROR_IMPORT_PATHS:
+            return False
+        return any(is_ancestor(root, commit, tip) for tip in landed_tips)
+
     imported: set[str] = set()
     for tip in sorted(approved & range_commits):
         side = git(root, "rev-list", tip, f"^{git_base}").splitlines()
@@ -699,7 +713,10 @@ def imported_mirror_commits(
                     f"mirror/: {', '.join(entries) or '(empty tree)'}"
                 )
             parents = git(root, "rev-list", "--parents", "-n", "1", commit).split()[1:]
-            outside = [parent for parent in parents if parent not in side_set]
+            outside = [
+                parent for parent in parents
+                if parent not in side_set and not in_landed_import(parent)
+            ]
             if outside:
                 raise ObservatoryError(
                     f"imported mirror history commit {commit} descends from "
@@ -718,7 +735,14 @@ def imported_mirror_history(root: Path, start: str, target: str) -> set[str]:
     """
     roots = git(root, "rev-list", "--max-parents=0", f"{start}..{target}").split()
     if not roots:
-        return set()
+        # A re-export continues an import already landed, so its history has
+        # no root of its own. Its commits carry no observatory cursor; only
+        # then is the receipt verification worth running.
+        commits = git(root, "rev-list", f"{start}..{target}").split()
+        if all(has_cursor(root, commit) for commit in commits):
+            return set()
+        imported, _errors = imported_mirror_commits(root, start, target)
+        return imported
     imported, errors = imported_mirror_commits(root, start, target)
     unexplained = [commit for commit in roots if commit not in imported]
     if unexplained:
