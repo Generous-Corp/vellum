@@ -216,8 +216,56 @@ jobs:
         run: |
           python3 tools/provenance/test_verify_renderer_dependency.py
           python3 tools/provenance/test_verify_renderer_eligibility.py
-          python3 tools/provenance/verify_renderer_dependency.py --json \
+          python3 -I tools/provenance/verify_renderer_dependency.py --json \
             > "$RUNNER_TEMP/renderer-provenance-report.json"
+
+      - name: Prove renderer eligibility from the builder's records
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # An eligible lock must be provable at every commit, not first at a
+          # release tag: fetch the builder's records the record names and run
+          # the release's own eligibility check. A blocked lock has none.
+          records="$RUNNER_TEMP/renderer-records"
+          mkdir "$records"
+          python3 -I - <<'PY' > "$records/assets.tsv"
+          import json, re, sys
+          # URLs are built here from the pinned builder release, never taken
+          # from the record, so the runner fetches nothing else.
+          builder = "https://github.com/danielraffel/skia-builder"
+          lock = json.load(open("provenance/third-party-lock.json"))
+          if lock["runtime_toolchain_dependencies"]["renderer"]["release_eligibility"] == "eligible":
+              record = json.load(open("provenance/renderer-attestation.json"))
+              artifact = record["artifact"]
+              tag = artifact.get("release_tag")
+              if artifact.get("repository") != builder or not re.fullmatch(r"chrome/m[0-9]+", str(tag)):
+                  sys.exit("the renderer record does not name a danielraffel/skia-builder chrome/mNNN release")
+              for flag, name in (("archive", artifact.get("name")),
+                                 ("legal-manifest", record["legal_inventory"]["manifest"]["name"]),
+                                 ("toolchain-receipt", record["build_identity"]["toolchain_receipt"]["name"]),
+                                 ("provenance-bundle", record["build_provenance"]["bundle"]["name"])):
+                  if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", str(name)):
+                      sys.exit(f"the renderer record names a malformed {flag} asset")
+                  print(f"{flag}\t{builder}/releases/download/{tag}/{name}")
+              print(f"release-json\tapi:repos/danielraffel/skia-builder/releases/tags/{tag}")
+          PY
+          if [ ! -s "$records/assets.tsv" ]; then
+            echo "The renderer lock is blocked; there are no builder records to prove."
+            exit 0
+          fi
+          proof=()
+          while IFS=$'\t' read -r flag url; do
+            if [[ "$url" == api:* ]]; then
+              gh api "${url#api:}" > "$records/$flag"
+            else
+              curl -fsSL --retry 3 "$url" -o "$records/$flag"
+            fi
+            proof+=("--$flag" "$records/$flag")
+          done < "$records/assets.tsv"
+          python3 -I tools/provenance/verify_renderer_dependency.py \
+            "${proof[@]}" --require-release-eligible --json \
+            > "$RUNNER_TEMP/renderer-eligibility-report.json"
 
       - name: Verify pinned Pulp tooling disposition
         run: |
@@ -777,6 +825,8 @@ jobs:
           name: provenance-report
           path: |
             ${{ runner.temp }}/provenance-report.json
+            ${{ runner.temp }}/renderer-provenance-report.json
+            ${{ runner.temp }}/renderer-eligibility-report.json
             ${{ runner.temp }}/pulp-tooling-disposition-report.json
             ${{ runner.temp }}/agent-instructions-report.json
             ${{ runner.temp }}/authority-ready-report.json

@@ -267,7 +267,7 @@ jobs:
 
       - name: Verify renderer provenance and byte identity
         run: |
-          python3 tools/provenance/verify_renderer_dependency.py \
+          python3 -I tools/provenance/verify_renderer_dependency.py \
             --archive "$VELLUM_SKIA_ARCHIVE" \
             --require-macho
 

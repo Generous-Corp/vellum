@@ -527,63 +527,53 @@ jobs:
         run: |
           set -euo pipefail
           # A release stays blocked until the renderer lock at the exact source
-          # commit declares the renderer release-eligible.
+          # commit declares the renderer release-eligible, and the builder's
+          # own records for the locked archive prove it.
           lock_root="$RUNNER_TEMP/release-source-renderer-lock"
           mkdir "$lock_root"
           git show "$SOURCE_COMMIT:provenance/third-party-lock.json" \
             > "$lock_root/third-party-lock.json"
           git show "$SOURCE_COMMIT:provenance/renderer-attestation.json" \
             > "$lock_root/renderer-attestation.json"
-          # An eligible renderer must also prove its signature and that the
-          # attested legal manifest is the published release asset, by
-          # GitHub's own asset digests. A blocked lock fails without them.
-          proof=()
-          if git cat-file -e "$SOURCE_COMMIT:provenance/renderer-attestation.json.sig" 2>/dev/null; then
-            git show "$SOURCE_COMMIT:provenance/renderer-attestation.json.sig" \
-              > "$lock_root/renderer-attestation.json.sig"
-            proof+=(--signature "$lock_root/renderer-attestation.json.sig")
-          fi
-          # Every attested asset is fetched from the locked release: the
-          # archive, its legal manifest, toolchain receipt and provenance
-          # bundle, plus GitHub's release JSON for their asset digests.
-          python3 - "$lock_root" <<'PY' > "$lock_root/renderer-assets.tsv"
-          import json, sys
+          # Every asset a builder-attested record names is fetched from the
+          # locked release: the archive, its legal manifest, toolchain receipt
+          # and provenance bundle, plus GitHub's release JSON for their asset
+          # digests. A pending record names none, and the verifier refuses it.
+          python3 -I - "$lock_root" <<'PY' > "$lock_root/renderer-assets.tsv"
+          import json, re, sys
           root = sys.argv[1]
+          # URLs are built here from the pinned builder release, never taken
+          # from the record, so the runner fetches nothing else.
+          builder = "https://github.com/danielraffel/skia-builder"
           record = json.load(open(f"{root}/renderer-attestation.json"))
-          artifact = record["artifact"]
-          rows = [("archive", f"{artifact['repository']}/releases/download/{artifact['release_tag']}/{artifact['name']}")]
-          for flag, asset in (("legal-manifest", (record.get("legal_inventory") or {}).get("manifest")),
-                              ("toolchain-receipt", (record.get("build_identity") or {}).get("toolchain_receipt")),
-                              ("provenance-bundle", ((record.get("build_provenance") or {}).get("bundle")))):
-              if isinstance(asset, dict) and asset.get("url"):
-                  rows.append((flag, asset["url"]))
-          # Records rebound from a member-identical rebuild name that rebuild's
-          # durable evidence assets; the verifier re-runs the comparison.
-          derived = (record.get("legal_inventory") or {}).get("derived_from") or {}
-          for flag, key in (("rebuild-archive", "rebuild_archive"), ("rebuild-receipt", "rebuild_receipt"),
-                            ("rebuild-manifest", "rebuild_manifest"),
-                            ("rebuild-provenance-bundle", "rebuild_bundle")):
-              if (derived.get(key) or {}).get("url"):
-                  rows.append((flag, derived[key]["url"]))
-          # GitHub's release JSON is read through the authenticated API (gh api),
-          # not an unauthenticated request that a rate limit can fail or a proxy
-          # can serve.
-          repo = artifact["repository"].removeprefix("https://github.com/")
-          rows.append(("release-json", f"api:repos/{repo}/releases/tags/{artifact['release_tag']}"))
-          for flag, url in rows:
-              print(f"{flag}\t{url}")
+          if record.get("state") == "builder-attested":
+              artifact = record["artifact"]
+              tag = artifact.get("release_tag")
+              if artifact.get("repository") != builder or not re.fullmatch(r"chrome/m[0-9]+", str(tag)):
+                  sys.exit("the renderer record does not name a danielraffel/skia-builder chrome/mNNN release")
+              names = [("archive", artifact.get("name")),
+                       ("legal-manifest", ((record.get("legal_inventory") or {}).get("manifest") or {}).get("name")),
+                       ("toolchain-receipt", ((record.get("build_identity") or {}).get("toolchain_receipt") or {}).get("name")),
+                       ("provenance-bundle", (((record.get("build_provenance") or {}).get("bundle")) or {}).get("name"))]
+              for flag, name in names:
+                  if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", str(name)):
+                      sys.exit(f"the renderer record names a malformed {flag} asset")
+                  print(f"{flag}\t{builder}/releases/download/{tag}/{name}")
+              # GitHub's release JSON is read through the authenticated API (gh api),
+              # not an unauthenticated request that a rate limit can fail or a proxy
+              # can serve.
+              print(f"release-json\tapi:repos/danielraffel/skia-builder/releases/tags/{tag}")
           PY
-          if [ -n "${proof[*]:-}" ]; then
-            while IFS=$'\t' read -r flag url; do
-              if [[ "$url" == api:* ]]; then
-                gh api "${url#api:}" > "$lock_root/renderer-$flag"
-              else
-                curl -fsSL "$url" -o "$lock_root/renderer-$flag"
-              fi
-              proof+=("--$flag" "$lock_root/renderer-$flag")
-            done < "$lock_root/renderer-assets.tsv"
-          fi
-          python3 tools/provenance/verify_renderer_dependency.py \
+          proof=()
+          while IFS=$'\t' read -r flag url; do
+            if [[ "$url" == api:* ]]; then
+              gh api "${url#api:}" > "$lock_root/renderer-$flag"
+            else
+              curl -fsSL "$url" -o "$lock_root/renderer-$flag"
+            fi
+            proof+=("--$flag" "$lock_root/renderer-$flag")
+          done < "$lock_root/renderer-assets.tsv"
+          python3 -I tools/provenance/verify_renderer_dependency.py \
             --lock "$lock_root/third-party-lock.json" \
             --attestation "$lock_root/renderer-attestation.json" \
             ${proof[@]+"${proof[@]}"} \

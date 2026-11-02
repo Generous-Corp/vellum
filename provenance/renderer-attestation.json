@@ -1,6 +1,6 @@
 {
-  "schema": "vellum.renderer-provenance.v1",
-  "state": "pending-owner-attestation",
+  "schema": "vellum.renderer-provenance.v2",
+  "state": "pending-build-provenance",
   "artifact": {
     "repository": "https://github.com/danielraffel/skia-builder",
     "release_tag": "chrome/m157",
@@ -43,11 +43,5 @@
     "state": "observed-not-exhaustive",
     "manifest_sha256": null,
     "entries": []
-  },
-  "signature": {
-    "state": "missing",
-    "issuer": null,
-    "subject": null,
-    "signature_sha256": null
   }
 }

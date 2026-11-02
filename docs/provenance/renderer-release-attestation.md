@@ -1,132 +1,122 @@
-# Renderer release attestation plan
+# Renderer release attestation
 
-The `chrome/m157` Skia/Dawn archive is byte locked in
+Vellum links a prebuilt Skia/Dawn archive published by
+[skia-builder](https://github.com/danielraffel/skia-builder). The archive is
+byte locked in
 [`provenance/third-party-lock.json`](../../provenance/third-party-lock.json),
-but it is not release eligible until the builder produces one signed record
-that binds the archive digest to its complete build inputs.
+and it is release eligible only on skia-builder's own published records for
+that exact archive. No owner key is involved: the build-provenance
+attestation is what vouches for the bytes.
 
 [`provenance/renderer-attestation.json`](../../provenance/renderer-attestation.json)
-is the checked-in contract for that record. It currently has
-`state: pending-owner-attestation`, `signature.state: missing`, and
-`legal_inventory.state: observed-not-exhaustive`; those states deliberately
-keep release eligibility blocked.
+names those records. Its `state` is `pending-build-provenance` while the
+locked archive has no such records (the lock then stays `blocked`), and
+`builder-attested` once it names them.
 
-## Required producer record
+## What makes the renderer eligible
 
-The release-producing builder must replace the pending values without changing
-the locked artifact or source tuple:
+For the archive the lock pins, all three of skia-builder's records must
+verify:
 
-1. `artifact.sha256` must equal the archive digest and the lock entry.
-2. `source_identities` must name the Skia, Dawn, and builder repositories and
-   exact commits used for the archive.
-3. `build_identity` must record the target, configuration, compiler identity and
-   digest, linker identity and digest, and C++ standard-library ABI. No field
-   may still read `pending` or `unknown`.
-4. `legal_inventory` must be `exhaustive`, with a content-addressed manifest
-   covering every transitive source, license, notice, and archive member.
-   `legal_inventory.manifest` names the release asset: its `name` must be
-   `<archive>.legal-manifest.sha256-<digest>.json`, its `sha256` must be that
-   digest (and equal `manifest_sha256`), and its `url` must be the asset on the
-   locked release.
-5. `signature` must be `signed`, with the owner-approved issuer, the artifact
-   digest as `subject`, the `vellum-renderer-attestation` namespace, and the
-   digests of the signature file and of the signed payload.
+1. **Build provenance.** The `<archive>.provenance-attestation.sha256-<digest>.sigstore.json`
+   asset is a Sigstore bundle. `gh attestation verify --bundle` (real Sigstore:
+   certificate chain, Rekor inclusion, signature) must accept it for the
+   archive, the legal manifest and the toolchain receipt, each pinned to:
+   - repository `danielraffel/skia-builder`;
+   - signer workflow `danielraffel/skia-builder/.github/workflows/build-skia.yml@refs/heads/main`
+     and source ref `refs/heads/main`;
+   - source commit equal to the lock's builder commit (`--source-digest`);
+   - predicate type `https://slsa.dev/provenance/v1`;
+   - OIDC issuer `https://token.actions.githubusercontent.com`;
+   - a GitHub-hosted runner (`--deny-self-hosted-runners`).
 
-## Signing (owner only)
+   The verifier then re-checks what Sigstore verified: exactly one
+   attestation per subject; every certificate field above plus the run
+   invocation the record names (`build_provenance.run`); and that the
+   statement Sigstore verified is the bundle's own. That statement must name
+   the archive, manifest and receipt by name and digest, and must say the build
+   was `build-skia.yml` on `refs/heads/main` of the builder repository, at the
+   builder commit, on a GitHub-hosted runner, in the named run. None of these
+   values is read from the record: the verifier pins them, and the record
+   must repeat them.
+2. **Legal manifest.** The `<archive>.legal-manifest.sha256-<digest>.json`
+   asset must have its attested digest, describe the locked archive, record
+   the lock's Skia and Dawn revisions as the ones built, claim an exhaustive
+   inventory with no gaps, and carry every license text with a matching
+   digest. Every zip member is re-derived from the archive and must be listed
+   with its digest; every static archive must be inventoried (exactly the
+   lock's archives); and every member and symbol table of every slice is
+   re-derived from the archive bytes and must be listed, each object with at
+   least one license from the manifest.
+3. **Toolchain receipt.** The `<archive>.apple-toolchain.sha256-<digest>.json`
+   asset must have its attested digest and describe the locked archive. It
+   supplies the build identity: the record's compiler and linker (version,
+   path, digest), SDK and C++ ABI must equal what it measured, every object
+   must have been built against that SDK, it must have built the locked
+   target and configuration, and its SDK and minimum OS must equal the lock's
+   observed Mach-O tuple.
 
-The signed payload is the canonical record (sorted-key JSON) with the
-signature block reduced to `issuer`, `subject` and `namespace`, prefixed by a
-fixed domain line. The verifier prints exactly those bytes:
+GitHub's own release-asset digests (`--release-json`) must also equal the
+archive's and all three records'.
+
+## Updating the record
+
+Point the lock at the new archive first (digests, source identities, header
+and archive inventory, observed Mach-O tuple). Then download the archive and
+its three records from the locked release, and the release JSON, and let the
+verifier derive and prove the record:
 
 ```sh
-python3 tools/provenance/verify_renderer_dependency.py --print-signing-payload \
-  > renderer-attestation.payload
-ssh-keygen -Y sign -f <owner key> -n vellum-renderer-attestation renderer-attestation.payload
-mv renderer-attestation.payload.sig provenance/renderer-attestation.json.sig
+python3 tools/provenance/verify_renderer_dependency.py \
+  --archive skia-build-mac-universal-gpu-release.zip \
+  --legal-manifest skia-build-mac-universal-gpu-release.legal-manifest.sha256-<d>.json \
+  --toolchain-receipt skia-build-mac-universal-gpu-release.apple-toolchain.sha256-<d>.json \
+  --provenance-bundle skia-build-mac-universal-gpu-release.provenance-attestation.sha256-<d>.sigstore.json \
+  --release-json release.json \
+  --emit-attestation provenance/renderer-attestation.json
 ```
 
-Then record `signature.state: signed`, `signature_sha256` (of the `.sig` file)
-and `payload_sha256` (of the payload) in the record. Changing any signed field
-afterwards invalidates the signature.
+`--emit-attestation` writes the record only after every proof above passes.
+Then set the lock's `release_eligibility` to `eligible`, its status to
+`byte-locked-renderer-release-attested`, clear `release_blockers`, and record
+`bundled_components_completeness.claim: exhaustive` with the manifest's digest.
 
-## Verification
+## Where it is checked
 
-`tools/provenance/verify_renderer_dependency.py` never trusts a state string:
-
-- A record that says `signed` is verified with `ssh-keygen -Y verify` against
-  `provenance/renderer-signers.allowed_signers`. That file must name exactly
-  the owner principal, and its key fingerprint must equal the one pinned in
-  the verifier, so editing the file alone cannot admit another issuer.
-- A record that says `exhaustive` must name a content-addressed manifest on
-  the locked release.
-- `--legal-manifest <file>` checks that the downloaded manifest has the attested
-  digest, describes the locked archive, claims an exhaustive inventory with no
-  gaps, and leaves no member without a license. With `--archive` it also
-  checks that the manifest lists every zip member with its digest.
-- `--release-json <file>` (GitHub's release JSON for the tag) checks that
-  GitHub's own `digest` for the archive and for the manifest asset equals the
-  attested digests.
-
-- `--toolchain-receipt <file>` checks the content-addressed receipt that
-  `build_identity.toolchain_receipt` names, and requires every structured
-  `build_identity` field (clang banner, ld version, tool paths and digests,
-  SDK, libc++ version and ABI) to equal what the receipt measured, with every
-  object built against the attested SDK.
-- `--provenance-bundle <file>` runs `gh attestation verify --bundle
-  --deny-self-hosted-runners` for the archive, manifest and receipt, accepting
-  only `danielraffel/skia-builder` workflows pinned at `refs/heads/main`:
-  `build-skia.yml` at the lock's builder commit (`--source-digest`) for records
-  a build wrote, and `rebind-provenance.yml` at the commit the signed record
-  names as `build_provenance.source_digest` for records rebound from a
-  member-identical rebuild. Every result must name the run invocation the
-  signed record names as `build_provenance.run` (`run_id`, `run_attempt`).
-  A rebind bundle covers the rebound manifest, the rebound receipt and the
-  member-comparison report, never the published archive: for rebound records
-  the archive is not a bundle subject, and is bound instead by the rebound
-  manifest's `archive.sha256` and the member comparison against the
-  rebuild-attested rebuild archive. The signed record and the legal manifest
-  must agree on whether the records are rebound before the subject set is
-  chosen.
-- With `--archive`, the manifest's static-archive inventory is re-derived from
-  the archive bytes: every member of every slice must be listed with its
-  digest, and the inventoried archives must be exactly the lock's.
-- A manifest and receipt rebound from a member-identical rebuild carry
-  `derived_from`. `--rebuild-archive` (and `--rebuild-receipt`) re-run the
-  comparison: every zip member, every static-archive member and every
-  `__.SYMDEF` symbol table must have the same content in both archives, fat
-  slices are keyed by CPU type and subtype (a duplicate slice is refused), and
-  the rebound receipt's toolchain fields must equal the rebuild receipt that
-  measured them. The rebound manifest must carry the rebuild manifest's
-  license mapping unchanged (files, licenses, per-member licenses, origins).
-  Because the rebound records rest on the rebuild's own claims, the rebuild
-  archive, manifest and receipt must each verify against the rebuild run's
-  build-provenance bundle (named in the signed record's
-  `legal_inventory.derived_from.rebuild_bundle`) for
-  `build-skia.yml@refs/heads/main`, with `--source-digest` set to the signed
-  record's `rebuild_run.head_sha` and `--deny-self-hosted-runners`. All three
-  certificates must name the run invocation of the signed record's
-  `rebuild_run` (repository, run, attempt); `rebuild_run` and `rebuild_bundle`
-  must equal the manifest's derivation; and the rebuild manifest and receipt
-  must describe the rebuild archive, with the manifest listing each of its
-  zip members (once) with its digest. `--rebuild-archive`,
-  `--rebuild-receipt`, `--rebuild-manifest` and `--rebuild-provenance-bundle`
-  are all required whenever the manifest is derived.
-- A record may not contain keys starting with `_`; the verifier reserves them
-  for its own results, which are not signed.
+- `provenance.yml` runs the contract tests, including the real Sigstore tests
+  against the published chrome/m158 bundle (`VELLUM_REQUIRE_REAL_SIGSTORE=1`
+  makes them mandatory), and, when the lock is eligible, downloads the
+  builder's records and runs `--require-release-eligible` on every commit.
+- `sdk-release.yml` runs `--require-release-eligible` against the lock and
+  record at the exact release source commit before publishing.
+- `--require-release-eligible` fails unless the lock declares the renderer
+  eligible and `--archive`, `--legal-manifest`, `--toolchain-receipt`,
+  `--provenance-bundle` and `--release-json` are all given and all verify.
+  Without it, the verifier checks the lock and record and any records given,
+  but never reports the renderer eligible.
+- Every workflow runs the verifier with `python3 -I`, and the verifier refuses
+  to run as a script without `-I`/`-P`: otherwise a module or package beside
+  it named like a standard-library module (`tools/provenance/subprocess/`)
+  would run in place of that module and could fake `gh`'s answer.
+  `check_release_policy.py` fails an unisolated verifier call in any workflow,
+  and any module, package or compiled module named like a standard-library
+  module in `.`, `scripts/` or `tools/provenance/`.
+- The workflows build the asset URLs from the pinned builder release and the
+  record's asset names (which must be plain file names), so the runner never
+  fetches a URL the record chose.
+- The release gate (sdk-release.yml) runs on Linux without `--require-macho`;
+  the Mach-O SDK and minimum OS there come from the attested toolchain
+  receipt, cross-checked against the lock's observed tuple. gpu-macos checks
+  the Mach-O tuple directly.
+- The per-commit proof in provenance.yml is a release-readiness signal, not a
+  merge gate unless that check is required by the repository's ruleset; the
+  hard gate is the release step.
+- The verifier pins the builder, so it is a release-policy file: CODEOWNERS
+  gives it to the owner and `scripts/check_release_policy.py` keeps the two
+  lists one inventory.
 - `verify_extraction.py` requires every landed mirror receipt's Pulp commit
   to pin this same renderer (branch, Skia, Dawn and builder commits, archive
   URL and digest).
 
-The lock may say `release_eligibility: eligible` only when the record is
-`owner-attested`, the signature verifies, the inventory is exhaustive, the
-lock's `bundled_components_completeness` claims `exhaustive` for the same
-manifest digest, no release blockers remain, and the lock `status` is
-`byte-locked-renderer-release-attested`. `--require-release-eligible`
-additionally requires `--archive`, `--legal-manifest`, `--toolchain-receipt`,
-`--provenance-bundle` and `--release-json`. The SDK release
-workflow fetches all of them, and any rebuild evidence the record's
-`legal_inventory.derived_from` names, before it runs that check.
-
-Pulp's render-toolchain pin must consume this same artifact/source tuple after
-the Vellum record is signed. No second provider or independent Skia/Dawn pin
-is introduced under D4.
+Pulp's render-toolchain pin must consume this same artifact/source tuple. No
+second provider or independent Skia/Dawn pin is introduced under D4.
