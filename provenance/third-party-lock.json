@@ -82,6 +82,39 @@
         "@esbuild/darwin-arm64": "sha512-TZbWkQY7kvTAXbXUT7uVACR5cMHsDiSz9z7ZKAX/RTq/WJEk3QyRr0wZpNhBDX+/0CtdqUIJlOiodQcta6tY3Q=="
       },
       "surface": "redistributed in the optional macOS arm64 SDK as the installed TS/JS/JSX application bundler and platform binary"
+    },
+    {
+      "name": "FreeType",
+      "version": "2.13.3",
+      "license": "FTL",
+      "source": "https://download.savannah.gnu.org/releases/freetype/freetype-2.13.3.tar.gz",
+      "sha256": "5c3a8e78f7b24c20b25b54ee575d6daa40007a5f4eea2845861c3409b3021747",
+      "surface": "optional rmlui/ module only (VELLUM_ENABLE_RMLUI or a standalone rmlui build); built from source as a static hidden-visibility archive linked privately into VellumRmlUi::Core when VELLUM_RMLUI_FONTS=ON; PNG, zlib, bzip2, Brotli and HarfBuzz disabled"
+    },
+    {
+      "name": "Lua",
+      "version": "5.4.7",
+      "license": "MIT",
+      "source": "https://www.lua.org/ftp/lua-5.4.7.tar.gz",
+      "sha256": "9fbf5e28ef86c69858f6d3d34eccc32e911c1a28b4120ff3e84aaa70cfbf1e30",
+      "surface": "optional rmlui/ module only (VELLUM_ENABLE_RMLUI or a standalone rmlui build); built from source as a static hidden-visibility archive linked privately into the VellumRmlUi::Lua archive when VELLUM_RMLUI_LUA=ON"
+    },
+    {
+      "name": "RmlUi",
+      "version": "6.1",
+      "license": "MIT",
+      "source": "https://github.com/mikke89/RmlUi",
+      "commit": "58c751531f4c1a1eb2dc56f409b8e8a323a0c9ad",
+      "surface": "optional rmlui/ module only (VELLUM_ENABLE_RMLUI or a standalone rmlui build); built from source as a static hidden-visibility archive linked privately into VellumRmlUi::Core"
+    },
+    {
+      "name": "stb_image_write",
+      "version": "1.16",
+      "license": "MIT",
+      "source": "https://github.com/nothings/stb/blob/d14d46f6b44456eb88beac58cba833a4135d4c89/stb_image_write.h",
+      "commit": "d14d46f6b44456eb88beac58cba833a4135d4c89",
+      "sha256": "cbd5f0ad7a9cf4468affb36354a1d2338034f2c12473cf1a8e32053cb6914a05",
+      "surface": "optional rmlui/ module only; single header compiled into the VellumRmlUi::SoftRenderer PNG encoder"
     }
   ],
   "runtime_toolchain_dependencies": {
