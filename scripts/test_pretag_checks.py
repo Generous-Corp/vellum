@@ -34,7 +34,7 @@ def fixture_workflows(failing: str | None = None) -> dict[str, str]:
                 if step_id:
                     lines += [f"        id: {step_id}"]
                 lines += ["        env:", "          SEEN_REF: ${{ github.ref }}", "        run: |",
-                          f"          printf '%s|%s|%s\\n' {check.step!r} \"$SEEN_REF\" \"$GITHUB_SHA\" >> \"$LOG\""]
+                          f"          printf '%s|%s|%s|%s|%s\\n' {check.step!r} \"$SEEN_REF\" \"$GITHUB_REF\" \"$GITHUB_REF_NAME\" \"$GITHUB_SHA\" >> \"$LOG\""]
                 if step_id == "authority-phase":
                     lines += ["          echo phase=active >> \"$GITHUB_OUTPUT\""]
                 if step_id == "observatory-cursor":
@@ -86,8 +86,9 @@ class Fixture(unittest.TestCase):
         self.assertEqual(runner.main(), 0)
         self.assertEqual(self.ran(), [check.step for check in pc.CHECKS])
         for line in self.log.read_text().splitlines():
-            _, ref, sha = line.split("|")
-            self.assertEqual((ref, sha), ("refs/tags/v0.1.10", self.commit))
+            _, expression, ref, name, sha = line.split("|")
+            self.assertEqual((expression, ref, name, sha),
+                             ("refs/tags/v0.1.10", "refs/tags/v0.1.10", "v0.1.10", self.commit))
         self.assertTrue(runner.signed)
         self.assertEqual(pc.git("tag", "--list", "v0.1.10", cwd=self.root), "", "the local tag is deleted")
 
