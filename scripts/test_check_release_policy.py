@@ -207,7 +207,7 @@ class Policy(unittest.TestCase):
                      "/provenance/retired-release-tags.json",
                      "/provenance/release-request.json",
                      "/provenance/authority-signers.allowed_signers",
-                     "/provenance/renderer-signers.allowed_signers"):
+                     "/tools/provenance/verify_renderer_dependency.py"):
             with self.subTest(path=path):
                 shutil.copy(ROOT / policy.CODEOWNERS, self.tmp / policy.CODEOWNERS)
                 owners = self.tmp / policy.CODEOWNERS
@@ -221,7 +221,7 @@ class Policy(unittest.TestCase):
                      "/provenance/retired-release-tags.json",
                      "/provenance/release-request.json",
                      "/provenance/authority-signers.allowed_signers",
-                     "/provenance/renderer-signers.allowed_signers"):
+                     "/tools/provenance/verify_renderer_dependency.py"):
             with self.subTest(path=path):
                 self.assertIn(path, policy.POLICY_FILES)
                 kept = tuple(p for p in policy.POLICY_FILES if p != path)
@@ -310,6 +310,31 @@ class Isolation(unittest.TestCase):
                 self.assertTrue(any("Administration-only" in p for p in self.found(
                     "    steps:\n" + app.replace("app-token", "other-token"))))
 
+    def test_the_renderer_verifier_runs_isolated_in_every_workflow(self) -> None:
+        step = "    steps:\n      - name: prove\n        run: python3 {flags}tools/provenance/verify_renderer_dependency.py\n"
+        for name in ("sdk-release.yml", "provenance.yml", "gpu-macos.yml"):
+            with self.subTest(workflow=name):
+                found = policy.isolation_problems({name: step.format(flags="")}, self.tmp)
+                self.assertIn(f"{name}: - name: prove runs the renderer verifier without -I", found)
+                self.assertEqual(policy.isolation_problems({name: step.format(flags="-I ")}, self.tmp), [])
+        # Its tests may run unisolated; they never decide eligibility.
+        tests = "    steps:\n      - name: t\n        run: python3 tools/provenance/test_verify_renderer_dependency.py\n"
+        self.assertEqual(policy.isolation_problems({"provenance.yml": tests}, self.tmp), [])
+
+    def test_a_package_or_compiled_module_shadowing_the_standard_library_fails(self) -> None:
+        (self.tmp / "tools" / "provenance").mkdir(parents=True)
+        package = self.tmp / "tools" / "provenance" / "subprocess"
+        package.mkdir()
+        self.assertEqual(self.found(""), [])  # a plain directory imports nothing ahead of the stdlib
+        (package / "__init__.py").write_text("")
+        self.assertTrue(any("subprocess" in p for p in self.found("")))
+        shutil.rmtree(package)
+        for name in ("json.cpython-312.pyc", "zipfile.so", "shutil.pyd"):
+            with self.subTest(name=name):
+                (self.tmp / "scripts" / name).write_bytes(b"")
+                self.assertTrue(any(name.split(".")[0] in p for p in self.found("")))
+                (self.tmp / "scripts" / name).unlink()
+
     def test_a_file_shadowing_the_standard_library_fails(self) -> None:
         (self.tmp / "scripts" / "json.py").write_text("")
         self.assertTrue(any("json" in p for p in self.found("")))
@@ -336,7 +361,7 @@ class Repository(unittest.TestCase):
                      "/provenance/retired-release-tags.json",
                      "/provenance/release-request.json",
                      "/provenance/authority-signers.allowed_signers",
-                     "/provenance/renderer-signers.allowed_signers"):
+                     "/tools/provenance/verify_renderer_dependency.py"):
             with self.subTest(path=path):
                 self.assertIn(path, policy.POLICY_FILES)
 

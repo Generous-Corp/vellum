@@ -51,7 +51,6 @@ POLICY_FILES = (
     "/provenance/authority-signers.allowed_signers",
     "/provenance/release-request.json",
     "/provenance/release-signers.allowed_signers",
-    "/provenance/renderer-signers.allowed_signers",
     "/provenance/retired-release-tags.json",
     "/scripts/check_release_policy.py",
     "/scripts/pretag_checks.py",
@@ -59,6 +58,7 @@ POLICY_FILES = (
     "/scripts/verify_immutable_release_preflight.py",
     "/scripts/verify_release_tag.py",
     "/tools/provenance/verify_authority_expansion.py",
+    "/tools/provenance/verify_renderer_dependency.py",
 )
 # GitHub Actions accepts quoted YAML keys and optional whitespace before the
 # colon. Keep both spellings in the structural scanner so a release
@@ -73,6 +73,9 @@ RELEASE_WORKFLOWS = (SIGNING_WORKFLOW, "release-policy.yml")
 ADMIN_READ = re.compile(r"gh api [^\n]*(?:branches/main/protection|rules/branches/|/rulesets|immutable-releases)")
 APP_TOKEN = re.compile(r"GH_TOKEN:\s*\$\{\{\s*steps\.(?:app-token|push-token)\.outputs\.token\s*\}\}")
 PYTHON_CALL = re.compile(r"\bpython3?\b(?P<flags>(?:\s+-[A-Za-z]+)*)")
+RENDERER_VERIFIER_CALL = re.compile(
+    r"\bpython3?\b(?P<flags>(?:\s+-[A-Za-z]+)*)\s+(?:\S*/)?verify_renderer_dependency\.py")
+IMPORTABLE_SUFFIXES = (".py", ".pyc", ".so", ".pyd")
 # Any step output named `token` is a minted credential, whatever the step id.
 SECRET = re.compile(r"\$\{\{[^}]*(?:\bsecrets\b|\boutputs\s*(?:\.\s*token\b|\[\s*['\"]token['\"]\s*\]))")
 # Directories a release workflow runs Python from: the script's own directory
@@ -403,11 +406,24 @@ def isolation_problems(workflows: dict[str, str], root: Path) -> list[str]:
                 found.append(f"{name}: {title} holds a secret and runs Python")
             if name == SIGNING_WORKFLOW and ADMIN_READ.search(step) and not APP_TOKEN.search(step):
                 found.append(f"{name}: {title} reads an Administration-only endpoint without the App token")
+    # The renderer verifier decides release eligibility wherever a workflow
+    # runs it, so every call must be isolated too.
+    for name, text in sorted(workflows.items()):
+        for step in steps(text):
+            title = step.strip().splitlines()[0]
+            for call in RENDERER_VERIFIER_CALL.finditer(step):
+                if "I" not in call["flags"].replace("-", ""):
+                    found.append(f"{name}: {title} runs the renderer verifier without -I")
     stdlib = set(sys.stdlib_module_names)
     for directory in PYTHON_DIRS:
-        for path in sorted((root / directory).glob("*.py")):
-            if path.stem in stdlib:
-                found.append(f"{path.relative_to(root)} is named like the standard-library module `{path.stem}`")
+        for path in sorted((root / directory).iterdir()) if (root / directory).is_dir() else []:
+            # A module, a package, or a compiled or extension module all import
+            # under the name before the dot.
+            module = path.name.split(".", 1)[0]
+            importable = (path.is_dir() and (path / "__init__.py").exists()) or (
+                path.is_file() and path.suffix in IMPORTABLE_SUFFIXES)
+            if importable and module in stdlib:
+                found.append(f"{path.relative_to(root)} is named like the standard-library module `{module}`")
     return found
 
 

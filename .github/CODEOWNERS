@@ -8,7 +8,6 @@
 /provenance/authority-signers.allowed_signers @danielraffel
 /provenance/release-request.json @danielraffel
 /provenance/release-signers.allowed_signers @danielraffel
-/provenance/renderer-signers.allowed_signers @danielraffel
 /provenance/retired-release-tags.json @danielraffel
 /scripts/check_release_policy.py @danielraffel
 /scripts/pretag_checks.py @danielraffel
@@ -16,3 +15,4 @@
 /scripts/verify_immutable_release_preflight.py @danielraffel
 /scripts/verify_release_tag.py @danielraffel
 /tools/provenance/verify_authority_expansion.py @danielraffel
+/tools/provenance/verify_renderer_dependency.py @danielraffel

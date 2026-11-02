@@ -116,7 +116,7 @@ promotion attestation and prove full-matrix parity.
   pipeline's key); `authority/*` tags against `authority-signers.allowed_signers` (the owner key that signed them).
   `verify_release_tag.py` picks the file from the tag name itself, refuses abbreviated or repeated flags, so a
   caller cannot verify a release tag against the other key. Tags `v0.1.0`–`v0.1.8` were signed by the owner key,
-  so re-running a release workflow on one of them now fails verification by design. The renderer attestation has its own `renderer-signers.allowed_signers`, pinned in its verifier.
+  so re-running a release workflow on one of them now fails verification by design. The renderer has no signer file: skia-builder's build provenance vouches for it (`renderer-release-attestation.md`).
 - **Every verifier call pins its file's key.** `release-policy` reads each `verify_release_tag.py` call and fails
   when it names another signer file, pins a principal or fingerprint other than that file's (in either `--flag value`
   or `--flag=value` form), pins through a variable outside `release-tag.yml`, or when a workflow that verifies tags

@@ -811,16 +811,19 @@ class RunnerPolicyTests(unittest.TestCase):
             eligibility_step,
         )
         for proof in ("archive", "legal-manifest", "toolchain-receipt",
-                      "provenance-bundle", "release-json"):
+                      "provenance-bundle"):
             self.assertIn(f'("{proof}"', eligibility_step)
-        for proof in ("rebuild-archive", "rebuild-receipt", "rebuild-manifest",
-                      "rebuild-provenance-bundle"):
-            self.assertIn(f'("{proof}"', eligibility_step)
+        self.assertIn('print(f"release-json\\t', eligibility_step)
+        # Asset URLs come from the pinned builder release, never from the record.
+        self.assertIn('builder = "https://github.com/danielraffel/skia-builder"', eligibility_step)
+        self.assertIn('{builder}/releases/download/{tag}/{name}', eligibility_step)
+        self.assertNotIn('asset["url"]', eligibility_step)
+        self.assertIn("python3 -I tools/provenance/verify_renderer_dependency.py", eligibility_step)
         # The release JSON comes from the authenticated API, not plain curl.
         self.assertIn('gh api "${url#api:}"', eligibility_step)
-        # The pinned owner identity is never overridden in a release.
-        self.assertNotIn("--owner-principal", eligibility_step)
-        self.assertNotIn("--owner-fingerprint", eligibility_step)
+        # Only builder records vouch for the renderer: no owner signature is read.
+        self.assertNotIn("renderer-attestation.json.sig", eligibility_step)
+        self.assertNotIn("--signature", eligibility_step)
         self.assertIn('test "$(gh api "repos/$GITHUB_REPOSITORY/immutable-releases" --jq \'.enabled\')" = true', finalizer)
         self.assertIn('for row in page["jobs"]', finalizer)
         self.assertIn('"path": ".github/workflows/gpu-macos.yml"', finalizer)

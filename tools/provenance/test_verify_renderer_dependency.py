@@ -40,20 +40,21 @@ class RendererAttestationTests(unittest.TestCase):
 
     def test_release_gate_follows_declared_eligibility(self) -> None:
         # The release finalizer passes --require-release-eligible. It must fail
-        # while the lock declares the renderer blocked and pass once eligible.
+        # while the lock declares the renderer blocked; once eligible it still
+        # fails until the builder's records are given to prove it.
         completed = subprocess.run(
-            [sys.executable, str(Path(__file__).with_name("verify_renderer_dependency.py")),
+            [sys.executable, "-I", str(Path(__file__).with_name("verify_renderer_dependency.py")),
              "--require-release-eligible", "--json"],
             check=False, capture_output=True, text=True,
         )
+        self.assertNotEqual(completed.returncode, 0)
         if self.renderer["release_eligibility"] == "eligible":
-            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertIn("release eligibility requires --archive", completed.stderr)
         else:
-            self.assertNotEqual(completed.returncode, 0)
             self.assertIn("GPU release is blocked", completed.stderr)
         # Control: without the flag the same lock verifies.
         control = subprocess.run(
-            [sys.executable, str(Path(__file__).with_name("verify_renderer_dependency.py")),
+            [sys.executable, "-I", str(Path(__file__).with_name("verify_renderer_dependency.py")),
              "--json"],
             check=False, capture_output=True, text=True,
         )
