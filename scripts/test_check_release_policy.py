@@ -201,10 +201,9 @@ class Policy(unittest.TestCase):
         self.assertTrue(any("verify_release_tag.py" in p for p in policy.problems(self.tmp)))
 
     def test_release_decision_inputs_missing_from_codeowners_fail(self) -> None:
-        # A forged preflight, a dropped retired tag, or a weakened preflight
+        # A dropped retired tag, a forged request, or a weakened immutable-release
         # verifier must not land without the owner's review.
         for path in ("/scripts/verify_immutable_release_preflight.py",
-                     "/provenance/immutable-release-preflight.json",
                      "/provenance/retired-release-tags.json",
                      "/provenance/release-request.json",
                      "/provenance/authority-signers.allowed_signers",
@@ -219,7 +218,6 @@ class Policy(unittest.TestCase):
 
     def test_release_decision_inputs_missing_from_policy_files_fail(self) -> None:
         for path in ("/scripts/verify_immutable_release_preflight.py",
-                     "/provenance/immutable-release-preflight.json",
                      "/provenance/retired-release-tags.json",
                      "/provenance/release-request.json",
                      "/provenance/authority-signers.allowed_signers",
@@ -283,9 +281,24 @@ class Isolation(unittest.TestCase):
         self.assertTrue(any("holds a secret" in p for p in self.found("    steps:\n" + key)))
         self.assertTrue(any("holds a secret" in p for p in self.found("    steps:\n" + token)))
         self.assertEqual(self.found("    steps:\n" + clean), [])
+        # Any minted token counts, whatever its step id: the push mints its own.
+        for step_id in ("push-token", "other-token"):
+            with self.subTest(step_id=step_id):
+                minted = token.replace("steps.app-token", f"steps.{step_id}")
+                self.assertTrue(any("holds a secret" in p for p in self.found("    steps:\n" + minted)))
+        # Other spellings of the same expressions are secrets too.
+        for spelling in ("${{ secrets['RELEASE_TAG_SIGNING_KEY'] }}", "${{ toJSON(secrets) }}",
+                         "${{ steps['push-token'].outputs.token }}", "${{ steps.x.outputs['token'] }}"):
+            with self.subTest(spelling=spelling):
+                held = token.replace("${{ steps.app-token.outputs.token }}", spelling)
+                self.assertTrue(any("holds a secret" in p for p in self.found("    steps:\n" + held)))
+        # A step output that is not a token is not a secret.
+        output = token.replace("GH_TOKEN: ${{ steps.app-token.outputs.token }}", "T: ${{ steps.request.outputs.tag }}")
+        self.assertEqual(self.found("    steps:\n" + output), [])
 
     def test_admin_only_reads_need_the_app_token(self) -> None:
-        for endpoint in ("rules/branches/main", "branches/main/protection/required_status_checks"):
+        for endpoint in ("rules/branches/main", "branches/main/protection/required_status_checks",
+                         "immutable-releases"):
             with self.subTest(endpoint=endpoint):
                 actions = ("      - name: read\n        env:\n          GH_TOKEN: ${{ github.token }}\n"
                            f"        run: gh api \"repos/$R/{endpoint}\" > out.json\n")
@@ -293,6 +306,9 @@ class Isolation(unittest.TestCase):
                        f"        run: gh api \"repos/$R/{endpoint}\" > out.json\n")
                 self.assertTrue(any("Administration-only" in p for p in self.found("    steps:\n" + actions)))
                 self.assertEqual(self.found("    steps:\n" + app), [])
+                self.assertEqual(self.found("    steps:\n" + app.replace("app-token", "push-token")), [])
+                self.assertTrue(any("Administration-only" in p for p in self.found(
+                    "    steps:\n" + app.replace("app-token", "other-token"))))
 
     def test_a_file_shadowing_the_standard_library_fails(self) -> None:
         (self.tmp / "scripts" / "json.py").write_text("")
@@ -306,11 +322,17 @@ class Repository(unittest.TestCase):
     def test_the_repository_holds_its_policy(self) -> None:
         self.assertEqual(policy.problems(ROOT), [])
 
+    def test_the_committed_immutable_release_preflight_is_retired(self) -> None:
+        # Immutable releases are read live by the release jobs; a committed
+        # record would be a second, stale answer, and owning it would be moot.
+        self.assertFalse((ROOT / "provenance/immutable-release-preflight.json").exists())
+        self.assertNotIn("/provenance/immutable-release-preflight.json", policy.POLICY_FILES)
+        self.assertNotIn("immutable-release-preflight.json", (ROOT / policy.CODEOWNERS).read_text())
+
     def test_the_release_decision_inputs_are_policy_files(self) -> None:
         # Dropping one from both lists at once needs an owner-reviewed change
         # to check_release_policy.py; this names the omission in that review.
         for path in ("/scripts/verify_immutable_release_preflight.py",
-                     "/provenance/immutable-release-preflight.json",
                      "/provenance/retired-release-tags.json",
                      "/provenance/release-request.json",
                      "/provenance/authority-signers.allowed_signers",
