@@ -40,9 +40,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: danielraffel/Shipyard
-          # Shipyard v0.344.1: refuses an App APPROVE stamped `unattributed`,
-          # signers only from the base config, and the rebase carry.
-          ref: 76e5c7032351b4445a8dcad133002eaa8f1887e6
+          # Shipyard v0.384.0: counts an App APPROVE only from a session listed in
+          # `[auto_merge] reviewer_stamp_sessions` (a HOLD from any session still counts).
+          ref: 67aa53c534eeded02e5a1b0bc83892903fe8ab22
           persist-credentials: false
       - name: Set up Python
         id: python
