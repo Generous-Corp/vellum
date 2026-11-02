@@ -1,23 +1,23 @@
 {
   "schema": "vellum.pulp-view-audio-archive.v1",
   "pulp_repository": "Generous-Corp/pulp",
-  "source_sha": "46cee5e4e6e2984e407a402d89dffae5f4f56631",
-  "export_receipt": "provenance/mirror/receipts/20261025-46cee5e4e6e2.json",
-  "release_tag": "artifact/pulp-view-audio/46cee5e4e6e2984e407a402d89dffae5f4f56631",
-  "workflow_run_id": 40163492230,
-  "workflow_sha": "46cee5e4e6e2984e407a402d89dffae5f4f56631",
+  "source_sha": "0f616a440cecdbdaff6234be48f682eec1184587",
+  "export_receipt": "provenance/mirror/receipts/20261102-0f616a440cec.json",
+  "release_tag": "artifact/pulp-view-audio/0f616a440cecdbdaff6234be48f682eec1184587",
+  "workflow_run_id": 41531609477,
+  "workflow_sha": "0f616a440cecdbdaff6234be48f682eec1184587",
   "archive": {
     "name": "libpulp-view-audio.a",
-    "sha256": "03884b2472019ebbf5068a40fe2f82963b831abec7df31fbf3aefbd06709db35",
-    "size": 1749464
+    "sha256": "74536743a34daed6a65aadf57fd719132dde033c9b68fb4f5aa3816faa1213e5",
+    "size": 1747552
   },
   "manifest": {
     "name": "pulp-view-audio-archive.manifest.json",
-    "sha256": "4234ca143239eaf0244428751fe41b3226cf0de490f6c92fdd8a05c5d2de91c2"
+    "sha256": "7295f1f9d6a68ecfc0f59268a873c1c984bf477f28c6c6d0dc595828573a0626"
   },
   "symbol_floor": {
     "name": "pulp-view-audio-symbol-floor.txt",
-    "sha256": "7d1388bd8eee0dab94bb5ebece2bd504f4f5748399dfc584fdf9adecb7b886a2"
+    "sha256": "7f472909820fd45b1a3bbd7ea691c5ea457f487505b8ac0500e4b713fbdf8844"
   },
   "symbol_floor_gate": {
     "name": "pulp-view-audio-symbol-floor-gate.txt",
@@ -25,10 +25,10 @@
   },
   "checksums": {
     "name": "SHA256SUMS",
-    "sha256": "b080351d7ddcdecc2101d143d77d298624860b3f193a8714d083de027e1512e0"
+    "sha256": "84af79bfabcec1a28029185ba4dda25949d43d6f2e82db2ef122ab73f5233895"
   },
   "attestation_bundle": {
     "name": "pulp-view-audio-archive.sigstore.json",
-    "sha256": "de394c0049684d97958aeb3006d4b1cda58362b24b08f16742f78769bc8cb08d"
+    "sha256": "6e1858229e8503c1987fab1d06f9d52b6929b6558e42a47720a0d2398cfcfd75"
   }
 }
