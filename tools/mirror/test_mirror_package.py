@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -389,6 +390,27 @@ class PreludeHeaderTest(unittest.TestCase):
         with self.assertRaises(mp.PlanError) as caught:
             mp.render_prelude_header(cmake, self.js_paths(cmake))
         self.assertIn("unsupported CMake escape", str(caught.exception))
+
+    def test_landed_mirror_renders_its_receipts_header_digest(self) -> None:
+        # The renderer against the real landed producer: the header it writes
+        # must hash to the digest the newest receipt's closures recorded.
+        repo = HERE.parents[1]
+        if not (repo / mp.INDEX_PATH).is_file():
+            self.skipTest("no landed mirror export in this checkout")
+        _, receipt = mp.newest_receipt(repo)
+        digests = {
+            row["sha256"]
+            for _, closure in mp.load_closures(repo, receipt)
+            for row in closure.get("generated_inputs", [])
+            if row.get("path") == PRELUDE_HEADER_PATH
+        }
+        if not digests:
+            self.skipTest("the newest export generates no prelude header")
+        cmake = (repo / mp.MIRROR_DIR / "core/view/cmake/PulpViewJsPreludes.cmake").read_text(encoding="utf-8")
+        js_paths = [js for js in re.findall(r"\$\{CMAKE_CURRENT_SOURCE_DIR\}/(js/[^\s)]+)", cmake)
+                    if js != "js/embed_js.py"]
+        header = mp.render_prelude_header(cmake, js_paths)
+        self.assertEqual(digests, {sha(header.encode("utf-8"))})
 
     def test_quoted_quote_and_backslash_are_unescaped(self) -> None:
         self.assertEqual(mp.cmake_unquote(r'a\"b\\c\nd'), 'a"b\\c\nd')
