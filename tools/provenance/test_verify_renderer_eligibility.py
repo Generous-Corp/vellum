@@ -92,6 +92,7 @@ class FakeGh:
 
     def __init__(self, builder_commit: str) -> None:
         self.calls: list[list[str]] = []
+        self.bundles: list[bytes] = []
         self.returncode = 0
         self.certificate = certificate(builder_commit)
         self.statement_edit = None
@@ -100,6 +101,7 @@ class FakeGh:
     def __call__(self, args: list[str]) -> subprocess.CompletedProcess:
         self.calls.append(args)
         bundle = Path(args[args.index("--bundle") + 1]).read_bytes()
+        self.bundles.append(bundle)
         statement = verifier.bundle_statement(bundle)
         if self.statement_edit:
             statement = copy.deepcopy(statement)
@@ -323,8 +325,13 @@ class BuilderAttestedRendererTests(unittest.TestCase):
         self.assertEqual(len(self.fx.gh.calls), 3)
         for args, path in zip(self.fx.gh.calls, (self.fx.archive, self.fx.manifest_path,
                                                  self.fx.receipt_path)):
+            # The bundle is handed to gh as a .json copy (gh refuses other names).
+            bundle_arg = args[args.index("--bundle") + 1]
+            self.assertTrue(bundle_arg.endswith(".json"), bundle_arg)
+            self.assertEqual(self.fx.gh.bundles[self.fx.gh.calls.index(args)],
+                             self.fx.bundle_path.read_bytes())
             self.assertEqual(args, [
-                "gh", "attestation", "verify", str(path), "--bundle", str(self.fx.bundle_path),
+                "gh", "attestation", "verify", str(path), "--bundle", bundle_arg,
                 "--repo", "danielraffel/skia-builder",
                 "--signer-workflow", "danielraffel/skia-builder/.github/workflows/build-skia.yml@refs/heads/main",
                 "--source-ref", "refs/heads/main", "--source-digest", self.fx.builder,
@@ -540,6 +547,20 @@ class BuilderAttestedRendererTests(unittest.TestCase):
                                                "legal manifest": self.fx.manifest_path,
                                                "toolchain receipt": self.fx.receipt_path},
                     self.fx.bundle_path)
+
+    def test_a_bundle_saved_without_a_json_name_is_verified_from_a_json_copy(self) -> None:
+        lock_path, record_path = self.fx.build()
+        _, renderer = verifier.load_lock(lock_path, record_path)
+        unnamed = self.fx.bundle_path.with_name("provenance-bundle")
+        unnamed.write_bytes(self.fx.bundle_path.read_bytes())
+        verifier.verify_build_provenance(
+            renderer["_attestation"], {"archive": self.fx.archive,
+                                       "legal manifest": self.fx.manifest_path,
+                                       "toolchain receipt": self.fx.receipt_path},
+            unnamed, runner=self.fx.gh)
+        bundles = [Path(call[call.index("--bundle") + 1]) for call in self.fx.gh.calls]
+        self.assertEqual(len(bundles), 3)
+        self.assertTrue(all(path.suffix == ".json" for path in bundles), bundles)
 
     def test_every_subject_is_required(self) -> None:
         lock_path, record_path = self.fx.build()

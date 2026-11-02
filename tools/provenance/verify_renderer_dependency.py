@@ -554,9 +554,15 @@ def verify_build_provenance(
                 f"the {label} given is not the one the record names")
     statement = bundle_statement(data)
     verify_statement(statement, expected, builder_commit, invocation)
-    for label in SUBJECT_LABELS:
-        verify_subject_with_sigstore(label, subjects[label], bundle, statement, builder_commit,
-                                     invocation, runner)
+    # gh accepts a bundle only under a .json or .jsonl name, and release and
+    # workflow downloads may store it under any name. Verify the same bytes,
+    # already checked against the record, from a .json copy.
+    with tempfile.TemporaryDirectory(prefix="renderer-provenance-") as scratch:
+        bundle_json = Path(scratch) / "build-provenance.sigstore.json"
+        bundle_json.write_bytes(data)
+        for label in SUBJECT_LABELS:
+            verify_subject_with_sigstore(label, subjects[label], bundle_json, statement,
+                                         builder_commit, invocation, runner)
     return {"build_provenance_verified": list(SUBJECT_LABELS), "build_provenance_run": invocation,
             "gh": shutil.which("gh")}
 
