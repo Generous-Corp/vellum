@@ -26,6 +26,7 @@
 #include "design_import_native_common.hpp"
 #include "design_ir_helpers.hpp"
 #include "design_binding_metadata.hpp"
+#include "design_cpp_binding_codegen.hpp"
 
 #include <algorithm>
 #include <array>
@@ -457,6 +458,13 @@ struct SwiftEmitCtx {
     // shadows) so the import CLI can surface them as `fidelity:` warnings and
     // `--strict-fidelity` can gate on the non-informational ones.
     std::vector<FidelityIssue>* fidelity = nullptr;
+    struct Subtree {
+        const ResolvedNativeNode* resolved = nullptr;
+        std::string property;
+    };
+    std::map<const IRNode*, Subtree> subtrees;
+    std::vector<const IRNode*> subtree_order;
+    bool emit_subtree_references = false;
 };
 
 // Report a SwiftUI-lowering divergence against the fidelity sink (if any).
@@ -477,15 +485,23 @@ void push_fidelity(const SwiftEmitCtx& ctx, const IRNode& node,
 // The string the generated control resolves against PulpParameter.name. B1's
 // convention is an exact match on the runtime parameter's *display name*, so we
 // use the widget's display label — the audio label (e.g. "Gain") or, lacking
-// one, the node name. We deliberately do NOT use pulpParamKey here: that is the
-// design tool's *canonical* key (e.g. "filter.cutoff_hz"), a different concept
-// from ParamInfo's human-readable `name`, and would systematically miss. The
-// canonical key is preserved as metadata in the binding manifest for B4, which
-// will add a real key→parameter resolver. Until then a name mismatch surfaces
-// as a visible missing/duplicate placeholder, never a silent mis-bind.
+// one, the node name. pulpParamKey is the design tool's *canonical* key (e.g.
+// "filter.cutoff_hz"), a different concept from ParamInfo's human-readable
+// `name`, so it is only the last resort: a keyed, routed control with neither
+// label nor name (a captured fader often has none) would otherwise bind in
+// every lane except this one. A key-only meter (pulpMeterValueKey, no source or
+// channel) falls back to that key the same way: it names what the meter shows,
+// as the bridge's bindMeter(id, key) resolves it. A name mismatch still surfaces
+// as a visible missing/duplicate placeholder, never a silent mis-bind; B4's
+// key→parameter resolver retires the guess.
 std::string binding_resolve_name(const IRNode& node) {
     if (!node.audio_label.empty()) return node.audio_label;
-    return node.name;
+    if (!node.name.empty())
+        return node.name;
+    const auto md = NativeBindingMetadata::parse(node);
+    if (md.param_key && !md.param_key->empty())
+        return *md.param_key;
+    return md.meter_value_key.value_or(std::string{});
 }
 
 bool is_bound_widget(NativeWidgetKind kind) {
@@ -559,50 +575,71 @@ void report_captured_raster_fidelity(const SwiftEmitCtx& ctx,
 
 // Emit a bound control as an inline `switch` over the resolver result so a
 // missing or duplicate parameter is visible rather than silently mis-bound.
+// `key` empty emits the control inert: the same widget and look, drawn at the
+// value native shows it at, on a detached parameter that drives nothing and
+// takes no input. That is what the native lane materializes for a control it
+// does not bind, so a design-only import keeps its controls.
 void emit_bound_control(std::ostringstream& out, const SwiftEmitCtx& ctx,
                         NativeWidgetKind kind, const IRNode& node,
                         const std::string& key, int depth) {
     const int s = ctx.opts.indent_spaces;
+    const bool inert = key.empty();
+    const std::string p =
+        inert ? ".detached(name: " +
+                    swift_string_literal(node.audio_label.empty() ? node.name : node.audio_label) +
+                    ", normalizedValue: " + format_float(normalized_audio_value(node)) + ")"
+              : "p";
     std::string control;
     switch (kind) {
         case NativeWidgetKind::knob: {
             float size = 60.0f;
             if (node.style.width) size = *node.style.width;
             else if (node.style.height) size = *node.style.height;
-            control = "PulpKnob(parameter: p, size: " + format_float(size) + ")";
+            control = "PulpKnob(parameter: " + p + ", size: " + format_float(size) + ")";
             break;
         }
         case NativeWidgetKind::fader:
-            control = "PulpSlider(parameter: p)";
+            control = "PulpSlider(parameter: " + p + ")";
             break;
         case NativeWidgetKind::toggle_button:
         case NativeWidgetKind::checkbox:
-            control = "PulpToggle(parameter: p)";
+            control = "PulpToggle(parameter: " + p + ")";
             break;
         case NativeWidgetKind::meter:
-            control = "PulpMeter(parameter: p)";
+            control = "PulpMeter(parameter: " + p + ")";
             break;
         case NativeWidgetKind::xy_pad:
-            control = "PulpXYPad(parameter: p)";
-            push_fidelity(ctx, node, "swiftui-xypad-single-axis",
-                          "xy_pad binds its X axis to the one parameter the IR carries; "
-                          "the Y axis is unbound visual state", /*informational=*/true);
+            control = "PulpXYPad(parameter: " + p + ")";
+            if (!inert)
+                push_fidelity(ctx, node, "swiftui-xypad-single-axis",
+                              "xy_pad binds its X axis to the one parameter the IR carries; "
+                              "the Y axis is unbound visual state",
+                              /*informational=*/true);
             break;
         case NativeWidgetKind::waveform:
-            control = "PulpWaveform(parameter: p)";
-            push_fidelity(ctx, node, "swiftui-static-visualizer",
-                          "waveform has no audio buffer in a baked import; rendered as a "
-                          "static shape scaled by the bound parameter", /*informational=*/true);
+            control = "PulpWaveform(parameter: " + p + ")";
+            if (!inert)
+                push_fidelity(ctx, node, "swiftui-static-visualizer",
+                              "waveform has no audio buffer in a baked import; rendered as a "
+                              "static shape scaled by the bound parameter",
+                              /*informational=*/true);
             break;
         case NativeWidgetKind::spectrum:
-            control = "PulpSpectrum(parameter: p)";
-            push_fidelity(ctx, node, "swiftui-static-visualizer",
-                          "spectrum has no audio buffer in a baked import; rendered as a "
-                          "static shape scaled by the bound parameter", /*informational=*/true);
+            control = "PulpSpectrum(parameter: " + p + ")";
+            if (!inert)
+                push_fidelity(ctx, node, "swiftui-static-visualizer",
+                              "spectrum has no audio buffer in a baked import; rendered as a "
+                              "static shape scaled by the bound parameter",
+                              /*informational=*/true);
             break;
         default:
             control = "EmptyView()";
             break;
+    }
+    if (inert) {
+        emit_line(out, depth, s, control);
+        emit_line(out, depth + 1, s, ".allowsHitTesting(false)");
+        return;
     }
     const std::string lit = swift_string_literal(key);
     emit_line(out, depth, s, "switch resolver.resolveParameter(named: " + lit + ") {");
@@ -619,6 +656,31 @@ void emit_bound_control(std::ostringstream& out, const SwiftEmitCtx& ctx,
 void emit_node(std::ostringstream& out, const SwiftEmitCtx& ctx,
                const IRNode& node, const ResolvedNativeNode& resolved, int depth);
 
+void emit_child_node(std::ostringstream& out, const SwiftEmitCtx& ctx, const IRNode& node,
+                     const ResolvedNativeNode& resolved, int depth) {
+    if (ctx.emit_subtree_references) {
+        const auto it = ctx.subtrees.find(&node);
+        if (it != ctx.subtrees.end()) {
+            emit_line(out, depth, ctx.opts.indent_spaces, "self." + it->second.property);
+            return;
+        }
+    }
+    emit_node(out, ctx, node, resolved, depth);
+}
+
+void collect_subtree_properties(SwiftEmitCtx& ctx, const IRNode& node,
+                                const ResolvedNativeNode& resolved, std::size_t& next_property) {
+    const std::size_t count = std::min(node.children.size(), resolved.children.size());
+    for (std::size_t i = 0; i < count; ++i) {
+        const auto& child = node.children[i];
+        const auto& child_resolved = resolved.children[i];
+        const std::string property = "pulpImportedNode" + std::to_string(next_property++);
+        ctx.subtrees.emplace(&child, SwiftEmitCtx::Subtree{&child_resolved, property});
+        ctx.subtree_order.push_back(&child);
+        collect_subtree_properties(ctx, child, child_resolved, next_property);
+    }
+}
+
 // Emit child indices [lo, hi) into the current ViewBuilder, keeping every
 // container's direct child count <= 10 (SwiftUI's ViewBuilder arity limit) by
 // recursively wrapping in Group blocks. For N <= 10, emit directly. Otherwise
@@ -632,7 +694,7 @@ void emit_child_range(std::ostringstream& out, const SwiftEmitCtx& ctx,
     const std::size_t n = hi - lo;
     if (n <= 10) {
         for (std::size_t i = lo; i < hi; ++i)
-            emit_node(out, ctx, node.children[i], resolved.children[i], depth);
+            emit_child_node(out, ctx, node.children[i], resolved.children[i], depth);
         return;
     }
     const std::size_t chunk = (n + 9) / 10;  // ceil(n/10) → at most 10 groups
@@ -1558,7 +1620,7 @@ void emit_children_distributed(std::ostringstream& out, const SwiftEmitCtx& ctx,
     if (around || end) emit_line(out, depth, s, "Spacer()");
     for (std::size_t i = 0; i < count; ++i) {
         if (i > 0 && (around || between)) emit_line(out, depth, s, "Spacer()");
-        emit_node(out, ctx, node.children[i], resolved.children[i], depth);
+        emit_child_node(out, ctx, node.children[i], resolved.children[i], depth);
     }
     if (around) emit_line(out, depth, s, "Spacer()");
     // space-between with a single child is flex-start: a trailing Spacer pushes
@@ -1585,18 +1647,29 @@ void emit_node(std::ostringstream& out, const SwiftEmitCtx& ctx,
         return;
     }
 
-    // Bound audio controls (knob/slider/toggle).
+    // Audio controls. A control binds only when its metadata would install a
+    // binding in the native and baked C++ lanes too (`binding_route_installable`);
+    // one resolved by its display label alone would bind controls the other
+    // lanes leave unbound, and a renamed label would silently rebind it. Every
+    // other control is still drawn, inert, the way native draws it.
+    //
+    // A refused binding reports the native binder's own code, at the native
+    // binder's weight: informational, because native logs it as a warning and
+    // still imports, so it must not fail a strict-fidelity export either. A
+    // control with no binding metadata at all reports nothing, as in native:
+    // there is nothing to refuse, and a design-only import is not an error.
     if (is_bound_widget(kind)) {
-        const std::string key = binding_resolve_name(node);
-        if (key.empty()) {
-            if (ctx.opts.include_comments)
-                emit_line(out, depth, s, "// unbound " + std::string(native_widget_kind_name(kind))
-                                              + " (no param key)");
-            emit_line(out, depth, s,
-                      "Text(\"⚠︎ unbound " + std::string(native_widget_kind_name(kind)) + "\")");
-            emit_line(out, depth + 1, s, ".font(.caption).foregroundColor(.orange)");
-            return;
+        const auto md = NativeBindingMetadata::parse(node);
+        const bool installable = binding_route_installable(node, kind, md);
+        const std::string key = installable ? binding_resolve_name(node) : std::string{};
+        if (!installable) {
+            if (const auto refusal = binding_refusal(node, kind, md))
+                push_fidelity(ctx, node, refusal->code, refusal->message, /*informational=*/true);
         }
+        if (key.empty() && ctx.opts.include_comments)
+            emit_line(out, depth, s,
+                      "// unbound " + std::string(native_widget_kind_name(kind)) +
+                          ": drawn inert, not wired to a parameter");
         emit_bound_control(out, ctx, kind, node, key, depth);
         return;
     }
@@ -1827,9 +1900,24 @@ std::string emit_view(const DesignIR& ir, const ResolvedNativeNode& resolved,
     out << "        self.resolver = resolver\n";
     out << "    }\n\n";
     out << "    public var body: some View {\n";
-    SwiftEmitCtx ctx{opts, ir.asset_manifest, opts.fidelity_report};
+    SwiftEmitCtx ctx{opts, ir.asset_manifest, opts.fidelity_report, {}, {}, false};
+    std::size_t next_property = 0;
+    collect_subtree_properties(ctx, ir.root, resolved, next_property);
+    ctx.emit_subtree_references = true;
     emit_node(out, ctx, ir.root, resolved, 2);
     out << "    }\n";
+
+    // Keep each imported subtree in its own ViewBuilder expression. This
+    // preserves the hierarchy while preventing Swift from type-checking a
+    // large browser capture as one deeply nested opaque body expression.
+    for (const IRNode* node : ctx.subtree_order) {
+        const auto it = ctx.subtrees.find(node);
+        if (it == ctx.subtrees.end() || !it->second.resolved)
+            continue;
+        out << "\n    @ViewBuilder\n    private var " << it->second.property << ": some View {\n";
+        emit_node(out, ctx, *node, *it->second.resolved, 2);
+        out << "    }\n";
+    }
     out << "}\n";
     return out.str();
 }
@@ -1841,8 +1929,9 @@ std::string emit_view(const DesignIR& ir, const ResolvedNativeNode& resolved,
 // (B1's exact-`PulpParameter.name` strategy — Pulp's state model has no stable
 // string key, so bound controls resolve by display name). An entry is emitted
 // for any node the C++ manifest would include (carries `pulp*` binding
-// metadata) OR any resolvable bound widget — the union gives the host both the
-// full contract and the name-resolution pre-flight. The field set is asserted
+// metadata); only a control whose metadata would install a binding in the
+// native and C++ lanes (`binding_route_installable`) is marked bound and gets
+// the name-resolution block. The field set is asserted
 // to match the C++ manifest by a cross-check test (test_design_swift_codegen).
 
 // The same manifest-eligibility predicate the C++ path uses (the `pulp*`
@@ -1882,7 +1971,10 @@ struct SwiftBindingEntry {
 
 void collect_swift_bindings(const IRNode& node, const ResolvedNativeNode& resolved,
                             std::string_view ir_path, std::vector<SwiftBindingEntry>& out) {
-    const bool bound = is_bound_widget(resolved.kind) && !binding_resolve_name(node).empty();
+    const bool bound =
+        is_bound_widget(resolved.kind) &&
+        binding_route_installable(node, resolved.kind, NativeBindingMetadata::parse(node)) &&
+        !binding_resolve_name(node).empty();
     if (bound || swift_node_has_binding_metadata(node))
         out.push_back({std::string(ir_path), &node, resolved.kind, bound});
     const std::size_t count = std::min(node.children.size(), resolved.children.size());

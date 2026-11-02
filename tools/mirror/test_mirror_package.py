@@ -446,6 +446,37 @@ class ChocV8PatchTest(unittest.TestCase):
                 mp.apply_choc_v8_patch(root)
 
 
+class ChocFileWatcherPatchTest(unittest.TestCase):
+    def header(self, root: Path, edits) -> Path:
+        path = root / mp.CHOC_FILE_WATCHER_HEADER
+        path.parent.mkdir(parents=True)
+        path.write_text("start\n" + "\nmiddle\n".join(edits) + "\nend\n", encoding="utf-8")
+        return path
+
+    def test_both_edits_apply_once(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = self.header(root, [before for before, _ in mp.CHOC_FILE_WATCHER_EDITS])
+            mp.apply_patch("choc", "file-watcher-lifetime", root)
+            patched = path.read_text(encoding="utf-8")
+            for _, after in mp.CHOC_FILE_WATCHER_EDITS:
+                self.assertEqual(patched.count(after), 1)
+            self.assertIn("dispatch_sync_f (dispatchQueue", patched)
+            mp.apply_patch("choc", "file-watcher-lifetime", root)
+            self.assertEqual(path.read_text(encoding="utf-8"), patched)
+
+    def test_drifted_source_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.header(root, [mp.CHOC_FILE_WATCHER_EDITS[0][0]])
+            with self.assertRaises(mp.PlanError):
+                mp.apply_patch("choc", "file-watcher-lifetime", root)
+
+    def test_choc_recipe_applies_the_patch(self) -> None:
+        self.assertIn("file-watcher-lifetime", mp.DEPENDENCIES["choc"]["patches"])
+        self.assertEqual(mp.PATCHED_PATHS["file-watcher-lifetime"], mp.CHOC_FILE_WATCHER_HEADER)
+
+
 class SourceCompileOptionsTest(unittest.TestCase):
     """Per-source options are read from CMake under the closure's configure."""
 

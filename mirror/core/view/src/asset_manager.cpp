@@ -3,6 +3,7 @@
 #include <pulp/canvas/text_font_context.hpp>
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <fstream>
 #include <filesystem>
 
@@ -16,8 +17,13 @@ AssetManager::AssetManager() {
     // Android / headless it falls through to the bundled Noto Color
     // Emoji (when `PULP_BUNDLE_NOTO_COLOR_EMOJI=ON`). Idempotent — a
     // subsequent `pulp::canvas::register_emoji_fallback(...)` call from
-    // user code replaces the discovery result.
+    // user code replaces the discovery result. The lite editor build
+    // (PULP_LITE_EDITOR, see pulp-editor-lite) skips it: its text is measured
+    // and painted through CoreText, which falls back to the system emoji face
+    // on its own, so nothing there reads Skia's emoji fallback.
+#if !(defined(PULP_LITE_EDITOR) && PULP_LITE_EDITOR)
     pulp::canvas::register_best_available_emoji_fallback();
+#endif
 }
 AssetManager::~AssetManager() = default;
 
@@ -80,12 +86,21 @@ std::string AssetManager::resolve_path(const std::string& path) const {
 
 // ── File I/O ────────────────────────────────────────────────────────────────
 
-BlobData AssetManager::read_file_bytes(const std::string& path) {
+void AssetManager::set_max_file_bytes(size_t bytes) {
+    std::lock_guard lock(mutex_);
+    max_file_bytes_ = bytes;
+}
+
+BlobData AssetManager::read_file_bytes(const std::string& path) const {
     std::ifstream file(path, std::ios::binary | std::ios::ate);
     if (!file.is_open()) return {};
 
     auto size = file.tellg();
     if (size <= 0) return {};
+    // The ceiling is checked before the buffer exists, so an oversized file
+    // costs nothing but the open.
+    if (max_file_bytes_ != 0 && static_cast<std::uintmax_t>(size) > max_file_bytes_)
+        return {};
 
     BlobData blob;
     blob.data.resize(static_cast<size_t>(size));
