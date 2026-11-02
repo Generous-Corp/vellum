@@ -278,13 +278,22 @@ inline void open_safe_libraries(lua_State *state) {
   luaL_requiref(state, LUA_UTF8LIBNAME, luaopen_utf8, 1);
   lua_pop(state, 1);
 
-  // The base library includes these file-loading entry points. They are not
-  // part of the RmlUi compatibility contract and would bypass the asset
-  // provider's declared content closure.
+  // These loaders and bytecode helpers are not part of the RmlUi
+  // compatibility contract. Removing all of them keeps a skin from
+  // manufacturing a precompiled chunk and feeding it back to Lua's loader,
+  // bypassing the text-only check applied to host-provided source.
   lua_pushnil(state);
   lua_setglobal(state, "dofile");
   lua_pushnil(state);
   lua_setglobal(state, "loadfile");
+  lua_pushnil(state);
+  lua_setglobal(state, "load");
+  lua_getglobal(state, LUA_STRLIBNAME);
+  if (lua_istable(state, -1)) {
+    lua_pushnil(state);
+    lua_setfield(state, -2, "dump");
+  }
+  lua_pop(state, 1);
   install_coroutine_guards(state);
   lua_getglobal(state, "setmetatable");
   lua_pushcclosure(state, &safe_setmetatable, 1);

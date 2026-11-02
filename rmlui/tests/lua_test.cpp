@@ -41,11 +41,18 @@ void test_sandbox_guards() {
                               "assert(utf8.len('Skin') == 4); "
                               "assert(type(params) == 'nil')") == LUA_OK);
 
-  // Host file/process/debug loaders are absent even though base is present.
+  // Host file/process/debug/dynamic-code loaders are absent even though base is present.
   VELLUM_RMLUI_CHECK(luaL_dostring(state,
                        "assert(io == nil and os == nil and package == nil and "
                        "debug == nil); "
                        "assert(dofile == nil and loadfile == nil)") == LUA_OK);
+  VELLUM_RMLUI_CHECK(luaL_dostring(
+                       state,
+                       "assert(load == nil and string.dump == nil); "
+                       "local ok, error = pcall(function() "
+                       "return load(string.dump(function() return 1 end), "
+                       "'chunk', 'b') end); "
+                       "assert(not ok and type(error) == 'string')") == LUA_OK);
   VELLUM_RMLUI_CHECK(luaL_loadstring(state, "return 42") == LUA_OK);
   VELLUM_RMLUI_CHECK(ProtectedCall::run(state, 0, 1) ==
          LUA_OK);

@@ -11,7 +11,8 @@ namespace vellum::rmlui {
 // owns its own lua_State, so two editors never share script state.
 //
 // The sandbox opens only base, coroutine, table, string, math and utf8;
-// removes dofile and loadfile; refuses skin-authored __gc finalizers; and runs
+// removes dofile, loadfile, load and string.dump; refuses skin-authored __gc
+// finalizers; and runs
 // every entry point (a loaded chunk, a dispatched callback, and every
 // coroutine resume or close) under an instruction and wall-clock budget, so a
 // runaway script returns an error instead of hanging the UI thread.
