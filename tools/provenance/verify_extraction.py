@@ -44,6 +44,7 @@ EXPECTED_ACTIVE_ROOTS = (
     "graphics",
     "packages/vellum-design-ir",
     "packages/vellum-ui",
+    "rmlui",
     "runtime",
     "scripts",
     "templates",

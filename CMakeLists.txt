@@ -24,6 +24,8 @@ option(VELLUM_ENABLE_MIRROR
     "Package the landed mirror's units (needs the locked Skia/Dawn archive)" OFF)
 option(VELLUM_ENABLE_ADDRESS_SANITIZER
     "Instrument Vellum targets with AddressSanitizer" OFF)
+option(VELLUM_ENABLE_RMLUI
+    "Build the optional RmlUi module (rmlui/; fetches its pinned RmlUi source)" OFF)
 set(VELLUM_AUTHORING_TEST_BUNDLE "" CACHE FILEPATH
     "Optional @vellum/ui classic-script bundle for the real JavaScriptCore integration test")
 set(VELLUM_PHASE3_TEST_BUNDLE "" CACHE FILEPATH
@@ -64,6 +66,12 @@ endif()
 add_subdirectory(foundation)
 add_subdirectory(runtime)
 add_subdirectory(components)
+
+# The RmlUi module is a self-contained project that depends on nothing else in
+# Vellum; it is also built on its own with `cmake -S rmlui`.
+if(VELLUM_ENABLE_RMLUI)
+    add_subdirectory(rmlui)
+endif()
 
 if(VELLUM_ENABLE_GPU)
     include(cmake/VellumSkiaDawn.cmake)

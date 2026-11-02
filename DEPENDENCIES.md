@@ -127,6 +127,26 @@ has no signed provenance or source-to-asset attestation and is not claimed to
 be reproducible from source. These limitations prevent the current
 incubation lock from being described as a production supply-chain attestation.
 
+## Optional RmlUi module dependencies
+
+The optional `rmlui/` module builds these from pinned source when it is
+enabled (`VELLUM_ENABLE_RMLUI=ON`, default OFF, or a standalone
+`cmake -S rmlui` build). Every input is fetched by exact identity and fails
+the configure on a mismatch. They are compiled as static, hidden-visibility
+archives and linked privately into the `VellumRmlUi::Core` shared library (or,
+for stb_image_write, the `VellumRmlUi::SoftRenderer` archive, and for Lua the
+`VellumRmlUi::Lua` archive). The installed `VellumRmlUi` package carries none
+of their headers and the Core library exports none of their symbols; when the
+Lua host is built, the static Lua archive is installed beside it for linking.
+Nothing here enters the default Vellum build or the Vellum SDK artifact.
+
+| Dependency | Pinned identity | License | Used by | Notes |
+|---|---|---|---|---|
+| FreeType | `2.13.3`, `freetype-2.13.3.tar.gz` SHA-256 `5c3a8e78f7b24c20b25b54ee575d6daa40007a5f4eea2845861c3409b3021747` | FTL (FreeType License; the GPLv2 alternative is not used) | RmlUi font engine, only with `VELLUM_RMLUI_FONTS=ON` | PNG, zlib, bzip2, Brotli and HarfBuzz integrations disabled; FTL credit in `NOTICE.md` |
+| Lua | `5.4.7`, `lua-5.4.7.tar.gz` SHA-256 `9fbf5e28ef86c69858f6d3d34eccc32e911c1a28b4120ff3e84aaa70cfbf1e30` | MIT | The sandboxed `VellumRmlUi::Lua` host, only with `VELLUM_RMLUI_LUA=ON` | Library only; the `lua` and `luac` front ends are not built. RmlUi's own Lua plugin is not built, since it keeps one process-wide `lua_State` |
+| RmlUi | `6.1`, commit `58c751531f4c1a1eb2dc56f409b8e8a323a0c9ad` | MIT | `VellumRmlUi::Core` | Samples, third-party containers, SVG, Lottie and Tracy disabled |
+| stb_image_write | `v1.16`, `nothings/stb` commit `d14d46f6b44456eb88beac58cba833a4135d4c89`, `stb_image_write.h` SHA-256 `cbd5f0ad7a9cf4468affb36354a1d2338034f2c12473cf1a8e32053cb6914a05` | MIT (chosen of MIT or public domain) | `VellumRmlUi::SoftRenderer` PNG encoder | Single header, compiled into one translation unit |
+
 ## Developer prerequisites
 
 CMake, a C++20 compiler, Python 3, Node.js, and npm are developer-supplied
