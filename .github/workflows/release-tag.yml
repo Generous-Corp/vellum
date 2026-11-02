@@ -1,14 +1,17 @@
 name: Sign the requested release tag
 
 # A release is a reviewed pull request that changes
-# provenance/release-request.json. When it lands, this job tags the commit
-# that landed it, signed with the key that exists only in the `release`
-# environment, and freezes the tag. Pushing the tag starts the release
-# pipeline (gpu-macos, then sdk-release).
+# provenance/release-request.json. The commit that lands it is never tagged:
+# the tag's provenance run requires everything after the Pulp observatory's
+# Vellum cursor to be observatory evidence, and a tree cannot name its own
+# commit as that cursor. The observatory receiver then lands a reconcile commit
+# whose cursor covers the request; this job tags that commit, signed with the
+# key that exists only in the `release` environment, and freezes the tag.
+# Pushing the tag starts the release pipeline (gpu-macos, then sdk-release).
 on:
   push:
     branches: [main]
-    paths: [provenance/release-request.json, provenance/immutable-release-preflight.json]
+    paths: [provenance/pulp-observatory/cursor.json]
 
 permissions:
   contents: read
@@ -19,12 +22,71 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Every observatory reconcile on main starts this workflow. Deciding whether
+  # it is the release's reconcile needs no secret and no environment, so most
+  # runs end here and never enter `release`.
+  select-release-commit:
+    name: select-release-commit
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.select.outputs.tag }}
+    steps:
+      - name: Check out the pushed commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Decide whether this commit is the release's reconcile
+        id: select
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = Generous-Corp/vellum
+          test "$GITHUB_REF" = refs/heads/main
+          if ! python3 -I scripts/release_request.py select --commit "$GITHUB_SHA" --remote origin \
+            > "$RUNNER_TEMP/selection.txt" 2> "$RUNNER_TEMP/selection-reason.txt"; then
+            echo "::error::$(cat "$RUNNER_TEMP/selection-reason.txt")"
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/selection.txt" >> "$GITHUB_OUTPUT"
+          reason="$(cat "$RUNNER_TEMP/selection-reason.txt")"
+          echo "::notice::$reason"
+          printf '%s\n' "$reason" >> "$GITHUB_STEP_SUMMARY"
+
+      # The tag is frozen once pushed, so the check its provenance run applies
+      # to the observatory (the one v0.1.8 and v0.1.9 could never pass) runs
+      # here first, exactly as provenance.yml runs it on refs/tags/*.
+      - name: Check out the Pulp commit the observatory cursor names
+        if: steps.select.outputs.tag != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: Generous-Corp/pulp
+          ref: ${{ steps.select.outputs.pulp-cursor }}
+          path: .observatory-pulp
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Run the tag's reconciled observatory check before tagging
+        if: steps.select.outputs.tag != ''
+        env:
+          PULP_CURSOR: ${{ steps.select.outputs.pulp-cursor }}
+        run: |
+          set -euo pipefail
+          now="$(TZ=UTC0 git show -s --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ "$GITHUB_SHA")"
+          python3 -I -c 'import sys; sys.path.insert(0, "tools/provenance"); import observatory; raise SystemExit(observatory.main(sys.argv[1:]))' \
+            verify --pulp-repo .observatory-pulp --vellum-repo . --git-base "$(git rev-parse "$GITHUB_SHA^")" \
+            --pulp-target "$PULP_CURSOR" --vellum-target "$GITHUB_SHA" --vellum-tail-policy reconciled \
+            --now "$now" --output "$RUNNER_TEMP/observatory-health-report.json" > /dev/null
+
   sign-release-tag:
     name: sign-release-tag
+    needs: select-release-commit
+    if: needs.select-release-commit.outputs.tag != ''
     runs-on: ubuntu-latest
     environment: release
     steps:
-      - name: Check out the commit that landed the request
+      - name: Check out the reconciled commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}
@@ -42,11 +104,12 @@ jobs:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
 
-      # Main's required checks live in classic branch protection and in rulesets;
-      # reading either needs Administration read, which only the App token has.
-      # This step holds that token, so it runs no repository code: it only
-      # writes the API answers to files.
-      - name: Read main's required checks
+      # Main's required checks live in classic branch protection and in rulesets,
+      # and whether releases are immutable is a repository setting; reading any
+      # of them needs Administration read, which only the App token has. This
+      # step holds that token, so it runs no repository code: it only writes
+      # the API answers to files.
+      - name: Read main's required checks and the immutable-release setting
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
@@ -54,16 +117,24 @@ jobs:
           gh api "repos/$GITHUB_REPOSITORY/branches/main/protection/required_status_checks" \
             > "$RUNNER_TEMP/required-checks.json"
           gh api "repos/$GITHUB_REPOSITORY/rules/branches/main" > "$RUNNER_TEMP/branch-rules.json"
+          gh api "repos/$GITHUB_REPOSITORY/immutable-releases" > "$RUNNER_TEMP/immutable-releases.json"
+          date -u +%Y-%m-%dT%H:%M:%SZ > "$RUNNER_TEMP/immutable-releases-read-at.txt"
 
       - name: Decide whether the request may be tagged
         id: request
         env:
           GH_TOKEN: ${{ github.token }}
+          SELECTED_TAG: ${{ needs.select-release-commit.outputs.tag }}
         run: |
           set -euo pipefail
           test "$GITHUB_REPOSITORY" = Generous-Corp/vellum
           test "$GITHUB_REF" = refs/heads/main
-          # The push that landed the request starts main's required checks again
+          # Decide again in this job, and require the same answer: the commit
+          # must still be the release's reconcile and the tag must still be absent.
+          python3 -I scripts/release_request.py select --commit "$GITHUB_SHA" --remote origin \
+            > "$RUNNER_TEMP/selection.txt"
+          test "$(sed -n 's/^tag=//p' "$RUNNER_TEMP/selection.txt")" = "$SELECTED_TAG"
+          # The push that landed the reconcile starts main's required checks again
           # on this commit. While the newest run of any required check is still
           # running (gpu-macos takes about 45 minutes), wait rather than read it
           # as unmet. A transient API failure is retried, not fatal.
@@ -92,7 +163,10 @@ jobs:
           version="$(python3 -I -c 'import json; print(json.load(open("provenance/release-request.json"))["version"])')"
           tag="$(python3 -I scripts/release_request.py check --commit "$GITHUB_SHA" --remote origin \
             --branch-rules "$RUNNER_TEMP/branch-rules.json" --check-runs "$RUNNER_TEMP/check-runs.json" \
-            --protection "$RUNNER_TEMP/required-checks.json")"
+            --protection "$RUNNER_TEMP/required-checks.json" \
+            --immutable-releases "$RUNNER_TEMP/immutable-releases.json" \
+            --immutable-read-at "$(cat "$RUNNER_TEMP/immutable-releases-read-at.txt")")"
+          test "$tag" = "$SELECTED_TAG"
           python3 -I scripts/check_release_policy.py check
           python3 -I scripts/check_release_policy.py signer >> "$GITHUB_OUTPUT"
           python3 -I scripts/release_request.py freeze --tag "$tag" > "$RUNNER_TEMP/freeze.json"
@@ -133,9 +207,18 @@ jobs:
             --expected-principal "$PRINCIPAL" --expected-fingerprint "$FINGERPRINT" \
             --output "$RUNNER_TEMP/release-trust.json"
 
+      # An App token lives one hour, and the wait for required checks above
+      # can take longer, so the push and the freeze use a token minted now.
+      - name: Mint a fresh release App token for the push
+        id: push-token
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
       - name: Push the tag and freeze it
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.push-token.outputs.token }}
           TAG: ${{ steps.request.outputs.tag }}
           OBJECT: ${{ steps.sign.outputs.object }}
         run: |

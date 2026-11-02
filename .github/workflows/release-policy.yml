@@ -15,9 +15,12 @@ jobs:
     name: release-policy
     runs-on: ubuntu-latest
     steps:
+      # Full history: test_release_request.py replays the tag's observatory
+      # check on Vellum's own release commits.
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Check the release-signing policy

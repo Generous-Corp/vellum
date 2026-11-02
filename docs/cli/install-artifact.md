@@ -4,11 +4,11 @@ The repository builds a reproducible local artifact, and the installer supports
 local development, verified local archive, and an exact-version release mode.
 The commands below install the published, immutable `v0.1.6` tagged release
 from `Generous-Corp/vellum`, the current published release. The source tree
-identifies as `0.1.9`, the next release, and is unreleased.
+identifies as `0.1.10`, the next release, and is unreleased.
 The name `v0.1.7` is retired and is never reused; [`provenance/retired-release-tags.json`](../../provenance/retired-release-tags.json)
 records why, and `scripts/verify_release_tag.py` refuses any retired tag.
-`v0.1.8` is retired too: its tag stays in place, frozen, but no release was
-published from it and none will be.
+`v0.1.8` and `v0.1.9` are retired too: their tags stay in place, frozen, but no
+release was published from either and none will be.
 
 ## Tagged-release installation
 
@@ -257,10 +257,10 @@ Build and validate the artifact:
 ```sh
 python3 scripts/build_sdk_artifact.py --output-dir dist --json
 python3 scripts/verify_sdk_artifact.py \
-  --archive dist/vellum-sdk-0.1.9-darwin-arm64.tar.gz \
+  --archive dist/vellum-sdk-0.1.10-darwin-arm64.tar.gz \
   --checksums dist/SHA256SUMS --json
 python3 scripts/validate_installed_sdk.py \
-  --archive dist/vellum-sdk-0.1.9-darwin-arm64.tar.gz \
+  --archive dist/vellum-sdk-0.1.10-darwin-arm64.tar.gz \
   --checksums dist/SHA256SUMS \
   --output dist/installed-validation.json --json
 ```
@@ -323,7 +323,7 @@ release attestation is required and verified. See
 [Immutable releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases)
 and [GitHub security features](https://docs.github.com/en/code-security/getting-started/github-security-features#artifact-attestations).
 
-These are release gates, not claims that `v0.1.9` exists before the tag workflow
+These are release gates, not claims that `v0.1.10` exists before the tag workflow
 has completed. The local artifact flow exercises the same archive verification
 and transactional installation logic but cannot claim hosted release
 immutability or GitHub asset digests.
