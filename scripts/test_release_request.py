@@ -828,15 +828,25 @@ class ReleaseTagWorkflow(unittest.TestCase):
         self.assertIn("GH_TOKEN: ${{ steps.push-token.outputs.token }}", push)
         self.assertNotIn("python", push)
 
-    def test_the_tag_observatory_check_runs_before_anything_is_signed(self) -> None:
-        start = self.select_job.index("- name: Run the tag's reconciled observatory check before tagging")
-        step = self.select_job[start:]
-        for text in ("if: steps.select.outputs.tag != ''", "import observatory", "--vellum-tail-policy reconciled",
-                     '--vellum-target "$GITHUB_SHA"', '--now "$now"', 'git rev-parse "$GITHUB_SHA^"',
-                     '--pulp-target "$PULP_CURSOR"'):
-            self.assertIn(text, step)
+    def test_the_tag_content_checks_run_before_the_selection_is_released(self) -> None:
+        # Whatever can refuse the tag must refuse it before it exists: the job's
+        # tag output comes only from the last step, after the content checks,
+        # and the signing job needs this job.
+        self.assertIn("tag: ${{ steps.release.outputs.tag }}", self.select_job)
+        self.assertNotIn("tag: ${{ steps.select.outputs.tag }}", self.select_job)
+        order = [self.select_job.index(f"- name: {name}") for name in (
+            "Decide whether this commit is the release's reconcile", "Check out Pulp main for release readiness",
+            "Check out the Pulp commit the observatory cursor names",
+            "Run the tag's content checks before the tag exists", "Release the selection")]
+        self.assertEqual(order, sorted(order))
+        checks = self.select_job[order[3]:order[4]]
+        self.assertIn("if: steps.select.outputs.tag != ''", checks)
+        self.assertIn('python3 -I scripts/pretag_checks.py --tag "$TAG" --commit "$GITHUB_SHA"', checks)
+        self.assertNotIn("continue-on-error", self.select_job)
+        self.assertIn("path: .exact-boundary-pulp", self.select_job)
         self.assertIn("ref: ${{ steps.select.outputs.pulp-cursor }}", self.select_job)
-        self.assertIn("python3 -I -c", step)
+        self.assertIn("needs: select-release-commit", self.sign_job)
+        self.assertIn("if: needs.select-release-commit.outputs.tag != ''", self.sign_job)
 
     def test_the_tag_and_attestation_bind_the_pushed_commit(self) -> None:
         self.assertIn('attestation --commit "$GITHUB_SHA"', self.sign_job)

@@ -54,6 +54,7 @@ POLICY_FILES = (
     "/provenance/renderer-signers.allowed_signers",
     "/provenance/retired-release-tags.json",
     "/scripts/check_release_policy.py",
+    "/scripts/pretag_checks.py",
     "/scripts/release_request.py",
     "/scripts/verify_immutable_release_preflight.py",
     "/scripts/verify_release_tag.py",
