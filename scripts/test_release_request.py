@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -396,8 +397,13 @@ class History:
         self.main = self.reconcile(self.base)
 
     def git(self, *args: str) -> str:
+        # Strictly increasing commit dates, so history order never depends on
+        # two commits sharing a second.
+        self.tick = getattr(self, "tick", 0) + 1
+        stamp = f"@{1790000000 + self.tick} +0000"
+        environment = {**os.environ, "GIT_AUTHOR_DATE": stamp, "GIT_COMMITTER_DATE": stamp}
         return subprocess.run(["git", "-C", str(self.root), *args], check=True, capture_output=True,
-                              text=True).stdout.strip()
+                              text=True, env=environment).stdout.strip()
 
     def write(self, path: str, text: str) -> None:
         target = self.root / path
@@ -552,6 +558,20 @@ class TagTargetSelection(unittest.TestCase):
         with self.assertRaisesRegex(observatory.ObservatoryError, "discontinuous"):
             observatory.verify_vellum_observatory_tail(self.history.root, landed, joined)
 
+    def test_a_merge_that_changes_its_own_tree_is_refused(self) -> None:
+        # The queue's merge of the receiver's commit is accepted only because
+        # its tree equals that commit's; a merge that adds its own change is not.
+        landed = self.history.request()
+        evidence = self.history.reconcile(landed)
+        self.history.git("checkout", "-q", "--detach", landed)
+        self.history.git("merge", "-q", "--no-ff", "--no-commit", evidence)
+        self.history.write("src/app.txt", "smuggled\n")
+        evil = self.history.commit("Merge pull request")
+        self.assertEqual(self.history.git("rev-list", "--parents", "-n", "1", evil).split()[1:], [landed, evidence])
+        chosen = self.select(evil)
+        self.assertIsNone(chosen.tag)
+        self.assertIn("not one linear chain", chosen.reason)
+
     def test_an_empty_commit_after_the_cursor_is_refused(self) -> None:
         landed = self.history.request()
         self.history.branch(self.history.reconcile(landed))
@@ -585,6 +605,8 @@ class TagTargetSelection(unittest.TestCase):
         landed = self.history.request()
         for name, text in (("foreign repository", History.cursor(landed, "someone/vellum")),
                            ("short commit", History.cursor("abc")), ("not JSON", "{"),
+                           # An abbreviated commit git would resolve is still not a full SHA.
+                           ("abbreviated commit", History.cursor(landed[:12])),
                            ("not active", History.cursor(landed).replace('"active"', '"prepared"'))):
             with self.subTest(name):
                 self.history.branch(landed)
@@ -594,6 +616,18 @@ class TagTargetSelection(unittest.TestCase):
                     self.select(bad)
         with self.assertRaisesRegex(rr.ReleaseRequestError, "full SHA"):
             self.select("abc")
+
+    def test_a_side_branch_that_repeats_the_request_does_not_move_its_landing(self) -> None:
+        # A branch cut before the request lands, setting the same request, then
+        # merged: the newest commit that changed the file is on that branch, but
+        # main's first-parent chain still says the request landed at `landed`.
+        before = self.history.main
+        landed = self.history.request()
+        self.history.branch(before)
+        self.history.write(rr.REQUEST, json.dumps({"schema": rr.REQUEST_SCHEMA, "version": "0.1.10"}))
+        repeat = self.history.commit("repeat the request on a stale branch")
+        self.history.land(repeat)
+        self.assertEqual(rr.request_landing(self.history.root, self.history.main), landed)
 
     def test_the_request_landing_is_the_first_parent_merge(self) -> None:
         landed = self.history.request()
