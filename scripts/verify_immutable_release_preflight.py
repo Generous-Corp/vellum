@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Verify a signed, time-bounded admin check of immutable-release policy."""
+"""Verify the live answer to GitHub's immutable-release check and record it.
+
+The release jobs read GET /repos/{repository}/immutable-releases with an App
+token that has Administration read, in a step that runs no repository code,
+and pass the answer here. A release is refused unless immutable releases are
+enabled. The record written for the release evidence keeps the
+`vellum.immutable-release-preflight.v1` shape, stamped with the time of that
+live read; nothing is committed or reused across runs.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +15,7 @@ import argparse
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import re
 import sys
 from typing import Any
 
@@ -123,13 +132,61 @@ def verify(
     return payload
 
 
+def verify_live(
+    answer: Any,
+    *,
+    repository: str,
+    release_tag: str,
+    checked_at: datetime,
+) -> dict[str, Any]:
+    """The verified record of a live GET /repos/{repository}/immutable-releases answer.
+
+    The answer must say `enabled: true` and carry a boolean
+    `enforced_by_owner`; any other key GitHub adds is ignored, because only
+    those two decide anything.
+    """
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
+        raise ImmutableReleasePreflightError(f"invalid repository: {repository!r}")
+    if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", release_tag):
+        raise ImmutableReleasePreflightError(f"invalid release tag: {release_tag!r}")
+    if not isinstance(answer, dict):
+        raise ImmutableReleasePreflightError("the immutable-release answer must be an object")
+    if answer.get("enabled") is not True:
+        raise ImmutableReleasePreflightError("immutable releases are not enabled")
+    enforced = answer.get("enforced_by_owner")
+    if not isinstance(enforced, bool):
+        raise ImmutableReleasePreflightError("the immutable-release answer has no boolean enforced_by_owner")
+    stamp = checked_at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    record = {
+        "administrator_check": {
+            "checked_at": stamp,
+            "enabled": True,
+            "endpoint": f"GET /repos/{repository}/immutable-releases",
+            "enforced_by_owner": enforced,
+            "required_permission": "Administration: read",
+        },
+        "documentation": (
+            "https://docs.github.com/en/rest/repos/repos"
+            "#check-if-immutable-releases-are-enabled-for-a-repository"
+        ),
+        "integrity_model": "covered-by-exact-signed-annotated-release-tag",
+        "maximum_age_seconds": MAXIMUM_ALLOWED_AGE_SECONDS,
+        "release_tag": release_tag,
+        "repository": repository,
+        "schema": SCHEMA,
+    }
+    return verify(record, repository=repository, release_tag=release_tag,
+                  now=parse_utc(stamp, "checked_at"))
+
+
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--input", type=Path, required=True)
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--input", type=Path, required=True,
+                        help="the live GET /repos/{repository}/immutable-releases answer")
     parser.add_argument("--repository", required=True)
     parser.add_argument("--release-tag", required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--now")
+    parser.add_argument("--now", help="when the answer was read (default: now)")
     return parser.parse_args()
 
 
@@ -139,20 +196,16 @@ def main() -> int:
         payload = json.loads(
             args.input.read_text(encoding="utf-8"), object_pairs_hook=reject_duplicate_keys
         )
-        if not isinstance(payload, dict):
-            raise ImmutableReleasePreflightError(
-                "preflight root must be an object"
-            )
         now = (
             parse_utc(args.now, "--now")
             if args.now is not None
             else datetime.now(timezone.utc)
         )
-        verified = verify(
+        verified = verify_live(
             payload,
             repository=args.repository,
             release_tag=args.release_tag,
-            now=now,
+            checked_at=now,
         )
     except (OSError, json.JSONDecodeError, ImmutableReleasePreflightError) as error:
         print(
