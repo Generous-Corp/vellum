@@ -43,13 +43,12 @@ RELEASE_ENVIRONMENT = "release"
 SIGNING_WORKFLOW = "release-tag.yml"
 OWNER = "@danielraffel"
 # The signing policy, the code that enforces it, and the committed records the
-# release decision trusts (the immutable-release preflight and the retired tags).
+# release decision trusts (the release request and the retired tags).
 POLICY_FILES = (
     "/.github/CODEOWNERS",
     "/.github/workflows/release-tag.yml",
     "/.github/workflows/release-policy.yml",
     "/provenance/authority-signers.allowed_signers",
-    "/provenance/immutable-release-preflight.json",
     "/provenance/release-request.json",
     "/provenance/release-signers.allowed_signers",
     "/provenance/renderer-signers.allowed_signers",
@@ -71,9 +70,10 @@ ENVIRONMENT_NAME = re.compile(r"\bname:\s*['\"]?(?P<name>[A-Za-z0-9_-]+)")
 RELEASE_WORKFLOWS = (SIGNING_WORKFLOW, "release-policy.yml")
 # Endpoints only an Administration-read token may call; the Actions token gets 403.
 ADMIN_READ = re.compile(r"gh api [^\n]*(?:branches/main/protection|rules/branches/|/rulesets|immutable-releases)")
-APP_TOKEN = re.compile(r"GH_TOKEN:\s*\$\{\{\s*steps\.app-token\.outputs\.token\s*\}\}")
+APP_TOKEN = re.compile(r"GH_TOKEN:\s*\$\{\{\s*steps\.(?:app-token|push-token)\.outputs\.token\s*\}\}")
 PYTHON_CALL = re.compile(r"\bpython3?\b(?P<flags>(?:\s+-[A-Za-z]+)*)")
-SECRET = re.compile(r"\$\{\{\s*(?:secrets\.|steps\.app-token\.outputs\.token)")
+# Any step output named `token` is a minted credential, whatever the step id.
+SECRET = re.compile(r"\$\{\{\s*(?:secrets\.|steps\.[A-Za-z0-9_-]+\.outputs\.token\b)")
 # Directories a release workflow runs Python from: the script's own directory
 # and the working directory would be first on sys.path without -I.
 PYTHON_DIRS = (".", "scripts", "tools/provenance")

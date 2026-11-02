@@ -2,13 +2,21 @@
 """Decide whether a merged release request may be tagged, and describe its freeze.
 
 A release starts as a reviewed pull request that changes
-provenance/release-request.json. When it lands, release-tag.yml tags the
-commit that landed it. This script makes the decision from files the
-workflow has already fetched, so it needs no network:
+provenance/release-request.json. The commit that lands it on main is not
+tagged: a tag's provenance run requires every commit after the Pulp
+observatory's Vellum cursor to be observatory evidence, and a commit's tree
+can never name that same commit as its cursor. The observatory receiver then
+lands a reconcile commit whose cursor covers the request, and release-tag.yml
+tags that commit. This script makes the decision from files the workflow has
+already fetched and the local clone, so it needs no token:
 
+  select  whether the pushed commit is the observatory reconcile that covers
+          an untagged release request, and so the commit to tag.
   check   the request names a new, unretired version that matches the
-          project version, the tag does not exist yet, and every check the
-          main branch rules require concluded success on the commit.
+          project version, the tag does not exist yet, every check the main
+          branch rules require concluded success on the commit, and the live
+          answer of GET /repos/{repo}/immutable-releases says immutable
+          releases are enabled.
   freeze  the per-tag ruleset that verify_release_tag_ruleset.py requires
           before an immutable release is finalized.
   attestation
@@ -17,12 +25,7 @@ workflow has already fetched, so it needs no network:
           checked with the release-readiness verifier's own validators before
           anything is signed. It binds the parity completion record when one
           exists at the commit, and otherwise is the mirror-promotion
-          attestation that only the Phase 4 promotion tag may carry.
-
-The immutable-release preflight is committed with the request and is only
-accepted for a few hours; `check` refuses to tag unless enough of that window
-remains for the tagged run to reach its trust step, so a stale record never
-spends a version number.
+          attestation that only the listed mirror-promotion tags may carry.
 """
 
 from __future__ import annotations
@@ -33,7 +36,8 @@ import json
 import re
 import subprocess
 import sys
-from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -45,11 +49,15 @@ PROJECT_VERSION = re.compile(r"project\(\s*vellum\b[^)]*\bVERSION\s+([0-9.]+)", 
 
 
 REPOSITORY = "Generous-Corp/vellum"
-PREFLIGHT = Path("provenance/immutable-release-preflight.json")
-# The tagged gpu-macos run reaches its trust step about 20 minutes after the
-# tag, and sdk-release re-checks the preflight when it finalizes, after the
-# whole gpu-macos run; tag only with at least this much of the window left.
-PREFLIGHT_MARGIN = timedelta(hours=2)
+REQUEST = "provenance/release-request.json"
+OBSERVATORY = "provenance/pulp-observatory"
+CURSOR = f"{OBSERVATORY}/cursor.json"
+# What an observatory evidence commit may change, exactly as the tag's
+# provenance run (tools/provenance/observatory.py, verify_vellum_observatory_tail)
+# accepts it: the cursor and the two reports modified, and new event files.
+EVIDENCE_MODIFIED = frozenset({CURSOR, f"{OBSERVATORY}/reports/current.json",
+                               f"{OBSERVATORY}/reports/current.md"})
+EVENTS_PREFIX = f"{OBSERVATORY}/events/"
 EXPANSION = Path("provenance/authority/expansions/full-design-import-render-v1")
 
 
@@ -207,25 +215,20 @@ def remote_release_tags(root: Path, remote: str = "origin") -> list[str]:
     return [line.split("refs/tags/", 1)[1] for line in result.stdout.splitlines() if "refs/tags/" in line]
 
 
-def preflight_remaining(preflight: Any, tag: str, now: datetime, repository: str = REPOSITORY) -> timedelta:
-    """How much of the preflight's acceptance window is left; raises when it cannot be used.
+def immutable_release_record(answer: Any, tag: str, now: datetime,
+                             repository: str = REPOSITORY) -> dict[str, Any]:
+    """The verified record of the live immutable-release answer; raises when releases are not immutable.
 
-    The record must first pass the same strict verifier sdk-release runs
-    (schema, repository, tag, endpoint, permission, integrity model, owner
-    field, six-hour maximum, future-clock bound), so nothing it would reject
-    can be tagged.
+    `answer` is GET /repos/{repository}/immutable-releases as the App token
+    read it in this run. sdk-release reads it live again when it finalizes.
     """
     sys.path.insert(0, str(ROOT / "scripts"))
     import verify_immutable_release_preflight as vip  # noqa: PLC0415
 
-    if not isinstance(preflight, dict) or preflight.get("release_tag") != tag:
-        raise ReleaseRequestError(f"the immutable-release preflight is not for {tag}; refresh it with the request")
     try:
-        verified = vip.verify(preflight, repository=repository, release_tag=tag, now=now)
+        return vip.verify_live(answer, repository=repository, release_tag=tag, checked_at=now)
     except vip.ImmutableReleasePreflightError as error:
-        raise ReleaseRequestError(f"the immutable-release preflight is not valid: {error}") from error
-    checked = vip.parse_utc(verified["administrator_check"]["checked_at"], "administrator_check.checked_at")
-    return checked + timedelta(seconds=verified["maximum_age_seconds"]) - now
+        raise ReleaseRequestError(f"the live immutable-release answer refuses the release: {error}") from error
 
 
 def remote_tag_exists(root: Path, tag: str, remote: str = "origin") -> bool:
@@ -243,7 +246,7 @@ def remote_tag_exists(root: Path, tag: str, remote: str = "origin") -> bool:
 
 
 def check(*, request: Any, cmakelists: str, retired_tags: Any, commit: str, tag_exists: bool,
-          branch_rules: Any, pages: Any, preflight: Any = None, now: datetime | None = None,
+          branch_rules: Any, pages: Any, immutable: Any = None, now: datetime | None = None,
           protection: Any = None, existing_tags: list[str] | None = None) -> str:
     """The tag to create; raises ReleaseRequestError when the request may not be tagged."""
     if not SHA.fullmatch(commit):
@@ -263,12 +266,7 @@ def check(*, request: Any, cmakelists: str, retired_tags: Any, commit: str, tag_
     missing = unmet(required_checks(branch_rules, protection), check_runs(pages), commit)
     if missing:
         raise ReleaseRequestError("required checks have not passed: " + "; ".join(missing))
-    remaining = preflight_remaining(preflight, tag, now or datetime.now(timezone.utc))
-    if remaining < PREFLIGHT_MARGIN:
-        raise ReleaseRequestError(
-            f"the immutable-release preflight has {remaining} of its window left, under {PREFLIGHT_MARGIN}; "
-            "refresh it (scripts/refresh_immutable_release_preflight.py) and land it again, and the tag "
-            "is made then")
+    immutable_release_record(immutable, tag, now or datetime.now(timezone.utc))
     return tag
 
 
@@ -292,6 +290,141 @@ def freeze_ruleset(tag: str) -> dict[str, Any]:
 def git(root: Path, *args: str) -> str:
     return subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True,
                           check=True).stdout.strip()
+
+
+def is_ancestor(root: Path, ancestor: str, commit: str) -> bool:
+    """Whether `ancestor` is `commit` or one of its ancestors; a git failure raises."""
+    result = subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", ancestor, commit],
+                            capture_output=True, text=True, check=False)
+    if result.returncode not in (0, 1):
+        raise ReleaseRequestError(f"cannot compare {ancestor} with {commit}: {result.stderr.strip()}")
+    return result.returncode == 0
+
+
+def blob_at(root: Path, commit: str, path: str) -> bytes:
+    result = subprocess.run(["git", "-C", str(root), "show", f"{commit}:{path}"], capture_output=True, check=False)
+    if result.returncode != 0:
+        raise ReleaseRequestError(f"{path} is missing at {commit}")
+    return result.stdout
+
+
+def request_landing(root: Path, commit: str) -> str:
+    """The commit on `commit`'s first-parent chain that landed its release request.
+
+    That is the newest first-parent commit whose request file differs from its
+    first parent's. A request reaches main through the merge queue, so on main
+    this is the queue's merge commit, the one the release used to tag.
+    """
+    chain = git(root, "rev-list", "--first-parent", commit).splitlines()
+    if not chain:
+        raise ReleaseRequestError(f"{commit} has no history")
+    query = "".join(f"{entry}:{REQUEST}\n{entry}^1:{REQUEST}\n" for entry in chain)
+    answer = subprocess.run(["git", "-C", str(root), "cat-file", "--batch-check=%(objectname)"],
+                            input=query, capture_output=True, text=True, check=True).stdout.splitlines()
+    if len(answer) != 2 * len(chain):
+        raise ReleaseRequestError("git answered a different number of objects than asked")
+    for index, entry in enumerate(chain):
+        mine, parent = answer[2 * index], answer[2 * index + 1]
+        if mine.endswith(" missing"):
+            break
+        if mine != parent:
+            return entry
+    raise ReleaseRequestError(f"no commit on the first-parent history of {commit} landed {REQUEST}")
+
+
+def observatory_cursor(root: Path, commit: str) -> str:
+    """The Vellum commit the observatory cursor at `commit` was reconciled through."""
+    try:
+        cursor = json.loads(blob_at(root, commit, CURSOR), object_pairs_hook=strict_object)
+    except ValueError as error:
+        raise ReleaseRequestError(f"{CURSOR} at {commit} is not JSON: {error}") from error
+    vellum = cursor.get("vellum") if isinstance(cursor, dict) else None
+    if (not isinstance(vellum, dict) or cursor.get("state") != "active"
+            or vellum.get("repository") != REPOSITORY):
+        raise ReleaseRequestError(f"{CURSOR} at {commit} is not an active cursor for {REPOSITORY}")
+    scanned = vellum.get("last_scanned_commit")
+    if not isinstance(scanned, str) or not SHA.fullmatch(scanned):
+        raise ReleaseRequestError(f"{CURSOR} at {commit} names no full Vellum commit")
+    return scanned
+
+
+def require_evidence_tail(root: Path, cursor: str, commit: str) -> None:
+    """Raise unless every commit after `cursor` up to `commit` is observatory evidence.
+
+    This is the rule the tag's provenance run applies with
+    `--vellum-tail-policy reconciled` (observatory.py,
+    verify_vellum_observatory_tail), minus its one-time authority-activation
+    exception: a linear chain of commits that each modify only the cursor and
+    the reports and add only event files, where a merge counts only when its
+    tree equals the commit before it (the merge queue landing that chain).
+    """
+    if cursor == commit or not is_ancestor(root, cursor, commit):
+        raise ReleaseRequestError(f"the cursor {cursor} is not a strict ancestor of {commit}")
+    previous = cursor
+    for entry in git(root, "rev-list", "--reverse", "--topo-order", f"{cursor}..{commit}").splitlines():
+        parents = git(root, "rev-list", "--parents", "-n", "1", entry).split()[1:]
+        if (len(parents) == 2 and previous in parents
+                and git(root, "rev-parse", f"{entry}^{{tree}}") == git(root, "rev-parse", f"{previous}^{{tree}}")):
+            previous = entry
+            continue
+        if parents != [previous]:
+            raise ReleaseRequestError(f"the evidence tail is not one linear chain at {entry}")
+        fields = git(root, "diff-tree", "--no-commit-id", "-r", "-z", "--no-renames", "--name-status",
+                     previous, entry).split("\0")
+        changes = list(zip(fields[0::2], fields[1::2]))
+        if not changes:
+            raise ReleaseRequestError(f"{entry} changes nothing")
+        for status, path in changes:
+            event = path[len(EVENTS_PREFIX):] if path.startswith(EVENTS_PREFIX) else ""
+            if (status == "M" and path in EVIDENCE_MODIFIED) or (
+                    status == "A" and event.endswith(".yaml") and "/" not in event):
+                continue
+            raise ReleaseRequestError(f"{entry} is not observatory evidence: {status} {path}")
+        previous = entry
+
+
+@dataclass(frozen=True)
+class Selection:
+    """What a push to main means for the release: the tag to make, or None and why not."""
+    tag: str | None
+    reason: str
+    request_commit: str | None = None
+    cursor: str | None = None
+
+
+def select(root: Path, commit: str, tag_exists: bool) -> Selection:
+    """Whether `commit` is the commit to tag for the release request it carries.
+
+    It is when the request's tag does not exist yet, the observatory cursor at
+    `commit` is (or descends from) the commit that landed the request, and
+    everything after that cursor is observatory evidence. Such a commit passes
+    the tag's reconciled observatory check, and its content is the content the
+    cursor was reconciled through. Every other push is not a release: the
+    request merge itself (its tree cannot name it as the cursor), a reconcile
+    whose cursor predates the request, a reconcile landed behind other changes,
+    and any push once the tag exists.
+    """
+    if not SHA.fullmatch(commit):
+        raise ReleaseRequestError("the commit must be a full SHA")
+    try:
+        request = json.loads(blob_at(root, commit, REQUEST), object_pairs_hook=strict_object)
+    except ValueError as error:
+        raise ReleaseRequestError(f"{REQUEST} at {commit} is not JSON: {error}") from error
+    tag = f"v{request_version(request)}"
+    if tag_exists:
+        return Selection(None, f"{tag} already exists; no release request is waiting")
+    landed = request_landing(root, commit)
+    cursor = observatory_cursor(root, commit)
+    if not is_ancestor(root, landed, cursor):
+        return Selection(None, f"the observatory cursor {cursor} does not yet contain {landed}, which "
+                               f"landed the {tag} request; a later reconcile tags it", landed, cursor)
+    try:
+        require_evidence_tail(root, cursor, commit)
+    except ReleaseRequestError as error:
+        return Selection(None, f"{commit} is not an observatory-reconciled commit ({error}); a later "
+                               f"reconcile tags {tag}", landed, cursor)
+    return Selection(tag, f"{commit} reconciles the observatory through {cursor}, which contains {landed}, "
+                          f"the commit that landed the {tag} request", landed, cursor)
 
 
 def attestation(root: Path, commit: str, attested_at: str, tag: str) -> dict[str, Any]:
@@ -392,7 +525,11 @@ def main(argv: list[str]) -> int:
     one.add_argument("--check-runs", type=Path, required=True)
     one.add_argument("--protection", type=Path, required=True,
                      help="GET /branches/main/protection/required_status_checks")
-    one.add_argument("--preflight", type=Path, default=ROOT / PREFLIGHT)
+    one.add_argument("--immutable-releases", type=Path, required=True,
+                     help="GET /repos/{repo}/immutable-releases, read live in this run")
+    pick = sub.add_parser("select", help="print `tag=` (empty when this push is not a release) and its reason")
+    pick.add_argument("--commit", required=True)
+    pick.add_argument("--remote", default="origin")
     wait = sub.add_parser("pending", help="print required checks still running on the commit, one per line")
     wait.add_argument("--commit", required=True)
     wait.add_argument("--branch-rules", type=Path, required=True)
@@ -412,6 +549,15 @@ def main(argv: list[str]) -> int:
         if args.command == "attestation":
             print(json.dumps(attestation(ROOT, args.commit, args.attested_at, args.tag), indent=2, sort_keys=True))
             return 0
+        if args.command == "select":
+            request = json.loads(blob_at(ROOT, args.commit, REQUEST), object_pairs_hook=strict_object)
+            chosen = select(ROOT, args.commit,
+                            remote_tag_exists(ROOT, f"v{request_version(request)}", args.remote))
+            print(f"tag={chosen.tag or ''}")
+            print(f"request-commit={chosen.request_commit or ''}")
+            print(f"cursor={chosen.cursor or ''}")
+            print(chosen.reason, file=sys.stderr)
+            return 0
         if args.command == "pending":
             running = pending(required_checks(load(args.branch_rules), load(args.protection)),
                               check_runs(load(args.check_runs)), args.commit)
@@ -422,10 +568,10 @@ def main(argv: list[str]) -> int:
         tag = check(request=request, cmakelists=args.cmakelists.read_text(encoding="utf-8"),
                     retired_tags=load(ROOT / "provenance/retired-release-tags.json"), commit=args.commit,
                     tag_exists=exists, branch_rules=load(args.branch_rules),
-                    pages=load(args.check_runs), preflight=load(args.preflight),
+                    pages=load(args.check_runs), immutable=load(args.immutable_releases),
                     protection=load(args.protection),
                     existing_tags=remote_release_tags(ROOT, args.remote))
-    except (OSError, ReleaseRequestError) as error:
+    except (OSError, ValueError, ReleaseRequestError) as error:
         print(f"release request refused: {error}", file=sys.stderr)
         return 1
     print(tag)

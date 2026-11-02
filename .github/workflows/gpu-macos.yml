@@ -510,11 +510,6 @@ jobs:
                 --output "$RUNNER_TEMP/release-trust.json"
               ;;
           esac
-          python3 scripts/verify_immutable_release_preflight.py \
-            --input provenance/immutable-release-preflight.json \
-            --repository "$GITHUB_REPOSITORY" \
-            --release-tag "$GITHUB_REF_NAME" \
-            --output "$RUNNER_TEMP/immutable-release-preflight.json"
           printf 'VELLUM_TAG_OBJECT_SHA=%s\n' \
             "$VELLUM_TAG_OBJECT_SHA" >> "$GITHUB_ENV"
 
@@ -617,7 +612,6 @@ jobs:
             ${{ runner.temp }}/web-payload.json
             ${{ runner.temp }}/phase3-browser-evidence.json
             ${{ runner.temp }}/release-trust.json
-            ${{ runner.temp }}/immutable-release-preflight.json
             ${{ runner.temp }}/pulp-view-audio/libpulp-view-audio.a
             ${{ runner.temp }}/pulp-view-audio-archive.json
           if-no-files-found: warn

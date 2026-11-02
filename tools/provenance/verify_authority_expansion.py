@@ -161,17 +161,20 @@ OWNER = re.compile(r"^@[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
 RELEASE_PIPELINE_ATTESTER = "release-pipeline:Generous-Corp/vellum"
 # A release attests one of two closed shapes. The authority promotion
 # attestation binds the parity completion record and its executed proofs. The
-# mirror-promotion attestation (owner decision 2026-10-31, third sitting) is
-# for the Phase 4 promotion release only: it binds the promoted commit, the
-# exact-boundary acknowledgement and the newest mirror export receipt, and
-# states that full-matrix parity is not yet proven. The parity re-freeze gates
-# every later release, so the mirror shape is accepted only for the tags listed
-# here and only while no parity completion record exists at the release commit.
+# mirror-promotion attestation (owner decision 2026-10-31, third sitting) binds
+# the promoted commit, the exact-boundary acknowledgement and the newest mirror
+# export receipt, and states that full-matrix parity is not yet proven. It is
+# accepted only for the tags listed here and only while no parity completion
+# record exists at the release commit: v0.1.10, the Phase 4 promotion release
+# (v0.1.9 was retired unpublished, owner decision 2026-11-02), and v0.1.11, the
+# release carrying everything since 2026-10-25 under the same parity waiver
+# (owner decision 2026-11-01, ruling 1). The parity re-freeze gates every later
+# release.
 AUTHORITY_PROMOTION_KIND = "vellum-authority-promotion-attestation"
 MIRROR_PROMOTION_KIND = "vellum-mirror-promotion-attestation"
 MIRROR_PROMOTION_ATTESTATION_ID = "full-design-import-render-v1-mirror-promotion-1"
 MIRROR_PROMOTION_PARITY = "not-proven-deferred-to-matrix-refreeze"
-MIRROR_PROMOTION_RELEASE_TAGS = frozenset({"v0.1.9"})
+MIRROR_PROMOTION_RELEASE_TAGS = frozenset({"v0.1.10", "v0.1.11"})
 MIRROR_RECEIPT_INDEX_PATH = "provenance/mirror/receipts/index.json"
 MIRROR_RECEIPT_INDEX_SCHEMA = "vellum.mirror-receipt-index.v1"
 MIRROR_RECEIPT_PATH = re.compile(r"^provenance/mirror/receipts/[A-Za-z0-9][A-Za-z0-9._-]*\.json$")

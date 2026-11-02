@@ -8,34 +8,52 @@ A Vellum release tag is signed by CI, never by a person or an agent's host key.
    `provenance/release-request.json`:
 
    ```json
-   {"schema": "vellum.release-request.v1", "version": "0.1.9"}
+   {"schema": "vellum.release-request.v1", "version": "0.1.10"}
    ```
 
    It is reviewed and lands through the merge queue like any other change.
-2. When it lands, `release-tag.yml` runs on `main` in the `release` environment.
-   `scripts/release_request.py check` refuses the request unless all of these hold:
+2. The commit that lands the request is **not** tagged. A tag's `provenance.yml` run checks the Pulp observatory with
+   `--vellum-tail-policy reconciled`: every commit after the cursor's `vellum.last_scanned_commit` must be
+   observatory evidence. A commit's tree can never name that same commit as its cursor, so a request commit can never
+   pass (this is why `v0.1.8` and `v0.1.9` never published; both are retired).
+3. The observatory receiver reconciles the landing and lands its evidence commit through the queue. That push changes
+   `provenance/pulp-observatory/cursor.json`, which starts `release-tag.yml`. Its first job,
+   `select-release-commit`, holds no secret and no environment; `scripts/release_request.py select` decides whether
+   the pushed commit is the one to tag. It is when:
+   - the requested tag does not exist yet (otherwise the push is an ordinary reconcile and the job ends);
+   - the cursor at the pushed commit is, or descends from, the commit that landed the request: the newest commit on
+     the pushed commit's first-parent history whose `release-request.json` differs from its first parent's, which on
+     `main` is the merge queue's merge of the request;
+   - every commit after the cursor is observatory evidence, by the same rule the tag's provenance run applies: a
+     linear chain that only modifies the cursor and the two reports and only adds event files, where a merge counts
+     only when its tree equals the commit before it (the queue's merge of the receiver's commit).
+
+   Any other push tags nothing: the request merge itself, a reconcile whose cursor predates the request, or a
+   reconcile that landed behind other changes. A later reconcile then tags the release.
+4. The `sign-release-tag` job runs only for a selected commit, in the `release` environment. It decides again and
+   requires the same answer, then `scripts/release_request.py check` refuses unless all of these hold:
    - the version matches the project version;
    - the version is not retired (`provenance/retired-release-tags.json`);
    - the tag does not exist yet (only git's "no such ref" answer counts as absent; a failed lookup refuses);
    - the version is newer than every existing and retired `v*` tag;
-   - the immutable-release preflight passes `scripts/verify_immutable_release_preflight.py` with at least two hours
-     of its six-hour window left;
-   - every status check the `main` rules require concluded `success` on the commit that landed the request.
+   - the live `GET /repos/Generous-Corp/vellum/immutable-releases` answer, read with the release App token, says
+     immutable releases are enabled (`scripts/verify_immutable_release_preflight.py` validates it);
+   - every status check the `main` rules require concluded `success` on the selected commit.
 
-   The push that lands the request starts those checks again on the same commit, so the job first waits, up to
-   100 minutes, until none of them is still running (`release_request.py pending`).
-
-   Timing: the preflight is valid for six hours and the decision needs two of them left, after the merge queue
-   and that wait. Refresh it (`scripts/refresh_immutable_release_preflight.py`) when the release pull request is
-   ready to land, not earlier.
-3. The job signs an annotated tag on that commit with the key in the environment's `RELEASE_TAG_SIGNING_KEY` secret.
+   The push that lands the reconcile starts those checks on the same commit, so the job first waits, up to 100
+   minutes, until none of them is still running (`release_request.py pending`).
+5. The job signs an annotated tag on that commit with the key in the environment's `RELEASE_TAG_SIGNING_KEY` secret.
    It verifies the tag with `scripts/verify_release_tag.py` against `provenance/release-signers.allowed_signers`
    before pushing anything.
-4. It then pushes the tag with the release App's token and creates the tag's freeze ruleset
-   (`release_request.py freeze`), which `sdk-release.yml` requires before it finalizes the release. The freeze is
-   retried; if every attempt fails, the job prints the exact ruleset for the owner to apply. The tag push starts
-   `gpu-macos.yml`, then `sdk-release.yml`, which reads the signer file and the preflight from the tagged commit,
-   not from `main`.
+6. It then mints a fresh release App token (the wait can outlast the first token's hour), pushes the tag and creates
+   the tag's freeze ruleset (`release_request.py freeze`), which `sdk-release.yml` requires before it finalizes the
+   release. The freeze is retried; if every attempt fails, the job prints the exact ruleset for the owner to apply.
+   The tag push starts `gpu-macos.yml`, then `sdk-release.yml`, which reads the signer file from the tagged commit,
+   not from `main`, and reads the immutable-release setting live again before it publishes.
+
+The cursor file is evidence the receiver writes, not a policy file: it only decides *when* a release is tagged.
+*What* is tagged is a commit whose content equals the cursor's commit apart from evidence, and that commit has
+passed main's required checks.
 
 Nobody approves a routine release by hand. Authorization is the reviewed pull request plus the required checks.
 
@@ -52,8 +70,10 @@ accepts exactly one of two closed shapes:
   - `parity-completion-1.json` at the release commit.
 
   The release must also show the required parity check runs and their `vellum-parity-proof-execution` receipts.
-- **Mirror promotion** (`vellum-mirror-promotion-attestation`). This is the Phase 4 promotion release, `v0.1.9` only
-  (owner decision 2026-10-31, third sitting). It binds:
+- **Mirror promotion** (`vellum-mirror-promotion-attestation`). Only `v0.1.10`, the Phase 4 promotion release
+  (owner decision 2026-10-31, third sitting; `v0.1.9` was retired unpublished, owner decision 2026-11-02), and
+  `v0.1.11`, the release carrying everything since 2026-10-25 under the same parity waiver (owner decision
+  2026-11-01), may carry it. It binds:
   - the promoted commit and tree;
   - the exact-boundary acknowledgement;
   - the newest export receipt in `provenance/mirror/receipts/index.json` at the release commit, by SHA-256.
@@ -66,7 +86,7 @@ accepts exactly one of two closed shapes:
   - when a parity completion record exists at the release commit;
   - when the receipt is not the newest one in the index.
 
-The parity re-freeze to the mirror is the next milestone. Every release after `v0.1.9` must carry the authority
+The parity re-freeze to the mirror is the next milestone. Every release after `v0.1.11` must carry the authority
 promotion attestation and prove full-matrix parity.
 
 ## Who can do what
@@ -80,16 +100,15 @@ promotion attestation and prove full-matrix parity.
   - the signer files: release, authority and renderer;
   - the two release workflows;
   - the release scripts;
-  - the verifiers, including the immutable-release preflight verifier;
-  - the committed records the release decision trusts: the release request, the immutable-release preflight and the
-    retired tags;
+  - the verifiers, including the immutable-release verifier;
+  - the committed records the release decision trusts: the release request and the retired tags;
   - CODEOWNERS itself.
   `release-policy` keeps that list complete: CODEOWNERS and the check's own list must name the same files, and a
   policy script may import only modules that are themselves on the list.
 - **Checked-out code never runs next to a secret.** Each secret lives in a step that runs no repository Python:
   - signing runs only `git tag`;
   - verifying runs without the key;
-  - the steps that hold the App token only call `gh` and `git`.
+  - the steps that hold an App token only call `gh` and `git`; every minted token counts, whatever its step id.
   Every release script runs as `python3 -I`, so no file in the checkout can shadow a standard-library module.
   `release-policy` enforces all of this, and it also refuses a repository Python file named like a
   standard-library module.
