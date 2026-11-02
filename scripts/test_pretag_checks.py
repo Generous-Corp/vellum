@@ -122,6 +122,21 @@ class Fixture(unittest.TestCase):
         self.assertNotIn("Verify active repository documentation", self.ran())
 
 
+class Coverage(unittest.TestCase):
+    def test_every_tag_only_content_check_is_listed(self) -> None:
+        # Each of these can refuse a v* tag on the tagged commit's content and
+        # runs only on the tag; dropping one reopens the v0.1.9 failure.
+        required = {
+            ("gpu-macos.yml", "Derive the release identity from CMakeLists.txt"),
+            ("provenance.yml", "Resolve exact-boundary and signed-tag promotion evidence"),
+            ("provenance.yml", "Test authority protocol and negative controls"),
+            ("provenance.yml", "Verify two-way observatory health and negative controls"),
+            ("sdk-release.yml", "Fetch and verify the pinned Pulp view-audio archive"),
+            ("sdk-release.yml", "Require renderer release eligibility at the release source"),
+        }
+        self.assertLessEqual(required, {(check.workflow, check.step) for check in pc.CHECKS})
+
+
 class Reader(unittest.TestCase):
     def test_every_check_reads_from_the_real_workflows(self) -> None:
         workflows = Path(pc.ROOT / ".github/workflows")
