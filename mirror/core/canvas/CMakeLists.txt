@@ -14,6 +14,8 @@ target_sources(pulp-canvas PRIVATE
     # Skia-free on purpose: it is a value, so it must exist in every build
     # config, including the ones with no GPU backend at all.
     src/drawlist_format.cpp
+    # Reference CSS gradient colour interpolation; Skia-free, like Path.
+    src/gradient_interpolation.cpp
     src/path.cpp
     src/path_measure.cpp
     src/recording_canvas.cpp
@@ -184,6 +186,7 @@ if(PULP_HAS_SKIA)
         src/skia_canvas.cpp
         src/skia_canvas_fonts.cpp
         src/skia_canvas_text.cpp
+        src/skia_paragraph_cache.cpp
         src/skia_canvas_filter.cpp
         src/skia_canvas_mask.cpp
         src/skia_canvas_gradients.cpp
@@ -206,7 +209,17 @@ if(PULP_HAS_SKIA)
         # SkParagraph paths and owns the per-context FontCollection used
         # for Label/measurement.
         src/text_font_context.cpp
+        # CSS font-weight matching for the paragraph collection's default
+        # font manager (see font_weight_match.hpp).
+        src/font_weight_match.cpp
+        src/css_weight_font_manager.cpp
     )
+    if(NOT MSVC)
+        # It subclasses SkFontMgr, whose type info the prebuilt Skia does not
+        # export.
+        set_source_files_properties(src/css_weight_font_manager.cpp PROPERTIES
+            COMPILE_OPTIONS "-fno-rtti")
+    endif()
     if(APPLE)
         target_sources(pulp-canvas PRIVATE src/system_ui_font_manager.cpp)
         # It subclasses SkFontMgr, whose type info the prebuilt Skia does not
@@ -250,6 +263,30 @@ if(PULP_HAS_SKIA)
     target_link_libraries(pulp-canvas PUBLIC skia::skia)
     if(TARGET skia::dawn)
         target_link_libraries(pulp-canvas PUBLIC skia::dawn)
+    endif()
+
+    # MSVC's ARM64EC compiler emits STL helper calls with the EC thunk ABI.
+    # The ARM64EC toolset has no standalone msvcprt.lib; the ARM64 import
+    # library contains the compatible definitions, but also carries /MD
+    # runtime directives.  Pulp and the Skia bundle are /MT, so exporting the
+    # whole import library creates LNK2038/LNK1319 conflicts.  The SDK instead
+    # carries a thunk-only archive made from its ARM64EC members with those
+    # directives removed.
+    if(WIN32 AND CMAKE_CXX_COMPILER_ARCHITECTURE_ID STREQUAL "ARM64EC")
+        set(PULP_ARM64EC_STL_THUNKS "" CACHE FILEPATH
+            "Sanitized ARM64EC STL thunk archive for static-runtime consumers")
+        if(NOT EXISTS "${PULP_ARM64EC_STL_THUNKS}")
+            message(FATAL_ERROR
+                "ARM64EC requires PULP_ARM64EC_STL_THUNKS (the thunk-only "
+                "archive shipped by the Windows SDK)")
+        endif()
+        if(NOT TARGET pulp-arm64ec-stl-thunks)
+            add_library(pulp-arm64ec-stl-thunks INTERFACE)
+            target_link_libraries(pulp-arm64ec-stl-thunks INTERFACE
+                "$<BUILD_INTERFACE:${PULP_ARM64EC_STL_THUNKS}>"
+                "$<INSTALL_INTERFACE:$<INSTALL_PREFIX>/${CMAKE_INSTALL_LIBDIR}/pulp-arm64ec-stl-thunks.lib>")
+        endif()
+        target_link_libraries(pulp-canvas PUBLIC pulp-arm64ec-stl-thunks)
     endif()
     target_compile_definitions(pulp-canvas PUBLIC PULP_HAS_SKIA=1)
     target_include_directories(pulp-canvas PRIVATE ${SKIA_INCLUDE_DIRS})
@@ -397,12 +434,14 @@ set(PULP_CANVAS_UNIT_HEADERS
     include/pulp/canvas/font_options.hpp
     include/pulp/canvas/font_resolver.hpp
     include/pulp/canvas/font_scope.hpp
+    include/pulp/canvas/gradient_interpolation.hpp
     include/pulp/canvas/image_codecs.hpp
     include/pulp/canvas/image_convolution.hpp
     include/pulp/canvas/image_file_cache.hpp
     include/pulp/canvas/image_probe.hpp
     include/pulp/canvas/lottie_animation.hpp
     include/pulp/canvas/msdf_atlas.hpp
+    include/pulp/canvas/paragraph_cache.hpp
     include/pulp/canvas/path.hpp
     include/pulp/canvas/path_measure.hpp
     include/pulp/canvas/path_to_sdf.hpp
@@ -425,10 +464,12 @@ set(PULP_CANVAS_UNIT_HEADERS
     include/pulp/canvas/sdf_text.hpp
     include/pulp/canvas/shaped_text.hpp
     include/pulp/canvas/skia_canvas.hpp
+    include/pulp/canvas/skia_text_raster_policy.hpp
     include/pulp/canvas/svg.hpp
     include/pulp/canvas/svg_dom_cache.hpp
     include/pulp/canvas/text_font_context.hpp
     include/pulp/canvas/text_layout.hpp
+    include/pulp/canvas/text_raster_policy.hpp
     include/pulp/canvas/text_run_planner.hpp
     include/pulp/canvas/text_shaper.hpp
     include/pulp/canvas/text_utf8.hpp

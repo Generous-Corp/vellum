@@ -6,8 +6,10 @@
 #include <cstring>
 #include <pulp/canvas/affine_transform.hpp>
 #include <pulp/canvas/canvas_capability.hpp>
+#include <pulp/canvas/gradient_interpolation.hpp>
 #include <pulp/canvas/path.hpp>
 #include <pulp/canvas/scene_recording.hpp>
+#include <pulp/canvas/text_raster_policy.hpp>
 #include <pulp/canvas/text_utf8.hpp>
 #include <string>
 #include <vector>
@@ -1179,6 +1181,16 @@ public:
         set_font(family, size);
     }
 
+    /// CSS `-webkit-font-smoothing` for the text drawn and measured after it.
+    /// `antialiased` turns glyph hinting off, which with a `chromium` surface
+    /// (pulp/canvas/text_raster_policy.hpp) reproduces Chromium's
+    /// `antialiased` glyphs; `auto` keeps the default light hinting. Scoped
+    /// by save()/restore() like the clip and matrix. Skia, CoreGraphics and
+    /// RecordingCanvas implement it; the default ignores it.
+    virtual void set_font_smoothing(FontSmoothing smoothing) {
+        (void)smoothing;
+    }
+
     // OpenType feature flags for font-variant. Each
     // FontFeature is a 4-byte tag (e.g. "tnum" / "smcp" / "onum" /
     // "lnum" / "pnum") + an on/off value (0 disables, 1 enables).
@@ -2013,6 +2025,19 @@ protected:
         out_height = static_cast<float>(h);
         return true;
     }
+
+    /// Colour space every LATER gradient setter blends its stops in (CSS
+    /// `<color-interpolation-method>`), until set again; save() does not keep
+    /// it. Appended for the vtable. Skia blends natively, CoreGraphics resamples.
+    virtual void set_gradient_interpolation(GradientInterpolation m) {
+        gradient_interpolation_ = m;
+    }
+    GradientInterpolation gradient_interpolation() const {
+        return gradient_interpolation_;
+    }
+
+  private:
+    GradientInterpolation gradient_interpolation_{};
 };
 
 } // namespace pulp::canvas

@@ -11,6 +11,7 @@
 #include "pulp/canvas/font_scope.hpp"
 #include "pulp/canvas/bundled_fonts.hpp"
 #include "pulp/canvas/font_flight_recorder.hpp"
+#include "font_weight_match.hpp"
 #include "system_ui_typeface.hpp"
 
 #include <algorithm>
@@ -33,6 +34,20 @@
 #include <CoreText/CoreText.h>
 #include "include/ports/SkTypeface_mac.h"
 #endif
+#endif
+
+// PULP_LITE_EDITOR builds this file a second time, into the pulp-editor-lite
+// objects that a plug-in without a GPU editor links ahead of the library.
+// It changes function bodies only; every declaration stays as the headers
+// give it, so the two builds agree on every type.
+#if defined(PULP_HAS_SKIA) && !(defined(PULP_LITE_EDITOR) && PULP_LITE_EDITOR)
+#define PULP_FONT_RESOLVER_SKIA 1
+#else
+#define PULP_FONT_RESOLVER_SKIA 0
+#endif
+
+#if !PULP_FONT_RESOLVER_SKIA && defined(__APPLE__)
+#include "coretext_text.hpp"
 #endif
 
 namespace pulp::canvas {
@@ -149,6 +164,19 @@ std::vector<std::string> split_css_font_family_list(std::string_view list) {
     return out;
 }
 
+bool paragraph_fakes_missing_font_styles(std::string_view css_font_family, int weight, int slant) {
+    if (slant != 0)
+        return true;
+    for (const auto& entry : split_css_font_family_list(css_font_family)) {
+        // Ranges are declared under the bare family; a stack entry is usually
+        // quoted ("'Jost', serif", or a native alias).
+        if (const auto synthesize =
+                declared_face_synthesizes_bold(parse_css_font_family(entry).name, weight))
+            return *synthesize;
+    }
+    return true;
+}
+
 std::string platform_family_for_css_family(std::string_view entry) {
     CssFontFamily family = parse_css_font_family(entry);
     if (!family.quoted) {
@@ -238,7 +266,7 @@ std::size_t FontResolver::cache_size() const noexcept {
     return impl_->cache.size();
 }
 
-#ifdef PULP_HAS_SKIA
+#if PULP_FONT_RESOLVER_SKIA
 
 namespace {
 
@@ -411,8 +439,10 @@ ResolvedFont resolve_one_family(const std::string& entry, const FontOptions& opt
             system_ui = tf != nullptr;
         }
 #endif
+        // CSS weight matching inside the family, the same matcher SkParagraph's
+        // collection uses, so the face reported here is the face painted.
         if (!tf)
-            tf = mgr->matchFamilyStyle(platform_family.c_str(), sk_style);
+            tf = css_match_family_style(*mgr, platform_family.c_str(), sk_style);
         if (tf) {
             SkString actual;
             tf->getFamilyName(&actual);
@@ -691,7 +721,7 @@ ResolvedFont FontResolver::resolve_character_fallback(const FontOptions& options
     return r;
 }
 
-#else // !PULP_HAS_SKIA
+#else // !PULP_FONT_RESOLVER_SKIA
 
 // Non-Skia builds: every resolver call returns a NotFound result. The
 // callers that pull this in are expected to fall back to their own
@@ -753,12 +783,12 @@ ResolvedFont FontResolver::resolve_character_fallback(const FontOptions& options
     return r;
 }
 
-#endif // PULP_HAS_SKIA
+#endif // PULP_FONT_RESOLVER_SKIA
 
 // Color-font predicates — Skia-conditional method bodies that compile
 // in both Skia and non-Skia builds.
 
-#ifdef PULP_HAS_SKIA
+#if PULP_FONT_RESOLVER_SKIA
 namespace {
 
 // Enumerate which specific color tables a typeface carries so
@@ -801,10 +831,10 @@ ColorTablePresence scan_color_tables(const SkTypeface* typeface) {
 }
 
 } // namespace
-#endif // PULP_HAS_SKIA
+#endif // PULP_FONT_RESOLVER_SKIA
 
 bool ResolvedFont::supports_color_font() const noexcept {
-#ifdef PULP_HAS_SKIA
+#if PULP_FONT_RESOLVER_SKIA
     return scan_color_tables(typeface.get()).any_color;
 #else
     return false;
@@ -812,7 +842,7 @@ bool ResolvedFont::supports_color_font() const noexcept {
 }
 
 bool ResolvedFont::color_font_active() const noexcept {
-#ifdef PULP_HAS_SKIA
+#if PULP_FONT_RESOLVER_SKIA
     if (color_font_mode == ColorFontMode::ForceMonochrome) return false;
     if (!typeface) return false;
     const ColorTablePresence p = scan_color_tables(typeface.get());
@@ -835,7 +865,7 @@ bool ResolvedFont::color_font_active() const noexcept {
 
 std::string resolved_face_identity(const std::string& css_font_family,
                                    float weight, FontSlant slant) {
-#ifdef PULP_HAS_SKIA
+#if PULP_FONT_RESOLVER_SKIA
     FontOptions options;
     options.weight = weight;
     options.slant = slant;
@@ -852,6 +882,12 @@ std::string resolved_face_identity(const std::string& css_font_family,
         return resolved.actual_family;
     }
     return std::string(name.c_str(), name.size());
+#elif defined(__APPLE__)
+    // The lite stack measures and paints through CoreText, so the face that
+    // decides line breaks is the one CoreText resolves.
+    const int css_slant = slant == FontSlant::Oblique ? 2 : slant == FontSlant::Italic ? 1 : 0;
+    return detail::coretext_face_postscript_name(css_font_family, static_cast<int>(weight),
+                                                 css_slant);
 #else
     (void)css_font_family;
     (void)weight;

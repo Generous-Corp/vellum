@@ -96,7 +96,7 @@ DEPENDENCIES: dict[str, dict[str, Any]] = {
     },
     "choc": {
         "kind": "headers",
-        "patches": ["v8-compatibility", "json-positive-exponent"],
+        "patches": ["v8-compatibility", "json-positive-exponent", "file-watcher-lifetime"],
     },
     "brotli": {"kind": "sources"},
     "woff2": {"kind": "sources"},
@@ -133,13 +133,19 @@ PRELUDE_PATH = re.compile(r"@build/core/view/web_compat_preludes_gen\.(?P<suffix
 BUILD_INFO_INPUTS = {
     "20261014-34d16417a460": {"version": "0.964.1"},
     "20261025-46cee5e4e6e2": {"version": "1.11.0"},
+    "20261102-0f616a440cec": {"version": "1.46.1"},
 }
 
 # Pulp's CHOC standards patch, re-expressed: the JSON number parser accepts a
 # positive exponent sign. Proved by the closure digest of choc_JSON.h.
 CHOC_JSON_HEADER = "choc/text/choc_JSON.h"
 CHOC_V8_HEADER = "choc/javascript/choc_javascript_V8.h"
-PATCHED_PATHS = {"v8-compatibility": CHOC_V8_HEADER, "json-positive-exponent": CHOC_JSON_HEADER}
+CHOC_FILE_WATCHER_HEADER = "choc/platform/choc_FileWatcher.h"
+PATCHED_PATHS = {
+    "v8-compatibility": CHOC_V8_HEADER,
+    "json-positive-exponent": CHOC_JSON_HEADER,
+    "file-watcher-lifetime": CHOC_FILE_WATCHER_HEADER,
+}
 CHOC_JSON_BEFORE = (
     "                    hadExponent = true;\n"
     "                    popIf ('-');\n"
@@ -394,11 +400,58 @@ def apply_choc_v8_patch(root: Path) -> None:
     header.write_text(text, encoding="utf-8")
 
 
+# Pulp's CHOC file watcher lifetime patch (pulp_patch_choc_file_watcher):
+# ~Pimpl drains the FSEvents dispatch queue, unless it runs on that queue, so
+# no callback still running there reads the Watcher being destroyed.
+CHOC_FILE_WATCHER_EDITS = (
+    (
+        "        FSEventStreamSetDispatchQueue (eventStream, dispatchQueue);\n"
+        "        FSEventStreamStart (eventStream);",
+        "        // Tags the queue so ~Pimpl can tell when it runs on it.\n"
+        "        dispatch_queue_set_specific (dispatchQueue, this, this, nullptr);\n"
+        "        FSEventStreamSetDispatchQueue (eventStream, dispatchQueue);\n"
+        "        FSEventStreamStart (eventStream);",
+    ),
+    (
+        "            FSEventStreamStop (eventStream);\n"
+        "            FSEventStreamInvalidate (eventStream);\n"
+        "            FSEventStreamRelease (eventStream);",
+        "            FSEventStreamStop (eventStream);\n"
+        "            FSEventStreamInvalidate (eventStream);\n"
+        "            // Stop and Invalidate schedule no new callbacks but do not wait for\n"
+        "            // one already running on the queue, which reads the Watcher being\n"
+        "            // destroyed. Draining the serial queue waits for it, except when\n"
+        "            // this destructor runs on that queue itself.\n"
+        "            if (dispatchQueue && dispatch_get_specific (this) != this)\n"
+        "                dispatch_sync_f (dispatchQueue, nullptr, [] (void*) {});\n"
+        "            FSEventStreamRelease (eventStream);",
+    ),
+)
+
+
+def apply_choc_file_watcher_patch(root: Path) -> None:
+    """Apply each edit once; an edit already present is left alone, as Pulp's patch does."""
+    header = root / CHOC_FILE_WATCHER_HEADER
+    text = header.read_text(encoding="utf-8")
+    original = text
+    for before, after in CHOC_FILE_WATCHER_EDITS:
+        if after in text:
+            continue
+        if text.count(before) != 1:
+            raise PlanError("choc file watcher lifetime patch no longer matches the expected source")
+        text = text.replace(before, after)
+    if text != original:
+        header.write_text(text, encoding="utf-8")
+
+
 def apply_patch(name: str, patch: str, root: Path) -> None:
-    if name != "choc" or patch not in {"v8-compatibility", "json-positive-exponent"}:
+    if name != "choc" or patch not in PATCHED_PATHS:
         raise PlanError(f"unknown patch {patch!r} for {name}")
     if patch == "v8-compatibility":
         apply_choc_v8_patch(root)
+        return
+    if patch == "file-watcher-lifetime":
+        apply_choc_file_watcher_patch(root)
         return
     header = root / CHOC_JSON_HEADER
     text = header.read_text(encoding="utf-8")

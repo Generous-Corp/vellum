@@ -1,4 +1,5 @@
 #include <pulp/view/widget_bridge.hpp>
+#include <pulp/canvas/bundled_fonts.hpp>
 #include <pulp/view/data_display.hpp>
 #include <pulp/view/widgets.hpp>
 #include <pulp/view/gap_widgets.hpp>
@@ -336,68 +337,70 @@ WidgetBridge::WidgetBridge(ScriptEngine& engine, View& root, state::StateStore& 
     repaint_callback_ = [&root] { root.request_repaint(); };
     register_api();
     eval_or_throw(engine_, "kJSPreamble", dispatch_prelude_js() + kJSPreamblePart2);
-    eval_or_throw(engine_, "css_colors", preludes::css_colors);
-    eval_or_throw(engine_, "css_parser", preludes::css_parser);
-    eval_or_throw(engine_, "web_compat_element", preludes::web_compat_element);
+    const auto eval_prelude = [this](const char* name, const auto& prelude) {
+        eval_or_throw(engine_, name, preludes::source(prelude));
+    };
+    eval_prelude("css_colors", preludes::css_colors);
+    eval_prelude("css_parser", preludes::css_parser);
+    eval_prelude("web_compat_element", preludes::web_compat_element);
     // Events + pointer-capture helpers must eval after web_compat_element so
     // the Element constructor and prototype exist before overrides install.
-    eval_or_throw(engine_, "web_compat_element_events", preludes::web_compat_element_events);
-    eval_or_throw(engine_, "web_compat_canvas", preludes::web_compat_canvas);
+    eval_prelude("web_compat_element_events", preludes::web_compat_element_events);
+    eval_prelude("web_compat_canvas", preludes::web_compat_canvas);
     // Native GPU canvas helpers must eval after the canvas core so
     // CanvasRenderingContext2D and window.pulp.gpu are in scope when
     // __ensurePulpGpuHelpers / getContext("webgpu") run.
-    eval_or_throw(engine_, "web_compat_canvas_gpu", preludes::web_compat_canvas_gpu);
+    eval_prelude("web_compat_canvas_gpu", preludes::web_compat_canvas_gpu);
     // _PulpCanvasMatrix DOMMatrix-compat helper plus Canvas2D API closures
     // must eval after web_compat_canvas so the CanvasRenderingContext2D
     // constructor and prototype are in scope.
-    eval_or_throw(engine_, "web_compat_canvas_matrix", preludes::web_compat_canvas_matrix);
-    eval_or_throw(engine_, "web_compat_canvas_image", preludes::web_compat_canvas_image);
+    eval_prelude("web_compat_canvas_matrix", preludes::web_compat_canvas_matrix);
+    eval_prelude("web_compat_canvas_image", preludes::web_compat_canvas_image);
     // Generated alias-group table read by _applyProperty's write-dedup
     // guard. Plain data, no dependencies, so it evaluates before the
     // declaration that consumes it.
-    eval_or_throw(engine_, "web_compat_style_dedup_table", preludes::web_compat_style_dedup_table);
-    eval_or_throw(engine_, "web_compat_style_decl", preludes::web_compat_style_decl);
+    eval_prelude("web_compat_style_dedup_table", preludes::web_compat_style_dedup_table);
+    eval_prelude("web_compat_style_decl", preludes::web_compat_style_decl);
     // Per-domain `_applyProperty` handler modules. The property switch is split
     // into layout / paint / typography / transform / misc handlers;
     // web-compat-style-decl.js's `_applyProperty` is a thin dispatcher that
     // resolves those function declarations at call time. Evaluate handlers
     // after style_decl and before any consumer can trigger a style apply.
-    eval_or_throw(engine_, "web_compat_style_decl_layout", preludes::web_compat_style_decl_layout);
-    eval_or_throw(engine_, "web_compat_style_decl_paint", preludes::web_compat_style_decl_paint);
-    eval_or_throw(engine_, "web_compat_style_decl_typography", preludes::web_compat_style_decl_typography);
-    eval_or_throw(engine_, "web_compat_style_decl_transform", preludes::web_compat_style_decl_transform);
-    eval_or_throw(engine_, "web_compat_style_decl_misc", preludes::web_compat_style_decl_misc);
+    eval_prelude("web_compat_style_decl_layout", preludes::web_compat_style_decl_layout);
+    eval_prelude("web_compat_style_decl_paint", preludes::web_compat_style_decl_paint);
+    eval_prelude("web_compat_style_decl_typography", preludes::web_compat_style_decl_typography);
+    eval_prelude("web_compat_style_decl_transform", preludes::web_compat_style_decl_transform);
+    eval_prelude("web_compat_style_decl_misc", preludes::web_compat_style_decl_misc);
     // CSSStyleDeclaration helper installation needs the style constructor and
     // _applyProperty prototype before it walks __cssProperties__.
-    eval_or_throw(engine_, "web_compat_style_decl_helpers", preludes::web_compat_style_decl_helpers);
-    eval_or_throw(engine_, "web_compat_animation", preludes::web_compat_animation);
-    eval_or_throw(engine_, "web_compat_document", preludes::web_compat_document);
-    eval_or_throw(engine_, "web_compat_transient_interaction",
-                  preludes::web_compat_transient_interaction);
+    eval_prelude("web_compat_style_decl_helpers", preludes::web_compat_style_decl_helpers);
+    eval_prelude("web_compat_animation", preludes::web_compat_animation);
+    eval_prelude("web_compat_document", preludes::web_compat_document);
+    eval_prelude("web_compat_transient_interaction", preludes::web_compat_transient_interaction);
     // CSS selector engine must eval after document and Element so the
     // selector helpers are resolvable when document.querySelector /
     // .querySelectorAll dispatch into them.
-    eval_or_throw(engine_, "web_compat_document_selectors", preludes::web_compat_document_selectors);
+    eval_prelude("web_compat_document_selectors", preludes::web_compat_document_selectors);
     // WebGPU mock factories must eval after document so GPU* usage constants
     // are in scope when factory bodies resolve them lazily at call time.
-    eval_or_throw(engine_, "web_compat_document_gpu_mock", preludes::web_compat_document_gpu_mock);
-    eval_or_throw(engine_, "web_compat_gpu_buffered", preludes::web_compat_gpu_buffered);
+    eval_prelude("web_compat_document_gpu_mock", preludes::web_compat_document_gpu_mock);
+    eval_prelude("web_compat_gpu_buffered", preludes::web_compat_gpu_buffered);
     // DOM mutation methods (appendChild / removeChild / etc.). Single source
     // of truth lives in core/view/js/web-compat-dom-ops.js.
     // The JS file's idempotency guard (`__pulp_dom_ops__` marker on the
     // prototype methods) makes a re-eval a no-op, which matters because
     // load_script callers used to re-trigger this initialization manually
     // before the consolidation.
-    eval_or_throw(engine_, "web_compat_dom_ops", preludes::web_compat_dom_ops);
+    eval_prelude("web_compat_dom_ops", preludes::web_compat_dom_ops);
     // Observer no-ops and scheduler shims so React 18, and any other framework
     // that feature-detects MutationObserver / MessageChannel / queueMicrotask,
     // finds the constructors it expects on the global.
-    eval_or_throw(engine_, "web_compat_observers", preludes::web_compat_observers);
-    eval_or_throw(engine_, "web_compat_scheduler", preludes::web_compat_scheduler);
+    eval_prelude("web_compat_observers", preludes::web_compat_observers);
+    eval_prelude("web_compat_scheduler", preludes::web_compat_scheduler);
     // DOM construction and walker for the Claude Design `--execute-bundle`
     // import lane. Hides itself behind `globalThis.__pulpImportRuntime__` so
     // non-import scripts do not see new globals.
-    eval_or_throw(engine_, "import_runtime", preludes::import_runtime);
+    eval_prelude("import_runtime", preludes::import_runtime);
     // Install the window event-listener shim LAST so it survives any
     // `var window = {...}` reassignment performed by the preludes above
     // (notably web-compat-document.js). See kWindowListenerShim comment.
@@ -413,6 +416,7 @@ WidgetBridge::WidgetBridge(ScriptEngine& engine, View& root, state::StateStore& 
 }
 
 WidgetBridge::~WidgetBridge() {
+    pulp::canvas::clear_declared_font_face_weight_ranges(font_weight_scope());
     if (callback_alive_->engine_alive() && engine_.bridge_call_counter() == bridge_call_count_)
         engine_.set_bridge_call_counter(nullptr);
     release_document_navigation_focus();
@@ -1124,12 +1128,13 @@ void WidgetBridge::service_frame_callbacks() {
         request_repaint();
 }
 
+// Shell exec/execAsync is a development-only affordance: PULP_BRIDGE_EXEC_ENABLED
+// comes from the PULP_DEV_BRIDGE_EXEC option (OFF for release/SDK builds), which
+// compiles the registrar out; when compiled in it is ALSO gated by the `exec`
+// capability. No default on purpose — a build that forgets the define fails here.
 #ifndef PULP_BRIDGE_EXEC_ENABLED
-// Shell exec/execAsync is a development-only affordance. Compiled out of shipping
-// builds via -DPULP_BRIDGE_EXEC_ENABLED=0, and even when compiled in it is ALSO
-// gated behind the `exec` capability, so a UI with no granted capabilities never
-// receives it. Two independent locks, because shelling out is the sharpest edge.
-#define PULP_BRIDGE_EXEC_ENABLED 1
+#error                                                                                             \
+    "PULP_BRIDGE_EXEC_ENABLED is not defined; core/view/cmake/PulpViewJsEngines.cmake sets it from PULP_DEV_BRIDGE_EXEC"
 #endif
 
 // One bridge-API group. `gate` names the capability an EFFECTFUL group requires;
@@ -1149,66 +1154,66 @@ void WidgetBridge::register_api() {
     // overwrite a JS name registered by an earlier one, and the JS preludes
     // evaluated after this run against the resulting surface. Append; never sort.
     static constexpr ApiGroup kGroups[] = {
-        {std::nullopt,                     &BridgeRegistrars::register_widget_factory_controls_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_factory_controls_api},
         // Reads arbitrary file paths (image/sprite assets) → gated by Filesystem.
-        {ReloadCapability::Filesystem,     &BridgeRegistrars::register_widget_assets_api},
-        {std::nullopt,                     &BridgeRegistrars::register_widget_factory_form_api},
-        {std::nullopt,                     &BridgeRegistrars::register_widget_value_controls_api},
-        {std::nullopt,                     &BridgeRegistrars::register_state_binding_api},
-        {std::nullopt,                     &BridgeRegistrars::register_animation_api},
-        {std::nullopt,                     &BridgeRegistrars::register_widget_style_visibility_api},
-        {std::nullopt,                     &BridgeRegistrars::register_accessibility_api},
-        {std::nullopt,                     &BridgeRegistrars::register_hover_event_api},
-        {std::nullopt,                     &BridgeRegistrars::register_layout_grid_api},
-        {std::nullopt,                     &BridgeRegistrars::register_pointer_event_api},
-        {std::nullopt,                     &BridgeRegistrars::register_metadata_removal_api},
+        {ReloadCapability::Filesystem, &BridgeRegistrars::register_widget_assets_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_factory_form_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_value_controls_api},
+        {std::nullopt, &BridgeRegistrars::register_state_binding_api},
+        {std::nullopt, &BridgeRegistrars::register_animation_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_style_visibility_api},
+        {std::nullopt, &BridgeRegistrars::register_accessibility_api},
+        {std::nullopt, &BridgeRegistrars::register_hover_event_api},
+        {std::nullopt, &BridgeRegistrars::register_layout_grid_api},
+        {std::nullopt, &BridgeRegistrars::register_pointer_event_api},
+        {std::nullopt, &BridgeRegistrars::register_metadata_removal_api},
 
         // Extended API: containers, layout, all widgets, themes, canvas.
-        {std::nullopt,                     &BridgeRegistrars::register_widget_factory_container_api},
-        {std::nullopt,                     &BridgeRegistrars::register_layout_flex_api},
-        {std::nullopt,                     &BridgeRegistrars::register_style_reset_api},
-        {std::nullopt,                     &BridgeRegistrars::register_dom_api},
-        {std::nullopt,                     &BridgeRegistrars::register_layout_query_api},
-        {std::nullopt,                     &BridgeRegistrars::register_widget_style_interaction_api},
-        {std::nullopt,                     &BridgeRegistrars::register_widget_factory_composite_api},
-        {std::nullopt,                     &BridgeRegistrars::register_widget_value_list_api},
-        {std::nullopt,                     &BridgeRegistrars::register_widget_factory_text_editor_api},
-        {std::nullopt,                     &BridgeRegistrars::register_widget_factory_design_system_api},
-        {std::nullopt,                     &BridgeRegistrars::register_widget_value_label_api},
-        {std::nullopt,                     &BridgeRegistrars::register_metadata_source_api},
-        {std::nullopt,                     &BridgeRegistrars::register_widget_value_basic_api},
-        {std::nullopt,                     &BridgeRegistrars::register_widget_typography_api},
-        {std::nullopt,                     &BridgeRegistrars::register_widget_value_content_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_factory_container_api},
+        {std::nullopt, &BridgeRegistrars::register_layout_flex_api},
+        {std::nullopt, &BridgeRegistrars::register_style_reset_api},
+        {std::nullopt, &BridgeRegistrars::register_dom_api},
+        {std::nullopt, &BridgeRegistrars::register_layout_query_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_style_interaction_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_factory_composite_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_value_list_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_factory_text_editor_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_factory_design_system_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_value_label_api},
+        {std::nullopt, &BridgeRegistrars::register_metadata_source_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_value_basic_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_typography_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_value_content_api},
 
         // Visual properties (CSS box model). CSS color parsing lives in
         // css_color.cpp (parse_bridge_css_color); each color-consuming registrar
         // calls it directly.
-        {std::nullopt,                     &BridgeRegistrars::register_tokens_api},
-        {std::nullopt,                     &BridgeRegistrars::register_widget_text_runs_api},
-        {std::nullopt,                     &BridgeRegistrars::register_widget_style_background_color_api},
-        {std::nullopt,                     &BridgeRegistrars::register_svg_api},
-        {std::nullopt,                     &BridgeRegistrars::register_widget_border_box_api},
-        {std::nullopt,                     &BridgeRegistrars::register_list_style_api},
-        {std::nullopt,                     &BridgeRegistrars::register_widget_outline_api},
-        {std::nullopt,                     &BridgeRegistrars::register_widget_border_radius_api},
-        {std::nullopt,                     &BridgeRegistrars::register_widget_border_side_api},
-        {std::nullopt,                     &BridgeRegistrars::register_widget_style_shadow_api},
-        {std::nullopt,                     &BridgeRegistrars::register_wheel_event_api},
-        {std::nullopt,                     &BridgeRegistrars::register_widget_style_opacity_api},
-        {std::nullopt,                     &BridgeRegistrars::register_widget_typography_color_api},
-        {std::nullopt,                     &BridgeRegistrars::register_widget_style_overflow_api},
-        {std::nullopt,                     &BridgeRegistrars::register_layout_box_model_api},
-        {std::nullopt,                     &BridgeRegistrars::register_canvas2d_api},
-        {std::nullopt,                     &BridgeRegistrars::register_widget_style_state_api},
-        {std::nullopt,                     &BridgeRegistrars::register_widget_typography_decoration_api},
-        {std::nullopt,                     &BridgeRegistrars::register_widget_style_background_repeat_api},
-        {std::nullopt,                     &BridgeRegistrars::register_layout_position_api},
-        {std::nullopt,                     &BridgeRegistrars::register_animation_style_api},
-        {std::nullopt,                     &BridgeRegistrars::register_widget_typography_overflow_api},
-        {std::nullopt,                     &BridgeRegistrars::register_widget_style_cursor_direction_api},
-        {std::nullopt,                     &BridgeRegistrars::register_widget_style_filter_clip_api},
-        {std::nullopt,                     &BridgeRegistrars::register_widget_style_mask_object_api},
-        {std::nullopt,                     &BridgeRegistrars::register_widget_style_blend_api},
+        {std::nullopt, &BridgeRegistrars::register_tokens_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_text_runs_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_style_background_color_api},
+        {std::nullopt, &BridgeRegistrars::register_svg_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_border_box_api},
+        {std::nullopt, &BridgeRegistrars::register_list_style_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_outline_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_border_radius_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_border_side_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_style_shadow_api},
+        {std::nullopt, &BridgeRegistrars::register_wheel_event_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_style_opacity_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_typography_color_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_style_overflow_api},
+        {std::nullopt, &BridgeRegistrars::register_layout_box_model_api},
+        {std::nullopt, &BridgeRegistrars::register_canvas2d_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_style_state_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_typography_decoration_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_style_background_repeat_api},
+        {std::nullopt, &BridgeRegistrars::register_layout_position_api},
+        {std::nullopt, &BridgeRegistrars::register_animation_style_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_typography_overflow_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_style_cursor_direction_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_style_filter_clip_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_style_mask_object_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_style_blend_api},
 
         // Storage-only setters for remaining CSS compatibility entries. Each
         // handler records the value on the View's catalog slot so harness
@@ -1216,38 +1221,38 @@ void WidgetBridge::register_api() {
         // status documents implementation depth: `partial` for storage-only with
         // deferred paint, `noop` for accept-and-ignore, and `wontfix` for
         // architectural out-of-scope.
-        {std::nullopt,                     &BridgeRegistrars::register_widget_typography_extended_api},
-        {std::nullopt,                     &BridgeRegistrars::register_widget_style_rn_compat_api},
-        {std::nullopt,                     &BridgeRegistrars::register_widget_typography_shadow_shorthand_api},
-        {std::nullopt,                     &BridgeRegistrars::register_widget_style_background_subproperty_api},
-        {std::nullopt,                     &BridgeRegistrars::register_widget_style_background_gradient_api},
-        {std::nullopt,                     &BridgeRegistrars::register_widget_style_box_shadow_api},
-        {std::nullopt,                     &BridgeRegistrars::register_shader_widget_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_typography_extended_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_style_rn_compat_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_typography_shadow_shorthand_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_style_background_subproperty_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_style_background_gradient_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_style_box_shadow_api},
+        {std::nullopt, &BridgeRegistrars::register_shader_widget_api},
 
         // Persists style presets to temp files → gated by Storage.
-        {ReloadCapability::Storage,        &BridgeRegistrars::register_widget_schema_api},
-        {std::nullopt,                     &BridgeRegistrars::register_theme_api},
-        {ReloadCapability::Ai,             &BridgeRegistrars::register_platform_services_ai_api},
-        {std::nullopt,                     &BridgeRegistrars::register_metadata_computed_api},
+        {ReloadCapability::Storage, &BridgeRegistrars::register_widget_schema_api},
+        {std::nullopt, &BridgeRegistrars::register_theme_api},
+        {ReloadCapability::Ai, &BridgeRegistrars::register_platform_services_ai_api},
+        {std::nullopt, &BridgeRegistrars::register_metadata_computed_api},
 #if PULP_BRIDGE_EXEC_ENABLED
-        // Shell exec — dev-only (compiled out of ship) AND gated by the exec cap.
-        {ReloadCapability::Exec,           &BridgeRegistrars::register_platform_services_exec_api},
+        // Shell exec — dev-only (registrar not compiled otherwise) AND exec-gated.
+        {ReloadCapability::Exec, &BridgeRegistrars::register_platform_services_exec_api},
 #endif
-        {std::nullopt,                     &BridgeRegistrars::register_context_menu_event_api},
+        {std::nullopt, &BridgeRegistrars::register_context_menu_event_api},
         // Native file dialogs read/choose arbitrary paths → gated by Filesystem.
-        {ReloadCapability::Filesystem,     &BridgeRegistrars::register_platform_services_dialog_api},
-        {std::nullopt,                     &BridgeRegistrars::register_runtime_api},
+        {ReloadCapability::Filesystem, &BridgeRegistrars::register_platform_services_dialog_api},
+        {std::nullopt, &BridgeRegistrars::register_runtime_api},
         // Off-thread index/search — non-effectful, so no capability.
-        {std::nullopt,                     &BridgeRegistrars::register_query_service_api},
-        {ReloadCapability::Clipboard,      &BridgeRegistrars::register_platform_services_clipboard_api},
+        {std::nullopt, &BridgeRegistrars::register_query_service_api},
+        {ReloadCapability::Clipboard, &BridgeRegistrars::register_platform_services_clipboard_api},
         // Key/value persistence → Storage; asset loading reads file:// paths →
         // Filesystem (granted independently).
-        {ReloadCapability::Storage,        &BridgeRegistrars::register_storage_key_value_api},
-        {ReloadCapability::Filesystem,     &BridgeRegistrars::register_asset_loading_api},
-        {std::nullopt,                     &BridgeRegistrars::register_drop_event_api},
-        {ReloadCapability::Filesystem,     &BridgeRegistrars::register_font_assets_api},
-        {std::nullopt,                     &BridgeRegistrars::register_shader_canvas_api},
-        {std::nullopt,                     &BridgeRegistrars::register_gpu_api},
+        {ReloadCapability::Storage, &BridgeRegistrars::register_storage_key_value_api},
+        {ReloadCapability::Filesystem, &BridgeRegistrars::register_asset_loading_api},
+        {std::nullopt, &BridgeRegistrars::register_drop_event_api},
+        {ReloadCapability::Filesystem, &BridgeRegistrars::register_font_assets_api},
+        {std::nullopt, &BridgeRegistrars::register_shader_canvas_api},
+        {std::nullopt, &BridgeRegistrars::register_gpu_api},
     };
 
     for (const auto& group : kGroups) {
