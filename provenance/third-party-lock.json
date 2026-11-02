@@ -1,13 +1,13 @@
 {
   "schema_version": 2,
-  "status": "incubation-byte-locked-not-release-attested",
+  "status": "byte-locked-renderer-release-attested",
   "dependencies": [
     {
       "name": "Skia Graphite and Dawn renderer toolchain",
-      "version": "chrome/m157",
+      "version": "chrome/m158",
       "license": "multiple; see NOTICE.md and runtime_toolchain_dependencies",
-      "sha256": "bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86",
-      "surface": "byte-locked build input statically linked into the optional installed Vellum::SkiaDawnProvider shared library used by Vellum::Gpu and Vellum::MirrorCanvas; source association and exhaustive legal inventory remain release-blocked"
+      "sha256": "dca73c0eee5b0f6d129fe357d0754f7165c6b436051e0de947aeedd3e1bde250",
+      "surface": "byte-locked build input statically linked into the optional installed Vellum::SkiaDawnProvider shared library used by Vellum::Gpu and Vellum::MirrorCanvas; release eligibility rests on the builder's build-provenance attestation, legal manifest and toolchain receipt"
     },
     {
       "name": "Inter Regular",
@@ -120,36 +120,23 @@
   "runtime_toolchain_dependencies": {
     "state": "renderer-artifact-byte-locked",
     "renderer": {
-      "state": "artifact-bytes-proven-source-association-not-attested",
-      "release_eligibility": "blocked",
+      "state": "artifact-bytes-proven-builder-attested",
+      "release_eligibility": "eligible",
       "attestation_record": "provenance/renderer-attestation.json",
-      "release_blockers": [
-        {
-          "id": "renderer-source-to-asset-attestation-missing",
-          "detail": "The asset hash is proven, but no signed provenance or embedded manifest connects those bytes to the declared Skia and builder commits."
-        },
-        {
-          "id": "renderer-transitive-legal-inventory-unproven",
-          "detail": "The artifact contains no SBOM, build graph, or license manifest. Archive-member and global-symbol inspection identified the bundled components listed below, but cannot prove that the list is exhaustive. A release-producing builder must emit and attest an exhaustive transitive source/license manifest."
-        },
-        {
-          "id": "renderer-toolchain-abi-identity-missing",
-          "detail": "The exact compiler build, linker identity, and C++ standard-library ABI are not recorded by the asset."
-        }
-      ],
+      "release_blockers": [],
       "consumer_boundary": "selected static archive members are linked into the installed Vellum::SkiaDawnProvider shared library used by Vellum::Gpu and Vellum::MirrorCanvas; the prebuilt archive is not installed",
       "artifact": {
         "repository": "https://github.com/danielraffel/skia-builder",
-        "release_tag": "chrome/m157",
+        "release_tag": "chrome/m158",
         "name": "skia-build-mac-universal-gpu-release.zip",
-        "url": "https://github.com/danielraffel/skia-builder/releases/download/chrome/m157/skia-build-mac-universal-gpu-release.zip",
-        "sha256": "bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86",
-        "builder_commit": "f710b2834eaf37dbf1bd39408f9361d10d85eda2",
+        "url": "https://github.com/danielraffel/skia-builder/releases/download/chrome/m158/skia-build-mac-universal-gpu-release.zip",
+        "sha256": "dca73c0eee5b0f6d129fe357d0754f7165c6b436051e0de947aeedd3e1bde250",
+        "builder_commit": "312f05e24a5d5a45d4a3e70ca70ff3ccff1b4d97",
         "target": "macos-arm64",
         "configuration": "Release",
         "archive_root": "build/mac-gpu/lib/Release",
         "legal_files_in_artifact": [],
-        "legal_files_note": "The sealed asset contains no license or notice manifest. NOTICE.md is reconstructed from the exact upstream source revisions below. A source-to-asset attestation is still absent."
+        "legal_files_note": "The sealed asset contains no license or notice file. Its content-addressed legal manifest is a separate asset of the same release, covered with the archive by the builder's build-provenance attestation; NOTICE.md reproduces the license texts it resolves."
       },
       "features": {
         "graphite": true,
@@ -173,74 +160,74 @@
       "source_identities": {
         "skia": {
           "repository": "https://skia.googlesource.com/skia",
-          "ref": "refs/heads/chrome/m157",
-          "commit": "b94213a11b3a2edadfae89f0c57a7f4ab72772c9",
+          "ref": "refs/heads/chrome/m158",
+          "commit": "be7d7c3e996e567eda7dc9774274f7a0103cdb8c",
           "license": "BSD-3-Clause",
-          "evidence": "The release's skia-release-lock.json (resolved before the build, source skia-branch-head) pins this commit, and skia-builder rebuild run 39903006566 checked it out and reproduced every member of the asset. The asset itself does not embed this exact Skia commit."
+          "evidence": "The release's legal manifest records this commit as the checked-out Skia revision (source_revisions.skia), and that manifest is covered with the archive by the builder's build-provenance attestation. The asset itself does not embed this exact Skia commit."
         },
         "dawn": {
           "repository": "https://dawn.googlesource.com/dawn",
-          "commit": "ada567700e13aecf7989d78b21f7d330b522ea80",
+          "commit": "1716e88cc9e58398fab5d4473f7f2e858667b677",
           "license": "BSD-3-Clause",
-          "evidence": "Skia DEPS pins this revision and build/include/dawn/dawn_version.h embeds the same 20-byte commit."
+          "evidence": "The legal manifest records this Dawn checkout (source_revisions.dawn) and build/include/dawn/dawn_version.h embeds the same 20-byte commit."
         },
         "builder": {
           "repository": "https://github.com/danielraffel/skia-builder",
-          "commit": "f710b2834eaf37dbf1bd39408f9361d10d85eda2",
-          "evidence": "Pulp's tools/deps/manifest.json records this skia_builder_ref for chrome/m157; the release's mac-universal asset was built by skia-builder run 38756369724 (job 116495939151) at this commit. The commit is not embedded in the asset."
+          "commit": "312f05e24a5d5a45d4a3e70ca70ff3ccff1b4d97",
+          "evidence": "The build-provenance attestation for the archive was signed by build-skia.yml on refs/heads/main at this commit (skia-builder run 40626447857, attempt 1, GitHub-hosted)."
         }
       },
       "headers": {
         "root": "build/include",
-        "file_count": 809,
-        "construction_specific_sha256": "6da97bc5d94a09ac97b6dc36701a70df5942000d78c7f3c75edc06058134c851",
+        "file_count": 811,
+        "construction_specific_sha256": "fb5e47c00c77719a284e2401de12cb0e8489686a0d32c5d2d903208f96407c2b",
         "digest_command": "from build/include: find . -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256 | shasum -a 256",
         "canonical_tree_hash": false
       },
       "archives": [
         {
           "name": "libdawn_combined.a",
-          "sha256": "7f24a7c906a16d61e108ca7475494bf949cf288fa42b2b2c2811bf3d000a3602"
+          "sha256": "6c6c5535e3b004ca260f388536c1baa737c11479d0a95865d174888d7d3077f3"
         },
         {
           "name": "libjsonreader.a",
-          "sha256": "e438aea5afdb82d28a53d0ab15799426e2cadd26c0a08f5a06f71bda06cf0074"
+          "sha256": "5ee1e3e660e19dd3f34458aad6a0b3c1f90815d274c40a709e28a6e933be5927"
         },
         {
           "name": "libskia.a",
-          "sha256": "e6152842da957a8548a9931c8d7aade0475d6dce32c920d6fb2bc7a9eaa856e2"
+          "sha256": "4f5e148866dab6f260a80ee6da006539b8f47885daece28489972726295fde1c"
         },
         {
           "name": "libskottie.a",
-          "sha256": "2761e503a271a6aa0da7422c902f206bfb3e64e53452ac920dc85482ec6162e3"
+          "sha256": "b19184f4a82c401be3fb4e37d552bdf9dafc10940f2a8c04a3195702cbbbc5bc"
         },
         {
           "name": "libskparagraph.a",
-          "sha256": "94ea982e976fa76e4e36dbbd828bb22c45a4884aa1eaa2c4fcc6daae77fe4da8"
+          "sha256": "4144a0a4d1ce6dadd2c53d379bf21a56f59d16922b2eeac3bff4a0c0768abf53"
         },
         {
           "name": "libskresources.a",
-          "sha256": "9c3fb99e43180159bd7f7cd7d252872e9c523c40563b947195f77669698fb7f9"
+          "sha256": "af723156c3896a5d3a51f09f7bcf464795c5cedb2672cf07e646e2ecdba84024"
         },
         {
           "name": "libsksg.a",
-          "sha256": "c73b504a958de55eb11e008bbdcf5a5588558c8cd0c84586b24c42d0185fd2dc"
+          "sha256": "1e927792c47ee2b6c7e80f0e5b6a33894568f5657fd6f7b69e1bb3ea0e1fe067"
         },
         {
           "name": "libskshaper.a",
-          "sha256": "ca7df9d95609d0f11b98d3719b19140e9e98138689729266f992b639eace0fa9"
+          "sha256": "a6a16bedd0bf001f813f03517a919f7c6932128537c60721c1c1be8f151a1e74"
         },
         {
           "name": "libskunicode_core.a",
-          "sha256": "e0e46a61bd45fe1037babbf0607df1f42ec0b5acf1b61f2ec9b78e105ef10314"
+          "sha256": "e3026eedb11a9af0c245e8f3e227f0ce92e383271e3da8b55e87fdefe89f93cb"
         },
         {
           "name": "libskunicode_icu.a",
-          "sha256": "e57859c9e6c238632067b3d6a4cafd014fc86af6fd91250d093da5796c42ea89"
+          "sha256": "ea7352e2ebab5734852924be28ffba61e99db578f4b065a302cbff9dcae484cb"
         },
         {
           "name": "libsvg.a",
-          "sha256": "2609b13b3349cfb1ee738b285a268fcca16e0e6e4f9a5da95995b1f5fe3b6d5b"
+          "sha256": "651c113ade708034b19461016b219a216ef8b2f451e83e60931c9eae1aed594b"
         }
       ],
       "observed_macho": {
@@ -347,16 +334,16 @@
         }
       ],
       "bundled_components_completeness": {
-        "claim": "observed-not-exhaustive",
-        "method": "Skia and Dawn DEPS correlation plus static-archive member names and exported C++ symbol namespaces",
-        "missing_evidence": "builder-emitted exhaustive link graph, SBOM, license manifest, and source-to-object mapping"
+        "claim": "exhaustive",
+        "method": "the builder's content-addressed legal manifest, re-derived against every zip member and every static-archive member and symbol table of the locked archive",
+        "legal_manifest_sha256": "c46884c40b15e870a916b41299c5671d03e87fe0bcbb557203019b3f2d36bd6c"
       },
       "identity_limits": [
-        "The release has no signed provenance or source-to-asset attestation connecting the asset bytes to the builder and Skia commits.",
-        "The exact Skia commit and builder commit are not embedded in the asset; only the Dawn commit is embedded.",
-        "The exact compiler build, C++ standard-library ABI, and linker identity are not recorded by the asset.",
+        "Release eligibility rests on skia-builder's own records: the build-provenance attestation, the legal manifest and the toolchain receipt. No Vellum-side signature is added.",
+        "The exact Skia and builder commits are not embedded in the asset; they are bound through the attested legal manifest and the attestation's source commit. Only the Dawn commit is embedded.",
+        "The legal manifest resolves each file's license to its nearest ancestor license file; it does not adjudicate license compatibility.",
+        "The legal manifest's GN target graph was not captured for this build (gn ls failed); object-to-source mapping comes from the build's dependency files.",
         "The artifact is not claimed reproducible from source.",
-        "The asset contains no upstream license bundle; Vellum's NOTICE is reconstructed from primary-source license files at the locked revisions.",
         "Archive membership proves packaged object code, not that every member is retained by the static linker's dead-code selection in a particular provider or frontend binary."
       ]
     },

@@ -5,14 +5,15 @@ or packaged inside renderer archives that can be statically linked into the
 installed `vellum-gpu` library. Apple system frameworks and developer-supplied
 build tools are not redistributed.
 
-The observed renderer inventory was derived from the exact revisions in
-Skia's and Dawn's primary-source `DEPS` files and checked against the member
-and symbol tables of the byte-locked `chrome/m157` macOS arm64 artifact. The
-artifact itself contains no license bundle, SBOM, build graph, or
-source-to-object map. Inspection positively identifies the components below
-but cannot prove the inventory exhaustive; GPU release eligibility remains
-blocked until the builder emits and attests that evidence. Exact commits,
-archive hashes, evidence, release blockers, and known limits are recorded in
+The renderer inventory comes from the builder's content-addressed legal
+manifest for the byte-locked `chrome/m158` macOS universal artifact. The
+manifest maps every zip member and every object member of every static
+archive to the license files it resolves to, and the verifier re-derives that
+inventory from the archive bytes; the builder's build-provenance attestation
+covers the manifest together with the archive. The license texts below are
+reproduced from the primary-source license files at the locked revisions, the
+same files the manifest resolves the archive's members to. Exact commits, archive
+hashes, the manifest digest and known limits are recorded in
 `provenance/third-party-lock.json`.
 
 Vellum links the byte-locked `libskparagraph.a`, `libskshaper.a`,
@@ -26,9 +27,13 @@ particular `vellum-gpu` binary.
 
 ### Dawn and Tint
 
-Revision: `ada567700e13aecf7989d78b21f7d330b522ea80`
+Revision: `1716e88cc9e58398fab5d4473f7f2e858667b677`
 
-Copyright 2017-2023 The Dawn & Tint Authors
+Dawn's `LICENSE` also carries Apache-2.0 sections for
+`generator/templates/art/*` and `tools/android/webgpu/*`, Android-only sources
+that are not compiled into the macOS archive; they are not reproduced here.
+
+Copyright 2017-2026 The Dawn & Tint Authors
 
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions are met:
@@ -57,7 +62,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ### Skia and skcms
 
-Revision: `b94213a11b3a2edadfae89f0c57a7f4ab72772c9`
+Revision: `be7d7c3e996e567eda7dc9774274f7a0103cdb8c`
 
 Copyright (c) 2011 Google Inc. All rights reserved.
 

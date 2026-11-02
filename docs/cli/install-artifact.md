@@ -137,7 +137,7 @@ esbuild/TypeScript dependencies:
 
 ```sh
 python3 scripts/build_sdk_artifact.py \
-  --skia-archive /tmp/vellum-skia-m157.zip \
+  --skia-archive /tmp/vellum-skia-m158.zip \
   --node-binary "$(command -v node)" \
   --node-license /path/to/node-distribution/LICENSE \
   --node-provenance /path/to/node-provenance.json \
