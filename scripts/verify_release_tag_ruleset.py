@@ -37,6 +37,22 @@ def flatten_pages(payload: Any) -> list[Any]:
     return payload
 
 
+def update_rule_forbids_fetch_and_merge(rule: dict[str, Any]) -> bool:
+    """Whether an `update` rule refuses every update, fetch-and-merge included.
+
+    GitHub stores `update_allows_fetch_and_merge: false` as its default and
+    reads the rule back as a bare `{"type": "update"}`, so a missing
+    `parameters` means false. Present parameters must say exactly that; any
+    other key or value, including one that allows fetch and merge, is refused.
+    """
+    if set(rule) == {"type"}:
+        return rule["type"] == "update"
+    return rule == {
+        "type": "update",
+        "parameters": {"update_allows_fetch_and_merge": False},
+    }
+
+
 def verify(payload: Any, *, repository: str, tag: str) -> dict[str, Any]:
     if REPOSITORY.fullmatch(repository) is None:
         raise TagRulesetError("repository is invalid")
@@ -71,10 +87,7 @@ def verify(payload: Any, *, repository: str, tag: str) -> dict[str, Any]:
             "non_fast_forward"
         ] != {"type": "non_fast_forward"}:
             continue
-        if rule_rows["update"] != {
-            "type": "update",
-            "parameters": {"update_allows_fetch_and_merge": False},
-        }:
+        if not update_rule_forbids_fetch_and_merge(rule_rows["update"]):
             continue
         if (
             not isinstance(row.get("id"), int)
