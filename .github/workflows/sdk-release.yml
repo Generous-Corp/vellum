@@ -666,29 +666,34 @@ jobs:
             "release-tag-protection.json=$RUNNER_TEMP/release-tag-protection.json"
           )
           verify_release_guard
-          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
-              > "$RUNNER_TEMP/release.json" 2>/dev/null; then
-            :
-          else
-            verify_release_guard
-            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-              --verify-tag --draft --title "$RELEASE_NAME" --notes-file "$notes"
-            gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
-              > "$RUNNER_TEMP/release.json"
-          fi
-          gh api --paginate --slurp \
-            "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
-            > "$RUNNER_TEMP/releases.json"
           select_args=()
           for asset in "${allowed[@]}"; do
             select_args+=(--allowed-asset "${asset%%=*}")
           done
           select_args+=(--allowed-asset release-assets-verification.json)
-          python3 scripts/select_release.py \
-            --releases-json "$RUNNER_TEMP/releases.json" \
-            --tag "$RELEASE_TAG" --expected-name "$RELEASE_NAME" \
-            --expected-body-file "$notes" "${select_args[@]}" \
-            --output "$RUNNER_TEMP/release.json"
+          # Releases are found through the list endpoint only: the by-tag
+          # endpoint returns 404 for a draft, so it can neither confirm a
+          # draft just created nor detect one left by an interrupted run.
+          select_existing_release() {
+            gh api --paginate --slurp \
+              "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              > "$RUNNER_TEMP/releases.json" || return 1
+            python3 scripts/select_release.py \
+              --releases-json "$RUNNER_TEMP/releases.json" \
+              --tag "$RELEASE_TAG" --expected-name "$RELEASE_NAME" \
+              --expected-body-file "$notes" "${select_args[@]}" \
+              --output "$RUNNER_TEMP/release.json"
+          }
+          select_status=0
+          select_existing_release || select_status=$?
+          if [ "$select_status" -eq 4 ]; then
+            verify_release_guard
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --verify-tag --draft --title "$RELEASE_NAME" --notes-file "$notes"
+            select_existing_release
+          elif [ "$select_status" -ne 0 ]; then
+            exit "$select_status"
+          fi
           release_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "$RUNNER_TEMP/release.json")"
           replace_asset() {
             local name="$1" path="$2" existing_id
