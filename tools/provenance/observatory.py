@@ -765,12 +765,13 @@ def imported_mirror_history(
         # no root of its own. Its commits carry no observatory cursor; only
         # then is the receipt verification worth running.
         commits = git(root, "rev-list", f"{start}..{target}").split()
-        if all(has_cursor(root, commit) for commit in commits):
+        cursorless = [commit for commit in commits if not has_cursor(root, commit)]
+        if not cursorless:
             return set()
         imported, errors = imported_mirror_commits(root, start, target, pulp_repo)
-        if errors:
-            # Commits without the cursor can only be an approved import, and
-            # nothing is approved: refuse rather than walk them as ordinary
+        if errors and any(mirror_only_tree(root, commit)[0] for commit in cursorless):
+            # A mirror-only commit can enter only as an approved import, and
+            # nothing was approved: refuse rather than walk it as ordinary
             # history.
             raise ObservatoryError(
                 f"{start}..{target} has commits without the observatory cursor "
