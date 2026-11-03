@@ -35,6 +35,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import unicodedata
 from typing import Any
 
 SCHEMA = "vellum.illustrator-svg-provenance.v1"
@@ -85,14 +86,37 @@ def _writable_destination(path: Path, label: str) -> Path:
     return path.resolve()
 
 
+def _folded_name(path: Path) -> str:
+    """A file name as a case- and normalization-insensitive volume compares it.
+
+    APFS and HFS+ treat NFC and NFD spellings of a name as one file, and fold
+    case, so the name is decomposed, case-folded, and decomposed again (folding
+    can produce characters that decompose further).
+    """
+    decomposed = unicodedata.normalize("NFD", path.name)
+    return unicodedata.normalize("NFD", decomposed.casefold())
+
+
+def _move_into_place(temporary: Path, destination: Path, label: str) -> None:
+    """Replace ``destination`` with ``temporary``, as a user-facing error on failure.
+
+    The destination was checked earlier, but it can change before the move (for
+    example, become a directory); that is reported, not raised as a traceback.
+    """
+    try:
+        os.replace(temporary, destination)
+    except OSError as exc:
+        raise ConversionError(f"cannot move the {label} into place at {destination}: {exc}") from exc
+
+
 def _same_file(a: Path, b: Path) -> bool:
     """Whether two paths name one file, including on a case-insensitive volume.
 
     Resolved strings are not enough: macOS ``resolve()`` keeps the caller's
     case, so ``ART.PDF`` and ``art.pdf`` differ as strings while naming one
     file. Existing files are compared by identity. A destination that does not
-    exist yet is treated as the same file when its name matches
-    case-insensitively in the same directory, which is conservative on a
+    exist yet is treated as the same file when its name matches, ignoring case
+    and Unicode normalization, in the same directory, which is conservative on a
     case-sensitive volume.
     """
     if a == b:
@@ -102,7 +126,7 @@ def _same_file(a: Path, b: Path) -> bool:
             return True
     except OSError:
         pass
-    if a.name.casefold() != b.name.casefold():
+    if _folded_name(a) != _folded_name(b):
         return False
     if a.parent == b.parent:
         return True
@@ -228,7 +252,7 @@ def convert(
     source_hash = sha256_file(source)
     source_bytes = source.stat().st_size
 
-    # The converter writes into a fresh 0700 directory, so no other process can
+    # The converter writes into a fresh 0700 directory, so no other user can
     # plant or swap the file it writes before it is moved into place.
     workdir = Path(tempfile.mkdtemp(prefix=f".{output.stem}.", dir=str(output.parent)))
     temporary = workdir / "converted.svg"
@@ -262,7 +286,7 @@ def convert(
             raise ConversionError("pdftocairo produced no SVG output")
         if not looks_like_svg(temporary):
             raise ConversionError("pdftocairo output does not look like an SVG")
-        os.replace(temporary, output)
+        _move_into_place(temporary, output, "SVG")
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
@@ -296,7 +320,7 @@ def convert(
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
             stream.write(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
-        os.replace(temporary_receipt, receipt_path)
+        _move_into_place(temporary_receipt, receipt_path, "receipt")
     finally:
         _remove_if_present(temporary_receipt)
     return receipt
