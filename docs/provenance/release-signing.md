@@ -129,3 +129,19 @@ promotion attestation and prove full-matrix parity.
 
 Owner authorization (owner decisions in the planning repository), release signing (this key) and ordinary commit
 signing (each host's own key) are three separate keys.
+
+## Rehearse before you request
+
+A release cannot be undone: the tag, its immutable release and its frozen inputs are final, so a downstream failure
+loses the version. Before changing anything on the release path, or asking for a release, replay the tag's own
+pipeline against the exact commit using the checked-in entry points from `.github/workflows/release-tag.yml`
+(`scripts/release_request.py` for `select`, `pending` and `check`, plus
+`scripts/verify_immutable_release_preflight.py`) and `.github/workflows/sdk-release.yml`
+(`scripts/verify_release_assets.py`). Dispatch the checked-in `.github/workflows/provenance.yml` and
+`.github/workflows/gpu-macos.yml` at that ref, and let the successful tag run invoke `.github/workflows/sdk-release.yml`,
+using the real artifacts where they exist. Include tags that must fail (`v0.1.8`, `v0.1.9`) and one that published
+(`v0.1.6`), so the replay is shown able to fail.
+
+When you verify the repository's rules, read them back (`GET /repos/Generous-Corp/vellum/rulesets/<id>`); GitHub
+stores rules differently than they were posted (an `update` rule comes back without its parameters), so a POST
+payload is not evidence. `gh attestation verify --bundle` accepts only files named `*.json` or `*.jsonl`.
