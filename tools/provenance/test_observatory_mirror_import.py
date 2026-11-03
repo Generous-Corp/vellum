@@ -52,7 +52,7 @@ class MirrorImportCase(unittest.TestCase):
 
 class ObservatoryMirrorImportTests(MirrorImportCase):
     def verify(self, fixture: Fixture) -> None:
-        observatory.verify_append_only(fixture.vellum, fixture.base_sha)
+        observatory.verify_append_only(fixture.vellum, fixture.base_sha, pulp_repo=fixture.pulp)
 
     def assertRejected(self, fixture: Fixture, fragment: str) -> None:
         with self.assertRaises(observatory.ObservatoryError) as caught:
@@ -145,6 +145,55 @@ class ObservatoryMirrorImportTests(MirrorImportCase):
         self.assertEqual(fixture.errors(), [])
         self.assertRejected(fixture, "outside the imported history")
 
+    def test_an_import_is_not_approved_without_pulp(self) -> None:
+        fixture = self.fixture()
+        with self.assertRaises(observatory.ObservatoryError) as caught:
+            observatory.verify_append_only(fixture.vellum, fixture.base_sha)
+        self.assertIn("Pulp identity cannot be proved without the Pulp repository", str(caught.exception))
+
+    def test_an_import_whose_receipt_disagrees_with_pulp_is_rejected(self) -> None:
+        fixture = self.fixture()
+        # The receipt still verifies on its own; only Pulp itself refutes it.
+        self.assertEqual(fixture.errors(), [])
+        run(fixture.pulp, "update-ref", "-d", "refs/remotes/origin/main")
+        self.assertNotEqual(fixture.errors(pulp=True), [])
+        with self.assertRaises(observatory.ObservatoryError) as caught:
+            self.verify(fixture)
+        self.assertIn("refs/remotes/origin/main", str(caught.exception))
+
+    def test_mirror_that_is_not_a_directory_is_rejected(self) -> None:
+        for mode, kind in (("120000", "blob"), ("160000", "commit")):
+            with self.subTest(mode=mode):
+                def mirror_entry(fixture: Fixture, mode: str = mode, kind: str = kind) -> None:
+                    # A side commit whose `mirror` is a symlink or a gitlink
+                    # has the one name a name-only check looks for.
+                    if kind == "blob":
+                        target = subprocess.run(
+                            ["git", "hash-object", "-w", "--stdin"], cwd=fixture.vellum,
+                            input=b"../elsewhere", capture_output=True, check=True,
+                        ).stdout.decode().strip()
+                    else:
+                        target = fixture.base_sha
+                    tree = subprocess.run(
+                        ["git", "mktree"], cwd=fixture.vellum,
+                        input=f"{mode} {kind} {target}\tmirror\n".encode(),
+                        capture_output=True, check=True,
+                    ).stdout.decode().strip()
+                    odd = run(fixture.vellum, "commit-tree", tree, "-p", fixture.mirror_sha, "-m", "odd mirror")
+                    tip = run(fixture.vellum, "commit-tree", f"{fixture.mirror_sha}^{{tree}}", "-p", odd, "-m", "tip")
+                    fixture.mirror_sha = tip
+                    self.rebuild_join(fixture, fixture.base_sha, tip)
+
+                fixture = self.fixture(after_join=mirror_entry)
+                original = observatory.approved_mirror_shas
+                observatory.approved_mirror_shas = lambda root, pulp_repo, tip=fixture.mirror_sha: ({tip}, [])
+                try:
+                    self.assertRejected(fixture, "holds paths other than mirror/")
+                finally:
+                    observatory.approved_mirror_shas = original
+                self.tearDown()
+                self.setUp()
+
     def test_uncommitted_receipts_cannot_approve_an_import(self) -> None:
         fixture = self.fixture()
         write(fixture.vellum, "provenance/mirror/receipts/index.json", dump({
@@ -192,18 +241,72 @@ class ReExportMirrorImportTests(MirrorImportCase):
     def join(self, tip: str) -> None:
         run(self.vellum, "merge", "-q", "--no-edit", "-s", "ours", "--allow-unrelated-histories", tip)
 
-    def verify(self, approved: set[str]) -> None:
+    def approve(self, approved: set[str]) -> None:
         original = observatory.approved_mirror_shas
-        observatory.approved_mirror_shas = lambda root: (approved, [])
-        try:
-            observatory.verify_append_only(self.vellum, self.landed)
-        finally:
-            observatory.approved_mirror_shas = original
+        observatory.approved_mirror_shas = lambda root, pulp_repo: (approved, [])
+        self.addCleanup(setattr, observatory, "approved_mirror_shas", original)
+
+    def verify(self, approved: set[str]) -> None:
+        self.approve(approved)
+        observatory.verify_append_only(self.vellum, self.landed, pulp_repo=self.fixture_.pulp)
 
     def test_re_export_continuing_the_landed_import_passes(self) -> None:
         second = self.mirror_commit(self.first_tip, "second")
         self.join(second)
         self.verify({self.first_tip, second})
+
+    def test_tail_names_a_re_export_that_brings_no_root(self) -> None:
+        # The no-root branch of imported_mirror_history: a continuing
+        # re-export brings no root commit, yet its commits lack the cursor,
+        # so the import check must still run and name exactly the new commit.
+        second = self.mirror_commit(self.first_tip, "second")
+        self.join(second)
+        self.approve({self.first_tip, second})
+        head = run(self.vellum, "rev-parse", "HEAD")
+        self.assertEqual(run(self.vellum, "rev-list", "--max-parents=0", f"{self.landed}..{head}"), "")
+        self.assertEqual(
+            observatory.imported_mirror_history(self.vellum, self.landed, head, self.fixture_.pulp),
+            {second},
+        )
+
+    def test_mainline_commit_in_the_approved_set_is_not_a_landed_import(self) -> None:
+        # Even if a mainline commit were approved, a parent outside the new
+        # import must itself be a mirror-only commit to count as landed.
+        mainline = run(self.vellum, "rev-parse", f"{self.landed}^1")
+        second = self.mirror_commit(mainline, "second")
+        self.join(second)
+        with self.assertRaisesRegex(observatory.ObservatoryError, "outside the imported history"):
+            self.verify({self.first_tip, mainline, second})
+
+    def test_approved_tip_outside_the_base_is_not_a_landed_import(self) -> None:
+        # A stray mirror commit in the base that no landed receipt names,
+        # and an approved tip that descends from it but never landed (it is
+        # in no history of this range): the stray commit is still refused.
+        stray = self.mirror_commit(self.first_tip, "stray")
+        self.join(stray)
+        self.landed = run(self.vellum, "rev-parse", "HEAD")
+        dangling = self.mirror_commit(stray, "dangling")
+        second = self.mirror_commit(stray, "second")
+        self.join(second)
+        with self.assertRaisesRegex(observatory.ObservatoryError, "outside the imported history"):
+            self.verify({self.first_tip, dangling, second})
+
+    def test_landed_parent_whose_mirror_is_not_a_directory_is_rejected(self) -> None:
+        blob = subprocess.run(
+            ["git", "hash-object", "-w", "--stdin"], cwd=self.vellum, input=b"../elsewhere",
+            capture_output=True, check=True).stdout.decode().strip()
+        tree = subprocess.run(
+            ["git", "mktree"], cwd=self.vellum, input=f"120000 blob {blob}\tmirror\n".encode(),
+            capture_output=True, check=True).stdout.decode().strip()
+        # The symlink commit sits in the first import's approved, landed history.
+        link = run(self.vellum, "commit-tree", tree, "-p", self.first_tip, "-m", "link")
+        landed_tip = self.mirror_commit(link, "landed")
+        self.join(landed_tip)
+        self.landed = run(self.vellum, "rev-parse", "HEAD")
+        second = self.mirror_commit(link, "second")
+        self.join(second)
+        with self.assertRaisesRegex(observatory.ObservatoryError, "outside the imported history"):
+            self.verify({self.first_tip, landed_tip, second})
 
     def test_re_export_on_a_mainline_commit_is_rejected(self) -> None:
         second = self.mirror_commit(self.landed, "second")
@@ -238,7 +341,11 @@ class CoverageTailMirrorImportTests(MirrorImportCase):
 
     def gaps(self, fixture: Fixture, vellum_path: str = "graphics/") -> list[dict[str, str]]:
         cursor = {
-            "pulp": {"repository": "Generous-Corp/pulp"},
+            "pulp": {
+                "repository": "Generous-Corp/pulp",
+                "scan_base_commit": fixture.pulp_sha,
+                "last_scanned_commit": fixture.pulp_sha,
+            },
             "vellum": {
                 "repository": "Generous-Corp/vellum",
                 "scan_base_commit": fixture.base_sha,
@@ -247,7 +354,7 @@ class CoverageTailMirrorImportTests(MirrorImportCase):
         }
         gaps = observatory.coverage_gaps(
             root=fixture.vellum, mapping=mapping_for(vellum_path), cursor=cursor, events=[],
-            pulp_repo=None, vellum_repo=fixture.vellum,
+            pulp_repo=fixture.pulp, vellum_repo=fixture.vellum,
             vellum_target=run(fixture.vellum, "rev-parse", "HEAD"),
             vellum_tail_policy="coverage",
         )
