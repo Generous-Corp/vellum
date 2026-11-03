@@ -17,6 +17,7 @@ import stat
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -42,6 +43,13 @@ if log:
 if "-svg" not in sys.argv:
     raise SystemExit(9)
 out = pathlib.Path(sys.argv[-1])
+probe = os.environ.get("FAKE_PROBE_LOG")
+if probe:
+    pathlib.Path(probe).write_text(json.dumps({
+        "existed": out.exists(),
+        "parent": str(out.parent),
+        "parent_mode": out.parent.stat().st_mode & 0o777,
+    }), encoding="utf-8")
 if mode == "fail":
     print("Syntax Error: broken xref", file=sys.stderr)
     raise SystemExit(3)
@@ -71,7 +79,7 @@ class IllustratorToSvgTests(unittest.TestCase):
         self.tool.chmod(self.tool.stat().st_mode | stat.S_IXUSR)
         self.argv_log = self.root / "argv.json"
         self.saved_env = {
-            key: os.environ.get(key) for key in (CONVERTER_ENV, "FAKE_MODE", "FAKE_ARGV_LOG")
+            key: os.environ.get(key) for key in (CONVERTER_ENV, "FAKE_MODE", "FAKE_ARGV_LOG", "FAKE_PROBE_LOG")
         }
         os.environ[CONVERTER_ENV] = str(self.tool)
         os.environ["FAKE_ARGV_LOG"] = str(self.argv_log)
@@ -114,7 +122,7 @@ class IllustratorToSvgTests(unittest.TestCase):
         self.assertEqual(argv[5], str(self.source))
         # The converter writes a private temporary that is then moved into place.
         self.assertNotEqual(argv[6], str(output))
-        self.assertEqual(Path(argv[6]).parent, output.parent)
+        self.assertEqual(Path(argv[6]).parent.parent, output.parent)
 
     def test_default_paths_are_beside_the_source(self) -> None:
         receipt = convert(self.source)
@@ -247,6 +255,73 @@ class IllustratorToSvgTests(unittest.TestCase):
         self.assertTrue(adapter.looks_like_svg(probe))
         probe.write_bytes(b"<svg>" + b" " * (2 * adapter.SVG_PROBE_BYTES) + b"</svg>")
         self.assertTrue(adapter.looks_like_svg(probe))
+
+    def test_case_variant_output_does_not_overwrite_the_source(self) -> None:
+        source = self.root / "art.pdf"
+        source.write_bytes(b"%PDF-1.4\n")
+        with self.assertRaisesRegex(ConversionError, "output must not overwrite the source"):
+            convert(source, self.root / "ART.PDF")
+        self.assertEqual(source.read_bytes(), b"%PDF-1.4\n")
+
+    def test_case_variant_receipt_does_not_overwrite_the_source(self) -> None:
+        before = self.source.read_bytes()
+        with self.assertRaisesRegex(ConversionError, "receipt must not overwrite"):
+            convert(self.source, self.root / "p.svg", self.root / "Panel.Ai")
+        self.assertEqual(self.source.read_bytes(), before)
+        self.assertFalse((self.root / "p.svg").exists())
+
+    def test_case_variant_receipt_does_not_overwrite_the_output(self) -> None:
+        with self.assertRaisesRegex(ConversionError, "receipt must not overwrite"):
+            convert(self.source, self.root / "panel.svg", self.root / "PANEL.svg")
+        self.assertFalse((self.root / "panel.svg").exists())
+
+    def test_case_variant_directory_is_compared_by_identity(self) -> None:
+        (self.root / "out").mkdir()
+        if not (self.root / "OUT").exists():
+            self.skipTest("this volume is case-sensitive, so OUT is a different directory")
+        with self.assertRaisesRegex(ConversionError, "receipt must not overwrite"):
+            convert(self.source, self.root / "out" / "panel.svg", self.root / "OUT" / "Panel.SVG")
+
+    def test_converter_writes_into_a_fresh_private_directory(self) -> None:
+        probe = self.root / "probe.json"
+        os.environ["FAKE_PROBE_LOG"] = str(probe)
+        self.addCleanup(os.environ.pop, "FAKE_PROBE_LOG", None)
+        output = self.root / "out" / "panel.svg"
+        convert(self.source, output)
+        seen = json.loads(probe.read_text(encoding="utf-8"))
+        self.assertFalse(seen["existed"])
+        self.assertEqual(seen["parent_mode"], 0o700)
+        workdir = Path(seen["parent"])
+        self.assertTrue(os.path.samefile(workdir.parent, output.parent))
+        self.assertFalse(workdir.exists())
+
+    def test_receipt_is_written_through_the_mkstemp_descriptor(self) -> None:
+        with mock.patch.object(Path, "write_text", side_effect=AssertionError("path write")):
+            receipt = convert(self.source)
+        self.assertEqual(receipt["schema"], SCHEMA)
+
+    def test_symlinked_default_receipt_is_rejected(self) -> None:
+        victim = self.root / "victim.json"
+        victim.write_text("keep", encoding="utf-8")
+        (self.root / "panel.svg.provenance.json").symlink_to(victim)
+        with self.assertRaisesRegex(ConversionError, "receipt must not be a symlink"):
+            convert(self.source)
+        self.assertEqual(victim.read_text(encoding="utf-8"), "keep")
+
+    def test_preplanted_fixed_receipt_temporary_is_not_followed(self) -> None:
+        victim = self.root / "victim.json"
+        victim.write_text("keep", encoding="utf-8")
+        receipt_path = self.root / "panel.receipt.json"
+        (self.root / ".panel.receipt.json.tmp").symlink_to(victim)
+        convert(self.source, self.root / "panel.svg", receipt_path)
+        self.assertEqual(victim.read_text(encoding="utf-8"), "keep")
+        self.assertEqual(json.loads(receipt_path.read_text(encoding="utf-8"))["schema"], SCHEMA)
+
+    def test_receipt_may_not_overwrite_the_source(self) -> None:
+        before = self.source.read_bytes()
+        with self.assertRaisesRegex(ConversionError, "receipt must not overwrite"):
+            convert(self.source, self.root / "panel.svg", self.source)
+        self.assertEqual(self.source.read_bytes(), before)
 
     def test_cli_reports_errors_with_exit_2(self) -> None:
         stderr = io.StringIO()

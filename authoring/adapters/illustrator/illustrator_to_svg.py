@@ -13,8 +13,11 @@ The boundary fails closed:
 - only ``.ai`` and ``.pdf`` sources are accepted;
 - the source, the output and the receipt must not be symlinks, and the output
   must not be the source;
-- the SVG and the receipt are written to private temporary files in their
-  destination directories and moved into place only when complete;
+- the converter writes into a fresh 0700 directory and the receipt is written
+  through its mkstemp descriptor; both are moved into place only when complete;
+- the output and the receipt may not name the source or each other, compared
+  by file identity and case-insensitively, since a case-insensitive volume maps
+  ART.PDF and art.pdf to one file;
 - a missing converter, a non-zero exit, a timeout or an output that does not
   look like SVG is an error.
 """
@@ -82,6 +85,33 @@ def _writable_destination(path: Path, label: str) -> Path:
     return path.resolve()
 
 
+def _same_file(a: Path, b: Path) -> bool:
+    """Whether two paths name one file, including on a case-insensitive volume.
+
+    Resolved strings are not enough: macOS ``resolve()`` keeps the caller's
+    case, so ``ART.PDF`` and ``art.pdf`` differ as strings while naming one
+    file. Existing files are compared by identity. A destination that does not
+    exist yet is treated as the same file when its name matches
+    case-insensitively in the same directory, which is conservative on a
+    case-sensitive volume.
+    """
+    if a == b:
+        return True
+    try:
+        if os.path.samefile(a, b):
+            return True
+    except OSError:
+        pass
+    if a.name.casefold() != b.name.casefold():
+        return False
+    if a.parent == b.parent:
+        return True
+    try:
+        return os.path.samefile(a.parent, b.parent)
+    except OSError:
+        return False
+
+
 def find_converter() -> Path:
     """Return the converter executable, honouring ``VELLUM_PDF_TO_SVG``."""
     override = os.environ.get(CONVERTER_ENV)
@@ -142,12 +172,6 @@ def looks_like_svg(path: Path) -> bool:
     return b"<svg" in head and b"</svg" in tail
 
 
-def _private_temporary(directory: Path, stem: str, suffix: str) -> Path:
-    fd, name = tempfile.mkstemp(prefix=f".{stem}.", suffix=suffix, dir=str(directory))
-    os.close(fd)
-    return Path(name)
-
-
 def _remove_if_present(path: Path) -> None:
     try:
         path.unlink()
@@ -186,7 +210,8 @@ def convert(
         source.with_suffix(".svg") if output is None else Path(output).expanduser(),
         "output",
     )
-    if output == source:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    if _same_file(output, source):
         raise ConversionError(f"output must not overwrite the source: {output}")
     receipt_path = _writable_destination(
         Path(str(output) + ".provenance.json")
@@ -194,7 +219,8 @@ def convert(
         else Path(receipt_path).expanduser(),
         "receipt",
     )
-    if receipt_path in (source, output):
+    receipt_path.parent.mkdir(parents=True, exist_ok=True)
+    if _same_file(receipt_path, source) or _same_file(receipt_path, output):
         raise ConversionError(f"receipt must not overwrite the source or output: {receipt_path}")
 
     tool = find_converter()
@@ -202,8 +228,10 @@ def convert(
     source_hash = sha256_file(source)
     source_bytes = source.stat().st_size
 
-    output.parent.mkdir(parents=True, exist_ok=True)
-    temporary = _private_temporary(output.parent, output.stem, ".svg")
+    # The converter writes into a fresh 0700 directory, so no other process can
+    # plant or swap the file it writes before it is moved into place.
+    workdir = Path(tempfile.mkdtemp(prefix=f".{output.stem}.", dir=str(output.parent)))
+    temporary = workdir / "converted.svg"
     try:
         # One page only. For SVG, pdftocairo writes exactly the named output
         # when the page range is a single page; -singlefile applies only to
@@ -236,7 +264,7 @@ def convert(
             raise ConversionError("pdftocairo output does not look like an SVG")
         os.replace(temporary, output)
     finally:
-        _remove_if_present(temporary)
+        shutil.rmtree(workdir, ignore_errors=True)
 
     receipt: dict[str, Any] = {
         "schema": SCHEMA,
@@ -260,12 +288,14 @@ def convert(
         },
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
     }
-    receipt_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_receipt = _private_temporary(receipt_path.parent, receipt_path.name, ".tmp")
+    # Write through the descriptor mkstemp returns, so the bytes land in the file it
+    # created and not in whatever a path lookup finds later.
+    fd, temporary_name = tempfile.mkstemp(
+        prefix=f".{receipt_path.name}.", suffix=".tmp", dir=str(receipt_path.parent))
+    temporary_receipt = Path(temporary_name)
     try:
-        temporary_receipt.write_text(
-            json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
         os.replace(temporary_receipt, receipt_path)
     finally:
         _remove_if_present(temporary_receipt)
