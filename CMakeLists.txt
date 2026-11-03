@@ -288,6 +288,10 @@ if(VELLUM_BUILD_TESTS)
         COMMAND "${Python3_EXECUTABLE}"
             authoring/tests/test_phase3_contracts.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.authoring-illustrator-to-svg
+        COMMAND "${Python3_EXECUTABLE}"
+            authoring/adapters/illustrator/test_illustrator_to_svg.py
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME vellum.parity-packaging-unit
         COMMAND "${Python3_EXECUTABLE}"
             tools/parity/packaging/test_packaging_lane.py
