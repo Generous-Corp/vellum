@@ -18,7 +18,7 @@
       "original_repository": "Generous-Corp/vellum",
       "tag_object": "a3ce268d0770e1fb3b34130cd0eed4471ea1ce5d",
       "target_commit": "5f847399829f2d55cd0f540019ee591bd78d8fb5",
-      "reason": "Tagged and frozen by release-tag.yml on the commit that landed the v0.1.9 release request (#137's merge), but never published: its provenance run (41368275724) failed the reconciled observatory tail check, because a commit that lands a release request can never name itself as the observatory cursor, and every input to a re-run is fixed by the frozen tag. The tag stays in place and frozen; no release is published from it, and the name is never reused. The same content ships as v0.1.10 from an observatory-reconciled commit (owner decision 2026-11-02)."
+      "reason": "Tagged and frozen by release-tag.yml on the commit that landed the v0.1.9 release request (#137's merge), but never published: its provenance run (41368275724) failed the reconciled observatory tail check, because a commit that lands a release request can never name itself as the observatory cursor, and every input to a re-run is fixed by the frozen tag. The tag stays in place and frozen; no release is published from it, and the name is never reused. v0.1.10 is the next release: the combined Phase 4 + M1 release from the m158 re-export, tagged on an observatory-reconciled commit (owner decisions 2026-11-02)."
     }
   ]
 }
