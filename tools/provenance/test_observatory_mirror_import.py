@@ -153,13 +153,15 @@ class ObservatoryMirrorImportTests(MirrorImportCase):
 
     def test_an_import_whose_receipt_disagrees_with_pulp_is_rejected(self) -> None:
         fixture = self.fixture()
-        # The receipt still verifies on its own; only Pulp itself refutes it.
+        # The receipt still verifies on its own; only Pulp itself refutes it:
+        # Pulp main is a history that never contained the receipt's pulp_sha.
         self.assertEqual(fixture.errors(), [])
-        run(fixture.pulp, "update-ref", "-d", "refs/remotes/origin/main")
-        self.assertNotEqual(fixture.errors(pulp=True), [])
+        self.assertEqual(fixture.errors(pulp=True), [])
+        other = run(fixture.pulp, "commit-tree", "4b825dc642cb6eb9a060e54bf8d69288fbee4904", "-m", "other main")
+        run(fixture.pulp, "update-ref", "refs/remotes/origin/main", other)
         with self.assertRaises(observatory.ObservatoryError) as caught:
             self.verify(fixture)
-        self.assertIn("refs/remotes/origin/main", str(caught.exception))
+        self.assertIn(f"Pulp commit {fixture.pulp_sha} is not reachable from Pulp main", str(caught.exception))
 
     def test_mirror_that_is_not_a_directory_is_rejected(self) -> None:
         for mode, kind in (("120000", "blob"), ("160000", "commit")):
@@ -268,6 +270,19 @@ class ReExportMirrorImportTests(MirrorImportCase):
             observatory.imported_mirror_history(self.vellum, self.landed, head, self.fixture_.pulp),
             {second},
         )
+
+    def test_tail_refuses_a_re_export_when_verification_fails(self) -> None:
+        # With no root of its own, a re-export's cursor-less commits must not
+        # fall back to ordinary history when nothing could be approved.
+        second = self.mirror_commit(self.first_tip, "second")
+        self.join(second)
+        head = run(self.vellum, "rev-parse", "HEAD")
+        original = observatory.approved_mirror_shas
+        observatory.approved_mirror_shas = lambda root, pulp_repo: (set(), ["Pulp refutes the receipt"])
+        self.addCleanup(setattr, observatory, "approved_mirror_shas", original)
+        with self.assertRaisesRegex(observatory.ObservatoryError,
+                                    "mirror-export verification failed: Pulp refutes the receipt"):
+            observatory.imported_mirror_history(self.vellum, self.landed, head, self.fixture_.pulp)
 
     def test_mainline_commit_in_the_approved_set_is_not_a_landed_import(self) -> None:
         # Even if a mainline commit were approved, a parent outside the new

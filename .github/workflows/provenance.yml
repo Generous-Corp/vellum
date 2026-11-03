@@ -565,8 +565,9 @@ jobs:
             # after it, so the checkout is first brought to the live main read
             # here, exactly that commit, and the window left is the judgment
             # itself. If main or an open pull request moves inside it, the whole
-            # read is retried after a bounded wait; nothing is judged twice
-            # against different evidence, and a judgment that fails is final.
+            # read is retried after a bounded wait: each attempt collects fresh
+            # evidence and judges it against one main, and only an attempt
+            # whose reads held still counts. A judgment that fails is final.
             bind_exact_boundary_pulp_to_live_main() {
               local checked_out
               checked_out="$(git -C .exact-boundary-pulp rev-parse HEAD)"
@@ -590,7 +591,13 @@ jobs:
               moved=""
               collect_open_pr_snapshot "$RUNNER_TEMP/open-pr-snapshot-input-$live_attempt"
               write_live_open_pr_cursor "$RUNNER_TEMP/open-pr-cursor-before.json"
-              if ! cmp "$RUNNER_TEMP/open-pr-cursor.json" "$RUNNER_TEMP/open-pr-cursor-before.json"; then
+              cursor_differs=0
+              cmp "$RUNNER_TEMP/open-pr-cursor.json" "$RUNNER_TEMP/open-pr-cursor-before.json" || cursor_differs=$?
+              if [[ "$cursor_differs" -gt 1 ]]; then
+                echo "::error::cannot compare the open-PR cursors"
+                exit 1
+              fi
+              if [[ "$cursor_differs" == 1 ]]; then
                 moved="the open PRs changed while their snapshot was collected"
               else
                 bind_exact_boundary_pulp_to_live_main
@@ -600,7 +607,13 @@ jobs:
                   moved="Pulp main moved from $live_pulp_main (judged) to $after_pulp_main (live) while the authority evidence was judged"
                 else
                   write_live_open_pr_cursor "$RUNNER_TEMP/open-pr-cursor-after.json"
-                  if ! cmp "$RUNNER_TEMP/open-pr-cursor.json" "$RUNNER_TEMP/open-pr-cursor-after.json"; then
+                  cursor_differs=0
+                  cmp "$RUNNER_TEMP/open-pr-cursor.json" "$RUNNER_TEMP/open-pr-cursor-after.json" || cursor_differs=$?
+                  if [[ "$cursor_differs" -gt 1 ]]; then
+                    echo "::error::cannot compare the open-PR cursors"
+                    exit 1
+                  fi
+                  if [[ "$cursor_differs" == 1 ]]; then
                     moved="the open PRs changed while the authority evidence was judged"
                   fi
                 fi

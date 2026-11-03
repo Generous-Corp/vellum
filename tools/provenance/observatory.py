@@ -432,7 +432,11 @@ def coverage_gaps(
                         verify_vellum_observatory_tail(repo, target, requested_target)
                     except ObservatoryError:
                         require_event_coverage = True
-            imported = imported_mirror_history(repo, tail_start, requested_target, pulp_repo)
+            # Only Vellum imports Pulp's mirror history; a Pulp range has none.
+            imported = (
+                imported_mirror_history(repo, tail_start, requested_target, pulp_repo)
+                if source == "vellum" else set()
+            )
             for commit in commits_between(repo, tail_start, requested_target):
                 if commit in imported:
                     # Imported Pulp mirror history is not Vellum-authored; its
@@ -763,7 +767,16 @@ def imported_mirror_history(
         commits = git(root, "rev-list", f"{start}..{target}").split()
         if all(has_cursor(root, commit) for commit in commits):
             return set()
-        imported, _errors = imported_mirror_commits(root, start, target, pulp_repo)
+        imported, errors = imported_mirror_commits(root, start, target, pulp_repo)
+        if errors:
+            # Commits without the cursor can only be an approved import, and
+            # nothing is approved: refuse rather than walk them as ordinary
+            # history.
+            raise ObservatoryError(
+                f"{start}..{target} has commits without the observatory cursor "
+                f"and no approved imported mirror history; mirror-export "
+                f"verification failed: {'; '.join(errors)}"
+            )
         return imported
     imported, errors = imported_mirror_commits(root, start, target, pulp_repo)
     unexplained = [commit for commit in roots if commit not in imported]
