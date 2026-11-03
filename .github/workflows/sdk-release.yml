@@ -459,9 +459,28 @@ jobs:
           cmp "$RUNNER_TEMP/trusted/install.sh" "$RUNNER_TEMP/gpu/install.sh"
           cmp "$RUNNER_TEMP/trusted/install_core.py" \
             "$RUNNER_TEMP/gpu/install_core.py"
+          # The published SHA256SUMS covers every installable asset: the archive
+          # and both installer files, one `shasum -a 256` line each, ordered by
+          # `LC_ALL=C sort` exactly as gpu-macos.yml writes it. Every digest is
+          # taken here from the bytes this job publishes and bound to a trusted
+          # input: the installers to the tagged commit, the archive to the digest
+          # the validation job verified and installed. The source run's file is
+          # then compared, never trusted.
           archive_sha="$(shasum -a 256 "$RUNNER_TEMP/gpu/$RELEASE_ARCHIVE" | awk '{print $1}')"
-          printf '%s  %s\n' "$archive_sha" "$RELEASE_ARCHIVE" \
-            > "$RUNNER_TEMP/trusted/SHA256SUMS"
+          verified_sha="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' \
+            "$RUNNER_TEMP/trusted/trusted-sdk-verification.json")"
+          installed_sha="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["artifact_sha256"])' \
+            "$RUNNER_TEMP/trusted/trusted-sdk-installed-validation.json")"
+          [[ "$archive_sha" =~ ^[0-9a-f]{64}$ ]]
+          test "$archive_sha" = "$verified_sha"
+          test "$archive_sha" = "$installed_sha"
+          install_sha="$(shasum -a 256 "$RUNNER_TEMP/trusted/install.sh" | awk '{print $1}')"
+          install_core_sha="$(shasum -a 256 "$RUNNER_TEMP/trusted/install_core.py" | awk '{print $1}')"
+          printf '%s  %s\n' \
+            "$archive_sha" "$RELEASE_ARCHIVE" \
+            "$install_sha" install.sh \
+            "$install_core_sha" install_core.py \
+            | LC_ALL=C sort > "$RUNNER_TEMP/trusted/SHA256SUMS"
           cmp "$RUNNER_TEMP/trusted/SHA256SUMS" "$RUNNER_TEMP/gpu/SHA256SUMS"
           python3 - <<'PY'
           import json, os, tarfile
@@ -474,8 +493,11 @@ jobs:
               raise SystemExit("web payload evidence source differs")
           archive = root / "gpu" / os.environ["RELEASE_ARCHIVE"]
           with tarfile.open(archive, "r:gz") as handle:
-              matches = [member for member in handle.getmembers() if member.name.endswith("/web/manifest.json")]
-              if len(matches) != 1:
+              # The archive's payload is rooted at the archive root (see
+              # write_archive in scripts/build_sdk_artifact.py), so the web
+              # manifest is exactly `web/manifest.json`, a regular file.
+              matches = [member for member in handle.getmembers() if member.name == "web/manifest.json"]
+              if len(matches) != 1 or not matches[0].isfile():
                   raise SystemExit("SDK archive web manifest coverage differs")
               stream = handle.extractfile(matches[0])
               if stream is None:
