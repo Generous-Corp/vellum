@@ -1678,9 +1678,15 @@ class ReleaseShapeTests(unittest.TestCase):
         sums.write_text("\n".join(only) + "\n")
         result = self.run_finalizer()
         self.assertNotEqual(result.returncode, 0)
-        # Refused by the `cmp` against the trusted copy (it reports on stdout
-        # or stderr), not by setup.
-        self.assertIn(str(self.runner / "trusted/SHA256SUMS"), result.stdout + result.stderr)
+        # Refused by the `cmp` against the trusted copy, not by setup. The
+        # archive-only file is a prefix of the trusted one, and GNU cmp names
+        # the shorter file ("EOF on ...") where BSD cmp names the other, so
+        # either path proves the comparison ran.
+        output = result.stdout + result.stderr
+        self.assertTrue(
+            any(str(path) in output for path in (
+                self.runner / "trusted/SHA256SUMS", self.runner / "gpu/SHA256SUMS")),
+            output)
 
     def test_a_changed_installer_is_refused(self) -> None:
         (self.gpu_output / "install_core.py").write_text("print('other')\n")
