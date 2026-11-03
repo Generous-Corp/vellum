@@ -492,49 +492,57 @@ jobs:
               --check-runs-json "$RUNNER_TEMP/parity-check-runs.json"
             )
           fi
+          judge_authority_expansion() {
+            python3 tools/provenance/verify_authority_expansion.py \
+              "${release_readiness[@]}" \
+              "${repository_evidence[@]}" \
+              --output "$RUNNER_TEMP/authority-expansion-report.json"
+          }
           if [[ -n "$PULP_ACCEPTANCE_SHA" && "$GITHUB_EVENT_NAME" != pull_request && "$GITHUB_EVENT_NAME" != merge_group ]]; then
             open_pr_repositories_text="$(python3 tools/provenance/collect_release_evidence.py repositories)"
             mapfile -t open_pr_repositories <<<"$open_pr_repositories_text"
             test "${#open_pr_repositories[@]}" -gt 0
-            snapshot_root="$RUNNER_TEMP/open-pr-snapshot-input"
-            mkdir "$snapshot_root"
-            for repository in "${open_pr_repositories[@]}"; do
-              slug="${repository//\//__}"
-              repository_root="$snapshot_root/$slug"
-              mkdir -p "$repository_root/details" "$repository_root/trees"
-              gh api --method GET --paginate --slurp \
-                "repos/$repository/pulls?state=open&per_page=100" \
-                > "$repository_root/pulls.json"
-              python3 tools/provenance/collect_release_evidence.py open-pr-numbers \
-                --pulls "$repository_root/pulls.json" \
-                > "$repository_root/numbers.txt"
-              while read -r pull_number; do
-                gh api "repos/$repository/pulls/$pull_number" \
-                  > "$repository_root/details/$pull_number.json"
-                python3 tools/provenance/collect_release_evidence.py pull-coordinates \
-                  --detail "$repository_root/details/$pull_number.json" \
-                  > "$repository_root/trees/$pull_number-coordinates.txt"
-                read -r base_commit head_commit \
-                  < "$repository_root/trees/$pull_number-coordinates.txt"
-                gh api "repos/$repository/compare/$base_commit...$head_commit" \
-                  > "$repository_root/trees/$pull_number-compare.json"
-                merge_base_commit="$(python3 tools/provenance/collect_release_evidence.py merge-base-commit --compare "$repository_root/trees/$pull_number-compare.json")"
-                gh api "repos/$repository/git/commits/$merge_base_commit" \
-                  > "$repository_root/trees/$pull_number-merge-base-commit.json"
-                gh api "repos/$repository/git/commits/$head_commit" \
-                  > "$repository_root/trees/$pull_number-head-commit.json"
-                merge_base_tree="$(python3 tools/provenance/collect_release_evidence.py commit-tree --commit "$repository_root/trees/$pull_number-merge-base-commit.json")"
-                head_tree="$(python3 tools/provenance/collect_release_evidence.py commit-tree --commit "$repository_root/trees/$pull_number-head-commit.json")"
-                gh api "repos/$repository/git/trees/$merge_base_tree?recursive=1" \
-                  > "$repository_root/trees/$pull_number-merge-base-tree.json"
-                gh api "repos/$repository/git/trees/$head_tree?recursive=1" \
-                  > "$repository_root/trees/$pull_number-head-tree.json"
-              done < "$repository_root/numbers.txt"
-            done
-            python3 tools/provenance/collect_release_evidence.py open-pr-snapshot \
-              --snapshot-root "$snapshot_root" \
-              --output "$RUNNER_TEMP/open-pr-snapshot.json" \
-              --cursor-output "$RUNNER_TEMP/open-pr-cursor.json"
+            collect_open_pr_snapshot() {
+              local snapshot_root="$1"
+              mkdir "$snapshot_root"
+              for repository in "${open_pr_repositories[@]}"; do
+                slug="${repository//\//__}"
+                repository_root="$snapshot_root/$slug"
+                mkdir -p "$repository_root/details" "$repository_root/trees"
+                gh api --method GET --paginate --slurp \
+                  "repos/$repository/pulls?state=open&per_page=100" \
+                  > "$repository_root/pulls.json"
+                python3 tools/provenance/collect_release_evidence.py open-pr-numbers \
+                  --pulls "$repository_root/pulls.json" \
+                  > "$repository_root/numbers.txt"
+                while read -r pull_number; do
+                  gh api "repos/$repository/pulls/$pull_number" \
+                    > "$repository_root/details/$pull_number.json"
+                  python3 tools/provenance/collect_release_evidence.py pull-coordinates \
+                    --detail "$repository_root/details/$pull_number.json" \
+                    > "$repository_root/trees/$pull_number-coordinates.txt"
+                  read -r base_commit head_commit \
+                    < "$repository_root/trees/$pull_number-coordinates.txt"
+                  gh api "repos/$repository/compare/$base_commit...$head_commit" \
+                    > "$repository_root/trees/$pull_number-compare.json"
+                  merge_base_commit="$(python3 tools/provenance/collect_release_evidence.py merge-base-commit --compare "$repository_root/trees/$pull_number-compare.json")"
+                  gh api "repos/$repository/git/commits/$merge_base_commit" \
+                    > "$repository_root/trees/$pull_number-merge-base-commit.json"
+                  gh api "repos/$repository/git/commits/$head_commit" \
+                    > "$repository_root/trees/$pull_number-head-commit.json"
+                  merge_base_tree="$(python3 tools/provenance/collect_release_evidence.py commit-tree --commit "$repository_root/trees/$pull_number-merge-base-commit.json")"
+                  head_tree="$(python3 tools/provenance/collect_release_evidence.py commit-tree --commit "$repository_root/trees/$pull_number-head-commit.json")"
+                  gh api "repos/$repository/git/trees/$merge_base_tree?recursive=1" \
+                    > "$repository_root/trees/$pull_number-merge-base-tree.json"
+                  gh api "repos/$repository/git/trees/$head_tree?recursive=1" \
+                    > "$repository_root/trees/$pull_number-head-tree.json"
+                done < "$repository_root/numbers.txt"
+              done
+              python3 tools/provenance/collect_release_evidence.py open-pr-snapshot \
+                --snapshot-root "$snapshot_root" \
+                --output "$RUNNER_TEMP/open-pr-snapshot.json" \
+                --cursor-output "$RUNNER_TEMP/open-pr-cursor.json"
+            }
             write_live_open_pr_cursor() {
               local destination="$1"
               local cursor_root
@@ -549,24 +557,66 @@ jobs:
                 --cursor-root "$cursor_root" \
                 --output "$destination"
             }
-            write_live_open_pr_cursor "$RUNNER_TEMP/open-pr-cursor-before.json"
-            cmp "$RUNNER_TEMP/open-pr-cursor.json" "$RUNNER_TEMP/open-pr-cursor-before.json"
+            # Push and tag runs judge the authority evidence against live Pulp
+            # main: the judgment counts only if the commit it read is still
+            # main after it ran. Main is fast-forward only, so equal reads
+            # before and after mean main did not move in between. Main often
+            # moves between this job's checkout and this point, which is long
+            # after it, so the checkout is first brought to the live main read
+            # here, exactly that commit, and the window left is the judgment
+            # itself. If main or an open pull request moves inside it, the whole
+            # read is retried after a bounded wait; nothing is judged twice
+            # against different evidence, and a judgment that fails is final.
+            bind_exact_boundary_pulp_to_live_main() {
+              local checked_out
+              checked_out="$(git -C .exact-boundary-pulp rev-parse HEAD)"
+              live_pulp_main="$(gh api repos/Generous-Corp/pulp/git/ref/heads/main --jq .object.sha)"
+              if [[ "$checked_out" != "$live_pulp_main" ]]; then
+                echo "Pulp main moved from $checked_out (checked out) to $live_pulp_main; judging $live_pulp_main"
+                git -C .exact-boundary-pulp fetch --no-tags origin "$live_pulp_main"
+                if ! git -C .exact-boundary-pulp merge-base --is-ancestor "$checked_out" "$live_pulp_main"; then
+                  echo "::error::live Pulp main $live_pulp_main does not descend from $checked_out, the main this job checked out; Pulp main only moves forward"
+                  exit 1
+                fi
+                git -C .exact-boundary-pulp checkout --detach "$live_pulp_main"
+              fi
+              test "$(git -C .exact-boundary-pulp rev-parse HEAD)" = "$live_pulp_main"
+            }
             repository_evidence+=(
               --open-pr-snapshot-json "$RUNNER_TEMP/open-pr-snapshot.json"
             )
-            local_pulp_main="$(git -C .exact-boundary-pulp rev-parse HEAD)"
-            live_pulp_main="$(gh api repos/Generous-Corp/pulp/git/ref/heads/main --jq .object.sha)"
-            test "$local_pulp_main" = "$live_pulp_main"
-          fi
-          python3 tools/provenance/verify_authority_expansion.py \
-            "${release_readiness[@]}" \
-            "${repository_evidence[@]}" \
-            --output "$RUNNER_TEMP/authority-expansion-report.json"
-          if [[ -n "$PULP_ACCEPTANCE_SHA" && "$GITHUB_EVENT_NAME" != pull_request && "$GITHUB_EVENT_NAME" != merge_group ]]; then
-            test "$live_pulp_main" = \
-              "$(gh api repos/Generous-Corp/pulp/git/ref/heads/main --jq .object.sha)"
-            write_live_open_pr_cursor "$RUNNER_TEMP/open-pr-cursor-after.json"
-            cmp "$RUNNER_TEMP/open-pr-cursor.json" "$RUNNER_TEMP/open-pr-cursor-after.json"
+            live_attempts=3
+            for live_attempt in $(seq 1 "$live_attempts"); do
+              moved=""
+              collect_open_pr_snapshot "$RUNNER_TEMP/open-pr-snapshot-input-$live_attempt"
+              write_live_open_pr_cursor "$RUNNER_TEMP/open-pr-cursor-before.json"
+              if ! cmp "$RUNNER_TEMP/open-pr-cursor.json" "$RUNNER_TEMP/open-pr-cursor-before.json"; then
+                moved="the open PRs changed while their snapshot was collected"
+              else
+                bind_exact_boundary_pulp_to_live_main
+                judge_authority_expansion
+                after_pulp_main="$(gh api repos/Generous-Corp/pulp/git/ref/heads/main --jq .object.sha)"
+                if [[ "$after_pulp_main" != "$live_pulp_main" ]]; then
+                  moved="Pulp main moved from $live_pulp_main (judged) to $after_pulp_main (live) while the authority evidence was judged"
+                else
+                  write_live_open_pr_cursor "$RUNNER_TEMP/open-pr-cursor-after.json"
+                  if ! cmp "$RUNNER_TEMP/open-pr-cursor.json" "$RUNNER_TEMP/open-pr-cursor-after.json"; then
+                    moved="the open PRs changed while the authority evidence was judged"
+                  fi
+                fi
+              fi
+              if [[ -z "$moved" ]]; then
+                break
+              fi
+              if [[ "$live_attempt" == "$live_attempts" ]]; then
+                echo "::error::$moved, on attempt $live_attempt of $live_attempts; the authority evidence was never judged against a Pulp main and open PRs that held still. Re-run this job."
+                exit 1
+              fi
+              echo "::warning::$moved; retrying the live read (attempt $live_attempt of $live_attempts)"
+              sleep $((live_attempt * 30))
+            done
+          else
+            judge_authority_expansion
           fi
           python3 .agents/skills/pulp-vellum-change-routing/scripts/test_route_change.py
 

@@ -816,6 +816,45 @@ class AuthorityActivationTests(unittest.TestCase):
                     activation_commit=side_commit,
                 )
 
+    def test_live_main_beyond_the_checkout_is_named(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            pulp = Path(temporary) / "pulp"
+            pulp.mkdir()
+            for args in (["init", "-q"], ["config", "user.name", "Test"],
+                         ["config", "user.email", "test@example.com"]):
+                subprocess.run(["git", *args], cwd=pulp, check=True)
+            (pulp / "a.txt").write_text("a\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=pulp, check=True)
+            subprocess.run(["git", "commit", "-q", "-m", "a"], cwd=pulp, check=True)
+            local = subprocess.run(["git", "rev-parse", "HEAD"], cwd=pulp, check=True,
+                                   capture_output=True, text=True).stdout.strip()
+            moved = "c" * 40
+            responses = {
+                "/repos/Generous-Corp/pulp/git/ref/heads/main": {
+                    "object": {"type": "commit", "sha": moved}
+                },
+            }
+            with self.assertRaisesRegex(
+                activation.ActivationError,
+                f"live Pulp main {moved} is not in the checked-out Pulp history"
+                ".*Pulp main moved after the checkout",
+            ):
+                activation.verify_landed_on_pulp_main(
+                    github=FakeGitHub(responses), token="pulp-token",
+                    pulp_repo=pulp, activation_commit=local,
+                )
+            # The same history with main at the local commit still passes.
+            responses["/repos/Generous-Corp/pulp/git/ref/heads/main"] = {
+                "object": {"type": "commit", "sha": local}
+            }
+            self.assertEqual(
+                activation.verify_landed_on_pulp_main(
+                    github=FakeGitHub(responses), token="pulp-token",
+                    pulp_repo=pulp, activation_commit=local,
+                ),
+                local,
+            )
+
     def test_schema_v2_rejects_authority_branch_downgrade(self) -> None:
         record = activation.load_json(
             MODULE_PATH.parents[2]

@@ -814,8 +814,25 @@ def verify_landed_on_pulp_main(
         or not isinstance(obj.get("sha"), str)
     ):
         raise ActivationError("live Pulp main ref is invalid")
+    live_main = require_sha(obj["sha"], "live Pulp main commit")
+    if subprocess.run(
+        ["git", "cat-file", "-e", f"{live_main}^{{commit}}"],
+        cwd=pulp_repo, capture_output=True, check=False,
+    ).returncode != 0:
+        # Main is read live here, after the checkout that imported its
+        # history. When main moves in between, its new commit is not local;
+        # say so plainly rather than as a failed lookup.
+        imported = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", "FETCH_HEAD^{commit}"],
+            cwd=pulp_repo, capture_output=True, text=True, check=False,
+        ).stdout.strip() or "unknown"
+        raise ActivationError(
+            f"live Pulp main {live_main} is not in the checked-out Pulp history "
+            f"(imported main {imported}); Pulp main moved after the checkout, "
+            "so re-run to judge the current main"
+        )
     main_commit = require_commit(
-        pulp_repo, obj["sha"], "live Pulp main commit"
+        pulp_repo, live_main, "live Pulp main commit"
     )
     require_ancestor(
         pulp_repo,
