@@ -860,6 +860,24 @@ class Freeze(unittest.TestCase):
         body = dict(rr.freeze_ruleset("v0.1.10"), id=7, source_type="Repository", source="Generous-Corp/vellum")
         ruleset.verify([body], repository="Generous-Corp/vellum", tag="v0.1.10")
 
+    def test_github_stored_freeze_satisfies_the_release_finalizer(self) -> None:
+        # The finalizer reads the ruleset back from GitHub, which stores the
+        # update rule's default `update_allows_fetch_and_merge: false` as a
+        # bare `{"type": "update"}`. The posted freeze for v0.1.9 is exactly
+        # that live read-back, apart from GitHub's normalization and its own
+        # fields, and the finalizer accepts what GitHub returned.
+        live = json.loads((Path(__file__).resolve().parent / "fixtures"
+                           / "freeze-v0.1.9-ruleset-readback.json").read_text(encoding="utf-8"))
+        posted = rr.freeze_ruleset("v0.1.9")
+        stored = {key: live[key] for key in posted}
+        normalized_rules = [
+            {"type": rule["type"]} if rule.get("parameters") == {"update_allows_fetch_and_merge": False}
+            else rule
+            for rule in posted["rules"]
+        ]
+        self.assertEqual(stored, dict(posted, rules=normalized_rules))
+        ruleset.verify([live], repository="Generous-Corp/vellum", tag="v0.1.9")
+
     def test_a_malformed_tag_refuses(self) -> None:
         with self.assertRaises(rr.ReleaseRequestError):
             rr.freeze_ruleset("v0.1")

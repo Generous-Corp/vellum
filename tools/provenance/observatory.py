@@ -12,6 +12,7 @@ import argparse
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import re
 import sys
 
 if __package__ in {None, ""}:
@@ -431,7 +432,11 @@ def coverage_gaps(
                         verify_vellum_observatory_tail(repo, target, requested_target)
                     except ObservatoryError:
                         require_event_coverage = True
-            imported = imported_mirror_history(repo, tail_start, requested_target)
+            # Only Vellum imports Pulp's mirror history; a Pulp range has none.
+            imported = (
+                imported_mirror_history(repo, tail_start, requested_target, pulp_repo)
+                if source == "vellum" else set()
+            )
             for commit in commits_between(repo, tail_start, requested_target):
                 if commit in imported:
                     # Imported Pulp mirror history is not Vellum-authored; its
@@ -641,15 +646,32 @@ def verify_vellum_observatory_pr_tail(
     verify_vellum_observatory_tail(repo, cursor, merge_base)
 
 
-MIRROR_IMPORT_PATHS = ("mirror",)
+MIRROR_IMPORT_ENTRY = re.compile(r"040000 tree [0-9a-f]{40}(?:[0-9a-f]{24})?\tmirror")
 
 
-def approved_mirror_shas(root: Path) -> tuple[set[str], list[str]]:
+def mirror_only_tree(root: Path, commit: str) -> tuple[bool, list[str]]:
+    """Whether `commit`'s root tree is exactly one `mirror` directory.
+
+    Compares the full `ls-tree` entry, so a `mirror` that is a symlink, a
+    file or a gitlink is refused, not only a second name. Returns the verdict
+    and the entries, for the error message.
+    """
+    entries = git(root, "ls-tree", commit).splitlines()
+    return len(entries) == 1 and MIRROR_IMPORT_ENTRY.fullmatch(entries[0]) is not None, entries
+
+
+def approved_mirror_shas(root: Path, pulp_repo: Path | None) -> tuple[set[str], list[str]]:
     """Mirror tips named by receipts the mirror-export verifier accepts.
 
-    Returns the approved tips and, when verification fails, its errors; a
-    failed verification approves nothing.
+    The receipts are verified against Pulp itself, so the approval never
+    depends on another step having checked their Pulp identity first.
+    Returns the approved tips and, when verification fails or Pulp is not
+    supplied, the errors; such a verification approves nothing.
     """
+    if pulp_repo is None:
+        return set(), [
+            "the receipts' Pulp identity cannot be proved without the Pulp repository"
+        ]
     import importlib.util
 
     module_path = Path(__file__).with_name("verify_mirror_export.py")
@@ -665,7 +687,7 @@ def approved_mirror_shas(root: Path) -> tuple[set[str], list[str]]:
             "provenance/mirror has uncommitted changes; imported mirror history "
             "is approved only from committed receipts"
         )
-    report = verifier.verify(root)
+    report = verifier.verify(root, pulp_repo)
     if report["status"] != "pass":
         return set(), [str(error) for error in report["errors"]]
     shas: set[str] = set()
@@ -676,7 +698,7 @@ def approved_mirror_shas(root: Path) -> tuple[set[str], list[str]]:
 
 
 def imported_mirror_commits(
-    root: Path, git_base: str, head: str
+    root: Path, git_base: str, head: str, pulp_repo: Path | None
 ) -> tuple[set[str], list[str]]:
     """Commits of an imported Pulp mirror history that the append-only check skips.
 
@@ -690,14 +712,16 @@ def imported_mirror_commits(
     cursor.
     """
     range_commits = set(git(root, "rev-list", f"{git_base}..{head}").splitlines())
-    approved, verification_errors = approved_mirror_shas(root)
+    approved, verification_errors = approved_mirror_shas(root, pulp_repo)
+    # The verifier approves tips reachable from the checkout's HEAD, which
+    # need not be `head`; only a tip already in the base is a landed import.
     landed_tips = [
         tip for tip in sorted(approved - range_commits)
         if is_ancestor(root, tip, git_base)
     ]
 
     def in_landed_import(commit: str) -> bool:
-        if tuple(git(root, "ls-tree", "--name-only", commit).splitlines()) != MIRROR_IMPORT_PATHS:
+        if not mirror_only_tree(root, commit)[0]:
             return False
         return any(is_ancestor(root, commit, tip) for tip in landed_tips)
 
@@ -706,11 +730,11 @@ def imported_mirror_commits(
         side = git(root, "rev-list", tip, f"^{git_base}").splitlines()
         side_set = set(side)
         for commit in side:
-            entries = tuple(git(root, "ls-tree", "--name-only", commit).splitlines())
-            if entries != MIRROR_IMPORT_PATHS:
+            mirror_only, entries = mirror_only_tree(root, commit)
+            if not mirror_only:
                 raise ObservatoryError(
                     f"imported mirror history commit {commit} holds paths other than "
-                    f"mirror/: {', '.join(entries) or '(empty tree)'}"
+                    f"mirror/: {'; '.join(entries) or '(empty tree)'}"
                 )
             parents = git(root, "rev-list", "--parents", "-n", "1", commit).split()[1:]
             outside = [
@@ -726,7 +750,9 @@ def imported_mirror_commits(
     return imported, verification_errors
 
 
-def imported_mirror_history(root: Path, start: str, target: str) -> set[str]:
+def imported_mirror_history(
+    root: Path, start: str, target: str, pulp_repo: Path | None
+) -> set[str]:
     """Imported mirror commits in start..target, or none when it has no root.
 
     Only a range containing a root commit can import an unrelated history, so
@@ -739,11 +765,21 @@ def imported_mirror_history(root: Path, start: str, target: str) -> set[str]:
         # no root of its own. Its commits carry no observatory cursor; only
         # then is the receipt verification worth running.
         commits = git(root, "rev-list", f"{start}..{target}").split()
-        if all(has_cursor(root, commit) for commit in commits):
+        cursorless = [commit for commit in commits if not has_cursor(root, commit)]
+        if not cursorless:
             return set()
-        imported, _errors = imported_mirror_commits(root, start, target)
+        imported, errors = imported_mirror_commits(root, start, target, pulp_repo)
+        if errors and any(mirror_only_tree(root, commit)[0] for commit in cursorless):
+            # A mirror-only commit can enter only as an approved import, and
+            # nothing was approved: refuse rather than walk it as ordinary
+            # history.
+            raise ObservatoryError(
+                f"{start}..{target} has commits without the observatory cursor "
+                f"and no approved imported mirror history; mirror-export "
+                f"verification failed: {'; '.join(errors)}"
+            )
         return imported
-    imported, errors = imported_mirror_commits(root, start, target)
+    imported, errors = imported_mirror_commits(root, start, target, pulp_repo)
     unexplained = [commit for commit in roots if commit not in imported]
     if unexplained:
         detail = f"; mirror-export verification failed: {'; '.join(errors)}" if errors else ""
@@ -813,7 +849,7 @@ def verify_append_only(
             return imported_cache[0]
         if all(has_cursor(root, sha) for sha in (commit, *parents)):
             return set()
-        imported, errors = imported_mirror_commits(root, git_base, head)
+        imported, errors = imported_mirror_commits(root, git_base, head, pulp_repo)
         imported_cache.append(imported)
         verification_errors.extend(errors)
         return imported

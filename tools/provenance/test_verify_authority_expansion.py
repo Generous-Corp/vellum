@@ -1967,7 +1967,27 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
             'if [[ -n "$PULP_ACCEPTANCE_SHA" && "$GITHUB_EVENT_NAME" != pull_request '
             '&& "$GITHUB_EVENT_NAME" != merge_group ]]; then'
         )
-        self.assertEqual(workflow.count(snapshot_gate), 2)
+        # One gate holds the whole live read: the snapshot, the binding of the
+        # exact-boundary checkout to live Pulp main, the judgment and both
+        # re-checks. Pull-request and queue runs take the else branch.
+        self.assertEqual(workflow.count(snapshot_gate), 1)
+        live = workflow[workflow.index(snapshot_gate):]
+        live = live[:live.index("\n          else\n            judge_authority_expansion\n          fi\n")]
+        # Each attempt judges the live main it bound the checkout to, and
+        # reads main again only after the judgment.
+        self.assertIn(
+            "                bind_exact_boundary_pulp_to_live_main\n"
+            "                judge_authority_expansion\n"
+            '                after_pulp_main="$(gh api repos/Generous-Corp/pulp/git/ref/heads/main --jq .object.sha)"\n',
+            live,
+        )
+        for part in (
+            'collect_open_pr_snapshot "$RUNNER_TEMP/open-pr-snapshot-input-$live_attempt"',
+            'write_live_open_pr_cursor "$RUNNER_TEMP/open-pr-cursor-before.json"',
+            'write_live_open_pr_cursor "$RUNNER_TEMP/open-pr-cursor-after.json"',
+            'if [[ "$after_pulp_main" != "$live_pulp_main" ]]; then',
+        ):
+            self.assertIn(part, live)
         self.assertNotIn(
             'if [[ -n "$PULP_ACCEPTANCE_SHA" && "$GITHUB_EVENT_NAME" != pull_request ]]; then',
             workflow,

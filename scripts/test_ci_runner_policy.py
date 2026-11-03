@@ -198,14 +198,23 @@ PULP_API_READER_GH_CALLS = {
     'run download "$run_id" --name pulp-vellum-routing-contract-execution',
     'run download "$run_id" --name vellum-parity-proof-execution',
 }
-PULP_API_READER_GIT_CALLS = {"git -C .exact-boundary-pulp rev-parse HEAD"}
+# Push and tag runs bring the exact-boundary checkout to the live Pulp main
+# the reader just read, by that exact SHA and only forward along main, so the
+# judgment does not race main moving after the checkout step. These are the
+# only git commands the reader runs, verbatim.
+PULP_API_READER_GIT_CALLS = {
+    "git -C .exact-boundary-pulp rev-parse HEAD",
+    'git -C .exact-boundary-pulp fetch --no-tags origin "$live_pulp_main"',
+    'git -C .exact-boundary-pulp merge-base --is-ancestor "$checked_out" "$live_pulp_main"',
+    'git -C .exact-boundary-pulp checkout --detach "$live_pulp_main"',
+}
 # The reader step itself, byte for byte (sha256 of its text without trailing
 # blank and comment lines). Shell and Python can assemble a command or a
 # repository name in ways no line check reads (`eval "g""h ..."`, a
 # backslash continuation inside a word, a glued `os.system` argument, a
 # value written to a file for a later step), so any change to the reader is
 # a reviewed change to this digest. The checks below only explain a failure.
-PULP_API_READER_SHA256 = "0d05a1cefb10fd0a08b7a9225b82fb262139738da5f8dd09bb2ba0613e419600"
+PULP_API_READER_SHA256 = "0c8e0e7b06788974feb7d7bc0ea716eb8254e6aeca68477214c3938fce6d1454"
 # The reader reshapes the GitHub responses it fetched through this script, so
 # the script is part of the reader: it is pinned byte for byte like the step
 # and must carry no transport of its own (every read stays a gh call above).
@@ -217,7 +226,7 @@ PULP_API_READER_PULP_LINES = {
     '"repos/Generous-Corp/pulp/commits/$PULP_ACCEPTANCE_SHA/check-runs?per_page=100" \\',
     'if [[ "$repository" == "Generous-Corp/pulp" ]]; then',
     'live_pulp_main="$(gh api repos/Generous-Corp/pulp/git/ref/heads/main --jq .object.sha)"',
-    '"$(gh api repos/Generous-Corp/pulp/git/ref/heads/main --jq .object.sha)"',
+    'after_pulp_main="$(gh api repos/Generous-Corp/pulp/git/ref/heads/main --jq .object.sha)"',
 }
 # A command reached through a variable (`g=git; $g clone ...`).
 COMMAND_INDIRECTION = re.compile(
