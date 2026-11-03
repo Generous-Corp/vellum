@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -158,6 +160,66 @@ class ObservatoryMirrorImportTests(MirrorImportCase):
         message = str(caught.exception)
         self.assertIn("observatory cursor must exist on every history edge", message)
         self.assertIn("mirror-export verification failed", message)
+
+
+class ReExportMirrorImportTests(MirrorImportCase):
+    """A re-export whose filter-repo history continues an import already landed."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.fixture_ = self.fixture()
+        self.vellum = self.fixture_.vellum
+        # The first import has landed: judge only what comes after it.
+        self.landed = run(self.vellum, "rev-parse", "HEAD")
+        self.first_tip = self.fixture_.mirror_sha
+
+    def mirror_commit(self, parent: str, name: str) -> str:
+        """A mirror-only commit on ``parent``, as git-filter-repo writes the next export."""
+        tree = run(self.vellum, "rev-parse", f"{self.first_tip}^{{tree}}")
+        index = self.base / f"{name}.index"
+        env = dict(os.environ, GIT_INDEX_FILE=str(index))
+        subprocess.run(["git", "read-tree", tree], cwd=self.vellum, env=env, check=True)
+        blob = subprocess.run(
+            ["git", "hash-object", "-w", "--stdin"], cwd=self.vellum, input=name.encode(),
+            capture_output=True, check=True).stdout.decode().strip()
+        subprocess.run(
+            ["git", "update-index", "--add", "--cacheinfo", f"100644,{blob},mirror/core/canvas/{name}.txt"],
+            cwd=self.vellum, env=env, check=True)
+        new_tree = subprocess.run(
+            ["git", "write-tree"], cwd=self.vellum, env=env, capture_output=True, check=True).stdout.decode().strip()
+        return run(self.vellum, "commit-tree", new_tree, "-p", parent, "-m", name)
+
+    def join(self, tip: str) -> None:
+        run(self.vellum, "merge", "-q", "--no-edit", "-s", "ours", "--allow-unrelated-histories", tip)
+
+    def verify(self, approved: set[str]) -> None:
+        original = observatory.approved_mirror_shas
+        observatory.approved_mirror_shas = lambda root: (approved, [])
+        try:
+            observatory.verify_append_only(self.vellum, self.landed)
+        finally:
+            observatory.approved_mirror_shas = original
+
+    def test_re_export_continuing_the_landed_import_passes(self) -> None:
+        second = self.mirror_commit(self.first_tip, "second")
+        self.join(second)
+        self.verify({self.first_tip, second})
+
+    def test_re_export_on_a_mainline_commit_is_rejected(self) -> None:
+        second = self.mirror_commit(self.landed, "second")
+        self.join(second)
+        with self.assertRaisesRegex(observatory.ObservatoryError, "outside the imported history"):
+            self.verify({self.first_tip, second})
+
+    def test_re_export_on_an_unapproved_mirror_history_is_rejected(self) -> None:
+        # A mirror-only history already in the base, but no accepted receipt's.
+        stray = self.mirror_commit(self.first_tip, "stray")
+        self.join(stray)
+        self.landed = run(self.vellum, "rev-parse", "HEAD")
+        second = self.mirror_commit(stray, "second")
+        self.join(second)
+        with self.assertRaisesRegex(observatory.ObservatoryError, "outside the imported history"):
+            self.verify({self.first_tip, second})
 
 
 def mapping_for(vellum_path: str) -> dict[str, object]:

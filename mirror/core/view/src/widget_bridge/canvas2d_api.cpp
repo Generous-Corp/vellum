@@ -841,16 +841,14 @@ void BridgeRegistrars::register_canvas2d_api(WidgetBridge& self) {
     // Args: (id, src, tile_x, tile_y)
     //   src      — image source (file path, "data:" URL, or "" for clear)
     //   tile_x   — "repeat" | "no-repeat"
-    //   tile_y   — "repeat" | "no-repeat"
     register_bridge_function(api, "canvasSetFillPattern", [&self](choc::javascript::ArgumentList args) {
         if (auto* c = dynamic_cast<CanvasWidget*>(self.widget(args.get<std::string>(0, "")))) {
             CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::set_fill_pattern;
-            cmd.text = args.get<std::string>(1, "");          // image source
+            cmd.text = args.get<std::string>(1, "");
+            if (cmd.text.rfind("data:", 0) != 0)
+                cmd.text = self.resolve_script_relative(cmd.text);
             auto tx = args.get<std::string>(2, "repeat");
             auto ty = args.get<std::string>(3, "repeat");
-            // Pack tile modes into int_val (bit 0 = x, bit 1 = y);
-            // 0 = repeat, 1 = no-repeat. Mirrors set_image_smoothing's
-            // pattern of folding multiple enum values into one int slot.
             int tx_i = (tx == "no-repeat") ? 1 : 0;
             int ty_i = (ty == "no-repeat") ? 1 : 0;
             cmd.int_val = tx_i | (ty_i << 1);
@@ -866,6 +864,8 @@ void BridgeRegistrars::register_canvas2d_api(WidgetBridge& self) {
         if (auto* c = dynamic_cast<CanvasWidget*>(self.widget(args.get<std::string>(0, "")))) {
             CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::set_stroke_pattern;
             cmd.text = args.get<std::string>(1, "");
+            if (cmd.text.rfind("data:", 0) != 0)
+                cmd.text = self.resolve_script_relative(cmd.text);
             auto tx = args.get<std::string>(2, "repeat");
             auto ty = args.get<std::string>(3, "repeat");
             int tx_i = (tx == "no-repeat") ? 1 : 0;
@@ -1192,21 +1192,20 @@ void BridgeRegistrars::register_canvas2d_api(WidgetBridge& self) {
 
     // Canvas drawImage(canvasId, imagePath, dx, dy, dw, dh)
     //   or 9-arg form: canvasDrawImage(id, path, dx,dy,dw,dh, sx,sy,sw,sh)
-    // When args[6..9] are present the JS shim is using the
-    // source-rect 9-arg form. Bridge stashes it in x2/y2/x3/y3 + sets
-    // has_source_rect; the canvas_widget renderer routes through the
-    // _rect overload so the source sub-rectangle lands on the dst rect.
+    // The 9-arg source rect (args[6..9]) lands in x2/y2/x3/y3 with has_source_rect,
+    // and the renderer's _rect overload maps that sub-rectangle onto the dst rect.
     register_bridge_function(api, "canvasDrawImage", [&self](choc::javascript::ArgumentList args) {
         if (auto* c = dynamic_cast<CanvasWidget*>(self.widget(args.get<std::string>(0, "")))) {
             CanvasDrawCmd cmd; cmd.type = CanvasDrawCmd::Type::draw_image;
-            cmd.text = args.get<std::string>(1, ""); // image source path
+            // Paths go through resolve_script_relative(); a refusal paints the placeholder.
+            cmd.text = args.get<std::string>(1, "");
+            if (cmd.text.rfind("data:", 0) != 0)
+                cmd.text = self.resolve_script_relative(cmd.text);
             cmd.x = (float)args.get<double>(2, 0);
             cmd.y = (float)args.get<double>(3, 0);
             cmd.w = (float)args.get<double>(4, 0);
             cmd.h = (float)args.get<double>(5, 0);
-            // 9-arg drawImage source rect — JS appends sx,sy,sw,sh
-            // when the caller used the 9-arg form. choc reports
-            // missing args as defaults, so we gate on numArgs >= 10.
+            // 9-arg form appends sx,sy,sw,sh; choc defaults missing args.
             if (args.numArgs >= 10) {
                 cmd.x2 = (float)args.get<double>(6, 0);
                 cmd.y2 = (float)args.get<double>(7, 0);

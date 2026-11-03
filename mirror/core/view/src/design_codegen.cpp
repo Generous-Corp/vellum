@@ -25,6 +25,7 @@
 #include "design_import_internal.hpp"
 #include "design_import_native_common.hpp"
 #include "design_import_svg_stroke.hpp"
+#include "design_js_capture_lowering.hpp"
 #include "design_ir_helpers.hpp"
 
 #include <algorithm>
@@ -753,6 +754,14 @@ static void generate_node(std::ostringstream& ss, const IRNode& node,
     emit_str("transform", s.transform);
     emit_px("width", s.width);
     emit_px("height", s.height);
+    // Imported frames carry an authored height that is part of the captured
+    // design geometry.  A web-compat root/child is commonly mounted inside a
+    // flex host whose default flex-shrink is 1; when the host viewport is
+    // shorter than the design, that silently compresses the frame (Kelvin's
+    // 886px panel became 116px).  Preserve explicit design heights just as the
+    // native Yoga emitter does for column-flow children.
+    if (s.height)
+        ss << ind << var << ".style.flexShrink = '0';\n";
     emit_px("minWidth", s.min_width);
     emit_px("minHeight", s.min_height);
     emit_px("maxWidth", s.max_width);
@@ -980,6 +989,15 @@ static void emit_js_layout_constraints(const NativeEmit& e, const std::string& t
     // layout needs shrink:0 to keep the sizes it emitted.
     if (L.flex_shrink)
         ss << ind << "setFlex('" << target_id << "', 'flex_shrink', " << *L.flex_shrink << ");\n";
+    // Imported browser/design captures carry already-solved heights. In a
+    // column parent Yoga's default flex-shrink:1 compresses those authored
+    // boxes to the host viewport (for example, a tall panel rendered into a
+    // short initial viewport). Preserve the captured main-axis extent unless
+    // the source explicitly supplied a shrink policy above.
+    if (!L.flex_shrink && e.parent_direction && *e.parent_direction == LayoutDirection::column &&
+        node.style.height) {
+        ss << ind << "setFlex('" << target_id << "', 'flex_shrink', 0);\n";
+    }
     // Explicit per-child flex properties (Figma auto-layout children:
     // layoutGrow → flex_grow, layoutAlign → align_self, targetAspectRatio →
     // aspect_ratio). Emitted BEFORE the constraint fallbacks below so an
@@ -2421,11 +2439,16 @@ static void emit_js_text_node(const NativeEmit& e) {
     // into the next flex sibling (visible bug: "FILTER & EQHOLLOW
     // PUNCH" — the EQ label overflows its 77-px slot, painting on
     // top of the dropdown's "Hollow Punch" text).
+    // A run whose captured layout is in use (a control's value text, which
+    // has no basis, included). A rejected basis rewraps, so it stays soft.
+    const bool captured_run =
+        has_browser_line_layout || node.attributes.count("control_value_of") != 0;
     if (node.style.width) {
         bool uppercase = node.style.text_transform &&
                          *node.style.text_transform == "uppercase";
         float w = *node.style.width;
-        if (uppercase) w *= 1.20f;  // empirical: caps run ~15-20% wider
+        if (uppercase && !captured_run)
+            w *= 1.20f; // empirical: caps run ~15-20% wider
         ss << ind << "setFlex('" << id << "', 'min_width', " << w << ");\n";
 
         // Multi-line text box: when the design's own box is taller than a
@@ -2439,7 +2462,8 @@ static void emit_js_text_node(const NativeEmit& e) {
         // (height ≈ one line, e.g. a title) is intentionally NOT bounded
         // here: forcing its narrow hug-width as a hard wrap box would make
         // it wrap when Pulp's font metrics run a hair wider than Figma's,
-        // breaking a title that the design drew on one line.
+        // breaking a title that the design drew on one line. A captured run
+        // takes its box as native does: it is the width Chromium laid it out at.
         // Multi-line only when the box clears ~1.8 line boxes. Prefer the
         // IR's declared line_height; when absent assume a tight font*1.2
         // (a single rendered line), NOT font*1.4 — the looser fallback let
@@ -2454,7 +2478,7 @@ static void emit_js_text_node(const NativeEmit& e) {
             *node.style.text_overflow == "ellipsis";
         const bool needs_multiline =
             (multiline_box && !browser_single_line) || browser_wrapped;
-        if (needs_multiline || ellipsis_clip) {
+        if (needs_multiline || ellipsis_clip || captured_run) {
             ss << ind << "setFlex('" << id << "', 'width', " << *node.style.width << ");\n";
             if (needs_multiline && !has_browser_line_layout)
                 ss << ind << "setMultiLine('" << id << "', true);\n";
@@ -2566,8 +2590,9 @@ static void emit_js_container(const NativeEmit& e, int& var_counter,
     if (opts.include_comments && !node.name.empty() && depth > 0)
         ss << ind << "// " << node.name << "\n";
 
-    ss << ind << (is_grid ? "createGrid" : (is_row ? "createRow" : "createCol"))
-       << "('" << id << "', " << pid << ");\n";
+    if (!emit_js_ua_button_surface(ss, node, ind, id, pid, is_row))
+        ss << ind << (is_grid ? "createGrid" : (is_row ? "createRow" : "createCol")) << "('" << id
+           << "', " << pid << ");\n";
     emit_js_absolute_position(e, id);
     emit_js_visual_overrides(e, id);
     if (is_grid) {
@@ -2936,6 +2961,18 @@ static void generate_native_node_impl(std::ostringstream& ss, const IRNode& node
         return;
     }
     if (emit_js_svg_path_node(e)) return;
+    // A theme-painted control is the widget the native lane builds, with its
+    // captured skin and state, placed and sized like any other node.
+    if (emit_js_ua_form_control(ss, node, e.ind, e.id, e.pid)) {
+        emit_js_absolute_position(e, e.id);
+        emit_js_visual_overrides(e, e.id);
+        if (node.style.width)
+            ss << e.ind << "setFlex('" << e.id << "', 'width', " << *node.style.width << ");\n";
+        if (node.style.height)
+            ss << e.ind << "setFlex('" << e.id << "', 'height', " << *node.style.height << ");\n";
+        ss << "\n";
+        return;
+    }
 
     // Materialized browser captures use canvas nodes as stable visible
     // targets for a live React/Canvas2D behavior realm. They may carry a PNG
@@ -2971,7 +3008,9 @@ static void generate_native_node_impl(std::ostringstream& ss, const IRNode& node
     const bool is_image = (kind == NativeWidgetKind::image_view) ||
                           node.attributes.count("asset_path") > 0;
     const bool is_text = (kind == NativeWidgetKind::label);
-    const bool is_container = !is_image && (!node.children.empty() || node.type == "frame");
+    // A theme-painted button is a container even when it has no content yet.
+    const bool is_container = !is_image && (!node.children.empty() || node.type == "frame" ||
+                                            kind == NativeWidgetKind::button_surface);
 
     if (is_image) {
         emit_js_image_node(e);
@@ -3000,9 +3039,11 @@ static void generate_native_node(std::ostringstream& ss, const IRNode& node,
     auto* ids = id_map ? id_map : &local_ids;
     generate_native_node_impl(ss, node, resolved, opts, depth, var_counter, parent_id,
                               parent_direction, ids);
-    if (!node.stable_anchor_id || node.stable_anchor_id->empty()) return;
     auto it = ids->find(&node);
     if (it == ids->end()) return;
+    emit_js_captured_paint_rect(ss, node, indent(depth, opts.indent_spaces), it->second);
+    if (!node.stable_anchor_id || node.stable_anchor_id->empty())
+        return;
     ss << indent(depth, opts.indent_spaces) << "setAnchor('" << it->second << "', '"
        << js_single_quote_escape(*node.stable_anchor_id) << "');\n";
 }
@@ -3063,11 +3104,10 @@ std::string generate_pulp_js(const DesignIR& ir, const CodeGenOptions& opts) {
     ss << "if (typeof setSubpixelLayout === 'function') setSubpixelLayout('', true);\n"
        << "if (typeof setCapturedFrameRoot === 'function') setCapturedFrameRoot('', true);\n\n";
 
-    // Register bundled (non-system) fonts BEFORE any setFontFamily, so a
-    // family like "Clash Grotesk" / "Inter" resolves to the shipped face
-    // instead of silently falling back to a same-named system font (or a
-    // generic). resolved_path is the absolute .ttf/.otf path stamped by the
-    // CLI's font asset-resolution pass; skip entries that didn't resolve.
+    // Register bundled fonts, with each @font-face rule's declared weight range,
+    // BEFORE any setFontFamily, so a family resolves to the shipped face rather
+    // than a same-named system font. resolved_path is the absolute file the CLI's
+    // asset-resolution pass stamped; entries that did not resolve are skipped.
     if (!ir.font_family_assets.empty()) {
         bool any = false;
         for (const auto& fa : ir.font_family_assets) {
@@ -3075,7 +3115,8 @@ std::string generate_pulp_js(const DesignIR& ir, const CodeGenOptions& opts) {
             if (!any && opts.include_comments) ss << "// Bundled fonts\n";
             any = true;
             ss << "registerFont('" << js_single_quote_escape(fa.family) << "', '"
-               << js_single_quote_escape(fa.resolved_path) << "');\n";
+               << js_single_quote_escape(fa.resolved_path) << "', " << fa.weight << ", "
+               << (fa.weight_max > 0 ? fa.weight_max : fa.weight) << ");\n";
         }
         if (any) ss << "\n";
     }

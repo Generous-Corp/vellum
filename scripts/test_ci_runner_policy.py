@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import unittest
 from pathlib import Path
@@ -892,10 +893,11 @@ class RunnerPolicyTests(unittest.TestCase):
         gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
         self.assertIn("--retry 5 --retry-delay 2 --retry-all-errors", gpu)
         self.assertIn("--continue-at -", gpu)
-        self.assertIn(
-            "bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86",
-            gpu,
-        )
+        # The workflow downloads and hash-checks exactly the archive the lock pins.
+        lock = json.loads((ROOT / "provenance/third-party-lock.json").read_text(encoding="utf-8"))
+        artifact = lock["runtime_toolchain_dependencies"]["renderer"]["artifact"]
+        self.assertIn(artifact["url"], gpu)
+        self.assertIn(artifact["sha256"], gpu)
 
     def test_workflows_use_their_reviewed_runner_class(self) -> None:
         workflow_paths = sorted(

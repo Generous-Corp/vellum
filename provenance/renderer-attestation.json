@@ -1,47 +1,77 @@
 {
   "schema": "vellum.renderer-provenance.v2",
-  "state": "pending-build-provenance",
+  "state": "builder-attested",
   "artifact": {
     "repository": "https://github.com/danielraffel/skia-builder",
-    "release_tag": "chrome/m157",
+    "release_tag": "chrome/m158",
     "name": "skia-build-mac-universal-gpu-release.zip",
-    "sha256": "bb24c74f05699fa084df6d68ecb9a427802c3df49ce85d8a7dc696aeb9e19a86"
+    "sha256": "dca73c0eee5b0f6d129fe357d0754f7165c6b436051e0de947aeedd3e1bde250"
   },
   "source_identities": {
     "skia": {
       "repository": "https://skia.googlesource.com/skia",
-      "commit": "b94213a11b3a2edadfae89f0c57a7f4ab72772c9"
+      "commit": "be7d7c3e996e567eda7dc9774274f7a0103cdb8c"
     },
     "dawn": {
       "repository": "https://dawn.googlesource.com/dawn",
-      "commit": "ada567700e13aecf7989d78b21f7d330b522ea80"
+      "commit": "1716e88cc9e58398fab5d4473f7f2e858667b677"
     },
     "builder": {
       "repository": "https://github.com/danielraffel/skia-builder",
-      "commit": "f710b2834eaf37dbf1bd39408f9361d10d85eda2"
+      "commit": "312f05e24a5d5a45d4a3e70ca70ff3ccff1b4d97"
     }
   },
   "build_identity": {
     "target": "macos-arm64",
     "configuration": "Release",
     "compiler": {
-      "vendor": "pending-builder-attestation",
-      "version": "pending-builder-attestation",
-      "sha256": null
+      "vendor": "Apple",
+      "version": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+      "path": "/Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++",
+      "sha256": "4c458256bcdf913774de1bb4a37768244d3b41f32ad55afb2dfec3432f46f4fe"
     },
     "linker": {
-      "vendor": "pending-builder-attestation",
-      "version": "pending-builder-attestation",
-      "sha256": null
+      "vendor": "Apple",
+      "version": "@(#)PROGRAM:ld PROJECT:ld-1167.5",
+      "path": "/Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld",
+      "sha256": "648a8aac7f6f829a42305d24dddd7a3cfa48ee0bd9d4e7ec1ded5c51edea372b"
+    },
+    "sdk": {
+      "version": "15.5"
     },
     "cpp_abi": {
-      "stdlib": "pending-builder-attestation",
-      "abi": "pending-builder-attestation"
+      "stdlib": "libc++",
+      "abi": "1",
+      "libcpp_version": "190102"
+    },
+    "toolchain_receipt": {
+      "name": "skia-build-mac-universal-gpu-release.apple-toolchain.sha256-101a51466c7f09f2fd8ea6c6edca6c912d13712eba85e1c6e2606607312cbb6e.json",
+      "sha256": "101a51466c7f09f2fd8ea6c6edca6c912d13712eba85e1c6e2606607312cbb6e",
+      "url": "https://github.com/danielraffel/skia-builder/releases/download/chrome/m158/skia-build-mac-universal-gpu-release.apple-toolchain.sha256-101a51466c7f09f2fd8ea6c6edca6c912d13712eba85e1c6e2606607312cbb6e.json"
     }
   },
   "legal_inventory": {
-    "state": "observed-not-exhaustive",
-    "manifest_sha256": null,
-    "entries": []
+    "state": "exhaustive",
+    "manifest_sha256": "c46884c40b15e870a916b41299c5671d03e87fe0bcbb557203019b3f2d36bd6c",
+    "manifest": {
+      "name": "skia-build-mac-universal-gpu-release.legal-manifest.sha256-c46884c40b15e870a916b41299c5671d03e87fe0bcbb557203019b3f2d36bd6c.json",
+      "sha256": "c46884c40b15e870a916b41299c5671d03e87fe0bcbb557203019b3f2d36bd6c",
+      "url": "https://github.com/danielraffel/skia-builder/releases/download/chrome/m158/skia-build-mac-universal-gpu-release.legal-manifest.sha256-c46884c40b15e870a916b41299c5671d03e87fe0bcbb557203019b3f2d36bd6c.json"
+    }
+  },
+  "build_provenance": {
+    "repository": "danielraffel/skia-builder",
+    "signer_workflow": "danielraffel/skia-builder/.github/workflows/build-skia.yml",
+    "source_ref": "refs/heads/main",
+    "predicate_type": "https://slsa.dev/provenance/v1",
+    "run": {
+      "run_id": 40626447857,
+      "run_attempt": 1
+    },
+    "bundle": {
+      "name": "skia-build-mac-universal-gpu-release.provenance-attestation.sha256-b781f48d57c6157850db0efe072a872eb555fb352c669950ed2e186625967884.sigstore.json",
+      "sha256": "b781f48d57c6157850db0efe072a872eb555fb352c669950ed2e186625967884",
+      "url": "https://github.com/danielraffel/skia-builder/releases/download/chrome/m158/skia-build-mac-universal-gpu-release.provenance-attestation.sha256-b781f48d57c6157850db0efe072a872eb555fb352c669950ed2e186625967884.sigstore.json"
+    }
   }
 }
