@@ -63,6 +63,18 @@ jobs:
           } >> "$GITHUB_ENV"
           echo "archive=vellum-sdk-$version-darwin-arm64.tar.gz" >> "$GITHUB_OUTPUT"
 
+      # The job owns its whole machine: a disposable fleet VM (6 cores) or a
+      # hosted runner (3). Size every build to it rather than to a constant.
+      - name: Size builds to this runner's cores
+        shell: bash
+        run: |
+          set -euo pipefail
+          cores="$(sysctl -n hw.ncpu)"
+          [[ "$cores" =~ ^[1-9][0-9]*$ ]]
+          jobs=$(( cores > 16 ? 16 : cores ))
+          echo "VELLUM_BUILD_JOBS=$jobs" >> "$GITHUB_ENV"
+          echo "Building with $jobs jobs on $cores cores"
+
       - name: Download and verify the locked Skia and Dawn archive
         shell: bash
         run: |
@@ -179,7 +191,7 @@ jobs:
             -DVELLUM_ENABLE_MIRROR=ON \
             -DVELLUM_MIRROR_DEPS_DIR="$VELLUM_MIRROR_DEPS_DIR" \
             -DVELLUM_VIEW_AUDIO_ARCHIVE="$VELLUM_VIEW_AUDIO_ARCHIVE"
-          cmake --build build-gpu --parallel 3
+          cmake --build build-gpu --parallel "$VELLUM_BUILD_JOBS"
 
       - name: Stress parallel text shaping in Release
         run: |
@@ -199,7 +211,7 @@ jobs:
             -DVELLUM_REQUIRE_GPU=ON \
             -DVELLUM_SKIA_ARCHIVE="$VELLUM_SKIA_ARCHIVE"
           cmake --build build-gpu-asan \
-            --target vellum-text-shaping-concurrency-test --parallel 3
+            --target vellum-text-shaping-concurrency-test --parallel "$VELLUM_BUILD_JOBS"
           ASAN_OPTIONS=abort_on_error=1:detect_leaks=0:halt_on_error=1 \
           VELLUM_TEXT_STRESS_ROUNDS=20 \
             ./build-gpu-asan/vellum-text-shaping-concurrency-test
@@ -334,20 +346,35 @@ jobs:
               json.dumps(record, indent=2, sort_keys=True) + "\n"
           )
           PY
-          python3 scripts/build_sdk_artifact.py \
-            --skia-archive "$VELLUM_SKIA_ARCHIVE" \
-            --web-payload "$RUNNER_TEMP/web-payload" \
-            --node-binary "$node_binary" \
-            --node-license "$node_license" \
-            --node-provenance "$RUNNER_TEMP/node-provenance.json" \
-            --output-dir "$first" --json > "$RUNNER_TEMP/sdk-first.json"
-          python3 scripts/build_sdk_artifact.py \
-            --skia-archive "$VELLUM_SKIA_ARCHIVE" \
-            --web-payload "$RUNNER_TEMP/web-payload" \
-            --node-binary "$node_binary" \
-            --node-license "$node_license" \
-            --node-provenance "$RUNNER_TEMP/node-provenance.json" \
-            --output-dir "$second" --json > "$RUNNER_TEMP/sdk-second.json"
+          # The two independent builds run side by side, each in its own
+          # temporary tree with half the cores, so their configure, install
+          # and packaging phases overlap. Both must succeed. They share the
+          # mirror's dependency checkouts, which the GPU build above already
+          # fetched; GIT_OPTIONAL_LOCKS=0 keeps the reuse check's concurrent
+          # `git status` from contending for an index lock there.
+          build_sdk() {
+            GIT_OPTIONAL_LOCKS=0 \
+            CMAKE_BUILD_PARALLEL_LEVEL="$(( VELLUM_BUILD_JOBS > 1 ? VELLUM_BUILD_JOBS / 2 : 1 ))" \
+            python3 scripts/build_sdk_artifact.py \
+              --skia-archive "$VELLUM_SKIA_ARCHIVE" \
+              --web-payload "$RUNNER_TEMP/web-payload" \
+              --node-binary "$node_binary" \
+              --node-license "$node_license" \
+              --node-provenance "$RUNNER_TEMP/node-provenance.json" \
+              --output-dir "$1" --json > "$2"
+          }
+          build_sdk "$first" "$RUNNER_TEMP/sdk-first.json" &
+          first_pid=$!
+          build_sdk "$second" "$RUNNER_TEMP/sdk-second.json" &
+          second_pid=$!
+          first_status=0
+          second_status=0
+          wait "$first_pid" || first_status=$?
+          wait "$second_pid" || second_status=$?
+          if [ "$first_status" -ne 0 ] || [ "$second_status" -ne 0 ]; then
+            echo "::error::SDK builds exited $first_status and $second_status"
+            exit 1
+          fi
           test "$(python3 cli/vellum_cli.py --version)" = \
             "vellum $VELLUM_RELEASE_VERSION"
           archive="$VELLUM_RELEASE_ARCHIVE"
