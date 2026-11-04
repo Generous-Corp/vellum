@@ -1,0 +1,263 @@
+#pragma once
+
+#include <cstdint>
+#include <memory>
+#include <string>
+
+namespace gpu_runtime {
+
+/// Decides when a presentable swapchain has to be (re)configured.
+///
+/// A host resize only records the size it wants. The swapchain is rebuilt at
+/// most once, when the next frame acquires its texture. Live resize delivers
+/// several size events per frame and a rebuild costs milliseconds on Vulkan
+/// and D3D12, so configuring on every event rebuilt it for sizes no frame ever
+/// presented.
+class SwapchainResizeState {
+  public:
+    /// Record the size the host wants. Configures nothing.
+    void request(uint32_t width, uint32_t height) {
+        requested_width_ = width;
+        requested_height_ = height;
+    }
+
+    /// The swapchain now matches the requested size.
+    void mark_configured() {
+        configured_width_ = requested_width_;
+        configured_height_ = requested_height_;
+        configured_ = true;
+    }
+
+    /// Make the next frame configure even at an unchanged size, for a
+    /// swapchain the surface reported as suboptimal.
+    void invalidate() {
+        configured_ = false;
+    }
+
+    /// A zero dimension (a minimised or collapsed window) has nothing to
+    /// present, and a swapchain cannot be configured at that size.
+    bool presentable() const {
+        return requested_width_ != 0 && requested_height_ != 0;
+    }
+
+    /// True when the next frame must configure before it acquires a texture.
+    bool needs_configure() const {
+        return presentable() && (!configured_ || requested_width_ != configured_width_ ||
+                                 requested_height_ != configured_height_);
+    }
+
+    /// Record a presented frame. `configured` says whether it had to configure
+    /// first; a frame that did restarts the settle count.
+    void note_frame(bool configured) {
+        if (configured)
+            stable_frames_ = 0;
+        else if (stable_frames_ < kSettleFrames)
+            ++stable_frames_;
+    }
+
+    /// Settled: the last kSettleFrames frames presented without configuring,
+    /// and no resize is pending, so a live resize is over and width()/height()
+    /// are the final size. Nothing in the surface acts on it; it is a signal
+    /// for callers that want to wait out a drag, such as a GPU cache trim or a
+    /// final-size check.
+    bool settled() const {
+        return presentable() && !needs_configure() && stable_frames_ >= kSettleFrames;
+    }
+
+    static constexpr uint32_t kSettleFrames = 2;
+
+    /// The requested size, which is what GpuSurface::width()/height() report.
+    uint32_t width() const {
+        return requested_width_;
+    }
+    uint32_t height() const {
+        return requested_height_;
+    }
+
+  private:
+    uint32_t requested_width_ = 0;
+    uint32_t requested_height_ = 0;
+    uint32_t configured_width_ = 0;
+    uint32_t configured_height_ = 0;
+    bool configured_ = false;
+    uint32_t stable_frames_ = 0;
+};
+
+/// Abstract GPU surface — a presentable rendering target backed by a native window/view.
+///
+/// Ownership model:
+/// - Platform code creates native views/layers and passes handles here
+/// - GpuSurface owns the Dawn instance, adapter, device, queue, and surface
+/// - SkiaSurface receives the device/queue from GpuSurface (single device)
+/// - begin_frame()/end_frame() bracket each rendered frame with acquire/present
+///
+/// Frame lifecycle:
+///   gpu.begin_frame()   → acquires current presentable texture
+///   skia.begin_frame()  → wraps that texture as Graphite render target
+///   ... draw ...
+///   skia.end_frame()    → submits Graphite recording to the shared device/queue
+///   gpu.end_frame()     → presents to native surface
+class GpuSurface {
+public:
+    /// Native adapter type reported by Dawn/WebGPU. This is independent of the
+    /// backend API: Metal, D3D12, or Vulkan can each expose hardware, fallback,
+    /// or CPU adapters.
+    enum class AdapterType {
+        unknown,
+        integrated_gpu,
+        discrete_gpu,
+        cpu,
+    };
+
+    enum class AdapterBackendPreference {
+        default_backend,
+        null_backend,
+        /// Use the Vulkan backend without Dawn's fallback-adapter hint. This
+        /// lets a hosted Linux lane select its configured software ICD
+        /// (lavapipe) and is intentionally separate from force_fallback_adapter.
+        vulkan,
+        /// Use the D3D12 backend without Dawn's fallback-adapter hint. On a
+        /// hosted Windows runner this resolves to the WARP adapter.
+        d3d12,
+    };
+
+    struct AdapterInfo {
+        bool available = false;
+        bool native_bridge = false;
+        AdapterType adapter_type = AdapterType::unknown;
+        /// Authoritative backend classification reported by Dawn/WebGPU.
+        /// Dawn's Null backend can also report a CPU adapter type, but it is
+        /// an API-validation backend and must never be treated as software
+        /// rendering evidence.
+        bool null_backend = false;
+        std::string backend = "unavailable";
+        std::string backend_type = "Unknown";
+        std::string name = "Mock Dawn Adapter";
+        std::string vendor = "Pulp";
+        std::string architecture = "unavailable";
+        std::string description = "Mock Dawn Adapter";
+        std::string preferred_canvas_format = "bgra8unorm";
+    };
+
+    struct Config {
+        uint32_t width = 800;
+        uint32_t height = 600;
+        bool vsync = true;
+
+        /// Request Dawn's `timestamp-query` feature for GPU render timing.
+        ///
+        /// OFF by default, and deliberately NOT inferred from adapter support.
+        /// Dawn gates `writeTimestamp` behind the `allow_unsafe_apis` toggle on
+        /// every backend, so requesting timestamps forces that toggle on — which
+        /// relaxes the device's validation posture for ORDINARY RENDERING, not
+        /// just for the diagnostic. Previously this was enabled whenever the
+        /// adapter advertised the feature, meaning normal rendering silently ran
+        /// with weaker validation on most machines.
+        ///
+        /// Turning it on is the caller's decision (see
+        /// `PluginViewHost::Options::enable_gpu_timing`). With it off,
+        /// `SkiaSurface::gpu_render_timing_available()` reports false and the
+        /// inspector shows an honest "GPU timing unavailable".
+        bool enable_gpu_timing = false;
+
+        bool force_fallback_adapter = false;
+        AdapterBackendPreference backend_preference =
+            AdapterBackendPreference::default_backend;
+
+        /// Opaque platform-specific handle for on-screen rendering.
+        /// On macOS/iOS: CAMetalLayer*
+        /// On Windows:   HWND
+        /// On Linux:     a pointer to an X11NativeHandle (see below). A bare
+        ///               X11 Window id is NOT enough — Dawn's Xlib surface
+        ///               source needs both the Display* and the Window. Wayland
+        ///               (wl_display*/wl_surface*) is not wired yet.
+        /// nullptr = offscreen-only mode (no presentation)
+        void* native_surface_handle = nullptr;
+    };
+
+    /// Typed X11 surface handle. Pass a pointer to one of these as
+    /// Config::native_surface_handle on Linux so Dawn can build an
+    /// SurfaceSourceXlibWindow. `display` is an `Display*` and `window` is an
+    /// X11 `Window` (an `unsigned long`); both are kept opaque here so this
+    /// header stays Xlib-include-free for non-Linux and no-X11 consumers. The
+    /// pointed-to struct only needs to outlive the initialize() call.
+    struct X11NativeHandle {
+        void*         display = nullptr;  // Display*
+        unsigned long window  = 0;        // Window
+    };
+
+    virtual ~GpuSurface() = default;
+
+    virtual bool initialize(const Config& config) = 0;
+
+    /// Record a new size. width()/height() report it at once, but a
+    /// presentable surface reconfigures its swapchain only in the next
+    /// begin_frame(), so several resizes before one frame configure once.
+    virtual void resize(uint32_t width, uint32_t height) = 0;
+
+    /// Acquire the current presentable texture, first configuring the
+    /// swapchain if the size changed since the last frame. Returns false if
+    /// not ready, including while either dimension is zero.
+    virtual bool begin_frame() = 0;
+
+    /// Present to native surface (or just process events if offscreen).
+    virtual void end_frame() = 0;
+
+    virtual bool is_initialized() const = 0;
+    virtual bool has_surface() const = 0;
+    virtual uint32_t width() const = 0;
+    virtual uint32_t height() const = 0;
+
+    /// Opaque accessors for the Dawn device/queue/texture.
+    /// SkiaSurface (in the same module) interprets these as Dawn C++ types.
+    /// Returns nullptr if not initialized.
+    virtual void* dawn_device_handle() const = 0;
+    virtual void* dawn_queue_handle() const = 0;
+    virtual void* dawn_instance_handle() const = 0;
+
+    /// The current presentable texture, valid only between begin_frame/end_frame.
+    /// Returns nullptr in offscreen mode or if begin_frame wasn't called.
+    virtual void* current_texture_handle() const = 0;
+
+    /// Snapshot describing the current adapter/device state for higher-level bridges.
+    /// Returns an unavailable record when no native adapter has been initialized.
+    virtual AdapterInfo adapter_info() const = 0;
+
+    static std::unique_ptr<GpuSurface> create_dawn();
+
+    /// Wall-clock milliseconds spent in each stage of initialize(), measured
+    /// with a monotonic clock. A stage that did not run (initialize() failed
+    /// before it, or the implementation has no such stage) stays negative.
+    struct StartupTimings {
+        double instance_ms = -1.0;
+        /// Adapter request (RequestAdapter / EnumerateAdapters).
+        double adapter_ms = -1.0;
+        /// Device request, including feature and toggle negotiation.
+        double device_ms = -1.0;
+        /// Native surface creation plus the first swapchain configure.
+        double surface_ms = -1.0;
+    };
+
+    /// Stage timings recorded by the most recent initialize() call. The base
+    /// implementation reports nothing measured. Kept at the vtable tail so
+    /// existing GpuSurface subclasses keep their slot layout.
+    virtual StartupTimings startup_timings() const { return {}; }
+
+    /// Swapchain configurations issued since initialize(), the first one
+    /// included, their total wall-clock milliseconds, and whether the size
+    /// has settled. Offscreen surfaces never configure; implementations
+    /// without a swapchain report zero and never settle.
+    struct SwapchainStats {
+        uint64_t configure_count = 0;
+        double configure_ms = 0.0;
+        /// SwapchainResizeState::settled(): the size has held for two frames.
+        bool settled = false;
+    };
+
+    /// Kept at the vtable tail for the same reason as startup_timings().
+    virtual SwapchainStats swapchain_stats() const {
+        return {};
+    }
+};
+
+} // namespace gpu_runtime
