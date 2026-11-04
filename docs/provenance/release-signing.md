@@ -4,35 +4,50 @@ A Vellum release tag is signed by CI, never by a person or an agent's host key.
 
 ## How a release happens
 
-1. Open a pull request that bumps the project `VERSION` in `CMakeLists.txt` and sets
-   `provenance/release-request.json`:
+1. A release is a landed change to the project `VERSION` in `CMakeLists.txt` that is newer than every existing and
+   retired `v*` tag. Nobody writes it by hand: after every landing on `main`, `version-at-land.yml` runs
+   `scripts/version_at_land.py plan`, which counts the changes landed since the newest release tag:
+   - only a change that touches a path that ships in the SDK counts (`SHIP_PATHS`, tests excluded); workflow,
+     provenance, documentation and test changes release nothing on their own;
+   - a `Version-Bump: vellum=<patch|minor|major>` trailer on any of its commits sets its level, and
+     `Version-Bump: skip reason="..."` counts it as nothing; an unreadable `Version-Bump:` trailer fails the run;
+   - otherwise its conventional-commit titles decide: a breaking change (`type!:` or a `BREAKING CHANGE:` footer) is
+     major, `feat` is minor, anything else that ships is patch;
+   - while the major version is `0`, every level moves down one place (Cargo's 0.x rule): breaking is minor, and
+     features and fixes are patch.
 
-   ```json
-   {"schema": "vellum.release-request.v1", "version": "0.1.10"}
-   ```
+   The next version is one level above the highest version any tag has used, existing or retired, so versions only
+   move forward and a retired name is never reused. `scripts/version_at_land.py apply` rewrites every version
+   surface (`VERSION_SURFACES`) and regenerates `scripts/INSTALLER_SHA256SUMS`, and the workflow opens the change as
+   a pull request from `automation/version-bump` (or updates the one already open). It is reviewed and lands through
+   the merge queue like any other change. While `main` declares a version that is not tagged yet, the workflow
+   proposes nothing: that release covers what lands meanwhile.
 
-   It is reviewed and lands through the merge queue like any other change.
-2. The commit that lands the request is **not** tagged. A tag's `provenance.yml` run checks the Pulp observatory with
+   A person may open the same change by hand (for example to release a minor version early); `release-tag.yml`
+   treats it the same way.
+2. The commit that lands the version is **not** tagged. A tag's `provenance.yml` run checks the Pulp observatory with
    `--vellum-tail-policy reconciled`: every commit after the cursor's `vellum.last_scanned_commit` must be
-   observatory evidence. A commit's tree can never name that same commit as its cursor, so a request commit can never
+   observatory evidence. A commit's tree can never name that same commit as its cursor, so a version commit can never
    pass (this is why `v0.1.8` and `v0.1.9` never published; both are retired).
 3. The observatory receiver reconciles the landing and lands its evidence commit through the queue. That push changes
    `provenance/pulp-observatory/cursor.json`, which starts `release-tag.yml`. Its first job,
    `select-release-commit`, holds no secret and no environment; `scripts/release_request.py select` decides whether
    the pushed commit is the one to tag. It is when:
-   - the requested tag does not exist yet (otherwise the push is an ordinary reconcile and the job ends);
-   - the cursor at the pushed commit is, or descends from, the commit that landed the request: the newest commit on
-     the pushed commit's first-parent history whose `release-request.json` differs from its first parent's, which on
-     `main` is the merge queue's merge of the request;
+   - the tag of the project version at the pushed commit does not exist yet, is not retired, and is newer than every
+     existing and retired `v*` tag (otherwise the push is an ordinary reconcile and the job ends);
+   - the cursor at the pushed commit is, or descends from, the commit that landed the version: the newest commit on
+     the pushed commit's first-parent history whose project `VERSION` differs from its first parent's, which on
+     `main` is the merge queue's merge of the bump;
    - every commit after the cursor is observatory evidence, by the same rule the tag's provenance run applies: a
      linear chain that only modifies the cursor and the two reports and only adds event files, where a merge counts
      only when its tree equals the commit before it (the queue's merge of the receiver's commit).
 
-   Any other push tags nothing: the request merge itself, a reconcile whose cursor predates the request, or a
-   reconcile that landed behind other changes. A later reconcile then tags the release.
+   Any other push tags nothing: the bump merge itself, a reconcile whose cursor predates the bump, or a reconcile
+   that landed behind other changes. A later reconcile then tags the release. The job's pre-tag checks
+   (`scripts/pretag_checks.py`) then run the tag pipeline's content checks before any tag exists.
 4. The `sign-release-tag` job runs only for a selected commit, in the `release` environment. It decides again and
-   requires the same answer, then `scripts/release_request.py check` refuses unless all of these hold:
-   - the version matches the project version;
+   requires the same answer, then `scripts/release_request.py check` refuses unless all of these hold for the project
+   version at that commit:
    - the version is not retired (`provenance/retired-release-tags.json`);
    - the tag does not exist yet (only git's "no such ref" answer counts as absent; a failed lookup refuses);
    - the version is newer than every existing and retired `v*` tag;
@@ -55,7 +70,23 @@ The cursor file is evidence the receiver writes, not a policy file: it only deci
 *What* is tagged is a commit whose content equals the cursor's commit apart from evidence, and that commit has
 passed main's required checks.
 
-Nobody approves a routine release by hand. Authorization is the reviewed pull request plus the required checks.
+Nobody approves a routine release by hand. Authorization is the landed version bump plus the required checks on the
+tagged commit.
+
+## When a release does not appear
+
+Two workflows make a missing release loud instead of silent:
+
+- `release-watchdog.yml` opens one issue per workflow (`Release pipeline failed: <name>`) when `version-at-land.yml`
+  or `release-tag.yml` fails on `main`, or when the GPU proof, provenance or SDK finalizer fails for a release tag,
+  and closes it on the next successful run.
+- `release-cadence-check.yml` runs every hour and judges the outcome (`scripts/release_cadence.py`): a version on
+  `main` with no tag six hours after it landed, a newest unretired tag with no published release six hours after it
+  was tagged, a version on `main` that is retired, or one older than the newest tag. It keeps one issue
+  (`Release cadence: a Vellum version is not released`) open until a run finds nothing.
+
+A pushed tag is frozen. When its own pipeline cannot pass, retire it in `provenance/retired-release-tags.json` (an
+owner-reviewed change); the next shipped change then bumps past it.
 
 ## What the tag message attests
 
@@ -98,14 +129,16 @@ promotion attestation and prove full-matrix parity.
 - **The signing policy is owner-reviewed.** `.github/CODEOWNERS` gives these files to the owner, and `main` requires
   code-owner review:
   - the signer files: release, authority and renderer;
-  - the two release workflows;
+  - the release workflows: `release-tag.yml`, `release-policy.yml` and `version-at-land.yml`, which holds the App
+    token that pushes the bump branch;
   - the release scripts;
   - the verifiers, including the immutable-release verifier;
-  - the committed records the release decision trusts: the release request and the retired tags;
+  - the committed record the release decision trusts: the retired tags;
   - CODEOWNERS itself.
   `release-policy` keeps that list complete: CODEOWNERS and the check's own list must name the same files, and a
   policy script may import only modules that are themselves on the list.
-- **Checked-out code never runs next to a secret.** Each secret lives in a step that runs no repository Python:
+- **Checked-out code never runs next to a secret.** In `release-tag.yml` and `version-at-land.yml`, each secret
+  lives in a step that runs no repository Python:
   - signing runs only `git tag`;
   - verifying runs without the key;
   - the steps that hold an App token only call `gh` and `git`; every minted token counts, whatever its step id.
@@ -130,7 +163,7 @@ promotion attestation and prove full-matrix parity.
 Owner authorization (owner decisions in the planning repository), release signing (this key) and ordinary commit
 signing (each host's own key) are three separate keys.
 
-## Rehearse before you request
+## Rehearse before you change the release path
 
 A release cannot be undone: the tag, its immutable release and its frozen inputs are final, so a downstream failure
 loses the version. Before changing anything on the release path, or asking for a release, replay the tag's own

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""release_request.py tags only a valid, new, fully checked, observatory-reconciled release request."""
+"""release_request.py tags only a new, fully checked, observatory-reconciled project version."""
 
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ def green() -> list:
 
 class Check(unittest.TestCase):
     def check(self, **overrides):
-        args = dict(request={"schema": rr.REQUEST_SCHEMA, "version": "0.1.10"}, cmakelists=CMAKE,
+        args = dict(cmakelists=CMAKE,
                     retired_tags=RETIRED, commit=COMMIT, tag_exists=False, branch_rules=RULES, pages=green(),
                     immutable=ENABLED, now=NOW)
         args.update(overrides)
@@ -61,8 +61,9 @@ class Check(unittest.TestCase):
         self.assertEqual(self.check(existing_tags=["v0.1.6", "v0.1.8", "v0.1.9", "not-a-version"]), "v0.1.10")
 
     def test_a_version_has_one_spelling(self) -> None:
-        self.refused("MAJOR.MINOR.PATCH", request={"schema": rr.REQUEST_SCHEMA, "version": "0.1.010"},
-                     cmakelists=CMAKE.replace("0.1.10", "0.1.010"))
+        for spelling in ("0.1.010", "0.1", "0.1.10.1", "01.1.10"):
+            with self.subTest(spelling=spelling):
+                self.refused("MAJOR.MINOR.PATCH", cmakelists=CMAKE.replace("0.1.10", spelling))
 
     def test_a_release_only_moves_forward(self) -> None:
         self.refused("not newer than v0.2.0", existing_tags=["v0.1.8", "v0.2.0"])
@@ -74,24 +75,23 @@ class Check(unittest.TestCase):
         self.refused("already exists", tag_exists=True)
 
     def test_a_retired_tag_is_never_reused(self) -> None:
-        self.refused("retired", request={"schema": rr.REQUEST_SCHEMA, "version": "0.1.7"},
-                     cmakelists=CMAKE.replace("0.1.10", "0.1.7"))
+        self.refused("retired", cmakelists=CMAKE.replace("0.1.10", "0.1.7"))
 
     def test_the_committed_record_retires_v0_1_9(self) -> None:
         record = json.loads((rr.ROOT / "provenance/retired-release-tags.json").read_text())
         row = {entry["tag"]: entry for entry in record["tags"]}["v0.1.9"]
         self.assertEqual(row["target_commit"], "5f847399829f2d55cd0f540019ee591bd78d8fb5")
         self.assertEqual(row["tag_object"], "a3ce268d0770e1fb3b34130cd0eed4471ea1ce5d")
-        self.refused("retired", request={"schema": rr.REQUEST_SCHEMA, "version": "0.1.9"},
-                     cmakelists=CMAKE.replace("0.1.10", "0.1.9"), retired_tags=record)
+        self.refused("retired", cmakelists=CMAKE.replace("0.1.10", "0.1.9"), retired_tags=record)
 
-    def test_the_project_version_must_match(self) -> None:
-        self.refused("declares 0.1.9", cmakelists=CMAKE.replace("0.1.10", "0.1.9"))
-
-    def test_the_request_shape_is_closed(self) -> None:
-        self.refused("exactly", request={"schema": rr.REQUEST_SCHEMA, "version": "0.1.10", "commit": COMMIT})
-        self.refused("schema", request={"schema": "other", "version": "0.1.10"})
-        self.refused("MAJOR", request={"schema": rr.REQUEST_SCHEMA, "version": "0.1.10-rc1"})
+    def test_the_tag_is_the_project_version(self) -> None:
+        # The project VERSION is the only statement of the release; there is no
+        # second file for it to disagree with.
+        self.assertEqual(self.check(cmakelists=CMAKE.replace("0.1.10", "0.1.11")), "v0.1.11")
+        self.assertEqual(self.check(cmakelists=CMAKE.replace("0.1.10", "0.2.0"), existing_tags=["v0.1.10"]),
+                         "v0.2.0")
+        self.refused("declares no project VERSION", cmakelists="project(Vellum LANGUAGES CXX)\n")
+        self.assertFalse((rr.ROOT / "provenance/release-request.json").exists())
 
     def test_a_failed_required_check_refuses(self) -> None:
         self.refused("macos: completed/failure", pages=[{"check_runs": [run("macos", "failure"),
@@ -137,7 +137,7 @@ def app_run(name: str, run_id: int, app: int = 15368, status: str = "completed",
 
 class RequiredChecksFromProtection(unittest.TestCase):
     def check(self, runs: list) -> str:
-        return rr.check(request={"schema": rr.REQUEST_SCHEMA, "version": "0.1.10"}, cmakelists=CMAKE,
+        return rr.check(cmakelists=CMAKE,
                         retired_tags=RETIRED, commit=COMMIT, tag_exists=False, branch_rules=LIVE_RULES,
                         pages=[{"check_runs": runs}], immutable=ENABLED, now=NOW,
                         protection=LIVE_PROTECTION)
@@ -181,7 +181,7 @@ class LiveImmutableReleases(unittest.TestCase):
     """The tag is made only when the live immutable-release answer says releases are immutable."""
 
     def check(self, answer) -> str:
-        return rr.check(request={"schema": rr.REQUEST_SCHEMA, "version": "0.1.10"}, cmakelists=CMAKE,
+        return rr.check(cmakelists=CMAKE,
                         retired_tags=RETIRED, commit=COMMIT, tag_exists=False, branch_rules=RULES,
                         pages=green(), immutable=answer, now=NOW)
 
@@ -394,7 +394,8 @@ class History:
         self.git("init", "-q", "-b", "main")
         self.git("config", "user.name", "t")
         self.git("config", "user.email", "t@t")
-        self.write(rr.REQUEST, json.dumps({"schema": rr.REQUEST_SCHEMA, "version": "0.1.9"}))
+        self.write(rr.CMAKELISTS, CMAKE.replace("0.1.10", "0.1.9"))
+        self.write(rr.RETIRED_TAGS, json.dumps(RETIRED) + "\n")
         self.write("src/app.txt", "one\n")
         for report in sorted(rr.EVIDENCE_MODIFIED - {rr.CURSOR}):
             self.write(report, "{}\n")
@@ -448,10 +449,11 @@ class History:
             self.write(extra, extra_text)
         return self.commit("chore(provenance): coalesce Pulp observatory evidence")
 
-    def request(self, version: str = "0.1.10") -> str:
+    def bump(self, version: str = "0.1.10") -> str:
+        """The queue's merge of a pull request that changes the project VERSION."""
         self.branch(self.main)
-        self.write(rr.REQUEST, json.dumps({"schema": rr.REQUEST_SCHEMA, "version": version}))
-        return self.land(self.commit(f"release: request v{version}"))
+        self.write(rr.CMAKELISTS, CMAKE.replace("0.1.10", version))
+        return self.land(self.commit(f"chore(release): bump version to {version}"))
 
     def change(self, text: str = "two\n") -> str:
         self.branch(self.main)
@@ -460,7 +462,7 @@ class History:
 
 
 class TagTargetSelection(unittest.TestCase):
-    """Only the receiver's reconcile covering an untagged request is tagged."""
+    """Only the receiver's reconcile covering an untagged version bump is tagged."""
 
     def setUp(self) -> None:
         self.history = History(self)
@@ -468,15 +470,15 @@ class TagTargetSelection(unittest.TestCase):
     def select(self, commit: str, tag_exists: bool = False) -> rr.Selection:
         return rr.select(self.history.root, commit, tag_exists)
 
-    def test_the_request_merge_is_refused(self) -> None:
-        landed = self.history.request()
+    def test_the_bump_merge_is_refused(self) -> None:
+        landed = self.history.bump()
         chosen = self.select(landed)
         self.assertIsNone(chosen.tag)
-        self.assertEqual(chosen.request_commit, landed)
+        self.assertEqual(chosen.version_commit, landed)
         self.assertIn("does not yet contain", chosen.reason)
 
     def test_the_reconcile_commit_and_its_queue_merge_are_accepted(self) -> None:
-        landed = self.history.request()
+        landed = self.history.bump()
         evidence = self.history.reconcile(landed)
         merged = self.history.land(evidence)
         self.assertEqual(self.history.git("rev-parse", f"{merged}^{{tree}}"),
@@ -485,32 +487,32 @@ class TagTargetSelection(unittest.TestCase):
             with self.subTest(commit=commit):
                 chosen = self.select(commit)
                 self.assertEqual(chosen.tag, "v0.1.10", chosen.reason)
-                self.assertEqual((chosen.request_commit, chosen.cursor), (landed, landed))
+                self.assertEqual((chosen.version_commit, chosen.cursor), (landed, landed))
 
-    def test_a_reconcile_after_later_changes_still_covers_the_request(self) -> None:
-        landed = self.history.request()
+    def test_a_reconcile_after_later_changes_still_covers_the_bump(self) -> None:
+        landed = self.history.bump()
         later = self.history.change()
         merged = self.history.land(self.history.reconcile(later))
         chosen = self.select(merged)
         self.assertEqual(chosen.tag, "v0.1.10", chosen.reason)
-        self.assertEqual((chosen.request_commit, chosen.cursor), (landed, later))
+        self.assertEqual((chosen.version_commit, chosen.cursor), (landed, later))
 
-    def test_a_reconcile_for_a_non_request_change_is_ignored(self) -> None:
-        # The request on main is already tagged: an ordinary change's reconcile releases nothing.
+    def test_a_reconcile_for_a_non_bump_change_is_ignored(self) -> None:
+        # The version on main is already tagged: an ordinary change's reconcile releases nothing.
         changed = self.history.change()
         merged = self.history.land(self.history.reconcile(changed))
         chosen = self.select(merged, tag_exists=True)
         self.assertIsNone(chosen.tag)
         self.assertIn("already exists", chosen.reason)
-        # ... and a reconcile of a change made before the request landed does not release it.
+        # ... and a reconcile of a change made before the bump landed does not release it.
         stale = self.history.reconcile(changed)
-        self.history.request()
+        self.history.bump()
         merged = self.history.land(stale)
         chosen = self.select(merged)
         self.assertIsNone(chosen.tag)
 
     def test_a_reconcile_landed_behind_another_change_is_not_tagged(self) -> None:
-        landed = self.history.request()
+        landed = self.history.bump()
         evidence = self.history.reconcile(landed)
         self.history.change()
         merged = self.history.land(evidence)
@@ -519,18 +521,20 @@ class TagTargetSelection(unittest.TestCase):
         self.assertIn("not an observatory-reconciled commit", chosen.reason)
 
     def test_anything_but_evidence_after_the_cursor_is_refused(self) -> None:
-        landed = self.history.request()
+        landed = self.history.bump()
         evidence_only = "not observatory evidence"
         cases = {
             "code": (dict(extra="src/app.txt"), evidence_only),
             "workflow": (dict(extra=".github/workflows/release-tag.yml"), evidence_only),
-            "added file": (dict(extra="CMakeLists.txt"), evidence_only),
+            "added file": (dict(extra="docs/new.md"), evidence_only),
+            # CMakeLists.txt changed without its version is not evidence either.
+            "build file": (dict(extra=rr.CMAKELISTS, extra_text=CMAKE + "# changed\n"), evidence_only),
             "nested event": (dict(event="nested/e.yaml"), evidence_only),
             "non-yaml event": (dict(event="e.json"), evidence_only),
-            # Touching the request makes this commit the request's landing,
+            # Changing the version makes this commit the version's landing,
             # which no cursor in its own tree can contain.
-            "request": (dict(extra=rr.REQUEST, extra_text=json.dumps(
-                {"schema": rr.REQUEST_SCHEMA, "version": "0.1.10"}) + "\n"), "does not yet contain"),
+            "version": (dict(extra=rr.CMAKELISTS, extra_text=CMAKE.replace("0.1.10", "0.1.11")),
+                        "does not yet contain"),
         }
         for name, (change, reason) in cases.items():
             with self.subTest(name):
@@ -543,7 +547,7 @@ class TagTargetSelection(unittest.TestCase):
         # Two evidence commits on the cursor, joined by a merge whose tree is the
         # second one's: every diff against the commit before it is evidence, but
         # the tag's provenance run rejects the second commit as discontinuous.
-        landed = self.history.request()
+        landed = self.history.bump()
         first = self.history.reconcile(landed, start=landed, event="a.yaml")
         self.history.branch(landed)
         for event in ("a.yaml", "b.yaml"):
@@ -567,7 +571,7 @@ class TagTargetSelection(unittest.TestCase):
     def test_a_merge_that_changes_its_own_tree_is_refused(self) -> None:
         # The queue's merge of the receiver's commit is accepted only because
         # its tree equals that commit's; a merge that adds its own change is not.
-        landed = self.history.request()
+        landed = self.history.bump()
         evidence = self.history.reconcile(landed)
         self.history.git("checkout", "-q", "--detach", landed)
         self.history.git("merge", "-q", "--no-ff", "--no-commit", evidence)
@@ -579,13 +583,13 @@ class TagTargetSelection(unittest.TestCase):
         self.assertIn("not one linear chain", chosen.reason)
 
     def test_an_empty_commit_after_the_cursor_is_refused(self) -> None:
-        landed = self.history.request()
+        landed = self.history.bump()
         self.history.branch(self.history.reconcile(landed))
         empty = self.history.commit("empty")
         self.assertIn("changes nothing", self.select(empty).reason)
 
     def test_a_cursor_off_the_pushed_history_is_refused(self) -> None:
-        landed = self.history.request()
+        landed = self.history.bump()
         self.history.branch(landed)
         side = self.history.commit("side commit never landed")
         evidence = self.history.reconcile(side, start=landed)
@@ -594,7 +598,7 @@ class TagTargetSelection(unittest.TestCase):
         self.assertIn("not a strict ancestor", chosen.reason)
 
     def test_a_deleted_report_or_a_retyped_cursor_is_refused(self) -> None:
-        landed = self.history.request()
+        landed = self.history.bump()
         evidence = self.history.reconcile(landed)
         self.history.branch(evidence)
         self.history.git("rm", "-q", f"{rr.OBSERVATORY}/reports/current.md")
@@ -616,7 +620,7 @@ class TagTargetSelection(unittest.TestCase):
             self.select(self.history.commit("cursor becomes a symlink"))
 
     def test_a_deleted_or_renamed_evidence_file_is_refused(self) -> None:
-        landed = self.history.request()
+        landed = self.history.bump()
         evidence = self.history.reconcile(landed)
         self.history.branch(evidence)
         event = next((self.history.root / rr.EVENTS_PREFIX).glob("*.yaml"))
@@ -625,7 +629,7 @@ class TagTargetSelection(unittest.TestCase):
         self.assertIn("not observatory evidence: D", self.select(renamed).reason)
 
     def test_a_path_cannot_inject_a_workflow_command_through_the_reason(self) -> None:
-        landed = self.history.request()
+        landed = self.history.bump()
         self.history.branch(self.history.reconcile(landed))
         self.history.write("src/x\n::error::injected", "x\n")
         hostile = self.history.commit("hostile path")
@@ -635,12 +639,12 @@ class TagTargetSelection(unittest.TestCase):
         self.assertIn("src/x\\n::error::injected", rr.one_line(reason))
 
     def test_an_existing_tag_is_never_reselected(self) -> None:
-        landed = self.history.request()
+        landed = self.history.bump()
         merged = self.history.land(self.history.reconcile(landed))
         self.assertIsNone(self.select(merged, tag_exists=True).tag)
 
-    def test_a_malformed_cursor_or_request_refuses_loudly(self) -> None:
-        landed = self.history.request()
+    def test_a_malformed_cursor_or_version_refuses_loudly(self) -> None:
+        landed = self.history.bump()
         for name, text in (("foreign repository", History.cursor(landed, "someone/vellum")),
                            ("short commit", History.cursor("abc")), ("not JSON", "{"),
                            # An abbreviated commit git would resolve is still not a full SHA.
@@ -655,32 +659,63 @@ class TagTargetSelection(unittest.TestCase):
         with self.assertRaisesRegex(rr.ReleaseRequestError, "full SHA"):
             self.select("abc")
 
-    def test_a_side_branch_that_repeats_the_request_does_not_move_its_landing(self) -> None:
-        # A branch cut before the request lands, setting the same request, then
+    def test_a_side_branch_that_repeats_the_bump_does_not_move_its_landing(self) -> None:
+        # A branch cut before the bump lands, setting the same version, then
         # merged: the newest commit that changed the file is on that branch, but
-        # main's first-parent chain still says the request landed at `landed`.
+        # main's first-parent chain still says the version landed at `landed`.
         before = self.history.main
-        landed = self.history.request()
+        landed = self.history.bump()
         self.history.branch(before)
-        self.history.write(rr.REQUEST, json.dumps({"schema": rr.REQUEST_SCHEMA, "version": "0.1.10"}))
-        repeat = self.history.commit("repeat the request on a stale branch")
+        self.history.write(rr.CMAKELISTS, CMAKE)
+        repeat = self.history.commit("repeat the bump on a stale branch")
         self.history.land(repeat)
-        self.assertEqual(rr.request_landing(self.history.root, self.history.main), landed)
+        self.assertEqual(rr.version_landing(self.history.root, self.history.main), landed)
 
-    def test_the_request_landing_is_the_first_parent_merge(self) -> None:
-        landed = self.history.request()
+    def test_the_version_landing_is_the_first_parent_merge(self) -> None:
+        landed = self.history.bump()
         self.history.change()
         self.history.land(self.history.reconcile(self.history.main))
-        self.assertEqual(rr.request_landing(self.history.root, self.history.main), landed)
-        # The request branch's own commit is not on main's first-parent chain.
-        self.assertNotEqual(rr.request_landing(self.history.root, self.history.main),
+        self.assertEqual(rr.version_landing(self.history.root, self.history.main), landed)
+        # The bump branch's own commit is not on main's first-parent chain.
+        self.assertNotEqual(rr.version_landing(self.history.root, self.history.main),
                             self.history.git("rev-parse", f"{landed}^2"))
+
+    def test_a_build_change_to_cmakelists_does_not_move_the_landing(self) -> None:
+        # A later change to CMakeLists.txt that leaves the version alone is not
+        # a version landing; only a change to the version is.
+        landed = self.history.bump()
+        self.history.branch(self.history.main)
+        self.history.write(rr.CMAKELISTS, CMAKE + "add_subdirectory(more)\n")
+        self.history.land(self.history.commit("build: add a subdirectory"))
+        self.assertEqual(rr.version_landing(self.history.root, self.history.main), landed)
+        merged = self.history.land(self.history.reconcile(self.history.main))
+        chosen = self.select(merged)
+        self.assertEqual((chosen.tag, chosen.version_commit), ("v0.1.10", landed), chosen.reason)
+
+    def test_only_a_version_newer_than_every_tag_is_selected(self) -> None:
+        # Must-pass: a bump past the newest tag is selected. Must-fail: the
+        # same reconcile with an equal, older or retired version is not.
+        landed = self.history.bump("0.1.11")
+        merged = self.history.land(self.history.reconcile(landed))
+        self.assertEqual(rr.select(self.history.root, merged, False, ["v0.1.10"]).tag, "v0.1.11")
+        for tags, reason in ((["v0.1.11"], "not newer than v0.1.11"), (["v0.1.12"], "not newer than v0.1.12"),
+                             (["v0.2.0", "v0.1.6"], "not newer than v0.2.0")):
+            with self.subTest(tags=tags):
+                chosen = rr.select(self.history.root, merged, False, tags)
+                self.assertIsNone(chosen.tag)
+                self.assertIn(reason, chosen.reason)
+        # A retired version is never selected, even when no tag of that name exists.
+        retired = self.history.bump("0.1.7")
+        merged = self.history.land(self.history.reconcile(retired))
+        chosen = rr.select(self.history.root, merged, False, ["v0.1.6"])
+        self.assertIsNone(chosen.tag)
+        self.assertIn("retired", chosen.reason)
 
     def test_the_selection_agrees_with_the_tag_provenance_tail_check(self) -> None:
         # Whatever select() accepts, the tag's provenance run accepts too.
         sys.path.insert(0, str(rr.ROOT / "tools/provenance"))
         import observatory  # noqa: PLC0415
-        landed = self.history.request()
+        landed = self.history.bump()
         evidence = self.history.reconcile(landed)
         merged = self.history.land(evidence)
         for commit in (evidence, merged):
@@ -692,7 +727,7 @@ class TagTargetSelection(unittest.TestCase):
                 self.history.root, landed), landed)
 
     def test_the_cli_prints_the_selection(self) -> None:
-        landed = self.history.request()
+        landed = self.history.bump()
         merged = self.history.land(self.history.reconcile(landed))
         remote = self.history.root.parent / (self.history.root.name + "-remote.git")
         self.addCleanup(shutil.rmtree, remote, True)
@@ -709,7 +744,7 @@ class TagTargetSelection(unittest.TestCase):
 
         chosen = run(merged)
         self.assertEqual(chosen.returncode, 0, chosen.stderr)
-        self.assertEqual(chosen.stdout.splitlines(), ["tag=v0.1.10", f"request-commit={landed}",
+        self.assertEqual(chosen.stdout.splitlines(), ["tag=v0.1.10", f"version-commit={landed}",
                                                       f"cursor={landed}", f"pulp-cursor={'1' * 40}"])
         refused = run(landed)
         self.assertEqual(refused.returncode, 0, refused.stderr)
@@ -770,10 +805,28 @@ class RealHistoryReplay(unittest.TestCase):
             with self.subTest(target=target):
                 chosen = rr.select(rr.ROOT, target, tag_exists=False)
                 self.assertEqual(chosen.tag, "v0.1.9", chosen.reason)
-                self.assertEqual((chosen.request_commit, chosen.cursor), (self.V0_1_9, self.V0_1_9))
+                self.assertEqual((chosen.version_commit, chosen.cursor), (self.V0_1_9, self.V0_1_9))
                 self.tail(target)
         # With the tag present, as it is, the same reconcile releases nothing.
         self.assertIsNone(rr.select(rr.ROOT, self.RECONCILE_MERGE, tag_exists=True).tag)
+
+    V0_1_10 = "6b0bee8e61e49c21076af5d6cd6bfa29a06ed75b"
+    V0_1_10_BUMP = "23e59fb4b04f382a283b049c5df4086cf4c49612"
+
+    def test_v0_1_10_is_selected_from_its_version_alone(self) -> None:
+        # The commit v0.1.10 tags, replayed as if its tag did not exist yet,
+        # with the release tags that existed before it. Its version landed in
+        # #141's merge, before the request file named it; the version alone
+        # selects the same commit the request did.
+        before = ["v0.1.0", "v0.1.1", "v0.1.6", "v0.1.8", "v0.1.9"]
+        chosen = rr.select(rr.ROOT, self.V0_1_10, tag_exists=False, existing_tags=before)
+        self.assertEqual(chosen.tag, "v0.1.10", chosen.reason)
+        self.assertEqual(chosen.version_commit, self.V0_1_10_BUMP)
+        self.tail(self.V0_1_10)
+        # The same commit selects nothing once v0.1.10 exists, or with a newer tag.
+        self.assertIsNone(rr.select(rr.ROOT, self.V0_1_10, tag_exists=True).tag)
+        self.assertIsNone(rr.select(rr.ROOT, self.V0_1_10, tag_exists=False,
+                                    existing_tags=[*before, "v0.1.10"]).tag)
 
 
 class ReleaseTagWorkflow(unittest.TestCase):
@@ -795,6 +848,8 @@ class ReleaseTagWorkflow(unittest.TestCase):
         self.assertIn("paths: [provenance/pulp-observatory/cursor.json]", trigger)
         self.assertNotIn("release-request.json", trigger)
         self.assertNotIn("immutable-release-preflight", self.text)
+        # The version comes from the tagged commit's CMakeLists.txt; no request file is read.
+        self.assertNotIn("release-request", self.text)
 
     def test_the_selection_job_holds_no_secret_and_no_environment(self) -> None:
         self.assertNotIn("secrets.", self.select_job)
@@ -807,7 +862,7 @@ class ReleaseTagWorkflow(unittest.TestCase):
         self.assertIn("needs: select-release-commit", self.sign_job)
         self.assertIn("if: needs.select-release-commit.outputs.tag != ''", self.sign_job)
         self.assertIn("environment: release", self.sign_job)
-        decide = self.step("Decide whether the request may be tagged")
+        decide = self.step("Decide whether the version may be tagged")
         self.assertIn("release_request.py select --commit \"$GITHUB_SHA\"", decide)
         self.assertIn('= "$SELECTED_TAG"', decide.split("release_request.py select", 1)[1].split("\n")[2])
         self.assertIn('test "$tag" = "$SELECTED_TAG"', decide)
@@ -822,7 +877,7 @@ class ReleaseTagWorkflow(unittest.TestCase):
         self.assertNotIn("python", read)
 
     def test_the_push_uses_a_token_minted_after_the_wait(self) -> None:
-        self.assertLess(self.sign_job.index("- name: Decide whether the request may be tagged"),
+        self.assertLess(self.sign_job.index("- name: Decide whether the version may be tagged"),
                         self.sign_job.index("id: push-token"))
         push = self.step("Push the tag and freeze it")
         self.assertIn("GH_TOKEN: ${{ steps.push-token.outputs.token }}", push)

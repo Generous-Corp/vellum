@@ -40,13 +40,16 @@ EXPECTED_RUNNERS = {
     "pulp-observatory-watchdog.yml": ("__hosted__", "ubuntu-latest"),
     "review-verdict.yml": ("__hosted__", "ubuntu-24.04"),
     "review-verdict-trigger.yml": ("__hosted__", "ubuntu-24.04"),
+    "release-cadence-check.yml": ("__hosted__", "ubuntu-latest"),
     "release-policy.yml": ("__hosted__", "ubuntu-latest"),
     "release-tag.yml": ("__hosted__", "ubuntu-latest"),
+    "release-watchdog.yml": ("__hosted__", "ubuntu-latest"),
     "readme-quick-start.yml": (
         "VELLUM_MACOS_RUNS_ON_JSON",
         '["macos-15"]',
     ),
     "sdk-release.yml": ("__mixed__", ""),
+    "version-at-land.yml": ("__hosted__", "ubuntu-latest"),
     "workflow-lint.yml": ("__hosted__", "ubuntu-latest"),
 }
 

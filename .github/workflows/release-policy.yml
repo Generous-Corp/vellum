@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Full history: test_release_request.py replays the tag's observatory
-      # check on Vellum's own release commits.
+      # check on Vellum's own release commits; test_release_cadence.py reads tags.
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -28,6 +28,8 @@ jobs:
           set -euo pipefail
           python3 -I scripts/test_check_release_policy.py
           python3 -I scripts/test_release_request.py
+          python3 -I scripts/test_version_at_land.py
+          python3 -I scripts/test_release_cadence.py
           python3 -I scripts/test_pretag_checks.py
           python3 -I scripts/test_sdk_release_draft_lookup.py
           python3 -I scripts/check_release_policy.py check

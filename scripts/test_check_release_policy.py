@@ -201,11 +201,12 @@ class Policy(unittest.TestCase):
         self.assertTrue(any("verify_release_tag.py" in p for p in policy.problems(self.tmp)))
 
     def test_release_decision_inputs_missing_from_codeowners_fail(self) -> None:
-        # A dropped retired tag, a forged request, or a weakened immutable-release
-        # verifier must not land without the owner's review.
+        # A dropped retired tag, a weakened immutable-release verifier, or a
+        # version-at-land workflow that does more with its App token must not
+        # land without the owner's review.
         for path in ("/scripts/verify_immutable_release_preflight.py",
                      "/provenance/retired-release-tags.json",
-                     "/provenance/release-request.json",
+                     "/.github/workflows/version-at-land.yml",
                      "/provenance/authority-signers.allowed_signers",
                      "/tools/provenance/verify_renderer_dependency.py"):
             with self.subTest(path=path):
@@ -219,7 +220,7 @@ class Policy(unittest.TestCase):
     def test_release_decision_inputs_missing_from_policy_files_fail(self) -> None:
         for path in ("/scripts/verify_immutable_release_preflight.py",
                      "/provenance/retired-release-tags.json",
-                     "/provenance/release-request.json",
+                     "/.github/workflows/version-at-land.yml",
                      "/provenance/authority-signers.allowed_signers",
                      "/tools/provenance/verify_renderer_dependency.py"):
             with self.subTest(path=path):
@@ -296,6 +297,31 @@ class Isolation(unittest.TestCase):
         output = token.replace("GH_TOKEN: ${{ steps.app-token.outputs.token }}", "T: ${{ steps.request.outputs.tag }}")
         self.assertEqual(self.found("    steps:\n" + output), [])
 
+    def test_version_at_land_runs_no_python_where_it_holds_a_token(self) -> None:
+        # Must-pass: the App token is minted and used in steps that run no
+        # Python. Must-fail: repository Python in a token-holding step, or
+        # Python without -I anywhere in the workflow.
+        def found(text: str) -> list[str]:
+            return policy.isolation_problems({policy.VERSION_WORKFLOW: text}, self.tmp)
+
+        mint = ("      - name: mint\n        uses: actions/create-github-app-token@x\n        with:\n"
+                "          private-key: ${{ secrets.SHIPYARD_APP_PRIVATE_KEY }}\n")
+        push = ("      - name: push\n        env:\n          GH_TOKEN: ${{ steps.bump-token.outputs.token }}\n"
+                "        run: git push origin HEAD\n")
+        plan = "      - name: plan\n        run: python3 -I scripts/version_at_land.py plan\n"
+        self.assertEqual(found("    steps:\n" + plan + mint + push), [])
+        held = push.replace("git push origin HEAD", "python3 -I scripts/version_at_land.py apply")
+        self.assertTrue(any("holds a secret and runs Python" in p for p in found("    steps:\n" + held)))
+        keyed = mint.replace("        with:", "        run: python3 -I x.py\n        with:")
+        self.assertTrue(any("holds a secret and runs Python" in p for p in found("    steps:\n" + keyed)))
+        loose = plan.replace("python3 -I", "python3")
+        self.assertTrue(any("without -I" in p for p in found("    steps:\n" + loose)))
+
+    def test_the_committed_version_at_land_holds_the_rule(self) -> None:
+        text = (ROOT / policy.WORKFLOWS / policy.VERSION_WORKFLOW).read_text()
+        self.assertEqual(policy.isolation_problems({policy.VERSION_WORKFLOW: text}, self.tmp), [])
+        self.assertNotIn(policy.RELEASE_ENVIRONMENT, policy.environment_names(text))
+
     def test_admin_only_reads_need_the_app_token(self) -> None:
         for endpoint in ("rules/branches/main", "branches/main/protection/required_status_checks",
                          "immutable-releases"):
@@ -354,12 +380,19 @@ class Repository(unittest.TestCase):
         self.assertNotIn("/provenance/immutable-release-preflight.json", policy.POLICY_FILES)
         self.assertNotIn("immutable-release-preflight.json", (ROOT / policy.CODEOWNERS).read_text())
 
+    def test_the_release_request_file_is_retired(self) -> None:
+        # The project VERSION is the release; a second file naming it would be
+        # a second answer, and owning it would be moot.
+        self.assertFalse((ROOT / "provenance/release-request.json").exists())
+        self.assertNotIn("/provenance/release-request.json", policy.POLICY_FILES)
+        self.assertNotIn("release-request.json", (ROOT / policy.CODEOWNERS).read_text())
+
     def test_the_release_decision_inputs_are_policy_files(self) -> None:
         # Dropping one from both lists at once needs an owner-reviewed change
         # to check_release_policy.py; this names the omission in that review.
         for path in ("/scripts/verify_immutable_release_preflight.py",
                      "/provenance/retired-release-tags.json",
-                     "/provenance/release-request.json",
+                     "/.github/workflows/version-at-land.yml",
                      "/provenance/authority-signers.allowed_signers",
                      "/tools/provenance/verify_renderer_dependency.py"):
             with self.subTest(path=path):

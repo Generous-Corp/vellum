@@ -1,0 +1,80 @@
+name: Release cadence check
+
+# Every hour, scripts/release_cadence.py asks one question of the outcome: is
+# there a version that should be released by now and is not? A version main
+# declares that has no tag, or a newest tag that has no published release,
+# older than the grace period, opens (or updates) one tracking issue. It
+# closes on the first run that finds nothing. It does not care which workflow
+# broke: a release that silently fails to appear is the symptom it watches.
+# release-watchdog.yml reports the failed runs themselves.
+on:
+  schedule:
+    - cron: '23 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: release-cadence-check
+  cancel-in-progress: false
+
+jobs:
+  release-cadence-check:
+    name: release-cadence-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TRACKING_TITLE: 'Release cadence: a Vellum version is not released'
+    steps:
+      - name: Check out main and its tags
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Read the published releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$RUNNER_TEMP/releases.json"
+
+      - name: Find versions that should be released by now
+        id: scan
+        run: |
+          set -euo pipefail
+          python3 -I scripts/release_cadence.py --commit "$(git rev-parse HEAD)" \
+            --releases "$RUNNER_TEMP/releases.json" --output "$RUNNER_TEMP/findings.json" \
+            --body "$RUNNER_TEMP/body.md" >> "$GITHUB_OUTPUT"
+          cat "$RUNNER_TEMP/body.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Maintain the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COUNT: ${{ steps.scan.outputs.count }}
+        run: |
+          set -euo pipefail
+          existing="$(gh api --method GET "repos/$GITHUB_REPOSITORY/issues" -f state=open -f per_page=100 \
+            --paginate --jq ".[] | select(.pull_request == null and .title == env.TRACKING_TITLE) | .number" \
+            | head -n 1)"
+          if [ "$COUNT" = 0 ]; then
+            if [ -n "$existing" ]; then
+              gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$existing/comments" \
+                -f body="Every version is released as of run $GITHUB_RUN_ID. Closing." > /dev/null
+              gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/$existing" \
+                -f state=closed -f state_reason=completed > /dev/null
+            fi
+            exit 0
+          fi
+          if [ -n "$existing" ]; then
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/$existing" \
+              -F body=@"$RUNNER_TEMP/body.md" > /dev/null
+          else
+            gh api --method POST "repos/$GITHUB_REPOSITORY/issues" -f title="$TRACKING_TITLE" \
+              -F body=@"$RUNNER_TEMP/body.md" > /dev/null
+          fi
+          echo "::error::a Vellum version is not released; see the tracking issue"
+          exit 1

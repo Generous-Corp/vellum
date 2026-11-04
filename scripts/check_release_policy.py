@@ -18,9 +18,10 @@ fails when:
   the policy list does not name, so the two lists stay one inventory;
 - a policy script imports a repository module that is not itself a policy
   file, so the release decision never runs code the owner does not own;
-- a release workflow runs Python without `-I`, a step that holds a secret runs
-  Python at all, or a repository Python file is named like a standard-library
-  module, so checked-out code cannot run with the signing key or App token.
+- a release workflow runs Python without `-I`, a step of release-tag.yml or
+  version-at-land.yml that holds a secret runs Python at all, or a repository
+  Python file is named like a standard-library module, so checked-out code
+  cannot run with the signing key or an App token.
 
 `signer` prints the principal and fingerprint the policy names, for the
 release job to verify the tag it just signed.
@@ -42,14 +43,15 @@ CODEOWNERS = Path(".github/CODEOWNERS")
 RELEASE_ENVIRONMENT = "release"
 SIGNING_WORKFLOW = "release-tag.yml"
 OWNER = "@danielraffel"
-# The signing policy, the code that enforces it, and the committed records the
-# release decision trusts (the release request and the retired tags).
+# The signing policy, the code that enforces it, the committed record the
+# release decision trusts (the retired tags), and the workflow that holds an
+# App token to propose each version (version-at-land.yml).
 POLICY_FILES = (
     "/.github/CODEOWNERS",
-    "/.github/workflows/release-tag.yml",
     "/.github/workflows/release-policy.yml",
+    "/.github/workflows/release-tag.yml",
+    "/.github/workflows/version-at-land.yml",
     "/provenance/authority-signers.allowed_signers",
-    "/provenance/release-request.json",
     "/provenance/release-signers.allowed_signers",
     "/provenance/retired-release-tags.json",
     "/scripts/check_release_policy.py",
@@ -68,7 +70,10 @@ ENVIRONMENT_KEY = re.compile(
     re.MULTILINE,
 )
 ENVIRONMENT_NAME = re.compile(r"\bname:\s*['\"]?(?P<name>[A-Za-z0-9_-]+)")
-RELEASE_WORKFLOWS = (SIGNING_WORKFLOW, "release-policy.yml")
+VERSION_WORKFLOW = "version-at-land.yml"
+RELEASE_WORKFLOWS = (SIGNING_WORKFLOW, "release-policy.yml", VERSION_WORKFLOW)
+# Workflows whose secret-holding steps must run no Python at all.
+SECRET_ISOLATED = (SIGNING_WORKFLOW, VERSION_WORKFLOW)
 # Endpoints only an Administration-read token may call; the Actions token gets 403.
 ADMIN_READ = re.compile(r"gh api [^\n]*(?:branches/main/protection|rules/branches/|/rulesets|immutable-releases)")
 APP_TOKEN = re.compile(r"GH_TOKEN:\s*\$\{\{\s*steps\.(?:app-token|push-token)\.outputs\.token\s*\}\}")
@@ -402,7 +407,7 @@ def isolation_problems(workflows: dict[str, str], root: Path) -> list[str]:
             for call in PYTHON_CALL.finditer(step):
                 if "I" not in call["flags"].replace("-", ""):
                     found.append(f"{name}: {title} runs `{call.group(0).strip()}` without -I")
-            if name == SIGNING_WORKFLOW and SECRET.search(step) and PYTHON_CALL.search(step):
+            if name in SECRET_ISOLATED and SECRET.search(step) and PYTHON_CALL.search(step):
                 found.append(f"{name}: {title} holds a secret and runs Python")
             if name == SIGNING_WORKFLOW and ADMIN_READ.search(step) and not APP_TOKEN.search(step):
                 found.append(f"{name}: {title} reads an Administration-only endpoint without the App token")

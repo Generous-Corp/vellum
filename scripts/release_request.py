@@ -1,22 +1,24 @@
 #!/usr/bin/env python3
-"""Decide whether a merged release request may be tagged, and describe its freeze.
+"""Decide whether a landed version bump may be tagged, and describe its freeze.
 
-A release starts as a reviewed pull request that changes
-provenance/release-request.json. The commit that lands it on main is not
-tagged: a tag's provenance run requires every commit after the Pulp
+A release is a landed change to the project VERSION in CMakeLists.txt that is
+newer than every release tag, existing or retired. version-at-land.yml opens
+that change as a pull request; a person may open one too. Either way it lands
+through the merge queue like any other change. The commit that lands it is
+not tagged: a tag's provenance run requires every commit after the Pulp
 observatory's Vellum cursor to be observatory evidence, and a commit's tree
 can never name that same commit as its cursor. The observatory receiver then
-lands a reconcile commit whose cursor covers the request, and release-tag.yml
+lands a reconcile commit whose cursor covers the bump, and release-tag.yml
 tags that commit. This script makes the decision from files the workflow has
 already fetched and the local clone, so it needs no token:
 
   select  whether the pushed commit is the observatory reconcile that covers
-          an untagged release request, and so the commit to tag.
-  check   the request names a new, unretired version that matches the
-          project version, the tag does not exist yet, every check the main
-          branch rules require concluded success on the commit, and the live
-          answer of GET /repos/{repo}/immutable-releases says immutable
-          releases are enabled.
+          an untagged version bump, and so the commit to tag.
+  check   the project version is new, unretired and newer than every release
+          tag, the tag does not exist yet, every check the main branch rules
+          require concluded success on the commit, and the live answer of
+          GET /repos/{repo}/immutable-releases says immutable releases are
+          enabled.
   freeze  the per-tag ruleset that verify_release_tag_ruleset.py requires
           before an immutable release is finalized.
   attestation
@@ -42,14 +44,14 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-REQUEST_SCHEMA = "vellum.release-request.v1"
 VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 SHA = re.compile(r"^[0-9a-f]{40}$")
 PROJECT_VERSION = re.compile(r"project\(\s*vellum\b[^)]*\bVERSION\s+([0-9.]+)", re.IGNORECASE | re.DOTALL)
 
 
 REPOSITORY = "Generous-Corp/vellum"
-REQUEST = "provenance/release-request.json"
+CMAKELISTS = "CMakeLists.txt"
+RETIRED_TAGS = "provenance/retired-release-tags.json"
 OBSERVATORY = "provenance/pulp-observatory"
 CURSOR = f"{OBSERVATORY}/cursor.json"
 # What an observatory evidence commit may change, exactly as the tag's
@@ -81,21 +83,12 @@ def load(path: Path) -> Any:
         raise ReleaseRequestError(f"cannot read {path}: {error}") from error
 
 
-def request_version(request: Any) -> str:
-    if not isinstance(request, dict) or set(request) != {"schema", "version"}:
-        raise ReleaseRequestError("the request must hold exactly `schema` and `version`")
-    if request["schema"] != REQUEST_SCHEMA:
-        raise ReleaseRequestError(f"the request schema must be {REQUEST_SCHEMA}")
-    version = request["version"]
-    if not isinstance(version, str) or not VERSION.fullmatch(version):
-        raise ReleaseRequestError("the requested version must be MAJOR.MINOR.PATCH")
-    return version
-
-
 def project_version(cmakelists: str) -> str:
     found = PROJECT_VERSION.search(cmakelists)
     if not found:
         raise ReleaseRequestError("CMakeLists.txt declares no project VERSION")
+    if not VERSION.fullmatch(found[1]):
+        raise ReleaseRequestError(f"the project VERSION {found[1]} is not MAJOR.MINOR.PATCH")
     return found[1]
 
 
@@ -190,7 +183,7 @@ def unmet(required: list[tuple[str, int | None]], runs: list[dict[str, Any]], co
 def pending(required: list[tuple[str, int | None]], runs: list[dict[str, Any]], commit: str) -> list[str]:
     """Required checks whose newest run on `commit` has not finished.
 
-    The push that lands a request starts main's checks again on the same
+    The push that lands the reconcile starts main's checks again on the same
     commit. While the newest run of a required check is still running, the
     release job waits instead of reading it as unmet. A run not yet created
     is not waited for: the merge-queue run on the same commit decides.
@@ -256,24 +249,28 @@ def remote_tag_exists(root: Path, tag: str, remote: str = "origin") -> bool:
                               f"{result.stderr.strip()}")
 
 
-def check(*, request: Any, cmakelists: str, retired_tags: Any, commit: str, tag_exists: bool,
+def newest_known(retired_tags: Any, existing_tags: list[str]) -> tuple[int, int, int] | None:
+    """The highest version any release tag has used, existing or retired."""
+    known = [key for name in [*existing_tags, *retired(retired_tags)] if (key := version_key(name))]
+    return max(known) if known else None
+
+
+def check(*, cmakelists: str, retired_tags: Any, commit: str, tag_exists: bool,
           branch_rules: Any, pages: Any, immutable: Any = None, now: datetime | None = None,
           protection: Any = None, existing_tags: list[str] | None = None) -> str:
-    """The tag to create; raises ReleaseRequestError when the request may not be tagged."""
+    """The tag to create; raises ReleaseRequestError when the project version may not be tagged."""
     if not SHA.fullmatch(commit):
         raise ReleaseRequestError("the commit must be a full SHA")
-    version = request_version(request)
+    version = project_version(cmakelists)
     tag = f"v{version}"
-    if project_version(cmakelists) != version:
-        raise ReleaseRequestError(f"the request names {version}, but CMakeLists.txt declares {project_version(cmakelists)}")
     if tag in retired(retired_tags):
         raise ReleaseRequestError(f"{tag} is retired and is never reused")
     if tag_exists:
         raise ReleaseRequestError(f"{tag} already exists; a release tag is never moved")
-    known = [key for name in [*(existing_tags or []), *retired(retired_tags)] if (key := version_key(name))]
-    if known and version_key(tag) <= max(known):  # type: ignore[operator]
-        newest = "v" + ".".join(map(str, max(known)))
-        raise ReleaseRequestError(f"{tag} is not newer than {newest}; a release only moves forward")
+    newest = newest_known(retired_tags, existing_tags or [])
+    if newest and version_key(tag) <= newest:  # type: ignore[operator]
+        raise ReleaseRequestError(f"{tag} is not newer than v{'.'.join(map(str, newest))}; "
+                                  "a release only moves forward")
     missing = unmet(required_checks(branch_rules, protection), check_runs(pages), commit)
     if missing:
         raise ReleaseRequestError("required checks have not passed: " + "; ".join(missing))
@@ -319,17 +316,28 @@ def blob_at(root: Path, commit: str, path: str) -> bytes:
     return result.stdout
 
 
-def request_landing(root: Path, commit: str) -> str:
-    """The commit on `commit`'s first-parent chain that landed its release request.
+def version_at(root: Path, commit: str) -> str | None:
+    """The project VERSION CMakeLists.txt declares at `commit`, or None when it declares none."""
+    result = subprocess.run(["git", "-C", str(root), "show", f"{commit}:{CMAKELISTS}"], capture_output=True,
+                            check=False)
+    if result.returncode != 0:
+        return None
+    found = PROJECT_VERSION.search(result.stdout.decode("utf-8", "replace"))
+    return found[1] if found else None
 
-    That is the newest first-parent commit whose request file differs from its
-    first parent's. A request reaches main through the merge queue, so on main
-    this is the queue's merge commit, the one the release used to tag.
+
+def version_landing(root: Path, commit: str) -> str:
+    """The commit on `commit`'s first-parent chain that landed its project VERSION.
+
+    That is the newest first-parent commit whose project VERSION differs from
+    its first parent's. A version bump reaches main through the merge queue, so
+    on main this is the queue's merge commit. Commits that change
+    CMakeLists.txt without changing the version are passed over.
     """
     chain = git(root, "rev-list", "--first-parent", commit).splitlines()
     if not chain:
         raise ReleaseRequestError(f"{commit} has no history")
-    query = "".join(f"{entry}:{REQUEST}\n{entry}^1:{REQUEST}\n" for entry in chain)
+    query = "".join(f"{entry}:{CMAKELISTS}\n{entry}^1:{CMAKELISTS}\n" for entry in chain)
     answer = subprocess.run(["git", "-C", str(root), "cat-file", "--batch-check=%(objectname)"],
                             input=query, capture_output=True, text=True, check=True).stdout.splitlines()
     if len(answer) != 2 * len(chain):
@@ -338,9 +346,9 @@ def request_landing(root: Path, commit: str) -> str:
         mine, parent = answer[2 * index], answer[2 * index + 1]
         if mine.endswith(" missing"):
             break
-        if mine != parent:
+        if mine != parent and version_at(root, entry) != version_at(root, f"{entry}^1"):
             return entry
-    raise ReleaseRequestError(f"no commit on the first-parent history of {commit} landed {REQUEST}")
+    raise ReleaseRequestError(f"no commit on the first-parent history of {commit} set its project VERSION")
 
 
 def observatory_cursor(root: Path, commit: str) -> str:
@@ -415,43 +423,54 @@ class Selection:
     """What a push to main means for the release: the tag to make, or None and why not."""
     tag: str | None
     reason: str
-    request_commit: str | None = None
+    version_commit: str | None = None
     cursor: str | None = None
 
 
-def select(root: Path, commit: str, tag_exists: bool) -> Selection:
-    """Whether `commit` is the commit to tag for the release request it carries.
+def select(root: Path, commit: str, tag_exists: bool, existing_tags: list[str] | None = None) -> Selection:
+    """Whether `commit` is the commit to tag for the project version it declares.
 
-    It is when the request's tag does not exist yet, the observatory cursor at
-    `commit` is (or descends from) the commit that landed the request, and
-    everything after that cursor is observatory evidence. Such a commit passes
-    the tag's reconciled observatory check, and its content is the content the
-    cursor was reconciled through. Every other push is not a release: the
-    request merge itself (its tree cannot name it as the cursor), a reconcile
-    whose cursor predates the request, a reconcile landed behind other changes,
+    It is when that version's tag does not exist yet, is not retired, and is
+    newer than every release tag; the observatory cursor at `commit` is (or
+    descends from) the commit that landed the version; and everything after
+    that cursor is observatory evidence. Such a commit passes the tag's
+    reconciled observatory check, and its content is the content the cursor
+    was reconciled through. Every other push is not a release: the version
+    bump's merge itself (its tree cannot name it as the cursor), a reconcile
+    whose cursor predates the bump, a reconcile landed behind other changes,
     and any push once the tag exists.
     """
     if not SHA.fullmatch(commit):
         raise ReleaseRequestError("the commit must be a full SHA")
     try:
-        request = json.loads(blob_at(root, commit, REQUEST), object_pairs_hook=strict_object)
-    except ValueError as error:
-        raise ReleaseRequestError(f"{REQUEST} at {commit} is not JSON: {error}") from error
-    tag = f"v{request_version(request)}"
+        cmakelists = blob_at(root, commit, CMAKELISTS).decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ReleaseRequestError(f"{CMAKELISTS} at {commit} is not UTF-8: {error}") from error
+    tag = f"v{project_version(cmakelists)}"
     if tag_exists:
-        return Selection(None, f"{tag} already exists; no release request is waiting")
-    landed = request_landing(root, commit)
+        return Selection(None, f"{tag} already exists; no version bump is waiting")
+    try:
+        retired_tags = json.loads(blob_at(root, commit, RETIRED_TAGS), object_pairs_hook=strict_object)
+    except ValueError as error:
+        raise ReleaseRequestError(f"{RETIRED_TAGS} at {commit} is not JSON: {error}") from error
+    if tag in retired(retired_tags):
+        return Selection(None, f"{tag} is retired and is never reused; main must declare a newer version")
+    newest = newest_known(retired_tags, existing_tags or [])
+    if newest and version_key(tag) <= newest:  # type: ignore[operator]
+        return Selection(None, f"{tag} is not newer than v{'.'.join(map(str, newest))}; no version bump is "
+                               "waiting")
+    landed = version_landing(root, commit)
     cursor = observatory_cursor(root, commit)
     if not is_ancestor(root, landed, cursor):
         return Selection(None, f"the observatory cursor {cursor} does not yet contain {landed}, which "
-                               f"landed the {tag} request; a later reconcile tags it", landed, cursor)
+                               f"landed version {tag[1:]}; a later reconcile tags it", landed, cursor)
     try:
         require_evidence_tail(root, cursor, commit)
     except ReleaseRequestError as error:
         return Selection(None, f"{commit} is not an observatory-reconciled commit ({error}); a later "
                                f"reconcile tags {tag}", landed, cursor)
     return Selection(tag, f"{commit} reconciles the observatory through {cursor}, which contains {landed}, "
-                          f"the commit that landed the {tag} request", landed, cursor)
+                          f"the commit that landed version {tag[1:]}", landed, cursor)
 
 
 def attestation(root: Path, commit: str, attested_at: str, tag: str) -> dict[str, Any]:
@@ -543,8 +562,7 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
     one = sub.add_parser("check")
-    one.add_argument("--request", type=Path, default=ROOT / "provenance/release-request.json")
-    one.add_argument("--cmakelists", type=Path, default=ROOT / "CMakeLists.txt")
+    one.add_argument("--cmakelists", type=Path, default=ROOT / CMAKELISTS)
     one.add_argument("--commit", required=True)
     one.add_argument("--remote", default="origin",
                      help="looked up for the tag; only git's no-match answer reads as absent")
@@ -579,11 +597,13 @@ def main(argv: list[str]) -> int:
             print(json.dumps(attestation(ROOT, args.commit, args.attested_at, args.tag), indent=2, sort_keys=True))
             return 0
         if args.command == "select":
-            request = json.loads(blob_at(ROOT, args.commit, REQUEST), object_pairs_hook=strict_object)
-            chosen = select(ROOT, args.commit,
-                            remote_tag_exists(ROOT, f"v{request_version(request)}", args.remote))
+            if not SHA.fullmatch(args.commit):
+                raise ReleaseRequestError("the commit must be a full SHA")
+            version = project_version(blob_at(ROOT, args.commit, CMAKELISTS).decode("utf-8", "replace"))
+            chosen = select(ROOT, args.commit, remote_tag_exists(ROOT, f"v{version}", args.remote),
+                            remote_release_tags(ROOT, args.remote))
             print(f"tag={chosen.tag or ''}")
-            print(f"request-commit={chosen.request_commit or ''}")
+            print(f"version-commit={chosen.version_commit or ''}")
             print(f"cursor={chosen.cursor or ''}")
             print(f"pulp-cursor={observatory_pulp_cursor(ROOT, args.commit) if chosen.tag else ''}")
             print(one_line(chosen.reason), file=sys.stderr)
@@ -593,16 +613,15 @@ def main(argv: list[str]) -> int:
                               check_runs(load(args.check_runs)), args.commit)
             print("\n".join(running))
             return 0
-        request = load(args.request)
-        exists = remote_tag_exists(ROOT, f"v{request_version(request)}", args.remote)
-        tag = check(request=request, cmakelists=args.cmakelists.read_text(encoding="utf-8"),
-                    retired_tags=load(ROOT / "provenance/retired-release-tags.json"), commit=args.commit,
+        cmakelists = args.cmakelists.read_text(encoding="utf-8")
+        exists = remote_tag_exists(ROOT, f"v{project_version(cmakelists)}", args.remote)
+        tag = check(cmakelists=cmakelists, retired_tags=load(ROOT / RETIRED_TAGS), commit=args.commit,
                     tag_exists=exists, branch_rules=load(args.branch_rules),
                     pages=load(args.check_runs), immutable=load(args.immutable_releases),
                     protection=load(args.protection),
                     existing_tags=remote_release_tags(ROOT, args.remote), now=read_time(args.immutable_read_at))
     except (OSError, ValueError, subprocess.CalledProcessError, ReleaseRequestError) as error:
-        print(one_line(f"release request refused: {error}"), file=sys.stderr)
+        print(one_line(f"release refused: {error}"), file=sys.stderr)
         return 1
     print(tag)
     return 0
