@@ -11,46 +11,73 @@
 #       [LOCK <renderer-lock.json>]
 #       [REQUIRED])
 #
-# Defines the IMPORTED target gpu-runtime-dawn (Dawn's headers and
-# libdawn_combined.a) and sets GPU_RUNTIME_HAS_DAWN in the caller. Without a
-# directory or archive it sets GPU_RUNTIME_HAS_DAWN OFF, or stops configure
-# when REQUIRED. A digest mismatch always stops configure.
-#
-# Whichever form is supplied, the check proves it is the Dawn build the runtime
-# was compiled against.
+# Defines the IMPORTED target VellumGpuRuntime::Dawn (Dawn's headers, when
+# available, and libdawn_combined.a) and sets GPU_RUNTIME_HAS_DAWN and
+# GPU_RUNTIME_DAWN_LIBRARY in the caller. Without a directory, archive or
+# library it sets GPU_RUNTIME_HAS_DAWN OFF, or stops configure when REQUIRED.
+# A digest mismatch always stops configure, and so does an existing
+# VellumGpuRuntime::Dawn that was checked against a different lock digest:
+# the target is never reused on trust.
 
 include("${CMAKE_CURRENT_LIST_DIR}/GpuRuntimeRendererLock.cmake")
+
+function(_gpu_runtime_check_dawn_library library expected)
+    if(NOT EXISTS "${library}")
+        message(FATAL_ERROR "gpu-runtime: Dawn library does not exist: ${library}")
+    endif()
+    file(SHA256 "${library}" _actual)
+    if(NOT _actual STREQUAL expected)
+        message(FATAL_ERROR
+            "gpu-runtime: libdawn_combined.a does not match the lock; expected "
+            "${expected}, got ${_actual}")
+    endif()
+endfunction()
+
+function(_gpu_runtime_define_dawn library include_dirs digest)
+    add_library(VellumGpuRuntime::Dawn STATIC IMPORTED GLOBAL)
+    set_target_properties(VellumGpuRuntime::Dawn PROPERTIES
+        IMPORTED_LOCATION "${library}"
+        GPU_RUNTIME_DAWN_SHA256 "${digest}")
+    if(include_dirs)
+        set_target_properties(VellumGpuRuntime::Dawn PROPERTIES
+            INTERFACE_INCLUDE_DIRECTORIES "${include_dirs}")
+    endif()
+    if(APPLE)
+        set_property(TARGET VellumGpuRuntime::Dawn APPEND PROPERTY INTERFACE_LINK_LIBRARIES
+            "-framework Foundation" "-framework IOKit" "-framework IOSurface"
+            "-framework Metal" "-framework QuartzCore")
+    endif()
+endfunction()
 
 function(gpu_runtime_find_dawn)
     cmake_parse_arguments(ARG "REQUIRED" "PLATFORM;SKIA_DIR;ARCHIVE;LIBRARY;LOCK" "" ${ARGN})
     set(GPU_RUNTIME_HAS_DAWN OFF PARENT_SCOPE)
-    if(TARGET gpu-runtime-dawn)
-        set(GPU_RUNTIME_HAS_DAWN ON PARENT_SCOPE)
-        return()
-    endif()
     set(_lock_args PLATFORM "${ARG_PLATFORM}" PREFIX _gr)
     if(ARG_LOCK)
         list(APPEND _lock_args LOCK "${ARG_LOCK}")
     endif()
     gpu_runtime_read_renderer_lock(${_lock_args})
+    set(_expected "${_gr_SHA256_libdawn_combined.a}")
+    string(REGEX REPLACE "^chrome/m" "" _milestone "${_gr_MILESTONE}")
+    set(GPU_RUNTIME_SKIA_MILESTONE "${_milestone}" PARENT_SCOPE)
+
+    if(TARGET VellumGpuRuntime::Dawn)
+        get_target_property(_recorded VellumGpuRuntime::Dawn GPU_RUNTIME_DAWN_SHA256)
+        get_target_property(_location VellumGpuRuntime::Dawn IMPORTED_LOCATION)
+        if(NOT _recorded STREQUAL _expected)
+            message(FATAL_ERROR
+                "gpu-runtime: VellumGpuRuntime::Dawn already exists and was not checked "
+                "against this lock (recorded ${_recorded}, expected ${_expected})")
+        endif()
+        _gpu_runtime_check_dawn_library("${_location}" "${_expected}")
+        set(GPU_RUNTIME_DAWN_LIBRARY "${_location}" PARENT_SCOPE)
+        set(GPU_RUNTIME_HAS_DAWN ON PARENT_SCOPE)
+        return()
+    endif()
 
     if(ARG_LIBRARY AND NOT ARG_SKIA_DIR AND NOT ARG_ARCHIVE)
-        if(NOT EXISTS "${ARG_LIBRARY}")
-            message(FATAL_ERROR "gpu-runtime: Dawn library does not exist: ${ARG_LIBRARY}")
-        endif()
-        file(SHA256 "${ARG_LIBRARY}" _library_sha256)
-        if(NOT _library_sha256 STREQUAL "${_gr_SHA256_libdawn_combined.a}")
-            message(FATAL_ERROR
-                "gpu-runtime: libdawn_combined.a does not match the lock; expected "
-                "${_gr_SHA256_libdawn_combined.a}, got ${_library_sha256}")
-        endif()
-        add_library(gpu-runtime-dawn STATIC IMPORTED GLOBAL)
-        set_target_properties(gpu-runtime-dawn PROPERTIES IMPORTED_LOCATION "${ARG_LIBRARY}")
-        if(APPLE)
-            set_property(TARGET gpu-runtime-dawn APPEND PROPERTY INTERFACE_LINK_LIBRARIES
-                "-framework Foundation" "-framework IOKit" "-framework IOSurface"
-                "-framework Metal" "-framework QuartzCore")
-        endif()
+        _gpu_runtime_check_dawn_library("${ARG_LIBRARY}" "${_expected}")
+        _gpu_runtime_define_dawn("${ARG_LIBRARY}" "" "${_expected}")
         set(GPU_RUNTIME_DAWN_LIBRARY "${ARG_LIBRARY}" PARENT_SCOPE)
         set(GPU_RUNTIME_HAS_DAWN ON PARENT_SCOPE)
         return()
@@ -86,32 +113,15 @@ function(gpu_runtime_find_dawn)
 
     set(_include "${_dir}/build/include")
     set(_library "${_dir}/${_gr_ARCHIVE_ROOT}/libdawn_combined.a")
-    if(NOT EXISTS "${_library}" OR
-       NOT EXISTS "${_include}/third_party/externals/dawn/include/dawn/native/DawnNative.h" OR
+    if(NOT EXISTS "${_include}/third_party/externals/dawn/include/dawn/native/DawnNative.h" OR
        NOT EXISTS "${_include}/dawn/dawn_proc_table.h")
         message(FATAL_ERROR
             "gpu-runtime: ${_dir} does not hold the locked Dawn headers and "
             "${_gr_ARCHIVE_ROOT}/libdawn_combined.a")
     endif()
-    file(SHA256 "${_library}" _library_sha256)
-    if(NOT _library_sha256 STREQUAL "${_gr_SHA256_libdawn_combined.a}")
-        message(FATAL_ERROR
-            "gpu-runtime: libdawn_combined.a does not match the lock; expected "
-            "${_gr_SHA256_libdawn_combined.a}, got ${_library_sha256}")
-    endif()
-
-    add_library(gpu-runtime-dawn STATIC IMPORTED GLOBAL)
-    set_target_properties(gpu-runtime-dawn PROPERTIES
-        IMPORTED_LOCATION "${_library}"
-        INTERFACE_INCLUDE_DIRECTORIES
-            "${_include};${_include}/third_party/externals/dawn/include")
-    if(APPLE)
-        set_property(TARGET gpu-runtime-dawn APPEND PROPERTY INTERFACE_LINK_LIBRARIES
-            "-framework Foundation" "-framework IOKit" "-framework IOSurface"
-            "-framework Metal" "-framework QuartzCore")
-    endif()
-    string(REGEX REPLACE "^chrome/m" "" _milestone "${_gr_MILESTONE}")
-    set(GPU_RUNTIME_SKIA_MILESTONE "${_milestone}" PARENT_SCOPE)
+    _gpu_runtime_check_dawn_library("${_library}" "${_expected}")
+    _gpu_runtime_define_dawn("${_library}"
+        "${_include};${_include}/third_party/externals/dawn/include" "${_expected}")
     set(GPU_RUNTIME_DAWN_DIR "${_dir}" PARENT_SCOPE)
     set(GPU_RUNTIME_DAWN_LIBRARY "${_library}" PARENT_SCOPE)
     set(GPU_RUNTIME_HAS_DAWN ON PARENT_SCOPE)

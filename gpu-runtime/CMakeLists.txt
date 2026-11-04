@@ -151,11 +151,11 @@ if(GPU_RUNTIME_HAS_DEVICE)
     endif()
     target_link_libraries(gpu-runtime-device
         PUBLIC VellumGpuRuntime::DeviceApi VellumGpuRuntime::Bootstrap
-        PRIVATE $<BUILD_INTERFACE:gpu-runtime-dawn>)
+        PRIVATE $<BUILD_INTERFACE:VellumGpuRuntime::Dawn>)
     # A static library carries its link dependencies to the consumer; the
-    # installed package re-creates gpu-runtime-dawn from the consumer's locked
+    # installed package re-creates VellumGpuRuntime::Dawn from the locked
     # asset (VellumGpuRuntimeConfig.cmake).
-    target_link_libraries(gpu-runtime-device INTERFACE $<INSTALL_INTERFACE:gpu-runtime-dawn>)
+    target_link_libraries(gpu-runtime-device INTERFACE $<INSTALL_INTERFACE:VellumGpuRuntime::Dawn>)
     if(APPLE)
         target_link_libraries(gpu-runtime-device PRIVATE
             "-framework Cocoa" "-framework Metal" "-framework QuartzCore")
@@ -185,7 +185,7 @@ if(GPU_RUNTIME_BUILD_TESTS)
     add_test(NAME gpu-runtime.bootstrap COMMAND gpu-runtime-bootstrap-test)
     if(GPU_RUNTIME_HAS_DEVICE)
         add_executable(gpu-runtime-device-test tests/device_test.cpp)
-        target_link_libraries(gpu-runtime-device-test PRIVATE VellumGpuRuntime::Device gpu-runtime-dawn)
+        target_link_libraries(gpu-runtime-device-test PRIVATE VellumGpuRuntime::Device VellumGpuRuntime::Dawn)
         target_include_directories(gpu-runtime-device-test PRIVATE src)
         if(GPU_RUNTIME_HOST_OWNS_DAWN_PROCS)
             target_compile_definitions(gpu-runtime-device-test PRIVATE
@@ -242,6 +242,9 @@ if(GPU_RUNTIME_INSTALL)
     # against, so an audio-only plug-in needs nothing else; the package config
     # checks its digest against the shipped lock before linking it.
     if(GPU_RUNTIME_HAS_DEVICE AND GPU_RUNTIME_INSTALL_DAWN)
+        if(NOT GPU_RUNTIME_DAWN_LIBRARY)
+            message(FATAL_ERROR "gpu-runtime: no checked Dawn library to install")
+        endif()
         install(FILES "${GPU_RUNTIME_DAWN_LIBRARY}" DESTINATION "${CMAKE_INSTALL_LIBDIR}")
     endif()
     install(FILES renderer-lock.json cmake/GpuRuntimeRendererLock.cmake

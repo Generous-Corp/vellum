@@ -1,17 +1,28 @@
 #!/usr/bin/env python3
 """Verify a vellum-gpu-runtime archive before it is published or installed.
 
-Checks, without trusting anything the archive says about itself:
+The archive's own record (gpu-runtime-artifact.json) is checked, but never
+trusted to say what belongs in the archive:
 
-  * every member is a plain file or directory with a relative, normalized
-    path, so extraction cannot escape its directory or follow a link;
-  * the archive holds exactly the files gpu-runtime-artifact.json lists, plus
-    that record, each with the listed SHA-256 and size;
-  * the record names this archive's version and target, and its renderer lock
-    digest is the digest of the lock the archive ships;
-  * the shipped libdawn_combined.a is byte for byte the library that lock
-    names, and the license and notices for it ship beside it;
-  * with --repo, the shipped lock and headers are byte-identical to the source.
+  * the tar stream is exactly the canonical stream the builder writes for the
+    files it holds (normalized headers, sorted order, plain files and
+    directories only), so no tar reader can see anything the verifier did not;
+  * member names are relative and normalized, never collide after case folding
+    and Unicode normalization (as they would on APFS), and stay inside the
+    package's directories;
+  * the file set is the package's fixed set: the three gpu-runtime libraries,
+    libdawn_combined.a, the CMake package files, the license and notice, the
+    record, and only gpu_runtime headers;
+  * every file matches the record's digest, size and executable bit, and the
+    record names this archive's version and target;
+  * the shipped libdawn_combined.a is the library the shipped lock names, and
+    the package's Targets files import only the shipped gpu-runtime libraries.
+
+With --repo the archive is held to that checkout instead of to itself: the
+file set is derived from the source, the lock, headers, license, verbatim
+CMake modules and the assembled notice must be byte-identical to what the
+source produces, the generated config must embed the source template, and the
+record's source commit and version must be the checkout's HEAD and version.
 
 With --consumer it then extracts the archive and builds and runs a consumer
 that finds the package by exact version and links Device against the Dawn
@@ -23,8 +34,11 @@ Exit 0 when every check passes, 1 with the first failure otherwise.
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
+import io
 import json
+import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
@@ -32,15 +46,38 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import unicodedata
 
 METADATA_SCHEMA = "vellum.gpu-runtime-artifact.v1"
 METADATA_NAME = "gpu-runtime-artifact.json"
-LOCK_MEMBER = "lib/cmake/VellumGpuRuntime/renderer-lock.json"
+PACKAGE_DIR = "lib/cmake/VellumGpuRuntime"
+LOCK_MEMBER = f"{PACKAGE_DIR}/renderer-lock.json"
 NAME = re.compile(r"^vellum-gpu-runtime-([0-9]+\.[0-9]+\.[0-9]+)-(darwin-arm64)\.tar\.gz$")
-ALLOWED_PREFIXES = ("include/gpu_runtime/", "lib/", "share/doc/VellumGpuRuntime/")
+HEADER = re.compile(r"^include/gpu_runtime/(?:[a-z0-9_]+/)*[a-z0-9_]+\.hpp$")
+DIRECTORY = re.compile(r"^(?:include|include/gpu_runtime(?:/[a-z0-9_]+)*|lib|lib/cmake|"
+                       r"lib/cmake/VellumGpuRuntime|share|share/doc|share/doc/VellumGpuRuntime)$")
+LIBRARIES = (
+    "lib/libgpu-runtime-bootstrap.a",
+    "lib/libgpu-runtime-device.a",
+    "lib/libgpu-runtime-skia-log-bridge.a",
+)
 DAWN_MEMBER = "lib/libdawn_combined.a"
 NOTICE_MEMBER = "share/doc/VellumGpuRuntime/NOTICE.md"
 LICENSE_MEMBER = "share/doc/VellumGpuRuntime/LICENSE.md"
+VERBATIM_MODULES = {
+    f"{PACKAGE_DIR}/GpuRuntimeDawn.cmake": "gpu-runtime/cmake/GpuRuntimeDawn.cmake",
+    f"{PACKAGE_DIR}/GpuRuntimeRendererLock.cmake": "gpu-runtime/cmake/GpuRuntimeRendererLock.cmake",
+    LOCK_MEMBER: "gpu-runtime/renderer-lock.json",
+}
+GENERATED = (
+    f"{PACKAGE_DIR}/VellumGpuRuntimeConfig.cmake",
+    f"{PACKAGE_DIR}/VellumGpuRuntimeConfigVersion.cmake",
+    f"{PACKAGE_DIR}/VellumGpuRuntimeTargets-release.cmake",
+    f"{PACKAGE_DIR}/VellumGpuRuntimeTargets.cmake",
+)
+FIXED_FILES = frozenset({*LIBRARIES, DAWN_MEMBER, NOTICE_MEMBER, LICENSE_MEMBER,
+                         *VERBATIM_MODULES, *GENERATED, METADATA_NAME})
+NOTICE_HEADINGS = ("### Dawn and Tint", "### Skia and skcms")
 
 
 class VerificationError(RuntimeError):
@@ -56,25 +93,98 @@ def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def read_members(archive: Path) -> dict[str, bytes]:
+def fold(name: str) -> str:
+    return unicodedata.normalize("NFC", name).casefold()
+
+
+def canonical_tar(files: dict[str, bytes], directories: set[str], executable: dict[str, bool]) -> bytes:
+    """The tar stream write_archive() in build_sdk_artifact.py produces."""
+    stream = io.BytesIO()
+    with tarfile.open(fileobj=stream, mode="w", format=tarfile.PAX_FORMAT) as archive:
+        for name in sorted([*files, *directories]):
+            info = tarfile.TarInfo(name)
+            info.mtime = 0
+            info.uid = info.gid = 0
+            info.uname = info.gname = ""
+            if name in directories:
+                info.type = tarfile.DIRTYPE
+                info.mode = 0o755
+                archive.addfile(info)
+            else:
+                info.type = tarfile.REGTYPE
+                info.mode = 0o755 if executable.get(name) else 0o644
+                info.size = len(files[name])
+                archive.addfile(info, io.BytesIO(files[name]))
+    return stream.getvalue()
+
+
+def read_members(archive: Path) -> tuple[dict[str, bytes], set[str], bytes]:
+    raw = gzip.decompress(archive.read_bytes())
     files: dict[str, bytes] = {}
-    with tarfile.open(archive, mode="r:gz") as handle:
+    directories: set[str] = set()
+    folded: dict[str, str] = {}
+    with tarfile.open(fileobj=io.BytesIO(raw), mode="r:") as handle:
         for member in handle.getmembers():
             name = member.name
             path = PurePosixPath(name)
             require(not path.is_absolute() and ".." not in path.parts and str(path) == name
-                    and name not in {"", "."},
+                    and name not in {"", "."} and "\\" not in name,
                     f"archive member has an unsafe path: {name!r}")
-            if member.isdir():
+            key = fold(name)
+            require(key not in folded,
+                    f"archive members {folded.get(key)!r} and {name!r} collide on a "
+                    "case-insensitive or normalizing file system")
+            folded[key] = name
+            if member.type == tarfile.DIRTYPE:
+                require(DIRECTORY.fullmatch(name) is not None,
+                        f"archive directory is outside the gpu-runtime package: {name}")
+                directories.add(name)
                 continue
-            require(member.isreg(), f"archive member is not a regular file: {name}")
-            require(name not in files, f"archive member is duplicated: {name}")
-            require(name == METADATA_NAME or name.startswith(ALLOWED_PREFIXES),
+            require(member.type in (tarfile.REGTYPE, tarfile.AREGTYPE),
+                    f"archive member is not a regular file: {name}")
+            require(name in FIXED_FILES or HEADER.fullmatch(name) is not None,
                     f"archive member is outside the gpu-runtime package: {name}")
             extracted = handle.extractfile(member)
             require(extracted is not None, f"archive member cannot be read: {name}")
             files[name] = extracted.read()
-    return files
+    return files, directories, raw
+
+
+def git_head(repo: Path) -> str:
+    completed = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, text=True,
+                               capture_output=True, check=False)
+    require(completed.returncode == 0, "could not read the checkout's HEAD")
+    return completed.stdout.strip()
+
+
+def verify_against_source(files: dict[str, bytes], metadata: dict, repo: Path) -> None:
+    sys.path.insert(0, str(repo / "scripts"))
+    import build_gpu_runtime_artifact as builder  # noqa: PLC0415
+
+    expected = set(builder.expected_files(repo))
+    require(set(files) == expected,
+            "archive files differ from what the source installs: "
+            + ", ".join(sorted(set(files) ^ expected)))
+    for member, source in VERBATIM_MODULES.items():
+        require(files[member] == (repo / source).read_bytes(),
+                f"shipped {member} differs from the source")
+    include_root = repo / "gpu-runtime/include"
+    for path in (include_root / "gpu_runtime").rglob("*.hpp"):
+        member = "include/" + path.relative_to(include_root).as_posix()
+        require(files[member] == path.read_bytes(), f"shipped {member} differs from the source")
+    require(files[LICENSE_MEMBER] == (repo / "LICENSE.md").read_bytes(),
+            "shipped license differs from the source")
+    require(files[NOTICE_MEMBER].decode("utf-8") == builder.dawn_notice(repo),
+            "shipped notice differs from the one the source assembles")
+    template = (repo / "gpu-runtime/cmake/VellumGpuRuntimeConfig.cmake.in").read_text(encoding="utf-8")
+    body = template.split("@PACKAGE_INIT@", 1)[1]
+    body = body.replace("@GPU_RUNTIME_HAS_DEVICE@", "ON").replace("@CMAKE_INSTALL_LIBDIR@", "lib")
+    require(files[f"{PACKAGE_DIR}/VellumGpuRuntimeConfig.cmake"].decode("utf-8").endswith(body),
+            "shipped package config is not the source template")
+    require(metadata.get("source_commit") == git_head(repo),
+            "artifact record names another source commit than the checkout")
+    require(metadata.get("version") == builder.vellum_version(repo),
+            "artifact record names another version than the checkout")
 
 
 def verify(archive: Path, repo: Path | None) -> dict[str, object]:
@@ -82,8 +192,10 @@ def verify(archive: Path, repo: Path | None) -> dict[str, object]:
     require(match is not None, f"archive name is not vellum-gpu-runtime-<version>-<target>.tar.gz: "
                                f"{archive.name}")
     version, target = match.groups()
-    files = read_members(archive)
-    require(METADATA_NAME in files, f"archive has no {METADATA_NAME}")
+    files, directories, raw = read_members(archive)
+    require(FIXED_FILES <= set(files),
+            "archive lacks package files: " + ", ".join(sorted(FIXED_FILES - set(files))))
+    require(any(HEADER.fullmatch(name) for name in files), "archive ships no gpu_runtime headers")
     metadata = json.loads(files[METADATA_NAME])
     require(metadata.get("schema") == METADATA_SCHEMA, "artifact record schema is unsupported")
     require(metadata.get("name") == "vellum-gpu-runtime", "artifact record names another package")
@@ -96,9 +208,10 @@ def verify(archive: Path, repo: Path | None) -> dict[str, object]:
 
     rows = metadata.get("files")
     require(isinstance(rows, list) and rows, "artifact record lists no files")
-    listed = {}
+    listed: dict[str, dict] = {}
     for row in rows:
-        require(isinstance(row, dict) and isinstance(row.get("path"), str),
+        require(isinstance(row, dict) and isinstance(row.get("path"), str)
+                and isinstance(row.get("executable"), bool),
                 "artifact record file row is malformed")
         require(row["path"] not in listed, f"artifact record lists {row['path']} twice")
         listed[row["path"]] = row
@@ -108,37 +221,33 @@ def verify(archive: Path, repo: Path | None) -> dict[str, object]:
     for name, row in listed.items():
         require(row.get("sha256") == sha256_bytes(files[name]), f"digest mismatch: {name}")
         require(row.get("size") == len(files[name]), f"size mismatch: {name}")
+        require(row["executable"] is False, f"package file is marked executable: {name}")
+    executable = {name: False for name in files}
+    require(raw == canonical_tar(files, directories, executable),
+            "archive is not the canonical tar stream of its files")
 
-    require(LOCK_MEMBER in files, "archive ships no renderer lock")
     lock_digest = sha256_bytes(files[LOCK_MEMBER])
     require(metadata.get("renderer_lock_sha256") == lock_digest,
             "artifact record names a different renderer lock than it ships")
     lock = json.loads(files[LOCK_MEMBER])
     require(metadata.get("renderer_milestone") == lock.get("milestone"),
             "artifact record names a different renderer milestone than its lock")
-    require(DAWN_MEMBER in files, "archive does not ship libdawn_combined.a")
     platform = (lock.get("platforms") or {}).get(target.replace("darwin", "macos"), {})
     require(sha256_bytes(files[DAWN_MEMBER]) == (platform.get("archives") or {}).get(
                 "libdawn_combined.a"),
             "shipped libdawn_combined.a is not the library the renderer lock names")
-    require(LICENSE_MEMBER in files, "archive ships no license")
-    require(NOTICE_MEMBER in files and b"### Dawn and Tint" in files[NOTICE_MEMBER],
-            "archive ships no Dawn notice")
-    for library in ("lib/libgpu-runtime-bootstrap.a", "lib/libgpu-runtime-device.a"):
-        require(library in files and files[library].startswith(b"!<arch>\n"),
+    for heading in NOTICE_HEADINGS:
+        require(heading.encode() in files[NOTICE_MEMBER], f"archive notice lacks {heading}")
+    for library in LIBRARIES:
+        require(files[library].startswith(b"!<arch>\n"),
                 f"archive does not ship {library} as a static library")
+    targets = files[f"{PACKAGE_DIR}/VellumGpuRuntimeTargets-release.cmake"].decode("utf-8")
+    imported = set(re.findall(r'IMPORTED_LOCATION_RELEASE "\$\{_IMPORT_PREFIX\}/([^"]+)"', targets))
+    require(imported == set(LIBRARIES) and targets.count("IMPORTED_LOCATION") == len(LIBRARIES),
+            "package targets import something other than the shipped gpu-runtime libraries")
 
     if repo is not None:
-        source_lock = (repo / "gpu-runtime/renderer-lock.json").read_bytes()
-        require(files[LOCK_MEMBER] == source_lock, "shipped renderer lock differs from the source")
-        include_root = repo / "gpu-runtime/include"
-        source_headers = {"include/" + path.relative_to(include_root).as_posix(): path.read_bytes()
-                          for path in (include_root / "gpu_runtime").rglob("*.hpp")}
-        shipped_headers = {name: data for name, data in files.items()
-                           if name.startswith("include/")}
-        require(shipped_headers == source_headers, "shipped headers differ from the source")
-        require(files[LICENSE_MEMBER] == (repo / "LICENSE.md").read_bytes(),
-                "shipped license differs from the source")
+        verify_against_source(files, metadata, repo)
     return {
         "archive": archive.name,
         "sha256": sha256_bytes(archive.read_bytes()),
@@ -147,10 +256,11 @@ def verify(archive: Path, repo: Path | None) -> dict[str, object]:
         "source_commit": metadata["source_commit"],
         "renderer_lock_sha256": lock_digest,
         "files_verified": len(listed),
+        "checked_against_source": repo is not None,
     }
 
 
-def run_consumer(archive: Path, version: str, repo: Path) -> str:
+def run_consumer(archive: Path, version: str, repo: Path, require_adapter: bool) -> str:
     source = repo / "gpu-runtime/tests/artifact-consumer"
     with tempfile.TemporaryDirectory(prefix="vellum-gpu-runtime-consumer-") as temporary_text:
         temporary = Path(temporary_text)
@@ -165,9 +275,14 @@ def run_consumer(archive: Path, version: str, repo: Path) -> str:
                      f"-DEXPECTED_VERSION={version}"]
         if shutil.which("ninja"):
             configure.extend(["-G", "Ninja"])
+        env = dict(os.environ)
+        env.pop("GPU_RUNTIME_SKIA_DIR", None)
+        env.pop("GPU_RUNTIME_RENDERER_ARCHIVE", None)
+        if require_adapter:
+            env["GPU_RUNTIME_REQUIRE_ADAPTER"] = "1"
         for command in (configure, ["cmake", "--build", str(build)],
                         [str(build / "gpu-runtime-artifact-consumer")]):
-            completed = subprocess.run(command, text=True, capture_output=True, check=False)
+            completed = subprocess.run(command, text=True, capture_output=True, check=False, env=env)
             if completed.returncode:
                 raise VerificationError(
                     f"consumer step failed: {' '.join(command)}\n"
@@ -178,18 +293,21 @@ def run_consumer(archive: Path, version: str, repo: Path) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--archive", type=Path, required=True)
-    parser.add_argument("--repo", type=Path, help="also compare the lock and headers to this checkout")
+    parser.add_argument("--repo", type=Path, help="hold the archive to this checkout")
     parser.add_argument("--consumer", action="store_true",
                         help="build and run the audio-only consumer against the archive")
+    parser.add_argument("--require-adapter", action="store_true",
+                        help="with --consumer: fail unless the consumer brings up a GPU adapter")
     parser.add_argument("--output", type=Path, help="write the verification record here")
     args = parser.parse_args(argv)
     try:
         if args.consumer and args.repo is None:
             raise VerificationError("--consumer needs --repo")
-        result = verify(args.archive, args.repo)
+        result = verify(args.archive, args.repo.resolve() if args.repo else None)
         if args.consumer:
-            result["consumer"] = run_consumer(args.archive, str(result["version"]), args.repo)
-    except (VerificationError, OSError, ValueError, tarfile.TarError) as error:
+            result["consumer"] = run_consumer(args.archive, str(result["version"]),
+                                              args.repo.resolve(), args.require_adapter)
+    except (VerificationError, OSError, ValueError, tarfile.TarError, EOFError) as error:
         print(f"verify-gpu-runtime-artifact: {error}", file=sys.stderr)
         return 1
     text = json.dumps(result, indent=2, sort_keys=True) + "\n"

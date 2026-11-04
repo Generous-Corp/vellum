@@ -418,7 +418,7 @@ jobs:
           python3 scripts/verify_gpu_runtime_artifact.py \
             --archive "$RUNNER_TEMP/$archive" \
             --repo "$GITHUB_WORKSPACE" \
-            --consumer \
+            --consumer --require-adapter \
             --output "$RUNNER_TEMP/gpu-runtime-verification.json"
           (cd "$RUNNER_TEMP" && shasum -a 256 "$archive" > vellum-gpu-runtime.sha256)
 

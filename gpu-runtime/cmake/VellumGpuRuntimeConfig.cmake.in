@@ -29,6 +29,8 @@ if(VellumGpuRuntime_HAS_DEVICE)
     endif()
     if(GPU_RUNTIME_HAS_DAWN)
         set(VellumGpuRuntime_Device_FOUND TRUE)
+        # SkiaLogBridge compiles against Skia's headers only; the consumer that
+        # registers it must link Skia itself (a renderer always does).
         set(VellumGpuRuntime_SkiaLogBridge_FOUND TRUE)
     endif()
 endif()

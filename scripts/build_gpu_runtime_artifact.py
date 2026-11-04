@@ -21,7 +21,6 @@ import json
 import os
 from pathlib import Path
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -49,11 +48,14 @@ LIBRARIES = (
     "lib/libgpu-runtime-device.a",
     "lib/libgpu-runtime-skia-log-bridge.a",
 )
+# Fixed, so PATH cannot change the build graph and with it the archive bytes.
+GENERATOR = "Unix Makefiles"
 DAWN_LIBRARY = "lib/libdawn_combined.a"
 DOC_DIR = "share/doc/VellumGpuRuntime"
 DOC_FILES = (f"{DOC_DIR}/LICENSE.md", f"{DOC_DIR}/NOTICE.md")
 DAWN_ARCHIVE = "libdawn_combined.a"
 APACHE_HEADING = "Apache License, Version 2.0"
+SKIA_HEADING = "Skia and skcms"
 PACKAGE_FILES = (
     f"{PACKAGE_DIR}/GpuRuntimeDawn.cmake",
     f"{PACKAGE_DIR}/GpuRuntimeRendererLock.cmake",
@@ -63,6 +65,35 @@ PACKAGE_FILES = (
     f"{PACKAGE_DIR}/VellumGpuRuntimeTargets.cmake",
     f"{PACKAGE_DIR}/renderer-lock.json",
 )
+
+
+def normalize_library(path: Path) -> None:
+    """normalize_static_archive, plus the member mode field, which Apple's ar
+    copies from each object's st_mode and so differs with the host's umask."""
+    normalize_static_archive(path)
+    data = bytearray(path.read_bytes())
+    offset = 8
+    while offset < len(data):
+        size = int(bytes(data[offset + 48:offset + 58]).decode("ascii").strip())
+        data[offset + 40:offset + 48] = b"100644".ljust(8)
+        offset += 60 + size
+        if offset % 2:
+            offset += 1
+    path.write_bytes(data)
+
+
+def toolchain_identity(env: dict[str, str]) -> dict[str, str]:
+    def first_line(command: list[str]) -> str:
+        completed = subprocess.run(command, env=env, text=True, capture_output=True, check=False)
+        if completed.returncode:
+            raise ArtifactError(f"could not identify the toolchain: {' '.join(command)}")
+        return completed.stdout.strip().splitlines()[0]
+    return {
+        "compiler": first_line(["c++", "--version"]),
+        "sdk": first_line(["xcrun", "--sdk", "macosx", "--show-sdk-version"]),
+        "cmake": first_line(["cmake", "--version"]),
+        "generator": GENERATOR,
+    }
 
 
 def archive_name(version: str, target: str) -> str:
@@ -109,10 +140,10 @@ def notice_sections(text: str) -> dict[str, str]:
 
 
 def dawn_notice(repo: Path) -> str:
-    """NOTICE.md for the archive: Dawn's own notice and every component the
-    renderer legal inventory places inside libdawn_combined.a, copied verbatim
-    from Vellum's NOTICE.md. A component the inventory names without a notice
-    section stops the build."""
+    """NOTICE.md for the archive: Dawn's own notice, every component the
+    renderer legal inventory places inside libdawn_combined.a, and Skia's
+    (SkiaLogBridge), copied verbatim from Vellum's NOTICE.md. A component
+    without a notice section stops the build."""
     lock = json.loads((repo / "provenance/third-party-lock.json").read_text(encoding="utf-8"))
     renderer = lock["runtime_toolchain_dependencies"]["renderer"]
     if renderer.get("bundled_components_completeness", {}).get("claim") != "exhaustive":
@@ -120,7 +151,8 @@ def dawn_notice(repo: Path) -> str:
     components = [row for row in renderer["bundled_components"]
                   if row.get("parent_archive") == DAWN_ARCHIVE]
     sections = notice_sections((repo / "NOTICE.md").read_text(encoding="utf-8"))
-    names = ["Dawn and Tint", *(row["name"] for row in components)]
+    # SkiaLogBridge's library holds code compiled from Skia headers.
+    names = ["Dawn and Tint", *(row["name"] for row in components), SKIA_HEADING]
     missing = [name for name in names if name not in sections]
     if missing:
         raise ArtifactError(f"NOTICE.md has no section for {', '.join(missing)}")
@@ -129,8 +161,9 @@ def dawn_notice(repo: Path) -> str:
         "This archive redistributes `libdawn_combined.a` exactly as the locked\n"
         f"skia-builder `{json.loads((repo / LOCK).read_text())['milestone']}` asset ships it "
         "(see `lib/cmake/VellumGpuRuntime/renderer-lock.json`).\n"
-        "Its legal inventory places the components below inside that archive; the\n"
-        "texts are Vellum's NOTICE.md sections for them, unchanged.\n",
+        "Its legal inventory places the components below inside that archive, and\n"
+        "`libgpu-runtime-skia-log-bridge.a` holds code compiled from Skia's headers;\n"
+        "the texts are Vellum's NOTICE.md sections for them, unchanged.\n",
     ]
     parts.extend(sections[name] for name in names)
     if any("Apache-2.0" in row.get("license", "") for row in components):
@@ -178,14 +211,13 @@ def build(args: argparse.Namespace) -> dict[str, object]:
         ]
         for language in ("CXX", "OBJCXX"):
             configure.append(f"-DCMAKE_{language}_FLAGS={flags}")
-        if shutil.which("ninja"):
-            configure.extend(["-G", "Ninja"])
+        configure.extend(["-G", GENERATOR])
         run(configure, env=env)
         jobs = str(max(1, min(args.jobs, os.cpu_count() or 1)))
         run(["cmake", "--build", str(build_dir), "--parallel", jobs], env=env)
         run(["cmake", "--install", str(build_dir)], env=env)
         for relative in LIBRARIES:
-            normalize_static_archive(payload / relative)
+            normalize_library(payload / relative)
         lock = json.loads((repo / LOCK).read_text(encoding="utf-8"))
         locked_dawn = lock["platforms"]["macos-arm64"]["archives"][DAWN_ARCHIVE]
         if sha256(payload / DAWN_LIBRARY) != locked_dawn:
@@ -207,6 +239,7 @@ def build(args: argparse.Namespace) -> dict[str, object]:
             "source_tree_clean": clean,
             "renderer_lock_sha256": sha256(repo / LOCK),
             "renderer_milestone": json.loads(lock_bytes)["milestone"],
+            "toolchain": toolchain_identity(env),
             "files": payload_files(payload),
         }
         (payload / METADATA_NAME).write_text(

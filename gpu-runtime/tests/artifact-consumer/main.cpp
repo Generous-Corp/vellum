@@ -6,6 +6,7 @@
 #include <gpu_runtime/gpu_proc_installer.hpp>
 
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 
 int main() {
@@ -32,7 +33,12 @@ int main() {
         std::fprintf(stderr, "GpuCompute::create() returned null\n");
         return 1;
     }
+    const bool up = compute->initialize_standalone();
+    if (!up && std::getenv("GPU_RUNTIME_REQUIRE_ADAPTER") != nullptr) {
+        std::fprintf(stderr, "no GPU adapter, and GPU_RUNTIME_REQUIRE_ADAPTER is set\n");
+        return 1;
+    }
     std::printf("gpu-runtime artifact consumer: ok (Dawn %s, compute %s)\n", record->revision.c_str(),
-                compute->initialize_standalone() ? "up" : "no adapter");
+                up ? "up" : "no adapter");
     return 0;
 }
