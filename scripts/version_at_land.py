@@ -220,22 +220,35 @@ def semantic_level(messages: list[str], major: int) -> str:
 WARNINGS: list[str] = []
 
 
-def explicit_level(messages: list[str], major: int = 1) -> tuple[str | None, bool]:
-    """The highest `Version-Bump: vellum=<level>` in the messages, and whether one says skip.
+def trailers(message: str) -> list[str]:
+    """The `Version-Bump` values in the message's trailer block only, as git reads trailers.
 
-    While the major version is 0, an explicit `major` counts as `minor`. A
-    trailer this script cannot read is skipped and recorded in WARNINGS.
+    A line in the body that merely quotes the syntax is not a trailer.
+    """
+    result = subprocess.run(["git", "interpret-trailers", "--parse", "--no-divider"], input=message,
+                            capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        raise VersionError(f"git interpret-trailers failed: {result.stderr.strip()}")
+    return [match["value"] for match in TRAILER.finditer(result.stdout)]
+
+
+def explicit_level(messages: list[str], major: int = 1) -> tuple[str | None, bool]:
+    """The highest `Version-Bump: vellum=<level>` trailer in the messages, and whether one says skip.
+
+    While the major version is 0, an explicit `major` counts as `minor`.
+    Another project's key (Pulp's `sdk=patch`) is ignored. A malformed
+    `vellum=` or `skip` value is skipped and recorded in WARNINGS, so one bad
+    line never stops every later plan.
     """
     levels, skipped = [], False
     for message in messages:
-        for match in TRAILER.finditer(message):
-            value = match["value"]
+        for value in trailers(message):
             if (explicit := EXPLICIT.fullmatch(value)):
                 level = explicit["level"]
                 levels.append("minor" if major == 0 and level == "major" else level)
             elif SKIP.fullmatch(value):
                 skipped = True
-            else:
+            elif re.match(r"(?i)\s*(vellum\b|skip\b)", value):
                 WARNINGS.append(f"skipped unreadable trailer `Version-Bump: {one_line(value)[:120]}`; use "
                                 'vellum=<patch|minor|major> or skip reason="..."')
     return (max(levels, key=LEVELS.index) if levels else None), skipped

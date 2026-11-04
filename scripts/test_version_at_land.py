@@ -126,9 +126,17 @@ class Levels(unittest.TestCase):
         self.assertEqual(val.explicit_level(['fix: a\n\nVersion-Bump: skip reason="docs only"']), (None, True))
         self.assertEqual(val.explicit_level(["a\n\nVersion-Bump: skip", "b\n\nVersion-Bump: vellum=patch"]),
                          ("patch", True))
-        self.assertEqual(val.explicit_level(["a\n\nVersion-Bump: vellum=patch", "Version-Bump: vellum=major"]),
+        self.assertEqual(val.explicit_level(["a\n\nVersion-Bump: vellum=patch", "b\n\nVersion-Bump: vellum=major"]),
                          ("major", False))
         self.assertEqual(val.explicit_level(["fix: no trailer"]), (None, False))
+
+    def test_only_the_trailer_block_counts(self) -> None:
+        # A body line that quotes the syntax is prose, not a trailer.
+        quoted = ("docs: explain trailers\n\nWrite `Version-Bump: vellum=major` to ask for a major.\n"
+                  "Version-Bump: vellum=major\nis what the line looks like.\n")
+        self.assertEqual(val.explicit_level([quoted]), (None, False))
+        trailer = "fix: a\n\nThe body.\n\nVersion-Bump: vellum=minor\nCo-Authored-By: x <x@x>\n"
+        self.assertEqual(val.explicit_level([trailer]), ("minor", False))
 
     def test_an_explicit_major_is_minor_under_0x(self) -> None:
         # 1.0.0 is never proposed automatically.
@@ -142,15 +150,19 @@ class Levels(unittest.TestCase):
     def test_an_unreadable_trailer_is_skipped_with_a_warning(self) -> None:
         # Must-pass: one bad line never stops every later plan. Must-fail: it is
         # still named, and it never counts as a level or a skip.
-        for value in ("sdk=minor", "vellum=huge", "vellum = minor", "skip because", "Minor"):
+        for value in ("vellum=huge", "vellum = minor", "skip because", "Vellum=patch"):
             with self.subTest(value=value):
                 val.WARNINGS.clear()
                 self.assertEqual(val.explicit_level([f"fix: a\n\nVersion-Bump: {value}"]), (None, False))
                 self.assertEqual(len(val.WARNINGS), 1)
                 self.assertIn("unreadable trailer", val.WARNINGS[0])
+        # Another project's key is not Vellum's and is ignored without a warning.
+        val.WARNINGS.clear()
+        self.assertEqual(val.explicit_level(["fix: a\n\nVersion-Bump: sdk=patch"]), (None, False))
+        self.assertEqual(val.WARNINGS, [])
         repo = Repo(self)
         repo.tag("v0.1.10")
-        repo.land("fix: a", {"runtime/s.cpp": "s\n"}, body="Version-Bump: sdk=patch")
+        repo.land("fix: a", {"runtime/s.cpp": "s\n"}, body="Version-Bump: vellum=huge")
         self.assertEqual(repo.plan().version, "0.1.11")
         self.assertEqual(len(val.lint(repo.root, f"{repo.tags['v0.1.10']}..{repo.main}")), 1)
         self.assertEqual(val.lint(repo.root, f"{repo.tags['v0.1.10']}..{repo.tags['v0.1.10']}"), [])
@@ -268,6 +280,13 @@ class Apply(unittest.TestCase):
                     f"{hashlib.sha256((self.root / 'scripts/install.sh').read_bytes()).hexdigest()}  install.sh\n")
         self.assertEqual((self.root / val.INSTALLER_SUMS).read_text(), expected)
 
+    def test_files_outside_the_surfaces_are_never_rewritten(self) -> None:
+        other = self.root / "docs/history.md"
+        other.parent.mkdir(parents=True, exist_ok=True)
+        other.write_text("v0.1.10 shipped the Phase 4 promotion.\n")
+        val.apply(self.root, "0.1.11")
+        self.assertEqual(other.read_text(), "v0.1.10 shipped the Phase 4 promotion.\n")
+
     def test_a_surface_without_the_version_refuses_and_writes_nothing(self) -> None:
         (self.root / "docs/cli/contract.md").write_text("no version here\n")
         before = self.snapshot()
@@ -354,6 +373,15 @@ class Workflow(unittest.TestCase):
         apply = self.step(self.push_job, "Apply the planned bump")
         listed = apply.split("allowed=(\n", 1)[1].split("\n          )", 1)[0].split()
         self.assertEqual(listed, [*val.VERSION_SURFACES, val.INSTALLER_SUMS])
+
+    def test_a_standing_bump_is_kept_only_when_it_is_this_exact_patch(self) -> None:
+        # An extra file (or commit) on automation/version-bump changes the
+        # patch id or the commit count, so the branch is rewritten.
+        standing = self.step(self.plan_job, "Read the standing bump pull request")
+        self.assertIn("patch-id --stable", standing)
+        self.assertIn('"$(git rev-list --count origin/main..FETCH_HEAD)" = 1', standing)
+        self.assertIn('[ "$ours" = "$theirs" ]', standing)
+        self.assertNotIn("CMakeLists", standing)
 
     def test_the_planned_outputs_are_checked_before_use(self) -> None:
         decide = self.step(self.plan_job, "Decide the next version")

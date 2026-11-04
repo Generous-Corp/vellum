@@ -11,6 +11,7 @@
 /provenance/retired-release-tags.json @danielraffel
 /scripts/check_release_policy.py @danielraffel
 /scripts/pretag_checks.py @danielraffel
+/scripts/release_cadence.py @danielraffel
 /scripts/release_request.py @danielraffel
 /scripts/verify_immutable_release_preflight.py @danielraffel
 /scripts/verify_release_tag.py @danielraffel
