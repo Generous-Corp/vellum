@@ -421,6 +421,73 @@ class Names(unittest.TestCase):
                 vrt.required_signers_file(name)
 
 
+class Gate(unittest.TestCase):
+    """The dry run starts by itself only on release-path pushes, weekly and by hand, never beside a release."""
+
+    def runs(self, *rows: dict) -> list:
+        return [{"workflow_runs": list(rows)}]
+
+    def push(self, files: dict[str, str], runs: list | None = None) -> tuple[bool, str]:
+        import test_release_request as trr  # noqa: PLC0415
+        history = trr.History(self)
+        before = history.main
+        history.branch(before)
+        for path, text in files.items():
+            history.write(path, text)
+        after = history.land(history.commit("change"))
+        return dry.gate(history.root, "push", before, after, runs or self.runs())
+
+    def test_a_push_runs_a_dry_run_only_when_it_changes_a_release_path_file(self) -> None:
+        for path in dry.RELEASE_PATHS:
+            with self.subTest(path=path):
+                self.assertEqual(self.push({path: "x\n"})[0], True)
+        for files in ({"provenance/pulp-observatory/cursor.json": "{}\n"}, {"docs/x.md": "x\n"},
+                      {"scripts/release_cadence.py": "x\n"}, {".github/workflows/version-at-land.yml": "x\n"}):
+            with self.subTest(files=files):
+                run, reason = self.push(files)
+                self.assertFalse(run)
+                self.assertIn("no release-path file", reason)
+
+    def test_schedule_and_dispatch_run_and_nothing_else_does(self) -> None:
+        for event in ("schedule", "workflow_dispatch"):
+            self.assertEqual(dry.gate(ROOT, event, "", "a" * 40, self.runs())[0], True)
+        for event in ("pull_request", "merge_group", "workflow_run"):
+            self.assertEqual(dry.gate(ROOT, event, "", "a" * 40, self.runs())[0], False)
+
+    def test_no_dry_run_while_a_release_may_be_in_flight(self) -> None:
+        busy = [{"name": "Locked macOS GPU proof", "head_branch": "v0.1.11", "status": "in_progress", "id": 1},
+                {"name": "Provenance and forbidden dependencies", "head_branch": "v0.1.11", "status": "queued", "id": 2},
+                {"name": "Finalize immutable SDK release", "head_branch": "main", "status": "in_progress", "id": 3}]
+        for row in busy:
+            with self.subTest(row=row["name"]):
+                for event in ("schedule", "workflow_dispatch"):
+                    run, reason = dry.gate(ROOT, event, "", "a" * 40, self.runs(row))
+                    self.assertFalse(run)
+                    self.assertIn("in flight", reason)
+                self.assertFalse(self.push({"scripts/release_request.py": "x\n"}, self.runs(row))[0])
+        idle = [{"name": "Locked macOS GPU proof", "head_branch": "main", "status": "in_progress", "id": 4},
+                {"name": "Locked macOS GPU proof", "head_branch": "dry-run/v0.1.10/1-1", "status": "in_progress",
+                 "id": 5},
+                {"name": "Locked macOS GPU proof", "head_branch": "v0.1.11", "status": "completed", "id": 6}]
+        self.assertEqual(dry.gate(ROOT, "schedule", "", "a" * 40, self.runs(*idle))[0], True)
+
+    def test_every_event_shares_the_release_tag_concurrency_group(self) -> None:
+        text = (WORKFLOWS / "release-tag.yml").read_text()
+        self.assertIn("concurrency:\n  group: release-tag\n  cancel-in-progress: false\n", text)
+        self.assertEqual(text.count("concurrency:"), 1)
+        trigger = text[text.index("\non:\n"):text.index("\npermissions:")]
+        listed = [line.strip()[2:] for line in trigger.splitlines() if line.strip().startswith("- ")
+                  and not line.strip().startswith("- cron")]
+        expected = ["provenance/pulp-observatory/cursor.json",
+                    *[path.replace("verify_release_tag.py", "verify_release_*.py") for path in dry.RELEASE_PATHS]]
+        self.assertEqual(listed, expected)
+        self.assertIn("  schedule:\n    - cron: '17 9 * * 1'\n", trigger)
+        self.assertIn("  workflow_dispatch:\n", trigger)
+        gate = job_text("release-tag.yml", "dry-run-gate")
+        self.assertNotIn("environment", gate)
+        self.assertNotIn("secrets.", gate)
+
+
 class Target(unittest.TestCase):
     def test_the_newest_reconciled_commit_is_tagged(self) -> None:
         import test_release_request as trr  # noqa: PLC0415
@@ -439,7 +506,7 @@ class Wiring(unittest.TestCase):
         select = job_text("release-tag.yml", "select-release-commit")
         self.assertIn("if: github.event_name == 'push'", select)
         job = job_text("release-tag.yml", "sign-dry-run-tag")
-        self.assertIn("if: github.event_name == 'workflow_dispatch'", job)
+        self.assertIn("needs: dry-run-gate\n    if: needs.dry-run-gate.outputs.run == 'true'", job)
         self.assertIn("environment: release", job)
         self.assertIn('test "$GITHUB_REF" = refs/heads/main', job)
         self.assertNotIn("rulesets", job)

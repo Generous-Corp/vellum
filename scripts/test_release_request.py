@@ -993,7 +993,7 @@ class ReleaseTagWorkflow(unittest.TestCase):
 
     def test_only_an_observatory_reconcile_starts_it(self) -> None:
         trigger = self.text[self.text.index("\non:\n"):self.text.index("\npermissions:")]
-        self.assertIn("paths: [provenance/pulp-observatory/cursor.json]", trigger)
+        self.assertIn("    paths:\n      - provenance/pulp-observatory/cursor.json\n", trigger)
         self.assertNotIn("release-request.json", trigger)
         self.assertNotIn("immutable-release-preflight", self.text)
         # The version comes from the tagged commit's CMakeLists.txt; no request file is read.

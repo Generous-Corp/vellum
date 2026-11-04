@@ -19,6 +19,11 @@ is the one the next release of that version would carry. The release identity
             and the dry-run tag's name.
   identity  for a tag name: `mode=` release or dry-run, `version=`, `identity=`.
             Any other name is refused.
+  gate      whether this run of release-tag.yml starts a dry run: always on
+            the weekly schedule and by hand; on a push to main only when the
+            push changes a release-path file (RELEASE_PATHS); and never while
+            a release tag's GPU proof or provenance run, or any SDK finalizer
+            run, is queued or in progress.
 """
 
 from __future__ import annotations
@@ -38,6 +43,22 @@ RELEASE_TAG = re.compile(rf"v{VERSION}")
 DRY_RUN_TAG = re.compile(rf"dry-run/v{VERSION}/[1-9][0-9]*-[1-9][0-9]*")
 # How far back on main's first-parent history a reconciled commit is looked for.
 SEARCH_LIMIT = 200
+# A push to main that changes one of these starts a dry run by itself.
+RELEASE_PATHS = (
+    ".github/workflows/gpu-macos.yml",
+    ".github/workflows/provenance.yml",
+    ".github/workflows/release-tag.yml",
+    ".github/workflows/sdk-release.yml",
+    "scripts/release_dry_run.py",
+    "scripts/release_request.py",
+    "scripts/verify_release_tag.py",
+    "scripts/version_at_land.py",
+)
+# Runs of these, on a release tag (or any finalizer run, whose branch is main),
+# mean a real release may be in flight; a dry run then waits for next time.
+RELEASE_PIPELINE = ("Locked macOS GPU proof", "Provenance and forbidden dependencies")
+FINALIZER = "Finalize immutable SDK release"
+ZERO = "0" * 40
 
 
 class DryRunError(RuntimeError):
@@ -73,6 +94,43 @@ def reconciled_target(root: Path, head: str) -> str:
     raise DryRunError(f"no observatory-reconciled commit in the last {SEARCH_LIMIT} first-parent commits of {head}")
 
 
+def busy(runs: object) -> list[str]:
+    """Queued or running runs that may belong to a real release, from `gh api --paginate --slurp` pages."""
+    rows = [row for page in runs if isinstance(page, dict) for row in page.get("workflow_runs", [])
+            if isinstance(row, dict)] if isinstance(runs, list) else None
+    if rows is None:
+        raise DryRunError("the runs listing must be an array of pages")
+    found = []
+    for row in rows:
+        if row.get("status") not in ("queued", "in_progress", "waiting", "pending", "requested"):
+            continue
+        name, branch = row.get("name"), str(row.get("head_branch") or "")
+        if (name in RELEASE_PIPELINE and RELEASE_TAG.fullmatch(branch)) or name == FINALIZER:
+            found.append(f"{name} on {branch} (run {row.get('id')})")
+    return found
+
+
+def gate(root: Path, event: str, before: str, after: str, runs: object) -> tuple[bool, str]:
+    """Whether this release-tag.yml run starts a dry run, and why."""
+    in_flight = busy(runs)
+    if in_flight:
+        return False, "a release run may be in flight: " + "; ".join(in_flight)
+    if event in ("schedule", "workflow_dispatch"):
+        return True, f"{event} runs a dry run"
+    if event != "push":
+        return False, f"{event} never runs a dry run"
+    if not rr.SHA.fullmatch(after):
+        raise DryRunError("the pushed commit must be a full SHA")
+    if not rr.SHA.fullmatch(before) or before == ZERO:
+        changed = rr.git(root, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", after).split()
+    else:
+        changed = rr.git(root, "diff", "--name-only", "--no-renames", before, after).split()
+    touched = sorted(set(changed) & set(RELEASE_PATHS))
+    if not touched:
+        return False, "the push changes no release-path file"
+    return True, "the push changes " + ", ".join(touched)
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -82,8 +140,20 @@ def main(argv: list[str]) -> int:
     one.add_argument("--attempt", required=True)
     two = sub.add_parser("identity")
     two.add_argument("--tag", required=True)
+    three = sub.add_parser("gate")
+    three.add_argument("--event", required=True)
+    three.add_argument("--before", default="")
+    three.add_argument("--after", required=True)
+    three.add_argument("--runs", type=Path, required=True, help="queued and in-progress runs, gh api --slurp pages")
     args = parser.parse_args(argv)
     try:
+        if args.command == "gate":
+            import json  # noqa: PLC0415
+            run, reason = gate(ROOT, args.event, args.before, args.after,
+                               json.loads(args.runs.read_text(encoding="utf-8")))
+            print(f"run={'true' if run else 'false'}")
+            print(reason, file=sys.stderr)
+            return 0
         if args.command == "identity":
             mode, version = identity(args.tag)
             print(f"mode={mode}\nversion={version}\nidentity=v{version}")
@@ -94,7 +164,7 @@ def main(argv: list[str]) -> int:
         version = val.project_version(rr.git(ROOT, "show", f"{target}:{rr.CMAKELISTS}"))
         name = tag_name(version, args.run_id, args.attempt)
         print(f"commit={target}\ntag={name}\nidentity=v{version}")
-    except (DryRunError, rr.ReleaseRequestError, val.VersionError) as error:
+    except (DryRunError, rr.ReleaseRequestError, val.VersionError, OSError, ValueError) as error:
         print(f"release dry run refused: {error}", file=sys.stderr)
         return 1
     return 0

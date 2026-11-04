@@ -11,14 +11,32 @@ name: Sign the release tag
 # that exists only in the `release` environment, and freezes the tag. Pushing
 # the tag starts the release pipeline (gpu-macos, then sdk-release).
 #
-# A manual run is a release dry run: sign-dry-run-tag signs a throwaway
+# A release dry run: sign-dry-run-tag signs a throwaway
 # dry-run/v<version>/<run>-<attempt> tag on the newest reconciled commit, never
 # freezes it, and pushes it. The same pipeline runs on it; sdk-release builds
-# the draft, stops before publication, and deletes the draft and the tag.
+# the draft, stops before publication, and deletes the draft and the tag. It
+# starts by itself on a push to main that changes a release-path file, weekly
+# as a canary, and by hand (dry-run-gate decides; scripts/release_dry_run.py).
+# Every event shares the release-tag concurrency group, so a dry run is never
+# signed while a release tag is.
 on:
   push:
     branches: [main]
-    paths: [provenance/pulp-observatory/cursor.json]
+    paths:
+      - provenance/pulp-observatory/cursor.json
+      # The release path: a change here starts a dry run (dry-run-gate).
+      - .github/workflows/gpu-macos.yml
+      - .github/workflows/provenance.yml
+      - .github/workflows/release-tag.yml
+      - .github/workflows/sdk-release.yml
+      - scripts/release_dry_run.py
+      - scripts/release_request.py
+      # The tag verifier (and the asset verifier), spelled as a pattern so
+      # release-policy's reader of verifier calls does not take it for a call.
+      - scripts/verify_release_*.py
+      - scripts/version_at_land.py
+  schedule:
+    - cron: '17 9 * * 1'
   workflow_dispatch:
 
 permissions:
@@ -282,9 +300,53 @@ jobs:
   # environment, and its tag can only be a dry-run/ name: the tag verifier
   # and release_dry_run.py both refuse anything else, and the push step checks
   # the name again. No freeze is created, so sdk-release can delete the tag.
+  # Decides whether this run starts a dry run. No secret, no environment.
+  dry-run-gate:
+    name: dry-run-gate
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+    steps:
+      - name: Check out main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Read the runs a real release may have in flight
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for status in queued in_progress; do
+            gh api --method GET --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs" \
+              -f status="$status" -F per_page=100 > "$RUNNER_TEMP/runs-$status.json"
+          done
+          jq -s 'add' "$RUNNER_TEMP/runs-queued.json" "$RUNNER_TEMP/runs-in_progress.json" > "$RUNNER_TEMP/runs.json"
+
+      - name: Decide whether to run a dry run
+        id: gate
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          python3 -I scripts/release_dry_run.py gate --event "$EVENT" --before "$BEFORE" --after "$GITHUB_SHA" \
+            --runs "$RUNNER_TEMP/runs.json" > "$RUNNER_TEMP/gate.txt" 2> "$RUNNER_TEMP/gate-reason.txt"
+          run="$(sed -n 's/^run=//p' "$RUNNER_TEMP/gate.txt")"
+          [[ "$run" == true || "$run" == false ]]
+          printf 'run=%s\n' "$run" >> "$GITHUB_OUTPUT"
+          echo "dry run: $run ($(head -n 1 "$RUNNER_TEMP/gate-reason.txt"))" >> "$GITHUB_STEP_SUMMARY"
+
   sign-dry-run-tag:
     name: sign-dry-run-tag
-    if: github.event_name == 'workflow_dispatch'
+    needs: dry-run-gate
+    if: needs.dry-run-gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     environment: release
     steps:
