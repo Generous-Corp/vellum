@@ -1,0 +1,22 @@
+{
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "created_at": "2026-11-04T16:48:51Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-8b9e20b6e35d54059a9caeb7d842e6f6dc3c3290",
+  "kind": "resolution",
+  "linked_commits": [
+    "8b9e20b6e35d54059a9caeb7d842e6f6dc3c3290"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/vellum/pull/156"
+  ],
+  "owner": "@danielraffel",
+  "rationale": "Adds Vellum's own Illustrator PDF-to-SVG adapter under authoring/adapters/illustrator, the Vellum route the owner chose on 2026-11-01. It is a rewrite under Vellum's native rules, not a byte copy, and creates no obligation for Pulp.",
+  "resolves": "vellum-8b9e20b6e35d54059a9caeb7d842e6f6dc3c3290",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

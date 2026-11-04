@@ -9,12 +9,12 @@ namespace gpu_runtime {
 
 /// Whole-recording GPU *render* time.
 ///
-/// True per-pass GPU timing tied to Pulp's logical render passes is
+/// True per-pass GPU timing tied to a renderer's logical render passes is
 /// architecturally blocked: Skia Graphite owns the Dawn command encoder and
-/// every render-pass descriptor, so Pulp cannot inject per-pass
+/// every render-pass descriptor, so the renderer cannot inject per-pass
 /// `timestampWrites`, and the encoder-level `WriteTimestamp` is gated behind
 /// Dawn's `allow_unsafe_apis` toggle and disabled by Skia's `DawnCaps` on
-/// Metal/Apple-silicon (Pulp's primary platform).
+/// Metal/Apple-silicon (the primary platform).
 ///
 /// What IS available — and correct on every backend — is Skia Graphite's own
 /// GPU-stats API: `InsertRecordingInfo::fGpuStatsFlags = kElapsedTime` plus a
@@ -37,7 +37,7 @@ inline constexpr double kGpuRenderNanosecondsPerMillisecond = 1.0e6;
 /// Dawn's `timestamp_quantization` toggle, which defaults to ON in native Dawn
 /// (not only in Chrome) and ANDs every resolved timestamp with 0xFFFF0000 —
 /// truncating each endpoint to a multiple of 65536 ns. It exists to stop
-/// untrusted web content building a high-resolution timer; Pulp runs its own
+/// untrusted web content building a high-resolution timer; a plug-in runs its own
 /// shaders in its own process, so the mitigation buys nothing here and costs
 /// the metric roughly three orders of magnitude of resolution.
 ///

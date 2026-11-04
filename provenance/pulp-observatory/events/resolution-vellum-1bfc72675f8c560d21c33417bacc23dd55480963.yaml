@@ -1,0 +1,20 @@
+{
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer"
+  ],
+  "created_at": "2026-11-04T16:48:51Z",
+  "disposition": "superseded",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-1bfc72675f8c560d21c33417bacc23dd55480963",
+  "kind": "resolution",
+  "linked_commits": [
+    "1bfc72675f8c560d21c33417bacc23dd55480963"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Integration merge (Merge main into claude/post108-followups-20261027). It carries no change beyond the commits it merges, whose own observations are classified separately in this ledger, so it has no independent contract.",
+  "resolves": "vellum-1bfc72675f8c560d21c33417bacc23dd55480963",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

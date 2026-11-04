@@ -6,10 +6,12 @@
 // ensure_dawn_procs() first, and that resolves the process's installer exactly
 // once.
 //
-// By default the installer is the device's own: it installs Dawn's native
-// procs once per process. A build whose host owns the table has no default:
-// ensure_dawn_procs() fails until a host registers an installer. An embedding
-// host that owns the table instead (because it authenticates the Dawn build,
+// By default the installer is the bootstrap coordinator (dawn_bootstrap.hpp):
+// a table another component already bootstrapped is used as it is, and
+// otherwise the native bootstrap installs Dawn's native procs. A build with
+// GPU_RUNTIME_HOST_OWNS_DAWN_PROCS has no native default: ensure_dawn_procs()
+// fails until the host registers a bootstrap or an installer. A host that
+// installs the table its own way (because it authenticates the Dawn build,
 // shares the table with other code, or installs it itself) registers its
 // installer with set_dawn_proc_installer() before any GpuSurface or GpuCompute
 // is created. An installer may install the table, or only verify that the host

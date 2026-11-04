@@ -133,7 +133,7 @@ public:
         std::string backend = "unavailable";
         std::string backend_type = "Unknown";
         std::string name = "Mock Dawn Adapter";
-        std::string vendor = "Pulp";
+        std::string vendor = "gpu-runtime";
         std::string architecture = "unavailable";
         std::string description = "Mock Dawn Adapter";
         std::string preferred_canvas_format = "bgra8unorm";
