@@ -3,24 +3,27 @@ set(VELLUM_SKIA_ARCHIVE "" CACHE FILEPATH
 set(VELLUM_SKIA_DIR "" CACHE PATH
     "Development-only path to the extracted pinned Skia/Dawn archive")
 
-set(_vellum_expected_archive_sha256
-    "dca73c0eee5b0f6d129fe357d0754f7165c6b436051e0de947aeedd3e1bde250")
-set(_vellum_expected_skia_sha256
-    "4f5e148866dab6f260a80ee6da006539b8f47885daece28489972726295fde1c")
-set(_vellum_expected_dawn_sha256
-    "6c6c5535e3b004ca260f388536c1baa737c11479d0a95865d174888d7d3077f3")
-set(_vellum_expected_svg_sha256
-    "651c113ade708034b19461016b219a216ef8b2f451e83e60931c9eae1aed594b")
-set(_vellum_expected_skresources_sha256
-    "af723156c3896a5d3a51f09f7bcf464795c5cedb2672cf07e646e2ecdba84024")
-set(_vellum_expected_skshaper_sha256
-    "a6a16bedd0bf001f813f03517a919f7c6932128537c60721c1c1be8f151a1e74")
-set(_vellum_expected_skparagraph_sha256
-    "4144a0a4d1ce6dadd2c53d379bf21a56f59d16922b2eeac3bff4a0c0768abf53")
-set(_vellum_expected_skunicode_core_sha256
-    "e3026eedb11a9af0c245e8f3e227f0ce92e383271e3da8b55e87fdefe89f93cb")
-set(_vellum_expected_skunicode_icu_sha256
-    "ea7352e2ebab5734852924be28ffba61e99db578f4b065a302cbff9dcae484cb")
+# The pin is read from gpu-runtime/renderer-lock.json, the only place the
+# milestone and the skia-builder digests are written.
+include("${CMAKE_CURRENT_LIST_DIR}/../gpu-runtime/cmake/GpuRuntimeRendererLock.cmake")
+gpu_runtime_read_renderer_lock(PLATFORM macos-arm64 PREFIX _vellum_renderer)
+set(_vellum_expected_archive_sha256 "${_vellum_renderer_SHA256}")
+foreach(_vellum_locked IN ITEMS
+        skia dawn_combined svg skresources skshaper skparagraph
+        skunicode_core skunicode_icu)
+    if(NOT DEFINED "_vellum_renderer_SHA256_lib${_vellum_locked}.a")
+        message(FATAL_ERROR
+            "Vellum: gpu-runtime/renderer-lock.json does not lock lib${_vellum_locked}.a")
+    endif()
+endforeach()
+set(_vellum_expected_skia_sha256 "${_vellum_renderer_SHA256_libskia.a}")
+set(_vellum_expected_dawn_sha256 "${_vellum_renderer_SHA256_libdawn_combined.a}")
+set(_vellum_expected_svg_sha256 "${_vellum_renderer_SHA256_libsvg.a}")
+set(_vellum_expected_skresources_sha256 "${_vellum_renderer_SHA256_libskresources.a}")
+set(_vellum_expected_skshaper_sha256 "${_vellum_renderer_SHA256_libskshaper.a}")
+set(_vellum_expected_skparagraph_sha256 "${_vellum_renderer_SHA256_libskparagraph.a}")
+set(_vellum_expected_skunicode_core_sha256 "${_vellum_renderer_SHA256_libskunicode_core.a}")
+set(_vellum_expected_skunicode_icu_sha256 "${_vellum_renderer_SHA256_libskunicode_icu.a}")
 
 if(VELLUM_SKIA_ARCHIVE)
     if(NOT EXISTS "${VELLUM_SKIA_ARCHIVE}")
@@ -76,7 +79,7 @@ if(NOT VELLUM_SKIA_DIR)
 endif()
 
 set(_vellum_skia_include "${VELLUM_SKIA_DIR}/build/include")
-set(_vellum_skia_release_dir "${VELLUM_SKIA_DIR}/build/mac-gpu/lib/Release")
+set(_vellum_skia_release_dir "${VELLUM_SKIA_DIR}/${_vellum_renderer_ARCHIVE_ROOT}")
 set(_vellum_skia_libdir "")
 foreach(_vellum_candidate IN ITEMS
         "${_vellum_skia_release_dir}"
@@ -139,7 +142,7 @@ if(NOT _vellum_skia_sha256 STREQUAL _vellum_expected_skia_sha256 OR
    NOT _vellum_skunicode_icu_sha256 STREQUAL _vellum_expected_skunicode_icu_sha256)
     message(FATAL_ERROR
         "Vellum: extracted Skia/Dawn libraries do not match the locked "
-        "chrome/m158 macOS universal tuple")
+        "${_vellum_renderer_MILESTONE} macOS universal tuple")
 endif()
 
 # This public headers-only target lets an embedding host compile its Dawn
