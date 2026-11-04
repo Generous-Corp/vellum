@@ -2,6 +2,8 @@
 
 #include <vellum/graphics/color.hpp>
 
+#include <cstdint>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -52,6 +54,41 @@ struct TextRun final {
     TextStyle style;
 };
 
+/// Premultiplied RGBA8 texels, row-major, top row first.
+struct MeshTexture final {
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    std::vector<std::uint8_t> premultiplied_rgba;
+};
+
+/// One vertex of a triangle mesh. The position is relative to the owning
+/// node's origin. `u` and `v` are normalized texture coordinates. The colour
+/// is premultiplied RGBA8 packed with red in the high byte; with a texture it
+/// multiplies the sampled texel.
+struct MeshVertex final {
+    float x = 0.0F;
+    float y = 0.0F;
+    float u = 0.0F;
+    float v = 0.0F;
+    std::uint32_t premultiplied_rgba = 0xFFFFFFFFU;
+};
+
+/// An indexed triangle list with an optional texture and clip rectangle.
+///
+/// Positions are final: a producer that applies a projective transform does
+/// so per vertex before building the mesh, so colours and texture coordinates
+/// interpolate linearly in output space. Texels are sampled nearest-neighbour
+/// with clamped edges, and the mesh is drawn without anti-aliasing.
+struct TriangleMesh final {
+    std::vector<MeshVertex> vertices;
+    /// Three indices per triangle.
+    std::vector<std::uint32_t> indices;
+    std::shared_ptr<const MeshTexture> texture;
+    bool clip_enabled = false;
+    /// Clip rectangle relative to the owning node's origin.
+    Rect clip{};
+};
+
 /// A deliberately small retained scene used by the first extraction proof.
 ///
 /// Nodes carry stable semantic identities so import, interaction, and capture
@@ -63,6 +100,7 @@ struct SceneNode final {
         rectangle,
         text,
         custom,
+        mesh,
     };
 
     std::string id;
@@ -83,6 +121,8 @@ struct SceneNode final {
     std::string custom_component;
     std::string custom_properties_json;
     std::vector<SceneNode> children;
+    /// The geometry of a `mesh` node.
+    std::shared_ptr<const TriangleMesh> mesh;
 };
 
 struct Scene final {

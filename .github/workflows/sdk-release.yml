@@ -740,6 +740,17 @@ jobs:
             gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
               -F draft=false -f make_latest=false > "$RUNNER_TEMP/release-published.json"
           fi
+          # GitHub writes the immutable-release attestation shortly after
+          # publication, so a verify issued at once can find none. Wait up to
+          # two minutes for it to appear; every check below is unchanged and
+          # still fails the job if the attestation never appears or is wrong.
+          for attempt in $(seq 1 12); do
+            if gh release verify "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              break
+            fi
+            echo "release attestation not yet visible (attempt $attempt/12); waiting 10s"
+            sleep 10
+          done
           gh release verify "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY"
           gh release verify-asset "$RELEASE_TAG" "$RUNNER_TEMP/gpu/$RELEASE_ARCHIVE" \
             --repo "$GITHUB_REPOSITORY"

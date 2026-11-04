@@ -63,6 +63,22 @@ jobs:
           } >> "$GITHUB_ENV"
           echo "archive=vellum-sdk-$version-darwin-arm64.tar.gz" >> "$GITHUB_OUTPUT"
 
+      # The job owns its whole machine: a disposable fleet VM (6 cores,
+      # 10 GiB) or a hosted runner (3 cores, 7 GiB). Size every build to it
+      # rather than to a constant, allowing 1.5 GiB per compile job.
+      - name: Size builds to this runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          cores="$(sysctl -n hw.ncpu)"
+          memory_bytes="$(sysctl -n hw.memsize)"
+          [[ "$cores" =~ ^[1-9][0-9]*$ && "$memory_bytes" =~ ^[1-9][0-9]*$ ]]
+          by_memory=$(( memory_bytes * 2 / 3 / 1024 / 1024 / 1024 ))
+          jobs=$(( cores < by_memory ? cores : by_memory ))
+          jobs=$(( jobs < 1 ? 1 : jobs > 16 ? 16 : jobs ))
+          echo "VELLUM_BUILD_JOBS=$jobs" >> "$GITHUB_ENV"
+          echo "Building with $jobs jobs ($cores cores, $(( memory_bytes / 1024 / 1024 / 1024 )) GiB)"
+
       - name: Download and verify the locked Skia and Dawn archive
         shell: bash
         run: |
@@ -189,8 +205,10 @@ jobs:
             -DVELLUM_SKIA_ARCHIVE="$VELLUM_SKIA_ARCHIVE" \
             -DVELLUM_ENABLE_MIRROR=ON \
             -DVELLUM_MIRROR_DEPS_DIR="$VELLUM_MIRROR_DEPS_DIR" \
-            -DVELLUM_VIEW_AUDIO_ARCHIVE="$VELLUM_VIEW_AUDIO_ARCHIVE"
-          cmake --build build-gpu --parallel 3
+            -DVELLUM_VIEW_AUDIO_ARCHIVE="$VELLUM_VIEW_AUDIO_ARCHIVE" \
+            -DVELLUM_ENABLE_RMLUI=ON \
+            -DVELLUM_RMLUI_VELLUM_RENDERER=ON
+          cmake --build build-gpu --parallel "$VELLUM_BUILD_JOBS"
 
       - name: Stress parallel text shaping in Release
         run: |
@@ -210,7 +228,7 @@ jobs:
             -DVELLUM_REQUIRE_GPU=ON \
             -DVELLUM_SKIA_ARCHIVE="$VELLUM_SKIA_ARCHIVE"
           cmake --build build-gpu-asan \
-            --target vellum-text-shaping-concurrency-test --parallel 3
+            --target vellum-text-shaping-concurrency-test --parallel "$VELLUM_BUILD_JOBS"
           ASAN_OPTIONS=abort_on_error=1:detect_leaks=0:halt_on_error=1 \
           VELLUM_TEXT_STRESS_ROUNDS=20 \
             ./build-gpu-asan/vellum-text-shaping-concurrency-test
@@ -345,20 +363,67 @@ jobs:
               json.dumps(record, indent=2, sort_keys=True) + "\n"
           )
           PY
-          python3 scripts/build_sdk_artifact.py \
-            --skia-archive "$VELLUM_SKIA_ARCHIVE" \
-            --web-payload "$RUNNER_TEMP/web-payload" \
-            --node-binary "$node_binary" \
-            --node-license "$node_license" \
-            --node-provenance "$RUNNER_TEMP/node-provenance.json" \
-            --output-dir "$first" --json > "$RUNNER_TEMP/sdk-first.json"
-          python3 scripts/build_sdk_artifact.py \
-            --skia-archive "$VELLUM_SKIA_ARCHIVE" \
-            --web-payload "$RUNNER_TEMP/web-payload" \
-            --node-binary "$node_binary" \
-            --node-license "$node_license" \
-            --node-provenance "$RUNNER_TEMP/node-provenance.json" \
-            --output-dir "$second" --json > "$RUNNER_TEMP/sdk-second.json"
+          build_sdk() {
+            local label="$1" output="$2" json="$3" deps="$4" jobs="$5"
+            VELLUM_MIRROR_DEPS_DIR="$deps" \
+            CMAKE_BUILD_PARALLEL_LEVEL="$jobs" \
+            python3 scripts/build_sdk_artifact.py \
+              --skia-archive "$VELLUM_SKIA_ARCHIVE" \
+              --web-payload "$RUNNER_TEMP/web-payload" \
+              --node-binary "$node_binary" \
+              --node-license "$node_license" \
+              --node-provenance "$RUNNER_TEMP/node-provenance.json" \
+              --output-dir "$output" --json > "$json" \
+              2> >(sed "s/^/[$label] /" >&2)
+          }
+          # On a pull request or queue run with at least 4 jobs, the two
+          # independent builds run side by side with half the jobs each, so
+          # their configure, install and packaging phases overlap. Each gets
+          # its own copy-on-write clone of the mirror's dependency checkouts
+          # (the GPU build fetched them; object paths are prefix-mapped), so
+          # nothing they write is shared. Pushes to main and release tags keep
+          # building serially, minutes apart, so a wall-clock byte two
+          # simultaneous builds would share still fails the comparison before
+          # any release.
+          if [ "$VELLUM_BUILD_JOBS" -ge 4 ] && {
+            [ "$GITHUB_EVENT_NAME" = pull_request ] ||
+            [ "$GITHUB_EVENT_NAME" = merge_group ] ||
+            [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]
+          }; then
+            half=$(( VELLUM_BUILD_JOBS / 2 ))
+            for side in first second; do
+              cp -cRp "$VELLUM_MIRROR_DEPS_DIR" "$RUNNER_TEMP/mirror-deps-$side"
+            done
+            ( while :; do
+                printf '%s free_pages=%s swap=%s\n' "$(date -u +%H:%M:%S)" \
+                  "$(sysctl -n vm.page_free_count)" "$(sysctl -n vm.swapusage | tr -s ' ')"
+                sleep 5
+              done ) > "$RUNNER_TEMP/sdk-build-memory.log" 2>&1 &
+            sampler_pid=$!
+            build_sdk first "$first" "$RUNNER_TEMP/sdk-first.json" \
+              "$RUNNER_TEMP/mirror-deps-first" "$half" &
+            first_pid=$!
+            build_sdk second "$second" "$RUNNER_TEMP/sdk-second.json" \
+              "$RUNNER_TEMP/mirror-deps-second" "$half" &
+            second_pid=$!
+            first_status=0
+            second_status=0
+            wait "$first_pid" || first_status=$?
+            wait "$second_pid" || second_status=$?
+            kill "$sampler_pid" 2>/dev/null || true
+            page_size="$(sysctl -n hw.pagesize)"
+            min_free="$(awk '{sub("free_pages=","",$2); if (min == "" || $2 < min) min = $2} END {print min}' "$RUNNER_TEMP/sdk-build-memory.log")"
+            echo "Concurrent SDK builds: minimum free memory $(( ${min_free:-0} * page_size / 1024 / 1024 )) MiB; final $(tail -n 1 "$RUNNER_TEMP/sdk-build-memory.log")"
+            if [ "$first_status" -ne 0 ] || [ "$second_status" -ne 0 ]; then
+              echo "::error::SDK builds exited $first_status and $second_status"
+              exit 1
+            fi
+          else
+            build_sdk first "$first" "$RUNNER_TEMP/sdk-first.json" \
+              "$VELLUM_MIRROR_DEPS_DIR" "$VELLUM_BUILD_JOBS"
+            build_sdk second "$second" "$RUNNER_TEMP/sdk-second.json" \
+              "$VELLUM_MIRROR_DEPS_DIR" "$VELLUM_BUILD_JOBS"
+          fi
           test "$(python3 cli/vellum_cli.py --version)" = \
             "vellum $VELLUM_RELEASE_VERSION"
           archive="$VELLUM_RELEASE_ARCHIVE"
@@ -420,12 +485,23 @@ jobs:
           prefix="$RUNNER_TEMP/templates-smoke-sdk"
           project="$RUNNER_TEMP/html-import-proof"
           source="$GITHUB_WORKSPACE/fixtures/html-import/index.html"
+          # Keep each command's stderr beside its JSON and report the exit
+          # status when it fails: a command killed by a signal or one that dies
+          # before writing JSON otherwise leaves no trace.
           run_json() {
             local output="$1"
             shift
-            if ! "$@" > "$output"; then
-              echo "installed SDK command failed: $*" >&2
-              echo "--- $output ---" >&2
+            local status=0
+            # stderr streams live into the log as well as the file, so a
+            # command the job timeout kills still leaves its last words.
+            "$@" > "$output" 2> >(tee "$output.stderr" >&2) || status=$?
+            if [ "$status" -ne 0 ]; then
+              detail="exit status $status"
+              if [ "$status" -gt 128 ]; then
+                detail="$detail (signal $((status - 128)) $(kill -l "$((status - 128))" 2>/dev/null || true) if the shell reported a signal)"
+              fi
+              echo "installed SDK command failed with $detail: $*" >&2
+              echo "--- stdout: $output ---" >&2
               cat "$output" >&2 || true
               return 1
             fi
@@ -606,6 +682,7 @@ jobs:
             ${{ runner.temp }}/html-import-design-check.json
             ${{ runner.temp }}/html-import-build.json
             ${{ runner.temp }}/html-import-capture.json
+            ${{ runner.temp }}/html-import*.json.stderr
             ${{ runner.temp }}/${{ env.VELLUM_RELEASE_ARCHIVE }}
             ${{ runner.temp }}/install.sh
             ${{ runner.temp }}/install_core.py
@@ -613,6 +690,7 @@ jobs:
             ${{ runner.temp }}/vellum-sdk.sha256
             ${{ runner.temp }}/sdk-first.json
             ${{ runner.temp }}/sdk-second.json
+            ${{ runner.temp }}/sdk-build-memory.log
             ${{ runner.temp }}/sdk-verification.json
             ${{ runner.temp }}/templates-smoke.json
             ${{ runner.temp }}/templates-smoke.stdout.json
