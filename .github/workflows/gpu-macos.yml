@@ -68,7 +68,10 @@ jobs:
         run: |
           set -euo pipefail
           # gpu-runtime/renderer-lock.json is the only place the pin is written.
-          read -r url asset sha256 < <(python3 -I - <<'PY'
+          # The reader is a file, not a heredoc inside <( ): bash 3.2 (macOS's
+          # /bin/bash) cannot parse a quoted heredoc within a substitution.
+          reader="$RUNNER_TEMP/read_renderer_lock.py"
+          cat > "$reader" <<'PY'
           import json, re, sys
           lock = json.load(open("gpu-runtime/renderer-lock.json", encoding="utf-8"))
           platform = lock["platforms"]["macos-arm64"]
@@ -83,7 +86,8 @@ jobs:
               sys.exit("renderer lock names an unexpected skia-builder asset")
           print("/".join((repository, "releases/download", milestone, asset)), asset, sha256)
           PY
-          )
+          python3 -I "$reader" > "$RUNNER_TEMP/renderer-lock-asset.txt"
+          read -r url asset sha256 < "$RUNNER_TEMP/renderer-lock-asset.txt"
           [[ "$url" =~ ^https://github\.com/danielraffel/skia-builder/releases/download/chrome/m[0-9]+/[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]]
           [[ "$sha256" =~ ^[0-9a-f]{64}$ && "$asset" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]]
           archive="$RUNNER_TEMP/$asset"

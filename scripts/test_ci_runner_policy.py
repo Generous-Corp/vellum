@@ -952,6 +952,58 @@ class RunnerPolicyTests(unittest.TestCase):
                 self.assertNotEqual(probe.returncode, 0, f"{label} reached curl: {probe.stdout}")
                 self.assertEqual(probe.stdout, "")
 
+    def test_locked_gpu_archive_step_runs_under_the_runner_shell(self) -> None:
+        # Run the step's own `run:` text the way Actions does (bash with
+        # -e -o pipefail), with a curl stand-in, on a copy of the lock. macOS's
+        # /bin/bash is 3.2, whose parser once refused this step outright, so a
+        # parse error here fails the suite rather than a release.
+        gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
+        script = gpu.split("- name: Download and verify the locked Skia and Dawn archive", 1)[1]
+        script = script.split("run: |\n", 1)[1]
+        lines = []
+        for line in script.splitlines():
+            if line.strip() and not line.startswith("          "):
+                break
+            lines.append(line.removeprefix("          "))
+        step = "\n".join(lines) + "\n"
+        payload = b"stand-in renderer archive\n"
+        digest = hashlib.sha256(payload).hexdigest()
+        bash = "/bin/bash" if Path("/bin/bash").exists() else shutil.which("bash")
+        self.assertIsNotNone(bash)
+        for label, lock_digest, expect_ok in (("matching", digest, True),
+                                              ("tampered", "0" * 64, False)):
+            with self.subTest(case=label), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                lock = json.loads((ROOT / "gpu-runtime/renderer-lock.json").read_text(encoding="utf-8"))
+                lock["platforms"]["macos-arm64"]["sha256"] = lock_digest
+                (root / "gpu-runtime").mkdir()
+                (root / "gpu-runtime/renderer-lock.json").write_text(json.dumps(lock), encoding="utf-8")
+                stub = root / "bin"
+                stub.mkdir()
+                (stub / "curl").write_text(
+                    "#!/bin/sh\n"
+                    "while [ $# -gt 0 ]; do\n"
+                    '  if [ "$1" = --output ]; then printf \'stand-in renderer archive\\n\' > "$2"; fi\n'
+                    "  shift\n"
+                    "done\n", encoding="utf-8")
+                (stub / "curl").chmod(0o755)
+                runner = root / "runner"
+                runner.mkdir()
+                env = dict(os.environ, PATH=f"{stub}:{os.environ['PATH']}",
+                           RUNNER_TEMP=str(runner), GITHUB_ENV=str(runner / "env"))
+                (root / "step.sh").write_text(step, encoding="utf-8")
+                result = subprocess.run([bash, "--noprofile", "--norc", "-e", "-o", "pipefail",
+                                         str(root / "step.sh")], cwd=root, env=env,
+                                        capture_output=True, text=True, check=False)
+                self.assertNotIn("bad substitution", result.stderr)
+                if expect_ok:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn("VELLUM_SKIA_ARCHIVE=", (runner / "env").read_text())
+                else:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse((runner / "env").exists() and
+                                     "VELLUM_SKIA_ARCHIVE=" in (runner / "env").read_text())
+
     def test_workflows_use_their_reviewed_runner_class(self) -> None:
         workflow_paths = sorted(
             [*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]
