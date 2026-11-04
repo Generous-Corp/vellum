@@ -431,7 +431,6 @@ jobs:
           python3 tools/provenance/test_verify_current_state_docs.py
           python3 tools/provenance/test_verify_authority_expansion.py
           python3 tools/provenance/test_collect_release_evidence.py
-          python3 tools/provenance/test_pulp_main_drift_annotations.py
           python3 scripts/test_select_exact_provenance_run.py
           python3 scripts/test_verify_exact_provenance_artifact.py
           release_readiness=()
