@@ -1,0 +1,22 @@
+{
+  "contract_tests": [
+    "vellum.authoring",
+    "vellum.capture-stats",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-04T16:48:51Z",
+  "disposition": "superseded",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-aeb418a6900ea459a765a39a157b84a7e6554aac",
+  "kind": "resolution",
+  "linked_commits": [
+    "aeb418a6900ea459a765a39a157b84a7e6554aac"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Integration merge (Merge remote-tracking branch 'origin/main' into fix/inertness-plugin-view-host-debt). It carries no change beyond the commits it merges, whose own observations are classified separately in this ledger, so it has no independent contract.",
+  "resolves": "vellum-aeb418a6900ea459a765a39a157b84a7e6554aac",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}
