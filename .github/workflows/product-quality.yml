@@ -61,6 +61,7 @@ jobs:
           python3 -I gpu-runtime/tools/test_check_device_api_closure.py
           python3 -I gpu-runtime/tools/check_device_api_closure.py gpu-runtime/include
           python3 cli/tests/test_templates.py
+          python3 authoring/adapters/illustrator/test_illustrator_to_svg.py
           python3 scripts/template_guard.py
           python3 scripts/test_templates_smoke.py
           python3 scripts/test_sterile_acceptance_bundle.py
