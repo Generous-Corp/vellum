@@ -334,6 +334,22 @@ jobs:
               if not found:
                   raise SystemExit("release tag lacks an SSH-signed JSON message")
               data = json.loads(payload.strip(), object_pairs_hook=strict_object)
+              # A dry-run tag's message wraps the rehearsed release's
+              # attestation; it is unwrapped only on the dry-run tag it names,
+              # and a release tag never accepts a wrapper.
+              dry_run = re.fullmatch(
+                  r"refs/tags/(dry-run/(v[0-9]+\.[0-9]+\.[0-9]+)/[1-9][0-9]*-[1-9][0-9]*)", ref
+              )
+              wrapped = isinstance(data, dict) and data.get("schema") == "vellum.release-dry-run-attestation.v1"
+              if dry_run:
+                  if not wrapped or set(data) != {
+                      "schema", "dry_run", "dry_run_tag", "release_identity", "attestation",
+                  } or data["dry_run"] is not True or data["dry_run_tag"] != dry_run.group(1) \
+                          or data["release_identity"] != dry_run.group(2):
+                      raise SystemExit("dry-run tag message is not this dry run's wrapped attestation")
+                  data = data["attestation"]
+              elif wrapped:
+                  raise SystemExit("a release tag carries a dry-run attestation")
               promotion = Path(os.environ["RUNNER_TEMP"]) / (
                   "authority-promotion-attestation.json"
               )

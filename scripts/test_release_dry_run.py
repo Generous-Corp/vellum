@@ -95,6 +95,13 @@ if path == f"repos/{repo}/immutable-releases":
     print("true" if jq == ".enabled" else json.dumps({"enabled": True, "enforced_by_owner": False})); sys.exit(0)
 if path.startswith(f"repos/{repo}/rulesets"):
     print(json.dumps([[]])); sys.exit(0)
+if path.startswith(f"repos/{repo}/actions/runs/"):
+    run = state["runs"].get(path.rsplit("/", 1)[1])
+    if run is None:
+        sys.exit(1)
+    print("\t".join([run["path"], run["event"], run["head_branch"], run["head_sha"]])); sys.exit(0)
+if path.startswith(f"repos/{repo}/git/tags/"):
+    print(state["tag_objects"][path.rsplit("/", 1)[1]]); sys.exit(0)
 if path.startswith(f"repos/{repo}/git/ref/tags/"):
     tag = path[len(f"repos/{repo}/git/ref/tags/"):]
     if tag not in state["tags"]:
@@ -145,7 +152,8 @@ print(path)
 
 
 class FakeGitHub:
-    def __init__(self, case: unittest.TestCase, tags: dict[str, str], releases: list | None = None) -> None:
+    def __init__(self, case: unittest.TestCase, tags: dict[str, str], releases: list | None = None,
+                 runs: dict | None = None, tag_objects: dict | None = None) -> None:
         temporary = tempfile.TemporaryDirectory()
         case.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
@@ -162,7 +170,8 @@ class FakeGitHub:
         nap.write_text("#!/bin/sh\nexit 0\n")
         nap.chmod(0o755)
         self.state = self.root / "state.json"
-        self.state.write_text(json.dumps({"tags": tags, "releases": releases or [], "published": [], "next": 100}))
+        self.state.write_text(json.dumps({"tags": tags, "releases": releases or [], "published": [], "next": 100,
+                                          "runs": runs or {}, "tag_objects": tag_objects or {}}))
         self.log = self.root / "calls.log"
         self.log.write_text("")
 
@@ -256,15 +265,37 @@ class PublishStep(unittest.TestCase):
 class Cleanup(unittest.TestCase):
     """clean-dry-run deletes the dry run's draft and tag, and nothing else."""
 
-    def run_cleanup(self, tag: str, tags: dict[str, str], releases: list):
-        github = FakeGitHub(self, tags, releases)
+    SOURCE = "e" * 40
+
+    def run_cleanup(self, tag: str, tags: dict[str, str], releases: list, run: dict | None = None,
+                    tagged_commit: str | None = None):
+        source = {"path": ".github/workflows/gpu-macos.yml", "event": "push", "head_branch": tag,
+                  "head_sha": self.SOURCE, **(run or {})}
+        github = FakeGitHub(self, tags, releases, runs={"55": source},
+                            tag_objects={sha: tagged_commit or self.SOURCE for sha in tags.values()})
         temp = github.root / "runner-temp"
         temp.mkdir()
         done = subprocess.run(["bash", "-eo", "pipefail", "-c",
                                step_script("sdk-release.yml", "Delete the dry run's draft and tag")],
-                              cwd=ROOT, env=github.env(RUNNER_TEMP=str(temp), DRY_RUN_TAG=tag),
+                              cwd=ROOT, env=github.env(RUNNER_TEMP=str(temp), DRY_RUN_TAG=tag, SOURCE_RUN_ID="55",
+                                                       SOURCE_SHA=self.SOURCE),
                               capture_output=True, text=True, check=False)
         return done, github
+
+    def test_a_run_not_started_by_that_tag_push_deletes_nothing(self) -> None:
+        # A branch named like a live dry-run tag, or another workflow, must not
+        # get the dry run's tag or draft deleted.
+        for change in ({"path": ".github/workflows/other.yml"}, {"event": "workflow_dispatch"},
+                       {"head_branch": "dry-run/v0.1.10/42-1"}, {"head_sha": "f" * 40}):
+            with self.subTest(change=change):
+                done, github = self.run_cleanup(DRY_TAG, {DRY_TAG: TAG_OBJECT}, [self.release(7, DRY_TAG, True)],
+                                                run=change)
+                self.assertNotEqual(done.returncode, 0)
+                self.assertFalse(any(option == "DELETE" for call in github.calls() for option in call))
+        done, github = self.run_cleanup(DRY_TAG, {DRY_TAG: TAG_OBJECT}, [self.release(7, DRY_TAG, True)],
+                                        tagged_commit="f" * 40)
+        self.assertNotEqual(done.returncode, 0)
+        self.assertFalse(any(option == "DELETE" for call in github.calls() for option in call))
 
     @staticmethod
     def release(rid: int, tag: str, draft: bool) -> dict:
@@ -303,6 +334,50 @@ class Cleanup(unittest.TestCase):
         self.assertIn("always() &&", job)
         self.assertIn("startsWith(github.event.workflow_run.head_branch, 'dry-run/v')", job)
         self.assertNotIn("python", job)
+        # A failed cleanup fails this workflow, and the release watchdog opens
+        # an issue for any failed finalizer run at once.
+        watchdog = (WORKFLOWS / "release-watchdog.yml").read_text()
+        self.assertIn("      || github.event.workflow_run.name == 'Finalize immutable SDK release'", watchdog)
+
+
+class Attestation(unittest.TestCase):
+    """A dry run's signed message can never pass for the release it rehearses."""
+
+    def inner(self) -> dict:
+        return {"kind": "vellum-mirror-promotion-attestation", "attestation_id": "x"}
+
+    def test_the_wrapper_names_the_dry_run_and_only_a_matching_identity(self) -> None:
+        import release_request as rr  # noqa: PLC0415
+        wrapped = rr.dry_run_attestation(self.inner(), DRY_TAG, "v0.1.10")
+        self.assertEqual(wrapped, {"schema": rr.DRY_RUN_SCHEMA, "dry_run": True, "dry_run_tag": DRY_TAG,
+                                   "release_identity": "v0.1.10", "attestation": self.inner()})
+        for tag, identity in ((DRY_TAG, "v0.1.11"), ("v0.1.10", "v0.1.10"), ("dry-run/v0.1.10", "v0.1.10")):
+            with self.subTest(tag=tag), self.assertRaises(rr.ReleaseRequestError):
+                rr.dry_run_attestation(self.inner(), tag, identity)
+
+    def test_the_release_verifier_refuses_a_wrapped_attestation(self) -> None:
+        import release_request as rr  # noqa: PLC0415
+        sys.path.insert(0, str(ROOT / "tools/provenance"))
+        import verify_authority_expansion as vae  # noqa: PLC0415
+        amendment = json.loads((ROOT / "provenance/authority/expansions/full-design-import-render-v1/"
+                                "exact-boundary-amendment-1.json").read_text())
+        wrapped = rr.dry_run_attestation(self.inner(), DRY_TAG, "v0.1.10")
+        self.assertTrue(vae.validate_mirror_promotion_attestation(wrapped, amendment, delivery_retired=True))
+        self.assertTrue(vae.validate_authority_promotion_attestation(wrapped, amendment, delivery_retired=True))
+
+    def test_provenance_unwraps_only_on_the_named_dry_run_tag(self) -> None:
+        text = (WORKFLOWS / "provenance.yml").read_text()
+        self.assertIn('raise SystemExit("a release tag carries a dry-run attestation")', text)
+        self.assertIn('data["dry_run_tag"] != dry_run.group(1)', text)
+        job = job_text("release-tag.yml", "sign-dry-run-tag")
+        self.assertIn('--tag "$identity" --dry-run-tag "$tag"', job)
+
+    def test_the_push_token_can_only_write_contents(self) -> None:
+        job = job_text("release-tag.yml", "sign-dry-run-tag")
+        mint = job[job.index("- name: Mint the release App token for the push"):job.index("- name: Push the dry-run tag")]
+        self.assertIn("repositories: vellum", mint)
+        self.assertIn("permission-contents: write", mint)
+        self.assertEqual(mint.count("permission-"), 1)
 
 
 class Names(unittest.TestCase):

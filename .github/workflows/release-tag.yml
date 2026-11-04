@@ -313,8 +313,11 @@ jobs:
           git checkout --quiet --detach "$commit"
           python3 -I scripts/check_release_policy.py check
           python3 -I scripts/check_release_policy.py signer >> "$GITHUB_OUTPUT"
+          # The signed message wraps v<version>'s attestation under its own
+          # schema with the dry-run tag's name, so it can never pass for a release.
           python3 -I scripts/release_request.py attestation --commit "$commit" \
-            --attested-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --tag "$identity" > "$RUNNER_TEMP/promotion-attestation.json"
+            --attested-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --tag "$identity" --dry-run-tag "$tag" \
+            > "$RUNNER_TEMP/promotion-attestation.json"
           printf 'commit=%s\ntag=%s\n' "$commit" "$tag" >> "$GITHUB_OUTPUT"
           echo "dry run: $tag on $commit (release identity $identity)" >> "$GITHUB_STEP_SUMMARY"
 
@@ -352,12 +355,16 @@ jobs:
             --expected-principal "$PRINCIPAL" --expected-fingerprint "$FINGERPRINT" \
             --output "$RUNNER_TEMP/dry-run-trust.json"
 
+      # Narrowed to pushing one tag: no ruleset or administration access.
       - name: Mint the release App token for the push
         id: push-token
         uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: Generous-Corp
+          repositories: vellum
+          permission-contents: write
 
       - name: Push the dry-run tag
         env:

@@ -143,6 +143,16 @@ class DryRunLeftovers(unittest.TestCase):
         self.assertEqual([(row["kind"], row["tag"]) for row in self.repo.find(PUBLISHED, hours=7)],
                          [("dry-run-leftover", "dry-run/v0.1.10/41-1")])
 
+    def test_an_orphan_dry_run_draft_is_found_after_the_grace_period(self) -> None:
+        repo = Repo(self)
+        repo.tag("v0.1.10")
+        created = repo.at(0).strftime("%Y-%m-%dT%H:%M:%SZ")
+        draft = {"tag_name": "dry-run/v0.1.10/9-1", "draft": True, "published_at": None,
+                 "name": "Vellum 0.1.10 experimental SDK (release dry run)", "created_at": created}
+        self.assertEqual(repo.find([[release("v0.1.10"), draft]], hours=5), [])
+        found = repo.find([[release("v0.1.10"), draft]], hours=7)
+        self.assertEqual([(row["kind"], row["tag"]) for row in found], [("dry-run-leftover", "dry-run/v0.1.10/9-1")])
+
     def test_a_published_dry_run_release_is_found_at_once(self) -> None:
         found = self.repo.find([[release("v0.1.10"), release("dry-run/v0.1.10/41-1")]], hours=0)
         self.assertEqual([row["kind"] for row in found], ["dry-run-leftover"])

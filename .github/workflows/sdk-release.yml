@@ -672,8 +672,26 @@ jobs:
               --index "$index" --details-dir "$details" --output "$rulesets"
             if [ "$DRY_RUN" = true ]; then
               # A dry-run tag is never frozen, so it can be deleted afterwards;
-              # it is never published either (see below).
-              printf '{"dry_run": true, "tag": "%s"}\n' "$RELEASE_TAG" > "$protection"
+              # it is never published either (see below). The ruleset path a
+              # release depends on is still exercised, report-only, against the
+              # newest frozen release tag.
+              frozen="$(python3 -I - "$details" <<'PY'
+          import json, re, sys
+          from pathlib import Path
+          names = [json.loads(p.read_text()).get("name", "") for p in Path(sys.argv[1]).glob("*.json")]
+          tags = [n.removeprefix("freeze-") for n in names if re.fullmatch(r"freeze-v[0-9]+\.[0-9]+\.[0-9]+", n)]
+          print(max(tags, key=lambda t: tuple(int(x) for x in t[1:].split(".")), default=""))
+          PY
+              )"
+              if [ -n "$frozen" ] && python3 scripts/verify_release_tag_ruleset.py \
+                  --input "$rulesets" --repository "$GITHUB_REPOSITORY" \
+                  --tag "$frozen" --output "$RUNNER_TEMP/dry-run-ruleset-check.json"; then
+                echo "dry run: the release ruleset path verifies $frozen" >> "$GITHUB_STEP_SUMMARY"
+              else
+                echo "::warning::dry run: the release ruleset path did not verify the newest frozen tag (${frozen:-none})"
+              fi
+              printf '{"dry_run": true, "tag": "%s", "ruleset_checked_against": "%s"}\n' \
+                "$RELEASE_TAG" "$frozen" > "$protection"
             else
               python3 scripts/verify_release_tag_ruleset.py \
                 --input "$rulesets" --repository "$GITHUB_REPOSITORY" \
@@ -877,9 +895,26 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.cleanup-token.outputs.token }}
           DRY_RUN_TAG: ${{ github.event.workflow_run.head_branch }}
+          SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
           [[ "$DRY_RUN_TAG" =~ ^dry-run/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)/[1-9][0-9]*-[1-9][0-9]*$ ]]
+          [[ "$SOURCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          # The run must be gpu-macos.yml started by a push of that tag: a branch
+          # of the same name must not get a live dry run's tag deleted.
+          test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID" \
+            --jq '[.path, .event, .head_branch, .head_sha] | @tsv')" = \
+            "$(printf '%s\t%s\t%s\t%s' .github/workflows/gpu-macos.yml push "$DRY_RUN_TAG" "$SOURCE_SHA")"
+          tag_present=false
+          if row="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$DRY_RUN_TAG" \
+              --jq '[.object.type, .object.sha] | @tsv' 2>/dev/null)"; then
+            read -r object_type object_sha <<< "$row"
+            test "$object_type" = tag
+            test "$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$object_sha" --jq .object.sha)" = "$SOURCE_SHA"
+            tag_present=true
+          fi
           gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$RUNNER_TEMP/releases.json"
           rows="$(jq -r --arg tag "$DRY_RUN_TAG" '[.[][] | select(.tag_name == $tag)] | .[] | "\(.id) \(.draft)"' \
             "$RUNNER_TEMP/releases.json")"
@@ -892,7 +927,7 @@ jobs:
             gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
             echo "deleted draft release $id for $DRY_RUN_TAG" >> "$GITHUB_STEP_SUMMARY"
           done <<< "$rows"
-          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$DRY_RUN_TAG" > /dev/null 2>&1; then
+          if [ "$tag_present" = true ]; then
             gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$DRY_RUN_TAG"
             echo "deleted tag $DRY_RUN_TAG" >> "$GITHUB_STEP_SUMMARY"
           fi

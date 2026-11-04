@@ -53,11 +53,15 @@ def local_release_tags(root: Path) -> list[str]:
     return [name for name in rr.git(root, "tag", "--list", "v*").splitlines() if rr.version_key(name)]
 
 
-def published(releases: Any) -> set[str]:
-    """Tags with a published, non-draft release, from `gh api --paginate --slurp`."""
+def release_rows(releases: Any) -> list[dict[str, Any]]:
     if not isinstance(releases, list):
         raise rr.ReleaseRequestError("releases must be an array of pages")
-    rows = [row for page in releases for row in (page if isinstance(page, list) else [page])]
+    return [row for page in releases for row in (page if isinstance(page, list) else [page]) if isinstance(row, dict)]
+
+
+def published(releases: Any) -> set[str]:
+    """Tags with a published, non-draft release, from `gh api --paginate --slurp`."""
+    rows = release_rows(releases)
     return {row["tag_name"] for row in rows if isinstance(row, dict) and isinstance(row.get("tag_name"), str)
             and row.get("draft") is False and row.get("published_at")}
 
@@ -89,6 +93,13 @@ def findings(root: Path, commit: str, releases: Any, now: datetime,
         if age > grace:
             found.append({"kind": "dry-run-leftover", "tag": name,
                           "detail": f"{name} is {age_text(age)} old; delete it and any draft release on it"})
+    for row in release_rows(releases):
+        name, created = row.get("name"), row.get("created_at")
+        if isinstance(name, str) and name.endswith(" (release dry run)") and isinstance(created, str):
+            age = now - datetime.strptime(created, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+            if age > grace:
+                found.append({"kind": "dry-run-leftover", "tag": str(row.get("tag_name")),
+                              "detail": f"the dry-run release {name!r} is {age_text(age)} old; delete it"})
     published_tags = published(releases)
     for name in sorted(tag for tag in published_tags if tag.startswith("dry-run/")):
         found.append({"kind": "dry-run-leftover", "tag": name,
