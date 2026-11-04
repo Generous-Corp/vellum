@@ -115,3 +115,17 @@ proof, so every landed commit is still proven from scratch after it lands.
 Reuse adds no trust beyond today's: a queue run already executes the pull
 request's own workflow definition, so the reviewed exact head is what decides
 both runs.
+
+## Changes the GPU proof cannot see
+
+A pull request or queue entry that changes only observatory evidence the GPU
+proof never reads (`provenance/pulp-observatory/cursor.json`, `reports/*` and
+`events/*.json`, which is what the receiver's coalesced evidence pull requests
+change) skips the proof's steps. Both required jobs still run and report.
+`scripts/classify_gpu_proof.py` decides, and the workflow runs it as it exists
+in the merged tree's first parent, never the change's own copy, over the diff
+between that parent and the merged tree. A change to the classifier or to any
+workflow needs the proof by rule, as does an empty diff or a base without the
+classifier. A trailing guard re-derives the verdict and fails the job if the
+proof was skipped for anything else, or on any event other than a pull request
+or queue entry. Pushes to `main` and release tags always run the full proof.

@@ -310,7 +310,7 @@ def job_steps(text: str, job: str) -> list[tuple[str, str]]:
     return steps
 
 
-GPU_GATE = "steps.reuse.outputs.run_id == ''"
+GPU_GATE = "steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == ''"
 # test_ci_runner_policy.py holds this step to a byte-exact canonical text
 # shared with the release finalizer, so it carries no condition. It only
 # fetches and verifies a digest-pinned archive, so a reused run still passes it
@@ -319,22 +319,34 @@ UNGATED_GPU_STEPS = {"Fetch and verify the pinned Pulp view-audio archive"}
 # Runs only when a proof is reused: the external-state checks the reused run
 # performed against the world as it was then.
 RECHECK_STEP = "Re-check the external state a reused proof read"
-STERILE_GATE = "needs.gpu-macos-arm64.outputs.reused_run == ''"
+STERILE_GATE = (
+    "needs.gpu-macos-arm64.outputs.unaffected != 'true' && "
+    "needs.gpu-macos-arm64.outputs.reused_run == ''"
+)
+# The classifier's own trailing guard (scripts/test_classify_gpu_proof.py).
+GUARD_STEP = "Prove a skipped proof was allowed"
 
 
 def assert_reuse_wiring(test: unittest.TestCase, text: str) -> None:
     steps = job_steps(text, "gpu-macos-arm64")
     names = [name for name, _ in steps]
     reuse = names.index("Reuse an identical-tree pull-request proof")
-    test.assertEqual(dict(steps)[names[reuse]], "github.event_name == 'merge_group'")
-    # Checkout and the release identity precede the decision; nothing else.
-    test.assertEqual(reuse, 2)
+    test.assertEqual(
+        dict(steps)[names[reuse]],
+        "github.event_name == 'merge_group' && steps.classify.outputs.unaffected != 'true'",
+    )
+    # Checkout, the release identity and the classifier precede the decision.
+    test.assertEqual(reuse, 3)
+    test.assertEqual(names[2], "Classify the change against the base's rules")
     for name, condition in steps[reuse + 1:]:
         if name in UNGATED_GPU_STEPS:
             test.assertEqual(condition, "", name)
             continue
         if name == RECHECK_STEP:
             test.assertEqual(condition, "steps.reuse.outputs.run_id != ''", name)
+            continue
+        if name == GUARD_STEP:
+            test.assertEqual(condition, "always() && steps.classify.outputs.unaffected == 'true'", name)
             continue
         # No subTest here: a mutation test must see this failure raised.
         test.assertNotIn("||", condition, f"gpu-macos-arm64 {name!r}")
@@ -361,7 +373,9 @@ def assert_reuse_wiring(test: unittest.TestCase, text: str) -> None:
         ("Report the reused sterile-consumer proof",
          "needs.gpu-macos-arm64.outputs.reused_run != ''"),
     )
-    for name, condition in sterile[1:]:
+    test.assertEqual(sterile[1], ("Report a change the proof does not cover",
+                                  "needs.gpu-macos-arm64.outputs.unaffected == 'true'"))
+    for name, condition in sterile[2:]:
         test.assertTrue(
             condition in (STERILE_GATE, f"always() && {STERILE_GATE}"),
             f"sterile-consumer {name!r} runs in a reused queue run: if: {condition!r}",
@@ -376,11 +390,11 @@ class WorkflowWiringTests(unittest.TestCase):
         text = WORKFLOW.read_text(encoding="utf-8")
         mutations = {
             "ungated build": text.replace(
-                "      - name: Build the release GPU slice\n        if: steps.reuse.outputs.run_id == ''\n",
+                f"      - name: Build the release GPU slice\n        if: {GPU_GATE}\n",
                 "      - name: Build the release GPU slice\n", 1,
             ),
             "reuse on pull requests": text.replace(
-                "        if: github.event_name == 'merge_group'\n",
+                "        if: github.event_name == 'merge_group' && steps.classify.outputs.unaffected != 'true'\n",
                 "        if: github.event_name != 'push'\n", 1,
             ),
             "ungated sterile journey": text.replace(
