@@ -1068,6 +1068,14 @@ def verify(
     if time_budgets == "report":
         fatal = [item for item in violations if item not in TIME_BUDGET_VIOLATIONS]
         reported = [item for item in violations if item in TIME_BUDGET_VIOLATIONS]
+        late = late_new_events(root, git_base, events, budgets, check_now) if reported else []
+        if reported and (git_base is None or late):
+            # Only debt the change did not bring is reported: without a base
+            # to tell old events from new ones, or when an event the change
+            # adds is itself overdue or over age, the budgets are enforced.
+            fatal, reported = violations, []
+            if late:
+                fatal.append("new-event-already-late: " + ", ".join(late))
     else:
         fatal, reported = violations, []
     if fatal:
@@ -1078,6 +1086,34 @@ def verify(
     if reported:
         report = {**report, "reported_time_budget_violations": reported}
     return report
+
+
+def late_new_events(
+    root: Path, git_base: str | None, events: list[tuple[Path, dict[str, object]]],
+    budgets: dict[str, int], now: datetime | None,
+) -> list[str]:
+    """Event IDs this change adds that are pending and already overdue or old.
+
+    A backdated or long-unclassified event a change brings must fail that
+    change, not wait for main.
+    """
+    if git_base is None or now is None:
+        return []
+    prefix = EVENTS_PATH.as_posix()
+    existing = set(git(root, "ls-tree", "-r", "--name-only", git_base, "--", prefix).splitlines())
+    new_ids = {
+        str(event["event_id"]) for path, event in events
+        if path.resolve().relative_to(root.resolve()).as_posix() not in existing
+    }
+    late = []
+    for event in effective_observations(events):
+        if event["disposition"] != "pending" or str(event["event_id"]) not in new_ids:
+            continue
+        discovered = parse_utc(event["discovered_at"], "event.discovered_at")
+        age_days = (now - discovered).total_seconds() / 86400
+        if now > deadline(event, budgets) or age_days > budgets["maximum_pending_event_age_days"]:
+            late.append(str(event["event_id"]))
+    return sorted(late)
 
 
 def describe_coverage_gaps(gaps: list[dict[str, str]], cursor: dict[str, object]) -> str:

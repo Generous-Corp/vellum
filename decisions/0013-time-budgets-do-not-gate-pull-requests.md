@@ -27,18 +27,25 @@ that; it stopped every landing while the work waited.
    - coverage gaps, such as a pull request's own mapped commit without an event;
    - the other budgets;
    - schema, append-only and ancestry checks.
+
+   Only debt the change did not bring is reported. A pending event the change
+   adds itself (absent from `--git-base`) that is already overdue or over age
+   fails the run (`new-event-already-late`); a backdated `discovered_at` is
+   one way to get there. With no base, the budgets are enforced.
 3. Pushes to `main` and release tags keep `--time-budgets enforce`, the default.
    A red `provenance-verify` on `main` holds release-tag readiness, and a tag is
    judged at its commit's time, so nothing is released while events are overdue.
 4. The hourly `Observatory overdue issue` workflow keeps one issue,
    "Observatory events overdue for classification", with the current overdue
-   list. It closes the issue when the count returns to 0.
+   list. It closes any duplicates, and closes the issue when the count returns
+   to 0.
 
 ## Consequences
 
 Classification debt is asked for once, in the issue and on `main`, instead of
 in every queue entry. A pull request can land while events are overdue. It
-cannot release, and it cannot introduce a gap of its own. The negative control
+cannot release, cannot introduce a gap of its own, and cannot add an event
+that is already late. The negative control
 is `test_time_budgets_are_reported_on_pull_requests_and_enforced_on_releases`:
 the same overdue tree fails under `enforce` and passes under `report`. A gap the
 pull request introduces still fails under `report`

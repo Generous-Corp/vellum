@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 try:
     from .git_test_environment import disable_auto_maintenance
@@ -1617,20 +1618,52 @@ class ObservatoryTests(unittest.TestCase):
             pulp_base, pulp_head = init_repo(pulp, "core/render/render.cpp")
             vellum_base, vellum_head = init_repo(vellum, "graphics/render.cpp")
             make_state(root, pulp_base, vellum_base)
+            # The state is a repository, so verify can tell the change's own
+            # events from debt that was already on its base.
+            run(root, "git", "init", "-q", "-b", "main")
+            run(root, "git", "config", "user.email", "observatory@example.invalid")
+            run(root, "git", "config", "user.name", "Observatory Test")
+            empty_base = commit_all(root, "state without events")
             observatory.reconcile(
                 root=root, pulp_repo=pulp, vellum_repo=vellum,
                 pulp_target=pulp_head, vellum_target=vellum_head,
                 now_text="2026-07-22T20:00:00Z", write=True,
             )
-            arguments = dict(root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None)
+            events_base = commit_all(root, "reconciled events")
+            self.assertEqual(observatory.TIME_BUDGET_VIOLATIONS, frozenset({
+                "overdue-event-count-exceeded", "pending-event-age-exceeded",
+            }))
+            arguments = dict(root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=events_base)
             later = observatory.parse_utc("2027-07-22T20:00:00Z", "now")
             with self.assertRaisesRegex(observatory.ObservatoryError, "overdue-event-count-exceeded"):
                 observatory.verify(**arguments, check_now=later, time_budgets="enforce")
             report = observatory.verify(**arguments, check_now=later, time_budgets="report")
-            self.assertIn("overdue-event-count-exceeded", report["reported_time_budget_violations"])
-            self.assertTrue(set(report["reported_time_budget_violations"])
-                            <= observatory.TIME_BUDGET_VIOLATIONS)
+            self.assertEqual(set(report["reported_time_budget_violations"]),
+                             {"overdue-event-count-exceeded", "pending-event-age-exceeded"})
             self.assertEqual(report["health"], "fail")
+            # Events the change itself adds that are already late are its own
+            # debt (for example a backdated discovered_at): still fatal.
+            with self.assertRaisesRegex(observatory.ObservatoryError, "new-event-already-late"):
+                observatory.verify(**{**arguments, "git_base": empty_base},
+                                   check_now=later, time_budgets="report")
+            # Without a base to tell them apart, nothing is relaxed.
+            with self.assertRaisesRegex(observatory.ObservatoryError, "overdue-event-count-exceeded"):
+                observatory.verify(**{**arguments, "git_base": None},
+                                   check_now=later, time_budgets="report")
+            # Budgets that are not about time stay fatal under report.
+            real_build_report = observatory.build_report
+
+            def with_pending_overflow(**kwargs):
+                value = real_build_report(**kwargs)
+                if kwargs.get("now") != later:
+                    return value  # the committed report's staleness check
+                return {**value, "health": "fail", "budget_violations": [
+                    *value["budget_violations"], "pending-event-count-exceeded"]}
+
+            with mock.patch.object(observatory, "build_report", with_pending_overflow):
+                with self.assertRaisesRegex(observatory.ObservatoryError,
+                                            "pending-event-count-exceeded"):
+                    observatory.verify(**arguments, check_now=later, time_budgets="report")
             # In time, nothing is reported at all.
             on_time = observatory.verify(
                 **arguments, check_now=observatory.parse_utc("2026-07-22T20:00:00Z", "now"),
@@ -1638,7 +1671,7 @@ class ObservatoryTests(unittest.TestCase):
             )
             self.assertNotIn("reported_time_budget_violations", on_time)
             cli = ["--root", str(root), "verify", "--pulp-repo", str(pulp), "--vellum-repo", str(vellum),
-                   "--now", "2027-07-22T20:00:00Z"]
+                   "--git-base", events_base, "--now", "2027-07-22T20:00:00Z"]
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                 self.assertNotEqual(observatory.main(cli), 0)
                 self.assertNotEqual(observatory.main([*cli, "--time-budgets", "enforce"]), 0)
