@@ -487,20 +487,42 @@ class VerifyBump(unittest.TestCase):
         self.repo.bot_bump("0.1.11", body="")
         self.assertIn("lacks the version-at-land trailer", self.verify())
 
-    def test_a_verified_untagged_bump_is_pending(self) -> None:
+    def test_a_bump_still_covering_what_landed_after_it_is_pending(self) -> None:
+        # Control: a harmless fix after the bump keeps the patch sufficient.
         self.repo.bot_bump("0.1.11")
-        self.repo.land("feat!: lands while the release waits", {"runtime/s.cpp": "s\n"})
+        self.repo.land("fix: another core fix", {"runtime/s.cpp": "s\n"})
         result = self.repo.plan()
         self.assertEqual((result.action, result.version), ("pending", ""))
-        self.assertIn("newer than every release tag", result.reason)
+        self.assertIsNone(val.coverage_problem(self.repo.root, self.repo.main, self.repo.tags, NO_RETIRED, "0.1.11"))
 
-    def test_a_breaking_change_landed_ahead_of_the_bump_does_not_block_it(self) -> None:
+    def test_a_breaking_change_after_the_bump_makes_the_patch_insufficient(self) -> None:
+        self.repo.bot_bump("0.1.11")
+        self.assertIsNone(self.verify())
+        self.repo.land("feat!: replace the scene API", {"runtime/s.cpp": "s\n"})
+        self.assertIn("needs at least 0.2.0",
+                      val.coverage_problem(self.repo.root, self.repo.main, self.repo.tags, NO_RETIRED, "0.1.11"))
+        result = self.repo.plan()
+        self.assertEqual((result.action, result.version), ("bump", "0.2.0"))
+        self.assertIn("v0.1.11 is passed over", result.reason)
+        self.repo.bot_bump("0.2.0")
+        self.assertIsNone(self.verify())
+        self.assertEqual(self.repo.plan().action, "pending")
+
+    def test_a_breaking_change_landed_ahead_of_the_bump_refuses_the_patch(self) -> None:
         # The race: the bot plans 0.1.11 from main, a `feat!:` lands first,
-        # then the bump. It is judged against the main it was planned from.
+        # then the bump. The bump is the bot's exact one, but 0.1.11 does not
+        # cover the breaking change, so plan proposes 0.2.0, which is accepted.
         planned = self.repo.main
         self.repo.land("feat!: replace the scene API", {"runtime/s.cpp": "s\n"})
         self.repo.bot_bump("0.1.11", start=planned)
         self.assertIsNone(self.verify())
+        self.assertIn("needs at least 0.2.0",
+                      val.coverage_problem(self.repo.root, self.repo.main, self.repo.tags, NO_RETIRED, "0.1.11"))
+        result = self.repo.plan()
+        self.assertEqual((result.action, result.version), ("bump", "0.2.0"))
+        self.repo.bot_bump("0.2.0")
+        self.assertIsNone(self.verify())
+        self.assertIsNone(val.coverage_problem(self.repo.root, self.repo.main, self.repo.tags, NO_RETIRED, "0.2.0"))
         self.assertEqual(self.repo.plan().action, "pending")
 
     def test_a_bump_refused_after_a_race_is_passed_over_by_the_next_one(self) -> None:

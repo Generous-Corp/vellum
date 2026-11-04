@@ -436,6 +436,16 @@ def require_bot_bump(root: Path, landing: str, tags: dict[str, str], retired_tag
         raise ReleaseRequestError(f"the version was not landed by version-at-land: {problem}")
 
 
+def require_coverage(root: Path, commit: str, tags: dict[str, str], retired_tags: Any, version: str) -> None:
+    """Raise unless `version` covers every shipped change a release at `commit` carries."""
+    try:
+        problem = val.coverage_problem(root, commit, tags, retired_tags, version)
+    except val.VersionError as error:
+        problem = str(error)
+    if problem:
+        raise ReleaseRequestError(f"the version is too low for what it would ship: {problem}")
+
+
 def select(root: Path, commit: str, tag_exists: bool, existing_tags: list[str] | None = None,
            tags: dict[str, str] | None = None) -> Selection:
     """Whether `commit` is the commit to tag for the project version it declares.
@@ -443,7 +453,8 @@ def select(root: Path, commit: str, tag_exists: bool, existing_tags: list[str] |
     It is when that version's tag does not exist yet, is not retired, and is
     newer than every release tag; the commit that landed the version is the
     version-at-land bot's own bump, re-derived exactly (require_bot_bump); the
-    observatory cursor at `commit` is (or
+    version covers every shipped change through `commit`, including any that
+    landed after the bump (require_coverage); the observatory cursor at `commit` is (or
     descends from) the commit that landed the version; and everything after
     that cursor is observatory evidence. Such a commit passes the tag's
     reconciled observatory check, and its content is the content the cursor
@@ -472,9 +483,10 @@ def select(root: Path, commit: str, tag_exists: bool, existing_tags: list[str] |
         return Selection(None, f"{tag} is not newer than v{'.'.join(map(str, newest))}; no version bump is "
                                "waiting")
     landed = version_landing(root, commit)
+    known = tags if tags is not None else tag_commits(root, existing_tags or [])
     try:
-        require_bot_bump(root, landed, tags if tags is not None else tag_commits(root, existing_tags or []),
-                         retired_tags)
+        require_bot_bump(root, landed, known, retired_tags)
+        require_coverage(root, commit, known, retired_tags, tag[1:])
     except ReleaseRequestError as error:
         return Selection(None, f"{tag} is not a release: {error}", landed)
     cursor = observatory_cursor(root, commit)
@@ -638,8 +650,9 @@ def main(argv: list[str]) -> int:
             raise ReleaseRequestError("the commit must be a full SHA")
         if version_at(ROOT, args.commit) != project_version(cmakelists):
             raise ReleaseRequestError(f"{args.cmakelists} does not declare the version at {args.commit}")
-        require_bot_bump(ROOT, version_landing(ROOT, args.commit), val.remote_release_tags(ROOT, args.remote),
-                         retired_tags)
+        live_tags = val.remote_release_tags(ROOT, args.remote)
+        require_bot_bump(ROOT, version_landing(ROOT, args.commit), live_tags, retired_tags)
+        require_coverage(ROOT, args.commit, live_tags, retired_tags, project_version(cmakelists))
         tag = check(cmakelists=cmakelists, retired_tags=retired_tags, commit=args.commit,
                     tag_exists=exists, branch_rules=load(args.branch_rules),
                     pages=load(args.check_runs), immutable=load(args.immutable_releases),

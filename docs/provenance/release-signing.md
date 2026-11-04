@@ -51,6 +51,11 @@ A Vellum release tag is signed by CI, never by a person or an agent's host key.
      past a number one step above the newest tag, and only when that landing is the bot's own merge (a hand-set
      version stops `plan` until a person reverts it or retires it); the bump pull request states the number it
      passes over;
+   - the version covers everything the release would ship: it is at least one required level above the highest
+     existing or retired tag, where the level is the highest of every shipped change landed since the newest
+     release tag through the pushed commit, including changes that landed after the bump
+     (`version_at_land.coverage_problem`). A patch bump followed by a breaking change is refused, and
+     version-at-land proposes the sufficient version past it;
    - the cursor at the pushed commit is, or descends from, the commit that landed the version: the newest commit on
      the pushed commit's first-parent history whose project `VERSION` differs from its first parent's, which on
      `main` is the merge queue's merge of the bump;

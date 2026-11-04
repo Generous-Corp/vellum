@@ -362,39 +362,16 @@ class Plan:
     changes: list[Contribution] = field(default_factory=list)
 
 
-def plan(root: Path, commit: str, tags: dict[str, str], retired_tags: Any) -> Plan:
-    """What main at `commit` needs.
-
-    `tags` maps each existing release tag to the commit it names. The next
-    version is one level above the highest version any tag has used, existing
-    or retired, so a retired name is never reused and versions only move
-    forward. The changes counted are the first-parent commits after the newest
-    existing release tag that main contains.
-    """
-    current = project_version(git(root, "show", f"{commit}:{CMAKELISTS}"))
+def highest_known(tags: dict[str, str], retired_tags: Any) -> tuple[int, int, int]:
     known = [key for name in [*tags, *retired(retired_tags)] if (key := tag_version(name))]
     if not known:
         raise VersionError("no release tag exists to count from")
-    highest = max(known)
-    floor = None
-    passed_over = ""
-    if parse_version(current) > highest:
-        landing = version_landing(root, commit)
-        problem = verify_bump(root, landing, tags, retired_tags)
-        if problem is None:
-            return Plan("pending", current, f"main declares {current}, newer than every release tag; "
-                                            f"release-tag.yml tags v{current} once the observatory reconciles it")
-        # A bump that release-tag will refuse (one that lost a race with a
-        # change landed ahead of it) must not leave main stuck: it counts as
-        # used, and the next version goes past it. Only a number one step
-        # above the newest tag may be passed over this way; anything further
-        # (a hand-set jump) stops here for a person to revert or retire.
-        steps = {bumped(highest, level) for level in (("patch", "minor") if highest[0] == 0 else LEVELS[1:])}
-        if bot_structure_problem(root, landing) or parse_version(current) not in steps:
-            raise VersionError(f"main declares {current}, which version-at-land did not land as a release "
-                               f"({problem}); revert it, or retire v{current} in {RETIRED_TAGS}")
-        floor = parse_version(current)
-        passed_over = f"; v{current} is passed over (refused bump at {landing[:12]}); not tagged"
+    return max(known)
+
+
+def shipped_since_release(root: Path, commit: str, tags: dict[str, str], highest: tuple[int, int, int]
+                          ) -> tuple[str, str, list[Contribution]]:
+    """(required level, newest release tag, changes) for everything landed after that tag up to `commit`."""
     released = sorted(((key, name) for name in tags if (key := tag_version(name))
                        and is_ancestor(root, tags[name], commit)), reverse=True)
     if not released:
@@ -403,6 +380,63 @@ def plan(root: Path, commit: str, tags: dict[str, str], retired_tags: Any) -> Pl
     chain = git(root, "rev-list", "--first-parent", "--reverse", f"{tags[base_tag]}..{commit}").split()
     changes = [landed_change(root, entry, highest[0]) for entry in chain]
     level = max((change.level for change in changes), key=LEVELS.index, default="none")
+    return level, base_tag, changes
+
+
+def coverage_problem(root: Path, commit: str, tags: dict[str, str], retired_tags: Any, version: str) -> str | None:
+    """Why `version` does not cover every shipped change a release at `commit` would carry, or None.
+
+    A release at `commit` ships everything landed since the newest release tag,
+    including changes that landed after the bump itself. Its version must be at
+    least one required level above the highest version any tag has used.
+    """
+    highest = highest_known(tags, retired_tags)
+    level, base_tag, _ = shipped_since_release(root, commit, tags, highest)
+    if level == "none":
+        return None
+    needed = bumped(highest, level)
+    if parse_version(version) < needed:
+        return (f"{version} does not cover the {level} change(s) landed since {base_tag} through {commit[:12]}; "
+                f"the release needs at least {render(needed)}")
+    return None
+
+
+def plan(root: Path, commit: str, tags: dict[str, str], retired_tags: Any) -> Plan:
+    """What main at `commit` needs.
+
+    `tags` maps each existing release tag to the commit it names. The next
+    version is one level above the highest version any tag has used, existing
+    or retired, so a retired name is never reused and versions only move
+    forward. The changes counted are the first-parent commits after the newest
+    existing release tag that main contains.
+
+    main is `pending` only while it declares a version that version-at-land
+    landed exactly and that still covers every shipped change through
+    `commit`. A bump of its own that falls short (it lost a race with a
+    change landed ahead of it, or a change with a higher level landed after
+    it) counts as used, and the next sufficient version is proposed past it.
+    """
+    current = project_version(git(root, "show", f"{commit}:{CMAKELISTS}"))
+    highest = highest_known(tags, retired_tags)
+    floor = None
+    passed_over = ""
+    if parse_version(current) > highest:
+        landing = version_landing(root, commit)
+        problem = (verify_bump(root, landing, tags, retired_tags)
+                   or coverage_problem(root, commit, tags, retired_tags, current))
+        if problem is None:
+            return Plan("pending", current, f"main declares {current}, newer than every release tag; "
+                                            f"release-tag.yml tags v{current} once the observatory reconciles it")
+        # Only the bot's own merge of a number one step above the newest tag
+        # is passed over; anything else (a hand-set version) stops here for a
+        # person to revert or retire.
+        steps = {bumped(highest, level) for level in (("patch", "minor") if highest[0] == 0 else LEVELS[1:])}
+        if bot_structure_problem(root, landing) or parse_version(current) not in steps:
+            raise VersionError(f"main declares {current}, which version-at-land did not land as a release "
+                               f"({problem}); revert it, or retire v{current} in {RETIRED_TAGS}")
+        floor = parse_version(current)
+        passed_over = f"; v{current} is passed over (refused bump at {landing[:12]}); not tagged"
+    level, base_tag, changes = shipped_since_release(root, commit, tags, highest)
     if level == "none":
         return Plan("none", current, f"nothing that ships has landed since {base_tag}", since=base_tag,
                     changes=changes)

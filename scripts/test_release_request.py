@@ -733,6 +733,32 @@ class TagTargetSelection(unittest.TestCase):
         self.assertIsNone(chosen.tag)
         self.assertIn("retired", chosen.reason)
 
+    def ship(self, title: str) -> str:
+        self.history.branch(self.history.main)
+        self.history.ships = getattr(self.history, "ships", 0) + 1
+        self.history.write("runtime/s.cpp", f"int s = {self.history.ships};\n")
+        return self.history.land(self.history.commit(title))
+
+    def test_a_breaking_change_after_the_bump_refuses_the_patch_at_select(self) -> None:
+        # Must-fail: the reconcile would ship a breaking change under 0.1.10.
+        landed = self.history.bump()
+        self.ship("feat!: replace the scene API")
+        merged = self.history.land(self.history.reconcile(self.history.main))
+        chosen = self.select(merged)
+        self.assertIsNone(chosen.tag)
+        self.assertIn("too low for what it would ship", chosen.reason)
+        self.assertIn("needs at least 0.2.0", chosen.reason)
+        self.assertEqual(chosen.version_commit, landed)
+
+    def test_a_harmless_fix_after_the_bump_keeps_the_patch(self) -> None:
+        # Must-pass control for the rule above.
+        landed = self.history.bump()
+        self.ship("fix: another core fix")
+        merged = self.history.land(self.history.reconcile(self.history.main))
+        chosen = self.select(merged)
+        self.assertEqual(chosen.tag, "v0.1.10", chosen.reason)
+        self.assertEqual(chosen.version_commit, landed)
+
     def test_only_the_bots_exact_bump_is_selected(self) -> None:
         # Must-pass is every test above. Must-fail: the same reconcile shape
         # around a version the bot did not land exactly as it derives it.
@@ -854,6 +880,17 @@ class CheckCli(unittest.TestCase):
         done = self.run_check(history, merged)
         self.assertEqual(done.returncode, 1)
         self.assertIn("not landed by version-at-land", done.stderr)
+
+    def test_a_patch_short_of_a_later_breaking_change_is_refused_by_check(self) -> None:
+        history = History(self)
+        history.bump()
+        history.branch(history.main)
+        history.write("runtime/s.cpp", "int s;\n")
+        history.land(history.commit("feat!: replace the scene API"))
+        merged = history.land(history.reconcile(history.main))
+        done = self.run_check(history, merged)
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("too low for what it would ship", done.stderr)
 
     def test_the_bots_bump_passes_check_to_the_next_input(self) -> None:
         history = History(self)
