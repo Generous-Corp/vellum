@@ -8364,14 +8364,62 @@
       ],
       "source_commit": "20e2b55b9530b33b466024d0972c0b9fd4771c60",
       "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "test",
+      "deadline": "2026-11-11T03:31:28Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "pending",
+      "event_id": "vellum-8b9e20b6e35d54059a9caeb7d842e6f6dc3c3290",
+      "mapped_contracts": [
+        "retained-ui-kernel"
+      ],
+      "source_commit": "8b9e20b6e35d54059a9caeb7d842e6f6dc3c3290",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "test",
+      "deadline": "2026-11-11T03:31:28Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "pending",
+      "event_id": "vellum-b3fe0e2d22440fa3da667fb5f98828b16e4529f0",
+      "mapped_contracts": [
+        "retained-ui-kernel"
+      ],
+      "source_commit": "b3fe0e2d22440fa3da667fb5f98828b16e4529f0",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "test",
+      "deadline": "2026-11-11T03:31:28Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "pending",
+      "event_id": "vellum-f62694f70fdc83d76bedce565b52de8da82efdb6",
+      "mapped_contracts": [
+        "retained-ui-kernel"
+      ],
+      "source_commit": "f62694f70fdc83d76bedce565b52de8da82efdb6",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "test",
+      "deadline": "2026-11-11T08:46:13Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "pending",
+      "event_id": "vellum-29610e58f7cb75045b62fbba988a1c9147bd6376",
+      "mapped_contracts": [
+        "retained-ui-kernel"
+      ],
+      "source_commit": "29610e58f7cb75045b62fbba988a1c9147bd6376",
+      "source_repository": "Generous-Corp/vellum"
     }
   ],
-  "generated_at": "2026-11-04T02:25:57Z",
+  "generated_at": "2026-11-04T08:46:13Z",
   "health": "pass",
-  "maximum_pending_age_days": 3.535,
+  "maximum_pending_age_days": 3.799,
   "observatory_effort_percent": 0.0,
   "overdue": 0,
-  "pending": 10,
+  "pending": 14,
   "release_blockers": [],
   "repeated_generic_fixes": {
     "canvas-kernel": 2,
