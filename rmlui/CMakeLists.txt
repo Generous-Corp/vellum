@@ -14,10 +14,11 @@ cmake_minimum_required(VERSION 3.24)
 #   VellumRmlUi::DevAssets     development-only hot-reload asset provider.
 #   VellumRmlUi::Lua           sandboxed per-instance Lua 5.4 host for skins
 #                              (VELLUM_RMLUI_LUA=ON).
-#
-# A renderer that draws through Vellum's canvas implements
-# vellum::rmlui::RenderInterface in its own target linking Core; Core itself
-# never depends on a Vellum renderer.
+#   VellumRmlUi::VellumRenderer draws the backend's commands as triangle meshes
+#                              through Vellum's SkiaDawnSurface
+#                              (VELLUM_RMLUI_VELLUM_RENDERER=ON). It is the only
+#                              target that links Vellum; Core and SoftRenderer
+#                              never do.
 project(VellumRmlUi
     VERSION 0.1.0
     DESCRIPTION "Optional RmlUi module for Vellum"
@@ -36,6 +37,8 @@ option(VELLUM_RMLUI_FONTS
     "Build RmlUi's FreeType font engine from the pinned FreeType source" OFF)
 option(VELLUM_RMLUI_LUA
     "Build the sandboxed Lua host (VellumRmlUi::Lua) from the pinned Lua source" OFF)
+option(VELLUM_RMLUI_VELLUM_RENDERER
+    "Build VellumRmlUi::VellumRenderer, which draws through Vellum's GPU renderer (needs Vellum::Gpu)" OFF)
 option(VELLUM_RMLUI_BUILD_TESTS "Build the RmlUi module tests" ${BUILD_TESTING})
 option(VELLUM_RMLUI_INSTALL "Install the VellumRmlUi CMake package" ON)
 
@@ -116,6 +119,27 @@ if(VELLUM_RMLUI_LUA)
     list(APPEND _vellum_rmlui_install_targets vellum-rmlui-lua vellum-rmlui-lua54)
 endif()
 
+if(VELLUM_RMLUI_VELLUM_RENDERER)
+    # Inside a Vellum build the GPU target already exists; on its own the
+    # module takes it from an installed Vellum package.
+    if(NOT TARGET Vellum::Gpu)
+        find_package(Vellum CONFIG REQUIRED)
+    endif()
+    if(NOT TARGET Vellum::Gpu OR NOT TARGET Vellum::DawnHeaders)
+        message(FATAL_ERROR
+            "VELLUM_RMLUI_VELLUM_RENDERER needs Vellum's GPU renderer (Vellum::Gpu and "
+            "Vellum::DawnHeaders); configure Vellum with its locked Skia/Dawn archive")
+    endif()
+    add_library(vellum-rmlui-vellum-renderer STATIC
+        src/vellum_renderer.cpp)
+    add_library(VellumRmlUi::VellumRenderer ALIAS vellum-rmlui-vellum-renderer)
+    set_target_properties(vellum-rmlui-vellum-renderer PROPERTIES
+        EXPORT_NAME VellumRenderer
+        POSITION_INDEPENDENT_CODE ON)
+    target_link_libraries(vellum-rmlui-vellum-renderer PUBLIC vellum-rmlui-core Vellum::Gpu)
+    list(APPEND VELLUM_RMLUI_COMPONENTS VellumRenderer)
+endif()
+
 if(VELLUM_RMLUI_INSTALL)
     set(_vellum_rmlui_cmake_dir "${CMAKE_INSTALL_LIBDIR}/cmake/VellumRmlUi")
     install(TARGETS ${_vellum_rmlui_install_targets}
@@ -131,6 +155,18 @@ if(VELLUM_RMLUI_INSTALL)
         NAMESPACE VellumRmlUi::
         DESTINATION ${_vellum_rmlui_cmake_dir}
         COMPONENT VellumRmlUi)
+    if(VELLUM_RMLUI_VELLUM_RENDERER)
+        # A separate export set, so the base package never needs Vellum; the
+        # config loads it, after finding Vellum, only when it is asked for.
+        install(TARGETS vellum-rmlui-vellum-renderer
+            EXPORT VellumRmlUiVellumRendererTargets
+            COMPONENT VellumRmlUi
+            ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+        install(EXPORT VellumRmlUiVellumRendererTargets
+            NAMESPACE VellumRmlUi::
+            DESTINATION ${_vellum_rmlui_cmake_dir}
+            COMPONENT VellumRmlUi)
+    endif()
     configure_package_config_file(cmake/VellumRmlUiConfig.cmake.in
         "${CMAKE_CURRENT_BINARY_DIR}/VellumRmlUiConfig.cmake"
         INSTALL_DESTINATION ${_vellum_rmlui_cmake_dir})
