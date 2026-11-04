@@ -211,5 +211,61 @@ class AssetNameTest(unittest.TestCase):
             self.assertEqual(names, ["sdk-verification.json", "SHA256SUMS"])
 
 
+VERIFY_GH = r'''#!/usr/bin/env python3
+import os, sys
+counter = os.environ["FAKE_GH_COUNTER"]
+n = int(open(counter).read() or 0) + 1
+open(counter, "w").write(str(n))
+if sys.argv[1:3] == ["release", "verify"]:
+    ready = int(os.environ["FAKE_ATTESTATION_AFTER"])
+    if ready and n >= ready:
+        sys.exit(0)
+    print("no attestations for tag", file=sys.stderr)
+    sys.exit(1)
+sys.exit(2)
+'''
+
+
+def attestation_wait_shell(workflow_text: str) -> str:
+    """The finalizer's wait for the release attestation plus its strict verify."""
+    lines = workflow_text.splitlines()
+    start = next(i for i, line in enumerate(lines)
+                 if line.strip().startswith("for attempt in $(seq 1 12); do"))
+    end = next(i for i in range(start, len(lines))
+               if lines[i].strip() == 'gh release verify "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY"')
+    return textwrap.dedent("\n".join(lines[start:end + 1])) + "\n"
+
+
+class AttestationWaitTest(unittest.TestCase):
+    def run_wait(self, ready_after: int):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            bin_dir = tmp_path / "bin"
+            bin_dir.mkdir()
+            gh = bin_dir / "gh"
+            gh.write_text(VERIFY_GH)
+            gh.chmod(gh.stat().st_mode | stat.S_IEXEC)
+            counter = tmp_path / "count"
+            counter.write_text("0")
+            script = ("set -euo pipefail\nsleep() { :; }\n"
+                      + attestation_wait_shell(WORKFLOW.read_text()))
+            env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}",
+                       FAKE_GH_COUNTER=str(counter), FAKE_ATTESTATION_AFTER=str(ready_after),
+                       GITHUB_REPOSITORY="o/r", RELEASE_TAG=TAG)
+            result = subprocess.run(["bash", "-c", script], cwd=ROOT, env=env,
+                                    capture_output=True, text=True)
+            return result, int(counter.read_text())
+
+    def test_waits_for_an_attestation_that_appears_after_publication(self) -> None:
+        result, calls = self.run_wait(ready_after=3)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, 4)  # three polls, then the strict verify
+
+    def test_missing_attestation_still_fails_after_the_wait(self) -> None:
+        result, calls = self.run_wait(ready_after=0)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(calls, 13)  # twelve bounded polls, then the strict verify
+
+
 if __name__ == "__main__":
     unittest.main()
