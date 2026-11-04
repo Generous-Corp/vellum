@@ -1164,7 +1164,7 @@ class DawnGpuCompute : public GpuCompute {
             break;
         case RuntimeOptions::Choice::from_environment: {
             bool fallback = false;
-            detail::env_flag("GPU_RUNTIME_SOFTWARE_ADAPTER", fallback);
+            detail::runtime_env_flag("SOFTWARE_ADAPTER", fallback);
             opts.forceFallbackAdapter = fallback;
             break;
         }

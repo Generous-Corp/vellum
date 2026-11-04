@@ -18,6 +18,8 @@ void trace_instant(const char* category, const char* name, const TraceArg* args,
 void trace_begin(const char* category, const char* name) noexcept;
 void trace_end(const char* category) noexcept;
 bool env_flag(const char* name, bool& value) noexcept;
+/// env_flag() for <RuntimeOptions::environment_prefix><suffix>.
+bool runtime_env_flag(const char* suffix, bool& value) noexcept;
 
 template <typename... Args>
 void log_at(LogLevel level, std::format_string<Args...> format, Args&&... args) {

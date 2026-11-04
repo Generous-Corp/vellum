@@ -29,7 +29,8 @@ The device layer depends on no framework, so the host supplies what a
 framework used to: `gpu_host_hooks.hpp` takes a log sink (stderr without one),
 a trace sink (events dropped without one) and process options that replace the
 environment variables `GPU_RUNTIME_SOFTWARE_ADAPTER` and
-`GPU_RUNTIME_LOG_BRIDGE`.
+`GPU_RUNTIME_LOG_BRIDGE` (a host can keep its own names by setting
+`RuntimeOptions::environment_prefix`).
 
 ## Who reads the lock
 

@@ -160,10 +160,10 @@ void forward_skia_log_record(GpuDiagnosticSeverity severity, std::string_view me
 /// which is the difference between "nothing to install" and "declined to".
 bool skia_log_bridge_available() noexcept;
 
-/// True when the opt-in is satisfied: a build with tracing, or
-/// GPU_RUNTIME_LOG_BRIDGE set to 1/true/yes/on. Setting GPU_RUNTIME_LOG_BRIDGE
-/// to 0/false/no/off wins over the tracing build, so a tracing build can still
-/// leave the host's Skia logging alone.
+/// True when the opt-in is satisfied: RuntimeOptions::log_bridge says yes, or
+/// it defers to the environment and either a trace sink is installed or
+/// <prefix>LOG_BRIDGE is 1/true/yes/on. <prefix>LOG_BRIDGE=0/false/no/off wins
+/// over the trace sink, so a tracing host can still leave Skia's logging alone.
 bool skia_log_bridge_enabled() noexcept;
 
 /// Install the bridge, honouring the opt-in. Without it the status becomes

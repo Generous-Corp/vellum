@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
+#include <string>
 
 namespace gpu_runtime {
 namespace {
@@ -89,6 +90,13 @@ void trace_begin(const char* category, const char* name) noexcept {
 void trace_end(const char* category) noexcept {
     if (const auto sink = g_trace_end.load(std::memory_order_acquire))
         sink(category, g_trace_context.load(std::memory_order_acquire));
+}
+
+bool runtime_env_flag(const char* suffix, bool& value) noexcept {
+    const char* prefix = runtime_options().environment_prefix;
+    std::string name = prefix != nullptr ? prefix : "GPU_RUNTIME_";
+    name += suffix;
+    return env_flag(name.c_str(), value);
 }
 
 bool env_flag(const char* name, bool& value) noexcept {
