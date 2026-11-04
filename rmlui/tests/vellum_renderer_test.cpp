@@ -34,7 +34,7 @@ const std::filesystem::path fixtures = VELLUM_RMLUI_TEST_FIXTURES;
 constexpr std::uint32_t width = 160;
 constexpr std::uint32_t height = 96;
 constexpr int kChannelTolerance = 16;
-constexpr double kMaxDifferingPercent = 2.0;
+constexpr double kMaxDifferingPercent = 1.0;
 
 struct GainModel final : ModelHost {
     explicit GainModel(double value) : gain(value) {}
