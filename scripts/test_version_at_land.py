@@ -77,7 +77,7 @@ class Paths(unittest.TestCase):
     def test_shipped_paths_count_and_the_rest_do_not(self) -> None:
         for path in ("CMakeLists.txt", "foundation/src/core.cpp", "cli/vellum_cli.py", "mirror/core/x.hpp",
                      "scripts/install.sh", "provenance/renderer-attestation.json", "packages/vellum-ui/index.js",
-                     "LICENSE.md", "tools/mirror/VellumMirror.cmake"):
+                     "LICENSE.md", "tools/mirror/VellumMirror.cmake", "gpu-runtime/renderer-lock.json"):
             with self.subTest(path=path):
                 self.assertTrue(val.ships(path))
         for path in ("cli/tests/test_cli.py", "web/tests/a.mjs", ".github/workflows/release-tag.yml",

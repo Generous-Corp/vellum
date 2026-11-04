@@ -53,7 +53,7 @@ LEVELS = ("none", "patch", "minor", "major")
 SHIP_PATHS = (
     "CMakeLists.txt", "LICENSE.md", "NOTICE.md", "DEPENDENCIES.md",
     "apps/**", "assets/**", "authoring/**", "cli/**", "cmake/**", "components/**", "foundation/**",
-    "graphics/**", "mirror/**", "packages/**", "rmlui/**", "runtime/**", "templates/**", "web/**",
+    "gpu-runtime/**", "graphics/**", "mirror/**", "packages/**", "rmlui/**", "runtime/**", "templates/**", "web/**",
     "tools/mirror/**", "tools/agent_instructions/**",
     "scripts/install.sh", "scripts/install.ps1", "scripts/install_core.py", "scripts/INSTALLER_SHA256SUMS",
     "scripts/build_sdk_artifact.py", "scripts/build_web_payload.py",
