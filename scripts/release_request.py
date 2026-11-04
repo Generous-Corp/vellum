@@ -44,9 +44,10 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+import version_at_land as val  # noqa: E402
 VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 SHA = re.compile(r"^[0-9a-f]{40}$")
-PROJECT_VERSION = re.compile(r"project\(\s*vellum\b[^)]*\bVERSION\s+([0-9.]+)", re.IGNORECASE | re.DOTALL)
 
 
 REPOSITORY = "Generous-Corp/vellum"
@@ -84,12 +85,14 @@ def load(path: Path) -> Any:
 
 
 def project_version(cmakelists: str) -> str:
-    found = PROJECT_VERSION.search(cmakelists)
-    if not found:
-        raise ReleaseRequestError("CMakeLists.txt declares no project VERSION")
-    if not VERSION.fullmatch(found[1]):
-        raise ReleaseRequestError(f"the project VERSION {found[1]} is not MAJOR.MINOR.PATCH")
-    return found[1]
+    """The project VERSION, read by the one parser every release script shares."""
+    try:
+        return val.project_version(cmakelists)
+    except val.VersionError as error:
+        message = str(error)
+        if "MAJOR.MINOR.PATCH" in message:
+            message = f"the project VERSION is not MAJOR.MINOR.PATCH ({message})"
+        raise ReleaseRequestError(message) from error
 
 
 def retired(retired_tags: Any) -> set[str]:
@@ -317,13 +320,15 @@ def blob_at(root: Path, commit: str, path: str) -> bytes:
 
 
 def version_at(root: Path, commit: str) -> str | None:
-    """The project VERSION CMakeLists.txt declares at `commit`, or None when it declares none."""
+    """The project VERSION CMakeLists.txt declares at `commit`, or None when it declares none readably."""
     result = subprocess.run(["git", "-C", str(root), "show", f"{commit}:{CMAKELISTS}"], capture_output=True,
                             check=False)
     if result.returncode != 0:
         return None
-    found = PROJECT_VERSION.search(result.stdout.decode("utf-8", "replace"))
-    return found[1] if found else None
+    try:
+        return val.project_version(result.stdout.decode("utf-8", "replace"))
+    except val.VersionError:
+        return None
 
 
 def version_landing(root: Path, commit: str) -> str:
@@ -427,11 +432,35 @@ class Selection:
     cursor: str | None = None
 
 
-def select(root: Path, commit: str, tag_exists: bool, existing_tags: list[str] | None = None) -> Selection:
+def tag_commits(root: Path, names: list[str]) -> dict[str, str]:
+    """The commit each local release tag names; a tag the clone lacks is left out."""
+    found = {}
+    for name in names:
+        result = subprocess.run(["git", "-C", str(root), "rev-parse", "--verify", "--quiet", f"refs/tags/{name}^{{commit}}"],
+                                capture_output=True, text=True, check=False)
+        if result.returncode == 0 and version_key(name):
+            found[name] = result.stdout.strip()
+    return found
+
+
+def require_bot_bump(root: Path, landing: str, tags: dict[str, str], retired_tags: Any) -> None:
+    """Raise unless `landing` is the version-at-land bot's own bump, exactly as it would write it."""
+    try:
+        problem = val.verify_bump(root, landing, tags, retired_tags)
+    except val.VersionError as error:
+        problem = str(error)
+    if problem:
+        raise ReleaseRequestError(f"the version was not landed by version-at-land: {problem}")
+
+
+def select(root: Path, commit: str, tag_exists: bool, existing_tags: list[str] | None = None,
+           tags: dict[str, str] | None = None) -> Selection:
     """Whether `commit` is the commit to tag for the project version it declares.
 
     It is when that version's tag does not exist yet, is not retired, and is
-    newer than every release tag; the observatory cursor at `commit` is (or
+    newer than every release tag; the commit that landed the version is the
+    version-at-land bot's own bump, re-derived exactly (require_bot_bump); the
+    observatory cursor at `commit` is (or
     descends from) the commit that landed the version; and everything after
     that cursor is observatory evidence. Such a commit passes the tag's
     reconciled observatory check, and its content is the content the cursor
@@ -460,6 +489,11 @@ def select(root: Path, commit: str, tag_exists: bool, existing_tags: list[str] |
         return Selection(None, f"{tag} is not newer than v{'.'.join(map(str, newest))}; no version bump is "
                                "waiting")
     landed = version_landing(root, commit)
+    try:
+        require_bot_bump(root, landed, tags if tags is not None else tag_commits(root, existing_tags or []),
+                         retired_tags)
+    except ReleaseRequestError as error:
+        return Selection(None, f"{tag} is not a release: {error}", landed)
     cursor = observatory_cursor(root, commit)
     if not is_ancestor(root, landed, cursor):
         return Selection(None, f"the observatory cursor {cursor} does not yet contain {landed}, which "
@@ -600,8 +634,9 @@ def main(argv: list[str]) -> int:
             if not SHA.fullmatch(args.commit):
                 raise ReleaseRequestError("the commit must be a full SHA")
             version = project_version(blob_at(ROOT, args.commit, CMAKELISTS).decode("utf-8", "replace"))
+            remote_tags = val.remote_release_tags(ROOT, args.remote)
             chosen = select(ROOT, args.commit, remote_tag_exists(ROOT, f"v{version}", args.remote),
-                            remote_release_tags(ROOT, args.remote))
+                            list(remote_tags), remote_tags)
             print(f"tag={chosen.tag or ''}")
             print(f"version-commit={chosen.version_commit or ''}")
             print(f"cursor={chosen.cursor or ''}")
@@ -615,12 +650,19 @@ def main(argv: list[str]) -> int:
             return 0
         cmakelists = args.cmakelists.read_text(encoding="utf-8")
         exists = remote_tag_exists(ROOT, f"v{project_version(cmakelists)}", args.remote)
-        tag = check(cmakelists=cmakelists, retired_tags=load(ROOT / RETIRED_TAGS), commit=args.commit,
+        retired_tags = load(ROOT / RETIRED_TAGS)
+        if not SHA.fullmatch(args.commit):
+            raise ReleaseRequestError("the commit must be a full SHA")
+        if version_at(ROOT, args.commit) != project_version(cmakelists):
+            raise ReleaseRequestError(f"{args.cmakelists} does not declare the version at {args.commit}")
+        require_bot_bump(ROOT, version_landing(ROOT, args.commit), val.remote_release_tags(ROOT, args.remote),
+                         retired_tags)
+        tag = check(cmakelists=cmakelists, retired_tags=retired_tags, commit=args.commit,
                     tag_exists=exists, branch_rules=load(args.branch_rules),
                     pages=load(args.check_runs), immutable=load(args.immutable_releases),
                     protection=load(args.protection),
                     existing_tags=remote_release_tags(ROOT, args.remote), now=read_time(args.immutable_read_at))
-    except (OSError, ValueError, subprocess.CalledProcessError, ReleaseRequestError) as error:
+    except (OSError, ValueError, subprocess.CalledProcessError, ReleaseRequestError, val.VersionError) as error:
         print(one_line(f"release refused: {error}"), file=sys.stderr)
         return 1
     print(tag)

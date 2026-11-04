@@ -17,6 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import release_request as rr  # noqa: E402
 import verify_release_tag_ruleset as ruleset  # noqa: E402
+import version_at_land as val  # noqa: E402
 
 COMMIT = "a" * 40
 OTHER = "b" * 40
@@ -394,13 +395,19 @@ class History:
         self.git("init", "-q", "-b", "main")
         self.git("config", "user.name", "t")
         self.git("config", "user.email", "t@t")
+        # Every version surface, so the bot's bump is the real rewrite.
+        for surface in val.VERSION_SURFACES:
+            self.write(surface, "version 0.1.9\n")
         self.write(rr.CMAKELISTS, CMAKE.replace("0.1.10", "0.1.9"))
+        self.write("scripts/install_core.py", "core\n")
+        self.write(val.INSTALLER_SUMS, f"{'0' * 64}  install_core.py\n{'0' * 64}  install.sh\n")
         self.write(rr.RETIRED_TAGS, json.dumps(RETIRED) + "\n")
         self.write("src/app.txt", "one\n")
         for report in sorted(rr.EVIDENCE_MODIFIED - {rr.CURSOR}):
             self.write(report, "{}\n")
         self.write(rr.CURSOR, self.cursor("0" * 40))
         self.base = self.commit("root")
+        self.git("tag", "v0.1.9", self.base)
         self.main = self.reconcile(self.base)
 
     def git(self, *args: str) -> str:
@@ -450,10 +457,22 @@ class History:
         return self.commit("chore(provenance): coalesce Pulp observatory evidence")
 
     def bump(self, version: str = "0.1.10") -> str:
-        """The queue's merge of a pull request that changes the project VERSION."""
+        """A shipped fix, then the queue's merge of the version-at-land bot's bump to `version`."""
         self.branch(self.main)
-        self.write(rr.CMAKELISTS, CMAKE.replace("0.1.10", version))
-        return self.land(self.commit(f"chore(release): bump version to {version}"))
+        self.ships = getattr(self, "ships", 0) + 1
+        self.write("foundation/src/core.cpp", f"int x = {self.ships};\n")
+        self.land(self.commit("fix: correct the core"))
+        self.branch(self.main)
+        val.apply(self.root, version)
+        self.git("add", "-A")
+        self.git("-c", f"user.name={val.BOT_NAME}", "-c", f"user.email={val.BOT_EMAIL}", "commit", "-q", "-m",
+                 f"chore(release): bump version to {version}\n\n{val.BOT_TRAILER}")
+        head = self.git("rev-parse", "HEAD")
+        self.git("checkout", "-q", "--detach", self.main)
+        self.git("merge", "-q", "--no-ff", "-m", "Merge pull request #7 from Generous-Corp/automation/version-bump",
+                 head)
+        self.main = self.git("rev-parse", "HEAD")
+        return self.main
 
     def change(self, text: str = "two\n") -> str:
         self.branch(self.main)
@@ -468,7 +487,7 @@ class TagTargetSelection(unittest.TestCase):
         self.history = History(self)
 
     def select(self, commit: str, tag_exists: bool = False) -> rr.Selection:
-        return rr.select(self.history.root, commit, tag_exists)
+        return rr.select(self.history.root, commit, tag_exists, ["v0.1.9"])
 
     def test_the_bump_merge_is_refused(self) -> None:
         landed = self.history.bump()
@@ -534,7 +553,7 @@ class TagTargetSelection(unittest.TestCase):
             # Changing the version makes this commit the version's landing,
             # which no cursor in its own tree can contain.
             "version": (dict(extra=rr.CMAKELISTS, extra_text=CMAKE.replace("0.1.10", "0.1.11")),
-                        "does not yet contain"),
+                        "not landed by version-at-land"),
         }
         for name, (change, reason) in cases.items():
             with self.subTest(name):
@@ -695,9 +714,10 @@ class TagTargetSelection(unittest.TestCase):
     def test_only_a_version_newer_than_every_tag_is_selected(self) -> None:
         # Must-pass: a bump past the newest tag is selected. Must-fail: the
         # same reconcile with an equal, older or retired version is not.
+        self.history.git("tag", "v0.1.10", self.history.main)
         landed = self.history.bump("0.1.11")
         merged = self.history.land(self.history.reconcile(landed))
-        self.assertEqual(rr.select(self.history.root, merged, False, ["v0.1.10"]).tag, "v0.1.11")
+        self.assertEqual(rr.select(self.history.root, merged, False, ["v0.1.9", "v0.1.10"]).tag, "v0.1.11")
         for tags, reason in ((["v0.1.11"], "not newer than v0.1.11"), (["v0.1.12"], "not newer than v0.1.12"),
                              (["v0.2.0", "v0.1.6"], "not newer than v0.2.0")):
             with self.subTest(tags=tags):
@@ -705,11 +725,58 @@ class TagTargetSelection(unittest.TestCase):
                 self.assertIsNone(chosen.tag)
                 self.assertIn(reason, chosen.reason)
         # A retired version is never selected, even when no tag of that name exists.
-        retired = self.history.bump("0.1.7")
+        self.history.branch(self.history.main)
+        self.history.write(rr.CMAKELISTS, CMAKE.replace("0.1.10", "0.1.7"))
+        retired = self.history.land(self.history.commit("set a retired version"))
         merged = self.history.land(self.history.reconcile(retired))
         chosen = rr.select(self.history.root, merged, False, ["v0.1.6"])
         self.assertIsNone(chosen.tag)
         self.assertIn("retired", chosen.reason)
+
+    def test_only_the_bots_exact_bump_is_selected(self) -> None:
+        # Must-pass is every test above. Must-fail: the same reconcile shape
+        # around a version the bot did not land exactly as it derives it.
+        def human(version: str, extra: dict[str, str] | None = None) -> str:
+            self.history.branch(self.history.main)
+            self.history.write("foundation/src/core.cpp", "int human;\n")
+            self.history.land(self.history.commit("fix: ship"))
+            self.history.branch(self.history.main)
+            val.apply(self.history.root, version)
+            for path, text in (extra or {}).items():
+                self.history.write(path, text)
+            return self.history.land(self.history.commit(f"release: {version}"))
+
+        for name, version, extra in (("a human pull request setting 9.0.0", "9.0.0", None),
+                                     ("a human pull request with the bot's exact rewrite", "0.1.10", None)):
+            with self.subTest(name):
+                history = History(self)
+                self.history = history
+                landed = human(version, extra)
+                merged = history.land(history.reconcile(landed))
+                chosen = rr.select(history.root, merged, False, ["v0.1.9"])
+                self.assertIsNone(chosen.tag)
+                self.assertIn("not landed by version-at-land", chosen.reason)
+        # The bot's merge with a smuggled hunk is refused too.
+        history = History(self)
+        self.history = history
+        history.branch(history.main)
+        history.write("foundation/src/core.cpp", "int x;\n")
+        history.land(history.commit("fix: ship"))
+        history.branch(history.main)
+        val.apply(history.root, "0.1.10")
+        history.write("src/app.txt", "smuggled\n")
+        history.git("add", "-A")
+        history.git("-c", f"user.name={val.BOT_NAME}", "-c", f"user.email={val.BOT_EMAIL}", "commit", "-q", "-m",
+                    f"chore(release): bump version to 0.1.10\n\n{val.BOT_TRAILER}")
+        head = history.git("rev-parse", "HEAD")
+        history.git("checkout", "-q", "--detach", history.main)
+        history.git("merge", "-q", "--no-ff", "-m", "Merge pull request #8 from Generous-Corp/automation/version-bump",
+                    head)
+        history.main = history.git("rev-parse", "HEAD")
+        merged = history.land(history.reconcile(history.main))
+        chosen = rr.select(history.root, merged, False, ["v0.1.9"])
+        self.assertIsNone(chosen.tag)
+        self.assertIn("beyond the rewrite", chosen.reason)
 
     def test_the_selection_agrees_with_the_tag_provenance_tail_check(self) -> None:
         # Whatever select() accepts, the tag's provenance run accepts too.
@@ -735,8 +802,9 @@ class TagTargetSelection(unittest.TestCase):
         self.history.git("remote", "add", "origin", str(remote))
         script = self.history.root / "scripts/release_request.py"
         script.parent.mkdir(parents=True, exist_ok=True)
-        for name in ("release_request.py", "verify_immutable_release_preflight.py"):
+        for name in ("release_request.py", "verify_immutable_release_preflight.py", "version_at_land.py"):
             shutil.copy2(rr.ROOT / "scripts" / name, script.parent / name)
+        self.history.git("push", "-q", "origin", "refs/tags/v0.1.9")
 
         def run(commit: str) -> subprocess.CompletedProcess[str]:
             return subprocess.run([sys.executable, "-I", str(script), "select", "--commit", commit],
@@ -755,7 +823,7 @@ class TagTargetSelection(unittest.TestCase):
         self.history.git("remote", "set-url", "origin", str(remote) + "-missing")
         failed = run(merged)
         self.assertEqual(failed.returncode, 1)
-        self.assertIn("could not look up", failed.stderr)
+        self.assertIn("could not list release tags", failed.stderr)
 
 
 class RealHistoryReplay(unittest.TestCase):
@@ -798,31 +866,36 @@ class RealHistoryReplay(unittest.TestCase):
     def test_the_reconcile_commit_v0_1_6_passes(self) -> None:
         self.tail(self.V0_1_6)
 
-    def test_the_commit_release_tag_selects_passes(self) -> None:
+    def test_the_reconcile_after_v0_1_9_passes_the_tail_but_its_hand_bump_is_not_a_release(self) -> None:
+        # #139's reconcile passes the tag's tail check. Its version was set by a
+        # person (#137), not by version-at-land, so today it is not selected.
         self.assertIsNone(rr.select(rr.ROOT, self.V0_1_9, tag_exists=False).tag)
         self.assertEqual(rr.git(rr.ROOT, "rev-parse", f"{self.RECONCILE_MERGE}^2"), self.RECONCILE)
         for target in (self.RECONCILE, self.RECONCILE_MERGE):
             with self.subTest(target=target):
-                chosen = rr.select(rr.ROOT, target, tag_exists=False)
-                self.assertEqual(chosen.tag, "v0.1.9", chosen.reason)
-                self.assertEqual((chosen.version_commit, chosen.cursor), (self.V0_1_9, self.V0_1_9))
+                self.assertEqual(rr.version_landing(rr.ROOT, target), self.V0_1_9)
                 self.tail(target)
+                chosen = rr.select(rr.ROOT, target, tag_exists=False, existing_tags=["v0.1.6", "v0.1.8"])
+                self.assertIsNone(chosen.tag)
+                self.assertIn("does not merge the automation/version-bump branch", chosen.reason)
         # With the tag present, as it is, the same reconcile releases nothing.
         self.assertIsNone(rr.select(rr.ROOT, self.RECONCILE_MERGE, tag_exists=True).tag)
 
     V0_1_10 = "6b0bee8e61e49c21076af5d6cd6bfa29a06ed75b"
     V0_1_10_BUMP = "23e59fb4b04f382a283b049c5df4086cf4c49612"
 
-    def test_v0_1_10_is_selected_from_its_version_alone(self) -> None:
+    def test_v0_1_10s_landing_is_found_and_its_hand_bump_is_refused(self) -> None:
         # The commit v0.1.10 tags, replayed as if its tag did not exist yet,
         # with the release tags that existed before it. Its version landed in
-        # #141's merge, before the request file named it; the version alone
-        # selects the same commit the request did.
+        # #141's merge (a person's bump), which the landing rule finds and the
+        # bot-bump rule refuses.
         before = ["v0.1.0", "v0.1.1", "v0.1.6", "v0.1.8", "v0.1.9"]
-        chosen = rr.select(rr.ROOT, self.V0_1_10, tag_exists=False, existing_tags=before)
-        self.assertEqual(chosen.tag, "v0.1.10", chosen.reason)
-        self.assertEqual(chosen.version_commit, self.V0_1_10_BUMP)
+        self.assertEqual(rr.version_landing(rr.ROOT, self.V0_1_10), self.V0_1_10_BUMP)
         self.tail(self.V0_1_10)
+        chosen = rr.select(rr.ROOT, self.V0_1_10, tag_exists=False, existing_tags=before)
+        self.assertIsNone(chosen.tag)
+        self.assertEqual(chosen.version_commit, self.V0_1_10_BUMP)
+        self.assertIn("not landed by version-at-land", chosen.reason)
         # The same commit selects nothing once v0.1.10 exists, or with a newer tag.
         self.assertIsNone(rr.select(rr.ROOT, self.V0_1_10, tag_exists=True).tag)
         self.assertIsNone(rr.select(rr.ROOT, self.V0_1_10, tag_exists=False,

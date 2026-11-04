@@ -51,20 +51,32 @@ class Repo:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(text)
 
-    def land(self, title: str, files: dict[str, str], body: str = "") -> str:
+    def land(self, title: str, files: dict[str, str], body: str = "", branch: str = "topic",
+             identity: tuple[str, str] = ("t", "t@t"), extra_commits: int = 0) -> str:
         """A pull request with one commit titled `title`, landed by the queue's merge commit."""
         self.git("checkout", "-q", "--detach", self.main)
+        for index in range(extra_commits):
+            self.git("commit", "-q", "--allow-empty", "-m", f"chore: extra {index}")
         for path, text in files.items():
             self.write(path, text)
         self.git("add", "-A")
-        self.git("commit", "-q", "--allow-empty", "-m", title + ("\n\n" + body if body else ""))
+        name, email = identity
+        self.git("-c", f"user.name={name}", "-c", f"user.email={email}", "commit", "-q", "--allow-empty", "-m",
+                 title + ("\n\n" + body if body else ""))
         head = self.git("rev-parse", "HEAD")
         self.git("checkout", "-q", "--detach", self.main)
         number = self.tick
-        self.git("merge", "-q", "--no-ff", "-m", f"Merge pull request #{number} from Generous-Corp/topic\n\n{title}",
-                 head)
+        self.git("merge", "-q", "--no-ff", "-m",
+                 f"Merge pull request #{number} from Generous-Corp/{branch}\n\n{title}", head)
         self.main = self.git("rev-parse", "HEAD")
         return self.main
+
+    def bot_bump(self, version: str, extra: dict[str, str] | None = None, **overrides) -> str:
+        """The version-at-land pull request: the bot's one commit rewriting CMakeLists.txt, merged."""
+        files = {"CMakeLists.txt": CMAKE.format(v=version), **(extra or {})}
+        options = dict(body=val.BOT_TRAILER, branch=val.BUMP_BRANCH, identity=(val.BOT_NAME, val.BOT_EMAIL))
+        options.update(overrides)
+        return self.land(f"chore(release): bump version to {version}", files, **options)
 
     def tag(self, name: str) -> None:
         self.tags[name] = self.main
@@ -118,10 +130,30 @@ class Levels(unittest.TestCase):
                          ("major", False))
         self.assertEqual(val.explicit_level(["fix: no trailer"]), (None, False))
 
-    def test_an_unreadable_trailer_refuses_instead_of_reading_as_none(self) -> None:
+    def test_an_explicit_major_is_minor_under_0x(self) -> None:
+        # 1.0.0 is never proposed automatically.
+        self.assertEqual(val.explicit_level(["a\n\nVersion-Bump: vellum=major"], major=0), ("minor", False))
+        self.assertEqual(val.explicit_level(["a\n\nVersion-Bump: vellum=major"], major=1), ("major", False))
+        repo = Repo(self)
+        repo.tag("v0.1.10")
+        repo.land("fix: a", {"runtime/s.cpp": "s\n"}, body="Version-Bump: vellum=major")
+        self.assertEqual(repo.plan().version, "0.2.0")
+
+    def test_an_unreadable_trailer_is_skipped_with_a_warning(self) -> None:
+        # Must-pass: one bad line never stops every later plan. Must-fail: it is
+        # still named, and it never counts as a level or a skip.
         for value in ("sdk=minor", "vellum=huge", "vellum = minor", "skip because", "Minor"):
-            with self.subTest(value=value), self.assertRaisesRegex(val.VersionError, "unreadable trailer"):
-                val.explicit_level([f"fix: a\n\nVersion-Bump: {value}"])
+            with self.subTest(value=value):
+                val.WARNINGS.clear()
+                self.assertEqual(val.explicit_level([f"fix: a\n\nVersion-Bump: {value}"]), (None, False))
+                self.assertEqual(len(val.WARNINGS), 1)
+                self.assertIn("unreadable trailer", val.WARNINGS[0])
+        repo = Repo(self)
+        repo.tag("v0.1.10")
+        repo.land("fix: a", {"runtime/s.cpp": "s\n"}, body="Version-Bump: sdk=patch")
+        self.assertEqual(repo.plan().version, "0.1.11")
+        self.assertEqual(len(val.lint(repo.root, f"{repo.tags['v0.1.10']}..{repo.main}")), 1)
+        self.assertEqual(val.lint(repo.root, f"{repo.tags['v0.1.10']}..{repo.tags['v0.1.10']}"), [])
 
 
 class Plans(unittest.TestCase):
@@ -277,16 +309,18 @@ class Repository(unittest.TestCase):
 
 
 class Workflow(unittest.TestCase):
-    """version-at-land.yml decides with no token and pushes with one, in that order."""
+    """version-at-land.yml plans with no write token and pushes with one, in separate jobs."""
 
     @classmethod
     def setUpClass(cls) -> None:
         cls.text = (ROOT / ".github/workflows/version-at-land.yml").read_text()
+        _, _, jobs = cls.text.partition("\njobs:\n")
+        cls.plan_job, _, cls.push_job = jobs.partition("\n  push:\n")
 
-    def step(self, title: str) -> str:
-        start = self.text.index(f"- name: {title}")
-        following = self.text.find("\n      - name:", start + 1)
-        return self.text[start:following if following != -1 else None]
+    def step(self, job: str, title: str) -> str:
+        start = job.index(f"- name: {title}")
+        following = job.find("\n      - name:", start + 1)
+        return job[start:following if following != -1 else None]
 
     def test_only_main_is_counted_and_nothing_is_tagged(self) -> None:
         self.assertIn("on:\n  push:\n    branches: [main]\n", self.text)
@@ -294,22 +328,124 @@ class Workflow(unittest.TestCase):
         self.assertNotIn("git tag", self.text)
         self.assertNotIn("environment:", self.text)
         self.assertIn("permissions:\n  contents: read\n  pull-requests: read\n", self.text)
+        self.assertIn(f"BUMP_BRANCH: {val.BUMP_BRANCH}\n", self.text)
 
-    def test_the_token_is_minted_after_the_bump_is_written(self) -> None:
-        order = [self.text.index(f"- name: {name}") for name in (
-            "Decide the next version", "Read the standing bump pull request", "Write the version bump",
+    def test_the_plan_job_holds_no_secret_and_the_push_job_runs_no_python(self) -> None:
+        self.assertNotIn("secrets.", self.plan_job)
+        self.assertNotIn("outputs.token", self.plan_job)
+        self.assertNotIn("python", self.push_job)
+        self.assertIn("needs: plan", self.push_job)
+        self.assertIn("ref: ${{ needs.plan.outputs.main }}", self.push_job)
+        order = [self.push_job.index(f"- name: {name}") for name in (
+            "Check out the planned main commit", "Fetch the planned bump", "Apply the planned bump",
             "Mint the bump token", "Push the bump branch and open its pull request")]
         self.assertEqual(order, sorted(order))
-        self.assertNotIn("secrets.", self.text[:order[3]])
-        push = self.step("Push the bump branch and open its pull request")
-        self.assertIn("GH_TOKEN: ${{ steps.bump-token.outputs.token }}", push)
-        self.assertNotIn("python", push)
-        self.assertIn('"$MAIN:refs/heads/main" "HEAD:refs/heads/$BUMP_BRANCH"', push)
+        apply = self.step(self.push_job, "Apply the planned bump")
+        self.assertIn("-c core.hooksPath=/dev/null", apply)
+        push = self.step(self.push_job, "Push the bump branch and open its pull request")
+        self.assertIn("env -i PATH=/usr/bin:/bin", push)
+        for command in push.split("\n"):
+            if command.strip().startswith(("git ", "gh ")):
+                self.fail(f"a token-holding command runs outside the clean environment: {command.strip()}")
+        # main is only read, never pushed, by the bump job.
+        self.assertNotIn(":refs/heads/main", push)
 
-    def test_the_plan_and_the_bump_run_isolated_python(self) -> None:
-        self.assertIn('python3 -I scripts/version_at_land.py plan --commit "$main"', self.step("Decide the next version"))
-        self.assertIn('python3 -I scripts/version_at_land.py apply --to "$VERSION"', self.step("Write the version bump"))
-        self.assertIn(val.BOT_TRAILER, self.step("Write the version bump"))
+    def test_the_push_job_applies_only_version_surfaces(self) -> None:
+        apply = self.step(self.push_job, "Apply the planned bump")
+        listed = apply.split("allowed=(\n", 1)[1].split("\n          )", 1)[0].split()
+        self.assertEqual(listed, [*val.VERSION_SURFACES, val.INSTALLER_SUMS])
+
+    def test_the_planned_outputs_are_checked_before_use(self) -> None:
+        decide = self.step(self.plan_job, "Decide the next version")
+        self.assertIn('[[ "$version" =~ ^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$ ]]', decide)
+        self.assertIn('[[ "$main" =~ ^[0-9a-f]{40}$ ]]', decide)
+        self.assertIn('python3 -I scripts/version_at_land.py plan --commit "$main"', decide)
+        write = self.step(self.plan_job, "Write the version bump")
+        self.assertIn('python3 -I scripts/version_at_land.py apply --to "$VERSION"', write)
+        self.assertIn(val.BOT_TRAILER, write)
+        self.assertIn(f"user.email={val.BOT_EMAIL}", write)
+
+
+class Parser(unittest.TestCase):
+    def test_comments_never_declare_the_version(self) -> None:
+        text = CMAKE.format(v="0.1.10")
+        self.assertEqual(val.project_version(text), "0.1.10")
+        self.assertEqual(val.project_version("# project(Vellum VERSION 9.9.9)\n" + text), "0.1.10")
+        self.assertEqual(val.project_version("#[[\nproject(Vellum VERSION 9.9.9)\n]]\n" + text), "0.1.10")
+        self.assertEqual(val.project_version(text.replace("LANGUAGES CXX", 'DESCRIPTION "a # b" LANGUAGES CXX')),
+                         "0.1.10")
+        with self.assertRaisesRegex(val.VersionError, "more than once"):
+            val.project_version(text + "project(Vellum VERSION 9.9.9)\n")
+        with self.assertRaisesRegex(val.VersionError, "no project VERSION"):
+            val.project_version("# project(Vellum VERSION 0.1.10)\n")
+        for bad in ("0.1", "0.1.10.1", "0.1.010", "0.1.10-rc1"):
+            with self.subTest(bad=bad), self.assertRaises(val.VersionError):
+                val.project_version(CMAKE.format(v=bad))
+
+
+class VerifyBump(unittest.TestCase):
+    """Only the bot's own bump, exactly as plan and apply would make it, is a release."""
+
+    def setUp(self) -> None:
+        saved = (val.VERSION_SURFACES, val.INSTALLER_SUMS)
+        val.VERSION_SURFACES, val.INSTALLER_SUMS = ("CMakeLists.txt",), None
+        self.addCleanup(lambda: setattr(val, "VERSION_SURFACES", saved[0]) or setattr(val, "INSTALLER_SUMS", saved[1]))
+        self.repo = Repo(self)
+        self.repo.tag("v0.1.10")
+        self.repo.land("fix: correct the core", {"foundation/src/core.cpp": "int y;\n"})
+
+    def verify(self) -> str | None:
+        return val.verify_bump(self.repo.root, self.repo.main, self.repo.tags, NO_RETIRED)
+
+    def test_the_bots_exact_bump_is_a_release(self) -> None:
+        self.repo.bot_bump("0.1.11")
+        self.assertIsNone(self.verify())
+
+    def test_a_human_pull_request_setting_9_0_0_is_refused(self) -> None:
+        self.repo.land("release: 9.0.0", {"CMakeLists.txt": CMAKE.format(v="9.0.0")})
+        self.assertIn("does not merge the automation/version-bump branch", self.verify())
+
+    def test_a_human_commit_on_the_bot_branch_is_refused(self) -> None:
+        self.repo.bot_bump("0.1.11", identity=("someone", "someone@example.com"))
+        self.assertIn("not the version-at-land bot's commit", self.verify())
+
+    def test_a_bot_pull_request_with_an_extra_hunk_is_refused(self) -> None:
+        self.repo.bot_bump("0.1.11", extra={"foundation/src/core.cpp": "int smuggled;\n"})
+        self.assertIn("beyond the rewrite", self.verify())
+
+    def test_an_extra_hunk_in_a_version_surface_is_refused(self) -> None:
+        self.repo.bot_bump("0.1.11", extra={"CMakeLists.txt": CMAKE.format(v="0.1.11") + "add_subdirectory(x)\n"})
+        self.assertIn("differs from the rewrite", self.verify())
+
+    def test_a_level_plan_would_not_choose_is_refused(self) -> None:
+        self.repo.bot_bump("0.2.0")
+        self.assertIn("derives 0.1.11", self.verify())
+
+    def test_a_skipped_version_is_refused(self) -> None:
+        self.repo.bot_bump("0.1.12")
+        self.assertIn("derives 0.1.11", self.verify())
+
+    def test_a_bump_with_nothing_shipped_is_refused(self) -> None:
+        repo = Repo(self)
+        repo.tag("v0.1.10")
+        repo.land("docs: only", {"docs/x.md": "x\n"})
+        repo.bot_bump("0.1.11")
+        self.assertIn("derives none", val.verify_bump(repo.root, repo.main, repo.tags, NO_RETIRED))
+
+    def test_a_bump_pull_request_of_more_than_one_commit_is_refused(self) -> None:
+        self.repo.bot_bump("0.1.11", extra_commits=1)
+        self.assertIn("is not one commit", self.verify())
+
+    def test_a_bump_without_the_bot_trailer_is_refused(self) -> None:
+        self.repo.bot_bump("0.1.11", body="")
+        self.assertIn("lacks the version-at-land trailer", self.verify())
+
+    def test_a_direct_commit_is_refused(self) -> None:
+        self.repo.git("checkout", "-q", "--detach", self.repo.main)
+        self.repo.write("CMakeLists.txt", CMAKE.format(v="0.1.11"))
+        self.repo.git("commit", "-qam", "direct")
+        self.repo.main = self.repo.git("rev-parse", "HEAD")
+        self.assertIn("not a merge queue merge", self.verify())
 
 
 class Cli(unittest.TestCase):

@@ -207,6 +207,7 @@ class Policy(unittest.TestCase):
         for path in ("/scripts/verify_immutable_release_preflight.py",
                      "/provenance/retired-release-tags.json",
                      "/.github/workflows/version-at-land.yml",
+                     "/scripts/version_at_land.py",
                      "/provenance/authority-signers.allowed_signers",
                      "/tools/provenance/verify_renderer_dependency.py"):
             with self.subTest(path=path):
@@ -221,6 +222,7 @@ class Policy(unittest.TestCase):
         for path in ("/scripts/verify_immutable_release_preflight.py",
                      "/provenance/retired-release-tags.json",
                      "/.github/workflows/version-at-land.yml",
+                     "/scripts/version_at_land.py",
                      "/provenance/authority-signers.allowed_signers",
                      "/tools/provenance/verify_renderer_dependency.py"):
             with self.subTest(path=path):
@@ -309,13 +311,32 @@ class Isolation(unittest.TestCase):
         push = ("      - name: push\n        env:\n          GH_TOKEN: ${{ steps.bump-token.outputs.token }}\n"
                 "        run: git push origin HEAD\n")
         plan = "      - name: plan\n        run: python3 -I scripts/version_at_land.py plan\n"
-        self.assertEqual(found("    steps:\n" + plan + mint + push), [])
+        def workflow(plan_steps: str, push_steps: str) -> str:
+            return "jobs:\n  plan:\n    steps:\n" + plan_steps + "  push:\n    steps:\n" + push_steps
+
+        self.assertEqual(found(workflow(plan, mint + push)), [])
         held = push.replace("git push origin HEAD", "python3 -I scripts/version_at_land.py apply")
-        self.assertTrue(any("holds a secret and runs Python" in p for p in found("    steps:\n" + held)))
+        self.assertTrue(any("holds a secret and runs Python" in p for p in found(workflow(plan, mint + held))))
         keyed = mint.replace("        with:", "        run: python3 -I x.py\n        with:")
-        self.assertTrue(any("holds a secret and runs Python" in p for p in found("    steps:\n" + keyed)))
+        self.assertTrue(any("holds a secret and runs Python" in p for p in found(workflow(plan, keyed + push))))
         loose = plan.replace("python3 -I", "python3")
-        self.assertTrue(any("without -I" in p for p in found("    steps:\n" + loose)))
+        self.assertTrue(any("without -I" in p for p in found(workflow(loose, mint + push))))
+        self.assertIn("version-at-land.yml: no jobs could be read", found("    steps:\n" + plan))
+
+    def test_a_token_job_runs_no_repository_python_in_any_step(self) -> None:
+        # Must-pass: Python in a job that holds no token. Must-fail: the same
+        # Python in an earlier step of the job that later mints the token,
+        # which could plant a hook or a GITHUB_PATH entry the push then runs.
+        def found(text: str) -> list[str]:
+            return policy.isolation_problems({policy.VERSION_WORKFLOW: text}, self.tmp)
+
+        plan = "  plan:\n    steps:\n      - name: plan\n        run: python3 -I scripts/version_at_land.py plan\n"
+        push = ("  push:\n    steps:\n      - name: mint\n        uses: actions/create-github-app-token@x\n"
+                "        with:\n          private-key: ${{ secrets.SHIPYARD_APP_PRIVATE_KEY }}\n")
+        self.assertEqual(found("jobs:\n" + plan + push), [])
+        merged = push.replace("    steps:\n", "    steps:\n      - name: plan\n"
+                              "        run: python3 -I scripts/version_at_land.py apply\n")
+        self.assertTrue(any("job push holds a secret and runs Python" in p for p in found("jobs:\n" + plan + merged)))
 
     def test_the_committed_version_at_land_holds_the_rule(self) -> None:
         text = (ROOT / policy.WORKFLOWS / policy.VERSION_WORKFLOW).read_text()
@@ -393,6 +414,7 @@ class Repository(unittest.TestCase):
         for path in ("/scripts/verify_immutable_release_preflight.py",
                      "/provenance/retired-release-tags.json",
                      "/.github/workflows/version-at-land.yml",
+                     "/scripts/version_at_land.py",
                      "/provenance/authority-signers.allowed_signers",
                      "/tools/provenance/verify_renderer_dependency.py"):
             with self.subTest(path=path):

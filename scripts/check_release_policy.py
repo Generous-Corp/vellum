@@ -19,7 +19,8 @@ fails when:
 - a policy script imports a repository module that is not itself a policy
   file, so the release decision never runs code the owner does not own;
 - a release workflow runs Python without `-I`, a step of release-tag.yml or
-  version-at-land.yml that holds a secret runs Python at all, or a repository
+  version-at-land.yml that holds a secret runs Python at all, a job of
+  version-at-land.yml that holds a secret runs Python in any step, or a repository
   Python file is named like a standard-library module, so checked-out code
   cannot run with the signing key or an App token.
 
@@ -59,6 +60,7 @@ POLICY_FILES = (
     "/scripts/release_request.py",
     "/scripts/verify_immutable_release_preflight.py",
     "/scripts/verify_release_tag.py",
+    "/scripts/version_at_land.py",
     "/tools/provenance/verify_authority_expansion.py",
     "/tools/provenance/verify_renderer_dependency.py",
 )
@@ -399,8 +401,28 @@ def steps(workflow: str) -> list[str]:
     return [block for block in re.split(r"\n(?=\s+- name:)", workflow)[1:] if block.strip()]
 
 
+JOB_HEADER = re.compile(r"^  (?P<name>[A-Za-z0-9_-]+):[ \t]*$", re.MULTILINE)
+
+
+def jobs(workflow: str) -> dict[str, str]:
+    """The workflow's jobs, as text blocks keyed by job id."""
+    found = re.search(r"(?:^|\n)jobs:[ \t]*\n", workflow)
+    body = workflow[found.end():] if found else ""
+    marks = list(JOB_HEADER.finditer(body))
+    return {mark["name"]: body[mark.start():(marks[index + 1].start() if index + 1 < len(marks) else None)]
+            for index, mark in enumerate(marks)}
+
+
 def isolation_problems(workflows: dict[str, str], root: Path) -> list[str]:
     found = []
+    # A job that holds a token runs no repository Python in any step: an
+    # earlier step could otherwise plant code (a hook, GITHUB_PATH, GITHUB_ENV)
+    # that a later token-holding step runs.
+    if VERSION_WORKFLOW in workflows and not jobs(workflows[VERSION_WORKFLOW]):
+        found.append(f"{VERSION_WORKFLOW}: no jobs could be read")
+    for job, text in jobs(workflows.get(VERSION_WORKFLOW, "")).items():
+        if SECRET.search(text) and PYTHON_CALL.search(text):
+            found.append(f"{VERSION_WORKFLOW}: job {job} holds a secret and runs Python in one of its steps")
     for name in RELEASE_WORKFLOWS:
         for step in steps(workflows.get(name, "")):
             title = step.strip().splitlines()[0]

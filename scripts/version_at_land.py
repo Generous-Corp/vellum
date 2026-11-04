@@ -13,6 +13,13 @@ needs no token:
           release-tag.yml tags once the observatory reconciles it).
   apply   rewrite every version surface from the current version to a newer
           one, refusing when a surface no longer holds the current version.
+  lint    report `Version-Bump:` trailers in a commit range that plan would
+          skip (advisory; release-policy.yml runs it on pull requests).
+
+release_request.py also uses this module to decide that a landed version is a
+release at all (verify_bump): only the version-at-land bot's own pull request,
+whose diff is exactly the rewrite apply makes and whose version is exactly what
+plan derives from the changes before it, can be tagged.
 
 How a landed change counts (the semver heuristic, scaled for 0.x):
 
@@ -21,13 +28,16 @@ How a landed change counts (the semver heuristic, scaled for 0.x):
   release nothing on their own.
 - A `Version-Bump: vellum=<patch|minor|major>` trailer on any commit of the
   change sets its level; `Version-Bump: skip reason="..."` counts it as
-  nothing. An explicit level wins over a skip in the same change.
+  nothing. An explicit level wins over a skip in the same change. A
+  `Version-Bump:` line this script cannot read (another project's surface
+  name, a typo) is skipped with a warning, so one bad line never stops every
+  later release.
 - Otherwise its conventional-commit titles decide: a breaking change (`type!:`
   or a `BREAKING CHANGE:` footer) is major, `feat` is minor, anything else
   that ships is patch.
 - While the major version is 0, every level moves down one place, as Cargo's
   0.x rule does: breaking is minor, and features and fixes are patch. An
-  explicit trailer level is taken as written.
+  explicit `major` is minor too, so 1.0.0 is never proposed automatically.
 """
 
 from __future__ import annotations
@@ -46,7 +56,11 @@ ROOT = Path(__file__).resolve().parents[1]
 CMAKELISTS = "CMakeLists.txt"
 RETIRED_TAGS = "provenance/retired-release-tags.json"
 VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
-PROJECT_VERSION = re.compile(r"project\(\s*vellum\b[^)]*\bVERSION\s+([0-9.]+)", re.IGNORECASE | re.DOTALL)
+# A project(...) call at the start of a line, read only after comments are
+# removed, so a commented-out project() line can never declare the version.
+PROJECT_VERSION = re.compile(r"^[ \t]*project[ \t]*\(\s*vellum\b[^)]*?\bVERSION\s+([^\s)]+)",
+                             re.IGNORECASE | re.MULTILINE)
+BRACKET_COMMENT = re.compile(r"#\[(=*)\[.*?\]\1\]", re.DOTALL)
 TAG = re.compile(r"^v([0-9]+)\.([0-9]+)\.([0-9]+)$")
 LEVELS = ("none", "patch", "minor", "major")
 # What ships in the SDK archive or decides its contents.
@@ -82,7 +96,7 @@ VERSION_SURFACES = (
     "scripts/verify_sdk_artifact.py",
 )
 # Regenerated after the surfaces are rewritten: it holds the installers' digests.
-INSTALLER_SUMS = "scripts/INSTALLER_SHA256SUMS"
+INSTALLER_SUMS: str | None = "scripts/INSTALLER_SHA256SUMS"
 TRAILER = re.compile(r"^Version-Bump:[ \t]*(?P<value>.*?)[ \t]*$", re.MULTILINE)
 EXPLICIT = re.compile(r"^vellum=(?P<level>patch|minor|major)$")
 SKIP = re.compile(r'^skip(?:[ \t]+reason="[^"\n]*")?$')
@@ -113,12 +127,31 @@ def render(version: tuple[int, int, int]) -> str:
     return ".".join(map(str, version))
 
 
+def strip_cmake_comments(text: str) -> str:
+    """`text` with CMake bracket and line comments removed (a `#` inside a quoted argument is kept)."""
+    text = BRACKET_COMMENT.sub("", text)
+    lines = []
+    for line in text.splitlines():
+        quoted, kept = False, []
+        for index, char in enumerate(line):
+            if char == '"' and (index == 0 or line[index - 1] != "\\"):
+                quoted = not quoted
+            if char == "#" and not quoted:
+                break
+            kept.append(char)
+        lines.append("".join(kept))
+    return "\n".join(lines)
+
+
 def project_version(cmakelists: str) -> str:
-    found = PROJECT_VERSION.search(cmakelists)
+    """The one project(Vellum VERSION ...) the file declares; the parser every release script uses."""
+    found = PROJECT_VERSION.findall(strip_cmake_comments(cmakelists))
     if not found:
         raise VersionError("CMakeLists.txt declares no project VERSION")
-    parse_version(found[1])
-    return found[1]
+    if len(found) > 1:
+        raise VersionError("CMakeLists.txt declares the project VERSION more than once")
+    parse_version(found[0])
+    return found[0]
 
 
 def bumped(version: tuple[int, int, int], level: str) -> tuple[int, int, int]:
@@ -184,24 +217,32 @@ def semantic_level(messages: list[str], major: int) -> str:
     return level
 
 
-def explicit_level(messages: list[str]) -> tuple[str | None, bool]:
+WARNINGS: list[str] = []
+
+
+def explicit_level(messages: list[str], major: int = 1) -> tuple[str | None, bool]:
     """The highest `Version-Bump: vellum=<level>` in the messages, and whether one says skip.
 
-    A trailer this script cannot read is refused rather than ignored, so a
-    typo never turns a requested release into none.
+    While the major version is 0, an explicit `major` counts as `minor`. A
+    trailer this script cannot read is skipped and recorded in WARNINGS.
     """
     levels, skipped = [], False
     for message in messages:
         for match in TRAILER.finditer(message):
             value = match["value"]
             if (explicit := EXPLICIT.fullmatch(value)):
-                levels.append(explicit["level"])
+                level = explicit["level"]
+                levels.append("minor" if major == 0 and level == "major" else level)
             elif SKIP.fullmatch(value):
                 skipped = True
             else:
-                raise VersionError(f"unreadable trailer `Version-Bump: {value}`; use vellum=<patch|minor|major> "
-                                   'or skip reason="..."')
+                WARNINGS.append(f"skipped unreadable trailer `Version-Bump: {one_line(value)[:120]}`; use "
+                                'vellum=<patch|minor|major> or skip reason="..."')
     return (max(levels, key=LEVELS.index) if levels else None), skipped
+
+
+def one_line(text: str) -> str:
+    return "".join(ch if ch.isprintable() else "?" for ch in text)
 
 
 @dataclass(frozen=True)
@@ -225,7 +266,7 @@ def landed_change(root: Path, commit: str, major: int) -> Contribution:
              if path]
     lines = [line for line in messages[0].splitlines() if line.strip()]
     title = lines[1] if len(lines) > 1 and QUEUE_MERGE.match(lines[0]) else (lines[0] if lines else commit)
-    explicit, skipped = explicit_level(messages)
+    explicit, skipped = explicit_level(messages, major)
     if explicit:
         return Contribution(commit, title, explicit, "Version-Bump trailer")
     if skipped:
@@ -304,48 +345,140 @@ def plan(root: Path, commit: str, tags: dict[str, str], retired_tags: Any) -> Pl
 TOKEN = r"(?<![0-9.]){}(?![0-9]|\.[0-9])"
 
 
-def apply(root: Path, new: str) -> list[str]:
-    """Rewrite every version surface from the current version to `new`; the files written."""
-    cmake = root / CMAKELISTS
-    old = project_version(cmake.read_text(encoding="utf-8"))
+def rewrite(read: Any, new: str) -> dict[str, bytes]:
+    """Every file a bump to `new` writes, from `read(path) -> bytes | None` of the tree it starts from.
+
+    This is the whole bump: apply writes exactly these bytes, and verify_bump
+    requires a landed bump to equal them.
+    """
+    cmake = read(CMAKELISTS)
+    if cmake is None:
+        raise VersionError("CMakeLists.txt is missing")
+    old = project_version(cmake.decode("utf-8"))
     if parse_version(new) <= parse_version(old):
         raise VersionError(f"{new} is not newer than the current version {old}")
     pattern = re.compile(TOKEN.format(re.escape(old)))
-    rewritten: dict[str, str] = {}
+    written: dict[str, bytes] = {}
     for relative in VERSION_SURFACES:
-        path = root / relative
-        try:
-            text = path.read_text(encoding="utf-8")
-        except OSError as error:
-            raise VersionError(f"version surface {relative} cannot be read: {error}") from error
-        updated, count = pattern.subn(new, text)
+        data = read(relative)
+        if data is None:
+            raise VersionError(f"version surface {relative} cannot be read")
+        updated, count = pattern.subn(new, data.decode("utf-8"))
         if count == 0:
             raise VersionError(f"version surface {relative} does not state the current version {old}; "
                                "update VERSION_SURFACES")
-        rewritten[relative] = updated
-    if project_version(rewritten[CMAKELISTS]) != new:
+        written[relative] = updated.encode("utf-8")
+    if project_version(written[CMAKELISTS].decode("utf-8")) != new:
         raise VersionError(f"CMakeLists.txt does not declare {new} after the rewrite")
-    for relative, text in rewritten.items():
-        (root / relative).write_text(text, encoding="utf-8")
-    regenerate_installer_sums(root)
-    return [*VERSION_SURFACES, INSTALLER_SUMS]
+    if INSTALLER_SUMS:
+        written[INSTALLER_SUMS] = installer_sums(read, written)
+    return written
 
 
-def regenerate_installer_sums(root: Path) -> None:
-    """Recompute each digest in INSTALLER_SHA256SUMS; it names files relative to scripts/ or the root."""
-    sums = root / INSTALLER_SUMS
+def installer_sums(read: Any, written: dict[str, bytes]) -> bytes:
+    """INSTALLER_SHA256SUMS recomputed; it names files relative to scripts/ or the root."""
+    sums = read(INSTALLER_SUMS)
+    if sums is None:
+        raise VersionError(f"{INSTALLER_SUMS} is missing")
     lines = []
-    for line in sums.read_text(encoding="utf-8").splitlines():
+    for line in sums.decode("utf-8").splitlines():
         if not line.strip():
             continue
-        digest, name = line.split(None, 1)
+        _, name = line.split(None, 1)
         name = name.strip()
-        candidates = [root / "scripts" / name, root / name]
-        source = next((path for path in candidates if path.is_file()), None)
-        if source is None or ".." in Path(name).parts:
+        if ".." in Path(name).parts or name.startswith("/"):
+            raise VersionError(f"{INSTALLER_SUMS} names {name}, outside the repository")
+        for candidate in (f"scripts/{name}", name):
+            data = written.get(candidate, read(candidate))
+            if data is not None:
+                break
+        else:
             raise VersionError(f"{INSTALLER_SUMS} names {name}, which does not exist")
-        lines.append(f"{hashlib.sha256(source.read_bytes()).hexdigest()}  {name}")
-    sums.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        lines.append(f"{hashlib.sha256(data).hexdigest()}  {name}")
+    return ("\n".join(lines) + "\n").encode("utf-8")
+
+
+def apply(root: Path, new: str) -> list[str]:
+    """Rewrite every version surface from the current version to `new`; the files written."""
+    def read(relative: str) -> bytes | None:
+        path = root / relative
+        return path.read_bytes() if path.is_file() else None
+
+    written = rewrite(read, new)
+    for relative, data in written.items():
+        (root / relative).write_bytes(data)
+    return list(written)
+
+
+BOT_NAME = "vellum-version-at-land"
+BOT_EMAIL = "vellum-version-at-land@users.noreply.github.com"
+BUMP_BRANCH = "automation/version-bump"
+BUMP_MERGE = re.compile(r"^Merge pull request #[0-9]+ from Generous-Corp/automation/version-bump$")
+
+
+def blob(root: Path, commit: str, path: str) -> bytes | None:
+    result = subprocess.run(["git", "-C", str(root), "cat-file", "blob", f"{commit}:{path}"], capture_output=True,
+                            check=False)
+    return result.stdout if result.returncode == 0 else None
+
+
+def verify_bump(root: Path, landing: str, tags: dict[str, str], retired_tags: Any) -> str | None:
+    """Why the commit that landed main's version is not a release, or None when it is one.
+
+    It is a release only when all of these hold:
+    - it is the merge queue's merge of the version-at-land pull request (the
+      merge names the automation/version-bump branch) and that pull request is
+      one commit by the version-at-land bot carrying the bot's trailer;
+    - its diff is exactly the rewrite apply makes from its first parent's tree;
+    - its version is exactly what plan derives, at its first parent, from the
+      changes landed since the newest release tag.
+    A version changed any other way (by hand, with an extra hunk, a level
+    plan would not choose, or a skipped number) is never tagged.
+    """
+    parents = git(root, "rev-list", "--parents", "-n", "1", landing).split()[1:]
+    if len(parents) != 2:
+        return f"{landing[:12]} is not a merge queue merge"
+    base, head = parents
+    if not BUMP_MERGE.match(git(root, "show", "-s", "--format=%s", landing).strip()):
+        return f"{landing[:12]} does not merge the {BUMP_BRANCH} branch"
+    side = git(root, "rev-list", f"{base}..{head}").split()
+    if side != [head]:
+        return f"the bump pull request merged at {landing[:12]} is not one commit"
+    author = git(root, "show", "-s", "--format=%an%n%ae%n%cn%n%ce", head).splitlines()
+    if author != [BOT_NAME, BOT_EMAIL, BOT_NAME, BOT_EMAIL]:
+        return f"{head[:12]} is not the version-at-land bot's commit"
+    if BOT_TRAILER not in git(root, "show", "-s", "--format=%B", head):
+        return f"{head[:12]} lacks the version-at-land trailer"
+    version = project_version(git(root, "show", f"{landing}:{CMAKELISTS}"))
+    try:
+        expected = plan(root, base, tags, retired_tags)
+    except VersionError as error:
+        return f"the version cannot be re-derived at {base[:12]}: {error}"
+    if expected.action != "bump" or expected.version != version:
+        return (f"version-at-land derives {expected.version or expected.action} at {base[:12]}, but "
+                f"{landing[:12]} declares {version}")
+    try:
+        written = rewrite(lambda path: blob(root, base, path), version)
+    except VersionError as error:
+        return f"the bump cannot be re-derived at {base[:12]}: {error}"
+    changed = sorted(path for path in git(root, "diff", "--name-only", "--no-renames", "-z", base, landing)
+                     .split("\0") if path)
+    if changed != sorted(written):
+        extra = sorted(set(changed) - set(written))
+        missing = sorted(set(written) - set(changed))
+        return f"the bump changes {extra or 'too little'}{f', not {missing}' if missing else ''} beyond the rewrite"
+    wrong = [path for path, data in written.items() if blob(root, landing, path) != data]
+    if wrong:
+        return f"the bump's {wrong[0]} differs from the rewrite apply makes"
+    return None
+
+
+def lint(root: Path, revisions: str) -> list[str]:
+    """Trailers in `revisions` that plan would skip."""
+    WARNINGS.clear()
+    for commit in git(root, "rev-list", revisions).split():
+        explicit_level([git(root, "show", "-s", "--format=%B", commit)])
+    return list(WARNINGS)
 
 
 def remote_release_tags(root: Path, remote: str) -> dict[str, str]:
@@ -381,8 +514,14 @@ def main(argv: list[str]) -> int:
     two = sub.add_parser("apply", help="rewrite every version surface to --to")
     two.add_argument("--to", required=True)
     two.add_argument("--root", type=Path, default=ROOT)
+    three = sub.add_parser("lint", help="print a ::warning:: for each trailer plan would skip; always exits 0")
+    three.add_argument("--revisions", required=True, help="a git revision range, such as BASE..HEAD")
     args = parser.parse_args(argv)
     try:
+        if args.command == "lint":
+            for warning in lint(ROOT, args.revisions):
+                print("::warning::" + warning.replace("%", "%25"))
+            return 0
         if args.command == "apply":
             for path in apply(args.root, args.to):
                 print(path)
@@ -397,6 +536,8 @@ def main(argv: list[str]) -> int:
     print(f"action={result.action}\nversion={result.version}\nlevel={result.level}\nsince={result.since}\n"
           f"current={result.current}")
     print(describe(result), file=sys.stderr)
+    for warning in WARNINGS:
+        print(f"warning: {warning}", file=sys.stderr)
     return 0
 
 

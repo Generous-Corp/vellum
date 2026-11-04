@@ -18,9 +18,11 @@ refused. Never hard-code a version in a workflow.
    the tag push runs `gpu-macos.yml` and then `sdk-release.yml`. See
    `docs/provenance/release-signing.md`.
 
-A person may still open the bump by hand, for example to release early: run
-`python3 -I scripts/version_at_land.py apply --to <version>` and open the
-result as a pull request.
+Only the bot's pull request can release: `release-tag.yml` re-derives the bump
+from main's history and tags nothing when the landed version differs from it in
+any way (a hand-set number, an extra hunk, a skipped version). To release a
+higher level, put the trailer on a landed change and let version-at-land
+propose it.
 
 Whether immutable releases are enabled is read live, with the release App
 token, both before tagging and when `sdk-release.yml` finalizes. There is no

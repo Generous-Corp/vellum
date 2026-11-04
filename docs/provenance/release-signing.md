@@ -10,21 +10,26 @@ A Vellum release tag is signed by CI, never by a person or an agent's host key.
    - only a change that touches a path that ships in the SDK counts (`SHIP_PATHS`, tests excluded); workflow,
      provenance, documentation and test changes release nothing on their own;
    - a `Version-Bump: vellum=<patch|minor|major>` trailer on any of its commits sets its level, and
-     `Version-Bump: skip reason="..."` counts it as nothing; an unreadable `Version-Bump:` trailer fails the run;
+     `Version-Bump: skip reason="..."` counts it as nothing; a `Version-Bump:` line it cannot read is skipped with a
+     warning (release-policy names it on the pull request, as advice);
    - otherwise its conventional-commit titles decide: a breaking change (`type!:` or a `BREAKING CHANGE:` footer) is
      major, `feat` is minor, anything else that ships is patch;
    - while the major version is `0`, every level moves down one place (Cargo's 0.x rule): breaking is minor, and
-     features and fixes are patch.
+     features and fixes are patch; an explicit `vellum=major` is minor too, so 1.0.0 is never proposed
+     automatically.
 
    The next version is one level above the highest version any tag has used, existing or retired, so versions only
    move forward and a retired name is never reused. `scripts/version_at_land.py apply` rewrites every version
    surface (`VERSION_SURFACES`) and regenerates `scripts/INSTALLER_SHA256SUMS`, and the workflow opens the change as
-   a pull request from `automation/version-bump` (or updates the one already open). It is reviewed and lands through
-   the merge queue like any other change. While `main` declares a version that is not tagged yet, the workflow
+   a pull request from `automation/version-bump` (or updates the one already open). The workflow has two jobs: `plan`
+   runs the script with no write token and hands the bump on as a patch; `push` checks out the planned `main` commit,
+   applies the patch with hooks off (refusing any path that is not a version surface), and only then mints the App
+   token, for `git` and `gh` run with an empty environment. It is reviewed and lands through the merge queue like any
+   other change. While `main` declares a version that is not tagged yet, the workflow
    proposes nothing: that release covers what lands meanwhile.
 
-   A person may open the same change by hand (for example to release a minor version early); `release-tag.yml`
-   treats it the same way.
+   Only that pull request can release. A version changed any other way is never tagged (see step 3); to release a
+   higher level, put a `Version-Bump: vellum=<level>` trailer on a landed change and let version-at-land propose it.
 2. The commit that lands the version is **not** tagged. A tag's `provenance.yml` run checks the Pulp observatory with
    `--vellum-tail-policy reconciled`: every commit after the cursor's `vellum.last_scanned_commit` must be
    observatory evidence. A commit's tree can never name that same commit as its cursor, so a version commit can never
@@ -35,6 +40,12 @@ A Vellum release tag is signed by CI, never by a person or an agent's host key.
    the pushed commit is the one to tag. It is when:
    - the tag of the project version at the pushed commit does not exist yet, is not retired, and is newer than every
      existing and retired `v*` tag (otherwise the push is an ordinary reconcile and the job ends);
+   - the commit that landed the version is the version-at-land bot's own bump, exactly
+     (`scripts/version_at_land.py verify_bump`): the queue's merge of `automation/version-bump`, one commit authored
+     and committed by `vellum-version-at-land` with its trailer, a diff equal byte for byte to the rewrite `apply`
+     makes from the merge's first parent, and a version equal to what `plan` derives at that parent. A hand-set
+     version, a bump with an extra hunk, a level `plan` would not choose, or a skipped number is refused. The
+     signing job checks this again before `check`;
    - the cursor at the pushed commit is, or descends from, the commit that landed the version: the newest commit on
      the pushed commit's first-parent history whose project `VERSION` differs from its first parent's, which on
      `main` is the merge queue's merge of the bump;
@@ -70,8 +81,9 @@ The cursor file is evidence the receiver writes, not a policy file: it only deci
 *What* is tagged is a commit whose content equals the cursor's commit apart from evidence, and that commit has
 passed main's required checks.
 
-Nobody approves a routine release by hand. Authorization is the landed version bump plus the required checks on the
-tagged commit.
+Nobody approves a routine release by hand. Authorization is the bot's exact, re-derived version bump, landed through
+the queue, plus the required checks on the tagged commit. The version line is parsed in one place
+(`version_at_land.project_version`), which reads CMake with comments removed and refuses a second declaration.
 
 ## When a release does not appear
 
@@ -156,9 +168,11 @@ promotion attestation and prove full-matrix parity.
   has fewer calls than it must.
 - **No reusable workflow from another repository.** A called workflow can name the `release` environment where this
   check cannot read it, so `release-policy` refuses any job that `uses:` a workflow outside this repository.
-- **Only the release App can create a release tag.** This needs a `creation` rule on `protect-release-tags` with the
-  release App as its only bypass actor. Until the owner adds it, anyone with write access can create a `v*` tag, and a
-  stray tag would block that version forever.
+- **Only the release App can create a release tag.** `create-release-tags` refuses `v*` tag creation to everyone but
+  integration 3878000 ("Shipyard Local"), the App `release-tag.yml` mints from `RELEASE_APP_ID`. The repository secret
+  `SHIPYARD_APP_PRIVATE_KEY`, which the observatory receiver and version-at-land use, mints tokens for the same App, so
+  a workflow holding it could create a `v*` tag. It cannot sign one, but a stray tag would burn that version name. The
+  fix is the owner's: a separate App for release tags, or that key in a `main`-only environment.
 
 Owner authorization (owner decisions in the planning repository), release signing (this key) and ordinary commit
 signing (each host's own key) are three separate keys.

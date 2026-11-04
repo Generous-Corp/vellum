@@ -146,7 +146,8 @@ class Cli(unittest.TestCase):
         repo.bump("0.1.11")
         script = repo.root / "scripts"
         script.mkdir()
-        for name in ("release_cadence.py", "release_request.py", "verify_immutable_release_preflight.py"):
+        for name in ("release_cadence.py", "release_request.py", "verify_immutable_release_preflight.py",
+                     "version_at_land.py"):
             (script / name).write_bytes((ROOT / "scripts" / name).read_bytes())
         releases = repo.root / "releases.json"
         releases.write_text(json.dumps(PUBLISHED))
