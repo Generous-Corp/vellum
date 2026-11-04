@@ -280,17 +280,38 @@ jobs:
           # a time. Both halves must find their tests and pass.
           # GIT_OPTIONAL_LOCKS=0: both halves may read the mirror's dependency
           # checkouts, which the build above already fetched.
+          # A dependency checkout with untracked or ignored files is not
+          # reusable, and the nested configure would delete and fetch it again
+          # under the other tests; then everything runs serially instead.
+          # Both ctests write build-gpu/Testing/Temporary, so LastTest.log
+          # there is partial; the nested half's full output is its own log.
           export VELLUM_MIRROR_LIVE_GPU=1 GIT_OPTIONAL_LOCKS=0
           nested='^vellum\.install-consumer-nested-libdir$'
-          ctest --test-dir build-gpu --output-on-failure --no-tests=error \
-            -R "$nested" > "$RUNNER_TEMP/ctest-nested-libdir.log" 2>&1 &
-          nested_pid=$!
+          deps_clean=1
+          for checkout in "$VELLUM_MIRROR_DEPS_DIR"/*/; do
+            # Modified tracked files are the mirror's own reviewed patches;
+            # untracked or ignored ones are what make a checkout unreusable.
+            if [ -d "$checkout/.git" ] && git -C "$checkout" status --porcelain \
+                --untracked-files=all --ignored=matching --ignore-submodules=none \
+                | /usr/bin/grep -Eq '^([?][?]|!!)'; then
+              echo "::notice::$checkout is not clean; running the suite serially"
+              deps_clean=0
+            fi
+          done
           rest_status=0
-          ctest --test-dir build-gpu --output-on-failure --no-tests=error \
-            -E "$nested" || rest_status=$?
           nested_status=0
-          wait "$nested_pid" || nested_status=$?
-          cat "$RUNNER_TEMP/ctest-nested-libdir.log"
+          if [ "$deps_clean" = 1 ]; then
+            ctest --test-dir build-gpu --output-on-failure --no-tests=error \
+              -R "$nested" > "$RUNNER_TEMP/ctest-nested-libdir.log" 2>&1 &
+            nested_pid=$!
+            ctest --test-dir build-gpu --output-on-failure --no-tests=error \
+              -E "$nested" || rest_status=$?
+            wait "$nested_pid" || nested_status=$?
+            cat "$RUNNER_TEMP/ctest-nested-libdir.log"
+          else
+            ctest --test-dir build-gpu --output-on-failure --no-tests=error \
+              || rest_status=$?
+          fi
           if [ "$rest_status" -ne 0 ] || [ "$nested_status" -ne 0 ]; then
             echo "::error::ctest exited $rest_status (suite) and $nested_status (nested-libdir)"
             exit 1
