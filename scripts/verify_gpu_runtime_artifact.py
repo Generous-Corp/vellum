@@ -91,6 +91,174 @@ class VerificationError(RuntimeError):
     pass
 
 
+# What the package's generated export files may contain. They run at every
+# consumer's configure time, so even without a checkout to regenerate them
+# from, they are held to the standard export template: only these commands,
+# exactly these targets with exactly these interface values, every path under
+# the package, and no other include, file operation or process.
+TARGET_LIBRARIES = {
+    "VellumGpuRuntime::Bootstrap": "lib/libgpu-runtime-bootstrap.a",
+    "VellumGpuRuntime::Device": "lib/libgpu-runtime-device.a",
+    "VellumGpuRuntime::SkiaLogBridge": "lib/libgpu-runtime-skia-log-bridge.a",
+}
+TARGET_KINDS = {
+    "VellumGpuRuntime::DeviceApi": "INTERFACE",
+    **{name: "STATIC" for name in TARGET_LIBRARIES},
+}
+TARGET_INTERFACES = {
+    "VellumGpuRuntime::DeviceApi": {
+        "INTERFACE_COMPILE_FEATURES": "cxx_std_20",
+        "INTERFACE_INCLUDE_DIRECTORIES": "${_IMPORT_PREFIX}/include",
+    },
+    "VellumGpuRuntime::Bootstrap": {"INTERFACE_LINK_LIBRARIES": "VellumGpuRuntime::DeviceApi"},
+    "VellumGpuRuntime::Device": {
+        "INTERFACE_LINK_LIBRARIES": "VellumGpuRuntime::DeviceApi;VellumGpuRuntime::Bootstrap;"
+                                    "\\$<LINK_ONLY:>;VellumGpuRuntime::Dawn;-framework Cocoa;"
+                                    "-framework Metal;-framework QuartzCore",
+    },
+    "VellumGpuRuntime::SkiaLogBridge": {"INTERFACE_LINK_LIBRARIES": "VellumGpuRuntime::Device"},
+}
+EXPORT_COMMANDS = frozenset({
+    "if", "elseif", "else", "endif", "foreach", "endforeach", "message", "cmake_policy",
+    "set", "unset", "list", "return", "string", "get_filename_component", "add_library",
+    "set_target_properties", "set_property", "file", "include",
+})
+# The only variables an export file writes: its own scratch variables.
+EXPORT_VARIABLE = re.compile(r"^(?:_cmake_[A-Za-z0-9_]+|_cmake_import_check_files_for_\$\{_cmake_target\}"
+                             r"|_IMPORT_PREFIX|CMAKE_IMPORT_FILE_VERSION)$")
+ARGUMENT = re.compile(r'"((?:\\.|[^"\\])*)"|([^\s"]+)')
+
+
+def cmake_commands(text: str) -> list[tuple[str, str]]:
+    """(name, raw arguments) for each command in a generated CMake file."""
+    commands: list[tuple[str, str]] = []
+    index = 0
+    length = len(text)
+    while index < length:
+        character = text[index]
+        if character.isspace():
+            index += 1
+            continue
+        if character == "#":
+            index = text.find("\n", index)
+            index = length if index == -1 else index
+            continue
+        match = re.match(r"([A-Za-z_][A-Za-z0-9_]*)\s*\(", text[index:])
+        require(match is not None, f"unexpected text in a generated export file: {text[index:index + 40]!r}")
+        name = match.group(1).lower()
+        position = index + match.end()
+        depth, quoted, start = 1, False, position
+        while depth:
+            require(position < length, "unterminated command in a generated export file")
+            current = text[position]
+            if quoted:
+                if current == "\\":
+                    position += 1
+                elif current == '"':
+                    quoted = False
+            elif current == '"':
+                quoted = True
+            elif current == "(":
+                depth += 1
+            elif current == ")":
+                depth -= 1
+            position += 1
+        commands.append((name, text[start:position - 1]))
+        index = position
+    return commands
+
+
+def arguments(raw: str) -> list[str]:
+    return [quoted if quoted or bare == "" else bare
+            for quoted, bare in ((m.group(1) or "", m.group(2) or "") for m in ARGUMENT.finditer(raw))
+            if quoted or bare] if raw.strip() else []
+
+
+def check_export_paths(name: str, raw: str, member: str) -> None:
+    """Every path a command names must be inside the package (message text and
+    the template's root-prefix comparison aside)."""
+    if name == "message":
+        return
+    for value in arguments(raw):
+        for part in value.split(";"):
+            if part == "/" or part.startswith(("-framework", "\\$<")) or "/" not in part:
+                continue
+            require(part.startswith(("${_IMPORT_PREFIX}/", "${CMAKE_CURRENT_LIST_DIR}/")),
+                    f"{member} names a path outside the package: {part}")
+
+
+def check_targets_file(text: str, member: str) -> None:
+    defined: dict[str, str] = {}
+    properties: dict[str, dict[str, str]] = {}
+    for name, raw in cmake_commands(text):
+        require(name in EXPORT_COMMANDS, f"{member} runs {name}(), which an export file never does")
+        check_export_paths(name, raw, member)
+        values = arguments(raw)
+        written = {"set": 0, "unset": 0, "get_filename_component": 0, "list": 1, "string": 3,
+                   "foreach": 0}.get(name)
+        if written is not None:
+            require(len(values) > written and EXPORT_VARIABLE.fullmatch(values[written]),
+                    f"{member} writes a variable outside its own scratch space: {values[:written + 1]}")
+        if name == "cmake_policy":
+            require(values in (["PUSH"], ["POP"]) or (len(values) == 2 and values[0] == "VERSION"),
+                    f"{member} changes policies beyond the template")
+        if name == "file":
+            require(values == ["GLOB", "_cmake_config_files",
+                               "${CMAKE_CURRENT_LIST_DIR}/VellumGpuRuntimeTargets-*.cmake"],
+                    f"{member} has an unexpected file() call")
+        elif name == "include":
+            require(values == ["${_cmake_config_file}"], f"{member} includes something else")
+        elif name == "add_library":
+            require(len(values) == 3 and values[2] == "IMPORTED" and values[0] in TARGET_KINDS
+                    and values[1] == TARGET_KINDS[values[0]] and values[0] not in defined,
+                    f"{member} defines an unexpected target: {values}")
+            defined[values[0]] = values[1]
+        elif name == "set_target_properties":
+            require(len(values) >= 4 and values[0] in TARGET_KINDS and values[1] == "PROPERTIES"
+                    and len(values) % 2 == 0, f"{member} sets unexpected properties: {values[:2]}")
+            properties.setdefault(values[0], {}).update(zip(values[2::2], values[3::2]))
+        elif name == "set_property":
+            require(False, f"{member} sets a property outside the export template")
+    require(defined == TARGET_KINDS, f"{member} defines {sorted(defined)}, not the package's targets")
+    require(properties == TARGET_INTERFACES,
+            f"{member} gives the targets other interfaces than the package declares")
+
+
+def check_targets_release_file(text: str, member: str) -> None:
+    located: dict[str, str] = {}
+    for name, raw in cmake_commands(text):
+        check_export_paths(name, raw, member)
+        values = arguments(raw)
+        if name == "set":
+            require(values in (["CMAKE_IMPORT_FILE_VERSION", "1"], ["CMAKE_IMPORT_FILE_VERSION"]),
+                    f"{member} sets something other than the import file version")
+        elif name == "set_property":
+            require(len(values) == 6 and values[0] == "TARGET" and values[1] in TARGET_LIBRARIES
+                    and values[2:] == ["APPEND", "PROPERTY", "IMPORTED_CONFIGURATIONS", "RELEASE"],
+                    f"{member} sets an unexpected property: {values}")
+        elif name == "set_target_properties":
+            require(len(values) == 6 and values[0] in TARGET_LIBRARIES and values[1] == "PROPERTIES"
+                    and values[2] == "IMPORTED_LINK_INTERFACE_LANGUAGES_RELEASE"
+                    and values[3] in {"CXX", "CXX;OBJCXX"}
+                    and values[4] == "IMPORTED_LOCATION_RELEASE"
+                    and values[5] == "${_IMPORT_PREFIX}/" + TARGET_LIBRARIES[values[0]]
+                    and values[0] not in located,
+                    f"{member} imports something other than the shipped libraries: {values}")
+            located[values[0]] = values[5]
+        elif name == "list":
+            target = TARGET_LIBRARIES.get(values[2]) if len(values) == 3 else None
+            ok = (len(values) == 3 and values[:2] == ["APPEND", "_cmake_import_check_targets"]
+                  and target is not None) or (
+                len(values) == 3 and values[0] == "APPEND"
+                and values[1].removeprefix("_cmake_import_check_files_for_") in TARGET_LIBRARIES
+                and values[2] == "${_IMPORT_PREFIX}/"
+                + TARGET_LIBRARIES[values[1].removeprefix("_cmake_import_check_files_for_")])
+            require(ok, f"{member} records an unexpected import check: {values}")
+        else:
+            require(False, f"{member} runs {name}(), which a configuration export never does")
+    require(set(located) == set(TARGET_LIBRARIES), f"{member} does not import every shipped library")
+
+
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise VerificationError(message)
@@ -269,10 +437,11 @@ def verify(archive: Path, repo: Path | None,
     for library in LIBRARIES:
         require(files[library].startswith(b"!<arch>\n"),
                 f"archive does not ship {library} as a static library")
-    targets = files[f"{PACKAGE_DIR}/VellumGpuRuntimeTargets-release.cmake"].decode("utf-8")
-    imported = set(re.findall(r'IMPORTED_LOCATION_RELEASE "\$\{_IMPORT_PREFIX\}/([^"]+)"', targets))
-    require(imported == set(LIBRARIES) and targets.count("IMPORTED_LOCATION") == len(LIBRARIES),
-            "package targets import something other than the shipped gpu-runtime libraries")
+    check_targets_file(files[f"{PACKAGE_DIR}/VellumGpuRuntimeTargets.cmake"].decode("utf-8"),
+                       "VellumGpuRuntimeTargets.cmake")
+    check_targets_release_file(
+        files[f"{PACKAGE_DIR}/VellumGpuRuntimeTargets-release.cmake"].decode("utf-8"),
+        "VellumGpuRuntimeTargets-release.cmake")
 
     if repo is not None:
         require(generated is not None, "holding an archive to its source needs the "

@@ -29,6 +29,7 @@ def sha256_bytes(data: bytes) -> str:
 import verify_gpu_runtime_artifact as verifier  # noqa: E402
 
 VERSION = builder.vellum_version(ROOT)
+EXPORTS = ROOT / "scripts/fixtures/gpu-runtime-package"
 NAME = builder.archive_name(VERSION, "darwin-arm64")
 
 
@@ -54,9 +55,9 @@ class GpuRuntimeArtifactTest(unittest.TestCase):
         for member, source in verifier.VERBATIM_MODULES.items():
             if member != verifier.LOCK_MEMBER:
                 (self.payload / member).write_bytes((ROOT / source).read_bytes())
-        (self.payload / builder.PACKAGE_DIR / "VellumGpuRuntimeTargets-release.cmake").write_text(
-            "".join(f'  IMPORTED_LOCATION_RELEASE "${{_IMPORT_PREFIX}}/{library}"\n'
-                    for library in builder.LIBRARIES), encoding="utf-8")
+        # The export files CMake generated for a real build of the package.
+        for name in ("VellumGpuRuntimeTargets.cmake", "VellumGpuRuntimeTargets-release.cmake"):
+            (self.payload / builder.PACKAGE_DIR / name).write_bytes((EXPORTS / name).read_bytes())
         # The real libdawn_combined.a is not in the repository, so the shipped
         # lock names this stand-in's digest; checks against the source lock
         # are exercised on their own below.
@@ -261,11 +262,48 @@ class GpuRuntimeArtifactTest(unittest.TestCase):
         with self.assertRaisesRegex(verifier.VerificationError, "differ from what the source installs"):
             verifier.verify_against_source(files, self.source_record(), ROOT, self.generated())
 
+    def edit_export(self, name: str, edit) -> Path:
+        path = self.payload / builder.PACKAGE_DIR / name
+        path.write_text(edit(path.read_text(encoding="utf-8")), encoding="utf-8")
+        return self.archive()
+
     def test_targets_importing_another_library_are_refused(self) -> None:
-        path = self.payload / builder.PACKAGE_DIR / "VellumGpuRuntimeTargets-release.cmake"
-        path.write_text(path.read_text().replace("libgpu-runtime-device.a", "libdawn_combined.a"),
-                        encoding="utf-8")
-        self.assert_refused(self.archive(), "import something other")
+        archive = self.edit_export("VellumGpuRuntimeTargets-release.cmake",
+                                   lambda t: t.replace("libgpu-runtime-device.a", "libdawn_combined.a"))
+        self.assert_refused(archive, "imports something other")
+
+    def test_export_files_are_held_to_the_template_without_a_checkout(self) -> None:
+        payloads = {
+            "a process": 'execute_process(COMMAND /bin/sh -c "touch /tmp/pwned")\n',
+            "a link option": 'set_property(TARGET VellumGpuRuntime::Device APPEND PROPERTY '
+                             'INTERFACE_LINK_OPTIONS "-Wl,-force_load,/tmp/evil.a")\n',
+            "a flag": 'set(CMAKE_CXX_FLAGS "-include /tmp/evil.h")\n',
+            "an include": 'include("/tmp/evil.cmake")\n',
+            "a file write": 'file(WRITE "/tmp/pwned" "x")\n',
+            "an extra target": 'add_library(Evil STATIC IMPORTED)\n',
+        }
+        for name in ("VellumGpuRuntimeTargets.cmake", "VellumGpuRuntimeTargets-release.cmake"):
+            for label, injected in payloads.items():
+                for where in ("prepended", "appended"):
+                    with self.subTest(file=name, payload=label, where=where):
+                        archive = self.edit_export(
+                            name, lambda t: injected + t if where == "prepended" else t + injected)
+                        with self.assertRaises(verifier.VerificationError):
+                            verifier.verify(archive, None)
+                        (self.payload / builder.PACKAGE_DIR / name).write_bytes(
+                            (EXPORTS / name).read_bytes())
+
+    def test_an_interface_change_is_refused_without_a_checkout(self) -> None:
+        archive = self.edit_export(
+            "VellumGpuRuntimeTargets.cmake",
+            lambda t: t.replace('INTERFACE_LINK_LIBRARIES "VellumGpuRuntime::Device"',
+                                'INTERFACE_LINK_LIBRARIES "VellumGpuRuntime::Device;/tmp/evil.a"'))
+        self.assert_refused(archive, "outside the package")
+
+    def test_the_real_export_files_pass(self) -> None:
+        verifier.check_targets_file((EXPORTS / "VellumGpuRuntimeTargets.cmake").read_text(), "t")
+        verifier.check_targets_release_file(
+            (EXPORTS / "VellumGpuRuntimeTargets-release.cmake").read_text(), "r")
 
     def test_an_unlisted_file_is_refused(self) -> None:
         archive = self.archive(metadata_edit=lambda m: m.update(
