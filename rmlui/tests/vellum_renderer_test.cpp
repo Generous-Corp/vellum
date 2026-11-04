@@ -158,13 +158,20 @@ int main() {
     const auto empty_comparison = compare(empty, reference);
     report("empty.rml (negative control)", empty_comparison);
 
+    // A second, harder control: the same document with the LED off and the
+    // pointer turned down differs only where those two parts are drawn.
+    std::size_t low_triangles = 0;
+    const auto low = render_vellum(*surface, "knob_led.rml", 0.2, low_triangles);
+    const auto low_comparison = compare(low, reference);
+    report("knob_led.rml at gain 0.2 (negative control)", low_comparison);
+
     if (!knob_comparison.within_tolerance) {
         std::fprintf(stderr, "VellumRenderer output is outside the tolerance (%.1f%% allowed)\n",
                      kMaxDifferingPercent);
         return 1;
     }
-    if (empty_comparison.within_tolerance) {
-        std::fprintf(stderr, "the negative control passed the tolerance, so it proves nothing\n");
+    if (empty_comparison.within_tolerance || low_comparison.within_tolerance) {
+        std::fprintf(stderr, "a negative control passed the tolerance, so it proves nothing\n");
         return 1;
     }
     std::printf("vellum-rmlui vellum renderer: ok (%zu triangles)\n", knob_triangles);
