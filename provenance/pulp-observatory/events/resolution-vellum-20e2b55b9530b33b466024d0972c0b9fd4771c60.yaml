@@ -1,0 +1,22 @@
+{
+  "contract_tests": [
+    "vellum.authoring",
+    "vellum.capture-stats",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-04T16:48:51Z",
+  "disposition": "superseded",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-20e2b55b9530b33b466024d0972c0b9fd4771c60",
+  "kind": "resolution",
+  "linked_commits": [
+    "20e2b55b9530b33b466024d0972c0b9fd4771c60"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Integration merge (Merge remote-tracking branch 'origin/main' into feat/ci-release-signing). It carries no change beyond the commits it merges, whose own observations are classified separately in this ledger, so it has no independent contract.",
+  "resolves": "vellum-20e2b55b9530b33b466024d0972c0b9fd4771c60",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}
