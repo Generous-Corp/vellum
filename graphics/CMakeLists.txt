@@ -43,6 +43,10 @@ if(VELLUM_HAS_SKIA_DAWN)
         VELLUM_DATADIR_FROM_LIBDIR="${_vellum_datadir_from_libdir}"
         VELLUM_BUILD_DATADIR_FROM_PROVIDER_DIR="${_vellum_build_datadir_from_provider_dir}")
     target_link_libraries(vellum-skia-dawn-provider PUBLIC Vellum::Graphics)
+    # gpu-runtime's coordinator is the image's one Dawn proc-table installer;
+    # Vellum's ABI v1 bootstrap forwards to it (src/dawn_bootstrap.cpp). It is
+    # linked statically with hidden symbols, so this provider is its only copy.
+    target_link_libraries(vellum-skia-dawn-provider PRIVATE VellumGpuRuntime::Device)
 
     # Preserve the Vellum::Gpu binary identity for existing consumers. It is a
     # forwarding frontend; all GPU implementation symbols live in the group.

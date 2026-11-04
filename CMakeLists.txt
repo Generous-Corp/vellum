@@ -67,13 +67,6 @@ add_subdirectory(foundation)
 add_subdirectory(runtime)
 add_subdirectory(components)
 
-# The GPU device layer shared by GPU audio and rendering is a self-contained
-# project that depends on nothing else in Vellum; it is also built on its own
-# with `cmake -S gpu-runtime`. Its renderer-lock.json is the Skia/Dawn pin
-# VellumSkiaDawn.cmake reads.
-set(GPU_RUNTIME_BUILD_TESTS ${VELLUM_BUILD_TESTS})
-add_subdirectory(gpu-runtime)
-
 # The RmlUi module is a self-contained project that depends on nothing else in
 # Vellum; it is also built on its own with `cmake -S rmlui`.
 if(VELLUM_ENABLE_RMLUI)
@@ -83,6 +76,20 @@ endif()
 if(VELLUM_ENABLE_GPU)
     include(cmake/VellumSkiaDawn.cmake)
 endif()
+
+# The GPU device layer shared by GPU audio and rendering is a self-contained
+# project that depends on nothing else in Vellum; it is also built on its own
+# with `cmake -S gpu-runtime`. Its renderer-lock.json is the Skia/Dawn pin
+# VellumSkiaDawn.cmake reads, and its device library builds against the same
+# extracted archive. Vellum's host owns Dawn's proc table, so the device
+# library has no native default here: the embedding executable bootstraps it.
+set(GPU_RUNTIME_BUILD_TESTS ${VELLUM_BUILD_TESTS})
+set(GPU_RUNTIME_HOST_OWNS_DAWN_PROCS ON)
+if(VELLUM_HAS_SKIA_DAWN)
+    set(GPU_RUNTIME_SKIA_DIR "${VELLUM_SKIA_DIR}")
+    set(GPU_RUNTIME_REQUIRE_DEVICE ON)
+endif()
+add_subdirectory(gpu-runtime)
 
 set(VELLUM_PACKAGE_HAS_MIRROR OFF)
 if(VELLUM_ENABLE_MIRROR)

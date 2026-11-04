@@ -1,7 +1,23 @@
 @PACKAGE_INIT@
 
-include("${CMAKE_CURRENT_LIST_DIR}/VellumGpuRuntimeTargets.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/GpuRuntimeRendererLock.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/GpuRuntimeDawn.cmake")
 set(VellumGpuRuntime_RENDERER_LOCK "${CMAKE_CURRENT_LIST_DIR}/renderer-lock.json")
+set(VellumGpuRuntime_HAS_DEVICE @GPU_RUNTIME_HAS_DEVICE@)
+
+# The device library links the consumer's own copy of the locked Dawn build,
+# checked against the shipped lock: set GPU_RUNTIME_SKIA_DIR (an extracted
+# skia-builder asset) or GPU_RUNTIME_RENDERER_ARCHIVE (the asset) first.
+if(VellumGpuRuntime_HAS_DEVICE AND NOT TARGET gpu-runtime-dawn)
+    gpu_runtime_find_dawn(PLATFORM macos-arm64
+        SKIA_DIR "${GPU_RUNTIME_SKIA_DIR}"
+        ARCHIVE "${GPU_RUNTIME_RENDERER_ARCHIVE}"
+        LOCK "${VellumGpuRuntime_RENDERER_LOCK}")
+    if(NOT GPU_RUNTIME_HAS_DAWN)
+        set(VellumGpuRuntime_Device_FOUND FALSE)
+    endif()
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/VellumGpuRuntimeTargets.cmake")
 
 check_required_components(VellumGpuRuntime)

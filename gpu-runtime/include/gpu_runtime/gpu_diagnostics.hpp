@@ -58,7 +58,8 @@ inline constexpr std::size_t kGpuDiagnosticMessageLimit = 512;
 struct GpuDiagnosticsStats {
     /// Records handed to emit_gpu_diagnostic() in this process.
     std::uint64_t emitted = 0;
-    /// Records forwarded to Perfetto. Always 0 in a build without tracing.
+    /// Records forwarded to the host's trace sink. Always 0 without one
+    /// (gpu_host_hooks.hpp).
     std::uint64_t traced = 0;
     /// Records whose message text was truncated to the limit above.
     std::uint64_t truncated = 0;
@@ -68,8 +69,8 @@ GpuDiagnosticsStats gpu_diagnostics_stats() noexcept;
 
 /// Outcome of trying to route Skia's process-global log handler into the sink.
 ///
-/// SkLogHandler::SetInstance is first-install-wins and process-global, and Pulp
-/// loads into hosts that may use Skia themselves, so every outcome other than
+/// SkLogHandler::SetInstance is first-install-wins and process-global, and a
+/// plug-in loads into hosts that may use Skia themselves, so every outcome other than
 /// `installed` is a normal, reportable state rather than an error.
 enum class SkiaLogBridgeStatus {
     /// install_skia_log_bridge*() has not run yet.
@@ -80,7 +81,8 @@ enum class SkiaLogBridgeStatus {
     declined_handler_present,
     /// The opt-in was absent, so no install was attempted.
     declined_not_enabled,
-    /// This build has no Skia, so there is no handler to install.
+    /// No library that links Skia registered a bridge installer, so there is
+    /// no handler to install.
     unavailable_no_skia,
 };
 
@@ -93,7 +95,7 @@ struct SkiaLogBridgeState {
     /// status means Skia has logged nothing — a different fact from a status of
     /// `declined_handler_present`, where nothing could ever arrive.
     std::uint64_t records_forwarded = 0;
-    /// Forwarded records also written to the text log (runtime::log_*).
+    /// Forwarded records also written to the text log (the host's log sink).
     std::uint64_t text_logged = 0;
     /// Forwarded records NOT written to the text log because the budget below
     /// ran out. They still reached the diagnostic sink and its counters.
@@ -133,7 +135,27 @@ class LogTextBudget {
 
 SkiaLogBridgeState skia_log_bridge_state() noexcept;
 
-/// True when this build contains the Skia log-handler subclass at all. False
+/// How a library that links Skia installs the bridge. The device layer never
+/// links Skia itself: the renderer (or VellumGpuRuntime::SkiaLogBridge)
+/// registers this, and the install functions below call it.
+struct SkiaLogBridgeInstaller {
+    /// Install the process's Skia log handler if none is present, returning
+    /// `installed` or `declined_handler_present`. Called with an internal
+    /// lock held, at most once per process.
+    SkiaLogBridgeStatus (*install)(void* context) noexcept = nullptr;
+    void* context = nullptr;
+};
+
+/// Register the bridge installer. The first registration wins; registering
+/// the same installer again returns true, a different one returns false.
+bool register_skia_log_bridge(const SkiaLogBridgeInstaller& installer) noexcept;
+
+/// Hand one Skia log record to the sink: counted, emitted as a `skia.log`
+/// diagnostic and copied to the text log within kSkiaLogTextLimit. Called by
+/// the installed handler from any thread.
+void forward_skia_log_record(GpuDiagnosticSeverity severity, std::string_view message) noexcept;
+
+/// True when a bridge installer is registered (register_skia_log_bridge). False
 /// means `unavailable_no_skia` is the only outcome an install can ever report,
 /// which is the difference between "nothing to install" and "declined to".
 bool skia_log_bridge_available() noexcept;
