@@ -1,12 +1,85 @@
 #include <vellum/graphics/paint_command.hpp>
 
 #include <cmath>
+#include <cstdint>
+#include <limits>
+#include <memory>
 #include <string>
+#include <vector>
 
 namespace {
 
 bool near(float left, float right) {
     return std::abs(left - right) < 0.0001F;
+}
+
+
+bool mesh_commands() {
+    using vellum::graphics::MeshTexture;
+    using vellum::graphics::MeshVertex;
+    using vellum::graphics::TriangleMesh;
+    auto mesh = std::make_shared<TriangleMesh>();
+    mesh->vertices = {
+        {.x = 0.0F, .y = 0.0F},
+        {.x = 4.0F, .y = 0.0F, .u = 1.0F},
+        {.x = 0.0F, .y = 4.0F, .v = 1.0F},
+    };
+    mesh->indices = {0, 1, 2};
+
+    vellum::graphics::Scene scene;
+    scene.root.bounds = {10.0F, 20.0F, 100.0F, 100.0F};
+    scene.root.children.push_back({
+        .id = "mesh",
+        .kind = vellum::graphics::SceneNode::Kind::mesh,
+        .bounds = {1.0F, 2.0F, 0.0F, 0.0F},
+        .mesh = mesh,
+    });
+    // A mesh node without geometry paints nothing.
+    scene.root.children.push_back({
+        .id = "no-geometry",
+        .kind = vellum::graphics::SceneNode::Kind::mesh,
+    });
+    const auto commands = vellum::graphics::make_paint_commands(scene);
+    if (commands.size() != 1U ||
+        commands[0].kind != vellum::graphics::PaintCommand::Kind::mesh ||
+        commands[0].node_id != "mesh" || commands[0].mesh != mesh ||
+        !near(commands[0].bounds.x, 11.0F) || !near(commands[0].bounds.y, 22.0F)) {
+        return false;
+    }
+
+    std::string reason;
+    if (!vellum::graphics::mesh_is_valid(*mesh, &reason) || !reason.empty()) return false;
+
+    auto expect_invalid = [&](TriangleMesh candidate, const std::string& expected) {
+        std::string why;
+        return !vellum::graphics::mesh_is_valid(candidate, &why) &&
+               why.find(expected) != std::string::npos;
+    };
+    TriangleMesh partial = *mesh;
+    partial.indices.push_back(0);
+    TriangleMesh out_of_range = *mesh;
+    out_of_range.indices[2] = 3;
+    TriangleMesh not_finite = *mesh;
+    not_finite.vertices[1].u = std::numeric_limits<float>::quiet_NaN();
+    TriangleMesh short_texture = *mesh;
+    short_texture.texture = std::make_shared<MeshTexture>(
+        MeshTexture{.width = 2, .height = 2, .premultiplied_rgba = std::vector<std::uint8_t>(15)});
+    TriangleMesh empty_texture = *mesh;
+    empty_texture.texture = std::make_shared<MeshTexture>();
+    TriangleMesh bad_clip = *mesh;
+    bad_clip.clip_enabled = true;
+    bad_clip.clip.width = std::numeric_limits<float>::infinity();
+    TriangleMesh good_texture = *mesh;
+    good_texture.texture = std::make_shared<MeshTexture>(
+        MeshTexture{.width = 2, .height = 1, .premultiplied_rgba = std::vector<std::uint8_t>(8)});
+    return expect_invalid(partial, "multiple of three") &&
+           expect_invalid(out_of_range, "past the end") &&
+           expect_invalid(not_finite, "not finite") &&
+           expect_invalid(short_texture, "does not match") &&
+           expect_invalid(empty_texture, "no pixels") &&
+           expect_invalid(bad_clip, "clip rectangle") &&
+           vellum::graphics::mesh_is_valid(good_texture) &&
+           vellum::graphics::mesh_is_valid(TriangleMesh{});
 }
 
 }  // namespace
@@ -83,5 +156,5 @@ int main() {
         !near(diagonal.end_y, 125.0F)) {
         return 1;
     }
-    return 0;
+    return mesh_commands() ? 0 : 1;
 }

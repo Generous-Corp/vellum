@@ -3,6 +3,8 @@
 
 #include <vellum/graphics/dawn_native_bootstrap.hpp>
 
+#include <array>
+#include <memory>
 #include <cmath>
 #include <cstdint>
 #include <future>
@@ -357,6 +359,87 @@ bool attributed_text_runs_materialization() {
     return passed;
 }
 
+
+// Two textured quads, one untextured quad and a clipped quad, read back:
+// texture coordinates choose the texel (the left half of the first quad
+// samples the texture's right texel), a vertex colour multiplies the texel,
+// an untextured mesh draws its vertex colours, and the clip rectangle cuts the
+// last quad off.
+bool textured_triangle_mesh() {
+    auto texture = std::make_shared<MeshTexture>(MeshTexture{
+        .width = 2,
+        .height = 1,
+        .premultiplied_rgba = {255, 0, 0, 255, 0, 0, 255, 255},
+    });
+    const auto quad = [](float x0, float y0, float x1, float y1, float u0, float u1,
+                         std::uint32_t rgba) {
+        auto mesh = std::make_shared<TriangleMesh>();
+        mesh->vertices = {
+            {.x = x0, .y = y0, .u = u0, .v = 0.0F, .premultiplied_rgba = rgba},
+            {.x = x1, .y = y0, .u = u1, .v = 0.0F, .premultiplied_rgba = rgba},
+            {.x = x1, .y = y1, .u = u1, .v = 1.0F, .premultiplied_rgba = rgba},
+            {.x = x0, .y = y1, .u = u0, .v = 1.0F, .premultiplied_rgba = rgba},
+        };
+        mesh->indices = {0, 1, 2, 0, 2, 3};
+        return mesh;
+    };
+    // u runs from 1 at the left edge to 0 at the right edge.
+    auto mirrored = quad(0.0F, 0.0F, 40.0F, 20.0F, 1.0F, 0.0F, 0xFFFFFFFFU);
+    mirrored->texture = texture;
+    // A premultiplied half-alpha white modulating the same texture.
+    auto modulated = quad(0.0F, 20.0F, 40.0F, 40.0F, 0.0F, 1.0F, 0x80808080U);
+    modulated->texture = texture;
+    auto untextured = quad(0.0F, 40.0F, 40.0F, 60.0F, 0.0F, 1.0F, 0x00FF00FFU);
+    auto clipped = quad(0.0F, 60.0F, 40.0F, 80.0F, 0.0F, 1.0F, 0xFFFF00FFU);
+    clipped->clip_enabled = true;
+    clipped->clip = {0.0F, 60.0F, 20.0F, 20.0F};
+
+    Scene scene{.width = 40.0F, .height = 80.0F, .background = Color::hex(0x000000)};
+    scene.root.id = "root";
+    int index = 0;
+    for (const auto& mesh : {mirrored, modulated, untextured, clipped}) {
+        scene.root.children.push_back({
+            .id = "mesh-" + std::to_string(index++),
+            .kind = SceneNode::Kind::mesh,
+            .mesh = mesh,
+        });
+    }
+    std::vector<std::uint8_t> rgba;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    if (!capture(scene, rgba, width, height) || width != 40U || height != 80U) return false;
+
+    struct Probe {
+        const char* what;
+        std::uint32_t x;
+        std::uint32_t y;
+        std::array<int, 4> expected;
+    };
+    const Probe probes[] = {
+        {"mirrored left samples the right texel", 5, 10, {0, 0, 255, 255}},
+        {"mirrored right samples the left texel", 35, 10, {255, 0, 0, 255}},
+        {"modulated left is half-alpha red", 5, 30, {128, 0, 0, 128}},
+        {"modulated right is half-alpha blue", 35, 30, {0, 0, 128, 128}},
+        {"untextured mesh draws its vertex colour", 20, 50, {0, 255, 0, 255}},
+        {"clipped mesh inside the clip", 10, 70, {255, 255, 0, 255}},
+        {"clipped mesh outside the clip", 30, 70, {0, 0, 0, 255}},
+    };
+    bool passed = true;
+    for (const auto& probe : probes) {
+        const auto* actual = pixel(rgba, width, probe.x, probe.y);
+        for (int channel = 0; channel < 4; ++channel) {
+            if (std::abs(int(actual[channel]) - probe.expected[channel]) > 2) {
+                std::cerr << "textured_triangle_mesh: " << probe.what << ": got "
+                          << int(actual[0]) << ',' << int(actual[1]) << ','
+                          << int(actual[2]) << ',' << int(actual[3]) << '\n';
+                passed = false;
+                break;
+            }
+        }
+    }
+    return passed;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -374,6 +457,9 @@ int main(int argc, char** argv) {
         }
         if (fixture == "attributed_text_runs_materialization") {
             return attributed_text_runs_materialization() ? 0 : 1;
+        }
+        if (fixture == "textured_triangle_mesh") {
+            return textured_triangle_mesh() ? 0 : 1;
         }
     } catch (const std::exception& exception) {
         std::cerr << exception.what() << '\n';

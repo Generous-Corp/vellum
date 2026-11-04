@@ -23,11 +23,13 @@
 #include "include/core/SkRRect.h"
 #include "include/core/SkStream.h"
 #include "include/core/SkSurface.h"
+#include "include/core/SkVertices.h"
 #include "include/encode/SkPngEncoder.h"
 #include "include/effects/SkGradient.h"
 #include "include/gpu/graphite/BackendTexture.h"
 #include "include/gpu/graphite/Context.h"
 #include "include/gpu/graphite/ContextOptions.h"
+#include "include/gpu/graphite/Image.h"
 #include "include/gpu/graphite/Recorder.h"
 #include "include/gpu/graphite/Recording.h"
 #include "include/gpu/graphite/Surface.h"
@@ -389,8 +391,129 @@ bool draw_text(SkCanvas& canvas, const PaintCommand& command,
     return true;
 }
 
+// Textures uploaded for one frame, so a texture shared by several meshes (a
+// glyph atlas, say) is uploaded once.
+struct MeshTextureCache final {
+    skgpu::graphite::Recorder* recorder = nullptr;
+    std::unordered_map<const MeshTexture*, sk_sp<SkImage>> images;
+};
+
+sk_sp<SkImage> mesh_texture_image(
+    const MeshTexture& texture, MeshTextureCache& cache, std::string* error) {
+    if (const auto found = cache.images.find(&texture); found != cache.images.end()) {
+        return found->second;
+    }
+    const auto info = SkImageInfo::Make(
+        static_cast<int>(texture.width), static_cast<int>(texture.height),
+        kRGBA_8888_SkColorType, kPremul_SkAlphaType);
+    auto raster = SkImages::RasterFromData(
+        info,
+        SkData::MakeWithCopy(texture.premultiplied_rgba.data(),
+                             texture.premultiplied_rgba.size()),
+        static_cast<std::size_t>(texture.width) * 4U);
+    if (!raster) {
+        set_error(error, "Skia could not wrap a mesh texture");
+        return nullptr;
+    }
+    auto uploaded = cache.recorder != nullptr
+        ? SkImages::TextureFromImage(cache.recorder, raster.get(), {})
+        : nullptr;
+    if (!uploaded) {
+        set_error(error, "Skia Graphite could not upload a mesh texture");
+        return nullptr;
+    }
+    cache.images.emplace(&texture, uploaded);
+    return uploaded;
+}
+
+// Vertex colours arrive premultiplied; SkVertices takes straight-alpha SkColor.
+SkColor straight_vertex_color(std::uint32_t premultiplied_rgba) {
+    const auto channel = [premultiplied_rgba](int shift) {
+        return (premultiplied_rgba >> shift) & 0xFFU;
+    };
+    const std::uint32_t alpha = channel(0);
+    const auto unpremultiply = [alpha](std::uint32_t value) {
+        if (alpha == 0U) return 0U;
+        return std::min(255U, (value * 255U + alpha / 2U) / alpha);
+    };
+    return SkColorSetARGB(alpha, unpremultiply(channel(24)),
+                          unpremultiply(channel(16)), unpremultiply(channel(8)));
+}
+
+bool draw_mesh(SkCanvas& canvas, const PaintCommand& command,
+               MeshTextureCache& cache, std::string* error) {
+    if (!command.mesh) return true;
+    const auto& mesh = *command.mesh;
+    std::string reason;
+    if (!mesh_is_valid(mesh, &reason)) {
+        set_error(error, "mesh " + command.node_id + " cannot be drawn: " + reason);
+        return false;
+    }
+    if (mesh.indices.empty()) return true;
+    if (mesh.indices.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+        set_error(error, "mesh " + command.node_id + " has too many indices");
+        return false;
+    }
+
+    sk_sp<SkImage> image;
+    if (mesh.texture) {
+        image = mesh_texture_image(*mesh.texture, cache, error);
+        if (!image) return false;
+    }
+    // Expand the indexed list: SkVertices indices are 16-bit, and a mesh may
+    // name more vertices than that.
+    const auto count = mesh.indices.size();
+    std::vector<SkPoint> positions(count);
+    std::vector<SkColor> colors(count);
+    std::vector<SkPoint> texture_coordinates(image ? count : 0U);
+    for (std::size_t index = 0; index < count; ++index) {
+        const auto& vertex = mesh.vertices[mesh.indices[index]];
+        positions[index] = {command.bounds.x + vertex.x, command.bounds.y + vertex.y};
+        colors[index] = straight_vertex_color(vertex.premultiplied_rgba);
+        if (image) {
+            texture_coordinates[index] = {
+                vertex.u * static_cast<float>(mesh.texture->width),
+                vertex.v * static_cast<float>(mesh.texture->height)};
+        }
+    }
+    const auto vertices = SkVertices::MakeCopy(
+        SkVertices::kTriangles_VertexMode, static_cast<int>(count), positions.data(),
+        image ? texture_coordinates.data() : nullptr, colors.data());
+    if (!vertices) {
+        set_error(error, "Skia could not build the vertices of mesh " + command.node_id);
+        return false;
+    }
+
+    SkPaint paint;
+    paint.setAntiAlias(false);
+    if (image) {
+        // Texture coordinates are in texel units, so a coordinate inside a
+        // texel samples that texel.
+        paint.setShader(image->makeShader(
+            SkTileMode::kClamp, SkTileMode::kClamp,
+            SkSamplingOptions(SkFilterMode::kNearest)));
+    }
+    canvas.save();
+    if (mesh.clip_enabled) {
+        canvas.clipRect(
+            SkRect::MakeXYWH(command.bounds.x + mesh.clip.x, command.bounds.y + mesh.clip.y,
+                             std::max(0.0F, mesh.clip.width),
+                             std::max(0.0F, mesh.clip.height)),
+            false);
+    }
+    // With a texture, the shader's texel is multiplied by the vertex colour;
+    // without one, the vertex colours are drawn as they are.
+    canvas.drawVertices(vertices, SkBlendMode::kModulate, paint);
+    canvas.restore();
+    return true;
+}
+
 bool paint_command(SkCanvas& canvas, const PaintCommand& command,
-                   std::string_view directory, std::string* error) {
+                   std::string_view directory, MeshTextureCache& meshes,
+                   std::string* error) {
+    if (command.kind == PaintCommand::Kind::mesh) {
+        return draw_mesh(canvas, command, meshes, error);
+    }
     if (command.kind == PaintCommand::Kind::rectangle) {
         return draw_rectangle(canvas, command, error);
     }
@@ -729,8 +852,10 @@ private:
         canvas->resetMatrix();
         canvas->clear(sk_color(scene.background));
         canvas->scale(config_.scale, config_.scale);
+        MeshTextureCache mesh_textures{.recorder = recorder_.get()};
         for (const auto& command : make_paint_commands(scene)) {
-            if (!paint_command(*canvas, command, config_.font_directory, error)) {
+            if (!paint_command(*canvas, command, config_.font_directory,
+                               mesh_textures, error)) {
                 canvas->restore();
                 current_texture_ = nullptr;
                 return false;
