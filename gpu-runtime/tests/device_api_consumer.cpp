@@ -9,12 +9,16 @@
 // breaks this build.
 
 #include <gpu_runtime/bench/perf_counters.hpp>
+#include <gpu_runtime/dawn_bootstrap.hpp>
+#include <gpu_runtime/dawn_native_bootstrap.hpp>
 #include <gpu_runtime/gpu_compute.hpp>
 #include <gpu_runtime/gpu_diagnostics.hpp>
+#include <gpu_runtime/gpu_host_hooks.hpp>
 #include <gpu_runtime/gpu_proc_installer.hpp>
 #include <gpu_runtime/gpu_render_time.hpp>
 #include <gpu_runtime/gpu_startup_report.hpp>
 #include <gpu_runtime/gpu_surface.hpp>
+#include <gpu_runtime/skia_log_bridge.hpp>
 
 #include <cstdio>
 #include <type_traits>

@@ -11,6 +11,10 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 ALLOWED = {
     ROOT / "graphics" / "include" / "vellum" / "graphics" / "dawn_native_bootstrap.hpp",
+    # gpu-runtime's native bootstrap, the device library's only setter. It runs
+    # through the coordinator, and Vellum builds it host-owned, so it installs
+    # nothing unless a host registers it.
+    ROOT / "gpu-runtime" / "src" / "dawn_native_bootstrap.cpp",
     # Pulp's default installer, mirrored byte for byte. Vellum's mirror build
     # turns on Pulp's host-owned proc-table switch, which compiles no setter
     # into it (tools/mirror/VellumMirror.cmake).

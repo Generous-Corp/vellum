@@ -43,13 +43,14 @@ class ClosureTest(unittest.TestCase):
     def test_the_real_headers_are_closed(self) -> None:
         self.assertEqual(closure.check(REAL_INCLUDE), [])
 
-    def test_the_real_tree_has_all_seven_headers(self) -> None:
+    def test_the_real_tree_has_every_api_header(self) -> None:
         names = {path.relative_to(REAL_INCLUDE / "gpu_runtime").as_posix()
                  for path in (REAL_INCLUDE / "gpu_runtime").rglob("*.hpp")}
         self.assertEqual(names, {
-            "bench/perf_counters.hpp", "gpu_compute.hpp", "gpu_diagnostics.hpp",
-            "gpu_proc_installer.hpp", "gpu_render_time.hpp",
-            "gpu_startup_report.hpp", "gpu_surface.hpp"})
+            "bench/perf_counters.hpp", "dawn_bootstrap.hpp", "dawn_native_bootstrap.hpp",
+            "gpu_compute.hpp", "gpu_diagnostics.hpp", "gpu_host_hooks.hpp",
+            "gpu_proc_installer.hpp", "gpu_render_time.hpp", "gpu_startup_report.hpp",
+            "gpu_surface.hpp", "skia_log_bridge.hpp"})
 
     def test_comments_and_strings_do_not_count(self) -> None:
         self.assertEqual(closure.check(self.tree(CLEAN)), [])
