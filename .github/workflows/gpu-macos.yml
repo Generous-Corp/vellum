@@ -409,21 +409,22 @@ jobs:
           prefix="$RUNNER_TEMP/templates-smoke-sdk"
           project="$RUNNER_TEMP/html-import-proof"
           source="$GITHUB_WORKSPACE/fixtures/html-import/index.html"
-          # Keep each command's stderr beside its JSON and show both, with the
-          # exit status, when it fails: a command killed by a signal or one
-          # that dies before writing JSON otherwise leaves no trace.
+          # Keep each command's stderr beside its JSON and report the exit
+          # status when it fails: a command killed by a signal or one that dies
+          # before writing JSON otherwise leaves no trace.
           run_json() {
             local output="$1"
             shift
             local status=0
-            "$@" > "$output" 2> "$output.stderr" || status=$?
-            cat "$output.stderr" >&2 || true
+            # stderr streams live into the log as well as the file, so a
+            # command the job timeout kills still leaves its last words.
+            "$@" > "$output" 2> >(tee "$output.stderr" >&2) || status=$?
             if [ "$status" -ne 0 ]; then
+              detail="exit status $status"
               if [ "$status" -gt 128 ]; then
-                echo "installed SDK command killed by signal $((status - 128)) ($(kill -l "$((status - 128))" 2>/dev/null || echo unknown)): $*" >&2
-              else
-                echo "installed SDK command exited $status: $*" >&2
+                detail="$detail (signal $((status - 128)) $(kill -l "$((status - 128))" 2>/dev/null || true) if the shell reported a signal)"
               fi
+              echo "installed SDK command failed with $detail: $*" >&2
               echo "--- stdout: $output ---" >&2
               cat "$output" >&2 || true
               return 1
