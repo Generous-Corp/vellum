@@ -62,16 +62,20 @@ InMemoryParamModel::InMemoryParamModel(std::vector<ParamSpec> params)
 InMemoryParamModel::~InMemoryParamModel() = default;
 
 InMemoryParamModel::Param* InMemoryParamModel::find(ParamHandle param) noexcept {
-    return param.valid() && param.id < params_.size() ? &params_[param.id] : nullptr;
+    return param.valid() && param.owner == this && param.id < params_.size()
+               ? &params_[param.id]
+               : nullptr;
 }
 
 const InMemoryParamModel::Param* InMemoryParamModel::find(ParamHandle param) const noexcept {
-    return param.valid() && param.id < params_.size() ? &params_[param.id] : nullptr;
+    return param.valid() && param.owner == this && param.id < params_.size()
+               ? &params_[param.id]
+               : nullptr;
 }
 
 ParamHandle InMemoryParamModel::resolve(std::string_view key) {
     const auto it = by_key_.find(key);
-    return it == by_key_.end() ? ParamHandle{} : ParamHandle{it->second};
+    return it == by_key_.end() ? ParamHandle{} : ParamHandle{it->second, this};
 }
 
 double InMemoryParamModel::normalized(ParamHandle param) {

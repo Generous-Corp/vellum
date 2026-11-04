@@ -41,16 +41,17 @@
 namespace vellum::value {
 
 /// A resolved parameter. Opaque to callers; only the model that issued it
-/// interprets `id`. A default-constructed handle is invalid, and every
-/// `ParamModel` call ignores an invalid or foreign handle (reads return 0, an
-/// empty string, or 0 values).
+/// interprets `id` and `owner`. A default-constructed handle is invalid, and
+/// every `ParamModel` call ignores an invalid or foreign handle (reads return
+/// 0, an empty string, or 0 values).
 struct ParamHandle {
     static constexpr std::uint32_t invalid_id = 0xFFFF'FFFFu;
 
     std::uint32_t id = invalid_id;
+    const void* owner = nullptr;
 
     [[nodiscard]] constexpr bool valid() const noexcept {
-        return id != invalid_id;
+        return id != invalid_id && owner != nullptr;
     }
     friend constexpr bool operator==(ParamHandle, ParamHandle) noexcept = default;
 };

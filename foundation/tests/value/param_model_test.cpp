@@ -66,6 +66,41 @@ void resolve_finds_keys_verbatim() {
     CHECK(model.gesture_depth(foreign) == 0);
 }
 
+void foreign_handles_are_ignored() {
+    InMemoryParamModel first({{.key = "cutoff", .default_normalized = 0.25}});
+    InMemoryParamModel second({{.key = "gain", .default_normalized = 0.75}});
+    ParamModel& first_model = first;
+    ParamModel& second_model = second;
+    const ParamHandle cutoff = first_model.resolve("cutoff");
+    const ParamHandle gain = second_model.resolve("gain");
+
+    CHECK(second_model.normalized(cutoff) == 0.0);
+    CHECK(second_model.display_text(cutoff, 0.5).empty());
+    CHECK(second_model.value_count(cutoff) == 0);
+
+    int listener_calls = 0;
+    Subscription listener = second_model.subscribe([&](ParamHandle, double) {
+        ++listener_calls;
+    });
+    std::vector<std::pair<ParamHandle, bool>> gestures;
+    second.set_gesture_observer([&](ParamHandle param, bool begun) {
+        gestures.emplace_back(param, begun);
+    });
+
+    second_model.set_normalized(cutoff, 0.1);
+    second_model.begin(cutoff);
+    second_model.end(cutoff);
+
+    CHECK(second_model.normalized(gain) == 0.75);
+    CHECK(second.gesture_depth(gain) == 0);
+    CHECK(listener_calls == 0);
+    CHECK(gestures.empty());
+
+    second_model.set_normalized(gain, 0.5);
+    CHECK(second_model.normalized(gain) == 0.5);
+    CHECK(listener_calls == 1);
+}
+
 void normalized_round_trips() {
     auto model = make_model();
     ParamModel& m = model;
@@ -277,6 +312,7 @@ void construction_rejects_bad_specs() {
 
 int main() {
     resolve_finds_keys_verbatim();
+    foreign_handles_are_ignored();
     normalized_round_trips();
     value_count_semantics();
     display_text_prefers_format_then_labels();
