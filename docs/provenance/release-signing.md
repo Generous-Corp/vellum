@@ -95,7 +95,26 @@ Nobody approves a routine release by hand. Authorization is the bot's exact, re-
 the queue, plus the required checks on the tagged commit. The version line is parsed in one place
 (`version_at_land.project_version`), which reads CMake with comments removed and refuses a second declaration.
 
-## When a release does not appear
+## Release dry run
+
+A release cannot be undone, so the whole path is rehearsed on GitHub first. Run `release-tag.yml` by hand on `main`
+(Actions > Sign the release tag > Run workflow):
+
+1. `sign-dry-run-tag`, in the `release` environment, picks the newest observatory-reconciled commit on `main`
+   (`scripts/release_dry_run.py plan`) and signs `dry-run/v<version>/<run>-<attempt>` on it with the release key. The
+   tag message is the promotion attestation of `v<version>`, the release it rehearses. No freeze is created.
+2. `provenance.yml` and `gpu-macos.yml` run on it as on a release tag, judging release readiness as `v<version>`.
+   The tag verifier accepts the `dry-run/` namespace only for exactly that name shape, against the release key.
+3. `sdk-release.yml` validates the artifacts with the sterile consumer, builds the draft with every release asset,
+   verifies it as a release would be, and stops before the only call that publishes. A published release on a
+   dry-run tag is refused.
+4. `clean-dry-run` deletes the draft and the tag whatever happened before, acting only on a well-formed `dry-run/`
+   tag and only on draft releases. The release cadence check reports a dry-run tag older than six hours, and any
+   published release on one.
+
+What a dry run cannot show: the immutable-release attestation GitHub writes after publication.
+
+
 
 Two workflows make a missing release loud instead of silent:
 
