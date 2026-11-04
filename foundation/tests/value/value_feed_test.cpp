@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 #include <stdexcept>
 #include <thread>
 #include <vector>
@@ -192,6 +193,22 @@ void construction_rejects_bad_specs() {
     // The same name with a different shape is a different channel.
     CHECK(!throws({{.name = "a"}, {.name = "a", .shape = ChannelShape::meter}}));
     CHECK(!throws({{.name = "a", .capacity = 0}})); // capacity is ignored for a scalar
+
+    // Every triple-buffer product must be checked before allocation. These
+    // capacities would otherwise wrap (or exceed vector::max_size()).
+    const auto max = std::numeric_limits<std::size_t>::max();
+    CHECK(throws({{.name = "meter-wrap", .shape = ChannelShape::meter,
+                  .capacity = max / 2 + 1}}));
+    CHECK(throws({{.name = "vector-wrap", .shape = ChannelShape::vector,
+                  .capacity = max / 3 + 1}}));
+    CHECK(throws({{.name = "events-wrap", .shape = ChannelShape::events,
+                  .capacity = max / 3 + 1}}));
+    CHECK(throws({{.name = "meter-limit", .shape = ChannelShape::meter,
+                  .capacity = std::vector<float>{}.max_size() / 3 + 1}}));
+    CHECK(throws({{.name = "vector-limit", .shape = ChannelShape::vector,
+                  .capacity = std::vector<float>{}.max_size() / 3 + 1}}));
+    CHECK(throws({{.name = "events-limit", .shape = ChannelShape::events,
+                  .capacity = std::vector<ChannelEvent>{}.max_size() / 3 + 1}}));
 }
 
 // One producer publishes blocks whose samples all equal the block's sequence

@@ -18,6 +18,12 @@ constexpr std::uint8_t fresh_bit = 0x4;
 static_assert(std::atomic<std::uint8_t>::is_always_lock_free);
 static_assert(std::atomic<std::uint32_t>::is_always_lock_free);
 
+std::size_t checked_product(std::size_t lhs, std::size_t rhs, std::size_t limit) {
+    if (lhs > limit / rhs)
+        throw std::invalid_argument("InMemoryValueFeed: channel capacity is too large");
+    return lhs * rhs;
+}
+
 }  // namespace
 
 // Each channel is a triple buffer. The producer owns `back`, the reader owns
@@ -75,16 +81,22 @@ InMemoryValueFeed::InMemoryValueFeed(std::vector<ChannelSpec> channels) {
                                             spec.name + "\"");
         }
         auto c = std::make_unique<Channel>();
+        const std::size_t float_limit = std::vector<float>{}.max_size();
+        const std::size_t event_limit = std::vector<ChannelEvent>{}.max_size();
+        std::size_t float_count = 0;
         switch (spec.shape) {
         case ChannelShape::scalar:
             spec.capacity = 1;
             c->floats_per_slot = 1;
+            float_count = checked_product(c->floats_per_slot, 3, float_limit);
             break;
         case ChannelShape::meter:
-            c->floats_per_slot = 2 * spec.capacity; // rms, then peak
+            c->floats_per_slot = checked_product(spec.capacity, 2, float_limit); // rms, then peak
+            float_count = checked_product(c->floats_per_slot, 3, float_limit);
             break;
         case ChannelShape::vector:
             c->floats_per_slot = spec.capacity;
+            float_count = checked_product(c->floats_per_slot, 3, float_limit);
             break;
         case ChannelShape::events:
             c->floats_per_slot = 0;
@@ -93,9 +105,10 @@ InMemoryValueFeed::InMemoryValueFeed(std::vector<ChannelSpec> channels) {
         if (spec.capacity == 0)
             throw std::invalid_argument("InMemoryValueFeed: zero capacity for \"" + spec.name +
                                         "\"");
-        c->floats.assign(3 * c->floats_per_slot, 0.0f);
-        if (spec.shape == ChannelShape::events)
-            c->events.assign(3 * spec.capacity, ChannelEvent{});
+        if (spec.shape != ChannelShape::events)
+            c->floats.assign(float_count, 0.0f);
+        else
+            c->events.assign(checked_product(spec.capacity, 3, event_limit), ChannelEvent{});
         c->spec = std::move(spec);
         channels_.push_back(std::move(c));
     }
