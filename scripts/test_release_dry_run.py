@@ -530,16 +530,13 @@ class Gate(unittest.TestCase):
                 self.assertEqual(done.returncode == 0, ok, done.stderr[-500:])
                 self.assertEqual(output.read_text(), "run=true\n" if ok else "")
 
-    def test_releases_and_dry_runs_queue_in_separate_groups(self) -> None:
-        # A dry run must never displace a pending release run: GitHub keeps one
-        # pending run per group, and a newer one cancels it.
+    def test_push_runs_serialize_as_one_and_dry_runs_queue_apart(self) -> None:
+        # One workflow-level group keeps a run's select and sign together, as
+        # before; scheduled and manual dry runs never take a push run's slot.
         text = (WORKFLOWS / "release-tag.yml").read_text()
-        self.assertNotIn("\nconcurrency:", text)
-        for job, group in (("select-release-commit", "release-tag"), ("sign-release-tag", "release-tag"),
-                           ("dry-run-gate", "release-dry-run"), ("sign-dry-run-tag", "release-dry-run")):
-            with self.subTest(job=job):
-                self.assertIn(f"    concurrency:\n      group: {group}\n      cancel-in-progress: false\n",
-                              job_text("release-tag.yml", job))
+        self.assertIn("concurrency:\n  group: ${{ github.event_name == 'push' && 'release-tag' || 'release-dry-run' }}\n"
+                      "  cancel-in-progress: false\n", text)
+        self.assertEqual(text.count("concurrency:"), 1)
         trigger = text[text.index("\non:\n"):text.index("\npermissions:")]
         self.assertIn("  push:\n    branches: [main]\n    paths: [provenance/pulp-observatory/cursor.json]\n", trigger)
         self.assertIn("  schedule:\n    - cron: '17 9 * * 1'\n", trigger)
@@ -549,6 +546,17 @@ class Gate(unittest.TestCase):
         self.assertNotIn("secrets.", gate)
         for status in dry.ACTIVE:
             self.assertIn(status, gate)
+
+    def test_an_unreadable_previous_commit_runs_nothing_and_says_why(self) -> None:
+        import test_release_request as trr  # noqa: PLC0415
+        history = trr.History(self)
+        history.branch(history.main)
+        history.write("scripts/release_request.py", "x\n")
+        landed = history.land(history.commit("change"))
+        after = history.land(history.reconcile(landed))
+        run, reason = dry.gate(history.root, "push", "f" * 40, after, self.runs())
+        self.assertFalse(run)
+        self.assertIn("cannot be read", reason)
 
 
 class Target(unittest.TestCase):

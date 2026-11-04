@@ -101,8 +101,9 @@ A release cannot be undone, so the whole path is rehearsed on GitHub first. A dr
 reconcile on `main` covers a change to a release-path file (`release_dry_run.RELEASE_PATHS`), so the commit it
 tags contains the change; every Monday as a canary; and optionally by hand (Actions > Sign the release tag > Run
 workflow). `dry-run-gate` decides, and refuses while a release tag's GPU proof or provenance run, or any finalizer
-run, is waiting, queued or in progress. Dry runs queue in their own concurrency group, so one never displaces a
-pending release run.
+run, is not finished. Push runs keep one concurrency group, so a release's select and sign stay together;
+scheduled and manual dry runs queue in their own group and never displace a pending release run. The reconciled range
+is compared tree to tree, so a release file changed and changed back within it does not start a dry run.
 
 1. `sign-dry-run-tag`, in the `release` environment, picks the newest observatory-reconciled commit on `main`
    (`scripts/release_dry_run.py plan`) and signs `dry-run/v<version>/<run>-<attempt>` on it with the release key. The

@@ -137,12 +137,20 @@ def gate(root: Path, event: str, before: str, after: str, runs: object) -> tuple
     if not rr.SHA.fullmatch(after):
         raise DryRunError("the pushed commit must be a full SHA")
     previous = before if rr.SHA.fullmatch(before) and before != ZERO else f"{after}^1"
+    # A force push can leave `before` out of the clone: no dry run, said plainly.
+    if subprocess.run(["git", "-C", str(root), "cat-file", "-e", f"{previous}^{{commit}}"],
+                      capture_output=True).returncode != 0:
+        return False, f"the push's previous commit {previous[:12]} cannot be read; no dry run"
     try:
         old, new = rr.observatory_cursor(root, previous), rr.observatory_cursor(root, after)
     except rr.ReleaseRequestError as error:
         return False, f"the push is not an observatory reconcile with a readable cursor ({error})"
+    except subprocess.CalledProcessError as error:
+        return False, f"the cursor cannot be read ({(error.stderr or '').strip()[:200]}); no dry run"
     if old == new:
         return False, "the push reconciles no new Vellum commit"
+    # The two trees are compared: a release file changed and then changed back
+    # inside the range does not count, which is accepted.
     try:
         changed = rr.git(root, "diff", "--name-only", "--no-renames", old, new).split()
     except subprocess.CalledProcessError as error:

@@ -17,9 +17,9 @@ name: Sign the release tag
 # the draft, stops before publication, and deletes the draft and the tag. It
 # starts by itself when an observatory reconcile on main covers a change to a
 # release-path file (so the tagged commit contains it), weekly as a canary, and
-# by hand (dry-run-gate decides; scripts/release_dry_run.py). Releases and dry
-# runs queue in separate concurrency groups, so a dry run never displaces a
-# pending release run; dry-run-gate refuses while a release is in flight.
+# by hand (dry-run-gate decides; scripts/release_dry_run.py). Scheduled and
+# manual dry runs queue apart from push runs, so they never displace a pending
+# release run; dry-run-gate refuses while a release is in flight.
 # A dry run tags the newest observatory-reconciled commit, which can lag main:
 # a scheduled or manual run may test code from before the newest landings.
 # Whoever relies on a green dry run for a change checks that the tagged
@@ -36,6 +36,14 @@ permissions:
   contents: read
   checks: read
 
+# One run at a time per group, select and sign together, as before dry runs
+# existed. Push runs (every release, and the dry runs a reconcile starts) share
+# release-tag; scheduled and manual dry runs queue in release-dry-run, so they
+# never take a release run's pending slot.
+concurrency:
+  group: ${{ github.event_name == 'push' && 'release-tag' || 'release-dry-run' }}
+  cancel-in-progress: false
+
 jobs:
   # Every observatory reconcile on main starts this workflow. Deciding whether
   # it is the release's reconcile, and running the tag's content checks, needs
@@ -44,9 +52,6 @@ jobs:
   select-release-commit:
     name: select-release-commit
     if: github.event_name == 'push'
-    concurrency:
-      group: release-tag
-      cancel-in-progress: false
     runs-on: ubuntu-latest
     # What provenance.yml's tag run reads with the same Actions token.
     permissions:
@@ -128,9 +133,6 @@ jobs:
   sign-release-tag:
     name: sign-release-tag
     needs: select-release-commit
-    concurrency:
-      group: release-tag
-      cancel-in-progress: false
     if: needs.select-release-commit.outputs.tag != ''
     runs-on: ubuntu-latest
     environment: release
@@ -298,9 +300,6 @@ jobs:
   # Decides whether this run starts a dry run. No secret, no environment.
   dry-run-gate:
     name: dry-run-gate
-    concurrency:
-      group: release-dry-run
-      cancel-in-progress: false
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -344,9 +343,6 @@ jobs:
   sign-dry-run-tag:
     name: sign-dry-run-tag
     needs: dry-run-gate
-    concurrency:
-      group: release-dry-run
-      cancel-in-progress: false
     if: needs.dry-run-gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     environment: release
