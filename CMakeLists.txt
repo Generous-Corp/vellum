@@ -67,6 +67,13 @@ add_subdirectory(foundation)
 add_subdirectory(runtime)
 add_subdirectory(components)
 
+# The GPU device layer shared by GPU audio and rendering is a self-contained
+# project that depends on nothing else in Vellum; it is also built on its own
+# with `cmake -S gpu-runtime`. Its renderer-lock.json is the Skia/Dawn pin
+# VellumSkiaDawn.cmake reads.
+set(GPU_RUNTIME_BUILD_TESTS ${VELLUM_BUILD_TESTS})
+add_subdirectory(gpu-runtime)
+
 # The RmlUi module is a self-contained project that depends on nothing else in
 # Vellum; it is also built on its own with `cmake -S rmlui`.
 if(VELLUM_ENABLE_RMLUI)
@@ -288,6 +295,10 @@ if(VELLUM_BUILD_TESTS)
         COMMAND "${Python3_EXECUTABLE}"
             authoring/tests/test_phase3_contracts.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.authoring-illustrator-to-svg
+        COMMAND "${Python3_EXECUTABLE}"
+            authoring/adapters/illustrator/test_illustrator_to_svg.py
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME vellum.parity-packaging-unit
         COMMAND "${Python3_EXECUTABLE}"
             tools/parity/packaging/test_packaging_lane.py
@@ -303,6 +314,12 @@ if(VELLUM_BUILD_TESTS)
     add_test(NAME vellum.ci-runner-policy
         COMMAND "${Python3_EXECUTABLE}"
             scripts/test_ci_runner_policy.py
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.renderer-lock-drift
+        COMMAND "${Python3_EXECUTABLE}" -I scripts/check_renderer_lock.py
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.renderer-lock-drift-unit
+        COMMAND "${Python3_EXECUTABLE}" -I scripts/test_check_renderer_lock.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME vellum.provenance-unit
         COMMAND "${Python3_EXECUTABLE}"
