@@ -1,0 +1,93 @@
+name: Release watchdog
+
+# Reports a failed release-pipeline run the moment it completes, instead of
+# leaving it to be noticed when a release never appears. Each watched workflow
+# has one tracking issue, opened (or updated) on a failed run and closed on the
+# next successful one. Only runs that belong to a release count: the version
+# and tag jobs on main, and the GPU proof, provenance and SDK finalizer on a
+# release tag. release-cadence-check.yml watches the outcome independently.
+on:
+  workflow_run:
+    workflows:
+      - Version at land
+      - Sign the release tag
+      - Locked macOS GPU proof
+      - Provenance and forbidden dependencies
+      - Finalize immutable SDK release
+    types: [completed]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: release-watchdog-${{ github.event.workflow_run.name }}
+  cancel-in-progress: false
+
+jobs:
+  release-watchdog:
+    name: release-watchdog
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # The version and tag jobs count on main; the GPU proof and provenance
+    # count on a release tag; the finalizer runs on main for every GPU proof
+    # and only does work for a tag, so only its failures and successes count.
+    if: >-
+      ((github.event.workflow_run.name == 'Version at land'
+          || github.event.workflow_run.name == 'Sign the release tag')
+        && github.event.workflow_run.head_branch == 'main')
+      || ((github.event.workflow_run.name == 'Locked macOS GPU proof'
+          || github.event.workflow_run.name == 'Provenance and forbidden dependencies')
+        && github.event.workflow_run.event == 'push'
+        && startsWith(github.event.workflow_run.head_branch, 'v'))
+      || github.event.workflow_run.name == 'Finalize immutable SDK release'
+    steps:
+      - name: Maintain the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW: ${{ github.event.workflow_run.name }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+          title="Release pipeline failed: $WORKFLOW"
+          existing="$(TITLE="$title" gh api --method GET "repos/$GITHUB_REPOSITORY/issues" -f state=open \
+            -f per_page=100 --paginate \
+            --jq '.[] | select(.pull_request == null and .title == env.TITLE) | .number' | head -n 1)"
+          case "$CONCLUSION" in
+            success)
+              if [ -n "$existing" ]; then
+                gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$existing/comments" \
+                  -f body="$WORKFLOW succeeded again: $RUN_URL (\`$HEAD_SHA\`). Closing." > /dev/null
+                gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/$existing" \
+                  -f state=closed -f state_reason=completed > /dev/null
+              fi
+              ;;
+            failure|timed_out|startup_failure)
+              {
+                echo "_Written by \`.github/workflows/release-watchdog.yml\` at $(date -u '+%Y-%m-%d %H:%M') UTC._"
+                echo
+                echo "**$WORKFLOW** concluded \`$CONCLUSION\` on \`$HEAD_BRANCH\` at \`$HEAD_SHA\`."
+                echo
+                echo "Run: $RUN_URL"
+                echo
+                echo "A release cannot complete while this fails. A pushed release tag is frozen:"
+                echo "when its own pipeline cannot pass, retire the tag in"
+                echo "\`provenance/retired-release-tags.json\` and release the next version."
+                echo
+                echo "_This issue closes on the next successful run._"
+              } > "$RUNNER_TEMP/body.md"
+              if [ -n "$existing" ]; then
+                gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/$existing" \
+                  -F body=@"$RUNNER_TEMP/body.md" > /dev/null
+              else
+                gh api --method POST "repos/$GITHUB_REPOSITORY/issues" -f title="$title" \
+                  -F body=@"$RUNNER_TEMP/body.md" > /dev/null
+              fi
+              ;;
+            *)
+              echo "$WORKFLOW concluded $CONCLUSION; nothing to report"
+              ;;
+          esac

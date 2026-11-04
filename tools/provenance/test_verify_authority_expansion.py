@@ -1236,6 +1236,94 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
         acknowledgement["coordinates"]["pulp_acceptance_sha256"] = digest
         return pulp_root, pulp_main_commit, pulp_commit, acceptance_path, digest
 
+    def test_pulp_main_ref_compares_a_pinned_checkout_against_live_main(self) -> None:
+        # Pull-request and merge-group runs detach the Pulp checkout at the
+        # acceptance commit, so its HEAD cannot show drift that landed on Pulp
+        # main later. --pulp-main-ref points the comparison at live main.
+        amendment_commit = subprocess.check_output(
+            [
+                "git", "-C", str(ROOT), "log", "--diff-filter=A", "--format=%H",
+                "--", verifier.BOUNDARY_AMENDMENT_PATH.as_posix(),
+            ],
+            text=True,
+        ).splitlines()[-1]
+        acknowledgement = self.exact_boundary_acknowledgement(
+            amendment_commit=amendment_commit
+        )
+        pulp_root, pulp_main_commit, pulp_commit, _, _ = self.pulp_acceptance_fixture(
+            acknowledgement
+        )
+        amendment = json.loads((ROOT / verifier.BOUNDARY_AMENDMENT_PATH).read_text())
+
+        def git(*args: str) -> str:
+            return subprocess.check_output(
+                ["git", "-C", str(pulp_root), *args], text=True
+            ).strip()
+
+        def drift_errors(errors: list[str]) -> list[str]:
+            return [error for error in errors if "authoritative Pulp main" in error]
+
+        # Live main is one commit ahead and edits the routing projection;
+        # the checkout stays detached at the acceptance commit.
+        git("checkout", "-q", "-b", "live-main", pulp_commit)
+        (pulp_root / verifier.PULP_OWNERSHIP_PATH).write_text('{"schema_version":3}\n')
+        git("add", ".")
+        git("commit", "-qm", "drift current routing")
+        git("checkout", "-q", "--detach", pulp_commit)
+        self.assertEqual(git("rev-parse", "HEAD"), pulp_commit)
+
+        # Negative control: the pinned HEAD compares each blob with itself.
+        pinned = verifier.validate_exact_boundary_repository_evidence(
+            ROOT, pulp_root, acknowledgement, amendment, defer_live_open_pr_audit=True
+        )
+        self.assertEqual(pinned, [])
+
+        live = verifier.validate_exact_boundary_repository_evidence(
+            ROOT, pulp_root, acknowledgement, amendment, defer_live_open_pr_audit=True,
+            pulp_main_ref="live-main",
+        )
+        self.assertIn(
+            "authoritative Pulp main: routing projection differs from accepted blob", live
+        )
+        self.assertEqual(len(drift_errors(live)), 1)
+
+        # A live main that did not change the bound blobs passes.
+        git("checkout", "-q", "-b", "quiet-main", pulp_commit)
+        (pulp_root / "unrelated.txt").write_text("not routing\n")
+        git("add", ".")
+        git("commit", "-qm", "unrelated change")
+        git("checkout", "-q", "--detach", pulp_commit)
+        self.assertEqual(
+            verifier.validate_exact_boundary_repository_evidence(
+                ROOT, pulp_root, acknowledgement, amendment,
+                defer_live_open_pr_audit=True, pulp_main_ref="quiet-main",
+            ),
+            [],
+        )
+
+        # A main that does not contain the acceptance is not authoritative.
+        older = verifier.validate_exact_boundary_repository_evidence(
+            ROOT, pulp_root, acknowledgement, amendment, defer_live_open_pr_audit=True,
+            pulp_main_ref=pulp_main_commit,
+        )
+        self.assertTrue(any("not on authoritative Pulp main" in error for error in older))
+
+        for bad, expected in (
+            ("no-such-ref", "does not name a commit"),
+            ("--output=/tmp/x", "expected a Git ref or commit"),
+            ("", "expected a Git ref or commit"),
+        ):
+            with self.subTest(ref=bad):
+                errors = verifier.validate_exact_boundary_repository_evidence(
+                    ROOT, pulp_root, acknowledgement, amendment,
+                    defer_live_open_pr_audit=True, pulp_main_ref=bad,
+                )
+                self.assertTrue(
+                    any(error.startswith("--pulp-main-ref") and expected in error
+                        for error in errors),
+                    errors,
+                )
+
     def test_exact_acknowledgement_resolves_pulp_acceptance_and_vellum_artifacts(self) -> None:
         amendment_commit = subprocess.check_output(
             [

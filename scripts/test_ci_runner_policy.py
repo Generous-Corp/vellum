@@ -26,6 +26,7 @@ EXPECTED_RUNNERS = {
         "VELLUM_LOCAL_MACOS_RUNS_ON_JSON",
         '["macos-15"]',
     ),
+    "observatory-overdue-issue.yml": ("__hosted__", "ubuntu-latest"),
     "product-quality.yml": (
         "VELLUM_LINUX_RUNS_ON_JSON",
         '["ubuntu-latest"]',
@@ -43,13 +44,16 @@ EXPECTED_RUNNERS = {
     "review-verdict-trigger.yml": ("__hosted__", "ubuntu-24.04"),
     "release-path-review.yml": ("__hosted__", "ubuntu-24.04"),
     "release-path-review-trigger.yml": ("__hosted__", "ubuntu-24.04"),
+    "release-cadence-check.yml": ("__hosted__", "ubuntu-latest"),
     "release-policy.yml": ("__hosted__", "ubuntu-latest"),
     "release-tag.yml": ("__hosted__", "ubuntu-latest"),
+    "release-watchdog.yml": ("__hosted__", "ubuntu-latest"),
     "readme-quick-start.yml": (
         "VELLUM_MACOS_RUNS_ON_JSON",
         '["macos-15"]',
     ),
     "sdk-release.yml": ("__mixed__", ""),
+    "version-at-land.yml": ("__hosted__", "ubuntu-latest"),
     "workflow-lint.yml": ("__hosted__", "ubuntu-latest"),
 }
 

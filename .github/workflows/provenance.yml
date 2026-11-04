@@ -673,6 +673,32 @@ jobs:
               output.write(f"phase={phase}\n")
           PY
 
+      - name: Compare the boundary evidence with live Pulp main (advisory)
+        # The required verdict above stays pinned to the acceptance commit
+        # (Decision 0011), so on a pull request it cannot see a later Pulp
+        # change to the routing projection or a bound router blob; the first
+        # push to main would. This step repeats the comparison against the
+        # Pulp main the checkout fetched, and only annotates: it never fails
+        # the job or changes the verdict.
+        if: steps.expansion-evidence.outputs.pulp-sha != '' && github.event_name == 'pull_request'
+        continue-on-error: true
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          set -uo pipefail
+          if ! live_main="$(git -C .exact-boundary-pulp rev-parse --verify --quiet 'refs/remotes/origin/main^{commit}')"; then
+            echo "::warning title=Pulp main boundary (advisory)::skipped: the Pulp checkout has no origin/main"
+            exit 0
+          fi
+          report="$RUNNER_TEMP/authority-expansion-live-main.json"
+          python3 tools/provenance/verify_authority_expansion.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --pulp-root .exact-boundary-pulp \
+            --pulp-main-ref "$live_main" \
+            --defer-live-open-pr-audit \
+            --output "$report" > /dev/null || true
+          python3 tools/provenance/pulp_main_drift_annotations.py "$report" "$live_main"
+
       - name: Verify active repository documentation
         if: steps.authority-phase.outputs.phase == 'active'
         run: python3 tools/provenance/verify_current_state_docs.py
@@ -852,6 +878,16 @@ jobs:
           if [[ "$GITHUB_EVENT_NAME" == merge_group ]]; then
             test "$VELLUM_GIT_BASE" != ""
           fi
+          # Overdue and pending-age budgets break with the clock, not with a
+          # change: a pull request or queue entry cannot clear them, and
+          # failing it only stalls every landing until someone classifies the
+          # events. Those runs report them; pushes to main and release tags
+          # still fail on them, so nothing is released with overdue events.
+          # Coverage gaps and every other budget stay fatal everywhere.
+          observatory_time_budgets=enforce
+          if [[ "$GITHUB_EVENT_NAME" == pull_request || "$GITHUB_EVENT_NAME" == merge_group ]]; then
+            observatory_time_budgets=report
+          fi
           python3 tools/provenance/test_observatory.py
           python3 tools/provenance/test_observatory_mirror_import.py
           python3 tools/provenance/test_receiver.py
@@ -875,8 +911,12 @@ jobs:
             --pulp-target "${{ steps.observatory-cursor.outputs.pulp-sha }}" \
             --vellum-target "$observatory_vellum_target" \
             --vellum-tail-policy "$observatory_tail_policy" \
+            --time-budgets "$observatory_time_budgets" \
             "${observatory_now_args[@]}" \
             --output "$RUNNER_TEMP/observatory-health-report.json"
+          jq -r '(.reported_time_budget_violations // [])[] |
+            "::warning::observatory \(.) (reported, not enforced, on this \(env.GITHUB_EVENT_NAME) run; classify the events, see the open observatory-overdue issue)"' \
+            "$RUNNER_TEMP/observatory-health-report.json"
           python3 tools/provenance/test_verify_pulp_observation_scope.py
           python3 tools/provenance/verify_pulp_observation_scope.py \
             --output "$RUNNER_TEMP/pulp-observation-scope-report.json"
