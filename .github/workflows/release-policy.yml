@@ -29,6 +29,7 @@ jobs:
           python3 -I scripts/test_check_release_policy.py
           python3 -I scripts/test_release_request.py
           python3 -I scripts/test_version_at_land.py
+          python3 -I scripts/test_release_dry_run.py
           python3 -I scripts/test_release_cadence.py
           python3 -I scripts/test_pretag_checks.py
           python3 -I scripts/test_sdk_release_draft_lookup.py

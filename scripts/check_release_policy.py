@@ -58,6 +58,7 @@ POLICY_FILES = (
     "/scripts/check_release_policy.py",
     "/scripts/pretag_checks.py",
     "/scripts/release_cadence.py",
+    "/scripts/release_dry_run.py",
     "/scripts/release_request.py",
     "/scripts/verify_immutable_release_preflight.py",
     "/scripts/verify_release_tag.py",
@@ -109,7 +110,7 @@ REQUIRED_VERIFIER_CALLS = {
     "authority-release.yml": 1,
     "gpu-macos.yml": 2,
     "provenance.yml": 2,
-    "release-tag.yml": 1,
+    "release-tag.yml": 2,
     "sdk-release.yml": 2,
 }
 # Any `uses:` key, block or flow, quoted or not, in any case, and its value.

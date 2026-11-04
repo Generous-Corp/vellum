@@ -225,7 +225,7 @@ PULP_API_READER_GIT_CALLS = {
 # backslash continuation inside a word, a glued `os.system` argument, a
 # value written to a file for a later step), so any change to the reader is
 # a reviewed change to this digest. The checks below only explain a failure.
-PULP_API_READER_SHA256 = "0c8e0e7b06788974feb7d7bc0ea716eb8254e6aeca68477214c3938fce6d1454"
+PULP_API_READER_SHA256 = "2cf6dd5116ee7e696f487852bc8d6d4aa056d0e457cda62a815732ef0ce46bf4"
 # The reader reshapes the GitHub responses it fetched through this script, so
 # the script is part of the reader: it is pinned byte for byte like the step
 # and must carry no transport of its own (every read stays a gh call above).

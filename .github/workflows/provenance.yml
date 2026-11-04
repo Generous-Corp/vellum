@@ -9,7 +9,7 @@ on:
     branches: [main]
   push:
     branches: [main]
-    tags: ['v[0-9]*', 'authority/**']
+    tags: ['v[0-9]*', 'authority/**', 'dry-run/**']
 
 permissions:
   actions: read
@@ -313,7 +313,8 @@ jobs:
                   "pulp_acceptance_merge_commit", ""
               )
           ref = os.environ["GITHUB_REF"]
-          if re.fullmatch(r"refs/tags/v[0-9].*", ref):
+          # A release dry-run tag carries the same signed promotion attestation.
+          if re.fullmatch(r"refs/tags/(?:v[0-9]|dry-run/v[0-9]).*", ref):
               raw = subprocess.run(
                   ["git", "cat-file", "tag", ref], check=True,
                   stdout=subprocess.PIPE,
@@ -350,7 +351,7 @@ jobs:
           PY
 
       - name: Verify the signed promotion release tag
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/dry-run/')
         shell: bash
         run: |
           set -euo pipefail
@@ -441,8 +442,15 @@ jobs:
           if [[ -n "$PULP_ACCEPTANCE_SHA" ]]; then
             repository_evidence+=(--pulp-root .exact-boundary-pulp)
           fi
-          if [[ "$GITHUB_REF" == refs/tags/v[0-9]* ]]; then
+          if [[ "$GITHUB_REF" == refs/tags/v[0-9]* || "$GITHUB_REF" == refs/tags/dry-run/v[0-9]* ]]; then
             release_readiness+=(--release-readiness)
+            # A dry run is judged as the release it rehearses: v<version>.
+            if [[ "$GITHUB_REF_NAME" =~ ^dry-run/(v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))/[1-9][0-9]*-[1-9][0-9]*$ ]]; then
+              release_readiness+=(--release-tag "${BASH_REMATCH[1]}")
+            elif [[ "$GITHUB_REF" == refs/tags/dry-run/* ]]; then
+              echo "::error::$GITHUB_REF_NAME is not a well-formed release dry-run tag"
+              exit 1
+            fi
             test -n "$DELIVERY_PROMOTION_SHA"
             test -n "$PROMOTION_ATTESTATION_PATH"
             test -n "$PULP_ACCEPTANCE_SHA"

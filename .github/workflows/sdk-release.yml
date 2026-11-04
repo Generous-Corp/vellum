@@ -1,5 +1,11 @@
 name: Finalize immutable SDK release
 
+# Runs after every successful GPU proof of a release tag (v<version>), and of a
+# release dry-run tag (dry-run/v<version>/<run>-<attempt>, signed by
+# release-tag.yml's manual run). A dry run goes through every step a release
+# does, builds and verifies the draft, and stops before publication;
+# clean-dry-run then deletes the draft and the tag, whatever happened.
+
 on:
   workflow_run:
     workflows: [Locked macOS GPU proof]
@@ -18,7 +24,8 @@ jobs:
     name: validate-sdk-artifacts
     if: >-
       github.event.workflow_run.event == 'push' &&
-      startsWith(github.event.workflow_run.head_branch, 'v') &&
+      (startsWith(github.event.workflow_run.head_branch, 'v') ||
+        startsWith(github.event.workflow_run.head_branch, 'dry-run/v')) &&
       github.event.workflow_run.conclusion == 'success'
     runs-on: ${{ fromJSON(vars.VELLUM_MACOS_RUNS_ON_JSON || '["macos-15"]') }}
     env:
@@ -36,9 +43,16 @@ jobs:
       - name: Derive the release archive from the tag
         run: |
           set -euo pipefail
-          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          version="${RELEASE_TAG#v}"
+          # A release tag is v<version>; a dry-run tag rehearses v<version>.
+          if [[ "$RELEASE_TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            version="${BASH_REMATCH[1]}"
+          elif [[ "$RELEASE_TAG" =~ ^dry-run/v([0-9]+\.[0-9]+\.[0-9]+)/[1-9][0-9]*-[1-9][0-9]*$ ]]; then
+            version="${BASH_REMATCH[1]}"
+          else
+            exit 1
+          fi
           {
+            echo "RELEASE_VERSION=$version"
             echo "RELEASE_ARCHIVE=vellum-sdk-$version-darwin-arm64.tar.gz"
           } >> "$GITHUB_ENV"
 
@@ -63,12 +77,12 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REPOSITORY" = Generous-Corp/vellum
           [[ "$SOURCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
-          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$RELEASE_TAG" =~ ^(v[0-9]+\.[0-9]+\.[0-9]+|dry-run/v[0-9]+\.[0-9]+\.[0-9]+/[1-9][0-9]*-[1-9][0-9]*)$ ]]
           [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
           # The archive name follows from the validated tag, so a release of
           # any version validates its own archive rather than a fixed one.
           printf 'RELEASE_ARCHIVE=vellum-sdk-%s-darwin-arm64.tar.gz\n' \
-            "${RELEASE_TAG#v}" >> "$GITHUB_ENV"
+            "$RELEASE_VERSION" >> "$GITHUB_ENV"
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID" \
             > "$RUNNER_TEMP/validation-source-run.json"
           python3 - <<'PY'
@@ -171,7 +185,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$SOURCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
-          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$RELEASE_TAG" =~ ^(v[0-9]+\.[0-9]+\.[0-9]+|dry-run/v[0-9]+\.[0-9]+\.[0-9]+/[1-9][0-9]*-[1-9][0-9]*)$ ]]
           [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
           test -x "$VELLUM_CHROME_PATH"
           input="$RUNNER_TEMP/gpu"
@@ -188,8 +202,8 @@ jobs:
               "schema": "vellum.sdk-artifact-verification.v1",
               "ok": True,
               "artifact": os.environ["RELEASE_ARCHIVE"],
-              "framework_version": os.environ["RELEASE_TAG"].removeprefix("v"),
-              "cli_version": os.environ["RELEASE_TAG"].removeprefix("v"),
+              "framework_version": os.environ["RELEASE_VERSION"],
+              "cli_version": os.environ["RELEASE_VERSION"],
               "source_commit": os.environ["SOURCE_COMMIT"],
               "source_tree_clean": True,
               "target": "darwin-arm64",
@@ -279,7 +293,8 @@ jobs:
     needs: validate-sdk-artifacts
     if: >-
       github.event.workflow_run.event == 'push' &&
-      startsWith(github.event.workflow_run.head_branch, 'v') &&
+      (startsWith(github.event.workflow_run.head_branch, 'v') ||
+        startsWith(github.event.workflow_run.head_branch, 'dry-run/v')) &&
       github.event.workflow_run.conclusion == 'success'
     runs-on: ${{ fromJSON(vars.VELLUM_AUTHORITY_RUNS_ON_JSON || '["ubuntu-latest"]') }}
     steps:
@@ -318,16 +333,21 @@ jobs:
           if not isinstance(source_run_id, int) or source_run_id <= 0:
               raise SystemExit("trusted release source run id is invalid")
           release_tag = value["release_tag"]
-          if not isinstance(release_tag, str) or not re.fullmatch(
-              r"v[0-9]+\.[0-9]+\.[0-9]+", release_tag
-          ):
+          release = re.fullmatch(r"v([0-9]+\.[0-9]+\.[0-9]+)", release_tag) if isinstance(release_tag, str) else None
+          dry_run = re.fullmatch(r"dry-run/v([0-9]+\.[0-9]+\.[0-9]+)/[1-9][0-9]*-[1-9][0-9]*",
+                                 release_tag) if isinstance(release_tag, str) else None
+          if not (release or dry_run):
               raise SystemExit("trusted release tag is invalid")
-          version = release_tag.removeprefix("v")
+          version = (release or dry_run).group(1)
           coordinates = {
               "SOURCE_RUN_ID": str(source_run_id),
               "RELEASE_TAG": release_tag,
+              # A dry run is judged as the release it rehearses, and never published.
+              "RELEASE_IDENTITY": f"v{version}",
+              "RELEASE_VERSION": version,
+              "DRY_RUN": "true" if dry_run else "false",
               # The release name and archive follow from the validated tag.
-              "RELEASE_NAME": f"Vellum {version} experimental SDK",
+              "RELEASE_NAME": f"Vellum {version} experimental SDK" + (" (release dry run)" if dry_run else ""),
               "RELEASE_ARCHIVE": f"vellum-sdk-{version}-darwin-arm64.tar.gz",
               "SOURCE_COMMIT": value["source_commit"],
               "VALIDATED_TAG_OBJECT_SHA": value["tag_object_sha"],
@@ -345,11 +365,16 @@ jobs:
       - name: Derive the release name and archive from the tag
         run: |
           set -euo pipefail
-          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          version="${RELEASE_TAG#v}"
+          [[ "$RELEASE_TAG" =~ ^(v[0-9]+\.[0-9]+\.[0-9]+|dry-run/v[0-9]+\.[0-9]+\.[0-9]+/[1-9][0-9]*-[1-9][0-9]*)$ ]]
+          test "$RELEASE_IDENTITY" = "v$RELEASE_VERSION"
+          suffix=""
+          case "$RELEASE_TAG" in
+            dry-run/*) test "$DRY_RUN" = true; suffix=" (release dry run)" ;;
+            *) test "$DRY_RUN" = false ;;
+          esac
           {
-            echo "RELEASE_ARCHIVE=vellum-sdk-$version-darwin-arm64.tar.gz"
-            echo "RELEASE_NAME=Vellum $version experimental SDK"
+            echo "RELEASE_ARCHIVE=vellum-sdk-$RELEASE_VERSION-darwin-arm64.tar.gz"
+            echo "RELEASE_NAME=Vellum $RELEASE_VERSION experimental SDK$suffix"
           } >> "$GITHUB_ENV"
 
       - name: Mint one-repository finalizer token
@@ -373,7 +398,7 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REPOSITORY" = Generous-Corp/vellum
           [[ "$SOURCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
-          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$RELEASE_TAG" =~ ^(v[0-9]+\.[0-9]+\.[0-9]+|dry-run/v[0-9]+\.[0-9]+\.[0-9]+/[1-9][0-9]*-[1-9][0-9]*)$ ]]
           [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID" \
             > "$RUNNER_TEMP/source-run.json"
@@ -517,7 +542,7 @@ jobs:
           python3 -I scripts/verify_immutable_release_preflight.py \
             --input "$RUNNER_TEMP/immutable-releases.json" \
             --repository "$GITHUB_REPOSITORY" \
-            --release-tag "$RELEASE_TAG" \
+            --release-tag "$RELEASE_IDENTITY" \
             --output "$RUNNER_TEMP/immutable-release-preflight.json"
 
       - name: Require exact provenance readiness
@@ -619,6 +644,9 @@ jobs:
           native and browser-Wasm proof lanes. It is not a Pulp dependency or a
           broad platform support claim.
           EOF
+          if [ "$DRY_RUN" = true ]; then
+            printf '\nRelease dry run: this draft is never published and is deleted when the run ends.\n' >> "$notes"
+          fi
           verify_release_guard() {
             local index details ids rulesets protection remote_row remote_type remote_sha
             index="$(mktemp "$RUNNER_TEMP/ruleset-index.XXXXXX.json")"
@@ -642,9 +670,15 @@ jobs:
             done < "$ids"
             python3 scripts/collect_release_tag_rulesets.py \
               --index "$index" --details-dir "$details" --output "$rulesets"
-            python3 scripts/verify_release_tag_ruleset.py \
-              --input "$rulesets" --repository "$GITHUB_REPOSITORY" \
-              --tag "$RELEASE_TAG" --output "$protection"
+            if [ "$DRY_RUN" = true ]; then
+              # A dry-run tag is never frozen, so it can be deleted afterwards;
+              # it is never published either (see below).
+              printf '{"dry_run": true, "tag": "%s"}\n' "$RELEASE_TAG" > "$protection"
+            else
+              python3 scripts/verify_release_tag_ruleset.py \
+                --input "$rulesets" --repository "$GITHUB_REPOSITORY" \
+                --tag "$RELEASE_TAG" --output "$protection"
+            fi
             remote_row="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq '[.object.type, .object.sha] | @tsv')"
             read -r remote_type remote_sha <<EOF
           $remote_row
@@ -713,6 +747,10 @@ jobs:
             gh release upload "$RELEASE_TAG" "$staged" --repo "$GITHUB_REPOSITORY"
           }
           draft="$(python3 -c 'import json,sys; print(str(json.load(open(sys.argv[1]))["draft"]).lower())' "$RUNNER_TEMP/release.json")"
+          if [ "$DRY_RUN" = true ] && [ "$draft" != true ]; then
+            echo "::error::a published release exists for the dry-run tag $RELEASE_TAG"
+            exit 1
+          fi
           if [ "$draft" = true ]; then
             for asset in "${allowed[@]}"; do replace_asset "${asset%%=*}" "${asset#*=}"; done
             gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > "$RUNNER_TEMP/release.json"
@@ -733,6 +771,13 @@ jobs:
               --tag "$RELEASE_TAG" "${args[@]}" \
               --asset "release-assets-verification.json=$RUNNER_TEMP/release-assets-verification.json" \
               --output "$RUNNER_TEMP/release-assets-final-prepublish-verification.json"
+            # A release dry run ends here, before the only publishing call: the
+            # draft holds every asset, verified as a release would be, and
+            # clean-dry-run deletes it and the tag.
+            if [ "$DRY_RUN" != false ]; then
+              echo "release dry run: $RELEASE_TAG verified as a draft; not published" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
             # GitHub exposes no revision/ETag precondition on draft publication.
             # Repository contents writers are therefore part of the release trust
             # boundary. This exact-ID verification is the final API operation
@@ -803,3 +848,51 @@ jobs:
             ${{ runner.temp }}/immutable-release-attestation.json
           if-no-files-found: error
           retention-days: 90
+
+  clean-dry-run:
+    # Deletes a release dry run's draft and tag whatever happened before: the
+    # GPU proof failed, validation failed, or the finalizer stopped before
+    # publication as it always does for a dry run. It acts only on a
+    # well-formed dry-run/ tag, deletes only draft releases, and never names a
+    # v* tag.
+    name: clean-dry-run
+    needs: [validate-sdk-artifacts, finalize-sdk-release]
+    if: >-
+      always() &&
+      github.event.workflow_run.event == 'push' &&
+      startsWith(github.event.workflow_run.head_branch, 'dry-run/v')
+    runs-on: ${{ fromJSON(vars.VELLUM_AUTHORITY_RUNS_ON_JSON || '["ubuntu-latest"]') }}
+    steps:
+      - name: Mint one-repository cleanup token
+        id: cleanup-token
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3
+        with:
+          app-id: ${{ secrets.SHIPYARD_APP_ID }}
+          private-key: ${{ secrets.SHIPYARD_APP_PRIVATE_KEY }}
+          owner: Generous-Corp
+          repositories: vellum
+          permission-contents: write
+
+      - name: Delete the dry run's draft and tag
+        env:
+          GH_TOKEN: ${{ steps.cleanup-token.outputs.token }}
+          DRY_RUN_TAG: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+          [[ "$DRY_RUN_TAG" =~ ^dry-run/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)/[1-9][0-9]*-[1-9][0-9]*$ ]]
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$RUNNER_TEMP/releases.json"
+          rows="$(jq -r --arg tag "$DRY_RUN_TAG" '[.[][] | select(.tag_name == $tag)] | .[] | "\(.id) \(.draft)"' \
+            "$RUNNER_TEMP/releases.json")"
+          while read -r id draft; do
+            [ -z "$id" ] && continue
+            if [ "$draft" != true ]; then
+              echo "::error::release $id for $DRY_RUN_TAG is published; it must be removed by hand"
+              exit 1
+            fi
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
+            echo "deleted draft release $id for $DRY_RUN_TAG" >> "$GITHUB_STEP_SUMMARY"
+          done <<< "$rows"
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$DRY_RUN_TAG" > /dev/null 2>&1; then
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$DRY_RUN_TAG"
+            echo "deleted tag $DRY_RUN_TAG" >> "$GITHUB_STEP_SUMMARY"
+          fi

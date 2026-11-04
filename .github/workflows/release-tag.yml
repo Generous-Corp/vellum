@@ -10,10 +10,16 @@ name: Sign the release tag
 # whose cursor covers the bump; this job tags that commit, signed with the key
 # that exists only in the `release` environment, and freezes the tag. Pushing
 # the tag starts the release pipeline (gpu-macos, then sdk-release).
+#
+# A manual run is a release dry run: sign-dry-run-tag signs a throwaway
+# dry-run/v<version>/<run>-<attempt> tag on the newest reconciled commit, never
+# freezes it, and pushes it. The same pipeline runs on it; sdk-release builds
+# the draft, stops before publication, and deletes the draft and the tag.
 on:
   push:
     branches: [main]
     paths: [provenance/pulp-observatory/cursor.json]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -30,6 +36,7 @@ jobs:
   # `release`.
   select-release-commit:
     name: select-release-commit
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     # What provenance.yml's tag run reads with the same Actions token.
     permissions:
@@ -270,3 +277,97 @@ jobs:
             sleep $((attempt * 20))
           done
           echo "signed, pushed and froze $TAG at $OBJECT" >> "$GITHUB_STEP_SUMMARY"
+
+  # A release dry run. It runs only by hand on main, in the release
+  # environment, and its tag can only be a dry-run/ name: the tag verifier
+  # and release_dry_run.py both refuse anything else, and the push step checks
+  # the name again. No freeze is created, so sdk-release can delete the tag.
+  sign-dry-run-tag:
+    name: sign-dry-run-tag
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - name: Check out main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Choose the dry-run commit and build its attestation
+        id: dry-run
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = Generous-Corp/vellum
+          test "$GITHUB_REF" = refs/heads/main
+          python3 -I scripts/release_dry_run.py plan --head "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" \
+            --attempt "$GITHUB_RUN_ATTEMPT" > "$RUNNER_TEMP/dry-run.txt"
+          commit="$(sed -n 's/^commit=//p' "$RUNNER_TEMP/dry-run.txt")"
+          tag="$(sed -n 's/^tag=//p' "$RUNNER_TEMP/dry-run.txt")"
+          identity="$(sed -n 's/^identity=//p' "$RUNNER_TEMP/dry-run.txt")"
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$tag" =~ ^dry-run/(v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))/[1-9][0-9]*-[1-9][0-9]*$ ]]
+          test "$identity" = "${BASH_REMATCH[1]}"
+          # The tagged commit's own release scripts decide, as on a release.
+          git checkout --quiet --detach "$commit"
+          python3 -I scripts/check_release_policy.py check
+          python3 -I scripts/check_release_policy.py signer >> "$GITHUB_OUTPUT"
+          python3 -I scripts/release_request.py attestation --commit "$commit" \
+            --attested-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --tag "$identity" > "$RUNNER_TEMP/promotion-attestation.json"
+          printf 'commit=%s\ntag=%s\n' "$commit" "$tag" >> "$GITHUB_OUTPUT"
+          echo "dry run: $tag on $commit (release identity $identity)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Sign the dry-run tag
+        id: sign
+        env:
+          RELEASE_TAG_SIGNING_KEY: ${{ secrets.RELEASE_TAG_SIGNING_KEY }}
+          TAG: ${{ steps.dry-run.outputs.tag }}
+          COMMIT: ${{ steps.dry-run.outputs.commit }}
+          PRINCIPAL: ${{ steps.dry-run.outputs.principal }}
+        run: |
+          set -euo pipefail
+          test -n "$RELEASE_TAG_SIGNING_KEY"
+          case "$TAG" in dry-run/v*) ;; *) exit 1 ;; esac
+          key="$RUNNER_TEMP/release-signing-key"
+          trap 'rm -f "$key"' EXIT
+          (umask 077 && printf '%s\n' "$RELEASE_TAG_SIGNING_KEY" > "$key")
+          git -c gpg.format=ssh -c user.signingkey="$key" \
+            -c user.name="Vellum release" -c user.email="$PRINCIPAL" \
+            tag -s -F "$RUNNER_TEMP/promotion-attestation.json" "$TAG" "$COMMIT"
+          printf 'object=%s\n' "$(git rev-parse "refs/tags/$TAG")" >> "$GITHUB_OUTPUT"
+
+      - name: Verify the dry-run tag against the policy
+        env:
+          TAG: ${{ steps.dry-run.outputs.tag }}
+          COMMIT: ${{ steps.dry-run.outputs.commit }}
+          OBJECT: ${{ steps.sign.outputs.object }}
+          PRINCIPAL: ${{ steps.dry-run.outputs.principal }}
+          FINGERPRINT: ${{ steps.dry-run.outputs.fingerprint }}
+        run: |
+          set -euo pipefail
+          python3 -I scripts/verify_release_tag.py --repo . --repository "$GITHUB_REPOSITORY" \
+            --tag-name "$TAG" --tag-object-sha "$OBJECT" --source-commit "$COMMIT" \
+            --allowed-signers provenance/release-signers.allowed_signers \
+            --expected-principal "$PRINCIPAL" --expected-fingerprint "$FINGERPRINT" \
+            --output "$RUNNER_TEMP/dry-run-trust.json"
+
+      - name: Mint the release App token for the push
+        id: push-token
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      - name: Push the dry-run tag
+        env:
+          GH_TOKEN: ${{ steps.push-token.outputs.token }}
+          TAG: ${{ steps.dry-run.outputs.tag }}
+          OBJECT: ${{ steps.sign.outputs.object }}
+        run: |
+          set -euo pipefail
+          case "$TAG" in dry-run/v*) ;; *) echo "::error::$TAG is not a dry-run tag"; exit 1 ;; esac
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" \
+            push "https://github.com/$GITHUB_REPOSITORY" "refs/tags/$TAG:refs/tags/$TAG"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.sha)" = "$OBJECT"
+          echo "pushed the dry-run tag $TAG at $OBJECT; sdk-release deletes it and its draft" >> "$GITHUB_STEP_SUMMARY"

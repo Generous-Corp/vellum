@@ -17,10 +17,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class Policy(unittest.TestCase):
-    SIGNING = ("jobs:\n  sign:\n    environment: release\n    steps:\n      - name: v\n        run: |\n"
-               "          python3 -I scripts/verify_release_tag.py \\\n"
-               "            --allowed-signers provenance/release-signers.allowed_signers \\\n"
-               "            --expected-principal \"$PRINCIPAL\" --expected-fingerprint \"$FINGERPRINT\"\n")
+    CALL = ("          python3 -I scripts/verify_release_tag.py \\\n"
+            "            --allowed-signers provenance/release-signers.allowed_signers \\\n"
+            "            --expected-principal \"$PRINCIPAL\" --expected-fingerprint \"$FINGERPRINT\"\n")
+    # The release job and the dry-run job each verify the tag they signed.
+    SIGNING = ("jobs:\n  sign:\n    environment: release\n    steps:\n      - name: v\n        run: |\n" + CALL
+               + "      - name: d\n        run: |\n" + CALL)
 
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp(prefix="release-policy-"))
