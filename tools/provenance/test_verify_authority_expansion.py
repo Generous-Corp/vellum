@@ -1308,14 +1308,21 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
         )
         self.assertTrue(any("not on authoritative Pulp main" in error for error in older))
 
-        for bad in ("no-such-ref", "--output=/tmp/x", ""):
+        for bad, expected in (
+            ("no-such-ref", "does not name a commit"),
+            ("--output=/tmp/x", "expected a Git ref or commit"),
+            ("", "expected a Git ref or commit"),
+        ):
             with self.subTest(ref=bad):
                 errors = verifier.validate_exact_boundary_repository_evidence(
                     ROOT, pulp_root, acknowledgement, amendment,
                     defer_live_open_pr_audit=True, pulp_main_ref=bad,
                 )
-                self.assertTrue(errors)
-                self.assertTrue(any("--pulp-main-ref" in error for error in errors))
+                self.assertTrue(
+                    any(error.startswith("--pulp-main-ref") and expected in error
+                        for error in errors),
+                    errors,
+                )
 
     def test_exact_acknowledgement_resolves_pulp_acceptance_and_vellum_artifacts(self) -> None:
         amendment_commit = subprocess.check_output(
