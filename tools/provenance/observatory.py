@@ -1071,8 +1071,8 @@ def describe_coverage_gaps(gaps: list[dict[str, str]], cursor: dict[str, object]
     lines = []
     for gap in gaps:
         lines.append(f"\n  {gap['source']} {gap['commit']}: {gap['reason']}")
-    reasons = {gap["reason"] for gap in gaps}
-    if "mapped-commit-after-reconciled-cursor" in reasons:
+    reasons = {(gap["source"], gap["reason"]) for gap in gaps}
+    if ("vellum", "mapped-commit-after-reconciled-cursor") in reasons:
         lines.append(
             "\nRe-running will not help: each commit above changes a mapped path and"
             " has no observation event. Record them on the branch and push"
@@ -1083,7 +1083,15 @@ def describe_coverage_gaps(gaps: list[dict[str, str]], cursor: dict[str, object]
             " --vellum-target <exact-pr-head-sha> --now <utc-timestamp>"
             " --write --events-only"
         )
-    if "merge-changes-other-side-without-first-parent-diff" in reasons:
+    if ("pulp", "mapped-commit-after-reconciled-cursor") in reasons:
+        lines.append(
+            "\nA Pulp commit above has no observation event; the receiver's"
+            " coalesced evidence pull request (branch"
+            " automation/pulp-observatory-coalesced) records Pulp events, and"
+            " this check passes once it lands and this branch merges main."
+        )
+    if any(reason == "merge-changes-other-side-without-first-parent-diff"
+           for _, reason in reasons):
         lines.append(
             "\nA merge above changes a mapped path that its first-parent diff does"
             " not show; make that change an explicit commit on the branch."

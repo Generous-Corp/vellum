@@ -642,6 +642,29 @@ class ObservatoryTests(unittest.TestCase):
         feature = commit_all(vellum, "feature mapped change")
         return pulp, vellum, root, pulp_head, vellum_main, feature
 
+    def test_coverage_gap_remedy_names_the_right_owner(self) -> None:
+        cursor = {"pulp": {"last_scanned_commit": "c" * 40}}
+        self.assertEqual(observatory.describe_coverage_gaps([], cursor), "")
+        vellum = observatory.describe_coverage_gaps(
+            [{"source": "vellum", "commit": "a" * 40,
+              "reason": "mapped-commit-after-reconciled-cursor"}], cursor,
+        )
+        self.assertIn("--events-only", vellum)
+        self.assertIn(f"--pulp-target {'c' * 40}", vellum)
+        self.assertNotIn("automation/pulp-observatory-coalesced", vellum)
+        pulp = observatory.describe_coverage_gaps(
+            [{"source": "pulp", "commit": "b" * 40,
+              "reason": "mapped-commit-after-reconciled-cursor"}], cursor,
+        )
+        self.assertIn(f"pulp {'b' * 40}: mapped-commit-after-reconciled-cursor", pulp)
+        self.assertIn("automation/pulp-observatory-coalesced", pulp)
+        self.assertNotIn("--events-only", pulp)
+        other = observatory.describe_coverage_gaps(
+            [{"source": "pulp", "commit": "unverified",
+              "reason": "source-repository-not-supplied"}], {},
+        )
+        self.assertEqual(other, "\n  pulp unverified: source-repository-not-supplied")
+
     def test_coverage_policy_accepts_events_only_pull_request_and_rejects_missing_event(
         self,
     ) -> None:
