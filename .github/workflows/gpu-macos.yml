@@ -273,8 +273,28 @@ jobs:
 
       - name: Run native, capture, and sterile-consumer tests
         run: |
-          VELLUM_MIRROR_LIVE_GPU=1 \
-            ctest --test-dir build-gpu --output-on-failure
+          # The nested-libdir consumer configures and builds the whole SDK in
+          # its own directory (about three minutes) and shares no work
+          # directory with any other test, so it runs beside the rest of the
+          # suite rather than after it. Every other test keeps running one at
+          # a time. Both halves must find their tests and pass.
+          # GIT_OPTIONAL_LOCKS=0: both halves may read the mirror's dependency
+          # checkouts, which the build above already fetched.
+          export VELLUM_MIRROR_LIVE_GPU=1 GIT_OPTIONAL_LOCKS=0
+          nested='^vellum\.install-consumer-nested-libdir$'
+          ctest --test-dir build-gpu --output-on-failure --no-tests=error \
+            -R "$nested" > "$RUNNER_TEMP/ctest-nested-libdir.log" 2>&1 &
+          nested_pid=$!
+          rest_status=0
+          ctest --test-dir build-gpu --output-on-failure --no-tests=error \
+            -E "$nested" || rest_status=$?
+          nested_status=0
+          wait "$nested_pid" || nested_status=$?
+          cat "$RUNNER_TEMP/ctest-nested-libdir.log"
+          if [ "$rest_status" -ne 0 ] || [ "$nested_status" -ne 0 ]; then
+            echo "::error::ctest exited $rest_status (suite) and $nested_status (nested-libdir)"
+            exit 1
+          fi
           ./build-gpu/apps/gpu-native/vellum-gpu-native.app/Contents/MacOS/vellum-gpu-native \
             --self-test --capture "$RUNNER_TEMP/vellum-gpu-proof.png" \
             | tee "$RUNNER_TEMP/vellum-gpu-proof.txt"
