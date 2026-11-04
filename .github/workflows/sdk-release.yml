@@ -703,8 +703,14 @@ jobs:
               verify_release_guard
               gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$existing_id"
             fi
+            # `gh release upload` names an asset after the uploaded file, so
+            # stage each source under its asset name first: several trusted
+            # sources live under a different file name than they publish as.
+            local staged
+            staged="$(mktemp -d "$RUNNER_TEMP/asset-upload.XXXXXX")/$name"
+            cp "$path" "$staged"
             verify_release_guard
-            gh release upload "$RELEASE_TAG" "$path" --repo "$GITHUB_REPOSITORY"
+            gh release upload "$RELEASE_TAG" "$staged" --repo "$GITHUB_REPOSITORY"
           }
           draft="$(python3 -c 'import json,sys; print(str(json.load(open(sys.argv[1]))["draft"]).lower())' "$RUNNER_TEMP/release.json")"
           if [ "$draft" = true ]; then
