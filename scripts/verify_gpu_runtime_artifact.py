@@ -14,8 +14,8 @@ Checks, without trusting anything the archive says about itself:
   * with --repo, the shipped lock and headers are byte-identical to the source.
 
 With --consumer it then extracts the archive and builds and runs a consumer
-that finds the package by exact version and links Device against the locked
-skia-builder asset (--renderer-archive): the audio-only journey.
+that finds the package by exact version and links Device against the Dawn
+library the archive ships, with nothing else supplied: the audio-only journey.
 
 Exit 0 when every check passes, 1 with the first failure otherwise.
 """
@@ -150,7 +150,7 @@ def verify(archive: Path, repo: Path | None) -> dict[str, object]:
     }
 
 
-def run_consumer(archive: Path, renderer_archive: Path, version: str, repo: Path) -> str:
+def run_consumer(archive: Path, version: str, repo: Path) -> str:
     source = repo / "gpu-runtime/tests/artifact-consumer"
     with tempfile.TemporaryDirectory(prefix="vellum-gpu-runtime-consumer-") as temporary_text:
         temporary = Path(temporary_text)
@@ -162,8 +162,7 @@ def run_consumer(archive: Path, renderer_archive: Path, version: str, repo: Path
         configure = ["cmake", "-S", str(source), "-B", str(build),
                      "-DCMAKE_BUILD_TYPE=Release",
                      f"-DCMAKE_PREFIX_PATH={prefix}",
-                     f"-DEXPECTED_VERSION={version}",
-                     f"-DGPU_RUNTIME_RENDERER_ARCHIVE={renderer_archive.resolve()}"]
+                     f"-DEXPECTED_VERSION={version}"]
         if shutil.which("ninja"):
             configure.extend(["-G", "Ninja"])
         for command in (configure, ["cmake", "--build", str(build)],
@@ -182,17 +181,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo", type=Path, help="also compare the lock and headers to this checkout")
     parser.add_argument("--consumer", action="store_true",
                         help="build and run the audio-only consumer against the archive")
-    parser.add_argument("--renderer-archive", type=Path,
-                        help="the locked skia-builder asset, for --consumer")
     parser.add_argument("--output", type=Path, help="write the verification record here")
     args = parser.parse_args(argv)
     try:
-        if args.consumer and (args.renderer_archive is None or args.repo is None):
-            raise VerificationError("--consumer needs --renderer-archive and --repo")
+        if args.consumer and args.repo is None:
+            raise VerificationError("--consumer needs --repo")
         result = verify(args.archive, args.repo)
         if args.consumer:
-            result["consumer"] = run_consumer(args.archive, args.renderer_archive,
-                                              str(result["version"]), args.repo)
+            result["consumer"] = run_consumer(args.archive, str(result["version"]), args.repo)
     except (VerificationError, OSError, ValueError, tarfile.TarError) as error:
         print(f"verify-gpu-runtime-artifact: {error}", file=sys.stderr)
         return 1

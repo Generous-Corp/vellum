@@ -2,8 +2,8 @@ cmake_minimum_required(VERSION 3.24)
 project(GpuRuntimeArtifactConsumer LANGUAGES CXX)
 
 # An audio-only GPU consumer of the published gpu-runtime archive: it finds the
-# package by exact version, supplies the locked skia-builder asset for Dawn
-# (GPU_RUNTIME_RENDERER_ARCHIVE), and links Device with nothing from Vellum.
+# package by exact version and links Device against the Dawn library the
+# archive ships, with nothing from Vellum and no skia-builder asset.
 find_package(VellumGpuRuntime ${EXPECTED_VERSION} EXACT REQUIRED COMPONENTS Device)
 if(NOT TARGET VellumGpuRuntime::Device)
     message(FATAL_ERROR "the installed package has no Device target")

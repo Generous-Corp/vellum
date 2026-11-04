@@ -396,7 +396,7 @@ jobs:
           # vellum-gpu-runtime-<version>-darwin-arm64.tar.gz is published beside
           # the SDK. Two builds of this commit must match byte for byte, and an
           # audio-only consumer must find it by exact version and link Device
-          # against the locked Dawn build.
+          # against the Dawn build it ships, with nothing else supplied.
           for build in first second; do
             python3 scripts/build_gpu_runtime_artifact.py \
               --renderer-archive "$VELLUM_SKIA_ARCHIVE" \
@@ -410,7 +410,7 @@ jobs:
           python3 scripts/verify_gpu_runtime_artifact.py \
             --archive "$RUNNER_TEMP/$archive" \
             --repo "$GITHUB_WORKSPACE" \
-            --consumer --renderer-archive "$VELLUM_SKIA_ARCHIVE" \
+            --consumer \
             --output "$RUNNER_TEMP/gpu-runtime-verification.json"
           (cd "$RUNNER_TEMP" && shasum -a 256 "$archive" > vellum-gpu-runtime.sha256)
 
