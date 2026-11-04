@@ -334,6 +334,37 @@ class OutputTests(GateCase):
         self.assertEqual(lines[1], "state=failure")
 
 
+class LogTests(GateCase):
+    def test_a_crafted_file_name_cannot_emit_a_workflow_command(self) -> None:
+        name = ".github/workflows/x\n::set-output name=state::success\r\n::error::y"
+        api = FakeApi(pull_routes(7, HEAD, files(name), []))
+        logged: list[str] = []
+        sha, state, description = gate.decide("pull_request_target", pull_event(), REPO, api, self.root,
+                                              log=logged.append)
+        self.assertEqual(state, "failure")
+        for text in [*logged, description]:
+            self.assertNotIn("\n", text)
+            self.assertNotIn("\r", text)
+            self.assertFalse(text.startswith("::"))
+
+    def test_main_wraps_its_log_in_stop_commands(self) -> None:
+        import contextlib
+        import io
+        import os
+        from unittest import mock
+        event = self.root / "event.json"
+        event.write_text("{}", encoding="utf-8")
+        env = {"GITHUB_EVENT_NAME": "pull_request_target", "GITHUB_REPOSITORY": REPO, "GITHUB_EVENT_PATH": str(event),
+               "GH_TOKEN": "t", "GITHUB_OUTPUT": str(self.root / "output")}
+        stdout = io.StringIO()
+        with mock.patch.dict(os.environ, env), contextlib.redirect_stdout(stdout), mock.patch.object(
+                gate, "decide", side_effect=lambda *a, **k: print("::set-output name=state::success") or None):
+            self.assertEqual(gate.main(), 0)
+        lines = stdout.getvalue().splitlines()
+        token = re.fullmatch(r"::stop-commands::([0-9a-f]{32})", lines[0]).group(1)
+        self.assertEqual(lines[-1], f"::{token}::")
+
+
 class QueueTests(GateCase):
     first, second, merge1, merge2 = "1" * 40, "2" * 40, "d" * 40, "e" * 40
 
@@ -412,7 +443,9 @@ class QueueTests(GateCase):
     def test_a_merge_group_run_off_a_queue_branch_fails_closed(self) -> None:
         entries = {7: (self.first, files(UNPROTECTED), []), 8: (self.second, files(UNPROTECTED), [])}
         self.assertEqual(self.queue(entries, self.batch(), self.merge2)[0], "success")
-        self.assertEqual(self.queue(entries, self.batch(), self.merge2, branch="feature/x")[0], "error")
+        for branch in ("feature/x", "gh-readonly-queue/other/pr-8-x"):
+            with self.subTest(branch=branch):
+                self.assertEqual(self.queue(entries, self.batch(), self.merge2, branch=branch)[0], "error")
 
 
 if __name__ == "__main__":

@@ -73,6 +73,16 @@ was a queue, not a second opinion.
   `reviewer_signer_identities`. This is exactly the exposure of Shipyard's
   `review-verdict` rule, and no looser. Shipyard's `reviewer_claim_receipt`
   (a check run from a dedicated claim App) is the way to close it.
+- **The environment must admit exactly `main`.** Its deployment-branch policy
+  is one custom branch rule named `main`, never "protected branches" or a
+  wildcard: a queued copy that adds a `merge_group` job runs on
+  `gh-readonly-queue/main/*` and would otherwise reach the key.
+- **Accepted residual: a late HOLD.** A HOLD posted after the queue build's
+  status turned `success` does not pull the entry out of the queue; the gate
+  judges the head when the queue builds it.
+- **Accepted residual: deployment records.** The job runs in the
+  `release-path-review` environment, so every pull-request and comment run
+  records a deployment to it.
 - **Follow-up: `review-verdict.yml`.** It posts with the Actions token, so a
   same-repository workflow could post its context. It is not required by the
   ruleset today; if it becomes required, it should post through the same

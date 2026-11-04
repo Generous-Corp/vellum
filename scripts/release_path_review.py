@@ -39,6 +39,7 @@ import fnmatch
 import json
 import os
 import re
+import secrets
 import sys
 import tomllib
 import urllib.error
@@ -72,7 +73,8 @@ UNATTRIBUTED = "unattributed"
 PROTECTED_PREFIXES = (".github/workflows/", ".github/actions/")
 # A queue range longer than this is refused rather than read in part.
 QUEUE_COMMIT_LIMIT = 1000
-QUEUE_BRANCH = "gh-readonly-queue/"
+# A merge-queue branch is `gh-readonly-queue/<base branch>/pr-<n>-<sha>`.
+QUEUE_BRANCH = "gh-readonly-queue/{branch}/"
 
 
 class GateError(RuntimeError):
@@ -399,7 +401,8 @@ def target(event_name: str, event: dict[str, Any], api: Api, repo: str) -> tuple
         if not re.fullmatch(r"[0-9a-f]{40}", head):
             raise GateError("the triggering run names no head")
         if run.get("event") == "merge_group":
-            if not str(run.get("head_branch") or "").startswith(QUEUE_BRANCH):
+            branch = str((event.get("repository") or {}).get("default_branch") or "")
+            if not branch or not str(run.get("head_branch") or "").startswith(QUEUE_BRANCH.format(branch=branch)):
                 raise GateError(f"merge-group branch {run.get('head_branch')!r} is not a queue branch")
             return "queue", head, []
         numbers = [p.get("number") for p in run.get("pull_requests") or []
@@ -408,12 +411,23 @@ def target(event_name: str, event: dict[str, Any], api: Api, repo: str) -> tuple
     raise GateError(f"unsupported event {event_name!r}")
 
 
+def one_line(text: str) -> str:
+    """`text` on one line: a pull request's file names reach the log and the
+    status, and a newline in one could start a workflow command."""
+    return " ".join(str(text).split())
+
+
 def decide(event_name: str, event: dict[str, Any], repo: str, api: Api, root: Path,
            log: Callable[[str], None] = print) -> tuple[str, str, str] | None:
     """`(sha, state, description)` to post, or None when there is nothing to judge.
 
     Never raises for a judgement it cannot make: once a head is known, a
     failure to read anything is an `error` status on it."""
+    raw_log = log
+
+    def log(message: str) -> None:
+        raw_log(one_line(message))
+
     head = None
     if event_name == "workflow_run":
         named = str((event.get("workflow_run") or {}).get("head_sha") or "").lower()
@@ -439,10 +453,10 @@ def decide(event_name: str, event: dict[str, Any], repo: str, api: Api, root: Pa
         log(f"release-path-review: error: {error}")
         if head is None:
             raise
-        return head, "error", describe(f"cannot judge: {error}")
+        return head, "error", describe(one_line(f"cannot judge: {error}"))
     state = "success" if allowed else "failure"
     log(f"release-path-review: {state} on {head}: {why}")
-    return head, state, describe(why)
+    return head, state, describe(one_line(why))
 
 
 def main() -> int:
@@ -456,17 +470,23 @@ def main() -> int:
               "GITHUB_OUTPUT are required", file=sys.stderr)
         return 2
     api = Api(token, os.environ.get("GITHUB_API_URL", "https://api.github.com"))
+    # The log carries pull-request file names; the runner reads no workflow
+    # command from it until the token, which nothing in it can guess, ends it.
+    token_line = secrets.token_hex(16)
+    print(f"::stop-commands::{token_line}", flush=True)
     try:
         event = json.loads(Path(event_path).read_text(encoding="utf-8"))
         decision = decide(event_name, event, repo, api, ROOT)
     except (OSError, ValueError, GateError) as error:
-        print(f"release-path-review: error: {error}", file=sys.stderr)
+        print(one_line(f"release-path-review: error: {error}"), file=sys.stderr)
         return 1
+    finally:
+        print(f"::{token_line}::", flush=True)
     if decision is None:
         return 0
     sha, state, description = decision
     with open(output, "a", encoding="utf-8") as handle:
-        handle.write(f"sha={sha}\nstate={state}\ndescription={' '.join(description.split())}\n")
+        handle.write(f"sha={sha}\nstate={state}\ndescription={one_line(description)}\n")
     return 0
 
 
