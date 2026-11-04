@@ -97,11 +97,12 @@ the queue, plus the required checks on the tagged commit. The version line is pa
 
 ## Release dry run
 
-A release cannot be undone, so the whole path is rehearsed on GitHub first. A dry run starts by itself on a push to
-`main` that changes a release-path file (`release_dry_run.RELEASE_PATHS`), every Monday as a canary, and optionally
-by hand (Actions > Sign the release tag > Run workflow). `dry-run-gate` decides, and refuses while a release tag's
-GPU proof or provenance run, or any finalizer run, is in flight; every event shares the `release-tag` concurrency
-group, so a dry-run tag is never signed while a release tag is.
+A release cannot be undone, so the whole path is rehearsed on GitHub first. A dry run starts by itself when an observatory
+reconcile on `main` covers a change to a release-path file (`release_dry_run.RELEASE_PATHS`), so the commit it
+tags contains the change; every Monday as a canary; and optionally by hand (Actions > Sign the release tag > Run
+workflow). `dry-run-gate` decides, and refuses while a release tag's GPU proof or provenance run, or any finalizer
+run, is waiting, queued or in progress. Dry runs queue in their own concurrency group, so one never displaces a
+pending release run.
 
 1. `sign-dry-run-tag`, in the `release` environment, picks the newest observatory-reconciled commit on `main`
    (`scripts/release_dry_run.py plan`) and signs `dry-run/v<version>/<run>-<attempt>` on it with the release key. The

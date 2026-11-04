@@ -20,16 +20,19 @@ is the one the next release of that version would carry. The release identity
   identity  for a tag name: `mode=` release or dry-run, `version=`, `identity=`.
             Any other name is refused.
   gate      whether this run of release-tag.yml starts a dry run: always on
-            the weekly schedule and by hand; on a push to main only when the
-            push changes a release-path file (RELEASE_PATHS); and never while
-            a release tag's GPU proof or provenance run, or any SDK finalizer
-            run, is queued or in progress.
+            the weekly schedule and by hand; on a push to main only when it is
+            an observatory reconcile whose newly reconciled range changes a
+            release-path file (RELEASE_PATHS), so the dry run tags a commit
+            that contains the change; and never while a release tag's GPU
+            proof or provenance run, or any SDK finalizer run, is waiting,
+            queued or in progress.
 """
 
 from __future__ import annotations
 
 import argparse
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -49,11 +52,22 @@ RELEASE_PATHS = (
     ".github/workflows/provenance.yml",
     ".github/workflows/release-tag.yml",
     ".github/workflows/sdk-release.yml",
+    "scripts/check_release_policy.py",
+    "scripts/collect_release_tag_rulesets.py",
+    "scripts/pretag_checks.py",
     "scripts/release_dry_run.py",
     "scripts/release_request.py",
+    "scripts/select_exact_provenance_run.py",
+    "scripts/select_release.py",
+    "scripts/verify_exact_provenance_artifact.py",
+    "scripts/verify_immutable_release_preflight.py",
+    "scripts/verify_release_assets.py",
     "scripts/verify_release_tag.py",
+    "scripts/verify_release_tag_ruleset.py",
     "scripts/version_at_land.py",
 )
+# Run states GitHub reports before a run completes.
+ACTIVE = ("queued", "in_progress", "waiting", "pending", "requested")
 # Runs of these, on a release tag (or any finalizer run, whose branch is main),
 # mean a real release may be in flight; a dry run then waits for next time.
 RELEASE_PIPELINE = ("Locked macOS GPU proof", "Provenance and forbidden dependencies")
@@ -102,7 +116,7 @@ def busy(runs: object) -> list[str]:
         raise DryRunError("the runs listing must be an array of pages")
     found = []
     for row in rows:
-        if row.get("status") not in ("queued", "in_progress", "waiting", "pending", "requested"):
+        if row.get("status") not in ACTIVE:
             continue
         name, branch = row.get("name"), str(row.get("head_branch") or "")
         if (name in RELEASE_PIPELINE and RELEASE_TAG.fullmatch(branch)) or name == FINALIZER:
@@ -121,14 +135,21 @@ def gate(root: Path, event: str, before: str, after: str, runs: object) -> tuple
         return False, f"{event} never runs a dry run"
     if not rr.SHA.fullmatch(after):
         raise DryRunError("the pushed commit must be a full SHA")
-    if not rr.SHA.fullmatch(before) or before == ZERO:
-        changed = rr.git(root, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", after).split()
-    else:
-        changed = rr.git(root, "diff", "--name-only", "--no-renames", before, after).split()
+    previous = before if rr.SHA.fullmatch(before) and before != ZERO else f"{after}^1"
+    try:
+        old, new = rr.observatory_cursor(root, previous), rr.observatory_cursor(root, after)
+    except rr.ReleaseRequestError as error:
+        return False, f"the push is not an observatory reconcile with a readable cursor ({error})"
+    if old == new:
+        return False, "the push reconciles no new Vellum commit"
+    try:
+        changed = rr.git(root, "diff", "--name-only", "--no-renames", old, new).split()
+    except subprocess.CalledProcessError as error:
+        return False, f"the reconciled range {old[:12]}..{new[:12]} cannot be read ({error.stderr.strip()[:200]})"
     touched = sorted(set(changed) & set(RELEASE_PATHS))
     if not touched:
-        return False, "the push changes no release-path file"
-    return True, "the push changes " + ", ".join(touched)
+        return False, f"the reconciled range {old[:12]}..{new[:12]} changes no release-path file"
+    return True, f"the reconciled range {old[:12]}..{new[:12]} changes " + ", ".join(touched)
 
 
 def main(argv: list[str]) -> int:

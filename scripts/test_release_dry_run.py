@@ -428,25 +428,46 @@ class Gate(unittest.TestCase):
         return [{"workflow_runs": list(rows)}]
 
     def push(self, files: dict[str, str], runs: list | None = None) -> tuple[bool, str]:
+        """A change landed on main, then the receiver's reconcile of it: the cursor push the gate judges."""
         import test_release_request as trr  # noqa: PLC0415
         history = trr.History(self)
-        before = history.main
-        history.branch(before)
+        history.branch(history.main)
         for path, text in files.items():
             history.write(path, text)
-        after = history.land(history.commit("change"))
+        landed = history.land(history.commit("change"))
+        before = history.main
+        after = history.land(history.reconcile(landed))
+        self.history = history
         return dry.gate(history.root, "push", before, after, runs or self.runs())
 
     def test_a_push_runs_a_dry_run_only_when_it_changes_a_release_path_file(self) -> None:
         for path in dry.RELEASE_PATHS:
             with self.subTest(path=path):
                 self.assertEqual(self.push({path: "x\n"})[0], True)
-        for files in ({"provenance/pulp-observatory/cursor.json": "{}\n"}, {"docs/x.md": "x\n"},
-                      {"scripts/release_cadence.py": "x\n"}, {".github/workflows/version-at-land.yml": "x\n"}):
+        for files in ({"docs/x.md": "x\n"}, {"scripts/release_cadence.py": "x\n"},
+                      {".github/workflows/version-at-land.yml": "x\n"}):
             with self.subTest(files=files):
                 run, reason = self.push(files)
                 self.assertFalse(run)
-                self.assertIn("no release-path file", reason)
+                self.assertIn("changes no release-path file", reason)
+
+    def test_the_dry_run_tags_a_commit_that_contains_the_change(self) -> None:
+        run, _ = self.push({"scripts/release_request.py": "x\n"})
+        self.assertTrue(run)
+        target = dry.reconciled_target(self.history.root, self.history.main)
+        self.assertEqual(target, self.history.main)
+        self.assertEqual(self.history.git("show", f"{target}:scripts/release_request.py"), "x")
+
+    def test_a_push_that_is_not_a_new_reconcile_runs_nothing(self) -> None:
+        import test_release_request as trr  # noqa: PLC0415
+        history = trr.History(self)
+        before = history.main
+        history.branch(before)
+        history.write("scripts/release_request.py", "x\n")
+        landed = history.land(history.commit("a release-path change, not yet reconciled"))
+        run, reason = dry.gate(history.root, "push", before, landed, self.runs())
+        self.assertFalse(run)
+        self.assertIn("no new Vellum commit", reason)
 
     def test_schedule_and_dispatch_run_and_nothing_else_does(self) -> None:
         for event in ("schedule", "workflow_dispatch"):
@@ -471,21 +492,25 @@ class Gate(unittest.TestCase):
                 {"name": "Locked macOS GPU proof", "head_branch": "v0.1.11", "status": "completed", "id": 6}]
         self.assertEqual(dry.gate(ROOT, "schedule", "", "a" * 40, self.runs(*idle))[0], True)
 
-    def test_every_event_shares_the_release_tag_concurrency_group(self) -> None:
+    def test_releases_and_dry_runs_queue_in_separate_groups(self) -> None:
+        # A dry run must never displace a pending release run: GitHub keeps one
+        # pending run per group, and a newer one cancels it.
         text = (WORKFLOWS / "release-tag.yml").read_text()
-        self.assertIn("concurrency:\n  group: release-tag\n  cancel-in-progress: false\n", text)
-        self.assertEqual(text.count("concurrency:"), 1)
+        self.assertNotIn("\nconcurrency:", text)
+        for job, group in (("select-release-commit", "release-tag"), ("sign-release-tag", "release-tag"),
+                           ("dry-run-gate", "release-dry-run"), ("sign-dry-run-tag", "release-dry-run")):
+            with self.subTest(job=job):
+                self.assertIn(f"    concurrency:\n      group: {group}\n      cancel-in-progress: false\n",
+                              job_text("release-tag.yml", job))
         trigger = text[text.index("\non:\n"):text.index("\npermissions:")]
-        listed = [line.strip()[2:] for line in trigger.splitlines() if line.strip().startswith("- ")
-                  and not line.strip().startswith("- cron")]
-        expected = ["provenance/pulp-observatory/cursor.json",
-                    *[path.replace("verify_release_tag.py", "verify_release_*.py") for path in dry.RELEASE_PATHS]]
-        self.assertEqual(listed, expected)
+        self.assertIn("  push:\n    branches: [main]\n    paths: [provenance/pulp-observatory/cursor.json]\n", trigger)
         self.assertIn("  schedule:\n    - cron: '17 9 * * 1'\n", trigger)
         self.assertIn("  workflow_dispatch:\n", trigger)
         gate = job_text("release-tag.yml", "dry-run-gate")
         self.assertNotIn("environment", gate)
         self.assertNotIn("secrets.", gate)
+        for status in dry.ACTIVE:
+            self.assertIn(status, gate)
 
 
 class Target(unittest.TestCase):
@@ -506,7 +531,8 @@ class Wiring(unittest.TestCase):
         select = job_text("release-tag.yml", "select-release-commit")
         self.assertIn("if: github.event_name == 'push'", select)
         job = job_text("release-tag.yml", "sign-dry-run-tag")
-        self.assertIn("needs: dry-run-gate\n    if: needs.dry-run-gate.outputs.run == 'true'", job)
+        self.assertIn("needs: dry-run-gate\n", job)
+        self.assertIn("\n    if: needs.dry-run-gate.outputs.run == 'true'\n", job)
         self.assertIn("environment: release", job)
         self.assertIn('test "$GITHUB_REF" = refs/heads/main', job)
         self.assertNotIn("rulesets", job)
