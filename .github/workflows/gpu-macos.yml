@@ -205,7 +205,9 @@ jobs:
             -DVELLUM_SKIA_ARCHIVE="$VELLUM_SKIA_ARCHIVE" \
             -DVELLUM_ENABLE_MIRROR=ON \
             -DVELLUM_MIRROR_DEPS_DIR="$VELLUM_MIRROR_DEPS_DIR" \
-            -DVELLUM_VIEW_AUDIO_ARCHIVE="$VELLUM_VIEW_AUDIO_ARCHIVE"
+            -DVELLUM_VIEW_AUDIO_ARCHIVE="$VELLUM_VIEW_AUDIO_ARCHIVE" \
+            -DVELLUM_ENABLE_RMLUI=ON \
+            -DVELLUM_RMLUI_VELLUM_RENDERER=ON
           cmake --build build-gpu --parallel "$VELLUM_BUILD_JOBS"
 
       - name: Stress parallel text shaping in Release
