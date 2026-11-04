@@ -1,0 +1,24 @@
+{
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "created_at": "2026-11-04T16:48:51Z",
+  "disposition": "ported",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-f62694f70fdc83d76bedce565b52de8da82efdb6",
+  "kind": "resolution",
+  "linked_commits": [
+    "0a7dcb810a5339aa2ab221ef270372c66b831473",
+    "f62694f70fdc83d76bedce565b52de8da82efdb6"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/pulp/pull/11449",
+    "https://github.com/Generous-Corp/vellum/pull/156"
+  ],
+  "owner": "@danielraffel",
+  "rationale": "Folds Unicode normalization into the Illustrator adapter's destination name checks and reports a destination that turns into a directory as a conversion error. The same fix is in Pulp's copy of the helper (pulp#11449, merged as 0a7dcb81), so nothing remains to port.",
+  "resolves": "vellum-f62694f70fdc83d76bedce565b52de8da82efdb6",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}
