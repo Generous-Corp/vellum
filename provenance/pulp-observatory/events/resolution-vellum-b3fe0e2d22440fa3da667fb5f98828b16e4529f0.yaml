@@ -9,12 +9,12 @@
   "event_id": "resolution-vellum-b3fe0e2d22440fa3da667fb5f98828b16e4529f0",
   "kind": "resolution",
   "linked_commits": [
-    "b3fe0e2d22440fa3da667fb5f98828b16e4529f0",
-    "87797002487f48caf7cb87ecddbb6db2026abd78"
+    "87797002487f48caf7cb87ecddbb6db2026abd78",
+    "b3fe0e2d22440fa3da667fb5f98828b16e4529f0"
   ],
   "linked_pull_requests": [
-    "https://github.com/Generous-Corp/vellum/pull/156",
-    "https://github.com/Generous-Corp/pulp/pull/11443"
+    "https://github.com/Generous-Corp/pulp/pull/11443",
+    "https://github.com/Generous-Corp/vellum/pull/156"
   ],
   "owner": "@danielraffel",
   "rationale": "Hardens the Illustrator adapter's destination checks: file identity instead of resolved path strings, a private converter directory, and the receipt written through its mkstemp descriptor. The same fix is in Pulp's copy of the helper (pulp#11443, merged as 87797002), so nothing remains to port.",
