@@ -817,6 +817,12 @@ def run_chrome_scenario(
                 stop_browser(process, process_group=process_group)
 
 
+# Per-response bound for capture commands once the session is connected.
+# Sized from fleet timings (VELLUM_CDP_TIMING_LOG); see the GPU proof's HTML
+# import step.
+CAPTURE_COMMAND_TIMEOUT = 30.0
+
+
 def run_chrome_interaction_capture(
     build: Path, plan: dict[str, Any], *, chrome: str | None = None,
     profile_factory: Any = tempfile.TemporaryDirectory,
@@ -883,11 +889,20 @@ def run_chrome_interaction_capture(
                             f"Browser CDP did not become ready: {last_error}",
                             status="test_failed",
                     )
-                    client.wait_for_dom()
-                    evidence = client.execute_interaction_plan(plan)
-                    settled_snapshot = client.settle_idle()
-                    screenshot = client.capture_screenshot()
-                    viewport = client.viewport()
+                    # The 2 s bound above only paces the readiness poll. A
+                    # capture command (DOM snapshot, screenshot) on a loaded
+                    # VM can take longer than that with the browser healthy.
+                    client.set_timeout(CAPTURE_COMMAND_TIMEOUT)
+                    try:
+                        client.wait_for_dom()
+                        evidence = client.execute_interaction_plan(plan)
+                        settled_snapshot = client.settle_idle()
+                        screenshot = client.capture_screenshot()
+                        viewport = client.viewport()
+                    except CdpClientError as error:
+                        raise BackendFailure(
+                            f"Browser capture failed: {error}", status="test_failed",
+                        ) from error
                     root, assets, capture_evidence = lower_dom_snapshot(
                         settled_snapshot,
                         settled_snapshot=settled_snapshot,

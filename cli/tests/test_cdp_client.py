@@ -45,6 +45,8 @@ def _send_server_frame(connection: socket.socket, payload: bytes) -> None:
 
 
 class _FakeCdpHandler(socketserver.BaseRequestHandler):
+    screenshot_delay = 0.0
+
     def handle(self) -> None:
         headers = _read_headers(self.request)
         first_line = headers.split(b"\r\n", 1)[0]
@@ -97,6 +99,11 @@ class _FakeCdpHandler(socketserver.BaseRequestHandler):
             except (OSError, ValueError):
                 return
             method = command["method"]
+            if method == "Page.captureScreenshot":
+                # A loaded VM's software compositor: a healthy browser that
+                # answers this one command slowly.
+                import time
+                time.sleep(_FakeCdpHandler.screenshot_delay)
             if method == "Page.navigate":
                 result = {"frameId": "frame-1"}
             elif method == "DOMSnapshot.captureSnapshot":
@@ -134,6 +141,47 @@ class CdpClientTests(unittest.TestCase):
                 self.assertIn("documents", snapshot)
             finally:
                 client.close()
+
+    def test_a_slow_command_names_itself_and_a_longer_bound_waits_for_it(self) -> None:
+        # The HTML import failures said only "timed out": the 2 s readiness
+        # poll bound also bounded every capture command. A command now names
+        # itself and its bound, and the capture's longer bound waits for it.
+        _FakeCdpHandler.screenshot_delay = 0.6
+        log = Path(self.temporary.name) / "timings.jsonl"
+        try:
+            with CdpAdmission(str(self.socket_path)) as admission:
+                client = CdpClient(admission.endpoint, timeout=0.2)
+                client.connect()
+                try:
+                    with self.assertRaisesRegex(
+                        CdpClientError, r"CDP Page.captureScreenshot got no response within 0.2 s"
+                    ):
+                        client.capture_screenshot()
+                finally:
+                    client.close()
+                # The fake serves one connection at a time; let it finish the
+                # slow answer to the closed session before connecting again.
+                client = CdpClient(admission.endpoint, timeout=2.0)
+                client.connect()
+                try:
+                    client.set_timeout(0.2)
+                    client.set_timeout(5.0)
+                    import os
+                    os.environ["VELLUM_CDP_TIMING_LOG"] = str(log)
+                    try:
+                        with self.assertRaisesRegex(CdpClientError, "not a PNG|omitted PNG"):
+                            client.capture_screenshot()
+                    finally:
+                        del os.environ["VELLUM_CDP_TIMING_LOG"]
+                finally:
+                    client.close()
+        finally:
+            _FakeCdpHandler.screenshot_delay = 0.0
+        rows = [json.loads(line) for line in log.read_text().splitlines()]
+        self.assertEqual([row["method"] for row in rows], ["Page.captureScreenshot"])
+        self.assertGreaterEqual(rows[0]["seconds"], 0.5)
+        with self.assertRaises(CdpClientError):
+            client.set_timeout(0)
 
     def test_wait_for_dom_is_bounded_and_retries_until_document_is_ready(self) -> None:
         client = object.__new__(CdpClient)

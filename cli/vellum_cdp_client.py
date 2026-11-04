@@ -6,6 +6,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import secrets
 import socket
 import struct
@@ -74,6 +75,18 @@ def _bounded_json(raw: bytes, *, label: str, limit: int, object_required: bool =
     return value
 
 
+def _record_timing(method: str, seconds: float) -> None:
+    """Append one command's duration to VELLUM_CDP_TIMING_LOG, when set."""
+    path = os.environ.get("VELLUM_CDP_TIMING_LOG")
+    if not path:
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps({"method": method, "seconds": round(seconds, 3)}) + "\n")
+    except OSError:
+        pass
+
+
 class CdpClient:
     """Authenticated loopback CDP session with a narrow command surface."""
 
@@ -92,6 +105,14 @@ class CdpClient:
 
     def __exit__(self, *_exc: object) -> None:
         self.close()
+
+    def set_timeout(self, timeout: float) -> None:
+        """Bound each later socket read; a connected session keeps its socket."""
+        if timeout <= 0 or timeout > 120:
+            raise CdpClientError("CDP timeout is outside the bounded range")
+        self.timeout = timeout
+        if self._socket is not None:
+            self._socket.settimeout(timeout)
 
     def discover(self) -> dict[str, Any]:
         value = self._discover_path("/json/version")
@@ -370,6 +391,19 @@ class CdpClient:
         if len(payload) > MAX_DISCOVERY_BYTES:
             raise CdpClientError("CDP command exceeds the bounded request size")
         self._send_frame(sock, 0x1, payload)
+        started = time.monotonic()
+        try:
+            return self._await_response(sock, command_id)
+        except OSError as error:
+            # A bare socket timeout reads as "timed out"; name the command and
+            # the bound so a slow browser is told apart from a broken one.
+            raise CdpClientError(
+                f"CDP {method} got no response within {self.timeout:g} s: {error}"
+            ) from error
+        finally:
+            _record_timing(method, time.monotonic() - started)
+
+    def _await_response(self, sock: socket.socket, command_id: int) -> dict[str, Any]:
         while True:
             opcode, data = self._read_frame(sock)
             if opcode == 0x9:
