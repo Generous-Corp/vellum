@@ -876,6 +876,16 @@ jobs:
           if [[ "$GITHUB_EVENT_NAME" == merge_group ]]; then
             test "$VELLUM_GIT_BASE" != ""
           fi
+          # Overdue and pending-age budgets break with the clock, not with a
+          # change: a pull request or queue entry cannot clear them, and
+          # failing it only stalls every landing until someone classifies the
+          # events. Those runs report them; pushes to main and release tags
+          # still fail on them, so nothing is released with overdue events.
+          # Coverage gaps and every other budget stay fatal everywhere.
+          observatory_time_budgets=enforce
+          if [[ "$GITHUB_EVENT_NAME" == pull_request || "$GITHUB_EVENT_NAME" == merge_group ]]; then
+            observatory_time_budgets=report
+          fi
           python3 tools/provenance/test_observatory.py
           python3 tools/provenance/test_observatory_mirror_import.py
           python3 tools/provenance/test_receiver.py
@@ -899,8 +909,12 @@ jobs:
             --pulp-target "${{ steps.observatory-cursor.outputs.pulp-sha }}" \
             --vellum-target "$observatory_vellum_target" \
             --vellum-tail-policy "$observatory_tail_policy" \
+            --time-budgets "$observatory_time_budgets" \
             "${observatory_now_args[@]}" \
             --output "$RUNNER_TEMP/observatory-health-report.json"
+          jq -r '(.reported_time_budget_violations // [])[] |
+            "::warning::observatory \(.) (reported, not enforced, on this \(env.GITHUB_EVENT_NAME) run; classify the events, see the open observatory-overdue issue)"' \
+            "$RUNNER_TEMP/observatory-health-report.json"
           python3 tools/provenance/test_verify_pulp_observation_scope.py
           python3 tools/provenance/verify_pulp_observation_scope.py \
             --output "$RUNNER_TEMP/pulp-observation-scope-report.json"
