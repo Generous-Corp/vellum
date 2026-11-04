@@ -18,11 +18,18 @@ trusted to say what belongs in the archive:
   * the shipped libdawn_combined.a is the library the shipped lock names, and
     the package's Targets files import only the shipped gpu-runtime libraries.
 
-With --repo the archive is held to that checkout instead of to itself: the
-file set is derived from the source, the lock, headers, license, verbatim
-CMake modules and the assembled notice must be byte-identical to what the
-source produces, the generated config must embed the source template, and the
-record's source commit and version must be the checkout's HEAD and version.
+With --repo (and --renderer-archive) the archive is held to that checkout
+instead of to itself: the file set is derived from the source; the lock,
+headers, license, verbatim CMake modules and the assembled notice must be
+byte-identical to what the source produces; the four generated package files
+(config, version and both exports, all of which run at a consumer's configure
+time) must equal what configuring the source with the builder's own configure
+command generates on this host; and the record's source commit and version
+must be the checkout's HEAD and version.
+
+Without --repo the result is a consistency check of the archive, not a trust
+decision: it says so on stderr and records checked_against_source false. A
+publishing gate must use --repo at the exact source commit.
 
 With --consumer it then extracts the archive and builds and runs a consumer
 that finds the package by exact version and links Device against the Dawn
@@ -157,9 +164,30 @@ def git_head(repo: Path) -> str:
     return completed.stdout.strip()
 
 
-def verify_against_source(files: dict[str, bytes], metadata: dict, repo: Path) -> None:
+def load_builder(repo: Path):
     sys.path.insert(0, str(repo / "scripts"))
     import build_gpu_runtime_artifact as builder  # noqa: PLC0415
+    return builder
+
+
+def regenerate_package_files(repo: Path, renderer_archive: Path) -> dict[str, bytes]:
+    """Configure the source with the builder's configure command (no compile)
+    and return the package files CMake generates for it."""
+    builder = load_builder(repo)
+    with tempfile.TemporaryDirectory(prefix="vellum-gpu-runtime-regenerate-") as temporary_text:
+        temporary = Path(temporary_text)
+        command = builder.configure_command(repo, renderer_archive.resolve(),
+                                            temporary / "build", temporary / "prefix")
+        completed = subprocess.run(command, text=True, capture_output=True, check=False)
+        if completed.returncode:
+            raise VerificationError("could not configure the source to regenerate the package "
+                                    f"files:\n{completed.stderr[-3000:]}")
+        return builder.generated_package_files(temporary / "build")
+
+
+def verify_against_source(files: dict[str, bytes], metadata: dict, repo: Path,
+                          generated: dict[str, bytes]) -> None:
+    builder = load_builder(repo)
 
     expected = set(builder.expected_files(repo))
     require(set(files) == expected,
@@ -176,18 +204,18 @@ def verify_against_source(files: dict[str, bytes], metadata: dict, repo: Path) -
             "shipped license differs from the source")
     require(files[NOTICE_MEMBER].decode("utf-8") == builder.dawn_notice(repo),
             "shipped notice differs from the one the source assembles")
-    template = (repo / "gpu-runtime/cmake/VellumGpuRuntimeConfig.cmake.in").read_text(encoding="utf-8")
-    body = template.split("@PACKAGE_INIT@", 1)[1]
-    body = body.replace("@GPU_RUNTIME_HAS_DEVICE@", "ON").replace("@CMAKE_INSTALL_LIBDIR@", "lib")
-    require(files[f"{PACKAGE_DIR}/VellumGpuRuntimeConfig.cmake"].decode("utf-8").endswith(body),
-            "shipped package config is not the source template")
+    require(set(generated) == set(GENERATED), "regenerated package files are incomplete")
+    for member in GENERATED:
+        require(files[member] == generated[member],
+                f"shipped {member} differs from what the source generates")
     require(metadata.get("source_commit") == git_head(repo),
             "artifact record names another source commit than the checkout")
     require(metadata.get("version") == builder.vellum_version(repo),
             "artifact record names another version than the checkout")
 
 
-def verify(archive: Path, repo: Path | None) -> dict[str, object]:
+def verify(archive: Path, repo: Path | None,
+           generated: dict[str, bytes] | None = None) -> dict[str, object]:
     match = NAME.fullmatch(archive.name)
     require(match is not None, f"archive name is not vellum-gpu-runtime-<version>-<target>.tar.gz: "
                                f"{archive.name}")
@@ -247,7 +275,9 @@ def verify(archive: Path, repo: Path | None) -> dict[str, object]:
             "package targets import something other than the shipped gpu-runtime libraries")
 
     if repo is not None:
-        verify_against_source(files, metadata, repo)
+        require(generated is not None, "holding an archive to its source needs the "
+                                       "regenerated package files (--renderer-archive)")
+        verify_against_source(files, metadata, repo, generated)
     return {
         "archive": archive.name,
         "sha256": sha256_bytes(archive.read_bytes()),
@@ -294,6 +324,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--archive", type=Path, required=True)
     parser.add_argument("--repo", type=Path, help="hold the archive to this checkout")
+    parser.add_argument("--renderer-archive", type=Path,
+                        help="with --repo: the locked skia-builder asset, to regenerate the "
+                             "package files from the source")
     parser.add_argument("--consumer", action="store_true",
                         help="build and run the audio-only consumer against the archive")
     parser.add_argument("--require-adapter", action="store_true",
@@ -303,7 +336,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.consumer and args.repo is None:
             raise VerificationError("--consumer needs --repo")
-        result = verify(args.archive, args.repo.resolve() if args.repo else None)
+        if args.repo is not None and args.renderer_archive is None:
+            raise VerificationError("--repo needs --renderer-archive")
+        repo = args.repo.resolve() if args.repo else None
+        generated = regenerate_package_files(repo, args.renderer_archive) if repo else None
+        result = verify(args.archive, repo, generated)
+        if repo is None:
+            print("verify-gpu-runtime-artifact: checked for consistency only; without --repo "
+                  "this is not a trust decision", file=sys.stderr)
         if args.consumer:
             result["consumer"] = run_consumer(args.archive, str(result["version"]),
                                               args.repo.resolve(), args.require_adapter)

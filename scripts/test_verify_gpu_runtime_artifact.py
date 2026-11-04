@@ -131,7 +131,7 @@ class GpuRuntimeArtifactTest(unittest.TestCase):
         archive = self.archive()
         verifier.verify(archive, None)  # self-consistent, which is why --repo exists
         with self.assertRaises(verifier.VerificationError) as caught:
-            verifier.verify(archive, ROOT)
+            verifier.verify(archive, ROOT, self.generated())
         self.assertIn("differs from the source", str(caught.exception))
 
     def test_an_extra_library_is_refused(self) -> None:
@@ -206,47 +206,60 @@ class GpuRuntimeArtifactTest(unittest.TestCase):
             files[member] = (ROOT / source).read_bytes()
         files[verifier.LICENSE_MEMBER] = (ROOT / "LICENSE.md").read_bytes()
         files[verifier.NOTICE_MEMBER] = builder.dawn_notice(ROOT).encode()
-        template = (ROOT / "gpu-runtime/cmake/VellumGpuRuntimeConfig.cmake.in").read_text()
-        body = template.split("@PACKAGE_INIT@", 1)[1].replace(
-            "@GPU_RUNTIME_HAS_DEVICE@", "ON").replace("@CMAKE_INSTALL_LIBDIR@", "lib")
-        files[f"{builder.PACKAGE_DIR}/VellumGpuRuntimeConfig.cmake"] = ("# init\n" + body).encode()
+        files.update(self.generated())
         return files
+
+    def generated(self) -> dict[str, bytes]:
+        """Stand-ins for what configuring the source generates (the unit tests
+        do not configure; the real regeneration runs in gpu-macos)."""
+        return {member: f"# generated {member}\n".encode() for member in verifier.GENERATED}
 
     def source_record(self) -> dict:
         head = verifier.git_head(ROOT)
         return {"source_commit": head, "version": VERSION}
 
     def test_source_comparison_accepts_the_source(self) -> None:
-        verifier.verify_against_source(self.source_files(), self.source_record(), ROOT)
+        verifier.verify_against_source(self.source_files(), self.source_record(), ROOT,
+                                       self.generated())
 
     def test_a_record_from_another_commit_is_refused_against_the_source(self) -> None:
         record = dict(self.source_record(), source_commit="b" * 40)
         with self.assertRaisesRegex(verifier.VerificationError, "another source commit"):
-            verifier.verify_against_source(self.source_files(), record, ROOT)
+            verifier.verify_against_source(self.source_files(), record, ROOT, self.generated())
 
     def test_a_record_of_another_version_is_refused_against_the_source(self) -> None:
         record = dict(self.source_record(), version="9.9.9")
         with self.assertRaisesRegex(verifier.VerificationError, "another version"):
-            verifier.verify_against_source(self.source_files(), record, ROOT)
+            verifier.verify_against_source(self.source_files(), record, ROOT, self.generated())
 
     def test_a_notice_other_than_the_assembled_one_is_refused(self) -> None:
         files = self.source_files()
         files[verifier.NOTICE_MEMBER] += b"\n### Extra\n"
         with self.assertRaisesRegex(verifier.VerificationError, "notice differs"):
-            verifier.verify_against_source(files, self.source_record(), ROOT)
+            verifier.verify_against_source(files, self.source_record(), ROOT, self.generated())
 
-    def test_a_config_other_than_the_template_is_refused(self) -> None:
-        files = self.source_files()
-        key = f"{builder.PACKAGE_DIR}/VellumGpuRuntimeConfig.cmake"
-        files[key] = files[key].replace(b"gpu_runtime_find_dawn", b"message", 1)
-        with self.assertRaisesRegex(verifier.VerificationError, "not the source template"):
-            verifier.verify_against_source(files, self.source_record(), ROOT)
+    def test_every_generated_package_file_is_held_to_the_source(self) -> None:
+        injected = b'execute_process(COMMAND /bin/sh -c "touch /tmp/pwned")\n'
+        for member in verifier.GENERATED:
+            for label, edit in (("prepended", lambda data: injected + data),
+                                ("appended", lambda data: data + injected)):
+                with self.subTest(member=member, edit=label):
+                    files = self.source_files()
+                    files[member] = edit(files[member])
+                    with self.assertRaisesRegex(verifier.VerificationError,
+                                                "differs from what the source generates"):
+                        verifier.verify_against_source(files, self.source_record(), ROOT,
+                                                       self.generated())
+
+    def test_holding_to_the_source_needs_regenerated_files(self) -> None:
+        with self.assertRaisesRegex(verifier.VerificationError, "regenerated package files"):
+            verifier.verify(self.archive(), ROOT)
 
     def test_a_file_set_other_than_the_source_is_refused(self) -> None:
         files = self.source_files()
         del files[sorted(name for name in files if name.startswith("include/"))[0]]
         with self.assertRaisesRegex(verifier.VerificationError, "differ from what the source installs"):
-            verifier.verify_against_source(files, self.source_record(), ROOT)
+            verifier.verify_against_source(files, self.source_record(), ROOT, self.generated())
 
     def test_targets_importing_another_library_are_refused(self) -> None:
         path = self.payload / builder.PACKAGE_DIR / "VellumGpuRuntimeTargets-release.cmake"
@@ -297,7 +310,7 @@ class GpuRuntimeArtifactTest(unittest.TestCase):
 
     def test_a_lock_that_differs_from_the_source_is_refused(self) -> None:
         with self.assertRaises(verifier.VerificationError) as caught:
-            verifier.verify(self.archive(), ROOT)
+            verifier.verify(self.archive(), ROOT, self.generated())
         self.assertIn("renderer-lock.json differs from the source", str(caught.exception))
 
     def test_a_dawn_library_the_lock_does_not_name_is_refused(self) -> None:

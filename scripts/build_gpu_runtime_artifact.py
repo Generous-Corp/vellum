@@ -82,18 +82,69 @@ def normalize_library(path: Path) -> None:
     path.write_bytes(data)
 
 
-def toolchain_identity(env: dict[str, str]) -> dict[str, str]:
-    def first_line(command: list[str]) -> str:
-        completed = subprocess.run(command, env=env, text=True, capture_output=True, check=False)
-        if completed.returncode:
-            raise ArtifactError(f"could not identify the toolchain: {' '.join(command)}")
-        return completed.stdout.strip().splitlines()[0]
-    return {
-        "compiler": first_line(["c++", "--version"]),
-        "sdk": first_line(["xcrun", "--sdk", "macosx", "--show-sdk-version"]),
-        "cmake": first_line(["cmake", "--version"]),
-        "generator": GENERATOR,
+def toolchain_identity(build_dir: Path) -> dict[str, str]:
+    """The compiler, SDK and CMake this build actually used, read from the
+    configured build rather than from whatever is first on PATH."""
+    cache = (build_dir / "CMakeCache.txt").read_text(encoding="utf-8")
+
+    def cached(name: str) -> str:
+        match = re.search(rf"^{name}:[A-Z]+=(.*)$", cache, re.M)
+        return match.group(1) if match else ""
+
+    version = ""
+    for compiler_file in sorted((build_dir / "CMakeFiles").glob("*/CMakeCXXCompiler.cmake")):
+        match = re.search(r'set\(CMAKE_CXX_COMPILER_VERSION "([^"]+)"\)',
+                          compiler_file.read_text(encoding="utf-8"))
+        if match:
+            version = match.group(1)
+    identity = {
+        "compiler": cached("CMAKE_CXX_COMPILER"),
+        "compiler_version": version,
+        "sysroot": cached("CMAKE_OSX_SYSROOT"),
+        "cmake": f"{cached('CMAKE_CACHE_MAJOR_VERSION')}.{cached('CMAKE_CACHE_MINOR_VERSION')}."
+                 f"{cached('CMAKE_CACHE_PATCH_VERSION')}",
+        "generator": cached("CMAKE_GENERATOR"),
     }
+    if not identity["compiler"] or not version or identity["generator"] != GENERATOR:
+        raise ArtifactError("could not read the build's toolchain from its CMake cache")
+    return identity
+
+
+def configure_command(repo: Path, renderer_archive: Path, build_dir: Path, prefix: Path,
+                      flags: str = "") -> list[str]:
+    """The one configure both the builder and the verifier's regeneration use,
+    so the generated package files they produce are comparable byte for byte."""
+    command = [
+        "cmake", "-S", str(repo / "gpu-runtime"), "-B", str(build_dir),
+        "-G", GENERATOR,
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DCMAKE_OSX_ARCHITECTURES=arm64",
+        "-DCMAKE_OSX_DEPLOYMENT_TARGET=13.3",
+        "-DGPU_RUNTIME_BUILD_TESTS=OFF",
+        "-DGPU_RUNTIME_INSTALL=ON",
+        "-DGPU_RUNTIME_REQUIRE_DEVICE=ON",
+        f"-DGPU_RUNTIME_RENDERER_ARCHIVE={renderer_archive}",
+        f"-DCMAKE_INSTALL_PREFIX={prefix}",
+    ]
+    if flags:
+        for language in ("CXX", "OBJCXX"):
+            command.append(f"-DCMAKE_{language}_FLAGS={flags}")
+    return command
+
+
+def generated_package_files(build_dir: Path) -> dict[str, bytes]:
+    """The four package files CMake generates for a configured build: the
+    config and version files at configure time, the exports at generate."""
+    exports = sorted((build_dir / "CMakeFiles" / "Export").glob("*/VellumGpuRuntimeTargets*.cmake"))
+    files = {f"{PACKAGE_DIR}/{path.name}": path.read_bytes() for path in exports}
+    for name in ("VellumGpuRuntimeConfig.cmake", "VellumGpuRuntimeConfigVersion.cmake"):
+        files[f"{PACKAGE_DIR}/{name}"] = (build_dir / name).read_bytes()
+    expected = {f"{PACKAGE_DIR}/{name}" for name in (
+        "VellumGpuRuntimeConfig.cmake", "VellumGpuRuntimeConfigVersion.cmake",
+        "VellumGpuRuntimeTargets.cmake", "VellumGpuRuntimeTargets-release.cmake")}
+    if set(files) != expected:
+        raise ArtifactError(f"unexpected generated package files: {sorted(files)}")
+    return files
 
 
 def archive_name(version: str, target: str) -> str:
@@ -198,26 +249,16 @@ def build(args: argparse.Namespace) -> dict[str, object]:
             maps.append(f"-f{flag}-prefix-map={repo}={canonical_source}")
         flags = " ".join(maps)
         env = dict(os.environ, ZERO_AR_DATE="1")
-        configure = [
-            "cmake", "-S", str(repo / "gpu-runtime"), "-B", str(build_dir),
-            "-DCMAKE_BUILD_TYPE=Release",
-            "-DCMAKE_OSX_ARCHITECTURES=arm64",
-            "-DCMAKE_OSX_DEPLOYMENT_TARGET=13.3",
-            "-DGPU_RUNTIME_BUILD_TESTS=OFF",
-            "-DGPU_RUNTIME_INSTALL=ON",
-            "-DGPU_RUNTIME_REQUIRE_DEVICE=ON",
-            f"-DGPU_RUNTIME_RENDERER_ARCHIVE={renderer_archive}",
-            f"-DCMAKE_INSTALL_PREFIX={payload}",
-        ]
-        for language in ("CXX", "OBJCXX"):
-            configure.append(f"-DCMAKE_{language}_FLAGS={flags}")
-        configure.extend(["-G", GENERATOR])
+        configure = configure_command(repo, renderer_archive, build_dir, payload, flags)
         run(configure, env=env)
         jobs = str(max(1, min(args.jobs, os.cpu_count() or 1)))
         run(["cmake", "--build", str(build_dir), "--parallel", jobs], env=env)
         run(["cmake", "--install", str(build_dir)], env=env)
         for relative in LIBRARIES:
             normalize_library(payload / relative)
+        for name, data in generated_package_files(build_dir).items():
+            if (payload / name).read_bytes() != data:
+                raise ArtifactError(f"installed {name} differs from the generated one")
         lock = json.loads((repo / LOCK).read_text(encoding="utf-8"))
         locked_dawn = lock["platforms"]["macos-arm64"]["archives"][DAWN_ARCHIVE]
         if sha256(payload / DAWN_LIBRARY) != locked_dawn:
@@ -239,7 +280,7 @@ def build(args: argparse.Namespace) -> dict[str, object]:
             "source_tree_clean": clean,
             "renderer_lock_sha256": sha256(repo / LOCK),
             "renderer_milestone": json.loads(lock_bytes)["milestone"],
-            "toolchain": toolchain_identity(env),
+            "toolchain": toolchain_identity(build_dir),
             "files": payload_files(payload),
         }
         (payload / METADATA_NAME).write_text(
