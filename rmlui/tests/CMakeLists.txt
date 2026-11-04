@@ -30,6 +30,17 @@ add_test(NAME vellum.rmlui.soft-render-golden COMMAND vellum-rmlui-soft-render-g
 set_tests_properties(vellum.rmlui.soft-render-golden PROPERTIES
     WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 
+if(VELLUM_RMLUI_VELLUM_RENDERER)
+    vellum_rmlui_add_test(vellum-rmlui-vellum-renderer-test vellum_renderer_test.cpp
+        VellumRmlUi::VellumRenderer VellumRmlUi::SoftRenderer Vellum::DawnHeaders)
+    if(APPLE)
+        set_target_properties(vellum-rmlui-vellum-renderer-test PROPERTIES
+            OSX_ARCHITECTURES arm64
+            BUILD_RPATH "$<TARGET_FILE_DIR:Vellum::Gpu>")
+    endif()
+    add_test(NAME vellum.rmlui.vellum-renderer COMMAND vellum-rmlui-vellum-renderer-test)
+endif()
+
 if(VELLUM_RMLUI_LUA)
     vellum_rmlui_add_test(vellum-rmlui-lua-test lua_test.cpp VellumRmlUi::Lua)
     # The sandbox's internal guards are tested directly, against the same
