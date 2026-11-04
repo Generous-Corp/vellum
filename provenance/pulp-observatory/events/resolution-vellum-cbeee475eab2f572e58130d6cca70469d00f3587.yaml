@@ -1,0 +1,22 @@
+{
+  "contract_tests": [
+    "vellum.authoring",
+    "vellum.capture-stats",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-04T16:48:51Z",
+  "disposition": "superseded",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-cbeee475eab2f572e58130d6cca70469d00f3587",
+  "kind": "resolution",
+  "linked_commits": [
+    "cbeee475eab2f572e58130d6cca70469d00f3587"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Integration merge (Merge remote-tracking branch 'origin/main' into r117). It carries no change beyond the commits it merges, whose own observations are classified separately in this ledger, so it has no independent contract.",
+  "resolves": "vellum-cbeee475eab2f572e58130d6cca70469d00f3587",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

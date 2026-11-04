@@ -53,13 +53,18 @@ bool trace_sink_installed() noexcept;
 /// Process options a host may set instead of relying on environment variables.
 struct RuntimeOptions {
     /// Request Dawn's fallback (software) adapter for GpuCompute. When unset,
-    /// GPU_RUNTIME_SOFTWARE_ADAPTER=1/true/on in the environment requests it.
+    /// GPU_RUNTIME_SOFTWARE_ADAPTER=1/true/on in the environment requests it
+    /// (the prefix is environment_prefix below).
     enum class Choice { from_environment, yes, no };
     Choice software_adapter = Choice::from_environment;
     /// Opt into the Skia log bridge. When unset, an installed trace sink or
     /// GPU_RUNTIME_LOG_BRIDGE=1/true/yes/on enables it, and
     /// GPU_RUNTIME_LOG_BRIDGE=0/false/no/off disables it.
     Choice log_bridge = Choice::from_environment;
+    /// Prefix of the environment variables read for `from_environment`
+    /// choices: <prefix>SOFTWARE_ADAPTER and <prefix>LOG_BRIDGE. A host keeps
+    /// its own variable names by setting its prefix (static storage only).
+    const char* environment_prefix = "GPU_RUNTIME_";
 };
 
 void set_runtime_options(const RuntimeOptions& options) noexcept;

@@ -130,6 +130,16 @@ int main() {
     setenv("GPU_RUNTIME_LOG_BRIDGE", "off", 1);
     check(!skia_log_bridge_enabled(), "GPU_RUNTIME_LOG_BRIDGE=off did not win");
     unsetenv("GPU_RUNTIME_LOG_BRIDGE");
+    // A host's own prefix replaces the variable names.
+    set_runtime_options({.environment_prefix = "HOST_GPU_"});
+    setenv("HOST_GPU_LOG_BRIDGE", "off", 1);
+    check(!skia_log_bridge_enabled(), "the host's environment prefix was not read");
+    setenv("GPU_RUNTIME_LOG_BRIDGE", "off", 1);
+    setenv("HOST_GPU_LOG_BRIDGE", "on", 1);
+    check(skia_log_bridge_enabled(), "the default variable was read despite a host prefix");
+    unsetenv("HOST_GPU_LOG_BRIDGE");
+    unsetenv("GPU_RUNTIME_LOG_BRIDGE");
+    set_runtime_options({});
     check(install_skia_log_bridge_if_enabled() == SkiaLogBridgeStatus::installed &&
               fake_installs == 1,
           "the enabled bridge did not install through the registered installer");

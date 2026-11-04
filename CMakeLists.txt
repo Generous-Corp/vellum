@@ -67,12 +67,6 @@ add_subdirectory(foundation)
 add_subdirectory(runtime)
 add_subdirectory(components)
 
-# The RmlUi module is a self-contained project that depends on nothing else in
-# Vellum; it is also built on its own with `cmake -S rmlui`.
-if(VELLUM_ENABLE_RMLUI)
-    add_subdirectory(rmlui)
-endif()
-
 if(VELLUM_ENABLE_GPU)
     include(cmake/VellumSkiaDawn.cmake)
 endif()
@@ -129,6 +123,13 @@ if(APPLE AND TARGET vellum-gpu)
     endif()
 
     add_subdirectory(apps/gpu-native)
+endif()
+
+# The RmlUi module is a self-contained project; it is also built on its own
+# with `cmake -S rmlui`. It is added after the graphics targets so its optional
+# VellumRenderer can link Vellum::Gpu; nothing else in it uses Vellum.
+if(VELLUM_ENABLE_RMLUI)
+    add_subdirectory(rmlui)
 endif()
 
 if(VELLUM_BUILD_TESTS)
@@ -249,7 +250,8 @@ if(VELLUM_BUILD_TESTS)
                 packaged_text_fallback_weights
                 repeating_linear_gradient_non_square
                 outset_shadow_spread_diagonal
-                attributed_text_runs_materialization)
+                attributed_text_runs_materialization
+                textured_triangle_mesh)
             add_test(NAME "vellum.gpu.${_vellum_fixture}"
                 COMMAND vellum-gpu-style-test "${_vellum_fixture}")
         endforeach()
@@ -301,6 +303,10 @@ if(VELLUM_BUILD_TESTS)
     add_test(NAME vellum.authoring-phase3-contracts
         COMMAND "${Python3_EXECUTABLE}"
             authoring/tests/test_phase3_contracts.py
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.authoring-illustrator-to-svg
+        COMMAND "${Python3_EXECUTABLE}"
+            authoring/adapters/illustrator/test_illustrator_to_svg.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME vellum.parity-packaging-unit
         COMMAND "${Python3_EXECUTABLE}"

@@ -1,0 +1,22 @@
+{
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-04T16:48:51Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-7b3a243f8e444eb6e45d09dc7a1354dba57f7cdb",
+  "kind": "resolution",
+  "linked_commits": [
+    "7b3a243f8e444eb6e45d09dc7a1354dba57f7cdb"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/vellum/pull/126"
+  ],
+  "owner": "@danielraffel",
+  "rationale": "Vellum-native SDK link fix: the Skia/Dawn provider is the single owner of the libm symbols it links, so the installed GPU frontend has one definition. It changes Vellum's provider packaging only; Pulp links its own renderer and has no counterpart to port.",
+  "resolves": "vellum-7b3a243f8e444eb6e45d09dc7a1354dba57f7cdb",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

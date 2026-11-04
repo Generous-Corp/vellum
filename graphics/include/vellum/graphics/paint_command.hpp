@@ -16,6 +16,7 @@ struct PaintCommand final {
     enum class Kind {
         rectangle,
         text,
+        mesh,
     };
 
     Kind kind = Kind::rectangle;
@@ -33,6 +34,8 @@ struct PaintCommand final {
     bool underline = false;
     bool strikethrough = false;
     std::vector<TextRun> text_runs;
+    /// Mesh geometry, relative to `bounds.x`/`bounds.y`.
+    std::shared_ptr<const TriangleMesh> mesh;
 };
 
 struct ResolvedLinearGradient final {
@@ -52,5 +55,11 @@ struct ResolvedLinearGradient final {
     const Rect& bounds, const LinearGradient& gradient);
 
 [[nodiscard]] std::vector<PaintCommand> make_paint_commands(const Scene& scene);
+
+/// Whether a mesh can be drawn as given: every index names a vertex, the index
+/// count is a multiple of three, every position and texture coordinate is
+/// finite, and a texture's pixel buffer matches its dimensions. On failure
+/// `reason`, when non-null, says which rule failed.
+[[nodiscard]] bool mesh_is_valid(const TriangleMesh& mesh, std::string* reason = nullptr);
 
 }  // namespace vellum::graphics

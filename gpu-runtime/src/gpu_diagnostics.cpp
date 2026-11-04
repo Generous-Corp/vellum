@@ -112,7 +112,7 @@ bool skia_log_bridge_enabled() noexcept {
         break;
     }
     bool value = trace_sink_installed();
-    detail::env_flag("GPU_RUNTIME_LOG_BRIDGE", value);
+    detail::runtime_env_flag("LOG_BRIDGE", value);
     return value;
 }
 

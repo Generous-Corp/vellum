@@ -1,0 +1,22 @@
+{
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-04T16:48:51Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-edcfe4116a74f423bd845a9f0419341e442e6225",
+  "kind": "resolution",
+  "linked_commits": [
+    "edcfe4116a74f423bd845a9f0419341e442e6225"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/vellum/pull/165"
+  ],
+  "owner": "@danielraffel",
+  "rationale": "Adds a textured triangle-mesh primitive to Vellum's native graphics layer and VellumRmlUi::VellumRenderer, which draws RmlUi through it. This is Vellum-native code with no Pulp counterpart; it does not authorize Pulp consumption or copy a Pulp implementation.",
+  "resolves": "vellum-edcfe4116a74f423bd845a9f0419341e442e6225",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}
