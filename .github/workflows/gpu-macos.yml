@@ -107,15 +107,24 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          archive="$RUNNER_TEMP/skia-build-mac-universal-gpu-release.zip"
+          # gpu-runtime/renderer-lock.json is the only place the pin is written.
+          read -r url asset sha256 < <(python3 -I - <<'PY'
+          import json
+          lock = json.load(open("gpu-runtime/renderer-lock.json", encoding="utf-8"))
+          platform = lock["platforms"]["macos-arm64"]
+          url = "/".join((lock["builder"]["repository"], "releases/download",
+                          lock["milestone"], platform["asset"]))
+          print(url, platform["asset"], platform["sha256"])
+          PY
+          )
+          [[ "$sha256" =~ ^[0-9a-f]{64}$ && "$asset" =~ ^[A-Za-z0-9_.-]+$ ]]
+          archive="$RUNNER_TEMP/$asset"
           curl --fail --location --silent --show-error \
             --retry 5 --retry-delay 2 --retry-all-errors \
             --continue-at - \
-            https://github.com/danielraffel/skia-builder/releases/download/chrome/m158/skia-build-mac-universal-gpu-release.zip \
+            "$url" \
             --output "$archive"
-          printf '%s  %s\n' \
-            dca73c0eee5b0f6d129fe357d0754f7165c6b436051e0de947aeedd3e1bde250 \
-            "$archive" | shasum -a 256 -c -
+          printf '%s  %s\n' "$sha256" "$archive" | shasum -a 256 -c -
           printf 'VELLUM_SKIA_ARCHIVE=%s\n' "$archive" >> "$GITHUB_ENV"
           # One digest-checked fetch of the mirror's pinned dependencies serves
           # the GPU build and both reproducible SDK builds.
@@ -145,6 +154,8 @@ jobs:
           python3 scripts/test_sterile_acceptance_bundle.py
           python3 scripts/test_compare_sdk_archives.py
           python3 -m unittest discover -s tools/mirror -p 'test_*.py'
+          python3 -I scripts/test_check_renderer_lock.py
+          python3 -I scripts/check_renderer_lock.py
           python3 scripts/test_select_exact_provenance_run.py
           python3 scripts/test_verify_exact_provenance_artifact.py
           python3 scripts/test_run_parity_proofs.py

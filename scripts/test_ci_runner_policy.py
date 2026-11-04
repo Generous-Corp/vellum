@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import textwrap
@@ -909,11 +910,19 @@ class RunnerPolicyTests(unittest.TestCase):
         gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
         self.assertIn("--retry 5 --retry-delay 2 --retry-all-errors", gpu)
         self.assertIn("--continue-at -", gpu)
-        # The workflow downloads and hash-checks exactly the archive the lock pins.
+        self.assertIn('printf \'%s  %s\\n\' "$sha256" "$archive" | shasum -a 256 -c -', gpu)
+        # The workflow reads the pin from gpu-runtime's lock; running its own
+        # reader must yield exactly the archive the release lock pins.
+        step = gpu.split("- name: Download and verify the locked Skia and Dawn archive", 1)[1]
+        reader = step.split("<<'PY'\n", 1)[1].split("\n          PY\n", 1)[0]
+        reader = "\n".join(line.removeprefix("          ") for line in reader.splitlines())
+        result = subprocess.run([sys.executable, "-I", "-c", reader], cwd=ROOT,
+                                capture_output=True, text=True, check=True)
+        url, asset, sha256 = result.stdout.split()
         lock = json.loads((ROOT / "provenance/third-party-lock.json").read_text(encoding="utf-8"))
         artifact = lock["runtime_toolchain_dependencies"]["renderer"]["artifact"]
-        self.assertIn(artifact["url"], gpu)
-        self.assertIn(artifact["sha256"], gpu)
+        self.assertEqual((url, asset, sha256),
+                         (artifact["url"], artifact["name"], artifact["sha256"]))
 
     def test_workflows_use_their_reviewed_runner_class(self) -> None:
         workflow_paths = sorted(
