@@ -596,8 +596,8 @@ class Wiring(unittest.TestCase):
                 text = (WORKFLOWS / workflow).read_text()
                 self.assertIn("tags: ['v[0-9]*', 'authority/**', 'dry-run/**']", text)
         gpu = (WORKFLOWS / "gpu-macos.yml").read_text()
-        self.assertEqual(gpu.count("if: startsWith(github.ref, 'refs/tags/v') || "
-                                   "startsWith(github.ref, 'refs/tags/dry-run/')"), 2)
+        self.assertEqual(gpu.count("(startsWith(github.ref, 'refs/tags/v') || "
+                                   "startsWith(github.ref, 'refs/tags/dry-run/'))"), 2)
         provenance = (WORKFLOWS / "provenance.yml").read_text()
         self.assertIn('release_readiness+=(--release-tag "${BASH_REMATCH[1]}")', provenance)
 

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 namespace vellum::graphics {
 namespace {
@@ -50,6 +51,13 @@ void append_node(const SceneNode& node, float parent_x, float parent_y,
             .strikethrough = node.strikethrough,
             .text_runs = node.text_runs,
         });
+    } else if (node.kind == SceneNode::Kind::mesh && node.mesh) {
+        output.push_back({
+            .kind = PaintCommand::Kind::mesh,
+            .node_id = node.id,
+            .bounds = absolute,
+            .mesh = node.mesh,
+        });
     }
     for (const auto& child : node.children) {
         append_node(child, absolute.x, absolute.y, output);
@@ -87,6 +95,44 @@ ResolvedLinearGradient resolve_linear_gradient(
             return left.position < right.position;
         });
     return resolved;
+}
+
+bool mesh_is_valid(const TriangleMesh& mesh, std::string* reason) {
+    const auto fail = [reason](const char* message) {
+        if (reason != nullptr) *reason = message;
+        return false;
+    };
+    if (mesh.indices.size() % 3U != 0U) {
+        return fail("the index count is not a multiple of three");
+    }
+    for (const auto index : mesh.indices) {
+        if (index >= mesh.vertices.size()) {
+            return fail("an index names a vertex past the end of the vertex list");
+        }
+    }
+    for (const auto& vertex : mesh.vertices) {
+        if (!std::isfinite(vertex.x) || !std::isfinite(vertex.y) ||
+            !std::isfinite(vertex.u) || !std::isfinite(vertex.v)) {
+            return fail("a vertex position or texture coordinate is not finite");
+        }
+    }
+    if (mesh.texture) {
+        const auto& texture = *mesh.texture;
+        if (texture.width == 0U || texture.height == 0U) {
+            return fail("the texture has no pixels");
+        }
+        const auto expected = static_cast<std::uint64_t>(texture.width) *
+                              static_cast<std::uint64_t>(texture.height) * 4U;
+        if (texture.premultiplied_rgba.size() != expected) {
+            return fail("the texture's pixel buffer does not match its dimensions");
+        }
+    }
+    if (mesh.clip_enabled &&
+        (!std::isfinite(mesh.clip.x) || !std::isfinite(mesh.clip.y) ||
+         !std::isfinite(mesh.clip.width) || !std::isfinite(mesh.clip.height))) {
+        return fail("the clip rectangle is not finite");
+    }
+    return true;
 }
 
 std::vector<PaintCommand> make_paint_commands(const Scene& scene) {
