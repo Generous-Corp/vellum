@@ -122,6 +122,78 @@ void report(const char* label, const Comparison& comparison) {
                 kChannelTolerance);
 }
 
+
+// The mapping from a DrawCommand to a scene mesh, checked on the scene the
+// renderer builds: translation then transform per vertex, the scissor as the
+// mesh clip, a generated texture's bytes, a triangle with an unprojectable
+// vertex dropped, and an image without a decoder skipped.
+void check_command_mapping(vellum::graphics::SkiaDawnSurface& surface) {
+    VellumRenderer renderer(surface);
+    renderer.begin_frame(width, height);
+
+    auto vertices = std::make_shared<std::vector<DrawVertex>>(std::vector<DrawVertex>{
+        {1.0f, 2.0f, 0.0f, 0.0f, 0xff0000ffu},
+        {5.0f, 2.0f, 1.0f, 0.0f, 0x00ff00ffu},
+        {1.0f, 6.0f, 0.0f, 1.0f, 0x0000ffffu},
+        {1.0f, 2.0f, 0.5f, 0.5f, 0xffffffffu},
+    });
+    DrawCommand command;
+    command.kind = DrawCommand::Kind::texture;
+    command.texture_bytes = std::make_shared<const std::string>(std::string(2 * 1 * 4, '\x7f'));
+    command.texture_width = 2;
+    command.texture_height = 1;
+    command.translation_x = 10.0f;
+    command.translation_y = 20.0f;
+    command.vertices = vertices;
+    command.indices = std::make_shared<std::vector<std::uint32_t>>(
+        std::vector<std::uint32_t>{0, 1, 2, 0, 1, 3});
+    command.scissor_enabled = true;
+    command.scissor = {3, 4, 50, 60};
+    // Scale x by 2.
+    command.transform_enabled = true;
+    command.transform = {2.0f, 0.0f, 0.0f, 0.0f,  0.0f, 1.0f, 0.0f, 0.0f,
+                         0.0f, 0.0f, 1.0f, 0.0f,  0.0f, 0.0f, 0.0f, 1.0f};
+    renderer.submit(command);
+    VELLUM_RMLUI_CHECK(renderer.triangles_submitted() == 2);
+
+    auto projective = command;
+    // w = 1 - 0.1 * x: the fourth vertex lands at x = 11 after translation,
+    // where w is negative, so the triangle that uses it is dropped.
+    projective.transform[3] = -0.1f;
+    projective.vertices = std::make_shared<std::vector<DrawVertex>>(std::vector<DrawVertex>{
+        {-10.0f, 0.0f, 0.0f, 0.0f, 0xffffffffu},
+        {-9.0f, 0.0f, 0.0f, 0.0f, 0xffffffffu},
+        {-10.0f, 1.0f, 0.0f, 0.0f, 0xffffffffu},
+        {1.0f, 0.0f, 0.0f, 0.0f, 0xffffffffu},
+    });
+    renderer.submit(projective);
+    VELLUM_RMLUI_CHECK(renderer.triangles_submitted() == 3);
+
+    auto image = command;
+    image.texture_path = "missing.png";
+    renderer.submit(image);
+    VELLUM_RMLUI_CHECK(renderer.skipped_draws() == 1);
+
+    const auto& nodes = renderer.scene().root.children;
+    VELLUM_RMLUI_CHECK(nodes.size() == 2);
+    const auto& mesh = *nodes[0].mesh;
+    VELLUM_RMLUI_CHECK(nodes[0].kind == vellum::graphics::SceneNode::Kind::mesh);
+    VELLUM_RMLUI_CHECK(mesh.vertices.size() == 6 && mesh.indices.size() == 6);
+    VELLUM_RMLUI_CHECK(mesh.vertices[0].x == 22.0f && mesh.vertices[0].y == 22.0f);
+    VELLUM_RMLUI_CHECK(mesh.vertices[1].x == 30.0f && mesh.vertices[1].u == 1.0f);
+    VELLUM_RMLUI_CHECK(mesh.vertices[2].y == 26.0f && mesh.vertices[2].premultiplied_rgba == 0x0000ffffu);
+    VELLUM_RMLUI_CHECK(mesh.clip_enabled && mesh.clip.x == 3.0f && mesh.clip.y == 4.0f &&
+                       mesh.clip.width == 50.0f && mesh.clip.height == 60.0f);
+    VELLUM_RMLUI_CHECK(mesh.texture && mesh.texture->width == 2 && mesh.texture->height == 1 &&
+                       mesh.texture->premultiplied_rgba ==
+                           std::vector<std::uint8_t>(8, std::uint8_t{0x7f}));
+    // The projective command keeps only its first triangle; the second uses
+    // the vertex at x = 11, where w is negative.
+    VELLUM_RMLUI_CHECK(nodes[1].mesh->vertices.size() == 3);
+    // A shared generated texture is converted once.
+    VELLUM_RMLUI_CHECK(nodes[1].mesh->texture == mesh.texture);
+}
+
 } // namespace
 
 int main() {
@@ -137,6 +209,8 @@ int main() {
         std::fprintf(stderr, "SkiaDawnSurface: %s\n", error.c_str());
         return 1;
     }
+
+    check_command_mapping(*surface);
 
     // The reference: the soft renderer's frame, which is the golden image.
     SoftRenderer soft(0x000000ffu);
