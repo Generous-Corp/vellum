@@ -231,6 +231,25 @@ class PublishStep(unittest.TestCase):
         self.assertFalse(any("draft=false" in call for call in calls))
         self.assertTrue(github.current()["releases"][0]["draft"])
 
+    def test_a_failing_report_only_ruleset_read_does_not_stop_the_dry_run(self) -> None:
+        # The newest-freeze lookup is report-only: when it fails (here a
+        # python3 that refuses that one inline script), the dry run still
+        # builds and verifies the draft, and still never publishes.
+        real = subprocess.run(["bash", "-c", "command -v python3"], capture_output=True, text=True).stdout.strip()
+        shim_dir = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: [path.unlink() for path in shim_dir.iterdir()] and shim_dir.rmdir())
+        shim = shim_dir / "python3"
+        shim.write_text(f'#!/bin/sh\nif [ "$1" = -I ] && [ "$2" = - ] && [ -d "$3" ]; then exit 3; fi\nexec {real} "$@"\n')
+        shim.chmod(0o755)
+        old_path = os.environ["PATH"]
+        os.environ["PATH"] = f"{shim_dir}:{old_path}"
+        self.addCleanup(os.environ.__setitem__, "PATH", old_path)
+        done, github = self.run_publish("true")
+        self.assertEqual(done.returncode, 0, done.stderr[-1500:])
+        self.assertIn("did not verify the newest frozen tag", done.stdout + done.stderr)
+        self.assertEqual(github.current()["published"], [])
+        self.assertEqual(len(github.current()["releases"][0]["assets"]), 11)
+
     def test_an_unset_or_unexpected_flag_never_publishes(self) -> None:
         for value in (None, "", "yes", "TRUE"):
             with self.subTest(value=value):
@@ -338,6 +357,9 @@ class Cleanup(unittest.TestCase):
         # an issue for any failed finalizer run at once.
         watchdog = (WORKFLOWS / "release-watchdog.yml").read_text()
         self.assertIn("      || github.event.workflow_run.name == 'Finalize immutable SDK release'", watchdog)
+        # A dry run whose GPU proof or provenance fails is reported too.
+        self.assertIn("&& (startsWith(github.event.workflow_run.head_branch, 'v')\n"
+                      "          || startsWith(github.event.workflow_run.head_branch, 'dry-run/v')))", watchdog)
 
 
 class Attestation(unittest.TestCase):
