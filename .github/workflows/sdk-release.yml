@@ -459,9 +459,28 @@ jobs:
           cmp "$RUNNER_TEMP/trusted/install.sh" "$RUNNER_TEMP/gpu/install.sh"
           cmp "$RUNNER_TEMP/trusted/install_core.py" \
             "$RUNNER_TEMP/gpu/install_core.py"
+          # The published SHA256SUMS covers every installable asset: the archive
+          # and both installer files, one `shasum -a 256` line each, ordered by
+          # `LC_ALL=C sort` exactly as gpu-macos.yml writes it. Every digest is
+          # taken here from the bytes this job publishes and bound to a trusted
+          # input: the installers to the tagged commit, the archive to the digest
+          # the validation job verified and installed. The source run's file is
+          # then compared, never trusted.
           archive_sha="$(shasum -a 256 "$RUNNER_TEMP/gpu/$RELEASE_ARCHIVE" | awk '{print $1}')"
-          printf '%s  %s\n' "$archive_sha" "$RELEASE_ARCHIVE" \
-            > "$RUNNER_TEMP/trusted/SHA256SUMS"
+          verified_sha="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' \
+            "$RUNNER_TEMP/trusted/trusted-sdk-verification.json")"
+          installed_sha="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["artifact_sha256"])' \
+            "$RUNNER_TEMP/trusted/trusted-sdk-installed-validation.json")"
+          [[ "$archive_sha" =~ ^[0-9a-f]{64}$ ]]
+          test "$archive_sha" = "$verified_sha"
+          test "$archive_sha" = "$installed_sha"
+          install_sha="$(shasum -a 256 "$RUNNER_TEMP/trusted/install.sh" | awk '{print $1}')"
+          install_core_sha="$(shasum -a 256 "$RUNNER_TEMP/trusted/install_core.py" | awk '{print $1}')"
+          printf '%s  %s\n' \
+            "$archive_sha" "$RELEASE_ARCHIVE" \
+            "$install_sha" install.sh \
+            "$install_core_sha" install_core.py \
+            | LC_ALL=C sort > "$RUNNER_TEMP/trusted/SHA256SUMS"
           cmp "$RUNNER_TEMP/trusted/SHA256SUMS" "$RUNNER_TEMP/gpu/SHA256SUMS"
           python3 - <<'PY'
           import json, os, tarfile
@@ -474,8 +493,11 @@ jobs:
               raise SystemExit("web payload evidence source differs")
           archive = root / "gpu" / os.environ["RELEASE_ARCHIVE"]
           with tarfile.open(archive, "r:gz") as handle:
-              matches = [member for member in handle.getmembers() if member.name.endswith("/web/manifest.json")]
-              if len(matches) != 1:
+              # The archive's payload is rooted at the archive root (see
+              # write_archive in scripts/build_sdk_artifact.py), so the web
+              # manifest is exactly `web/manifest.json`, a regular file.
+              matches = [member for member in handle.getmembers() if member.name == "web/manifest.json"]
+              if len(matches) != 1 or not matches[0].isfile():
                   raise SystemExit("SDK archive web manifest coverage differs")
               stream = handle.extractfile(matches[0])
               if stream is None:
@@ -644,29 +666,34 @@ jobs:
             "release-tag-protection.json=$RUNNER_TEMP/release-tag-protection.json"
           )
           verify_release_guard
-          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
-              > "$RUNNER_TEMP/release.json" 2>/dev/null; then
-            :
-          else
-            verify_release_guard
-            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-              --verify-tag --draft --title "$RELEASE_NAME" --notes-file "$notes"
-            gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
-              > "$RUNNER_TEMP/release.json"
-          fi
-          gh api --paginate --slurp \
-            "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
-            > "$RUNNER_TEMP/releases.json"
           select_args=()
           for asset in "${allowed[@]}"; do
             select_args+=(--allowed-asset "${asset%%=*}")
           done
           select_args+=(--allowed-asset release-assets-verification.json)
-          python3 scripts/select_release.py \
-            --releases-json "$RUNNER_TEMP/releases.json" \
-            --tag "$RELEASE_TAG" --expected-name "$RELEASE_NAME" \
-            --expected-body-file "$notes" "${select_args[@]}" \
-            --output "$RUNNER_TEMP/release.json"
+          # Releases are found through the list endpoint only: the by-tag
+          # endpoint returns 404 for a draft, so it can neither confirm a
+          # draft just created nor detect one left by an interrupted run.
+          select_existing_release() {
+            gh api --paginate --slurp \
+              "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              > "$RUNNER_TEMP/releases.json" || return 1
+            python3 scripts/select_release.py \
+              --releases-json "$RUNNER_TEMP/releases.json" \
+              --tag "$RELEASE_TAG" --expected-name "$RELEASE_NAME" \
+              --expected-body-file "$notes" "${select_args[@]}" \
+              --output "$RUNNER_TEMP/release.json"
+          }
+          select_status=0
+          select_existing_release || select_status=$?
+          if [ "$select_status" -eq 4 ]; then
+            verify_release_guard
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --verify-tag --draft --title "$RELEASE_NAME" --notes-file "$notes"
+            select_existing_release
+          elif [ "$select_status" -ne 0 ]; then
+            exit "$select_status"
+          fi
           release_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "$RUNNER_TEMP/release.json")"
           replace_asset() {
             local name="$1" path="$2" existing_id
@@ -676,8 +703,14 @@ jobs:
               verify_release_guard
               gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$existing_id"
             fi
+            # `gh release upload` names an asset after the uploaded file, so
+            # stage each source under its asset name first: several trusted
+            # sources live under a different file name than they publish as.
+            local staged
+            staged="$(mktemp -d "$RUNNER_TEMP/asset-upload.XXXXXX")/$name"
+            cp "$path" "$staged"
             verify_release_guard
-            gh release upload "$RELEASE_TAG" "$path" --repo "$GITHUB_REPOSITORY"
+            gh release upload "$RELEASE_TAG" "$staged" --repo "$GITHUB_REPOSITORY"
           }
           draft="$(python3 -c 'import json,sys; print(str(json.load(open(sys.argv[1]))["draft"]).lower())' "$RUNNER_TEMP/release.json")"
           if [ "$draft" = true ]; then

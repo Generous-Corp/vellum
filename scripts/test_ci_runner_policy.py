@@ -2,8 +2,15 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
+import os
 import re
+import shutil
+import subprocess
+import tarfile
+import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -1482,6 +1489,212 @@ class RunnerPolicyTests(unittest.TestCase):
             with self.subTest(mutation=name):
                 with self.assertRaises(AssertionError):
                     assert_exact_boundary_pulp_pin(mutated)
+
+
+
+def run_block(workflow: str, step_name: str) -> str:
+    """The dedented `run: |` script of a named workflow step."""
+    body = named_step_body(workflow, step_name)
+    if body is None:
+        raise AssertionError(f"step {step_name!r} is missing")
+    lines = body.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.strip() == "run: |")
+    indent = len(lines[start]) - len(lines[start].lstrip())
+    block = []
+    for line in lines[start + 1 :]:
+        if line.strip() and len(line) - len(line.lstrip()) <= indent:
+            break
+        block.append(line)
+    return textwrap.dedent("\n".join(block)) + "\n"
+
+
+def script_span(script: str, first: str, last: str, *, through: bool = True) -> str:
+    """The lines of script from the one containing first to the one containing
+    last, inclusive unless through is False."""
+    lines = script.splitlines()
+    begin = next(i for i, line in enumerate(lines) if first in line)
+    end = next(i for i, line in enumerate(lines) if i >= begin and last in line)
+    return "\n".join(lines[begin : end + 1 if through else end]) + "\n"
+
+
+class ReleaseShapeTests(unittest.TestCase):
+    """The finalizer's release-shaped download step, run against the shapes the
+    tag's GPU run really produces: its trusted SHA256SUMS must be byte-identical
+    to the one gpu-macos.yml writes, and its web-payload check must find the
+    archive's root-level web manifest. Both workflows' scripts are read and
+    executed, so a change to either side is caught here rather than on a
+    frozen tag."""
+
+    ARCHIVE = "vellum-sdk-9.8.7-darwin-arm64.tar.gz"
+
+    def setUp(self) -> None:
+        if not all(shutil.which(tool) for tool in ("bash", "git", "shasum", "cmp")):
+            self.skipTest("bash, git, shasum and cmp are required")
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.repo = self.root / "repo"
+        (self.repo / "scripts").mkdir(parents=True)
+        (self.repo / "scripts/install.sh").write_text("#!/bin/sh\necho install\n")
+        (self.repo / "scripts/install_core.py").write_text("print('install core')\n")
+        git = ["git", "-C", str(self.repo), "-c", "user.name=t", "-c", "user.email=t@t",
+               "-c", "commit.gpgsign=false"]
+        subprocess.run([*git[:3], "init", "-q"], check=True)
+        subprocess.run([*git, "add", "scripts"], check=True)
+        subprocess.run([*git, "commit", "-q", "-m", "fixture"], check=True)
+        self.commit = subprocess.run([*git[:3], "rev-parse", "HEAD"], check=True,
+                                     capture_output=True, text=True).stdout.strip()
+        self.gpu_output = self.root / "gpu-output"
+        # The digest the validation job verified; None means the source archive's.
+        self.verified_sha: str | None = None
+        self.write_gpu_output()
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def write_gpu_output(self) -> None:
+        """Run gpu-macos.yml's own checksum script to produce the source artifact."""
+        gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
+        script = script_span(
+            run_block(gpu, "Prove the installed SDK artifact is reproducible"),
+            'cp "$first/$archive" "$RUNNER_TEMP/$archive"',
+            "shasum -a 256 -c SHA256SUMS")
+        script = "set -euo pipefail\n" + script + ")\n"
+        first = self.root / "first"
+        first.mkdir()
+        self.manifest = {"schema": "vellum.web-payload.v1", "source_commit": self.commit,
+                         "compiler": "emcc", "backend": "wasm",
+                         "files": {"index.html": {"sha256": "0" * 64, "size": 1}}}
+        self.write_archive(first / self.ARCHIVE, "web/manifest.json", self.manifest)
+        self.gpu_output.mkdir()
+        subprocess.run(
+            ["bash", "-c", script], cwd=self.repo, check=True, capture_output=True,
+            env={**os.environ, "first": str(first), "archive": self.ARCHIVE,
+                 "RUNNER_TEMP": str(self.gpu_output)})
+        (self.gpu_output / "web-payload.json").write_text(
+            json.dumps({**self.manifest, "output": "/runner/web-payload"}))
+
+    @staticmethod
+    def write_archive(path: Path, member: str, manifest: dict[str, object]) -> None:
+        """A gzip tarball laid out like build_sdk_artifact.py's: payload at the root."""
+        data = json.dumps(manifest).encode()
+        with tarfile.open(path, "w:gz") as archive:
+            for directory in ("sdk", "web"):
+                info = tarfile.TarInfo(directory)
+                info.type = tarfile.DIRTYPE
+                archive.addfile(info)
+            info = tarfile.TarInfo(member)
+            info.size = len(data)
+            archive.addfile(info, io.BytesIO(data))
+
+    def rewrite_gpu_archive(self, member: str, manifest: dict[str, object]) -> None:
+        """Replace the source artifact's archive and keep its SHA256SUMS consistent."""
+        self.write_archive(self.gpu_output / self.ARCHIVE, member, manifest)
+        digest = hashlib.sha256((self.gpu_output / self.ARCHIVE).read_bytes()).hexdigest()
+        sums = self.gpu_output / "SHA256SUMS"
+        lines = [f"{digest}  {self.ARCHIVE}" if line.endswith(f"  {self.ARCHIVE}") else line
+                 for line in sums.read_text().splitlines()]
+        sums.write_text("\n".join(sorted(lines)) + "\n")
+
+    def run_finalizer(self) -> subprocess.CompletedProcess[str]:
+        """Run the finalizer's download step up to its live immutable-release read."""
+        finalizer = (WORKFLOWS / "sdk-release.yml").read_text(encoding="utf-8")
+        script = script_span(
+            run_block(finalizer, "Download exact release-shaped artifacts"),
+            "set -euo pipefail",
+            "# Whether releases are immutable is read live now", through=False)
+        runner = self.root / "runner"
+        (runner / "trusted").mkdir(parents=True)
+        verified = self.verified_sha or hashlib.sha256(
+            (self.gpu_output / self.ARCHIVE).read_bytes()).hexdigest()
+        (runner / "trusted/trusted-sdk-verification.json").write_text(
+            json.dumps({"sha256": verified}) + "\n")
+        (runner / "trusted/trusted-sdk-installed-validation.json").write_text(
+            json.dumps({"artifact_sha256": verified}) + "\n")
+        bin_dir = self.root / "bin"
+        bin_dir.mkdir()
+        # `gh run download ... --dir DIR` delivers the source run's artifact.
+        (bin_dir / "gh").write_text(
+            "#!/bin/sh\nwhile [ $# -gt 0 ]; do\n"
+            "  if [ \"$1\" = --dir ]; then cp \"$GPU_OUTPUT\"/* \"$2\"/; exit 0; fi\n"
+            "  shift\ndone\nexit 1\n")
+        (bin_dir / "gh").chmod(0o755)
+        self.runner = runner
+        return subprocess.run(
+            ["bash", "-c", script], cwd=self.repo, capture_output=True, text=True,
+            env={**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+                 "RUNNER_TEMP": str(runner), "RELEASE_ARCHIVE": self.ARCHIVE,
+                 "SOURCE_COMMIT": self.commit, "GPU_OUTPUT": str(self.gpu_output),
+                 "GITHUB_REPOSITORY": "Generous-Corp/vellum", "SOURCE_RUN_ID": "1"})
+
+    def test_trusted_checksums_match_the_gpu_run_byte_for_byte(self) -> None:
+        source = (self.gpu_output / "SHA256SUMS").read_text()
+        # The GPU run covers the archive and both installer files.
+        self.assertEqual(
+            sorted(line.split("  ", 1)[1] for line in source.splitlines()),
+            sorted([self.ARCHIVE, "install.sh", "install_core.py"]))
+        result = self.run_finalizer()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.runner / "trusted/SHA256SUMS").read_text(), source)
+        self.assertEqual(
+            json.loads((self.runner / "trusted/web-payload.json").read_text()),
+            {**self.manifest, "output": "/runner/web-payload"})
+
+    def test_an_archive_other_than_the_verified_one_is_refused(self) -> None:
+        # The source artifact is self-consistent, but its archive is not the
+        # one the validation job verified and installed.
+        self.verified_sha = "1" * 64
+        result = self.run_finalizer()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.runner / "trusted/SHA256SUMS").exists())
+
+    def test_a_web_manifest_outside_the_payload_root_is_refused(self) -> None:
+        self.rewrite_gpu_archive("sdk/web/manifest.json", self.manifest)
+        result = self.run_finalizer()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("SDK archive web manifest coverage differs", result.stderr)
+
+    def test_a_web_manifest_that_differs_from_the_evidence_is_refused(self) -> None:
+        self.rewrite_gpu_archive("web/manifest.json", {**self.manifest, "backend": "other"})
+        result = self.run_finalizer()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("published web payload evidence differs from SDK archive", result.stderr)
+
+    def test_a_forged_gpu_checksum_line_is_refused(self) -> None:
+        sums = self.gpu_output / "SHA256SUMS"
+        lines = sums.read_text().splitlines()
+        forged = ["0" * 64 + "  install.sh" if line.endswith("  install.sh") else line
+                  for line in lines]
+        self.assertNotEqual(forged, lines)
+        sums.write_text("\n".join(forged) + "\n")
+        result = self.run_finalizer()
+        self.assertNotEqual(result.returncode, 0)
+        # Refused by the `cmp` against the trusted copy (it reports on stdout
+        # or stderr), not by setup.
+        self.assertIn(str(self.runner / "trusted/SHA256SUMS"), result.stdout + result.stderr)
+
+    def test_an_archive_only_gpu_checksum_file_is_refused(self) -> None:
+        sums = self.gpu_output / "SHA256SUMS"
+        only = [line for line in sums.read_text().splitlines() if line.endswith(self.ARCHIVE)]
+        sums.write_text("\n".join(only) + "\n")
+        result = self.run_finalizer()
+        self.assertNotEqual(result.returncode, 0)
+        # Refused by the `cmp` against the trusted copy, not by setup. The
+        # archive-only file is a prefix of the trusted one, and GNU cmp names
+        # the shorter file ("EOF on ...") where BSD cmp names the other, so
+        # either path proves the comparison ran.
+        output = result.stdout + result.stderr
+        self.assertTrue(
+            any(str(path) in output for path in (
+                self.runner / "trusted/SHA256SUMS", self.runner / "gpu/SHA256SUMS")),
+            output)
+
+    def test_a_changed_installer_is_refused(self) -> None:
+        (self.gpu_output / "install_core.py").write_text("print('other')\n")
+        result = self.run_finalizer()
+        self.assertNotEqual(result.returncode, 0)
+        # Refused by the `cmp` against the trusted copy (it reports on stdout
+        # or stderr), not by setup.
+        self.assertIn(str(self.runner / "trusted/install_core.py"), result.stdout + result.stderr)
 
 
 if __name__ == "__main__":
