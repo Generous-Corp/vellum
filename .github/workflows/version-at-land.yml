@@ -1,0 +1,258 @@
+name: Version at land
+
+# Proposes Vellum's next version from what landed. After every landing on main,
+# scripts/version_at_land.py counts the changes since the newest release tag;
+# when something that ships has changed, it rewrites every version surface to
+# the next version, and this workflow opens that change as a pull request from
+# the automation/version-bump branch. The pull request lands through the merge
+# queue like any other change. release-tag.yml tags the observatory reconcile
+# that covers it, and only if the landed bump is exactly the one
+# version_at_land.py derives again from main's history. Nothing here tags,
+# signs or names the `release` environment.
+#
+# Two jobs. `plan` runs repository Python and holds no write token; its
+# outputs are checked against strict patterns, and the bump travels as a patch
+# artifact. `push` checks out the planned main commit, applies the patch with
+# hooks off, and mints the App token only for git and gh, with a clean
+# environment. It never runs repository code.
+on:
+  push:
+    branches: [main]
+  # A backstop for a landing whose push run was lost; a run with nothing to do
+  # ends after the plan.
+  schedule:
+    - cron: '41 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: version-at-land
+  cancel-in-progress: false
+
+env:
+  BUMP_BRANCH: automation/version-bump
+
+jobs:
+  plan:
+    name: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      action: ${{ steps.plan.outputs.action }}
+      version: ${{ steps.plan.outputs.version }}
+      main: ${{ steps.plan.outputs.main }}
+      number: ${{ steps.standing.outputs.number }}
+      current: ${{ steps.standing.outputs.current }}
+    steps:
+      - name: Check out main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Decide the next version
+        id: plan
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = Generous-Corp/vellum
+          main="$(git rev-parse HEAD)"
+          if ! python3 -I scripts/version_at_land.py plan --commit "$main" --remote origin \
+            > "$RUNNER_TEMP/plan.txt" 2> "$RUNNER_TEMP/plan-reason.txt"; then
+            echo "::error::$(head -n 1 "$RUNNER_TEMP/plan-reason.txt")"
+            exit 1
+          fi
+          action="$(sed -n 's/^action=//p' "$RUNNER_TEMP/plan.txt")"
+          version="$(sed -n 's/^version=//p' "$RUNNER_TEMP/plan.txt")"
+          case "$action" in
+            bump) [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] ;;
+            none|pending) test -z "$version" ;;
+            *) false ;;
+          esac
+          [[ "$main" =~ ^[0-9a-f]{40}$ ]]
+          printf 'action=%s\nversion=%s\nmain=%s\n' "$action" "$version" "$main" >> "$GITHUB_OUTPUT"
+          { echo '### Version at land'; echo; cat "$RUNNER_TEMP/plan-reason.txt"; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Write the version bump
+        if: steps.plan.outputs.action == 'bump'
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          git switch -C "$BUMP_BRANCH"
+          python3 -I scripts/version_at_land.py apply --to "$VERSION" > "$RUNNER_TEMP/surfaces.txt"
+          xargs git add -- < "$RUNNER_TEMP/surfaces.txt"
+          {
+            echo "chore(release): bump version to $VERSION"
+            echo
+            echo "Landing this pull request releases v$VERSION: release-tag.yml tags the"
+            echo "observatory reconcile that covers it."
+            echo
+            sed -n '1,$p' "$RUNNER_TEMP/plan-reason.txt"
+            echo
+            echo 'Version-Bump: skip reason="the version-at-land bump itself"'
+          } > "$RUNNER_TEMP/message.txt"
+          git -c user.name=vellum-version-at-land \
+            -c user.email=vellum-version-at-land@users.noreply.github.com \
+            commit --quiet --file "$RUNNER_TEMP/message.txt"
+          mkdir -p "$RUNNER_TEMP/bump"
+          git format-patch -1 --stdout HEAD > "$RUNNER_TEMP/bump/bump.patch"
+          {
+            echo "Automated version bump from \`version-at-land.yml\`: **$VERSION**."
+            echo
+            echo "Landing it releases \`v$VERSION\`. release-tag.yml tags it only if this pull request is still exactly"
+            echo "the bump version-at-land derives. Lands by merge commit; never squash or rebase."
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/plan-reason.txt"
+            echo '```'
+          } > "$RUNNER_TEMP/bump/body.md"
+
+      # An open bump pull request whose one commit is this exact patch, by the
+      # bot and with its trailer, is left alone, so its checks and review
+      # stand. Anything else on the branch is replaced.
+      - name: Read the standing bump pull request
+        id: standing
+        if: steps.plan.outputs.action == 'bump'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          number="$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls" -f state=open \
+            -f head="$GITHUB_REPOSITORY_OWNER:$BUMP_BRANCH" -f per_page=100 --jq '.[0].number // ""')"
+          [[ -z "$number" || "$number" =~ ^[0-9]+$ ]]
+          current=false
+          if [ -n "$number" ] && git fetch --quiet --no-tags origin "refs/heads/$BUMP_BRANCH"; then
+            ours="$(git -c core.hooksPath=/dev/null patch-id --stable < "$RUNNER_TEMP/bump/bump.patch" | cut -d' ' -f1)"
+            theirs="$(git -c core.hooksPath=/dev/null show FETCH_HEAD | git patch-id --stable | cut -d' ' -f1)"
+            bot="$(printf '%s\n%s\n%s\n%s' vellum-version-at-land vellum-version-at-land@users.noreply.github.com \
+              vellum-version-at-land vellum-version-at-land@users.noreply.github.com)"
+            if [ "$(git rev-list --count origin/main..FETCH_HEAD)" = 1 ] && [ -n "$ours" ] && [ "$ours" = "$theirs" ] \
+              && [ "$(git log -1 --format=%an%n%ae%n%cn%n%ce FETCH_HEAD)" = "$bot" ] \
+              && git log -1 --format=%B FETCH_HEAD \
+                | grep -qxF 'Version-Bump: skip reason="the version-at-land bump itself"'; then
+              current=true
+              echo "::notice::#$number already proposes this bump"
+            fi
+          fi
+          printf 'number=%s\ncurrent=%s\n' "$number" "$current" >> "$GITHUB_OUTPUT"
+
+      - name: Keep the bump for the push job
+        if: steps.plan.outputs.action == 'bump' && steps.standing.outputs.current != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: version-bump
+          path: ${{ runner.temp }}/bump/
+          retention-days: 3
+          if-no-files-found: error
+
+  push:
+    name: push
+    needs: plan
+    if: needs.plan.outputs.action == 'bump' && needs.plan.outputs.current != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the planned main commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.plan.outputs.main }}
+          persist-credentials: false
+
+      - name: Fetch the planned bump
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: version-bump
+          path: ${{ runner.temp }}/bump
+
+      # The patch may touch the version surfaces and nothing else.
+      # test_version_at_land.py keeps this list equal to version_at_land.py's.
+      - name: Apply the planned bump
+        env:
+          MAIN: ${{ needs.plan.outputs.main }}
+        run: |
+          set -euo pipefail
+          [[ "$MAIN" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$MAIN"
+          allowed=(
+            CMakeLists.txt
+            README.md
+            cli/tests/test_agent_instructions_artifact.py
+            cli/tests/test_cli.py
+            cli/tests/test_contamination_scanner.py
+            cli/tests/test_dev.py
+            cli/tests/test_import_backend.py
+            cli/tests/test_installer.py
+            cli/tests/test_sdk_artifact.py
+            cli/vellum_cli.py
+            docs/cli/contract.md
+            docs/cli/install-artifact.md
+            scripts/build_sdk_artifact.py
+            scripts/install.ps1
+            scripts/install.sh
+            scripts/verify_sdk_artifact.py
+            scripts/INSTALLER_SHA256SUMS
+          )
+          patch="$RUNNER_TEMP/bump/bump.patch"
+          while IFS= read -r path; do
+            ok=false
+            for entry in "${allowed[@]}"; do [ "$path" = "$entry" ] && ok=true; done
+            if [ "$ok" != true ]; then
+              echo "::error::the planned bump touches $path, which is not a version surface"
+              exit 1
+            fi
+          done < <(git -c core.hooksPath=/dev/null apply --numstat "$patch" | cut -f3)
+          git -c core.hooksPath=/dev/null -c user.name=vellum-version-at-land \
+            -c user.email=vellum-version-at-land@users.noreply.github.com am --quiet "$patch"
+          test "$(git rev-parse HEAD^)" = "$MAIN"
+
+      # The App token can push the bump branch and open its pull request. A pull
+      # request opened with it runs its required checks; one opened with
+      # GITHUB_TOKEN never would.
+      - name: Mint the bump token
+        id: bump-token
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3
+        with:
+          app-id: ${{ secrets.SHIPYARD_APP_ID }}
+          private-key: ${{ secrets.SHIPYARD_APP_PRIVATE_KEY }}
+          owner: Generous-Corp
+          repositories: vellum
+          permission-contents: write
+          permission-pull-requests: write
+
+      # git and gh run from the system paths with an empty environment, so
+      # nothing an earlier step wrote to GITHUB_PATH, GITHUB_ENV or the git
+      # config can run while the token is held.
+      - name: Push the bump branch and open its pull request
+        env:
+          GH_TOKEN: ${{ steps.bump-token.outputs.token }}
+          MAIN: ${{ needs.plan.outputs.main }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          NUMBER: ${{ needs.plan.outputs.number }}
+        run: |
+          set -euo pipefail
+          [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          [[ -z "$NUMBER" || "$NUMBER" =~ ^[0-9]+$ ]]
+          clean() { env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" GH_TOKEN="$GH_TOKEN" GIT_CONFIG_NOSYSTEM=1 "$@"; }
+          auth="http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          remote="https://github.com/$GITHUB_REPOSITORY"
+          live="$(clean git -c core.hooksPath=/dev/null -c "$auth" ls-remote "$remote" refs/heads/main | cut -f1)"
+          if [ "$live" != "$MAIN" ]; then
+            echo "::notice::main moved from $MAIN to $live while the bump was planned; the next run proposes it"
+            exit 0
+          fi
+          lease="$(clean git -c core.hooksPath=/dev/null -c "$auth" ls-remote "$remote" "refs/heads/$BUMP_BRANCH" | cut -f1)"
+          clean git -c core.hooksPath=/dev/null -c "$auth" push \
+            --force-with-lease="refs/heads/$BUMP_BRANCH:$lease" "$remote" "HEAD:refs/heads/$BUMP_BRANCH"
+          title="chore(release): bump version to $VERSION"
+          if [ -n "$NUMBER" ]; then
+            clean /usr/bin/gh api --method PATCH "repos/$GITHUB_REPOSITORY/pulls/$NUMBER" -f title="$title" \
+              -F body=@"$RUNNER_TEMP/bump/body.md" > /dev/null
+            echo "updated #$NUMBER to propose $VERSION" >> "$GITHUB_STEP_SUMMARY"
+          else
+            clean /usr/bin/gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$BUMP_BRANCH" \
+              --title "$title" --body-file "$RUNNER_TEMP/bump/body.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
