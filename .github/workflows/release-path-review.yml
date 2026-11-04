@@ -1,0 +1,81 @@
+# Posts the `release-path-review` commit status: a pull request that changes a
+# file .github/CODEOWNERS names, or any workflow or local action, needs two
+# counted reviewer APPROVEs of its exact head, from different signers and
+# sessions (Decision 0013). The rule is scripts/release_path_review.py, checked
+# out from the default branch, never from the pull request. Every trigger runs
+# the default branch's definition of this file: a review or a merge-queue
+# build reaches it through the permission-less "Release path review trigger"
+# workflow's completion.
+#
+# The status is posted with a dedicated App's token, whose key is a secret of
+# the `release-path-review` environment, which only `main` may deploy to. The
+# ruleset binds the required context to that App, so neither the Actions
+# token nor the fleet App every agent holds can post it.
+name: Release path review
+
+on:
+  pull_request_target:
+    # `edited` covers a base change, so a stacked pull request retargeted to
+    # main is judged by main's copy.
+    types: [opened, reopened, synchronize, ready_for_review, edited]
+  issue_comment:
+    types: [created, edited, deleted]
+  workflow_run:
+    workflows: [Release path review trigger]
+    types: [completed]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: release-path-review-${{ github.event.pull_request.number || github.event.issue.number || github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  judge:
+    if: github.event_name != 'issue_comment' || github.event.issue.pull_request
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: release-path-review
+    steps:
+      - name: Check out the base rule
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Decide release-path-review
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -I scripts/release_path_review.py
+
+      - name: Mint the gate App token
+        id: gate-token
+        if: steps.decide.outputs.sha != ''
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3
+        with:
+          app-id: ${{ secrets.RELEASE_PATH_REVIEW_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PATH_REVIEW_APP_PRIVATE_KEY }}
+          owner: Generous-Corp
+          repositories: vellum
+          permission-statuses: write
+
+      - name: Post release-path-review
+        if: steps.decide.outputs.sha != ''
+        env:
+          GH_TOKEN: ${{ steps.gate-token.outputs.token }}
+          SHA: ${{ steps.decide.outputs.sha }}
+          STATE: ${{ steps.decide.outputs.state }}
+          DESCRIPTION: ${{ steps.decide.outputs.description }}
+          TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$SHA" \
+            -f state="$STATE" -f context=release-path-review \
+            -f description="$DESCRIPTION" -f target_url="$TARGET_URL" > /dev/null
+          echo "release-path-review: $STATE on $SHA: $DESCRIPTION"
+
+      - name: Fail a refused pull request run
+        if: github.event_name == 'pull_request_target' && steps.decide.outputs.state != '' && steps.decide.outputs.state != 'success'
+        run: exit 1

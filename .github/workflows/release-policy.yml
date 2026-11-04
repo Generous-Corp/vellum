@@ -30,4 +30,5 @@ jobs:
           python3 -I scripts/test_release_request.py
           python3 -I scripts/test_pretag_checks.py
           python3 -I scripts/test_sdk_release_draft_lookup.py
+          python3 -I scripts/test_release_path_review.py
           python3 -I scripts/check_release_policy.py check

@@ -42,18 +42,23 @@ CODEOWNERS = Path(".github/CODEOWNERS")
 RELEASE_ENVIRONMENT = "release"
 SIGNING_WORKFLOW = "release-tag.yml"
 OWNER = "@danielraffel"
-# The signing policy, the code that enforces it, and the committed records the
-# release decision trusts (the release request and the retired tags).
+# The signing policy, the code that enforces it, the committed records the
+# release decision trusts (the release request and the retired tags), and the
+# reviewer signers and sessions the release-path review counts.
 POLICY_FILES = (
     "/.github/CODEOWNERS",
     "/.github/workflows/release-tag.yml",
+    "/.github/workflows/release-path-review-trigger.yml",
+    "/.github/workflows/release-path-review.yml",
     "/.github/workflows/release-policy.yml",
+    "/.shipyard/config.toml",
     "/provenance/authority-signers.allowed_signers",
     "/provenance/release-request.json",
     "/provenance/release-signers.allowed_signers",
     "/provenance/retired-release-tags.json",
     "/scripts/check_release_policy.py",
     "/scripts/pretag_checks.py",
+    "/scripts/release_path_review.py",
     "/scripts/release_request.py",
     "/scripts/verify_immutable_release_preflight.py",
     "/scripts/verify_release_tag.py",

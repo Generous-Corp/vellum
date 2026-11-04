@@ -1,16 +1,22 @@
 # The release-signing policy and the code that enforces it. A change to any of
-# these needs the owner's review; nothing else in the repository does.
-# scripts/check_release_policy.py (the required `release-policy` check) keeps
-# this list complete.
+# these needs two independent counted reviewer APPROVEs of its exact head (the
+# required `release-path-review` status, Decision 0013), as does any change
+# under .github/workflows/ or .github/actions/; nothing else in the repository
+# does. scripts/check_release_policy.py (the required
+# `release-policy` check) keeps this list complete.
 /.github/CODEOWNERS @danielraffel
 /.github/workflows/release-tag.yml @danielraffel
+/.github/workflows/release-path-review-trigger.yml @danielraffel
+/.github/workflows/release-path-review.yml @danielraffel
 /.github/workflows/release-policy.yml @danielraffel
+/.shipyard/config.toml @danielraffel
 /provenance/authority-signers.allowed_signers @danielraffel
 /provenance/release-request.json @danielraffel
 /provenance/release-signers.allowed_signers @danielraffel
 /provenance/retired-release-tags.json @danielraffel
 /scripts/check_release_policy.py @danielraffel
 /scripts/pretag_checks.py @danielraffel
+/scripts/release_path_review.py @danielraffel
 /scripts/release_request.py @danielraffel
 /scripts/verify_immutable_release_preflight.py @danielraffel
 /scripts/verify_release_tag.py @danielraffel

@@ -95,10 +95,13 @@ promotion attestation and prove full-matrix parity.
   request and branch workflows cannot read it, and no fleet host holds it.
 - **Only `release-tag.yml` may use the environment.** The required `release-policy` check
   (`scripts/check_release_policy.py`) fails when any other workflow names it.
-- **The signing policy is owner-reviewed.** `.github/CODEOWNERS` gives these files to the owner, and `main` requires
-  code-owner review:
+- **The signing policy needs two independent reviews.** `.github/CODEOWNERS` lists these files, and `main` requires
+  the `release-path-review` status: a pull request that changes one needs two counted reviewer APPROVEs of its exact
+  head, from different signers and sessions ([Decision 0013](../../decisions/0013-two-automated-reviews-replace-code-owner-review.md)):
   - the signer files: release, authority and renderer;
-  - the two release workflows;
+  - the two release workflows and the review gate's two workflows (every other workflow and local action needs the
+    same two reviews);
+  - `.shipyard/config.toml`, which names the reviewer signers and sessions that count;
   - the release scripts;
   - the verifiers, including the immutable-release verifier;
   - the committed records the release decision trusts: the release request and the retired tags;
