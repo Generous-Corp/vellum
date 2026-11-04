@@ -42,3 +42,5 @@ record that still has to follow.
   namespace outside `gpu_runtime`.
 - `gpu-runtime.renderer-lock-reader` reads the lock back and proves that each
   kind of malformed lock stops configure.
+- `gpu-runtime.install-consumer` (standalone builds) installs the package and
+  builds a consumer that finds it by exact version and reads the shipped lock.

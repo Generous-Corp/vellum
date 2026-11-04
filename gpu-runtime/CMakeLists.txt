@@ -80,6 +80,16 @@ if(GPU_RUNTIME_BUILD_TESTS)
             -DLOCK=${CMAKE_CURRENT_SOURCE_DIR}/renderer-lock.json
             -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/renderer-lock-reader
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/renderer_lock_reader_test.cmake")
+    if(GPU_RUNTIME_INSTALL)
+        add_test(NAME gpu-runtime.install-consumer
+            COMMAND "${CMAKE_COMMAND}"
+                -DBUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}
+                -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/install-consumer
+                -DVERSION=${PROJECT_VERSION}
+                -DGENERATOR=${CMAKE_GENERATOR}
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/install_consumer_test.cmake")
+    endif()
 endif()
 
 if(GPU_RUNTIME_INSTALL)
