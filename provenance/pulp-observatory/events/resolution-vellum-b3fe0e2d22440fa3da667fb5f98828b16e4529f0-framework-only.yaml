@@ -1,0 +1,24 @@
+{
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "created_at": "2026-11-04T17:25:53Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-b3fe0e2d22440fa3da667fb5f98828b16e4529f0-framework-only",
+  "kind": "resolution",
+  "linked_commits": [
+    "87797002487f48caf7cb87ecddbb6db2026abd78",
+    "b3fe0e2d22440fa3da667fb5f98828b16e4529f0"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/pulp/pull/11443",
+    "https://github.com/Generous-Corp/vellum/pull/156"
+  ],
+  "owner": "@danielraffel",
+  "rationale": "Reclassified from ported. This commit hardens Vellum's own Illustrator adapter, the route the owner assigned to Vellum on 2026-11-01, and leaves no obligation for Pulp. Pulp's separate copy of the helper, which stays only until the Pulp CLI forwards to Vellum, was hardened in Pulp by https://github.com/Generous-Corp/pulp/pull/11443 (merged as 87797002) under Pulp's own review; that is not a port of this commit, so it is not counted as a repeated generic fix.",
+  "resolves": "vellum-b3fe0e2d22440fa3da667fb5f98828b16e4529f0",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

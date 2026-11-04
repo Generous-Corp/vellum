@@ -55,6 +55,7 @@ jobs:
           python3 scripts/test_docs_sync.py
           python3 scripts/docs_sync.py --check
           python3 scripts/test_ci_runner_policy.py
+          python3 scripts/test_select_reusable_gpu_proof.py
           python3 -I scripts/test_check_renderer_lock.py
           python3 -I scripts/check_renderer_lock.py
           python3 -I gpu-runtime/tools/test_check_device_api_closure.py

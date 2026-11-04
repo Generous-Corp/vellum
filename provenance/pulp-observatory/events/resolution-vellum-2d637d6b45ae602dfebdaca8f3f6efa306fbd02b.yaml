@@ -1,0 +1,22 @@
+{
+  "contract_tests": [
+    "vellum.authoring",
+    "vellum.capture-stats",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-04T16:48:51Z",
+  "disposition": "superseded",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-2d637d6b45ae602dfebdaca8f3f6efa306fbd02b",
+  "kind": "resolution",
+  "linked_commits": [
+    "2d637d6b45ae602dfebdaca8f3f6efa306fbd02b"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Integration merge (Merge origin/main into fix/release-preflight-refresh). It carries no change beyond the commits it merges, whose own observations are classified separately in this ledger, so it has no independent contract.",
+  "resolves": "vellum-2d637d6b45ae602dfebdaca8f3f6efa306fbd02b",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}
