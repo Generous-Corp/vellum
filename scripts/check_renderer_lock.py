@@ -33,6 +33,12 @@ LOCK = "gpu-runtime/renderer-lock.json"
 SCHEMA = "gpu-runtime.renderer-lock.v1"
 PLATFORM = "macos-arm64"
 HEX_64 = re.compile(r"\b[0-9a-f]{64}\b")
+# Any-case digests in other files: an UPPERCASE hand copy is still a copy.
+ANY_HEX_64 = re.compile(r"\b[0-9a-fA-F]{64}\b")
+
+
+def digests_in(text: str) -> set[str]:
+    return {match.lower() for match in ANY_HEX_64.findall(text)}
 HEX_40 = re.compile(r"^[0-9a-f]{40}$")
 MILESTONE = re.compile(r"\bchrome/m[0-9]+\b")
 
@@ -96,7 +102,7 @@ def check_readers(root: Path, lock: dict, problems: list[str]) -> None:
         text = (root / relative).read_text(encoding="utf-8")
         if marker not in text:
             problems.append(f"{relative}: does not read {LOCK}")
-        for digest in sorted(set(HEX_64.findall(text)) & locked_digests(lock)):
+        for digest in sorted(digests_in(text) & locked_digests(lock)):
             problems.append(f"{relative}: restates locked digest {digest}; read it from {LOCK}")
         for milestone in sorted(set(MILESTONE.findall(text))):
             problems.append(f"{relative}: restates milestone {milestone}; read it from {LOCK}")
@@ -186,7 +192,7 @@ def check_documents(root: Path, lock: dict, problems: list[str]) -> None:
             problems.append(f"{relative}: names {milestone}; the lock is {lock['milestone']}")
         if relative in DOCUMENTS_WITH_DIGEST and platform["sha256"] not in text:
             problems.append(f"{relative}: quotes {platform['asset']} without the lock's digest")
-        for digest in sorted(set(HEX_64.findall(text))):
+        for digest in sorted(digests_in(text)):
             if digest in locked_digests(lock):
                 continue
             # A stale renderer digest next to the asset name is the drift this
@@ -219,7 +225,7 @@ def check_no_other_copies(root: Path, lock: dict, problems: list[str]) -> None:
             text = (root / relative).read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
-        for digest in sorted(set(HEX_64.findall(text)) & digests):
+        for digest in sorted(digests_in(text) & digests):
             problems.append(f"{relative}: holds locked digest {digest}; read it from {LOCK}")
 
 
