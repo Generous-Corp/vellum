@@ -418,8 +418,9 @@ bool textured_triangle_mesh() {
     const Probe probes[] = {
         {"mirrored left samples the right texel", 5, 10, {0, 0, 255, 255}},
         {"mirrored right samples the left texel", 35, 10, {255, 0, 0, 255}},
-        {"modulated left is half-alpha red", 5, 30, {128, 0, 0, 128}},
-        {"modulated right is half-alpha blue", 35, 30, {0, 0, 128, 128}},
+        // Half-alpha colours composited over the opaque black background.
+        {"modulated left is half-alpha red", 5, 30, {128, 0, 0, 255}},
+        {"modulated right is half-alpha blue", 35, 30, {0, 0, 128, 255}},
         {"untextured mesh draws its vertex colour", 20, 50, {0, 255, 0, 255}},
         {"clipped mesh inside the clip", 10, 70, {255, 255, 0, 255}},
         {"clipped mesh outside the clip", 30, 70, {0, 0, 0, 255}},

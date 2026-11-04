@@ -486,6 +486,10 @@ bool draw_mesh(SkCanvas& canvas, const PaintCommand& command,
 
     SkPaint paint;
     paint.setAntiAlias(false);
+    // drawVertices combines the paint's colour (or shader) with the vertex
+    // colours through the blend mode, and the default paint colour is opaque
+    // black. White under kModulate leaves the vertex colours as they are.
+    paint.setColor(SK_ColorWHITE);
     if (image) {
         // Texture coordinates are in texel units, so a coordinate inside a
         // texel samples that texel.
@@ -501,8 +505,7 @@ bool draw_mesh(SkCanvas& canvas, const PaintCommand& command,
                              std::max(0.0F, mesh.clip.height)),
             false);
     }
-    // With a texture, the shader's texel is multiplied by the vertex colour;
-    // without one, the vertex colours are drawn as they are.
+    // With a texture, the shader's texel is multiplied by the vertex colour.
     canvas.drawVertices(vertices, SkBlendMode::kModulate, paint);
     canvas.restore();
     return true;
