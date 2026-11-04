@@ -1,0 +1,20 @@
+{
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "created_at": "2026-11-04T16:48:51Z",
+  "disposition": "superseded",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-29610e58f7cb75045b62fbba988a1c9147bd6376",
+  "kind": "resolution",
+  "linked_commits": [
+    "29610e58f7cb75045b62fbba988a1c9147bd6376"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Integration merge (Merge pull request #156 from Generous-Corp/feature/illustrator-adapter-20261103). It carries no change beyond the commits it merges, whose own observations are classified separately in this ledger, so it has no independent contract.",
+  "resolves": "vellum-29610e58f7cb75045b62fbba988a1c9147bd6376",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}
