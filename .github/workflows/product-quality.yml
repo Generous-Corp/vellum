@@ -55,6 +55,7 @@ jobs:
           python3 scripts/test_docs_sync.py
           python3 scripts/docs_sync.py --check
           python3 scripts/test_ci_runner_policy.py
+          python3 scripts/test_select_reusable_gpu_proof.py
           python3 cli/tests/test_templates.py
           python3 scripts/template_guard.py
           python3 scripts/test_templates_smoke.py
