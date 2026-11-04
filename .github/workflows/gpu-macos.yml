@@ -2,6 +2,11 @@ name: Locked macOS GPU proof
 
 on:
   workflow_dispatch:
+    inputs:
+      html_import_repeats:
+        description: Extra installed HTML imports to time (measurement runs only)
+        required: false
+        default: '0'
   pull_request:
   # Merge-queue builds: the queue merges main's tip with the PR head on a
   # gh-readonly-queue/* ref and needs every required check on that commit.
@@ -539,11 +544,16 @@ jobs:
       - name: Prove installed HTML import through DesignIR and GPU capture
         if: steps.reuse.outputs.run_id == ''
         shell: bash
+        env:
+          HTML_IMPORT_REPEATS: ${{ github.event_name == 'workflow_dispatch' && inputs.html_import_repeats || '0' }}
         run: |
           set -euo pipefail
           prefix="$RUNNER_TEMP/templates-smoke-sdk"
           project="$RUNNER_TEMP/html-import-proof"
           source="$GITHUB_WORKSPACE/fixtures/html-import/index.html"
+          # Every browser capture command's duration, so the capture bound
+          # stays sized to what fleet VMs actually take.
+          export VELLUM_CDP_TIMING_LOG="$RUNNER_TEMP/cdp-timings.jsonl"
           # Keep each command's stderr beside its JSON and report the exit
           # status when it fails: a command killed by a signal or one that dies
           # before writing JSON otherwise leaves no trace.
@@ -603,6 +613,48 @@ jobs:
           file "$project/artifacts/html-import-proof.png"
           shasum -a 256 "$project/artifacts/html-import-proof.png" \
             > "$project/artifacts/html-import-proof.png.sha256"
+          # Negative control: invalid HTML is still refused, before any browser
+          # starts, rather than waiting out a capture bound.
+          invalid="$RUNNER_TEMP/invalid-html-source"
+          mkdir -p "$invalid"
+          printf '<link rel="stylesheet" href="../outside.css"><p>x</p>\n' > "$invalid/index.html"
+          run_json "$RUNNER_TEMP/invalid-html-create.json" \
+            "$prefix/bin/vellum" --json create "Invalid HTML Control" \
+              --directory "$RUNNER_TEMP/invalid-html-project" --no-verify
+          started=$SECONDS
+          status=0
+          "$prefix/bin/vellum" --json import "$invalid/index.html" \
+            --project "$RUNNER_TEMP/invalid-html-project" --source-type html --as main \
+            > "$RUNNER_TEMP/invalid-html-import.json" || status=$?
+          elapsed=$(( SECONDS - started ))
+          cat "$RUNNER_TEMP/invalid-html-import.json"
+          test "$status" -eq 3
+          test "$(jq -r .status "$RUNNER_TEMP/invalid-html-import.json")" = invalid_html_source
+          test "$elapsed" -lt 10
+          # Measurement runs time more imports on the same VM.
+          repeats="${HTML_IMPORT_REPEATS:-0}"
+          [[ "$repeats" =~ ^[0-9]+$ ]] && [ "$repeats" -le 50 ]
+          for index in $(seq 1 "$repeats"); do
+            extra="$RUNNER_TEMP/html-import-repeat-$index"
+            run_json "$RUNNER_TEMP/html-import-repeat-$index-create.json" \
+              "$prefix/bin/vellum" --json create "HTML Import Repeat $index" \
+                --directory "$extra" --no-verify
+            run_json "$RUNNER_TEMP/html-import-repeat-$index.json" \
+              "$prefix/bin/vellum" --json import "$source" --project "$extra" \
+                --source-type html --as main
+          done
+          python3 - "$VELLUM_CDP_TIMING_LOG" <<'PY'
+          import json, sys
+          rows = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+          by = {}
+          for row in rows:
+              by.setdefault(row["method"], []).append(row["seconds"])
+          for method, values in sorted(by.items()):
+              values.sort()
+              p99 = values[min(len(values) - 1, round(0.99 * (len(values) - 1)))]
+              print(f"CDP {method}: n={len(values)} median={values[len(values) // 2]:.3f}s "
+                    f"p99={p99:.3f}s max={values[-1]:.3f}s")
+          PY
 
       # The receipt a later merge-queue run compares its own tree against.
       # Written only after every proof step above has passed.
@@ -782,6 +834,7 @@ jobs:
             ${{ runner.temp }}/html-import-build.json
             ${{ runner.temp }}/html-import-capture.json
             ${{ runner.temp }}/html-import*.json.stderr
+            ${{ runner.temp }}/cdp-timings.jsonl
             ${{ runner.temp }}/${{ env.VELLUM_RELEASE_ARCHIVE }}
             ${{ runner.temp }}/install.sh
             ${{ runner.temp }}/install_core.py
