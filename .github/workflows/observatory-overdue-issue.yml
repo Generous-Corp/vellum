@@ -1,0 +1,64 @@
+# Pull requests and queue entries only report overdue observatory events
+# (Decision 0013), so ask for their classification here: one issue, its body
+# kept current with the overdue list, closed once none is overdue. It runs the
+# default branch's code with GITHUB_TOKEN, which can write issues and nothing
+# else in this workflow.
+name: Observatory overdue issue
+
+on:
+  schedule:
+    - cron: '41 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: vellum-observatory-overdue-issue
+  cancel-in-progress: false
+
+jobs:
+  overdue-issue:
+    name: overdue-issue
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Keep the overdue-classification issue current
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 -I tools/provenance/overdue_events.py --root . > "$RUNNER_TEMP/overdue.json"
+          count="$(jq length "$RUNNER_TEMP/overdue.json")"
+          title="Observatory events overdue for classification"
+          number="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 100 \
+            --json number,title --jq "map(select(.title == \"$title\")) | .[0].number // empty")"
+          if [ "$count" -eq 0 ]; then
+            if [ -n "$number" ]; then
+              gh issue close "$number" --repo "$GITHUB_REPOSITORY" \
+                --comment "No pending event is past its classification deadline."
+            fi
+            exit 0
+          fi
+          {
+            echo "$count pending observation event(s) are past their classification deadline."
+            echo "Pull requests and queue entries report this; pushes to \`main\` and release"
+            echo "tags fail \`provenance-verify\` until each is classified with a resolution"
+            echo "event (provenance/pulp-observatory/README.md)."
+            echo
+            echo "| event | class | deadline |"
+            echo "| --- | --- | --- |"
+            jq -r '.[] | "| \(.event_id) | \(.class) | \(.deadline) |"' "$RUNNER_TEMP/overdue.json"
+          } > "$RUNNER_TEMP/overdue.md"
+          if [ -n "$number" ]; then
+            gh issue edit "$number" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/overdue.md"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file "$RUNNER_TEMP/overdue.md"
+          fi

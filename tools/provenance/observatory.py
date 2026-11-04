@@ -314,6 +314,16 @@ def coverage_tail_start(repo: Path, cursor: str, target: str) -> str:
 
 
 VELLUM_TAIL_POLICIES = frozenset({"reconciled", "coverage"})
+# Budgets that only the passage of time can break: an event is overdue, or the
+# oldest pending event is old, whatever the change under test does. A pull
+# request or queue entry cannot fix them by re-running or by any change of its
+# own, so `--time-budgets report` reports them instead of failing; pushes to
+# main and release tags keep enforcing them.
+TIME_BUDGET_VIOLATIONS = frozenset({
+    "overdue-event-count-exceeded",
+    "pending-event-age-exceeded",
+})
+TIME_BUDGET_MODES = frozenset({"enforce", "report"})
 
 
 def coverage_gaps(
@@ -956,6 +966,7 @@ def verify(
     vellum_tail_policy: str = "reconciled",
     vellum_pr_main: str | None = None,
     check_now: datetime | None = None,
+    time_budgets: str = "enforce",
 ) -> dict[str, object]:
     """Verify the ledger; with `check_now`, judge the health budgets at that time.
 
@@ -1051,11 +1062,21 @@ def verify(
     if check_now is not None:
         report = build_report(root=root, lock=lock, cursor=cursor, events=events, budgets=budgets,
                               now=check_now, coverage_gaps=gaps)
-    if report["health"] != "pass":
+    if time_budgets not in TIME_BUDGET_MODES:
+        raise ObservatoryError(f"unknown time-budget mode: {time_budgets}")
+    violations = list(report["budget_violations"])
+    if time_budgets == "report":
+        fatal = [item for item in violations if item not in TIME_BUDGET_VIOLATIONS]
+        reported = [item for item in violations if item in TIME_BUDGET_VIOLATIONS]
+    else:
+        fatal, reported = violations, []
+    if fatal:
         raise ObservatoryError(
-            "observatory health budgets failed: " + ", ".join(report["budget_violations"])
+            "observatory health budgets failed: " + ", ".join(fatal)
             + describe_coverage_gaps(gaps, cursor)
         )
+    if reported:
+        report = {**report, "reported_time_budget_violations": reported}
     return report
 
 
@@ -1214,6 +1235,16 @@ def main(argv: list[str] | None = None) -> int:
         "--now",
         help="UTC time at which to judge overdue events (default: the current time)",
     )
+    verify_parser.add_argument(
+        "--time-budgets",
+        choices=sorted(TIME_BUDGET_MODES),
+        default="enforce",
+        help=(
+            "enforce: overdue and pending-age budgets fail verification; "
+            "report: they are returned in the report instead (pull requests and "
+            "queue entries, which cannot change them)"
+        ),
+    )
     verify_parser.add_argument("--output", type=Path)
     reconcile_parser = subparsers.add_parser("reconcile")
     reconcile_parser.add_argument("--pulp-repo", type=Path, required=True)
@@ -1246,6 +1277,7 @@ def main(argv: list[str] | None = None) -> int:
                     parse_utc(args.now, "--now") if args.now
                     else datetime.now(timezone.utc).replace(microsecond=0)
                 ),
+                time_budgets=args.time_budgets,
             )
         else:
             if args.events_only and not args.write:

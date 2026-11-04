@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -691,6 +692,14 @@ class ObservatoryTests(unittest.TestCase):
             # The failure names the uncovered commit and the command that
             # closes the gap, at the committed Pulp cursor.
             message = str(raised.exception)
+            # A gap the pull request introduces stays fatal when time budgets
+            # are only reported, as they are on pull requests.
+            with self.assertRaisesRegex(observatory.ObservatoryError, "cursor-event-coverage-gap"):
+                observatory.verify(
+                    root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                    pulp_target=pulp_head, vellum_target=feature,
+                    vellum_tail_policy="coverage", time_budgets="report",
+                )
             self.assertIn(f"vellum {feature}: mapped-commit-after-reconciled-cursor", message)
             self.assertIn("Re-running will not help", message)
             self.assertIn(
@@ -1595,6 +1604,57 @@ class ObservatoryTests(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(observatory.main([*cli, "--now", "2026-07-22T20:00:00Z"]), 0)
                 self.assertNotEqual(observatory.main([*cli, "--now", "2027-07-22T20:00:00Z"]), 0)
+
+    def test_time_budgets_are_reported_on_pull_requests_and_enforced_on_releases(self) -> None:
+        # The negative control is the same tree judged twice at the same time:
+        # one overdue state, enforced (main, tags) versus reported (pull
+        # requests and queue entries, which cannot change the clock).
+        with tempfile.TemporaryDirectory() as temporary:
+            top = Path(temporary)
+            pulp = top / "pulp"
+            vellum = top / "vellum-source"
+            root = top / "state"
+            pulp_base, pulp_head = init_repo(pulp, "core/render/render.cpp")
+            vellum_base, vellum_head = init_repo(vellum, "graphics/render.cpp")
+            make_state(root, pulp_base, vellum_base)
+            observatory.reconcile(
+                root=root, pulp_repo=pulp, vellum_repo=vellum,
+                pulp_target=pulp_head, vellum_target=vellum_head,
+                now_text="2026-07-22T20:00:00Z", write=True,
+            )
+            arguments = dict(root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None)
+            later = observatory.parse_utc("2027-07-22T20:00:00Z", "now")
+            with self.assertRaisesRegex(observatory.ObservatoryError, "overdue-event-count-exceeded"):
+                observatory.verify(**arguments, check_now=later, time_budgets="enforce")
+            report = observatory.verify(**arguments, check_now=later, time_budgets="report")
+            self.assertIn("overdue-event-count-exceeded", report["reported_time_budget_violations"])
+            self.assertTrue(set(report["reported_time_budget_violations"])
+                            <= observatory.TIME_BUDGET_VIOLATIONS)
+            self.assertEqual(report["health"], "fail")
+            # In time, nothing is reported at all.
+            on_time = observatory.verify(
+                **arguments, check_now=observatory.parse_utc("2026-07-22T20:00:00Z", "now"),
+                time_budgets="report",
+            )
+            self.assertNotIn("reported_time_budget_violations", on_time)
+            cli = ["--root", str(root), "verify", "--pulp-repo", str(pulp), "--vellum-repo", str(vellum),
+                   "--now", "2027-07-22T20:00:00Z"]
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertNotEqual(observatory.main(cli), 0)
+                self.assertNotEqual(observatory.main([*cli, "--time-budgets", "enforce"]), 0)
+                self.assertEqual(observatory.main([*cli, "--time-budgets", "report"]), 0)
+                with self.assertRaises(SystemExit):
+                    observatory.main([*cli, "--time-budgets", "ignore"])
+            with self.assertRaisesRegex(observatory.ObservatoryError, "unknown time-budget mode"):
+                observatory.verify(**arguments, check_now=later, time_budgets="ignore")
+            # The watchdog's tracking issue lists exactly these overdue events.
+            sys.path.insert(0, str(Path(observatory.__file__).parent))
+            import overdue_events  # noqa: PLC0415
+            self.assertEqual(overdue_events.overdue(
+                root, observatory.parse_utc("2026-07-22T20:00:00Z", "now")), [])
+            late = overdue_events.overdue(root, later)
+            self.assertEqual(len(late), 2)
+            self.assertEqual(late, sorted(late, key=lambda row: (row["deadline"], row["event_id"])))
 
     def test_incremental_reconcile_preserves_full_verify_gate(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

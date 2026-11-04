@@ -1,0 +1,49 @@
+#!/usr/bin/env python3
+"""List the pending observation events past their classification deadline.
+
+    overdue_events.py [--root PATH] [--now UTC]
+
+Prints a JSON array of {event_id, class, deadline}, oldest deadline first.
+The Observatory overdue issue workflow keeps one tracking issue current from it: pull
+requests and queue entries only report overdue events (Decision 0013), so the
+issue is where the work to classify them is asked for.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import observatory  # noqa: E402
+
+
+def overdue(root: Path, now: datetime) -> list[dict[str, str]]:
+    budgets = observatory.load_budgets(root / observatory.BUDGETS_PATH)
+    rows = []
+    for event in observatory.effective_observations(observatory.load_events(root)):
+        if event["disposition"] != "pending":
+            continue
+        due = observatory.deadline(event, budgets)
+        if now > due:
+            rows.append({"event_id": str(event["event_id"]), "class": str(event["class"]),
+                         "deadline": observatory.utc_text(due)})
+    return sorted(rows, key=lambda row: (row["deadline"], row["event_id"]))
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--root", type=Path, default=Path("."))
+    parser.add_argument("--now")
+    args = parser.parse_args(argv)
+    now = (observatory.parse_utc(args.now, "--now") if args.now
+           else datetime.now(timezone.utc).replace(microsecond=0))
+    print(json.dumps(overdue(args.root.resolve(), now), indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
