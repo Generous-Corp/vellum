@@ -141,6 +141,17 @@ if(VELLUM_BUILD_TESTS)
     target_link_libraries(vellum-foundation-test PRIVATE Vellum::Foundation)
     add_test(NAME vellum.foundation COMMAND vellum-foundation-test)
 
+    add_executable(vellum-value-param-model-test
+        foundation/tests/value/param_model_test.cpp)
+    target_link_libraries(vellum-value-param-model-test PRIVATE Vellum::Value)
+    add_test(NAME vellum.value.param-model COMMAND vellum-value-param-model-test)
+
+    find_package(Threads REQUIRED)
+    add_executable(vellum-value-feed-test
+        foundation/tests/value/value_feed_test.cpp)
+    target_link_libraries(vellum-value-feed-test PRIVATE Vellum::Value Threads::Threads)
+    add_test(NAME vellum.value.feed COMMAND vellum-value-feed-test)
+
     add_executable(vellum-runtime-test
         runtime/tests/kernel_test.cpp)
     target_link_libraries(vellum-runtime-test PRIVATE Vellum::Runtime)
@@ -270,6 +281,17 @@ if(VELLUM_BUILD_TESTS)
                 "-DVELLUM_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
                 "-DTEST_CONFIG=$<CONFIG>"
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunInstallConsumer.cmake")
+        # The installed Vellum::Value target, used on its own the way an
+        # integration package uses it.
+        add_test(NAME vellum.value.install-consumer
+            COMMAND "${CMAKE_COMMAND}"
+                "-DVELLUM_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+                "-DVELLUM_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+                "-DVELLUM_INSTALL_CONSUMER_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/foundation/tests/value/install_consumer"
+                "-DVELLUM_INSTALL_CONSUMER_WORK=value-install-consumer-test"
+                "-DVELLUM_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
+                "-DTEST_CONFIG=$<CONFIG>"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunInstallConsumer.cmake")
         add_test(NAME vellum.install-arch-guard
             COMMAND "${CMAKE_COMMAND}"
                 "-DVELLUM_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
@@ -386,7 +408,7 @@ if(VELLUM_BUILD_TESTS)
     endif()
 endif()
 
-set(_vellum_install_targets vellum-foundation vellum-runtime vellum-component-abi)
+set(_vellum_install_targets vellum-foundation vellum-value vellum-runtime vellum-component-abi)
 if(VELLUM_ENABLE_GRAPHICS)
     list(APPEND _vellum_install_targets vellum-graphics)
     if(TARGET vellum-gpu)
