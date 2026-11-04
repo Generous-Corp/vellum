@@ -3,7 +3,8 @@
 
     overdue_events.py [--root PATH] [--now UTC]
 
-Prints a JSON array of {event_id, class, deadline}, oldest deadline first.
+Prints {overdue: [{event_id, class, deadline}], oldest_pending_days,
+maximum_pending_event_age_days, pending_age_exceeded}, overdue oldest first.
 The Observatory overdue issue workflow keeps one tracking issue current from it: pull
 requests and queue entries only report overdue events (Decision 0013), so the
 issue is where the work to classify them is asked for.
@@ -21,17 +22,26 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import observatory  # noqa: E402
 
 
-def overdue(root: Path, now: datetime) -> list[dict[str, str]]:
+def overdue(root: Path, now: datetime) -> dict[str, object]:
     budgets = observatory.load_budgets(root / observatory.BUDGETS_PATH)
     rows = []
+    oldest = 0.0
     for event in observatory.effective_observations(observatory.load_events(root)):
         if event["disposition"] != "pending":
             continue
+        discovered = observatory.parse_utc(event["discovered_at"], "event.discovered_at")
+        oldest = max(oldest, (now - discovered).total_seconds() / 86400)
         due = observatory.deadline(event, budgets)
         if now > due:
             rows.append({"event_id": str(event["event_id"]), "class": str(event["class"]),
                          "deadline": observatory.utc_text(due)})
-    return sorted(rows, key=lambda row: (row["deadline"], row["event_id"]))
+    limit = budgets["maximum_pending_event_age_days"]
+    return {
+        "overdue": sorted(rows, key=lambda row: (row["deadline"], row["event_id"])),
+        "oldest_pending_days": round(oldest, 2),
+        "maximum_pending_event_age_days": limit,
+        "pending_age_exceeded": oldest > limit,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:

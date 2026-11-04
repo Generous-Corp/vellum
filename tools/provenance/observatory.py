@@ -9,7 +9,7 @@ modules and remain re-exported here for compatibility with existing callers.
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import re
@@ -985,6 +985,9 @@ def verify(
         pulp_repo=pulp_repo,
         vellum_repo=vellum_repo,
     )
+    verify_new_event_times(
+        root, git_base, events, pulp_repo=pulp_repo, vellum_repo=vellum_repo, now=check_now,
+    )
     gaps = coverage_gaps(
         root=root, mapping=mapping, cursor=cursor, events=events,
         pulp_repo=pulp_repo, vellum_repo=vellum_repo,
@@ -1088,6 +1091,55 @@ def verify(
     return report
 
 
+# Clock skew allowed between a commit's committer time, a discovery stamp and
+# the verifying runner.
+DISCOVERY_SKEW = timedelta(hours=1)
+
+
+def new_event_ids(root: Path, git_base: str | None,
+                  events: list[tuple[Path, dict[str, object]]]) -> set[str]:
+    """IDs of the events whose files are absent from git_base."""
+    if git_base is None:
+        return set()
+    prefix = EVENTS_PATH.as_posix()
+    existing = set(git(root, "ls-tree", "-r", "--name-only", git_base, "--", prefix).splitlines())
+    return {
+        str(event["event_id"]) for path, event in events
+        if path.resolve().relative_to(root.resolve()).as_posix() not in existing
+    }
+
+
+def verify_new_event_times(
+    root: Path, git_base: str | None, events: list[tuple[Path, dict[str, object]]], *,
+    pulp_repo: Path | None, vellum_repo: Path | None, now: datetime | None,
+) -> None:
+    """A new observation cannot be discovered before its commit, or in the future.
+
+    Deadlines count from discovered_at, so a backdated stamp would make an
+    event overdue (or a future one keep it from ever being) by choice.
+    """
+    new_ids = new_event_ids(root, git_base, events)
+    repos = {"Generous-Corp/pulp": pulp_repo, "Generous-Corp/vellum": vellum_repo}
+    for _, event in events:
+        if event["kind"] != "observation" or str(event["event_id"]) not in new_ids:
+            continue
+        discovered = parse_utc(event["discovered_at"], "event.discovered_at")
+        if now is not None and discovered > now + DISCOVERY_SKEW:
+            raise ObservatoryError(f"{event['event_id']}: discovered_at is in the future")
+        repo = repos.get(str(event["source_repository"]))
+        if repo is None:
+            continue
+        committed = datetime.fromtimestamp(
+            int(git(repo, "show", "-s", "--format=%ct", str(event["source_commit"]))),
+            timezone.utc,
+        )
+        if discovered < committed - DISCOVERY_SKEW:
+            raise ObservatoryError(
+                f"{event['event_id']}: discovered_at {event['discovered_at']} precedes its "
+                f"commit ({committed.isoformat()})"
+            )
+
+
 def late_new_events(
     root: Path, git_base: str | None, events: list[tuple[Path, dict[str, object]]],
     budgets: dict[str, int], now: datetime | None,
@@ -1099,12 +1151,7 @@ def late_new_events(
     """
     if git_base is None or now is None:
         return []
-    prefix = EVENTS_PATH.as_posix()
-    existing = set(git(root, "ls-tree", "-r", "--name-only", git_base, "--", prefix).splitlines())
-    new_ids = {
-        str(event["event_id"]) for path, event in events
-        if path.resolve().relative_to(root.resolve()).as_posix() not in existing
-    }
+    new_ids = new_event_ids(root, git_base, events)
     late = []
     for event in effective_observations(events):
         if event["disposition"] != "pending" or str(event["event_id"]) not in new_ids:

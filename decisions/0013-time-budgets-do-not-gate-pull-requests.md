@@ -30,14 +30,17 @@ that; it stopped every landing while the work waited.
 
    Only debt the change did not bring is reported. A pending event the change
    adds itself (absent from `--git-base`) that is already overdue or over age
-   fails the run (`new-event-already-late`); a backdated `discovered_at` is
-   one way to get there. With no base, the budgets are enforced.
+   fails the run (`new-event-already-late`), and with no base the budgets are
+   enforced. On every run, a new observation's `discovered_at` may not precede
+   its source commit's committer time, nor lie in the future, by more than an
+   hour of clock skew, so deadlines cannot be moved by backdating.
 3. Pushes to `main` and release tags keep `--time-budgets enforce`, the default.
    A red `provenance-verify` on `main` holds release-tag readiness, and a tag is
    judged at its commit's time, so nothing is released while events are overdue.
 4. The hourly `Observatory overdue issue` workflow keeps one issue,
    "Observatory events overdue for classification", with the current overdue
-   list. It closes any duplicates, and closes the issue when the count returns
+   list and the oldest pending event's age against its budget. It closes any
+   duplicates, and closes the issue when the count returns
    to 0.
 
 ## Consequences

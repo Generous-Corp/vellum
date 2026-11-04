@@ -11,6 +11,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timedelta, timezone
 import unittest
 from unittest import mock
 
@@ -1624,17 +1625,21 @@ class ObservatoryTests(unittest.TestCase):
             run(root, "git", "config", "user.email", "observatory@example.invalid")
             run(root, "git", "config", "user.name", "Observatory Test")
             empty_base = commit_all(root, "state without events")
+            # Discovery is stamped after the fixture commits, as a real
+            # reconcile is; "later" is a year past every deadline.
+            discovered = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(minutes=1)
+            discovered_text = discovered.strftime("%Y-%m-%dT%H:%M:%SZ")
             observatory.reconcile(
                 root=root, pulp_repo=pulp, vellum_repo=vellum,
                 pulp_target=pulp_head, vellum_target=vellum_head,
-                now_text="2026-07-22T20:00:00Z", write=True,
+                now_text=discovered_text, write=True,
             )
             events_base = commit_all(root, "reconciled events")
             self.assertEqual(observatory.TIME_BUDGET_VIOLATIONS, frozenset({
                 "overdue-event-count-exceeded", "pending-event-age-exceeded",
             }))
             arguments = dict(root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=events_base)
-            later = observatory.parse_utc("2027-07-22T20:00:00Z", "now")
+            later = discovered + timedelta(days=365)
             with self.assertRaisesRegex(observatory.ObservatoryError, "overdue-event-count-exceeded"):
                 observatory.verify(**arguments, check_now=later, time_budgets="enforce")
             report = observatory.verify(**arguments, check_now=later, time_budgets="report")
@@ -1665,28 +1670,38 @@ class ObservatoryTests(unittest.TestCase):
                                             "pending-event-count-exceeded"):
                     observatory.verify(**arguments, check_now=later, time_budgets="report")
             # In time, nothing is reported at all.
-            on_time = observatory.verify(
-                **arguments, check_now=observatory.parse_utc("2026-07-22T20:00:00Z", "now"),
-                time_budgets="report",
-            )
+            on_time = observatory.verify(**arguments, check_now=discovered, time_budgets="report")
             self.assertNotIn("reported_time_budget_violations", on_time)
             cli = ["--root", str(root), "verify", "--pulp-repo", str(pulp), "--vellum-repo", str(vellum),
-                   "--git-base", events_base, "--now", "2027-07-22T20:00:00Z"]
+                   "--git-base", events_base, "--now", later.strftime("%Y-%m-%dT%H:%M:%SZ")]
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                 self.assertNotEqual(observatory.main(cli), 0)
                 self.assertNotEqual(observatory.main([*cli, "--time-budgets", "enforce"]), 0)
                 self.assertEqual(observatory.main([*cli, "--time-budgets", "report"]), 0)
                 with self.assertRaises(SystemExit):
                     observatory.main([*cli, "--time-budgets", "ignore"])
+            # A change cannot backdate (or postdate) the events it adds.
+            event_path = sorted((root / observatory.EVENTS_PATH).glob("*.yaml"))[0]
+            original = event_path.read_text()
+            for stamp, message in (("2020-01-01T00:00:00Z", "precedes its commit"),
+                                   ((later + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                                    "in the future")):
+                with self.subTest(stamp=stamp):
+                    event_path.write_text(original.replace(discovered_text, stamp))
+                    with self.assertRaisesRegex(observatory.ObservatoryError, message):
+                        observatory.verify(**{**arguments, "git_base": empty_base},
+                                           check_now=later, time_budgets="report")
+            event_path.write_text(original)
             with self.assertRaisesRegex(observatory.ObservatoryError, "unknown time-budget mode"):
                 observatory.verify(**arguments, check_now=later, time_budgets="ignore")
             # The watchdog's tracking issue lists exactly these overdue events.
             sys.path.insert(0, str(Path(observatory.__file__).parent))
             import overdue_events  # noqa: PLC0415
-            self.assertEqual(overdue_events.overdue(
-                root, observatory.parse_utc("2026-07-22T20:00:00Z", "now")), [])
-            late = overdue_events.overdue(root, later)
+            self.assertEqual(overdue_events.overdue(root, discovered)["overdue"], [])
+            summary = overdue_events.overdue(root, later)
+            late = summary["overdue"]
             self.assertEqual(len(late), 2)
+            self.assertTrue(summary["pending_age_exceeded"])
             self.assertEqual(late, sorted(late, key=lambda row: (row["deadline"], row["event_id"])))
 
     def test_incremental_reconcile_preserves_full_verify_gate(self) -> None:
