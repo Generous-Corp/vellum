@@ -52,14 +52,18 @@ class Repo:
         target.write_text(text)
 
     def land(self, title: str, files: dict[str, str], body: str = "", branch: str = "topic",
-             identity: tuple[str, str] = ("t", "t@t"), extra_commits: int = 0) -> str:
-        """A pull request with one commit titled `title`, landed by the queue's merge commit."""
-        self.git("checkout", "-q", "--detach", self.main)
+             identity: tuple[str, str] = ("t", "t@t"), extra_commits: int = 0, start: str | None = None,
+             mode: str | None = None) -> str:
+        """A pull request with one commit titled `title`, cut from `start` (main), landed by the queue's merge."""
+        self.git("checkout", "-q", "--detach", start or self.main)
         for index in range(extra_commits):
             self.git("commit", "-q", "--allow-empty", "-m", f"chore: extra {index}")
         for path, text in files.items():
             self.write(path, text)
         self.git("add", "-A")
+        if mode:
+            (self.root / "CMakeLists.txt").chmod(0o755 if mode == "+x" else 0o644)
+            self.git("update-index", f"--chmod={mode}", "CMakeLists.txt")
         name, email = identity
         self.git("-c", f"user.name={name}", "-c", f"user.email={email}", "commit", "-q", "--allow-empty", "-m",
                  title + ("\n\n" + body if body else ""))
@@ -73,7 +77,9 @@ class Repo:
 
     def bot_bump(self, version: str, extra: dict[str, str] | None = None, **overrides) -> str:
         """The version-at-land pull request: the bot's one commit rewriting CMakeLists.txt, merged."""
-        files = {"CMakeLists.txt": CMAKE.format(v=version), **(extra or {})}
+        exact = val.rewrite(lambda path: val.blob(self.root, overrides.get("start") or self.main, path), version)
+        files = {path: data.decode() for path, data in exact.items()}
+        files.update(extra or {})
         options = dict(body=val.BOT_TRAILER, branch=val.BUMP_BRANCH, identity=(val.BOT_NAME, val.BOT_EMAIL))
         options.update(overrides)
         return self.land(f"chore(release): bump version to {version}", files, **options)
@@ -137,6 +143,18 @@ class Levels(unittest.TestCase):
         self.assertEqual(val.explicit_level([quoted]), (None, False))
         trailer = "fix: a\n\nThe body.\n\nVersion-Bump: vellum=minor\nCo-Authored-By: x <x@x>\n"
         self.assertEqual(val.explicit_level([trailer]), ("minor", False))
+
+    def test_a_version_bump_line_outside_the_trailer_block_warns(self) -> None:
+        for message in ("fix: x\nVersion-Bump: vellum=minor\n",
+                        "fix: x\n\nA body line.\nVersion-Bump: vellum=minor\n"):
+            with self.subTest(message=message):
+                val.WARNINGS.clear()
+                self.assertEqual(val.explicit_level([message]), (None, False))
+                self.assertEqual(len(val.WARNINGS), 1)
+                self.assertIn("outside the trailer block", val.WARNINGS[0])
+        val.WARNINGS.clear()
+        self.assertEqual(val.explicit_level(["fix: x\n\nVersion-Bump: vellum=minor\n"]), ("minor", False))
+        self.assertEqual(val.WARNINGS, [])
 
     def test_an_explicit_major_is_minor_under_0x(self) -> None:
         # 1.0.0 is never proposed automatically.
@@ -203,15 +221,6 @@ class Plans(unittest.TestCase):
         self.repo.land("fix: after the release", {"runtime/s.cpp": "t\n"})
         result = self.repo.plan()
         self.assertEqual((result.version, result.since), ("0.2.1", "v0.2.0"))
-
-    def test_an_untagged_newer_version_on_main_is_pending(self) -> None:
-        self.repo.land("fix: correct the core", {"foundation/src/core.cpp": "int y;\n"})
-        self.repo.land("chore(release): bump version to 0.1.11", {"CMakeLists.txt": CMAKE.format(v="0.1.11")},
-                       body=val.BOT_TRAILER)
-        self.repo.land("feat!: lands while the release waits", {"runtime/s.cpp": "s\n"})
-        result = self.repo.plan()
-        self.assertEqual((result.action, result.version), ("pending", ""))
-        self.assertIn("newer than every release tag", result.reason)
 
     def test_a_retired_version_is_never_proposed(self) -> None:
         self.repo.land("fix: correct the core", {"foundation/src/core.cpp": "int y;\n"})
@@ -382,6 +391,16 @@ class Workflow(unittest.TestCase):
         self.assertIn('"$(git rev-list --count origin/main..FETCH_HEAD)" = 1', standing)
         self.assertIn('[ "$ours" = "$theirs" ]', standing)
         self.assertNotIn("CMakeLists", standing)
+        # ... and only when that commit is the bot's own, with its trailer.
+        self.assertIn('"$(git log -1 --format=%an%n%ae%n%cn%n%ce FETCH_HEAD)" = "$bot"', standing)
+        self.assertIn("grep -qxF 'Version-Bump: skip reason=\"the version-at-land bump itself\"'", standing)
+
+    def test_a_moved_main_ends_the_push_cleanly(self) -> None:
+        push = self.step(self.push_job, "Push the bump branch and open its pull request")
+        moved = push[push.index('live="$('):push.index('lease="$(')]
+        self.assertIn('if [ "$live" != "$MAIN" ]; then', moved)
+        self.assertIn("exit 0", moved)
+        self.assertLess(push.index('if [ "$live" != "$MAIN" ]'), push.index(" push \\"))
 
     def test_the_planned_outputs_are_checked_before_use(self) -> None:
         decide = self.step(self.plan_job, "Decide the next version")
@@ -467,6 +486,52 @@ class VerifyBump(unittest.TestCase):
     def test_a_bump_without_the_bot_trailer_is_refused(self) -> None:
         self.repo.bot_bump("0.1.11", body="")
         self.assertIn("lacks the version-at-land trailer", self.verify())
+
+    def test_a_verified_untagged_bump_is_pending(self) -> None:
+        self.repo.bot_bump("0.1.11")
+        self.repo.land("feat!: lands while the release waits", {"runtime/s.cpp": "s\n"})
+        result = self.repo.plan()
+        self.assertEqual((result.action, result.version), ("pending", ""))
+        self.assertIn("newer than every release tag", result.reason)
+
+    def test_a_breaking_change_landed_ahead_of_the_bump_does_not_block_it(self) -> None:
+        # The race: the bot plans 0.1.11 from main, a `feat!:` lands first,
+        # then the bump. It is judged against the main it was planned from.
+        planned = self.repo.main
+        self.repo.land("feat!: replace the scene API", {"runtime/s.cpp": "s\n"})
+        self.repo.bot_bump("0.1.11", start=planned)
+        self.assertIsNone(self.verify())
+        self.assertEqual(self.repo.plan().action, "pending")
+
+    def test_a_bump_refused_after_a_race_is_passed_over_by_the_next_one(self) -> None:
+        # A change ahead edits a version surface, so the merged tree is not the
+        # rewrite and the bump is refused; plan then proposes the next number
+        # instead of waiting forever, and that bump verifies.
+        planned = self.repo.main
+        self.repo.land("build: touch the project", {"CMakeLists.txt": CMAKE.format(v="0.1.10") + "# 0.1.10\n"})
+        self.repo.bot_bump("0.1.11", start=planned)
+        self.assertIn("differs from the rewrite", self.verify())
+        result = self.repo.plan()
+        self.assertEqual((result.action, result.version), ("bump", "0.1.12"))
+        self.repo.bot_bump("0.1.12")
+        self.assertIsNone(self.verify())
+        self.assertEqual(self.repo.plan().action, "pending")
+
+    def test_a_hand_set_jump_stops_plan_instead_of_being_passed_over(self) -> None:
+        self.repo.land("release: 9.0.0", {"CMakeLists.txt": CMAKE.format(v="9.0.0")})
+        with self.assertRaisesRegex(val.VersionError, "not one step above v0.1.10"):
+            self.repo.plan()
+
+    def test_a_bump_planned_off_main_is_refused(self) -> None:
+        self.repo.git("checkout", "-q", "--detach", self.repo.main)
+        self.repo.git("commit", "-q", "--allow-empty", "-m", "never landed")
+        side = self.repo.git("rev-parse", "HEAD")
+        self.repo.bot_bump("0.1.11", start=side)
+        self.assertIn("is not one commit", self.verify())
+
+    def test_a_changed_file_mode_is_refused(self) -> None:
+        self.repo.bot_bump("0.1.11", mode="+x")
+        self.assertIn("not mode 100644", self.verify())
 
     def test_a_direct_commit_is_refused(self) -> None:
         self.repo.git("checkout", "-q", "--detach", self.repo.main)

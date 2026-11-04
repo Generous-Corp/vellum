@@ -826,6 +826,44 @@ class TagTargetSelection(unittest.TestCase):
         self.assertIn("could not list release tags", failed.stderr)
 
 
+class CheckCli(unittest.TestCase):
+    """`release_request.py check` refuses a landing version-at-land did not make, before any other input."""
+
+    def run_check(self, history: History, commit: str) -> subprocess.CompletedProcess[str]:
+        remote = history.root.parent / (history.root.name + "-remote.git")
+        self.addCleanup(shutil.rmtree, remote, True)
+        git("init", "-q", "--bare", str(remote))
+        history.git("remote", "add", "origin", str(remote))
+        history.git("push", "-q", "origin", "refs/tags/v0.1.9")
+        scripts = history.root / "scripts"
+        for name in ("release_request.py", "verify_immutable_release_preflight.py", "version_at_land.py"):
+            shutil.copy2(rr.ROOT / "scripts" / name, scripts / name)
+        history.git("checkout", "-q", "--detach", commit)
+        missing = str(history.root / "not-read-yet.json")
+        return subprocess.run([sys.executable, "-I", str(scripts / "release_request.py"), "check", "--commit", commit,
+                               "--branch-rules", missing, "--check-runs", missing, "--protection", missing,
+                               "--immutable-releases", missing, "--immutable-read-at", "2026-11-01T00:00:00Z"],
+                              capture_output=True, text=True, check=False)
+
+    def test_a_hand_set_version_is_refused_by_check(self) -> None:
+        history = History(self)
+        history.branch(history.main)
+        val.apply(history.root, "0.1.10")
+        landed = history.land(history.commit("release: 0.1.10 by hand"))
+        merged = history.land(history.reconcile(landed))
+        done = self.run_check(history, merged)
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("not landed by version-at-land", done.stderr)
+
+    def test_the_bots_bump_passes_check_to_the_next_input(self) -> None:
+        history = History(self)
+        merged = history.land(history.reconcile(history.bump()))
+        done = self.run_check(history, merged)
+        self.assertEqual(done.returncode, 1)
+        self.assertNotIn("version-at-land", done.stderr)
+        self.assertIn("not-read-yet.json", done.stderr)
+
+
 class RealHistoryReplay(unittest.TestCase):
     """Replay the tag's reconciled observatory check on Vellum's own release history.
 

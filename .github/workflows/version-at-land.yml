@@ -111,9 +111,9 @@ jobs:
             echo '```'
           } > "$RUNNER_TEMP/bump/body.md"
 
-      # An open bump pull request whose one commit is this exact patch is left
-      # alone, so its checks and review stand. Anything else on the branch is
-      # replaced.
+      # An open bump pull request whose one commit is this exact patch, by the
+      # bot and with its trailer, is left alone, so its checks and review
+      # stand. Anything else on the branch is replaced.
       - name: Read the standing bump pull request
         id: standing
         if: steps.plan.outputs.action == 'bump'
@@ -128,7 +128,12 @@ jobs:
           if [ -n "$number" ] && git fetch --quiet --no-tags origin "refs/heads/$BUMP_BRANCH"; then
             ours="$(git -c core.hooksPath=/dev/null patch-id --stable < "$RUNNER_TEMP/bump/bump.patch" | cut -d' ' -f1)"
             theirs="$(git -c core.hooksPath=/dev/null show FETCH_HEAD | git patch-id --stable | cut -d' ' -f1)"
-            if [ "$(git rev-list --count origin/main..FETCH_HEAD)" = 1 ] && [ -n "$ours" ] && [ "$ours" = "$theirs" ]; then
+            bot="$(printf '%s\n%s\n%s\n%s' vellum-version-at-land vellum-version-at-land@users.noreply.github.com \
+              vellum-version-at-land vellum-version-at-land@users.noreply.github.com)"
+            if [ "$(git rev-list --count origin/main..FETCH_HEAD)" = 1 ] && [ -n "$ours" ] && [ "$ours" = "$theirs" ] \
+              && [ "$(git log -1 --format=%an%n%ae%n%cn%n%ce FETCH_HEAD)" = "$bot" ] \
+              && git log -1 --format=%B FETCH_HEAD \
+                | grep -qxF 'Version-Bump: skip reason="the version-at-land bump itself"'; then
               current=true
               echo "::notice::#$number already proposes this bump"
             fi

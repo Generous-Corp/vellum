@@ -332,28 +332,11 @@ def version_at(root: Path, commit: str) -> str | None:
 
 
 def version_landing(root: Path, commit: str) -> str:
-    """The commit on `commit`'s first-parent chain that landed its project VERSION.
-
-    That is the newest first-parent commit whose project VERSION differs from
-    its first parent's. A version bump reaches main through the merge queue, so
-    on main this is the queue's merge commit. Commits that change
-    CMakeLists.txt without changing the version are passed over.
-    """
-    chain = git(root, "rev-list", "--first-parent", commit).splitlines()
-    if not chain:
-        raise ReleaseRequestError(f"{commit} has no history")
-    query = "".join(f"{entry}:{CMAKELISTS}\n{entry}^1:{CMAKELISTS}\n" for entry in chain)
-    answer = subprocess.run(["git", "-C", str(root), "cat-file", "--batch-check=%(objectname)"],
-                            input=query, capture_output=True, text=True, check=True).stdout.splitlines()
-    if len(answer) != 2 * len(chain):
-        raise ReleaseRequestError("git answered a different number of objects than asked")
-    for index, entry in enumerate(chain):
-        mine, parent = answer[2 * index], answer[2 * index + 1]
-        if mine.endswith(" missing"):
-            break
-        if mine != parent and version_at(root, entry) != version_at(root, f"{entry}^1"):
-            return entry
-    raise ReleaseRequestError(f"no commit on the first-parent history of {commit} set its project VERSION")
+    """The commit on `commit`'s first-parent chain that landed its project VERSION (version_at_land's rule)."""
+    try:
+        return val.version_landing(root, commit)
+    except val.VersionError as error:
+        raise ReleaseRequestError(str(error)) from error
 
 
 def observatory_cursor(root: Path, commit: str) -> str:

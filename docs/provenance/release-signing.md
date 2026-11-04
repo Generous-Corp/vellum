@@ -45,7 +45,10 @@ A Vellum release tag is signed by CI, never by a person or an agent's host key.
      and committed by `vellum-version-at-land` with its trailer, a diff equal byte for byte to the rewrite `apply`
      makes from the merge's first parent, and a version equal to what `plan` derives at that parent. A hand-set
      version, a bump with an extra hunk, a level `plan` would not choose, or a skipped number is refused. The
-     signing job checks this again before `check`;
+     signing job checks this again before `check`. The version is re-derived at the bump commit's own parent (the
+     `main` it was planned from), so a change landed ahead of it in the queue does not make it unreleasable; when the
+     merged tree no longer equals the rewrite, `plan` treats that number as used and proposes the next one, but only
+     past a number one step above the newest tag;
    - the cursor at the pushed commit is, or descends from, the commit that landed the version: the newest commit on
      the pushed commit's first-parent history whose project `VERSION` differs from its first parent's, which on
      `main` is the merge queue's merge of the bump;

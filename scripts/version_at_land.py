@@ -110,11 +110,11 @@ class VersionError(RuntimeError):
     pass
 
 
-def git(root: Path, *args: str) -> str:
-    result = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, check=False)
+def git(root: Path, *args: str, input_bytes: bytes | None = None) -> str:
+    result = subprocess.run(["git", "-C", str(root), *args], capture_output=True, input=input_bytes, check=False)
     if result.returncode != 0:
-        raise VersionError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
-    return result.stdout
+        raise VersionError(f"git {' '.join(args)} failed: {result.stderr.decode('utf-8', 'replace').strip()}")
+    return result.stdout.decode("utf-8", "replace")
 
 
 def parse_version(text: str) -> tuple[int, int, int]:
@@ -242,7 +242,11 @@ def explicit_level(messages: list[str], major: int = 1) -> tuple[str | None, boo
     """
     levels, skipped = [], False
     for message in messages:
-        for value in trailers(message):
+        parsed = trailers(message)
+        if len(TRAILER.findall(message)) > len(parsed):
+            WARNINGS.append("ignored a `Version-Bump:` line outside the trailer block; put it in the last "
+                            "paragraph, after a blank line, with only trailers")
+        for value in parsed:
             if (explicit := EXPLICIT.fullmatch(value)):
                 level = explicit["level"]
                 levels.append("minor" if major == 0 and level == "major" else level)
@@ -303,6 +307,42 @@ def tag_version(tag: str) -> tuple[int, int, int] | None:
     return tuple(int(part) for part in match.groups()) if match else None  # type: ignore[return-value]
 
 
+def version_of(root: Path, commit: str) -> str | None:
+    """The project VERSION CMakeLists.txt declares at `commit`, or None when it declares none readably."""
+    data = blob(root, commit, CMAKELISTS)
+    if data is None:
+        return None
+    try:
+        return project_version(data.decode("utf-8", "replace"))
+    except VersionError:
+        return None
+
+
+def version_landing(root: Path, commit: str) -> str:
+    """The commit on `commit`'s first-parent chain that landed its project VERSION.
+
+    That is the newest first-parent commit whose project VERSION differs from
+    its first parent's. A version bump reaches main through the merge queue, so
+    on main this is the queue's merge commit. Commits that change
+    CMakeLists.txt without changing the version are passed over.
+    """
+    chain = git(root, "rev-list", "--first-parent", commit).split()
+    if not chain:
+        raise VersionError(f"{commit} has no history")
+    query = "".join(f"{entry}:{CMAKELISTS}\n{entry}^1:{CMAKELISTS}\n" for entry in chain)
+    answer = subprocess.run(["git", "-C", str(root), "cat-file", "--batch-check=%(objectname)"],
+                            input=query, capture_output=True, text=True, check=True).stdout.splitlines()
+    if len(answer) != 2 * len(chain):
+        raise VersionError("git answered a different number of objects than asked")
+    for index, entry in enumerate(chain):
+        mine, parent = answer[2 * index], answer[2 * index + 1]
+        if mine.endswith(" missing"):
+            break
+        if mine != parent and version_of(root, entry) != version_of(root, f"{entry}^1"):
+            return entry
+    raise VersionError(f"no commit on the first-parent history of {commit} set its project VERSION")
+
+
 def is_ancestor(root: Path, ancestor: str, commit: str) -> bool:
     result = subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", ancestor, commit],
                             capture_output=True, text=True, check=False)
@@ -336,9 +376,22 @@ def plan(root: Path, commit: str, tags: dict[str, str], retired_tags: Any) -> Pl
     if not known:
         raise VersionError("no release tag exists to count from")
     highest = max(known)
+    floor = None
     if parse_version(current) > highest:
-        return Plan("pending", current, f"main declares {current}, newer than every release tag; "
-                                        f"release-tag.yml tags v{current} once the observatory reconciles it")
+        problem = verify_bump(root, version_landing(root, commit), tags, retired_tags)
+        if problem is None:
+            return Plan("pending", current, f"main declares {current}, newer than every release tag; "
+                                            f"release-tag.yml tags v{current} once the observatory reconciles it")
+        # A bump that release-tag will refuse (one that lost a race with a
+        # change landed ahead of it) must not leave main stuck: it counts as
+        # used, and the next version goes past it. Only a number one step
+        # above the newest tag may be passed over this way; anything further
+        # (a hand-set jump) stops here for a person to revert or retire.
+        steps = {bumped(highest, level) for level in (("patch", "minor") if highest[0] == 0 else LEVELS[1:])}
+        if parse_version(current) not in steps:
+            raise VersionError(f"main declares {current}, which version-at-land did not land and which is not "
+                               f"one step above v{render(highest)} ({problem}); revert it or retire v{current}")
+        floor = parse_version(current)
     released = sorted(((key, name) for name in tags if (key := tag_version(name))
                        and is_ancestor(root, tags[name], commit)), reverse=True)
     if not released:
@@ -350,7 +403,10 @@ def plan(root: Path, commit: str, tags: dict[str, str], retired_tags: Any) -> Pl
     if level == "none":
         return Plan("none", current, f"nothing that ships has landed since {base_tag}", since=base_tag,
                     changes=changes)
-    version = render(bumped(highest, level))
+    target = bumped(highest, level)
+    if floor is not None and target <= floor:
+        target = bumped(floor, "patch")
+    version = render(target)
     return Plan("bump", current, f"{level} from {sum(c.level != 'none' for c in changes)} landed change(s) "
                                  f"since {base_tag}", version, level, base_tag, changes)
 
@@ -463,12 +519,17 @@ def verify_bump(root: Path, landing: str, tags: dict[str, str], retired_tags: An
     if BOT_TRAILER not in git(root, "show", "-s", "--format=%B", head):
         return f"{head[:12]} lacks the version-at-land trailer"
     version = project_version(git(root, "show", f"{landing}:{CMAKELISTS}"))
+    # The bump is judged against the main it was planned from (its own
+    # parent), so a change that lands ahead of it in the queue does not make
+    # it unreleasable; the byte check below still compares the merged tree.
+    # The one-commit rule above already means that parent is on main.
+    planned = git(root, "rev-parse", f"{head}^1").strip()
     try:
-        expected = plan(root, base, tags, retired_tags)
+        expected = plan(root, planned, tags, retired_tags)
     except VersionError as error:
-        return f"the version cannot be re-derived at {base[:12]}: {error}"
+        return f"the version cannot be re-derived at {planned[:12]}: {error}"
     if expected.action != "bump" or expected.version != version:
-        return (f"version-at-land derives {expected.version or expected.action} at {base[:12]}, but "
+        return (f"version-at-land derives {expected.version or expected.action} at {planned[:12]}, but "
                 f"{landing[:12]} declares {version}")
     try:
         written = rewrite(lambda path: blob(root, base, path), version)
@@ -483,7 +544,25 @@ def verify_bump(root: Path, landing: str, tags: dict[str, str], retired_tags: An
     wrong = [path for path, data in written.items() if blob(root, landing, path) != data]
     if wrong:
         return f"the bump's {wrong[0]} differs from the rewrite apply makes"
+    before, after = tree_entries(root, base, written), tree_entries(root, landing, written)
+    for path, data in written.items():
+        mode = before.get(path, ("100644", ""))[0]
+        object_id = git(root, "hash-object", "--stdin", "-t", "blob", input_bytes=data).strip()
+        if after.get(path) != (mode, object_id):
+            return f"the bump's {path} is {after.get(path)}, not mode {mode} object {object_id[:12]}"
     return None
+
+
+def tree_entries(root: Path, commit: str, paths: Any) -> dict[str, tuple[str, str]]:
+    """(mode, object id) of each path in `commit`'s tree."""
+    listing = git(root, "ls-tree", "-z", commit, "--", *sorted(paths))
+    found = {}
+    for row in listing.split("\0"):
+        if row:
+            meta, path = row.split("\t", 1)
+            mode, _, object_id = meta.split()
+            found[path] = (mode, object_id)
+    return found
 
 
 def lint(root: Path, revisions: str) -> list[str]:
