@@ -923,6 +923,34 @@ class RunnerPolicyTests(unittest.TestCase):
         artifact = lock["runtime_toolchain_dependencies"]["renderer"]["artifact"]
         self.assertEqual((url, asset, sha256),
                          (artifact["url"], artifact["name"], artifact["sha256"]))
+        # Every lock field that composes the URL is refused unless it names the
+        # pinned builder's chrome/mNNN asset, so none reaches curl as an option
+        # or a different path; the shell regex is a second fence on the URL.
+        self.assertIn("[[ \"$url\" =~ ^https://github\\.com/danielraffel/skia-builder/"
+                      "releases/download/chrome/m[0-9]+/", step)
+        source = json.loads((ROOT / "gpu-runtime/renderer-lock.json").read_text(encoding="utf-8"))
+        probes = {
+            "repository option": ("builder", "repository", "-K/etc/passwd"),
+            "foreign repository": ("builder", "repository", "https://github.com/evil/skia-builder"),
+            "milestone traversal": (None, "milestone", "../../evil"),
+            "milestone suffix": (None, "milestone", "chrome/m158/../x"),
+            "asset option": ("asset", "asset", "-o/tmp/x"),
+            "asset path": ("asset", "asset", "../evil.zip"),
+            "uppercase digest": ("asset", "sha256", source["platforms"]["macos-arm64"]["sha256"].upper()),
+        }
+        for label, (where, field, value) in probes.items():
+            with self.subTest(probe=label), tempfile.TemporaryDirectory() as temporary:
+                lock = json.loads(json.dumps(source))
+                target = {"builder": lock["builder"], None: lock,
+                          "asset": lock["platforms"]["macos-arm64"]}[where]
+                target[field] = value
+                path = Path(temporary) / "gpu-runtime/renderer-lock.json"
+                path.parent.mkdir()
+                path.write_text(json.dumps(lock), encoding="utf-8")
+                probe = subprocess.run([sys.executable, "-I", "-c", reader], cwd=temporary,
+                                       capture_output=True, text=True, check=False)
+                self.assertNotEqual(probe.returncode, 0, f"{label} reached curl: {probe.stdout}")
+                self.assertEqual(probe.stdout, "")
 
     def test_workflows_use_their_reviewed_runner_class(self) -> None:
         workflow_paths = sorted(
