@@ -91,6 +91,17 @@ jobs:
             echo "::notice::Running the full proof"
           fi
 
+      # The reused build, render and test steps are a pure function of the
+      # tree. These checks read state outside it (Pulp's history here, the
+      # attested view-audio archive in the canonical fetch below), so a
+      # reused queue run performs them again itself.
+      - name: Re-check the external state a reused proof read
+        if: steps.reuse.outputs.run_id != ''
+        run: |
+          python3 tools/provenance/verify_extraction.py \
+            --defer-mirror-identity \
+            --output "$RUNNER_TEMP/provenance-report.json"
+
       - name: Download and verify the locked Skia and Dawn archive
         if: steps.reuse.outputs.run_id == ''
         shell: bash

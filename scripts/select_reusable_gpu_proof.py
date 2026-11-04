@@ -18,6 +18,11 @@ It prints one workflow run ID, and exits 0, only when every one of these holds:
   ``skipped``).
 * That attempt uploaded the tree receipt, and the receipt names this exact
   tree, this run, and this attempt.
+* That attempt started no more than MAX_AGE before now. The heavy steps are
+  a pure function of the tree, but a few proof steps read external state
+  (Pulp's history, the attested view-audio archive); the queue run re-checks
+  those itself, and the age bound keeps the reused result from describing a
+  world much older than the queue that consumes it.
 
 Anything else, including any API or parsing error, prints a reason on stderr
 and exits 3: the caller then runs the full proof. The selector can only ever
@@ -33,6 +38,7 @@ import re
 import subprocess
 import sys
 import zipfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -44,6 +50,9 @@ RECEIPT_FILE = "gpu-proof-tree.json"
 RECEIPT_SCHEMA = "vellum.gpu-proof-tree.v1"
 PROOF_JOBS = ("gpu-macos-arm64", "sterile-consumer")
 NO_REUSE = 3
+# A pull request is normally approved and queued within hours of its proof;
+# anything older is rebuilt rather than trusted across that much drift.
+MAX_AGE = timedelta(hours=6)
 
 
 class Decline(Exception):
@@ -51,6 +60,7 @@ class Decline(Exception):
 
 
 Api = Callable[[str], Any]
+Clock = Callable[[], datetime]
 Download = Callable[[str], bytes]
 
 
@@ -88,16 +98,31 @@ def read_receipt(archive: bytes) -> dict[str, Any]:
     return value
 
 
+def positive_int(value: Any) -> bool:
+    return type(value) is int and value > 0
+
+
+def started_at(value: Any) -> datetime:
+    if not isinstance(value, str) or not re.fullmatch(
+        r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", value
+    ):
+        raise Decline(f"run start time {value!r} is not a UTC timestamp")
+    return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+
+
 def check_run(
     run: dict[str, Any], *, repository: str, head_sha: str, tree: str,
-    api: Api, download: Download,
+    api: Api, download: Download, now: Clock,
 ) -> int:
     run_id = run.get("id")
     attempt = run.get("run_attempt")
-    if not isinstance(run_id, int) or isinstance(run_id, bool) or run_id <= 0:
+    if not positive_int(run_id):
         raise Decline("run has an invalid ID")
-    if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt <= 0:
+    if not positive_int(attempt):
         raise Decline(f"run {run_id} has an invalid attempt")
+    age = now() - started_at(run.get("run_started_at"))
+    if not timedelta(0) <= age <= MAX_AGE:
+        raise Decline(f"run {run_id} started {age} ago, outside {MAX_AGE}")
     if run.get("event") != "pull_request":
         raise Decline(f"run {run_id} is a {run.get('event')} run")
     if run.get("path") != WORKFLOW_PATH:
@@ -118,7 +143,9 @@ def check_run(
         if len(matches) != 1:
             raise Decline(f"run {run_id} has {len(matches)} {name} jobs")
         job = matches[0]
-        if job.get("conclusion") != "success" or job.get("run_attempt") != attempt:
+        if job.get("conclusion") != "success" or not (
+            positive_int(job.get("run_attempt")) and job["run_attempt"] == attempt
+        ):
             raise Decline(
                 f"run {run_id} {name} is {job.get('conclusion')} "
                 f"in attempt {job.get('run_attempt')}"
@@ -130,14 +157,16 @@ def check_run(
     )
     artifacts = [
         artifact for artifact in listing.get("artifacts", [])
-        if artifact.get("name") == RECEIPT_ARTIFACT and not artifact.get("expired")
+        if artifact.get("name") == RECEIPT_ARTIFACT
+        and artifact.get("expired") is False
+        and positive_int(artifact.get("id"))
         and (artifact.get("workflow_run") or {}).get("id") == run_id
     ]
     for artifact in artifacts:
         receipt = read_receipt(download(
             f"repos/{repository}/actions/artifacts/{artifact['id']}/zip"
         ))
-        if receipt.get("run_attempt") != attempt:
+        if not (positive_int(receipt.get("run_attempt")) and receipt["run_attempt"] == attempt):
             continue
         expected = {
             "schema": RECEIPT_SCHEMA,
@@ -148,7 +177,8 @@ def check_run(
             "tree": tree,
         }
         for key, value in expected.items():
-            if receipt.get(key) != value:
+            # type() as well as value: JSON true must not stand in for 1.
+            if type(receipt.get(key)) is not type(value) or receipt.get(key) != value:
                 raise Decline(
                     f"run {run_id} receipt {key} is {receipt.get(key)!r}, not {value!r}"
                 )
@@ -156,21 +186,38 @@ def check_run(
     raise Decline(f"run {run_id} attempt {attempt} uploaded no tree receipt")
 
 
+def successful_runs(api: Api, repository: str, head_sha: str) -> list[dict[str, Any]]:
+    # Only successful runs can qualify, and every page is read, so other runs
+    # on the same head (a fork's, a failed attempt) cannot hide the real one.
+    runs: list[dict[str, Any]] = []
+    for page in range(1, 11):
+        batch = api(
+            f"repos/{repository}/actions/workflows/gpu-macos.yml/runs"
+            f"?event=pull_request&status=success&head_sha={head_sha}"
+            f"&per_page=100&page={page}"
+        ).get("workflow_runs", [])
+        runs.extend(batch)
+        if len(batch) < 100:
+            return runs
+    raise Decline(f"more than 1000 runs on {head_sha}")
+
+
 def select(
     *, repository: str, tree: str, head_sha: str, api: Api, download: Download,
+    now: Clock = lambda: datetime.now(timezone.utc),
 ) -> int:
-    runs = api(
-        f"repos/{repository}/actions/workflows/gpu-macos.yml/runs"
-        f"?event=pull_request&head_sha={head_sha}&per_page=20"
-    ).get("workflow_runs", [])
+    runs = successful_runs(api, repository, head_sha)
     reasons = []
     # Newest first: a later attempt or push of the same head is the one that
     # describes the current merge ref.
-    for run in sorted(runs, key=lambda value: value.get("id") or 0, reverse=True):
+    for run in sorted(
+        runs, key=lambda value: value.get("id") if positive_int(value.get("id")) else 0,
+        reverse=True,
+    ):
         try:
             return check_run(
                 run, repository=repository, head_sha=head_sha, tree=tree,
-                api=api, download=download,
+                api=api, download=download, now=now,
             )
         except Decline as reason:
             reasons.append(str(reason))

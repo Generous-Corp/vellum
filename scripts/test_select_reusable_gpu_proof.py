@@ -11,7 +11,9 @@ import re
 import subprocess
 import tempfile
 import unittest
+import os
 import zipfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -29,6 +31,7 @@ HEAD = "a" * 40
 TREE = "b" * 40
 RUN_ID = 41000
 ATTEMPT = 2
+NOW = datetime(2026, 11, 4, 12, 0, 0, tzinfo=timezone.utc)
 
 
 def receipt_zip(**changes) -> bytes:
@@ -59,7 +62,9 @@ class FakeGitHub:
             "head_repository": {"full_name": REPO},
             "status": "completed",
             "conclusion": "success",
+            "run_started_at": "2026-11-04T10:00:00Z",
         }]
+        self.queries: list[str] = []
         self.jobs = {RUN_ID: [
             {"name": name, "conclusion": "success", "run_attempt": ATTEMPT}
             for name in selector.PROOF_JOBS
@@ -71,13 +76,19 @@ class FakeGitHub:
         self.archives = {7: receipt_zip()}
 
     def api(self, path: str):
+        self.queries.append(path)
         if "/actions/workflows/gpu-macos.yml/runs?" in path:
-            assert f"head_sha={HEAD}" in path and "event=pull_request" in path
-            return {"workflow_runs": self.runs}
+            for required in (f"head_sha={HEAD}", "event=pull_request", "status=success",
+                             "per_page=100"):
+                assert required in path, path
+            page = int(re.search(r"[?&]page=(\d+)", path).group(1))
+            return {"workflow_runs": self.runs[(page - 1) * 100:page * 100]}
         match = re.search(r"/actions/runs/(\d+)/(jobs|artifacts)\?", path)
         assert match, path
         run_id = int(match.group(1))
         if match.group(2) == "jobs":
+            # The latest attempt's jobs, not every attempt's.
+            assert "filter=latest" in path, path
             return {"jobs": self.jobs.get(run_id, [])}
         return {"artifacts": self.artifacts.get(run_id, [])}
 
@@ -89,7 +100,7 @@ class FakeGitHub:
     def select(self) -> int:
         return selector.select(
             repository=REPO, tree=TREE, head_sha=HEAD,
-            api=self.api, download=self.download,
+            api=self.api, download=self.download, now=lambda: NOW,
         )
 
 
@@ -117,6 +128,12 @@ class SelectorTests(unittest.TestCase):
             "other workflow": ({"path": ".github/workflows/other.yml"}, "other.yml"),
             "other head": ({"head_sha": "e" * 40}, "ran head"),
             "boolean id": ({"id": True}, "invalid ID"),
+            "boolean attempt": ({"run_attempt": True}, "invalid attempt"),
+            "float attempt": ({"run_attempt": 2.0}, "invalid attempt"),
+            "older than the bound": ({"run_started_at": "2026-11-04T05:59:59Z"}, "outside"),
+            "from the future": ({"run_started_at": "2026-11-04T12:00:01Z"}, "outside"),
+            "unparseable start": ({"run_started_at": "yesterday"}, "not a UTC timestamp"),
+            "missing start": ({"run_started_at": None}, "not a UTC timestamp"),
         }
         for name, (change, fragment) in cases.items():
             with self.subTest(case=name):
@@ -168,6 +185,15 @@ class SelectorTests(unittest.TestCase):
                 lambda g: g.archives.update({7: receipt_zip(event="merge_group")}), "event",
             ),
             "other schema": (lambda g: g.archives.update({7: receipt_zip(schema="v0")}), "schema"),
+            "boolean run id": (
+                lambda g: g.archives.update({7: receipt_zip(run_id=True)}), "run_id",
+            ),
+            "boolean attempt": (
+                lambda g: g.archives.update({7: receipt_zip(run_attempt=True)}), "no tree receipt",
+            ),
+            "expired flag missing": (
+                lambda g: g.artifacts[RUN_ID][0].pop("expired"), "no tree receipt",
+            ),
         }
         for name, (mutate, fragment) in cases.items():
             with self.subTest(case=name):
@@ -190,6 +216,23 @@ class SelectorTests(unittest.TestCase):
         older.update(id=RUN_ID - 5, conclusion="failure")
         github.runs.insert(0, older)
         self.assertEqual(github.select(), RUN_ID)
+
+    def test_exactly_the_bound_is_still_reused(self) -> None:
+        github = FakeGitHub()
+        github.runs[0]["run_started_at"] = "2026-11-04T06:00:00Z"
+        self.assertEqual(github.select(), RUN_ID)
+
+    def test_other_runs_on_the_head_cannot_page_the_real_one_out(self) -> None:
+        github = FakeGitHub()
+        real = github.runs[0]
+        forks = []
+        for index in range(150):
+            fork = copy.deepcopy(real)
+            fork.update(id=RUN_ID + 1 + index, head_repository={"full_name": "fork/vellum"})
+            forks.append(fork)
+        github.runs = forks + [real]
+        self.assertEqual(github.select(), RUN_ID)
+        self.assertTrue(any("page=2" in query for query in github.queries))
 
     def test_no_runs_declines(self) -> None:
         github = FakeGitHub()
@@ -273,6 +316,9 @@ GPU_GATE = "steps.reuse.outputs.run_id == ''"
 # fetches and verifies a digest-pinned archive, so a reused run still passes it
 # or fails closed.
 UNGATED_GPU_STEPS = {"Fetch and verify the pinned Pulp view-audio archive"}
+# Runs only when a proof is reused: the external-state checks the reused run
+# performed against the world as it was then.
+RECHECK_STEP = "Re-check the external state a reused proof read"
 STERILE_GATE = "needs.gpu-macos-arm64.outputs.reused_run == ''"
 
 
@@ -287,6 +333,9 @@ def assert_reuse_wiring(test: unittest.TestCase, text: str) -> None:
         if name in UNGATED_GPU_STEPS:
             test.assertEqual(condition, "", name)
             continue
+        if name == RECHECK_STEP:
+            test.assertEqual(condition, "steps.reuse.outputs.run_id != ''", name)
+            continue
         # No subTest here: a mutation test must see this failure raised.
         test.assertNotIn("||", condition, f"gpu-macos-arm64 {name!r}")
         test.assertTrue(
@@ -295,6 +344,8 @@ def assert_reuse_wiring(test: unittest.TestCase, text: str) -> None:
             ),
             f"gpu-macos-arm64 {name!r} runs in a reused queue run: if: {condition!r}",
         )
+    test.assertEqual(names[reuse + 1], RECHECK_STEP)
+    test.assertIn("verify_extraction.py", text)
     receipt = dict(steps)["Record the tree this pull-request proof covered"]
     test.assertEqual(receipt, f"{GPU_GATE} && github.event_name == 'pull_request'")
     test.assertGreater(
@@ -337,6 +388,9 @@ class WorkflowWiringTests(unittest.TestCase):
                 f"        if: {STERILE_GATE}\n",
                 "      - name: Run the complete installed journey without a framework checkout\n", 1,
             ),
+            "no external-state re-check": text.replace(
+                f"      - name: {RECHECK_STEP}\n", "      - name: Re-check nothing\n", 1,
+            ),
             "receipt on every event": text.replace(
                 f"        if: {GPU_GATE} && github.event_name == 'pull_request'\n"
                 "        shell: bash",
@@ -356,6 +410,65 @@ class WorkflowWiringTests(unittest.TestCase):
         for job in selector.PROOF_JOBS:
             body = re.search(rf"^  {job}:\n(.*?)\n    steps:", text, re.M | re.S).group(1)
             self.assertNotIn("reuse", body.split("outputs:")[0], job)
+
+
+def reuse_step_script(text: str) -> str:
+    block = text.split("      - name: Reuse an identical-tree pull-request proof\n", 1)[1]
+    body = block.split("        run: |\n", 1)[1]
+    lines = []
+    for line in body.splitlines():
+        if line and not line.startswith("          "):
+            break
+        lines.append(line[10:])
+    return "\n".join(lines).strip() + "\n"
+
+
+class WrapperTests(unittest.TestCase):
+    """The bash around the selector must turn anything but one ID into a full proof."""
+
+    def run_wrapper(self, stdout: str, status: int) -> str:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(
+                ["git", "-C", str(root), "-c", "user.email=t@example.invalid", "-c", "user.name=t",
+                 "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "x"],
+                check=True,
+            )
+            head = subprocess.run(
+                ["git", "-C", str(root), "rev-parse", "HEAD"],
+                check=True, text=True, capture_output=True,
+            ).stdout.strip()
+            (root / "scripts").mkdir()
+            (root / "scripts" / "select_reusable_gpu_proof.py").write_text(
+                "import sys\n"
+                f"sys.stdout.write({stdout!r})\n"
+                f"sys.exit({status})\n"
+            )
+            output = root / "github_output"
+            output.write_text("")
+            environment = dict(
+                os.environ, GITHUB_OUTPUT=str(output), GITHUB_SHA=head,
+                GITHUB_REPOSITORY=REPO, GITHUB_SERVER_URL="https://github.com",
+            )
+            completed = subprocess.run(
+                ["bash", "-e", "-c", reuse_step_script(WORKFLOW.read_text(encoding="utf-8"))],
+                cwd=root, env=environment, capture_output=True, text=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            return output.read_text()
+
+    def test_one_positive_id_is_the_only_reuse(self) -> None:
+        self.assertEqual(self.run_wrapper("41000\n", 0), "run_id=41000\n")
+
+    def test_anything_else_runs_the_full_proof(self) -> None:
+        for stdout, status in (
+            ("", 0), ("\n", 0), ("garbage", 0), ("41000\n41001\n", 0), ("0\n", 0),
+            ("041000\n", 0), ("-1\n", 0), ("41000 \n", 0), ("41000\n", 3),
+            ("41000\n", 1), ("run_id=1\n", 0), ("1;echo run_id=2\n", 0),
+        ):
+            with self.subTest(stdout=stdout, status=status):
+                self.assertEqual(self.run_wrapper(stdout, status), "")
 
 
 if __name__ == "__main__":

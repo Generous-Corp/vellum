@@ -83,3 +83,35 @@ approved before it can use local capacity; the workflow `if:` guard alone is
 not a security boundary. The `vm` lane has no cross-repository yield and can
 occupy a free host slot until its job completes, so the evidence must include
 concurrent Pulp lease observations.
+
+## Exact-tree reuse of the GPU proof in the merge queue
+
+When no other change lands on `main` between a pull request's proof and its
+queue entry, the queue's merge commit carries exactly the tree the pull
+request's merge ref did. In that case the `merge_group` run of the Locked
+macOS GPU proof may satisfy its heavy build, render and test steps with an
+exact-tree reuse receipt instead of rebuilding them. Both required jobs still
+run and report; only steps are skipped, never a job, because a job skipped by
+its own condition reports a passing required check.
+
+`scripts/select_reusable_gpu_proof.py` permits reuse only when all of these
+hold, and any doubt or error runs the full proof:
+
+- the queue commit has two parents and the earlier run is a `pull_request`
+  run of `gpu-macos.yml` on its second parent, from this repository, never a
+  fork;
+- both proof jobs concluded `success` (not `skipped`) in that run's latest
+  attempt;
+- that attempt uploaded a receipt, written only after every proof step
+  passed, naming this exact git tree, run and attempt;
+- that attempt started no more than six hours before the queue run. A pull
+  request is normally approved and queued well within that window, and it
+  bounds how far the reused result can drift from the world the queue sees.
+
+The proof steps that read state outside the tree, the Pulp ancestry check in
+`verify_extraction.py` and the attested view-audio archive fetch, run again in
+the reused queue run. Pushes to `main` and release tags always run the full
+proof, so every landed commit is still proven from scratch after it lands.
+Reuse adds no trust beyond today's: a queue run already executes the pull
+request's own workflow definition, so the reviewed exact head is what decides
+both runs.
