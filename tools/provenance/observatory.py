@@ -1052,8 +1052,52 @@ def verify(
         report = build_report(root=root, lock=lock, cursor=cursor, events=events, budgets=budgets,
                               now=check_now, coverage_gaps=gaps)
     if report["health"] != "pass":
-        raise ObservatoryError("observatory health budgets failed: " + ", ".join(report["budget_violations"]))
+        raise ObservatoryError(
+            "observatory health budgets failed: " + ", ".join(report["budget_violations"])
+            + describe_coverage_gaps(gaps, cursor)
+        )
     return report
+
+
+def describe_coverage_gaps(gaps: list[dict[str, str]], cursor: dict[str, object]) -> str:
+    """Name each coverage gap and the step that closes it.
+
+    A missing event on a pull request's own commit is closed by the pull
+    request recording it, not by re-running the check, which fails the same
+    way every time.
+    """
+    if not gaps:
+        return ""
+    shown = 20
+    lines = [f"\n  {gap['source']} {gap['commit']}: {gap['reason']}" for gap in gaps[:shown]]
+    if len(gaps) > shown:
+        lines.append(f"\n  ... and {len(gaps) - shown} more")
+    reasons = {(gap["source"], gap["reason"]) for gap in gaps}
+    if ("vellum", "mapped-commit-after-reconciled-cursor") in reasons:
+        lines.append(
+            "\nRe-running will not help: each commit above changes a mapped path and"
+            " has no observation event. Record them on the branch and push"
+            " (provenance/pulp-observatory/README.md):"
+            "\n  python3 tools/provenance/observatory.py reconcile"
+            " --pulp-repo <pulp-checkout> --vellum-repo ."
+            f" --pulp-target {(cursor.get('pulp') or {}).get('last_scanned_commit', '<committed-pulp-cursor-sha>')}"
+            " --vellum-target <exact-pr-head-sha> --now <utc-timestamp>"
+            " --write --events-only"
+        )
+    if ("pulp", "mapped-commit-after-reconciled-cursor") in reasons:
+        lines.append(
+            "\nA Pulp commit above has no observation event; the receiver's"
+            " coalesced evidence pull request (branch"
+            " automation/pulp-observatory-coalesced) records Pulp events, and"
+            " this check passes once it lands and this branch merges main."
+        )
+    if any(reason == "merge-changes-other-side-without-first-parent-diff"
+           for _, reason in reasons):
+        lines.append(
+            "\nA merge above changes a mapped path that its first-parent diff does"
+            " not show; make that change an explicit commit on the branch."
+        )
+    return "".join(lines)
 
 
 def reconcile(
