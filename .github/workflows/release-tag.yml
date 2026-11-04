@@ -20,6 +20,10 @@ name: Sign the release tag
 # by hand (dry-run-gate decides; scripts/release_dry_run.py). Releases and dry
 # runs queue in separate concurrency groups, so a dry run never displaces a
 # pending release run; dry-run-gate refuses while a release is in flight.
+# A dry run tags the newest observatory-reconciled commit, which can lag main:
+# a scheduled or manual run may test code from before the newest landings.
+# Whoever relies on a green dry run for a change checks that the tagged
+# commit contains it.
 on:
   push:
     branches: [main]

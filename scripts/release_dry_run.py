@@ -66,7 +66,7 @@ RELEASE_PATHS = (
     "scripts/verify_release_tag_ruleset.py",
     "scripts/version_at_land.py",
 )
-# Run states GitHub reports before a run completes.
+# Run states GitHub reports before a run completes; dry-run-gate reads each.
 ACTIVE = ("queued", "in_progress", "waiting", "pending", "requested")
 # Runs of these, on a release tag (or any finalizer run, whose branch is main),
 # mean a real release may be in flight; a dry run then waits for next time.
@@ -116,7 +116,8 @@ def busy(runs: object) -> list[str]:
         raise DryRunError("the runs listing must be an array of pages")
     found = []
     for row in rows:
-        if row.get("status") not in ACTIVE:
+        # Anything not completed may still become part of a release.
+        if row.get("status") == "completed":
             continue
         name, branch = row.get("name"), str(row.get("head_branch") or "")
         if (name in RELEASE_PIPELINE and RELEASE_TAG.fullmatch(branch)) or name == FINALIZER:

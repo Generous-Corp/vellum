@@ -492,6 +492,44 @@ class Gate(unittest.TestCase):
                 {"name": "Locked macOS GPU proof", "head_branch": "v0.1.11", "status": "completed", "id": 6}]
         self.assertEqual(dry.gate(ROOT, "schedule", "", "a" * 40, self.runs(*idle))[0], True)
 
+    def test_a_missing_or_zero_before_falls_back_to_the_first_parent(self) -> None:
+        import test_release_request as trr  # noqa: PLC0415
+        history = trr.History(self)
+        history.branch(history.main)
+        history.write("scripts/release_request.py", "x\n")
+        landed = history.land(history.commit("change"))
+        after = history.land(history.reconcile(landed))
+        for before in (dry.ZERO, "", "not-a-sha"):
+            with self.subTest(before=before):
+                run, reason = dry.gate(history.root, "push", before, after, self.runs())
+                self.assertTrue(run, reason)
+                self.assertIn("scripts/release_request.py", reason)
+
+    def test_every_unfinished_run_state_counts_as_in_flight(self) -> None:
+        for status in (*dry.ACTIVE, "action_required", "some_future_state"):
+            with self.subTest(status=status):
+                row = {"name": "Locked macOS GPU proof", "head_branch": "v0.1.11", "status": status, "id": 1}
+                self.assertFalse(dry.gate(ROOT, "schedule", "", "a" * 40, self.runs(row))[0])
+        done = {"name": "Locked macOS GPU proof", "head_branch": "v0.1.11", "status": "completed", "id": 1}
+        self.assertTrue(dry.gate(ROOT, "schedule", "", "a" * 40, self.runs(done))[0])
+
+    def test_the_gate_refuses_any_ref_but_main(self) -> None:
+        github = FakeGitHub(self, {})
+        temp = github.root / "runner-temp"
+        temp.mkdir()
+        (temp / "runs.json").write_text(json.dumps(self.runs()))
+        script = step_script("release-tag.yml", "Decide whether to run a dry run")
+        for ref, ok in (("refs/heads/main", True), ("refs/heads/feature", False), ("refs/tags/v0.1.10", False)):
+            with self.subTest(ref=ref):
+                output = temp / f"out-{ok}-{ref.replace('/', '_')}"
+                output.write_text("")
+                done = subprocess.run(["bash", "-eo", "pipefail", "-c", script], cwd=ROOT,
+                                      env=github.env(RUNNER_TEMP=str(temp), GITHUB_REF=ref, GITHUB_SHA="a" * 40,
+                                                     EVENT="schedule", BEFORE="", GITHUB_OUTPUT=str(output)),
+                                      capture_output=True, text=True, check=False)
+                self.assertEqual(done.returncode == 0, ok, done.stderr[-500:])
+                self.assertEqual(output.read_text(), "run=true\n" if ok else "")
+
     def test_releases_and_dry_runs_queue_in_separate_groups(self) -> None:
         # A dry run must never displace a pending release run: GitHub keeps one
         # pending run per group, and a newer one cancels it.
