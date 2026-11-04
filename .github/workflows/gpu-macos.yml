@@ -409,12 +409,22 @@ jobs:
           prefix="$RUNNER_TEMP/templates-smoke-sdk"
           project="$RUNNER_TEMP/html-import-proof"
           source="$GITHUB_WORKSPACE/fixtures/html-import/index.html"
+          # Keep each command's stderr beside its JSON and show both, with the
+          # exit status, when it fails: a command killed by a signal or one
+          # that dies before writing JSON otherwise leaves no trace.
           run_json() {
             local output="$1"
             shift
-            if ! "$@" > "$output"; then
-              echo "installed SDK command failed: $*" >&2
-              echo "--- $output ---" >&2
+            local status=0
+            "$@" > "$output" 2> "$output.stderr" || status=$?
+            cat "$output.stderr" >&2 || true
+            if [ "$status" -ne 0 ]; then
+              if [ "$status" -gt 128 ]; then
+                echo "installed SDK command killed by signal $((status - 128)) ($(kill -l "$((status - 128))" 2>/dev/null || echo unknown)): $*" >&2
+              else
+                echo "installed SDK command exited $status: $*" >&2
+              fi
+              echo "--- stdout: $output ---" >&2
               cat "$output" >&2 || true
               return 1
             fi
@@ -595,6 +605,7 @@ jobs:
             ${{ runner.temp }}/html-import-design-check.json
             ${{ runner.temp }}/html-import-build.json
             ${{ runner.temp }}/html-import-capture.json
+            ${{ runner.temp }}/html-import*.json.stderr
             ${{ runner.temp }}/${{ env.VELLUM_RELEASE_ARCHIVE }}
             ${{ runner.temp }}/install.sh
             ${{ runner.temp }}/install_core.py
