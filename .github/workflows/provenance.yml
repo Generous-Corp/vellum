@@ -633,6 +633,50 @@ jobs:
           fi
           python3 .agents/skills/pulp-vellum-change-routing/scripts/test_route_change.py
 
+      - name: Compare the boundary evidence with live Pulp main (advisory)
+        # The required verdict above stays pinned to the acceptance commit
+        # (Decision 0011), so on a pull request it cannot see a later Pulp
+        # change to the routing projection or a bound router blob; the first
+        # push to main would. This step repeats the comparison against the
+        # Pulp main the checkout fetched, and only annotates: it never fails
+        # the job or changes the verdict.
+        if: steps.expansion-evidence.outputs.pulp-sha != '' && github.event_name == 'pull_request'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -uo pipefail
+          if ! live_main="$(git -C .exact-boundary-pulp rev-parse --verify --quiet 'refs/remotes/origin/main^{commit}')"; then
+            echo "::warning title=Pulp main boundary (advisory)::skipped: the Pulp checkout has no origin/main"
+            exit 0
+          fi
+          report="$RUNNER_TEMP/authority-expansion-live-main.json"
+          python3 tools/provenance/verify_authority_expansion.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --pulp-root .exact-boundary-pulp \
+            --pulp-main-ref "$live_main" \
+            --defer-live-open-pr-audit \
+            --output "$report" > /dev/null || true
+          python3 - "$report" "$live_main" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          title = "Pulp main boundary (advisory)"
+          path, live_main = Path(sys.argv[1]), sys.argv[2]
+          try:
+              errors = json.loads(path.read_text(encoding="utf-8")).get("errors", [])
+          except (OSError, ValueError) as exc:
+              print(f"::warning title={title}::no report to read: {exc}")
+              raise SystemExit(0)
+          drift = [e for e in errors if isinstance(e, str) and "authoritative Pulp main" in e]
+          for error in drift:
+              print(f"::warning title={title}::Pulp main {live_main[:12]}: {error}")
+          if drift:
+              print(f"::warning title={title}::the next push to Vellum main will fail provenance-verify until the Pulp boundary evidence is refreshed")
+          else:
+              print(f"Pulp main {live_main} matches the accepted boundary evidence")
+          PY
+
       - name: Resolve the exact authority lifecycle phase
         id: authority-phase
         env:
