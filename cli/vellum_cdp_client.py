@@ -289,6 +289,11 @@ class CdpClient:
 
     def capture_screenshot(self) -> dict[str, Any]:
         """Capture one bounded PNG from the current browser surface."""
+        # settle_idle leaves virtual time paused once its budget expires, and a
+        # surface screenshot waits for a frame that paused time never
+        # produces: on fleet VMs it hung until the read bound (2 s, then 30 s,
+        # 2026-11-04). The DOM is already settled, so let time run again.
+        self.command("Emulation.setVirtualTimePolicy", {"policy": "advance"})
         result = self.command("Page.captureScreenshot", {
             "format": "png", "fromSurface": True, "captureBeyondViewport": False,
         })

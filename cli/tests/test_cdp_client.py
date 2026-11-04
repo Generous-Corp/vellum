@@ -93,12 +93,20 @@ class _FakeCdpHandler(socketserver.BaseRequestHandler):
             b"Upgrade: websocket\r\nConnection: Upgrade\r\n"
             b"Sec-WebSocket-Accept: " + accept + b"\r\n\r\n"
         )
+        paused = False
         while True:
             try:
                 command = json.loads(_read_client_frame(self.request))
             except (OSError, ValueError):
                 return
             method = command["method"]
+            if method == "Emulation.setVirtualTimePolicy":
+                paused = command["params"].get("policy") != "advance"
+            if method == "Page.captureScreenshot" and paused:
+                # Chrome never produces the frame while virtual time is paused.
+                import time
+                time.sleep(5)
+                continue
             if method == "Page.captureScreenshot":
                 # A loaded VM's software compositor: a healthy browser that
                 # answers this one command slowly.
@@ -178,10 +186,39 @@ class CdpClientTests(unittest.TestCase):
         finally:
             _FakeCdpHandler.screenshot_delay = 0.0
         rows = [json.loads(line) for line in log.read_text().splitlines()]
-        self.assertEqual([row["method"] for row in rows], ["Page.captureScreenshot"])
-        self.assertGreaterEqual(rows[0]["seconds"], 0.5)
+        self.assertEqual([row["method"] for row in rows],
+                         ["Emulation.setVirtualTimePolicy", "Page.captureScreenshot"])
+        self.assertGreaterEqual(rows[-1]["seconds"], 0.5)
         with self.assertRaises(CdpClientError):
             client.set_timeout(0)
+
+    def test_a_screenshot_after_paused_virtual_time_resumes_time_first(self) -> None:
+        with CdpAdmission(str(self.socket_path)) as admission:
+            client = CdpClient(admission.endpoint, timeout=1.0)
+            client.connect()
+            try:
+                # What settle_idle leaves behind once its budget expires.
+                client.command("Emulation.setVirtualTimePolicy", {
+                    "policy": "pauseIfNetworkFetchesPending", "budget": 1000,
+                })
+                with self.assertRaisesRegex(CdpClientError, "not a PNG|omitted PNG"):
+                    client.capture_screenshot()  # answered, not hung
+            finally:
+                client.close()
+
+    def test_without_resuming_time_the_screenshot_hangs(self) -> None:
+        # The negative control for the fleet hang.
+        with CdpAdmission(str(self.socket_path)) as admission:
+            client = CdpClient(admission.endpoint, timeout=0.5)
+            client.connect()
+            try:
+                client.command("Emulation.setVirtualTimePolicy", {
+                    "policy": "pauseIfNetworkFetchesPending", "budget": 1000,
+                })
+                with self.assertRaisesRegex(CdpClientError, "Page.captureScreenshot got no response"):
+                    client.command("Page.captureScreenshot", {"format": "png"})
+            finally:
+                client.close()
 
     def test_wait_for_dom_is_bounded_and_retries_until_document_is_ready(self) -> None:
         client = object.__new__(CdpClient)
@@ -222,7 +259,9 @@ class CdpClientTests(unittest.TestCase):
 
     def test_screenshot_rejects_non_png_data(self) -> None:
         client = object.__new__(CdpClient)
-        client.command = lambda method, params=None: {"data": "bm90LXB u".replace(" ", "")}  # type: ignore[method-assign]
+        client.command = lambda method, params=None: (  # type: ignore[method-assign]
+            {} if method == "Emulation.setVirtualTimePolicy" else {"data": "bm90LXB u".replace(" ", "")}
+        )
         with self.assertRaisesRegex(CdpClientError, "not a PNG"):
             client.capture_screenshot()
 
