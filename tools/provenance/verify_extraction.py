@@ -41,6 +41,7 @@ EXPECTED_ACTIVE_ROOTS = (
     "cli",
     "cmake",
     "foundation",
+    "gpu-runtime",
     "graphics",
     "packages/vellum-design-ir",
     "packages/vellum-ui",
