@@ -300,6 +300,35 @@ class GpuRuntimeArtifactTest(unittest.TestCase):
                                 'INTERFACE_LINK_LIBRARIES "VellumGpuRuntime::Device;/tmp/evil.a"'))
         self.assert_refused(archive, "outside the package")
 
+    def test_parser_differentials_are_refused(self) -> None:
+        real = (EXPORTS / "VellumGpuRuntimeTargets.cmake").read_text(encoding="utf-8")
+        smuggles = {
+            # Each is a real differential: CMake runs execute_process, while a
+            # scan that ignores the construct sees one harmless set() (or, for
+            # a bracket comment, ignored text).
+            "line comment": "set(_cmake_smuggle # (\n)\nexecute_process(COMMAND touch PWNED)\n"
+                            "set(_cmake_close # )\n)\n",
+            "escaped parenthesis": "set(_cmake_smuggle \\()\nexecute_process(COMMAND touch PWNED)\n"
+                                   "set(_cmake_close \\))\n",
+            "escaped quote": 'set(_cmake_smuggle \\")\nexecute_process(COMMAND touch PWNED)\n'
+                             'set(_cmake_close \\")\n',
+            "bracket argument": "set(_cmake_smuggle [[(]])\nexecute_process(COMMAND touch PWNED)\n"
+                                "set(_cmake_close [[)]])\n",
+            "bracket argument with equals": "set(_cmake_smuggle [=[(]=])\n"
+                                            "execute_process(COMMAND touch PWNED)\n"
+                                            "set(_cmake_close [=[)]=])\n",
+            "bracket comment": "set(_cmake_smuggle #[[ ( ]]\n)\nexecute_process(COMMAND touch PWNED)\n"
+                               "set(_cmake_close #[[ ) ]]\n)\n",
+            "bracket comment with equals": "set(_cmake_smuggle #[==[ ( ]==]\n)\n"
+                                           "execute_process(COMMAND touch PWNED)\n"
+                                           "set(_cmake_close #[==[ ) ]==]\n)\n",
+            "top-level bracket comment": "#[[\nexecute_process(COMMAND touch PWNED)\n]]\n",
+        }
+        for label, smuggle in smuggles.items():
+            with self.subTest(case=label):
+                with self.assertRaises(verifier.VerificationError):
+                    verifier.check_targets_file(smuggle + real, "t")
+
     def test_the_real_export_files_pass(self) -> None:
         verifier.check_targets_file((EXPORTS / "VellumGpuRuntimeTargets.cmake").read_text(), "t")
         verifier.check_targets_release_file(

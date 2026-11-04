@@ -140,6 +140,10 @@ def cmake_commands(text: str) -> list[tuple[str, str]]:
             index += 1
             continue
         if character == "#":
+            # A bracket comment can span lines and hide commands from a line
+            # scan; the export template never writes one.
+            require(not re.match(r"#\[=*\[", text[index:]),
+                    "a generated export file contains a bracket comment")
             index = text.find("\n", index)
             index = length if index == -1 else index
             continue
@@ -158,6 +162,13 @@ def cmake_commands(text: str) -> list[tuple[str, str]]:
                     quoted = False
             elif current == '"':
                 quoted = True
+            elif current in "#\\" or text.startswith(("[[", "[="), position):
+                # CMake reads these differently from this scan (a line comment,
+                # an escaped character, a bracket argument), so a command could
+                # hide inside what looks like another's arguments. The export
+                # template only ever uses them inside quoted text.
+                require(False, "a generated export file uses a comment, escape or bracket "
+                               "argument inside a command's arguments")
             elif current == "(":
                 depth += 1
             elif current == ")":
