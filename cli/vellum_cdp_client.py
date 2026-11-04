@@ -38,7 +38,14 @@ ALLOWED_COMMANDS = {
     "Page.navigate",
     "DOMSnapshot.captureSnapshot",
     "Page.captureScreenshot",
+    "Runtime.evaluate",
 }
+# Runtime.evaluate runs only these fixed expressions, never caller code.
+READINESS_EXPRESSION = (
+    "document.readyState === 'complete' && "
+    "(!document.fonts || document.fonts.status === 'loaded')"
+)
+FIXED_EXPRESSIONS = {READINESS_EXPRESSION}
 
 
 class CdpClientError(RuntimeError):
@@ -253,6 +260,18 @@ class CdpClient:
             raise CdpClientError("idle settling bounds are invalid")
         self.command("Page.enable")
         deadline = time.monotonic() + timeout
+        # What the virtual-time policy's pauseIfNetworkFetchesPending gave:
+        # every subresource and web font is in before the budget starts, so a
+        # slow stylesheet cannot be captured as an unstyled page.
+        while True:
+            result = self.command("Runtime.evaluate", {
+                "expression": READINESS_EXPRESSION, "returnByValue": True,
+            })
+            if (result.get("result") or {}).get("value") is True:
+                break
+            if time.monotonic() >= deadline:
+                raise CdpClientError("page did not finish loading before the bounded timeout")
+            time.sleep(0.05)
         time.sleep(min(budget_ms / 1000, max(0.0, deadline - time.monotonic())))
         previous_digest: str | None = None
         stable_since: float | None = None
@@ -372,6 +391,12 @@ class CdpClient:
     def command(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         if method not in ALLOWED_COMMANDS:
             raise CdpClientError(f"CDP command is not allowed: {method}")
+        if method == "Runtime.evaluate" and (
+            set(params or {}) != {"expression", "returnByValue"}
+            or (params or {}).get("expression") not in FIXED_EXPRESSIONS
+            or (params or {}).get("returnByValue") is not True
+        ):
+            raise CdpClientError("Runtime.evaluate is limited to the fixed readiness check")
         sock = self._socket
         if sock is None:
             raise CdpClientError("CDP client is not connected")

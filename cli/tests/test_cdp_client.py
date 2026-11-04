@@ -19,6 +19,11 @@ from vellum_cdp_client import CdpClient, CdpClientError
 sys.path.pop(0)
 
 
+def vellum_cdp_client_module():
+    import vellum_cdp_client
+    return vellum_cdp_client
+
+
 def _read_headers(connection: socket.socket) -> bytes:
     value = bytearray()
     while b"\r\n\r\n" not in value:
@@ -46,6 +51,8 @@ def _send_server_frame(connection: socket.socket, payload: bytes) -> None:
 
 class _FakeCdpHandler(socketserver.BaseRequestHandler):
     screenshot_delay = 0.0
+    loading_polls = 0
+    evaluations = 0
 
     def handle(self) -> None:
         headers = _read_headers(self.request)
@@ -112,7 +119,11 @@ class _FakeCdpHandler(socketserver.BaseRequestHandler):
                 # answers this one command slowly.
                 import time
                 time.sleep(_FakeCdpHandler.screenshot_delay)
-            if method == "Page.navigate":
+            if method == "Runtime.evaluate":
+                _FakeCdpHandler.evaluations += 1
+                ready = _FakeCdpHandler.evaluations > _FakeCdpHandler.loading_polls
+                result = {"result": {"type": "boolean", "value": ready}}
+            elif method == "Page.navigate":
                 result = {"frameId": "frame-1"}
             elif method == "DOMSnapshot.captureSnapshot":
                 result = {"documents": [{"computedStyles": ["color"]}]}
@@ -204,6 +215,35 @@ class CdpClientTests(unittest.TestCase):
             finally:
                 client.close()
 
+    def test_settle_waits_for_the_page_to_finish_loading(self) -> None:
+        _FakeCdpHandler.loading_polls = 3
+        _FakeCdpHandler.evaluations = 0
+        try:
+            with CdpAdmission(str(self.socket_path)) as admission:
+                client = CdpClient(admission.endpoint, timeout=1.0)
+                client.connect()
+                try:
+                    client.settle_idle(quiet_period=0.05, timeout=2, budget_ms=50)
+                    self.assertEqual(_FakeCdpHandler.evaluations, 4)
+                    _FakeCdpHandler.loading_polls = 10 ** 6
+                    with self.assertRaisesRegex(CdpClientError, "did not finish loading"):
+                        client.settle_idle(quiet_period=0.05, timeout=0.3, budget_ms=50)
+                finally:
+                    client.close()
+        finally:
+            _FakeCdpHandler.loading_polls = 0
+
+    def test_runtime_evaluate_runs_only_the_fixed_readiness_check(self) -> None:
+        client = object.__new__(CdpClient)
+        client._socket = None
+        for params in ({"expression": "fetch('/x')", "returnByValue": True},
+                       {"expression": vellum_cdp_client_module().READINESS_EXPRESSION},
+                       {"expression": vellum_cdp_client_module().READINESS_EXPRESSION,
+                        "returnByValue": True, "awaitPromise": True}):
+            with self.subTest(params=params):
+                with self.assertRaisesRegex(CdpClientError, "limited to the fixed readiness check"):
+                    client.command("Runtime.evaluate", params)
+
     def test_paused_virtual_time_hangs_the_screenshot(self) -> None:
         # The negative control: what the old settle left behind.
         import vellum_cdp_client
@@ -274,6 +314,8 @@ class CdpClientTests(unittest.TestCase):
         def command(method: str, params: dict[str, object] | None = None) -> dict[str, object]:
             del params
             calls.append(method)
+            if method == "Runtime.evaluate":
+                return {"result": {"value": calls.count("Runtime.evaluate") > 2}}
             if method == "DOMSnapshot.captureSnapshot":
                 return {"documents": [{"nodes": {"nodeName": ["HTML"]}}]}
             return {}
@@ -282,6 +324,9 @@ class CdpClientTests(unittest.TestCase):
         snapshot = client.settle_idle(quiet_period=0.05, timeout=2, budget_ms=50)
         self.assertIn("documents", snapshot)
         self.assertNotIn("Emulation.setVirtualTimePolicy", calls)
+        # It polled the load and font readiness until it held, then settled.
+        self.assertEqual(calls.count("Runtime.evaluate"), 3)
+        self.assertLess(calls.index("Runtime.evaluate"), calls.index("DOMSnapshot.captureSnapshot"))
 
     def test_client_rejects_public_navigation_and_unbounded_styles(self) -> None:
         with CdpAdmission(str(self.socket_path)) as admission:
