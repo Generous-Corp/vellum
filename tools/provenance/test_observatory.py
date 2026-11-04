@@ -664,6 +664,12 @@ class ObservatoryTests(unittest.TestCase):
               "reason": "source-repository-not-supplied"}], {},
         )
         self.assertEqual(other, "\n  pulp unverified: source-repository-not-supplied")
+        many = observatory.describe_coverage_gaps(
+            [{"source": "vellum", "commit": f"{index:040x}",
+              "reason": "mapped-commit-after-reconciled-cursor"} for index in range(25)], {},
+        )
+        self.assertIn("... and 5 more", many)
+        self.assertIn("--pulp-target <committed-pulp-cursor-sha>", many)
 
     def test_coverage_policy_accepts_events_only_pull_request_and_rejects_missing_event(
         self,

@@ -1068,9 +1068,10 @@ def describe_coverage_gaps(gaps: list[dict[str, str]], cursor: dict[str, object]
     """
     if not gaps:
         return ""
-    lines = []
-    for gap in gaps:
-        lines.append(f"\n  {gap['source']} {gap['commit']}: {gap['reason']}")
+    shown = 20
+    lines = [f"\n  {gap['source']} {gap['commit']}: {gap['reason']}" for gap in gaps[:shown]]
+    if len(gaps) > shown:
+        lines.append(f"\n  ... and {len(gaps) - shown} more")
     reasons = {(gap["source"], gap["reason"]) for gap in gaps}
     if ("vellum", "mapped-commit-after-reconciled-cursor") in reasons:
         lines.append(
@@ -1079,7 +1080,7 @@ def describe_coverage_gaps(gaps: list[dict[str, str]], cursor: dict[str, object]
             " (provenance/pulp-observatory/README.md):"
             "\n  python3 tools/provenance/observatory.py reconcile"
             " --pulp-repo <pulp-checkout> --vellum-repo ."
-            f" --pulp-target {cursor['pulp']['last_scanned_commit']}"
+            f" --pulp-target {(cursor.get('pulp') or {}).get('last_scanned_commit', '<committed-pulp-cursor-sha>')}"
             " --vellum-target <exact-pr-head-sha> --now <utc-timestamp>"
             " --write --events-only"
         )
