@@ -650,7 +650,7 @@ jobs:
           retention-days: 14
 
       - name: Record private-release trust controls
-        if: steps.reuse.outputs.run_id == '' && (startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/dry-run/'))
+        if: steps.reuse.outputs.run_id == '' && startsWith(github.ref, 'refs/tags/') && !startsWith(github.ref, 'refs/tags/authority/')
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -705,7 +705,7 @@ jobs:
             "$VELLUM_TAG_OBJECT_SHA" >> "$GITHUB_ENV"
 
       - name: Gate every release mutation on exact provenance readiness
-        if: steps.reuse.outputs.run_id == '' && (startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/dry-run/'))
+        if: steps.reuse.outputs.run_id == '' && startsWith(github.ref, 'refs/tags/') && !startsWith(github.ref, 'refs/tags/authority/')
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}

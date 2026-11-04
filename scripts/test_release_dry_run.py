@@ -596,8 +596,10 @@ class Wiring(unittest.TestCase):
                 text = (WORKFLOWS / workflow).read_text()
                 self.assertIn("tags: ['v[0-9]*', 'authority/**', 'dry-run/**']", text)
         gpu = (WORKFLOWS / "gpu-macos.yml").read_text()
-        self.assertEqual(gpu.count("(startsWith(github.ref, 'refs/tags/v') || "
-                                   "startsWith(github.ref, 'refs/tags/dry-run/'))"), 2)
+        # Release (v*) and dry-run tags: every tag gpu-macos runs on but authority/ ones,
+        # written without `||` so the merge-queue reuse rule can read it.
+        self.assertEqual(gpu.count("startsWith(github.ref, 'refs/tags/') && "
+                                   "!startsWith(github.ref, 'refs/tags/authority/')"), 2)
         provenance = (WORKFLOWS / "provenance.yml").read_text()
         self.assertIn('release_readiness+=(--release-tag "${BASH_REMATCH[1]}")', provenance)
 
