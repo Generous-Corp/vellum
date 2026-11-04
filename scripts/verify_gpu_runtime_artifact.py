@@ -9,6 +9,8 @@ Checks, without trusting anything the archive says about itself:
     that record, each with the listed SHA-256 and size;
   * the record names this archive's version and target, and its renderer lock
     digest is the digest of the lock the archive ships;
+  * the shipped libdawn_combined.a is byte for byte the library that lock
+    names, and the license and notices for it ship beside it;
   * with --repo, the shipped lock and headers are byte-identical to the source.
 
 With --consumer it then extracts the archive and builds and runs a consumer
@@ -35,7 +37,10 @@ METADATA_SCHEMA = "vellum.gpu-runtime-artifact.v1"
 METADATA_NAME = "gpu-runtime-artifact.json"
 LOCK_MEMBER = "lib/cmake/VellumGpuRuntime/renderer-lock.json"
 NAME = re.compile(r"^vellum-gpu-runtime-([0-9]+\.[0-9]+\.[0-9]+)-(darwin-arm64)\.tar\.gz$")
-ALLOWED_PREFIXES = ("include/gpu_runtime/", "lib/")
+ALLOWED_PREFIXES = ("include/gpu_runtime/", "lib/", "share/doc/VellumGpuRuntime/")
+DAWN_MEMBER = "lib/libdawn_combined.a"
+NOTICE_MEMBER = "share/doc/VellumGpuRuntime/NOTICE.md"
+LICENSE_MEMBER = "share/doc/VellumGpuRuntime/LICENSE.md"
 
 
 class VerificationError(RuntimeError):
@@ -111,6 +116,14 @@ def verify(archive: Path, repo: Path | None) -> dict[str, object]:
     lock = json.loads(files[LOCK_MEMBER])
     require(metadata.get("renderer_milestone") == lock.get("milestone"),
             "artifact record names a different renderer milestone than its lock")
+    require(DAWN_MEMBER in files, "archive does not ship libdawn_combined.a")
+    platform = (lock.get("platforms") or {}).get(target.replace("darwin", "macos"), {})
+    require(sha256_bytes(files[DAWN_MEMBER]) == (platform.get("archives") or {}).get(
+                "libdawn_combined.a"),
+            "shipped libdawn_combined.a is not the library the renderer lock names")
+    require(LICENSE_MEMBER in files, "archive ships no license")
+    require(NOTICE_MEMBER in files and b"### Dawn and Tint" in files[NOTICE_MEMBER],
+            "archive ships no Dawn notice")
     for library in ("lib/libgpu-runtime-bootstrap.a", "lib/libgpu-runtime-device.a"):
         require(library in files and files[library].startswith(b"!<arch>\n"),
                 f"archive does not ship {library} as a static library")
@@ -124,6 +137,8 @@ def verify(archive: Path, repo: Path | None) -> dict[str, object]:
         shipped_headers = {name: data for name, data in files.items()
                            if name.startswith("include/")}
         require(shipped_headers == source_headers, "shipped headers differ from the source")
+        require(files[LICENSE_MEMBER] == (repo / "LICENSE.md").read_bytes(),
+                "shipped license differs from the source")
     return {
         "archive": archive.name,
         "sha256": sha256_bytes(archive.read_bytes()),

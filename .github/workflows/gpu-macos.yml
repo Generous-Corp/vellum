@@ -114,6 +114,7 @@ jobs:
           python3 -m unittest discover -s tools/mirror -p 'test_*.py'
           python3 -I scripts/test_check_renderer_lock.py
           python3 -I scripts/check_renderer_lock.py
+          python3 -I scripts/test_verify_gpu_runtime_artifact.py
           python3 scripts/test_select_exact_provenance_run.py
           python3 scripts/test_verify_exact_provenance_artifact.py
           python3 scripts/test_run_parity_proofs.py
@@ -388,6 +389,31 @@ jobs:
             --output "$RUNNER_TEMP/vellum-sterile-acceptance.tar.gz" \
             --json > "$RUNNER_TEMP/sterile-acceptance-bundle.json"
 
+      - name: Prove the gpu-runtime archive is reproducible and consumable
+        shell: bash
+        run: |
+          set -euo pipefail
+          # vellum-gpu-runtime-<version>-darwin-arm64.tar.gz is published beside
+          # the SDK. Two builds of this commit must match byte for byte, and an
+          # audio-only consumer must find it by exact version and link Device
+          # against the locked Dawn build.
+          for build in first second; do
+            python3 scripts/build_gpu_runtime_artifact.py \
+              --renderer-archive "$VELLUM_SKIA_ARCHIVE" \
+              --source-commit "$GITHUB_SHA" \
+              --output-dir "$RUNNER_TEMP/gpu-runtime-$build" \
+              --json > "$RUNNER_TEMP/gpu-runtime-$build.json"
+          done
+          archive="vellum-gpu-runtime-$VELLUM_RELEASE_VERSION-darwin-arm64.tar.gz"
+          cmp "$RUNNER_TEMP/gpu-runtime-first/$archive" "$RUNNER_TEMP/gpu-runtime-second/$archive"
+          cp "$RUNNER_TEMP/gpu-runtime-first/$archive" "$RUNNER_TEMP/$archive"
+          python3 scripts/verify_gpu_runtime_artifact.py \
+            --archive "$RUNNER_TEMP/$archive" \
+            --repo "$GITHUB_WORKSPACE" \
+            --consumer --renderer-archive "$VELLUM_SKIA_ARCHIVE" \
+            --output "$RUNNER_TEMP/gpu-runtime-verification.json"
+          (cd "$RUNNER_TEMP" && shasum -a 256 "$archive" > vellum-gpu-runtime.sha256)
+
       - name: Verify the binary deployment boundary
         shell: bash
         run: |
@@ -614,6 +640,11 @@ jobs:
             ${{ runner.temp }}/sdk-first.json
             ${{ runner.temp }}/sdk-second.json
             ${{ runner.temp }}/sdk-verification.json
+            ${{ runner.temp }}/vellum-gpu-runtime-${{ env.VELLUM_RELEASE_VERSION }}-darwin-arm64.tar.gz
+            ${{ runner.temp }}/vellum-gpu-runtime.sha256
+            ${{ runner.temp }}/gpu-runtime-first.json
+            ${{ runner.temp }}/gpu-runtime-second.json
+            ${{ runner.temp }}/gpu-runtime-verification.json
             ${{ runner.temp }}/templates-smoke.json
             ${{ runner.temp }}/templates-smoke.stdout.json
             ${{ runner.temp }}/vellum-sterile-acceptance.tar.gz

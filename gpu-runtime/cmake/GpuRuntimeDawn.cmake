@@ -5,6 +5,9 @@
 #       PLATFORM <platform>         # a key of the lock's "platforms"
 #       [SKIA_DIR <dir>]            # an extracted skia-builder asset
 #       [ARCHIVE <zip>]             # or the asset itself; extracted under the build dir
+#       [LIBRARY <libdawn_combined.a>]  # or the library alone, as a published
+#                                   # gpu-runtime package ships it (no headers:
+#                                   # the device API names no Dawn type)
 #       [LOCK <renderer-lock.json>]
 #       [REQUIRED])
 #
@@ -13,14 +16,13 @@
 # directory or archive it sets GPU_RUNTIME_HAS_DAWN OFF, or stops configure
 # when REQUIRED. A digest mismatch always stops configure.
 #
-# gpu-runtime does not redistribute Dawn: the consumer supplies the locked
-# skia-builder asset, and this check proves it is the one the runtime was
-# built against.
+# Whichever form is supplied, the check proves it is the Dawn build the runtime
+# was compiled against.
 
 include("${CMAKE_CURRENT_LIST_DIR}/GpuRuntimeRendererLock.cmake")
 
 function(gpu_runtime_find_dawn)
-    cmake_parse_arguments(ARG "REQUIRED" "PLATFORM;SKIA_DIR;ARCHIVE;LOCK" "" ${ARGN})
+    cmake_parse_arguments(ARG "REQUIRED" "PLATFORM;SKIA_DIR;ARCHIVE;LIBRARY;LOCK" "" ${ARGN})
     set(GPU_RUNTIME_HAS_DAWN OFF PARENT_SCOPE)
     if(TARGET gpu-runtime-dawn)
         set(GPU_RUNTIME_HAS_DAWN ON PARENT_SCOPE)
@@ -31,6 +33,28 @@ function(gpu_runtime_find_dawn)
         list(APPEND _lock_args LOCK "${ARG_LOCK}")
     endif()
     gpu_runtime_read_renderer_lock(${_lock_args})
+
+    if(ARG_LIBRARY AND NOT ARG_SKIA_DIR AND NOT ARG_ARCHIVE)
+        if(NOT EXISTS "${ARG_LIBRARY}")
+            message(FATAL_ERROR "gpu-runtime: Dawn library does not exist: ${ARG_LIBRARY}")
+        endif()
+        file(SHA256 "${ARG_LIBRARY}" _library_sha256)
+        if(NOT _library_sha256 STREQUAL "${_gr_SHA256_libdawn_combined.a}")
+            message(FATAL_ERROR
+                "gpu-runtime: libdawn_combined.a does not match the lock; expected "
+                "${_gr_SHA256_libdawn_combined.a}, got ${_library_sha256}")
+        endif()
+        add_library(gpu-runtime-dawn STATIC IMPORTED GLOBAL)
+        set_target_properties(gpu-runtime-dawn PROPERTIES IMPORTED_LOCATION "${ARG_LIBRARY}")
+        if(APPLE)
+            set_property(TARGET gpu-runtime-dawn APPEND PROPERTY INTERFACE_LINK_LIBRARIES
+                "-framework Foundation" "-framework IOKit" "-framework IOSurface"
+                "-framework Metal" "-framework QuartzCore")
+        endif()
+        set(GPU_RUNTIME_DAWN_LIBRARY "${ARG_LIBRARY}" PARENT_SCOPE)
+        set(GPU_RUNTIME_HAS_DAWN ON PARENT_SCOPE)
+        return()
+    endif()
 
     set(_dir "${ARG_SKIA_DIR}")
     if(NOT _dir AND ARG_ARCHIVE)
@@ -89,5 +113,6 @@ function(gpu_runtime_find_dawn)
     string(REGEX REPLACE "^chrome/m" "" _milestone "${_gr_MILESTONE}")
     set(GPU_RUNTIME_SKIA_MILESTONE "${_milestone}" PARENT_SCOPE)
     set(GPU_RUNTIME_DAWN_DIR "${_dir}" PARENT_SCOPE)
+    set(GPU_RUNTIME_DAWN_LIBRARY "${_library}" PARENT_SCOPE)
     set(GPU_RUNTIME_HAS_DAWN ON PARENT_SCOPE)
 endfunction()

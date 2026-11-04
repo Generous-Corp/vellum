@@ -83,6 +83,8 @@ set(GPU_RUNTIME_SKIA_DIR "" CACHE PATH
 set(GPU_RUNTIME_RENDERER_ARCHIVE "" CACHE FILEPATH
     "The locked skia-builder asset itself, for the device library's Dawn")
 option(GPU_RUNTIME_REQUIRE_DEVICE "Fail configure unless the device library can be built" OFF)
+option(GPU_RUNTIME_INSTALL_DAWN
+    "Install the locked libdawn_combined.a beside the device library" ON)
 option(GPU_RUNTIME_HOST_OWNS_DAWN_PROCS
     "Give the device library no native proc-table default; the host must bootstrap" OFF)
 
@@ -236,6 +238,12 @@ if(GPU_RUNTIME_INSTALL)
         DESTINATION "${_gpu_runtime_cmake_dir}")
     # The lock and its reader ship with the package, so a consumer reads the
     # same pin the runtime was built against.
+    # A published package carries the locked Dawn build it was compiled
+    # against, so an audio-only plug-in needs nothing else; the package config
+    # checks its digest against the shipped lock before linking it.
+    if(GPU_RUNTIME_HAS_DEVICE AND GPU_RUNTIME_INSTALL_DAWN)
+        install(FILES "${GPU_RUNTIME_DAWN_LIBRARY}" DESTINATION "${CMAKE_INSTALL_LIBDIR}")
+    endif()
     install(FILES renderer-lock.json cmake/GpuRuntimeRendererLock.cmake
             cmake/GpuRuntimeDawn.cmake
         DESTINATION "${_gpu_runtime_cmake_dir}")

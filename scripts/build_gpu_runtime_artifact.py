@@ -3,10 +3,11 @@
 
 vellum-gpu-runtime-<version>-<target>.tar.gz is gpu-runtime's installed CMake
 package: the device API headers, the Bootstrap, Device and SkiaLogBridge static
-libraries, the renderer lock and its readers, and gpu-runtime-artifact.json,
+libraries, the locked libdawn_combined.a (exactly the bytes the renderer lock
+names, never rewritten), the renderer lock and its readers, the license and the
+third-party notices for everything linked from it, and gpu-runtime-artifact.json,
 which names the source commit, the lock and every file's digest. An audio-only
-GPU plug-in fetches this archive alone. It carries no Dawn: a consumer supplies
-the locked skia-builder asset, which the package checks against its lock.
+GPU plug-in fetches this archive alone.
 
 The archive is built from `cmake -S gpu-runtime` with the per-build temporary
 root remapped out of every object, and static-library member headers
@@ -48,6 +49,11 @@ LIBRARIES = (
     "lib/libgpu-runtime-device.a",
     "lib/libgpu-runtime-skia-log-bridge.a",
 )
+DAWN_LIBRARY = "lib/libdawn_combined.a"
+DOC_DIR = "share/doc/VellumGpuRuntime"
+DOC_FILES = (f"{DOC_DIR}/LICENSE.md", f"{DOC_DIR}/NOTICE.md")
+DAWN_ARCHIVE = "libdawn_combined.a"
+APACHE_HEADING = "Apache License, Version 2.0"
 PACKAGE_FILES = (
     f"{PACKAGE_DIR}/GpuRuntimeDawn.cmake",
     f"{PACKAGE_DIR}/GpuRuntimeRendererLock.cmake",
@@ -86,7 +92,50 @@ def expected_headers(repo: Path) -> list[str]:
 
 
 def expected_files(repo: Path) -> list[str]:
-    return sorted([*expected_headers(repo), *LIBRARIES, *PACKAGE_FILES, METADATA_NAME])
+    return sorted([*expected_headers(repo), *LIBRARIES, DAWN_LIBRARY, *PACKAGE_FILES,
+                   *DOC_FILES, METADATA_NAME])
+
+
+def notice_sections(text: str) -> dict[str, str]:
+    """The `### <name>` sections of NOTICE.md's renderer-components part."""
+    start = text.index("## Renderer components\n")
+    end = text.index("\n## ", start + 1)
+    body = text[start:end]
+    sections: dict[str, str] = {}
+    for chunk in re.split(r"(?m)^(?=### )", body)[1:]:
+        heading, _, rest = chunk.partition("\n")
+        sections[heading.removeprefix("### ").strip()] = chunk.rstrip() + "\n"
+    return sections
+
+
+def dawn_notice(repo: Path) -> str:
+    """NOTICE.md for the archive: Dawn's own notice and every component the
+    renderer legal inventory places inside libdawn_combined.a, copied verbatim
+    from Vellum's NOTICE.md. A component the inventory names without a notice
+    section stops the build."""
+    lock = json.loads((repo / "provenance/third-party-lock.json").read_text(encoding="utf-8"))
+    renderer = lock["runtime_toolchain_dependencies"]["renderer"]
+    if renderer.get("bundled_components_completeness", {}).get("claim") != "exhaustive":
+        raise ArtifactError("the renderer legal inventory is not exhaustive")
+    components = [row for row in renderer["bundled_components"]
+                  if row.get("parent_archive") == DAWN_ARCHIVE]
+    sections = notice_sections((repo / "NOTICE.md").read_text(encoding="utf-8"))
+    names = ["Dawn and Tint", *(row["name"] for row in components)]
+    missing = [name for name in names if name not in sections]
+    if missing:
+        raise ArtifactError(f"NOTICE.md has no section for {', '.join(missing)}")
+    parts = [
+        "# Third-Party Notices\n",
+        "This archive redistributes `libdawn_combined.a` exactly as the locked\n"
+        f"skia-builder `{json.loads((repo / LOCK).read_text())['milestone']}` asset ships it "
+        "(see `lib/cmake/VellumGpuRuntime/renderer-lock.json`).\n"
+        "Its legal inventory places the components below inside that archive; the\n"
+        "texts are Vellum's NOTICE.md sections for them, unchanged.\n",
+    ]
+    parts.extend(sections[name] for name in names)
+    if any("Apache-2.0" in row.get("license", "") for row in components):
+        parts.append(sections[APACHE_HEADING])
+    return "\n".join(parts)
 
 
 def build(args: argparse.Namespace) -> dict[str, object]:
@@ -137,6 +186,14 @@ def build(args: argparse.Namespace) -> dict[str, object]:
         run(["cmake", "--install", str(build_dir)], env=env)
         for relative in LIBRARIES:
             normalize_static_archive(payload / relative)
+        lock = json.loads((repo / LOCK).read_text(encoding="utf-8"))
+        locked_dawn = lock["platforms"]["macos-arm64"]["archives"][DAWN_ARCHIVE]
+        if sha256(payload / DAWN_LIBRARY) != locked_dawn:
+            raise ArtifactError("the installed libdawn_combined.a differs from the lock")
+        docs = payload / DOC_DIR
+        docs.mkdir(parents=True, exist_ok=True)
+        (docs / "LICENSE.md").write_bytes((repo / "LICENSE.md").read_bytes())
+        (docs / "NOTICE.md").write_text(dawn_notice(repo), encoding="utf-8")
 
         lock_bytes = (repo / LOCK).read_bytes()
         if (payload / PACKAGE_DIR / "renderer-lock.json").read_bytes() != lock_bytes:
