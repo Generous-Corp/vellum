@@ -1,6 +1,6 @@
 # The release-signing policy and the code that enforces it. A change to any of
 # these needs two independent counted reviewer APPROVEs of its exact head (the
-# required `release-path-review` status, Decision 0013), as does any change
+# required `release-path-review` status, Decision 0014), as does any change
 # under .github/workflows/ or .github/actions/; nothing else in the repository
 # does. scripts/check_release_policy.py (the required
 # `release-policy` check) keeps this list complete.

@@ -1,4 +1,4 @@
-# Decision 0013: two independent automated reviews replace code-owner review on release-path files
+# Decision 0014: two independent automated reviews replace code-owner review on release-path files
 
 - Date: 2026-11-04
 - Status: accepted (owner request, 2026-11-04: Vellum pull requests stop
@@ -16,7 +16,9 @@ was a queue, not a second opinion.
 ## Decision
 
 1. The ruleset stops requiring code-owner review. The owner flips
-   `require_code_owner_review` himself.
+   `require_code_owner_review` himself, and only after a second, adversarial
+   reviewer pass signing `infra-review2` is live; until then no release-path
+   pull request could collect two counted APPROVEs.
 2. A pull request that changes a file CODEOWNERS names, or any file under
    `.github/workflows/` or `.github/actions/`, needs the required
    `release-path-review` status (`.github/workflows/release-path-review.yml`,

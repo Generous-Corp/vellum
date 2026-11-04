@@ -97,7 +97,7 @@ promotion attestation and prove full-matrix parity.
   (`scripts/check_release_policy.py`) fails when any other workflow names it.
 - **The signing policy needs two independent reviews.** `.github/CODEOWNERS` lists these files, and `main` requires
   the `release-path-review` status: a pull request that changes one needs two counted reviewer APPROVEs of its exact
-  head, from different signers and sessions ([Decision 0013](../../decisions/0013-two-automated-reviews-replace-code-owner-review.md)):
+  head, from different signers and sessions ([Decision 0014](../../decisions/0014-two-automated-reviews-replace-code-owner-review.md)):
   - the signer files: release, authority and renderer;
   - the two release workflows and the review gate's two workflows (every other workflow and local action needs the
     same two reviews);
