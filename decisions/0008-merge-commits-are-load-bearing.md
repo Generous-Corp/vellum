@@ -120,11 +120,13 @@ both runs.
 
 A pull request or queue entry that changes only observatory evidence the GPU
 proof never reads (`provenance/pulp-observatory/cursor.json`, `reports/*` and
-`events/*.json`, which is what the receiver's coalesced evidence pull requests
+`events/*.yaml`, which is what the receiver's coalesced evidence pull requests
 change) skips the proof's steps. Both required jobs still run and report.
-`scripts/classify_gpu_proof.py` decides, and the workflow runs it as it exists
-in the merged tree's first parent, never the change's own copy, over the diff
-between that parent and the merged tree. A change to the classifier or to any
+`scripts/classify_gpu_proof.py` decides. The workflow runs it as it exists in
+the base, never the change's own copy, over the diff between the base and the
+merged tree. For a pull request the base is its merge ref's first parent. For a
+queue entry it is `merge_group.base_sha`, main's tip, so a batch is judged as a
+whole rather than by its last entry. A change to the classifier or to any
 workflow needs the proof by rule, as does an empty diff or a base without the
 classifier. A trailing guard re-derives the verdict and fails the job if the
 proof was skipped for anything else, or on any event other than a pull request

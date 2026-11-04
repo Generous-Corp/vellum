@@ -20,7 +20,7 @@ SPEC.loader.exec_module(classifier)
 
 CURSOR = "provenance/pulp-observatory/cursor.json"
 REPORT = "provenance/pulp-observatory/reports/current.json"
-EVENT = "provenance/pulp-observatory/events/vellum-abc.json"
+EVENT = "provenance/pulp-observatory/events/vellum-abc.yaml"
 SDK = "graphics/src/canvas.cpp"
 
 
@@ -34,8 +34,9 @@ class ClassifierTests(unittest.TestCase):
             [],
             [CURSOR, SDK],
             ["provenance/pulp-observatory/provenance.lock"],
-            ["provenance/pulp-observatory/events/nested/x.json"],
+            ["provenance/pulp-observatory/events/nested/x.yaml"],
             ["provenance/pulp-observatory/events/x.txt"],
+            ["provenance/pulp-observatory/events/x.json"],
             ["provenance/pulp-observatory/README.md"],
             ["README.md"],
             ["scripts/classify_gpu_proof.py"],
@@ -120,7 +121,7 @@ class WorkflowStepTests(unittest.TestCase):
         self.git("merge", "-q", "--no-ff", "-m", "merge", "topic")
         return self.git("rev-parse", "HEAD")
 
-    def run_step(self, name: str, sha: str, event: str = "pull_request"):
+    def run_step(self, name: str, sha: str, event: str = "pull_request", queue_base: str = ""):
         temp = Path(self.directory.name) / f"runner-{name[:8]}"
         temp.mkdir(exist_ok=True)
         output = temp / "github_output"
@@ -129,7 +130,7 @@ class WorkflowStepTests(unittest.TestCase):
             ["bash", "-e", "-c", step_script(self.text, name)],
             cwd=self.root, capture_output=True, text=True,
             env=dict(os.environ, GITHUB_SHA=sha, GITHUB_OUTPUT=str(output),
-                     GITHUB_EVENT_NAME=event, RUNNER_TEMP=str(temp)),
+                     GITHUB_EVENT_NAME=event, RUNNER_TEMP=str(temp), QUEUE_BASE=queue_base),
         )
         return result, output.read_text()
 
@@ -176,9 +177,68 @@ class WorkflowStepTests(unittest.TestCase):
                 guard, _ = self.run_step(GUARD_STEP, evidence, event=event)
                 self.assertNotEqual(guard.returncode, 0)
 
+    def test_a_queue_batch_is_judged_against_main_not_the_entry_ahead(self) -> None:
+        # Entry A changes SDK code; entry B, queued behind it, changes only
+        # evidence. B's queue commit's first parent is A's, so judging B
+        # against its first parent would let A land unproven.
+        main = self.git("rev-parse", "HEAD")
+        self.git("checkout", "-q", "-b", "queue")
+        self.write(SDK, "int a;\n")
+        self.commit("entry A")
+        self.write(CURSOR, '{"v": 5}\n')
+        self.commit("entry B")
+        tip = self.git("rev-parse", "HEAD")
+        _, output = self.run_step(CLASSIFY_STEP, tip, event="merge_group", queue_base=main)
+        self.assertEqual(output, "")
+        # The control: the same tip judged against its first parent only.
+        _, control = self.run_step(CLASSIFY_STEP, tip, event="pull_request")
+        self.assertEqual(control, "unaffected=true\n")
+        guard, _ = self.run_step(GUARD_STEP, tip, event="merge_group", queue_base=main)
+        self.assertNotEqual(guard.returncode, 0)
+        # A queue run without its base never skips.
+        _, missing = self.run_step(CLASSIFY_STEP, tip, event="merge_group")
+        self.assertEqual(missing, "")
+        guard, _ = self.run_step(GUARD_STEP, tip, event="merge_group")
+        self.assertNotEqual(guard.returncode, 0)
+
+    def test_moving_sdk_code_into_the_allowlist_needs_the_proof(self) -> None:
+        self.git("checkout", "-q", "-b", "topic")
+        (self.root / "provenance/pulp-observatory/reports").mkdir(parents=True, exist_ok=True)
+        self.git("mv", SDK, "provenance/pulp-observatory/reports/canvas.cpp")
+        self.commit("rename")
+        self.git("checkout", "-q", "main")
+        self.git("merge", "-q", "--no-ff", "-m", "merge", "topic")
+        _, output = self.run_step(CLASSIFY_STEP, self.git("rev-parse", "HEAD"))
+        self.assertEqual(output, "")
+
     def merge_again(self, changes: dict[str, str]) -> str:
         self.git("branch", "-q", "-D", "topic")
         return self.merge(changes)
+
+    def test_every_proof_step_waits_for_the_classifier(self) -> None:
+        import re
+        def steps(job: str):
+            body = re.search(rf"^  {job}:\n(.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)", self.text, re.M | re.S)
+            for block in re.split(r"^      - ", body.group(1), flags=re.M)[1:]:
+                name = re.match(r"name: (.*)", block).group(1)
+                condition = re.search(r"^        if: (.*)$", block, re.M)
+                yield name, condition.group(1) if condition else ""
+        gpu = list(steps("gpu-macos-arm64"))
+        names = [name for name, _ in gpu]
+        start = names.index(CLASSIFY_STEP) + 1
+        # The canonical view-audio fetch is pinned byte for byte by
+        # test_ci_runner_policy.py and reads only a digest-pinned archive; the
+        # re-check runs only with a reused proof, which an unaffected run never has.
+        exempt = {"Fetch and verify the pinned Pulp view-audio archive",
+                  "Re-check the external state a reused proof read"}
+        for name, condition in gpu[start:]:
+            if name in exempt:
+                continue
+            self.assertIn("steps.classify.outputs.unaffected", condition, name)
+        for name, condition in steps("sterile-consumer"):
+            if name == "Report the reused sterile-consumer proof":
+                continue
+            self.assertIn("needs.gpu-macos-arm64.outputs.unaffected", condition, name)
 
     def test_the_steps_run_only_where_the_workflow_says(self) -> None:
         self.assertIn(

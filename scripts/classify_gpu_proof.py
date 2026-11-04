@@ -13,9 +13,10 @@ records under provenance/pulp-observatory/. The receiver's coalesced evidence
 pull requests change only these. The proof reads provenance.lock from that
 directory, so the allowlist names files, not the directory.
 
-The workflow runs this file as it exists in the merged tree's first parent
-(the base), never the pull request's own copy, so a pull request cannot widen
-the allowlist or rewrite the rules that judge it. Any change to this file or to
+The workflow runs this file as it exists in the base (a pull request's merge
+ref's first parent; a merge-queue entry's `merge_group.base_sha`, so every
+entry of a batch is judged, not only the last), never the change's own copy,
+so a change cannot widen the allowlist or rewrite the rules that judge it. Any change to this file or to
 a workflow is required by rule, and an empty change list is required too.
 """
 
@@ -31,7 +32,7 @@ from pathlib import Path
 EVIDENCE = (
     re.compile(r"provenance/pulp-observatory/cursor\.json"),
     re.compile(r"provenance/pulp-observatory/reports/[^/]+"),
-    re.compile(r"provenance/pulp-observatory/events/[^/]+\.json"),
+    re.compile(r"provenance/pulp-observatory/events/[^/]+\.yaml"),
 )
 # Changes that always need the proof, whatever the allowlist says.
 ALWAYS = (

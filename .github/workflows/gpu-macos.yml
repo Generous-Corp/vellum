@@ -80,12 +80,18 @@ jobs:
         id: classify
         if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
         shell: bash
+        env:
+          # A queue entry's first parent is the entry ahead of it in a batch;
+          # judge it against main's tip, so every batched change is classified.
+          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}
         run: |
           set -uo pipefail
+          base="${QUEUE_BASE:-$GITHUB_SHA^1}"
           classifier="$RUNNER_TEMP/base-classify-gpu-proof.py"
           verdict=""
-          if git show "$GITHUB_SHA^1:scripts/classify_gpu_proof.py" > "$classifier" 2>/dev/null &&
-             git diff --name-only -z --no-renames "$GITHUB_SHA^1" "$GITHUB_SHA" \
+          if { [ "$GITHUB_EVENT_NAME" != merge_group ] || [ -n "$QUEUE_BASE" ]; } &&
+             git show "$base:scripts/classify_gpu_proof.py" > "$classifier" 2>/dev/null &&
+             git diff --name-only -z --no-renames "$base" "$GITHUB_SHA" \
                > "$RUNNER_TEMP/changed-paths" &&
              verdict="$(python3 -I "$classifier" --files0-from "$RUNNER_TEMP/changed-paths")"; then
             :
@@ -800,14 +806,20 @@ jobs:
       - name: Prove a skipped proof was allowed
         if: always() && steps.classify.outputs.unaffected == 'true'
         shell: bash
+        env:
+          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}
         run: |
           set -euo pipefail
           case "$GITHUB_EVENT_NAME" in pull_request|merge_group) ;; *)
             echo "::error::a $GITHUB_EVENT_NAME run may not skip the proof"; exit 1 ;;
           esac
+          if [ "$GITHUB_EVENT_NAME" = merge_group ] && [ -z "$QUEUE_BASE" ]; then
+            echo "::error::a queue run without merge_group.base_sha may not skip the proof"; exit 1
+          fi
+          base="${QUEUE_BASE:-$GITHUB_SHA^1}"
           guard="$RUNNER_TEMP/guard-classify-gpu-proof.py"
-          git show "$GITHUB_SHA^1:scripts/classify_gpu_proof.py" > "$guard"
-          git diff --name-only -z --no-renames "$GITHUB_SHA^1" "$GITHUB_SHA" > "$RUNNER_TEMP/guard-paths"
+          git show "$base:scripts/classify_gpu_proof.py" > "$guard"
+          git diff --name-only -z --no-renames "$base" "$GITHUB_SHA" > "$RUNNER_TEMP/guard-paths"
           verdict="$(python3 -I "$guard" --files0-from "$RUNNER_TEMP/guard-paths")"
           if [ "$verdict" != not-required ]; then
             echo "::error::the proof was skipped, but the base's classifier says: $verdict"
