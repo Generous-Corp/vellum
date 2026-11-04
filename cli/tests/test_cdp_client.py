@@ -186,39 +186,42 @@ class CdpClientTests(unittest.TestCase):
         finally:
             _FakeCdpHandler.screenshot_delay = 0.0
         rows = [json.loads(line) for line in log.read_text().splitlines()]
-        self.assertEqual([row["method"] for row in rows],
-                         ["Emulation.setVirtualTimePolicy", "Page.captureScreenshot"])
+        self.assertEqual([row["method"] for row in rows], ["Page.captureScreenshot"])
         self.assertGreaterEqual(rows[-1]["seconds"], 0.5)
         with self.assertRaises(CdpClientError):
             client.set_timeout(0)
 
-    def test_a_screenshot_after_paused_virtual_time_resumes_time_first(self) -> None:
+    def test_settling_then_a_screenshot_is_answered(self) -> None:
+        # settle_idle no longer pauses virtual time, so the surface screenshot
+        # that follows it is answered.
         with CdpAdmission(str(self.socket_path)) as admission:
             client = CdpClient(admission.endpoint, timeout=1.0)
             client.connect()
             try:
-                # What settle_idle leaves behind once its budget expires.
-                client.command("Emulation.setVirtualTimePolicy", {
-                    "policy": "pauseIfNetworkFetchesPending", "budget": 1000,
-                })
+                client.settle_idle(quiet_period=0.05, timeout=2, budget_ms=50)
                 with self.assertRaisesRegex(CdpClientError, "not a PNG|omitted PNG"):
-                    client.capture_screenshot()  # answered, not hung
+                    client.capture_screenshot()
             finally:
                 client.close()
 
-    def test_without_resuming_time_the_screenshot_hangs(self) -> None:
-        # The negative control for the fleet hang.
-        with CdpAdmission(str(self.socket_path)) as admission:
-            client = CdpClient(admission.endpoint, timeout=0.5)
-            client.connect()
-            try:
-                client.command("Emulation.setVirtualTimePolicy", {
-                    "policy": "pauseIfNetworkFetchesPending", "budget": 1000,
-                })
-                with self.assertRaisesRegex(CdpClientError, "Page.captureScreenshot got no response"):
-                    client.command("Page.captureScreenshot", {"format": "png"})
-            finally:
-                client.close()
+    def test_paused_virtual_time_hangs_the_screenshot(self) -> None:
+        # The negative control: what the old settle left behind.
+        import vellum_cdp_client
+        vellum_cdp_client.ALLOWED_COMMANDS.add("Emulation.setVirtualTimePolicy")
+        try:
+            with CdpAdmission(str(self.socket_path)) as admission:
+                client = CdpClient(admission.endpoint, timeout=0.5)
+                client.connect()
+                try:
+                    client.command("Emulation.setVirtualTimePolicy", {
+                        "policy": "pauseIfNetworkFetchesPending", "budget": 1000,
+                    })
+                    with self.assertRaisesRegex(CdpClientError, "Page.captureScreenshot got no response"):
+                        client.capture_screenshot()
+                finally:
+                    client.close()
+        finally:
+            vellum_cdp_client.ALLOWED_COMMANDS.discard("Emulation.setVirtualTimePolicy")
 
     def test_wait_for_dom_is_bounded_and_retries_until_document_is_ready(self) -> None:
         client = object.__new__(CdpClient)
@@ -259,15 +262,13 @@ class CdpClientTests(unittest.TestCase):
 
     def test_screenshot_rejects_non_png_data(self) -> None:
         client = object.__new__(CdpClient)
-        client.command = lambda method, params=None: (  # type: ignore[method-assign]
-            {} if method == "Emulation.setVirtualTimePolicy" else {"data": "bm90LXB u".replace(" ", "")}
-        )
+        client.command = lambda method, params=None: {"data": "bm90LXB u".replace(" ", "")}  # type: ignore[method-assign]
         with self.assertRaisesRegex(CdpClientError, "not a PNG"):
             client.capture_screenshot()
 
-    def test_settle_idle_uses_virtual_time_and_returns_stable_snapshot(self) -> None:
+    def test_settle_idle_uses_real_time_and_returns_stable_snapshot(self) -> None:
         client = object.__new__(CdpClient)
-        client._events = [{"method": "Emulation.virtualTimeBudgetExpired"}]
+        client._events = []
         calls: list[str] = []
 
         def command(method: str, params: dict[str, object] | None = None) -> dict[str, object]:
@@ -278,9 +279,9 @@ class CdpClientTests(unittest.TestCase):
             return {}
 
         client.command = command  # type: ignore[method-assign]
-        snapshot = client.settle_idle(quiet_period=0.05, timeout=1)
+        snapshot = client.settle_idle(quiet_period=0.05, timeout=2, budget_ms=50)
         self.assertIn("documents", snapshot)
-        self.assertIn("Emulation.setVirtualTimePolicy", calls)
+        self.assertNotIn("Emulation.setVirtualTimePolicy", calls)
 
     def test_client_rejects_public_navigation_and_unbounded_styles(self) -> None:
         with CdpAdmission(str(self.socket_path)) as admission:

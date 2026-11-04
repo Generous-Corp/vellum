@@ -37,7 +37,6 @@ ALLOWED_COMMANDS = {
     "Page.getLayoutMetrics",
     "Page.navigate",
     "DOMSnapshot.captureSnapshot",
-    "Emulation.setVirtualTimePolicy",
     "Page.captureScreenshot",
 }
 
@@ -240,20 +239,21 @@ class CdpClient:
         self, *, budget_ms: int = 1000, quiet_period: float = 0.25,
         timeout: float = 20.0,
     ) -> dict[str, Any]:
-        """Advance bounded virtual time and wait for a stable DOM snapshot."""
+        """Let the page run for its budget, then wait for a stable DOM snapshot.
+
+        This used to advance a virtual-time budget. Chrome's virtual time left
+        some pages unable to produce a frame afterwards, so the surface
+        screenshot that follows hung: 2 of 6 local captures and most m5
+        captures (2026-11-04), and still 4 of 8 after resetting the policy to
+        `advance`. Real time with the same budget passed 20 of 20 under load.
+        """
         if not isinstance(budget_ms, int) or isinstance(budget_ms, bool) or not 1 <= budget_ms <= 10000:
             raise CdpClientError("virtual-time budget is outside the bounded range")
         if quiet_period <= 0 or quiet_period > 5 or timeout <= 0 or timeout > 120:
             raise CdpClientError("idle settling bounds are invalid")
         self.command("Page.enable")
-        self.command("Emulation.setVirtualTimePolicy", {
-            "policy": "pauseIfNetworkFetchesPending",
-            "budget": budget_ms,
-            "maxVirtualTimeTaskStarvationCount": 1000,
-            "waitForNavigation": True,
-        })
         deadline = time.monotonic() + timeout
-        self._wait_for_event("Emulation.virtualTimeBudgetExpired", deadline)
+        time.sleep(min(budget_ms / 1000, max(0.0, deadline - time.monotonic())))
         previous_digest: str | None = None
         stable_since: float | None = None
         snapshot: dict[str, Any] = {}
@@ -277,23 +277,8 @@ class CdpClient:
             time.sleep(0.05)
         raise CdpClientError("browser DOM did not settle before the bounded timeout")
 
-    def _wait_for_event(self, method: str, deadline: float) -> None:
-        while time.monotonic() < deadline:
-            for index, event in enumerate(self._events):
-                if event.get("method") == method:
-                    del self._events[index]
-                    return
-            self.command("Page.getLayoutMetrics")
-            time.sleep(0.05)
-        raise CdpClientError(f"CDP event {method} was not observed before the bounded timeout")
-
     def capture_screenshot(self) -> dict[str, Any]:
         """Capture one bounded PNG from the current browser surface."""
-        # settle_idle leaves virtual time paused once its budget expires, and a
-        # surface screenshot waits for a frame that paused time never
-        # produces: on fleet VMs it hung until the read bound (2 s, then 30 s,
-        # 2026-11-04). The DOM is already settled, so let time run again.
-        self.command("Emulation.setVirtualTimePolicy", {"policy": "advance"})
         result = self.command("Page.captureScreenshot", {
             "format": "png", "fromSurface": True, "captureBeyondViewport": False,
         })
