@@ -651,12 +651,24 @@ class ObservatoryTests(unittest.TestCase):
             report_before = (root / observatory.REPORT_JSON_PATH).read_bytes()
 
             # Negative control: the pull request carries no event for its mapped commit.
-            with self.assertRaisesRegex(observatory.ObservatoryError, "health budgets failed"):
+            with self.assertRaisesRegex(
+                observatory.ObservatoryError, "health budgets failed"
+            ) as raised:
                 observatory.verify(
                     root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
                     pulp_target=pulp_head, vellum_target=feature,
                     vellum_tail_policy="coverage",
                 )
+            # The failure names the uncovered commit and the command that
+            # closes the gap, at the committed Pulp cursor.
+            message = str(raised.exception)
+            self.assertIn(f"vellum {feature}: mapped-commit-after-reconciled-cursor", message)
+            self.assertIn("Re-running will not help", message)
+            self.assertIn(
+                f"--pulp-target {cursor_before['pulp']['last_scanned_commit']}", message
+            )
+            self.assertIn("--write --events-only", message)
+            self.assertNotIn("explicit commit", message)
             # The reconciled policy rejects the same tree for a different reason:
             # the tail is not evidence-only.
             with self.assertRaisesRegex(observatory.ObservatoryError, "evidence tail"):
@@ -932,6 +944,11 @@ class ObservatoryTests(unittest.TestCase):
                     pulp_target=pulp_head, vellum_target=reverting,
                     vellum_tail_policy="coverage",
                 )
+            self.assertIn(
+                f"vellum {reverting}: merge-changes-other-side-without-first-parent-diff",
+                str(raised.exception),
+            )
+            self.assertIn("make that change an explicit commit", str(raised.exception))
             gaps = observatory.coverage_gaps(
                 root=root, mapping=observatory.load_json(root / observatory.MAP_PATH),
                 cursor=observatory.load_json(root / observatory.CURSOR_PATH),
