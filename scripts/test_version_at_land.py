@@ -513,14 +513,25 @@ class VerifyBump(unittest.TestCase):
         self.assertIn("differs from the rewrite", self.verify())
         result = self.repo.plan()
         self.assertEqual((result.action, result.version), ("bump", "0.1.12"))
+        # The skipped number is stated where the bump pull request body shows it.
+        self.assertRegex(result.reason, r"v0\.1\.11 is passed over \(refused bump at [0-9a-f]{12}\); not tagged")
+        self.assertIn(result.reason, val.describe(result).splitlines()[0])
         self.repo.bot_bump("0.1.12")
         self.assertIsNone(self.verify())
         self.assertEqual(self.repo.plan().action, "pending")
 
-    def test_a_hand_set_jump_stops_plan_instead_of_being_passed_over(self) -> None:
-        self.repo.land("release: 9.0.0", {"CMakeLists.txt": CMAKE.format(v="9.0.0")})
-        with self.assertRaisesRegex(val.VersionError, "not one step above v0.1.10"):
-            self.repo.plan()
+    def test_a_hand_set_version_stops_plan_instead_of_being_passed_over(self) -> None:
+        # A one-step hand bump (0.2.0) cannot steer the next version either:
+        # only the bot's own refused merge is passed over.
+        for version in ("9.0.0", "0.2.0", "0.1.11"):
+            with self.subTest(version=version):
+                repo = Repo(self)
+                repo.tag("v0.1.10")
+                repo.land("fix: correct the core", {"foundation/src/core.cpp": "int y;\n"})
+                repo.land(f"release: {version}", {"CMakeLists.txt": CMAKE.format(v=version)})
+                with self.assertRaisesRegex(val.VersionError, f"revert it, or retire v{version} in "
+                                                              "provenance/retired-release-tags.json"):
+                    repo.plan()
 
     def test_a_bump_planned_off_main_is_refused(self) -> None:
         self.repo.git("checkout", "-q", "--detach", self.repo.main)

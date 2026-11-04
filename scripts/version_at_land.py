@@ -377,8 +377,10 @@ def plan(root: Path, commit: str, tags: dict[str, str], retired_tags: Any) -> Pl
         raise VersionError("no release tag exists to count from")
     highest = max(known)
     floor = None
+    passed_over = ""
     if parse_version(current) > highest:
-        problem = verify_bump(root, version_landing(root, commit), tags, retired_tags)
+        landing = version_landing(root, commit)
+        problem = verify_bump(root, landing, tags, retired_tags)
         if problem is None:
             return Plan("pending", current, f"main declares {current}, newer than every release tag; "
                                             f"release-tag.yml tags v{current} once the observatory reconciles it")
@@ -388,10 +390,11 @@ def plan(root: Path, commit: str, tags: dict[str, str], retired_tags: Any) -> Pl
         # above the newest tag may be passed over this way; anything further
         # (a hand-set jump) stops here for a person to revert or retire.
         steps = {bumped(highest, level) for level in (("patch", "minor") if highest[0] == 0 else LEVELS[1:])}
-        if parse_version(current) not in steps:
-            raise VersionError(f"main declares {current}, which version-at-land did not land and which is not "
-                               f"one step above v{render(highest)} ({problem}); revert it or retire v{current}")
+        if bot_structure_problem(root, landing) or parse_version(current) not in steps:
+            raise VersionError(f"main declares {current}, which version-at-land did not land as a release "
+                               f"({problem}); revert it, or retire v{current} in {RETIRED_TAGS}")
         floor = parse_version(current)
+        passed_over = f"; v{current} is passed over (refused bump at {landing[:12]}); not tagged"
     released = sorted(((key, name) for name in tags if (key := tag_version(name))
                        and is_ancestor(root, tags[name], commit)), reverse=True)
     if not released:
@@ -408,7 +411,7 @@ def plan(root: Path, commit: str, tags: dict[str, str], retired_tags: Any) -> Pl
         target = bumped(floor, "patch")
     version = render(target)
     return Plan("bump", current, f"{level} from {sum(c.level != 'none' for c in changes)} landed change(s) "
-                                 f"since {base_tag}", version, level, base_tag, changes)
+                                 f"since {base_tag}{passed_over}", version, level, base_tag, changes)
 
 
 TOKEN = r"(?<![0-9.]){}(?![0-9]|\.[0-9])"
@@ -491,6 +494,25 @@ def blob(root: Path, commit: str, path: str) -> bytes | None:
     return result.stdout if result.returncode == 0 else None
 
 
+def bot_structure_problem(root: Path, landing: str) -> str | None:
+    """Why `landing` is not the queue's merge of the bot's one-commit bump, or None when it is."""
+    parents = git(root, "rev-list", "--parents", "-n", "1", landing).split()[1:]
+    if len(parents) != 2:
+        return f"{landing[:12]} is not a merge queue merge"
+    base, head = parents
+    if not BUMP_MERGE.match(git(root, "show", "-s", "--format=%s", landing).strip()):
+        return f"{landing[:12]} does not merge the {BUMP_BRANCH} branch"
+    side = git(root, "rev-list", f"{base}..{head}").split()
+    if side != [head]:
+        return f"the bump pull request merged at {landing[:12]} is not one commit"
+    author = git(root, "show", "-s", "--format=%an%n%ae%n%cn%n%ce", head).splitlines()
+    if author != [BOT_NAME, BOT_EMAIL, BOT_NAME, BOT_EMAIL]:
+        return f"{head[:12]} is not the version-at-land bot's commit"
+    if BOT_TRAILER not in git(root, "show", "-s", "--format=%B", head).splitlines():
+        return f"{head[:12]} lacks the version-at-land trailer"
+    return None
+
+
 def verify_bump(root: Path, landing: str, tags: dict[str, str], retired_tags: Any) -> str | None:
     """Why the commit that landed main's version is not a release, or None when it is one.
 
@@ -504,20 +526,10 @@ def verify_bump(root: Path, landing: str, tags: dict[str, str], retired_tags: An
     A version changed any other way (by hand, with an extra hunk, a level
     plan would not choose, or a skipped number) is never tagged.
     """
-    parents = git(root, "rev-list", "--parents", "-n", "1", landing).split()[1:]
-    if len(parents) != 2:
-        return f"{landing[:12]} is not a merge queue merge"
-    base, head = parents
-    if not BUMP_MERGE.match(git(root, "show", "-s", "--format=%s", landing).strip()):
-        return f"{landing[:12]} does not merge the {BUMP_BRANCH} branch"
-    side = git(root, "rev-list", f"{base}..{head}").split()
-    if side != [head]:
-        return f"the bump pull request merged at {landing[:12]} is not one commit"
-    author = git(root, "show", "-s", "--format=%an%n%ae%n%cn%n%ce", head).splitlines()
-    if author != [BOT_NAME, BOT_EMAIL, BOT_NAME, BOT_EMAIL]:
-        return f"{head[:12]} is not the version-at-land bot's commit"
-    if BOT_TRAILER not in git(root, "show", "-s", "--format=%B", head):
-        return f"{head[:12]} lacks the version-at-land trailer"
+    problem = bot_structure_problem(root, landing)
+    if problem:
+        return problem
+    base, head = git(root, "rev-list", "--parents", "-n", "1", landing).split()[1:]
     version = project_version(git(root, "show", f"{landing}:{CMAKELISTS}"))
     # The bump is judged against the main it was planned from (its own
     # parent), so a change that lands ahead of it in the queue does not make
