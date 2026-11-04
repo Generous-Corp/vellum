@@ -3,8 +3,10 @@
 
 The advisory provenance step runs the verifier against live Pulp main with
 --pulp-main-ref. This prints one GitHub warning annotation for each
-"authoritative Pulp main" error in that report, and always exits 0: the
-comparison informs a pull request, it never gates one.
+"authoritative Pulp main" error in that report, a warning that the comparison
+is inconclusive when the report has only other errors, and a plain line only
+when it has none. It always exits 0: the comparison informs a pull request,
+it never gates one.
 """
 
 from __future__ import annotations
@@ -31,9 +33,13 @@ def annotations(report_path: Path, live_main: str) -> list[str]:
     errors = report.get("errors") if isinstance(report, dict) else None
     if not isinstance(errors, list):
         return [f"::warning title={TITLE}::the verifier report has no error list"]
+    if not errors:
+        return [f"Pulp main {live_main} matches the accepted boundary evidence"]
     drift = [error for error in errors if isinstance(error, str) and DRIFT_MARKER in error]
     if not drift:
-        return [f"Pulp main {live_main} matches the accepted boundary evidence"]
+        # Any other error means the comparison may not have run at all (a
+        # bad --pulp-main-ref, say), so it cannot be reported as a match.
+        return [f"::warning title={TITLE}::{escape(f'comparison inconclusive: {errors[0]}')}"]
     lines = [
         f"::warning title={TITLE}::{escape(f'Pulp main {live_main[:12]}: {error}')}"
         for error in drift

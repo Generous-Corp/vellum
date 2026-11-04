@@ -39,9 +39,20 @@ class AnnotationTests(unittest.TestCase):
         self.assertIn("next push to Vellum main", warnings[2])
         self.assertFalse(any("unrelated" in line for line in lines))
 
-    def test_no_drift_is_a_plain_line(self) -> None:
-        lines = annotate.annotations(self.report({"errors": ["something else"]}), LIVE)
+    def test_a_clean_report_is_a_plain_line(self) -> None:
+        lines = annotate.annotations(self.report({"errors": []}), LIVE)
         self.assertEqual(lines, [f"Pulp main {LIVE} matches the accepted boundary evidence"])
+
+    def test_other_errors_are_inconclusive_not_a_match(self) -> None:
+        path = self.report({"errors": [
+            "--pulp-main-ref 'x' does not name a commit in the Pulp checkout",
+            "something else",
+        ]})
+        lines = annotate.annotations(path, LIVE)
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].startswith("::warning"))
+        self.assertIn("comparison inconclusive: --pulp-main-ref 'x' does not name", lines[0])
+        self.assertNotIn("matches", lines[0])
 
     def test_unreadable_or_malformed_reports_warn(self) -> None:
         missing = annotate.annotations(Path("/nonexistent/report.json"), LIVE)

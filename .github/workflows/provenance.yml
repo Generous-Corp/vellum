@@ -682,6 +682,7 @@ jobs:
         # the job or changes the verdict.
         if: steps.expansion-evidence.outputs.pulp-sha != '' && github.event_name == 'pull_request'
         continue-on-error: true
+        timeout-minutes: 5
         shell: bash
         run: |
           set -uo pipefail
