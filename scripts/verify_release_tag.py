@@ -114,13 +114,21 @@ def allowed_signer_principals(path: Path) -> list[str]:
 # the release pipeline's key; authority tags were signed by the owner's key.
 # The verifier picks the file by namespace itself, so no caller can verify a
 # release tag against the other key.
+# Release dry-run tags (dry-run/vX.Y.Z/<run>-<attempt>) are signed by the same
+# pipeline key: a dry run proves the release path end to end, and its tag and
+# draft are deleted afterwards. The name is checked exactly, so nothing else
+# shares the namespace.
 SIGNERS_BY_NAMESPACE = (
     ("authority/", "authority-signers.allowed_signers"),
+    ("dry-run/", "release-signers.allowed_signers"),
     ("v", "release-signers.allowed_signers"),
 )
+DRY_RUN_TAG = re.compile(r"dry-run/v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)/[1-9][0-9]*-[1-9][0-9]*")
 
 
 def required_signers_file(tag_name: str) -> str:
+    if tag_name.startswith("dry-run/") and not DRY_RUN_TAG.fullmatch(tag_name):
+        raise ReleaseTagVerificationError(f"tag {tag_name!r} is not a well-formed release dry-run tag")
     for prefix, name in SIGNERS_BY_NAMESPACE:
         if tag_name.startswith(prefix):
             return name

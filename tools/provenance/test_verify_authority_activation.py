@@ -305,7 +305,7 @@ class AuthorityActivationTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         for workflow in (provenance, gpu):
             self.assertIn(
-                "tags: ['v[0-9]*', 'authority/**']", workflow
+                "tags: ['v[0-9]*', 'authority/**', 'dry-run/**']", workflow
             )
         self.assertNotIn("refs/heads/authority/", provenance)
         self.assertIn("forbidden-deps:\n    name: forbidden-deps", provenance)

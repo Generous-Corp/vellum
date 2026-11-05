@@ -12,8 +12,10 @@ on:
     - cron: '23 * * * *'
   workflow_dispatch:
 
+# contents: write only so the release list includes drafts (a leftover dry-run
+# draft); every step that holds the token runs gh alone, no repository code.
 permissions:
-  contents: read
+  contents: write
   issues: write
 
 concurrency:

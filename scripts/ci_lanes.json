@@ -16,6 +16,10 @@
         "isolated": true
       },
       {
+        "script": "scripts/test_release_dry_run.py",
+        "isolated": true
+      },
+      {
         "script": "scripts/test_release_cadence.py",
         "isolated": true
       },
