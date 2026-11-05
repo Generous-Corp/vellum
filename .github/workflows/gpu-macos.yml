@@ -565,7 +565,7 @@ jobs:
             --json > "$RUNNER_TEMP/sterile-acceptance-bundle.json"
 
       - name: Prove the gpu-runtime archive is reproducible and consumable
-        if: steps.reuse.outputs.run_id == ''
+        if: steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == ''
         shell: bash
         run: |
           set -euo pipefail
