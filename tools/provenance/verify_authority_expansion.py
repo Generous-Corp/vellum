@@ -1649,7 +1649,15 @@ def validate_exact_boundary_repository_evidence(
     root: Path, pulp_root: Path | None, data: Any, amendment: Any,
     check_runs: Any = None, open_pr_snapshot: Any = None,
     defer_live_open_pr_audit: bool = False, delivery_retired: bool = False,
+    pulp_main_ref: str | None = None,
 ) -> list[str]:
+    """Check the acknowledgement's Pulp and Vellum evidence.
+
+    "Authoritative Pulp main" is the HEAD of ``pulp_root`` unless
+    ``pulp_main_ref`` names it. A run that pins the checkout at the acceptance
+    commit (pull requests and merge groups, Decision 0011) passes the live
+    main ref here to compare against it instead of against the pin itself.
+    """
     errors: list[str] = []
     if not isinstance(data, dict) or not isinstance(data.get("coordinates"), dict):
         return ["exact_boundary_acknowledgement evidence: coordinates unavailable"]
@@ -1698,10 +1706,27 @@ def validate_exact_boundary_repository_evidence(
         return errors
     if git_commit_tree(pulp_root, pulp_commit, "Pulp acceptance merge", errors) is None:
         return errors
-    head = git_output(pulp_root, "rev-parse", "HEAD")
+    if pulp_main_ref is None:
+        head = git_output(pulp_root, "rev-parse", "HEAD")
+    elif not isinstance(pulp_main_ref, str) or not pulp_main_ref or pulp_main_ref.startswith("-"):
+        errors.append("--pulp-main-ref: expected a Git ref or commit")
+        return errors
+    else:
+        head = git_output(
+            pulp_root, "rev-parse", "--verify", "--quiet", "--end-of-options",
+            f"{pulp_main_ref}^{{commit}}",
+        )
+        if head is None:
+            errors.append(
+                f"--pulp-main-ref {pulp_main_ref!r} does not name a commit in the Pulp checkout"
+            )
+            return errors
     main_head = head.decode().strip() if head is not None else None
     on_main = subprocess.run(
-        ["git", "-C", str(pulp_root), "merge-base", "--is-ancestor", pulp_commit, "HEAD"],
+        [
+            "git", "-C", str(pulp_root), "merge-base", "--is-ancestor",
+            pulp_commit, main_head or "HEAD",
+        ],
         check=False,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -3199,6 +3224,7 @@ def verify(
     open_pr_snapshot: Any = None,
     defer_live_open_pr_audit: bool = False,
     release_tag: str | None = None,
+    pulp_main_ref: str | None = None,
 ) -> dict[str, Any]:
     closure_errors = []
     try:
@@ -3288,6 +3314,7 @@ def verify(
                 open_pr_snapshot,
                 defer_live_open_pr_audit,
                 delivery_retired,
+                pulp_main_ref,
             )
         parity_completion_path = root / PARITY_COMPLETION_PATH
         if parity_completion_path.is_file():
@@ -3395,9 +3422,15 @@ def main() -> int:
     parser.add_argument("--check-runs-json", type=Path)
     parser.add_argument("--open-pr-snapshot-json", type=Path)
     parser.add_argument("--defer-live-open-pr-audit", action="store_true")
+    parser.add_argument(
+        "--pulp-main-ref",
+        help="Git ref in --pulp-root to treat as authoritative Pulp main instead of its HEAD",
+    )
     parser.add_argument("--output", type=Path)
     parser.add_argument("--release-readiness", action="store_true")
     args = parser.parse_args()
+    if args.pulp_main_ref is not None and args.pulp_root is None:
+        parser.error("--pulp-main-ref requires --pulp-root")
     report = verify(
         args.root.resolve(),
         release_readiness=args.release_readiness,
@@ -3415,6 +3448,7 @@ def main() -> int:
         ),
         defer_live_open_pr_audit=args.defer_live_open_pr_audit,
         release_tag=args.release_tag,
+        pulp_main_ref=args.pulp_main_ref,
     )
     rendered = json.dumps(report, indent=2, sort_keys=True) + "\n"
     if args.output:

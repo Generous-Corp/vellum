@@ -697,6 +697,32 @@ jobs:
               output.write(f"phase={phase}\n")
           PY
 
+      - name: Compare the boundary evidence with live Pulp main (advisory)
+        # The required verdict above stays pinned to the acceptance commit
+        # (Decision 0011), so on a pull request it cannot see a later Pulp
+        # change to the routing projection or a bound router blob; the first
+        # push to main would. This step repeats the comparison against the
+        # Pulp main the checkout fetched, and only annotates: it never fails
+        # the job or changes the verdict.
+        if: steps.expansion-evidence.outputs.pulp-sha != '' && github.event_name == 'pull_request'
+        continue-on-error: true
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          set -uo pipefail
+          if ! live_main="$(git -C .exact-boundary-pulp rev-parse --verify --quiet 'refs/remotes/origin/main^{commit}')"; then
+            echo "::warning title=Pulp main boundary (advisory)::skipped: the Pulp checkout has no origin/main"
+            exit 0
+          fi
+          report="$RUNNER_TEMP/authority-expansion-live-main.json"
+          python3 tools/provenance/verify_authority_expansion.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --pulp-root .exact-boundary-pulp \
+            --pulp-main-ref "$live_main" \
+            --defer-live-open-pr-audit \
+            --output "$report" > /dev/null || true
+          python3 tools/provenance/pulp_main_drift_annotations.py "$report" "$live_main"
+
       - name: Verify active repository documentation
         if: steps.authority-phase.outputs.phase == 'active'
         run: python3 tools/provenance/verify_current_state_docs.py

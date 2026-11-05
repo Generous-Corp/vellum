@@ -6,6 +6,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import secrets
 import socket
 import struct
@@ -36,9 +37,15 @@ ALLOWED_COMMANDS = {
     "Page.getLayoutMetrics",
     "Page.navigate",
     "DOMSnapshot.captureSnapshot",
-    "Emulation.setVirtualTimePolicy",
     "Page.captureScreenshot",
+    "Runtime.evaluate",
 }
+# Runtime.evaluate runs only these fixed expressions, never caller code.
+READINESS_EXPRESSION = (
+    "document.readyState === 'complete' && "
+    "(!document.fonts || document.fonts.status === 'loaded')"
+)
+FIXED_EXPRESSIONS = {READINESS_EXPRESSION}
 
 
 class CdpClientError(RuntimeError):
@@ -74,6 +81,18 @@ def _bounded_json(raw: bytes, *, label: str, limit: int, object_required: bool =
     return value
 
 
+def _record_timing(method: str, seconds: float) -> None:
+    """Append one command's duration to VELLUM_CDP_TIMING_LOG, when set."""
+    path = os.environ.get("VELLUM_CDP_TIMING_LOG")
+    if not path:
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps({"method": method, "seconds": round(seconds, 3)}) + "\n")
+    except OSError:
+        pass
+
+
 class CdpClient:
     """Authenticated loopback CDP session with a narrow command surface."""
 
@@ -92,6 +111,14 @@ class CdpClient:
 
     def __exit__(self, *_exc: object) -> None:
         self.close()
+
+    def set_timeout(self, timeout: float) -> None:
+        """Bound each later socket read; a connected session keeps its socket."""
+        if timeout <= 0 or timeout > 120:
+            raise CdpClientError("CDP timeout is outside the bounded range")
+        self.timeout = timeout
+        if self._socket is not None:
+            self._socket.settimeout(timeout)
 
     def discover(self) -> dict[str, Any]:
         value = self._discover_path("/json/version")
@@ -219,20 +246,33 @@ class CdpClient:
         self, *, budget_ms: int = 1000, quiet_period: float = 0.25,
         timeout: float = 20.0,
     ) -> dict[str, Any]:
-        """Advance bounded virtual time and wait for a stable DOM snapshot."""
+        """Let the page run for its budget, then wait for a stable DOM snapshot.
+
+        This used to advance a virtual-time budget. Chrome's virtual time left
+        some pages unable to produce a frame afterwards, so the surface
+        screenshot that follows hung: 2 of 6 local captures and most m5
+        captures (2026-11-04), and still 4 of 8 after resetting the policy to
+        `advance`. Real time with the same budget passed 20 of 20 under load.
+        """
         if not isinstance(budget_ms, int) or isinstance(budget_ms, bool) or not 1 <= budget_ms <= 10000:
             raise CdpClientError("virtual-time budget is outside the bounded range")
         if quiet_period <= 0 or quiet_period > 5 or timeout <= 0 or timeout > 120:
             raise CdpClientError("idle settling bounds are invalid")
         self.command("Page.enable")
-        self.command("Emulation.setVirtualTimePolicy", {
-            "policy": "pauseIfNetworkFetchesPending",
-            "budget": budget_ms,
-            "maxVirtualTimeTaskStarvationCount": 1000,
-            "waitForNavigation": True,
-        })
         deadline = time.monotonic() + timeout
-        self._wait_for_event("Emulation.virtualTimeBudgetExpired", deadline)
+        # What the virtual-time policy's pauseIfNetworkFetchesPending gave:
+        # every subresource and web font is in before the budget starts, so a
+        # slow stylesheet cannot be captured as an unstyled page.
+        while True:
+            result = self.command("Runtime.evaluate", {
+                "expression": READINESS_EXPRESSION, "returnByValue": True,
+            })
+            if (result.get("result") or {}).get("value") is True:
+                break
+            if time.monotonic() >= deadline:
+                raise CdpClientError("page did not finish loading before the bounded timeout")
+            time.sleep(0.05)
+        time.sleep(min(budget_ms / 1000, max(0.0, deadline - time.monotonic())))
         previous_digest: str | None = None
         stable_since: float | None = None
         snapshot: dict[str, Any] = {}
@@ -255,16 +295,6 @@ class CdpClient:
                 stable_since = now
             time.sleep(0.05)
         raise CdpClientError("browser DOM did not settle before the bounded timeout")
-
-    def _wait_for_event(self, method: str, deadline: float) -> None:
-        while time.monotonic() < deadline:
-            for index, event in enumerate(self._events):
-                if event.get("method") == method:
-                    del self._events[index]
-                    return
-            self.command("Page.getLayoutMetrics")
-            time.sleep(0.05)
-        raise CdpClientError(f"CDP event {method} was not observed before the bounded timeout")
 
     def capture_screenshot(self) -> dict[str, Any]:
         """Capture one bounded PNG from the current browser surface."""
@@ -361,6 +391,12 @@ class CdpClient:
     def command(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         if method not in ALLOWED_COMMANDS:
             raise CdpClientError(f"CDP command is not allowed: {method}")
+        if method == "Runtime.evaluate" and (
+            set(params or {}) != {"expression", "returnByValue"}
+            or (params or {}).get("expression") not in FIXED_EXPRESSIONS
+            or (params or {}).get("returnByValue") is not True
+        ):
+            raise CdpClientError("Runtime.evaluate is limited to the fixed readiness check")
         sock = self._socket
         if sock is None:
             raise CdpClientError("CDP client is not connected")
@@ -370,6 +406,19 @@ class CdpClient:
         if len(payload) > MAX_DISCOVERY_BYTES:
             raise CdpClientError("CDP command exceeds the bounded request size")
         self._send_frame(sock, 0x1, payload)
+        started = time.monotonic()
+        try:
+            return self._await_response(sock, command_id)
+        except OSError as error:
+            # A bare socket timeout reads as "timed out"; name the command and
+            # the bound so a slow browser is told apart from a broken one.
+            raise CdpClientError(
+                f"CDP {method} got no response within {self.timeout:g} s: {error}"
+            ) from error
+        finally:
+            _record_timing(method, time.monotonic() - started)
+
+    def _await_response(self, sock: socket.socket, command_id: int) -> dict[str, Any]:
         while True:
             opcode, data = self._read_frame(sock)
             if opcode == 0x9:

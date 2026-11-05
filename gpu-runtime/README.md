@@ -23,7 +23,7 @@ ctest --test-dir build-gpu-runtime
 | `VellumGpuRuntime::SkiaLogBridge` | The one piece that names Skia: it routes Skia's log handler into the diagnostic sink. A renderer that links Skia calls `register_skia_log_bridge(skia_log_bridge_installer())`. |
 | `renderer-lock.json` | The Skia/Dawn pin: the skia-builder `chrome/mNNN` milestone, the builder and source commits, and per platform the release asset with its SHA-256 and the SHA-256 of every static library inside it. This is the only place those values are written. |
 | `cmake/GpuRuntimeRendererLock.cmake` | `gpu_runtime_read_renderer_lock(PLATFORM <p> PREFIX <v>)` reads and validates the lock for a build. Vellum's `cmake/VellumSkiaDawn.cmake` uses it, and the installed package ships both files. |
-| `cmake/GpuRuntimeDawn.cmake` | `gpu_runtime_find_dawn()` locates the consumer's copy of the locked asset (`GPU_RUNTIME_SKIA_DIR`, or `GPU_RUNTIME_RENDERER_ARCHIVE`) and checks `libdawn_combined.a` against the lock. gpu-runtime does not redistribute Dawn. |
+| `cmake/GpuRuntimeDawn.cmake` | `gpu_runtime_find_dawn()` locates the consumer's copy of the locked asset (`GPU_RUNTIME_SKIA_DIR`, or `GPU_RUNTIME_RENDERER_ARCHIVE`) and checks `libdawn_combined.a` against the lock. A published package ships that library unchanged, so its config needs neither. |
 
 The device layer depends on no framework, so the host supplies what a
 framework used to: `gpu_host_hooks.hpp` takes a log sink (stderr without one),
