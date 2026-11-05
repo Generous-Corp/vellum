@@ -213,33 +213,7 @@ jobs:
       - name: Verify the exact release source contract
         if: steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == ''
         run: |
-          python3 -m unittest discover -s cli/tests -p 'test_*.py'
-          python3 -m unittest tools.agent_instructions.test_verify
-          python3 scripts/test_readme_exec.py
-          python3 scripts/readme_exec.py --lint
-          python3 scripts/test_readme_lint.py
-          python3 scripts/readme_lint.py
-          python3 scripts/test_docs_sync.py
-          python3 scripts/docs_sync.py --check
-          python3 scripts/template_guard.py
-          python3 scripts/test_templates_smoke.py
-          python3 scripts/test_sterile_acceptance_bundle.py
-          python3 scripts/test_compare_sdk_archives.py
-          python3 -m unittest discover -s tools/mirror -p 'test_*.py'
-          python3 -I scripts/test_check_renderer_lock.py
-          python3 -I scripts/check_renderer_lock.py
-          python3 -I scripts/test_verify_gpu_runtime_artifact.py
-          python3 scripts/test_select_exact_provenance_run.py
-          python3 scripts/test_verify_exact_provenance_artifact.py
-          python3 scripts/test_run_parity_proofs.py
-          python3 scripts/test_verify_budget_ratification.py
-          python3 scripts/verify_budget_ratification.py
-          python3 tools/provenance/test_verify_downstream_consumers.py
-          python3 tools/provenance/verify_downstream_consumers.py
-          python3 tools/provenance/test_verify_extraction.py
-          python3 tools/provenance/verify_extraction.py \
-            --defer-mirror-identity \
-            --output "$RUNNER_TEMP/provenance-report.json"
+          python3 -I scripts/run_ci_lane.py --lane release-source
           npm run check --prefix packages/vellum-design-ir
 
       - name: Build the installed TypeScript and JSX Phase 3 fixture
