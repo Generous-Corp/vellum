@@ -26,14 +26,7 @@ jobs:
       - name: Check the release-signing policy
         run: |
           set -euo pipefail
-          python3 -I scripts/test_check_release_policy.py
-          python3 -I scripts/test_release_request.py
-          python3 -I scripts/test_version_at_land.py
-          python3 -I scripts/test_release_dry_run.py
-          python3 -I scripts/test_release_cadence.py
-          python3 -I scripts/test_pretag_checks.py
-          python3 -I scripts/test_sdk_release_draft_lookup.py
-          python3 -I scripts/check_release_policy.py check
+          python3 -I scripts/run_ci_lane.py --lane release-policy
 
       # Advisory: a Version-Bump trailer that version-at-land cannot read is
       # skipped there with a warning, so name it here while it can still be fixed.

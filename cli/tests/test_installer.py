@@ -4,6 +4,7 @@ import copy
 import hashlib
 import io
 import json
+import re
 import os
 from pathlib import Path
 import runpy
@@ -272,6 +273,20 @@ class InstallerTests(unittest.TestCase):
             self.assertNotEqual(accepted_boundary.returncode, 0)
             self.assertNotIn("require macOS 15.0 or newer", accepted_boundary.stderr)
             self.assertIn("GH_RELEASE_ACQUISITION_REACHED", accepted_boundary.stderr)
+
+    def test_installer_retired_list_equals_the_record(self) -> None:
+        # install.sh runs standalone, so it carries the retired versions as a
+        # literal; it must name exactly the record's tags, no more and no fewer.
+        source = (REPO / "scripts/install.sh").read_text(encoding="utf-8")
+        literals = re.findall(r"^\s*([0-9][0-9.|]*)\)\s*printf .*retired release", source, re.M)
+        self.assertEqual(len(literals), 1, literals)
+        record = json.loads(
+            (REPO / "provenance/retired-release-tags.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            sorted(literals[0].split("|")),
+            sorted(row["tag"].removeprefix("v") for row in record["tags"]),
+        )
 
     def test_retired_release_version_is_refused_before_acquisition(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

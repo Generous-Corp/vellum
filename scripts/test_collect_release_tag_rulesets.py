@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+from pathlib import Path
+import sys
 import unittest
 
-import collect_release_tag_rulesets as collector
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import collect_release_tag_rulesets as collector  # noqa: E402
 
 
 class Tests(unittest.TestCase):

@@ -1236,6 +1236,28 @@ def receipt_history_errors(root: Path, receipts: list[str], stored: list[str]) -
     return errors
 
 
+def mirror_ref_errors(root: Path, receipts: list[str], ref_sha: str) -> list[str]:
+    """The export ref must sit at the newest receipt's mirror_sha.
+
+    Every receipt names MIRROR_REF as where its export landed. ``ref_sha`` is
+    that ref's live tip (``git ls-remote origin MIRROR_REF``), which a checkout
+    of main does not carry, so the caller supplies it. Only the newest receipt
+    binds the tip: export histories are rewritten per export, so an older
+    mirror_sha need not be an ancestor of a newer one.
+    """
+    if not receipts:
+        return []
+    newest = receipts[-1]
+    try:
+        newest_sha = strict_json(root / newest)["mirror_sha"]
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return [f"{newest}: unreadable for the {MIRROR_REF} check: {exc}"]
+    if ref_sha != newest_sha:
+        return [f"{MIRROR_REF} is at {ref_sha[:12]}, but {newest} says its export landed "
+                f"there at {newest_sha[:12]}; fast-forward the ref"]
+    return []
+
+
 def verify(root: Path, pulp_root: Path | None = None) -> dict[str, Any]:
     errors: list[str] = []
     head = git(root, "rev-parse", "HEAD")
@@ -1303,8 +1325,18 @@ def main() -> int:
     parser.add_argument("--pulp-root", type=Path)
     parser.add_argument("--require-pulp-identity", action="store_true")
     parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--mirror-ref-sha",
+        help=f"the live tip of {MIRROR_REF}; when given it must equal the newest receipt's mirror_sha",
+    )
     args = parser.parse_args()
     report = verify(args.root.resolve(), args.pulp_root.resolve() if args.pulp_root else None)
+    if args.mirror_ref_sha:
+        ref_errors = mirror_ref_errors(args.root.resolve(), report["receipts"], args.mirror_ref_sha)
+        report["mirror_ref_checked"] = True
+        if ref_errors:
+            report["status"] = "fail"
+            report["errors"].extend(ref_errors)
     if args.require_pulp_identity and report["receipts"] and not report["pulp_identity_checked"]:
         report["status"] = "fail"
         report["errors"].append("receipts exist but Pulp identity was not proved")

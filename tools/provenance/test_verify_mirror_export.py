@@ -284,6 +284,17 @@ class VerifyMirrorExportTests(unittest.TestCase):
         self.assertEqual(report["status"], "pass", report["errors"])
         self.assertEqual(report["receipts"], receipts)
 
+    def test_mirror_ref_must_sit_at_the_newest_receipts_mirror_sha(self) -> None:
+        receipts = verify_mirror_export.landed_receipts(REPO)
+        if len(receipts) < 2:
+            self.skipTest("needs two landed receipts")
+        shas = [json.loads((REPO / r).read_text(encoding="utf-8"))["mirror_sha"] for r in receipts]
+        self.assertEqual(verify_mirror_export.mirror_ref_errors(REPO, receipts, shas[-1]), [])
+        # A ref left at the previous export (the 2026-11-02 state) fails.
+        stale = verify_mirror_export.mirror_ref_errors(REPO, receipts, shas[-2])
+        self.assertEqual(len(stale), 1)
+        self.assertIn("fast-forward the ref", stale[0])
+
     def test_repository_receipts_all_verify_with_pulp_identity(self) -> None:
         receipts = verify_mirror_export.landed_receipts(REPO)
         pulp_root_env = os.environ.get("MIRROR_PULP_ROOT")

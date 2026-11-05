@@ -33,7 +33,8 @@ class Repo:
         self.git("config", "user.name", "t")
         self.git("config", "user.email", "t@t")
         self.write("provenance/retired-release-tags.json",
-                   json.dumps({"tags": [{"tag": tag} for tag in retired]}))
+                   json.dumps({"schema": "vellum.retired-release-tags.v1",
+                               "tags": [{"tag": tag} for tag in retired]}))
         self.commit(CMAKE.format(v=version), "root")
 
     def git(self, *args: str) -> str:
@@ -173,8 +174,8 @@ class Cli(unittest.TestCase):
         repo.bump("0.1.11")
         script = repo.root / "scripts"
         script.mkdir()
-        for name in ("release_cadence.py", "release_request.py", "verify_immutable_release_preflight.py",
-                     "version_at_land.py"):
+        for name in ("release_cadence.py", "release_request.py", "retired_release_tags.py",
+                     "verify_immutable_release_preflight.py", "version_at_land.py"):
             (script / name).write_bytes((ROOT / "scripts" / name).read_bytes())
         releases = repo.root / "releases.json"
         releases.write_text(json.dumps(PUBLISHED))

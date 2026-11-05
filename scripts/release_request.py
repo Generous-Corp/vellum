@@ -52,7 +52,7 @@ SHA = re.compile(r"^[0-9a-f]{40}$")
 
 REPOSITORY = "Generous-Corp/vellum"
 CMAKELISTS = "CMakeLists.txt"
-RETIRED_TAGS = "provenance/retired-release-tags.json"
+RETIRED_TAGS = val.retired_record.RELATIVE_PATH
 OBSERVATORY = "provenance/pulp-observatory"
 CURSOR = f"{OBSERVATORY}/cursor.json"
 # What an observatory evidence commit may change, exactly as the tag's
@@ -96,10 +96,10 @@ def project_version(cmakelists: str) -> str:
 
 
 def retired(retired_tags: Any) -> set[str]:
-    rows = retired_tags.get("tags") if isinstance(retired_tags, dict) else None
-    if not isinstance(rows, list):
-        raise ReleaseRequestError("the retired-tags file must hold a `tags` list")
-    return {row["tag"] for row in rows if isinstance(row, dict) and isinstance(row.get("tag"), str)}
+    try:
+        return val.retired_record.tag_names(retired_tags)
+    except val.retired_record.RetiredTagsError as error:
+        raise ReleaseRequestError(str(error)) from error
 
 
 def required_checks(branch_rules: Any, protection: Any) -> list[tuple[str, int | None]]:
