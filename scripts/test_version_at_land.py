@@ -224,10 +224,10 @@ class Plans(unittest.TestCase):
 
     def test_a_retired_version_is_never_proposed(self) -> None:
         self.repo.land("fix: correct the core", {"foundation/src/core.cpp": "int y;\n"})
-        retired = {"tags": [{"tag": "v0.1.11"}, {"tag": "v0.1.12"}]}
+        retired = {**NO_RETIRED, "tags": [{"tag": "v0.1.11"}, {"tag": "v0.1.12"}]}
         self.assertEqual(self.repo.plan(retired).version, "0.1.13")
         # Retired names count as used even when they are higher than any tag.
-        self.assertEqual(self.repo.plan({"tags": [{"tag": "v0.3.4"}]}).version, "0.3.5")
+        self.assertEqual(self.repo.plan({**NO_RETIRED, "tags": [{"tag": "v0.3.4"}]}).version, "0.3.5")
 
     def test_a_main_behind_its_newest_tag_counts_from_the_tag(self) -> None:
         repo = Repo(self, version="0.1.9")
@@ -590,6 +590,7 @@ class Cli(unittest.TestCase):
         script = repo.root / "scripts/version_at_land.py"
         script.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / "scripts/version_at_land.py", script)
+        shutil.copy2(ROOT / "scripts/retired_release_tags.py", script.parent / "retired_release_tags.py")
         head = repo.git("rev-parse", "HEAD")
         done = subprocess.run([sys.executable, "-I", str(script), "plan", "--commit", head], capture_output=True,
                               text=True, check=False)

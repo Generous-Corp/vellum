@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -24,6 +25,8 @@ SPEC = importlib.util.spec_from_file_location("verify_extraction", MODULE_PATH)
 assert SPEC and SPEC.loader
 verify_extraction = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(verify_extraction)
+ROOT = MODULE_PATH.parents[2]
+content_scan_policy = verify_extraction.content_scan_policy
 ARTIFACT_MODULE_PATH = MODULE_PATH.parents[2] / "scripts/verify_sdk_artifact.py"
 ARTIFACT_SPEC = importlib.util.spec_from_file_location(
     "verify_sdk_artifact", ARTIFACT_MODULE_PATH
@@ -286,6 +289,159 @@ class VerifyExtractionTests(unittest.TestCase):
                 {(finding["path"], finding["rule"]) for finding in findings},
                 {("graphics/a.cpp", "pulp-public-namespace")},
             )
+
+    def test_renamed_mirror_namespaces_are_refused_in_native_trees(self) -> None:
+        # Each spelling a copied, renamed mirror file can take.
+        evasions = {
+            "graphics/qualified.cpp": b"namespace vellum::view { int x; }\n",
+            "graphics/spaced.cpp": b"auto* v = vellum :: view::make();\n",
+            "graphics/nested.cpp": b"namespace vellum {\nnamespace view {\nint x;\n}\n}\n",
+            "graphics/imported.mm": b"#import <vellum/view/view.hpp>\n",
+            "graphics/relative.cpp": b'#include "../include/vellum/view/view.hpp"\n',
+            "graphics/probed.cpp": b"#if __has_include(<vellum/canvas/canvas.hpp>)\n#endif\n",
+            "graphics/using.cpp": b"using namespace vellum;\nint f() { return view::g(); }\n",
+            "graphics/nested_comment.cpp": b"namespace vellum { /* ui */ namespace view {\nint x;\n}}\n",
+            "graphics/nested_between.cpp": b"namespace vellum {\nclass Fwd;\nnamespace view {\nint x;\n}\n}\n",
+            "graphics/unqualified.cpp": b"namespace vellum {\nint f() { return canvas::g(); }\n}\n",
+            "graphics/jni.cpp": b"namespace vellum::android { int x; }\n",
+            "graphics/embed_js.py": b'out.write("namespace vellum::view::preludes {\\n\\n")\n',
+            "tools/scratch/copied.cpp": b"namespace vellum::state { int x; }\n",
+            "components/w/copied.hpp": b"#include <vellum/render/x.hpp>\n",
+        }
+        legitimate = {
+            "graphics/own.cpp": b"#include <vellum/runtime/kernel.hpp>\nvellum::runtime::Kernel k;\n"
+                                b"vellum::graphics::X g;\nusing namespace vellum;\nint y = graphics::z();\n",
+            "graphics/near_miss.cpp": b"namespace vellum::graphics {\nauto r = std::ranges::views::all;\n"
+                                      b"int canvas_size = 0; int view_count = state_of(1);\n}\n",
+            "tools/mirror/consumer/main.cpp": b"#include <vellum/view/view.hpp>\n",
+        }
+        # The consumer exemption is per file: a new file there is scanned.
+        evasions["tools/mirror/consumer/new_helper.cpp"] = b"#include <vellum/view/view.hpp>\n"
+        evasions["tools/mirror/consumer/sub/deep.hpp"] = b"namespace vellum::canvas { int x; }\n"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.write_mirror(root, "mirror/core/view/src/a.cpp", b"namespace vellum::view { int x; }\n")
+            for relative, content in {**evasions, **legitimate}.items():
+                (root / relative).parent.mkdir(parents=True, exist_ok=True)
+                (root / relative).write_bytes(content)
+
+            findings = verify_extraction.scan_renamed_mirror(root)
+
+            self.assertEqual(sorted({f["path"] for f in findings}), sorted(evasions))
+            self.assertTrue(all(f["rule"] == "renamed-mirror-namespace" for f in findings))
+            # The main native scan leaves this rule to the wider one.
+            self.assertNotIn("renamed-mirror-namespace", verify_extraction.FORBIDDEN_ACTIVE_PATTERNS)
+
+    def test_renamed_mirror_units_match_the_mirror_namespace_census(self) -> None:
+        # The refused units are the mirror's top-level pulp::<unit> namespaces
+        # and include units, less the ones native Vellum owns. A new mirrored
+        # unit (pulp::android once escaped an include-unit census) must join.
+        rule = content_scan_policy.FORBIDDEN_NATIVE_CONTENT_PATTERNS["renamed-mirror-namespace"][0]
+        refused = set(re.search(r"vellum\\s\*::\\s\*\(\?:([^)]*)\)", rule).group(1).split("|"))
+        census: set[str] = set()
+        for path in (ROOT / "mirror").rglob("*"):
+            if path.is_file() and not path.relative_to(ROOT).as_posix().startswith("mirror/external/"):
+                text = path.read_bytes().decode("utf-8", errors="replace")
+                for spelling in ("pulp", "vellum"):
+                    census.update(re.findall(rf"namespace\s+{spelling}\s*::\s*(\w+)", text))
+                    census.update(re.findall(rf"namespace\s+{spelling}\s*\{{\s*namespace\s+(\w+)", text))
+        census |= {p.name for p in (ROOT / "mirror").glob("core/*/include/*/*")
+                   if p.is_dir() and p.parent.name in {"pulp", "vellum"}}
+        native = {p.name for top in ("foundation", "runtime", "graphics", "authoring")
+                  for p in (ROOT / top / "include/vellum").glob("*") if p.is_dir()}
+        self.assertIn("android", census)
+        self.assertEqual(refused, census - native)
+
+    def test_renamed_mirror_exemptions_are_pinned(self) -> None:
+        # Any change to what the rule skips must show up as an edit here.
+        self.assertEqual(verify_extraction.RENAMED_MIRROR_EXEMPT_PREFIXES, ())
+        self.assertEqual(verify_extraction.RENAMED_MIRROR_EXEMPT_PATHS, {
+            "tools/mirror/consumer/cross_image_main.cpp",
+            "tools/mirror/consumer/direct_gpu_main.cpp",
+            "tools/mirror/consumer/direct_main.cpp",
+            "tools/mirror/consumer/main.cpp",
+            "tools/mirror/consumer/runtime_image_census_main.cpp",
+            "scripts/install_core.py",
+            "tools/provenance/content_scan_policy.py",
+            "tools/provenance/test_verify_extraction.py",
+            "tools/provenance/verify_extraction.py",
+            "tools/provenance/mirror_edge_patterns.json",
+            "tools/mirror/verify_mirror_inertness.py",
+            "tools/mirror/test_verify_mirror_inertness.py",
+        })
+        self.assertEqual(verify_extraction.RENAMED_MIRROR_SCAN_ROOTS,
+                         verify_extraction.EXPECTED_ACTIVE_ROOTS + ("components", "product", "tools", "web"))
+
+    def test_symlinks_in_native_trees_are_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.write_mirror(root, "mirror/core/view/src/a.cpp", b"namespace vellum::view { int x; }\n")
+            (root / "graphics").mkdir()
+            (root / "graphics/linkdir").symlink_to(root / "mirror/core/view/src", target_is_directory=True)
+            (root / "tools").mkdir()
+            (root / "tools/linkfile.cpp").symlink_to(root / "mirror/core/view/src/a.cpp")
+            # Behind the directory link the file is invisible to the content scan ...
+            self.assertEqual(verify_extraction.scan_renamed_mirror(root, ("graphics",)), [])
+            # ... so the link itself is refused.
+            self.assertEqual(verify_extraction.symlink_findings(root, ("graphics", "tools")),
+                             ["graphics/linkdir", "tools/linkfile.cpp"])
+
+    def test_installed_dependency_symlinks_are_not_refused(self) -> None:
+        # `npm ci` leaves node_modules/.bin links on disk in CI. node_modules is
+        # gitignored, so those links are not part of the tree being verified.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "tools/pkg/node_modules/.bin").mkdir(parents=True)
+            (root / "tools/pkg/node_modules/esbuild.js").write_text("", encoding="utf-8")
+            (root / "tools/pkg/node_modules/.bin/esbuild").symlink_to(root / "tools/pkg/node_modules/esbuild.js")
+            (root / "tools/real.cpp").symlink_to(root / "tools/pkg/node_modules/esbuild.js")
+            self.assertEqual(verify_extraction.symlink_findings(root, ("tools",)), ["tools/real.cpp"])
+
+    def test_comment_stripping_keeps_string_literals(self) -> None:
+        source = (b'const char* glob = "include/*.hpp";\nint keep_this_function_body(int a) { return a * 1234567; }\n'
+                  b'const char* end = "*/";\n')
+        stripped = verify_extraction._strip_comments(source)
+        self.assertIn(b"keep_this_function_body", stripped)
+        self.assertIn(b'"include/*.hpp"', stripped)
+        self.assertEqual(verify_extraction._strip_comments(b"a /* x */ b // y\n'/*' c"), b"a  b \n'/*' c")
+        self.assertIsNotNone(verify_extraction.normalized_fingerprint(source))
+        self.assertIn(".inc", verify_extraction.NORMALIZED_SUFFIXES)
+        self.assertIn(".in", verify_extraction.NORMALIZED_SUFFIXES)
+
+    def test_undecodable_native_text_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "graphics").mkdir()
+            (root / "graphics/bad.cpp").write_bytes(b"int x; \xff\xfe namespace vellum::view {}\n")
+            for findings in (verify_extraction.scan_active_surface(root, ("graphics",)),
+                             verify_extraction.scan_renamed_mirror(root, ("graphics",))):
+                self.assertEqual([(f["path"], f["rule"]) for f in findings],
+                                 [("graphics/bad.cpp", "undecodable-native-text")])
+
+    def test_normalized_copies_of_mirror_files_are_refused(self) -> None:
+        mirror_source = (b"// Copyright Pulp\n#include <pulp/runtime/log.hpp>\n\nnamespace pulp::runtime {\n"
+                         b"/* the logger */\nvoid log_line(const char* message) { write_out(message, 42); }\n}\n")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.write_mirror(root, "mirror/core/runtime/src/log.cpp", mirror_source)
+            self.write_mirror(root, "mirror/external/lib/vendored.c", b"int vendored_function_body(void) { return 1234567; }\n")
+            (root / "runtime/src").mkdir(parents=True)
+            # Renamed, re-commented, re-indented and CRLF: still the same file.
+            edited = (b"#include <vellum/runtime/log.hpp>\r\nnamespace vellum::runtime\r\n{\r\n"
+                      b"    // mine now\r\n    void log_line(const char*   message)\r\n"
+                      b"    {   write_out(message, 42);   }\r\n}\r\n")
+            (root / "runtime/src/copied.cpp").write_bytes(edited)
+            # A real edit is a different file to this check.
+            (root / "runtime/src/changed.cpp").write_bytes(edited.replace(b"42", b"43"))
+            # Third-party files may ship natively too.
+            (root / "runtime/src/vendored.c").write_bytes(b"int vendored_function_body(void) { return 1234567; }\n")
+            # Too short to fingerprint.
+            self.write_mirror(root, "mirror/core/x/tiny.hpp", b"#pragma once\n")
+            (root / "runtime/src/tiny.hpp").write_bytes(b"#pragma once\n")
+
+            findings = verify_extraction.normalized_copy_findings(root, ("runtime",))
+
+            self.assertEqual(findings, [{"path": "runtime/src/copied.cpp", "mirror": "mirror/core/runtime/src/log.cpp"}])
 
     def test_origin_records_are_strictly_validated(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -582,8 +738,8 @@ class VerifyExtractionTests(unittest.TestCase):
         )
         self.assertEqual(verify_extraction.MIRROR_EDGE_SUFFIXES, set(table["suffixes"]))
         self.assertTrue({"", ".md", ".ps1", ".sh", ".ts", ".tsx", ".yaml", ".yml"} <= verify_extraction.MIRROR_EDGE_SUFFIXES)
-        self.assertEqual(set(table), {"schema", "description", "suffixes", "binary_suffixes",
-                                      "content_patterns", "path_patterns", "approved_exceptions"})
+        self.assertEqual(set(table), {"schema", "description", "roots", "suffixes", "binary_suffixes",
+                                      "content_patterns", "path_patterns", "approved_exceptions", "controls"})
         self.assertEqual(set(table["content_patterns"]), {
             "mirror-product-include", "mirror-product-symbol", "mirror-audio-framework-link",
             "mirror-pulp-kept-include", "mirror-pulp-kept-symbol"})
@@ -596,6 +752,32 @@ class VerifyExtractionTests(unittest.TestCase):
             verify_extraction.MIRROR_EDGE_EXCEPTIONS,
             {(row["rule"], row["path"], row["line"]) for row in table["approved_exceptions"]},
         )
+
+    def test_every_mirror_edge_rule_matches_its_controls(self) -> None:
+        # The vendored rules are spelled from the table's roots; Pulp's
+        # generator test proves they follow a respelling. Here each rule must
+        # match every control the table gives it, under every root it names,
+        # so a rule the scan applies can never silently match nothing.
+        table = json.loads(verify_extraction.MIRROR_EDGE_TABLE.read_text(encoding="utf-8"))
+        roots = table["roots"]
+        self.assertEqual(set(roots), {"namespace", "include", "target"})
+        # Controls are instantiated with one spelling for every placeholder.
+        self.assertEqual(roots["namespace"], roots["include"])
+        self.assertEqual(roots["namespace"], roots["target"])
+        rules = {**verify_extraction.FORBIDDEN_MIRROR_EDGE_PATTERNS, **verify_extraction.MIRROR_EDGE_PATH_PATTERNS}
+        self.assertEqual(set(table["controls"]), set(rules))
+        spellings = set(roots["namespace"])
+        for rule, compiled in rules.items():
+            templates = table["controls"].get(rule, [])
+            self.assertTrue(templates, rule)
+            for template in templates:
+                for name in sorted(spellings):
+                    text = template
+                    for kind in roots:
+                        text = text.replace(f"@{kind}@", name)
+                    with self.subTest(rule=rule, control=text):
+                        self.assertNotIn("@", text)
+                        self.assertTrue(compiled.search(text))
 
     def test_pulp_kept_view_audio_edges_are_findings(self) -> None:
         # The edges the Vellum #92 review planted: five kept view-audio
@@ -639,8 +821,27 @@ class VerifyExtractionTests(unittest.TestCase):
         self.assertEqual(
             verify_extraction.MIRROR_EDGE_EXCEPTIONS,
             {("mirror-pulp-kept-include", "core/view/include/pulp/view/widgets.hpp",
-              "#include <pulp/view/audio_widgets.hpp>")},
+              "#include <pulp/view/audio_widgets.hpp>"),
+             ("mirror-pulp-kept-include", "core/view/include/vellum/view/widgets.hpp",
+              "#include <vellum/view/audio_widgets.hpp>")},
         )
+
+    def test_a_renamed_seam_debt_line_is_exempt_only_through_its_respelled_row(self) -> None:
+        debt = (b"#pragma once\n#if defined(VELLUM_VIEW_HAS_AUDIO_WIDGETS)\n"
+                b"#include <vellum/view/audio_widgets.hpp>\n#endif\n")
+        table = json.loads(verify_extraction.MIRROR_EDGE_TABLE.read_text(encoding="utf-8"))
+        pulp_only = dict(table, approved_exceptions=[
+            row for row in table["approved_exceptions"] if "/vellum/" not in row["path"]])
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.write_mirror(root, "mirror/core/view/include/vellum/view/widgets.hpp", debt)
+            self.assertEqual(verify_extraction.mirror_edge_findings(root), [])
+            self.assertEqual(verify_extraction.mirror_edge_findings(root, table), [])
+            # The pulp-spelled row alone cannot exempt the renamed line.
+            self.assertEqual(
+                [(f["rule"], f["path"], f["line"]) for f in verify_extraction.mirror_edge_findings(root, pulp_only)],
+                [("mirror-pulp-kept-include", "mirror/core/view/include/vellum/view/widgets.hpp", 3)],
+            )
 
     def test_vendored_table_must_match_pulp(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

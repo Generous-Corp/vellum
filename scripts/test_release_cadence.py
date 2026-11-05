@@ -33,7 +33,8 @@ class Repo:
         self.git("config", "user.name", "t")
         self.git("config", "user.email", "t@t")
         self.write("provenance/retired-release-tags.json",
-                   json.dumps({"tags": [{"tag": tag} for tag in retired]}))
+                   json.dumps({"schema": "vellum.retired-release-tags.v1",
+                               "tags": [{"tag": tag} for tag in retired]}))
         self.commit(CMAKE.format(v=version), "root")
 
     def git(self, *args: str) -> str:
@@ -132,6 +133,33 @@ class Unpublished(unittest.TestCase):
         self.assertEqual([(row["kind"], row["tag"]) for row in found], [("retired", "v0.1.9")])
 
 
+class DryRunLeftovers(unittest.TestCase):
+    def setUp(self) -> None:
+        self.repo = Repo(self)
+        self.repo.tag("v0.1.10")
+        self.repo.tag("dry-run/v0.1.10/41-1")
+
+    def test_a_dry_run_tag_is_found_only_after_the_grace_period(self) -> None:
+        self.assertEqual(self.repo.find(PUBLISHED, hours=5), [])
+        self.assertEqual([(row["kind"], row["tag"]) for row in self.repo.find(PUBLISHED, hours=7)],
+                         [("dry-run-leftover", "dry-run/v0.1.10/41-1")])
+
+    def test_an_orphan_dry_run_draft_is_found_after_the_grace_period(self) -> None:
+        repo = Repo(self)
+        repo.tag("v0.1.10")
+        created = repo.at(0).strftime("%Y-%m-%dT%H:%M:%SZ")
+        draft = {"tag_name": "dry-run/v0.1.10/9-1", "draft": True, "published_at": None,
+                 "name": "Vellum 0.1.10 experimental SDK (release dry run)", "created_at": created}
+        self.assertEqual(repo.find([[release("v0.1.10"), draft]], hours=5), [])
+        found = repo.find([[release("v0.1.10"), draft]], hours=7)
+        self.assertEqual([(row["kind"], row["tag"]) for row in found], [("dry-run-leftover", "dry-run/v0.1.10/9-1")])
+
+    def test_a_published_dry_run_release_is_found_at_once(self) -> None:
+        found = self.repo.find([[release("v0.1.10"), release("dry-run/v0.1.10/41-1")]], hours=0)
+        self.assertEqual([row["kind"] for row in found], ["dry-run-leftover"])
+        self.assertIn("must never publish", found[0]["detail"])
+
+
 class Behind(unittest.TestCase):
     def test_main_older_than_its_newest_tag_is_found(self) -> None:
         repo = Repo(self, version="0.1.8")
@@ -146,8 +174,8 @@ class Cli(unittest.TestCase):
         repo.bump("0.1.11")
         script = repo.root / "scripts"
         script.mkdir()
-        for name in ("release_cadence.py", "release_request.py", "verify_immutable_release_preflight.py",
-                     "version_at_land.py"):
+        for name in ("release_cadence.py", "release_request.py", "retired_release_tags.py",
+                     "verify_immutable_release_preflight.py", "version_at_land.py"):
             (script / name).write_bytes((ROOT / "scripts" / name).read_bytes())
         releases = repo.root / "releases.json"
         releases.write_text(json.dumps(PUBLISHED))

@@ -111,6 +111,38 @@ FORBIDDEN_NATIVE_CONTENT_PATTERNS: dict[str, tuple[str, int]] = {
         r"\b(?:AudioUnit|VST3|CLAP|LV2|Oboe)\b",
         re.IGNORECASE,
     ),
+    # The renamed mirror's own namespaces and headers. A mirrored file copied
+    # into a native root after the pulp:: -> vellum:: rename no longer matches
+    # the rules above; this one matches the spellings such a copy keeps:
+    # `vellum :: view::`; `namespace vellum {` followed anywhere later by
+    # `namespace view` (content between the two allowed); an unqualified
+    # `view::` anywhere after a file opens `namespace vellum` (which also
+    # covers `using namespace vellum;`); `#include`/`#import` with an angle or
+    # quoted (also relative) path containing `vellum/<unit>/`; and
+    # `__has_include`.
+    #
+    # It is a spelling check aimed at accidental copies, not a similarity
+    # check. Accepted blind spot: a copy laundered with one rename of the unit
+    # itself (`canvas` -> `graphics`), or with one identifier changed, a line
+    # appended or half the file taken, passes both this rule and the
+    # whole-file normalized quarantine in verify_extraction.py. Similarity
+    # matching (token k-gram winnowing) is deliberately not built (integrator
+    # decision, M2 8b plan §3.7).
+    #
+    # The units are the mirror's top-level `pulp::<unit>` namespaces and include
+    # units, less those native Vellum owns; test_verify_extraction.py holds
+    # the list equal to that census. `runtime` is absent on purpose: native
+    # Vellum owns vellum::runtime and the mirrored runtime merges into it under
+    # the symbol-intersection gate. So an edited copy of a mirrored runtime
+    # file is not caught here; the normalized-content quarantine in
+    # verify_extraction.py catches a copy that differs only in comments,
+    # whitespace or line endings, and the symbol intersection catches one that
+    # defines a name the mirror defines. Anything else is the accepted blind
+    # spot (DECISIONS 2026-11-05, both gates).
+    "renamed-mirror-namespace": (
+        r"(?:\bvellum\s*::\s*(?:android|canvas|design|events|platform|render|simd|state|view)\b|\bnamespace\s+vellum\s*\{[\s\S]*?\bnamespace\s+(?:android|canvas|design|events|platform|render|simd|state|view)\b|\bnamespace\s+vellum\b[\s\S]*?(?<![\w:])(?:android|canvas|design|events|platform|render|simd|state|view)\s*::|#\s*(?:include|import)\s*[<\"][^>\"\n]*\bvellum/(?:android|canvas|design|events|platform|render|simd|state|view)/|__has_include(?:_next)?\s*\(\s*[<\"][^>\"\n]*\bvellum/(?:android|canvas|design|events|platform|render|simd|state|view)/|\busing\s+namespace\s+vellum\s*;[\s\S]*?(?<![\w:])(?:android|canvas|design|events|platform|render|simd|state|view)\s*::)",
+        0,
+    ),
 }
 
 

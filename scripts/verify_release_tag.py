@@ -11,12 +11,13 @@ import subprocess
 import sys
 from typing import Sequence
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import retired_release_tags as retired_record  # noqa: E402
+
 
 FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
-RETIRED_RELEASE_TAGS = (
-    Path(__file__).resolve().parents[1] / "provenance/retired-release-tags.json"
-)
-RETIRED_SCHEMA = "vellum.retired-release-tags.v1"
+RETIRED_RELEASE_TAGS = retired_record.PATH
+RETIRED_SCHEMA = retired_record.SCHEMA
 
 
 class ReleaseTagVerificationError(RuntimeError):
@@ -81,24 +82,9 @@ def retired_release_tags(path: Path) -> set[str]:
     the record fails closed when it is missing or malformed.
     """
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        raise ReleaseTagVerificationError(
-            f"retired release-tag record {path} is unreadable: {error}"
-        ) from error
-    if not isinstance(payload, dict) or payload.get("schema") != RETIRED_SCHEMA:
-        raise ReleaseTagVerificationError(
-            f"retired release-tag record {path} does not declare {RETIRED_SCHEMA}"
-        )
-    entries = payload.get("tags")
-    if not isinstance(entries, list) or not all(
-        isinstance(entry, dict) and isinstance(entry.get("tag"), str)
-        for entry in entries
-    ):
-        raise ReleaseTagVerificationError(
-            f"retired release-tag record {path} has malformed tag entries"
-        )
-    return {entry["tag"] for entry in entries}
+        return retired_record.load(path)
+    except retired_record.RetiredTagsError as error:
+        raise ReleaseTagVerificationError(str(error)) from error
 
 
 def require_unretired_tag(tag_name: str, retired_tags: Path) -> None:
@@ -128,13 +114,21 @@ def allowed_signer_principals(path: Path) -> list[str]:
 # the release pipeline's key; authority tags were signed by the owner's key.
 # The verifier picks the file by namespace itself, so no caller can verify a
 # release tag against the other key.
+# Release dry-run tags (dry-run/vX.Y.Z/<run>-<attempt>) are signed by the same
+# pipeline key: a dry run proves the release path end to end, and its tag and
+# draft are deleted afterwards. The name is checked exactly, so nothing else
+# shares the namespace.
 SIGNERS_BY_NAMESPACE = (
     ("authority/", "authority-signers.allowed_signers"),
+    ("dry-run/", "release-signers.allowed_signers"),
     ("v", "release-signers.allowed_signers"),
 )
+DRY_RUN_TAG = re.compile(r"dry-run/v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)/[1-9][0-9]*-[1-9][0-9]*")
 
 
 def required_signers_file(tag_name: str) -> str:
+    if tag_name.startswith("dry-run/") and not DRY_RUN_TAG.fullmatch(tag_name):
+        raise ReleaseTagVerificationError(f"tag {tag_name!r} is not a well-formed release dry-run tag")
     for prefix, name in SIGNERS_BY_NAMESPACE:
         if tag_name.startswith(prefix):
             return name

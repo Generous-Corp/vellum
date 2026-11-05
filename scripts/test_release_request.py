@@ -22,7 +22,7 @@ import version_at_land as val  # noqa: E402
 COMMIT = "a" * 40
 OTHER = "b" * 40
 CMAKE = "project(Vellum\n    VERSION 0.1.10\n    LANGUAGES CXX)\n"
-RETIRED = {"tags": [{"tag": "v0.1.7"}]}
+RETIRED = {"schema": "vellum.retired-release-tags.v1", "tags": [{"tag": "v0.1.7"}]}
 RULES = [{"type": "required_status_checks",
           "parameters": {"required_status_checks": [{"context": "macos"}, {"context": "provenance-verify"}]}},
          {"type": "pull_request", "parameters": {}}]
@@ -70,7 +70,7 @@ class Check(unittest.TestCase):
         self.refused("not newer than v0.2.0", existing_tags=["v0.1.8", "v0.2.0"])
         self.refused("not newer than v0.1.10", existing_tags=["v0.1.10"], tag_exists=False)
         self.refused("not newer than v0.1.11", existing_tags=["v0.1.11"])
-        self.refused("not newer than v0.3.0", retired_tags={"tags": [{"tag": "v0.3.0"}]})
+        self.refused("not newer than v0.3.0", retired_tags={"schema": "vellum.retired-release-tags.v1", "tags": [{"tag": "v0.3.0"}]})
 
     def test_an_existing_tag_is_never_moved(self) -> None:
         self.refused("already exists", tag_exists=True)
@@ -828,7 +828,8 @@ class TagTargetSelection(unittest.TestCase):
         self.history.git("remote", "add", "origin", str(remote))
         script = self.history.root / "scripts/release_request.py"
         script.parent.mkdir(parents=True, exist_ok=True)
-        for name in ("release_request.py", "verify_immutable_release_preflight.py", "version_at_land.py"):
+        for name in ("release_request.py", "retired_release_tags.py", "verify_immutable_release_preflight.py",
+                     "version_at_land.py"):
             shutil.copy2(rr.ROOT / "scripts" / name, script.parent / name)
         self.history.git("push", "-q", "origin", "refs/tags/v0.1.9")
 
@@ -862,7 +863,8 @@ class CheckCli(unittest.TestCase):
         history.git("remote", "add", "origin", str(remote))
         history.git("push", "-q", "origin", "refs/tags/v0.1.9")
         scripts = history.root / "scripts"
-        for name in ("release_request.py", "verify_immutable_release_preflight.py", "version_at_land.py"):
+        for name in ("release_request.py", "retired_release_tags.py", "verify_immutable_release_preflight.py",
+                     "version_at_land.py"):
             shutil.copy2(rr.ROOT / "scripts" / name, scripts / name)
         history.git("checkout", "-q", "--detach", commit)
         missing = str(history.root / "not-read-yet.json")

@@ -405,8 +405,14 @@ class Tests(unittest.TestCase):
         provenance = (ROOT / ".github/workflows/provenance.yml").read_text()
         self.assertIn("python3 scripts/test_select_exact_provenance_run.py", provenance)
         self.assertIn("python3 scripts/test_verify_exact_provenance_artifact.py", provenance)
+        # gpu-macos runs its release-source tests through the lane manifest.
+        self.assertIn("scripts/run_ci_lane.py --lane release-source", gpu)
+        lanes = json.loads((ROOT / "scripts/ci_lanes.json").read_text(encoding="utf-8"))
         self.assertEqual(
-            gpu.count("python3 scripts/test_select_exact_provenance_run.py"), 1
+            [e.get("script") for e in lanes["lanes"]["release-source"]].count(
+                "scripts/test_select_exact_provenance_run.py"
+            ),
+            1,
         )
         self.assertIn('-f branch="$RELEASE_TAG"', workflow)
         self.assertIn('--head-sha "$SOURCE_COMMIT"', workflow)

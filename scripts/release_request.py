@@ -52,7 +52,7 @@ SHA = re.compile(r"^[0-9a-f]{40}$")
 
 REPOSITORY = "Generous-Corp/vellum"
 CMAKELISTS = "CMakeLists.txt"
-RETIRED_TAGS = "provenance/retired-release-tags.json"
+RETIRED_TAGS = val.retired_record.RELATIVE_PATH
 OBSERVATORY = "provenance/pulp-observatory"
 CURSOR = f"{OBSERVATORY}/cursor.json"
 # What an observatory evidence commit may change, exactly as the tag's
@@ -96,10 +96,10 @@ def project_version(cmakelists: str) -> str:
 
 
 def retired(retired_tags: Any) -> set[str]:
-    rows = retired_tags.get("tags") if isinstance(retired_tags, dict) else None
-    if not isinstance(rows, list):
-        raise ReleaseRequestError("the retired-tags file must hold a `tags` list")
-    return {row["tag"] for row in rows if isinstance(row, dict) and isinstance(row.get("tag"), str)}
+    try:
+        return val.retired_record.tag_names(retired_tags)
+    except val.retired_record.RetiredTagsError as error:
+        raise ReleaseRequestError(str(error)) from error
 
 
 def required_checks(branch_rules: Any, protection: Any) -> list[tuple[str, int | None]]:
@@ -577,6 +577,26 @@ def attestation(root: Path, commit: str, attested_at: str, tag: str) -> dict[str
     return data
 
 
+DRY_RUN_SCHEMA = "vellum.release-dry-run-attestation.v1"
+DRY_RUN_TAG = re.compile(r"dry-run/(v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))/[1-9][0-9]*-[1-9][0-9]*")
+
+
+def dry_run_attestation(inner: dict[str, Any], dry_run_tag: str, identity: str) -> dict[str, Any]:
+    """The signed message of a release dry-run tag: the rehearsed release's attestation, wrapped.
+
+    The wrapper has its own schema and names the dry-run tag, so nothing that
+    reads a signed tag message can take a dry run for the release it
+    rehearses: the release-readiness verifier refuses the wrapper as a
+    promotion attestation, and provenance.yml unwraps it only on the dry-run
+    tag it names.
+    """
+    match = DRY_RUN_TAG.fullmatch(dry_run_tag)
+    if match is None or match.group(1) != identity:
+        raise ReleaseRequestError(f"{dry_run_tag!r} is not a release dry-run tag for {identity}")
+    return {"schema": DRY_RUN_SCHEMA, "dry_run": True, "dry_run_tag": dry_run_tag, "release_identity": identity,
+            "attestation": inner}
+
+
 def git_exists(root: Path, commit: str, path: str) -> bool:
     return subprocess.run(["git", "-C", str(root), "cat-file", "-e", f"{commit}:{path}"],
                           capture_output=True).returncode == 0
@@ -615,6 +635,7 @@ def main(argv: list[str]) -> int:
     attest.add_argument("--commit", required=True)
     attest.add_argument("--attested-at", required=True)
     attest.add_argument("--tag", required=True)
+    attest.add_argument("--dry-run-tag", help="wrap the attestation of --tag for this release dry-run tag")
     freeze = sub.add_parser("freeze")
     freeze.add_argument("--tag", required=True)
     args = parser.parse_args(argv)
@@ -623,7 +644,10 @@ def main(argv: list[str]) -> int:
             print(json.dumps(freeze_ruleset(args.tag), indent=2, sort_keys=True))
             return 0
         if args.command == "attestation":
-            print(json.dumps(attestation(ROOT, args.commit, args.attested_at, args.tag), indent=2, sort_keys=True))
+            data = attestation(ROOT, args.commit, args.attested_at, args.tag)
+            if args.dry_run_tag is not None:
+                data = dry_run_attestation(data, args.dry_run_tag, args.tag)
+            print(json.dumps(data, indent=2, sort_keys=True))
             return 0
         if args.command == "select":
             if not SHA.fullmatch(args.commit):

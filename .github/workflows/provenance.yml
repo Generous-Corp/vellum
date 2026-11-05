@@ -9,7 +9,7 @@ on:
     branches: [main]
   push:
     branches: [main]
-    tags: ['v[0-9]*', 'authority/**']
+    tags: ['v[0-9]*', 'authority/**', 'dry-run/**']
 
 permissions:
   actions: read
@@ -313,7 +313,8 @@ jobs:
                   "pulp_acceptance_merge_commit", ""
               )
           ref = os.environ["GITHUB_REF"]
-          if re.fullmatch(r"refs/tags/v[0-9].*", ref):
+          # A release dry-run tag carries the same signed promotion attestation.
+          if re.fullmatch(r"refs/tags/(?:v[0-9]|dry-run/v[0-9]).*", ref):
               raw = subprocess.run(
                   ["git", "cat-file", "tag", ref], check=True,
                   stdout=subprocess.PIPE,
@@ -333,6 +334,22 @@ jobs:
               if not found:
                   raise SystemExit("release tag lacks an SSH-signed JSON message")
               data = json.loads(payload.strip(), object_pairs_hook=strict_object)
+              # A dry-run tag's message wraps the rehearsed release's
+              # attestation; it is unwrapped only on the dry-run tag it names,
+              # and a release tag never accepts a wrapper.
+              dry_run = re.fullmatch(
+                  r"refs/tags/(dry-run/(v[0-9]+\.[0-9]+\.[0-9]+)/[1-9][0-9]*-[1-9][0-9]*)", ref
+              )
+              wrapped = isinstance(data, dict) and data.get("schema") == "vellum.release-dry-run-attestation.v1"
+              if dry_run:
+                  if not wrapped or set(data) != {
+                      "schema", "dry_run", "dry_run_tag", "release_identity", "attestation",
+                  } or data["dry_run"] is not True or data["dry_run_tag"] != dry_run.group(1) \
+                          or data["release_identity"] != dry_run.group(2):
+                      raise SystemExit("dry-run tag message is not this dry run's wrapped attestation")
+                  data = data["attestation"]
+              elif wrapped:
+                  raise SystemExit("a release tag carries a dry-run attestation")
               promotion = Path(os.environ["RUNNER_TEMP"]) / (
                   "authority-promotion-attestation.json"
               )
@@ -350,7 +367,7 @@ jobs:
           PY
 
       - name: Verify the signed promotion release tag
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/dry-run/')
         shell: bash
         run: |
           set -euo pipefail
@@ -441,8 +458,15 @@ jobs:
           if [[ -n "$PULP_ACCEPTANCE_SHA" ]]; then
             repository_evidence+=(--pulp-root .exact-boundary-pulp)
           fi
-          if [[ "$GITHUB_REF" == refs/tags/v[0-9]* ]]; then
+          if [[ "$GITHUB_REF" == refs/tags/v[0-9]* || "$GITHUB_REF" == refs/tags/dry-run/v[0-9]* ]]; then
             release_readiness+=(--release-readiness)
+            # A dry run is judged as the release it rehearses: v<version>.
+            if [[ "$GITHUB_REF_NAME" =~ ^dry-run/(v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))/[1-9][0-9]*-[1-9][0-9]*$ ]]; then
+              release_readiness+=(--release-tag "${BASH_REMATCH[1]}")
+            elif [[ "$GITHUB_REF" == refs/tags/dry-run/* ]]; then
+              echo "::error::$GITHUB_REF_NAME is not a well-formed release dry-run tag"
+              exit 1
+            fi
             test -n "$DELIVERY_PROMOTION_SHA"
             test -n "$PROMOTION_ATTESTATION_PATH"
             test -n "$PULP_ACCEPTANCE_SHA"

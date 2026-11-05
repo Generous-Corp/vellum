@@ -7,6 +7,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -230,6 +231,14 @@ class StrengthAwareFloorTest(unittest.TestCase):
         self.assertEqual(self.findings("vtable for pulp::audio::Engine", "typeinfo for pulp::canvas::Path"),
                          ["provider: vtable for pulp::audio::Engine"])
 
+    def test_renamed_copies_meet_the_archive_floor(self) -> None:
+        # The archive is spelled pulp; a renamed package's strong copy and its
+        # owned-class RTTI are the same code and must fail the same way.
+        self.assertEqual(
+            self.findings("vellum::audio::Engine::start()", "vtable for vellum::audio::Engine",
+                          "vellum::view::View::on_attached()", "typeinfo for vellum::canvas::Path"),
+            ["provider: vellum::audio::Engine::start()", "provider: vtable for vellum::audio::Engine"])
+
 
 class NameDebtTest(unittest.TestCase):
     """Audio-named view-core symbols pass only under a declared Phase-6 debt."""
@@ -325,6 +334,25 @@ class FloorAgreementTest(unittest.TestCase):
         owned = [name for name in self.floor if vi.VIEW_AUDIO_OWNED.search(name)]
         flagged, _ = vi.symbol_findings({"image": owned}, view_unit_packaged=False)
         self.assertEqual(len(flagged), len(owned))
+
+    def test_a_renamed_floor_symbol_is_still_caught(self) -> None:
+        # The archive spells pulp; the package may spell either root. Every
+        # owned floor symbol respelled to each root must still be a floor hit.
+        floor = {name for name in self.floor if vi.ARCHIVE_VIEW_AUDIO_OWNED.search(name)}
+        self.assertGreater(len(floor), 300)
+        for root in vi.MIRROR_ROOTS["namespace"]:
+            respelled = [re.sub(r"\bpulp::", f"{root}::", name) for name in sorted(floor)]
+            with self.subTest(root=root):
+                flagged, _ = vi.symbol_findings({"image": respelled}, view_unit_packaged=True, floor=floor)
+                self.assertEqual(len(flagged), len(respelled))
+                stand_in, _ = vi.symbol_findings({"image": respelled}, view_unit_packaged=False)
+                self.assertEqual(len(stand_in), len(respelled))
+        # The planted renamed Meter, the case an intersection by spelling misses.
+        planted = "vellum::view::Meter::clear_level_fill()"
+        self.assertIn("pulp::view::Meter::clear_level_fill()", floor)
+        self.assertNotIn(planted, floor)
+        flagged, _ = vi.symbol_findings({"image": [planted]}, view_unit_packaged=True, floor=floor)
+        self.assertEqual(flagged, [f"image: {planted}"])
 
     def test_floor_rule_ignores_shared_inline_definitions(self) -> None:
         shared = [name for name in self.floor if not vi.VIEW_AUDIO_OWNED.search(name)]
@@ -563,6 +591,117 @@ class VerifyTest(unittest.TestCase):
         self.symbols[self.image] = ["_main"]
         with self.assertRaises(vi.EvidenceError):
             self.run_verify()
+
+
+def spelled(names: tuple[str, ...]):
+    """The checker after the one-line rename edit: MIRROR_ROOTS set to `names`."""
+    source = (HERE / "verify_mirror_inertness.py").read_text(encoding="utf-8")
+    line = 'MIRROR_ROOTS = {"namespace": ("pulp", "vellum"), "include": ("pulp", "vellum")}\n'
+    assert source.count(line) == 1, "MIRROR_ROOTS is no longer the one-line literal this test edits"
+    roots = repr(tuple(names))
+    module = type(sys)("verify_mirror_inertness_spelled")
+    module.__file__ = str(HERE / "verify_mirror_inertness.py")
+    code = source.replace(line, f'MIRROR_ROOTS = {{"namespace": {roots}, "include": {roots}}}\n')
+    exec(compile(code, module.__file__, "exec"), module.__dict__)
+    return module
+
+
+# Text each root-spelled rule must match, with @namespace@ and @include@
+# standing for a root spelling. Keyed by module pattern name or debt id.
+ROOT_CONTROLS = {
+    "AUDIO_HEADER": ["sdk/mirror/include/@include@/view/audio_widgets.hpp", "include/@include@/view/meter.hpp"],
+    "VIEW_HEADER": ["sdk/mirror/include/@include@/view/view.hpp"],
+    "AUDIO_SYMBOL": ["@namespace@::view::Meter::paint(Canvas&)"],
+    "FORWARD_DECLARED": ["@namespace@::view::WaveformView::~WaveformView()"],
+    "VIEW_SYMBOL": ["@namespace@::view::View::layout()"],
+    "VIEW_AUDIO_OWNED": ["@namespace@::signal::Biquad::process(float)"],
+    "_ROOT_QUALIFIER": ["@namespace@::canvas::Canvas"],
+    "PACKAGE_INCLUDE": ["/opt/sdk/mirror/include/@include@/canvas/canvas.hpp"],
+    "PACKAGE_SYMBOL": ["@namespace@::canvas::Canvas::save()"],
+    "view-core-level-display": ["typeinfo for @namespace@::view::LevelDisplay"],
+    "view-core-waveform-recorder": ["@namespace@::view::WaveformRecorder::start()"],
+    "view-core-paint-waveform": ["@namespace@::view::painters::paint_waveform(Canvas&)"],
+    "design-import-level-display-binding": ["@namespace@::view::bind_imported_level_display(int)"],
+    "design-import-deprecated-bind-virtuals": ["@namespace@::view::NativeImportBindingContext::bind_meter(int)"],
+    "view-core-plugin-view-host-declarations": ["@namespace@::view::PluginViewHost::create()"],
+}
+SPELLINGS = (("pulp",), ("vellum",), ("pulp", "vellum"))
+
+
+def instantiate(template: str, name: str) -> str:
+    return template.replace("@namespace@", name).replace("@include@", name)
+
+
+def root_rules(module) -> dict[str, str]:
+    """Every rule the checker builds from MIRROR_ROOTS, as pattern text."""
+    rules = {name: value.pattern for name, value in vars(module).items()
+             if isinstance(value, re.Pattern) and name.isupper() and not name.startswith("ARCHIVE_")}
+    for debts in (module.NAME_DEBTS, module.REFERENCE_DEBTS):
+        rules.update({debt: entry["pattern"] for debt, entry in debts.items()})
+    return rules
+
+
+class MirrorRootTest(unittest.TestCase):
+    """The checker's rules follow MIRROR_ROOTS, so a renamed package is still checked."""
+
+    def test_roots_are_the_vendored_table_roots(self) -> None:
+        table = json.loads((HERE.parent / "provenance/mirror_edge_patterns.json").read_text(encoding="utf-8"))
+        self.assertEqual(vi.MIRROR_ROOTS, {kind: tuple(table["roots"][kind]) for kind in ("namespace", "include")})
+
+    def test_the_rtti_demangler_controls_every_root(self) -> None:
+        # The vendored demangler checks one control per root namespace; a root
+        # it does not control is a spelling nothing proves it can read.
+        self.assertEqual(vi.rtti_ownership.ROOT_NAMESPACES, vi.MIRROR_ROOTS["namespace"])
+        self.assertEqual([control for control, _ in vi.rtti_ownership.controls()],
+                         [f"__ZTIN{len(root)}{root}4rtti7ControlE" for root in vi.MIRROR_ROOTS["namespace"]])
+        if not (vi.shutil.which("c++filt") or vi.shutil.which("llvm-cxxfilt")):
+            self.skipTest("needs c++filt")
+        for control, expected in vi.rtti_ownership.controls():
+            with self.subTest(control=control):
+                self.assertEqual(vi.rtti_ownership.demangle({control}), {control: expected})
+
+    def test_every_root_spelled_rule_has_controls(self) -> None:
+        self.assertEqual(set(root_rules(vi)), set(ROOT_CONTROLS))
+
+    def test_every_control_matches_its_rule_under_every_spelling(self) -> None:
+        for names in SPELLINGS:
+            module = spelled(names)
+            for rule, pattern in root_rules(module).items():
+                templates = ROOT_CONTROLS.get(rule, [])
+                with self.subTest(spelling=names, rule=rule):
+                    self.assertTrue(templates, f"{rule} has no control, so nothing proves it can match")
+                for template in templates:
+                    for name in names:
+                        text = instantiate(template, name)
+                        with self.subTest(spelling=names, rule=rule, control=text):
+                            self.assertTrue(re.search(pattern, text))
+
+    def test_a_respelled_checker_spells_no_other_root(self) -> None:
+        module = spelled(("vellum",))
+        for rule, pattern in root_rules(module).items():
+            self.assertNotIn("pulp", pattern.lower(), rule)
+        self.assertEqual(module.GUARDS, ("VELLUM_VIEW_HAS_AUDIO_WIDGETS",))
+        self.assertEqual(set(module.DEBTS.values()), {"vellum/view/widgets.hpp", "vellum/view/design_import.hpp"})
+
+    def test_a_renamed_guard_and_debt_header_are_still_found(self) -> None:
+        for names in SPELLINGS:
+            module = spelled(names)
+            for name in names:
+                guard = f"{name.upper()}_VIEW_HAS_AUDIO_WIDGETS"
+                with self.subTest(spelling=names, guard=guard):
+                    self.assertTrue(module.compile_command_findings(
+                        [{"file": "a.cpp", "command": f"c++ -D{guard}=1 -c a.cpp"}]))
+                    self.assertTrue(module.package_definition_findings(
+                        [("mirror/include/x/config.hpp", f"#define {guard} 1\n")]))
+                with tempfile.TemporaryDirectory() as temporary, self.subTest(spelling=names, root=name):
+                    prefix = Path(temporary)
+                    header = prefix / "mirror/include" / name / "view/widgets.hpp"
+                    header.parent.mkdir(parents=True)
+                    header.write_text("#pragma once\n", encoding="utf-8")
+                    shipped = module.shipped_debt_headers(prefix)
+                    self.assertEqual(shipped["vellum-header-audio-widgets-include"], [header])
+                    probe = prefix / "probe.cpp"
+                    self.assertEqual(module.write_debt_probe(prefix, probe), [f"{name}/view/widgets.hpp"])
 
 
 if __name__ == "__main__":
