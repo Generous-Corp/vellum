@@ -49,7 +49,7 @@ Its authorship and exact blobs remain auditable in Git history and immutable
 
 The following is the exact published, immutable `v0.1.6` tagged-release flow
 from `Generous-Corp/vellum`. `v0.1.6` is the current published release; the
-source tree on `main` identifies as `0.1.10`, the next release, and is
+source tree on `main` identifies as `0.1.11`, the next release, and is
 unreleased. The name `v0.1.7` is retired and is never reused: it was published
 only on a deleted incubation repository (see
 [`provenance/retired-release-tags.json`](provenance/retired-release-tags.json)).
@@ -269,7 +269,7 @@ python3 scripts/build_sdk_artifact.py \
   --node-provenance /path/to/node-provenance.json \
   --output-dir dist --json
 ./scripts/install.sh \
-  --archive dist/vellum-sdk-0.1.10-darwin-arm64.tar.gz \
+  --archive dist/vellum-sdk-0.1.11-darwin-arm64.tar.gz \
   --checksums dist/SHA256SUMS
 
 app_dir="$(mktemp -d)/palette-board"
@@ -374,10 +374,10 @@ python3 scripts/build_sdk_artifact.py \
   --node-provenance /path/to/node-provenance.json \
   --output-dir dist --json
 python3 scripts/verify_sdk_artifact.py \
-  --archive dist/vellum-sdk-0.1.10-darwin-arm64.tar.gz \
+  --archive dist/vellum-sdk-0.1.11-darwin-arm64.tar.gz \
   --checksums dist/SHA256SUMS --json
 ./scripts/install.sh \
-  --archive dist/vellum-sdk-0.1.10-darwin-arm64.tar.gz \
+  --archive dist/vellum-sdk-0.1.11-darwin-arm64.tar.gz \
   --checksums dist/SHA256SUMS
 ```
 
@@ -465,12 +465,12 @@ proves the imported design is embedded in the application bundle, exercises
 build/run/test/capture/package, and builds/tests a sterile CMake consumer
 without a Vellum or Pulp checkout.
 
-An exact release is consumed without a moving `latest` pointer. Once `v0.1.10`
+An exact release is consumed without a moving `latest` pointer. Once `v0.1.11`
 is published, the checkout installer installs it with:
 
 <!-- readme-exec: id=version-install-only manual=subset-of-release-quick-start -->
 ```sh
-./scripts/install.sh --version 0.1.10
+./scripts/install.sh --version 0.1.11
 ```
 
 The release `SHA256SUMS` covers the SDK archive, `install.sh`, and
