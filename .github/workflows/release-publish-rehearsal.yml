@@ -131,11 +131,21 @@ jobs:
             --output "$RUNNER_TEMP/immutable-release-preflight.json"
           # Every other asset the publish step lists gets a synthetic stand-in,
           # read from the step's own allowed=( ) list so a new asset is staged
-          # without a change here. release-tag-protection.json is written by
-          # the step's own guard.
-          allowed_block="$(awk '/^allowed=\($/ {p=1; next} p && /^\)$/ {exit} p' "$RUNNER_TEMP/publish-step.sh")"
-          test -n "$allowed_block"
-          eval "allowed=( $allowed_block )"
+          # without a change here. The step's text up to that list's closing
+          # parenthesis runs as is, so names it derives first (such as an
+          # archive name built from RELEASE_ARCHIVE) resolve as they do there;
+          # that prefix only checks the mode, writes the notes file and defines
+          # functions. release-tag-protection.json is written by the step's guard.
+          awk '{print} /^allowed=\($/ {p=1} p && /^\)$/ {exit}' "$RUNNER_TEMP/publish-step.sh" \
+            > "$RUNNER_TEMP/publish-step-assets.sh"
+          grep -qx 'allowed=(' "$RUNNER_TEMP/publish-step-assets.sh"
+          cat >> "$RUNNER_TEMP/publish-step-assets.sh" <<'EOF'
+          printf '%s\n' "${allowed[@]}"
+          EOF
+          DRY_RUN=true bash --noprofile --norc -eo pipefail "$RUNNER_TEMP/publish-step-assets.sh" \
+            > "$RUNNER_TEMP/publish-step-assets.txt"
+          mapfile -t allowed < "$RUNNER_TEMP/publish-step-assets.txt"
+          test "${#allowed[@]}" -ge 10
           for asset in "${allowed[@]}"; do
             name="${asset%%=*}" path="${asset#*=}"
             [[ "$path" == "$RUNNER_TEMP"/* ]]
