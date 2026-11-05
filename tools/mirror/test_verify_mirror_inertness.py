@@ -648,6 +648,18 @@ class MirrorRootTest(unittest.TestCase):
         table = json.loads((HERE.parent / "provenance/mirror_edge_patterns.json").read_text(encoding="utf-8"))
         self.assertEqual(vi.MIRROR_ROOTS, {kind: tuple(table["roots"][kind]) for kind in ("namespace", "include")})
 
+    def test_the_rtti_demangler_controls_every_root(self) -> None:
+        # The vendored demangler checks one control per root namespace; a root
+        # it does not control is a spelling nothing proves it can read.
+        self.assertEqual(vi.rtti_ownership.ROOT_NAMESPACES, vi.MIRROR_ROOTS["namespace"])
+        self.assertEqual([control for control, _ in vi.rtti_ownership.controls()],
+                         [f"__ZTIN{len(root)}{root}4rtti7ControlE" for root in vi.MIRROR_ROOTS["namespace"]])
+        if not (vi.shutil.which("c++filt") or vi.shutil.which("llvm-cxxfilt")):
+            self.skipTest("needs c++filt")
+        for control, expected in vi.rtti_ownership.controls():
+            with self.subTest(control=control):
+                self.assertEqual(vi.rtti_ownership.demangle({control}), {control: expected})
+
     def test_every_root_spelled_rule_has_controls(self) -> None:
         self.assertEqual(set(root_rules(vi)), set(ROOT_CONTROLS))
 
