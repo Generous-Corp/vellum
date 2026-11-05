@@ -113,6 +113,10 @@ FORBIDDEN_PAYLOAD_CONTENT_PATTERNS = {
     "audio-plugin-sdk": re.compile(
         rb"\b(?:AudioUnit|VST3|CLAP|LV2|Oboe)\b", re.IGNORECASE
     ),
+    "renamed-mirror-namespace": re.compile(
+        rb"(?:\bvellum\s*::\s*(?:android|canvas|design|events|platform|render|simd|state|view)\b|\bnamespace\s+vellum\s*\{[\s\S]*?\bnamespace\s+(?:android|canvas|design|events|platform|render|simd|state|view)\b|\bnamespace\s+vellum\b[\s\S]*?(?<![\w:])(?:android|canvas|design|events|platform|render|simd|state|view)\s*::|#\s*(?:include|import)\s*[<\"][^>\"\n]*\bvellum/(?:android|canvas|design|events|platform|render|simd|state|view)/|__has_include(?:_next)?\s*\(\s*[<\"][^>\"\n]*\bvellum/(?:android|canvas|design|events|platform|render|simd|state|view)/|\busing\s+namespace\s+vellum\s*;[\s\S]*?(?<![\w:])(?:android|canvas|design|events|platform|render|simd|state|view)\s*::)",
+        0,
+    ),
 }
 # Mirrored Pulp framework source (Vellum Decision 0010) keeps its Pulp paths
 # and namespace byte for byte, so inside the mirror scope the Pulp-name rules
