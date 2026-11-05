@@ -324,6 +324,7 @@ TIME_BUDGET_VIOLATIONS = frozenset({
     "pending-event-age-exceeded",
 })
 TIME_BUDGET_MODES = frozenset({"enforce", "report"})
+MIRROR_RECEIPT_INDEX = Path("provenance/mirror/receipts/index.json")
 
 
 def coverage_gaps(
@@ -779,10 +780,15 @@ def imported_mirror_history(
         if not cursorless:
             return set()
         imported, errors = imported_mirror_commits(root, start, target, pulp_repo)
-        if errors and any(mirror_only_tree(root, commit)[0] for commit in cursorless):
-            # A mirror-only commit can enter only as an approved import, and
-            # nothing was approved: refuse rather than walk it as ordinary
-            # history.
+        if errors and (
+            lands_mirror_receipts(root, target)
+            or any(mirror_only_tree(root, commit)[0] for commit in cursorless)
+        ):
+            # A commit without the cursor can enter only as part of an approved
+            # import, and nothing was approved: refuse rather than walk it as
+            # ordinary history, whether or not its tree looks like a mirror.
+            # A repository with no landed receipts has no import to approve,
+            # so the same errors are not a contradiction there.
             raise ObservatoryError(
                 f"{start}..{target} has commits without the observatory cursor "
                 f"and no approved imported mirror history; mirror-export "
@@ -798,6 +804,15 @@ def imported_mirror_history(
             f"that is not an approved imported mirror history{detail}"
         )
     return imported
+
+
+def lands_mirror_receipts(root: Path, commit: str) -> bool:
+    """Whether `commit`'s tree lists at least one landed mirror-export receipt."""
+    try:
+        index = json.loads(git(root, "show", f"{commit}:{MIRROR_RECEIPT_INDEX.as_posix()}"))
+    except (ObservatoryError, ValueError):
+        return False
+    return isinstance(index, dict) and bool(index.get("receipts"))
 
 
 def has_cursor(root: Path, commit: str) -> bool:
