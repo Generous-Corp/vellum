@@ -200,7 +200,11 @@ class PublishStep(unittest.TestCase):
                  "trusted/install_core.py": b"print(1)\n", "trusted/SHA256SUMS": b"sums\n",
                  "trusted/trusted-sdk-verification.json": b"{}\n",
                  "trusted/trusted-sdk-installed-validation.json": b"{}\n", "trusted/web-payload.json": b"{}\n",
-                 "release-trust.json": b"{}\n", "immutable-release-preflight.json": b"{}\n"}
+                 "release-trust.json": b"{}\n", "immutable-release-preflight.json": b"{}\n",
+                 # The gpu-runtime archive ships beside the SDK (sdk-release.yml).
+                 "gpu/vellum-gpu-runtime-0.1.10-darwin-arm64.tar.gz": b"gpu-runtime",
+                 "trusted/vellum-gpu-runtime.sha256": b"sums\n",
+                 "trusted/trusted-gpu-runtime-verification.json": b"{}\n"}
         for relative, data in files.items():
             (temp / relative).write_bytes(data)
         env = github.env(RUNNER_TEMP=str(temp), RELEASE_TAG=tag, RELEASE_ARCHIVE=archive,
@@ -225,7 +229,9 @@ class PublishStep(unittest.TestCase):
         self.assertEqual(uploaded, sorted([
             "vellum-sdk-0.1.10-darwin-arm64.tar.gz", "install.sh", "install_core.py", "SHA256SUMS",
             "sdk-verification.json", "sdk-installed-validation.json", "web-payload.json", "release-trust.json",
-            "immutable-release-preflight.json", "release-tag-protection.json", "release-assets-verification.json"]))
+            "immutable-release-preflight.json", "release-tag-protection.json", "release-assets-verification.json",
+            "vellum-gpu-runtime-0.1.10-darwin-arm64.tar.gz", "vellum-gpu-runtime.sha256",
+            "gpu-runtime-verification.json"]))
         self.assertEqual(github.current()["published"], [])
         self.assertFalse(any(call[:2] == ["release", "verify"] for call in calls))
         self.assertFalse(any("draft=false" in call for call in calls))
@@ -248,7 +254,7 @@ class PublishStep(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stderr[-1500:])
         self.assertIn("did not verify the newest frozen tag", done.stdout + done.stderr)
         self.assertEqual(github.current()["published"], [])
-        self.assertEqual(len(github.current()["releases"][0]["assets"]), 11)
+        self.assertEqual(len(github.current()["releases"][0]["assets"]), 14)
 
     def test_an_unset_or_unexpected_flag_never_publishes(self) -> None:
         for value in (None, "", "yes", "TRUE"):

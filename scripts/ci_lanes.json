@@ -120,6 +120,10 @@
         "isolated": true
       },
       {
+        "script": "scripts/test_verify_gpu_runtime_release.py",
+        "isolated": true
+      },
+      {
         "script": "scripts/test_select_exact_provenance_run.py"
       },
       {
@@ -230,6 +234,10 @@
       },
       {
         "script": "scripts/test_verify_gpu_runtime_artifact.py",
+        "isolated": true
+      },
+      {
+        "script": "scripts/test_verify_gpu_runtime_release.py",
         "isolated": true
       },
       {

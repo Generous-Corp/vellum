@@ -18,6 +18,15 @@ refused. Never hard-code a version in a workflow.
    the tag push runs `gpu-macos.yml` and then `sdk-release.yml`. See
    `docs/provenance/release-signing.md`.
 
+The release publishes `vellum-gpu-runtime-<version>-darwin-arm64.tar.gz`
+beside the SDK archive, with `vellum-gpu-runtime.sha256` and
+`gpu-runtime-verification.json`. `sdk-release.yml` does not take the GPU run's
+word for it: `scripts/verify_gpu_runtime_release.py validate` uses main's
+verifiers against a checkout of the tagged commit to check every file, rebuild
+and run the audio-only consumer with a GPU adapter, and check the device API
+closure. `finalize` then ties the bytes it publishes to that record. Like the
+SDK archive, it is covered by the immutable release's attestation.
+
 Only the bot's pull request can release: `release-tag.yml` re-derives the bump
 from main's history and tags nothing when the landed version differs from it in
 any way (a hand-set number, an extra hunk, a skipped version). To release a

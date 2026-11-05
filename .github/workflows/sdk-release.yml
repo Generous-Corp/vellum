@@ -273,6 +273,26 @@ jobs:
               raise SystemExit("trusted installed SDK has no mirror inertness proof")
           PY
 
+      - name: Hold the gpu-runtime archive to the release source
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          # The gpu-runtime archive ships beside the SDK under the same version.
+          # main's verifiers hold it to a detached checkout of the release
+          # source: the renderer that source locks, every file and regenerated
+          # package file, the audio-only consumer with a GPU adapter, and the
+          # device API closure. The record is the one the release publishes.
+          gpu_archive="${RELEASE_ARCHIVE/vellum-sdk-/vellum-gpu-runtime-}"
+          version="${gpu_archive#vellum-gpu-runtime-}"
+          version="${version%-darwin-arm64.tar.gz}"
+          source_root="$RUNNER_TEMP/release-source"
+          git worktree add --detach "$source_root" "$SOURCE_COMMIT"
+          python3 scripts/verify_gpu_runtime_release.py validate \
+            --gpu-dir "$RUNNER_TEMP/gpu" --source-root "$source_root" \
+            --version "$version" --source-commit "$SOURCE_COMMIT" \
+            --output "$RUNNER_TEMP/trusted-gpu-runtime-verification.json"
+          git worktree remove --force "$source_root"
+
       - name: Retain trusted SDK validation
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -285,6 +305,7 @@ jobs:
             ${{ runner.temp }}/validation-release-trust.json
             ${{ runner.temp }}/trusted-release-source.json
             ${{ runner.temp }}/pulp-view-audio-archive.json
+            ${{ runner.temp }}/trusted-gpu-runtime-verification.json
           if-no-files-found: error
           retention-days: 90
 
@@ -545,6 +566,21 @@ jobs:
             --release-tag "$RELEASE_IDENTITY" \
             --output "$RUNNER_TEMP/immutable-release-preflight.json"
 
+      - name: Bind the gpu-runtime archive to its validated record
+        run: |
+          set -euo pipefail
+          # The gpu-runtime archive is published with its own checksum file,
+          # written here from the bytes this job publishes after they are bound
+          # to the record the validation job wrote at the release source.
+          gpu_archive="${RELEASE_ARCHIVE/vellum-sdk-/vellum-gpu-runtime-}"
+          gpu_version="${gpu_archive#vellum-gpu-runtime-}"
+          gpu_version="${gpu_version%-darwin-arm64.tar.gz}"
+          python3 -I scripts/verify_gpu_runtime_release.py finalize \
+            --gpu-dir "$RUNNER_TEMP/gpu" \
+            --record "$RUNNER_TEMP/trusted/trusted-gpu-runtime-verification.json" \
+            --version "$gpu_version" --source-commit "$SOURCE_COMMIT" \
+            --output "$RUNNER_TEMP/trusted/vellum-gpu-runtime.sha256"
+
       - name: Require exact provenance readiness
         env:
           GH_TOKEN: ${{ steps.finalizer-token.outputs.token }}
@@ -721,6 +757,7 @@ jobs:
             test "$remote_sha" = "$TAG_OBJECT_SHA"
             cp "$protection" "$RUNNER_TEMP/release-tag-protection.json"
           }
+          GPU_RUNTIME_ARCHIVE="${RELEASE_ARCHIVE/vellum-sdk-/vellum-gpu-runtime-}"
           allowed=(
             "$RELEASE_ARCHIVE=$RUNNER_TEMP/gpu/$RELEASE_ARCHIVE"
             "install.sh=$RUNNER_TEMP/trusted/install.sh"
@@ -729,6 +766,9 @@ jobs:
             "sdk-verification.json=$RUNNER_TEMP/trusted/trusted-sdk-verification.json"
             "sdk-installed-validation.json=$RUNNER_TEMP/trusted/trusted-sdk-installed-validation.json"
             "web-payload.json=$RUNNER_TEMP/trusted/web-payload.json"
+            "$GPU_RUNTIME_ARCHIVE=$RUNNER_TEMP/gpu/$GPU_RUNTIME_ARCHIVE"
+            "vellum-gpu-runtime.sha256=$RUNNER_TEMP/trusted/vellum-gpu-runtime.sha256"
+            "gpu-runtime-verification.json=$RUNNER_TEMP/trusted/trusted-gpu-runtime-verification.json"
             "release-trust.json=$RUNNER_TEMP/release-trust.json"
             "immutable-release-preflight.json=$RUNNER_TEMP/immutable-release-preflight.json"
             "release-tag-protection.json=$RUNNER_TEMP/release-tag-protection.json"
@@ -832,6 +872,8 @@ jobs:
           done
           gh release verify "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY"
           gh release verify-asset "$RELEASE_TAG" "$RUNNER_TEMP/gpu/$RELEASE_ARCHIVE" \
+            --repo "$GITHUB_REPOSITORY"
+          gh release verify-asset "$RELEASE_TAG" "$RUNNER_TEMP/gpu/$GPU_RUNTIME_ARCHIVE" \
             --repo "$GITHUB_REPOSITORY"
           gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
             > "$RUNNER_TEMP/release-published.json"
