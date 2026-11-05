@@ -114,7 +114,7 @@ FORBIDDEN_PAYLOAD_CONTENT_PATTERNS = {
         rb"\b(?:AudioUnit|VST3|CLAP|LV2|Oboe)\b", re.IGNORECASE
     ),
     "renamed-mirror-namespace": re.compile(
-        rb"(?:\bvellum\s*::\s*(?:android|canvas|design|events|platform|render|simd|state|view)\b|\bnamespace\s+vellum\s*\{\s*(?:inline\s+)?namespace\s+(?:android|canvas|design|events|platform|render|simd|state|view)\b|#\s*(?:include|import)\s*[<\"][^>\"\n]*\bvellum/(?:android|canvas|design|events|platform|render|simd|state|view)/|__has_include(?:_next)?\s*\(\s*[<\"][^>\"\n]*\bvellum/(?:android|canvas|design|events|platform|render|simd|state|view)/|\busing\s+namespace\s+vellum\s*;[\s\S]*?(?<![\w:])(?:android|canvas|design|events|platform|render|simd|state|view)\s*::)",
+        rb"(?:\bvellum\s*::\s*(?:android|canvas|design|events|platform|render|simd|state|view)\b|\bnamespace\s+vellum\s*\{[\s\S]*?\bnamespace\s+(?:android|canvas|design|events|platform|render|simd|state|view)\b|\bnamespace\s+vellum\b[\s\S]*?(?<![\w:])(?:android|canvas|design|events|platform|render|simd|state|view)\s*::|#\s*(?:include|import)\s*[<\"][^>\"\n]*\bvellum/(?:android|canvas|design|events|platform|render|simd|state|view)/|__has_include(?:_next)?\s*\(\s*[<\"][^>\"\n]*\bvellum/(?:android|canvas|design|events|platform|render|simd|state|view)/|\busing\s+namespace\s+vellum\s*;[\s\S]*?(?<![\w:])(?:android|canvas|design|events|platform|render|simd|state|view)\s*::)",
         0,
     ),
 }

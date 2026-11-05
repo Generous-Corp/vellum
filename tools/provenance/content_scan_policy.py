@@ -113,11 +113,20 @@ FORBIDDEN_NATIVE_CONTENT_PATTERNS: dict[str, tuple[str, int]] = {
     ),
     # The renamed mirror's own namespaces and headers. A mirrored file copied
     # into a native root after the pulp:: -> vellum:: rename no longer matches
-    # the rules above; it matches this one, in any of the spellings a copy can
-    # take: `vellum :: view::`, nested `namespace vellum { namespace view {`,
-    # `#include`/`#import` with an angle or quoted (also relative) path
-    # containing `vellum/<unit>/`, `__has_include`, and `using namespace
-    # vellum;` followed by `<unit>::`.
+    # the rules above; this one matches the spellings such a copy keeps:
+    # `vellum :: view::`; `namespace vellum {` followed anywhere later by
+    # `namespace view` (content between the two allowed); an unqualified
+    # `view::` anywhere after a file opens `namespace vellum` (which also
+    # covers `using namespace vellum;`); `#include`/`#import` with an angle or
+    # quoted (also relative) path containing `vellum/<unit>/`; and
+    # `__has_include`.
+    #
+    # It is a spelling check, not a similarity check. A copy laundered with one
+    # rename of the unit itself (`canvas` -> `graphics`) passes it, and the
+    # whole-file normalized quarantine in verify_extraction.py misses a copy
+    # with one identifier changed, a line appended or half the file taken. A
+    # winnowing check over normalized token k-grams against the mirror is the
+    # recorded follow-up for partial and laundered copies (M2 8b plan, §3.7).
     #
     # The units are the mirror's top-level `pulp::<unit>` namespaces and include
     # units, less those native Vellum owns; test_verify_extraction.py holds
@@ -130,7 +139,7 @@ FORBIDDEN_NATIVE_CONTENT_PATTERNS: dict[str, tuple[str, int]] = {
     # defines a name the mirror defines. Anything else is the accepted blind
     # spot (DECISIONS 2026-11-05, both gates).
     "renamed-mirror-namespace": (
-        r"(?:\bvellum\s*::\s*(?:android|canvas|design|events|platform|render|simd|state|view)\b|\bnamespace\s+vellum\s*\{\s*(?:inline\s+)?namespace\s+(?:android|canvas|design|events|platform|render|simd|state|view)\b|#\s*(?:include|import)\s*[<\"][^>\"\n]*\bvellum/(?:android|canvas|design|events|platform|render|simd|state|view)/|__has_include(?:_next)?\s*\(\s*[<\"][^>\"\n]*\bvellum/(?:android|canvas|design|events|platform|render|simd|state|view)/|\busing\s+namespace\s+vellum\s*;[\s\S]*?(?<![\w:])(?:android|canvas|design|events|platform|render|simd|state|view)\s*::)",
+        r"(?:\bvellum\s*::\s*(?:android|canvas|design|events|platform|render|simd|state|view)\b|\bnamespace\s+vellum\s*\{[\s\S]*?\bnamespace\s+(?:android|canvas|design|events|platform|render|simd|state|view)\b|\bnamespace\s+vellum\b[\s\S]*?(?<![\w:])(?:android|canvas|design|events|platform|render|simd|state|view)\s*::|#\s*(?:include|import)\s*[<\"][^>\"\n]*\bvellum/(?:android|canvas|design|events|platform|render|simd|state|view)/|__has_include(?:_next)?\s*\(\s*[<\"][^>\"\n]*\bvellum/(?:android|canvas|design|events|platform|render|simd|state|view)/|\busing\s+namespace\s+vellum\s*;[\s\S]*?(?<![\w:])(?:android|canvas|design|events|platform|render|simd|state|view)\s*::)",
         0,
     ),
 }

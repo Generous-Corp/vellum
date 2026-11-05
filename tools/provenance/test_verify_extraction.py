@@ -300,6 +300,9 @@ class VerifyExtractionTests(unittest.TestCase):
             "graphics/relative.cpp": b'#include "../include/vellum/view/view.hpp"\n',
             "graphics/probed.cpp": b"#if __has_include(<vellum/canvas/canvas.hpp>)\n#endif\n",
             "graphics/using.cpp": b"using namespace vellum;\nint f() { return view::g(); }\n",
+            "graphics/nested_comment.cpp": b"namespace vellum { /* ui */ namespace view {\nint x;\n}}\n",
+            "graphics/nested_between.cpp": b"namespace vellum {\nclass Fwd;\nnamespace view {\nint x;\n}\n}\n",
+            "graphics/unqualified.cpp": b"namespace vellum {\nint f() { return canvas::g(); }\n}\n",
             "graphics/jni.cpp": b"namespace vellum::android { int x; }\n",
             "graphics/embed_js.py": b'out.write("namespace vellum::view::preludes {\\n\\n")\n',
             "tools/scratch/copied.cpp": b"namespace vellum::state { int x; }\n",
@@ -308,6 +311,8 @@ class VerifyExtractionTests(unittest.TestCase):
         legitimate = {
             "graphics/own.cpp": b"#include <vellum/runtime/kernel.hpp>\nvellum::runtime::Kernel k;\n"
                                 b"vellum::graphics::X g;\nusing namespace vellum;\nint y = graphics::z();\n",
+            "graphics/near_miss.cpp": b"namespace vellum::graphics {\nauto r = std::ranges::views::all;\n"
+                                      b"int canvas_size = 0; int view_count = state_of(1);\n}\n",
             "tools/mirror/consumer/main.cpp": b"#include <vellum/view/view.hpp>\n",
         }
         with tempfile.TemporaryDirectory() as temporary:
