@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import sys
@@ -253,6 +254,31 @@ class Policy(unittest.TestCase):
                           "which is not a policy file", policy.problems(self.tmp))
         finally:
             policy.POLICY_FILES = original
+
+    def lanes(self, scripts: list[str]) -> None:
+        (self.tmp / "scripts").mkdir(exist_ok=True)
+        entries = [{"script": s} for s in scripts]
+        (self.tmp / policy.LANE_MANIFEST).write_text(json.dumps({"lanes": {policy.POLICY_LANE: entries}}))
+
+    def test_the_policy_lane_must_keep_the_lane_coverage_test_and_this_check(self) -> None:
+        self.lanes(list(policy.REQUIRED_LANE_SCRIPTS))
+        self.assertEqual(policy.problems(self.tmp), [])  # control: a complete lane passes
+        for dropped in policy.REQUIRED_LANE_SCRIPTS:
+            with self.subTest(dropped=dropped):
+                self.lanes([s for s in policy.REQUIRED_LANE_SCRIPTS if s != dropped])
+                self.assertIn(f"{policy.LANE_MANIFEST} lane `{policy.POLICY_LANE}` does not run {dropped}",
+                              policy.problems(self.tmp))
+
+    def test_an_unreadable_policy_lane_fails(self) -> None:
+        (self.tmp / "scripts").mkdir()
+        (self.tmp / policy.LANE_MANIFEST).write_text('{"lanes": {}}')
+        self.assertTrue(any("no readable" in p for p in policy.problems(self.tmp)))
+
+    def test_the_lane_manifest_is_not_a_policy_file(self) -> None:
+        self.assertNotIn("/scripts/ci_lanes.json", policy.POLICY_FILES)
+        self.assertNotIn("ci_lanes.json", (ROOT / policy.CODEOWNERS).read_text())
+        # Still named by the real manifest the check reads.
+        self.assertEqual(policy.lane_problems(ROOT), [])
 
     def test_the_signing_workflow_must_use_the_environment(self) -> None:
         self.workflow("release-tag.yml", "jobs:\n  sign:\n    runs-on: x\n")
