@@ -9,11 +9,12 @@ from pathlib import Path
 import sys
 from typing import Iterable
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import retired_release_tags as retired_record  # noqa: E402
+
 
 MISSING_EXIT = 4
-RETIRED_RELEASE_TAGS = (
-    Path(__file__).resolve().parents[1] / "provenance/retired-release-tags.json"
-)
+RETIRED_RELEASE_TAGS = retired_record.PATH
 
 
 class ReleaseSelectionError(RuntimeError):
@@ -48,17 +49,9 @@ def release_rows(payload: object) -> list[dict[str, object]]:
 
 def retired_release_tags(path: Path) -> set[str]:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        tags = {row["tag"] for row in payload["tags"]}
-    except (OSError, ValueError, KeyError, TypeError) as error:
-        raise ReleaseSelectionError(
-            f"retired release-tag record {path} is unreadable: {error}"
-        ) from error
-    if payload.get("schema") != "vellum.retired-release-tags.v1":
-        raise ReleaseSelectionError(
-            f"retired release-tag record {path} has an unexpected schema"
-        )
-    return tags
+        return retired_record.load(path)
+    except retired_record.RetiredTagsError as error:
+        raise ReleaseSelectionError(str(error)) from error
 
 
 def select_release(

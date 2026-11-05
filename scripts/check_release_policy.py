@@ -45,8 +45,9 @@ RELEASE_ENVIRONMENT = "release"
 SIGNING_WORKFLOW = "release-tag.yml"
 OWNER = "@danielraffel"
 # The signing policy, the code that enforces it, the committed record the
-# release decision trusts (the retired tags), and the workflow that holds an
-# App token to propose each version (version-at-land.yml).
+# release decision trusts (the retired tags) and its one loader, the lane
+# manifest and runner that decide which release-path tests CI runs, and the
+# workflow that holds an App token to propose each version (version-at-land.yml).
 POLICY_FILES = (
     "/.github/CODEOWNERS",
     "/.github/workflows/release-policy.yml",
@@ -56,9 +57,12 @@ POLICY_FILES = (
     "/provenance/release-signers.allowed_signers",
     "/provenance/retired-release-tags.json",
     "/scripts/check_release_policy.py",
+    "/scripts/ci_lanes.json",
     "/scripts/pretag_checks.py",
     "/scripts/release_cadence.py",
     "/scripts/release_request.py",
+    "/scripts/retired_release_tags.py",
+    "/scripts/run_ci_lane.py",
     "/scripts/verify_immutable_release_preflight.py",
     "/scripts/verify_release_tag.py",
     "/scripts/version_at_land.py",
