@@ -378,10 +378,10 @@ if [ -n "$version" ]; then
   # or were never published; see provenance/retired-release-tags.json. Refuse
   # it before any download. The list is literal because this bootstrap runs
   # standalone from a release asset, without the repository's records;
-  # cli/tests/test_installer.py fails if any retired tag in that record is
-  # missing here.
+  # cli/tests/test_installer.py fails unless this list equals that record's
+  # tags exactly.
   case "$version" in
-    0.1.7|0.1.9) printf '%s\n' "Vellum v$version is a retired release and cannot be installed; choose a published version such as 0.1.6." >&2; exit 2 ;;
+    0.1.7|0.1.8|0.1.9) printf '%s\n' "Vellum v$version is a retired release and cannot be installed; choose a published version from https://github.com/Generous-Corp/vellum/releases." >&2; exit 2 ;;
   esac
   case "$version" in *[!0-9A-Za-z._-]*) printf '%s\n' 'Release version contains unsafe characters.' >&2; exit 2 ;; esac
   if [ -z "$release_target" ]; then

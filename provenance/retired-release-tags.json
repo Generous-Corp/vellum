@@ -13,6 +13,14 @@
       "reason": "Published only on the private incubation repository, which was deleted after the public consolidation onto Generous-Corp/vellum. The tag object, release, attestation, and assets no longer exist. Re-creating the name would give a second immutable v0.1.7 with different bytes, so the name is never reused. The target commit remains in this repository's history."
     },
     {
+      "tag": "v0.1.8",
+      "status": "retired-unpublished",
+      "original_repository": "Generous-Corp/vellum",
+      "tag_object": "43f4557164540cc047592b18ae4fa64b3bcca9c3",
+      "target_commit": "b9953df49ac6568dca069d7c18d7755556d1104f",
+      "reason": "Tagged by the owner key on the merge of #92, the first org release after v0.1.7's retirement (D5), but never published: like v0.1.9 it tagged the commit that landed its release request, which can never satisfy the reconciled observatory tail check, and every input to a re-run is fixed by the tag. Its mirror also carried only 2 of the 13 promotion units, so the owner made v0.1.9 the promotion coordinate on 2026-10-27. The tag stays in place under protect-release-tags; no release is published from it, and the name is never reused."
+    },
+    {
       "tag": "v0.1.9",
       "status": "retired-unpublished",
       "original_repository": "Generous-Corp/vellum",

@@ -4,9 +4,11 @@ from __future__ import annotations
 import copy
 import json
 from pathlib import Path
+import sys
 import unittest
 
-import verify_release_tag_ruleset as verifier
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import verify_release_tag_ruleset as verifier  # noqa: E402
 
 # What GitHub returned for GET repos/Generous-Corp/vellum/rulesets/26335054
 # after release-tag POSTed the freeze for v0.1.9. GitHub drops the default
