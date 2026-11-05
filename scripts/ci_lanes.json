@@ -1,0 +1,306 @@
+{
+  "schema": "vellum.ci-lanes.v1",
+  "note": "Every tracked test_*.py outside mirror/ is either run by a lane here (scripts/run_ci_lane.py --lane <name>) or listed under elsewhere with the workflow or CMakeLists that runs it; scripts/test_ci_lanes.py holds that true.",
+  "lanes": {
+    "release-policy": [
+      {
+        "script": "scripts/test_check_release_policy.py",
+        "isolated": true
+      },
+      {
+        "script": "scripts/test_release_request.py",
+        "isolated": true
+      },
+      {
+        "script": "scripts/test_version_at_land.py",
+        "isolated": true
+      },
+      {
+        "script": "scripts/test_release_cadence.py",
+        "isolated": true
+      },
+      {
+        "script": "scripts/test_pretag_checks.py",
+        "isolated": true
+      },
+      {
+        "script": "scripts/test_sdk_release_draft_lookup.py",
+        "isolated": true
+      },
+      {
+        "script": "scripts/test_retired_release_tags.py",
+        "isolated": true
+      },
+      {
+        "script": "scripts/test_verify_release_tag_ruleset.py",
+        "isolated": true
+      },
+      {
+        "script": "scripts/test_collect_release_tag_rulesets.py",
+        "isolated": true
+      },
+      {
+        "script": "tools/provenance/test_mint_github_app_jwt.py",
+        "isolated": true
+      },
+      {
+        "script": "scripts/test_ci_lanes.py",
+        "isolated": true
+      },
+      {
+        "script": "scripts/check_release_policy.py",
+        "isolated": true,
+        "args": [
+          "check"
+        ]
+      }
+    ],
+    "release-source": [
+      {
+        "discover": "cli/tests",
+        "pattern": "test_*.py"
+      },
+      {
+        "module": "tools.agent_instructions.test_verify"
+      },
+      {
+        "script": "scripts/test_readme_exec.py"
+      },
+      {
+        "script": "scripts/readme_exec.py",
+        "args": [
+          "--lint"
+        ]
+      },
+      {
+        "script": "scripts/test_readme_lint.py"
+      },
+      {
+        "script": "scripts/readme_lint.py"
+      },
+      {
+        "script": "scripts/test_docs_sync.py"
+      },
+      {
+        "script": "scripts/docs_sync.py",
+        "args": [
+          "--check"
+        ]
+      },
+      {
+        "script": "scripts/template_guard.py"
+      },
+      {
+        "script": "scripts/test_templates_smoke.py"
+      },
+      {
+        "script": "scripts/test_sterile_acceptance_bundle.py"
+      },
+      {
+        "script": "scripts/test_compare_sdk_archives.py"
+      },
+      {
+        "discover": "tools/mirror",
+        "pattern": "test_*.py"
+      },
+      {
+        "script": "scripts/test_check_renderer_lock.py",
+        "isolated": true
+      },
+      {
+        "script": "scripts/check_renderer_lock.py",
+        "isolated": true
+      },
+      {
+        "script": "scripts/test_verify_gpu_runtime_artifact.py",
+        "isolated": true
+      },
+      {
+        "script": "scripts/test_select_exact_provenance_run.py"
+      },
+      {
+        "script": "scripts/test_verify_exact_provenance_artifact.py"
+      },
+      {
+        "script": "scripts/test_run_parity_proofs.py"
+      },
+      {
+        "script": "scripts/test_verify_budget_ratification.py"
+      },
+      {
+        "script": "scripts/verify_budget_ratification.py"
+      },
+      {
+        "script": "tools/provenance/test_verify_downstream_consumers.py"
+      },
+      {
+        "script": "tools/provenance/verify_downstream_consumers.py"
+      },
+      {
+        "script": "tools/provenance/test_verify_extraction.py"
+      },
+      {
+        "script": "tools/provenance/verify_extraction.py",
+        "args": [
+          "--defer-mirror-identity",
+          "--output",
+          "$RUNNER_TEMP/provenance-report.json"
+        ]
+      }
+    ],
+    "product-quality": [
+      {
+        "discover": "cli/tests",
+        "pattern": "test_*.py"
+      },
+      {
+        "module": "tools.agent_instructions.test_verify"
+      },
+      {
+        "script": "tools/parity/test_parity_harness.py"
+      },
+      {
+        "script": "tools/parity/test_frames_lane.py"
+      },
+      {
+        "script": "tools/parity/packaging/test_packaging_lane.py"
+      },
+      {
+        "script": "tools/parity/test_artifact_lane.py"
+      },
+      {
+        "script": "tools/parity/test_browser_lanes.py"
+      },
+      {
+        "script": "tools/parity/test_gpu_lane.py"
+      },
+      {
+        "script": "tools/parity/test_host_lane.py"
+      },
+      {
+        "script": "tools/parity/test_platform_lane.py"
+      },
+      {
+        "script": "tools/parity/test_r10_delta.py"
+      },
+      {
+        "script": "scripts/test_readme_exec.py"
+      },
+      {
+        "script": "scripts/readme_exec.py",
+        "args": [
+          "--lint"
+        ]
+      },
+      {
+        "script": "scripts/test_readme_lint.py"
+      },
+      {
+        "script": "scripts/readme_lint.py"
+      },
+      {
+        "script": "scripts/test_docs_sync.py"
+      },
+      {
+        "script": "scripts/docs_sync.py",
+        "args": [
+          "--check"
+        ]
+      },
+      {
+        "script": "scripts/test_ci_runner_policy.py"
+      },
+      {
+        "script": "scripts/test_select_reusable_gpu_proof.py"
+      },
+      {
+        "script": "scripts/test_check_renderer_lock.py",
+        "isolated": true
+      },
+      {
+        "script": "scripts/check_renderer_lock.py",
+        "isolated": true
+      },
+      {
+        "script": "scripts/test_verify_gpu_runtime_artifact.py",
+        "isolated": true
+      },
+      {
+        "script": "gpu-runtime/tools/test_check_device_api_closure.py",
+        "isolated": true
+      },
+      {
+        "script": "gpu-runtime/tools/check_device_api_closure.py",
+        "isolated": true,
+        "args": [
+          "gpu-runtime/include"
+        ]
+      },
+      {
+        "script": "cli/tests/test_templates.py"
+      },
+      {
+        "script": "authoring/adapters/illustrator/test_illustrator_to_svg.py"
+      },
+      {
+        "script": "scripts/template_guard.py"
+      },
+      {
+        "script": "scripts/test_templates_smoke.py"
+      },
+      {
+        "script": "scripts/test_sterile_acceptance_bundle.py"
+      },
+      {
+        "script": "scripts/test_verify_budget_ratification.py"
+      },
+      {
+        "script": "scripts/verify_budget_ratification.py"
+      },
+      {
+        "script": "tools/provenance/test_verify_downstream_consumers.py"
+      },
+      {
+        "script": "tools/provenance/test_pulp_main_drift_annotations.py"
+      },
+      {
+        "script": "tools/provenance/verify_downstream_consumers.py"
+      },
+      {
+        "script": "tools/provenance/verify_extraction.py",
+        "args": [
+          "--defer-mirror-identity",
+          "--output",
+          "$RUNNER_TEMP/provenance-report.json"
+        ]
+      }
+    ]
+  },
+  "elsewhere": {
+    ".agents/skills/pulp-vellum-change-routing/scripts/test_route_change.py": "workflow:provenance.yml",
+    "apps/app-host/test_phase3_scenario.py": "cmake:apps/app-host/CMakeLists.txt",
+    "apps/app-host/test_state_persistence.py": "cmake:apps/app-host/CMakeLists.txt",
+    "apps/app-host/test_text_semantics.py": "cmake:apps/app-host/CMakeLists.txt",
+    "authoring/tests/test_phase3_contracts.py": "cmake:CMakeLists.txt",
+    "graphics/tests/test_dawn_bootstrap_source.py": "cmake:CMakeLists.txt",
+    "graphics/tests/test_dawn_provider_topology.py": "cmake:CMakeLists.txt",
+    "tools/provenance/test_collect_release_evidence.py": "workflow:provenance.yml",
+    "tools/provenance/test_finalize_authority_reconciliation.py": "workflow:provenance.yml",
+    "tools/provenance/test_observatory.py": "workflow:provenance.yml",
+    "tools/provenance/test_observatory_mirror_import.py": "workflow:provenance.yml",
+    "tools/provenance/test_receiver.py": "workflow:provenance.yml",
+    "tools/provenance/test_receiver_watchdog.py": "workflow:provenance.yml",
+    "tools/provenance/test_receiver_watchdog_state.py": "workflow:pulp-observatory-watchdog.yml",
+    "tools/provenance/test_receiver_workflows.py": "workflow:provenance.yml",
+    "tools/provenance/test_verify_authority_activation.py": "workflow:provenance.yml",
+    "tools/provenance/test_verify_authority_expansion.py": "workflow:provenance.yml",
+    "tools/provenance/test_verify_current_state_docs.py": "workflow:provenance.yml",
+    "tools/provenance/test_verify_mirror_export.py": "workflow:provenance.yml",
+    "tools/provenance/test_verify_pulp_observation_scope.py": "workflow:provenance.yml",
+    "tools/provenance/test_verify_pulp_tooling_disposition.py": "workflow:provenance.yml",
+    "tools/provenance/test_verify_renderer_dependency.py": "workflow:provenance.yml",
+    "tools/provenance/test_verify_renderer_eligibility.py": "workflow:provenance.yml",
+    "web/tests/test_browser_process_cleanup.py": "cmake:web/CMakeLists.txt",
+    "web/tests/test_layout_contract.py": "cmake:web/CMakeLists.txt"
+  }
+}

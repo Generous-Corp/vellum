@@ -53,8 +53,11 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+import retired_release_tags as retired_record  # noqa: E402
+
 CMAKELISTS = "CMakeLists.txt"
-RETIRED_TAGS = "provenance/retired-release-tags.json"
+RETIRED_TAGS = retired_record.RELATIVE_PATH
 VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 # A project(...) call at the start of a line, read only after comments are
 # removed, so a commented-out project() line can never declare the version.
@@ -296,10 +299,10 @@ def landed_change(root: Path, commit: str, major: int) -> Contribution:
 
 
 def retired(retired_tags: Any) -> set[str]:
-    rows = retired_tags.get("tags") if isinstance(retired_tags, dict) else None
-    if not isinstance(rows, list):
-        raise VersionError("the retired-tags file must hold a `tags` list")
-    return {row["tag"] for row in rows if isinstance(row, dict) and isinstance(row.get("tag"), str)}
+    try:
+        return retired_record.tag_names(retired_tags)
+    except retired_record.RetiredTagsError as error:
+        raise VersionError(str(error)) from error
 
 
 def tag_version(tag: str) -> tuple[int, int, int] | None:
