@@ -636,6 +636,17 @@ jobs:
           TAG_OBJECT_SHA: ${{ steps.source.outputs.tag-object }}
         run: |
           set -euo pipefail
+          # DRY_RUN is false for a release and true for a dry run, which stops
+          # before publication. release-publish-rehearsal.yml runs this step's
+          # text as written, with publish-rehearsal on its own throwaway tag:
+          # that mode publishes and runs every post-publish check, and nothing
+          # in this workflow can set it.
+          case "$DRY_RUN" in
+            false) [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] ;;
+            true) [[ "$RELEASE_TAG" =~ ^(dry-run/v[0-9]+\.[0-9]+\.[0-9]+|publish-rehearsal)/[1-9][0-9]*-[1-9][0-9]*$ ]] ;;
+            publish-rehearsal) [[ "$RELEASE_TAG" =~ ^publish-rehearsal/[1-9][0-9]*-[1-9][0-9]*$ ]] ;;
+            *) echo "::error::DRY_RUN is not false, true or publish-rehearsal"; exit 1 ;;
+          esac
           notes="$RUNNER_TEMP/release-notes.md"
           cat > "$notes" <<'EOF'
           Private experimental Vellum SDK with converged native rendering and attributed text.
@@ -644,9 +655,14 @@ jobs:
           native and browser-Wasm proof lanes. It is not a Pulp dependency or a
           broad platform support claim.
           EOF
-          if [ "$DRY_RUN" = true ]; then
-            printf '\nRelease dry run: this draft is never published and is deleted when the run ends.\n' >> "$notes"
-          fi
+          # The notes follow the tag, not the mode, so a rehearsal's draft
+          # survives the mode change between its two passes.
+          case "$RELEASE_TAG" in
+            dry-run/*)
+              printf '\nRelease dry run: this draft is never published and is deleted when the run ends.\n' >> "$notes" ;;
+            publish-rehearsal/*)
+              printf '\nPublish rehearsal: synthetic assets, not an SDK. Deleted when the run ends.\n' >> "$notes" ;;
+          esac
           verify_release_guard() {
             local index details ids rulesets protection remote_row remote_type remote_sha
             index="$(mktemp "$RUNNER_TEMP/ruleset-index.XXXXXX.json")"
@@ -670,7 +686,7 @@ jobs:
             done < "$ids"
             python3 scripts/collect_release_tag_rulesets.py \
               --index "$index" --details-dir "$details" --output "$rulesets"
-            if [ "$DRY_RUN" = true ]; then
+            if [ "$DRY_RUN" != false ]; then
               # A dry-run tag is never frozen, so it can be deleted afterwards;
               # it is never published either (see below). The ruleset path a
               # release depends on is still exercised, report-only, against the
@@ -792,7 +808,7 @@ jobs:
             # A release dry run ends here, before the only publishing call: the
             # draft holds every asset, verified as a release would be, and
             # clean-dry-run deletes it and the tag.
-            if [ "$DRY_RUN" != false ]; then
+            if [ "$DRY_RUN" = true ]; then
               echo "release dry run: $RELEASE_TAG verified as a draft; not published" >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi

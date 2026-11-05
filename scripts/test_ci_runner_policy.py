@@ -44,6 +44,10 @@ EXPECTED_RUNNERS = {
     "review-verdict-trigger.yml": ("__hosted__", "ubuntu-24.04"),
     "release-cadence-check.yml": ("__hosted__", "ubuntu-latest"),
     "release-policy.yml": ("__hosted__", "ubuntu-latest"),
+    "release-publish-rehearsal.yml": (
+        "VELLUM_AUTHORITY_RUNS_ON_JSON",
+        '["ubuntu-latest"]',
+    ),
     "release-tag.yml": ("__hosted__", "ubuntu-latest"),
     "release-watchdog.yml": ("__hosted__", "ubuntu-latest"),
     "readme-quick-start.yml": (

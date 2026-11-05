@@ -260,10 +260,28 @@ class PublishStep(unittest.TestCase):
         # The control: with the guard removed, the same harness records the
         # publication, so its silence above means the dry run did not publish.
         text = step_script("sdk-release.yml", "Publish only through live no-bypass controls")
-        guard = text[text.index('  if [ "$DRY_RUN" != false ]; then'):text.index(
+        stop = text.index('echo "release dry run: $RELEASE_TAG verified as a draft; not published"')
+        guard = text[text.rindex("  if [", 0, stop):text.index(
             "  # GitHub exposes no revision/ETag precondition")]
+        self.assertIn('if [ "$DRY_RUN" = true ]; then', guard)
         _, github = self.run_publish("true", script=text.replace(guard, ""))
         self.assertEqual(github.current()["published"], [101])
+
+    def test_a_publish_rehearsal_publishes_its_own_draft(self) -> None:
+        # release-publish-rehearsal.yml's mode: the same step creates the
+        # draft, publishes it, and goes on to the post-publish checks, which
+        # this stand-in refuses at `gh release verify`.
+        done, github = self.run_publish("publish-rehearsal", tag="publish-rehearsal/41-1")
+        self.assertEqual(github.current()["published"], [101])
+        self.assertIn("must never reach: release verify publish-rehearsal/41-1", done.stderr)
+        patch = next(call for call in github.calls() if "draft=false" in call)
+        self.assertIn("make_latest=false", patch)
+
+    def test_a_publish_rehearsal_mode_on_a_dry_run_tag_never_publishes(self) -> None:
+        done, github = self.run_publish("publish-rehearsal")
+        self.assertNotEqual(done.returncode, 0)
+        self.assertEqual(github.current()["published"], [])
+        self.assertEqual(github.calls(), [])
 
     def test_a_published_release_on_a_dry_run_tag_is_refused(self) -> None:
         github = FakeGitHub(self, {DRY_TAG: TAG_OBJECT})

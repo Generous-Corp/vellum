@@ -267,5 +267,187 @@ class AttestationWaitTest(unittest.TestCase):
         self.assertEqual(calls, 13)  # twelve bounded polls, then the strict verify
 
 
+
+import sys
+
+sys.path.insert(0, str(ROOT / "scripts"))
+import extract_workflow_step as ews  # noqa: E402
+
+REHEARSAL = ROOT / ".github/workflows/release-publish-rehearsal.yml"
+PUBLISH_STEP = "Publish only through live no-bypass controls"
+
+LOGGING_GH = r"""#!/usr/bin/env python3
+import os, sys
+open(os.environ["FAKE_GH_LOG"], "a").write(" ".join(sys.argv[1:]) + "\n")
+sys.exit(2)
+"""
+
+
+class StepExtractionTest(unittest.TestCase):
+    def test_matches_a_yaml_parser_on_every_finalizer_step(self) -> None:
+        try:
+            import yaml
+        except ImportError:
+            self.skipTest("PyYAML is not installed; the shape checks below still run")
+        text = WORKFLOW.read_text()
+        steps = yaml.safe_load(text)["jobs"]["finalize-sdk-release"]["steps"]
+        compared = 0
+        for step in steps:
+            run = step.get("run")
+            if not isinstance(run, str) or "${{" in run:
+                continue
+            with self.subTest(step=step["name"]):
+                self.assertEqual(ews.step_script(text, "finalize-sdk-release", step["name"]), run)
+                compared += 1
+        self.assertGreaterEqual(compared, 5)
+
+    def test_publish_step_is_the_whole_publish_path(self) -> None:
+        script = ews.step_script(WORKFLOW.read_text(), "finalize-sdk-release", PUBLISH_STEP)
+        self.assertTrue(script.startswith("set -euo pipefail\n"))
+        for needle in ("gh release create", "-F draft=false", "for attempt in $(seq 1 12); do",
+                       "gh release verify-asset", "--require-published --require-immutable"):
+            self.assertIn(needle, script)
+        subprocess.run(["bash", "-n"], input=script, text=True, check=True)
+
+    def test_refuses_what_it_cannot_reproduce(self) -> None:
+        text = WORKFLOW.read_text()
+        with self.assertRaises(ews.StepError):
+            ews.step_script(text, "finalize-sdk-release", "No such step")
+        with self.assertRaises(ews.StepError):
+            ews.step_script(text, "no-such-job", PUBLISH_STEP)
+        with self.assertRaises(ews.StepError):  # its run block holds an expression
+            ews.step_script(text, "validate-sdk-artifacts", "Download the exact source-run GPU artifact")
+        twice = text.replace(f"- name: {PUBLISH_STEP}\n", f"- name: {PUBLISH_STEP}\n        run: |\n          :\n"
+                             f"      - name: {PUBLISH_STEP}\n", 1)
+        self.assertNotEqual(twice, text)
+        with self.assertRaises(ews.StepError):
+            ews.step_script(twice, "finalize-sdk-release", PUBLISH_STEP)
+
+
+class PublishModeGateTest(unittest.TestCase):
+    """The publish step refuses a mode that does not match its tag before any API call."""
+
+    def run_step(self, dry_run: str, tag: str):
+        script = ews.step_script(WORKFLOW.read_text(), "finalize-sdk-release", PUBLISH_STEP)
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            bin_dir = tmp_path / "bin"
+            bin_dir.mkdir()
+            gh = bin_dir / "gh"
+            gh.write_text(LOGGING_GH)
+            gh.chmod(gh.stat().st_mode | stat.S_IEXEC)
+            log = tmp_path / "gh.log"
+            log.write_text("")
+            env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", FAKE_GH_LOG=str(log),
+                       RUNNER_TEMP=str(tmp_path), GITHUB_REPOSITORY="o/r", GITHUB_STEP_SUMMARY=str(tmp_path / "s"),
+                       RELEASE_TAG=tag, RELEASE_NAME=NAME, RELEASE_ARCHIVE="a.tar.gz",
+                       TAG_OBJECT_SHA="0" * 40, DRY_RUN=dry_run)
+            result = subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", script],
+                                    cwd=ROOT, env=env, capture_output=True, text=True)
+            return result, log.read_text()
+
+    def test_mismatched_modes_stop_before_any_api_call(self) -> None:
+        for dry_run, tag in (("bogus", TAG), ("", TAG), ("publish-rehearsal", TAG),
+                             ("false", "publish-rehearsal/1-1"), ("false", "dry-run/v9.9.9/1-1"),
+                             ("true", TAG), ("publish-rehearsal", "dry-run/v9.9.9/1-1")):
+            with self.subTest(dry_run=dry_run, tag=tag):
+                result, log = self.run_step(dry_run, tag)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(log, "")
+
+    def test_matching_modes_reach_the_live_guard(self) -> None:
+        # Control: each accepted pairing gets past the gate to its first API read.
+        for dry_run, tag in (("false", TAG), ("true", "dry-run/v9.9.9/1-1"),
+                             ("true", "publish-rehearsal/1-1"), ("publish-rehearsal", "publish-rehearsal/1-1")):
+            with self.subTest(dry_run=dry_run, tag=tag):
+                _, log = self.run_step(dry_run, tag)
+                self.assertIn("immutable-releases", log)
+
+    def test_only_a_dry_run_stops_before_publication(self) -> None:
+        script = ews.step_script(WORKFLOW.read_text(), "finalize-sdk-release", PUBLISH_STEP)
+        before = script[:script.index("-F draft=false")]
+        stop = before.rindex("exit 0")
+        self.assertIn('if [ "$DRY_RUN" = true ]; then', before[before.rindex("if [", 0, stop) - 2:stop])
+
+    def test_the_finalizer_itself_never_selects_the_rehearsal_mode(self) -> None:
+        text = WORKFLOW.read_text()
+        self.assertIn('"DRY_RUN": "true" if dry_run else "false",', text)
+        self.assertNotIn("DRY_RUN: publish-rehearsal", text)
+        self.assertNotIn("DRY_RUN=publish-rehearsal", text)
+
+
+class PublishRehearsalWiringTest(unittest.TestCase):
+    def test_runs_the_finalizer_step_twice_then_cleans_up(self) -> None:
+        text = REHEARSAL.read_text()
+        triggers = text.split("\non:\n", 1)[1].split("\npermissions:", 1)[0]
+        self.assertEqual(triggers.strip(), "workflow_dispatch:")
+        self.assertEqual(text.count("if: github.ref == 'refs/heads/main'"), 1)
+        self.assertIn("if: always() && github.ref == 'refs/heads/main'", text)
+        self.assertIn("--workflow .github/workflows/sdk-release.yml", text)
+        self.assertIn("--job finalize-sdk-release", text)
+        self.assertIn(f'--step "{PUBLISH_STEP}"', text)
+        pass1 = text.index('DRY_RUN: "true"')
+        stale = text.index("- name: Leave a stale asset on the draft")
+        pass2 = text.index("DRY_RUN: publish-rehearsal")
+        clean = text.index("  clean-rehearsal:")
+        self.assertLess(pass1, stale)
+        self.assertLess(stale, pass2)
+        self.assertLess(pass2, clean)
+        self.assertEqual(text.count('bash --noprofile --norc -eo pipefail "$RUNNER_TEMP/publish-step.sh"'), 2)
+        self.assertEqual(text.count("RELEASE_TAG: publish-rehearsal/${{ github.run_id }}-${{ github.run_attempt }}"), 2)
+        self.assertNotIn("refs/tags/v", text)
+
+    def test_no_other_workflow_runs_on_a_rehearsal_tag(self) -> None:
+        for path in sorted((ROOT / ".github/workflows").glob("*.yml")):
+            if path == REHEARSAL:
+                continue
+            with self.subTest(workflow=path.name):
+                for line in path.read_text().splitlines():
+                    if line.strip().startswith("tags:"):
+                        self.assertNotIn("publish-rehearsal", line)
+                        self.assertNotIn("'**'", line)
+
+
+
+class GpuReleaseStepGateTest(unittest.TestCase):
+    """gpu-macos's release-tag steps keep the classifier gate and the authority exclusion."""
+
+    STEPS = ("Record private-release trust controls",
+             "Gate every release mutation on exact provenance readiness")
+
+    @staticmethod
+    def step_if(text: str, step: str) -> str:
+        lines = text.splitlines()
+        starts = [i for i, line in enumerate(lines) if line.strip() == f"- name: {step}"]
+        if len(starts) != 1:
+            raise AssertionError(f"{len(starts)} steps named {step!r}")
+        condition = lines[starts[0] + 1].strip()
+        if not condition.startswith("if: "):
+            raise AssertionError(f"{step!r} has no if: on its next line")
+        return condition
+
+    def problems(self, text: str) -> list[str]:
+        found = []
+        for step in self.STEPS:
+            condition = self.step_if(text, step)
+            for clause in ("steps.classify.outputs.unaffected != 'true'",
+                           "startsWith(github.ref, 'refs/tags/')",
+                           "!startsWith(github.ref, 'refs/tags/authority/')"):
+                if clause not in condition:
+                    found.append(f"{step}: missing {clause}")
+        return found
+
+    def test_both_conditions_hold(self) -> None:
+        text = (ROOT / ".github/workflows/gpu-macos.yml").read_text()
+        self.assertEqual(self.problems(text), [])
+        # Controls: dropping either clause is detected.
+        for clause in ("steps.classify.outputs.unaffected != 'true' && ",
+                       " && !startsWith(github.ref, 'refs/tags/authority/')"):
+            with self.subTest(dropped=clause):
+                broken = text.replace(clause, "")
+                self.assertNotEqual(broken, text)
+                self.assertNotEqual(self.problems(broken), [])
+
+
 if __name__ == "__main__":
     unittest.main()

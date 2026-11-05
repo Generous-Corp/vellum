@@ -1,0 +1,276 @@
+name: Rehearse SDK release publication
+
+# The release dry run stops before publication, so the finalizer's
+# post-publish code (the publish call, the wait for GitHub's immutable-release
+# attestation, `gh release verify` and `verify-asset`, and the published,
+# immutable asset check) runs only on a real release. This manual workflow runs
+# that code on a real, immutable release that is not an SDK.
+#
+# It tags main with an annotated `publish-rehearsal/<run>-<attempt>` tag: no
+# tag ruleset covers that namespace and no workflow triggers on it. It stages
+# small synthetic assets under every name a release publishes, then runs
+# sdk-release.yml's publish step as written, extracted at run time, twice:
+#   1. DRY_RUN=true creates the draft, uploads and verifies it, and stops
+#      before publication, as a dry run does;
+#   2. after one draft asset is replaced with stale bytes, DRY_RUN=
+#      publish-rehearsal resumes that draft through the releases list, replaces
+#      every asset, publishes it, and runs every post-publish check.
+# The cleanup job deletes the release, then the tag, whatever happened.
+# GitHub allows deleting an immutable release and then its tag. The tag name
+# can never be reused, so each run uses a fresh name. GitHub's release
+# attestation for it stays in the repository's attestation record.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-publish-rehearsal
+  cancel-in-progress: false
+
+jobs:
+  rehearse-publication:
+    name: rehearse-publication
+    if: github.ref == 'refs/heads/main'
+    runs-on: ${{ fromJSON(vars.VELLUM_AUTHORITY_RUNS_ON_JSON || '["ubuntu-latest"]') }}
+    env:
+      RELEASE_TAG: publish-rehearsal/${{ github.run_id }}-${{ github.run_attempt }}
+      RELEASE_NAME: Vellum 0.0.0 experimental SDK (publish rehearsal)
+      RELEASE_ARCHIVE: vellum-sdk-0.0.0-darwin-arm64.tar.gz
+    steps:
+      - name: Check out main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Mint one-repository rehearsal token
+        id: token
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3
+        with:
+          app-id: ${{ secrets.SHIPYARD_APP_ID }}
+          private-key: ${{ secrets.SHIPYARD_APP_PRIVATE_KEY }}
+          owner: Generous-Corp
+          repositories: vellum
+          permission-administration: read
+          permission-contents: write
+
+      - name: Refuse to start over a leftover rehearsal
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^publish-rehearsal/[1-9][0-9]*-[1-9][0-9]*$ ]]
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            > "$RUNNER_TEMP/releases-before.json"
+          leftover_releases="$(jq -r '[.[][] | select(.tag_name | startswith("publish-rehearsal/")) | .tag_name] | join(" ")' \
+            "$RUNNER_TEMP/releases-before.json")"
+          gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/publish-rehearsal/" \
+            > "$RUNNER_TEMP/tags-before.json"
+          leftover_tags="$(jq -r '[.[].ref] | join(" ")' "$RUNNER_TEMP/tags-before.json")"
+          # Control: the same list must show the newest real release.
+          jq -e '[.[][] | select(.draft == false and (.tag_name | test("^v[0-9]+[.][0-9]+[.][0-9]+$")))] | length > 0' \
+            "$RUNNER_TEMP/releases-before.json" > /dev/null
+          if [ -n "$leftover_releases$leftover_tags" ]; then
+            echo "::error::an earlier rehearsal was not cleaned up: releases [$leftover_releases] tags [$leftover_tags]; delete each release, then its tag"
+            exit 1
+          fi
+
+      - name: Tag main with the rehearsal tag
+        id: tag
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          tag_object="$(gh api --method POST "repos/$GITHUB_REPOSITORY/git/tags" \
+            -f tag="$RELEASE_TAG" -f object="$GITHUB_SHA" -f type=commit \
+            -f message="vellum-publish-rehearsal run $GITHUB_RUN_ID attempt $GITHUB_RUN_ATTEMPT" \
+            --jq .sha)"
+          [[ "$tag_object" =~ ^[0-9a-f]{40}$ ]]
+          gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+            -f ref="refs/tags/$RELEASE_TAG" -f sha="$tag_object" > /dev/null
+          printf 'tag-object=%s\n' "$tag_object" >> "$GITHUB_OUTPUT"
+          echo "tagged $GITHUB_SHA as $RELEASE_TAG (tag object $tag_object)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Extract the finalizer's publish step from sdk-release.yml
+        run: |
+          set -euo pipefail
+          python3 -I scripts/extract_workflow_step.py \
+            --workflow .github/workflows/sdk-release.yml \
+            --job finalize-sdk-release \
+            --step "Publish only through live no-bypass controls" \
+            --output "$RUNNER_TEMP/publish-step.sh"
+          echo "publish step sha256 $(shasum -a 256 "$RUNNER_TEMP/publish-step.sh" | awk '{print $1}') from $GITHUB_SHA" \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Stage synthetic release assets
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/gpu" "$RUNNER_TEMP/trusted" "$RUNNER_TEMP/payload"
+          printf 'Vellum publish rehearsal %s: not an SDK.\n' "$RELEASE_TAG" \
+            > "$RUNNER_TEMP/payload/README.txt"
+          tar -czf "$RUNNER_TEMP/gpu/$RELEASE_ARCHIVE" -C "$RUNNER_TEMP/payload" README.txt
+          cp scripts/install.sh "$RUNNER_TEMP/trusted/install.sh"
+          cp scripts/install_core.py "$RUNNER_TEMP/trusted/install_core.py"
+          # SHA256SUMS is written as the finalizer writes it.
+          printf '%s  %s\n' \
+            "$(shasum -a 256 "$RUNNER_TEMP/gpu/$RELEASE_ARCHIVE" | awk '{print $1}')" "$RELEASE_ARCHIVE" \
+            "$(shasum -a 256 "$RUNNER_TEMP/trusted/install.sh" | awk '{print $1}')" install.sh \
+            "$(shasum -a 256 "$RUNNER_TEMP/trusted/install_core.py" | awk '{print $1}')" install_core.py \
+            | LC_ALL=C sort > "$RUNNER_TEMP/trusted/SHA256SUMS"
+          # The live immutable-release read, as the finalizer makes it.
+          gh api "repos/$GITHUB_REPOSITORY/immutable-releases" > "$RUNNER_TEMP/immutable-releases.json"
+          python3 -I scripts/verify_immutable_release_preflight.py \
+            --input "$RUNNER_TEMP/immutable-releases.json" \
+            --repository "$GITHUB_REPOSITORY" --release-tag v0.0.0 \
+            --output "$RUNNER_TEMP/immutable-release-preflight.json"
+          # Every other asset the publish step lists gets a synthetic stand-in,
+          # read from the step's own allowed=( ) list so a new asset is staged
+          # without a change here. The step's text up to that list's closing
+          # parenthesis runs as is, so names it derives first (such as an
+          # archive name built from RELEASE_ARCHIVE) resolve as they do there;
+          # that prefix only checks the mode, writes the notes file and defines
+          # functions. release-tag-protection.json is written by the step's guard.
+          awk '{print} /^allowed=\($/ {p=1} p && /^\)$/ {exit}' "$RUNNER_TEMP/publish-step.sh" \
+            > "$RUNNER_TEMP/publish-step-assets.sh"
+          grep -qx 'allowed=(' "$RUNNER_TEMP/publish-step-assets.sh"
+          cat >> "$RUNNER_TEMP/publish-step-assets.sh" <<'EOF'
+          printf '%s\n' "${allowed[@]}"
+          EOF
+          DRY_RUN=true bash --noprofile --norc -eo pipefail "$RUNNER_TEMP/publish-step-assets.sh" \
+            > "$RUNNER_TEMP/publish-step-assets.txt"
+          mapfile -t allowed < "$RUNNER_TEMP/publish-step-assets.txt"
+          test "${#allowed[@]}" -ge 10
+          for asset in "${allowed[@]}"; do
+            name="${asset%%=*}" path="${asset#*=}"
+            [[ "$path" == "$RUNNER_TEMP"/* ]]
+            if [ "$name" = release-tag-protection.json ] || [ -e "$path" ]; then
+              continue
+            fi
+            mkdir -p "$(dirname "$path")"
+            printf '{"schema": "vellum.publish-rehearsal.synthetic.v1", "tag": "%s", "asset": "%s"}\n' \
+              "$RELEASE_TAG" "$name" > "$path"
+            echo "synthetic stand-in: $name" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: "Pass 1: build and verify the draft, stop before publication"
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          TAG_OBJECT_SHA: ${{ steps.tag.outputs.tag-object }}
+          DRY_RUN: "true"
+        run: |
+          set -euo pipefail
+          bash --noprofile --norc -eo pipefail "$RUNNER_TEMP/publish-step.sh"
+          test ! -e "$RUNNER_TEMP/release-published.json"
+          cp "$RUNNER_TEMP/release-assets-final-prepublish-verification.json" \
+            "$RUNNER_TEMP/pass1-prepublish-verification.json"
+
+      - name: Leave a stale asset on the draft
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          set -euo pipefail
+          release_id="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "$RUNNER_TEMP/release.json")"
+          [[ "$release_id" =~ ^[1-9][0-9]*$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > "$RUNNER_TEMP/draft.json"
+          test "$(jq -r '.draft' "$RUNNER_TEMP/draft.json")" = true
+          test "$(jq -r '.tag_name' "$RUNNER_TEMP/draft.json")" = "$RELEASE_TAG"
+          asset_id="$(jq -r '.assets[] | select(.name == "SHA256SUMS") | .id' "$RUNNER_TEMP/draft.json")"
+          [[ "$asset_id" =~ ^[1-9][0-9]*$ ]]
+          gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id"
+          mkdir "$RUNNER_TEMP/stale"
+          printf 'stale\n' > "$RUNNER_TEMP/stale/SHA256SUMS"
+          gh release upload "$RELEASE_TAG" "$RUNNER_TEMP/stale/SHA256SUMS" --repo "$GITHUB_REPOSITORY"
+          rm -f "$RUNNER_TEMP/release.json" "$RUNNER_TEMP/release-assets-verification.json"
+
+      - name: "Pass 2: resume the draft, publish it, and run every post-publish check"
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          TAG_OBJECT_SHA: ${{ steps.tag.outputs.tag-object }}
+          DRY_RUN: publish-rehearsal
+        run: |
+          set -euo pipefail
+          bash --noprofile --norc -eo pipefail "$RUNNER_TEMP/publish-step.sh"
+          jq -e '.status == "pass" and .draft == false and .immutable == true' \
+            "$RUNNER_TEMP/release-assets-published-verification.json" > /dev/null
+          echo "published, attested and verified immutable: $RELEASE_TAG" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Retain rehearsal evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: vellum-publish-rehearsal
+          path: |
+            ${{ runner.temp }}/publish-step.sh
+            ${{ runner.temp }}/immutable-release-preflight.json
+            ${{ runner.temp }}/release-tag-protection.json
+            ${{ runner.temp }}/pass1-prepublish-verification.json
+            ${{ runner.temp }}/release-assets-verification.json
+            ${{ runner.temp }}/release-assets-draft-verification.json
+            ${{ runner.temp }}/release-assets-final-prepublish-verification.json
+            ${{ runner.temp }}/release-published.json
+            ${{ runner.temp }}/immutable-release-attestation.json
+            ${{ runner.temp }}/release-assets-published-verification.json
+          if-no-files-found: warn
+          retention-days: 90
+
+  clean-rehearsal:
+    # Deletes this run's rehearsal release (draft or published) and then its
+    # tag. It names only this run's own publish-rehearsal/ tag, never a v* tag.
+    name: clean-rehearsal
+    needs: rehearse-publication
+    if: always() && github.ref == 'refs/heads/main'
+    runs-on: ${{ fromJSON(vars.VELLUM_AUTHORITY_RUNS_ON_JSON || '["ubuntu-latest"]') }}
+    steps:
+      - name: Mint one-repository cleanup token
+        id: token
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3
+        with:
+          app-id: ${{ secrets.SHIPYARD_APP_ID }}
+          private-key: ${{ secrets.SHIPYARD_APP_PRIVATE_KEY }}
+          owner: Generous-Corp
+          repositories: vellum
+          permission-contents: write
+
+      - name: Delete the rehearsal release, then its tag
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          RELEASE_TAG: publish-rehearsal/${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^publish-rehearsal/[1-9][0-9]*-[1-9][0-9]*$ ]]
+          message="vellum-publish-rehearsal run $GITHUB_RUN_ID attempt $GITHUB_RUN_ATTEMPT"
+          tag_present=false
+          if row="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" \
+              --jq '[.object.type, .object.sha] | @tsv' 2>/dev/null)"; then
+            read -r object_type object_sha <<< "$row"
+            test "$object_type" = tag
+            # Only a tag this run made: its message names this run and attempt.
+            test "$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$object_sha" --jq .message | head -n 1)" = "$message"
+            tag_present=true
+          fi
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$RUNNER_TEMP/releases.json"
+          jq -e '[.[][]] | length > 0' "$RUNNER_TEMP/releases.json" > /dev/null
+          rows="$(jq -r --arg tag "$RELEASE_TAG" '[.[][] | select(.tag_name == $tag)] | .[] | "\(.id) \(.draft) \(.immutable)"' \
+            "$RUNNER_TEMP/releases.json")"
+          while read -r id draft immutable; do
+            [ -z "$id" ] && continue
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
+            echo "deleted release $id for $RELEASE_TAG (draft=$draft, immutable=$immutable)" >> "$GITHUB_STEP_SUMMARY"
+          done <<< "$rows"
+          if [ "$tag_present" = true ]; then
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$RELEASE_TAG"
+            echo "deleted tag $RELEASE_TAG" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          # Both must now be gone.
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$RUNNER_TEMP/releases-after.json"
+          test "$(jq --arg tag "$RELEASE_TAG" '[.[][] | select(.tag_name == $tag)] | length' "$RUNNER_TEMP/releases-after.json")" = 0
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" > /dev/null 2>&1; then
+            echo "::error::tag $RELEASE_TAG is still present"
+            exit 1
+          fi
