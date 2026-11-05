@@ -386,6 +386,17 @@ class VerifyExtractionTests(unittest.TestCase):
             self.assertEqual(verify_extraction.symlink_findings(root, ("graphics", "tools")),
                              ["graphics/linkdir", "tools/linkfile.cpp"])
 
+    def test_installed_dependency_symlinks_are_not_refused(self) -> None:
+        # `npm ci` leaves node_modules/.bin links on disk in CI. node_modules is
+        # gitignored, so those links are not part of the tree being verified.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "tools/pkg/node_modules/.bin").mkdir(parents=True)
+            (root / "tools/pkg/node_modules/esbuild.js").write_text("", encoding="utf-8")
+            (root / "tools/pkg/node_modules/.bin/esbuild").symlink_to(root / "tools/pkg/node_modules/esbuild.js")
+            (root / "tools/real.cpp").symlink_to(root / "tools/pkg/node_modules/esbuild.js")
+            self.assertEqual(verify_extraction.symlink_findings(root, ("tools",)), ["tools/real.cpp"])
+
     def test_comment_stripping_keeps_string_literals(self) -> None:
         source = (b'const char* glob = "include/*.hpp";\nint keep_this_function_body(int a) { return a * 1234567; }\n'
                   b'const char* end = "*/";\n')

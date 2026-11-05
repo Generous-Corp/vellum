@@ -361,6 +361,10 @@ def symlink_findings(root: Path, roots: Iterable[str] = RENAMED_MIRROR_SCAN_ROOT
         if not top.is_dir():
             continue
         for dirpath, dirnames, filenames in os.walk(top, followlinks=False):
+            # Installed dependencies (`npm ci` leaves node_modules/.bin links)
+            # are gitignored, so never part of the verified tree. Tracked
+            # symlinks anywhere are still caught by the ls-files pass below.
+            dirnames[:] = [name for name in dirnames if name != "node_modules" or (Path(dirpath) / name).is_symlink()]
             for name in dirnames + filenames:
                 path = Path(dirpath) / name
                 if path.is_symlink():
