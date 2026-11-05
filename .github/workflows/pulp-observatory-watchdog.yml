@@ -20,8 +20,6 @@ jobs:
     # No configuration gate: a watchdog that can be left switched off is a
     # watchdog that is silently off. Every scheduled run evaluates.
     runs-on: ubuntu-latest
-    # Its App key is a secret of the main-only `automation` environment.
-    environment: automation
     steps:
       - name: Mint a Vellum watchdog token
         id: watchdog-token

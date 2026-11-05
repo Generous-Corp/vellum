@@ -179,13 +179,10 @@ promotion attestation and prove full-matrix parity.
 - **No reusable workflow from another repository.** A called workflow can name the `release` environment where this
   check cannot read it, so `release-policy` refuses any job that `uses:` a workflow outside this repository.
 - **Only the release App can create a release tag.** `create-release-tags` refuses `v*` tag creation to everyone but
-  the App `release-tag.yml` mints from `RELEASE_APP_ID` (the `release` environment's variable). Every other App key
-  the workflows use, `SHIPYARD_APP_ID`/`SHIPYARD_APP_PRIVATE_KEY` for the observatory receiver, version-at-land, the
-  authority workflows and sdk-release, is a secret of the `main`-only `automation` environment, so no run from another
-  ref can mint a token. The ruleset's bypass actor and `RELEASE_APP_ID` must name the dedicated release App
-  (`fleet-release`), not `shipyard-local`: while they name the same App, any holder of that App's key (every fleet
-  host) can create a `v*` tag. It cannot sign one, but a stray tag would burn that version name.
-  `scripts/test_workflow_secret_environments.py` pins which environment each credential is read from.
+  integration 3878000 ("Shipyard Local"), the App `release-tag.yml` mints from `RELEASE_APP_ID`. The repository secret
+  `SHIPYARD_APP_PRIVATE_KEY`, which the observatory receiver and version-at-land use, mints tokens for the same App, so
+  a workflow holding it could create a `v*` tag. It cannot sign one, but a stray tag would burn that version name. The
+  fix is the owner's: a separate App for release tags, or that key in a `main`-only environment.
 
 Owner authorization (owner decisions in the planning repository), release signing (this key) and ordinary commit
 signing (each host's own key) are three separate keys.

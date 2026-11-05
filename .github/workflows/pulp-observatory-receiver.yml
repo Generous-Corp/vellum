@@ -44,8 +44,6 @@ jobs:
       github.event_name == 'push' ||
       github.event_name == 'repository_dispatch'
     runs-on: ${{ fromJSON(vars.VELLUM_LINUX_RUNS_ON_JSON || '["ubuntu-latest"]') }}
-    # Its App key is a secret of the main-only `automation` environment.
-    environment: automation
     steps:
       # Tokens come from the same GitHub App the merge steward uses, minted
       # per run and scoped to one repository each. A pull request pushed and

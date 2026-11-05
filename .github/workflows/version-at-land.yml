@@ -154,8 +154,6 @@ jobs:
     needs: plan
     if: needs.plan.outputs.action == 'bump' && needs.plan.outputs.current != 'true'
     runs-on: ubuntu-latest
-    # Its App key is a secret of the main-only `automation` environment.
-    environment: automation
     timeout-minutes: 10
     steps:
       - name: Check out the planned main commit

@@ -23,8 +23,6 @@ jobs:
   authority-active:
     name: authority-active
     runs-on: ubuntu-latest
-    # Its App key is a secret of the main-only `automation` environment.
-    environment: automation
     steps:
       - name: Check out trusted Vellum controls
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
