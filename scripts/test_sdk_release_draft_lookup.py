@@ -408,5 +408,46 @@ class PublishRehearsalWiringTest(unittest.TestCase):
                         self.assertNotIn("'**'", line)
 
 
+
+class GpuReleaseStepGateTest(unittest.TestCase):
+    """gpu-macos's release-tag steps keep the classifier gate and the authority exclusion."""
+
+    STEPS = ("Record private-release trust controls",
+             "Gate every release mutation on exact provenance readiness")
+
+    @staticmethod
+    def step_if(text: str, step: str) -> str:
+        lines = text.splitlines()
+        starts = [i for i, line in enumerate(lines) if line.strip() == f"- name: {step}"]
+        if len(starts) != 1:
+            raise AssertionError(f"{len(starts)} steps named {step!r}")
+        condition = lines[starts[0] + 1].strip()
+        if not condition.startswith("if: "):
+            raise AssertionError(f"{step!r} has no if: on its next line")
+        return condition
+
+    def problems(self, text: str) -> list[str]:
+        found = []
+        for step in self.STEPS:
+            condition = self.step_if(text, step)
+            for clause in ("steps.classify.outputs.unaffected != 'true'",
+                           "startsWith(github.ref, 'refs/tags/')",
+                           "!startsWith(github.ref, 'refs/tags/authority/')"):
+                if clause not in condition:
+                    found.append(f"{step}: missing {clause}")
+        return found
+
+    def test_both_conditions_hold(self) -> None:
+        text = (ROOT / ".github/workflows/gpu-macos.yml").read_text()
+        self.assertEqual(self.problems(text), [])
+        # Controls: dropping either clause is detected.
+        for clause in ("steps.classify.outputs.unaffected != 'true' && ",
+                       " && !startsWith(github.ref, 'refs/tags/authority/')"):
+            with self.subTest(dropped=clause):
+                broken = text.replace(clause, "")
+                self.assertNotEqual(broken, text)
+                self.assertNotEqual(self.problems(broken), [])
+
+
 if __name__ == "__main__":
     unittest.main()
