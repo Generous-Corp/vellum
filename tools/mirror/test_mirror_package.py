@@ -7,6 +7,7 @@ import hashlib
 import importlib.util
 import json
 import re
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -374,6 +375,131 @@ class MirrorPackagePlanTest(unittest.TestCase):
     def test_empty_index_is_refused(self) -> None:
         (self.fixture.repo / mp.INDEX_PATH).write_text(json.dumps({"schema": mp.INDEX_SCHEMA, "receipts": []}))
         self.assertRefused("no landed export receipt")
+
+
+VELLUM_SOURCE = "https://github.com/Generous-Corp/vellum.git"
+GPU_RUNTIME_HEADER = "gpu-runtime/include/gpu_runtime/gpu_surface.hpp"
+
+
+class InTreeGpuRuntimeTest(unittest.TestCase):
+    """The mirror links Vellum's own gpu-runtime only at the interface Pulp read.
+
+    The fixture repository is a real git history: an old commit whose header
+    differs, the pinned commit, and HEAD on top with an unrelated change.
+    """
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.fixture = Fixture(Path(self.temporary.name))
+        mp.BUILD_INFO_INPUTS[EXPORT_ID] = {"version": "1.2.3"}
+        repo = self.fixture.repo
+        self.git("init", "-q", "-b", "main")
+        self.git("config", "user.email", "t@example.com")
+        self.git("config", "user.name", "t")
+        header = repo / GPU_RUNTIME_HEADER
+        header.parent.mkdir(parents=True)
+        header.write_bytes(b"struct GpuSurface; // old\n")
+        self.commit("old interface")
+        self.old = self.head()
+        self.header_bytes = b"struct GpuSurface;\n"
+        header.write_bytes(self.header_bytes)
+        self.commit("pinned interface")
+        self.pin = self.head()
+        (repo / "gpu-runtime/src").mkdir(parents=True)
+        (repo / "gpu-runtime/src/impl.cpp").write_bytes(b"int impl() { return 0; }\n")
+        self.commit("implementation change after the pin")
+        self.use_pin(self.pin)
+
+    def tearDown(self) -> None:
+        mp.BUILD_INFO_INPUTS.pop(EXPORT_ID, None)
+        self.temporary.cleanup()
+
+    def git(self, *args: str) -> str:
+        return subprocess.run(["git", *args], cwd=self.fixture.repo, check=True,
+                              capture_output=True, text=True).stdout.strip()
+
+    def commit(self, message: str) -> None:
+        self.git("add", "gpu-runtime")
+        self.git("commit", "-q", "-m", message)
+
+    def head(self) -> str:
+        return self.git("rev-parse", "HEAD")
+
+    def use_pin(self, pin: str, *, source: str = VELLUM_SOURCE, name: str = "vellum-gpu-runtime",
+                relative: str = GPU_RUNTIME_HEADER, digest: str | None = None,
+                link: str = "gpu-runtime-device") -> None:
+        closure = self.fixture.closure
+        closure["external_inputs"] = [row for row in closure["external_inputs"]
+                                      if "gpu-runtime" not in row["path"]]
+        closure["external_inputs"].append({
+            "path": f"@external/{name}/{pin}/{relative}", "pin": pin, "source": source,
+            "sha256": digest or sha(self.header_bytes),
+        })
+        target = closure["targets"][0]
+        target["include_dirs"] = [d for d in target["include_dirs"] if "gpu-runtime" not in d]
+        target["include_dirs"].append(f"@external/{name}/{pin}/gpu-runtime/include")
+        target["link_targets"] = [link]
+        self.fixture.write_receipt()
+
+    def assertRefused(self, fragment: str) -> None:
+        with self.assertRaises(mp.PlanError) as caught:
+            self.fixture.plan()
+        self.assertIn(fragment, str(caught.exception))
+
+    def test_matching_pin_links_the_in_tree_targets_without_fetching(self) -> None:
+        plan = self.fixture.plan()
+        target = plan["units"][0]["targets"][0]
+        self.assertEqual(target["external_links"], ["gpu-runtime-device"])
+        self.assertIn(str(self.fixture.repo.resolve() / "gpu-runtime/include"), target["include_dirs"])
+        self.assertFalse(self.fixture.deps.exists() and any(self.fixture.deps.iterdir()))
+        self.assertNotIn("vellum-gpu-runtime", plan["cmake_dependencies"])
+        self.assertNotIn("vellum-gpu-runtime", plan["licenses"])
+        self.assertEqual(plan["dependencies"]["vellum-gpu-runtime"]["pin"], self.pin)
+
+    def test_pin_whose_interface_tree_differs_is_refused(self) -> None:
+        self.use_pin(self.old, digest=sha(b"struct GpuSurface; // old\n"))
+        self.assertRefused("is not the tree at HEAD")
+
+    def test_edited_header_in_the_working_tree_is_refused(self) -> None:
+        (self.fixture.repo / GPU_RUNTIME_HEADER).write_bytes(b"struct GpuSurface { int edited; };\n")
+        self.assertRefused("has uncommitted changes")
+
+    def test_untracked_interface_header_is_refused(self) -> None:
+        (self.fixture.repo / "gpu-runtime/include/gpu_runtime/extra.hpp").write_bytes(b"// new\n")
+        self.assertRefused("has uncommitted changes")
+
+    def test_recorded_digest_that_differs_from_the_tree_is_refused(self) -> None:
+        self.use_pin(self.pin, digest="0" * 64)
+        self.assertRefused("does not match the closure digest")
+
+    def test_pin_that_is_not_a_commit_here_is_refused(self) -> None:
+        self.use_pin("f" * 40)
+        self.assertRefused("is not a commit of this repository")
+
+    def test_pin_that_is_not_an_ancestor_of_head_is_refused(self) -> None:
+        self.git("checkout", "-q", "-b", "side", self.old)
+        (self.fixture.repo / "gpu-runtime/side.txt").write_bytes(b"side\n")
+        self.commit("side branch")
+        side = self.head()
+        self.git("checkout", "-q", "main")
+        self.use_pin(side)
+        self.assertRefused("is not an ancestor of HEAD")
+
+    def test_other_repository_source_is_refused(self) -> None:
+        self.use_pin(self.pin, source="https://github.com/someone/vellum.git")
+        self.assertRefused("not this repository")
+
+    def test_recorded_file_outside_the_subtree_is_refused(self) -> None:
+        self.use_pin(self.pin, relative="runtime/include/vellum/x.hpp")
+        self.assertRefused("outside gpu-runtime/")
+
+    def test_unknown_external_is_refused(self) -> None:
+        self.use_pin(self.pin, name="vellum-gpu-runtime-copy")
+        self.assertRefused("has no Vellum build recipe")
+
+    def test_unlisted_gpu_runtime_target_is_refused(self) -> None:
+        self.use_pin(self.pin, link="gpu-runtime-device-api")
+        self.assertRefused("neither mirrored nor a recipe target")
 
 
 class PreludeHeaderTest(unittest.TestCase):

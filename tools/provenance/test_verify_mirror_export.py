@@ -1216,6 +1216,34 @@ class VerifyMirrorExportTests(unittest.TestCase):
         c = {"configure":{"identity":{"system":"Darwin"}},"targets":[],"transitive_link_targets":["juce-audio"],"files":[],"compile_definitions":[]}
         self.assertError(verify_mirror_export.link_closure_findings({"x": c}, policy), "x: forbidden link target juce-audio")
 
+    def test_in_tree_gpu_runtime_targets_are_allowed_and_nothing_else_from_it(self) -> None:
+        # The mirror links Vellum's own gpu-runtime build (mirror_package's
+        # in-tree recipe); exactly its three linked targets are allowed.
+        policy = json.loads((REPO / "provenance/mirror/link-policy.json").read_text())
+        for name in ("gpu-runtime-bootstrap", "gpu-runtime-device", "gpu-runtime-skia-log-bridge"):
+            c = {"configure": {"identity": {"system": "Darwin"}},
+                 "targets": [{"name": "pulp-gpu-device", "link_targets": [name]}],
+                 "files": [], "compile_definitions": []}
+            self.assertEqual(verify_mirror_export.link_closure_findings({"gpu-device-api": c}, policy), [])
+        for name in ("gpu-runtime-device-api", "gpu-runtime-other"):
+            c = {"configure": {"identity": {"system": "Darwin"}},
+                 "targets": [{"name": "pulp-gpu-device", "link_targets": [name]}],
+                 "files": [], "compile_definitions": []}
+            self.assertError(verify_mirror_export.link_closure_findings({"gpu-device-api": c}, policy),
+                             f"link target {name} is neither exported nor allowed")
+
+    def test_in_tree_gpu_runtime_external_input_shape(self) -> None:
+        pin = "1" * 40
+        row = {"path": f"@external/vellum-gpu-runtime/{pin}/gpu-runtime/include/gpu_runtime/gpu_surface.hpp",
+               "pin": pin, "source": "https://github.com/Generous-Corp/vellum.git", "sha256": "2" * 64}
+        self.assertEqual(verify_mirror_export.validate_external_inputs([row], "c.external_inputs"), [])
+        moved = dict(row, path=row["path"].replace(pin, "3" * 40))
+        self.assertError(verify_mirror_export.validate_external_inputs([moved], "c.external_inputs"),
+                         "pin segment must equal pin")
+        foreign = dict(row, source="https://example.com/vellum.git")
+        self.assertError(verify_mirror_export.validate_external_inputs([foreign], "c.external_inputs"),
+                         "source must be a known repository URL")
+
     def test_guard_transitive_non_pulp_branch(self) -> None:
         policy = json.loads((REPO / "provenance/mirror/link-policy.json").read_text())
         c = {"configure":{"identity":{"system":"Darwin"}},"targets":[],"transitive_link_targets":["mystery"],"files":[],"compile_definitions":[]}

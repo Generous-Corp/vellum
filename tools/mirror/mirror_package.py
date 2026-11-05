@@ -59,6 +59,12 @@ BUILD_TIMESTAMP_PLACEHOLDER = "<build-timestamp>"
 #             directories name the dependency.
 #   archive - the pinned Skia/Dawn release archive Vellum already locks in
 #             cmake/VellumSkiaDawn.cmake (identified by its asset digest).
+#   in-tree - a project in this repository that Vellum's own build already
+#             adds before the mirror, so nothing is fetched or built twice:
+#             the mirror links the targets in `provides` directly. The
+#             closure's pin must be a commit of this repository, an ancestor
+#             of HEAD, whose `abi_tree` equals HEAD's, so the mirror compiles
+#             exactly the interface Pulp exported against.
 # `patches` names Vellum transformations applied after checkout. Each is
 # proved only by the closure: the patched bytes must hash to the recorded
 # digest, so a patch that drifts from the export fails the plan.
@@ -108,6 +114,16 @@ DEPENDENCIES: dict[str, dict[str, Any]] = {
     # on yogacore (PulpDependencies.cmake), and the mirror build does the same.
     "yoga": {"kind": "cmake", "source_subdir": "yoga", "provides": ["yogacore"], "options": {},
              "cxx_options": ["-frtti"]},
+    # Pulp's device layer forwards to gpu-runtime, which lives in this
+    # repository. A second, fetched copy would put two Dawn proc tables and two
+    # device coordinators in one image, so the mirror links Vellum's own build.
+    "vellum-gpu-runtime": {
+        "kind": "in-tree",
+        "subtree": "gpu-runtime",
+        "abi_tree": "gpu-runtime/include",
+        "sources": ["https://github.com/Generous-Corp/vellum.git", "https://github.com/Generous-Corp/vellum"],
+        "provides": ["gpu-runtime-bootstrap", "gpu-runtime-device", "gpu-runtime-skia-log-bridge"],
+    },
     "yaml-cpp": {"kind": "cmake", "provides": ["yaml-cpp"], "options": {"YAML_CPP_BUILD_TESTS": "OFF", "YAML_CPP_BUILD_TOOLS": "OFF", "YAML_CPP_BUILD_CONTRIB": "OFF", "YAML_BUILD_SHARED_LIBS": "OFF", "YAML_CPP_INSTALL": "OFF", "CMAKE_POLICY_VERSION_MINIMUM": "3.5"}},
 }
 
@@ -480,12 +496,56 @@ def dependency_source_dir(name: str, root: Path) -> Path:
     return candidate
 
 
+def git_output(repo: Path, *args: str) -> tuple[int, str]:
+    completed = subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True, check=False)
+    return completed.returncode, completed.stdout.strip()
+
+
+def prepare_in_tree(name: str, entry: dict[str, Any], repo: Path) -> Path:
+    """Resolve an in-tree dependency to this repository, or refuse.
+
+    The closure recorded a commit of this repository and the exact files it
+    read. The mirror uses the working tree, so each check binds that tree to
+    the recorded commit: the commit is in this history before HEAD, the ABI
+    tree is the same object at both commits, nothing under it is modified or
+    untracked, and every recorded file is inside the subtree.
+    """
+    recipe = DEPENDENCIES[name]
+    pin = entry["pin"]
+    if entry.get("source") not in recipe["sources"]:
+        raise PlanError(f"{name} names source {entry.get('source')!r}, not this repository")
+    subtree, abi_tree = recipe["subtree"], recipe["abi_tree"]
+    for relative in entry["files"]:
+        if not relative.startswith(f"{subtree}/") or ".." in Path(relative).parts:
+            raise PlanError(f"{name} closure reads {relative}, outside {subtree}/")
+    code, _ = git_output(repo, "cat-file", "-e", f"{pin}^{{commit}}")
+    if code:
+        raise PlanError(f"{name}@{pin[:12]} is not a commit of this repository")
+    code, _ = git_output(repo, "merge-base", "--is-ancestor", pin, "HEAD")
+    if code:
+        raise PlanError(f"{name}@{pin[:12]} is not an ancestor of HEAD")
+    pinned = git_output(repo, "rev-parse", f"{pin}:{abi_tree}")
+    current = git_output(repo, "rev-parse", f"HEAD:{abi_tree}")
+    if pinned[0] or current[0] or pinned[1] != current[1]:
+        raise PlanError(
+            f"{name}: {abi_tree} at {pin[:12]} ({pinned[1] or 'absent'}) is not the tree at HEAD "
+            f"({current[1] or 'absent'}); Pulp must re-pin and re-export")
+    code, dirty = git_output(repo, "status", "--porcelain", "--untracked-files=all", "--", abi_tree)
+    if code or dirty:
+        raise PlanError(f"{name}: {abi_tree} has uncommitted changes: {dirty or 'git status failed'}")
+    return repo
+
+
 def prepare_dependencies(deps: dict[str, dict[str, Any]], deps_dir: Path, skia_dir: Path | None,
-                         skia_asset_sha256: str | None) -> dict[str, Path]:
+                         skia_asset_sha256: str | None, repo: Path | None = None) -> dict[str, Path]:
     roots: dict[str, Path] = {}
     for name, entry in sorted(deps.items()):
         recipe = DEPENDENCIES[name]
-        if recipe["kind"] == "archive":
+        if recipe["kind"] == "in-tree":
+            if repo is None:
+                raise PlanError(f"{name} is an in-tree dependency but no repository was given")
+            root = prepare_in_tree(name, entry, repo)
+        elif recipe["kind"] == "archive":
             if skia_dir is None or not skia_asset_sha256:
                 raise PlanError(f"closure needs {name} but no extracted Skia/Dawn archive was given")
             if entry["asset_sha256"] != skia_asset_sha256:
@@ -712,7 +772,7 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
     source_options = source_compile_options_for(repo, receipt, units)
     attached: set[str] = set()
     deps = external_dependencies(units)
-    roots = prepare_dependencies(deps, deps_dir, skia_dir, skia_asset_sha256)
+    roots = prepare_dependencies(deps, deps_dir, skia_dir, skia_asset_sha256, repo)
     generated = prepare_generated(repo, receipt, units, generated_dir)
     binary_dir_token = "@VELLUM_MIRROR_BINARY_DATA_DIR@"
 
@@ -817,7 +877,9 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
     # so its license travels with it.
     licenses = {}
     for name in sorted(roots):
-        if DEPENDENCIES[name]["kind"] == "archive":
+        # The archive's notices ship with it; an in-tree project is this
+        # repository's own code under its license.
+        if DEPENDENCIES[name]["kind"] in ("archive", "in-tree"):
             continue
         found = sorted(
             str(path) for path in roots[name].iterdir()
