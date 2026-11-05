@@ -85,7 +85,31 @@ _POLICY_SPEC = importlib.util.spec_from_file_location("content_scan_policy", CON
 assert _POLICY_SPEC and _POLICY_SPEC.loader
 content_scan_policy = importlib.util.module_from_spec(_POLICY_SPEC)
 _POLICY_SPEC.loader.exec_module(content_scan_policy)
-FORBIDDEN_ACTIVE_PATTERNS = content_scan_policy.compiled_text_patterns()
+RENAMED_MIRROR_RULE = "renamed-mirror-namespace"
+_ALL_NATIVE_PATTERNS = content_scan_policy.compiled_text_patterns()
+# The renamed-mirror rule has its own, wider scope (scan_renamed_mirror below).
+FORBIDDEN_ACTIVE_PATTERNS = {n: p for n, p in _ALL_NATIVE_PATTERNS.items() if n != RENAMED_MIRROR_RULE}
+RENAMED_MIRROR_PATTERN = _ALL_NATIVE_PATTERNS[RENAMED_MIRROR_RULE]
+# Where a copied, renamed mirror file must not land: every native root, plus
+# the trees outside the active inventory that still hold Vellum source.
+RENAMED_MIRROR_SCAN_ROOTS = EXPECTED_ACTIVE_ROOTS + ("components", "product", "tools", "web")
+# Paths that must spell the forbidden names: the consumer built against the
+# installed mirror, and the policy, its installer copy and their tests.
+RENAMED_MIRROR_EXEMPT_PREFIXES = (
+    "tools/mirror/consumer/",
+)
+RENAMED_MIRROR_EXEMPT_PATHS = {
+    # The rule itself, its installer copy and its tests.
+    "scripts/install_core.py",
+    "tools/provenance/content_scan_policy.py",
+    "tools/provenance/test_verify_extraction.py",
+    "tools/provenance/verify_extraction.py",
+    # The vendored mirror-edge table and the inertness checker spell the
+    # renamed namespaces to refuse them, with planted controls in its tests.
+    "tools/provenance/mirror_edge_patterns.json",
+    "tools/mirror/verify_mirror_inertness.py",
+    "tools/mirror/test_verify_mirror_inertness.py",
+}
 
 
 def scans_active_content(relative: str) -> bool:
@@ -222,6 +246,9 @@ def scan_active_surface(root: Path, roots: Iterable[str] = EXPECTED_ACTIVE_ROOTS
         try:
             text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
+            # Fail closed: a text-class file the scan cannot read is not proof
+            # that it holds nothing forbidden.
+            findings.append({"rule": "undecodable-native-text", "path": relative, "line": 0, "match": ""})
             continue
         for name, pattern in FORBIDDEN_ACTIVE_PATTERNS.items():
             for match in pattern.finditer(text):
@@ -233,6 +260,73 @@ def scan_active_surface(root: Path, roots: Iterable[str] = EXPECTED_ACTIVE_ROOTS
                         "match": match.group(0)[:120],
                     }
                 )
+    return findings
+
+
+def scan_renamed_mirror(root: Path, roots: Iterable[str] = RENAMED_MIRROR_SCAN_ROOTS) -> list[dict[str, object]]:
+    """The renamed-mirror rule over every native tree, Python included.
+
+    Python is read here, unlike the main native scan: a respelled copy of a
+    mirrored generator (core/view/js/embed_js.py) emits `namespace
+    vellum::view::...` from Python.
+    """
+    findings: list[dict[str, object]] = []
+    for path in active_files(root, roots):
+        relative = path.relative_to(root).as_posix()
+        if (relative.startswith(MIRROR_ROOT) or relative in RENAMED_MIRROR_EXEMPT_PATHS
+                or relative.startswith(RENAMED_MIRROR_EXEMPT_PREFIXES)
+                or not content_scan_policy.should_scan_content(relative, extensionless=True)):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            findings.append({"rule": "undecodable-native-text", "path": relative, "line": 0, "match": ""})
+            continue
+        for match in RENAMED_MIRROR_PATTERN.finditer(text):
+            findings.append({"rule": RENAMED_MIRROR_RULE, "path": relative,
+                             "line": text.count("\n", 0, match.start()) + 1, "match": match.group(0)[:120]})
+    return findings
+
+
+# A mirror file copied into a native root and edited only in comments,
+# whitespace or line endings keeps the same normalized content. Normalizing
+# also respells pulp -> vellum, so the raw and the renamed spelling of a mirror
+# file are one fingerprint. Files whose normalized form is shorter than this
+# carry too little to fingerprint (`#pragma once`, empty initializers).
+NORMALIZED_MIN_BYTES = 64
+NORMALIZED_SUFFIXES = {".h", ".hh", ".hpp", ".hxx", ".inl", ".ipp", ".c", ".cc", ".cpp", ".cxx", ".m", ".mm",
+                       ".cmake", ".py", ".js", ".mjs", ".ts"}
+_COMMENTS = re.compile(rb"//[^\n]*|/\*.*?\*/|(?m:^\s*#(?!\s*(?:include|import|define|if|ifdef|ifndef|else|elif|endif|pragma|undef))[^\n]*)", re.S)
+_SPACE = re.compile(rb"\s+")
+
+
+def normalized_fingerprint(data: bytes) -> str | None:
+    text = _SPACE.sub(b"", _COMMENTS.sub(b"", data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")))
+    text = text.replace(b"namespacepulp", b"namespacevellum").replace(b"pulp::", b"vellum::")
+    text = text.replace(b"pulp/", b"vellum/")
+    if len(text) < NORMALIZED_MIN_BYTES:
+        return None
+    return hashlib.sha256(text).hexdigest()
+
+
+def normalized_copy_findings(root: Path, roots: Iterable[str] = RENAMED_MIRROR_SCAN_ROOTS) -> list[dict[str, str]]:
+    """Native files whose normalized content equals a Pulp-authored mirror file's."""
+    mirror: dict[str, str] = {}
+    for path in mirror_files(root):
+        relative = path.relative_to(root).as_posix()
+        if relative.startswith(MIRROR_ROOT + "external/") or path.suffix.lower() not in NORMALIZED_SUFFIXES:
+            continue
+        fingerprint = normalized_fingerprint(path.read_bytes())
+        if fingerprint:
+            mirror.setdefault(fingerprint, relative)
+    findings: list[dict[str, str]] = []
+    for path in active_files(root, roots):
+        relative = path.relative_to(root).as_posix()
+        if relative.startswith(MIRROR_ROOT) or path.suffix.lower() not in NORMALIZED_SUFFIXES:
+            continue
+        fingerprint = normalized_fingerprint(path.read_bytes())
+        if fingerprint and fingerprint in mirror:
+            findings.append({"path": relative, "mirror": mirror[fingerprint]})
     return findings
 
 
@@ -772,11 +866,7 @@ def verify(
         entry["git_blob_sha"]
         for entry in entries
         if entry["source_path"] not in {"DEPENDENCIES.md", "LICENSE.md", "NOTICE.md"}
-    } | {record["git_blob_sha"] for record in records} | {
-        # v2 records (the pulp:: -> vellum:: rename) also name the raw Pulp
-        # blob a renamed mirror file came from; a native copy of either is refused.
-        record["pulp_git_blob_sha"] for record in records if record.get("pulp_git_blob_sha")
-    }
+    } | {record["git_blob_sha"] for record in records}
     pulp_origin_blobs.discard(EMPTY_BLOB_SHA)
     copied_findings = copied_seed_findings(root, active_roots, pulp_origin_blobs)
     checks["active_historical_blob_matches"] = copied_findings
@@ -848,6 +938,15 @@ def verify(
     checks["active_forbidden_findings"] = active_findings
     if active_findings:
         errors.append(f"native build/authoring surface has {len(active_findings)} forbidden references")
+
+    renamed_findings = scan_renamed_mirror(root)
+    checks["renamed_mirror_findings"] = renamed_findings
+    if renamed_findings:
+        errors.append(f"native trees use the renamed mirror's namespaces or headers {len(renamed_findings)} times")
+    normalized_copies = normalized_copy_findings(root)
+    checks["normalized_mirror_copies"] = normalized_copies
+    if normalized_copies:
+        errors.append(f"native trees hold {len(normalized_copies)} copies of mirror files (normalized content)")
 
     debt = provenance / "extraction-debt/initial.yaml"
     debt_status = top_level_scalar(debt, "status")

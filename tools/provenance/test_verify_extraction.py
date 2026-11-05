@@ -290,48 +290,94 @@ class VerifyExtractionTests(unittest.TestCase):
                 {("graphics/a.cpp", "pulp-public-namespace")},
             )
 
-    def test_renamed_mirror_namespaces_are_refused_in_native_roots(self) -> None:
+    def test_renamed_mirror_namespaces_are_refused_in_native_trees(self) -> None:
+        # Each spelling a copied, renamed mirror file can take.
+        evasions = {
+            "graphics/qualified.cpp": b"namespace vellum::view { int x; }\n",
+            "graphics/spaced.cpp": b"auto* v = vellum :: view::make();\n",
+            "graphics/nested.cpp": b"namespace vellum {\nnamespace view {\nint x;\n}\n}\n",
+            "graphics/imported.mm": b"#import <vellum/view/view.hpp>\n",
+            "graphics/relative.cpp": b'#include "../include/vellum/view/view.hpp"\n',
+            "graphics/probed.cpp": b"#if __has_include(<vellum/canvas/canvas.hpp>)\n#endif\n",
+            "graphics/using.cpp": b"using namespace vellum;\nint f() { return view::g(); }\n",
+            "graphics/jni.cpp": b"namespace vellum::android { int x; }\n",
+            "graphics/embed_js.py": b'out.write("namespace vellum::view::preludes {\\n\\n")\n',
+            "tools/scratch/copied.cpp": b"namespace vellum::state { int x; }\n",
+            "components/w/copied.hpp": b"#include <vellum/render/x.hpp>\n",
+        }
+        legitimate = {
+            "graphics/own.cpp": b"#include <vellum/runtime/kernel.hpp>\nvellum::runtime::Kernel k;\n"
+                                b"vellum::graphics::X g;\nusing namespace vellum;\nint y = graphics::z();\n",
+            "tools/mirror/consumer/main.cpp": b"#include <vellum/view/view.hpp>\n",
+        }
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            renamed = b"#include <vellum/view/view.hpp>\nnamespace vellum::view { int x; }\n"
-            self.write_mirror(root, "mirror/core/view/src/a.cpp", renamed)
-            (root / "graphics").mkdir()
-            (root / "graphics/copied.cpp").write_bytes(renamed)
-            # Native Vellum owns vellum::runtime and its other namespaces: legal.
-            (root / "graphics/own.cpp").write_bytes(
-                b"#include <vellum/runtime/kernel.hpp>\nvellum::runtime::Kernel k; vellum::graphics::X g;\n")
+            self.write_mirror(root, "mirror/core/view/src/a.cpp", b"namespace vellum::view { int x; }\n")
+            for relative, content in {**evasions, **legitimate}.items():
+                (root / relative).parent.mkdir(parents=True, exist_ok=True)
+                (root / relative).write_bytes(content)
 
-            findings = verify_extraction.scan_active_surface(root)
+            findings = verify_extraction.scan_renamed_mirror(root)
 
-            self.assertEqual(
-                sorted((finding["path"], finding["rule"]) for finding in findings),
-                [("graphics/copied.cpp", "renamed-mirror-namespace")] * 2,
-            )
+            self.assertEqual(sorted({f["path"] for f in findings}), sorted(evasions))
+            self.assertTrue(all(f["rule"] == "renamed-mirror-namespace" for f in findings))
+            # The main native scan leaves this rule to the wider one.
+            self.assertNotIn("renamed-mirror-namespace", verify_extraction.FORBIDDEN_ACTIVE_PATTERNS)
 
-    def test_renamed_mirror_namespace_units_match_the_mirror(self) -> None:
-        # The refused units are the mirror's include units that native Vellum
-        # does not also own; a new mirrored unit must join the rule.
+    def test_renamed_mirror_units_match_the_mirror_namespace_census(self) -> None:
+        # The refused units are the mirror's top-level pulp::<unit> namespaces
+        # and include units, less the ones native Vellum owns. A new mirrored
+        # unit (pulp::android once escaped an include-unit census) must join.
         rule = content_scan_policy.FORBIDDEN_NATIVE_CONTENT_PATTERNS["renamed-mirror-namespace"][0]
-        refused = set(re.search(r"vellum::\(\?:([^)]*)\)", rule).group(1).split("|"))
-        mirror_units = {p.name for p in (ROOT / "mirror").glob("core/*/include/*/*")
-                        if p.is_dir() and p.parent.name in {"pulp", "vellum"}}
-        native_units = {p.name for root in ("foundation", "runtime", "graphics", "authoring")
-                        for p in (ROOT / root / "include/vellum").glob("*") if p.is_dir()}
-        self.assertEqual(refused, mirror_units - native_units)
+        refused = set(re.search(r"vellum\\s\*::\\s\*\(\?:([^)]*)\)", rule).group(1).split("|"))
+        census: set[str] = set()
+        for path in (ROOT / "mirror").rglob("*"):
+            if path.is_file() and not path.relative_to(ROOT).as_posix().startswith("mirror/external/"):
+                text = path.read_bytes().decode("utf-8", errors="replace")
+                for spelling in ("pulp", "vellum"):
+                    census.update(re.findall(rf"namespace\s+{spelling}\s*::\s*(\w+)", text))
+                    census.update(re.findall(rf"namespace\s+{spelling}\s*\{{\s*namespace\s+(\w+)", text))
+        census |= {p.name for p in (ROOT / "mirror").glob("core/*/include/*/*")
+                   if p.is_dir() and p.parent.name in {"pulp", "vellum"}}
+        native = {p.name for top in ("foundation", "runtime", "graphics", "authoring")
+                  for p in (ROOT / top / "include/vellum").glob("*") if p.is_dir()}
+        self.assertIn("android", census)
+        self.assertEqual(refused, census - native)
 
-    def test_v2_records_quarantine_the_raw_pulp_blob_too(self) -> None:
-        raw = b"namespace pulp::view { int x; }\n"
-        renamed = b"namespace vellum::view { int x; }\n"
-        records = [{"git_blob_sha": verify_extraction.git_blob_sha(renamed),
-                    "pulp_git_blob_sha": verify_extraction.git_blob_sha(raw)}]
-        blobs = {record["git_blob_sha"] for record in records} | {
-            record["pulp_git_blob_sha"] for record in records if record.get("pulp_git_blob_sha")}
+    def test_undecodable_native_text_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / "graphics").mkdir()
-            (root / "graphics/raw_copy.cpp").write_bytes(raw)
-            findings = verify_extraction.copied_seed_findings(root, ("graphics",), blobs)
-            self.assertEqual([f["path"] for f in findings], ["graphics/raw_copy.cpp"])
+            (root / "graphics/bad.cpp").write_bytes(b"int x; \xff\xfe namespace vellum::view {}\n")
+            for findings in (verify_extraction.scan_active_surface(root, ("graphics",)),
+                             verify_extraction.scan_renamed_mirror(root, ("graphics",))):
+                self.assertEqual([(f["path"], f["rule"]) for f in findings],
+                                 [("graphics/bad.cpp", "undecodable-native-text")])
+
+    def test_normalized_copies_of_mirror_files_are_refused(self) -> None:
+        mirror_source = (b"// Copyright Pulp\n#include <pulp/runtime/log.hpp>\n\nnamespace pulp::runtime {\n"
+                         b"/* the logger */\nvoid log_line(const char* message) { write_out(message, 42); }\n}\n")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.write_mirror(root, "mirror/core/runtime/src/log.cpp", mirror_source)
+            self.write_mirror(root, "mirror/external/lib/vendored.c", b"int vendored_function_body(void) { return 1234567; }\n")
+            (root / "runtime/src").mkdir(parents=True)
+            # Renamed, re-commented, re-indented and CRLF: still the same file.
+            edited = (b"#include <vellum/runtime/log.hpp>\r\nnamespace vellum::runtime\r\n{\r\n"
+                      b"    // mine now\r\n    void log_line(const char*   message)\r\n"
+                      b"    {   write_out(message, 42);   }\r\n}\r\n")
+            (root / "runtime/src/copied.cpp").write_bytes(edited)
+            # A real edit is a different file to this check.
+            (root / "runtime/src/changed.cpp").write_bytes(edited.replace(b"42", b"43"))
+            # Third-party files may ship natively too.
+            (root / "runtime/src/vendored.c").write_bytes(b"int vendored_function_body(void) { return 1234567; }\n")
+            # Too short to fingerprint.
+            self.write_mirror(root, "mirror/core/x/tiny.hpp", b"#pragma once\n")
+            (root / "runtime/src/tiny.hpp").write_bytes(b"#pragma once\n")
+
+            findings = verify_extraction.normalized_copy_findings(root, ("runtime",))
+
+            self.assertEqual(findings, [{"path": "runtime/src/copied.cpp", "mirror": "mirror/core/runtime/src/log.cpp"}])
 
     def test_origin_records_are_strictly_validated(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

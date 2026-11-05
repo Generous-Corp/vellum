@@ -205,11 +205,11 @@ class SdkMirrorScopeTests(unittest.TestCase):
         for name, (pattern, flags) in shared.items():
             self.assertEqual(payload[name].pattern.decode("utf-8"), pattern, name)
             self.assertEqual(payload[name].flags, flags, name)
-        # The repository verifier compiles the same rules from the same source.
-        self.assertEqual(
-            {name: rule.pattern for name, rule in verify_extraction.FORBIDDEN_ACTIVE_PATTERNS.items()},
-            {name: pattern for name, (pattern, _flags) in shared.items()},
-        )
+        # The repository verifier compiles the same rules from the same source;
+        # it runs the renamed-mirror rule in its own, wider scan.
+        compiled = {name: rule.pattern for name, rule in verify_extraction.FORBIDDEN_ACTIVE_PATTERNS.items()}
+        compiled[verify_extraction.RENAMED_MIRROR_RULE] = verify_extraction.RENAMED_MIRROR_PATTERN.pattern
+        self.assertEqual(compiled, {name: pattern for name, (pattern, _flags) in shared.items()})
         # Same decision for every path in this checkout, plus the build inputs
         # the native scan once skipped.
         names = [path.relative_to(REPO).as_posix() for path in REPO.rglob("*")
