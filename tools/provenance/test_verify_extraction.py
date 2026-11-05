@@ -665,8 +665,27 @@ class VerifyExtractionTests(unittest.TestCase):
         self.assertEqual(
             verify_extraction.MIRROR_EDGE_EXCEPTIONS,
             {("mirror-pulp-kept-include", "core/view/include/pulp/view/widgets.hpp",
-              "#include <pulp/view/audio_widgets.hpp>")},
+              "#include <pulp/view/audio_widgets.hpp>"),
+             ("mirror-pulp-kept-include", "core/view/include/vellum/view/widgets.hpp",
+              "#include <vellum/view/audio_widgets.hpp>")},
         )
+
+    def test_a_renamed_seam_debt_line_is_exempt_only_through_its_respelled_row(self) -> None:
+        debt = (b"#pragma once\n#if defined(VELLUM_VIEW_HAS_AUDIO_WIDGETS)\n"
+                b"#include <vellum/view/audio_widgets.hpp>\n#endif\n")
+        table = json.loads(verify_extraction.MIRROR_EDGE_TABLE.read_text(encoding="utf-8"))
+        pulp_only = dict(table, approved_exceptions=[
+            row for row in table["approved_exceptions"] if "/vellum/" not in row["path"]])
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.write_mirror(root, "mirror/core/view/include/vellum/view/widgets.hpp", debt)
+            self.assertEqual(verify_extraction.mirror_edge_findings(root), [])
+            self.assertEqual(verify_extraction.mirror_edge_findings(root, table), [])
+            # The pulp-spelled row alone cannot exempt the renamed line.
+            self.assertEqual(
+                [(f["rule"], f["path"], f["line"]) for f in verify_extraction.mirror_edge_findings(root, pulp_only)],
+                [("mirror-pulp-kept-include", "mirror/core/view/include/vellum/view/widgets.hpp", 3)],
+            )
 
     def test_vendored_table_must_match_pulp(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

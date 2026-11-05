@@ -73,7 +73,7 @@ SCHEMA = "vellum.mirror-inertness-proof.v1"
 # this checker ships alone in the sterile acceptance bundle;
 # test_verify_mirror_inertness.py holds them equal to the table. Each is a
 # list, so a package part-way through a rename is checked under every spelling.
-MIRROR_ROOTS = {"namespace": ("pulp",), "include": ("pulp",)}
+MIRROR_ROOTS = {"namespace": ("pulp", "vellum"), "include": ("pulp", "vellum")}
 
 
 def root_pattern(names: tuple[str, ...]) -> str:
@@ -170,8 +170,21 @@ VIEW_SYMBOL = re.compile(rf"\b{_NS}::view::")
 # Namespaces the pulp-view-audio target owns: its own widgets and the product
 # subsystems it links. Every other floor symbol is an inline definition the
 # archive shares with any user of canvas, runtime or the C++ library.
-VIEW_AUDIO_OWNED = re.compile(
-    rf"\b{_NS}::(?:view|audio|signal|midi|music|format|host|gpu_audio|content)::")
+_VIEW_AUDIO_AREAS = r"(?:view|audio|signal|midi|music|format|host|gpu_audio|content)"
+VIEW_AUDIO_OWNED = re.compile(rf"\b{_NS}::{_VIEW_AUDIO_AREAS}::")
+# The pulp-view-audio archive is Pulp's own build, so it always spells Pulp's
+# namespace, while a renamed package spells the same definition under another
+# root. The floor is read in the archive's spelling, and an image symbol is
+# respelled into it (canonical) before it is compared, so a renamed
+# definition still meets its archive counterpart.
+ARCHIVE_NAMESPACE = "pulp"
+ARCHIVE_VIEW_AUDIO_OWNED = re.compile(rf"\b{re.escape(ARCHIVE_NAMESPACE)}::{_VIEW_AUDIO_AREAS}::")
+_ROOT_QUALIFIER = re.compile(rf"\b{_NS}::")
+
+
+def canonical(name: str) -> str:
+    """A demangled symbol with every root namespace spelled as the archive spells it."""
+    return _ROOT_QUALIFIER.sub(f"{ARCHIVE_NAMESPACE}::", name)
 # Any packaged header include and any packaged symbol: the evidence that the
 # consumer used the package at all.
 PACKAGE_INCLUDE = re.compile(rf"{_INC}/")
@@ -311,13 +324,16 @@ def build_floor(listing: str, darwin_listing: str | None = None) -> ViewAudioFlo
         names = rtti_ownership.demangle(strong)
     except rtti_ownership.DemangleError as error:
         raise EvidenceError(str(error)) from error
-    floor = ViewAudioFloor(name for name in names.values() if VIEW_AUDIO_OWNED.search(name))
-    floor.owned_classes = frozenset(rtti_ownership.owned_classes(strong, names))
+    floor = ViewAudioFloor(canonical(name) for name in names.values()
+                           if ARCHIVE_VIEW_AUDIO_OWNED.search(canonical(name)))
+    floor.owned_classes = frozenset(canonical(cls) for cls in rtti_ownership.owned_classes(strong, names))
     return floor
 
 
 def floor_hit(name: str, floor: set[str]) -> bool:
-    """Whether a demangled image symbol is view-audio code under `floor`."""
+    """Whether a demangled image symbol is view-audio code under `floor`,
+    whichever root spelling the image uses."""
+    name = canonical(name)
     if name in floor:
         return True
     cls = rtti_ownership.rtti_class(name)

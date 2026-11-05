@@ -173,6 +173,7 @@ class SdkMirrorScopeTests(unittest.TestCase):
         # installer's literals follow it.
         import json
         table = json.loads((REPO / "tools/provenance/mirror_edge_patterns.json").read_text(encoding="utf-8"))
+        self.assertEqual(install_core.MIRROR_EDGE_INCLUDE_ROOTS, tuple(table["roots"]["include"]))
         product_path = install_core.MIRROR_PAYLOAD_PATH_PATTERNS["mirror-product-path"]
         for root in table["roots"]["include"]:
             with self.subTest(root=root):

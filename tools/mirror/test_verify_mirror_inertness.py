@@ -231,6 +231,14 @@ class StrengthAwareFloorTest(unittest.TestCase):
         self.assertEqual(self.findings("vtable for pulp::audio::Engine", "typeinfo for pulp::canvas::Path"),
                          ["provider: vtable for pulp::audio::Engine"])
 
+    def test_renamed_copies_meet_the_archive_floor(self) -> None:
+        # The archive is spelled pulp; a renamed package's strong copy and its
+        # owned-class RTTI are the same code and must fail the same way.
+        self.assertEqual(
+            self.findings("vellum::audio::Engine::start()", "vtable for vellum::audio::Engine",
+                          "vellum::view::View::on_attached()", "typeinfo for vellum::canvas::Path"),
+            ["provider: vellum::audio::Engine::start()", "provider: vtable for vellum::audio::Engine"])
+
 
 class NameDebtTest(unittest.TestCase):
     """Audio-named view-core symbols pass only under a declared Phase-6 debt."""
@@ -326,6 +334,25 @@ class FloorAgreementTest(unittest.TestCase):
         owned = [name for name in self.floor if vi.VIEW_AUDIO_OWNED.search(name)]
         flagged, _ = vi.symbol_findings({"image": owned}, view_unit_packaged=False)
         self.assertEqual(len(flagged), len(owned))
+
+    def test_a_renamed_floor_symbol_is_still_caught(self) -> None:
+        # The archive spells pulp; the package may spell either root. Every
+        # owned floor symbol respelled to each root must still be a floor hit.
+        floor = {name for name in self.floor if vi.ARCHIVE_VIEW_AUDIO_OWNED.search(name)}
+        self.assertGreater(len(floor), 300)
+        for root in vi.MIRROR_ROOTS["namespace"]:
+            respelled = [re.sub(r"\bpulp::", f"{root}::", name) for name in sorted(floor)]
+            with self.subTest(root=root):
+                flagged, _ = vi.symbol_findings({"image": respelled}, view_unit_packaged=True, floor=floor)
+                self.assertEqual(len(flagged), len(respelled))
+                stand_in, _ = vi.symbol_findings({"image": respelled}, view_unit_packaged=False)
+                self.assertEqual(len(stand_in), len(respelled))
+        # The planted renamed Meter, the case an intersection by spelling misses.
+        planted = "vellum::view::Meter::clear_level_fill()"
+        self.assertIn("pulp::view::Meter::clear_level_fill()", floor)
+        self.assertNotIn(planted, floor)
+        flagged, _ = vi.symbol_findings({"image": [planted]}, view_unit_packaged=True, floor=floor)
+        self.assertEqual(flagged, [f"image: {planted}"])
 
     def test_floor_rule_ignores_shared_inline_definitions(self) -> None:
         shared = [name for name in self.floor if not vi.VIEW_AUDIO_OWNED.search(name)]
@@ -569,7 +596,7 @@ class VerifyTest(unittest.TestCase):
 def spelled(names: tuple[str, ...]):
     """The checker after the one-line rename edit: MIRROR_ROOTS set to `names`."""
     source = (HERE / "verify_mirror_inertness.py").read_text(encoding="utf-8")
-    line = 'MIRROR_ROOTS = {"namespace": ("pulp",), "include": ("pulp",)}\n'
+    line = 'MIRROR_ROOTS = {"namespace": ("pulp", "vellum"), "include": ("pulp", "vellum")}\n'
     assert source.count(line) == 1, "MIRROR_ROOTS is no longer the one-line literal this test edits"
     roots = repr(tuple(names))
     module = type(sys)("verify_mirror_inertness_spelled")
@@ -588,6 +615,7 @@ ROOT_CONTROLS = {
     "FORWARD_DECLARED": ["@namespace@::view::WaveformView::~WaveformView()"],
     "VIEW_SYMBOL": ["@namespace@::view::View::layout()"],
     "VIEW_AUDIO_OWNED": ["@namespace@::signal::Biquad::process(float)"],
+    "_ROOT_QUALIFIER": ["@namespace@::canvas::Canvas"],
     "PACKAGE_INCLUDE": ["/opt/sdk/mirror/include/@include@/canvas/canvas.hpp"],
     "PACKAGE_SYMBOL": ["@namespace@::canvas::Canvas::save()"],
     "view-core-level-display": ["typeinfo for @namespace@::view::LevelDisplay"],
@@ -607,7 +635,7 @@ def instantiate(template: str, name: str) -> str:
 def root_rules(module) -> dict[str, str]:
     """Every rule the checker builds from MIRROR_ROOTS, as pattern text."""
     rules = {name: value.pattern for name, value in vars(module).items()
-             if isinstance(value, re.Pattern) and name.isupper()}
+             if isinstance(value, re.Pattern) and name.isupper() and not name.startswith("ARCHIVE_")}
     for debts in (module.NAME_DEBTS, module.REFERENCE_DEBTS):
         rules.update({debt: entry["pattern"] for debt, entry in debts.items()})
     return rules
