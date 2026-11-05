@@ -214,6 +214,9 @@
         "script": "scripts/test_select_reusable_gpu_proof.py"
       },
       {
+        "script": "scripts/test_classify_gpu_proof.py"
+      },
+      {
         "script": "scripts/test_check_renderer_lock.py",
         "isolated": true
       },
