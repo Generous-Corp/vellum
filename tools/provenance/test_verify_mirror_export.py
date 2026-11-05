@@ -1216,15 +1216,48 @@ class VerifyMirrorExportTests(unittest.TestCase):
         c = {"configure":{"identity":{"system":"Darwin"}},"targets":[],"transitive_link_targets":["juce-audio"],"files":[],"compile_definitions":[]}
         self.assertError(verify_mirror_export.link_closure_findings({"x": c}, policy), "x: forbidden link target juce-audio")
 
-    def test_in_tree_gpu_runtime_targets_are_allowed_and_nothing_else_from_it(self) -> None:
+    def test_in_tree_gpu_runtime_targets_are_allowed_only_via_pulp_gpu_device(self) -> None:
         # The mirror links Vellum's own gpu-runtime build (mirror_package's
-        # in-tree recipe); exactly its three linked targets are allowed.
+        # in-tree recipe); its three targets are scoped to pulp-gpu-device.
         policy = json.loads((REPO / "provenance/mirror/link-policy.json").read_text())
         for name in ("gpu-runtime-bootstrap", "gpu-runtime-device", "gpu-runtime-skia-log-bridge"):
+            self.assertNotIn(name, policy["allowed_external_targets"])
             c = {"configure": {"identity": {"system": "Darwin"}},
                  "targets": [{"name": "pulp-gpu-device", "link_targets": [name]}],
                  "files": [], "compile_definitions": []}
             self.assertEqual(verify_mirror_export.link_closure_findings({"gpu-device-api": c}, policy), [])
+            # A target that links pulp-gpu-device reports gpu-runtime with its
+            # link interface (pulp-render, pulp-view-core); that is allowed.
+            via = {"configure": {"identity": {"system": "Darwin"}},
+                   "targets": [{"name": "pulp-gpu-device", "link_targets": []},
+                               {"name": "pulp-render", "link_targets": ["pulp-gpu-device", name]}],
+                   "files": [], "compile_definitions": []}
+            self.assertEqual(verify_mirror_export.link_closure_findings({"render-2d": via}, policy), [])
+            # Any other target linking it directly is refused.
+            stray = {"configure": {"identity": {"system": "Darwin"}},
+                     "targets": [{"name": "pulp-canvas", "link_targets": [name]}],
+                     "files": [], "compile_definitions": []}
+            self.assertError(verify_mirror_export.link_closure_findings({"canvas": stray}, policy),
+                             f"link target {name} is allowed only via pulp-gpu-device, not from pulp-canvas")
+            transitive = {"configure": {"identity": {"system": "Darwin"}}, "targets": [],
+                          "transitive_link_targets": [name], "files": [], "compile_definitions": []}
+            self.assertError(verify_mirror_export.link_closure_findings({"canvas": transitive}, policy),
+                             f"link target {name} is allowed only via pulp-gpu-device")
+
+    def test_scoped_external_targets_policy_shape(self) -> None:
+        policy = json.loads((REPO / "provenance/mirror/link-policy.json").read_text())
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "provenance/mirror").mkdir(parents=True)
+            for broken in (
+                dict(policy, scoped_external_targets={"targets": []}),
+                dict(policy, scoped_external_targets=[{"targets": ["x"], "via": "not-pulp", "reason": "r"}]),
+                dict(policy, scoped_external_targets=[{"targets": ["hwy"], "via": "pulp-gpu-device", "reason": "r"}]),
+            ):
+                (root / "provenance/mirror/link-policy.json").write_text(json.dumps(broken))
+                loaded, errors = verify_mirror_export.load_policy(root)
+                self.assertIsNone(loaded)
+                self.assertTrue(any("scoped_external_targets" in e for e in errors), errors)
         for name in ("gpu-runtime-device-api", "gpu-runtime-other"):
             c = {"configure": {"identity": {"system": "Darwin"}},
                  "targets": [{"name": "pulp-gpu-device", "link_targets": [name]}],

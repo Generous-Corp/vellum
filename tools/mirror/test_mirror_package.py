@@ -441,13 +441,22 @@ class InTreeGpuRuntimeTest(unittest.TestCase):
         target["link_targets"] = [link]
         self.fixture.write_receipt()
 
-    def assertRefused(self, fragment: str) -> None:
+    def plan(self, definitions: list[str] | None = None):
+        return mp.plan(self.fixture.repo, self.fixture.deps, self.fixture.generated, self.fixture.skia,
+                       self.fixture.skia_asset,
+                       {"vellum-gpu-runtime": definitions if definitions is not None else []})
+
+    def assertRefused(self, fragment: str, definitions: list[str] | None = None) -> None:
         with self.assertRaises(mp.PlanError) as caught:
-            self.fixture.plan()
+            self.plan(definitions)
         self.assertIn(fragment, str(caught.exception))
 
+    def set_definitions(self, definitions: list[str]) -> None:
+        self.fixture.closure["targets"][0]["compile_definitions"] = definitions
+        self.fixture.write_receipt()
+
     def test_matching_pin_links_the_in_tree_targets_without_fetching(self) -> None:
-        plan = self.fixture.plan()
+        plan = self.plan()
         target = plan["units"][0]["targets"][0]
         self.assertEqual(target["external_links"], ["gpu-runtime-device"])
         self.assertIn(str(self.fixture.repo.resolve() / "gpu-runtime/include"), target["include_dirs"])
@@ -455,6 +464,46 @@ class InTreeGpuRuntimeTest(unittest.TestCase):
         self.assertNotIn("vellum-gpu-runtime", plan["cmake_dependencies"])
         self.assertNotIn("vellum-gpu-runtime", plan["licenses"])
         self.assertEqual(plan["dependencies"]["vellum-gpu-runtime"]["pin"], self.pin)
+        self.assertEqual(target["in_tree_interfaces"], ["VellumGpuRuntime::DeviceApi"])
+        output = Path(self.temporary.name) / "plan.cmake"
+        mp.write_cmake(plan, output)
+        self.assertIn('set(VELLUM_MIRROR_TARGET_PULP_RUNTIME_IN_TREE_INTERFACES\n    "VellumGpuRuntime::DeviceApi"\n)',
+                      output.read_text())
+
+    def test_ignored_interface_header_is_refused(self) -> None:
+        (self.fixture.repo / ".gitignore").write_text("*.inc\n")
+        self.git("add", ".gitignore")
+        self.git("commit", "-q", "-m", "ignore rule")
+        (self.fixture.repo / "gpu-runtime/include/gpu_runtime/extra.inc").write_bytes(b"// ignored\n")
+        self.assertRefused("has uncommitted changes")
+
+    def test_matching_abi_definitions_plan(self) -> None:
+        self.set_definitions(["X=1", "GPU_RUNTIME_BENCHMARK=1"])
+        self.plan(["GPU_RUNTIME_BENCHMARK=1"])
+
+    def test_definition_only_the_closure_has_is_refused(self) -> None:
+        self.set_definitions(["X=1", "GPU_RUNTIME_BENCHMARK=1"])
+        self.assertRefused("in-tree vellum-gpu-runtime carries []", [])
+
+    def test_definition_only_the_in_tree_build_has_is_refused(self) -> None:
+        self.assertRefused("was exported with GPU_RUNTIME_* definitions []", ["GPU_RUNTIME_BENCHMARK=1"])
+
+    def test_missing_in_tree_definitions_is_refused(self) -> None:
+        with self.assertRaises(mp.PlanError) as caught:
+            mp.plan(self.fixture.repo, self.fixture.deps, self.fixture.generated, self.fixture.skia,
+                    self.fixture.skia_asset)
+        self.assertIn("passed no in-tree interface definitions", str(caught.exception))
+
+    def test_unit_that_does_not_route_into_the_provider_is_refused(self) -> None:
+        # Without Skia the unit's third-party links go into its own dylib,
+        # which would carry a second gpu-runtime beside the provider's.
+        target = self.fixture.closure["targets"][0]
+        target["external_link_inputs"] = []
+        target["include_dirs"] = [d for d in target["include_dirs"] if "skia" not in d]
+        self.fixture.closure["external_inputs"] = [r for r in self.fixture.closure["external_inputs"]
+                                                   if "skia" not in r["path"]]
+        self.fixture.write_receipt()
+        self.assertRefused("does not route into vellum-skia-dawn-provider")
 
     def test_pin_whose_interface_tree_differs_is_refused(self) -> None:
         self.use_pin(self.old, digest=sha(b"struct GpuSurface; // old\n"))

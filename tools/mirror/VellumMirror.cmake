@@ -31,9 +31,26 @@ set(VELLUM_MIRROR_DEPS_DIR "${CMAKE_BINARY_DIR}/_deps/vellum-mirror" CACHE PATH
 set(_vellum_mirror_generated "${CMAKE_BINARY_DIR}/generated/vellum-mirror")
 set(_vellum_mirror_plan_cmake "${_vellum_mirror_generated}/plan.cmake")
 set(_vellum_mirror_plan_json "${_vellum_mirror_generated}/plan.json")
+# The in-tree gpu-runtime's configuration, so the plan can refuse a closure
+# exported against a different GPU_RUNTIME_* interface.
+set(_vellum_mirror_gpu_runtime_definitions)
+foreach(_vellum_gpu_runtime_target IN ITEMS gpu-runtime-device-api gpu-runtime-bootstrap
+        gpu-runtime-device gpu-runtime-skia-log-bridge)
+    if(TARGET "${_vellum_gpu_runtime_target}")
+        get_target_property(_vellum_gpu_runtime_defs "${_vellum_gpu_runtime_target}"
+            INTERFACE_COMPILE_DEFINITIONS)
+        if(_vellum_gpu_runtime_defs)
+            list(APPEND _vellum_mirror_gpu_runtime_definitions ${_vellum_gpu_runtime_defs})
+        endif()
+    endif()
+endforeach()
+list(REMOVE_DUPLICATES _vellum_mirror_gpu_runtime_definitions)
+list(JOIN _vellum_mirror_gpu_runtime_definitions "|"
+    _vellum_mirror_gpu_runtime_definitions_arg)
 execute_process(
     COMMAND "${Python3_EXECUTABLE}"
         "${PROJECT_SOURCE_DIR}/tools/mirror/mirror_package.py"
+        "--in-tree-definitions=vellum-gpu-runtime=${_vellum_mirror_gpu_runtime_definitions_arg}"
         --repo "${PROJECT_SOURCE_DIR}"
         --deps-dir "${VELLUM_MIRROR_DEPS_DIR}"
         --generated-dir "${_vellum_mirror_generated}"
@@ -175,12 +192,22 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
                     "${VELLUM_MIRROR_TARGET_${_tkey}_OPTION_SOURCE_${_vellum_option_index}_OPTIONS}")
             endforeach()
         endif()
+        # A target that links an in-tree dependency compiles against its
+        # interface target, so the in-tree INTERFACE definitions (the ones the
+        # plan compared with the closure) apply to the mirrored sources.
+        foreach(_vellum_interface IN LISTS VELLUM_MIRROR_TARGET_${_tkey}_IN_TREE_INTERFACES)
+            target_link_libraries("${_vellum_mirror_target}" PRIVATE "${_vellum_interface}")
+        endforeach()
         # Vellum's host owns Dawn's process-global proc table. Pulp's
         # PULP_DAWN_PROCS_HOST_OWNED switch compiles the device library with
         # no native installer, so a mirrored GpuSurface or GpuCompute fails
         # until the host registers one through
         # pulp::render::set_dawn_proc_installer(). The sources are unchanged.
-        if(_vellum_mirror_target STREQUAL "pulp-gpu-device")
+        # A receipt whose pulp-gpu-device forwards to gpu-runtime compiles no
+        # installer at all, and gpu-runtime's own build carries Vellum's
+        # host-owned setting, so the switch applies only to the older receipts.
+        if(_vellum_mirror_target STREQUAL "pulp-gpu-device"
+           AND NOT VELLUM_MIRROR_TARGET_${_tkey}_IN_TREE_INTERFACES)
             target_compile_definitions("${_vellum_mirror_target}" PRIVATE
                 PULP_DAWN_PROCS_HOST_OWNED=1)
         endif()
