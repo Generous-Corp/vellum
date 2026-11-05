@@ -111,6 +111,17 @@ FORBIDDEN_NATIVE_CONTENT_PATTERNS: dict[str, tuple[str, int]] = {
         r"\b(?:AudioUnit|VST3|CLAP|LV2|Oboe)\b",
         re.IGNORECASE,
     ),
+    # The renamed mirror's own namespaces and headers: the mirrored include
+    # units native Vellum does not also own. A mirrored file copied into a
+    # native root after the pulp:: -> vellum:: rename no longer matches the
+    # rules above; it matches this one. `runtime` is absent on purpose: native
+    # Vellum owns vellum::runtime and the mirrored runtime merges into it under
+    # the symbol-intersection gate. test_verify_extraction.py holds this list
+    # equal to the mirror's include units minus the native ones.
+    "renamed-mirror-namespace": (
+        r"(?:\bvellum::(?:canvas|design|events|platform|render|simd|state|view)\b|#\s*include\s*[<\"]vellum/(?:canvas|design|events|platform|render|simd|state|view)/)",
+        0,
+    ),
 }
 
 

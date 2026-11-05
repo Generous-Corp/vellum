@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -24,6 +25,8 @@ SPEC = importlib.util.spec_from_file_location("verify_extraction", MODULE_PATH)
 assert SPEC and SPEC.loader
 verify_extraction = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(verify_extraction)
+ROOT = MODULE_PATH.parents[2]
+content_scan_policy = verify_extraction.content_scan_policy
 ARTIFACT_MODULE_PATH = MODULE_PATH.parents[2] / "scripts/verify_sdk_artifact.py"
 ARTIFACT_SPEC = importlib.util.spec_from_file_location(
     "verify_sdk_artifact", ARTIFACT_MODULE_PATH
@@ -286,6 +289,49 @@ class VerifyExtractionTests(unittest.TestCase):
                 {(finding["path"], finding["rule"]) for finding in findings},
                 {("graphics/a.cpp", "pulp-public-namespace")},
             )
+
+    def test_renamed_mirror_namespaces_are_refused_in_native_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            renamed = b"#include <vellum/view/view.hpp>\nnamespace vellum::view { int x; }\n"
+            self.write_mirror(root, "mirror/core/view/src/a.cpp", renamed)
+            (root / "graphics").mkdir()
+            (root / "graphics/copied.cpp").write_bytes(renamed)
+            # Native Vellum owns vellum::runtime and its other namespaces: legal.
+            (root / "graphics/own.cpp").write_bytes(
+                b"#include <vellum/runtime/kernel.hpp>\nvellum::runtime::Kernel k; vellum::graphics::X g;\n")
+
+            findings = verify_extraction.scan_active_surface(root)
+
+            self.assertEqual(
+                sorted((finding["path"], finding["rule"]) for finding in findings),
+                [("graphics/copied.cpp", "renamed-mirror-namespace")] * 2,
+            )
+
+    def test_renamed_mirror_namespace_units_match_the_mirror(self) -> None:
+        # The refused units are the mirror's include units that native Vellum
+        # does not also own; a new mirrored unit must join the rule.
+        rule = content_scan_policy.FORBIDDEN_NATIVE_CONTENT_PATTERNS["renamed-mirror-namespace"][0]
+        refused = set(re.search(r"vellum::\(\?:([^)]*)\)", rule).group(1).split("|"))
+        mirror_units = {p.name for p in (ROOT / "mirror").glob("core/*/include/*/*")
+                        if p.is_dir() and p.parent.name in {"pulp", "vellum"}}
+        native_units = {p.name for root in ("foundation", "runtime", "graphics", "authoring")
+                        for p in (ROOT / root / "include/vellum").glob("*") if p.is_dir()}
+        self.assertEqual(refused, mirror_units - native_units)
+
+    def test_v2_records_quarantine_the_raw_pulp_blob_too(self) -> None:
+        raw = b"namespace pulp::view { int x; }\n"
+        renamed = b"namespace vellum::view { int x; }\n"
+        records = [{"git_blob_sha": verify_extraction.git_blob_sha(renamed),
+                    "pulp_git_blob_sha": verify_extraction.git_blob_sha(raw)}]
+        blobs = {record["git_blob_sha"] for record in records} | {
+            record["pulp_git_blob_sha"] for record in records if record.get("pulp_git_blob_sha")}
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "graphics").mkdir()
+            (root / "graphics/raw_copy.cpp").write_bytes(raw)
+            findings = verify_extraction.copied_seed_findings(root, ("graphics",), blobs)
+            self.assertEqual([f["path"] for f in findings], ["graphics/raw_copy.cpp"])
 
     def test_origin_records_are_strictly_validated(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

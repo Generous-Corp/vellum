@@ -772,7 +772,11 @@ def verify(
         entry["git_blob_sha"]
         for entry in entries
         if entry["source_path"] not in {"DEPENDENCIES.md", "LICENSE.md", "NOTICE.md"}
-    } | {record["git_blob_sha"] for record in records}
+    } | {record["git_blob_sha"] for record in records} | {
+        # v2 records (the pulp:: -> vellum:: rename) also name the raw Pulp
+        # blob a renamed mirror file came from; a native copy of either is refused.
+        record["pulp_git_blob_sha"] for record in records if record.get("pulp_git_blob_sha")
+    }
     pulp_origin_blobs.discard(EMPTY_BLOB_SHA)
     copied_findings = copied_seed_findings(root, active_roots, pulp_origin_blobs)
     checks["active_historical_blob_matches"] = copied_findings
