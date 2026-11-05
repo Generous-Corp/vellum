@@ -14,6 +14,10 @@ one of these, and each is a finding once it is older than the grace period:
   retired    main declares a version whose tag is retired; nothing can be
              released until main declares a newer one.
   behind     main declares a version older than the newest release tag.
+  dry-run-leftover
+             a release dry-run tag older than the grace period, or any
+             published release on a dry-run tag; sdk-release's clean-dry-run
+             job should have deleted it.
 
 It reads the local clone (with its tags) and the releases the workflow
 fetched, and needs no token. It writes the findings as JSON and as the
@@ -49,11 +53,15 @@ def local_release_tags(root: Path) -> list[str]:
     return [name for name in rr.git(root, "tag", "--list", "v*").splitlines() if rr.version_key(name)]
 
 
-def published(releases: Any) -> set[str]:
-    """Tags with a published, non-draft release, from `gh api --paginate --slurp`."""
+def release_rows(releases: Any) -> list[dict[str, Any]]:
     if not isinstance(releases, list):
         raise rr.ReleaseRequestError("releases must be an array of pages")
-    rows = [row for page in releases for row in (page if isinstance(page, list) else [page])]
+    return [row for page in releases for row in (page if isinstance(page, list) else [page]) if isinstance(row, dict)]
+
+
+def published(releases: Any) -> set[str]:
+    """Tags with a published, non-draft release, from `gh api --paginate --slurp`."""
+    rows = release_rows(releases)
     return {row["tag_name"] for row in rows if isinstance(row, dict) and isinstance(row.get("tag_name"), str)
             and row.get("draft") is False and row.get("published_at")}
 
@@ -80,11 +88,27 @@ def findings(root: Path, commit: str, releases: Any, now: datetime,
     elif newest and rr.version_key(tag) < newest and tag not in tags:  # type: ignore[operator]
         found.append({"kind": "behind", "tag": tag,
                       "detail": f"main declares {version}, older than v{'.'.join(map(str, newest))}"})
+    for name in rr.git(root, "tag", "--list", "dry-run/*").splitlines():
+        age = now - committed_at(root, name)
+        if age > grace:
+            found.append({"kind": "dry-run-leftover", "tag": name,
+                          "detail": f"{name} is {age_text(age)} old; delete it and any draft release on it"})
+    for row in release_rows(releases):
+        name, created = row.get("name"), row.get("created_at")
+        if isinstance(name, str) and name.endswith(" (release dry run)") and isinstance(created, str):
+            age = now - datetime.strptime(created, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+            if age > grace:
+                found.append({"kind": "dry-run-leftover", "tag": str(row.get("tag_name")),
+                              "detail": f"the dry-run release {name!r} is {age_text(age)} old; delete it"})
+    published_tags = published(releases)
+    for name in sorted(tag for tag in published_tags if tag.startswith("dry-run/")):
+        found.append({"kind": "dry-run-leftover", "tag": name,
+                      "detail": f"a release on the dry-run tag {name} is published; a dry run must never publish"})
     live = sorted((key, name) for name in tags if name not in retired and (key := rr.version_key(name)))
     if live:
         latest = live[-1][1]
         age = now - committed_at(root, latest)
-        if latest not in published(releases) and age > grace:
+        if latest not in published_tags and age > grace:
             found.append({"kind": "unpublished", "tag": latest,
                           "detail": f"{latest} was tagged {age_text(age)} ago and has no published release"})
     return found
@@ -106,6 +130,8 @@ def body(found: list[dict[str, str]], now: datetime) -> str:
               "runs. A tag whose pipeline cannot pass is retired in `provenance/retired-release-tags.json` and "
               "the next version is released instead; a frozen tag is never moved.",
               "- `retired` or `behind`: main's `project(VERSION)`; the next shipped change bumps it.",
+              "- `dry-run-leftover`: the dry run's sdk-release `clean-dry-run` job; delete the `dry-run/` tag and "
+              "its draft by hand.",
               "", "This issue closes on the first check that finds nothing."]
     return "\n".join(lines) + "\n"
 

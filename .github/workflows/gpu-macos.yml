@@ -14,7 +14,7 @@ on:
     branches: [main]
   push:
     branches: [main]
-    tags: ['v[0-9]*', 'authority/**']
+    tags: ['v[0-9]*', 'authority/**', 'dry-run/**']
 
 permissions:
   actions: read
@@ -64,6 +64,11 @@ jobs:
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           if [[ "$GITHUB_REF" == refs/tags/v* && "$GITHUB_REF_NAME" != "v$version" ]]; then
             echo "::error::Tag $GITHUB_REF_NAME does not match CMakeLists version v$version"
+            exit 1
+          fi
+          # A release dry-run tag (dry-run/v<version>/<run>-<attempt>) names the version it rehearses.
+          if [[ "$GITHUB_REF" == refs/tags/dry-run/* && ! "$GITHUB_REF_NAME" =~ ^dry-run/v${version//./\\.}/[1-9][0-9]*-[1-9][0-9]*$ ]]; then
+            echo "::error::Dry-run tag $GITHUB_REF_NAME does not match CMakeLists version v$version"
             exit 1
           fi
           {
@@ -748,7 +753,7 @@ jobs:
           retention-days: 14
 
       - name: Record private-release trust controls
-        if: steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == '' && startsWith(github.ref, 'refs/tags/v')
+        if: steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == '' && startsWith(github.ref, 'refs/tags/') && !startsWith(github.ref, 'refs/tags/authority/')
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -803,7 +808,7 @@ jobs:
             "$VELLUM_TAG_OBJECT_SHA" >> "$GITHUB_ENV"
 
       - name: Gate every release mutation on exact provenance readiness
-        if: steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == '' && startsWith(github.ref, 'refs/tags/v')
+        if: steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == '' && startsWith(github.ref, 'refs/tags/') && !startsWith(github.ref, 'refs/tags/authority/')
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}

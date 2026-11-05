@@ -150,7 +150,8 @@ class Reader(unittest.TestCase):
     def test_the_content_checks_are_the_tag_specific_ones(self) -> None:
         provenance = (pc.ROOT / ".github/workflows/provenance.yml").read_text()
         readiness = pc.read_step(provenance, "provenance-verify", "Test authority protocol and negative controls")
-        self.assertIn('if [[ "$GITHUB_REF" == refs/tags/v[0-9]* ]]; then', readiness.run)
+        self.assertIn('if [[ "$GITHUB_REF" == refs/tags/v[0-9]* || "$GITHUB_REF" == refs/tags/dry-run/v[0-9]* ]]; then',
+                      readiness.run)
         self.assertIn("release_readiness+=(--release-readiness)", readiness.run)
         self.assertIn("open-pr-snapshot", readiness.run)
         self.assertEqual(readiness.env["PROMOTION_ATTESTATION_PATH"],

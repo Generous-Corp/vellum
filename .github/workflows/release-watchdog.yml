@@ -5,7 +5,7 @@ name: Release watchdog
 # has one tracking issue, opened (or updated) on a failed run and closed on the
 # next successful one. Only runs that belong to a release count: the version
 # and tag jobs on main, and the GPU proof, provenance and SDK finalizer on a
-# release tag. release-cadence-check.yml watches the outcome independently.
+# release tag or a release dry-run tag. release-cadence-check.yml watches the outcome independently.
 on:
   workflow_run:
     workflows:
@@ -39,7 +39,8 @@ jobs:
       || ((github.event.workflow_run.name == 'Locked macOS GPU proof'
           || github.event.workflow_run.name == 'Provenance and forbidden dependencies')
         && github.event.workflow_run.event == 'push'
-        && startsWith(github.event.workflow_run.head_branch, 'v'))
+        && (startsWith(github.event.workflow_run.head_branch, 'v')
+          || startsWith(github.event.workflow_run.head_branch, 'dry-run/v')))
       || github.event.workflow_run.name == 'Finalize immutable SDK release'
     steps:
       - name: Maintain the tracking issue

@@ -13,6 +13,7 @@
 /scripts/ci_lanes.json @danielraffel
 /scripts/pretag_checks.py @danielraffel
 /scripts/release_cadence.py @danielraffel
+/scripts/release_dry_run.py @danielraffel
 /scripts/release_request.py @danielraffel
 /scripts/retired_release_tags.py @danielraffel
 /scripts/run_ci_lane.py @danielraffel
