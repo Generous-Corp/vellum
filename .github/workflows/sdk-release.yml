@@ -555,7 +555,6 @@ jobs:
             --record "$RUNNER_TEMP/trusted/trusted-gpu-runtime-verification.json" \
             --version "$gpu_version" --source-commit "$SOURCE_COMMIT" \
             --output "$RUNNER_TEMP/trusted/vellum-gpu-runtime.sha256"
-          echo "GPU_RUNTIME_ARCHIVE=$gpu_archive" >> "$GITHUB_ENV"
 
       - name: Require exact provenance readiness
         env:
@@ -690,6 +689,7 @@ jobs:
             test "$remote_sha" = "$TAG_OBJECT_SHA"
             cp "$protection" "$RUNNER_TEMP/release-tag-protection.json"
           }
+          GPU_RUNTIME_ARCHIVE="${RELEASE_ARCHIVE/vellum-sdk-/vellum-gpu-runtime-}"
           allowed=(
             "$RELEASE_ARCHIVE=$RUNNER_TEMP/gpu/$RELEASE_ARCHIVE"
             "install.sh=$RUNNER_TEMP/trusted/install.sh"
