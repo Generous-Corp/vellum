@@ -117,6 +117,11 @@ DEPENDENCIES: dict[str, dict[str, Any]] = {
     # Pulp's device layer forwards to gpu-runtime, which lives in this
     # repository. A second, fetched copy would put two Dawn proc tables and two
     # device coordinators in one image, so the mirror links Vellum's own build.
+    # The pin is bound through `abi_tree`, the public headers, not the whole
+    # subtree: the mirror compiles only against that interface, and Vellum owns
+    # gpu-runtime, so an implementation, test or build change here must not
+    # wait on Pulp re-pinning. A header change does, because the mirror would
+    # otherwise compile against an interface Pulp never exported against.
     "vellum-gpu-runtime": {
         "kind": "in-tree",
         "subtree": "gpu-runtime",
