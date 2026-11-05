@@ -29,6 +29,13 @@ The macOS arm64 GPU proof uses one byte-locked prebuilt renderer artifact:
 |---|---|---|
 | `skia-build-mac-universal-gpu-release.zip` | `danielraffel/skia-builder` release `chrome/m158`; SHA-256 `dca73c0eee5b0f6d129fe357d0754f7165c6b436051e0de947aeedd3e1bde250` | Build-time Skia Graphite and Dawn/Metal static libraries and headers |
 
+The pin itself is written once, in `gpu-runtime/renderer-lock.json`; this
+table, `provenance/third-party-lock.json` and the attestation must agree with
+it (`scripts/check_renderer_lock.py`). The published
+`vellum-gpu-runtime-<version>-darwin-arm64.tar.gz` redistributes the
+artifact's `libdawn_combined.a` unchanged, with the Dawn and Tint, Abseil and
+PartitionAlloc notices the legal inventory places in it.
+
 The artifact was built by skia-builder's `build-skia.yml` on `refs/heads/main`
 at builder commit `312f05e24a5d5a45d4a3e70ca70ff3ccff1b4d97` (run
 40626447857, attempt 1, GitHub-hosted). Its source tuple is Skia commit

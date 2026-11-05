@@ -5,16 +5,33 @@ include("${CMAKE_CURRENT_LIST_DIR}/GpuRuntimeDawn.cmake")
 set(VellumGpuRuntime_RENDERER_LOCK "${CMAKE_CURRENT_LIST_DIR}/renderer-lock.json")
 set(VellumGpuRuntime_HAS_DEVICE @GPU_RUNTIME_HAS_DEVICE@)
 
-# The device library links the consumer's own copy of the locked Dawn build,
-# checked against the shipped lock: set GPU_RUNTIME_SKIA_DIR (an extracted
-# skia-builder asset) or GPU_RUNTIME_RENDERER_ARCHIVE (the asset) first.
-if(VellumGpuRuntime_HAS_DEVICE AND NOT TARGET gpu-runtime-dawn)
-    gpu_runtime_find_dawn(PLATFORM macos-arm64
-        SKIA_DIR "${GPU_RUNTIME_SKIA_DIR}"
-        ARCHIVE "${GPU_RUNTIME_RENDERER_ARCHIVE}"
-        LOCK "${VellumGpuRuntime_RENDERER_LOCK}")
-    if(NOT GPU_RUNTIME_HAS_DAWN)
-        set(VellumGpuRuntime_Device_FOUND FALSE)
+set(VellumGpuRuntime_DeviceApi_FOUND TRUE)
+set(VellumGpuRuntime_Bootstrap_FOUND TRUE)
+set(VellumGpuRuntime_Device_FOUND FALSE)
+set(VellumGpuRuntime_SkiaLogBridge_FOUND FALSE)
+
+# The device library links the locked Dawn build, checked against the shipped
+# lock. A published package ships libdawn_combined.a beside the device library;
+# a consumer may instead name its own copy of the locked skia-builder asset with
+# GPU_RUNTIME_SKIA_DIR or GPU_RUNTIME_RENDERER_ARCHIVE.
+if(VellumGpuRuntime_HAS_DEVICE)
+    set(_gpu_runtime_shipped_dawn "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_LIBDIR@/libdawn_combined.a")
+    if(NOT GPU_RUNTIME_SKIA_DIR AND NOT GPU_RUNTIME_RENDERER_ARCHIVE AND
+       EXISTS "${_gpu_runtime_shipped_dawn}")
+        gpu_runtime_find_dawn(PLATFORM macos-arm64
+            LIBRARY "${_gpu_runtime_shipped_dawn}"
+            LOCK "${VellumGpuRuntime_RENDERER_LOCK}")
+    else()
+        gpu_runtime_find_dawn(PLATFORM macos-arm64
+            SKIA_DIR "${GPU_RUNTIME_SKIA_DIR}"
+            ARCHIVE "${GPU_RUNTIME_RENDERER_ARCHIVE}"
+            LOCK "${VellumGpuRuntime_RENDERER_LOCK}")
+    endif()
+    if(GPU_RUNTIME_HAS_DAWN)
+        set(VellumGpuRuntime_Device_FOUND TRUE)
+        # SkiaLogBridge compiles against Skia's headers only; the consumer that
+        # registers it must link Skia itself (a renderer always does).
+        set(VellumGpuRuntime_SkiaLogBridge_FOUND TRUE)
     endif()
 endif()
 
